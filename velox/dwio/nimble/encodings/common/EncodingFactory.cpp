@@ -20,8 +20,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
@@ -48,6 +47,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingTypeDispatch.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
@@ -195,16 +195,17 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       }
     }
     case EncodingType::BlockBitPacking: {
-      RETURN_ENCODING_BY_NUMERIC_TYPE(BlockBitPackingEncoding, dataType);
+      RETURN_ENCODING_BY_NUMERIC_TYPE(
+          deprecated::BlockBitPackingEncoding, dataType);
+    }
+    case EncodingType::BlockBitPackingV2: {
+      RETURN_ENCODING_BY_NUMERIC_TYPE(BlockBitPackingV2Encoding, dataType);
     }
     case EncodingType::PFOR: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(PFOREncoding, dataType);
     }
     case EncodingType::SimdForBitpack: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(SimdForBitpackEncoding, dataType);
-    }
-    case EncodingType::BitRangeSplit: {
-      RETURN_ENCODING_BY_WIDE_INTEGER_TYPE(BitRangeSplitEncoding, dataType);
     }
     case EncodingType::SubIntSplit: {
       RETURN_ENCODING_BY_WIDE_NUMERIC_TYPE(SubIntSplitEncoding, dataType);
@@ -216,6 +217,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_INTEGER_TYPE(ForEncoding, dataType);
     }
     default: {
+      NIMBLE_CHECK_FILE_NE(
+          encodingType,
+          kRemovedBitRangeSplitEncodingType,
+          "BitRangeSplit encoding was removed; rewrite the data with "
+          "SubIntSplit");
       NIMBLE_UNREACHABLE(
           "Trying to deserialize invalid EncodingType:{} -- garbage input?",
           static_cast<int>(encodingType));
@@ -478,11 +484,19 @@ std::string_view EncodingFactory::encode(
     }
     case EncodingType::BlockBitPacking: {
       if constexpr (isNumericType<physicalType>()) {
-        return BlockBitPackingEncoding<T>::encode(
+        return deprecated::BlockBitPackingEncoding<T>::encode(
             selection, castedValues, buffer, options);
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
+    }
+    case EncodingType::BlockBitPackingV2: {
+      if constexpr (isNumericType<physicalType>()) {
+        return BlockBitPackingV2Encoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "BlockBitPackingV2 encoding should not be selected for non-numeric data types.");
     }
     case EncodingType::PFOR: {
       if constexpr (isIntegralType<physicalType>()) {
@@ -500,16 +514,6 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SimdForBitpack encoding only supports integral data types, got {}.",
-          TypeTraits<T>::dataType);
-    }
-    case EncodingType::BitRangeSplit: {
-      if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
-        return BitRangeSplitEncoding<T>::encode(
-            selection, castedValues, buffer, options);
-      }
-      NIMBLE_INCOMPATIBLE_ENCODING(
-          "BitRangeSplit encoding only supports 32- and 64-bit integer data "
-          "types, got {}.",
           TypeTraits<T>::dataType);
     }
     // Reachable only when something names SubIntSplit explicitly, such as an

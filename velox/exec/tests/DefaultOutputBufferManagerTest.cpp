@@ -1506,15 +1506,28 @@ TEST_P(DefaultOutputBufferManagerSerdeTest, getDataOnFailedTask) {
   ASSERT_FALSE(bufferManager_->updateNumDrivers("test.0.2", 1));
 }
 
-// A request for a task whose buffer does not exist yet is served once the
+// A request for a sub-task whose buffer does not exist yet is served once the
 // buffer is created, unless its consumer stopped waiting or deleted its
-// results.
+// results. A consumer that deleted its results before the buffer existed reads
+// nothing more, so the buffer is finished as soon as it is created, as it is
+// when the consumer deletes them after. Removing the parent task drops whatever
+// is still pending for its sub-tasks, and nothing is held for the sub-tasks of
+// a removed parent.
 TEST_F(DefaultOutputBufferManagerTest, getDataWhenCreated) {
+  for (const auto* parentTaskId : {"p", "q"}) {
+    initializeTask(
+        parentTaskId,
+        rowType_,
+        PartitionedOutputNode::Kind::kPartitioned,
+        1,
+        1);
+  }
   const auto unreachable = [](std::vector<std::unique_ptr<folly::IOBuf>>,
                               int64_t,
                               std::vector<int64_t>) { VELOX_UNREACHABLE(); };
   int64_t numPages{-1};
   bufferManager_->getDataWhenCreated(
+      "p",
       "t0",
       0,
       1'000'000'000,
@@ -1524,10 +1537,12 @@ TEST_F(DefaultOutputBufferManagerTest, getDataWhenCreated) {
           std::vector<int64_t> /*remainingBytes*/) { numPages = pages.size(); },
       [] { return true; });
   bufferManager_->getDataWhenCreated(
-      "t1", 0, 1'000'000'000, 0, unreachable, [] { return false; });
+      "p", "t1", 0, 1'000'000'000, 0, unreachable, [] { return false; });
   bufferManager_->getDataWhenCreated(
-      "t2", 0, 1'000'000'000, 0, unreachable, [] { return true; });
-  bufferManager_->deleteResults("t2", 0);
+      "p", "t2", 0, 1'000'000'000, 0, unreachable, [] { return true; });
+  bufferManager_->deleteResultsWhenCreated("p", "t2", 0);
+  bufferManager_->deleteResultsWhenCreated("p", "t3", 0);
+  bufferManager_->deleteResultsWhenCreated("q", "t4", 0);
 
   initializeTask(
       "t0", rowType_, PartitionedOutputNode::Kind::kPartitioned, 1, 1);
@@ -1538,13 +1553,38 @@ TEST_F(DefaultOutputBufferManagerTest, getDataWhenCreated) {
   fetchEndMarker("t0", 0, 1);
   bufferManager_->removeTask("t0");
 
-  for (const auto* taskId : {"t1", "t2"}) {
+  noMoreData("q");
+  fetchEndMarker("q", 0, 0);
+  bufferManager_->removeTask("q");
+  bufferManager_->getDataWhenCreated(
+      "q", "t6", 0, 1'000'000'000, 0, unreachable, [] { return true; });
+  bufferManager_->deleteResultsWhenCreated("q", "t6", 0);
+  for (const auto* taskId : {"t1", "t4", "t6"}) {
+    SCOPED_TRACE(taskId);
     initializeTask(
         taskId, rowType_, PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+    ASSERT_FALSE(bufferManager_->isFinished(taskId));
     noMoreData(taskId);
     fetchEndMarker(taskId, 0, 0);
     bufferManager_->removeTask(taskId);
   }
+
+  for (const auto* taskId : {"t2", "t3"}) {
+    SCOPED_TRACE(taskId);
+    initializeTask(
+        taskId, rowType_, PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+    ASSERT_TRUE(bufferManager_->isFinished(taskId));
+    bufferManager_->removeTask(taskId);
+  }
+
+  initializeTask(
+      "t5", rowType_, PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+  bufferManager_->deleteResultsWhenCreated("p", "t5", 0);
+  ASSERT_TRUE(bufferManager_->isFinished("t5"));
+  bufferManager_->removeTask("t5");
+  noMoreData("p");
+  fetchEndMarker("p", 0, 0);
+  bufferManager_->removeTask("p");
 }
 
 // Removing a task wakes a consumer that is waiting for its data.

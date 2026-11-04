@@ -148,6 +148,12 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
     VELOX_NYI();
   }
 
+  void visit(
+      const core::VectorSearchJoinNode& node,
+      core::PlanNodeVisitorContext& ctx) const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::TableScanNode& node, core::PlanNodeVisitorContext& ctx)
       const override {
     PrestoSqlPlanNodeVisitor::visit(node, ctx);

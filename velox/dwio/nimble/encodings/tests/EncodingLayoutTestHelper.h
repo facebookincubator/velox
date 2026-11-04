@@ -143,6 +143,26 @@ std::unique_ptr<Encoding> createFromCustomLayout(
 }
 
 // ===========================================================================
+// encodeFromCustomLayout — encode data using an EncodingLayout tree and return
+// the encoded bytes, for readers that take them, such as encoding views.
+// ===========================================================================
+
+template <typename T>
+std::string_view encodeFromCustomLayout(
+    const EncodingLayout& layout,
+    std::span<const T> data,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  auto policy = std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+      layout,
+      CompressionOptions{},
+      [](DataType type) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+        UNIQUE_PTR_FACTORY(type, TrivialNestedPolicy);
+      });
+  return EncodingFactory::encode<T>(std::move(policy), data, buffer, options);
+}
+
+// ===========================================================================
 // createNullableFromCustomLayout — encode nullable data using a layout for
 // the non-null values child.
 // ===========================================================================

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -364,7 +366,7 @@ class MergeJoinTest : public HiveConnectorTestBase {
     createDuckDbTable("t", leftInput);
     createDuckDbTable("u", rightInput);
 
-    testJoins(leftInput, rightInput, folly::identity);
+    testJoins(leftInput, rightInput, std::identity{});
     testJoins(
         leftInput,
         rightInput,
@@ -736,6 +738,70 @@ TEST_F(MergeJoinTest, leftAndRightJoinFilter) {
               "SELECT t_c0, t_c1, u_c1 FROM u RIGHT JOIN t ON t_c0 = u_c0 AND {}",
               filter));
     }
+  }
+}
+
+TEST_F(MergeJoinTest, outerJoinRejectedRowsAtOutputBoundary) {
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {makeFlatVector<int32_t>({10, 10}), makeFlatVector<int32_t>({0, 1})});
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {makeFlatVector<int32_t>({10, 10, 10, 10, 10, 10}),
+       makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5})});
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  for (auto rightJoin : {false, true}) {
+    auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(ids)
+            .values({rightJoin ? right : left})
+            .mergeJoin(
+                {rightJoin ? "u_c0" : "t_c0"},
+                {rightJoin ? "t_c0" : "u_c0"},
+                PlanBuilder(ids).values({rightJoin ? left : right}).planNode(),
+                "u_c1 > t_c1 + 10",
+                {"t_c0", "t_c1", "u_c1"},
+                rightJoin ? core::JoinType::kRight : core::JoinType::kLeft)
+            .planNode();
+    for (auto batchSize : {3, 4}) {
+      assertQuery(
+          makeCursorParameters(plan, batchSize),
+          "SELECT t_c0, t_c1, u_c1 FROM t LEFT JOIN u "
+          "ON t_c0 = u_c0 AND u_c1 > t_c1 + 10");
+    }
+  }
+}
+
+TEST_F(MergeJoinTest, fullOuterJoinRejectedRowsAtOutputBoundary) {
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {makeFlatVector<int32_t>({10}), makeFlatVector<int32_t>({0})});
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {makeFlatVector<int32_t>({10, 10, 10, 10, 10, 10}),
+       makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5})});
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(ids)
+                  .values({left})
+                  .mergeJoin(
+                      {"t_c0"},
+                      {"u_c0"},
+                      PlanBuilder(ids).values({right}).planNode(),
+                      "u_c1 > t_c1 + 10",
+                      {"t_c0", "t_c1", "u_c0", "u_c1"},
+                      core::JoinType::kFull)
+                  .planNode();
+  for (auto batchSize : {3, 4, 6}) {
+    SCOPED_TRACE(fmt::format("batchSize: {}", batchSize));
+    assertQuery(
+        makeCursorParameters(plan, batchSize),
+        "SELECT t_c0, t_c1, u_c0, u_c1 FROM t FULL OUTER JOIN u "
+        "ON t_c0 = u_c0 AND u_c1 > t_c1 + 10");
   }
 }
 

@@ -25,6 +25,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 
 using namespace facebook;
@@ -283,4 +284,17 @@ TEST(EncodingPrefixTest, factoryRejectsTruncatedTypePrefix) {
       EXPECT_EQ("Truncated encoding prefix.", error.errorMessage());
     }
   }
+}
+
+TEST(EncodingPrefixTest, factoryRejectsRemovedBitRangeSplit) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  const auto data = serializePrefix(
+      nimble::kRemovedBitRangeSplitEncodingType,
+      nimble::DataType::Uint64,
+      /*rowCount=*/1,
+      /*useVarint=*/false);
+
+  NIMBLE_ASSERT_FILE_THROW(
+      nimble::EncodingFactory{}.create(*pool, data, nullptr),
+      "BitRangeSplit encoding was removed");
 }

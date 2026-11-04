@@ -22,6 +22,7 @@
 #include <folly/lang/Bits.h>
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string_view>
 
@@ -224,6 +225,180 @@ std::string_view unframeDeletionVector(const std::string& blob) {
   return std::string_view(blob).substr(
       kHeaderSize, magicAndVectorLength - kDeletionVectorMagicSize);
 }
+
+uint16_t readLittleEndian16(const uint8_t* data) {
+  uint16_t value;
+  std::memcpy(&value, data, sizeof(value));
+  return folly::Endian::little(value);
+}
+
+uint32_t readLittleEndian32(const uint8_t* data) {
+  return readLittleEndian32(reinterpret_cast<const char*>(data));
+}
+
+uint64_t readLittleEndian64(const uint8_t* data) {
+  uint64_t value;
+  std::memcpy(&value, data, sizeof(value));
+  return folly::Endian::little(value);
+}
+
+constexpr uint32_t kMaxContainers = 65'536;
+constexpr uint32_t kMaxArrayContainerCardinality = 4'096;
+constexpr size_t kBitsetContainerBytes = 8'192;
+constexpr uint32_t kBitsetContainerWords = 1'024;
+constexpr uint32_t kMaxContainerValue = 65'535;
+
+// Sets bits [begin, end) of 'bitmap'. Writes only the bytes that hold those
+// bits, so it never touches memory past a buffer sized for the batch.
+void setBitRange(uint8_t* bitmap, uint64_t begin, uint64_t end) {
+  while (begin < end && begin % 8 != 0) {
+    bits::setBit(bitmap, begin++);
+  }
+  const uint64_t fullBytesEnd = end & ~uint64_t{7};
+  if (begin < fullBytesEnd) {
+    std::memset(bitmap + begin / 8, 0xFF, (fullBytesEnd - begin) / 8);
+    begin = fullBytesEnd;
+  }
+  while (begin < end) {
+    bits::setBit(bitmap, begin++);
+  }
+}
+
+// The apply functions below set the bits of the container's positions that
+// fall in [from, to). 'lower' is the row position of bit 0 in 'bitmap'. The
+// caller guarantees base <= from < to <= base + 65536.
+
+void applyArrayContainer(
+    const uint8_t* values,
+    uint32_t count,
+    int64_t base,
+    int64_t from,
+    int64_t to,
+    int64_t lower,
+    uint8_t* bitmap) {
+  const auto low = static_cast<uint32_t>(from - base);
+  const auto high = static_cast<uint32_t>(to - base);
+  uint32_t first = 0;
+  uint32_t last = count;
+  while (first < last) {
+    const uint32_t mid = first + (last - first) / 2;
+    if (readLittleEndian16(values + 2 * mid) < low) {
+      first = mid + 1;
+    } else {
+      last = mid;
+    }
+  }
+  for (uint32_t i = first; i < count; ++i) {
+    const uint32_t value = readLittleEndian16(values + 2 * i);
+    if (value >= high) {
+      break;
+    }
+    bits::setBit(bitmap, static_cast<uint64_t>(base + value - lower));
+  }
+}
+
+void applyRunContainer(
+    const uint8_t* runs,
+    uint32_t numRuns,
+    int64_t base,
+    int64_t from,
+    int64_t to,
+    int64_t lower,
+    uint8_t* bitmap) {
+  const auto low = static_cast<uint32_t>(from - base);
+  const auto high = static_cast<uint32_t>(to - base);
+  // Runs are sorted and disjoint, so their last values increase as well.
+  uint32_t first = 0;
+  uint32_t last = numRuns;
+  while (first < last) {
+    const uint32_t mid = first + (last - first) / 2;
+    const uint32_t runLast =
+        static_cast<uint32_t>(readLittleEndian16(runs + 4 * mid)) +
+        readLittleEndian16(runs + 4 * mid + 2);
+    if (runLast < low) {
+      first = mid + 1;
+    } else {
+      last = mid;
+    }
+  }
+  for (uint32_t i = first; i < numRuns; ++i) {
+    const uint32_t start = readLittleEndian16(runs + 4 * i);
+    if (start >= high) {
+      break;
+    }
+    const uint32_t end = start + readLittleEndian16(runs + 4 * i + 2) + 1;
+    setBitRange(
+        bitmap,
+        static_cast<uint64_t>(base + std::max(start, low) - lower),
+        static_cast<uint64_t>(base + std::min(end, high) - lower));
+  }
+}
+
+void applyBitsetContainer(
+    const uint8_t* words,
+    int64_t base,
+    int64_t from,
+    int64_t to,
+    int64_t lower,
+    uint8_t* bitmap) {
+  const auto low = static_cast<uint32_t>(from - base);
+  const auto high = static_cast<uint32_t>(to - base);
+  const uint32_t firstWord = low / 64;
+  const uint32_t lastWord = (high - 1) / 64;
+  for (uint32_t w = firstWord; w <= lastWord; ++w) {
+    uint64_t word = readLittleEndian64(words + 8 * w);
+    if (w == firstWord) {
+      word &= ~uint64_t{0} << (low % 64);
+    }
+    if (w == lastWord && high % 64 != 0) {
+      word &= (uint64_t{1} << (high % 64)) - 1;
+    }
+    const int64_t wordBase = base + static_cast<int64_t>(w) * 64 - lower;
+    while (word != 0) {
+      bits::setBit(
+          bitmap, static_cast<uint64_t>(wordBase + __builtin_ctzll(word)));
+      word &= word - 1;
+    }
+  }
+}
+
+void appendArrayPositions(
+    const uint8_t* values,
+    uint32_t count,
+    int64_t base,
+    std::vector<int64_t>& positions) {
+  for (uint32_t i = 0; i < count; ++i) {
+    positions.push_back(base + readLittleEndian16(values + 2 * i));
+  }
+}
+
+void appendRunPositions(
+    const uint8_t* runs,
+    uint32_t numRuns,
+    int64_t base,
+    std::vector<int64_t>& positions) {
+  for (uint32_t i = 0; i < numRuns; ++i) {
+    const uint32_t start = readLittleEndian16(runs + 4 * i);
+    const uint32_t last = start + readLittleEndian16(runs + 4 * i + 2);
+    for (uint32_t value = start; value <= last; ++value) {
+      positions.push_back(base + value);
+    }
+  }
+}
+
+void appendBitsetPositions(
+    const uint8_t* words,
+    int64_t base,
+    std::vector<int64_t>& positions) {
+  for (uint32_t w = 0; w < kBitsetContainerWords; ++w) {
+    uint64_t word = readLittleEndian64(words + 8 * w);
+    while (word != 0) {
+      positions.push_back(
+          base + static_cast<int64_t>(w) * 64 + __builtin_ctzll(word));
+      word &= word - 1;
+    }
+  }
+}
 } // namespace
 
 DeletionVectorReader::DeletionVectorReader(
@@ -331,37 +506,41 @@ void DeletionVectorReader::loadBitmap() {
       blobOffset + blobLength,
       fileSize);
 
-  std::string blobData(blobLength, '\0');
-  readFile->pread(blobOffset, blobLength, blobData.data());
+  blob_.assign(blobLength, '\0');
+  readFile->pread(blobOffset, blobLength, blob_.data());
 
   // Unwrap the Iceberg deletion-vector-v1 frame (validates magic + CRC-32),
   // then parse the inner roaring bitmap. Legacy unframed blobs pass through.
-  deserializeRoaring64Bitmap(unframeDeletionVector(blobData));
+  const auto bitmap = unframeDeletionVector(blob_);
+  bitmapOffset_ = static_cast<size_t>(bitmap.data() - blob_.data());
+  bitmapSize_ = bitmap.size();
+  parseRoaringBitmap();
 
-  std::sort(deletedPositions_.begin(), deletedPositions_.end());
+  // Writers emit containers in increasing order. Sort anyway so an out-of-order
+  // blob is still applied correctly; there are few containers per file.
+  const auto byBase = [](const Container& lhs, const Container& rhs) {
+    return lhs.base < rhs.base;
+  };
+  if (!std::is_sorted(containers_.begin(), containers_.end(), byBase)) {
+    std::sort(containers_.begin(), containers_.end(), byBase);
+  }
 }
 
-void DeletionVectorReader::deserializeRoaring64Bitmap(std::string_view data) {
-  if (data.size() < 8) {
+void DeletionVectorReader::parseRoaringBitmap() {
+  if (bitmapSize_ < 8) {
     VELOX_FAIL(
         "Deletion vector blob too small: {} bytes, expected at least 8.",
-        data.size());
+        bitmapSize_);
   }
-
-  const auto* ptr = reinterpret_cast<const uint8_t*>(data.data());
-  const auto* end = ptr + data.size();
+  const auto* data = bitmapData();
 
   // Peek at first 4 bytes to detect 32-bit vs 64-bit format.
-  uint32_t firstWord;
-  std::memcpy(&firstWord, ptr, sizeof(uint32_t));
-  firstWord = folly::Endian::little(firstWord);
-
-  bool is32BitFormat = (firstWord == kSerialCookieNoRun) ||
+  const uint32_t firstWord = readLittleEndian32(data);
+  const bool is32BitFormat = (firstWord == kSerialCookieNoRun) ||
       ((firstWord & 0xFFFF) == kSerialCookie);
-
   if (is32BitFormat) {
     // Legacy 32-bit RoaringBitmap — all positions in [0, 2^32).
-    deserialize32BitRoaringBitmap(ptr, end, 0);
+    parse32BitRoaringBitmap(0, 0);
     return;
   }
 
@@ -370,11 +549,7 @@ void DeletionVectorReader::deserializeRoaring64Bitmap(std::string_view data) {
   //   For each group (sorted by highBits):
   //     [highBits: uint32]
   //     [32-bit RoaringBitmap in portable format]
-  uint64_t numGroups;
-  std::memcpy(&numGroups, ptr, sizeof(uint64_t));
-  numGroups = folly::Endian::little(numGroups);
-  ptr += sizeof(uint64_t);
-
+  const uint64_t numGroups = readLittleEndian64(data);
   static constexpr uint64_t kMaxGroups = 1'000'000;
   VELOX_CHECK_LE(
       numGroups,
@@ -382,135 +557,43 @@ void DeletionVectorReader::deserializeRoaring64Bitmap(std::string_view data) {
       "Roaring64Bitmap group count exceeds sanity limit: {}",
       numGroups);
 
-  for (uint64_t g = 0; g < numGroups; ++g) {
+  size_t offset = sizeof(uint64_t);
+  for (uint64_t group = 0; group < numGroups; ++group) {
     VELOX_CHECK_GE(
-        static_cast<size_t>(end - ptr),
+        bitmapSize_ - offset,
         sizeof(uint32_t),
         "Truncated Roaring64Bitmap group header.");
-
-    uint32_t highBits;
-    std::memcpy(&highBits, ptr, sizeof(uint32_t));
-    highBits = folly::Endian::little(highBits);
-    ptr += sizeof(uint32_t);
-
+    const uint32_t highBits = readLittleEndian32(data + offset);
+    offset += sizeof(uint32_t);
     VELOX_CHECK_LE(
         highBits,
         kMaxRoaring64GroupKey,
         "Roaring64Bitmap group key exceeds the maximum the Iceberg "
         "deletion-vector format can represent: {}",
         highBits);
-
-    int64_t highBitsOffset = static_cast<int64_t>(highBits) << 32;
-
-    // Deserialize the 32-bit bitmap for this group.
-    // We need to find its size first by parsing the header.
-    deserialize32BitRoaringBitmap(ptr, end, highBitsOffset);
-
-    // Advance ptr past the 32-bit bitmap we just parsed.
-    // Re-parse the header to compute the size.
-    const auto* bitmapStart = ptr;
-
-    uint32_t cookie;
-    std::memcpy(&cookie, bitmapStart, sizeof(uint32_t));
-    cookie = folly::Endian::little(cookie);
-
-    bool hasRunContainers = false;
-    uint32_t numContainers = 0;
-
-    if ((cookie & 0xFFFF) == kSerialCookie) {
-      hasRunContainers = true;
-      numContainers = (cookie >> 16) + 1;
-      ptr += sizeof(uint32_t);
-    } else if (cookie == kSerialCookieNoRun) {
-      ptr += sizeof(uint32_t);
-      uint32_t containerCount;
-      std::memcpy(&containerCount, ptr, sizeof(uint32_t));
-      numContainers = folly::Endian::little(containerCount);
-      ptr += sizeof(uint32_t);
-    } else {
-      VELOX_FAIL("Unknown roaring bitmap cookie in 64-bit group: {}", cookie);
-    }
-
-    if (numContainers == 0) {
-      continue;
-    }
-
-    // Skip run bitmap if present.
-    if (hasRunContainers) {
-      uint32_t runBitmapBytes = (numContainers + 7) / 8;
-      ptr += runBitmapBytes;
-    }
-
-    // Read key-cardinality pairs to compute container data sizes.
-    struct ContainerMeta {
-      uint16_t key;
-      uint32_t cardinality;
-      bool isRun;
-    };
-    std::vector<ContainerMeta> containers(numContainers);
-
-    // Re-read run bitmap for container type detection.
-    const auto* runBitmapPtr =
-        hasRunContainers ? bitmapStart + sizeof(uint32_t) : nullptr;
-
-    for (uint32_t i = 0; i < numContainers; ++i) {
-      uint16_t key, cardMinus1;
-      std::memcpy(&key, ptr, sizeof(uint16_t));
-      key = folly::Endian::little(key);
-      ptr += sizeof(uint16_t);
-      std::memcpy(&cardMinus1, ptr, sizeof(uint16_t));
-      cardMinus1 = folly::Endian::little(cardMinus1);
-      ptr += sizeof(uint16_t);
-      bool isRun = hasRunContainers && runBitmapPtr
-          ? ((runBitmapPtr[i / 8] >> (i % 8)) & 1)
-          : false;
-      containers[i] = {key, static_cast<uint32_t>(cardMinus1) + 1, isRun};
-    }
-
-    // Skip offset section
-    const bool hasOffsetSection =
-        !hasRunContainers || numContainers >= kRunContainersNoOffsetThreshold;
-    if (hasOffsetSection) {
-      ptr += numContainers * sizeof(uint32_t);
-    }
-
-    // Skip container data.
-    for (uint32_t i = 0; i < numContainers; ++i) {
-      if (containers[i].isRun) {
-        uint16_t numRuns;
-        std::memcpy(&numRuns, ptr, sizeof(uint16_t));
-        numRuns = folly::Endian::little(numRuns);
-        ptr += sizeof(uint16_t) + static_cast<size_t>(numRuns) * 4;
-      } else if (containers[i].cardinality <= 4'096) {
-        ptr += static_cast<size_t>(containers[i].cardinality) * 2;
-      } else {
-        ptr += 8'192;
-      }
-    }
+    offset =
+        parse32BitRoaringBitmap(offset, static_cast<int64_t>(highBits) << 32);
   }
 }
 
-void DeletionVectorReader::deserialize32BitRoaringBitmap(
-    const uint8_t* ptr,
-    const uint8_t* end,
+size_t DeletionVectorReader::parse32BitRoaringBitmap(
+    size_t offset,
     int64_t highBitsOffset) {
-  VELOX_CHECK_GE(static_cast<size_t>(end - ptr), 8, "32-bit bitmap too small.");
+  const auto* data = bitmapData();
+  const auto remaining = [&]() { return bitmapSize_ - offset; };
+  VELOX_CHECK_GE(remaining(), 8, "32-bit bitmap too small.");
 
-  uint32_t cookie;
-  std::memcpy(&cookie, ptr, sizeof(uint32_t));
-  cookie = folly::Endian::little(cookie);
-  ptr += sizeof(uint32_t);
+  const uint32_t cookie = readLittleEndian32(data + offset);
+  offset += sizeof(uint32_t);
 
   bool hasRunContainers = false;
   uint32_t numContainers = 0;
-
   if ((cookie & 0xFFFF) == kSerialCookie) {
     hasRunContainers = true;
     numContainers = (cookie >> 16) + 1;
   } else if (cookie == kSerialCookieNoRun) {
-    std::memcpy(&numContainers, ptr, sizeof(uint32_t));
-    numContainers = folly::Endian::little(numContainers);
-    ptr += sizeof(uint32_t);
+    numContainers = readLittleEndian32(data + offset);
+    offset += sizeof(uint32_t);
   } else {
     VELOX_FAIL(
         "Unknown roaring bitmap cookie: {}. Expected {} or {}.",
@@ -520,124 +603,113 @@ void DeletionVectorReader::deserialize32BitRoaringBitmap(
   }
 
   if (numContainers == 0) {
-    return;
+    return offset;
   }
+  VELOX_CHECK_LE(
+      numContainers,
+      kMaxContainers,
+      "Roaring bitmap container count exceeds the 16-bit key space: {}",
+      numContainers);
 
-  // Read run bitmap if present.
-  std::vector<bool> isRunContainer(numContainers, false);
+  const size_t runBitmapOffset = offset;
   if (hasRunContainers) {
-    uint32_t runBitmapBytes = (numContainers + 7) / 8;
-    VELOX_CHECK_GE(
-        static_cast<size_t>(end - ptr),
-        runBitmapBytes,
-        "Truncated run bitmap.");
-    for (uint32_t i = 0; i < numContainers; ++i) {
-      isRunContainer[i] = (ptr[i / 8] >> (i % 8)) & 1;
-    }
-    ptr += runBitmapBytes;
+    const size_t runBitmapBytes = (numContainers + 7) / 8;
+    VELOX_CHECK_GE(remaining(), runBitmapBytes, "Truncated run bitmap.");
+    offset += runBitmapBytes;
   }
 
-  // Read key-cardinality pairs.
-  struct ContainerMeta {
-    uint16_t key;
-    uint32_t cardinality;
-  };
-  std::vector<ContainerMeta> containers(numContainers);
-
+  const size_t keysOffset = offset;
   VELOX_CHECK_GE(
-      static_cast<size_t>(end - ptr),
-      numContainers * 4,
+      remaining(),
+      static_cast<size_t>(numContainers) * 4,
       "Truncated container metadata.");
-  for (uint32_t i = 0; i < numContainers; ++i) {
-    uint16_t key, cardMinus1;
-    std::memcpy(&key, ptr, sizeof(uint16_t));
-    key = folly::Endian::little(key);
-    ptr += sizeof(uint16_t);
-    std::memcpy(&cardMinus1, ptr, sizeof(uint16_t));
-    cardMinus1 = folly::Endian::little(cardMinus1);
-    ptr += sizeof(uint16_t);
-    containers[i] = {key, static_cast<uint32_t>(cardMinus1) + 1};
-  }
+  offset += static_cast<size_t>(numContainers) * 4;
 
-  // Skip offset section
   const bool hasOffsetSection =
       !hasRunContainers || numContainers >= kRunContainersNoOffsetThreshold;
   if (hasOffsetSection) {
     VELOX_CHECK_GE(
-        static_cast<size_t>(end - ptr),
-        numContainers * 4,
+        remaining(),
+        static_cast<size_t>(numContainers) * 4,
         "Truncated offset section.");
-    ptr += numContainers * sizeof(uint32_t);
+    offset += static_cast<size_t>(numContainers) * sizeof(uint32_t);
   }
 
-  // dvFile_.recordCount was already validated against
-  // kMaxDeletionVectorRecordCount in the constructor.
-  deletedPositions_.reserve(deletedPositions_.size() + dvFile_.recordCount);
-
-  // Read container data.
+  containers_.reserve(containers_.size() + numContainers);
   for (uint32_t i = 0; i < numContainers; ++i) {
-    int64_t containerBase =
-        highBitsOffset | (static_cast<int64_t>(containers[i].key) << 16);
-    uint32_t cardinality = containers[i].cardinality;
+    const uint16_t key = readLittleEndian16(data + keysOffset + 4 * i);
+    const uint32_t cardinality = static_cast<uint32_t>(readLittleEndian16(
+                                     data + keysOffset + 4 * i + 2)) +
+        1;
+    const bool isRun =
+        hasRunContainers && ((data[runBitmapOffset + i / 8] >> (i % 8)) & 1);
+    const int64_t base = highBitsOffset | (static_cast<int64_t>(key) << 16);
 
-    if (isRunContainer[i]) {
-      uint16_t numRuns;
+    if (isRun) {
+      VELOX_CHECK_GE(remaining(), 2, "Truncated run container.");
+      const uint16_t numRuns = readLittleEndian16(data + offset);
+      offset += sizeof(uint16_t);
       VELOX_CHECK_GE(
-          static_cast<size_t>(end - ptr), 2u, "Truncated run container.");
-      std::memcpy(&numRuns, ptr, sizeof(uint16_t));
-      numRuns = folly::Endian::little(numRuns);
-      ptr += sizeof(uint16_t);
-
-      VELOX_CHECK_GE(
-          static_cast<size_t>(end - ptr),
+          remaining(),
           static_cast<size_t>(numRuns) * 4,
           "Truncated run container data.");
+      // Applying a batch binary-searches the runs, so they must be sorted,
+      // disjoint and inside the container. A violation would otherwise drop
+      // deletes silently.
+      int64_t previousLast = -1;
       for (uint16_t r = 0; r < numRuns; ++r) {
-        uint16_t start, lengthMinus1;
-        std::memcpy(&start, ptr, sizeof(uint16_t));
-        start = folly::Endian::little(start);
-        ptr += sizeof(uint16_t);
-        std::memcpy(&lengthMinus1, ptr, sizeof(uint16_t));
-        lengthMinus1 = folly::Endian::little(lengthMinus1);
-        ptr += sizeof(uint16_t);
-        for (uint32_t v = start;
-             v <= static_cast<uint32_t>(start) + lengthMinus1;
-             ++v) {
-          deletedPositions_.push_back(containerBase | v);
-        }
+        const uint32_t start = readLittleEndian16(data + offset + 4 * r);
+        const uint32_t last =
+            start + readLittleEndian16(data + offset + 4 * r + 2);
+        VELOX_CHECK_LE(
+            last,
+            kMaxContainerValue,
+            "Roaring run extends past its container.");
+        VELOX_CHECK_GT(
+            static_cast<int64_t>(start),
+            previousLast,
+            "Roaring runs are not sorted and disjoint.");
+        previousLast = last;
       }
-    } else if (cardinality <= 4'096) {
+      containers_.push_back(
+          {base, base + previousLast, offset, numRuns, ContainerKind::kRun});
+      offset += static_cast<size_t>(numRuns) * 4;
+    } else if (cardinality <= kMaxArrayContainerCardinality) {
       VELOX_CHECK_GE(
-          static_cast<size_t>(end - ptr),
-          cardinality * 2,
+          remaining(),
+          static_cast<size_t>(cardinality) * 2,
           "Truncated array container.");
+      // Applying a batch binary-searches the values, so they must be strictly
+      // increasing. A violation would otherwise drop deletes silently.
+      int32_t previous = -1;
       for (uint32_t j = 0; j < cardinality; ++j) {
-        uint16_t val;
-        std::memcpy(&val, ptr, sizeof(uint16_t));
-        val = folly::Endian::little(val);
-        ptr += sizeof(uint16_t);
-        deletedPositions_.push_back(containerBase | val);
+        const int32_t value = readLittleEndian16(data + offset + 2 * j);
+        VELOX_CHECK_GT(
+            value,
+            previous,
+            "Roaring array container values are not strictly increasing.");
+        previous = value;
       }
+      containers_.push_back(
+          {base, base + previous, offset, cardinality, ContainerKind::kArray});
+      offset += static_cast<size_t>(cardinality) * 2;
     } else {
-      static constexpr size_t kBitsetBytes = 8'192;
       VELOX_CHECK_GE(
-          static_cast<size_t>(end - ptr),
-          kBitsetBytes,
-          "Truncated bitset container.");
-      for (uint32_t word = 0; word < 1'024; ++word) {
-        uint64_t bits;
-        std::memcpy(&bits, ptr + word * 8, sizeof(uint64_t));
-        bits = folly::Endian::little(bits);
-        while (bits != 0) {
-          uint32_t bit = __builtin_ctzll(bits);
-          deletedPositions_.push_back(
-              containerBase | static_cast<int64_t>(word * 64 + bit));
-          bits &= bits - 1;
+          remaining(), kBitsetContainerBytes, "Truncated bitset container.");
+      int64_t lastValue = -1;
+      for (int32_t w = kBitsetContainerWords - 1; w >= 0; --w) {
+        const uint64_t word = readLittleEndian64(data + offset + 8 * w);
+        if (word != 0) {
+          lastValue = static_cast<int64_t>(w) * 64 + 63 - __builtin_clzll(word);
+          break;
         }
       }
-      ptr += kBitsetBytes;
+      containers_.push_back(
+          {base, base + lastValue, offset, 0, ContainerKind::kBitset});
+      offset += kBitsetContainerBytes;
     }
   }
+  return offset;
 }
 
 void DeletionVectorReader::readDeletePositions(
@@ -646,36 +718,78 @@ void DeletionVectorReader::readDeletePositions(
     BufferPtr deleteBitmap) {
   loadBitmap();
 
-  if (deletedPositions_.empty()) {
-    return;
+  const auto lower = static_cast<int64_t>(splitOffset_ + baseReadOffset);
+  const auto upper = lower + static_cast<int64_t>(size);
+  while (containerIndex_ < containers_.size() &&
+         containers_[containerIndex_].lastPosition < lower) {
+    ++containerIndex_;
   }
 
-  auto* bitmap = deleteBitmap->asMutable<uint8_t>();
-  int64_t rowNumberLowerBound =
-      static_cast<int64_t>(splitOffset_ + baseReadOffset);
-  int64_t rowNumberUpperBound =
-      rowNumberLowerBound + static_cast<int64_t>(size);
-
-  while (positionIndex_ < deletedPositions_.size() &&
-         deletedPositions_[positionIndex_] < rowNumberLowerBound) {
-    ++positionIndex_;
+  const auto* data = bitmapData();
+  for (size_t i = containerIndex_;
+       i < containers_.size() && containers_[i].base < upper;
+       ++i) {
+    const auto& container = containers_[i];
+    const int64_t from = std::max(lower, container.base);
+    const int64_t to = std::min(upper, container.lastPosition + 1);
+    if (from >= to) {
+      continue;
+    }
+    auto* bitmap = deleteBitmap->asMutable<uint8_t>();
+    const auto* payload = data + container.dataOffset;
+    switch (container.kind) {
+      case ContainerKind::kArray:
+        applyArrayContainer(
+            payload, container.count, container.base, from, to, lower, bitmap);
+        break;
+      case ContainerKind::kRun:
+        applyRunContainer(
+            payload, container.count, container.base, from, to, lower, bitmap);
+        break;
+      case ContainerKind::kBitset:
+        applyBitsetContainer(payload, container.base, from, to, lower, bitmap);
+        break;
+    }
   }
 
-  while (positionIndex_ < deletedPositions_.size() &&
-         deletedPositions_[positionIndex_] < rowNumberUpperBound) {
-    auto bitIndex = static_cast<uint64_t>(
-        deletedPositions_[positionIndex_] - rowNumberLowerBound);
-    bits::setBit(bitmap, bitIndex);
-    ++positionIndex_;
+  // A container whose last position is behind this batch is fully consumed.
+  while (containerIndex_ < containers_.size() &&
+         containers_[containerIndex_].lastPosition < upper) {
+    ++containerIndex_;
   }
 }
 
 bool DeletionVectorReader::noMoreData() const {
-  return loaded_ && positionIndex_ >= deletedPositions_.size();
+  return loaded_ && containerIndex_ >= containers_.size();
 }
 
 const std::vector<int64_t>& DeletionVectorReader::deletedPositions() {
   loadBitmap();
+  if (positionsExpanded_) {
+    return deletedPositions_;
+  }
+  positionsExpanded_ = true;
+  const auto* data = bitmapData();
+  for (const auto& container : containers_) {
+    const auto* payload = data + container.dataOffset;
+    switch (container.kind) {
+      case ContainerKind::kArray:
+        appendArrayPositions(
+            payload, container.count, container.base, deletedPositions_);
+        break;
+      case ContainerKind::kRun:
+        appendRunPositions(
+            payload, container.count, container.base, deletedPositions_);
+        break;
+      case ContainerKind::kBitset:
+        appendBitsetPositions(payload, container.base, deletedPositions_);
+        break;
+    }
+  }
+  // Containers can share a key only in an out-of-spec blob.
+  if (!std::is_sorted(deletedPositions_.begin(), deletedPositions_.end())) {
+    std::sort(deletedPositions_.begin(), deletedPositions_.end());
+  }
   return deletedPositions_;
 }
 

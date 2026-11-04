@@ -1065,6 +1065,7 @@ TEST_P(StreamSlicerPayloadApiTest, slicesForcedIntegerEncodings) {
       {EncodingType::Constant, {10, 10, 10, 10, 10, 10, 10}},
       {EncodingType::MainlyConstant, {10, 10, 10, 20, 10, 10, 30}},
       {EncodingType::BlockBitPacking, {10, 11, 12, 13, 14, 15, 16}},
+      {EncodingType::BlockBitPackingV2, {10, 11, 12, 13, 14, 15, 16}},
       {EncodingType::PFOR, {10, 11, 12, 13, 14, 15, 16}},
       {EncodingType::SimdForBitpack, {10, 11, 12, 13, 14, 15, 16}},
       {EncodingType::Huffman, {10, 11, 10, 12, 11, 10, 13}},
@@ -1340,11 +1341,12 @@ TEST_F(StreamSlicerTest, hybridFlatMapRequiresWholeBatch) {
           {1, 1},
           makeFlatVector<int32_t>({1, 1}),
           makeFlatVector<int64_t>({10, 20}))});
-  HybridFlatMap hybridMap;
-  hybridMap.groups = {
-      {.groupId = 0, .groupKeys = {"1"}},
-      {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
-  };
+  HybridFlatMap hybridMap{
+      ScalarKind::Int32,
+      {
+          {.groupId = 0, .groupKeys = {"1"}},
+          {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+      }};
   Serializer serializer{
       SerializerOptions{
           .version = SerializationVersion::kSerialization,

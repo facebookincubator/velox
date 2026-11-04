@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
@@ -97,19 +98,22 @@ std::string getOriginalName(const std::string& kind) {
   return kind;
 }
 
-bool aggregationSupportsMask(const std::string& aggregateName) {
+bool aggregationSupportsMask(
+    const std::string& aggregateName,
+    const StepAwareAggregationRegistry& registry) {
   // Mask eligibility is declared at registration (see
-  // maskSupportedAggregations() populated in
-  // registerCommonAggregationFunctions), so no aggregate names are hardcoded
-  // here. getOriginalName strips the _partial/_merge companion suffixes to the
-  // registered name before lookup.
-  const auto& supported = maskSupportedAggregations();
+  // maskSupportedAggregations(), populated per registry by the registration
+  // functions in AggregationRegistry.cpp), so no aggregate names are
+  // hardcoded here. getOriginalName strips the _partial/_merge companion
+  // suffixes to the registered name before lookup.
+  const auto& supported = maskSupportedAggregations(registry);
   return supported.count(getOriginalName(aggregateName)) > 0;
 }
 
 bool maskSupportedByCudf(
     const core::AggregationNode::Aggregate& aggregate,
-    core::AggregationNode::Step step) {
+    core::AggregationNode::Step step,
+    const StepAwareAggregationRegistry& registry) {
   if (!aggregate.mask) {
     return true;
   }
@@ -126,7 +130,18 @@ bool maskSupportedByCudf(
   }
   // Aggregates that ignore the mask must fall back to CPU rather than silently
   // produce an unmasked result.
-  return aggregationSupportsMask(aggregate.call->name());
+  return aggregationSupportsMask(aggregate.call->name(), registry);
+}
+
+bool sortingKeysSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate) {
+  if (aggregate.sortingKeys.empty()) {
+    return true;
+  }
+  // A function the CPU registry does not know counts as order sensitive.
+  const auto* entry =
+      exec::getAggregateFunctionEntry(getOriginalName(aggregate.call->name()));
+  return entry != nullptr && !entry->metadata.orderSensitive;
 }
 
 namespace {
@@ -284,9 +299,8 @@ AggregationInputChannels buildAggregationInputChannels(
       aggInputs.push_back(fallbackChannel);
     }
 
-    if (aggregate.distinct) {
-      VELOX_NYI("De-dup before aggregation is not yet supported");
-    }
+    VELOX_NYI_CHECK(
+        !aggregate.distinct, "De-dup before aggregation is not yet supported");
 
     result.channels.push_back(aggInputs[0]);
   }
@@ -422,8 +436,10 @@ bool canAggregationBeEvaluatedByRegistry(
     return false;
   }
 
-  // Validate against step-specific signatures from registry.
-  return matchTypedCallAgainstSignatures(call, stepIt->second);
+  // Validate against step-specific signatures from registry. A type variable
+  // in a signature binds any type, so the result must still be one cuDF holds.
+  return matchTypedCallAgainstSignatures(call, stepIt->second) &&
+      isTypeSupportedByCudf(call.type());
 }
 
 bool canBeEvaluatedByCudf(

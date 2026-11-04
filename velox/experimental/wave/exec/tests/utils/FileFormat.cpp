@@ -211,9 +211,7 @@ std::unique_ptr<Column> Encoder<T>::toColumn() {
     }
     column->nulls = encodeBits(nulls_.data(), count_, pool_);
   }
-  if (distincts_.size() <= 1) {
-    VELOX_NYI("constant not supported");
-  }
+  VELOX_NYI_CHECK_GT(distincts_.size(), 1, "constant not supported");
   if (!abandonDict_ && dictSize() < flatSize()) {
     if (kind_ == TypeKind::VARCHAR) {
       column->encoding = kDict;

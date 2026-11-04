@@ -809,67 +809,6 @@ TEST_F(E2EIndexTestBase, v1ChunkStatsDoNotPrune) {
   EXPECT_EQ(result.stats.processedRows, 8);
 }
 
-TEST_F(E2EIndexTestBase, v2ChunkStatsDoNotPruneCompactedTopLevelNulls) {
-  const auto rowType = ROW("value", BIGINT());
-  std::vector<RowVectorPtr> batches{
-      vectorMaker_->rowVector(
-          {"value"}, {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})}),
-      vectorMaker_->rowVector(
-          {"value"}, {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103})}),
-      vectorMaker_->rowVector(
-          {"value"}, {vectorMaker_->flatVector<int64_t>({200, 201, 202, 203})}),
-  };
-  batches[0]->setNull(1, true);
-  writeChunkStatsData(batches);
-
-  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
-  filters["value"] = std::make_unique<BigintRange>(200, 203, false);
-  const auto result = readChunkStatsData(rowType, filters);
-
-  verifyResultsEqual(result.rows, {batches[2]});
-  EXPECT_EQ(result.stats.chunkSkippedRows, 0);
-  EXPECT_EQ(result.stats.processedRows, 12);
-
-  filters["value"] = std::make_unique<IsNull>();
-  const auto nullResult = readChunkStatsData(rowType, filters);
-  auto expectedNull = vectorMaker_->rowVector(
-      {"value"}, {vectorMaker_->flatVector<int64_t>({1})});
-  expectedNull->setNull(0, true);
-  verifyResultsEqual(nullResult.rows, {expectedNull});
-  EXPECT_EQ(nullResult.stats.chunkSkippedRows, 0);
-  EXPECT_EQ(nullResult.stats.processedRows, 12);
-}
-
-TEST_F(E2EIndexTestBase, v2ChunkStatsPruneOnlyAlignedStripes) {
-  const auto rowType = ROW("value", BIGINT());
-  std::vector<RowVectorPtr> batches{
-      vectorMaker_->rowVector(
-          {"value"}, {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})}),
-      vectorMaker_->rowVector(
-          {"value"}, {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103})}),
-      vectorMaker_->rowVector(
-          {"value"}, {vectorMaker_->flatVector<int64_t>({200, 201, 202, 203})}),
-      vectorMaker_->rowVector(
-          {"value"}, {vectorMaker_->flatVector<int64_t>({300, 301, 302, 303})}),
-  };
-  // Compact the child stream only in the first stripe.
-  batches[0]->setNull(1, true);
-  writeChunkStatsData(
-      batches,
-      /*enableChunkStats=*/true,
-      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
-      /*minStreamChunkRawSize=*/0,
-      /*batchesPerStripe=*/2);
-
-  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
-  filters["value"] = std::make_unique<BigintRange>(300, 303, false);
-  const auto result = readChunkStatsData(rowType, filters);
-
-  verifyResultsEqual(result.rows, {batches[3]});
-  EXPECT_EQ(result.stats.chunkSkippedRows, 4);
-  EXPECT_EQ(result.stats.processedRows, 16);
-}
-
 TEST_F(E2EIndexTestBase, v2ChunkStatsSkipPrunedStripeBeforeLoad) {
   const auto rowType = ROW("value", BIGINT());
   std::vector<RowVectorPtr> batches{

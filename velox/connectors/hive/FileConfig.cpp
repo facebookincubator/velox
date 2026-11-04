@@ -17,8 +17,33 @@
 #include "velox/connectors/hive/FileConfig.h"
 
 #include "velox/common/config/Config.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive {
+
+void FileConfig::registerFormatProperties(
+    std::vector<config::ConfigProperty>& properties) {
+  parquet::ParquetConfig::registerProperties(
+      properties,
+      dwio::common::formatConfigPrefix(dwio::common::FileFormat::PARQUET, "_"));
+  dwrf::Config::registerProperties(
+      properties,
+      dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_"));
+}
+
+int32_t FileConfig::numCacheFileHandles() const {
+  return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
+}
+
+uint64_t FileConfig::fileHandleExpirationDurationMs() const {
+  return config_->get<uint64_t>(kFileHandleExpirationDurationMs, 0);
+}
+
+bool FileConfig::isFileHandleCacheEnabled() const {
+  return config_->get<bool>(kEnableFileHandleCache, true);
+}
 
 const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
@@ -31,7 +56,6 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
     VELOX_HIVE_CONFIG_REGISTER(kUseColumnNamesSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleStringDecoderZeroCopySession);
     VELOX_HIVE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleDictionaryAwareReadsSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleLazyColumnIoSession);

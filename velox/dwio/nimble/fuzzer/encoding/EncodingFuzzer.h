@@ -43,6 +43,41 @@ namespace facebook::nimble::test {
 // Data generators
 // ============================================================================
 
+inline Vector<std::string_view> makeFsstData(
+    velox::memory::MemoryPool& pool,
+    std::mt19937& rng,
+    uint32_t rowCount,
+    Buffer* buffer,
+    bool repeated) {
+  std::vector<std::string> alphabet{
+      "",
+      "a",
+      "common/prefix/alpha",
+      "common/prefix/alphabet",
+      std::string("a\0b", 3),
+      std::string("\xff\0\xff", 3),
+      std::string(2'048, 'a'),
+  };
+  for (uint32_t i = 0; i < 16; ++i) {
+    std::string value = "common/prefix/";
+    const auto length = 1 + rng() % 64;
+    for (uint32_t j = 0; j < length; ++j) {
+      value.push_back(static_cast<char>(rng() % 256));
+    }
+    alphabet.push_back(std::move(value));
+  }
+  Vector<std::string_view> data(&pool);
+  data.reserve(rowCount);
+  for (uint32_t i = 0; i < rowCount; ++i) {
+    auto value = alphabet[i < alphabet.size() ? i : rng() % alphabet.size()];
+    if (!repeated) {
+      value.append("/" + std::to_string(i));
+    }
+    data.push_back(buffer->writeString(value));
+  }
+  return data;
+}
+
 template <typename T, typename RNG>
 Vector<T> makeMonotonicData(
     velox::memory::MemoryPool& pool,
@@ -674,6 +709,14 @@ class EncodingFuzzer {
   std::vector<Vector<T>> generateDatasets(std::mt19937& rng) {
     std::vector<Vector<T>> datasets;
     uint32_t rowCount = 1 + folly::Random::rand32(rng) % maxRows_;
+
+    if constexpr (
+        Encoder<EncodingClass>::encodingType() == EncodingType::Fsst) {
+      datasets.push_back(
+          makeFsstData(*pool_, rng, rowCount, buffer_.get(), true));
+      datasets.push_back(
+          makeFsstData(*pool_, rng, rowCount, buffer_.get(), false));
+    }
 
     if constexpr (
         Encoder<EncodingClass>::encodingType() == EncodingType::DeltaBlock) {

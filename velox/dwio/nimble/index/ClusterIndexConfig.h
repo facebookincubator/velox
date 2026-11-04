@@ -42,7 +42,9 @@ struct ClusterIndexConfig final : IndexConfig {
       bool noDuplicateKey,
       EncodingLayout encodingLayout,
       uint64_t maxRowsPerKeyChunk,
-      CompressionType keyChunkCompressionType)
+      CompressionType keyChunkCompressionType,
+      std::vector<std::pair<EncodingType, float>>
+          hierarchicalKeyEncodingReadFactors = {})
       : IndexConfig{IndexFamily::Cluster, std::move(indexName)},
         columns{std::move(columns)},
         sortOrders{std::move(sortOrders)},
@@ -50,7 +52,9 @@ struct ClusterIndexConfig final : IndexConfig {
         noDuplicateKey{noDuplicateKey},
         encodingLayout{std::move(encodingLayout)},
         maxRowsPerKeyChunk{maxRowsPerKeyChunk},
-        keyChunkCompressionType{keyChunkCompressionType} {}
+        keyChunkCompressionType{keyChunkCompressionType},
+        hierarchicalKeyEncodingReadFactors{
+            std::move(hierarchicalKeyEncodingReadFactors)} {}
 
   /// Columns encoded into index keys for data pruning.
   std::vector<std::string> columns;
@@ -61,8 +65,8 @@ struct ClusterIndexConfig final : IndexConfig {
   bool enforceKeyOrder;
   /// Whether duplicate encoded keys are rejected when key order is enforced.
   bool noDuplicateKey;
-  /// Encoding layout for flat keys. Hierarchical indexes select an encoding
-  /// for each level internally.
+  /// Encoding layout for flat keys. Hierarchical indexes select the encoding
+  /// of each key sequence from hierarchicalKeyEncodingReadFactors.
   EncodingLayout encodingLayout;
   /// Maximum rows per key chunk. Smaller values improve lookup granularity at
   /// the cost of additional metadata.
@@ -70,6 +74,18 @@ struct ClusterIndexConfig final : IndexConfig {
   /// Chunk compression for encoded keys. Only Uncompressed, Zstd, and Lz4 are
   /// supported.
   CompressionType keyChunkCompressionType;
+  /// Encoding candidates and read factors for the sequences of hierarchical
+  /// key chunks, chosen by the standard encoding selection. They apply to both
+  /// the value sequences and the child offset sequences. Empty uses the
+  /// hierarchical writer's candidates: Constant, EliasFano, FixedBitWidth,
+  /// Trivial and PartitionedEliasFano. Keys whose levels repeat a few values
+  /// can pass
+  /// ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors() to let
+  /// Dictionary and the other default encodings compete, for smaller but slower
+  /// chunks. Every encoding must be one the selection supports. Flat indexes
+  /// ignore it.
+  std::vector<std::pair<EncodingType, float>>
+      hierarchicalKeyEncodingReadFactors;
 };
 
 /// Builds configuration for a registered cluster-index implementation.
@@ -121,6 +137,12 @@ class ClusterIndexConfigBuilder {
     return *this;
   }
 
+  ClusterIndexConfigBuilder& withHierarchicalKeyEncodingReadFactors(
+      std::vector<std::pair<EncodingType, float>> readFactors) {
+    hierarchicalKeyEncodingReadFactors_ = std::move(readFactors);
+    return *this;
+  }
+
   /// Builds an immutable configuration consumed by the index factory.
   std::shared_ptr<const IndexConfig> build() const {
     return std::make_shared<const ClusterIndexConfig>(
@@ -131,7 +153,8 @@ class ClusterIndexConfigBuilder {
         noDuplicateKey_,
         encodingLayout_,
         maxRowsPerKeyChunk_,
-        keyChunkCompressionType_);
+        keyChunkCompressionType_,
+        hierarchicalKeyEncodingReadFactors_);
   }
 
  private:
@@ -147,6 +170,8 @@ class ClusterIndexConfigBuilder {
       CompressionType::Uncompressed};
   uint64_t maxRowsPerKeyChunk_{10'000};
   CompressionType keyChunkCompressionType_{CompressionType::Uncompressed};
+  std::vector<std::pair<EncodingType, float>>
+      hierarchicalKeyEncodingReadFactors_;
 };
 
 } // namespace facebook::nimble::index

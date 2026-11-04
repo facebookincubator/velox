@@ -38,11 +38,14 @@ using StepAwareAggregationRegistry = std::unordered_map<
 StepAwareAggregationRegistry& getGroupbyAggregationRegistry();
 StepAwareAggregationRegistry& getReduceAggregationRegistry();
 
-/// Names (already prefixed) of aggregation functions whose cuDF operator honors
-/// a FILTER mask. Populated at registration time next to the functions
-/// themselves so mask eligibility lives with the function, not as a separate
-/// list in the validators.
-std::unordered_set<std::string>& maskSupportedAggregations();
+/// Names (already prefixed) of the aggregation functions of 'registry' whose
+/// cuDF aggregator honors a FILTER mask. 'registry' is
+/// getGroupbyAggregationRegistry() or getReduceAggregationRegistry(); any
+/// other registry fails. Populated at registration time next to the functions
+/// themselves, per physical registry: an aggregator that honors a mask on one
+/// path says nothing about an aggregator for the same function on the other.
+std::unordered_set<std::string>& maskSupportedAggregations(
+    const StepAwareAggregationRegistry& registry);
 
 /// Shared registration helpers used to populate a target physical registry.
 bool registerAggregationFunctionForStep(

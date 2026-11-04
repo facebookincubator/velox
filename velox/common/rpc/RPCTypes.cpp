@@ -73,7 +73,26 @@ void RPCResponse::setCapacityRetry(CapacityRetry retry) {
       static_cast<int>(RPCErrorCategory::kOverload),
       "Capacity retry applies only to an overload error");
   VELOX_CHECK_GE(retry.retryAfter.count(), 0);
-  VELOX_CHECK_GT(retry.budget.count(), 0);
+  if (retry.maxRetries.has_value()) {
+    VELOX_CHECK_GT(
+        retry.maxRetries.value(),
+        0,
+        "Capacity retry maxRetries must be positive");
+    VELOX_CHECK_EQ(
+        retry.minRetries,
+        0,
+        "Capacity retry minRetries applies only without maxRetries");
+  } else {
+    VELOX_CHECK(
+        retry.budget.count() > 0 || retry.minRetries > 0,
+        "Capacity retry without maxRetries needs a positive budget or minRetries");
+  }
+  VELOX_CHECK_GE(
+      retry.minRetries, 0, "Capacity retry minRetries must not be negative");
+  VELOX_CHECK_GE(
+      retry.numInPlaceRetries,
+      0,
+      "Capacity retry numInPlaceRetries must not be negative");
   VELOX_CHECK_GE(retry.maxRetryAfter.count(), 0);
   capacityRetry_ = retry;
 }

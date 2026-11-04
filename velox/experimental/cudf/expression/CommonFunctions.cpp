@@ -18,7 +18,23 @@
 #include "velox/experimental/cudf/expression/CommonFunctions.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/base/Exceptions.h"
+
+#include <cudf/unary.hpp>
+
 namespace facebook::velox::cudf_velox {
+
+IsNullFunction::IsNullFunction(const core::TypedExprPtr& expr) {
+  VELOX_CHECK_EQ(expr->inputs().size(), 1, "is_null expects 1 input");
+}
+
+ColumnOrView IsNullFunction::eval(
+    std::vector<ColumnOrView>& inputColumns,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) const {
+  VELOX_CHECK_EQ(inputColumns.size(), 1, "is_null expects 1 input");
+  return cudf::is_null(asView(inputColumns[0]), stream, mr);
+}
 
 std::vector<exec::FunctionSignaturePtr> arrayAccessSignatures(
     std::initializer_list<const char*> indexTypes) {

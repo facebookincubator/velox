@@ -41,6 +41,13 @@ struct CppToType<TimestampUtc> : public CppToTypeBase<TypeKind::TIMESTAMP> {
   }
 };
 
+template <>
+struct CppToType<VectorIndex> : public CppToTypeBase<TypeKind::VARBINARY> {
+  static auto create() {
+    return VectorIndexType::get();
+  }
+};
+
 template <typename T>
 struct CppToType<Generic<T>> : public CppToTypeBase<TypeKind::UNKNOWN> {};
 

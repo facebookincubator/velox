@@ -1626,6 +1626,75 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
   EXPECT_EQ(
       Timestamp(978336000, 0),
       dateTrunc("year", Timestamp(998'474'645, 321'001'234)));
+
+  // Spark timestamps are int64 microseconds since the epoch, from
+  // -290308-12-21 19:59:05.224192 to 294247-01-10 04:00:54.775807 UTC. Results
+  // outside that range throw.
+  const Timestamp minTimestamp = Timestamp::minMicros();
+  const Timestamp maxTimestamp = Timestamp::maxMicros();
+  for (const auto* timeZone : {"UTC", "America/Los_Angeles", "Asia/Shanghai"}) {
+    SCOPED_TRACE(timeZone);
+    setQueryTimeZone(timeZone);
+    for (const auto* unit :
+         {"year",
+          "quarter",
+          "month",
+          "week",
+          "day",
+          "hour",
+          "minute",
+          "second",
+          "millisecond"}) {
+      SCOPED_TRACE(unit);
+      VELOX_ASSERT_USER_THROW(dateTrunc(unit, minTimestamp), "long overflow");
+    }
+    EXPECT_EQ(minTimestamp, dateTrunc("microsecond", minTimestamp));
+    EXPECT_EQ(maxTimestamp, dateTrunc("microsecond", maxTimestamp));
+  }
+
+  {
+    SCOPED_TRACE("Smallest timestamps whose truncation is in range");
+    const Timestamp millisecond(-9'223'372'036'855, 225'000'000);
+    EXPECT_EQ(millisecond, dateTrunc("millisecond", millisecond));
+    const Timestamp second(-9'223'372'036'854, 0);
+    EXPECT_EQ(second, dateTrunc("second", second));
+  }
+
+  {
+    SCOPED_TRACE("Maximum timestamp");
+    setQueryTimeZone("UTC");
+    EXPECT_EQ(
+        Timestamp(9'223'372'036'854, 775'000'000),
+        dateTrunc("millisecond", maxTimestamp));
+    EXPECT_EQ(
+        Timestamp(9'223'372'036'854, 0), dateTrunc("second", maxTimestamp));
+    EXPECT_EQ(
+        Timestamp(9'223'372'036'800, 0), dateTrunc("minute", maxTimestamp));
+    EXPECT_EQ(Timestamp(9'223'372'036'800, 0), dateTrunc("hour", maxTimestamp));
+    EXPECT_EQ(Timestamp(9'223'372'022'400, 0), dateTrunc("day", maxTimestamp));
+    EXPECT_EQ(Timestamp(9'223'371'504'000, 0), dateTrunc("week", maxTimestamp));
+    EXPECT_EQ(
+        Timestamp(9'223'371'244'800, 0), dateTrunc("month", maxTimestamp));
+    EXPECT_EQ(
+        Timestamp(9'223'371'244'800, 0), dateTrunc("quarter", maxTimestamp));
+    EXPECT_EQ(Timestamp(9'223'371'244'800, 0), dateTrunc("year", maxTimestamp));
+  }
+
+  {
+    SCOPED_TRACE("Timestamps outside the range");
+    VELOX_ASSERT_USER_THROW(
+        dateTrunc(
+            "microsecond",
+            Timestamp(
+                maxTimestamp.getSeconds(), maxTimestamp.getNanos() + 1'000)),
+        "long overflow");
+    VELOX_ASSERT_USER_THROW(
+        dateTrunc(
+            "microsecond",
+            Timestamp(
+                minTimestamp.getSeconds(), minTimestamp.getNanos() - 1'000)),
+        "long overflow");
+  }
 }
 
 TEST_F(DateTimeFunctionsTest, trunc) {

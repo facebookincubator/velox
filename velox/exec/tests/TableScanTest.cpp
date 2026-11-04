@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <atomic>
+#include <functional>
 #include <shared_mutex>
 
 #include <fmt/ranges.h>
@@ -2403,7 +2404,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
   Timestamp ts =
       util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
-          .thenOrThrow(folly::identity, [&](const Status& status) {
+          .thenOrThrow(std::identity{}, [&](const Status& status) {
             VELOX_USER_FAIL("{}", status.message());
           });
   // Read timestamp partition value as UTC.
@@ -4133,6 +4134,34 @@ TEST_F(TableScanTest, remainingFilter) {
       "SELECT * FROM tmp WHERE not (c0 > 0 or c1 > c0)");
 }
 
+TEST_F(TableScanTest, remainingFilterWithNoProjectedColumns) {
+  auto data =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5})});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {data});
+
+  const auto outputType = ROW({}, {});
+  const auto assertOutput = [&](const std::string& remainingFilter,
+                                vector_size_t expectedSize) {
+    SCOPED_TRACE(remainingFilter);
+    auto plan =
+        PlanBuilder(pool_.get())
+            .tableScan(outputType, {}, remainingFilter, asRowType(data->type()))
+            .planNode();
+    auto result = AssertQueryBuilder(plan)
+                      .split(makeHiveConnectorSplit(file->getPath()))
+                      .copyResults(pool());
+
+    EXPECT_EQ(result->size(), expectedSize);
+    EXPECT_EQ(*result->type(), *outputType);
+    EXPECT_EQ(result->childrenSize(), 0);
+  };
+
+  assertOutput("c0 % 2 = 0", 3);
+  assertOutput("c0 % 1 = 0", 6);
+  assertOutput("c0 % 2 = 3", 0);
+}
+
 TEST_F(TableScanTest, remainingFilterLazyWithMultiReferences) {
   constexpr int kSize = 10;
   auto vector = makeRowVector({
@@ -5595,7 +5624,7 @@ TEST_F(TableScanTest, timestampPartitionKey) {
                   auto t = util::fromTimestampString(
                                inputs[i], util::TimestampParseMode::kPrestoCast)
                                .thenOrThrow(
-                                   folly::identity, [&](const Status& status) {
+                                   std::identity{}, [&](const Status& status) {
                                      VELOX_USER_FAIL("{}", status.message());
                                    });
                   if (asLocalTime) {
@@ -5732,8 +5761,8 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
       keys,
       {
           makeFlatIdentityVector<int64_t>(kSize),
-          makeFlatVector<int64_t>(kSize, folly::identity, nullEvery(5)),
-          makeFlatVector<int64_t>(kSize, folly::identity, nullEvery(7)),
+          makeFlatVector<int64_t>(kSize, std::identity{}, nullEvery(5)),
+          makeFlatVector<int64_t>(kSize, std::identity{}, nullEvery(7)),
       });
   auto vector = makeRowVector({c0});
   auto config = std::make_shared<dwrf::Config>();

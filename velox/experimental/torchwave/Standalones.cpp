@@ -23,6 +23,7 @@
 #include <ATen/ATen.h>
 #include <c10/core/WrapDimMinimal.h>
 
+#include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
 
@@ -93,7 +94,7 @@ void runStandaloneShortcut(
     return intAt(i);
   };
   auto setOutput = [&](c10::IValue value) {
-    frame.setIValue(data.actualOutputs[0], std::move(value));
+    writeFrame(frame, data.actualOutputs[0], std::move(value));
   };
 
   switch (data.launch->standaloneShortcut) {
@@ -392,7 +393,7 @@ void runStandaloneShortcut(
           data.actualOutputs.size(),
           " outputs");
       for (size_t i = 0; i < data.actualOutputs.size(); ++i) {
-        frame.setIValue(data.actualOutputs[i], list.get(i));
+        writeFrame(frame, data.actualOutputs[i], list.get(i));
       }
       break;
     }
@@ -424,6 +425,24 @@ void runStandaloneShortcut(
     }
     case StandaloneShortcut::kSymNumel: {
       setOutput(c10::IValue(tensorAt(0).numel()));
+      break;
+    }
+    case StandaloneShortcut::kEmptyFactory: {
+      // (Tensor self, int[] size, ScalarType? dtype, ...): self gives the
+      // device, and the dtype unless one is given. No elements, so no storage.
+      auto self = tensorAt(0);
+      auto dtype = self.scalar_type();
+      if (const auto* attr = data.standalone->tryGetAttribute("dtype");
+          attr != nullptr &&
+          std::holds_alternative<c10::ScalarType>(attr->value)) {
+        dtype = std::get<c10::ScalarType>(attr->value);
+      }
+      setOutput(
+          c10::IValue(
+              at::empty(
+                  std::vector<int64_t>(
+                      data.intList.begin(), data.intList.end()),
+                  self.options().dtype(dtype))));
       break;
     }
     case StandaloneShortcut::kNone:
