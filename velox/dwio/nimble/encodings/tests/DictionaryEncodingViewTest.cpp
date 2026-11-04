@@ -90,6 +90,27 @@ TEST_P(DictionaryEncodingViewTest, readsBitPackedAlphabet) {
       randomizedPositions(/*seed=*/12));
 }
 
+TEST_P(DictionaryEncodingViewTest, readsAlpAlphabetOverVarint) {
+  // The writer picks this layout for vectors of small integers when ALP is
+  // allowed. Every row read reads the alphabet, so its Varint view is read
+  // once per row.
+  expectLayoutReads(
+      nimble::DictionaryEnc{
+          .alphabet =
+              nimble::EncodingLayout{
+                  nimble::EncodingType::ALP,
+                  {},
+                  nimble::CompressionType::Uncompressed,
+                  {nimble::VarintEnc{},
+                   nimble::TrivialEnc{},
+                   nimble::TrivialEnc{}}},
+          .indices = nimble::FixedBitWidthEnc{},
+      },
+      nimble::EncodingType::ALP,
+      randomAlpData<float>(/*seed=*/13),
+      randomizedPositions(/*seed=*/14));
+}
+
 TEST_P(DictionaryEncodingViewTest, concurrent) {
   const auto positions = randomizedPositions(/*seed=*/8);
   std::vector<std::string> backing;
