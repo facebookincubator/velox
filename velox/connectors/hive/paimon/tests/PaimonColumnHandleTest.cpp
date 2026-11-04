@@ -23,7 +23,7 @@
 namespace facebook::velox::connector::hive::paimon {
 namespace {
 
-using ColumnType = FileColumnHandle::ColumnType;
+using ColumnType = connector::FileColumnHandle::ColumnType;
 
 class PaimonColumnHandleTest : public testing::Test {
  protected:
@@ -165,15 +165,19 @@ TEST_F(PaimonColumnHandleTest, commonFieldsMatchHive) {
 TEST_F(PaimonColumnHandleTest, commonExtractionsMatchHive) {
   HiveColumnHandle::registerSerDe();
   const auto schemaType = MAP(VARCHAR(), BIGINT());
-  const NamedExtraction keys{
+  const connector::NamedExtraction keys{
       "keys",
-      {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+      {connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapKeys)},
       ARRAY(VARCHAR())};
-  const NamedExtraction size{
-      "size", {ExtractionPathElement::simple(ExtractionStep::kSize)}, BIGINT()};
+  const connector::NamedExtraction size{
+      "size",
+      {connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kSize)},
+      BIGINT()};
   for (const auto& extractions :
-       {std::vector<NamedExtraction>{keys},
-        std::vector<NamedExtraction>{keys, size}}) {
+       {std::vector<connector::NamedExtraction>{keys},
+        std::vector<connector::NamedExtraction>{keys, size}}) {
     SCOPED_TRACE(extractions.size());
     TypePtr dataType = ARRAY(VARCHAR());
     if (extractions.size() > 1) {
@@ -203,18 +207,22 @@ TEST_F(PaimonColumnHandleTest, commonExtractionsMatchHive) {
 
 TEST_F(PaimonColumnHandleTest, extractionRoundTrip) {
   const auto schemaType = MAP(VARCHAR(), BIGINT());
-  const NamedExtraction keys{
+  const connector::NamedExtraction keys{
       "keys",
-      {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+      {connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapKeys)},
       ARRAY(VARCHAR())};
-  const NamedExtraction size{
-      "size", {ExtractionPathElement::simple(ExtractionStep::kSize)}, BIGINT()};
+  const connector::NamedExtraction size{
+      "size",
+      {connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kSize)},
+      BIGINT()};
   for (const auto& extractions :
-       {std::vector<NamedExtraction>{keys},
-        std::vector<NamedExtraction>{keys, size}}) {
+       {std::vector<connector::NamedExtraction>{keys},
+        std::vector<connector::NamedExtraction>{keys, size}}) {
     const PaimonColumnHandle column(
         "m", 30, ColumnType::kRegular, schemaType, {}, extractions);
-    const FileColumnHandle& fileColumn = column;
+    const connector::FileColumnHandle& fileColumn = column;
     EXPECT_EQ(fileColumn.schemaType(), schemaType);
     EXPECT_EQ(fileColumn.extractions(), extractions);
     const auto copy =
@@ -239,7 +247,9 @@ TEST_F(PaimonColumnHandleTest, extractionOutputNames) {
       ColumnType::kRegular,
       ROW({{"value", ROW({{"x", BIGINT()}})}}),
       {},
-      {{"value", {ExtractionPathElement::structField("value")}, output}});
+      {{"value",
+        {connector::ExtractionPathElement::structField("value")},
+        output}});
   const auto copy =
       ISerializable::deserialize<PaimonColumnHandle>(column.serialize());
   EXPECT_EQ(*column.dataType(), *output);
@@ -265,7 +275,8 @@ TEST_F(PaimonColumnHandleTest, invalidMetadata) {
           MAP(VARCHAR(), BIGINT()),
           {},
           {{"size",
-            {ExtractionPathElement::simple(ExtractionStep::kSize)},
+            {connector::ExtractionPathElement::simple(
+                connector::ExtractionStep::kSize)},
             VARCHAR()}}),
       "Paimon extraction 'size' output type must be BIGINT");
 }
@@ -297,7 +308,7 @@ TEST_F(PaimonColumnHandleTest, localCallbackIsNotWireState) {
       {},
       false,
       [&called](VectorPtr&) { called = true; });
-  const FileColumnHandle& fileColumn = column;
+  const connector::FileColumnHandle& fileColumn = column;
   ASSERT_TRUE(fileColumn.postProcessor());
   VectorPtr unused;
   fileColumn.postProcessor()(unused);

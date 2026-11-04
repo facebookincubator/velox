@@ -80,12 +80,11 @@ class KHyperLogLogAggregateTest : public AggregationTestBase {
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::map<int32_t, int64_t>& keysToExpectedCardinalities) {
-    testAggregations(
-        [&](PlanBuilder& builder) { builder.values(data); },
-        groupingKeys,
-        aggregates,
-        {},
-        [&](AssertQueryBuilder& builder) {
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy(groupingKeys)
+        .aggregates(aggregates)
+        .assertResults([&](AssertQueryBuilder& builder) {
           std::shared_ptr<exec::Task> task;
           auto result = builder.copyResults(pool_.get(), task);
           EXPECT_EQ(result->size(), keysToExpectedCardinalities.size());
@@ -170,16 +169,15 @@ TEST_F(KHyperLogLogAggregateTest, globalAggIntegersWithNulls) {
 
   // All nulls
   auto expected = makeRowVector({makeNullConstant(TypeKind::VARBINARY, 1)});
-  testAggregations(
-      {makeRowVector({
+  AggregationTester(*this)
+      .inputs(makeRowVector({
           makeNullableFlatVector<int64_t>(
               {std::nullopt, std::nullopt, std::nullopt}),
           makeNullableFlatVector<int64_t>(
               {std::nullopt, std::nullopt, std::nullopt}),
-      })},
-      {},
-      {"khyperloglog_agg(c0, c1)"},
-      {expected});
+      }))
+      .aggregates({"khyperloglog_agg(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(KHyperLogLogAggregateTest, globalAggStrings) {
@@ -349,7 +347,10 @@ TEST_F(KHyperLogLogAggregateTest, unknownType) {
   auto expected = makeRowVector(
       {makeNullableFlatVector<StringView>({std::nullopt}, VARBINARY())});
 
-  testAggregations({data}, {}, {"khyperloglog_agg(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"khyperloglog_agg(c0, c1)"})
+      .assertResults(expected);
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test

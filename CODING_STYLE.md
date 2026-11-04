@@ -299,6 +299,15 @@ std::shared_ptr<const Payload> payload;
   | ❌ Avoid | ✅ Prefer |
   |----------|-----------|
   | `VELOX_USER_FAIL("Column '{}' is ambiguous", name);` | `VELOX_USER_FAIL("Column is ambiguous: {}", name);` |
+* **Error messages name the mistake.** Say what was wrong with the input, or
+  state the requirement it broke with "must". A sentence that only describes
+  the correct state reads as documentation and leaves the reader to work out
+  what they did.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_USER_FAIL("A placeholder's type is declared with CAST, not TRY_CAST: {}", name);` | `VELOX_USER_FAIL("TRY_CAST of a placeholder is not supported: {}", name);` |
+  | `VELOX_USER_CHECK_GE(k, 1, "k is at least 1");` | `VELOX_USER_CHECK_GE(k, 1, "k must be at least 1");` |
 * Pass a value to a formatted message or `fmt::format` as is when its type has
   an `fmt::formatter`, such as `TypeKind`. The formatter already produces the
   text, so converting the value to a string first only repeats it.

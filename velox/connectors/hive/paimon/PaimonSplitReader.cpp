@@ -20,12 +20,13 @@
 namespace facebook::velox::connector::hive::paimon {
 
 PaimonSplitReader::PaimonSplitReader(
-    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
     std::shared_ptr<const PaimonConnectorSplit> paimonSplit,
     const std::shared_ptr<const PaimonTableHandle>& tableHandle,
-    const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+    const std::unordered_map<std::string, connector::FileColumnHandlePtr>*
+        partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& dataIoStats,
     const std::shared_ptr<io::IoStatistics>& metadataIoStats,
@@ -33,7 +34,7 @@ PaimonSplitReader::PaimonSplitReader(
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const std::shared_ptr<common::ScanSpec>& scanSpec)
-    : FileSplitReader(
+    : connector::FileSplitReader(
           fileSplit,
           tableHandle,
           partitionKeys,
@@ -72,7 +73,7 @@ uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
     // TODO: Apply deletion vectors using original physical file row positions.
     // TODO: Decode internal columns and row kinds for primary-key/changelog
     // files.
-    const auto rowsRead = FileSplitReader::next(size, output);
+    const auto rowsRead = connector::FileSplitReader::next(size, output);
     if (rowsRead > 0) {
       return rowsRead;
     }
@@ -94,7 +95,7 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     fileSplit_ = fileSplits_[currentFileIndex_];
 
     // TODO: Add historical-schema adaptation using per-file schema metadata.
-    FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
+    connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     if (!emptySplit_) {
       return true;
     }
@@ -117,9 +118,10 @@ void PaimonSplitReader::finishFileSplitReader() {
   emptySplit_ = false;
 }
 
-std::shared_ptr<FileConnectorSplit> PaimonSplitReader::makeFileConnectorSplit(
+std::shared_ptr<connector::FileConnectorSplit>
+PaimonSplitReader::makeFileConnectorSplit(
     const PaimonDataFile& dataFile) const {
-  return std::make_shared<FileConnectorSplit>(
+  return std::make_shared<connector::FileConnectorSplit>(
       paimonSplit_->connectorId,
       dataFile.path,
       paimonSplit_->fileFormat(),

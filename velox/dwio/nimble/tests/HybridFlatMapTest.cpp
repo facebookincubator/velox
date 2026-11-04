@@ -134,9 +134,11 @@ TEST(HybridFlatMapTest, supportedKeyKinds) {
   }
 }
 
-// Integer keys of `kind`, whose values are [min, max]: canonical forms pass
-// through; a non-canonical form, a non-integer and a value out of range are
-// rejected.
+// Integer keys of `kind`, whose values are the range of T, [min, max]:
+// canonical forms pass through; a non-canonical form, a non-integer and a value
+// out of range are rejected with the same user error by canonicalKey() and
+// parseCanonicalIntegerKey().
+template <typename T>
 void expectCanonicalIntegerKeys(
     ScalarKind kind,
     const std::string& min,
@@ -144,38 +146,49 @@ void expectCanonicalIntegerKeys(
     const std::string& pastMax) {
   for (const auto& key : {min, std::string{"-1"}, std::string{"0"}, max}) {
     EXPECT_EQ(HybridFlatMap::canonicalKey(kind, key), key);
+    EXPECT_EQ(
+        HybridFlatMap::parseCanonicalIntegerKey<T>(key),
+        static_cast<T>(std::stoll(key)));
   }
   for (const auto& key :
        {std::string{"07"}, std::string{"+7"}, std::string{"-0"}}) {
+    const auto message =
+        fmt::format("Hybrid FlatMap key '{}' is not canonical.", key);
+    NIMBLE_ASSERT_USER_THROW(HybridFlatMap::canonicalKey(kind, key), message);
     NIMBLE_ASSERT_USER_THROW(
-        HybridFlatMap::canonicalKey(kind, key),
-        fmt::format("Hybrid FlatMap key '{}' is not canonical.", key));
+        HybridFlatMap::parseCanonicalIntegerKey<T>(key), message);
   }
   for (const auto& key : {std::string{"ten"}, std::string{"1.5"}, pastMax}) {
+    const auto message = fmt::format(
+        "Hybrid FlatMap key '{}' cannot be parsed as {}.", key, kind);
+    NIMBLE_ASSERT_USER_THROW(HybridFlatMap::canonicalKey(kind, key), message);
     NIMBLE_ASSERT_USER_THROW(
-        HybridFlatMap::canonicalKey(kind, key),
-        fmt::format("Hybrid FlatMap key '{}' cannot be parsed as", key));
+        HybridFlatMap::parseCanonicalIntegerKey<T>(key), message);
   }
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap::canonicalKey(kind, ""),
       "Hybrid FlatMap key cannot be empty.");
+  NIMBLE_ASSERT_USER_THROW(
+      HybridFlatMap::parseCanonicalIntegerKey<T>(""),
+      fmt::format("Hybrid FlatMap key '' cannot be parsed as {}.", kind));
 }
 
 TEST(HybridFlatMapTest, canonicalInt8Keys) {
-  expectCanonicalIntegerKeys(ScalarKind::Int8, "-128", "127", "128");
+  expectCanonicalIntegerKeys<int8_t>(ScalarKind::Int8, "-128", "127", "128");
 }
 
 TEST(HybridFlatMapTest, canonicalInt16Keys) {
-  expectCanonicalIntegerKeys(ScalarKind::Int16, "-32768", "32767", "32768");
+  expectCanonicalIntegerKeys<int16_t>(
+      ScalarKind::Int16, "-32768", "32767", "32768");
 }
 
 TEST(HybridFlatMapTest, canonicalInt32Keys) {
-  expectCanonicalIntegerKeys(
+  expectCanonicalIntegerKeys<int32_t>(
       ScalarKind::Int32, "-2147483648", "2147483647", "2147483648");
 }
 
 TEST(HybridFlatMapTest, canonicalInt64Keys) {
-  expectCanonicalIntegerKeys(
+  expectCanonicalIntegerKeys<int64_t>(
       ScalarKind::Int64,
       "-9223372036854775808",
       "9223372036854775807",
@@ -222,6 +235,13 @@ TEST(HybridFlatMapTest, constructorSortsKeys) {
           ScalarKind::String, config({{0, {"b", "a"}}, {kDefault, {}}}))
           .groups(),
       config({{0, {"a", "b"}}, {kDefault, {}}}));
+  // Only the last key is out of order, so the whole group must be checked.
+  EXPECT_EQ(
+      HybridFlatMap(
+          ScalarKind::String,
+          config({{0, {"b", "c", "d", "a"}}, {kDefault, {}}}))
+          .groups(),
+      config({{0, {"a", "b", "c", "d"}}, {kDefault, {}}}));
   // A Default-only configuration is valid: Default holds every key.
   EXPECT_EQ(
       HybridFlatMap(ScalarKind::Int32, config({{kDefault, {}}})).groups(),

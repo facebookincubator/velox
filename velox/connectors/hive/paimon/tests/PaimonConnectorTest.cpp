@@ -17,14 +17,16 @@
 
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <atomic>
+#include <type_traits>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/LocalFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
@@ -49,6 +51,9 @@
 
 namespace facebook::velox::connector::hive::paimon {
 namespace {
+
+static_assert(std::is_base_of_v<connector::FileConnector, PaimonConnector>);
+static_assert(!std::is_base_of_v<HiveConnector, PaimonConnector>);
 
 static const std::string kPaimonConnectorId = "test-paimon";
 
@@ -276,7 +281,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
       common::SubfieldFilters subfieldFilters = {},
       const core::TypedExprPtr& remainingFilter = nullptr,
       const std::vector<std::string>& partitionNames = {},
-      std::vector<FileColumnHandlePtr> filterColumns = {},
+      std::vector<connector::FileColumnHandlePtr> filterColumns = {},
       std::unordered_map<std::string, std::string> options = {}) {
     return std::make_shared<PaimonTableHandle>(
         kPaimonConnectorId,
@@ -302,7 +307,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
       assignments[name] = std::make_shared<PaimonColumnHandle>(
           name,
           i + 10,
-          FileColumnHandle::ColumnType::kRegular,
+          connector::FileColumnHandle::ColumnType::kRegular,
           rowType->childAt(i));
     }
     return assignments;
@@ -354,6 +359,7 @@ TEST_F(PaimonConnectorTest, connectorRegistration) {
   auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
   ASSERT_NE(connector, nullptr);
   ASSERT_NE(connector->connectorConfig(), nullptr);
+  EXPECT_TRUE(connector->canAddDynamicFilter());
   EXPECT_FALSE(connector->supportsSplitPreload());
   EXPECT_FALSE(connector->supportsIndexLookup());
   VELOX_ASSERT_THROW(
@@ -369,15 +375,55 @@ TEST_F(PaimonConnectorTest, connectorFactory) {
 
   auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{
-          {HiveConfig::kEnableFileHandleCache, "true"},
-          {HiveConfig::kNumCacheFileHandles, "500"}});
+          {PaimonConfig::kEnableFileHandleCache, "true"},
+          {PaimonConfig::kNumCacheFileHandles, "500"}});
 
   auto connector = factory.newConnector("test-paimon-2", config);
   ASSERT_NE(connector, nullptr);
 
-  HiveConfig hiveConfig(connector->connectorConfig());
-  EXPECT_TRUE(hiveConfig.isFileHandleCacheEnabled());
-  EXPECT_EQ(hiveConfig.numCacheFileHandles(), 500);
+  PaimonConfig paimonConfig(connector->connectorConfig());
+  EXPECT_TRUE(paimonConfig.isFileHandleCacheEnabled());
+  EXPECT_EQ(paimonConfig.numCacheFileHandles(), 500);
+  auto* paimonConnector = dynamic_cast<PaimonConnector*>(connector.get());
+  ASSERT_NE(paimonConnector, nullptr);
+  EXPECT_EQ(paimonConnector->fileHandleCacheStats().maxSize, 500);
+}
+
+TEST_F(PaimonConnectorTest, configProvider) {
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {PaimonConfig::kCacheMetadata, "true"}});
+  auto connector =
+      PaimonConnectorFactory().newConnector("paimon-config", config);
+  const auto* provider = connector->configProvider();
+  ASSERT_NE(provider, nullptr);
+  const auto properties = provider->properties();
+  EXPECT_EQ(properties.size(), PaimonConfig::registeredProperties().size());
+  const auto cacheMetadata = std::find_if(
+      properties.begin(), properties.end(), [](const auto& property) {
+        return property.name == PaimonConfig::kCacheMetadataSession;
+      });
+  ASSERT_NE(cacheMetadata, properties.end());
+  EXPECT_EQ(cacheMetadata->defaultValue, "true");
+  EXPECT_EQ(provider->normalize("cache_metadata", "false"), "false");
+  EXPECT_NE(
+      std::find_if(
+          properties.begin(),
+          properties.end(),
+          [](const auto& property) {
+            return property.name ==
+                PaimonConfig::kOrcFooterSpeculativeIoSizeSession;
+          }),
+      properties.end());
+  EXPECT_EQ(
+      std::find_if(
+          properties.begin(),
+          properties.end(),
+          [](const auto& property) {
+            return property.name ==
+                HiveConfig::kInsertExistingPartitionsBehaviorSession;
+          }),
+      properties.end());
 }
 
 // E2E test: read a single file from an append-only Paimon split.
@@ -551,9 +597,12 @@ TEST_F(PaimonConnectorTest, appendOnlyWithPartitionKeys) {
 
   connector::ColumnHandleMap assignments;
   assignments["c0"] = std::make_shared<PaimonColumnHandle>(
-      "c0", 10, FileColumnHandle::ColumnType::kRegular, BIGINT());
+      "c0", 10, connector::FileColumnHandle::ColumnType::kRegular, BIGINT());
   assignments["p0"] = std::make_shared<PaimonColumnHandle>(
-      "p0", 11, FileColumnHandle::ColumnType::kPartitionKey, VARCHAR());
+      "p0",
+      11,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
+      VARCHAR());
 
   auto plan = exec::test::PlanBuilder()
                   .startTableScan()
@@ -590,10 +639,16 @@ TEST_F(PaimonConnectorTest, physicalPartitionColumnsUseSplitConstants) {
   const ColumnHandleMap assignments{
       {"id",
        std::make_shared<PaimonColumnHandle>(
-           "id", 10, FileColumnHandle::ColumnType::kRegular, BIGINT())},
+           "id",
+           10,
+           connector::FileColumnHandle::ColumnType::kRegular,
+           BIGINT())},
       {"p",
        std::make_shared<PaimonColumnHandle>(
-           "p", 11, FileColumnHandle::ColumnType::kPartitionKey, VARCHAR())}};
+           "p",
+           11,
+           connector::FileColumnHandle::ColumnType::kPartitionKey,
+           VARCHAR())}};
   const auto plan = exec::test::PlanBuilder()
                         .startTableScan()
                         .connectorId(kPaimonConnectorId)
@@ -640,13 +695,20 @@ TEST_F(PaimonConnectorTest, tableHandleFiltersAndProjection) {
       std::move(filters),
       remainingFilter,
       {},
-      std::vector<FileColumnHandlePtr>{std::make_shared<PaimonColumnHandle>(
-          "value", 11, FileColumnHandle::ColumnType::kRegular, BIGINT())});
+      std::vector<connector::FileColumnHandlePtr>{
+          std::make_shared<PaimonColumnHandle>(
+              "value",
+              11,
+              connector::FileColumnHandle::ColumnType::kRegular,
+              BIGINT())});
   const auto outputType = ROW({{"selected_id", BIGINT()}});
   connector::ColumnHandleMap assignments{
       {"selected_id",
        std::make_shared<PaimonColumnHandle>(
-           "id", 10, FileColumnHandle::ColumnType::kRegular, BIGINT())}};
+           "id",
+           10,
+           connector::FileColumnHandle::ColumnType::kRegular,
+           BIGINT())}};
   const auto plan = exec::test::PlanBuilder()
                         .startTableScan()
                         .connectorId(kPaimonConnectorId)
@@ -711,7 +773,7 @@ TEST_F(PaimonConnectorTest, fileScanCapabilitiesWithPaimonTable) {
   filters.emplace(
       common::Subfield("id"), std::make_unique<common::BoolValue>(true, false));
   const auto filterColumn = std::make_shared<PaimonColumnHandle>(
-      "value", 11, FileColumnHandle::ColumnType::kRegular, BIGINT());
+      "value", 11, connector::FileColumnHandle::ColumnType::kRegular, BIGINT());
   const auto table = makePaimonTableHandle(
       rowType,
       std::move(filters),
@@ -743,10 +805,10 @@ TEST_F(PaimonConnectorTest, fileScanCapabilitiesWithPaimonTable) {
               std::make_shared<PaimonColumnHandle>(
                   "id",
                   10,
-                  FileColumnHandle::ColumnType::kRegular,
+                  connector::FileColumnHandle::ColumnType::kRegular,
                   BIGINT(),
                   std::move(requiredSubfields),
-                  std::vector<NamedExtraction>{},
+                  std::vector<connector::NamedExtraction>{},
                   /*partitionDateValueDaysSinceEpoch=*/false,
                   std::move(processor))}})
         .endTableScan()
@@ -785,21 +847,22 @@ TEST_F(PaimonConnectorTest, fileScanCapabilitiesWithPaimonTable) {
       makeRowVector({"a.b"}, {makeFlatVector<int64_t>({1, 2})});
   std::vector<common::Subfield> requiredSubfields;
   requiredSubfields.push_back(std::move(*common::Subfield::create("a.b")));
-  const auto literalPlan = exec::test::PlanBuilder()
-                               .startTableScan()
-                               .connectorId(kPaimonConnectorId)
-                               .outputType(literalType)
-                               .tableHandle(makePaimonTableHandle(literalType))
-                               .assignments(
-                                   {{"a.b",
-                                     std::make_shared<PaimonColumnHandle>(
-                                         "a.b",
-                                         10,
-                                         FileColumnHandle::ColumnType::kRegular,
-                                         BIGINT(),
-                                         std::move(requiredSubfields))}})
-                               .endTableScan()
-                               .planNode();
+  const auto literalPlan =
+      exec::test::PlanBuilder()
+          .startTableScan()
+          .connectorId(kPaimonConnectorId)
+          .outputType(literalType)
+          .tableHandle(makePaimonTableHandle(literalType))
+          .assignments(
+              {{"a.b",
+                std::make_shared<PaimonColumnHandle>(
+                    "a.b",
+                    10,
+                    connector::FileColumnHandle::ColumnType::kRegular,
+                    BIGINT(),
+                    std::move(requiredSubfields))}})
+          .endTableScan()
+          .planNode();
   for (auto format : fileFormats()) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
     const auto files = makeFilePaths(1);
@@ -815,7 +878,10 @@ TEST_F(PaimonConnectorTest, partitionFilterOnlyConstants) {
   const auto rowType = ROW({{"id", BIGINT()}, {"p", VARCHAR()}});
   const auto input = makeRowVector({"id"}, {makeFlatVector<int64_t>({7, 8})});
   const auto partitionColumn = std::make_shared<PaimonColumnHandle>(
-      "p", 11, FileColumnHandle::ColumnType::kPartitionKey, VARCHAR());
+      "p",
+      11,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
+      VARCHAR());
   for (auto format : fileFormats()) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
     const auto files = makeFilePaths(1);
@@ -827,7 +893,7 @@ TEST_F(PaimonConnectorTest, partitionFilterOnlyConstants) {
           common::SubfieldFilters{},
           parseExpr("p is null or length(p) = 0", rowType),
           {"p"},
-          std::vector<FileColumnHandlePtr>{partitionColumn});
+          std::vector<connector::FileColumnHandlePtr>{partitionColumn});
       const auto plan =
           exec::test::PlanBuilder()
               .startTableScan()
@@ -854,7 +920,7 @@ TEST_F(PaimonConnectorTest, partitionFilterOnlyConstants) {
         std::move(filters),
         nullptr,
         {"p"},
-        std::vector<FileColumnHandlePtr>{partitionColumn});
+        std::vector<connector::FileColumnHandlePtr>{partitionColumn});
     const auto plan =
         exec::test::PlanBuilder()
             .startTableScan()
@@ -1005,10 +1071,16 @@ TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
   connector::ColumnHandleMap assignments{
       {"id",
        std::make_shared<PaimonColumnHandle>(
-           "id", 10, FileColumnHandle::ColumnType::kRegular, BIGINT())},
+           "id",
+           10,
+           connector::FileColumnHandle::ColumnType::kRegular,
+           BIGINT())},
       {"p",
        std::make_shared<PaimonColumnHandle>(
-           "p", 11, FileColumnHandle::ColumnType::kPartitionKey, VARCHAR())}};
+           "p",
+           11,
+           connector::FileColumnHandle::ColumnType::kPartitionKey,
+           VARCHAR())}};
   auto source =
       ConnectorRegistry::tryGet(kPaimonConnectorId)
           ->createDataSource(
@@ -1068,7 +1140,10 @@ TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
   const auto numericTable = makePaimonTableHandle(
       ROW({{"id", BIGINT()}, {"p", INTEGER()}}), {}, nullptr, {"p"});
   const auto numericColumn = std::make_shared<PaimonColumnHandle>(
-      "p", 11, FileColumnHandle::ColumnType::kPartitionKey, INTEGER());
+      "p",
+      11,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
+      INTEGER());
   auto numericSource = ConnectorRegistry::tryGet(kPaimonConnectorId)
                            ->createDataSource(
                                ROW({{"p", INTEGER()}}),
@@ -1121,7 +1196,7 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
     return std::make_shared<PaimonColumnHandle>(
         "id",
         10,
-        FileColumnHandle::ColumnType::kRegular,
+        connector::FileColumnHandle::ColumnType::kRegular,
         BIGINT(),
         std::move(subfields));
   };
@@ -1167,7 +1242,7 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
             std::make_shared<PaimonColumnHandle>(
                 "unused",
                 11,
-                FileColumnHandle::ColumnType::kRegular,
+                connector::FileColumnHandle::ColumnType::kRegular,
                 VARBINARY())}},
           context.get()),
       nullptr);
@@ -1192,7 +1267,10 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
         {"id", idColumns.at("id")},
         {"p",
          std::make_shared<PaimonColumnHandle>(
-             "p", 11, FileColumnHandle::ColumnType::kPartitionKey, VARCHAR())}};
+             "p",
+             11,
+             connector::FileColumnHandle::ColumnType::kPartitionKey,
+             VARCHAR())}};
     EXPECT_NE(
         connector->createDataSource(
             ROW({{"id", BIGINT()}}), filteredTable, columns, context.get()),
@@ -1202,8 +1280,9 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
         common::SubfieldFilters{},
         parseExpr(condition, rowType),
         {"p"},
-        std::vector<FileColumnHandlePtr>{
-            std::static_pointer_cast<const FileColumnHandle>(columns.at("p"))});
+        std::vector<connector::FileColumnHandlePtr>{
+            std::static_pointer_cast<const connector::FileColumnHandle>(
+                columns.at("p"))});
     EXPECT_NE(
         connector->createDataSource(
             ROW({{"id", BIGINT()}}),
@@ -1213,8 +1292,8 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
         nullptr);
   }
   for (const auto* option :
-       {FileConfig::kIgnoreMissingFilesSession,
-        FileConfig::kFileColumnNamesReadAsLowerCaseSession}) {
+       {connector::FileConfig::kIgnoreMissingFilesSession,
+        connector::FileConfig::kFileColumnNamesReadAsLowerCaseSession}) {
     SCOPED_TRACE(option);
     const auto session = std::make_shared<config::ConfigBase>(
         std::unordered_map<std::string, std::string>{{option, "true"}});
@@ -1301,7 +1380,7 @@ TEST_F(PaimonConnectorTest, ordinaryColumnsIgnoreFeatureOptions) {
           exec::test::AssertQueryBuilder(scan)
               .connectorSessionProperty(
                   kPaimonConnectorId,
-                  FileConfig::kIgnoreMissingFilesSession,
+                  connector::FileConfig::kIgnoreMissingFilesSession,
                   "true")
               .split(split)
               .assertResults(expected);
@@ -1323,12 +1402,17 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
         {files[0]->getPath()}, PaimonTableType::kAppendOnly, format);
     exec::CursorParameters params;
     params.planNode = plan;
-    params.queryConfigs[core::QueryConfig::kMaxOutputBufferSize] = "1";
+    // Keep the scan in progress after the first batch, even if the producer
+    // runs ahead of the cursor.
+    params.bufferedBytes = 1024;
+    params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] = "1024";
     auto cursor = exec::TaskCursor::create(params);
     cursor->task()->addSplit(plan->id(), exec::Split(split));
     cursor->task()->noMoreSplits(plan->id());
     ASSERT_TRUE(cursor->moveNext());
+    ASSERT_TRUE(cursor->task()->isRunning());
     cursor->task()->requestCancel().wait();
+    ASSERT_EQ(cursor->task()->state(), exec::TaskState::kCanceled);
     EXPECT_THROW(cursor->moveNext(), folly::OperationCancelled);
     cursor.reset();
     exec::test::waitForAllTasksToBeDeleted();
@@ -1377,11 +1461,14 @@ TEST_F(PaimonConnectorTest, columnHandlesRoundTrip) {
   const auto rowType =
       ROW({{"value", BIGINT()}, {"id", BIGINT()}, {"p", VARCHAR()}});
   const auto id = std::make_shared<PaimonColumnHandle>(
-      "id", 7, FileColumnHandle::ColumnType::kRegular, BIGINT());
+      "id", 7, connector::FileColumnHandle::ColumnType::kRegular, BIGINT());
   const auto value = std::make_shared<PaimonColumnHandle>(
-      "value", 41, FileColumnHandle::ColumnType::kRegular, BIGINT());
+      "value", 41, connector::FileColumnHandle::ColumnType::kRegular, BIGINT());
   const auto partition = std::make_shared<PaimonColumnHandle>(
-      "p", 99, FileColumnHandle::ColumnType::kPartitionKey, VARCHAR());
+      "p",
+      99,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
+      VARCHAR());
   common::SubfieldFilters filters;
   filters.emplace(
       common::Subfield("value"),
@@ -1397,7 +1484,7 @@ TEST_F(PaimonConnectorTest, columnHandlesRoundTrip) {
       std::unordered_map<std::string, std::string>{},
       std::move(filters),
       parseExpr("id < 3 and p = 'keep'", rowType),
-      std::vector<FileColumnHandlePtr>{value, partition});
+      std::vector<connector::FileColumnHandlePtr>{value, partition});
   const auto plan = exec::test::PlanBuilder()
                         .startTableScan()
                         .connectorId(kPaimonConnectorId)
@@ -1440,7 +1527,7 @@ TEST_F(PaimonConnectorTest, nestedColumnHandleRoundTrip) {
   const auto column = std::make_shared<PaimonColumnHandle>(
       "r",
       10,
-      FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       nestedType,
       std::move(paths));
   const auto plan = exec::test::PlanBuilder()
@@ -1479,12 +1566,13 @@ TEST_F(PaimonConnectorTest, extractedColumnHandleRoundTrip) {
   const auto column = std::make_shared<PaimonColumnHandle>(
       "m",
       10,
-      FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       mapType,
       std::vector<common::Subfield>{},
-      std::vector<NamedExtraction>{
+      std::vector<connector::NamedExtraction>{
           {"size",
-           {ExtractionPathElement::simple(ExtractionStep::kSize)},
+           {connector::ExtractionPathElement::simple(
+               connector::ExtractionStep::kSize)},
            BIGINT()}});
   const auto plan = exec::test::PlanBuilder()
                         .startTableScan()
@@ -1601,10 +1689,10 @@ TEST_F(PaimonConnectorTest, partitionDateEncodingRoundTrip) {
   const auto column = std::make_shared<PaimonColumnHandle>(
       "day",
       11,
-      FileColumnHandle::ColumnType::kPartitionKey,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
       DATE(),
       std::vector<common::Subfield>{},
-      std::vector<NamedExtraction>{},
+      std::vector<connector::NamedExtraction>{},
       /*partitionDateValueDaysSinceEpoch=*/true);
   const auto plan = exec::test::PlanBuilder()
                         .startTableScan()

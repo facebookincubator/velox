@@ -571,4 +571,39 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError)
       /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
 
+#define _VELOX_NYI_CHECK_IMPL(expr, exprStr, ...)                   \
+  _VELOX_CHECK_AND_THROW_IMPL(                                      \
+      expr,                                                         \
+      exprStr,                                                      \
+      ::facebook::velox::VeloxRuntimeError,                         \
+      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
+      ::facebook::velox::error_code::kNotImplemented.c_str(),       \
+      /* isRetriable */ false,                                      \
+      ##__VA_ARGS__)
+
+#define _VELOX_NYI_CHECK_OP(expr1, expr2, op, ...) \
+  _VELOX_CHECK_OP_HELPER(_VELOX_NYI_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
+
+// These throw the same error as VELOX_NYI when the condition does not hold. An
+// additional message can be passed using a format string and arguments, as
+// with `fmt::format`.
+#define VELOX_NYI_CHECK(expr, ...) \
+  _VELOX_NYI_CHECK_IMPL(expr, #expr, ##__VA_ARGS__)
+#define VELOX_NYI_CHECK_GT(e1, e2, ...) \
+  _VELOX_NYI_CHECK_OP(e1, e2, >, ##__VA_ARGS__)
+#define VELOX_NYI_CHECK_GE(e1, e2, ...) \
+  _VELOX_NYI_CHECK_OP(e1, e2, >=, ##__VA_ARGS__)
+#define VELOX_NYI_CHECK_LT(e1, e2, ...) \
+  _VELOX_NYI_CHECK_OP(e1, e2, <, ##__VA_ARGS__)
+#define VELOX_NYI_CHECK_LE(e1, e2, ...) \
+  _VELOX_NYI_CHECK_OP(e1, e2, <=, ##__VA_ARGS__)
+#define VELOX_NYI_CHECK_EQ(e1, e2, ...) \
+  _VELOX_NYI_CHECK_OP(e1, e2, ==, ##__VA_ARGS__)
+#define VELOX_NYI_CHECK_NE(e1, e2, ...) \
+  _VELOX_NYI_CHECK_OP(e1, e2, !=, ##__VA_ARGS__)
+#define VELOX_NYI_CHECK_NULL(e, ...) \
+  VELOX_NYI_CHECK(e == nullptr, ##__VA_ARGS__)
+#define VELOX_NYI_CHECK_NOT_NULL(e, ...) \
+  VELOX_NYI_CHECK(e != nullptr, ##__VA_ARGS__)
+
 } // namespace facebook::velox

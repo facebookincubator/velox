@@ -344,7 +344,7 @@ folly::coro::Task<NimbleIndexProjector::RowProjectionResult>
 NimbleIndexProjector::co_projectRows(
     const Request& request,
     const Options& options) {
-  ensureStreamReader();
+  ensureStreamReader(options.cacheEncodingView);
   SCOPE_EXIT {
     clearRequest();
   };
@@ -559,19 +559,23 @@ NimbleIndexProjector::loadStripeStreams(
   return result;
 }
 
-Encoding::Options NimbleIndexProjector::encodingOptions() {
+Encoding::Options NimbleIndexProjector::encodingOptions(
+    bool cacheEncodingView) {
   Encoding::Options options;
   options.useVarintRowCount = tablet_->properties().compactRowCountEncoding();
   options.bufferPool = &encodingBufferPool_;
+  options.cacheEncodingView = cacheEncodingView;
   return options;
 }
 
-void NimbleIndexProjector::ensureStreamReader() {
-  if (streamReader_ != nullptr) {
+void NimbleIndexProjector::ensureStreamReader(bool cacheEncodingView) {
+  if (streamReader_ != nullptr && cacheEncodingView_ == cacheEncodingView) {
     return;
   }
+  // The reader fixes its encoding options when it is created.
   streamReader_ = std::make_unique<StreamReader>(
-      projection_->nimbleType, pool_, encodingOptions());
+      projection_->nimbleType, pool_, encodingOptions(cacheEncodingView));
+  cacheEncodingView_ = cacheEncodingView;
 }
 
 void NimbleIndexProjector::setResumeKey(

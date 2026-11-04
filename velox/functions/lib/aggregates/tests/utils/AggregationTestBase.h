@@ -236,6 +236,123 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     testIncremental_ = true;
   }
 
+  /// Runs an aggregation through the plans that AggregationTestBase generates
+  /// and checks that they all produce the same results. Set the input, the
+  /// aggregation and the options, then call one of the assert methods:
+  ///
+  ///   AggregationTester(*this)
+  ///       .inputs(vectors)
+  ///       .groupBy({"c0"})
+  ///       .aggregates({"sum(c1)"})
+  ///       .withCompanion()
+  ///       .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY 1");
+  ///
+  /// The plans are those of AggregationTestBase::testAggregations: partial and
+  /// final, single, intermediate, local exchange, spilling, streaming, and
+  /// reading the input from files.
+  class AggregationTester {
+   public:
+    using AssertResults = std::function<std::shared_ptr<exec::Task>(
+        exec::test::AssertQueryBuilder&)>;
+
+    explicit AggregationTester(AggregationTestBase& test) : test_{test} {}
+
+    /// The input batches of the aggregation.
+    AggregationTester& inputs(std::vector<RowVectorPtr> inputs) {
+      inputs_ = std::move(inputs);
+      return *this;
+    }
+
+    /// The input of the aggregation, as a single batch.
+    AggregationTester& inputs(RowVectorPtr input) {
+      inputs_ = {std::move(input)};
+      return *this;
+    }
+
+    /// Adds plan nodes between the input and the aggregation, such as a
+    /// projection that computes the grouping keys.
+    AggregationTester& preAggregation(
+        std::function<void(exec::test::PlanBuilder&)> preAggregation) {
+      preAggregation_ = std::move(preAggregation);
+      return *this;
+    }
+
+    AggregationTester& groupBy(std::vector<std::string> groupingKeys) {
+      groupingKeys_ = std::move(groupingKeys);
+      return *this;
+    }
+
+    AggregationTester& aggregates(std::vector<std::string> aggregates) {
+      aggregates_ = std::move(aggregates);
+      return *this;
+    }
+
+    /// Projections to apply to the result of the aggregation.
+    AggregationTester& project(std::vector<std::string> projections) {
+      projections_ = std::move(projections);
+      return *this;
+    }
+
+    /// Sets a query configuration property for every plan.
+    AggregationTester& config(
+        const std::string& key,
+        const std::string& value) {
+      config_[key] = value;
+      return *this;
+    }
+
+    /// Also runs the plans that compute the aggregates with their companion
+    /// functions. See AggregationTestBase::testAggregationsWithCompanion.
+    AggregationTester& withCompanion() {
+      companion_ = true;
+      return *this;
+    }
+
+    /// Skips the check that extracting results twice from the same accumulators
+    /// gives the same results.
+    AggregationTester& disableIncremental() {
+      incremental_ = false;
+      return *this;
+    }
+
+    /// Checks the results against an equivalent DuckDB query over a table 'tmp'
+    /// that the test created from the input.
+    void assertResults(const std::string& duckDbSql);
+
+    /// Checks the results against 'expected'.
+    void assertResults(const std::vector<RowVectorPtr>& expected);
+
+    /// Checks the results against 'expected', a single batch.
+    void assertResults(const RowVectorPtr& expected);
+
+    /// Checks the results with 'assertResults', which runs the query.
+    void assertResults(const AssertResults& assertResults);
+
+    /// Checks that every plan fails with an error that contains 'message'.
+    void assertError(const std::string& message);
+
+   private:
+    // Runs the plans and checks their results with 'assertResults'.
+    void run(const AssertResults& assertResults);
+
+    // Adds the input and the pre-aggregation nodes to 'builder'.
+    void addSource(exec::test::PlanBuilder& builder) const;
+
+    // Returns the argument types of each aggregate, as the aggregation over the
+    // input resolves them.
+    std::vector<std::vector<TypePtr>> aggregateArgTypes() const;
+
+    AggregationTestBase& test_;
+    std::vector<RowVectorPtr> inputs_;
+    std::function<void(exec::test::PlanBuilder&)> preAggregation_;
+    std::vector<std::string> groupingKeys_;
+    std::vector<std::string> aggregates_;
+    std::vector<std::string> projections_;
+    std::unordered_map<std::string, std::string> config_;
+    bool companion_{false};
+    bool incremental_{true};
+  };
+
   /// Whether testStreaming should be called in testAggregations.
   bool testStreaming_{true};
 
@@ -267,6 +384,20 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::function<void(exec::test::PlanBuilder&)>& makeSource,
       const std::vector<std::string>& aggregates,
       const std::unordered_map<std::string, std::string>& config = {});
+
+  // Runs the companion plans of testAggregationsWithCompanion. 'makeSource'
+  // builds the input of the aggregation, including the extra grouping key
+  // 'k0'.
+  void testAggregationsWithCompanionImpl(
+      const std::vector<RowVectorPtr>& data,
+      const std::function<void(exec::test::PlanBuilder&)>& makeSource,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
+      const std::vector<std::string>& postAggregationProjections,
+      const std::function<std::shared_ptr<exec::Task>(
+          exec::test::AssertQueryBuilder&)>& assertResults,
+      const std::unordered_map<std::string, std::string>& config);
 
   void testAggregationsImpl(
       std::function<void(exec::test::PlanBuilder&)> makeSource,

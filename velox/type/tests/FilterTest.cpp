@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -76,6 +77,35 @@ TEST(FilterTest, isNotNull) {
   EXPECT_TRUE(notNull.testInt128Range(0, 0, true));
 
   EXPECT_FALSE(notNull.testNull());
+}
+
+TEST(FilterTest, isNotNullTestValues) {
+  IsNotNull notNull;
+  // Also call through the base class interface.
+  const Filter* filter = &notNull;
+
+  // Every non-null value passes, whatever the lane values are.
+  const auto check = [&](auto first, auto second) {
+    using T = decltype(first);
+    std::array<T, xsimd::batch<T>::size> values;
+    for (size_t i = 0; i < values.size(); ++i) {
+      values[i] = (i & 1) ? first : second;
+    }
+
+    const auto batch = xsimd::load_unaligned(values.data());
+    const auto expected = simd::allSetBitMask<T>();
+
+    EXPECT_EQ(expected, simd::toBitMask(notNull.testValues(batch)));
+    EXPECT_EQ(expected, simd::toBitMask(filter->testValues(batch)));
+  };
+
+  check(int64_t{0}, std::numeric_limits<int64_t>::min());
+  check(int32_t{-1}, std::numeric_limits<int32_t>::max());
+  check(int16_t{0}, std::numeric_limits<int16_t>::min());
+  check(
+      std::numeric_limits<double>::quiet_NaN(),
+      std::numeric_limits<double>::infinity());
+  check(std::numeric_limits<float>::quiet_NaN(), -0.0f);
 }
 
 TEST(FilterTest, isNull) {

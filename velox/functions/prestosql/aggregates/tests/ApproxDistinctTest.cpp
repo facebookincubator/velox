@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <functional>
+
 #include <folly/base64.h>
 
 #include "velox/common/hyperloglog/HllUtils.h"
@@ -464,7 +466,7 @@ TEST_F(ApproxDistinctTest, mergeWithEmpty) {
   auto input = makeRowVector({
       makeFlatVector<int32_t>(kSize, [](auto i) { return std::min(i, 1); }),
       makeFlatVector<int64_t>(
-          kSize, folly::identity, [](auto i) { return i == 0; }),
+          kSize, std::identity{}, [](auto i) { return i == 0; }),
   });
   auto op = PlanBuilder()
                 .values({input})

@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <functional>
+
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -370,11 +372,11 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
          makeFlatVector<int32_t>(
              kBatchSize,
-             folly::identity,
+             std::identity{},
              [](auto row) { return row % 5 == 0; }),
          makeFlatVector<double>(
              kBatchSize,
-             folly::identity,
+             std::identity{},
              [](auto row) { return row % 7 == 0; }),
          makeFlatIdentityVector<int64_t>(kBatchSize),
          makeFlatIdentityVector<double>(kBatchSize),

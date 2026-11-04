@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/type/Conversions.h"
+#include <functional>
+
 #include "gtest/gtest.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/Conversions.h"
 #include "velox/type/CppToType.h"
 
 using namespace facebook::velox;
@@ -53,7 +55,7 @@ class ConversionsTest : public testing::Test {
         result = Converter<toTypeKind, void, PrestoCastPolicy>::tryCast(input);
       }
 
-      return result.thenOrThrow(folly::identity, [](const Status& status) {
+      return result.thenOrThrow(std::identity{}, [](const Status& status) {
         VELOX_USER_FAIL(status.message());
       });
     };

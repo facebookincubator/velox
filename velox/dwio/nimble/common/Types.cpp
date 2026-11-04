@@ -43,6 +43,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::PFOR, "PFOR"},
         {EncodingType::SimdForBitpack, "SimdForBitpack"},
         {EncodingType::BlockBitPacking, "BlockBitPacking"},
+        {EncodingType::BlockBitPackingV2, "BlockBitPackingV2"},
         {EncodingType::SubIntSplit, "SubIntSplit"},
         {EncodingType::FrequencyPartition, "FrequencyPartition"},
         {EncodingType::FOR, "FOR"},

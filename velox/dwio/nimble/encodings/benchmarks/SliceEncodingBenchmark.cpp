@@ -18,7 +18,7 @@
 #include "folly/Benchmark.h"
 #include "folly/init/Init.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
@@ -291,9 +291,9 @@ SLICE_BENCHMARKS(
     makeNarrow<uint32_t>(12));
 SLICE_BENCHMARKS(
     BlockBitPackingUint32,
-    BlockBitPackingEncoding<uint32_t>,
+    BlockBitPackingV2Encoding<uint32_t>,
     uint32_t,
-    EncodingType::BlockBitPacking,
+    EncodingType::BlockBitPackingV2,
     makeIncreasing<uint32_t>());
 SLICE_BENCHMARKS(
     PFORUint32,
@@ -348,8 +348,8 @@ BENCHMARK(Slice_BlockBitPackingUint32PartialBlock, iters) {
   std::string encoded;
   BENCHMARK_SUSPEND {
     const auto data = makeIncreasing<uint32_t>();
-    encoded = encodeData<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking, data);
+    encoded = encodeData<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2, data);
   }
   sliceBenchmark(
       encoded, kPartialBlockSliceOffset, kPartialBlockSliceLength, iters);
@@ -358,12 +358,12 @@ BENCHMARK_RELATIVE(MaterializeEncode_BlockBitPackingUint32PartialBlock, iters) {
   std::string encoded;
   BENCHMARK_SUSPEND {
     const auto data = makeIncreasing<uint32_t>();
-    encoded = encodeData<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking, data);
+    encoded = encodeData<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2, data);
   }
-  materializeEncodeBenchmark<BlockBitPackingEncoding<uint32_t>, uint32_t>(
+  materializeEncodeBenchmark<BlockBitPackingV2Encoding<uint32_t>, uint32_t>(
       encoded,
-      EncodingType::BlockBitPacking,
+      EncodingType::BlockBitPackingV2,
       kPartialBlockSliceOffset,
       kPartialBlockSliceLength,
       iters);
@@ -412,9 +412,9 @@ int main(int argc, char** argv) {
         "FixedBitWidthUint32",
         EncodingType::FixedBitWidth,
         makeNarrow<uint32_t>(12));
-    printSize<BlockBitPackingEncoding<uint32_t>>(
+    printSize<BlockBitPackingV2Encoding<uint32_t>>(
         "BlockBitPackingUint32",
-        EncodingType::BlockBitPacking,
+        EncodingType::BlockBitPackingV2,
         makeIncreasing<uint32_t>());
     printSize<PFOREncoding<uint32_t>>(
         "PFORUint32", EncodingType::PFOR, makePforUint32());

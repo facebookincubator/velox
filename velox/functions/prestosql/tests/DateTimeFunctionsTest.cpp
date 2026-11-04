@@ -18,6 +18,7 @@
 
 #include <gmock/gmock.h>
 
+#include <functional>
 #include <utility>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -544,7 +545,7 @@ TEST_F(DateTimeFunctionsTest, week) {
   const auto weekTimestamp = [&](std::string_view time) {
     auto ts = util::fromTimestampString(
                   time.data(), time.size(), util::TimestampParseMode::kIso8601)
-                  .thenOrThrow(folly::identity, [&](const Status& status) {
+                  .thenOrThrow(std::identity{}, [&](const Status& status) {
                     VELOX_USER_FAIL("{}", status.message());
                   });
     auto timestamp =
@@ -571,7 +572,7 @@ TEST_F(DateTimeFunctionsTest, weekTimestampWithTimezone) {
                                          const char* timezone) {
     auto ts = util::fromTimestampString(
                   time.data(), time.size(), util::TimestampParseMode::kIso8601)
-                  .thenOrThrow(folly::identity, [&](const Status& status) {
+                  .thenOrThrow(std::identity{}, [&](const Status& status) {
                     VELOX_USER_FAIL("{}", status.message());
                   });
 

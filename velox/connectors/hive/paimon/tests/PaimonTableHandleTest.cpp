@@ -54,7 +54,7 @@ class PaimonTableHandleTest : public testing::Test {
 };
 
 TEST_F(PaimonTableHandleTest, tableDefinition) {
-  const FileTableHandlePtr handle = table();
+  const connector::FileTableHandlePtr handle = table();
   EXPECT_EQ(handle->connectorId(), "test-paimon");
   EXPECT_EQ(handle->name(), "orders");
   EXPECT_EQ(handle->dbName(), "");
@@ -106,7 +106,7 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
   const auto remaining =
       std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), Variant(true));
   const auto filterColumn = std::make_shared<PaimonColumnHandle>(
-      "value", 20, FileColumnHandle::ColumnType::kRegular, BIGINT());
+      "value", 20, connector::FileColumnHandle::ColumnType::kRegular, BIGINT());
   const std::unordered_map<std::string, std::string> options{
       {"deletion-vectors.enabled", "false"},
       {"data-evolution.enabled", "false"},
@@ -128,7 +128,7 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
       {filterColumn},
       0.5,
       "analytics");
-  const FileTableHandle& fileHandle = original;
+  const connector::FileTableHandle& fileHandle = original;
   EXPECT_EQ(fileHandle.name(), "orders");
   EXPECT_EQ(fileHandle.tableName(), "orders");
   EXPECT_EQ(fileHandle.dbName(), "analytics");
@@ -196,9 +196,12 @@ TEST_F(PaimonTableHandleTest, commonFieldsMatchHive) {
   HiveColumnHandle::registerSerDe();
   HiveTableHandle::registerSerDe();
   const auto hiveColumn = std::make_shared<HiveColumnHandle>(
-      "value", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+      "value",
+      connector::FileColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT());
   const auto paimonColumn = std::make_shared<PaimonColumnHandle>(
-      "value", 20, FileColumnHandle::ColumnType::kRegular, BIGINT());
+      "value", 20, connector::FileColumnHandle::ColumnType::kRegular, BIGINT());
 
   for (bool withFilters : {false, true}) {
     SCOPED_TRACE(withFilters);
@@ -238,8 +241,8 @@ TEST_F(PaimonTableHandleTest, commonFieldsMatchHive) {
         {},
         makeFilters(),
         remaining,
-        withFilters ? std::vector<FileColumnHandlePtr>{paimonColumn}
-                    : std::vector<FileColumnHandlePtr>{},
+        withFilters ? std::vector<connector::FileColumnHandlePtr>{paimonColumn}
+                    : std::vector<connector::FileColumnHandlePtr>{},
         sampleRate,
         dbName);
     const auto hiveObj = hive.serialize();
@@ -295,7 +298,7 @@ TEST_F(PaimonTableHandleTest, subfieldStringSerde) {
   const auto filterColumn = std::make_shared<PaimonColumnHandle>(
       "r",
       7,
-      FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       nestedType,
       std::move(requiredSubfields));
   const PaimonTableHandle original(
@@ -436,7 +439,7 @@ TEST_F(PaimonTableHandleTest, serializeNullSubfieldFilter) {
 
 TEST_F(PaimonTableHandleTest, serializeNullFilterColumnHandle) {
   const auto column = std::make_shared<PaimonColumnHandle>(
-      "id", 7, FileColumnHandle::ColumnType::kRegular, BIGINT());
+      "id", 7, connector::FileColumnHandle::ColumnType::kRegular, BIGINT());
   const PaimonTableHandle handle(
       "test-paimon",
       "orders",
@@ -458,10 +461,10 @@ TEST_F(PaimonTableHandleTest, localCallbackIsNotWireState) {
   const auto column = std::make_shared<PaimonColumnHandle>(
       "id",
       7,
-      FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       BIGINT(),
       std::vector<common::Subfield>{},
-      std::vector<NamedExtraction>{},
+      std::vector<connector::NamedExtraction>{},
       /*partitionDateValueDaysSinceEpoch=*/false,
       [](VectorPtr&) {});
   const PaimonTableHandle handle(

@@ -34,10 +34,6 @@ runs:
       shell: bash
       env:
         MAKEFLAGS: NUM_THREADS=8
-        # Mirror the adapters job: build FAISS from source. The image's
-        # FAISS is older than the 1.12.0 Velox requires. Remove once the
-        # images have FAISS 1.12.0.
-        faiss_SOURCE: BUNDLED
       run: |
         # The adapters image exports CC/CXX pointing at GCC 12 (used
         # during image build); without an explicit override the
