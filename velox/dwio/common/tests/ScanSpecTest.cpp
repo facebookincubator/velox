@@ -16,6 +16,7 @@
 
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gmock/gmock.h>
@@ -199,6 +200,31 @@ TEST_F(ScanSpecTest, testFilterOnConstant) {
         child.setFilter(std::make_shared<IsNotNull>());
       },
       false);
+}
+
+// A missing bound of long decimal statistics is unbounded, so the known bound
+// alone decides whether the filter can match.
+TEST_F(ScanSpecTest, testFilterOnOneSidedLongDecimalStatistics) {
+  // Beyond the int64_t range.
+  const auto large = HugeInt::build(10, 0);
+  auto test = [](int128_t value,
+                 std::optional<int128_t> min,
+                 std::optional<int128_t> max) {
+    const HugeintRange filter(value, value, false);
+    dwio::common::IntegerColumnStatistics<int128_t> statistics(
+        1, false, std::nullopt, std::nullopt, min, max, std::nullopt);
+    return testFilter(
+        &filter,
+        &statistics,
+        1,
+        DECIMAL(38, 0),
+        dwio::common::FileFormat::PARQUET);
+  };
+
+  EXPECT_TRUE(test(large, large, std::nullopt));
+  EXPECT_FALSE(test(large, large + 1, std::nullopt));
+  EXPECT_TRUE(test(-large, std::nullopt, -large));
+  EXPECT_FALSE(test(-large, std::nullopt, -large - 1));
 }
 
 // A child added after a snapshot was taken appears at the end of the next one.

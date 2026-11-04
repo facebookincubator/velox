@@ -172,7 +172,7 @@ void validateIntStats(const VectorPtr& batch, const ColumnStatistics& stats) {
       sum += val;
     }
   }
-  auto& intStats = dynamic_cast<const IntegerColumnStatistics&>(stats);
+  auto& intStats = dynamic_cast<const IntegerColumnStatistics<>&>(stats);
   ASSERT_EQ(min, intStats.getMinimum());
   ASSERT_EQ(max, intStats.getMaximum());
   ASSERT_EQ(sum, intStats.getSum());

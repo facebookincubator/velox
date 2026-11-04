@@ -126,11 +126,13 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   if (!velox_hive::testFilters(
           scanSpec.get(),
           deleteReader.get(),
+          deleteFileSchema,
           deleteSplit->filePath,
           deleteSplit->partitionKeys,
           {},
           hiveConfig->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx->sessionProperties()))) {
+              connectorQueryCtx->sessionProperties()),
+          deleteSplit->fileFormat)) {
     runtimeStats.skippedSplitBytes += static_cast<int64_t>(deleteSplit->length);
     numDeleteKeys_ = 0;
     return;

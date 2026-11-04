@@ -23,10 +23,16 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/type/Filter.h"
+
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/writer/Writer.h"
+#endif
 
 namespace facebook::velox::connector {
 
@@ -480,10 +486,12 @@ TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
       hive::testFilters(
           scanSpec.get(),
           reader.get(),
+          rowType,
           filePath,
           /*partitionKey=*/{},
           /*partitionKeysHandle=*/{},
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
@@ -517,10 +525,12 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
       hive::testFilters(
           scanSpec.get(),
           reader.get(),
+          rowType,
           filePath,
           partitionKeys,
           partitionKeysHandle,
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
@@ -554,10 +564,12 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
       hive::testFilters(
           scanSpec.get(),
           reader.get(),
+          rowType,
           filePath,
           partitionKeys,
           partitionKeysHandle,
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 // A constant decides the filter even when the data file carries the column.
@@ -586,10 +598,12 @@ TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
     return hive::testFilters(
         scanSpec.get(),
         reader.get(),
+        reader->rowType(),
         filePath,
         /*partitionKeys=*/{},
         /*partitionKeysHandle=*/{},
-        /*asLocalTime=*/false);
+        /*asLocalTime=*/false,
+        dwio::common::FileFormat::DWRF);
   };
 
   // The file holds 0 through 99: statistics would keep the split for both.
@@ -648,10 +662,12 @@ TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
       hive::testFilters(
           scanSpec.get(),
           reader.get(),
+          reader->rowType(),
           filePath,
           partitionKeys,
           partitionKeysHandle,
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
@@ -685,10 +701,12 @@ TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
       hive::testFilters(
           scanSpec.get(),
           reader.get(),
+          rowType,
           filePath,
           partitionKeys,
           partitionKeysHandle,
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
@@ -718,10 +736,12 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
         hive::testFilters(
             scanSpec.get(),
             reader.get(),
+            rowType,
             filePath,
             partitionKeys,
             partitionKeysHandle,
-            /*asLocalTime=*/false));
+            /*asLocalTime=*/false,
+            dwio::common::FileFormat::DWRF));
   }
 
   // Non-matching partition value.
@@ -740,10 +760,12 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
         hive::testFilters(
             scanSpec.get(),
             reader.get(),
+            rowType,
             filePath,
             partitionKeys,
             partitionKeysHandle,
-            /*asLocalTime=*/false));
+            /*asLocalTime=*/false,
+            dwio::common::FileFormat::DWRF));
   }
 }
 
@@ -768,10 +790,111 @@ TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
       hive::testFilters(
           scanSpec.get(),
           reader.get(),
+          rowType,
           filePath,
           /*partitionKey=*/{},
           /*partitionKeysHandle=*/{},
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
+}
+
+#ifdef VELOX_ENABLE_PARQUET
+// Parquet statistics are in the file scale, so a filter on the values of a
+// column read as a decimal with a different scale is rejected. Filters on
+// nulls do not depend on the scale and still use the statistics.
+TEST_F(FileConnectorUtilTest, testFiltersRescaledParquetDecimal) {
+  auto path = exec::test::TempFilePath::create();
+  const auto& filePath = path->getPath();
+  {
+    dwio::common::WriterOptions writerOptions;
+    writerOptions.memoryPool = rootPool_.get();
+    // The file holds 0 through 99 without nulls.
+    auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
+    parquet::Writer writer(
+        std::make_unique<dwio::common::WriteFileSink>(
+            std::make_unique<LocalWriteFile>(
+                filePath,
+                /*shouldCreateParentDirectories=*/false,
+                /*shouldThrowOnFileAlreadyExists=*/false),
+            filePath),
+        writerOptions,
+        asRowType(batch->type()));
+    writer.write(batch);
+    writer.close();
+  }
+
+  dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileFormat(dwio::common::FileFormat::PARQUET);
+  auto reader = std::make_unique<parquet::ParquetReader>(
+      std::make_unique<dwio::common::BufferedInput>(
+          std::make_shared<LocalReadFile>(filePath),
+          readerOptions.memoryPool()),
+      readerOptions);
+
+  auto keepsSplit = [&](std::unique_ptr<common::Filter> filter,
+                        const TypePtr& requestedType) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    scanSpec->addField("c0", 0)->setFilter(std::move(filter));
+    return hive::testFilters(
+        scanSpec.get(),
+        reader.get(),
+        ROW({"c0"}, {requestedType}),
+        filePath,
+        /*partitionKey=*/{},
+        /*partitionKeysHandle=*/{},
+        /*asLocalTime=*/false,
+        dwio::common::FileFormat::PARQUET);
+  };
+
+  // The file values do not include 100, so the statistics skip the split. Read
+  // as DECIMAL(12, 2), 1 is 1.00, which has the unscaled value 100.
+  EXPECT_FALSE(keepsSplit(
+      std::make_unique<common::BigintRange>(100, 100, false), DECIMAL(12, 0)));
+  EXPECT_FALSE(keepsSplit(std::make_unique<common::IsNull>(), DECIMAL(12, 2)));
+  VELOX_ASSERT_USER_THROW(
+      keepsSplit(
+          std::make_unique<common::BigintRange>(100, 100, false),
+          DECIMAL(12, 2)),
+      "Filter pushdown is not accepted. Requested type: DECIMAL(12, 2), file type: BIGINT.");
+}
+#endif
+
+// The ORC reader applies filters to values in the requested scale, and decimal
+// statistics of formats other than Parquet are not tested on filters, so an
+// ORC decimal read with a different scale accepts filters on values.
+TEST_F(FileConnectorUtilTest, testFiltersRescaledOrcDecimal) {
+  // Column 'b' is DECIMAL(38, 18) in the file and holds 100000000.
+  const auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/decimal.orc");
+  dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileFormat(dwio::common::FileFormat::ORC);
+  auto reader = dwio::common::getReaderFactory(dwio::common::FileFormat::ORC)
+                    ->createReader(
+                        std::make_unique<dwio::common::BufferedInput>(
+                            std::make_shared<LocalReadFile>(filePath),
+                            readerOptions.memoryPool()),
+                        readerOptions);
+
+  // Read as DECIMAL(38, 9), 100000000 has the unscaled value 10^17.
+  const int128_t value = 100'000'000'000'000'000;
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  scanSpec->addField("b", 0)->setFilter(
+      std::make_unique<common::HugeintRange>(value, value, false));
+
+  EXPECT_TRUE(
+      hive::testFilters(
+          scanSpec.get(),
+          reader.get(),
+          ROW({"b"}, {DECIMAL(38, 9)}),
+          filePath,
+          /*partitionKey=*/{},
+          /*partitionKeysHandle=*/{},
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::ORC));
 }
 
 } // namespace facebook::velox::connector

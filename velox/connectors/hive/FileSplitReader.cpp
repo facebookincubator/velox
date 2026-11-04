@@ -295,11 +295,13 @@ bool FileSplitReader::filterOnStats(
   if (testFilters(
           scanSpec_.get(),
           baseReader_.get(),
+          readerOutputType_,
           fileSplit_->filePath,
           fileSplit_->partitionKeys,
           *partitionKeys_,
           fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+              connectorQueryCtx_->sessionProperties()),
+          fileSplit_->fileFormat)) {
     ++runtimeStats.processedSplits;
     return true;
   }

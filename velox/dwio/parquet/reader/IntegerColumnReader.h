@@ -58,6 +58,25 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     return true;
   }
 
+  void filterRowGroups(
+      uint64_t rowGroupSize,
+      const dwio::common::StatsContext& context,
+      dwio::common::FormatData::FilterRowGroupsResult& result) const override {
+    // Statistics are in the file scale, so a filter on values in a different
+    // requested scale is rejected before they are compared.
+    checkFilter();
+    const auto numMetadataFilterResults = result.metadataFilterResults.size();
+    SelectiveIntegerColumnReader::filterRowGroups(
+        rowGroupSize, context, result);
+    if (isRescaledDecimal()) {
+      // Metadata filters are not rejected because the remaining filter they
+      // come from evaluates the rescaled values. Their bounds are in the
+      // requested scale, so their results on the statistics are dropped. A
+      // metadata filter without results is unknown and skips no row group.
+      result.metadataFilterResults.resize(numMetadataFilterResults);
+    }
+  }
+
   void seekToRowGroup(int64_t index) override {
     SelectiveIntegerColumnReader::seekToRowGroup(index);
     scanState().clear();
@@ -95,6 +114,8 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
         offset,
         rows,
         nullptr);
+    // Filters can change between batches, for example with dynamic filters.
+    checkFilter();
     readCommon<IntegerColumnReader, true>(rows);
     readOffset_ += rows.back() + 1;
   }
@@ -111,11 +132,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   void rescaleDecimalValues(
       const ParquetTypeWithId& fileType,
       VectorPtr& result) {
-    int32_t requestedScale = getDecimalPrecisionScale(*requestedType_).second;
-    int32_t fileScale = fileType.type()->isDecimal()
-        ? getDecimalPrecisionScale(*fileType.type()).second
-        : 0;
-    int32_t scaleAdjust = requestedScale - fileScale;
+    int32_t scaleAdjust = scaleToAdjust(fileType.type(), requestedType_);
     VELOX_USER_CHECK_GE(
         scaleAdjust,
         0,
@@ -141,10 +158,10 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     }
   }
 
-  /// Multiplies all non-null values in result by multiplier.
-  /// Overflow is impossible because convertType validates precInc >= scaleInc,
-  /// guaranteeing that originalValue * 10^scaleAdjust fits within the target
-  /// precision.
+  // Multiplies all non-null values in result by multiplier.
+  // Overflow is impossible because convertType validates precInc >= scaleInc,
+  // guaranteeing that originalValue * 10^scaleAdjust fits within the target
+  // precision.
   template <typename T>
   void applyDecimalScaleMultiplier(const VectorPtr& result, T multiplier)
       const {
@@ -162,6 +179,30 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
           rawValues[i] *= multiplier;
         }
       }
+    }
+  }
+
+  int32_t scaleToAdjust(const TypePtr& fileType, const TypePtr& requestedType)
+      const {
+    int32_t requestedScale = getDecimalPrecisionScale(*requestedType).second;
+    int32_t fileScale =
+        fileType->isDecimal() ? getDecimalPrecisionScale(*fileType).second : 0;
+    return requestedScale - fileScale;
+  }
+
+  // Returns true if values are multiplied from the file scale to the requested
+  // decimal scale. An integer file column has scale 0.
+  bool isRescaledDecimal() const {
+    return requestedType_->isDecimal() &&
+        scaleToAdjust(fileType_->type(), requestedType_) != 0;
+  }
+
+  // Filters on values are in the requested scale, so they are rejected when
+  // the file values are in a different scale.
+  void checkFilter() const {
+    if (scanSpec_->filter()) {
+      common::checkFilterOnRescaledDecimal(
+          *scanSpec_->filter(), *fileType_->type(), *requestedType_);
     }
   }
 };

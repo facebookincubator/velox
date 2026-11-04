@@ -35,6 +35,39 @@ size_t estimateFileSize(const thrift::FileMetaData& metadata) {
   return FileMetaDataPtr(&metadata).estimateFileMetadataSize();
 }
 
+// Encodes 'value' as 'width' big-endian two's complement bytes, the
+// FIXED_LEN_BYTE_ARRAY decimal layout.
+std::string toBigEndian(int128_t value, int32_t width) {
+  std::string bytes(width, '\0');
+  for (auto i = width - 1; i >= 0; --i) {
+    bytes[i] = static_cast<char>(value & 0xFF);
+    value >>= 8;
+  }
+  return bytes;
+}
+
+// Returns the min and max decoded from the statistics of a
+// FIXED_LEN_BYTE_ARRAY column chunk of decimal 'type'.
+template <typename T>
+std::pair<std::optional<T>, std::optional<T>> decodeDecimalStatistics(
+    const TypePtr& type,
+    const std::string& min,
+    const std::string& max) {
+  thrift::ColumnChunk column;
+  auto& metaData = column.meta_data().ensure();
+  metaData.type() = thrift::Type::FIXED_LEN_BYTE_ARRAY;
+  auto& statistics = metaData.statistics().ensure();
+  statistics.min_value() = min;
+  statistics.max_value() = max;
+  const auto columnStatistics =
+      ColumnChunkMetaDataPtr(&column).getColumnStatistics(type, 1);
+  const auto* integerStatistics =
+      dynamic_cast<const dwio::common::IntegerColumnStatistics<T>*>(
+          columnStatistics.get());
+  VELOX_CHECK_NOT_NULL(integerStatistics);
+  return {integerStatistics->getMinimum(), integerStatistics->getMaximum()};
+}
+
 } // namespace
 
 // An empty ColumnChunk has no heap-backed payloads; the estimate must
@@ -223,6 +256,45 @@ TEST(MetadataTest, fileMetaDataAccountsFooterSigningKey) {
       estimateFileSize(metadata),
       sizeof(thrift::FileMetaData) +
           metadata.footer_signing_key_metadata()->capacity());
+}
+
+// Decimal statistics are decoded from the stored bytes, whose width may exceed
+// the minimum for the precision, up to the width of the Velox type.
+TEST(MetadataTest, fixedLenByteArrayDecimalStatistics) {
+  auto test = [](const TypePtr& type, int32_t width, auto min, auto max) {
+    using T = decltype(min);
+    SCOPED_TRACE(fmt::format("{} in {} bytes", type->toString(), width));
+    const auto [decodedMin, decodedMax] = decodeDecimalStatistics<T>(
+        type, toBigEndian(min, width), toBigEndian(max, width));
+    EXPECT_EQ(decodedMin, min);
+    EXPECT_EQ(decodedMax, max);
+  };
+
+  test(DECIMAL(9, 2), 4, int64_t{-500}, int64_t{-100});
+  test(DECIMAL(18, 2), 8, int64_t{-500}, int64_t{-100});
+  test(DECIMAL(20, 2), 16, int128_t{12345}, int128_t{12346});
+  test(DECIMAL(38, 2), 16, int128_t{-500}, int128_t{-100});
+  test(
+      DECIMAL(38, 2),
+      16,
+      std::numeric_limits<int128_t>::min(),
+      std::numeric_limits<int128_t>::max());
+}
+
+// Statistics that are empty or wider than the Velox type are not decoded.
+TEST(MetadataTest, fixedLenByteArrayDecimalStatisticsInvalidWidth) {
+  auto test = [](const TypePtr& type, int32_t width, auto value) {
+    using T = decltype(value);
+    SCOPED_TRACE(fmt::format("{} in {} bytes", type->toString(), width));
+    const auto encoded = toBigEndian(value, width);
+    const auto [min, max] = decodeDecimalStatistics<T>(type, encoded, encoded);
+    EXPECT_FALSE(min.has_value());
+    EXPECT_FALSE(max.has_value());
+  };
+
+  test(DECIMAL(18, 2), 0, int64_t{1});
+  test(DECIMAL(18, 2), 9, int64_t{1});
+  test(DECIMAL(38, 2), 17, int128_t{1});
 }
 
 } // namespace facebook::velox::parquet
