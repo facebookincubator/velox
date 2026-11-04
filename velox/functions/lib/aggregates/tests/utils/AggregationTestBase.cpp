@@ -1792,7 +1792,13 @@ void AggregationTestBase::testFailingAggregations(
     VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
   }
 
-  if (testStreaming_ && groupingKeys.empty()) {
+  // The streaming check splits the input in two, so it doesn't run with fewer
+  // than 2 rows.
+  vector_size_t numRows{0};
+  for (const auto& vector : data) {
+    numRows += vector->size();
+  }
+  if (testStreaming_ && groupingKeys.empty() && numRows >= 2) {
     SCOPED_TRACE("Streaming");
     auto makeSource = [&](PlanBuilder& builder) { builder.values(data); };
     VELOX_ASSERT_THROW(
