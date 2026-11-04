@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <type_traits>
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
@@ -1137,6 +1143,205 @@ TEST_F(TextReaderTest, readFloatAsInt) {
   ASSERT_EQ(rowReader->next(6, result), 6);
   for (int i = 0; i < 6; ++i) {
     EXPECT_TRUE(result->equalValueAt(expected.get(), i, 10 + i));
+  }
+}
+
+TEST_F(TextReaderTest, readFloatingPointValues) {
+  struct TestCase {
+    std::string input;
+    std::optional<float> realValue;
+    std::optional<double> doubleValue;
+  };
+
+  const auto realNaN = std::numeric_limits<float>::quiet_NaN();
+  const auto doubleNaN = std::numeric_limits<double>::quiet_NaN();
+  const auto realInfinity = std::numeric_limits<float>::infinity();
+  const auto doubleInfinity = std::numeric_limits<double>::infinity();
+  const auto realAboveOne = std::nextafter(1.0f, 2.0f);
+  const std::vector<TestCase> testCases{
+      {"NaN", realNaN, doubleNaN},
+      {"+NaN", realNaN, doubleNaN},
+      {"-NaN", realNaN, doubleNaN},
+      {" \t-NaN\t ", realNaN, doubleNaN},
+      {"nan", std::nullopt, std::nullopt},
+      {"NAN", std::nullopt, std::nullopt},
+      {"Nan", std::nullopt, std::nullopt},
+      {"+nan", std::nullopt, std::nullopt},
+      {"-nan", std::nullopt, std::nullopt},
+      {"NaN()", std::nullopt, std::nullopt},
+      {"NaN(payload)", std::nullopt, std::nullopt},
+      {"+NaN(payload)", std::nullopt, std::nullopt},
+      {"NaNf", std::nullopt, std::nullopt},
+      {"NaNd", std::nullopt, std::nullopt},
+      {"+NaNF", std::nullopt, std::nullopt},
+      {"-NaND", std::nullopt, std::nullopt},
+      {"Infinity", realInfinity, doubleInfinity},
+      {"+Infinity", realInfinity, doubleInfinity},
+      {"-Infinity", -realInfinity, -doubleInfinity},
+      {"Inf", realInfinity, doubleInfinity},
+      {"-Inf", -realInfinity, -doubleInfinity},
+      {"inf", realInfinity, doubleInfinity},
+      {"INF", realInfinity, doubleInfinity},
+      {"-inf", -realInfinity, -doubleInfinity},
+      {"+inf", realInfinity, doubleInfinity},
+      {"inFINITY", realInfinity, doubleInfinity},
+      {"Infinityf", std::nullopt, std::nullopt},
+      {"+InfinityD", std::nullopt, std::nullopt},
+      {"-Infd", std::nullopt, std::nullopt},
+      {"1.25", 1.25f, 1.25},
+      {"1.25f", 1.25f, 1.25},
+      {"1.25F", 1.25f, 1.25},
+      {"1.25d", 1.25f, 1.25},
+      {"1.25D", 1.25f, 1.25},
+      {" \t1.25f\t ", 1.25f, 1.25},
+      {".5", 0.5f, 0.5},
+      {"-.5", -0.5f, -0.5},
+      {"+.5", 0.5f, 0.5},
+      {".5f", 0.5f, 0.5},
+      {"+.5f", 0.5f, 0.5},
+      {"-.5D", -0.5f, -0.5},
+      {"1.f", 1.0f, 1.0},
+      {"1e2F", 100.0f, 100.0},
+      {"0x1.8p+1D", 3.0f, 3.0},
+      // Preserve C-library hex grammar even without Java's required p exponent.
+      {"0x10", 16.0f, 16.0},
+      // A suffix does not narrow a DOUBLE value to float precision.
+      {"0.1f", 0.1f, 0.1},
+      {"16777217f", 16'777'216.0f, 16'777'217.0},
+      // This decimal is just above the midpoint between 1.0f and its successor.
+      // Rounding through DOUBLE lands on the midpoint and yields 1.0f.
+      {"1.0000000596046448f", realAboveOne, 1.0000000596046448},
+      {"-0.0", -0.0f, -0.0},
+      {"-0f", -0.0f, -0.0},
+      {"1e100f", realInfinity, 1e100},
+      {"1e400D", realInfinity, doubleInfinity},
+      {"-1e400d", -realInfinity, -doubleInfinity},
+      {"1e-100f", 0.0f, 1e-100},
+      {"1.4e-45f", std::numeric_limits<float>::denorm_min(), 1.4e-45},
+      {"4.9e-324D", 0.0f, std::numeric_limits<double>::denorm_min()},
+      {"1e-400D", 0.0f, 0.0},
+      {"-1e-400f", -0.0f, -0.0},
+      {"", std::nullopt, std::nullopt},
+      {" \t ", std::nullopt, std::nullopt},
+      {"f", std::nullopt, std::nullopt},
+      // A decimal point without mantissa digits is not a number.
+      {".", std::nullopt, std::nullopt},
+      {".f", std::nullopt, std::nullopt},
+      {".F", std::nullopt, std::nullopt},
+      {".d", std::nullopt, std::nullopt},
+      {".D", std::nullopt, std::nullopt},
+      {".e2", std::nullopt, std::nullopt},
+      {".e2f", std::nullopt, std::nullopt},
+      {"+f", std::nullopt, std::nullopt},
+      {"1ff", std::nullopt, std::nullopt},
+      {"1.0fX", std::nullopt, std::nullopt},
+      {"1.0X", std::nullopt, std::nullopt},
+      {"12a", std::nullopt, std::nullopt},
+      {"1L", std::nullopt, std::nullopt},
+      {"1.5%", std::nullopt, std::nullopt},
+      {"1.0 f", std::nullopt, std::nullopt},
+      {"1.5 d", std::nullopt, std::nullopt},
+      {"1e5x", std::nullopt, std::nullopt},
+      {"1e+f", std::nullopt, std::nullopt},
+      {"1ef", std::nullopt, std::nullopt},
+      {"0x1p+f", std::nullopt, std::nullopt},
+      {"1.2.3", std::nullopt, std::nullopt},
+      {"--1d", std::nullopt, std::nullopt},
+      {"1f2", std::nullopt, std::nullopt},
+      // sscanf stops at the embedded NUL, leaving part of the field unconsumed.
+      // The following valid row verifies recovery.
+      {std::string("1.0\0f", 5), std::nullopt, std::nullopt},
+      {"2.5f", 2.5f, 2.5},
+  };
+
+  const auto assertValue = []<typename T>(
+                               const FlatVector<T>* values,
+                               vector_size_t row,
+                               const std::optional<T>& expected) {
+    ASSERT_EQ(values->isNullAt(row), !expected.has_value());
+    if (!expected.has_value()) {
+      return;
+    }
+    using Bits =
+        std::conditional_t<sizeof(T) == sizeof(uint32_t), uint32_t, uint64_t>;
+    EXPECT_EQ(
+        std::bit_cast<Bits>(values->valueAt(row)),
+        std::bit_cast<Bits>(*expected));
+  };
+
+  auto textFile = TempFilePath::create();
+  {
+    auto writeFile =
+        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+    for (const auto& testCase : testCases) {
+      writeFile->append(
+          "7," + testCase.input + "," + testCase.input + "," + testCase.input +
+          ",9\n");
+    }
+    writeFile->close();
+  }
+
+  auto type = ROW(
+      {{"before", INTEGER()},
+       {"real", REAL()},
+       {"double", DOUBLE()},
+       {"widened_real", REAL()},
+       {"after", INTEGER()}});
+  const auto requestedType = ROW(
+      {{"before", INTEGER()},
+       {"real", REAL()},
+       {"double", DOUBLE()},
+       {"widened_real", DOUBLE()},
+       {"after", INTEGER()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(dwio::common::SerDeOptions(',', '\2', '\3'));
+
+  for (uint64_t batchSize :
+       {uint64_t{1}, uint64_t{7}, uint64_t{testCases.size()}}) {
+    SCOPED_TRACE(batchSize);
+    auto input =
+        std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+    auto reader = factory->createReader(std::move(input), readerOptions);
+    dwio::common::RowReaderOptions rowReaderOptions;
+    setScanSpec(*requestedType, rowReaderOptions);
+    rowReaderOptions.select(
+        std::make_shared<dwio::common::ColumnSelector>(requestedType, type));
+    rowReaderOptions.setProjectSelectedType(true);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+    VectorPtr result;
+    size_t offset = 0;
+    while (offset < testCases.size()) {
+      const auto rowsRead = rowReader->next(batchSize, result);
+      ASSERT_GT(rowsRead, 0);
+      ASSERT_LE(rowsRead, testCases.size() - offset);
+      auto* rows = result->asChecked<RowVector>();
+      ASSERT_EQ(*rows->type(), *requestedType);
+      auto* before = rows->childAt(0)->asChecked<FlatVector<int32_t>>();
+      auto* real = rows->childAt(1)->asChecked<FlatVector<float>>();
+      auto* doubles = rows->childAt(2)->asChecked<FlatVector<double>>();
+      auto* widenedReal = rows->childAt(3)->asChecked<FlatVector<double>>();
+      auto* after = rows->childAt(4)->asChecked<FlatVector<int32_t>>();
+      for (vector_size_t row = 0; row < rowsRead; ++row) {
+        const auto& testCase = testCases[offset + row];
+        SCOPED_TRACE(testCase.input);
+        ASSERT_FALSE(before->isNullAt(row));
+        EXPECT_EQ(before->valueAt(row), 7);
+        ASSERT_FALSE(after->isNullAt(row));
+        EXPECT_EQ(after->valueAt(row), 9);
+        ASSERT_NO_FATAL_FAILURE(assertValue(real, row, testCase.realValue));
+        ASSERT_NO_FATAL_FAILURE(
+            assertValue(doubles, row, testCase.doubleValue));
+        const std::optional<double> widenedValue = testCase.realValue
+            ? std::optional<double>{static_cast<double>(*testCase.realValue)}
+            : std::nullopt;
+        ASSERT_NO_FATAL_FAILURE(assertValue(widenedReal, row, widenedValue));
+      }
+      offset += rowsRead;
+    }
+    EXPECT_EQ(rowReader->next(batchSize, result), 0);
   }
 }
 
