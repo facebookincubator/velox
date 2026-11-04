@@ -246,6 +246,34 @@ class HierarchicalKeyReaderTest : public testing::Test {
     return keys;
   }
 
+  // Reads the keys of 'index' from 'startRow' to the end through batches of up
+  // to 'maxKeys' keys. Checks that each batch makes one allocation and holds
+  // 'maxKeys' keys unless the rows end first, and that a batch past the end
+  // appends nothing. Copies the keys once all are read, so the keys of a batch
+  // must stay valid past later batches.
+  static std::vector<std::string> readBatches(
+      const HierarchicalKeyReader& index,
+      uint32_t startRow,
+      size_t maxKeys) {
+    auto cursor = index.cursor(startRow);
+    std::vector<std::unique_ptr<char[]>> buffers;
+    const KeyCursor::BufferAllocator bufferAllocator = [&](size_t size) {
+      return buffers.emplace_back(std::make_unique<char[]>(size)).get();
+    };
+    const size_t numRows = index.rowCount() - startRow;
+    std::vector<std::string_view> keys;
+    while (cursor->hasNext()) {
+      const auto numBuffers = buffers.size();
+      const auto numKeys = keys.size();
+      cursor->next(maxKeys, keys, bufferAllocator);
+      EXPECT_EQ(buffers.size(), numBuffers + 1);
+      EXPECT_EQ(keys.size() - numKeys, std::min(maxKeys, numRows - numKeys));
+    }
+    cursor->next(maxKeys, keys, bufferAllocator);
+    EXPECT_EQ(keys.size(), numRows);
+    return {keys.begin(), keys.end()};
+  }
+
   // Returns the row seek() should return for 'key' in the sorted 'expected'.
   static std::optional<uint32_t> expectedSeek(
       const std::vector<std::string>& expected,
@@ -341,6 +369,13 @@ class HierarchicalKeyReaderTest : public testing::Test {
         EXPECT_EQ(cursor->next(), expected[row]);
       }
       EXPECT_FALSE(cursor->hasNext());
+      for (const auto maxKeys : {size_t{1}, size_t{7}, size_t{numRows}}) {
+        SCOPED_TRACE(fmt::format("maxKeys={}", maxKeys));
+        EXPECT_EQ(
+            readBatches(index, startRow, maxKeys),
+            std::vector<std::string>(
+                expected.begin() + startRow, expected.end()));
+      }
     }
   }
 
@@ -653,6 +688,70 @@ TEST_F(HierarchicalKeyReaderTest, cursorWalksRowsFromStart) {
     EXPECT_EQ(
         walked,
         std::vector<std::string>(expected.begin() + startRow, expected.end()));
+  }
+}
+
+// A batch of keys holds the keys that next() returns one by one. The rows
+// repeat keys and change the values of every level, and a batch starts at
+// each row.
+TEST_F(HierarchicalKeyReaderTest, cursorReadsKeysInBatches) {
+  const std::vector<std::vector<uint64_t>> columns{
+      {3, 3, 3, 3, 5, 5, 8, 8, 8},
+      {1, 1, 2, 7, 4, 4, 2, 6, 9},
+      {9, 9, 0, 1, 5, 5, 3, 3, 4},
+  };
+  const auto index = build(columns);
+  const auto expected = packRows(columns);
+
+  for (uint32_t startRow = 0; startRow < expected.size(); ++startRow) {
+    for (const auto maxKeys : {size_t{1}, size_t{2}, size_t{4}, size_t{100}}) {
+      SCOPED_TRACE(fmt::format("startRow {}, maxKeys {}", startRow, maxKeys));
+      EXPECT_EQ(
+          readBatches(*index, startRow, maxKeys),
+          std::vector<std::string>(
+              expected.begin() + startRow, expected.end()));
+    }
+  }
+}
+
+// readKeys() reads the values that a range of rows spans at each level, and
+// their child offsets, with one read each. The middle level has more values
+// than a level keeps decoded, so a long range reads many of its child offsets
+// through their encoding, as it does those of the leaf.
+TEST_F(HierarchicalKeyReaderTest, readKeysOfLongRanges) {
+  std::vector<std::vector<uint64_t>> columns(3);
+  for (const uint64_t first : {2, 4, 6}) {
+    for (uint64_t second = 0; second < 100; ++second) {
+      for (uint64_t third = 0; third < 30; ++third) {
+        // Every seventh key repeats, so the leaf row offsets are stored.
+        const uint32_t numRows = third % 7 == 0 ? 2 : 1;
+        for (uint32_t row = 0; row < numRows; ++row) {
+          columns[0].push_back(first);
+          columns[1].push_back(second);
+          columns[2].push_back(third * 3);
+        }
+      }
+    }
+  }
+  const auto index = build(columns);
+  const auto expected = packRows(columns);
+  const auto numKeys = static_cast<uint32_t>(expected.size());
+
+  for (const auto& [startRow, numRows] :
+       std::vector<std::pair<uint32_t, uint32_t>>{
+           {0, numKeys}, {numKeys / 3, numKeys / 3}, {numKeys - 3, 3}}) {
+    SCOPED_TRACE(fmt::format("startRow {}, numRows {}", startRow, numRows));
+    std::vector<std::unique_ptr<char[]>> buffers;
+    std::vector<std::string_view> keys;
+    index->readKeys(startRow, numRows, keys, [&](size_t size) {
+      return buffers.emplace_back(std::make_unique<char[]>(size)).get();
+    });
+    EXPECT_EQ(buffers.size(), 1);
+    EXPECT_EQ(
+        std::vector<std::string>(keys.begin(), keys.end()),
+        std::vector<std::string>(
+            expected.begin() + startRow,
+            expected.begin() + startRow + numRows));
   }
 }
 

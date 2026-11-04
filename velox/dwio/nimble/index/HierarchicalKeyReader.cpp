@@ -19,7 +19,9 @@
 #include <array>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 #include "velox/common/Casts.h"
@@ -32,6 +34,16 @@
 
 namespace facebook::nimble::index {
 namespace {
+
+// Returns room for 'size' values of 'values', which only grows, so the reads
+// that reuse it do not allocate.
+template <typename T>
+std::span<T> growScratch(std::vector<T>& values, size_t size) {
+  if (values.size() < size) {
+    values.resize(size);
+  }
+  return {values.data(), size};
+}
 
 size_t remainingBytes(const char* position, const char* end) {
   return static_cast<size_t>(
@@ -115,6 +127,11 @@ class KeySequence {
 
   virtual uint32_t rowCount() const = 0;
   virtual uint64_t valueAt(uint32_t row) const = 0;
+
+  // Stores in 'values' the values of as many rows from 'begin', which a scan
+  // reads together rather than one by one.
+  virtual void read(uint32_t begin, std::span<uint64_t> values) const = 0;
+
   // Returns the first row in [begin, end) whose value is at least 'value', or
   // 'end'. Stores the value of a returned row before 'end' in 'found', so a
   // caller that compares it needs no second read. The values in [begin, end)
@@ -128,6 +145,16 @@ class KeySequence {
  private:
   const EncodingType encodingType_;
 };
+
+// Returns room for 'numValues' values of a level narrower than 64 bits, which a
+// read widens. Each thread has its own, so the const reads of a reader that
+// threads share stay thread-safe, and it only grows, so the reads do not
+// allocate.
+template <typename T>
+std::span<T> narrowValuesScratch(size_t numValues) {
+  thread_local std::vector<T> narrowValues;
+  return growScratch(narrowValues, numValues);
+}
 
 template <typename T>
 class TypedKeySequence final : public KeySequence {
@@ -143,6 +170,19 @@ class TypedKeySequence final : public KeySequence {
 
   uint64_t valueAt(uint32_t row) const override {
     return view_->readAt(row);
+  }
+
+  void read(uint32_t begin, std::span<uint64_t> values) const override {
+    const auto count = static_cast<uint32_t>(values.size());
+    if constexpr (std::is_same_v<T, uint64_t>) {
+      view_->read(begin, count, values.data());
+    } else {
+      // Reads the values in the width of the level, then widens them with one
+      // copy.
+      const auto narrowValues = narrowValuesScratch<T>(count);
+      view_->read(begin, count, narrowValues.data());
+      std::copy_n(narrowValues.begin(), count, values.begin());
+    }
   }
 
   uint32_t lowerBound(
@@ -232,6 +272,22 @@ class ChildOffsets {
     }
     NIMBLE_DCHECK_LT(index, decoded_->size());
     return (*decoded_)[index];
+  }
+
+  // Stores in 'entries' the entries from 'begin', which a scan reads together
+  // rather than one by one with at().
+  void read(uint32_t begin, std::span<uint32_t> entries) const {
+    if (encoded_ != nullptr) {
+      encoded_->read(
+          begin, static_cast<uint32_t>(entries.size()), entries.data());
+      return;
+    }
+    if (!decoded_.has_value()) {
+      std::iota(entries.begin(), entries.end(), begin);
+      return;
+    }
+    NIMBLE_DCHECK_LE(begin + entries.size(), decoded_->size());
+    std::copy_n(decoded_->data() + begin, entries.size(), entries.begin());
   }
 
   // Returns the offset range containing `position`.
@@ -492,15 +548,66 @@ HierarchicalKeyReader::~HierarchicalKeyReader() = default;
 
 namespace {
 
-// Returns room for the values of 'numLevels' levels of a row. Each thread has
-// its own, so the const reads of a reader that threads share stay thread-safe,
-// and it only grows, so the reads do not allocate.
-std::span<uint64_t> levelScratch(uint32_t numLevels) {
+// Returns room for the values of the levels of 'numRows' rows of 'numLevels'
+// levels. Each thread has its own, so the const reads of a reader that threads
+// share stay thread-safe, and it only grows, so the reads do not allocate.
+std::span<uint64_t> levelScratch(uint32_t numRows, uint32_t numLevels) {
   thread_local std::vector<uint64_t> levels;
-  if (levels.size() < numLevels) {
-    levels.resize(numLevels);
+  return growScratch(levels, static_cast<size_t>(numRows) * numLevels);
+}
+
+// The values of one level that the rows of a batch span, from the value that
+// holds the first row to the value that holds the last row, which a batch reads
+// together.
+struct LevelSpan {
+  // Returns the index of the current value among the values of the level.
+  uint32_t currentLevelIndex() const {
+    return startIndex + currentIndex;
   }
-  return {levels.data(), numLevels};
+
+  // Returns the end offset of the child range of the current value.
+  uint32_t currentChildEndOffset() const {
+    return childOffsets[currentIndex];
+  }
+
+  // Returns the value that holds the current row.
+  uint64_t currentValue() const {
+    return levelValues[currentIndex];
+  }
+
+  // Index of the first value of the span among the values of the level.
+  uint32_t startIndex{0};
+  // Index of the last value of the span among the values of the level.
+  uint32_t lastIndex{0};
+  // Index in 'levelValues' of the value that holds the current row.
+  uint32_t currentIndex{0};
+  // Values of the level in the span, from 'startIndex' to 'lastIndex'.
+  std::span<uint64_t> levelValues;
+  // End offset of the child range of each value of the span: the index of the
+  // first value of the next level past its children or, for the leaf, the
+  // first row past its rows.
+  std::span<uint32_t> childOffsets;
+};
+
+// Returns room for the spans of 'numLevels' levels, per thread like
+// levelScratch().
+std::span<LevelSpan> levelSpanScratch(uint32_t numLevels) {
+  thread_local std::vector<LevelSpan> spans;
+  return growScratch(spans, numLevels);
+}
+
+// Returns room for the values of level spans that hold 'numValues' values, per
+// thread like levelScratch().
+std::span<uint64_t> levelValuesSpanScratch(size_t numValues) {
+  thread_local std::vector<uint64_t> levelValues;
+  return growScratch(levelValues, numValues);
+}
+
+// Returns room for the child end offsets of level spans that hold 'numValues'
+// values, per thread like levelScratch().
+std::span<uint32_t> childOffsetsSpanScratch(size_t numValues) {
+  thread_local std::vector<uint32_t> childOffsets;
+  return growScratch(childOffsets, numValues);
 }
 
 } // namespace
@@ -508,7 +615,7 @@ std::span<uint64_t> levelScratch(uint32_t numLevels) {
 std::optional<uint32_t> HierarchicalKeyReader::seek(
     std::string_view value,
     bool inclusive) const {
-  const auto levels = levelScratch(numLevels_);
+  const auto levels = levelScratch(/*numRows=*/1, numLevels_);
   const bool after = keyCodec_->parseKey(value, levelWidths_, levels);
   const auto [lower, upper] = seekBounds(levels);
   const auto row = inclusive && !after ? lower : upper;
@@ -516,16 +623,113 @@ std::optional<uint32_t> HierarchicalKeyReader::seek(
 }
 
 std::string HierarchicalKeyReader::get(uint32_t row) const {
-  const auto levels = levelScratch(numLevels_);
+  const auto levels = levelScratch(/*numRows=*/1, numLevels_);
   levelsAt(row, levels);
   return keyCodec_->encodeKey(levels, levelWidths_);
 }
 
+void HierarchicalKeyReader::levelsOf(
+    uint32_t startRow,
+    uint32_t numRows,
+    std::span<uint64_t> levels) const {
+  NIMBLE_CHECK_LE(startRow, rowCount_);
+  NIMBLE_CHECK_LE(numRows, rowCount_ - startRow);
+  NIMBLE_CHECK_EQ(levels.size(), static_cast<size_t>(numRows) * numLevels_);
+  if (numRows == 0) {
+    return;
+  }
+
+  // Finds the span of each level from the leaf up: the values that hold the
+  // first and the last row.
+  const auto spans = levelSpanScratch(numLevels_);
+  uint32_t startOffset{startRow};
+  uint32_t lastOffset{startRow + numRows - 1};
+  size_t numSpanValues{0};
+  for (uint32_t level = numLevels_; level-- > 0;) {
+    const auto& offsets = childOffsets_[level];
+    startOffset = offsets.containingRange(startOffset);
+    lastOffset =
+        numRows == 1 ? startOffset : offsets.containingRange(lastOffset);
+    spans[level].startIndex = startOffset;
+    spans[level].lastIndex = lastOffset;
+    spans[level].currentIndex = 0;
+    numSpanValues += lastOffset - startOffset + 1;
+  }
+
+  // Reads the values and the child end offsets of each span with one read
+  // each, which costs less than reading them one by one where the level
+  // changes, as the walk below visits every value of a span in order.
+  const auto levelValues = levelValuesSpanScratch(numSpanValues);
+  const auto childOffsets = childOffsetsSpanScratch(numSpanValues);
+  size_t offset{0};
+  for (uint32_t level = 0; level < numLevels_; ++level) {
+    auto& span = spans[level];
+    const size_t numValues = span.lastIndex - span.startIndex + 1;
+    span.levelValues = levelValues.subspan(offset, numValues);
+    span.childOffsets = childOffsets.subspan(offset, numValues);
+    levelSequences_[level]->read(span.startIndex, span.levelValues);
+    childOffsets_[level].read(span.startIndex + 1, span.childOffsets);
+    offset += numValues;
+  }
+
+  // Every value has a child, so the next row moves a level only when it moves
+  // the level below past the child range of the current value. The current
+  // value of each level stays in its span, which only debug builds check: the
+  // rows end at the last row, which the last value of every span holds, so the
+  // leaf moves at most to the value of the last row, and a level above moves
+  // only to the value that holds the moved value of the level below. These hold
+  // for any index that loads: readSequences() checks that the child offsets of
+  // each level start at zero, increase, and end at the number of values of the
+  // next level.
+  const uint32_t leaf = numLevels_ - 1;
+  auto* output = levels.data();
+  for (uint32_t row = startRow; row < startRow + numRows; ++row) {
+    if (row >= spans[leaf].currentChildEndOffset()) {
+      ++spans[leaf].currentIndex;
+      NIMBLE_DCHECK_LT(
+          spans[leaf].currentIndex, spans[leaf].levelValues.size());
+      for (uint32_t level = leaf; level > 0 &&
+           spans[level].currentLevelIndex() >=
+               spans[level - 1].currentChildEndOffset();
+           --level) {
+        ++spans[level - 1].currentIndex;
+        NIMBLE_DCHECK_LT(
+            spans[level - 1].currentIndex, spans[level - 1].levelValues.size());
+      }
+    }
+    for (uint32_t level = 0; level < numLevels_; ++level) {
+      *output++ = spans[level].currentValue();
+    }
+  }
+}
+
+void HierarchicalKeyReader::readKeys(
+    uint32_t startRow,
+    uint32_t numRows,
+    std::vector<std::string_view>& keys,
+    const KeyCursor::BufferAllocator& bufferAllocator) const {
+  if (numRows == 0) {
+    return;
+  }
+  const auto keySize = keyCodec_->keySize(levelWidths_);
+  auto* const buffer = static_cast<char*>(
+      bufferAllocator(static_cast<size_t>(numRows) * keySize));
+  NIMBLE_CHECK_NOT_NULL(buffer);
+  const auto levels = levelScratch(numRows, numLevels_);
+  levelsOf(startRow, numRows, levels);
+  keyCodec_->encodeKeys(levels, levelWidths_, buffer);
+  keys.reserve(keys.size() + numRows);
+  for (uint32_t row = 0; row < numRows; ++row) {
+    keys.emplace_back(buffer + static_cast<size_t>(row) * keySize, keySize);
+  }
+}
+
 namespace {
 
-// Walks rows, rebuilding each key from its hierarchy components. Consecutive
-// rows share no decoded state, so this only spares the caller a std::string
-// per row.
+// Walks rows, rebuilding each key from its hierarchy components. next() for one
+// key finds the components of its row on its own, so it only spares the caller
+// a std::string per row. next() for a batch walks the components of
+// consecutive rows together, through readKeys().
 class HierarchicalKeyReaderCursor final : public KeyCursor {
  public:
   HierarchicalKeyReaderCursor(
@@ -545,6 +749,16 @@ class HierarchicalKeyReaderCursor final : public KeyCursor {
     // first row allocates.
     key_ = encoding_.get(row_++);
     return key_;
+  }
+
+  void next(
+      size_t maxKeys,
+      std::vector<std::string_view>& keys,
+      const BufferAllocator& bufferAllocator) override {
+    const auto numRows =
+        static_cast<uint32_t>(std::min<size_t>(maxKeys, rowCount_ - row_));
+    encoding_.readKeys(row_, numRows, keys, bufferAllocator);
+    row_ += numRows;
   }
 
  private:

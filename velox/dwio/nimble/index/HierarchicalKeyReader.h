@@ -75,6 +75,16 @@ class HierarchicalKeyReader final : public KeyReader {
 
   std::string get(uint32_t row) const override;
 
+  /// Appends the keys of the 'numRows' rows from 'startRow' to 'keys', and
+  /// writes their bytes to one allocation of 'bufferAllocator'. Walks the
+  /// levels of consecutive rows together rather than finding those of each
+  /// row, so a scan pays for a value of a level once per change of the value.
+  void readKeys(
+      uint32_t startRow,
+      uint32_t numRows,
+      std::vector<std::string_view>& keys,
+      const KeyCursor::BufferAllocator& bufferAllocator) const;
+
   std::vector<std::string> materialize(uint32_t startRow, uint32_t count)
       const override;
 
@@ -115,6 +125,13 @@ class HierarchicalKeyReader final : public KeyReader {
   // Stores the normalized key components of a source row in 'levels', which
   // holds numLevels() values.
   void levelsAt(uint32_t row, std::span<uint64_t> levels) const;
+
+  // Stores in 'levels' the values of the levels of the 'numRows' rows from
+  // 'startRow', those of each row after those of the row before. Reads the
+  // values that the rows span at each level, and their child offsets, together
+  // rather than one by one where the level changes.
+  void levelsOf(uint32_t startRow, uint32_t numRows, std::span<uint64_t> levels)
+      const;
 
   // Defines the keys that reads take and return for the values of the levels.
   const std::shared_ptr<const HierarchicalKeyCodec> keyCodec_;
