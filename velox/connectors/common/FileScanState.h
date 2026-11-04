@@ -23,7 +23,7 @@
 #include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Scan state owned by a FileDataSource and reused across its splits.
 struct FileScanState {
@@ -45,4 +45,4 @@ struct FileScanState {
   RowTypePtr readerProducedType;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

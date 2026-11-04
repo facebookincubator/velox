@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/FileConnector.h"
+#include "velox/connectors/common/FileConnector.h"
 
 #include <folly/executors/InlineExecutor.h>
 #include <gtest/gtest.h>
@@ -21,7 +21,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempFilePath.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 namespace {
 
 class TestFileConnector : public FileConnector {
@@ -99,4 +99,4 @@ TEST(FileConnectorTest, defaultResources) {
 }
 
 } // namespace
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

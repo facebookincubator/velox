@@ -21,7 +21,7 @@
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Converts partition key strings to typed values. TIMESTAMP and DATE have
 /// more than one encoding, so the caller states which one applies.
@@ -70,4 +70,4 @@ class PartitionValue {
       DateMode dateMode);
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

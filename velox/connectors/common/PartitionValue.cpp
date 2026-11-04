@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/PartitionValue.h"
+#include "velox/connectors/common/PartitionValue.h"
 
 #include <string>
 #include <type_traits>
@@ -25,7 +25,7 @@
 #include "velox/type/Conversions.h"
 #include "velox/type/DecimalUtil.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 namespace {
 
 template <TypeKind kind>
@@ -84,4 +84,4 @@ Variant PartitionValue::fromString(
       fromStringImpl, type.kind(), value, type, timestampMode, dateMode);
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

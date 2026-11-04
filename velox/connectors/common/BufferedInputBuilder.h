@@ -22,7 +22,7 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Reader.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Registering a different implementation of BufferedInput is allowed using
 /// 'registerBuilder' API.
@@ -53,4 +53,4 @@ class BufferedInputBuilder {
   static std::shared_ptr<BufferedInputBuilder> builder_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

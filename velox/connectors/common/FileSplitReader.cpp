@@ -14,17 +14,17 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/connectors/common/FileSplitReader.h"
 
 #include "velox/common/caching/CacheTTLController.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/FileConfig.h"
-#include "velox/connectors/hive/FileConnectorSplit.h"
-#include "velox/connectors/hive/FileConnectorUtil.h"
-#include "velox/connectors/hive/PartitionValue.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileConnectorSplit.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/PartitionValue.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 VectorPtr newConstantFromString(
     const TypePtr& type,
@@ -49,7 +49,7 @@ VectorPtr newConstantFromString(
 }
 
 std::unique_ptr<FileSplitReader> FileSplitReader::create(
-    const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
+    const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
     const FileTableHandlePtr& tableHandle,
     const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -79,7 +79,7 @@ std::unique_ptr<FileSplitReader> FileSplitReader::create(
 }
 
 FileSplitReader::FileSplitReader(
-    const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
+    const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
     const FileTableHandlePtr& tableHandle,
     const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -126,7 +126,7 @@ void FileSplitReader::configureReaderOptions(
 }
 
 void FileSplitReader::configureBaseReaderOptions() {
-  hive::configureReaderOptions(
+  connector::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx_,
       tableHandle_,
@@ -342,7 +342,7 @@ void FileSplitReader::createRowReader(
 void FileSplitReader::configureBaseRowReaderOptions(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     RowTypePtr rowType) {
-  hive::configureRowReaderOptions(
+  connector::configureRowReaderOptions(
       tableHandle_->tableParameters(),
       scanSpec_,
       std::move(metadataFilter),
@@ -424,4 +424,4 @@ void FileSplitReader::setPartitionValue(
   spec->setConstantValue(constant);
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

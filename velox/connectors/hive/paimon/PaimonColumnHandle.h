@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileColumnHandle.h"
+#include "velox/connectors/common/FileColumnHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
@@ -23,7 +23,7 @@ namespace facebook::velox::connector::hive::paimon {
 /// type describe that field in the scan's fixed table schema, not an output
 /// alias or a historical file schema. Subfield paths stay relative to this
 /// schema; nested field-ID mapping is not represented here.
-class PaimonColumnHandle final : public FileColumnHandle {
+class PaimonColumnHandle final : public connector::FileColumnHandle {
  public:
   static constexpr int32_t kSerdeVersion = 1;
 
@@ -33,7 +33,7 @@ class PaimonColumnHandle final : public FileColumnHandle {
       ColumnType columnType,
       TypePtr schemaType,
       std::vector<common::Subfield> requiredSubfields = {},
-      std::vector<NamedExtraction> extractions = {},
+      std::vector<connector::NamedExtraction> extractions = {},
       bool partitionDateValueDaysSinceEpoch = false,
       std::function<void(VectorPtr&)> postProcessor = {});
 

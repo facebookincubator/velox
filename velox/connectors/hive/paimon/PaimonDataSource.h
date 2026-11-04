@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileDataSource.h"
+#include "velox/connectors/common/FileDataSource.h"
 #include "velox/connectors/hive/paimon/PaimonConfig.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
@@ -26,7 +26,7 @@ class PaimonConnectorSplit;
 /// Data source for reading Paimon tables. Reuses FileDataSource for projection
 /// and filtering, and PaimonSplitReader to read the files in each logical
 /// split.
-class PaimonDataSource : public FileDataSource {
+class PaimonDataSource : public connector::FileDataSource {
  public:
   PaimonDataSource(
       const RowTypePtr& outputType,
@@ -43,7 +43,7 @@ class PaimonDataSource : public FileDataSource {
 
  protected:
   /// Creates a reader for the complete logical Paimon split.
-  std::unique_ptr<FileSplitReader> createSplitReader() override;
+  std::unique_ptr<connector::FileSplitReader> createSplitReader() override;
 
  private:
   const std::shared_ptr<const PaimonTableHandle> paimonTableHandle_;

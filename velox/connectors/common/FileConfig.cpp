@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/parquet/common/ParquetConfig.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 void FileConfig::registerFormatProperties(
     std::vector<config::ConfigProperty>& properties) {
@@ -48,34 +48,34 @@ bool FileConfig::isFileHandleCacheEnabled() const {
 const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
     std::vector<config::ConfigProperty> properties;
-#define VELOX_HIVE_CONFIG_REGISTER(constName) \
+#define VELOX_FILE_CONFIG_REGISTER(constName) \
   config::registerConfigProperty<FileConfig::constName##Property>(properties)
 
-    VELOX_HIVE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
-    VELOX_HIVE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kUseColumnNamesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleDictionaryAwareReadsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleLazyColumnIoSession);
-    VELOX_HIVE_CONFIG_REGISTER(kFileColumnNamesReadAsLowerCaseSession);
-    VELOX_HIVE_CONFIG_REGISTER(kIgnoreMissingFilesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxCoalescedBytesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kLoadQuantumSession);
-    VELOX_HIVE_CONFIG_REGISTER(kReadStatsBasedFilterReorderDisabledSession);
-    VELOX_HIVE_CONFIG_REGISTER(kIndexEnabledSession);
-    VELOX_HIVE_CONFIG_REGISTER(kCacheMetadataSession);
-    VELOX_HIVE_CONFIG_REGISTER(kPinMetadataSession);
-    VELOX_HIVE_CONFIG_REGISTER(kCacheIndexSession);
-    VELOX_HIVE_CONFIG_REGISTER(kPinIndexSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSelectiveNimbleReaderEnabledSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleDirectBufferedInputEnabledSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxCoalescedDistanceSession);
-    VELOX_HIVE_CONFIG_REGISTER(kParallelUnitLoadCountSession);
-    VELOX_HIVE_CONFIG_REGISTER(kReadTimestampUnitSession);
+    VELOX_FILE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
+    VELOX_FILE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
+    VELOX_FILE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
+    VELOX_FILE_CONFIG_REGISTER(kUseColumnNamesSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleDictionaryAwareReadsSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleLazyColumnIoSession);
+    VELOX_FILE_CONFIG_REGISTER(kFileColumnNamesReadAsLowerCaseSession);
+    VELOX_FILE_CONFIG_REGISTER(kIgnoreMissingFilesSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxCoalescedBytesSession);
+    VELOX_FILE_CONFIG_REGISTER(kLoadQuantumSession);
+    VELOX_FILE_CONFIG_REGISTER(kReadStatsBasedFilterReorderDisabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kIndexEnabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kCacheMetadataSession);
+    VELOX_FILE_CONFIG_REGISTER(kPinMetadataSession);
+    VELOX_FILE_CONFIG_REGISTER(kCacheIndexSession);
+    VELOX_FILE_CONFIG_REGISTER(kPinIndexSession);
+    VELOX_FILE_CONFIG_REGISTER(kSelectiveNimbleReaderEnabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleDirectBufferedInputEnabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxCoalescedDistanceSession);
+    VELOX_FILE_CONFIG_REGISTER(kParallelUnitLoadCountSession);
+    VELOX_FILE_CONFIG_REGISTER(kReadTimestampUnitSession);
 
-#undef VELOX_HIVE_CONFIG_REGISTER
+#undef VELOX_FILE_CONFIG_REGISTER
 
     return properties;
   }();
@@ -124,4 +124,4 @@ uint8_t FileConfig::readTimestampUnit(const config::ConfigBase* session) const {
   return unit;
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

@@ -16,9 +16,9 @@
 #pragma once
 
 #include "velox/common/config/ConfigProvider.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Exposes a connector's session properties with catalog configuration
 /// overrides applied to their code defaults.
@@ -44,4 +44,4 @@ class FileConfigProvider : public config::ConfigProvider {
   const config::ConfigBase* catalogConfig_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

@@ -20,7 +20,7 @@ namespace {
 
 TypePtr outputType(
     const TypePtr& schemaType,
-    const std::vector<NamedExtraction>& extractions) {
+    const std::vector<connector::NamedExtraction>& extractions) {
   VELOX_USER_CHECK_NOT_NULL(schemaType, "Missing Paimon column schema type");
   if (extractions.empty()) {
     return schemaType;
@@ -29,7 +29,7 @@ TypePtr outputType(
   std::vector<TypePtr> types;
   for (const auto& extraction : extractions) {
     const auto derived =
-        deriveExtractionOutputType(schemaType, extraction.chain);
+        connector::deriveExtractionOutputType(schemaType, extraction.chain);
     VELOX_USER_CHECK(
         extraction.dataType && derived->equivalent(*extraction.dataType),
         "Paimon extraction '{}' output type must be {}",
@@ -50,10 +50,10 @@ PaimonColumnHandle::PaimonColumnHandle(
     ColumnType columnType,
     TypePtr schemaType,
     std::vector<common::Subfield> requiredSubfields,
-    std::vector<NamedExtraction> extractions,
+    std::vector<connector::NamedExtraction> extractions,
     bool partitionDateValueDaysSinceEpoch,
     std::function<void(VectorPtr&)> postProcessor)
-    : FileColumnHandle{
+    : connector::FileColumnHandle{
           std::move(name),
           columnType,
           // Braces keep type derivation before moving its inputs.
@@ -101,7 +101,7 @@ ColumnHandlePtr PaimonColumnHandle::create(const folly::dynamic& obj) {
       "Unsupported Paimon column handle wire version");
   ColumnType columnType;
   std::vector<common::Subfield> subfields;
-  std::vector<NamedExtraction> extractions;
+  std::vector<connector::NamedExtraction> extractions;
   deserializeFileFields(obj, columnType, subfields, extractions);
   return std::make_shared<PaimonColumnHandle>(
       obj.at("columnName").asString(),

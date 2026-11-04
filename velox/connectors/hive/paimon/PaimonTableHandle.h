@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/connectors/common/FileTableHandle.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 
 namespace facebook::velox::connector::hive::paimon {
@@ -23,7 +23,7 @@ namespace facebook::velox::connector::hive::paimon {
 /// Table handle for Paimon scans. Stores the fixed table definition and scan
 /// conditions, including a schema version ID and stable field IDs aligned with
 /// the top-level columns of its Velox RowType.
-class PaimonTableHandle final : public FileTableHandle {
+class PaimonTableHandle final : public connector::FileTableHandle {
  public:
   static constexpr int32_t kSerdeVersion = 1;
 
@@ -40,7 +40,7 @@ class PaimonTableHandle final : public FileTableHandle {
       std::unordered_map<std::string, std::string> options = {},
       common::SubfieldFilters subfieldFilters = {},
       core::TypedExprPtr remainingFilter = nullptr,
-      std::vector<FileColumnHandlePtr> filterColumnHandles = {},
+      std::vector<connector::FileColumnHandlePtr> filterColumnHandles = {},
       double sampleRate = 1.0,
       std::string dbName = "");
 
@@ -74,7 +74,8 @@ class PaimonTableHandle final : public FileTableHandle {
     return options_;
   }
 
-  std::vector<FileColumnHandlePtr> filterColumnHandles() const override {
+  std::vector<connector::FileColumnHandlePtr> filterColumnHandles()
+      const override {
     return filterColumnHandles_;
   }
 
@@ -92,7 +93,7 @@ class PaimonTableHandle final : public FileTableHandle {
   const PaimonTableType tableType_;
   const std::vector<std::string> partitionKeys_;
   const std::unordered_map<std::string, std::string> options_;
-  const std::vector<FileColumnHandlePtr> filterColumnHandles_;
+  const std::vector<connector::FileColumnHandlePtr> filterColumnHandles_;
 };
 
 } // namespace facebook::velox::connector::hive::paimon

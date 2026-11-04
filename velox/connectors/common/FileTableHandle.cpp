@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/connectors/common/FileTableHandle.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 FileTableHandle::FileTableHandle(
     std::string connectorId,
@@ -115,4 +115,4 @@ void FileTableHandle::deserializeFileFields(
   }
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

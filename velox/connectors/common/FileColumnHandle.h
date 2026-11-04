@@ -19,7 +19,7 @@
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Type of extraction to apply at one nesting level.
 enum class ExtractionStep : uint8_t {
@@ -298,18 +298,16 @@ using FileColumnHandlePtr = std::shared_ptr<const FileColumnHandle>;
 using FileColumnHandleMap =
     std::unordered_map<std::string, FileColumnHandlePtr>;
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector
 
 template <>
-struct fmt::formatter<
-    facebook::velox::connector::hive::FileColumnHandle::ColumnType>
+struct fmt::formatter<facebook::velox::connector::FileColumnHandle::ColumnType>
     : formatter<std::string> {
   auto format(
-      facebook::velox::connector::hive::FileColumnHandle::ColumnType type,
+      facebook::velox::connector::FileColumnHandle::ColumnType type,
       format_context& ctx) const {
     return formatter<std::string>::format(
-        facebook::velox::connector::hive::FileColumnHandle::columnTypeName(
-            type),
+        facebook::velox::connector::FileColumnHandle::columnTypeName(type),
         ctx);
   }
 };

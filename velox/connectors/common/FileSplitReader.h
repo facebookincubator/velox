@@ -20,9 +20,9 @@
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/FileColumnHandle.h"
-#include "velox/connectors/hive/FileConnectorSplit.h"
-#include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/connectors/common/FileColumnHandle.h"
+#include "velox/connectors/common/FileConnectorSplit.h"
+#include "velox/connectors/common/FileTableHandle.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 
@@ -48,7 +48,7 @@ namespace facebook::velox::memory {
 class MemoryPool;
 }
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Creates a constant vector of size 1 from a string representation of a value.
 ///
@@ -85,7 +85,7 @@ class FileConfig;
 class FileSplitReader {
  public:
   static std::unique_ptr<FileSplitReader> create(
-      const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
+      const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
       const FileTableHandlePtr& tableHandle,
       const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
@@ -149,7 +149,7 @@ class FileSplitReader {
 
  protected:
   FileSplitReader(
-      const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
+      const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
       const FileTableHandlePtr& tableHandle,
       const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
@@ -260,4 +260,4 @@ class FileSplitReader {
   bool emptySplit_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

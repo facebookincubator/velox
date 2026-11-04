@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/FileConnector.h"
+#include "velox/connectors/common/FileConnector.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 FileConnector::FileConnector(
     const std::string& id,
@@ -43,4 +43,4 @@ FileConnector::FileConnector(
   }
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

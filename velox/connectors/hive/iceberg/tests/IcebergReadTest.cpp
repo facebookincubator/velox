@@ -26,7 +26,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -1064,7 +1064,7 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterOnlyColumnIsNotRead) {
           test::kIcebergConnectorId,
           std::make_shared<config::ConfigBase>(
               std::unordered_map<std::string, std::string>{
-                  {FileConfig::kFilePreloadThreshold, "0"}}),
+                  {connector::FileConfig::kFilePreloadThreshold, "0"}}),
           ioExecutor_.get()));
 
   // Incompressible 'part' values make up nearly all of the file.
@@ -2477,9 +2477,10 @@ TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumnWithExtraction) {
   const auto mapType = MAP(VARCHAR(), BIGINT());
   const auto keysType = ARRAY(VARCHAR());
   // Reading only the keys is what makes 'readerProducedType_' differ.
-  std::vector<NamedExtraction> extractions{
+  std::vector<connector::NamedExtraction> extractions{
       {"c0",
-       {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kMapKeys)},
        keysType}};
   auto handle = std::make_shared<HiveColumnHandle>(
       "c0",

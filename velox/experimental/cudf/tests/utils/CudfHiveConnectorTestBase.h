@@ -127,9 +127,9 @@ class CudfHiveConnectorTestBase
   makeColumnHandle(
       const std::string& name,
       const TypePtr& type,
-      facebook::velox::connector::hive::FileColumnHandle::ColumnType
-          columnType = facebook::velox::connector::hive::HiveColumnHandle::
-              ColumnType::kRegular,
+      facebook::velox::connector::FileColumnHandle::ColumnType columnType =
+          facebook::velox::connector::hive::HiveColumnHandle::ColumnType::
+              kRegular,
       const std::vector<facebook::velox::common::Subfield>& requiredSubfields =
           {}) {
     return std::make_shared<facebook::velox::connector::hive::HiveColumnHandle>(

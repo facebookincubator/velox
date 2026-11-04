@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileConnector.h"
+#include "velox/connectors/common/FileConnector.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/core/PlanNode.h"
@@ -27,7 +27,7 @@ class DataSource;
 
 namespace facebook::velox::connector::hive {
 
-class HiveConnector : public FileConnector {
+class HiveConnector : public connector::FileConnector {
  public:
   HiveConnector(
       const std::string& id,
