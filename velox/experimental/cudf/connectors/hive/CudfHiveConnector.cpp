@@ -45,7 +45,7 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
   // TODO (dm): Make this ^^^ happen
   // Problem: this information is in split, not table handle
 
-  if (cudfIsRegistered() && isTypeSupportedByCudf(outputType)) {
+  if (cudfIsEnabled(connectorQueryCtx) && isTypeSupportedByCudf(outputType)) {
     return std::make_unique<CudfHiveDataSource>(
         outputType,
         tableHandle,
