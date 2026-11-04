@@ -29,11 +29,6 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-// Callers requiring scales outside this supported range must fall back to
-// Spark.
-constexpr int32_t kMinSupportedScale{-400};
-constexpr int32_t kMaxSupportedScale{400};
-
 template <typename TResult, typename TInput, typename Policy>
 class DecimalRoundFunction;
 
@@ -109,15 +104,7 @@ class DecimalRoundOps {
     if (value->isNullAt(0)) {
       return std::nullopt;
     }
-    const auto scale = value->valueAt(0);
-    VELOX_USER_CHECK(
-        scale >= kMinSupportedScale && scale <= kMaxSupportedScale,
-        "Scale must be in [{}, {}]: {}({}).",
-        kMinSupportedScale,
-        kMaxSupportedScale,
-        name,
-        scale);
-    return scale;
+    return value->valueAt(0);
   }
 
   template <typename Policy>

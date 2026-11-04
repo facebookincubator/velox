@@ -277,13 +277,15 @@ Decimal Special Forms
     Rounds ``decimal`` to a new scale using HALF_UP rounding: exact halfway
     cases round away from zero.
     ``scale`` defaults to zero and must be a constant INTEGER expression in
-    the inclusive range [-400, 400], or NULL. Out-of-range scales raise a user
-    error during expression construction, regardless of ANSI mode. They are
-    not clamped, and ``try`` does not catch this construction-time error.
+    the full INTEGER range, or NULL.
     A null scale returns null without evaluating the runtime decimal child;
     its resolved output type is the same as for scale zero.
     The expression must supply the resolved decimal result type, which is
-    validated against Spark's precision and scale rules below.
+    validated against the native precision and scale rules below. Native type
+    calculation widens scale arithmetic before negation, avoiding integer
+    overflow across the full INTEGER domain. This can differ from Spark/JVM
+    result metadata at the most-negative scales; integrations requiring exact
+    Spark type parity must retain compatibility validation and fallback.
     The result precision and scale are decided with the precision and scale of input ``decimal`` and ``scale``.
     After rounding we may need one more digit in the integral part.
     If a negative scale causes the rounded value to exceed decimal precision
@@ -291,7 +293,6 @@ Decimal Special Forms
     that error per row.
     Dropping more than 38 digits returns zero; dropping exactly 38 digits can
     still round away from zero and overflow.
-    Callers requiring scales outside [-400, 400] must fall back to Spark.
 
     ::
 
@@ -322,7 +323,7 @@ Decimal Special Forms
     ::
 
         SELECT round(cast (85.681 as DECIMAL(5, 3)), 1); -- decimal 85.7
-        SELECT round(cast (85.681 as DECIMAL(5, 3)), 400); -- decimal 85.681
+        SELECT round(cast (85.681 as DECIMAL(5, 3)), 2147483647); -- decimal 85.681
         SELECT round(cast (0.1234567890123456789 as DECIMAL(19, 19)), 14); -- decimal 0.12345678901235
 
 .. spark:function:: make_decimal(x[, nullOnOverflow]) -> decimal
