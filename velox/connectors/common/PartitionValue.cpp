@@ -16,6 +16,7 @@
 
 #include "velox/connectors/common/PartitionValue.h"
 
+#include <functional>
 #include <string>
 #include <type_traits>
 
@@ -60,7 +61,7 @@ Variant fromStringImpl(
     return Variant::create<kind>(std::string(value));
   } else {
     auto converted = util::Converter<kind>::tryCast(value).thenOrThrow(
-        folly::identity,
+        std::identity{},
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
     if constexpr (kind == TypeKind::TIMESTAMP) {
       if (type.equivalent(*TIMESTAMP()) &&

@@ -27,6 +27,7 @@
 #include <folly/hash/Hash.h>
 #include <re2/re2.h>
 
+#include <functional>
 #include <sstream>
 #include <typeindex>
 
@@ -1490,7 +1491,7 @@ int32_t DateType::toDays(std::string_view in) const {
 
 int32_t DateType::toDays(const char* in, size_t len) const {
   return util::fromDateString(in, len, util::ParseMode::kPrestoCast)
-      .thenOrThrow(folly::identity, [&](const Status& status) {
+      .thenOrThrow(std::identity{}, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
 }
@@ -1784,7 +1785,7 @@ StringView TimeMilliPrecisionType::valueToString(
 
 int64_t TimeMilliPrecisionType::valueToTime(const StringView& timeStr) const {
   return util::fromTimeString(timeStr).thenOrThrow(
-      folly::identity,
+      std::identity{},
       [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
 }
 
