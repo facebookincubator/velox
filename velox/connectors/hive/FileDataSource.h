@@ -19,16 +19,16 @@
 #include <unordered_set>
 
 #include "velox/common/base/RandomUtil.h"
+#include "velox/common/caching/FileHandle.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
-#include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/FileScanState.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/FileTableHandle.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"

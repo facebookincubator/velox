@@ -181,6 +181,13 @@ class NimbleIndexProjector {
     /// read error in any of them fails the projection. Pinned metadata keeps
     /// them in memory for the reader's lifetime.
     uint64_t maxStripeGroupMetadataBytesPerLoad{0};
+    /// Makes co_projectRows() build the lookup structures of each encoding
+    /// view when it binds a stripe's streams, which pays off when a projection
+    /// reads many rows of each stripe. When unset, each read derives only what
+    /// it needs, which suits point lookups. Both settings return the same rows.
+    /// Changing it between calls rebuilds the projector's StreamReader. See
+    /// Encoding::Options::cacheEncodingView.
+    bool cacheEncodingView{false};
   };
 
   /// Request for a batch of index lookups.
@@ -530,10 +537,11 @@ class NimbleIndexProjector {
   void loadStripes(const Request& request, const Options& options);
 
   // Returns decoding options backed by this projector's scratch pool.
-  Encoding::Options encodingOptions();
+  Encoding::Options encodingOptions(bool cacheEncodingView);
 
-  // Creates the schema-derived reader on first use by co_projectRows().
-  void ensureStreamReader();
+  // Creates the schema-derived reader on first use by co_projectRows(), and
+  // again when 'cacheEncodingView' differs from the current reader's setting.
+  void ensureStreamReader(bool cacheEncodingView);
 
   // Computes per-stripe pack ranges and returns the upper-bound byte estimate
   // used to allocate the sliced-output arena. Returns 0 when no stripe will be
@@ -654,6 +662,8 @@ class NimbleIndexProjector {
   // Decodes projected rows into Velox vectors. The serialized path does not
   // need this reader, so it is created on the first co_projectRows() call.
   std::unique_ptr<StreamReader> streamReader_;
+  // Options::cacheEncodingView of the call that created 'streamReader_'.
+  bool cacheEncodingView_{false};
 
   // One range tagged with the tablet stripe it falls in, before grouping.
   // Sorting a vector of these on (tabletStripeIndex, range.requestIndex) is

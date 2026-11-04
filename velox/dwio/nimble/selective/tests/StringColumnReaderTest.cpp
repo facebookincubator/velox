@@ -95,7 +95,9 @@ class StringColumnReaderTest : public ::testing::Test,
   Readers makeReaders(
       const RowVectorPtr& expected,
       const std::string& file,
-      const std::shared_ptr<common::ScanSpec>& scanSpec) {
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      bool scanFastPath = false,
+      bool fsstDecodeCacheEnabled = false) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -111,6 +113,8 @@ class StringColumnReaderTest : public ::testing::Test,
     dwio::common::RowReaderOptions rowOptions;
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(type);
+    rowOptions.setNimbleScanFastPath(scanFastPath);
+    rowOptions.setNimbleFsstDecodeRepeatedPayloads(fsstDecodeCacheEnabled);
     rowOptions.setNimblePreserveDictionaryEncoding(true);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;
@@ -263,6 +267,96 @@ EncodingLayout makeFsstEncodingLayout() {
       CompressionType::Uncompressed,
       {EncodingLayout{
           EncodingType::Trivial, {}, CompressionType::Uncompressed}}};
+}
+
+TEST_P(StringColumnReaderTest, fsstDecodeCacheUsesReaderOption) {
+  constexpr vector_size_t kChunkSize = 64;
+  const auto input = makeRowVector({
+      makeFlatIdentityVector<int64_t>(2 * kChunkSize),
+      makeFlatVector<std::string>(
+          2 * kChunkSize,
+          [](auto row) {
+            return row % 2 == 0
+                ? "long/repeated/fsst/value/with/common/prefix/alpha"
+                : "long/repeated/fsst/value/with/common/prefix/beta";
+          }),
+  });
+  WriterOptions options;
+  options.fsstCompressionTargetRatio = 10.0;
+  options.enableChunking = true;
+  options.minStreamChunkRawSize = 0;
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress&) { return false; },
+        [](const StripeProgress&) { return true; });
+  };
+  options.encodingLayoutTree.emplace(
+      Kind::Row,
+      std::
+          unordered_map<EncodingLayoutTree::StreamIdentifier, EncodingLayout>{},
+      "",
+      std::vector<EncodingLayoutTree>{
+          EncodingLayoutTree{Kind::Scalar, {}, "c0"},
+          EncodingLayoutTree{
+              Kind::Scalar, {{0, makeFsstEncodingLayout()}}, "c1"},
+      });
+  const auto file = test::createNimbleFile(
+      *rootPool(),
+      {input->slice(0, kChunkSize), input->slice(kChunkSize, kChunkSize)},
+      options,
+      /*flushAfterWrite=*/false);
+  const auto encodings = getStreamChunkEncodings(file, 1, pool());
+  ASSERT_EQ(encodings.size(), 2);
+  ASSERT_EQ(encodings[0].encodingType, EncodingType::Fsst);
+  ASSERT_EQ(encodings[1].encodingType, EncodingType::Fsst);
+
+  for (const bool fastPath : {false, true}) {
+    for (const bool cacheEnabled : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("fastPath={}, cacheEnabled={}", fastPath, cacheEnabled));
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      auto readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          /*scanFastPath=*/fastPath,
+          /*fsstDecodeCacheEnabled=*/cacheEnabled);
+      std::vector<VectorPtr> results;
+      for (int chunk = 0; chunk < 2; ++chunk) {
+        auto result = BaseVector::create(input->type(), 0, pool());
+        ASSERT_EQ(readers.rowReader->next(kChunkSize, result), kChunkSize);
+        result->validate();
+        ASSERT_EQ(result->size(), kChunkSize);
+        for (int row = 0; row < kChunkSize; ++row) {
+          ASSERT_TRUE(
+              result->equalValueAt(input.get(), row, chunk * kChunkSize + row));
+        }
+        results.push_back(std::move(result));
+      }
+
+      const auto strings = [&](int chunk) {
+        auto loaded = BaseVector::loadedVectorShared(
+            results[chunk]->asUnchecked<RowVector>()->childAt(1));
+        EXPECT_EQ(loaded->encoding(), VectorEncoding::Simple::FLAT);
+        return loaded->as<FlatVector<StringView>>();
+      };
+      const auto* firstChunk = strings(0);
+      const auto* secondChunk = strings(1);
+      ASSERT_NE(firstChunk, nullptr);
+      ASSERT_NE(secondChunk, nullptr);
+      if (cacheEnabled) {
+        EXPECT_EQ(firstChunk->valueAt(0).data(), firstChunk->valueAt(2).data());
+        EXPECT_EQ(
+            secondChunk->valueAt(0).data(), secondChunk->valueAt(2).data());
+      } else {
+        EXPECT_NE(firstChunk->valueAt(0).data(), firstChunk->valueAt(2).data());
+        EXPECT_NE(
+            secondChunk->valueAt(0).data(), secondChunk->valueAt(2).data());
+      }
+      EXPECT_NE(firstChunk->valueAt(0).data(), secondChunk->valueAt(0).data());
+    }
+  }
 }
 
 // Validates correctness and checks the expected encoding per batch.
@@ -576,48 +670,62 @@ TEST_P(StringColumnReaderTest, fsstFilterOnlyRangeAcrossChunks) {
       });
   auto file =
       test::createNimbleFile(*rootPool(), {first, second}, options, false);
-  for (const bool projectOut : {false, true}) {
-    for (const bool nullAllowed : {false, true}) {
-      for (const int batchSize : {137, 1500}) {
-        auto spec = std::make_shared<common::ScanSpec>("root");
-        spec->addAllChildFields(*first->type());
-        auto* keySpec = spec->childByName("key");
-        keySpec->setProjectOut(projectOut);
-        keySpec->setFilter(
-            std::make_unique<common::BytesRange>(
-                "common/match/",
-                /*lowerUnbounded=*/false,
-                /*lowerExclusive=*/false,
-                "common/match0",
-                /*upperUnbounded=*/false,
-                /*upperExclusive=*/true,
-                nullAllowed));
-        spec->childByName("value")->setFilter(
-            std::make_unique<common::BigintRange>(
-                100, 999, /*nullAllowed=*/false));
-        auto readers = makeReaders(first, file, spec);
-        auto result = BaseVector::create(first->type(), 0, pool());
-        std::vector<int64_t> actual;
-        while (readers.rowReader->next(batchSize, result) > 0) {
-          auto rows = result->as<RowVector>();
-          auto value = rows->childAt(1)->as<FlatVector<int64_t>>();
-          for (vector_size_t row = 0; row < rows->size(); ++row) {
-            actual.push_back(value->valueAt(row));
-            if (projectOut) {
-              auto source = actual.back() < kRows ? first : second;
-              EXPECT_TRUE(rows->childAt(0)->equalValueAt(
-                  source->childAt(0).get(), row, actual.back() % kRows));
+  for (const bool negated : {false, true}) {
+    for (const bool projectOut : {false, true}) {
+      for (const bool nullAllowed : {false, true}) {
+        for (const int batchSize : {137, 1'500}) {
+          auto spec = std::make_shared<common::ScanSpec>("root");
+          spec->addAllChildFields(*first->type());
+          auto* keySpec = spec->childByName("key");
+          keySpec->setProjectOut(projectOut);
+          if (negated) {
+            keySpec->setFilter(
+                std::make_unique<common::NegatedBytesRange>(
+                    "common/match/",
+                    /*lowerUnbounded=*/false,
+                    /*lowerExclusive=*/false,
+                    "common/match0",
+                    /*upperUnbounded=*/false,
+                    /*upperExclusive=*/true,
+                    /*nullAllowed=*/nullAllowed));
+          } else {
+            keySpec->setFilter(
+                std::make_unique<common::BytesRange>(
+                    "common/match/",
+                    /*lowerUnbounded=*/false,
+                    /*lowerExclusive=*/false,
+                    "common/match0",
+                    /*upperUnbounded=*/false,
+                    /*upperExclusive=*/true,
+                    /*nullAllowed=*/nullAllowed));
+          }
+          spec->childByName("value")->setFilter(
+              std::make_unique<common::BigintRange>(
+                  100, 999, /*nullAllowed=*/false));
+          auto readers = makeReaders(first, file, spec);
+          auto result = BaseVector::create(first->type(), 0, pool());
+          std::vector<int64_t> actual;
+          while (readers.rowReader->next(batchSize, result) > 0) {
+            auto rows = result->as<RowVector>();
+            auto value = rows->childAt(1)->as<FlatVector<int64_t>>();
+            for (vector_size_t row = 0; row < rows->size(); ++row) {
+              actual.push_back(value->valueAt(row));
+              if (projectOut) {
+                auto source = actual.back() < kRows ? first : second;
+                EXPECT_TRUE(rows->childAt(0)->equalValueAt(
+                    source->childAt(0).get(), row, actual.back() % kRows));
+              }
             }
           }
-        }
-        std::vector<int64_t> expected;
-        for (int row = 100; row <= 999; ++row) {
-          const auto local = row % kRows;
-          if (local % 7 == 0 ? nullAllowed : local % 3 == 0) {
-            expected.push_back(row);
+          std::vector<int64_t> expected;
+          for (int row = 100; row <= 999; ++row) {
+            const auto local = row % kRows;
+            if (local % 7 == 0 ? nullAllowed : (local % 3 == 0) != negated) {
+              expected.push_back(row);
+            }
           }
+          EXPECT_EQ(actual, expected);
         }
-        EXPECT_EQ(actual, expected);
       }
     }
   }
@@ -944,10 +1052,11 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundaryMidFile) {
 // array elements) and in streams with values only where an outer nulls bitmap
 // is set (a nullable struct's children, flat-map values). Preserving
 // dictionaries reads the dictionary strings through the dictionary read path,
-// which falls back to a flat read at a chunk that is not a dictionary. A second
-// filter on the nullable 'n' drops more rows. The rows read must not change,
-// and without preserved dictionaries no batch size may decompress more chunks
-// than reading one row per batch.
+// which falls back to a flat read when it skips into a chunk that is not a
+// dictionary. A second filter on the nullable 'n' drops more rows. The rows
+// read must not change, and no batch size may decompress more chunks than
+// reading one row per batch, apart from the chunk where a batch starts when
+// preserving dictionaries.
 TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
   constexpr int kNumChunks = 40;
   constexpr int kRowsPerChunk = 100;
@@ -956,6 +1065,8 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
   // 'r.u' and 'd'. The root is node 0.
   constexpr size_t kNumNodes{6};
   constexpr std::array<uint32_t, kNumNodes> kNodes{2, 4, 6, 11, 7, 12};
+  // Indices in kNodes of the dictionary-encoded 'r.u' and 'd'.
+  constexpr std::array<size_t, 2> kDictionaryIndices{4, 5};
   // Index in kNodes of the values of 'm'.
   constexpr size_t kMapValuesIndex{3};
 
@@ -1175,13 +1286,23 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
 
   // Reading one row per batch decompresses little more than the chunks of kept
   // rows, since each batch starts at a kept row. With chunk stats, no batch
-  // size decompresses more. Without them, one batch decompresses every chunk
-  // up to its last kept row. Row 3'998 is in the null tail of 'r', so reads of
-  // 'r.u' skip past its last value.
+  // size decompresses more, except that preserving dictionaries also
+  // decompresses the chunk where a batch starts when no kept row is in it.
+  // Without chunk stats, one batch decompresses every chunk up to its last kept
+  // row. Row 3'998 is in the null tail of 'r', so reads of 'r.u' skip past its
+  // last value.
   const std::vector<int> farApartRows{7, 1'234, 1'235, 2'999, 3'998};
   const auto oneRowBatches = read(
       file,
       farApartRows,
+      1,
+      /*scanFastPath=*/false,
+      /*preserveDictionary=*/false);
+  // Rows in the three chunks where batches of 1'000 rows start without a kept
+  // row, each with an entry in every stream.
+  const auto batchStartChunks = read(
+      file,
+      {1'001, 2'003, 3'002},
       1,
       /*scanFastPath=*/false,
       /*preserveDictionary=*/false);
@@ -1195,7 +1316,7 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
     for (const bool scanFastPath : {false, true}) {
       SCOPED_TRACE(
           fmt::format("batchSize={} scanFastPath={}", batchSize, scanFastPath));
-      read(
+      const auto dictionaryReads = read(
           file,
           farApartRows,
           batchSize,
@@ -1214,6 +1335,9 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
           scanFastPath,
           /*preserveDictionary=*/true,
           /*filterNullsOfN=*/true);
+      const auto batchStart = batchSize == 1'000
+          ? batchStartChunks
+          : std::array<uint64_t, kNumNodes>{};
       for (size_t index = 0; index < kNumNodes; ++index) {
         SCOPED_TRACE(fmt::format("node={}", kNodes[index]));
         // A read stops at the next kept row even where it has no value, then
@@ -1222,7 +1346,15 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
         const uint64_t extraChunk = index == kMapValuesIndex ? 1 : 0;
         EXPECT_GT(decompressions[index], 0);
         EXPECT_LE(decompressions[index], oneRowBatches[index] + extraChunk);
+        EXPECT_LE(
+            dictionaryReads[index],
+            oneRowBatches[index] + extraChunk + batchStart[index]);
         EXPECT_GT(withoutChunkStats[index], decompressions[index]);
+      }
+      for (const auto index : kDictionaryIndices) {
+        SCOPED_TRACE(fmt::format("dictionary node={}", kNodes[index]));
+        EXPECT_EQ(
+            dictionaryReads[index], oneRowBatches[index] + batchStart[index]);
       }
     }
   }

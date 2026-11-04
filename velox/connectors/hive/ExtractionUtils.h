@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/FileColumnHandle.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/vector/ComplexVector.h"
 

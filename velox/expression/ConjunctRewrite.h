@@ -27,7 +27,8 @@ class ConjunctRewrite {
   /// OR conjuncts that are `true` and `false` respectively are pruned. If there
   /// is only one input to the conjunct after its inputs are pruned, rewrites
   /// the conjunct expression to this input. Otherwise, returns an optimized
-  /// conjunct expression with pruned inputs.
+  /// conjunct expression with pruned inputs, or nullptr when no input is
+  /// flattened or pruned.
   static core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
 
   static void registerRewrite();

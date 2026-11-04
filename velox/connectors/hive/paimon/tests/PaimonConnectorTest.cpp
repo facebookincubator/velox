@@ -17,14 +17,16 @@
 
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <atomic>
+#include <type_traits>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/LocalFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
@@ -49,6 +51,9 @@
 
 namespace facebook::velox::connector::hive::paimon {
 namespace {
+
+static_assert(std::is_base_of_v<FileConnector, PaimonConnector>);
+static_assert(!std::is_base_of_v<HiveConnector, PaimonConnector>);
 
 static const std::string kPaimonConnectorId = "test-paimon";
 
@@ -354,6 +359,7 @@ TEST_F(PaimonConnectorTest, connectorRegistration) {
   auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
   ASSERT_NE(connector, nullptr);
   ASSERT_NE(connector->connectorConfig(), nullptr);
+  EXPECT_TRUE(connector->canAddDynamicFilter());
   EXPECT_FALSE(connector->supportsSplitPreload());
   EXPECT_FALSE(connector->supportsIndexLookup());
   VELOX_ASSERT_THROW(
@@ -369,15 +375,55 @@ TEST_F(PaimonConnectorTest, connectorFactory) {
 
   auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{
-          {HiveConfig::kEnableFileHandleCache, "true"},
-          {HiveConfig::kNumCacheFileHandles, "500"}});
+          {PaimonConfig::kEnableFileHandleCache, "true"},
+          {PaimonConfig::kNumCacheFileHandles, "500"}});
 
   auto connector = factory.newConnector("test-paimon-2", config);
   ASSERT_NE(connector, nullptr);
 
-  HiveConfig hiveConfig(connector->connectorConfig());
-  EXPECT_TRUE(hiveConfig.isFileHandleCacheEnabled());
-  EXPECT_EQ(hiveConfig.numCacheFileHandles(), 500);
+  PaimonConfig paimonConfig(connector->connectorConfig());
+  EXPECT_TRUE(paimonConfig.isFileHandleCacheEnabled());
+  EXPECT_EQ(paimonConfig.numCacheFileHandles(), 500);
+  auto* paimonConnector = dynamic_cast<PaimonConnector*>(connector.get());
+  ASSERT_NE(paimonConnector, nullptr);
+  EXPECT_EQ(paimonConnector->fileHandleCacheStats().maxSize, 500);
+}
+
+TEST_F(PaimonConnectorTest, configProvider) {
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {PaimonConfig::kCacheMetadata, "true"}});
+  auto connector =
+      PaimonConnectorFactory().newConnector("paimon-config", config);
+  const auto* provider = connector->configProvider();
+  ASSERT_NE(provider, nullptr);
+  const auto properties = provider->properties();
+  EXPECT_EQ(properties.size(), PaimonConfig::registeredProperties().size());
+  const auto cacheMetadata = std::find_if(
+      properties.begin(), properties.end(), [](const auto& property) {
+        return property.name == PaimonConfig::kCacheMetadataSession;
+      });
+  ASSERT_NE(cacheMetadata, properties.end());
+  EXPECT_EQ(cacheMetadata->defaultValue, "true");
+  EXPECT_EQ(provider->normalize("cache_metadata", "false"), "false");
+  EXPECT_NE(
+      std::find_if(
+          properties.begin(),
+          properties.end(),
+          [](const auto& property) {
+            return property.name ==
+                PaimonConfig::kOrcFooterSpeculativeIoSizeSession;
+          }),
+      properties.end());
+  EXPECT_EQ(
+      std::find_if(
+          properties.begin(),
+          properties.end(),
+          [](const auto& property) {
+            return property.name ==
+                HiveConfig::kInsertExistingPartitionsBehaviorSession;
+          }),
+      properties.end());
 }
 
 // E2E test: read a single file from an append-only Paimon split.
@@ -1323,12 +1369,17 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
         {files[0]->getPath()}, PaimonTableType::kAppendOnly, format);
     exec::CursorParameters params;
     params.planNode = plan;
-    params.queryConfigs[core::QueryConfig::kMaxOutputBufferSize] = "1";
+    // Keep the scan in progress after the first batch, even if the producer
+    // runs ahead of the cursor.
+    params.bufferedBytes = 1024;
+    params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] = "1024";
     auto cursor = exec::TaskCursor::create(params);
     cursor->task()->addSplit(plan->id(), exec::Split(split));
     cursor->task()->noMoreSplits(plan->id());
     ASSERT_TRUE(cursor->moveNext());
+    ASSERT_TRUE(cursor->task()->isRunning());
     cursor->task()->requestCancel().wait();
+    ASSERT_EQ(cursor->task()->state(), exec::TaskState::kCanceled);
     EXPECT_THROW(cursor->moveNext(), folly::OperationCancelled);
     cursor.reset();
     exec::test::waitForAllTasksToBeDeleted();

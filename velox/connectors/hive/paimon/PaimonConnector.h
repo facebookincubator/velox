@@ -15,19 +15,28 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/FileConfigProvider.h"
+#include "velox/connectors/hive/FileConnector.h"
 #include "velox/connectors/hive/paimon/PaimonConfig.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
 /// Connector for Paimon table scans. Creates PaimonDataSource and reuses the
 /// common File scan pipeline and DWIO readers for physical file access.
-class PaimonConnector final : public HiveConnector {
+class PaimonConnector final : public FileConnector {
  public:
   PaimonConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* ioExecutor);
+
+  const config::ConfigProvider* configProvider() const override {
+    return &configProvider_;
+  }
+
+  bool canAddDynamicFilter() const override {
+    return true;
+  }
 
   /// Creates PaimonDataSource for reading from Paimon tables.
   std::unique_ptr<DataSource> createDataSource(
@@ -58,6 +67,7 @@ class PaimonConnector final : public HiveConnector {
 
  private:
   const std::shared_ptr<PaimonConfig> paimonConfig_;
+  FileConfigProvider configProvider_;
 };
 
 class PaimonConnectorFactory final : public ConnectorFactory {

@@ -37,6 +37,7 @@
 #include "velox/dwio/parquet/writer/arrow/FileDecryptorInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/SchemaInternal.h"
+#include "velox/dwio/parquet/writer/arrow/SizeStatistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 
 namespace facebook::velox::parquet::arrow {
@@ -314,6 +315,11 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
              *encodingStatsEntry.count()});
       }
     }
+    if (columnMetadata_->size_statistics()) {
+      sizeStatistics_ = std::make_shared<SizeStatistics>(
+          fromThrift(*columnMetadata_->size_statistics()));
+      sizeStatistics_->validate(descr);
+    }
     possibleStats_ = nullptr;
   }
 
@@ -369,6 +375,10 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
   inline std::shared_ptr<::facebook::velox::parquet::arrow::Statistics>
   statistics() const {
     return isStatsSet() ? possibleStats_ : nullptr;
+  }
+
+  inline std::shared_ptr<SizeStatistics> sizeStatistics() const {
+    return sizeStatistics_;
   }
 
   inline Compression::type compression() const {
@@ -447,6 +457,7 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
  private:
   mutable std::shared_ptr<::facebook::velox::parquet::arrow::Statistics>
       possibleStats_;
+  std::shared_ptr<SizeStatistics> sizeStatistics_;
   std::vector<Encoding::type> encodings_;
   std::vector<PageEncodingStats> encodingStats_;
   const facebook::velox::parquet::thrift::ColumnChunk* column_;
@@ -539,6 +550,10 @@ std::shared_ptr<schema::ColumnPath> ColumnChunkMetaData::pathInSchema() const {
 
 std::shared_ptr<Statistics> ColumnChunkMetaData::statistics() const {
   return impl_->statistics();
+}
+
+std::shared_ptr<SizeStatistics> ColumnChunkMetaData::sizeStatistics() const {
+  return impl_->sizeStatistics();
 }
 
 bool ColumnChunkMetaData::isStatsSet() const {
@@ -1801,15 +1816,8 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
     }
   }
 
-  // column chunk
-  void set_file_path(const std::string& val) {
-    columnChunk_->file_path() = val;
-  }
-
-  // column metadata
-  void SetStatistics(const EncodedStatistics& val) {
-    apache::thrift::can_throw(*columnChunk_->meta_data()).statistics() =
-        toThrift(val);
+  void setSizeStatistics(const SizeStatistics& sizeStats) {
+    columnChunk_->meta_data()->size_statistics() = toThrift(sizeStats);
   }
 
   void finish(
@@ -1939,6 +1947,7 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
             columnChunk_->meta_data().ensure();
           }
           columnChunk_->meta_data()->statistics().reset();
+          columnChunk_->meta_data()->size_statistics().reset();
           columnChunk_->meta_data()->encoding_stats().reset();
         }
       }
@@ -2071,6 +2080,11 @@ const ColumnDescriptor* ColumnChunkMetaDataBuilder::descr() const {
 void ColumnChunkMetaDataBuilder::setStatistics(
     const EncodedStatistics& result) {
   impl_->setStatistics(result);
+}
+
+void ColumnChunkMetaDataBuilder::setSizeStatistics(
+    const SizeStatistics& sizeStats) {
+  impl_->setSizeStatistics(sizeStats);
 }
 
 int64_t ColumnChunkMetaDataBuilder::totalCompressedSize() const {
