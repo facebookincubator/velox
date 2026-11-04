@@ -271,10 +271,14 @@ RowContainer::RowContainer(
                                                  : RowColumn::kNotNullOffset);
     ++nullOffsetsPos;
   }
-  rowColumnsStats_.resize(types_.size());
-  columnFixedSizes_.reserve(types_.size());
+  initColumnStats();
+}
+
+void RowContainer::initColumnStats() {
+  rowColumnsStats_.clear();
+  rowColumnsStats_.reserve(types_.size());
   for (size_t i = 0; i < types_.size(); ++i) {
-    columnFixedSizes_.push_back(
+    rowColumnsStats_.emplace_back(
         types_[i]->isFixedWidth() ? typeKindSize(typeKinds_[i]) : -1);
   }
 }
@@ -349,9 +353,8 @@ void RowContainer::removeOrUpdateRowColumnStats(
   for (auto i = 0; i < types_.size(); i++) {
     if (isNullAt(row, columnAt(i))) {
       rowColumnsStats_[i].removeOrUpdateCellStats(0, true, setToNull);
-    } else if (columnFixedSizes_[i] >= 0) {
-      rowColumnsStats_[i].removeOrUpdateCellStats(
-          columnFixedSizes_[i], false, setToNull);
+    } else if (rowColumnsStats_[i].isFixedWidth()) {
+      rowColumnsStats_[i].removeOrUpdateCellStats(0, false, setToNull);
     } else {
       rowColumnsStats_[i].removeOrUpdateCellStats(
           variableSizeAt(row, i), false, setToNull);
@@ -461,7 +464,9 @@ void RowColumn::Stats::removeOrUpdateCellStats(
     }
   } else {
     --nonNullCount_;
-    sumBytes_ -= bytes;
+    if (!isFixedWidth()) {
+      sumBytes_ -= bytes;
+    }
     if (setToNull) {
       ++nullCount_;
     }
@@ -473,7 +478,11 @@ void RowColumn::Stats::removeOrUpdateCellStats(
 RowColumn::Stats RowColumn::Stats::merge(
     const std::vector<RowColumn::Stats>& statsList) {
   RowColumn::Stats mergedStats;
+  if (!statsList.empty()) {
+    mergedStats.fixedWidth_ = statsList.front().fixedWidth_;
+  }
   for (const auto& stats : statsList) {
+    VELOX_DCHECK_EQ(mergedStats.fixedWidth_, stats.fixedWidth_);
     if (mergedStats.numCells() == 0) {
       mergedStats.minBytes_ = stats.minBytes_;
       mergedStats.maxBytes_ = stats.maxBytes_;
@@ -509,8 +518,8 @@ void RowContainer::updateColumnStats(
   auto& columnStats = rowColumnsStats_[columnIndex];
   if (decoded.isNullAt(rowIndex)) {
     columnStats.addNullCell();
-  } else if (columnFixedSizes_[columnIndex] >= 0) {
-    columnStats.addCellSize(columnFixedSizes_[columnIndex]);
+  } else if (columnStats.isFixedWidth()) {
+    columnStats.addFixedWidthCell();
   } else {
     columnStats.addCellSize(variableSizeAt(row, columnIndex));
   }
@@ -522,8 +531,8 @@ void RowContainer::updateColumnStats(char* row, int32_t columnIndex) {
   auto& columnStats = rowColumnsStats_[columnIndex];
   if (nullColumn) {
     columnStats.addNullCell();
-  } else if (columnFixedSizes_[columnIndex] >= 0) {
-    columnStats.addCellSize(columnFixedSizes_[columnIndex]);
+  } else if (columnStats.isFixedWidth()) {
+    columnStats.addFixedWidthCell();
   } else {
     columnStats.addCellSize(variableSizeAt(row, columnIndex));
   }
@@ -997,8 +1006,7 @@ void RowContainer::clear() {
   numFreeRows_ = 0;
   firstFreeRow_ = nullptr;
 
-  rowColumnsStats_.clear();
-  rowColumnsStats_.resize(types_.size());
+  initColumnStats();
 }
 
 void RowContainer::setProbedFlag(char** rows, int32_t numRows) {

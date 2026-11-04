@@ -2914,11 +2914,98 @@ TEST_P(RowContainerTest, columnStatsMixedTypes) {
   rowContainer->eraseRows(folly::Range(rows.data(), 10));
   checkStats(kNumRows - 10, 849);
 
-  // clear() resets the stats.
+  // Erasing the remaining rows leaves no cells.
+  rowContainer->eraseRows(folly::Range(rows.data() + 10, kNumRows - 10));
+  for (auto i = 0; i < numFixed; ++i) {
+    SCOPED_TRACE(fmt::format("column {}", i));
+    const auto stats = rowContainer->columnStats(i).value();
+    EXPECT_EQ(stats.numCells(), 0);
+    EXPECT_EQ(stats.sumBytes(), 0);
+    EXPECT_EQ(stats.minBytes(), 0);
+    EXPECT_EQ(stats.maxBytes(), 0);
+  }
+
+  // clear() resets the stats and keeps the fixed widths.
   rowContainer->clear();
   for (auto i = 0; i < numCols; ++i) {
     EXPECT_EQ(rowContainer->columnStats(i).value().numCells(), 0);
   }
+  for (auto i = 0; i < kNumRows; ++i) {
+    rows[i] = rowContainer->newRow();
+  }
+  for (auto i = 0; i < numCols; ++i) {
+    DecodedVector decoded(*rowVector->childAt(i), allRows);
+    rowContainer->store(decoded, folly::Range(rows.data(), kNumRows), i);
+  }
+  checkStats(kNumRows, 857);
+}
+
+// Merging stats of a fixed-width column derives the sizes from the width.
+TEST_F(RowContainerTest, mergeFixedWidthColumnStats) {
+  const int32_t kWidth = sizeof(int64_t);
+  RowColumn::Stats first(kWidth);
+  for (auto i = 0; i < 3; ++i) {
+    first.addFixedWidthCell();
+  }
+  first.addNullCell();
+  const RowColumn::Stats empty(kWidth);
+  RowColumn::Stats nullsOnly(kWidth);
+  nullsOnly.addNullCell();
+  nullsOnly.addNullCell();
+  RowColumn::Stats last(kWidth);
+  last.addFixedWidthCell();
+
+  {
+    const auto merged =
+        RowColumn::Stats::merge({empty, first, nullsOnly, last});
+    EXPECT_EQ(merged.nonNullCount(), 4);
+    EXPECT_EQ(merged.nullCount(), 3);
+    EXPECT_EQ(merged.minBytes(), kWidth);
+    EXPECT_EQ(merged.maxBytes(), kWidth);
+    EXPECT_EQ(merged.sumBytes(), 4 * kWidth);
+    EXPECT_EQ(merged.avgBytes(), kWidth);
+  }
+
+  {
+    const auto merged = RowColumn::Stats::merge({empty, nullsOnly});
+    EXPECT_EQ(merged.nonNullCount(), 0);
+    EXPECT_EQ(merged.nullCount(), 2);
+    EXPECT_EQ(merged.minBytes(), 0);
+    EXPECT_EQ(merged.maxBytes(), 0);
+    EXPECT_EQ(merged.sumBytes(), 0);
+    EXPECT_EQ(merged.avgBytes(), 0);
+  }
+
+  {
+    const auto merged = RowColumn::Stats::merge({});
+    EXPECT_EQ(merged.numCells(), 0);
+    EXPECT_EQ(merged.sumBytes(), 0);
+  }
+}
+
+// Removing a fixed-width cell only changes the counts. The sizes are derived
+// from the width and stay exact.
+TEST_F(RowContainerTest, removeFixedWidthColumnStats) {
+  const int32_t kWidth = sizeof(int64_t);
+  RowColumn::Stats stats(kWidth);
+  stats.addFixedWidthCell();
+  stats.addFixedWidthCell();
+  stats.addNullCell();
+
+  stats.removeOrUpdateCellStats(0, false, false);
+  EXPECT_EQ(stats.nonNullCount(), 1);
+  EXPECT_EQ(stats.nullCount(), 1);
+  EXPECT_EQ(stats.sumBytes(), kWidth);
+  EXPECT_EQ(stats.minBytes(), kWidth);
+  EXPECT_EQ(stats.maxBytes(), kWidth);
+
+  // A non-null cell set to null moves from the non-null to the null count.
+  stats.removeOrUpdateCellStats(0, false, true);
+  EXPECT_EQ(stats.nonNullCount(), 0);
+  EXPECT_EQ(stats.nullCount(), 2);
+  EXPECT_EQ(stats.sumBytes(), 0);
+  EXPECT_EQ(stats.minBytes(), 0);
+  EXPECT_EQ(stats.maxBytes(), 0);
 }
 
 TEST_F(RowContainerTest, setAllNull) {
