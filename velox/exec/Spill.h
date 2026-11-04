@@ -638,7 +638,9 @@ class SpillState {
   /// Appends data to partition with 'id'. The rows given by 'indices' must be
   /// sorted for a sorted spill and must hash to 'partition'. It is safe to call
   /// this on multiple threads if all threads specify a different partition.
-  /// Returns the size to append to partition.
+  /// The writer splits the rows into pages by their serialized size estimates.
+  /// If it can't, the rows must be estimated under 2GB. Returns the size to
+  /// append to partition.
   uint64_t appendToPartition(
       const SpillPartitionId& id,
       const RowVectorPtr& rows);

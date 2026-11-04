@@ -15,6 +15,11 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <limits>
+
+#include <folly/Likely.h>
+
 #include "velox/serializers/PrestoSerializerSerializationUtils.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ConstantVector.h"
@@ -23,29 +28,67 @@
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::serializer::presto::detail {
+/// Returns 'bytes' as a size estimate, saturated at the largest vector_size_t
+/// so that a size of 2GB or more cannot wrap to a small or negative one.
+inline vector_size_t saturatedSize(uint64_t bytes) {
+  return static_cast<vector_size_t>(
+      std::min<uint64_t>(bytes, std::numeric_limits<vector_size_t>::max()));
+}
+
+/// The size of an int32 field, such as a length or an offset.
+constexpr vector_size_t kInt32Bytes{sizeof(int32_t)};
+
+/// Adds the non-negative 'bytes' to the size estimate '*size', saturating like
+/// saturatedSize(). Both are non-negative, so their unsigned 32-bit sum cannot
+/// wrap and the add and clamp stay in 32 bits.
+inline void addToSize(vector_size_t* size, vector_size_t bytes) {
+  const auto sum = static_cast<uint32_t>(*size) + static_cast<uint32_t>(bytes);
+  *size = static_cast<vector_size_t>(
+      std::min<uint32_t>(sum, std::numeric_limits<vector_size_t>::max()));
+}
+
+/// Adds 'bytes', which can exceed INT32_MAX, like the overload above.
+inline void addToSize(vector_size_t* size, uint64_t bytes) {
+  *size = saturatedSize(*size + bytes);
+}
+
+/// Returns 'count' x 'width' bytes of non-negative factors, saturated like
+/// saturatedSize().
+inline vector_size_t saturatedProduct(
+    vector_size_t count,
+    vector_size_t width) {
+  vector_size_t bytes;
+  if (FOLLY_UNLIKELY(__builtin_mul_overflow(count, width, &bytes))) {
+    return std::numeric_limits<vector_size_t>::max();
+  }
+  return bytes;
+}
+
 template <TypeKind Kind>
 void estimateFlatSerializedSize(
     const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes) {
-  const auto valueSize = vector->type()->cppSizeInBytes();
+  const auto valueSize =
+      static_cast<vector_size_t>(vector->type()->cppSizeInBytes());
   if (vector->mayHaveNulls()) {
     const auto* rawNulls = vector->rawNulls();
     for (int32_t i = 0; i < ranges.size(); ++i) {
       const auto end = ranges[i].begin + ranges[i].size;
       const auto numValues = bits::countBits(rawNulls, ranges[i].begin, end);
       // Add the size of the values.
-      *(sizes[i]) += numValues * valueSize;
+      addToSize(sizes[i], saturatedProduct(numValues, valueSize));
       // Add the size of the null bit mask if there are nulls in the range.
       if (numValues != ranges[i].size) {
-        *(sizes[i]) += bits::nbytes(ranges[i].size);
+        addToSize(
+            sizes[i], static_cast<vector_size_t>(bits::nbytes(ranges[i].size)));
       }
     }
   } else {
     for (int32_t i = 0; i < ranges.size(); ++i) {
       // Add the size of the values (there's not bit mask since there are no
       // nulls).
-      *(sizes[i]) += ranges[i].size * valueSize;
+      addToSize(sizes[i], saturatedProduct(ranges[i].size, valueSize));
     }
   }
 }
@@ -133,7 +176,9 @@ void estimateDictionarySerializedSize(
     }
 
     // Add the size of the indices.
-    *sizes[rangeIndex] += sizeof(int32_t) * ranges[rangeIndex].size;
+    addToSize(
+        sizes[rangeIndex],
+        saturatedProduct(ranges[rangeIndex].size, kInt32Bytes));
   }
 
   // In PrestoBatchVectorSerializer we don't preserve the encodings for the
@@ -170,13 +215,13 @@ void estimateConstantSerializedSize(
         &elementSizePtr,
         scratch);
   } else if constexpr (std::is_same_v<T, StringView>) {
-    elementSize = constantVector->valueAt(0).size();
+    elementSize = saturatedSize(constantVector->valueAt(0).size());
   } else {
     elementSize = sizeof(T);
   }
 
   for (int32_t i = 0; i < ranges.size(); ++i) {
-    *sizes[i] += elementSize;
+    addToSize(sizes[i], elementSize);
   }
 }
 

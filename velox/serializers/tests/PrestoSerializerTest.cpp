@@ -1419,6 +1419,77 @@ TEST_F(PrestoSerializerTest, appendStringPast2GBOffset) {
       serializer->append(rowVector), "Serialized page exceeds 2GB");
 }
 
+// A row of 4GB or more saturates its estimate instead of wrapping to a small
+// size that would pass for a real one.
+TEST_P(PrestoSerializerTest, estimateSerializedSizeSaturates) {
+  // Estimation reads only the string sizes, so the strings need no memory.
+  static const char kPrefix[] = "abcd";
+  auto makeMaxSizeString = [&]() {
+    auto strings =
+        BaseVector::create<FlatVector<StringView>>(VARCHAR(), 1, pool_.get());
+    strings->setNoCopy(
+        0, StringView(kPrefix, std::numeric_limits<int32_t>::max()));
+    return strings;
+  };
+  // Two strings of INT32_MAX bytes and one of 12 add up to 2^32+10.
+  const auto rowVector = makeRowVector(
+      {makeMaxSizeString(),
+       makeMaxSizeString(),
+       makeFlatVector<std::string>({std::string(12, 'x')})});
+  constexpr vector_size_t kMaxSize{std::numeric_limits<vector_size_t>::max()};
+  const IndexRange range{0, 1};
+  Scratch scratch;
+  {
+    const vector_size_t row{0};
+    vector_size_t size{0};
+    vector_size_t* sizePtr = &size;
+    serde_->estimateSerializedSize(
+        rowVector.get(), folly::Range(&row, 1), &sizePtr, scratch);
+    ASSERT_EQ(size, kMaxSize);
+  }
+  {
+    vector_size_t size{0};
+    vector_size_t* sizePtr = &size;
+    serde_->estimateSerializedSize(
+        rowVector.get(), folly::Range(&range, 1), &sizePtr, scratch);
+    ASSERT_EQ(size, kMaxSize);
+  }
+}
+
+// Each null string adds 4 bytes to the estimate it is added to, so null strings
+// added to an estimate near INT32_MAX saturate it.
+TEST_P(PrestoSerializerTest, estimateSerializedSizeSaturatesOnNullStrings) {
+  constexpr vector_size_t kNumRows{8};
+  constexpr vector_size_t kMaxSize{std::numeric_limits<vector_size_t>::max()};
+  const auto strings = makeAllNullFlatVector<StringView>(kNumRows);
+  Scratch scratch;
+  {
+    // All rows of a range add to one estimate, which passes INT32_MAX at the
+    // third row.
+    const IndexRange range{0, kNumRows};
+    vector_size_t size{kMaxSize - 10};
+    vector_size_t* sizePtr = &size;
+    serde_->estimateSerializedSize(
+        strings.get(), folly::Range(&range, 1), &sizePtr, scratch);
+    ASSERT_EQ(size, kMaxSize);
+  }
+  {
+    std::vector<vector_size_t> rows(kNumRows);
+    std::iota(rows.begin(), rows.end(), 0);
+    std::vector<vector_size_t> sizes(kNumRows, kMaxSize - 1);
+    std::vector<vector_size_t*> sizePtrs(kNumRows);
+    for (auto i = 0; i < kNumRows; ++i) {
+      sizePtrs[i] = &sizes[i];
+    }
+    serde_->estimateSerializedSize(
+        strings.get(),
+        folly::Range(rows.data(), rows.size()),
+        sizePtrs.data(),
+        scratch);
+    ASSERT_EQ(sizes, std::vector<vector_size_t>(kNumRows, kMaxSize));
+  }
+}
+
 TEST_P(PrestoSerializerTest, appendDeserializeInvalidatesNullCount) {
   const auto options = getParamSerdeOptions(nullptr);
   RowVectorPtr result;
@@ -2762,4 +2833,282 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, dictionary) {
       dictionaryWithNulls, {{0, 16}, {16, 16}}, {33, 33});
   testEstimateSerializedSize(
       dictionaryWithNulls, {{0, 8}, {8, 16}, {24, 8}}, {17, 33, 17});
+}
+
+// Tests the row overload, which estimates each row as the iterative serializer
+// writes it.
+class PrestoSerializerEstimateSizeTest
+    : public PrestoSerializerBatchEstimateSizeTest {
+ protected:
+  void testEstimateSerializedSizeByRows(
+      VectorPtr input,
+      const std::vector<vector_size_t>& rows,
+      const std::vector<vector_size_t>& expectedRowSizes) {
+    auto row = makeRowVector({input});
+    std::vector<vector_size_t> sizes(rows.size(), 0);
+    std::vector<vector_size_t*> sizePointers(rows.size());
+    for (auto i = 0; i < rows.size(); ++i) {
+      sizePointers[i] = &sizes[i];
+    }
+
+    Scratch scratch;
+    serde_->estimateSerializedSize(
+        row.get(),
+        folly::Range(rows.data(), rows.size()),
+        sizePointers.data(),
+        scratch);
+
+    ASSERT_EQ(sizes.size(), expectedRowSizes.size());
+    for (auto i = 0; i < sizes.size(); ++i) {
+      EXPECT_EQ(sizes[i], expectedRowSizes[i]) << "at row " << rows[i];
+    }
+  }
+};
+
+TEST_F(PrestoSerializerEstimateSizeTest, rows) {
+  auto flatVector =
+      makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
+  std::vector<vector_size_t> rows(32);
+  std::iota(rows.begin(), rows.end(), 0);
+
+  auto constant = BaseVector::wrapInConstant(32, 0, flatVector);
+  // The row overload flattens the constant: 4 bytes for the row wrapper and 4
+  // for the int32 value.
+  testEstimateSerializedSizeByRows(
+      constant, rows, std::vector<vector_size_t>(32, 8));
+
+  auto indices = makeIndices(32, [](auto row) { return (row * 2) % 32; });
+  auto dictionary =
+      BaseVector::wrapInDictionary(nullptr, indices, 32, flatVector);
+  // The row overload flattens the dictionary: 4 bytes for the row wrapper and
+  // 4 for the int32 value.
+  testEstimateSerializedSizeByRows(
+      dictionary, rows, std::vector<vector_size_t>(32, 8));
+
+  auto nullableValues = makeFlatVector<double>(
+      32,
+      [](vector_size_t row) { return row; },
+      [](auto row) { return row % 4 == 0; });
+  auto nullableDictionary =
+      BaseVector::wrapInDictionary(nullptr, indices, 32, nullableValues);
+  // indices contains each even position twice: reference 0, 2, 4, ..., 30.
+  // Thus, the 8 null positions produce 16 null rows and 16 non-null doubles.
+  // Null bitmaps are excluded from per-row estimates, so a row takes 4 bytes
+  // for the row wrapper and 8 if its double is not null.
+  std::vector<vector_size_t> expectedDictionaryRowSizes(32);
+  for (auto i = 0; i < 32; ++i) {
+    expectedDictionaryRowSizes[i] = i % 2 == 0 ? 4 : 12;
+  }
+  testEstimateSerializedSizeByRows(
+      nullableDictionary, rows, expectedDictionaryRowSizes);
+
+  auto nullableDoubles = makeFlatVector<double>(
+      32,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row % 4 == 0; });
+  std::vector<vector_size_t> expectedRowSizes(32);
+  for (auto i = 0; i < 32; ++i) {
+    // 4 bytes for the row wrapper and 8 bytes for non-null doubles.
+    expectedRowSizes[i] = i % 4 == 0 ? 4 : 12;
+  }
+  // 24 non-null doubles and 8 nulls.
+  testEstimateSerializedSizeByRows(nullableDoubles, rows, expectedRowSizes);
+}
+
+// The row overload, which PartitionedOutput calls on its output, counts 4 bytes
+// for each row, top-level or nested, and for the length of each string, null or
+// not, flat or constant.
+TEST_F(PrestoSerializerEstimateSizeTest, rowsCountLengths) {
+  constexpr vector_size_t kNumRows{8};
+  const auto output = makeRowVector({
+      makeFlatVector<std::string>(
+          kNumRows, [](auto /*row*/) { return "abc"; }, nullEvery(2, 1)),
+      makeRowVector(
+          {makeFlatVector<int32_t>(kNumRows, [](auto row) { return row; })},
+          nullEvery(4)),
+      makeConstant(StringView("abc"), kNumRows),
+      makeNullConstant(TypeKind::VARCHAR, kNumRows),
+  });
+  std::vector<vector_size_t> rows(kNumRows);
+  std::iota(rows.begin(), rows.end(), 0);
+  std::vector<vector_size_t> sizes(kNumRows, 0);
+  std::vector<vector_size_t*> sizePointers(kNumRows);
+  for (auto i = 0; i < kNumRows; ++i) {
+    sizePointers[i] = &sizes[i];
+  }
+  Scratch scratch;
+  serde_->estimateSerializedSize(
+      output.get(),
+      folly::Range(rows.data(), rows.size()),
+      sizePointers.data(),
+      scratch);
+
+  // 4 for the row; 4 for the string length plus 3 bytes if not null; 4 for the
+  // nested row plus 4 for its value if not null; 4 + 3 for the constant string
+  // and 4 for the null one.
+  EXPECT_EQ(
+      sizes, (std::vector<vector_size_t>{26, 27, 30, 27, 26, 27, 30, 27}));
+}
+
+// A join repeats one collection for many rows through a dictionary. The
+// elements of 65,544 rows x 65,536 elements per row don't fit in 32 bits.
+TEST_F(PrestoSerializerEstimateSizeTest, repeatedCollectionRows) {
+  constexpr vector_size_t kNumRows = 65'544;
+  constexpr vector_size_t kNumElements = 65'536;
+  std::vector<vector_size_t> rows(kNumRows);
+  std::iota(rows.begin(), rows.end(), 0);
+  auto indices = makeIndices(kNumRows, [](auto /*row*/) { return 0; });
+
+  {
+    auto array = makeArrayVector<int64_t>(
+        1,
+        [&](auto /*row*/) { return kNumElements; },
+        [](auto index) { return index; });
+    // 4 bytes for the row, 4 for the array length and 8 per element.
+    testEstimateSerializedSizeByRows(
+        BaseVector::wrapInDictionary(nullptr, indices, kNumRows, array),
+        rows,
+        std::vector<vector_size_t>(kNumRows, 4 + 4 + 8 * kNumElements));
+  }
+
+  {
+    auto map = makeMapVector<int64_t, int64_t>(
+        1,
+        [&](auto /*row*/) { return kNumElements; },
+        [](auto index) { return index; },
+        [](auto index) { return index; });
+    // 4 bytes for the row, 4 for the map length and 16 per entry.
+    testEstimateSerializedSizeByRows(
+        BaseVector::wrapInDictionary(nullptr, indices, kNumRows, map),
+        rows,
+        std::vector<vector_size_t>(kNumRows, 4 + 4 + 16 * kNumElements));
+  }
+}
+
+// Per-row estimates of a dictionary over collections match those of a flat
+// copy, with repeated, unsorted and null rows at the outer and inner levels.
+TEST_F(PrestoSerializerEstimateSizeTest, repeatedCollectionRowsMatchFlat) {
+  constexpr vector_size_t kNumRows = 32;
+  std::vector<vector_size_t> rows(kNumRows);
+  std::iota(rows.begin(), rows.end(), 0);
+  auto estimate = [&](const VectorPtr& vector) {
+    auto row = makeRowVector({vector});
+    std::vector<vector_size_t> sizes(kNumRows, 0);
+    std::vector<vector_size_t*> sizePointers(kNumRows);
+    for (auto i = 0; i < kNumRows; ++i) {
+      sizePointers[i] = &sizes[i];
+    }
+    Scratch scratch;
+    serde_->estimateSerializedSize(
+        row.get(),
+        folly::Range(rows.data(), rows.size()),
+        sizePointers.data(),
+        scratch);
+    return sizes;
+  };
+
+  // [[1, null], null, [], [3, 4, 5], [6]]
+  auto inner = makeNullableArrayVector<int64_t>(
+      std::vector<std::optional<std::vector<std::optional<int64_t>>>>{
+          {{1, std::nullopt}},
+          std::nullopt,
+          std::vector<std::optional<int64_t>>{},
+          {{3, 4, 5}},
+          {{6}}});
+  // [inner0, inner1], null, [inner2, inner3, inner4]
+  auto array = makeArrayVector({0, 2, 2}, inner, {1});
+  // {0: inner0}, {1: inner1, 2: inner2}, {3: inner3, 4: inner4}
+  auto map =
+      makeMapVector({0, 1, 3}, makeFlatVector<int64_t>({0, 1, 2, 3, 4}), inner);
+  auto indices = makeIndices(kNumRows, [](auto row) { return (row * 7) % 3; });
+
+  for (const auto& collection : std::vector<VectorPtr>{array, map}) {
+    for (const auto& nulls : std::vector<BufferPtr>{
+             nullptr,
+             makeNulls(kNumRows, [](auto row) { return row % 5 == 0; })}) {
+      auto dictionary =
+          BaseVector::wrapInDictionary(nulls, indices, kNumRows, collection);
+      EXPECT_EQ(estimate(dictionary), estimate(BaseVector::copy(*dictionary)));
+    }
+  }
+}
+
+// Rows that repeat a collection of 2GB or more saturate their estimates
+// instead of wrapping when its size is added to each of them.
+TEST_F(PrestoSerializerEstimateSizeTest, repeatedCollectionRowsSaturate) {
+  // Estimation reads only the string size, so a 16-byte string can claim
+  // INT32_MAX bytes. A dictionary checks only that it starts in a string
+  // buffer.
+  auto strings = makeFlatVector<std::string>({std::string(16, 'x')});
+  strings->setNoCopy(
+      0,
+      StringView(
+          strings->valueAt(0).data(), std::numeric_limits<int32_t>::max()));
+  // A whole SIMD batch of rows, which the dictionary reads at once.
+  constexpr vector_size_t kNumRows{8};
+  std::vector<vector_size_t> rows(kNumRows);
+  std::iota(rows.begin(), rows.end(), 0);
+  testEstimateSerializedSizeByRows(
+      BaseVector::wrapInDictionary(
+          nullptr,
+          makeIndices(kNumRows, [](auto /*row*/) { return 0; }),
+          kNumRows,
+          makeArrayVector({0}, strings)),
+      rows,
+      std::vector<vector_size_t>(
+          kNumRows, std::numeric_limits<vector_size_t>::max()));
+}
+
+// Collections of fixed-width elements are estimated from their lengths, and
+// other elements a bounded batch at a time, so the scratch memory does not grow
+// with the number of elements.
+TEST_F(PrestoSerializerEstimateSizeTest, largeCollectionScratch) {
+  constexpr vector_size_t kNumElements{1 << 22};
+  auto estimate = [&](const VectorPtr& elements, vector_size_t expectedSize) {
+    const auto row = makeRowVector({makeArrayVector({0}, elements)});
+    const vector_size_t rowNumber{0};
+    vector_size_t size{0};
+    vector_size_t* sizePointer = &size;
+    Scratch scratch;
+    serde_->estimateSerializedSize(
+        row.get(), folly::Range(&rowNumber, 1), &sizePointer, scratch);
+    // 4 bytes for the row wrapper and 4 for the array length.
+    EXPECT_EQ(size, 8 + expectedSize);
+    // Expanding all elements would take 12 bytes each, 48MB.
+    EXPECT_LT(scratch.retainedSize(), 4 << 20);
+  };
+
+  estimate(
+      makeFlatVector<int8_t>(kNumElements, [](auto row) { return row; }),
+      kNumElements);
+  // Null elements take no bytes.
+  estimate(
+      makeFlatVector<int8_t>(
+          kNumElements, [](auto row) { return row; }, nullEvery(2)),
+      kNumElements / 2);
+  // Each string takes 4 bytes for its length.
+  estimate(
+      makeFlatVector<StringView>(
+          kNumElements, [](auto /*row*/) { return StringView(); }),
+      4 * kNumElements);
+}
+
+// Rows of a collection can share elements. Here 70,000 rows each hold the same
+// 65,000 elements, more element rows in all than 32 bits count.
+TEST_F(PrestoSerializerEstimateSizeTest, overlappingCollectionRows) {
+  constexpr vector_size_t kNumRows{70'000};
+  constexpr vector_size_t kNumElements{65'000};
+  const auto array = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(BIGINT()),
+      nullptr,
+      kNumRows,
+      makeIndices(kNumRows, [](auto /*row*/) { return 0; }),
+      makeIndices(kNumRows, [&](auto /*row*/) { return kNumElements; }),
+      makeFlatVector<int64_t>(kNumElements, [](auto row) { return row; }));
+  std::vector<vector_size_t> rows(kNumRows);
+  std::iota(rows.begin(), rows.end(), 0);
+  // 4 bytes for the row wrapper, 4 for the array length and 8 per element.
+  testEstimateSerializedSizeByRows(
+      array, rows, std::vector<vector_size_t>(kNumRows, 8 + 8 * kNumElements));
 }
