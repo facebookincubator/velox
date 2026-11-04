@@ -16,6 +16,7 @@
 #pragma once
 
 #include <boost/algorithm/string.hpp>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -175,7 +176,7 @@ class FunctionSignature {
 
   bool hasConstantArgument() const {
     return std::any_of(
-        constantArguments_.begin(), constantArguments_.end(), folly::identity);
+        constantArguments_.begin(), constantArguments_.end(), std::identity{});
   }
 
   bool variableArity() const {

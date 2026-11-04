@@ -16,16 +16,49 @@
 
 #include "velox/dwio/nimble/encodings/tests/EncodingViewTestUtils.h"
 
+#include <span>
 #include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
 
 using namespace facebook;
 
-using DictionaryEncodingViewTest = nimble::test::EncodingViewTest;
+class DictionaryEncodingViewTest : public nimble::test::EncodingViewTest {
+ protected:
+  // Encodes 'values' with 'layout', checks that the alphabet was written with
+  // 'alphabetEncoding', and checks every read of a view over the result.
+  template <typename T>
+  void expectLayoutReads(
+      const nimble::EncodingLayout& layout,
+      nimble::EncodingType alphabetEncoding,
+      const nimble::Vector<T>& values,
+      const std::vector<uint32_t>& positions) {
+    for (const auto useVarint : {false, true}) {
+      SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
+      const nimble::Encoding::Options options{
+          .useVarintRowCount = useVarint,
+          .cacheEncodingView = cacheEncodingView(),
+      };
+      const auto encoded = nimble::encodeFromCustomLayout<T>(
+          layout,
+          std::span<const T>{values.data(), values.size()},
+          *buffer_,
+          options);
+      const char* pos = encoded.data() +
+          nimble::EncodingPrefix::prefixSize(encoded, useVarint);
+      const auto alphabetSize = nimble::encoding::readUint32(pos);
+      ASSERT_EQ(
+          nimble::EncodingPrefix::encodingType({pos, alphabetSize}),
+          alphabetEncoding);
+      expectEncodedReads(encoded, values, positions, options);
+    }
+  }
+};
 
 TEST_P(DictionaryEncodingViewTest, readsDictionaryEncoding) {
   expectReads<nimble::DictionaryEncoding<int32_t>>(
@@ -44,6 +77,17 @@ TEST_P(
   expectReads<nimble::DictionaryEncoding<std::string_view>>(
       makeVector<std::string_view>({"alpha", "beta", "alpha", "gamma", "beta"}),
       {4, 0, 3, 2, 1});
+}
+
+TEST_P(DictionaryEncodingViewTest, readsBitPackedAlphabet) {
+  expectLayoutReads(
+      nimble::DictionaryEnc{
+          .alphabet = nimble::FixedBitWidthEnc{},
+          .indices = nimble::FixedBitWidthEnc{},
+      },
+      nimble::EncodingType::FixedBitWidth,
+      randomDictionaryUint32(/*seed=*/11),
+      randomizedPositions(/*seed=*/12));
 }
 
 TEST_P(DictionaryEncodingViewTest, concurrent) {

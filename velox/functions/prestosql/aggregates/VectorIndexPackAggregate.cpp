@@ -55,7 +55,7 @@ class VectorIndexPackAggregate {
   static constexpr int32_t kClusterIds = 1;
   static constexpr int32_t kCentroids = 2;
 
-  using OutputType = Varbinary;
+  using OutputType = VectorIndex;
 
   // Reads and checks the constant 'metric' argument once, before any rows
   // arrive.
@@ -263,7 +263,7 @@ void registerVectorIndexPackAggregate(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
-          .returnType("varbinary")
+          .returnType("vector_index")
           .intermediateType("row(integer,array(bigint),array(real))")
           .argumentType("bigint")
           .argumentType("array(real)")

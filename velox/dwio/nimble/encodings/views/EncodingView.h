@@ -127,6 +127,19 @@ class EncodingView {
     NIMBLE_CHECK_LE(length, rowCount_ - offset);
   }
 
+  // Checks that every index is a row of the view and returns the largest.
+  // 'indices' must not be empty. Reduces the values instead of tracking a
+  // position as std::max_element does, so the loop vectorizes.
+  uint32_t checkReadIndices(std::span<const uint32_t> indices) const {
+    NIMBLE_DCHECK(!indices.empty(), "Read indices must not be empty");
+    uint32_t maxIndex{0};
+    for (const auto index : indices) {
+      maxIndex = std::max(maxIndex, index);
+    }
+    NIMBLE_CHECK_LT(maxIndex, rowCount_, "Read index out of range");
+    return maxIndex;
+  }
+
   uint32_t checkReadRanges(std::span<const RowRange> ranges) const {
     uint32_t numRows{0};
     for (size_t i{0}; i < ranges.size(); ++i) {

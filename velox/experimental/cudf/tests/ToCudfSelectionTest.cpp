@@ -26,6 +26,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Time.h"
 
 #include <gmock/gmock.h>
@@ -681,6 +682,69 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationFallsBack) {
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
 }
 
+// A plain array_agg runs on the GPU, which keeps each group's rows in arrival
+// order; one with ORDER BY falls back to the CPU, which sorts each group.
+TEST_F(ToCudfSelectionTest, arrayAggOrderByFallsBack) {
+  auto data = makeRowVector(
+      {"k", "v", "position"},
+      {
+          makeFlatVector<int64_t>({1, 2, 1, 2}),
+          makeFlatVector<int64_t>({30, 20, 10, 40}),
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+      });
+  createDuckDbTable({data});
+
+  auto run = [&](const std::string& aggregate, const std::string& sql) {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .singleAggregation({"k"}, {aggregate})
+                    .planNode();
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .config("cudf.enabled", true)
+        .plan(plan)
+        .assertResults(sql);
+  };
+
+  auto gpuTask =
+      run("array_agg(v)",
+          "SELECT k, array_agg(v ORDER BY position) FROM tmp GROUP BY k");
+  ASSERT_TRUE(wasCudfAggregationUsed(gpuTask));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(gpuTask));
+
+  auto cpuTask =
+      run("array_agg(v ORDER BY v DESC)",
+          "SELECT k, array_agg(v ORDER BY v DESC) FROM tmp GROUP BY k");
+  ASSERT_FALSE(wasCudfAggregationUsed(cpuTask));
+  ASSERT_TRUE(wasDefaultHashAggregationUsed(cpuTask));
+}
+
+// array_agg over an element type cuDF cannot hold, a MAP or a type with a
+// custom comparison, runs on the CPU.
+TEST_F(ToCudfSelectionTest, arrayAggUnsupportedElementTypeFallsBack) {
+  auto keys = makeFlatVector<int64_t>({1, 2});
+  const std::vector<std::pair<std::string, VectorPtr>> columns{
+      {"m", makeMapVectorFromJson<int64_t, int64_t>({"{1: 10}", "{2: 20}"})},
+      {"tz",
+       makeFlatVector<int64_t>(
+           {pack(0, 0), pack(1, 0)}, TIMESTAMP_WITH_TIME_ZONE())},
+  };
+  for (const auto& [name, column] : columns) {
+    SCOPED_TRACE(name);
+    auto plan = PlanBuilder()
+                    .values({makeRowVector({"k", name}, {keys, column})})
+                    .singleAggregation({"k"}, {"array_agg(" + name + ")"})
+                    .planNode();
+    // Each key has one row, so its array holds that row's value.
+    auto expected =
+        makeRowVector({"k", "a0"}, {keys, makeArrayVector({0, 1}, column)});
+    auto task = AssertQueryBuilder(plan)
+                    .config("cudf.enabled", true)
+                    .assertResults(expected);
+    ASSERT_FALSE(wasCudfAggregationUsed(task));
+    ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+  }
+}
+
 // Test mixed supported/unsupported should fall back
 TEST_F(ToCudfSelectionTest, mixedSupportFallsBack) {
   auto vectors = makeVectors(rowType_, 10, 100);
@@ -966,6 +1030,84 @@ TEST_F(ToCudfSelectionTest, zeroColumnCountConstantUsesGpu) {
 
   ASSERT_TRUE(wasCudfAggregationUsed(task));
   ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
+}
+
+// Constant projections over a zero-column input run on the GPU, which fills
+// them to the row count of each batch.
+TEST_F(ToCudfSelectionTest, zeroColumnConstantProjectionsUseCudf) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .filter("c0 > 1")
+                  .project({})
+                  .project({"'x' AS s", "7 AS n"})
+                  .singleAggregation({"s", "n"}, {"count(1)"})
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config("cudf.enabled", true)
+          .plan(plan)
+          .assertResults("SELECT 'x', 7, count(1) FROM tmp WHERE c0 > 1");
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// A filter over a zero-column input has no column to evaluate against and
+// stays on the CPU, whether a projection follows it or not. The filter is one
+// the GPU could otherwise evaluate, so the test fails if the rule is dropped.
+TEST_F(ToCudfSelectionTest, zeroColumnFilterFallsBack) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  createDuckDbTable({data});
+
+  auto fusedPlan = PlanBuilder()
+                       .values({data})
+                       .project({})
+                       .filter("1 < 2")
+                       .project({"'x' AS s"})
+                       .singleAggregation({"s"}, {"count(1)"})
+                       .planNode();
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(fusedPlan)
+                  .assertResults("SELECT 'x', count(1) FROM tmp");
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+
+  auto filterOnlyPlan = PlanBuilder()
+                            .values({data})
+                            .project({})
+                            .filter("1 < 2")
+                            .singleAggregation({}, {"count(1)"})
+                            .planNode();
+  task = AssertQueryBuilder(duckDbQueryRunner_)
+             .config("cudf.enabled", true)
+             .plan(filterOnlyPlan)
+             .assertResults("SELECT count(1) FROM tmp");
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+// So does a projection over a zero-column input that is not a plain constant
+// in the plan, even one that folds to a constant.
+TEST_F(ToCudfSelectionTest, zeroColumnNonConstantProjectionFallsBack) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({})
+                  .project({"1 + 2 AS n"})
+                  .singleAggregation({"n"}, {"count(1)"})
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT 3, count(1) FROM tmp");
+
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
 // Count-only aggregation plans (single and partial/final) should use

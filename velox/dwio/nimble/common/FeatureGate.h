@@ -37,14 +37,6 @@ class FeatureGate {
         "stream_deduplication";
     static constexpr std::string_view kDisableSharedStringBuffers =
         "disable_shared_string_buffers";
-    /// Writer-side: gates emitting the stripe-stats section (and the per-stripe
-    /// stats snapshot + file-stats-from-stripes merge that produces it). When
-    /// off, the writer accumulates stats across the whole file and emits no
-    /// stripe-stats section, matching pre-feature behavior.
-    static constexpr std::string_view kStripeStatsWrite = "stripe_stats_write";
-    /// Reader-side: gates stripe-stats stripe pruning in the selective reader.
-    static constexpr std::string_view kStripeStatsPruning =
-        "stripe_stats_pruning";
   };
 
   virtual ~FeatureGate() = default;

@@ -66,6 +66,11 @@ core::TypedExprPtr ConjunctRewrite::rewrite(const core::TypedExprPtr& expr) {
   if (optimizedInputs.size() == 1) {
     return optimizedInputs.front();
   }
+
+  // Nothing was flattened or dropped: report no rewrite.
+  if (utils::sameInputs(expr, optimizedInputs)) {
+    return nullptr;
+  }
   return std::make_shared<core::CallTypedExpr>(
       expr->type(), std::move(optimizedInputs), callExpr->name());
 }

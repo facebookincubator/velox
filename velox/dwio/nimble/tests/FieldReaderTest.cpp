@@ -1155,5 +1155,75 @@ TEST_F(FieldReaderTest, hybridFlatMapRoundTripsNestedValues) {
   }
 }
 
+TEST_F(FieldReaderTest, hybridFlatMapCopiesGroupsInKeyOrder) {
+  // Row 0 has keys of both explicit groups and Default, row 1 is null, and
+  // row 2 lists its keys out of schema order. Map equality ignores key order,
+  // so the checks below compare each row's keys in order.
+  const auto map = vectorMaker_->mapVector(
+      /*offsets=*/{0, 4, 4},
+      vectorMaker_->flatVector<int32_t>({1, 2, 5, 7, 2, 3, 1}),
+      vectorMaker_->arrayVector<int64_t>(
+          {{10}, {20, 21}, {50}, {70}, {22}, {30}, {11}}),
+      /*nulls=*/{1});
+  const auto input = vectorMaker_->rowVector({"features"}, {map});
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int32, {{"1", "2", "3"}, {"5"}})}},
+      },
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  Deserializer deserializer{schema, pool_.get()};
+
+  // Checks that output row `outputRow` holds `expectedKeys` in that order, each
+  // with the values of input entry `expectedEntries`.
+  const auto expectRow =
+      [&](const velox::VectorPtr& output,
+          velox::vector_size_t outputRow,
+          const std::vector<int32_t>& expectedKeys,
+          const std::vector<velox::vector_size_t>& expectedEntries) {
+        const auto* outputMap =
+            output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+        ASSERT_NE(outputMap, nullptr);
+        const auto* keys =
+            outputMap->mapKeys()->as<velox::FlatVector<int32_t>>();
+        ASSERT_NE(keys, nullptr);
+        const auto offset = outputMap->offsetAt(outputRow);
+        const std::vector<int32_t> actualKeys(
+            keys->rawValues() + offset,
+            keys->rawValues() + offset + outputMap->sizeAt(outputRow));
+        ASSERT_THAT(actualKeys, testing::ElementsAreArray(expectedKeys));
+        for (size_t i = 0; i < expectedEntries.size(); ++i) {
+          EXPECT_TRUE(outputMap->mapValues()->equalValueAt(
+              map->mapValues().get(), offset + i, expectedEntries[i]))
+              << "entry " << i;
+        }
+      };
+
+  {
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized, output);
+    ASSERT_EQ(output->size(), 3);
+    expectRow(output, 0, {1, 2, 5, 7}, {0, 1, 2, 3});
+    EXPECT_TRUE(output->as<velox::RowVector>()->childAt(0)->isNullAt(1));
+    expectRow(output, 2, {1, 2, 3}, {6, 4, 5});
+  }
+
+  // A one-row window copies every present key of a group in one call.
+  {
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized, std::vector<RowRange>{{2, 3}}, output);
+    ASSERT_EQ(output->size(), 1);
+    expectRow(output, 0, {1, 2, 3}, {6, 4, 5});
+  }
+}
+
 } // namespace
 } // namespace facebook::nimble

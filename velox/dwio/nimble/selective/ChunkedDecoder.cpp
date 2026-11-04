@@ -41,14 +41,19 @@ void ChunkedDecoder::ensureSharedDictionaryAlphabet() {
   NIMBLE_CHECK_NOT_NULL(dictionaryAlphabet_);
 }
 
+void ChunkedDecoder::dropChunk() {
+  encoding_ = nullptr;
+  currentStringBuffers_.clear();
+  remainingValues_ = 0;
+}
+
 bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
   if (hasLazyChunkSeek_) {
     return loadLazySeekChunk(onChunkLoaded);
   }
   // Free the previous chunk first so that it is not alive while the next chunk
   // is decompressed.
-  encoding_.reset();
-  currentStringBuffers_.clear();
+  dropChunk();
   auto ret = ensureInput(kChunkHeaderSize);
   NIMBLE_CHECK(ret, "Failed to read chunk header");
   const auto [length, compressionType] = readChunkHeader(inputData_);
@@ -295,8 +300,7 @@ void ChunkedDecoder::skipWithIndex(
 
   // If targetRow is exactly at the end, just reset state.
   if (targetRow == streamRowCount_.value()) {
-    encoding_ = nullptr;
-    remainingValues_ = 0;
+    dropChunk();
     rowPosition_ = targetRow;
     hasLazyChunkSeek_ = false;
     inputData_ += inputSize_;
@@ -306,10 +310,8 @@ void ChunkedDecoder::skipWithIndex(
     return;
   }
 
+  dropChunk();
   rowPosition_ = targetRow;
-  encoding_ = nullptr;
-  currentStringBuffers_.clear();
-  remainingValues_ = 0;
   hasLazyChunkSeek_ = true;
   onChunkBoundary();
 }

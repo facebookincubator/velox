@@ -18,10 +18,11 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <optional>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -37,7 +38,6 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/HierarchicalKeyFormat.h"
-#include "velox/dwio/nimble/index/IndexKeyEncoder.h"
 #include "velox/dwio/nimble/index/KeyChunkBuilder.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -142,7 +142,7 @@ std::vector<std::pair<EncodingType, float>> keySequenceEncodingReadFactors(
 class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
  public:
   HierarchicalKeyChunkBuilder(
-      std::unique_ptr<IndexKeyEncoder> keyEncoder,
+      std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
       const velox::RowTypePtr& inputType,
       std::span<const velox::column_index_t> keyColumnIndices,
       std::span<const SortOrder> sortOrders,
@@ -150,7 +150,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
       bool noDuplicateKey,
       std::vector<std::pair<EncodingType, float>> levelEncodingReadFactors,
       velox::memory::MemoryPool* pool)
-      : keyEncoder_{std::move(keyEncoder)},
+      : keyCodec_{velox::checkedNotNull(std::move(keyCodec))},
         keyColumnIndices_{keyColumnIndices.begin(), keyColumnIndices.end()},
         sortOrders_{sortOrders.begin(), sortOrders.end()},
         noDuplicateKey_{noDuplicateKey},
@@ -159,11 +159,8 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
                 ? defaultLevelEncodingReadFactors()
                 : std::move(levelEncodingReadFactors),
             /*compressionOptions=*/std::nullopt},
-        encodedKeyStream_{pool},
-        keyBuffer_{*velox::checkedNotNull(pool)},
         childBuffer_{*velox::checkedNotNull(pool)} {
     NIMBLE_CHECK_NOT_NULL(pool);
-    NIMBLE_CHECK_NOT_NULL(keyEncoder_);
     NIMBLE_USER_CHECK(
         enforceKeyOrder,
         "Hierarchical key chunks require enforceKeyOrder=true.");
@@ -174,7 +171,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
         "Hierarchical key chunks support at most 255 columns.");
     keyColumns_.reserve(keyColumnIndices_.size());
     keyColumnKinds_.reserve(keyColumnIndices_.size());
-    keyColumnBytes_.reserve(keyColumnIndices_.size());
+    levelWidths_.reserve(keyColumnIndices_.size());
     for (const auto columnIndex : keyColumnIndices_) {
       const auto& columnType = inputType->childAt(columnIndex);
       const auto kind = columnType->kind();
@@ -188,7 +185,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
           inputType->nameOf(columnIndex),
           kind);
       keyColumnKinds_.push_back(kind);
-      keyColumnBytes_.push_back(
+      levelWidths_.push_back(
           static_cast<uint8_t>(columnType->cppSizeInBytes()));
       keyColumns_.emplace_back(pool);
     }
@@ -201,14 +198,6 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
   void append(const velox::VectorPtr& input) override {
     const auto* row = input->asChecked<velox::RowVector>();
     const auto newKeyStart = size();
-    encodedKeys_.clear();
-    encodedKeys_.reserve(input->size());
-    keyEncoder_->encode(input, encodedKeys_, [this](size_t bytes) {
-      return keyBuffer_.reserve(bytes);
-    });
-    for (const auto key : encodedKeys_) {
-      encodedKeyStream_.push_back(key);
-    }
     for (size_t level = 0; level < keyColumnIndices_.size(); ++level) {
       velox::DecodedVector decoded(*row->childAt(keyColumnIndices_.at(level)));
       auto& keyColumn = keyColumns_.at(level);
@@ -228,8 +217,8 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
   }
 
   std::string keyAt(size_t row) const override {
-    NIMBLE_CHECK_LT(row, encodedKeyStream_.size());
-    return std::string{*(encodedKeyStream_.begin() + row)};
+    NIMBLE_CHECK_LT(row, size());
+    return keyCodec_->encodeKey(keyColumnsAt(row), levelWidths_);
   }
 
   std::string_view encode(size_t offset, uint32_t count, Buffer& buffer)
@@ -245,7 +234,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
       keyColumnInputs_.emplace_back(
           std::span<const uint64_t>{keyColumn.data(), keyColumn.size()}.subspan(
               offset, count),
-          keyColumnBytes_.at(level));
+          levelWidths_.at(level));
     }
     buildIndex();
     encodeIndex();
@@ -256,8 +245,6 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     for (auto& keyColumn : keyColumns_) {
       keyColumn.resize(0);
     }
-    encodedKeyStream_.clear();
-    keyBuffer_.reset();
     resetScratch();
   }
 
@@ -405,7 +392,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     NIMBLE_CHECK(encodedLevelKeySequences_.empty());
     NIMBLE_CHECK(encodedLevelOffsetSequences_.empty());
     for (size_t level = 0; level < numLevels; ++level) {
-      switch (keyColumnBytes_.at(level)) {
+      switch (levelWidths_.at(level)) {
         case sizeof(uint8_t):
           encodeIndexLevel<uint8_t>(level);
           break;
@@ -420,8 +407,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
           break;
         default:
           NIMBLE_UNREACHABLE(
-              "Unsupported hierarchical key width: {}",
-              keyColumnBytes_.at(level));
+              "Unsupported hierarchical key width: {}", levelWidths_.at(level));
       }
     }
     if (index_.hasDuplicateKeys()) {
@@ -458,7 +444,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     encoding::write<uint8_t>(HierarchicalKeyFormat::kVersion, position);
     encoding::write<uint8_t>(static_cast<uint8_t>(numLevels), position);
     encoding::writeUint32(numRows, position);
-    for (const auto width : keyColumnBytes_) {
+    for (const auto width : levelWidths_) {
       encoding::write<uint8_t>(width, position);
     }
     for (uint32_t level = 0; level < numLevels; ++level) {
@@ -481,20 +467,6 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     return {reserved, encodedSize};
   }
 
-  template <typename T>
-  static uint64_t normalize(T value, bool ascending) {
-    static_assert(std::is_integral_v<T>);
-    if constexpr (std::is_same_v<T, bool>) {
-      const uint8_t normalized = value ? 2 : 1;
-      return ascending ? normalized : static_cast<uint8_t>(~normalized);
-    } else {
-      using Unsigned = std::make_unsigned_t<T>;
-      auto normalized =
-          std::bit_cast<Unsigned>(value) ^ (Unsigned{1} << (sizeof(T) * 8 - 1));
-      return ascending ? normalized : static_cast<Unsigned>(~normalized);
-    }
-  }
-
   template <velox::TypeKind kind>
   static void appendKeyColumn(
       const velox::DecodedVector& decoded,
@@ -512,7 +484,8 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
       if (decoded.isConstantMapping()) {
         velox::simd::simdFill(
             outputValues,
-            normalize(decoded.valueAt<T>(0), ascending),
+            HierarchicalKeyFormat::normalizeKeyValue(
+                decoded.valueAt<T>(0), ascending),
             static_cast<uint32_t>(size));
         return;
       }
@@ -521,19 +494,21 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
           const auto* inputValues =
               velox::checkedNotNull(decoded.data<uint64_t>());
           for (velox::vector_size_t row = 0; row < size; ++row) {
-            outputValues[row] =
-                normalize(velox::bits::isBitSet(inputValues, row), ascending);
+            outputValues[row] = HierarchicalKeyFormat::normalizeKeyValue(
+                velox::bits::isBitSet(inputValues, row), ascending);
           }
         } else {
           const auto* inputValues = velox::checkedNotNull(decoded.data<T>());
           for (velox::vector_size_t row = 0; row < size; ++row) {
-            outputValues[row] = normalize(inputValues[row], ascending);
+            outputValues[row] = HierarchicalKeyFormat::normalizeKeyValue(
+                inputValues[row], ascending);
           }
         }
         return;
       }
       for (velox::vector_size_t row = 0; row < size; ++row) {
-        outputValues[row] = normalize(decoded.valueAt<T>(row), ascending);
+        outputValues[row] = HierarchicalKeyFormat::normalizeKeyValue(
+            decoded.valueAt<T>(row), ascending);
       }
       return;
     }
@@ -597,18 +572,17 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     lastKey_ = keyColumnsAt(size() - 1);
   }
 
-  const std::unique_ptr<IndexKeyEncoder> keyEncoder_;
+  // Writes the keys that bound the partitions and the chunks from the values
+  // of the levels.
+  const std::shared_ptr<const HierarchicalKeyCodec> keyCodec_;
   const std::vector<velox::column_index_t> keyColumnIndices_;
   const std::vector<SortOrder> sortOrders_;
   const bool noDuplicateKey_;
   // Selects the encoding of each key sequence from its candidates and read
   // factors.
   const ManualEncodingSelectionPolicyFactory encodingPolicyFactory_;
-  Vector<std::string_view> encodedKeyStream_;
-  Buffer keyBuffer_;
-  std::vector<std::string_view> encodedKeys_;
   std::vector<velox::TypeKind> keyColumnKinds_;
-  std::vector<uint8_t> keyColumnBytes_;
+  std::vector<uint8_t> levelWidths_;
   std::vector<Vector<uint64_t>> keyColumns_;
   mutable std::vector<KeyColumnInput> keyColumnInputs_;
   mutable Index index_;
@@ -624,7 +598,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
 
 // Creates the key-chunk builder used by the hierarchical writer.
 std::unique_ptr<KeyChunkBuilder> createHierarchicalKeyChunkBuilder(
-    std::unique_ptr<IndexKeyEncoder> keyEncoder,
+    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
     const velox::RowTypePtr& inputType,
     std::span<const velox::column_index_t> keyColumnIndices,
     std::span<const SortOrder> sortOrders,
@@ -633,7 +607,7 @@ std::unique_ptr<KeyChunkBuilder> createHierarchicalKeyChunkBuilder(
     std::vector<std::pair<EncodingType, float>> levelEncodingReadFactors,
     velox::memory::MemoryPool* pool) {
   return std::make_unique<HierarchicalKeyChunkBuilder>(
-      std::move(keyEncoder),
+      std::move(keyCodec),
       inputType,
       keyColumnIndices,
       sortOrders,
@@ -649,6 +623,7 @@ std::unique_ptr<HierarchicalClusterIndexWriter>
 HierarchicalClusterIndexWriter::create(
     const IndexConfig& config,
     const velox::TypePtr& inputType,
+    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
     velox::memory::MemoryPool* pool) {
   NIMBLE_USER_CHECK_EQ(config.family, IndexFamily::Cluster);
   NIMBLE_CHECK_NOT_NULL(pool, "memory pool must not be null");
@@ -659,6 +634,7 @@ HierarchicalClusterIndexWriter::create(
           hierarchicalConfig,
           velox::asRowType(inputType),
           getSortOrders(hierarchicalConfig),
+          std::move(keyCodec),
           pool));
 }
 
@@ -666,6 +642,7 @@ HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
     const ClusterIndexConfig& config,
     const velox::RowTypePtr& inputType,
     std::vector<SortOrder> sortOrders,
+    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
     velox::memory::MemoryPool* pool)
     : ClusterIndexWriterBase{
           inputType,
@@ -677,11 +654,7 @@ HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
               .keyChunkCompressionType = config.keyChunkCompressionType,
           },
           createHierarchicalKeyChunkBuilder(
-              createNimbleIndexKeyEncoder(
-                  config.columns,
-                  inputType,
-                  sortOrders,
-                  pool),
+              std::move(keyCodec),
               inputType,
               getKeyColumnIndices({config.columns}, inputType),
               sortOrders,

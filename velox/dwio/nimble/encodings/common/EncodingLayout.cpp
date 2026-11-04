@@ -185,6 +185,7 @@ EncodingLayout EncodingLayoutCapture::capture(
   if (encodingType == EncodingType::FixedBitWidth ||
       encodingType == EncodingType::Trivial ||
       encodingType == EncodingType::BlockBitPacking ||
+      encodingType == EncodingType::BlockBitPackingV2 ||
       encodingType == EncodingType::FOR || encodingType == EncodingType::Fsst) {
     compressionType =
         encoding::peek<uint8_t, CompressionType>(encoding.data() + prefixSize);
@@ -302,9 +303,11 @@ EncodingLayout EncodingLayoutCapture::capture(
       }
       break;
     }
-    case EncodingType::BlockBitPacking: {
-      // BlockBitPacking nests three per-block metadata sub-streams: baselines,
-      // bit widths, and data offsets.
+    case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2: {
+      // Both BlockBitPacking versions nest three per-block metadata
+      // sub-streams right after numBlocks: baselines, bit widths, and data
+      // offsets.
       const char* pos = encoding.data() + prefixSize;
       encoding::readChar(pos); // compressionType
       varint::readVarint32(&pos); // blockSize

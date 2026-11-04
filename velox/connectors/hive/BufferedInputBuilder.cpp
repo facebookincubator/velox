@@ -15,7 +15,7 @@
  */
 
 #include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 
 namespace facebook::velox::connector::hive {
 
