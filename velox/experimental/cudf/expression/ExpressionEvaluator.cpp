@@ -729,7 +729,7 @@ using Days = cuda::std::chrono::duration<int64_t, cuda::std::ratio<86'400>>;
 
 // Finds the first and last day, counted from 1970-01-01, that the valid rows
 // of a timestamp column fall on, from the column's minimum and maximum. The
-// two values reach the host in one copy, after one wait for the reduction.
+// two values are copied straight to the host and read after one stream.sync().
 struct DaySpanOf {
   template <typename T, CUDF_ENABLE_IF(cudf::is_timestamp<T>())>
   std::pair<int64_t, int64_t> operator()(
@@ -738,24 +738,19 @@ struct DaySpanOf {
     using Rep = typename T::rep;
     auto tempMr = get_temp_mr();
     auto [minimum, maximum] = cudf::minmax(input, stream, tempMr);
-    rmm::device_uvector<Rep> extremes(2, stream, tempMr);
-    CUDF_CUDA_TRY(cudaMemcpyAsync(
-        extremes.data(),
-        static_cast<cudf::timestamp_scalar<T>&>(*minimum).data(),
-        sizeof(Rep),
-        cudaMemcpyDeviceToDevice,
-        stream.get()));
-    CUDF_CUDA_TRY(cudaMemcpyAsync(
-        extremes.data() + 1,
-        static_cast<cudf::timestamp_scalar<T>&>(*maximum).data(),
-        sizeof(Rep),
-        cudaMemcpyDeviceToDevice,
-        stream.get()));
+    // A copy into pageable host memory may block until it is done, but CUDA
+    // promises only that it might; the sync is what makes ticks safe to read.
     Rep ticks[2];
     CUDF_CUDA_TRY(cudaMemcpyAsync(
-        ticks,
-        extremes.data(),
-        sizeof(ticks),
+        &ticks[0],
+        static_cast<cudf::timestamp_scalar<T>&>(*minimum).data(),
+        sizeof(Rep),
+        cudaMemcpyDeviceToHost,
+        stream.get()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        &ticks[1],
+        static_cast<cudf::timestamp_scalar<T>&>(*maximum).data(),
+        sizeof(Rep),
         cudaMemcpyDeviceToHost,
         stream.get()));
     stream.sync();
@@ -778,7 +773,8 @@ enum class YearRange {
   kFourDigits,
   // Some year lies outside 0 to 9999, so the batch formats its years apart.
   kFormatted,
-  // Some day lies off the calendar from_timestamps places a day on.
+  // Some day lies off the calendar from_timestamps places a day on
+  // (https://github.com/facebookincubator/velox/issues/19785).
   kBeyond,
 };
 
@@ -858,8 +854,8 @@ std::unique_ptr<cudf::column> yearsOf(
 // year and nothing for a negative one, so a batch with a year outside 0 to
 // 9999 takes its years from velox_year and the rest of the text from
 // from_timestamps; a batch with a day the latter cannot place on the calendar,
-// which only a TIMESTAMP in the seconds or milliseconds unit reaches, fails
-// rather than print a wrong date.
+// which a TIMESTAMP in the seconds or milliseconds unit or a DATE in its last
+// 719468 days reaches, fails rather than print a wrong date.
 std::unique_ptr<cudf::column> castTemporalToVarchar(
     cudf::column_view input,
     bool isDate,
@@ -875,7 +871,8 @@ std::unique_ptr<cudf::column> castTemporalToVarchar(
     case YearRange::kBeyond:
       VELOX_UNSUPPORTED(
           "Cast to VARCHAR of a {} before day {} or after day {} of "
-          "1970-01-01 is not supported on the GPU",
+          "1970-01-01 is not supported on the GPU "
+          "(https://github.com/facebookincubator/velox/issues/19785)",
           isDate ? "DATE" : "TIMESTAMP",
           kFirstDayOnCalendar,
           kLastDayOnCalendar);

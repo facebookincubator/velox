@@ -3241,7 +3241,8 @@ TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
               makeRowVector({makeFlatVector<Timestamp>(
                   {Timestamp(seconds, 0), Timestamp(0, 0)})})),
           "Cast to VARCHAR of a TIMESTAMP before day -2147483648 or after "
-          "day 2146764179 of 1970-01-01 is not supported on the GPU");
+          "day 2146764179 of 1970-01-01 is not supported on the GPU "
+          "(https://github.com/facebookincubator/velox/issues/19785)");
     }
   }
 
@@ -3322,7 +3323,8 @@ TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
             makeTypedExpr("cast(c0 as varchar)", ROW("c0", DATE())),
             makeRowVector({makeFlatVector<int32_t>({day, 0}, DATE())})),
         "Cast to VARCHAR of a DATE before day -2147483648 or after day "
-        "2146764179 of 1970-01-01 is not supported on the GPU");
+        "2146764179 of 1970-01-01 is not supported on the GPU "
+        "(https://github.com/facebookincubator/velox/issues/19785)");
   }
 
   // A DATE prints the same under legacy_cast and under a session time zone.
