@@ -4581,35 +4581,13 @@ TEST_F(SmallFilePreloadTest, preloadAttributesSingleReadToData) {
   EXPECT_EQ(dataStats->rawBytesRead(), nimbleFile.size());
 }
 
-// Records the file options passed to every pread.
-class FileOptsRecordingReadFile : public InMemoryReadFile {
- public:
-  using InMemoryReadFile::InMemoryReadFile;
-
-  std::string_view pread(
-      uint64_t offset,
-      uint64_t length,
-      void* buf,
-      const FileIoContext& context = {}) const override {
-    fileOpts_.push_back(context.fileOpts);
-    return InMemoryReadFile::pread(offset, length, buf, context);
-  }
-
-  const std::vector<folly::F14FastMap<std::string, std::string>>& fileOpts()
-      const {
-    return fileOpts_;
-  }
-
- private:
-  mutable std::vector<folly::F14FastMap<std::string, std::string>> fileOpts_;
-};
-
 TEST_F(SmallFilePreloadTest, preloadKeepsFileReadOps) {
   auto input = makeRowVector({makeFlatIdentityVector<int64_t>(500)});
   auto nimbleFile = test::createNimbleFile(*rootPool_, input);
   ASSERT_LE(nimbleFile.size(), 8 << 20);
 
-  auto readFile = std::make_shared<FileOptsRecordingReadFile>(nimbleFile);
+  auto readFile =
+      std::make_shared<nimble::testing::FileOptsRecordingReadFile>(nimbleFile);
   const folly::F14FastMap<std::string, std::string> fileReadOps{
       {"key", "value"},
   };
