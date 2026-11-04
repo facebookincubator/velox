@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_cudf_presto_serializer PrestoPageDevice.cu)
+add_library(
+  velox_cudf_presto_serializer
+  PrestoPageDevice.cpp
+  PrestoPageDevice.cu
+)
 
-target_link_libraries(velox_cudf_presto_serializer PUBLIC cudf::cudf)
+target_link_libraries(
+  velox_cudf_presto_serializer
+  PUBLIC cudf::cudf velox_exception
+)
