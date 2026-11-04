@@ -65,6 +65,9 @@ class ScanSpec {
   static constexpr const char* kMapValuesFieldName = "values";
   static constexpr const char* kArrayElementsFieldName = "elements";
 
+  /// Returns a root ScanSpec selecting all fields of 'type'.
+  static std::shared_ptr<ScanSpec> allFieldsRoot(const Type& type);
+
   explicit ScanSpec(const std::string& name) : fieldName_(name) {}
 
   /// Filter to apply. If 'this' corresponds to a struct/list/map, this
