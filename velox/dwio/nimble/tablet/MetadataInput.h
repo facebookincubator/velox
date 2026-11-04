@@ -34,19 +34,22 @@ struct FileHandle;
 
 namespace facebook::nimble {
 
-/// Reads metadata sections from a Nimble file with IO coalescing.
+class BlockCache;
+
+/// Reads metadata sections from a Nimble file.
 ///
 /// Stateless, thread-safe API: load() takes a span of sections and returns
 /// decompressed MetadataBuffers. All per-call state is local — no member
 /// state is mutated during load(), so concurrent calls are safe.
 ///
-/// IO coalescing is controlled by maxCoalesceDistance and maxCoalesceBytes
-/// from io::ReaderOptions, shared with data IO settings.
-///
-/// Two implementations:
+/// Implementations, chosen by create():
 ///   - DirectMetadataInput: IO coalescing, no caching
 ///   - CachedMetadataInput: IO coalescing + AsyncDataCache for decompressed
 ///     metadata with memory/SSD tier support
+///   - DirectBlockMetadataInput: one batched direct-I/O read per load, no
+///     caching
+///   - CachedBlockMetadataInput: one batched direct-I/O read per load +
+///     BlockCache for decompressed metadata
 class MetadataInput {
  public:
   struct Options {
@@ -59,8 +62,22 @@ class MetadataInput {
     // When both fileHandle and cache are set, creates CachedMetadataInput.
     const velox::FileHandle* fileHandle{nullptr};
     velox::cache::AsyncDataCache* cache{nullptr};
-    /// When set, metadata entries above this size in bytes bypass the cache.
+    /// When set, metadata entries above this size in bytes bypass 'cache'.
+    /// Does not apply to 'blockCache'.
     std::optional<uint32_t> maxCacheEntrySize{};
+    /// When set, creates CachedBlockMetadataInput, which caches decompressed
+    /// metadata here. Must outlive the input and every MetadataBuffer it
+    /// returns, including clones and slices, since each may pin a cache entry.
+    /// Must not be set with 'cache'.
+    BlockCache* blockCache{nullptr};
+    /// Identity of the file in 'blockCache' keys. Must be non-zero when
+    /// 'blockCache' is set. Files whose bytes differ, including files that
+    /// reuse a path, must use different ids. The BlockCache from
+    /// getBlockCache() requires an id leased from velox::fileIds().
+    uint64_t blockCacheFileId{0};
+    /// When true and 'blockCache' is not set, creates
+    /// DirectBlockMetadataInput. Must not be set with 'cache'.
+    bool blockMetadataInput{false};
   };
 
   static std::unique_ptr<MetadataInput> create(
@@ -74,15 +91,14 @@ class MetadataInput {
     return false;
   }
 
-  /// Loads metadata sections with coalesced IO. Returns one MetadataBuffer
-  /// per input section, in the same order. Thread-safe: all per-call state
-  /// is local.
+  /// Loads metadata sections. Returns one MetadataBuffer per input section,
+  /// in the same order. Thread-safe: all per-call state is local.
   virtual std::vector<std::shared_ptr<MetadataBuffer>> load(
       std::span<const MetadataSection> sections) = 0;
 
   /// Tries to find cached metadata at the given offset. Returns a
   /// MetadataBuffer holding a cache pin if found, nullptr otherwise.
-  /// DirectMetadataInput always returns nullptr.
+  /// Requires cached().
   virtual std::unique_ptr<MetadataBuffer> findCachedMetadata(uint64_t offset);
 
   /// Raw tracked read for bootstrap IO (e.g. speculative footer read)
@@ -91,13 +107,34 @@ class MetadataInput {
   void readRaw(uint64_t offset, uint64_t size, void* dest);
 
   /// Caches data at the given offset from multiple contiguous ranges.
-  /// Ranges are written sequentially into a single cache entry.
+  /// Ranges are written sequentially into a single cache entry. Requires
+  /// cached().
   virtual void cacheMetadata(
       uint64_t cacheOffset,
       std::span<const std::string_view> ranges);
 
  protected:
-  MetadataInput(velox::ReadFile* file, const Options& options);
+  MetadataInput(
+      velox::ReadFile* file,
+      std::shared_ptr<velox::io::IoStatistics> ioStats);
+
+  // Returns the uncompressed size, or nullopt if unknown (old files
+  // without uncompressed_size — will be deprecated).
+  static std::optional<uint32_t> resolveUncompressedSize(
+      const MetadataSection& section);
+
+  velox::ReadFile* const file_;
+  const std::shared_ptr<velox::io::IoStatistics> ioStats_;
+};
+
+/// Reads metadata through ReadFile::preadv with IO coalescing, running the
+/// coalesced reads in parallel on the IO executor when one is set.
+///
+/// IO coalescing is controlled by maxCoalesceDistance and maxCoalesceBytes
+/// from io::ReaderOptions, shared with data IO settings.
+class BufferedMetadataInput : public MetadataInput {
+ protected:
+  BufferedMetadataInput(velox::ReadFile* file, const Options& options);
 
   struct LoadedSection {
     explicit LoadedSection(MetadataSection _section) : section{_section} {}
@@ -159,11 +196,6 @@ class MetadataInput {
   // available, records IO stats, and propagates the first error.
   void executeIoGroups(std::vector<IoGroup>& ioGroups);
 
-  // Returns the uncompressed size, or nullopt if unknown (old files
-  // without uncompressed_size — will be deprecated).
-  static std::optional<uint32_t> resolveUncompressedSize(
-      const MetadataSection& section);
-
   // Records coalesced IO stats (payload, total read, overread).
   void recordCoalescedIoStats(const velox::CoalesceIoStats& ioStats);
 
@@ -184,18 +216,16 @@ class MetadataInput {
     velox::MicrosecondTimer timer_;
   };
 
-  velox::ReadFile* const file_;
   velox::memory::MemoryPool* const pool_;
   // Max gap in bytes between consecutive sections to merge into one IO.
   const int32_t maxCoalesceDistance_;
   // Max total bytes per coalesced IO batch.
   const int64_t maxCoalesceBytes_;
   folly::Executor* const executor_;
-  const std::shared_ptr<velox::io::IoStatistics> ioStats_;
 };
 
 /// Direct metadata loading with IO coalescing, no caching.
-class DirectMetadataInput : public MetadataInput {
+class DirectMetadataInput : public BufferedMetadataInput {
  public:
   std::vector<std::shared_ptr<MetadataBuffer>> load(
       std::span<const MetadataSection> sections) override;
@@ -219,7 +249,7 @@ class DirectMetadataInput : public MetadataInput {
 /// Checks memory cache and SSD cache before file IO.
 /// Caches decompressed metadata in contiguous cache entries.
 /// Cache key is the compressed file offset.
-class CachedMetadataInput : public MetadataInput {
+class CachedMetadataInput : public BufferedMetadataInput {
  public:
   bool cached() const override {
     return true;

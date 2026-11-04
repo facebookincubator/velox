@@ -27,6 +27,8 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
+#include "velox/dwio/nimble/tablet/BlockMetadataInput.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 
 namespace facebook::nimble::index::test {
@@ -277,6 +279,32 @@ TEST_F(IndexLookupTest, optionsValidateFileHandleAndCache) {
         options.validate(),
         "file and fileHandle->file must point to the same file");
   }
+  {
+    SCOPED_TRACE("cache with blockCache");
+    velox::FileHandle fileHandle;
+    fileHandle.file = file;
+    IndexLookup::Options options{
+        .file = file,
+        .ioOptions = &ioOptions,
+        .fileHandle = &fileHandle,
+        .cache = reinterpret_cast<velox::cache::AsyncDataCache*>(0x1),
+        .blockCache = reinterpret_cast<BlockCache*>(0x1)};
+    NIMBLE_ASSERT_USER_THROW(
+        options.validate(), "cache cannot be combined with blockCache");
+  }
+  {
+    SCOPED_TRACE("cache with blockMetadataInput");
+    velox::FileHandle fileHandle;
+    fileHandle.file = file;
+    IndexLookup::Options options{
+        .file = file,
+        .ioOptions = &ioOptions,
+        .fileHandle = &fileHandle,
+        .cache = reinterpret_cast<velox::cache::AsyncDataCache*>(0x1),
+        .blockMetadataInput = true};
+    NIMBLE_ASSERT_USER_THROW(
+        options.validate(), "cache cannot be combined with blockMetadataInput");
+  }
 }
 
 TEST_F(IndexLookupTest, createIndexMetadataInput) {
@@ -315,6 +343,37 @@ TEST_F(IndexLookupTest, createIndexMetadataInput) {
     auto metadataInput = createIndexMetadataInput(options);
     ASSERT_NE(metadataInput, nullptr);
     EXPECT_EQ(metadataInput->cached(), testData.cached);
+  }
+}
+
+TEST_F(IndexLookupTest, createBlockIndexMetadataInput) {
+  auto file = std::make_shared<velox::InMemoryReadFile>(std::string{});
+  auto pool = velox::memory::memoryManager()->addLeafPool();
+  velox::io::ReaderOptions ioOptions(pool.get());
+  ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+  {
+    IndexLookup::Options options{
+        .file = file, .ioOptions = &ioOptions, .blockMetadataInput = true};
+    auto metadataInput = createIndexMetadataInput(options);
+    EXPECT_NE(
+        dynamic_cast<DirectBlockMetadataInput*>(metadataInput.get()), nullptr);
+  }
+  {
+    auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+        velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+    auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+    testingResetBlockCache();
+    const velox::StringIdLease fileId{velox::fileIds(), "testFile"};
+    IndexLookup::Options options{
+        .file = file,
+        .ioOptions = &ioOptions,
+        .blockCache = getBlockCache(cache.get()),
+        .blockCacheFileId = fileId.id()};
+    auto metadataInput = createIndexMetadataInput(options);
+    EXPECT_NE(
+        dynamic_cast<CachedBlockMetadataInput*>(metadataInput.get()), nullptr);
+    testingResetBlockCache();
+    cache->shutdown();
   }
 }
 

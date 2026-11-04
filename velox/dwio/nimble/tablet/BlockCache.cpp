@@ -46,11 +46,18 @@ void BlockCache::Entry::reset() noexcept {
   sealed_ = false;
 }
 
+std::pair<BlockCache::Entry, uint32_t> BlockCache::find(
+    uint64_t /*fileId*/,
+    uint64_t /*offset*/,
+    velox::io::IoStatistics& /*ioStats*/) {
+  return {};
+}
+
 namespace {
 
 // BlockCache over velox's AsyncDataCache. Entries are contiguous and never
-// saved to the SSD tier. getOrCreate() blocks while another thread fills the
-// same entry, so concurrent misses on one key cost a single read.
+// saved to the SSD tier. getOrCreate() and find() block while another thread
+// fills the same entry, so concurrent misses on one key cost a single read.
 class BlockCacheImpl final : public BlockCache {
  public:
   explicit BlockCacheImpl(velox::cache::AsyncDataCache* cache)
@@ -75,18 +82,66 @@ class BlockCacheImpl final : public BlockCache {
       // An empty pin means another thread holds the entry exclusively. The
       // future only signals that its load finished, so findOrCreate must run
       // again to acquire a shared or exclusive pin.
-      NIMBLE_CHECK(waitFuture.valid(), "Cache wait future is invalid");
-      uint64_t waitUs{0};
-      {
-        velox::MicrosecondTimer timer(&waitUs);
-        std::move(waitFuture)
-            .via(&folly::QueuedImmediateExecutor::instance())
-            .wait();
-      }
-      ioStats.queryThreadIoLatencyUs().increment(waitUs);
-      ioStats.cacheWaitLatencyUs().increment(waitUs);
+      waitForFill(std::move(waitFuture), ioStats);
     }
+    return toEntry(std::move(pin), size, ioStats);
+  }
 
+  std::pair<Entry, uint32_t> find(
+      uint64_t fileId,
+      uint64_t offset,
+      velox::io::IoStatistics& ioStats) override {
+    for (;;) {
+      folly::SemiFuture<bool> waitFuture{false};
+      auto pin = cache_->find(
+          velox::cache::RawFileCacheKey{fileId, offset}, &waitFuture);
+      if (!pin.has_value()) {
+        return {};
+      }
+      if (!pin->empty()) {
+        const auto size = static_cast<uint32_t>(pin->checkedEntry()->size());
+        return {toEntry(std::move(*pin), size, ioStats), size};
+      }
+      // As in getOrCreate(), the future only signals that the fill finished.
+      waitForFill(std::move(waitFuture), ioStats);
+    }
+  }
+
+  void seal(Entry& entry) override {
+    NIMBLE_CHECK(!entry.sealed(), "Only an unsealed cache entry can be sealed");
+    auto* pin = static_cast<velox::cache::CachePin*>(entry.handle());
+    pin->checkedEntry()->setExclusiveToShared(/*ssdSavable=*/false);
+    entry.seal();
+  }
+
+ protected:
+  void release(void* pin) noexcept override {
+    NIMBLE_CHECK_NOT_NULL(pin);
+    delete static_cast<velox::cache::CachePin*>(pin);
+  }
+
+ private:
+  // Waits until another thread's exclusive pin on an entry is released.
+  static void waitForFill(
+      folly::SemiFuture<bool> waitFuture,
+      velox::io::IoStatistics& ioStats) {
+    NIMBLE_CHECK(waitFuture.valid(), "Cache wait future is invalid");
+    uint64_t waitUs{0};
+    {
+      velox::MicrosecondTimer timer(&waitUs);
+      std::move(waitFuture)
+          .via(&folly::QueuedImmediateExecutor::instance())
+          .wait();
+    }
+    ioStats.queryThreadIoLatencyUs().increment(waitUs);
+    ioStats.cacheWaitLatencyUs().increment(waitUs);
+  }
+
+  // Wraps a non-empty pin of 'size' bytes in an Entry.
+  Entry toEntry(
+      velox::cache::CachePin pin,
+      uint32_t size,
+      velox::io::IoStatistics& ioStats) {
     auto* entry = pin.checkedEntry();
     NIMBLE_CHECK(
         entry->hasContiguousData(), "Cache entry must have contiguous data");
@@ -104,20 +159,6 @@ class BlockCacheImpl final : public BlockCache {
         this, new velox::cache::CachePin(std::move(pin)), data, sealed};
   }
 
-  void seal(Entry& entry) override {
-    NIMBLE_CHECK(!entry.sealed(), "Only an unsealed cache entry can be sealed");
-    auto* pin = static_cast<velox::cache::CachePin*>(entry.handle());
-    pin->checkedEntry()->setExclusiveToShared(/*ssdSavable=*/false);
-    entry.seal();
-  }
-
- protected:
-  void release(void* pin) noexcept override {
-    NIMBLE_CHECK_NOT_NULL(pin);
-    delete static_cast<velox::cache::CachePin*>(pin);
-  }
-
- private:
   velox::cache::AsyncDataCache* const cache_;
 };
 

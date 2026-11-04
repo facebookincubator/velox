@@ -38,6 +38,7 @@
 #include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::nimble {
+class BlockCache;
 class MetadataInput;
 } // namespace facebook::nimble
 
@@ -99,6 +100,14 @@ class IndexLookup {
     velox::cache::AsyncDataCache* cache{nullptr};
     /// Maximum decompressed index metadata size admitted to the data cache.
     std::optional<uint32_t> maxCacheEntrySize{std::nullopt};
+    /// Block cache for decompressed index metadata. Must not be set with
+    /// cache. See MetadataInput::Options::blockCache.
+    BlockCache* blockCache{nullptr};
+    /// Identity of the file in blockCache keys.
+    uint64_t blockCacheFileId{0};
+    /// If true, reads index metadata through DirectBlockMetadataInput unless
+    /// blockCache is set. Must not be set with cache.
+    bool blockMetadataInput{false};
     /// If true, pins parsed index objects in the index cache with strong
     /// references so they are never evicted.
     bool pinIndex{false};

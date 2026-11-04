@@ -563,6 +563,9 @@ struct VectorIndexDirectory::InputState {
             .fileHandle = sourceOptions.fileHandle,
             .cache = sourceOptions.cache,
             .maxCacheEntrySize = sourceOptions.maxCacheEntrySize,
+            .blockCache = sourceOptions.blockCache,
+            .blockCacheFileId = sourceOptions.blockCacheFileId,
+            .blockMetadataInput = sourceOptions.blockMetadataInput,
             .pinIndex = sourceOptions.pinIndex,
             .preloadIndex = sourceOptions.preloadIndex,
         } {

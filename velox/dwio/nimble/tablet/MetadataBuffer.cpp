@@ -20,32 +20,43 @@
 
 namespace facebook::nimble {
 
-MetadataBuffer::MetadataBuffer(velox::BufferPtr buffer)
-    : MetadataBuffer(buffer, 0, buffer->size()) {}
+namespace {
 
-MetadataBuffer::MetadataBuffer(
-    velox::BufferPtr buffer,
-    uint64_t offset,
-    uint64_t size)
-    : buffer_{std::move(buffer)}, offset_{offset}, size_{size} {
-  NIMBLE_CHECK_NOT_NULL(buffer_);
-  NIMBLE_CHECK_LE(offset_ + size_, buffer_->size());
+PinnedBytes toPinnedBytes(velox::BufferPtr buffer) {
+  NIMBLE_CHECK_NOT_NULL(buffer);
+  const std::string_view data{buffer->as<char>(), buffer->size()};
+  return PinnedBytes{
+      std::make_shared<velox::BufferPtr>(std::move(buffer)), data};
 }
 
+PinnedBytes toPinnedBytes(velox::cache::CachePin pin) {
+  NIMBLE_CHECK(!pin.empty(), "CachePin must not be empty");
+  auto* entry = pin.checkedEntry();
+  const std::string_view data{
+      entry->contiguousData(), static_cast<size_t>(entry->size())};
+  return PinnedBytes{
+      std::make_shared<velox::cache::CachePin>(std::move(pin)), data};
+}
+
+} // namespace
+
+MetadataBuffer::MetadataBuffer(velox::BufferPtr buffer)
+    : MetadataBuffer(toPinnedBytes(std::move(buffer))) {}
+
 MetadataBuffer::MetadataBuffer(velox::cache::CachePin pin)
-    : MetadataBuffer(
-          pin,
-          0,
-          static_cast<uint64_t>(pin.checkedEntry()->size())) {}
+    : MetadataBuffer(toPinnedBytes(std::move(pin))) {}
+
+MetadataBuffer::MetadataBuffer(PinnedBytes bytes)
+    : bytes_{std::move(bytes)}, size_{bytes_.data.size()} {
+  NIMBLE_CHECK_NOT_NULL(bytes_.owner, "PinnedBytes must have an owner");
+}
 
 MetadataBuffer::MetadataBuffer(
-    velox::cache::CachePin pin,
+    PinnedBytes bytes,
     uint64_t offset,
     uint64_t size)
-    : pin_{std::move(pin)}, offset_{offset}, size_{size} {
-  NIMBLE_CHECK(!pin_.empty(), "CachePin must not be empty");
-  NIMBLE_CHECK_LE(
-      offset_ + size_, static_cast<uint64_t>(pin_.checkedEntry()->size()));
+    : bytes_{std::move(bytes)}, offset_{offset}, size_{size} {
+  NIMBLE_CHECK_LE(offset_ + size_, bytes_.data.size());
 }
 
 MetadataBuffer::~MetadataBuffer() = default;
@@ -55,11 +66,8 @@ MetadataBuffer::MetadataBuffer(MetadataBuffer&&) noexcept = default;
 MetadataBuffer& MetadataBuffer::operator=(MetadataBuffer&&) noexcept = default;
 
 MetadataBuffer MetadataBuffer::clone() const {
-  if (buffer_ != nullptr) {
-    return MetadataBuffer{buffer_, offset_, size_};
-  }
-  NIMBLE_CHECK(!pin_.empty(), "Cannot clone empty MetadataBuffer");
-  return MetadataBuffer{pin_, offset_, size_};
+  NIMBLE_CHECK_NOT_NULL(bytes_.owner, "Cannot clone empty MetadataBuffer");
+  return MetadataBuffer{bytes_, offset_, size_};
 }
 
 MetadataSection::MetadataSection(
@@ -135,13 +143,9 @@ std::unique_ptr<MetadataBuffer> MetadataBuffer::slice(
     uint64_t offset,
     uint64_t size) const {
   NIMBLE_CHECK_LE(offset + size, size_, "Slice range exceeds buffer content");
-  if (buffer_ != nullptr) {
-    return std::unique_ptr<MetadataBuffer>(
-        new MetadataBuffer(buffer_, offset_ + offset, size));
-  }
-  NIMBLE_CHECK(!pin_.empty(), "Cannot slice empty MetadataBuffer");
+  NIMBLE_CHECK_NOT_NULL(bytes_.owner, "Cannot slice empty MetadataBuffer");
   return std::unique_ptr<MetadataBuffer>(
-      new MetadataBuffer(pin_, offset_ + offset, size));
+      new MetadataBuffer(bytes_, offset_ + offset, size));
 }
 
 } // namespace facebook::nimble

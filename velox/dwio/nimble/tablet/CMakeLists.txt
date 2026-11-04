@@ -178,6 +178,7 @@ add_dependencies(nimble_vector_index_fb nimble_vector_index_schema_fb)
 
 add_library(
   nimble_tablet_common
+  BlockMetadataInput.cpp
   Checkpoint.cpp
   Compression.cpp
   FileProperties.cpp
@@ -194,9 +195,12 @@ add_library(
   Checkpoint.h
   Chunk.h
   Callbacks.h
+  BlockMetadataInput.h
+  IoAlignment.h
 )
 target_link_libraries(
   nimble_tablet_common
+  nimble_block_cache
   nimble_checkpoint_fb
   nimble_file_properties_fb
   nimble_footer_fb
