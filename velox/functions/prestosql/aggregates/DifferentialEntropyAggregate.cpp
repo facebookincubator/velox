@@ -26,8 +26,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -82,18 +84,91 @@ double calculateFromSamplesUsingVasicek(std::vector<double> samples) {
   return entropy / n / std::log(2);
 }
 
+void validateMaxSamples(int64_t maxSamples) {
+  VELOX_USER_CHECK_GT(
+      maxSamples,
+      0,
+      "In differential_entropy UDF, max samples must be positive: {}",
+      maxSamples);
+  VELOX_USER_CHECK_LE(
+      maxSamples,
+      kMaxSizeLimit,
+      "In differential_entropy UDF, max samples must be capped: {} vs {}",
+      maxSamples,
+      kMaxSizeLimit);
+}
+
 void validateHistogramParams(int64_t bucketCount, double min, double max) {
   VELOX_USER_CHECK_GT(
       bucketCount,
       0,
       "In differential_entropy UDF, bucket count must be positive: {}",
       bucketCount);
+  VELOX_USER_CHECK_LE(
+      bucketCount,
+      kMaxSizeLimit,
+      "In differential_entropy UDF, bucket count must be capped: {} vs {}",
+      bucketCount,
+      kMaxSizeLimit);
   VELOX_USER_CHECK_LT(
       min,
       max,
       "In differential_entropy UDF, min must be less than max: min={}, max={}",
       min,
       max);
+}
+
+// InputByteStream does not know the buffer length. Companion merge inputs and
+// partial-aggregation intermediates are read through this wrapper so a count
+// field cannot walk off the buffer or reserve more memory than the buffer
+// holds. Callers also reject counts outside the supported range before
+// allocating.
+class CheckedByteInput {
+ public:
+  CheckedByteInput(const char* data, size_t size) : data_(data), size_(size) {}
+
+  size_t remaining() const {
+    return size_ - offset_;
+  }
+
+  template <typename T>
+  T read() {
+    static_assert(std::is_trivially_copyable_v<T>);
+    VELOX_USER_CHECK_LE(
+        sizeof(T), remaining(), "Malformed differential_entropy intermediate");
+    T value;
+    std::memcpy(&value, data_ + offset_, sizeof(T));
+    offset_ += sizeof(T);
+    return value;
+  }
+
+  void finish() const {
+    VELOX_USER_CHECK_EQ(
+        offset_, size_, "Malformed differential_entropy intermediate");
+  }
+
+ private:
+  const char* data_;
+  size_t size_;
+  size_t offset_{0};
+};
+
+// `count` elements of `elementSize` bytes must already be present. A negative
+// or oversized count is rejected before the caller reserves memory.
+void ensureElements(
+    const CheckedByteInput& in,
+    int64_t count,
+    size_t elementSize) {
+  VELOX_USER_CHECK_GE(count, 0, "Malformed differential_entropy intermediate");
+  VELOX_USER_CHECK_GT(
+      elementSize, 0, "Malformed differential_entropy intermediate");
+  if (count == 0) {
+    return;
+  }
+  VELOX_USER_CHECK_LE(
+      static_cast<size_t>(count),
+      in.remaining() / elementSize,
+      "Malformed differential_entropy intermediate");
 }
 
 int64_t histogramBucketIndex(
@@ -113,31 +188,27 @@ class UnweightedReservoir {
  public:
   UnweightedReservoir(int64_t maxSamples, HashStringAllocator* allocator)
       : maxSamples_(maxSamples), samples_{StlAllocator<double>(allocator)} {
-    VELOX_USER_CHECK_GT(
-        maxSamples,
-        0,
-        "In differential_entropy UDF, max samples must be positive: {}",
-        maxSamples);
-    VELOX_USER_CHECK_LE(
-        maxSamples,
-        kMaxSizeLimit,
-        "In differential_entropy UDF, max samples must be capped: {} vs {}",
-        maxSamples,
-        kMaxSizeLimit);
+    validateMaxSamples(maxSamples);
     samples_.reserve(maxSamples);
   }
 
-  UnweightedReservoir(
-      common::InputByteStream& in,
-      HashStringAllocator* allocator)
+  UnweightedReservoir(CheckedByteInput& in, HashStringAllocator* allocator)
       : samples_{StlAllocator<double>(allocator)} {
     seenCount_ = in.read<int64_t>();
     maxSamples_ = in.read<int64_t>();
+    validateMaxSamples(maxSamples_);
+    VELOX_USER_CHECK_GE(
+        seenCount_,
+        0,
+        "Malformed differential_entropy intermediate: invalid seen count: {}",
+        seenCount_);
     const auto storedCount = std::min(seenCount_, maxSamples_);
-    samples_.resize(storedCount);
+    ensureElements(in, storedCount, sizeof(double));
+    samples_.resize(static_cast<size_t>(storedCount));
     for (int64_t i = 0; i < storedCount; ++i) {
       samples_[i] = in.read<double>();
     }
+    in.finish();
   }
 
   int64_t maxSamples() const {
@@ -250,28 +321,25 @@ class WeightedReservoir {
       : maxSamples_(maxSamples),
         samples_{StlAllocator<double>(allocator)},
         weights_{StlAllocator<double>(allocator)} {
-    VELOX_USER_CHECK_GT(
-        maxSamples,
-        0,
-        "In differential_entropy UDF, max samples must be positive: {}",
-        maxSamples);
-    VELOX_USER_CHECK_LE(
-        maxSamples,
-        kMaxSizeLimit,
-        "In differential_entropy UDF, max samples must be capped: {} vs {}",
-        maxSamples,
-        kMaxSizeLimit);
+    validateMaxSamples(maxSamples);
     samples_.reserve(maxSamples);
     weights_.reserve(maxSamples);
   }
 
-  WeightedReservoir(common::InputByteStream& in, HashStringAllocator* allocator)
+  WeightedReservoir(CheckedByteInput& in, HashStringAllocator* allocator)
       : samples_{StlAllocator<double>(allocator)},
         weights_{StlAllocator<double>(allocator)} {
     const auto count = in.read<int64_t>();
     maxSamples_ = in.read<int64_t>();
-    samples_.resize(count);
-    weights_.resize(count);
+    validateMaxSamples(maxSamples_);
+    VELOX_USER_CHECK(
+        count >= 0 && count <= maxSamples_,
+        "Malformed differential_entropy intermediate: invalid sample count: {}",
+        count);
+    // samples, weights, and totalPopulationWeight.
+    ensureElements(in, count * 2 + 1, sizeof(double));
+    samples_.resize(static_cast<size_t>(count));
+    weights_.resize(static_cast<size_t>(count));
     for (int64_t i = 0; i < count; ++i) {
       samples_[i] = in.read<double>();
     }
@@ -279,6 +347,7 @@ class WeightedReservoir {
       weights_[i] = in.read<double>();
     }
     totalPopulationWeight_ = in.read<double>();
+    in.finish();
   }
 
   int64_t maxSamples() const {
@@ -415,16 +484,19 @@ class FixedHistogramMle {
     bucketWeights_.assign(bucketCount, 0.0);
   }
 
-  FixedHistogramMle(common::InputByteStream& in, HashStringAllocator* allocator)
+  FixedHistogramMle(CheckedByteInput& in, HashStringAllocator* allocator)
       : bucketWeights_{StlAllocator<double>(allocator)} {
     bucketCount_ = in.read<int64_t>();
     min_ = in.read<double>();
     max_ = in.read<double>();
+    validateHistogramParams(bucketCount_, min_, max_);
+    ensureElements(in, bucketCount_, sizeof(double));
     width_ = (max_ - min_) / bucketCount_;
-    bucketWeights_.resize(bucketCount_);
+    bucketWeights_.resize(static_cast<size_t>(bucketCount_));
     for (int64_t i = 0; i < bucketCount_; ++i) {
       bucketWeights_[i] = in.read<double>();
     }
+    in.finish();
   }
 
   int64_t bucketCount() const {
@@ -520,14 +592,9 @@ class FixedHistogramMle {
 // *observation* at a time: observations that share both a bucket and an
 // exact weight value produce the same holdout entropy, so grouping them
 // lets the correction run in O(bucketCount * distinct weights per bucket)
-// rather than O(row count).
-//
-// Known scaffolding limitation: the per-bucket (weight, count) breakdown
-// uses a plain std::vector with the default allocator, so it is not counted
-// against the query's memory pool the way the outer bucket array is. This
-// is fine for the common case of few distinct weights per bucket (e.g. the
-// default weight=1.0), but should be revisited (e.g. a pool-backed hash map)
-// before relying on this for adversarial high-cardinality-weight inputs.
+// rather than O(row count). Both the outer bucket array and each per-bucket
+// breakdown are allocated through the query HashStringAllocator, so a
+// high-cardinality weight set is charged to the query memory pool.
 // ---------------------------------------------------------------------------
 class FixedHistogramJacknife {
  public:
@@ -542,27 +609,54 @@ class FixedHistogramJacknife {
         width_((max - min) / bucketCount),
         buckets_{StlAllocator<BucketBreakdown>(allocator)} {
     validateHistogramParams(bucketCount, min, max);
-    buckets_.resize(bucketCount);
+    buckets_.reserve(static_cast<size_t>(bucketCount));
+    const StlAllocator<WeightAndCount> entryAllocator(allocator);
+    for (int64_t i = 0; i < bucketCount; ++i) {
+      buckets_.emplace_back(entryAllocator);
+    }
   }
 
-  FixedHistogramJacknife(
-      common::InputByteStream& in,
-      HashStringAllocator* allocator)
+  FixedHistogramJacknife(CheckedByteInput& in, HashStringAllocator* allocator)
       : buckets_{StlAllocator<BucketBreakdown>(allocator)} {
     bucketCount_ = in.read<int64_t>();
     min_ = in.read<double>();
     max_ = in.read<double>();
+    validateHistogramParams(bucketCount_, min_, max_);
+    // Every bucket contributes at least its entry count, even when empty.
+    ensureElements(in, bucketCount_, sizeof(int64_t));
     width_ = (max_ - min_) / bucketCount_;
-    buckets_.resize(bucketCount_);
+    buckets_.reserve(static_cast<size_t>(bucketCount_));
+    const StlAllocator<WeightAndCount> entryAllocator(allocator);
     for (int64_t i = 0; i < bucketCount_; ++i) {
       const auto entryCount = in.read<int64_t>();
-      buckets_[i].reserve(entryCount);
+      VELOX_USER_CHECK_GE(
+          entryCount,
+          0,
+          "Malformed differential_entropy intermediate: invalid entry count: {}",
+          entryCount);
+      ensureElements(in, entryCount, sizeof(double) + sizeof(int64_t));
+      BucketBreakdown bucket(entryAllocator);
+      if (entryCount > 0) {
+        bucket.reserve(static_cast<size_t>(entryCount));
+      }
       for (int64_t j = 0; j < entryCount; ++j) {
         const auto weight = in.read<double>();
         const auto count = in.read<int64_t>();
-        buckets_[i].emplace_back(weight, count);
+        VELOX_USER_CHECK_GE(
+            weight,
+            0.0,
+            "Malformed differential_entropy intermediate: invalid weight: {}",
+            weight);
+        VELOX_USER_CHECK_GE(
+            count,
+            0,
+            "Malformed differential_entropy intermediate: invalid observation count: {}",
+            count);
+        bucket.emplace_back(weight, count);
       }
+      buckets_.push_back(std::move(bucket));
     }
+    in.finish();
   }
 
   int64_t bucketCount() const {
@@ -680,7 +774,9 @@ class FixedHistogramJacknife {
   }
 
  private:
-  using BucketBreakdown = std::vector<std::pair<double, int64_t>>;
+  using WeightAndCount = std::pair<double, int64_t>;
+  using BucketBreakdown =
+      std::vector<WeightAndCount, StlAllocator<WeightAndCount>>;
 
   static void
   addToBucket(BucketBreakdown& bucket, double weight, int64_t count) {
@@ -794,7 +890,7 @@ struct UnweightedReservoirAccumulator {
       return false;
     }
     const auto serialized = other.value();
-    common::InputByteStream stream(serialized.data());
+    CheckedByteInput stream(serialized.data(), serialized.size());
     UnweightedReservoir otherReservoir(stream, allocator);
     if (!reservoir_.has_value()) {
       reservoir_.emplace(otherReservoir.maxSamples(), allocator);
@@ -861,7 +957,7 @@ struct WeightedReservoirAccumulator {
       return false;
     }
     const auto serialized = other.value();
-    common::InputByteStream stream(serialized.data());
+    CheckedByteInput stream(serialized.data(), serialized.size());
     WeightedReservoir otherReservoir(stream, allocator);
     if (!reservoir_.has_value()) {
       reservoir_.emplace(otherReservoir.maxSamples(), allocator);
@@ -972,9 +1068,21 @@ struct FixedHistogramAccumulator {
       return false;
     }
     const auto serialized = other.value();
-    common::InputByteStream stream(serialized.data());
-    const auto otherMethod =
-        static_cast<HistogramMethod>(stream.read<int8_t>());
+    CheckedByteInput stream(serialized.data(), serialized.size());
+    const auto rawMethod = stream.read<int8_t>();
+    HistogramMethod otherMethod;
+    switch (rawMethod) {
+      case static_cast<int8_t>(HistogramMethod::kMle):
+        otherMethod = HistogramMethod::kMle;
+        break;
+      case static_cast<int8_t>(HistogramMethod::kJacknife):
+        otherMethod = HistogramMethod::kJacknife;
+        break;
+      default:
+        VELOX_USER_FAIL(
+            "Malformed differential_entropy intermediate: invalid method: {}",
+            static_cast<int32_t>(rawMethod));
+    }
     if (method_ == HistogramMethod::kUnset) {
       method_ = otherMethod;
     }
@@ -1082,32 +1190,29 @@ void registerDifferentialEntropyAggregate(
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType("double")
-          .intermediateType("varbinary")
-          .argumentType("bigint")
-          .argumentType("double")
-          .build());
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType("double")
-          .intermediateType("varbinary")
-          .argumentType("bigint")
-          .argumentType("double")
-          .argumentType("double")
-          .build());
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType("double")
-          .intermediateType("varbinary")
-          .argumentType("bigint")
-          .argumentType("double")
-          .argumentType("double")
-          .argumentType("varchar")
-          .argumentType("double")
-          .argumentType("double")
-          .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType("double")
+                           .intermediateType("varbinary")
+                           .argumentType("bigint")
+                           .argumentType("double")
+                           .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType("double")
+                           .intermediateType("varbinary")
+                           .argumentType("bigint")
+                           .argumentType("double")
+                           .argumentType("double")
+                           .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType("double")
+                           .intermediateType("varbinary")
+                           .argumentType("bigint")
+                           .argumentType("double")
+                           .argumentType("double")
+                           .argumentType("varchar")
+                           .argumentType("double")
+                           .argumentType("double")
+                           .build());
 
   exec::registerAggregateFunction(
       names,

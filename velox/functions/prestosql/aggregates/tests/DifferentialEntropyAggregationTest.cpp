@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <cstring>
 #include <random>
+#include <string>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -406,6 +408,161 @@ TEST_F(DifferentialEntropyAggregationTest, weightedReservoirNonUniformWeights) {
   const auto entropy =
       result->as<RowVector>()->childAt(0)->as<FlatVector<double>>()->valueAt(0);
   EXPECT_TRUE(std::isfinite(entropy));
+}
+
+TEST_F(
+    DifferentialEntropyAggregationTest,
+    fixedHistogramJacknifeDistinctWeightsAcrossBatches) {
+  // Enough distinct weights to grow the per-bucket breakdown past its initial
+  // allocation, including across partial+final merge.
+  constexpr vector_size_t kCount = 64;
+  auto batches = makeBatches(
+      kCount,
+      4,
+      [](vector_size_t) { return 1.0; },
+      [](vector_size_t i) { return 0.1 * static_cast<double>(i + 1); });
+  const auto aggregate =
+      "differential_entropy(1, c0, c1, 'fixed_histogram_jacknife', 0.0, 10.0)";
+  auto single = AssertQueryBuilder(PlanBuilder()
+                                       .values(batches)
+                                       .singleAggregation({}, {aggregate})
+                                       .planNode())
+                    .copyResults(pool());
+  testAggregations(batches, {}, {aggregate}, {single});
+}
+
+namespace {
+
+template <typename T>
+void appendPod(std::string& bytes, T value) {
+  const auto offset = bytes.size();
+  bytes.resize(offset + sizeof(T));
+  std::memcpy(bytes.data() + offset, &value, sizeof(T));
+}
+
+} // namespace
+
+TEST_F(DifferentialEntropyAggregationTest, malformedIntermediateRejected) {
+  const std::vector<TypePtr> kReservoirTypes = {BIGINT(), DOUBLE()};
+  const std::vector<TypePtr> kWeightedTypes = {BIGINT(), DOUBLE(), DOUBLE()};
+  const std::vector<TypePtr> kHistogramTypes = {
+      BIGINT(), DOUBLE(), DOUBLE(), VARCHAR(), DOUBLE(), DOUBLE()};
+
+  auto expectThrow = [&](const std::vector<TypePtr>& rawTypes,
+                         const std::string& bytes,
+                         const std::string& message) {
+    auto input = makeRowVector(
+        {makeFlatVector<StringView>({StringView(bytes)}, VARBINARY())});
+    auto plan =
+        PlanBuilder()
+            .values({input})
+            .finalAggregation({}, {"differential_entropy(c0)"}, {rawTypes})
+            .planNode();
+    VELOX_ASSERT_THROW(AssertQueryBuilder(plan).copyResults(pool()), message);
+  };
+
+  // A real partial result still finalizes. Truncating or extending it, and
+  // crafted headers with illegal counts, must fail before they are trusted.
+  auto data = makeRowVector({
+      makeFlatVector<double>({1, 2, 3, 6, 7}),
+      makeConstant<double>(1.0, 5),
+  });
+  auto partial =
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .partialAggregation(
+                  {},
+                  {"differential_entropy(2, c0, c1, 'fixed_histogram_mle', 0.0, 10.0)"})
+              .planNode())
+          .copyResults(pool());
+  auto view = partial->childAt(0)->as<FlatVector<StringView>>()->valueAt(0);
+  std::string valid(view.data(), view.size());
+  ASSERT_FALSE(valid.empty());
+
+  auto validInput = makeRowVector(
+      {makeFlatVector<StringView>({StringView(valid)}, VARBINARY())});
+  auto validPlan =
+      PlanBuilder()
+          .values({validInput})
+          .finalAggregation({}, {"differential_entropy(c0)"}, {kHistogramTypes})
+          .planNode();
+  AssertQueryBuilder(validPlan).assertResults(
+      makeRowVector({makeFlatVector<double>({3.2928786893420314})}));
+
+  expectThrow(
+      kHistogramTypes, "", "Malformed differential_entropy intermediate");
+  expectThrow(
+      kHistogramTypes,
+      valid.substr(0, valid.size() - 1),
+      "Malformed differential_entropy intermediate");
+  expectThrow(
+      kHistogramTypes,
+      valid + '\x00',
+      "Malformed differential_entropy intermediate");
+
+  std::string badMethod;
+  appendPod<int8_t>(badMethod, 9);
+  expectThrow(
+      kHistogramTypes,
+      badMethod,
+      "Malformed differential_entropy intermediate: invalid method");
+
+  std::string hugeBuckets;
+  appendPod<int8_t>(hugeBuckets, 1);
+  appendPod<int64_t>(hugeBuckets, 1'000'000'000);
+  appendPod<double>(hugeBuckets, 0.0);
+  appendPod<double>(hugeBuckets, 10.0);
+  expectThrow(kHistogramTypes, hugeBuckets, "bucket count must be capped");
+
+  std::string negativeBuckets;
+  appendPod<int8_t>(negativeBuckets, 1);
+  appendPod<int64_t>(negativeBuckets, -1);
+  appendPod<double>(negativeBuckets, 0.0);
+  appendPod<double>(negativeBuckets, 10.0);
+  expectThrow(
+      kHistogramTypes, negativeBuckets, "bucket count must be positive");
+
+  std::string hugeEntries;
+  appendPod<int8_t>(hugeEntries, 2);
+  appendPod<int64_t>(hugeEntries, 1);
+  appendPod<double>(hugeEntries, 0.0);
+  appendPod<double>(hugeEntries, 10.0);
+  appendPod<int64_t>(hugeEntries, 1'000'000);
+  expectThrow(
+      kHistogramTypes,
+      hugeEntries,
+      "Malformed differential_entropy intermediate");
+
+  std::string negativeSeen;
+  appendPod<int64_t>(negativeSeen, -1);
+  appendPod<int64_t>(negativeSeen, 10);
+  expectThrow(
+      kReservoirTypes,
+      negativeSeen,
+      "Malformed differential_entropy intermediate: invalid seen count");
+
+  std::string hugeReservoir;
+  appendPod<int64_t>(hugeReservoir, 1);
+  appendPod<int64_t>(hugeReservoir, 1'000'000'000);
+  expectThrow(kReservoirTypes, hugeReservoir, "max samples must be capped");
+
+  std::string truncatedReservoir;
+  appendPod<int64_t>(truncatedReservoir, 2);
+  appendPod<int64_t>(truncatedReservoir, 10);
+  appendPod<double>(truncatedReservoir, 1.0);
+  expectThrow(
+      kReservoirTypes,
+      truncatedReservoir,
+      "Malformed differential_entropy intermediate");
+
+  std::string hugeWeightedCount;
+  appendPod<int64_t>(hugeWeightedCount, 1'000'000);
+  appendPod<int64_t>(hugeWeightedCount, 10);
+  expectThrow(
+      kWeightedTypes,
+      hugeWeightedCount,
+      "Malformed differential_entropy intermediate: invalid sample count");
 }
 
 } // namespace
