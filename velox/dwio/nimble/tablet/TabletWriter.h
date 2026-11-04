@@ -100,9 +100,10 @@ class TabletWriter {
     // its own candidate set (Constant, Trivial, FixedBitWidth, Dictionary).
     std::vector<std::pair<EncodingType, float>>
         stripeGroupEncodingLayoutReadFactors{};
-    /// When true, identical kStreamMajor offsets or sizes arrays share one
-    /// encoding in the same stripe group.
-    /// Enabling this can increase temporary writer memory.
+    /// When true, identical metadata arrays of the stream-major layouts
+    /// (offsets, sizes and kStreamMajorSparse stripe lists) share one encoding
+    /// in the same stripe group. kStreamMajorSparse always deduplicates,
+    /// whatever this says. Enabling this can increase temporary writer memory.
     bool stripeGroupMetadataDeduplicationEnabled{false};
     // Callback invoked at stripe group flush boundaries. Used by index
     // writers (e.g., ClusterIndexWriter) to write partition data aligned
@@ -208,12 +209,17 @@ class TabletWriter {
   // layout-specific helper below per options_.stripeGroupEncodingLayout.
   void writeStripeGroup(size_t streamCount, size_t stripeCount);
   // Serialize the current stripe group's per-stream offsets/sizes into
-  // `builder` using the kRaw / kStreamMajor layout respectively.
+  // `builder` using the kRaw / kStreamMajor / kStreamMajorSparse layout
+  // respectively.
   void writeStripeGroupWithRawLayout(
       flatbuffers::FlatBufferBuilder& builder,
       size_t streamCount,
       size_t stripeCount);
   void writeStripeGroupWithStreamMajorLayout(
+      flatbuffers::FlatBufferBuilder& builder,
+      size_t streamCount,
+      size_t stripeCount);
+  void writeStripeGroupWithStreamMajorSparseLayout(
       flatbuffers::FlatBufferBuilder& builder,
       size_t streamCount,
       size_t stripeCount);

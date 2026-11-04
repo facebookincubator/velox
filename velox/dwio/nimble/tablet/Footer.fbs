@@ -66,6 +66,31 @@ table StreamMajorStripeGroup {
   stream_checksums:EncodedStream (deprecated);
 }
 
+/// kStreamMajorSparse: like kStreamMajor, but each stream holds offsets and
+/// sizes only for the stripes where it has data (a non-zero size), together
+/// with the list of those stripes. For a group of 4 stripes where stream 7 has
+/// data only in stripes 1 and 3:
+///   stream_stripes[7] = [1, 3]
+///   stream_offsets[7] = [offset in stripe 1, offset in stripe 3]
+///   stream_sizes[7]   = [size in stripe 1, size in stripe 3]
+/// Each entry is a Nimble-encoded uint32 array, or omitted when its data is
+/// absent. A stream with data in every stripe omits stream_stripes. A stream
+/// with data in no stripe omits all three arrays.
+table StreamMajorSparseStripeGroup {
+  /// Number of stripes in the group.
+  stripe_count:uint32;
+  /// Total number of leaf streams in the group (length of each vector below).
+  stream_count:uint32;
+  /// Strictly ascending group-local indices of the stripes where the stream has
+  /// data.
+  stream_stripes:[EncodedStream];
+  /// Byte offset of the stream within each listed stripe, relative to the
+  /// stripe's start.
+  stream_offsets:[EncodedStream];
+  /// Byte size of the stream within each listed stripe.
+  stream_sizes:[EncodedStream];
+}
+
 table MetadataSection {
   offset:uint64;
   size:uint32;
