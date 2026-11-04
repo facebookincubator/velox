@@ -32,6 +32,7 @@
 
 #include <cudf/copying.hpp>
 #include <cudf/null_mask.hpp>
+#include <cudf/stream_compaction.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
@@ -90,27 +91,6 @@ std::optional<int32_t> flatWidth(const TypePtr& type) {
       return 0;
     default:
       return std::nullopt;
-  }
-}
-
-// Scale from the cuDF timestamp unit to Presto milliseconds.
-bool timestampScale(cudf::type_id id, int64_t& mul, int64_t& div) {
-  mul = 1;
-  div = 1;
-  switch (id) {
-    case cudf::type_id::TIMESTAMP_SECONDS:
-      mul = 1'000;
-      return true;
-    case cudf::type_id::TIMESTAMP_MILLISECONDS:
-      return true;
-    case cudf::type_id::TIMESTAMP_MICROSECONDS:
-      div = 1'000;
-      return true;
-    case cudf::type_id::TIMESTAMP_NANOSECONDS:
-      div = 1'000'000;
-      return true;
-    default:
-      return false;
   }
 }
 
@@ -431,18 +411,10 @@ void CudfPrestoOutput::startSerializer() {
         // Presto blocks hold the values of the non-null rows only. The values
         // of null rows are undefined, so nothing below may read them.
         numValues = numRows - col.null_count();
-        rmm::device_buffer dense(
-            static_cast<size_t>(numValues) * column.width, stream, mr);
-        const auto copied = detail::compactValid(
-            raw,
-            column.width,
-            col.null_mask(),
-            col.offset(),
-            numRows,
-            static_cast<uint8_t*>(dense.data()),
-            stream);
-        VELOX_CHECK_EQ(copied, numValues);
-        column.dense = std::move(dense);
+        auto compacted =
+            cudf::drop_nulls(cudf::table_view{{col}}, {0}, stream, mr);
+        VELOX_CHECK_EQ(compacted->num_rows(), numValues);
+        column.dense = std::move(*compacted->release().front()->release().data);
         raw = static_cast<const uint8_t*>(column.dense.data());
         column.compacted = true;
       }
@@ -455,28 +427,19 @@ void CudfPrestoOutput::startSerializer() {
         }
         return static_cast<uint8_t*>(column.dense.data());
       };
-      if (type->kind() == TypeKind::TIMESTAMP) {
-        int64_t mul;
-        int64_t div;
-        VELOX_CHECK(
-            timestampScale(col.type().id(), mul, div),
-            "Expected a cuDF timestamp column for {}",
-            type->toString());
-        if (mul != 1 || div != 1) {
-          auto* millis = reinterpret_cast<int64_t*>(converted());
-          VELOX_USER_CHECK(
-              detail::timestampsToMillis(
-                  reinterpret_cast<const int64_t*>(raw),
-                  numValues,
-                  mul,
-                  div,
-                  millis,
-                  stream,
-                  mr),
-              "Could not convert the TIMESTAMP values of {} to milliseconds",
-              outputType_->nameOf(i));
-          raw = reinterpret_cast<const uint8_t*>(millis);
-        }
+      if (type->kind() == TypeKind::TIMESTAMP &&
+          col.type().id() != cudf::type_id::TIMESTAMP_MILLISECONDS) {
+        auto* millis = reinterpret_cast<int64_t*>(converted());
+        VELOX_USER_CHECK(
+            detail::timestampsToMillis(
+                reinterpret_cast<const int64_t*>(raw),
+                numValues,
+                col.type().id(),
+                millis,
+                stream),
+            "Could not convert the TIMESTAMP values of {} to milliseconds",
+            outputType_->nameOf(i));
+        raw = reinterpret_cast<const uint8_t*>(millis);
       } else if (type->kind() == TypeKind::HUGEINT) {
         auto* java = reinterpret_cast<__int128_t*>(converted());
         detail::decimalsToJava(
@@ -500,8 +463,7 @@ void CudfPrestoOutput::startSerializer() {
       stringOffsets,
       pageBytes_,
       kMaxPageRows,
-      stream,
-      mr);
+      stream);
   const auto& bounds = serializer->bounds;
   const size_t numPages = bounds.size() - 1;
 
@@ -529,7 +491,7 @@ void CudfPrestoOutput::startSerializer() {
     }
     if (column.isString()) {
       column.charsBounds =
-          detail::gatherStringOffsets(column.offsets, bounds, stream, mr);
+          detail::gatherStringOffsets(column.offsets, bounds, stream);
     }
   }
 
@@ -687,10 +649,10 @@ void CudfPrestoOutput::buildNextWave() {
          base + blobCopy.dstOffset,
          blobCopy.size});
   }
-  detail::batchedDeviceCopy(copies, stream, mr);
-  detail::fillPrestoNullBytes(nullTasks, stream, mr);
+  detail::batchedDeviceCopy(copies, stream);
+  detail::fillPrestoNullBytes(nullTasks, stream);
   VELOX_USER_CHECK(
-      detail::fillPrestoStringOffsets(offsetTasks, stream, mr),
+      detail::fillPrestoStringOffsets(offsetTasks, stream),
       "The strings of one page exceed what Presto's int32 offsets hold");
   // The pageable blob was staged by cudaMemcpyAsync before it returned, and
   // 'deviceBlob' is freed in stream order after the batched copy.
