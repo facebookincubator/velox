@@ -120,19 +120,27 @@ class HuffmanEncodingView final : public TypedEncodingView<T> {
     return reversed;
   }
 
+  // Returns the stream bits starting at 'bitOffset' in the low bits, at least
+  // kMaxCodeBits of them. The 4 bytes of decoder padding at the end of the
+  // stream keep the 4-byte load of any valid symbol in bounds.
+  uint32_t lookaheadAt(uint32_t bitOffset) const {
+    const uint32_t byteOffset = bitOffset >> 3;
+    NIMBLE_CHECK_FILE_LE(
+        byteOffset + sizeof(uint32_t),
+        bitstreamBytes_,
+        "Huffman symbol starts past the end of the stream");
+    uint32_t bits;
+    std::memcpy(&bits, bitstream_ + byteOffset, sizeof(bits));
+    return bits >> (bitOffset & 7);
+  }
+
   T readTypedAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);
     const uint32_t checkpoint = index / HuffmanEncoding<T>::kCheckpointStride;
     uint32_t bitOffset = checkpoints_[checkpoint];
     uint32_t current = checkpoint * HuffmanEncoding<T>::kCheckpointStride;
     while (current <= index) {
-      uint32_t lookahead = 0;
-      const uint32_t byteOffset = bitOffset >> 3;
-      NIMBLE_CHECK_LT(byteOffset, bitstreamBytes_);
-      const uint32_t available =
-          std::min<uint32_t>(4, bitstreamBytes_ - byteOffset);
-      std::memcpy(&lookahead, bitstream_ + byteOffset, available);
-      lookahead >>= bitOffset & 7;
+      const uint32_t lookahead = lookaheadAt(bitOffset);
       const auto entry = decodeTable_[lookahead & ((1u << tableLog_) - 1)];
       NIMBLE_CHECK_GT(entry.bits, 0);
       bitOffset += entry.bits;
@@ -155,13 +163,7 @@ class HuffmanEncodingView final : public TypedEncodingView<T> {
     uint32_t current = checkpoint * HuffmanEncoding<T>::kCheckpointStride;
     const auto end = offset + length;
     while (current < end) {
-      uint32_t lookahead = 0;
-      const uint32_t byteOffset = bitOffset >> 3;
-      NIMBLE_CHECK_LT(byteOffset, bitstreamBytes_);
-      const uint32_t available =
-          std::min<uint32_t>(4, bitstreamBytes_ - byteOffset);
-      std::memcpy(&lookahead, bitstream_ + byteOffset, available);
-      lookahead >>= bitOffset & 7;
+      const uint32_t lookahead = lookaheadAt(bitOffset);
       const auto entry = decodeTable_[lookahead & ((1u << tableLog_) - 1)];
       NIMBLE_CHECK_GT(entry.bits, 0);
       bitOffset += entry.bits;
