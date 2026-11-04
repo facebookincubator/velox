@@ -430,6 +430,12 @@ void checkHybridFlatMapGroupKeys(
     if (isDefaultGroup || i == 0) {
       continue;
     }
+
+    // Readers check every schema for every batch. One comparison accepts
+    // ascending keys; the checks below only name the failure.
+    if (groupKeys[i - 1] < groupKeys[i]) {
+      continue;
+    }
     NIMBLE_CHECK_NE(
         groupKeys[i - 1],
         groupKeys[i],

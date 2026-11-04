@@ -28,6 +28,7 @@
 
 #include <fmt/format.h>
 #include <folly/Conv.h>
+#include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/SchemaTypes.h"
@@ -124,6 +125,11 @@ class HybridFlatMap {
   /// Logical groups in schema order.
   const std::vector<Group>& groups() const {
     return groups_;
+  }
+
+  /// Moves the groups out, for a reader that builds its own type from them.
+  std::vector<Group> releaseGroups() && {
+    return std::move(groups_);
   }
 
   /// Adds explicit group `groupId` holding `keys`, checked with user errors
@@ -286,12 +292,18 @@ void checkHybridFlatMapDefaultKeys(
     uint32_t groupId,
     const std::vector<std::string>& groupKeys);
 
+// Validates the group IDs and keys of a whole schema, and maps each key to its
+// group's index in `groupIndices`, which must start empty. The index also
+// detects repeated keys, so a caller that needs it hashes each key once.
+// Callers keep every group's keys alive and unchanged while they use
+// `groupIndices`, so views avoid copying each key.
 template <typename GroupIdAt, typename GroupKeysAt>
 void validateHybridFlatMapGroups(
     size_t groupCount,
     bool hasDefault,
     GroupIdAt groupIdAt,
-    GroupKeysAt groupKeysAt) {
+    GroupKeysAt groupKeysAt,
+    folly::F14FastMap<std::string_view, size_t>& groupIndices) {
   NIMBLE_CHECK_GE(
       groupCount, size_t{1}, "Hybrid FlatMap requires at least 1 group(s).");
   // Default alone is valid because it holds every key. A projection may keep a
@@ -303,10 +315,12 @@ void validateHybridFlatMapGroups(
         "Hybrid FlatMap single group must be Default: {}.",
         groupIdAt(0));
   }
+  size_t numKeys{0};
+  for (size_t i = 0; i < groupCount; ++i) {
+    numKeys += groupKeysAt(i).size();
+  }
+  groupIndices.reserve(numKeys);
   folly::F14FastSet<uint32_t> groupIds;
-  // Callers keep every group's keys alive and unchanged during validation, so
-  // views avoid copying each key.
-  folly::F14FastSet<std::string_view> keys;
   bool foundDefault{false};
   for (size_t i = 0; i < groupCount; ++i) {
     const auto groupId = groupIdAt(i);
@@ -323,8 +337,8 @@ void validateHybridFlatMapGroups(
     foundDefault |= HybridFlatMap::isDefaultGroup(groupId);
     checkHybridFlatMapGroupKeys(groupId, groupKeys);
     for (const auto& key : groupKeys) {
-      NIMBLE_CHECK(
-          keys.insert(key).second, "Duplicate Hybrid FlatMap key: '{}'.", key);
+      const bool isNewKey = groupIndices.emplace(key, i).second;
+      NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
     }
   }
   if (hasDefault) {
