@@ -458,7 +458,11 @@ inline void resetIfNotWritable(velox::VectorPtr& vector, T&... buffer) {
     return reset;
   };
 
-  if ((... || resetIfShared(buffer))) {
+  // Reset every shared buffer, not just the first one found. The next read
+  // decodes into each kept buffer in place.
+  bool anyShared{false};
+  ((anyShared |= resetIfShared(buffer)), ...);
+  if (anyShared) {
     vector.reset();
   }
 }
