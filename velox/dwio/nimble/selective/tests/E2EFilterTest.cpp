@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/Portability.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include <utility>
@@ -1925,11 +1926,9 @@ TEST_P(E2EFilterTest, flatMapScalar) {
     dataSetBuilder_->makeMapStringValues(common::Subfield("string_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
   testWithTypes(
       kColumns, customize, false, {"long_val", "long_vals"}, numCombinations);
 }
@@ -1944,11 +1943,9 @@ TEST_P(E2EFilterTest, flatMapComplexNoRecursiveNulls) {
     dataSetBuilder_->makeUniformMapKeys(common::Subfield("struct_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
 #if !defined(NDEBUG)
   numCombinations = 1;
 #endif
@@ -1971,11 +1968,9 @@ TEST_P(E2EFilterTest, flatMapComplex) {
     dataSetBuilder_->makeUniformMapKeys(common::Subfield("struct_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
 #if !defined(NDEBUG)
   numCombinations = 1;
 #endif
