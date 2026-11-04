@@ -2504,17 +2504,8 @@ TEST_F(ReadWithVisitorTest, denseNoFilterNoNulls) {
 
 // ===========================================================================
 // Test: Dense read, no filter, nullable int64 (exercises NullableEncoding)
-//
-// Disabled: T295986475. An AlwaysTrue filter over a nullable column drops the
-// nulls when the encoding takes its bulk fast path. dwio::common::useFastPath
-// allows that path for AlwaysTrue even with nulls present, while useBulkPath
-// and setReturnNullsMode do not, so the bulk path skips addNull() and the
-// reader declines to return the nulls it decoded. This test asserts the right
-// invariant; it reaches the broken configuration only now that removing the
-// legacy encoding path makes every reader-level test here run non-legacy.
-// Re-enable with the fix. Analysis and repro: P2579720545.
 // ===========================================================================
-TEST_F(ReadWithVisitorTest, DISABLED_denseNoFilterWithNulls) {
+TEST_F(ReadWithVisitorTest, denseNoFilterWithNulls) {
   constexpr int kRows = 200;
   auto input = makeRowVector(
       {makeFlatVector<int64_t>(kRows, folly::identity, nullEvery(7))});
@@ -2532,6 +2523,47 @@ TEST_F(ReadWithVisitorTest, DISABLED_denseNoFilterWithNulls) {
   // Every row is "output" since there is no filter.
   EXPECT_EQ(child->numValues(), kRows);
   EXPECT_TRUE(child->hasNulls());
+}
+
+// ===========================================================================
+// Test: AlwaysTrue filter on nullable int64 keeps the nulls in the output
+// when the encoding takes its bulk fast path. High-entropy values select
+// Trivial and sequential values select FixedBitWidth; both have a bulk path.
+// ===========================================================================
+TEST_F(ReadWithVisitorTest, alwaysTrueFilterKeepsNulls) {
+  constexpr int kRows = 40;
+  const auto isNullAt = nullEvery(7);
+  std::mt19937 rng(12'345);
+  std::vector<int64_t> randomValues(kRows);
+  for (auto& value : randomValues) {
+    value = static_cast<int64_t>(folly::Random::rand64(rng));
+  }
+  const std::vector<std::pair<std::string, std::function<int64_t(int)>>>
+      generators = {
+          {"random", [&](auto row) { return randomValues[row]; }},
+          {"sequential", [](auto row) { return row; }},
+      };
+
+  for (const auto& [name, generator] : generators) {
+    SCOPED_TRACE(name);
+    auto input =
+        makeRowVector({makeFlatVector<int64_t>(kRows, generator, isNullAt)});
+    auto rowType = asRowType(input->type());
+
+    auto ctx = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    scanSpec->childByName("c0")->setFilter(
+        std::make_unique<common::AlwaysTrue>());
+
+    auto root = buildReader(*ctx, rowType, *scanSpec);
+    auto* child = readColumn(root.get(), kRows);
+    EXPECT_TRUE(child->hasNulls());
+
+    VectorPtr result = BaseVector::create(rowType, 0, pool());
+    root->getValues(root->outputRows(), &result);
+    velox::test::assertEqualVectors(input, result);
+  }
 }
 
 // ===========================================================================
