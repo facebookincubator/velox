@@ -5551,6 +5551,9 @@ TEST_P(TabletWithIndexTest, loadClusterIndex) {
     const auto indexBytesReadBefore = indexIoStats_->rawBytesRead();
     nimble::TabletReader::Options options;
     options.loadClusterIndex = loadClusterIndex;
+    // Preload chunk stats as the Velox reader does, so the footer read serves
+    // them.
+    options.preloadOptionalSections = {std::string(nimble::kChunkStatsSection)};
     auto tablet = TabletTest::createTabletReader(readFile, options);
     if (loadClusterIndex) {
       ASSERT_NE(tablet->clusterIndex(), nullptr);
@@ -5633,6 +5636,9 @@ TEST_P(TabletWithIndexTest, preloadClusterIndex) {
     nimble::TabletReader::Options options;
     options.loadClusterIndex = false;
     options.preloadIndex = true;
+    // Preload chunk stats as the Velox reader does, so the footer read serves
+    // them.
+    options.preloadOptionalSections = {std::string(nimble::kChunkStatsSection)};
     auto tablet = TabletTest::createTabletReader(readFile, options);
     EXPECT_EQ(tablet->clusterIndex(), nullptr);
     // loadClusterIndex=false performs no index IO. The only metadata IO is the
