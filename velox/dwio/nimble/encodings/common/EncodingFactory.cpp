@@ -20,7 +20,6 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -35,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -162,6 +162,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     case EncodingType::EliasFano: {
       RETURN_ENCODING_BY_INTEGER_TYPE(EliasFanoEncoding, dataType);
     }
+    case EncodingType::PartitionedEliasFano: {
+      RETURN_ENCODING_BY_INTEGER_TYPE(PartitionedEliasFanoEncoding, dataType);
+    }
     case EncodingType::ALP: {
       switch (dataType) {
         case DataType::Float:
@@ -199,9 +202,6 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     case EncodingType::SimdForBitpack: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(SimdForBitpackEncoding, dataType);
     }
-    case EncodingType::BitRangeSplit: {
-      RETURN_ENCODING_BY_WIDE_INTEGER_TYPE(BitRangeSplitEncoding, dataType);
-    }
     case EncodingType::SubIntSplit: {
       RETURN_ENCODING_BY_WIDE_NUMERIC_TYPE(SubIntSplitEncoding, dataType);
     }
@@ -212,6 +212,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_INTEGER_TYPE(ForEncoding, dataType);
     }
     default: {
+      NIMBLE_CHECK_FILE_NE(
+          encodingType,
+          kRemovedBitRangeSplitEncodingType,
+          "BitRangeSplit encoding was removed; rewrite the data with "
+          "SubIntSplit");
       NIMBLE_UNREACHABLE(
           "Trying to deserialize invalid EncodingType:{} -- garbage input?",
           static_cast<int>(encodingType));
@@ -446,6 +451,15 @@ std::string_view EncodingFactory::encode(
           "EliasFano encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     }
+    case EncodingType::PartitionedEliasFano: {
+      if constexpr (isIntegralType<T>()) {
+        return PartitionedEliasFanoEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "PartitionedEliasFano encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
     case EncodingType::ALP: {
       if constexpr (isFloatingPointType<T>()) {
         return ALPEncoding<T>::encode(selection, castedValues, buffer, options);
@@ -487,16 +501,6 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SimdForBitpack encoding only supports integral data types, got {}.",
-          TypeTraits<T>::dataType);
-    }
-    case EncodingType::BitRangeSplit: {
-      if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
-        return BitRangeSplitEncoding<T>::encode(
-            selection, castedValues, buffer, options);
-      }
-      NIMBLE_INCOMPATIBLE_ENCODING(
-          "BitRangeSplit encoding only supports 32- and 64-bit integer data "
-          "types, got {}.",
           TypeTraits<T>::dataType);
     }
     // Reachable only when something names SubIntSplit explicitly, such as an

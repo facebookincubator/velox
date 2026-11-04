@@ -15,7 +15,10 @@
  */
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/sparksql/Map.h"
+#include "velox/functions/sparksql/MapFromArrays.h"
 #include "velox/functions/sparksql/MapFromEntries.h"
+#include "velox/functions/sparksql/TransformKeys.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
@@ -41,10 +44,9 @@ void registerSparkMapFunctions(const std::string& prefix) {
 namespace sparksql {
 void registerMapFunctions(const std::string& prefix) {
   registerSparkMapFunctions(prefix);
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_from_arrays, prefix + "map_from_arrays");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_transform_keys, prefix + "transform_keys");
+  registerMapFunction(prefix + "map");
+  registerMapFromArraysFunction(prefix + "map_from_arrays");
+  registerTransformKeysFunction(prefix + "transform_keys");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
 }

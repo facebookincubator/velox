@@ -829,8 +829,7 @@ void BaseVector::ensureWritable(
         BaseVector::create(isUnknownType ? type : resultType, targetSize, pool);
   }
 
-  SelectivityVector copyRows(result->size());
-  copyRows.deselect(rows);
+  auto copyRows = rows.complement(result->size());
 
   if (copyRows.hasSelections()) {
     copy->copy(result.get(), copyRows, nullptr);
@@ -1109,7 +1108,7 @@ VectorPtr BaseVector::createConstant(
 }
 
 // static
-VectorPtr BaseVector::createFromVariants(
+VectorPtr BaseVector::createFromVariantsInternal(
     const TypePtr& type,
     const std::vector<Variant>& values,
     velox::memory::MemoryPool* pool) {

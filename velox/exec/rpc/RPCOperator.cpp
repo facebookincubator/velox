@@ -19,6 +19,7 @@
 #include "velox/exec/rpc/RpcErrorClassification.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
@@ -32,6 +33,8 @@ namespace facebook::velox::exec::rpc {
 namespace {
 constexpr int64_t kLegacyFixedLimit{200};
 constexpr int64_t kDefaultAdaptiveHardLimit{1'000'000};
+// Limiter floor when neither the function nor the session declares one.
+constexpr double kDefaultAdaptiveFloor{50.0};
 
 // Bounds a per-row future by 'timeout' and stamps 'rowId' on its response.
 folly::SemiFuture<RPCResponse> wrapRowFuture(
@@ -214,10 +217,25 @@ void RPCOperator::initializeRateLimiter() {
       0,
       "rpc.ratelimiter.max_probe_interval_ms must be non-negative");
 
+  // A hard limit of 0 or more opts into the function's bounds taking
+  // precedence: session properties apply to every function in the query,
+  // while the function declares bounds for its own backend. The default of -1
+  // keeps the session's precedence. With 0 or more, max_limit no longer
+  // applies: a positive hard limit is the ceiling when the function declares
+  // none, and 0 leaves only the safety ceiling.
+  const bool functionBoundsFirst = sessionHardLimit >= 0;
   RPCRateLimiter::Config policy;
   policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
-  policy.floor = sessionFloor > 0 ? static_cast<double>(sessionFloor)
-                                  : function_->configuredAdaptiveFloor();
+  const auto functionFloor = function_->configuredAdaptiveFloor();
+  if (functionBoundsFirst && functionFloor > 0) {
+    policy.floor = functionFloor;
+  } else if (sessionFloor > 0) {
+    policy.floor = static_cast<double>(sessionFloor);
+  } else if (functionFloor > 0) {
+    policy.floor = functionFloor;
+  } else {
+    policy.floor = kDefaultAdaptiveFloor;
+  }
   policy.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
   policy.maxProbeInterval = std::chrono::milliseconds{maxProbeIntervalMs};
   const auto functionLimit = function_->configuredCeiling();
@@ -245,6 +263,17 @@ void RPCOperator::initializeRateLimiter() {
   auto sources = liveStatsSources_.wlock();
   sources->limiter = limiter_;
   sources->policyScoped = lookup.policyScoped;
+}
+
+std::vector<RPCRateLimiter::Token> RPCOperator::tryAcquireAdmission(
+    int64_t want) {
+  VELOX_CHECK_NOT_NULL(limiter_);
+  if (!admissionRequested_) {
+    admissionRequested_ = true;
+    const auto baseline = limiter_->stats();
+    liveStatsSources_.wlock()->limiterBaseline = baseline;
+  }
+  return limiter_->tryAcquireUpTo(want);
 }
 
 bool RPCOperator::needsInput() const {
@@ -398,7 +427,7 @@ void RPCOperator::dispatchDueRetries() {
     if (want <= 0) {
       return;
     }
-    auto reserved = limiter_->tryAcquireUpTo(want);
+    auto reserved = tryAcquireAdmission(want);
     if (reserved.empty()) {
       return;
     }
@@ -447,7 +476,7 @@ void RPCOperator::dispatchRowsUnderAdmission() {
 
     // Reserve before dispatch so concurrent drivers cannot oversubscribe the
     // shared limit. Acquire the chunk in one call to avoid locking per row.
-    auto reserved = limiter_->tryAcquireUpTo(want);
+    auto reserved = tryAcquireAdmission(want);
     if (reserved.empty()) {
       break;
     }
@@ -723,7 +752,7 @@ bool RPCOperator::flushBatchRequests(int32_t maxRows) {
 
   const auto requestedUnits = function_->admissionUnitsForBatch(flushCount);
   VELOX_CHECK_GT(requestedUnits, 0);
-  auto reserved = limiter_->tryAcquireUpTo(requestedUnits);
+  auto reserved = tryAcquireAdmission(requestedUnits);
   if (reserved.empty()) {
     return false;
   }
@@ -878,13 +907,13 @@ RowVectorPtr RPCOperator::finishIfDrained() {
   return nullptr;
 }
 
-void RPCOperator::recordCongestion(
+int64_t RPCOperator::recordCongestion(
     AsyncRPCFunction::CongestionSignal signal,
     const std::vector<int64_t>& roundTripTimesNs,
     const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
     bool sharedOverloadHandled) {
   if (limiter_ == nullptr) {
-    return;
+    return 0;
   }
   // Canonical typed overload is applied to the shared limiter by the
   // completion callback before admission is released. Apply the same signal
@@ -922,10 +951,15 @@ void RPCOperator::recordCongestion(
   int64_t serviceHorizonNs = roundTripTimesNs.empty()
       ? 0
       : *std::min_element(roundTripTimesNs.begin(), roundTripTimesNs.end());
+  int64_t discardedUnits{0};
   for (const auto& [overloadEpoch, successUnits] : successUnitsByEpoch) {
-    limiter_->onSuccessForEpoch(overloadEpoch, successUnits, serviceHorizonNs);
+    if (!limiter_->onSuccessForEpoch(
+            overloadEpoch, successUnits, serviceHorizonNs)) {
+      discardedUnits += successUnits;
+    }
     serviceHorizonNs = 0;
   }
+  return discardedUnits;
 }
 
 RowVectorPtr RPCOperator::outputPerRow() {
@@ -987,11 +1021,14 @@ RowVectorPtr RPCOperator::outputPerRow() {
         claimedRows_.begin(), claimedRows_.end(), [](const auto& row) {
           return row.sharedOverloadHandled;
         });
-    recordCongestion(
+    // Only error-free rows carry success units here, so every discarded unit
+    // is a stale success.
+    const auto discardedUnits = recordCongestion(
         function_->evaluateCongestion(responses),
         roundTripTimesNs,
         successUnitsByEpoch,
         sharedOverloadHandled);
+    numStaleSuccessUnits_.fetch_add(discardedUnits, std::memory_order_relaxed);
     // Apply the completed rows' driver-local feedback before admitting more
     // buffered work. Completion already released the shared admission lease.
     dispatchRowsUnderAdmission();
@@ -1041,11 +1078,14 @@ RowVectorPtr RPCOperator::outputBatch() {
       successUnitsByEpoch.emplace_back(
           claimedBatch_->admissionEpoch.value(), claimedBatch_->admissionUnits);
     }
-    recordCongestion(
+    // Only a flush with a successful row carries success units, so every
+    // discarded unit is a stale success.
+    const auto discardedUnits = recordCongestion(
         function_->evaluateCongestion(claimedBatch_->responses),
         roundTripTimesNs,
         successUnitsByEpoch,
         claimedBatch_->sharedOverloadHandled);
+    numStaleSuccessUnits_.fetch_add(discardedUnits, std::memory_order_relaxed);
   }
 
   auto output = buildOutputFromReadyBatch(*claimedBatch_);
@@ -1453,7 +1493,26 @@ void RPCOperator::addLiveProgressStats(
     if (sources->policyScoped) {
       stats.runtimeStats[kRpcRateLimiterPolicyScoped] = RuntimeMetric(1);
     }
+    if (sources->limiterBaseline.has_value()) {
+      const auto& baseline = sources->limiterBaseline.value();
+      stats.runtimeStats[kRpcRateLimiterAttachedNanos] = RuntimeMetric(
+          limiterStats.clockNanos - baseline.clockNanos,
+          RuntimeCounter::Unit::kNanos);
+      stats.runtimeStats[kRpcRateLimiterPacingNanos] = RuntimeMetric(
+          limiterStats.pacingNanos - baseline.pacingNanos,
+          RuntimeCounter::Unit::kNanos);
+      stats.runtimeStats[kRpcRateLimiterLimitMilliUnitSeconds] = RuntimeMetric(
+          static_cast<int64_t>(std::llround(
+              1'000 *
+              (limiterStats.windowUnitSeconds - baseline.windowUnitSeconds))));
+    }
+    stats.runtimeStats[kRpcStaleSuccessUnits] =
+        RuntimeMetric(numStaleSuccessUnits_.load(std::memory_order_relaxed));
   }
+  stats.runtimeStats[kRpcOverloadedAttempts] =
+      RuntimeMetric(snapshot.numOverloadedAttempts);
+  stats.runtimeStats[kRpcSuccessesAfterOverload] =
+      RuntimeMetric(snapshot.numSuccessesAfterOverload);
   if (!includeGauges) {
     return;
   }
@@ -1516,6 +1575,11 @@ void RPCOperator::recordRuntimeStats() {
     if (snapshot.numCapacityRetries > 0) {
       lockedStats->addRuntimeStat(
           kRpcCapacityRetries, RuntimeCounter(snapshot.numCapacityRetries));
+    }
+    if (snapshot.numCapacityRetryFloorRetries > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcCapacityRetryFloorRetries,
+          RuntimeCounter(snapshot.numCapacityRetryFloorRetries));
     }
     if (snapshot.baselineRttNs > 0) {
       lockedStats->addRuntimeStat(

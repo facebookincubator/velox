@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/file/FileSystems.h"
@@ -49,6 +50,7 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     parse::registerTypeResolver();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions("");
 
     // Overwrite AST and JIT registrations with priority 0 so any expression
     // that FunctionExpression can also evaluate routes through that path.

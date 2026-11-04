@@ -16,7 +16,7 @@
 #include "velox/connectors/hive/paimon/PaimonConnector.h"
 
 #include "velox/common/Casts.h"
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
@@ -26,8 +26,15 @@ PaimonConnector::PaimonConnector(
     const std::string& id,
     std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* ioExecutor)
-    : HiveConnector(id, config, ioExecutor),
-      paimonConfig_(std::make_shared<PaimonConfig>(connectorConfig())) {}
+    : FileConnector(
+          id,
+          std::make_shared<PaimonConfig>(std::move(config)),
+          ioExecutor),
+      paimonConfig_(std::static_pointer_cast<PaimonConfig>(fileConfig_)),
+      configProvider_(
+          PaimonConfig::registeredProperties(),
+          id,
+          connectorConfig().get()) {}
 
 std::unique_ptr<DataSource> PaimonConnector::createDataSource(
     const RowTypePtr& outputType,
@@ -60,8 +67,7 @@ std::unique_ptr<DataSink> PaimonConnector::createDataSink(
 }
 
 void PaimonConnector::registerSerDe() {
-  // TODO: Introduce PaimonColumnHandle and register its serde here.
-  HiveColumnHandle::registerSerDe();
+  PaimonColumnHandle::registerSerDe();
   PaimonConnectorSplit::registerSerDe();
   PaimonTableHandle::registerSerDe();
 }

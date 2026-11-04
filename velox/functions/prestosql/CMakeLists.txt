@@ -168,6 +168,7 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_FAISS)
+  velox_sources(velox_functions_prestosql_impl PRIVATE VectorIndexFunctions.h)
   velox_link_libraries(velox_functions_prestosql_impl FAISS::faiss)
   velox_compile_definitions(velox_functions_prestosql_impl PRIVATE VELOX_ENABLE_FAISS)
 endif()

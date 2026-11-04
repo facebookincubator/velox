@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "velox/expression/EvalCtx.h"
@@ -24,6 +25,9 @@
 #include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::functions::sparksql {
+
+/// Registers Spark's map under the given name.
+void registerMapFunction(const std::string& name);
 
 /// Builds a map for the selected rows from per-row key and value arrays,
 /// resolving repeated keys with LastWin. The result has the given size and no
@@ -39,5 +43,13 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
     const VectorPtr& keyElements,
     const VectorPtr& valueElements,
     bool throwOnDuplicateKey);
+
+/// Throws on a null key or a repeated key. Used by the zero-copy path, which
+/// builds no entry indices.
+void checkNullAndDuplicateKeys(
+    const SelectivityVector& rows,
+    exec::EvalCtx& context,
+    const ArrayVectorBase& keysArray,
+    const DecodedVector& decodedKeyElements);
 
 } // namespace facebook::velox::functions::sparksql

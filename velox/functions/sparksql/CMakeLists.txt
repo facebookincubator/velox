@@ -38,6 +38,7 @@ velox_add_library(
   DecimalCeil.cpp
   DecimalCompare.cpp
   Elt.cpp
+  EncodeFunction.cpp
   FilterFunction.cpp
   FormatNumber.cpp
   FormatString.cpp
@@ -47,6 +48,7 @@ velox_add_library(
   LastWin.cpp
   LeastGreatest.cpp
   Map.cpp
+  MapFromArrays.cpp
   MapFromEntries.cpp
   Murmur3Hash.cpp
   RegexFunctions.cpp
@@ -54,6 +56,7 @@ velox_add_library(
   String.cpp
   TimestampUtils.cpp
   Transform.cpp
+  TransformKeys.cpp
   UnscaledValueFunction.cpp
   XxHash64.cpp
   HEADERS
@@ -67,6 +70,7 @@ velox_add_library(
   ArrayMinMaxFunction.h
   ArrayPrepend.h
   ArraySort.h
+  ArraysOverlap.h
   AssertNotNull.h
   Base64Function.h
   Bitwise.h
@@ -82,6 +86,7 @@ velox_add_library(
   detail/DecimalArithmeticFunctions.h
   detail/DecimalCeilFunction.h
   Elt.h
+  EncodeFunction.h
   Factorial.h
   FormatNumber.h
   FormatString.h
@@ -89,6 +94,7 @@ velox_add_library(
   Hash.h
   In.h
   InitcapFunction.h
+  JavaFloatingPoint.h
   JsonObjectKeys.h
   LambdaIndexUtil.h
   LastWin.h
@@ -96,6 +102,7 @@ velox_add_library(
   LuhnCheckFunction.h
   MakeTimestamp.h
   Map.h
+  MapFromArrays.h
   MapFromEntries.h
   MaskFunction.h
   MightContain.h
@@ -115,6 +122,7 @@ velox_add_library(
   TimestampUtils.h
   ToJson.h
   ToPrettyString.h
+  TransformKeys.h
   UnBase64Function.h
   UnscaledValueFunction.h
   Uuid.h

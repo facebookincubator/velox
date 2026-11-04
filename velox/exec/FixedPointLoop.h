@@ -51,6 +51,11 @@ struct NestedFixedPoint {
   /// destroyed.  Null when no loop created the sub-task.
   std::shared_ptr<memory::MemoryPool> statePool{};
 
+  /// The deletion latch of the loop's task, which the sub-task's latch holds,
+  /// so the loop's task is not reported deleted while the sub-task still
+  /// exists.
+  std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch{};
+
   /// The workers the nested loop runs on, by destination: the enclosing
   /// loop's, or worker 0 alone for a loop nested in a verdict plan.
   std::vector<std::string> workers{};
@@ -200,12 +205,14 @@ struct FixedPointExecutionStats {
 class FixedPointLoop {
  public:
   /// 'owner' is the fully constructed Task this loop runs the fragment for; it
-  /// owns the loop and so outlives it. 'node' is the FixedPointNode in the
-  /// owner's plan fragment.
+  /// owns the loop and so outlives it. 'ownerDeletionLatch' is the owner's
+  /// deletion latch, which the sub-tasks hold. 'node' is the FixedPointNode in
+  /// the owner's plan fragment.
   /// 'fixedPointOptions' supplies the hooks; the constructor checks that the
   /// ones this fixed point needs are set.
   FixedPointLoop(
       exec::Task* owner,
+      std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch,
       const core::FixedPointNode& node,
       const FixedPointOptions* fixedPointOptions,
       const NestedFixedPoint* nested);
@@ -428,6 +435,10 @@ class FixedPointLoop {
 
   // The task that owns this loop; outlives it by construction.
   exec::Task* const owner_;
+
+  // The owner's deletion latch, which each sub-task holds, so the owner is not
+  // reported deleted while a sub-task still exists.
+  const std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch_;
 
   // The parent task's maxDrivers (from start()), used for the Phase-1 initial
   // plans -- they read real sources (TableScan / Exchange / upstream) that

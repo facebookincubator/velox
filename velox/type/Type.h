@@ -959,6 +959,35 @@ class RowType : public TypeBase<TypeKind::ROW> {
   std::shared_ptr<const RowType> unionWith(
       const std::shared_ptr<const RowType>& other) const;
 
+  /// The overloads below return the children of 'this' followed by the
+  /// specified fields. They take the same arguments as the ROW() functions
+  /// and avoid building a temporary RowType.
+
+  /// 'names' and 'types' must have the same size.
+  /// {a, b}->unionWith({c, d}, {INTEGER(), VARCHAR()}) => {a, b, c, d}.
+  std::shared_ptr<const RowType> unionWith(
+      const std::vector<std::string>& names,
+      const std::vector<TypePtr>& types) const;
+
+  /// Fields that share a type.
+  /// {a, b}->unionWith({c, d}, BOOLEAN()) => {a, b, c, d}.
+  std::shared_ptr<const RowType> unionWith(
+      const std::vector<std::string>& names,
+      const TypePtr& type) const;
+
+  std::shared_ptr<const RowType> unionWith(
+      std::initializer_list<std::string_view> names,
+      const TypePtr& type) const;
+
+  /// {a, b}->unionWith({{"c", BIGINT()}, {"d", VARCHAR()}}) => {a, b, c, d}.
+  std::shared_ptr<const RowType> unionWith(
+      std::initializer_list<std::pair<std::string_view, TypePtr>> pairs) const;
+
+  /// {a, b}->unionWith("c", BIGINT()) => {a, b, c}.
+  std::shared_ptr<const RowType> unionWith(
+      std::string_view name,
+      const TypePtr& type) const;
+
   folly::dynamic serialize() const override;
 
   const std::vector<std::string>& names() const {
@@ -1209,6 +1238,40 @@ class TimestampUtcType final : public TimestampType {
 
  protected:
   constexpr TimestampUtcType() = default;
+};
+
+/// A local vector index (see common::vectorindex::LocalVectorIndex), stored as
+/// VARBINARY.
+class VectorIndexType final : public VarbinaryType {
+ public:
+  static std::shared_ptr<const VectorIndexType> create() = delete;
+
+  static std::shared_ptr<const VectorIndexType> get() {
+    VELOX_CONSTEXPR_SINGLETON VectorIndexType kInstance;
+    return {std::shared_ptr<const VectorIndexType>{}, &kInstance};
+  }
+
+  const char* name() const override {
+    return "VECTOR_INDEX";
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override;
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return VectorIndexType::get();
+  }
+
+ protected:
+  constexpr VectorIndexType() = default;
 };
 
 constexpr long kMillisInSecond = 1000;
@@ -2057,6 +2120,8 @@ VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
 
 TypePtr TIMESTAMP_UTC();
+
+TypePtr VECTOR_INDEX();
 
 TypePtr UNKNOWN();
 

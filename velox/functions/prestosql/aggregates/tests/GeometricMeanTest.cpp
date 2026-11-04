@@ -15,6 +15,7 @@
  */
 
 #include <cmath>
+#include <functional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -67,7 +68,7 @@ TEST_F(GeometricMeanTest, globalNulls) {
   testAggregations({data}, {}, {"geometric_mean(c0)"}, "SELECT NULL");
 
   auto expected = makeRowVector({
-      makeConstant(geometricMean<double>(1, 100, 2, folly::identity), 1),
+      makeConstant(geometricMean<double>(1, 100, 2, std::identity{}), 1),
   });
 
   testAggregations({data}, {}, {"geometric_mean(c1)"}, {expected});

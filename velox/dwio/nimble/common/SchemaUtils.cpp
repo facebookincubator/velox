@@ -839,7 +839,9 @@ std::shared_ptr<HybridFlatMapTypeBuilder> buildProjectedHybridFlatMapType(
     const ProjectedHybridFlatMap& projectedHybridFlatMap) {
   NIMBLE_CHECK_NOT_NULL(projectedHybridFlatMap.source);
   auto result = builder.createHybridFlatMapTypeBuilder(
-      projectedHybridFlatMap.source->keyScalarKind(), /*projection=*/true);
+      projectedHybridFlatMap.source->keyScalarKind(),
+      projectedHybridFlatMap.source->defaultGroupKeyPresenceMode(),
+      /*projection=*/true);
   result->setAttributes(projectedHybridFlatMap.source->attributes());
   if (projectedHybridFlatMap.groupIndices.empty()) {
     result->addGroup(
@@ -1020,12 +1022,13 @@ void resolveSubfield(
             "Nested projection inside hybrid FlatMap key '{}' is not supported.",
             keyName);
 
-        // Default's keys list every key the payload stores in Default, so a
-        // key in no group is absent and selects nothing. The group set is
-        // created even when it stays empty, so a column whose requested keys
-        // are all absent projects as a keyless Default group.
+        // With a bitmap, Default's keys list every key the payload stores in
+        // Default, so a key in no group is absent and selects nothing. The
+        // group set is created even when it stays empty, so a column with no
+        // selected group projects as a keyless Default group.
         auto& selectedGroups = selectedChildren[current];
-        const auto groupIndex = current->asHybridFlatMap().findGroup(keyName);
+        const auto groupIndex =
+            current->asHybridFlatMap().findProjectionGroup(keyName);
         if (groupIndex.has_value()) {
           selectedGroups.insert(*groupIndex);
         }

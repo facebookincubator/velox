@@ -179,7 +179,6 @@ class IntegerDictionaryFusionBenchmark : public velox::test::VectorTestBase {
     rowReaderOptions.setScanSpec(scanSpec);
     rowReaderOptions.setRequestedType(inputType);
     rowReaderOptions.setEagerFirstStripeLoad(true);
-    rowReaderOptions.setStringDecoderZeroCopy(true);
     rowReaderOptions.setNimbleDictionaryAwareReads(dictionaryAwareReads);
     readers.rowReader = readers.reader->createRowReader(rowReaderOptions);
     readers.result = BaseVector::create(

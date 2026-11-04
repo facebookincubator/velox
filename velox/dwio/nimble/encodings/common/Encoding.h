@@ -192,6 +192,20 @@ class Encoding {
     /// of the original string bytes.
     double fsstCompressionTargetRatio = 0.6;
 
+    /// Reuses decoded FSST strings whose compressed payload repeats within one
+    /// materialize() or readWithVisitor() call. The cache is never shared
+    /// across calls or FSST encodings because payload bytes are meaningful only
+    /// with the symbol table that encoded them.
+    bool enableFsstDecodeCache{false};
+
+    /// Maximum number of distinct FSST payloads retained by one decode call.
+    uint32_t fsstMaxDecodeCacheEntries{256};
+
+    /// Whether repeated FSST strings can be cached with these options.
+    bool fsstDecodeCacheEnabled() const {
+      return enableFsstDecodeCache && fsstMaxDecodeCacheEntries != 0;
+    }
+
     /// Makes an encoding view build and keep the structures that make many
     /// reads cheap, such as offsets, bitmaps and decoded chunks, when it is
     /// created. Set it for a view that serves many reads, such as a scan or a
@@ -665,12 +679,17 @@ void readSparseMaterializedIndices(
   visitor.setRowIndex(visitor.numRows());
 }
 
-template <typename DecoderVisitor, typename Skip, typename F>
+template <
+    typename DecoderVisitor,
+    typename Skip,
+    typename F,
+    typename Process = std::nullptr_t>
 void readWithVisitorSlow(
     DecoderVisitor& visitor,
     const ReadWithVisitorParams& params,
     Skip skip,
-    F decodeOne) {
+    F decodeOne,
+    Process process = nullptr) {
   using T = typename DecoderVisitor::DataType;
   constexpr bool kExtractToReader = std::is_same_v<
       typename DecoderVisitor::Extract,
@@ -705,7 +724,11 @@ void readWithVisitorSlow(
         visitor.processNull(atEnd);
       }
     } else {
-      visitor.process(castFromPhysicalType<T>(decodeOne()), atEnd);
+      if constexpr (std::is_null_pointer_v<Process>) {
+        visitor.process(castFromPhysicalType<T>(decodeOne()), atEnd);
+      } else {
+        process(decodeOne(), atEnd);
+      }
     }
   }
 }

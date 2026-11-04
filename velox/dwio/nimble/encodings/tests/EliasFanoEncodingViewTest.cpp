@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <limits>
 #include <random>
+#include <tuple>
 
 #include <gtest/gtest.h>
 
@@ -66,6 +67,38 @@ TEST_P(EliasFanoEncodingViewTest, lowerBound) {
        }) {
     SCOPED_TRACE(value);
     EXPECT_EQ(eliasFanoView->lowerBound(value), expected);
+  }
+}
+
+TEST_P(EliasFanoEncodingViewTest, lowerBoundInRange) {
+  const auto values = makeVector<int64_t>({-9, -1, 3, 3, 8, 20});
+  nimble::Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+  const auto serialized =
+      nimble::test::Encoder<nimble::EliasFanoEncoding<int64_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+  auto view = nimble::createEncodingView(serialized, pool_.get(), options);
+  const auto& typedView =
+      dynamic_cast<const nimble::TypedEncodingView<int64_t>&>(*view);
+
+  for (const auto& [begin, end, value, expected] :
+       std::vector<std::tuple<uint32_t, uint32_t, int64_t, uint32_t>>{
+           {0, 6, -10, 0},
+           {0, 6, -1, 1},
+           {0, 6, 0, 2},
+           {2, 5, -5, 2},
+           {2, 4, 4, 4},
+           {1, 3, 3, 2},
+           {0, 6, 21, 6},
+       }) {
+    SCOPED_TRACE(
+        ::testing::Message()
+        << "begin=" << begin << ", end=" << end << ", value=" << value);
+    int64_t found{0};
+    const auto row = typedView.lowerBound(begin, end, value, found);
+    EXPECT_EQ(row, expected);
+    if (row < end) {
+      EXPECT_EQ(found, values[row]);
+    }
   }
 }
 

@@ -21,8 +21,6 @@
 #include "velox/connectors/hive/iceberg/IcebergFieldMetadata.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -45,11 +43,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 
@@ -70,11 +64,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
       const RowTypePtr& rowType,
       const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
       const RowVectorPtr& expected) {
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
         {expected});
   }
@@ -218,11 +208,7 @@ TEST_F(IcebergInsertTest, singleColumnPartition) {
       ASSERT_TRUE(taskJson.count("partitionDataJson") > 0);
     }
 
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 }
@@ -334,11 +320,7 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
     ASSERT_EQ(commitTasks.size(), vectorSize);
     ASSERT_EQ(splits.size(), commitTasks.size());
 
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 }
@@ -390,12 +372,7 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
     EXPECT_EQ(files.size(), commitTasks.size());
 
     auto splits = createSplitsForDirectory(outputPath);
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
 
     return files.size();

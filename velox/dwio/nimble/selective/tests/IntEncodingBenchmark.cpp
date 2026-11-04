@@ -309,7 +309,6 @@ struct BenchmarkState : public velox::test::VectorTestBase {
     rowOptions.setEagerFirstStripeLoad(false);
     // zeroCopy=true uses nimble::EncodingFactory (not legacy), which forwards
     // Encoding::Options including decodingStats to encoding constructors.
-    rowOptions.setStringDecoderZeroCopy(true);
     rowOptions.setCollectColumnStats(true);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;

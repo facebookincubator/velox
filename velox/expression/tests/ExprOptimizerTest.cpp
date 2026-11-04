@@ -283,6 +283,70 @@ TEST_F(ExprOptimizerTest, rewritesWithConstantFolding) {
       type);
 }
 
+// An expression with nothing to fold or rewrite comes back as the same node.
+TEST_F(ExprOptimizerTest, unchanged) {
+  const auto type = ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), ARRAY(BIGINT())});
+  std::vector<core::TypedExprPtr> inputs;
+  for (const auto& sql : {
+           "a + b",
+           "cast(a as varchar)",
+           "transform(c, x -> x + a)",
+           "if(a > b, a, b)",
+           "case when a > b then a when b > a then b else a end",
+           "coalesce(a, b)",
+           "a > b and b > a",
+           "a > b or b > a",
+           "if(a > b, a, b) + if(b > a, b, a)",
+       }) {
+    inputs.push_back(makeTypedExpr(sql, type));
+  }
+  inputs.push_back(
+      std::make_shared<core::NullIfTypedExpr>(
+          makeTypedExpr("a", type), makeTypedExpr("b", type), BIGINT()));
+
+  const auto queryCtx = core::QueryCtx::create();
+  for (const auto& input : inputs) {
+    SCOPED_TRACE(input->toString());
+    const auto optimized = expression::optimize(input, queryCtx.get(), pool());
+    EXPECT_EQ(optimized.get(), input.get()) << optimized->toString();
+  }
+}
+
+// Optimizing an optimized expression returns the same node, and a fold rebuilds
+// only the path above it.
+TEST_F(ExprOptimizerTest, idempotent) {
+  const auto type = ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), ARRAY(BIGINT())});
+  const auto queryCtx = core::QueryCtx::create();
+
+  // A folded leaf leaves its unchanged sibling in place.
+  {
+    const auto expr =
+        makeTypedExpr("if(a > b, a, b) + if(b > a + (1 + 1), b, a)", type);
+    const auto optimized = expression::optimize(expr, queryCtx.get(), pool());
+    EXPECT_EQ(optimized->inputs()[0].get(), expr->inputs()[0].get());
+    EXPECT_EQ(
+        expression::optimize(optimized, queryCtx.get(), pool()).get(),
+        optimized.get());
+  }
+
+  // Each rewrite changes its input once, then leaves its own output alone.
+  for (const auto& sql : {
+           "case when 1 > 2 then a when a > b then b else a end",
+           "a > b and (b > a and a = b)",
+           "coalesce(a, b, a)",
+           "transform(c, x -> x + (1 + 1))",
+       }) {
+    SCOPED_TRACE(sql);
+    const auto expr = makeTypedExpr(sql, type);
+    const auto optimized = expression::optimize(expr, queryCtx.get(), pool());
+    ASSERT_NE(optimized.get(), expr.get());
+    EXPECT_EQ(
+        expression::optimize(optimized, queryCtx.get(), pool()).get(),
+        optimized.get())
+        << optimized->toString();
+  }
+}
+
 /// Test to ensure session queryCtx is used during expression optimization.
 TEST_F(ExprOptimizerTest, queryCtx) {
   auto testFromUnixtime = [&](const std::string& function,

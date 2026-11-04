@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <functional>
+
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/vector/FunctionVector.h"
@@ -62,7 +64,7 @@ Expected<RE2*> ReCache::tryFindOrCompile(const StringView& pattern) {
 
 RE2* ReCache::findOrCompile(const StringView& pattern) {
   return tryFindOrCompile(pattern).thenOrThrow(
-      folly::identity,
+      std::identity{},
       [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
 }
 

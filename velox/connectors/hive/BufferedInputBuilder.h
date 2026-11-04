@@ -17,8 +17,8 @@
 #pragma once
 #include <folly/Executor.h>
 
+#include "velox/common/caching/FileHandle.h"
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileHandle.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Reader.h"
 

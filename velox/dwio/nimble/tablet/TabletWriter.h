@@ -86,7 +86,7 @@ class TabletWriter {
     // Skip writing chunk stats for a stripe group if the average number
     // of chunks per stream is below this threshold. 0 disables chunk stats
     // skipping.
-    float chunkStatsMinAvgChunks{2};
+    float chunkStatsMinAvgChunks{0};
     // Maximum string or binary value length retained in per-chunk bounds.
     uint32_t maxChunkStringStatSize{
         ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize};
