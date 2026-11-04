@@ -30,9 +30,12 @@
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
 
 #include <folly/ScopeGuard.h>
+
+#include <limits>
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox;
@@ -213,50 +216,100 @@ TEST_F(CudfFilterProjectTest, castFromVarcharStaysOnCpu) {
 }
 
 TEST_F(CudfFilterProjectTest, hashWithSeed) {
-  auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
-  auto data = makeRowVector({input});
-  auto hashPlan = PlanBuilder()
-                      .setParseOptions(options_)
-                      .values({data})
-                      .project({"hash_with_seed(42, c0) AS c1"})
-                      .planNode();
-  auto hashResults = AssertQueryBuilder(hashPlan).copyResults(pool());
+  const std::vector<VectorPtr> inputs{
+      makeNullableFlatVector<bool>({true, false, std::nullopt}),
+      makeNullableFlatVector<int8_t>({0, -1, INT8_MIN, INT8_MAX, std::nullopt}),
+      makeNullableFlatVector<int16_t>(
+          {0, -1, INT16_MIN, INT16_MAX, std::nullopt}),
+      makeNullableFlatVector<int32_t>(
+          {0, -1, INT32_MIN, INT32_MAX, std::nullopt}),
+      makeNullableFlatVector<int64_t>(
+          {0, -1, INT64_MIN, INT64_MAX, std::nullopt}),
+      makeNullableFlatVector<float>(
+          {0.0f,
+           -0.0f,
+           1.5f,
+           std::numeric_limits<float>::quiet_NaN(),
+           std::nullopt}),
+      makeNullableFlatVector<double>(
+          {0.0,
+           -0.0,
+           1.5,
+           std::numeric_limits<double>::quiet_NaN(),
+           std::nullopt}),
+      makeNullableFlatVector<std::string>(
+          {"",
+           "a",
+           "ab",
+           "abc",
+           "abcd",
+           "abcde",
+           "über",
+           "日本",
+           std::nullopt}),
+      makeNullableFlatVector<int64_t>(
+          {0, -1, 123456789012345678, -999, std::nullopt}, DECIMAL(18, 2)),
+      makeNullableFlatVector<int128_t>(
+          {0,
+           -1,
+           DecimalUtil::kLongDecimalMax,
+           DecimalUtil::kLongDecimalMin,
+           std::nullopt},
+          DECIMAL(38, 10)),
+      makeNullableFlatVector<int32_t>(
+          {0, -1, 18'000, -18'000, std::nullopt}, DATE()),
+      makeNullableArrayVector<int32_t>(
+          {{{1, 2, 3}},
+           std::vector<std::optional<int32_t>>{},
+           {{4, std::nullopt}},
+           std::nullopt}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, 4}),
+           makeNullableFlatVector<std::string>({"a", "b", std::nullopt, "d"})},
+          [](vector_size_t row) { return row == 3; }),
+  };
+  for (const auto& input : inputs) {
+    SCOPED_TRACE(input->type()->toString());
+    auto data = makeRowVector({input});
+    assertExpressionMatchesCpu("hash_with_seed(42, c0)", data, data->rowType());
+  }
 
-  auto expected = makeRowVector({
-      makeFlatVector<int32_t>({
-          -1604625029,
-          -853646085,
-      }),
-  });
-  facebook::velox::test::assertEqualVectors(expected, hashResults);
+  // cuDF's Spark hash requires microsecond timestamps.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  auto data = makeRowVector({makeNullableFlatVector<Timestamp>(
+      {Timestamp(0, 0),
+       Timestamp(1, 1'000),
+       Timestamp(-1, 999'000),
+       Timestamp(1'700'000'000, 123'456'000),
+       std::nullopt})});
+  assertExpressionMatchesCpu("hash_with_seed(42, c0)", data, data->rowType());
 }
 
-// TODO: Re-enable after https://github.com/rapidsai/cudf/issues/21720.
-// cuDF's murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),
-// h(col1, seed)), while Spark instead hashes columns iteratively:
-// h(col1, h(col0, seed)).
-// These produce different results for multi-column inputs. The cudf hashing
-// API only accepts a scalar uint32_t seed (no per-row seed column), so
-// Spark's iterative semantics cannot be replicated without a custom CUDA
-// kernel. Single-column hash_with_seed works correctly since there is no
-// combining step.
-TEST_F(CudfFilterProjectTest, DISABLED_hashWithSeedMultiColumns) {
-  auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
-  auto data = makeRowVector({input, input});
-  auto hashPlan = PlanBuilder()
-                      .setParseOptions(options_)
-                      .values({data})
-                      .project({"hash_with_seed(42, c0, c1) AS c2"})
-                      .planNode();
-  auto hashResults = AssertQueryBuilder(hashPlan).copyResults(pool());
+TEST_F(CudfFilterProjectTest, hashWithSeedMultiColumns) {
+  auto bigints = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
+  auto bigintData = makeRowVector({bigints, bigints});
+  assertExpressionMatchesCpu(
+      "hash_with_seed(42, c0, c1)", bigintData, bigintData->rowType());
 
-  auto expected = makeRowVector({
-      makeFlatVector<int32_t>({
-          -572895191,
-          724095561,
-      }),
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>({1, std::nullopt, -7, 0, std::nullopt}),
+      makeNullableFlatVector<std::string>(
+          {"spark", "über", std::nullopt, "", std::nullopt}),
+      makeNullableFlatVector<double>(
+          {1.5, -0.0, 3.25, std::nullopt, std::nullopt}),
   });
-  facebook::velox::test::assertEqualVectors(expected, hashResults);
+  for (const auto& expression : {
+           "hash_with_seed(42, c0, c1, c2)",
+           "hash_with_seed(42, c2, c1, c0)",
+       }) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, data, data->rowType());
+  }
 }
 
 TEST_F(CudfFilterProjectTest, dateAdd) {
