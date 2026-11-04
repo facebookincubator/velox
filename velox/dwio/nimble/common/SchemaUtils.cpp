@@ -954,13 +954,15 @@ void validateProjectedHybridFlatMapSchema(const Type& schema) {
       continue;
     }
     const auto& hybridMap = child.asHybridFlatMap();
+    folly::F14FastMap<std::string_view, size_t> groupIndices;
     detail::validateHybridFlatMapGroups(
         hybridMap.groupCount(),
         /*hasDefault=*/false,
         [&hybridMap](size_t group) { return hybridMap.groupAt(group).groupId; },
         [&hybridMap](size_t group) -> const auto& {
           return hybridMap.groupAt(group).groupKeys;
-        });
+        },
+        groupIndices);
   }
 }
 

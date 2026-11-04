@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 #include <optional>
 
+#include "folly/container/F14Map.h"
 #include "velox/dwio/nimble/common/SchemaGenerated.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 
@@ -98,13 +99,15 @@ HybridFlatMap defaultOnlyMetadata() {
 }
 
 void validateGroups(const HybridFlatMap& hybridMap, bool hasDefault) {
+  folly::F14FastMap<std::string_view, size_t> groupIndices;
   detail::validateHybridFlatMapGroups(
       hybridMap.groups().size(),
       hasDefault,
       [&hybridMap](size_t index) { return hybridMap.groups()[index].groupId; },
       [&hybridMap](size_t index) -> const auto& {
         return hybridMap.groups()[index].groupKeys;
-      });
+      },
+      groupIndices);
 }
 
 TEST(HybridFlatMapTest, supportedKeyKinds) {
@@ -480,6 +483,13 @@ TEST(HybridFlatMapTest, getsGroupById) {
       hybridMap.groupById(8), "Hybrid FlatMap group ID is missing: 8");
 }
 
+TEST(HybridFlatMapTest, releaseGroupsMovesGroupsOut) {
+  auto hybridMap = metadata();
+  const auto expected = hybridMap.groups();
+
+  EXPECT_EQ(std::move(hybridMap).releaseGroups(), expected);
+}
+
 TEST(HybridFlatMapTest, metadataRoundTripPreservesFlattenedOrderAndBinaryKeys) {
   const auto expected = metadata();
   const auto serialized = expected.serialize();
@@ -619,6 +629,7 @@ TEST(HybridFlatMapTest, projectedConfiguredGroupRequiresKeys) {
   const auto projected = HybridFlatMap::fromSchema(
       {{.groupId = 7, .groupKeys = {}}},
       HybridFlatMap::KeyPresenceMode::kBitmap);
+  folly::F14FastMap<std::string_view, size_t> groupIndices;
 
   NIMBLE_ASSERT_THROW(
       detail::validateHybridFlatMapGroups(
@@ -629,7 +640,8 @@ TEST(HybridFlatMapTest, projectedConfiguredGroupRequiresKeys) {
           },
           [&projected](size_t index) -> const auto& {
             return projected.groups()[index].groupKeys;
-          }),
+          },
+          groupIndices),
       "Hybrid FlatMap group must contain at least one key: 7");
 }
 
