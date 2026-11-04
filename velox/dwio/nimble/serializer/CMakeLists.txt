@@ -126,6 +126,7 @@ target_link_libraries(
   nimble_velox_common
   nimble_velox_field_reader
   nimble_common
+  velox_common_base
   velox_vector
   velox_memory
   Folly::folly
