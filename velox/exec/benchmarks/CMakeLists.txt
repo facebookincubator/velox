@@ -21,6 +21,16 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_topn_row_number_benchmark TopNRowNumberBenchmark.cpp)
+
+target_link_libraries(
+  velox_topn_row_number_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::follybenchmark
+)
+
 add_executable(velox_filter_project_benchmark FilterProjectBenchmark.cpp)
 
 target_link_libraries(
