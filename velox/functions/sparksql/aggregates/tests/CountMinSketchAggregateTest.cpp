@@ -426,8 +426,10 @@ TEST_F(CountMinSketchAggregateTest, emptyInputPartialToFinal) {
           .planNode();
   auto expected = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
 
-  testAggregations(
-      vectors, {}, {"count_min_sketch(c0, 0.5, 0.5, 1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"count_min_sketch(c0, 0.5, 0.5, 1)"})
+      .assertResults(expected);
 }
 
 TEST_F(CountMinSketchAggregateTest, emptyInputCompanionFunctions) {
@@ -685,16 +687,13 @@ TEST_F(CountMinSketchAggregateTest, groupBy) {
   };
   const std::vector<std::string> projections = {
       "c0", "to_hex(a0)", "to_hex(a1)"};
-  testAggregations(vectors, {"c0"}, aggregates, projections, {expected});
-  testAggregationsWithCompanion(
-      vectors,
-      [](auto& /*builder*/) {},
-      {"c0"},
-      aggregates,
-      {{BIGINT(), DOUBLE(), DOUBLE(), INTEGER()},
-       {VARBINARY(), DOUBLE(), DOUBLE(), INTEGER()}},
-      projections,
-      {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates(aggregates)
+      .project(projections)
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(CountMinSketchAggregateTest, differentParameters) {
@@ -792,12 +791,6 @@ TEST_F(CountMinSketchAggregateTest, columnParametersRejected) {
     SCOPED_TRACE(constantEncoding);
     for (const vector_size_t size : {0, 3}) {
       SCOPED_TRACE(size);
-      // The streaming helper skips aggregation for fewer than two input rows.
-      if (size < 2) {
-        disableTestStreaming();
-      } else {
-        enableTestStreaming();
-      }
       auto input = makeRowVector({
           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
           makeFlatVector<double>(size, [](auto) { return 0.5; }),
@@ -813,7 +806,10 @@ TEST_F(CountMinSketchAggregateTest, columnParametersRejected) {
         SCOPED_TRACE(aggregate);
         const auto error =
             fmt::format("{} argument must be constant", parameter);
-        testFailingAggregations({input}, {}, {aggregate}, error);
+        AggregationTester(*this)
+            .inputs(input)
+            .aggregates({aggregate})
+            .assertError(error);
         if (size > 0) {
           auto planNode = exec::test::PlanBuilder(pool())
                               .values({input})
@@ -1052,8 +1048,7 @@ TEST_F(CountMinSketchAggregateTest, maskedGroupsProduceEmptySketches) {
 }
 
 TEST_F(CountMinSketchAggregateTest, partialToFinal) {
-  // Verify partial->final aggregation produces correct results using
-  // testAggregations which tests multiple plans.
+  // Verify partial->final aggregation produces correct results across plans.
   auto vectors = {makeRowVector({makeFlatVector<int64_t>({1, 2, 1})})};
 
   // Build expected result using single aggregation.
@@ -1064,8 +1059,10 @@ TEST_F(CountMinSketchAggregateTest, partialToFinal) {
           .planNode();
   auto expected = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
 
-  testAggregations(
-      vectors, {}, {"count_min_sketch(c0, 0.5, 0.5, 1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"count_min_sketch(c0, 0.5, 0.5, 1)"})
+      .assertResults(expected);
 }
 
 TEST_F(CountMinSketchAggregateTest, mergeCounterOverflowWraps) {
@@ -1184,26 +1181,22 @@ TEST_F(CountMinSketchAggregateTest, nullParametersRejected) {
   std::vector<RowVectorPtr> data = {
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
 
-  testFailingAggregations(
-      data,
-      {},
-      {"count_min_sketch(c0, cast(null as double), 0.5, 1)"},
-      "eps argument must not be null");
-  testFailingAggregations(
-      data,
-      {},
-      {"count_min_sketch(c0, 0.5, cast(null as double), 1)"},
-      "confidence argument must not be null");
-  testFailingAggregations(
-      data,
-      {},
-      {"count_min_sketch(c0, 0.5, 0.5, cast(null as integer))"},
-      "seed argument must not be null");
-  testFailingAggregations(
-      data,
-      {},
-      {"count_min_sketch(c0, 0.5, 0.5, cast(null as bigint))"},
-      "seed argument must not be null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, cast(null as double), 0.5, 1)"})
+      .assertError("eps argument must not be null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, 0.5, cast(null as double), 1)"})
+      .assertError("confidence argument must not be null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, 0.5, 0.5, cast(null as integer))"})
+      .assertError("seed argument must not be null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, 0.5, 0.5, cast(null as bigint))"})
+      .assertError("seed argument must not be null");
 }
 
 TEST_F(CountMinSketchAggregateTest, invalidParametersRejected) {
@@ -1213,15 +1206,16 @@ TEST_F(CountMinSketchAggregateTest, invalidParametersRejected) {
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
 
   // Non-positive eps.
-  testFailingAggregations(
-      data, {}, {"count_min_sketch(c0, -0.5, 0.5, 1)"}, "eps must be positive");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, -0.5, 0.5, 1)"})
+      .assertError("eps must be positive");
 
   // eps so small that the derived width overflows int32.
-  testFailingAggregations(
-      data,
-      {},
-      {"count_min_sketch(c0, 1.0e-300, 0.5, 1)"},
-      "count_min_sketch width out of range");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, 1.0e-300, 0.5, 1)"})
+      .assertError("count_min_sketch width out of range");
 
   // Supply these literals directly to avoid SQL parsing of subnormal values.
   for (const auto eps : {std::numeric_limits<double>::infinity(), 1.0e-310}) {
@@ -1242,28 +1236,24 @@ TEST_F(CountMinSketchAggregateTest, invalidParametersRejected) {
 
   // eps that produces a valid width but an output larger than StringView can
   // represent.
-  testFailingAggregations(
-      data,
-      {},
-      {"count_min_sketch(c0, 7.450580596923828e-9, 0.5, 1)"},
-      "count_min_sketch serialized size out of range");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, 7.450580596923828e-9, 0.5, 1)"})
+      .assertError("count_min_sketch serialized size out of range");
 
   // Confidence outside (0, 1).
-  testFailingAggregations(
-      data,
-      {},
-      {"count_min_sketch(c0, 0.5, 0.0, 1)"},
-      "confidence must be positive");
-  testFailingAggregations(
-      data,
-      {},
-      {"count_min_sketch(c0, 0.5, 1.0, 1)"},
-      "confidence must be less than 1.0");
-  testFailingAggregations(
-      data,
-      {},
-      {"count_min_sketch(c0, 0.5, 1.5, 1)"},
-      "confidence must be less than 1.0");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, 0.5, 0.0, 1)"})
+      .assertError("confidence must be positive");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, 0.5, 1.0, 1)"})
+      .assertError("confidence must be less than 1.0");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"count_min_sketch(c0, 0.5, 1.5, 1)"})
+      .assertError("confidence must be less than 1.0");
 }
 
 } // namespace
