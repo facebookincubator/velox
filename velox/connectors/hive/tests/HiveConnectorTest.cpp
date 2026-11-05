@@ -1019,6 +1019,68 @@ TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
       expected);
 }
 
+TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
+  registerCapturingFileSystem();
+
+  const auto rowType = ROW({"c0"}, {BIGINT()});
+  const auto filePath = TempFilePath::create();
+  writeToFile(
+      filePath->getPath(),
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+  const auto tableHandle = makeTableHandle(
+      SubfieldFilters{},
+      /*remainingFilter=*/nullptr,
+      "test_table",
+      /*dataColumns=*/nullptr,
+      /*indexColumns=*/{},
+      /*storageParameters=*/{},
+      "test_db");
+  const config::ConfigBase sessionProperties({});
+  const auto connectorQueryCtx = ConnectorQueryCtx::Builder()
+                                     .operatorPool(pool_.get())
+                                     .connectorPool(pool_.get())
+                                     .sessionProperties(&sessionProperties)
+                                     .queryId("query.HiveConnectorTest")
+                                     .taskId("task.HiveConnectorTest")
+                                     .planNodeId("planNodeId.HiveConnectorTest")
+                                     .build();
+  auto dataSource = ConnectorRegistry::tryGet(kHiveConnectorId)
+                        ->createDataSource(
+                            rowType,
+                            tableHandle,
+                            allRegularColumns(rowType),
+                            connectorQueryCtx.get());
+  checkedPointerCast<FileDataSource>(dataSource.get())
+      ->setFileReadOps(
+          folly::F14FastMap<std::string, std::string>{
+              {"readerKey", "readerValue"},
+              {"sharedKey", "readerValue"},
+          });
+
+  FileProperties fileProperties;
+  fileProperties.fileReadOps = {
+      {"splitKey", "splitValue"},
+      {"sharedKey", "splitValue"},
+      {std::string(kTableNameKey), "split_table"},
+  };
+  CapturingFileSystem::capturedFileReadOps().clear();
+  dataSource->addSplit(
+      exec::test::HiveConnectorSplitBuilder(
+          fmt::format("capture:{}", filePath->getPath()))
+          .fileFormat(dwio::common::FileFormat::DWRF)
+          .fileProperties(fileProperties)
+          .build());
+
+  const folly::F14FastMap<std::string, std::string> expected{
+      {"splitKey", "splitValue"},
+      {"readerKey", "readerValue"},
+      {"sharedKey", "readerValue"},
+      {std::string(kDbNameKey), "test_db"},
+      {std::string(kTableNameKey), "test_table"},
+  };
+  EXPECT_EQ(CapturingFileSystem::capturedFileReadOps(), expected);
+}
+
 /// Verifies that getRuntimeStats() merge logic allows IoStats (ReadFile-layer)
 /// to override the storageReadBytes value from IoStatistics (DWIO-level).
 TEST_F(HiveConnectorTest, ioStatsOverridesStorageReadBytes) {
