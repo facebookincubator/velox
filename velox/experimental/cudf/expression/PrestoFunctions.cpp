@@ -144,8 +144,9 @@ void registerPrestoFunctions(const std::string& prefix) {
            .argumentType("T")
            .build()});
 
-  // The GPU cast from VARCHAR follows Presto's rules.
-  setCastFromVarcharEnabled(true);
+  // CastFunction's cast from VARCHAR and cast from TIMESTAMP to VARCHAR follow
+  // Presto's rules.
+  setPrestoCastEnabled(true);
   registerPrestoArrayAccessFunctions(prefix);
 
   registerCudfFunction(
