@@ -34,7 +34,7 @@ add_library(
   CudfMarkDistinct.cpp
   CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
-  CudfProjectionCycle.cpp
+  CudfProjectionOperator.cpp
   CudfReduce.cpp
   CudfTopN.cpp
   CudfTopNRowNumber.cpp

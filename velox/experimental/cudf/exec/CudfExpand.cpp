@@ -16,11 +16,13 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfExpand.h"
-#include "velox/experimental/cudf/exec/CudfProjectionCycle.h"
+#include "velox/experimental/cudf/exec/CudfProjectionOperator.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/common/memory/Memory.h"
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -32,57 +34,40 @@ namespace facebook::velox::cudf_velox {
 
 namespace {
 
-// Null constants take their cuDF type from veloxToCudfDataType(), like input
-// columns do, so the column type is the same in every projection. ARRAY and
-// ROW are excluded because only scalar types are supported here.
-bool isSupportedNullType(const TypePtr& type) {
-  switch (type->kind()) {
-    case TypeKind::ARRAY:
-    case TypeKind::ROW:
-      return false;
-    default:
-      return tryVeloxToCudfDataType(type).has_value();
+// Returns true for constants that cuDF could build but that would give the
+// column a different type than the same column from CudfFromVelox, or whose
+// behavior is unverified. Building the scalar cannot detect these.
+bool isExcludedConstant(const core::ConstantTypedExprPtr& constant) {
+  if (constant->isNull()) {
+    // Null constants take their cuDF type from veloxToCudfDataType(), like
+    // input columns do. Only scalar types are supported here.
+    return constant->type()->kind() == TypeKind::ARRAY ||
+        constant->type()->kind() == TypeKind::ROW;
   }
+  // A day-time interval builds as a duration scalar, while the input column
+  // is INT64.
+  return constant->type()->isIntervalDayTime();
 }
 
-// Mirrors the types makeScalarFromConstantExpr() can build for non-null
-// values.
-bool isSupportedConstantType(const TypePtr& type) {
-  switch (type->kind()) {
-    case TypeKind::BOOLEAN:
-    case TypeKind::TINYINT:
-    case TypeKind::SMALLINT:
-    case TypeKind::REAL:
-    case TypeKind::DOUBLE:
-    case TypeKind::VARCHAR:
-    case TypeKind::TIMESTAMP:
-      return true;
-    case TypeKind::BIGINT:
-      return !type->isIntervalDayTime();
-    case TypeKind::INTEGER:
-      return !type->isIntervalYearMonth();
-    case TypeKind::HUGEINT:
-      return type->isDecimal();
-    default:
-      return false;
-  }
-}
-
-ScalarFactory makeConstantFactory(
+std::unique_ptr<cudf::scalar> makeConstantScalar(
     const core::ConstantTypedExprPtr& constant,
-    memory::MemoryPool* pool) {
-  return [constant, pool](cuda::stream_ref stream) {
-    if (constant->isNull()) {
-      return cudf::make_default_constructed_scalar(
-          veloxToCudfDataType(constant->type()), stream, get_temp_mr());
-    }
-    return makeScalarFromConstantExpr(constant, pool, std::nullopt, stream);
+    memory::MemoryPool* pool,
+    cuda::stream_ref stream) {
+  if (constant->isNull()) {
+    return cudf::make_default_constructed_scalar(
+        veloxToCudfDataType(constant->type()), stream, get_temp_mr());
+  }
+  return makeScalarFromConstantExpr(constant, pool, std::nullopt, stream);
+}
+
+ScalarFactory makeConstantFactory(const core::ConstantTypedExprPtr& constant) {
+  return [constant](cuda::stream_ref stream, memory::MemoryPool* pool) {
+    return makeConstantScalar(constant, pool, stream);
   };
 }
 
 std::vector<std::vector<ProjectionColumn>> makeProjections(
-    const core::ExpandNode& expandNode,
-    memory::MemoryPool* pool) {
+    const core::ExpandNode& expandNode) {
   const auto& inputType = expandNode.inputType();
   std::vector<std::vector<ProjectionColumn>> projections;
   projections.reserve(expandNode.projections().size());
@@ -96,7 +81,7 @@ std::vector<std::vector<ProjectionColumn>> makeProjections(
       } else if (
           auto constant = core::TypedExprs::asConstant(columnProjection)) {
         columns.push_back(
-            ProjectionColumn::constant(makeConstantFactory(constant, pool)));
+            ProjectionColumn::constant(makeConstantFactory(constant)));
       } else {
         // ExpandNode only accepts field accesses and constants.
         VELOX_UNREACHABLE(
@@ -113,70 +98,52 @@ CudfExpand::CudfExpand(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::ExpandNode>& expandNode)
-    : CudfOperatorBase(
+    : CudfProjectionOperator(
           operatorId,
           driverCtx,
           expandNode->outputType(),
           expandNode->id(),
           "CudfExpand",
           nvtx3::rgb{255, 165, 0}, // Orange
-          NvtxMethodFlag::kGetOutput | NvtxMethodFlag::kClose),
-      projectionCycle_(
-          makeProjections(*expandNode, pool()),
+          NvtxMethodFlag::kGetOutput | NvtxMethodFlag::kClose,
+          std::nullopt,
+          makeProjections(*expandNode),
           expandNode->inputType()->size()) {}
 
 bool CudfExpand::canRunOnGPU(
     const core::ExpandNode& expandNode,
     std::string* reason) {
+  // Building each constant is the check, so it cannot disagree with what the
+  // operator later builds. This runs once when the plan is adapted.
+  auto pool = memory::memoryManager()->addLeafPool("CudfExpand::canRunOnGPU");
+  const auto stream = getDefaultStreamForCurrentThread();
   for (const auto& rowProjections : expandNode.projections()) {
     for (const auto& columnProjection : rowProjections) {
       const auto constant = core::TypedExprs::asConstant(columnProjection);
       if (constant == nullptr) {
         continue;
       }
-      const auto supported = constant->isNull()
-          ? isSupportedNullType(constant->type())
-          : isSupportedConstantType(constant->type());
-      if (!supported) {
-        if (reason != nullptr) {
-          *reason = fmt::format(
-              "Expand constant type is not supported: {}",
-              columnProjection->type()->toString());
+      std::string error;
+      if (isExcludedConstant(constant)) {
+        error = "excluded";
+      } else {
+        try {
+          makeConstantScalar(constant, pool.get(), stream);
+          continue;
+        } catch (const std::exception& e) {
+          error = e.what();
         }
-        return false;
       }
+      if (reason != nullptr) {
+        *reason = fmt::format(
+            "Expand constant is not supported: {} ({})",
+            constant->type()->toString(),
+            error);
+      }
+      return false;
     }
   }
   return true;
-}
-
-bool CudfExpand::needsInput() const {
-  return !noMoreInput_ && !projectionCycle_.hasInput();
-}
-
-void CudfExpand::doAddInput(RowVectorPtr input) {
-  auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
-  VELOX_CHECK_NOT_NULL(cudfInput, "CudfExpand expects CudfVector input");
-  // Read before release(), which invalidates the vector.
-  const auto numRows = static_cast<cudf::size_type>(cudfInput->size());
-  const auto stream = cudfInput->stream();
-  projectionCycle_.setInput(cudfInput->release(), numRows, stream);
-}
-
-RowVectorPtr CudfExpand::doGetOutput() {
-  if (!projectionCycle_.hasInput()) {
-    return nullptr;
-  }
-  const auto numRows = projectionCycle_.numRows();
-  const auto stream = projectionCycle_.stream();
-  auto outputTable = projectionCycle_.next(get_output_mr());
-  return std::make_shared<CudfVector>(
-      pool(), outputType_, numRows, std::move(outputTable), stream);
-}
-
-void CudfExpand::doClose() {
-  Operator::close();
-  projectionCycle_.clear();
 }
 
 } // namespace facebook::velox::cudf_velox

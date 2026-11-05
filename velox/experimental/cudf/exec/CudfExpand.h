@@ -16,8 +16,7 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/CudfOperator.h"
-#include "velox/experimental/cudf/exec/CudfProjectionCycle.h"
+#include "velox/experimental/cudf/exec/CudfProjectionOperator.h"
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
@@ -27,40 +26,19 @@ namespace facebook::velox::cudf_velox {
 /// GPU implementation of the Expand operator. Takes a single input batch and
 /// produces one output batch per projection list. Each output column is either
 /// an input column or a constant.
-class CudfExpand : public CudfOperatorBase {
+class CudfExpand : public CudfProjectionOperator {
  public:
   CudfExpand(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::ExpandNode>& expandNode);
 
-  /// Returns true if every constant in the projections has a type CudfExpand
-  /// can materialize as a cuDF column. On failure, 'reason' is populated with
-  /// an explanation when non-null.
+  /// Returns true if every constant in the projections can be built as a cuDF
+  /// scalar. Builds each one to find out. On failure, 'reason' is populated
+  /// with an explanation when non-null.
   static bool canRunOnGPU(
       const core::ExpandNode& expandNode,
       std::string* reason);
-
-  bool needsInput() const override;
-
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
-  bool isFinished() override {
-    return noMoreInput_ && !projectionCycle_.hasInput();
-  }
-
- protected:
-  void doAddInput(RowVectorPtr input) override;
-
-  RowVectorPtr doGetOutput() override;
-
-  void doClose() override;
-
- private:
-  // Produces one output batch per projection of each input batch.
-  CudfProjectionCycle projectionCycle_;
 };
 
 } // namespace facebook::velox::cudf_velox

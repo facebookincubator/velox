@@ -14,16 +14,37 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/CudfProjectionCycle.h"
+#include "velox/experimental/cudf/exec/CudfProjectionOperator.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/column/column_factories.hpp>
 
 namespace facebook::velox::cudf_velox {
 
-CudfProjectionCycle::CudfProjectionCycle(
+CudfProjectionOperator::CudfProjectionOperator(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    RowTypePtr outputType,
+    const core::PlanNodeId& planNodeId,
+    const std::string& operatorName,
+    std::optional<nvtx3::color> color,
+    NvtxMethodFlag nvtxMethods,
+    std::optional<std::shared_ptr<const core::PlanNode>> planNode,
     std::vector<std::vector<ProjectionColumn>> projections,
     size_t numInputColumns)
-    : projections_(std::move(projections)), numInputColumns_(numInputColumns) {
+    : CudfOperatorBase(
+          operatorId,
+          driverCtx,
+          std::move(outputType),
+          planNodeId,
+          operatorName,
+          color,
+          nvtxMethods,
+          std::nullopt,
+          std::move(planNode)),
+      projections_(std::move(projections)),
+      numInputColumns_(numInputColumns) {
   VELOX_CHECK(!projections_.empty());
 
   // Walk the projections backwards so the first sighting of a channel is its
@@ -47,22 +68,34 @@ CudfProjectionCycle::CudfProjectionCycle(
   }
 }
 
-void CudfProjectionCycle::setInput(
-    std::unique_ptr<cudf::table> input,
-    cudf::size_type numRows,
-    cuda::stream_ref stream) {
+bool CudfProjectionOperator::needsInput() const {
+  return !noMoreInput_ && !hasInput_;
+}
+
+bool CudfProjectionOperator::isFinished() {
+  return noMoreInput_ && !hasInput_;
+}
+
+void CudfProjectionOperator::doAddInput(RowVectorPtr input) {
   VELOX_CHECK(!hasInput_, "Previous input not fully consumed");
-  inputColumns_ = input->release();
+  auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
+  VELOX_CHECK_NOT_NULL(
+      cudfInput, "{} expects CudfVector input", operatorType());
+
+  // Read before release(), which invalidates the vector.
+  numRows_ = static_cast<cudf::size_type>(cudfInput->size());
+  stream_ = cudfInput->stream();
+  inputColumns_ = cudfInput->release()->release();
   VELOX_CHECK_EQ(inputColumns_.size(), numInputColumns_);
-  numRows_ = numRows;
-  stream_ = stream;
   hasInput_ = true;
 }
 
-std::unique_ptr<cudf::table> CudfProjectionCycle::next(
-    rmm::device_async_resource_ref outputMr) {
-  VELOX_CHECK(hasInput_);
+RowVectorPtr CudfProjectionOperator::doGetOutput() {
+  if (!hasInput_) {
+    return nullptr;
+  }
 
+  const auto outputMr = get_output_mr();
   if (scalars_.empty()) {
     scalarStream_ = stream_;
     scalars_.reserve(projections_.size());
@@ -71,7 +104,7 @@ std::unique_ptr<cudf::table> CudfProjectionCycle::next(
       scalars.reserve(columns.size());
       for (const auto& column : columns) {
         scalars.push_back(
-            column.makeScalar ? column.makeScalar(stream_) : nullptr);
+            column.makeScalar ? column.makeScalar(stream_, pool()) : nullptr);
       }
     }
   }
@@ -109,15 +142,16 @@ std::unique_ptr<cudf::table> CudfProjectionCycle::next(
     inputColumns_.clear();
     hasInput_ = false;
   }
-  return std::make_unique<cudf::table>(std::move(outputColumns));
+
+  auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
+  return std::make_shared<CudfVector>(
+      pool(), outputType_, numRows_, std::move(outputTable), stream_);
 }
 
-void CudfProjectionCycle::clear() {
+void CudfProjectionOperator::doClose() {
+  Operator::close();
   inputColumns_.clear();
   scalars_.clear();
-  scalarStream_ = std::nullopt;
-  hasInput_ = false;
-  projectionIndex_ = 0;
 }
 
 } // namespace facebook::velox::cudf_velox

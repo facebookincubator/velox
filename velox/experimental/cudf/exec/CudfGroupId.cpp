@@ -16,7 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfGroupId.h"
-#include "velox/experimental/cudf/exec/CudfProjectionCycle.h"
+#include "velox/experimental/cudf/exec/CudfProjectionOperator.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -72,10 +72,11 @@ std::vector<std::vector<ProjectionColumn>> makeProjections(
         columns.push_back(ProjectionColumn::field(*keyChannels[i]));
       } else {
         columns.push_back(
-            ProjectionColumn::constant([type = keyTypes[i]](auto stream) {
-              return cudf::make_default_constructed_scalar(
-                  type, stream, get_temp_mr());
-            }));
+            ProjectionColumn::constant(
+                [type = keyTypes[i]](auto stream, auto* /*pool*/) {
+                  return cudf::make_default_constructed_scalar(
+                      type, stream, get_temp_mr());
+                }));
       }
     }
     for (const auto& input : groupIdNode.aggregationInputs()) {
@@ -83,10 +84,11 @@ std::vector<std::vector<ProjectionColumn>> makeProjections(
           ProjectionColumn::field(inputType->getChildIdx(input->name())));
     }
     const auto groupId = static_cast<int64_t>(projections.size() - 1);
-    columns.push_back(ProjectionColumn::constant([groupId](auto stream) {
-      return std::make_unique<cudf::numeric_scalar<int64_t>>(
-          groupId, true, stream, get_temp_mr());
-    }));
+    columns.push_back(
+        ProjectionColumn::constant([groupId](auto stream, auto* /*pool*/) {
+          return std::make_unique<cudf::numeric_scalar<int64_t>>(
+              groupId, true, stream, get_temp_mr());
+        }));
   }
   return projections;
 }
@@ -97,7 +99,7 @@ CudfGroupId::CudfGroupId(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::GroupIdNode>& groupIdNode)
-    : CudfOperatorBase(
+    : CudfProjectionOperator(
           operatorId,
           driverCtx,
           groupIdNode->outputType(),
@@ -105,35 +107,8 @@ CudfGroupId::CudfGroupId(
           "CudfGroupId",
           nvtx3::rgb{128, 0, 128}, // Purple
           NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
-          std::nullopt,
-          groupIdNode),
-      projectionCycle_(
+          groupIdNode,
           makeProjections(*groupIdNode),
           groupIdNode->sources()[0]->outputType()->size()) {}
-
-bool CudfGroupId::needsInput() const {
-  return !noMoreInput_ && !projectionCycle_.hasInput();
-}
-
-void CudfGroupId::doAddInput(RowVectorPtr input) {
-  auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
-  VELOX_CHECK_NOT_NULL(cudfInput, "CudfGroupId expects CudfVector input");
-
-  // Read before release(), which invalidates the vector.
-  const auto numRows = static_cast<cudf::size_type>(cudfInput->size());
-  const auto stream = cudfInput->stream();
-  projectionCycle_.setInput(cudfInput->release(), numRows, stream);
-}
-
-RowVectorPtr CudfGroupId::doGetOutput() {
-  if (!projectionCycle_.hasInput()) {
-    return nullptr;
-  }
-  const auto numRows = projectionCycle_.numRows();
-  const auto stream = projectionCycle_.stream();
-  auto outputTable = projectionCycle_.next(get_output_mr());
-  return std::make_shared<CudfVector>(
-      pool(), outputType_, numRows, std::move(outputTable), stream);
-}
 
 } // namespace facebook::velox::cudf_velox

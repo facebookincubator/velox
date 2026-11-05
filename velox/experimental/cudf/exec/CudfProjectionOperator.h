@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Type.h"
@@ -37,9 +38,10 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Builds a constant cuDF scalar on the given stream.
-using ScalarFactory =
-    std::function<std::unique_ptr<cudf::scalar>(cuda::stream_ref)>;
+/// Builds a constant cuDF scalar on the given stream. The memory pool is the
+/// operator's, for factories that materialize Velox values first.
+using ScalarFactory = std::function<
+    std::unique_ptr<cudf::scalar>(cuda::stream_ref, memory::MemoryPool*)>;
 
 /// One output column of a projection: either an input channel or a constant.
 struct ProjectionColumn {
@@ -60,47 +62,42 @@ struct ProjectionColumn {
   }
 };
 
-/// Turns one input table into one output table per projection. Shared by
-/// operators that emit several projections of each input batch, such as Expand
-/// and GroupId.
+/// Base class for operators that emit several projections of each input batch,
+/// such as Expand and GroupId. Takes one input batch and produces one output
+/// batch per projection.
 ///
 /// An input column is copied for every use except its last across all
 /// projections, where it is moved into the output.
-class CudfProjectionCycle {
+class CudfProjectionOperator : public CudfOperatorBase {
  public:
   /// 'projections' lists the output columns of each projection.
-  /// 'numInputColumns' is the width of every input table.
-  CudfProjectionCycle(
+  /// 'numInputColumns' is the width of every input batch.
+  CudfProjectionOperator(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      RowTypePtr outputType,
+      const core::PlanNodeId& planNodeId,
+      const std::string& operatorName,
+      std::optional<nvtx3::color> color,
+      NvtxMethodFlag nvtxMethods,
+      std::optional<std::shared_ptr<const core::PlanNode>> planNode,
       std::vector<std::vector<ProjectionColumn>> projections,
       size_t numInputColumns);
 
-  /// Returns true while the current input has projections left to output.
-  bool hasInput() const {
-    return hasInput_;
+  bool needsInput() const override;
+
+  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+    return exec::BlockingReason::kNotBlocked;
   }
 
-  /// Takes ownership of the next input batch. Requires hasInput() to be false.
-  void setInput(
-      std::unique_ptr<cudf::table> input,
-      cudf::size_type numRows,
-      cuda::stream_ref stream);
+  bool isFinished() override;
 
-  /// Returns the next projection of the current input. Drops the input after
-  /// the last projection. Requires hasInput().
-  std::unique_ptr<cudf::table> next(rmm::device_async_resource_ref outputMr);
+ protected:
+  void doAddInput(RowVectorPtr input) override;
 
-  /// Number of rows in the current input, and in every output derived from it.
-  cudf::size_type numRows() const {
-    return numRows_;
-  }
+  RowVectorPtr doGetOutput() override;
 
-  /// Stream of the current input.
-  cuda::stream_ref stream() const {
-    return stream_;
-  }
-
-  /// Releases the input and cached scalars.
-  void clear();
+  void doClose() override;
 
  private:
   // Output columns of each projection.
