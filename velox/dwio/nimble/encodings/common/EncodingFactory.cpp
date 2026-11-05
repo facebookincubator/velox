@@ -247,6 +247,26 @@ std::string_view EncodingFactory::slice(
   return EncodingSliceFactory::slice(encoded, offset, length, buffer, options);
 }
 
+std::string_view EncodingFactory::slice(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    int64_t valueDelta,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  ScopedEncodingBuffer scopedBuffer{
+      &buffer.getMemoryPool(), options.encodingBufferPool};
+  const auto sliced =
+      slice(encoded, offset, length, scopedBuffer.get(), options);
+  const auto dataType = EncodingPrefix::dataType(encoded);
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE_OR(
+      dataType,
+      T,
+      SliceEncoding<T>::wrap(
+          sliced, /*offset=*/0, length, buffer, valueDelta, options),
+      NIMBLE_FAIL("A value delta requires an integer stream: {}", dataType));
+}
+
 template <typename T>
 std::string_view EncodingFactory::encode(
     std::unique_ptr<EncodingSelectionPolicy<T>>&& selectorPolicy,
