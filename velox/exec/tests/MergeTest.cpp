@@ -15,9 +15,11 @@
  */
 
 #include "velox/exec/Merge.h"
+#include "folly/executors/ManualExecutor.h"
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -799,6 +801,47 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
       "Abort merge");
   std::dynamic_pointer_cast<folly::CPUThreadPoolExecutor>(spillExecutor_)
       ->join();
+}
+
+TEST_F(MergeTest, queuedSpillReadAfterMergerDestruction) {
+  folly::ManualExecutor executor;
+  common::SpillConfig spillConfig{};
+  spillConfig.executor = &executor;
+  auto queryPool = memory::memoryManager()->addRootPool();
+  auto spillPool = queryPool->addLeafChild("spill");
+  std::weak_ptr<memory::MemoryPool> weakPool = queryPool;
+  auto file = TempFilePath::create();
+  // The reader requires a non-empty file. The queued read must skip it.
+  file->append("unused");
+  auto type = ROW({"c0"}, {BIGINT()});
+  auto spillStats = std::make_shared<SpillStats>();
+  std::vector<std::vector<std::unique_ptr<SpillReadFile>>> files(1);
+  files[0].push_back(
+      SpillReadFile::create(
+          SpillFileInfo{
+              0, type, file->getPath(), 6, {}, common::CompressionKind_NONE},
+          1024,
+          spillPool.get(),
+          spillStats.get()));
+  auto merger = std::make_shared<SpillMerger>(
+      std::vector<SpillSortKey>{},
+      type,
+      std::move(files),
+      1,
+      1024,
+      1,
+      &spillConfig,
+      spillStats,
+      spillPool.get());
+  std::weak_ptr<SpillMerger> weakMerger = merger;
+  merger->start();
+
+  merger.reset();
+  spillPool.reset();
+  queryPool.reset();
+  EXPECT_TRUE(weakMerger.expired());
+  EXPECT_TRUE(weakPool.expired());
+  EXPECT_EQ(1, executor.drain());
 }
 
 TEST_F(MergeTest, localMerge) {
