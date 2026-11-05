@@ -16,9 +16,9 @@
 #pragma once
 
 #include "velox/connectors/common/FileTableHandle.h"
-#include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonConnectorSplit.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 /// Table handle for Paimon scans. Stores the fixed table definition and scan
 /// conditions, including a schema version ID and stable field IDs aligned with
@@ -96,4 +96,4 @@ class PaimonTableHandle final : public connector::FileTableHandle {
   const std::vector<connector::FileColumnHandlePtr> filterColumnHandles_;
 };
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

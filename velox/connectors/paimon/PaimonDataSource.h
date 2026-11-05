@@ -16,10 +16,10 @@
 #pragma once
 
 #include "velox/connectors/common/FileDataSource.h"
-#include "velox/connectors/hive/paimon/PaimonConfig.h"
-#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/connectors/paimon/PaimonConfig.h"
+#include "velox/connectors/paimon/PaimonTableHandle.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 class PaimonConnectorSplit;
 
@@ -52,4 +52,4 @@ class PaimonDataSource : public connector::FileDataSource {
   std::shared_ptr<PaimonConnectorSplit> paimonSplit_;
 };
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

@@ -25,10 +25,10 @@
 #include <folly/CPortability.h>
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/paimon/PaimonDataFileMeta.h"
+#include "velox/connectors/paimon/PaimonDataFileMeta.h"
 #include "velox/dwio/common/Options.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 // PaimonConnectorSplit represents a planner-selected Paimon DataSplit: a
 // logical read unit with one or more files from the same partition/bucket.
@@ -67,21 +67,20 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
   return os;
 }
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon
 
 template <>
-struct fmt::formatter<facebook::velox::connector::hive::paimon::PaimonTableType>
+struct fmt::formatter<facebook::velox::connector::paimon::PaimonTableType>
     : formatter<std::string> {
   auto format(
-      facebook::velox::connector::hive::paimon::PaimonTableType type,
+      facebook::velox::connector::paimon::PaimonTableType type,
       format_context& ctx) const {
     return formatter<std::string>::format(
-        facebook::velox::connector::hive::paimon::paimonTableTypeString(type),
-        ctx);
+        facebook::velox::connector::paimon::paimonTableTypeString(type), ctx);
   }
 };
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 /// Logical read unit carrying planner-selected files, partition values,
 /// snapshot identity and raw-read eligibility. See the file-level design above.
@@ -193,4 +192,4 @@ class PaimonConnectorSplitBuilder {
   bool rawConvertible_{true};
 };
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

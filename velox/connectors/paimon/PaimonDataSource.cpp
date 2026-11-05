@@ -13,14 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/paimon/PaimonDataSource.h"
+#include "velox/connectors/paimon/PaimonDataSource.h"
 
 #include "velox/common/Casts.h"
-#include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
-#include "velox/connectors/hive/paimon/PaimonSplitReader.h"
-#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/connectors/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonSplitReader.h"
+#include "velox/connectors/paimon/PaimonTableHandle.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 PaimonDataSource::PaimonDataSource(
     const RowTypePtr& outputType,
@@ -114,4 +114,4 @@ void PaimonDataSource::setFromDataSource(
       ->setRuntimeStats(runtimeStats_);
 }
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

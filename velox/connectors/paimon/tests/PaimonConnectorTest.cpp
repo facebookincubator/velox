@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/paimon/PaimonConnector.h"
+#include "velox/connectors/paimon/PaimonConnector.h"
 
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
@@ -27,9 +27,9 @@
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
-#include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
-#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/connectors/paimon/PaimonColumnHandle.h"
+#include "velox/connectors/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonTableHandle.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/Cursor.h"
@@ -49,8 +49,12 @@
 #include "velox/dwio/nimble/writer/Writer.h"
 #endif
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 namespace {
+
+using hive::HiveConfig;
+using hive::HiveConnector;
+using hive::HiveTableHandle;
 
 static_assert(std::is_base_of_v<connector::FileConnector, PaimonConnector>);
 static_assert(!std::is_base_of_v<HiveConnector, PaimonConnector>);
@@ -1846,7 +1850,7 @@ TEST_F(PaimonConnectorTest, appendOnlyMultipleSplits) {
 }
 
 } // namespace
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

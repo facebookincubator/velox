@@ -13,14 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/paimon/PaimonConnector.h"
+#include "velox/connectors/paimon/PaimonConnector.h"
 
 #include "velox/common/Casts.h"
-#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
-#include "velox/connectors/hive/paimon/PaimonDataSource.h"
-#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/connectors/paimon/PaimonColumnHandle.h"
+#include "velox/connectors/paimon/PaimonDataSource.h"
+#include "velox/connectors/paimon/PaimonTableHandle.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 PaimonConnector::PaimonConnector(
     const std::string& id,
@@ -72,4 +72,4 @@ void PaimonConnector::registerSerDe() {
   PaimonTableHandle::registerSerDe();
 }
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

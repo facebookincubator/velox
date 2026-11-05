@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/paimon/PaimonRowKind.h"
+#include "velox/connectors/paimon/PaimonRowKind.h"
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
@@ -22,7 +22,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
-using namespace facebook::velox::connector::hive::paimon;
+using namespace facebook::velox::connector::paimon;
 using namespace facebook::velox;
 
 TEST(PaimonRowKindTest, rowKindString) {

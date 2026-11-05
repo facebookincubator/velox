@@ -17,7 +17,7 @@
 
 #include "velox/connectors/common/FileColumnHandle.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 /// A query column identified by its stable Paimon field ID. The name and schema
 /// type describe that field in the scan's fixed table schema, not an output
@@ -52,4 +52,4 @@ class PaimonColumnHandle final : public connector::FileColumnHandle {
 
 using PaimonColumnHandlePtr = std::shared_ptr<const PaimonColumnHandle>;
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

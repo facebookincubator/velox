@@ -16,10 +16,10 @@
 #pragma once
 
 #include "velox/connectors/common/FileSplitReader.h"
-#include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
-#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/connectors/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonTableHandle.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 /// Sequential multi-file reader for rawConvertible Paimon splits. Opens one
 /// file at a time and reuses FileSplitReader for per-file preparation and batch
@@ -97,4 +97,4 @@ class PaimonSplitReader : public connector::FileSplitReader {
   dwio::common::RuntimeStats* runtimeStats_{nullptr};
 };
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

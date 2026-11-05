@@ -22,7 +22,7 @@
 
 #include <folly/CPortability.h>
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 /// Name of the hidden system column that stores the change type per row.
 /// Only present in primary-key table files — append-only tables do not
@@ -108,30 +108,27 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
   return os;
 }
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon
 
 template <>
-struct fmt::formatter<facebook::velox::connector::hive::paimon::PaimonRowKind>
+struct fmt::formatter<facebook::velox::connector::paimon::PaimonRowKind>
     : formatter<std::string> {
   auto format(
-      facebook::velox::connector::hive::paimon::PaimonRowKind kind,
+      facebook::velox::connector::paimon::PaimonRowKind kind,
       format_context& ctx) const {
     return formatter<std::string>::format(
-        facebook::velox::connector::hive::paimon::paimonRowKindString(kind),
-        ctx);
+        facebook::velox::connector::paimon::paimonRowKindString(kind), ctx);
   }
 };
 
 template <>
-struct fmt::formatter<
-    facebook::velox::connector::hive::paimon::PaimonChangelogMode>
+struct fmt::formatter<facebook::velox::connector::paimon::PaimonChangelogMode>
     : formatter<std::string> {
   auto format(
-      facebook::velox::connector::hive::paimon::PaimonChangelogMode mode,
+      facebook::velox::connector::paimon::PaimonChangelogMode mode,
       format_context& ctx) const {
     return formatter<std::string>::format(
-        facebook::velox::connector::hive::paimon::paimonChangelogModeString(
-            mode),
+        facebook::velox::connector::paimon::paimonChangelogModeString(mode),
         ctx);
   }
 };

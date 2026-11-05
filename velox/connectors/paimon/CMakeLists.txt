@@ -13,7 +13,7 @@
 # limitations under the License.
 
 velox_add_library(
-  velox_hive_paimon_split
+  velox_paimon_split
   PaimonConnectorSplit.cpp
   PaimonDataFileMeta.cpp
   PaimonDeletionFile.cpp
@@ -25,29 +25,24 @@ velox_add_library(
   PaimonRowKind.h
 )
 
-velox_link_libraries(velox_hive_paimon_split velox_connector velox_dwio_common fmt::fmt)
+velox_link_libraries(velox_paimon_split velox_connector velox_dwio_common fmt::fmt)
 
-velox_add_library(
-  velox_hive_paimon_column_handle
-  PaimonColumnHandle.cpp
-  HEADERS
-  PaimonColumnHandle.h
-)
+velox_add_library(velox_paimon_column_handle PaimonColumnHandle.cpp HEADERS PaimonColumnHandle.h)
 
-velox_link_libraries(velox_hive_paimon_column_handle velox_file_connector velox_type)
+velox_link_libraries(velox_paimon_column_handle velox_file_connector velox_type)
 
-velox_add_library(velox_hive_paimon_table_handle PaimonTableHandle.cpp HEADERS PaimonTableHandle.h)
+velox_add_library(velox_paimon_table_handle PaimonTableHandle.cpp HEADERS PaimonTableHandle.h)
 
 velox_link_libraries(
-  velox_hive_paimon_table_handle
-  velox_hive_paimon_split
+  velox_paimon_table_handle
+  velox_paimon_split
   velox_file_connector
   velox_core
   velox_type
 )
 
 velox_add_library(
-  velox_hive_paimon_connector
+  velox_paimon_connector
   PaimonConnector.cpp
   PaimonDataSource.cpp
   PaimonSplitReader.cpp
@@ -59,10 +54,10 @@ velox_add_library(
 )
 
 velox_link_libraries(
-  velox_hive_paimon_connector
-  velox_hive_paimon_split
-  velox_hive_paimon_table_handle
-  velox_hive_paimon_column_handle
+  velox_paimon_connector
+  velox_paimon_split
+  velox_paimon_table_handle
+  velox_paimon_column_handle
   velox_file_connector
 )
 
