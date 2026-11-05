@@ -45,10 +45,6 @@ uint64_t doubleBits(double value) {
   return std::bit_cast<uint64_t>(value);
 }
 
-uint32_t floatBits(float value) {
-  return std::bit_cast<uint32_t>(value);
-}
-
 class HistogramNumericTypesTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
@@ -175,95 +171,6 @@ TEST_F(HistogramNumericTypesTest, shortUsesIntThenLowBits) {
   EXPECT_EQ(Types::javaDoubleToShort(kNaN), 0);
 }
 
-TEST_F(HistogramNumericTypesTest, floatTiesToEven) {
-  const double evenTie = 1.0 + 0x1p-24;
-  const double oddTie = 1.0 + 3 * 0x1p-24;
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(evenTie)), 0x3f800000U);
-  EXPECT_EQ(
-      floatBits(Types::javaDoubleToFloat(std::nextafter(evenTie, kInfinity))),
-      0x3f800001U);
-  EXPECT_EQ(
-      floatBits(Types::javaDoubleToFloat(std::nextafter(evenTie, 0.0))),
-      0x3f800000U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(oddTie)), 0x3f800002U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(-oddTie)), 0xbf800002U);
-}
-
-TEST_F(HistogramNumericTypesTest, floatOverflow) {
-  const double threshold = 0x1.ffffffp127;
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(0x1.fffffep127)), 0x7f7fffffU);
-  EXPECT_EQ(
-      floatBits(Types::javaDoubleToFloat(std::nextafter(threshold, 0.0))),
-      0x7f7fffffU);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(threshold)), 0x7f800000U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(-threshold)), 0xff800000U);
-  EXPECT_EQ(
-      floatBits(Types::javaDoubleToFloat(std::numeric_limits<double>::max())),
-      0x7f800000U);
-}
-
-TEST_F(HistogramNumericTypesTest, floatNormalSubnormalBoundary) {
-  const double threshold = 0x1p-126 - 0x1p-150;
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(0x1p-126)), 0x00800000U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(threshold)), 0x00800000U);
-  EXPECT_EQ(
-      floatBits(Types::javaDoubleToFloat(std::nextafter(threshold, 0.0))),
-      0x007fffffU);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(0x1p-149)), 1U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(3 * 0x1p-150)), 2U);
-}
-
-TEST_F(HistogramNumericTypesTest, floatUnderflow) {
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(0x1p-150)), 0U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(-0x1p-150)), 0x80000000U);
-  EXPECT_EQ(
-      floatBits(Types::javaDoubleToFloat(std::nextafter(0x1p-150, kInfinity))),
-      1U);
-  EXPECT_EQ(
-      floatBits(
-          Types::javaDoubleToFloat(std::numeric_limits<double>::denorm_min())),
-      0U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(-0x1p-151)), 0x80000000U);
-}
-
-TEST_F(HistogramNumericTypesTest, floatZerosAndInfinities) {
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(0.0)), 0U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(-0.0)), 0x80000000U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(kInfinity)), 0x7f800000U);
-  EXPECT_EQ(floatBits(Types::javaDoubleToFloat(-kInfinity)), 0xff800000U);
-}
-
-TEST_F(HistogramNumericTypesTest, floatRoundTripExponentBoundaries) {
-  // Each binary32 input is exactly representable in binary64. Expected bits
-  // come from the input pattern, not from another narrowing implementation.
-  for (uint32_t exponent = 0; exponent < 255; ++exponent) {
-    for (uint32_t fraction : {0U, 1U, 0x003fffffU, 0x007ffffeU, 0x007fffffU}) {
-      for (uint32_t sign : {0U, 0x80000000U}) {
-        const uint32_t bits = sign | (exponent << 23) | fraction;
-        const auto widened = Types::numericToDouble(std::bit_cast<float>(bits));
-        EXPECT_EQ(floatBits(Types::javaDoubleToFloat(widened)), bits);
-      }
-    }
-  }
-}
-
-TEST_F(HistogramNumericTypesTest, floatNaNs) {
-  // Only classification is a portable Java contract. The native mapping keeps
-  // sign/high payload bits and quiets NaNs; JVM payload parity needs the
-  // oracle's recorded JDK/vendor/CPU profile, not a universal canonical-NaN
-  // assertion.
-  for (uint64_t bits :
-       {0x7ff0000000000001ULL, 0x7ff8123456789abcULL, 0xfff8123456789abcULL}) {
-    EXPECT_TRUE(
-        std::isnan(Types::javaDoubleToFloat(std::bit_cast<double>(bits))));
-  }
-  EXPECT_EQ(
-      floatBits(
-          Types::javaDoubleToFloat(
-              std::bit_cast<double>(0xfff8123456789abcULL))),
-      0xffc091a2U);
-}
-
 TEST_F(HistogramNumericTypesTest, dateDaysAndYearMonthMonths) {
   for (int32_t value : {INT32_MIN, -12, -1, 0, 1, 12, INT32_MAX}) {
     const auto center = Types::numericToDouble(value);
@@ -301,19 +208,20 @@ TEST_F(HistogramNumericTypesTest, timestampInputLimits) {
 
 TEST_F(HistogramNumericTypesTest, timestampRejectsSubMicrosecond) {
   VELOX_ASSERT_USER_THROW(
-      Types::timestampToDouble(Timestamp(0, 1)), "microsecond precision");
+      Types::timestampToDouble(Timestamp(0, 1)),
+      "histogram_numeric timestamp requires microsecond precision");
   VELOX_ASSERT_USER_THROW(
       Types::timestampToDouble(Timestamp(-1, 999'999'999)),
-      "microsecond precision");
+      "histogram_numeric timestamp requires microsecond precision");
 }
 
 TEST_F(HistogramNumericTypesTest, timestampRejectsMicrosecondOverflow) {
   VELOX_ASSERT_USER_THROW(
       Types::timestampToDouble(Timestamp(-9'223'372'036'855, 224'191'000)),
-      "microseconds");
+      "Could not convert Timestamp(-9223372036855, 224191000) to microseconds");
   VELOX_ASSERT_USER_THROW(
       Types::timestampToDouble(Timestamp(9'223'372'036'854, 775'808'000)),
-      "microseconds");
+      "Could not convert Timestamp(9223372036854, 775808000) to microseconds");
 }
 
 TEST_F(HistogramNumericTypesTest, timestampOutputLimitsAndNonFinite) {
@@ -341,12 +249,18 @@ TEST_F(HistogramNumericTypesTest, dayTimeIntervalMicrosCarrier) {
 }
 
 TEST_F(HistogramNumericTypesTest, decimalMetadataValidation) {
-  VELOX_ASSERT_USER_THROW((Decimal(0, 0)), "precision");
-  VELOX_ASSERT_USER_THROW((Decimal(39, 0)), "precision");
-  VELOX_ASSERT_USER_THROW((Decimal(-1, 0)), "precision");
-  VELOX_ASSERT_USER_THROW((Decimal(256, 0)), "precision");
-  VELOX_ASSERT_USER_THROW((Decimal(3, -1)), "scale");
-  VELOX_ASSERT_USER_THROW((Decimal(3, 4)), "scale");
+  for (const auto precision : {0, 39, -1, 256}) {
+    SCOPED_TRACE(precision);
+    VELOX_ASSERT_USER_THROW(
+        (Decimal(precision, 0)),
+        "histogram_numeric Decimal precision must be in [1, 38]");
+  }
+  for (const auto scale : {-1, 4}) {
+    SCOPED_TRACE(scale);
+    VELOX_ASSERT_USER_THROW(
+        (Decimal(3, scale)),
+        "histogram_numeric Decimal scale must be in [0, precision]");
+  }
 }
 
 TEST_F(HistogramNumericTypesTest, shortDecimalNormalization) {

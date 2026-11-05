@@ -58,11 +58,6 @@ class HistogramNumericTypes {
   /// Also reconstructs BIGINT centers.
   static int64_t javaDoubleToLong(double value);
 
-  /// Rounds to binary32, ties to even, including subnormals and overflow to
-  /// infinity, independently of the host FP rounding mode. Quiets NaNs while
-  /// keeping sign/high payload bits; Java only guarantees NaN classification.
-  static float javaDoubleToFloat(double value);
-
   /// Reconstructs TIMESTAMP and TIMESTAMP_UTC via Java-toLong microseconds,
   /// including INT64_MIN, without overflowing negative-epoch intermediates.
   static Timestamp javaDoubleToTimestamp(double value);
