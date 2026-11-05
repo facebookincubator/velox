@@ -1351,13 +1351,8 @@ bool RPCOperator::startDrain() {
 void RPCOperator::close() {
   recordRuntimeStats();
 
-  // Release resources explicitly. RPCState may be held alive by in-flight RPC
-  // callbacks (via shared_ptr capture), so dropping our reference is not enough
-  // to free the input vectors: those belong to upstream operators' memory pools
-  // and must be released here, on the driver thread, while those pools are
-  // still alive. Otherwise the retained external-memory charge makes the
-  // reservedBytes() == 0 check throw from ~MemoryPoolImpl() and terminate the
-  // worker, or a late callback frees into pools that are already gone.
+  // A running RPC callback may keep RPCState alive. Release retained input
+  // vectors on the driver thread while their upstream memory pools are alive.
   // Stop publishing to stats() first: the write blocks until any in-progress
   // sample has finished reading RPCState, so the reset below cannot free it
   // underneath the collector thread.
