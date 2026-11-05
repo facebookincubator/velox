@@ -22,6 +22,7 @@
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -31,6 +32,7 @@
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -179,6 +181,11 @@ class SubfieldFilterAstTest : public OperatorTestBase {
           case TypeKind::VARCHAR: {
             auto sv = fieldVec->asFlatVector<StringView>()->valueAt(i);
             veloxExpected = filter.testBytes(sv.data(), sv.size());
+            break;
+          }
+          case TypeKind::TIMESTAMP: {
+            auto v = fieldVec->asFlatVector<Timestamp>()->valueAt(i);
+            veloxExpected = filter.testTimestamp(v);
             break;
           }
           default:
@@ -1659,6 +1666,79 @@ TEST_F(SubfieldFilterAstTest, negatedBigintRangeWithNulls) {
   auto vec = makeRowVector({columnName}, {values});
 
   testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+// The bounds become literals of the reader's timestamp unit, rounded inward to
+// whole ticks so that the +/-1ns encoding of exclusive bounds stays exact.
+// Bounds beyond the unit's range must not throw.
+TEST_F(SubfieldFilterAstTest, timestampRange) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  const auto rowType = ROW({"c0"}, {TIMESTAMP()});
+  const common::Subfield subfield("c0");
+  const Timestamp bound(1'700'000'000, 0);
+  const Timestamp maxSeconds(Timestamp::kMaxSeconds, 0);
+  const Timestamp minSeconds(Timestamp::kMinSeconds, 0);
+
+  for (const auto& [unit, nanosPerTick] :
+       {std::pair{cudf::type_id::TIMESTAMP_MILLISECONDS, 1'000'000},
+        std::pair{cudf::type_id::TIMESTAMP_MICROSECONDS, 1'000},
+        std::pair{cudf::type_id::TIMESTAMP_NANOSECONDS, 1}}) {
+    SCOPED_TRACE(static_cast<int32_t>(unit));
+    // The column is built in, and holds whole ticks of, 'unit'.
+    config.timestampUnit = unit;
+    const auto ticksFromBound = [&](int64_t ticks) {
+      return Timestamp::fromNanos(bound.toNanos() + ticks * nanosPerTick);
+    };
+    const auto vector = makeRowVector(
+        {"c0"},
+        {makeNullableFlatVector<Timestamp>(
+            {ticksFromBound(-2),
+             ticksFromBound(-1),
+             bound,
+             std::nullopt,
+             ticksFromBound(1),
+             ticksFromBound(2)})});
+
+    std::vector<std::unique_ptr<common::Filter>> filters;
+    filters.push_back(exec::greaterThan(bound));
+    filters.push_back(exec::greaterThanOrEqual(bound));
+    filters.push_back(exec::lessThan(bound, /*nullAllowed=*/true));
+    filters.push_back(exec::lessThanOrEqual(bound));
+    filters.push_back(exec::between(ticksFromBound(-1), ticksFromBound(1)));
+    filters.push_back(exec::equal(bound));
+    // Lies between two ticks, so no value equals it.
+    filters.push_back(exec::equal(Timestamp(bound.getSeconds(), 1)));
+    // Bounds beyond the range of some units.
+    filters.push_back(exec::between(minSeconds, maxSeconds));
+    filters.push_back(exec::greaterThan(maxSeconds, /*nullAllowed=*/true));
+    filters.push_back(exec::lessThanOrEqual(minSeconds));
+    filters.push_back(exec::between(minSeconds, bound));
+
+    for (const auto& filter : filters) {
+      SCOPED_TRACE(filter->toString());
+      cudf::ast::tree tree;
+      std::vector<std::unique_ptr<cudf::scalar>> scalars;
+      const auto& expr = createAstFromSubfieldFilter(
+          subfield, *filter, tree, scalars, rowType, nullptr, unit);
+      for (const auto& scalar : scalars) {
+        EXPECT_EQ(scalar->type().id(), unit);
+      }
+      testFilterExecution(rowType, "c0", *filter, vector, expr);
+    }
+  }
+
+  // Without the reader's timestamp type there is no unit for the bounds.
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  EXPECT_THROW(
+      createAstFromSubfieldFilter(
+          subfield, *exec::equal(bound), tree, scalars, rowType),
+      VeloxException);
 }
 
 } // namespace

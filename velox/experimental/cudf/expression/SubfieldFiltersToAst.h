@@ -23,6 +23,7 @@
 #include <cudf/scalar/scalar.hpp>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -48,14 +49,16 @@ bool hasDecimalSubfieldFilter(
     const common::SubfieldFilters& subfieldFilters,
     const RowTypePtr& inputRowSchema);
 
-// Convert subfield filters to cudf AST
+// Convert subfield filters to cudf AST. 'timestampType' is the cuDF type of
+// the TIMESTAMP columns being filtered; a TimestampRange filter requires it.
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    const SubfieldFilterDecimalTypes* decimalTypes = nullptr);
+    const SubfieldFilterDecimalTypes* decimalTypes = nullptr,
+    std::optional<cudf::type_id> timestampType = std::nullopt);
 
 // Build a single AST expression representing logical AND of all filters in
 // 'subfieldFilters'. The resulting expression reference is owned by the passed
@@ -65,6 +68,7 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    const SubfieldFilterDecimalTypes* decimalTypes = nullptr);
+    const SubfieldFilterDecimalTypes* decimalTypes = nullptr,
+    std::optional<cudf::type_id> timestampType = std::nullopt);
 
 } // namespace facebook::velox::cudf_velox

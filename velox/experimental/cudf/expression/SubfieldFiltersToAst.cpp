@@ -520,6 +520,86 @@ void collectValueFilters(
   }
 }
 
+// Converts a TimestampRange to comparisons with literals of the column's
+// timestamp type T. Column values are whole ticks of T, so rounding the lower
+// bound up and the upper bound down to ticks keeps the result exact, including
+// for the +/-1ns that encodes an exclusive bound. A bound beyond the range of
+// T drops its side of the range or rejects all values. The literals are built
+// from the rounded ticks rather than with makeScalarFromValue, which takes a
+// Timestamp and converts it with toNanos()/toMicros() without rounding.
+template <typename T>
+const cudf::ast::expression& buildTimestampRangeExpr(
+    const common::TimestampRange& range,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::expression& columnRef,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+  using Rep = typename T::rep;
+  constexpr int128_t kNanosPerTick =
+      int128_t{Timestamp::kNanosInSecond} * T::period::num / T::period::den;
+
+  const auto toNanos = [](const Timestamp& timestamp) {
+    return int128_t{timestamp.getSeconds()} * Timestamp::kNanosInSecond +
+        timestamp.getNanos();
+  };
+  // Rounds 'nanos' down (up if 'roundUp') to ticks.
+  const auto toTicks = [&](int128_t nanos, bool roundUp) {
+    const auto quotient = nanos / kNanosPerTick;
+    const auto remainder = nanos % kNanosPerTick;
+    if (roundUp && remainder > 0) {
+      return quotient + 1;
+    }
+    if (!roundUp && remainder < 0) {
+      return quotient - 1;
+    }
+    return quotient;
+  };
+
+  constexpr int128_t kMinTicks = std::numeric_limits<Rep>::min();
+  constexpr int128_t kMaxTicks = std::numeric_limits<Rep>::max();
+  const auto lowerTicks = toTicks(toNanos(range.lower()), true);
+  const auto upperTicks = toTicks(toNanos(range.upper()), false);
+
+  if (lowerTicks > kMaxTicks || upperTicks < kMinTicks ||
+      lowerTicks > upperTicks) {
+    return tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
+  }
+
+  auto compare = [&](int128_t ticks, Op op) -> const cudf::ast::expression& {
+    scalars.push_back(
+        std::make_unique<cudf::timestamp_scalar<T>>(
+            T{typename T::duration{static_cast<Rep>(ticks)}},
+            true,
+            stream,
+            mr));
+    stream.sync();
+    auto const& literal = tree.push(
+        cudf::ast::literal{
+            *static_cast<cudf::timestamp_scalar<T>*>(scalars.back().get())});
+    return tree.push(Operation{op, columnRef, literal});
+  };
+
+  const cudf::ast::expression* lowerExpr = nullptr;
+  if (lowerTicks > kMinTicks) {
+    lowerExpr = &compare(lowerTicks, Op::GREATER_EQUAL);
+  }
+  const cudf::ast::expression* upperExpr = nullptr;
+  if (upperTicks < kMaxTicks) {
+    upperExpr = &compare(upperTicks, Op::LESS_EQUAL);
+  }
+  if (lowerExpr && upperExpr) {
+    return tree.push(Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+  } else if (lowerExpr) {
+    return *lowerExpr;
+  } else if (upperExpr) {
+    return *upperExpr;
+  }
+  return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
+}
+
 cudf::ast::expression const& createAlwaysFalseExpr(
     const cudf::ast::column_reference& columnRef,
     cudf::ast::tree& tree) {
@@ -537,7 +617,8 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    const SubfieldFilterDecimalTypes* decimalTypes);
+    const SubfieldFilterDecimalTypes* decimalTypes,
+    std::optional<cudf::type_id> timestampType);
 
 cudf::ast::expression const& createAstFromFiltersOr(
     const common::Subfield& subfield,
@@ -545,7 +626,8 @@ cudf::ast::expression const& createAstFromFiltersOr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    const SubfieldFilterDecimalTypes* decimalTypes) {
+    const SubfieldFilterDecimalTypes* decimalTypes,
+    std::optional<cudf::type_id> timestampType) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
@@ -555,7 +637,13 @@ cudf::ast::expression const& createAstFromFiltersOr(
   exprRefs.reserve(filters.size());
   for (const auto* subFilter : filters) {
     auto const& subExpr = createAstFromSubfieldFilterImpl(
-        subfield, *subFilter, tree, scalars, inputRowSchema, decimalTypes);
+        subfield,
+        *subFilter,
+        tree,
+        scalars,
+        inputRowSchema,
+        decimalTypes,
+        timestampType);
     exprRefs.push_back(&subExpr);
   }
 
@@ -572,7 +660,8 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    const SubfieldFilterDecimalTypes* decimalTypes) {
+    const SubfieldFilterDecimalTypes* decimalTypes,
+    std::optional<cudf::type_id> timestampType) {
   // First, create column reference from subfield
   // For now, only support simple field references
   if (subfield.path().empty() ||
@@ -695,6 +784,23 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
       return createBytesRangeExpr(filter, tree, scalars, columnRef, stream, mr);
     }
 
+    case common::FilterKind::kTimestampRange: {
+      // Without the reader's timestamp type there is no unit for the bounds.
+      if (!timestampType.has_value()) {
+        VELOX_NYI("TimestampRange filter needs the column's timestamp type");
+      }
+      const auto& range = static_cast<const common::TimestampRange&>(filter);
+      return cudf::type_dispatcher(
+          cudf::data_type{*timestampType},
+          [&]<typename T>() -> const cudf::ast::expression& {
+            if constexpr (cudf::is_timestamp<T>()) {
+              return buildTimestampRangeExpr<T>(
+                  range, tree, scalars, columnRef, stream, mr);
+            }
+            VELOX_UNREACHABLE();
+          });
+    }
+
     case common::FilterKind::kBoolValue: {
       auto* boolValue = static_cast<const common::BoolValue*>(&filter);
       auto matchesTrue = boolValue->testBool(true);
@@ -726,7 +832,13 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
         ranges.push_back(range.get());
       }
       return createAstFromFiltersOr(
-          subfield, ranges, tree, scalars, inputRowSchema, decimalTypes);
+          subfield,
+          ranges,
+          tree,
+          scalars,
+          inputRowSchema,
+          decimalTypes,
+          timestampType);
     }
 
     case common::FilterKind::kMultiRange: {
@@ -736,7 +848,13 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
         return createAlwaysFalseExpr(columnRef, tree);
       }
       return createAstFromFiltersOr(
-          subfield, valueFilters, tree, scalars, inputRowSchema, decimalTypes);
+          subfield,
+          valueFilters,
+          tree,
+          scalars,
+          inputRowSchema,
+          decimalTypes,
+          timestampType);
     }
 
     case common::FilterKind::kNegatedBigintRange: {
@@ -799,9 +917,16 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    const SubfieldFilterDecimalTypes* decimalTypes) {
+    const SubfieldFilterDecimalTypes* decimalTypes,
+    std::optional<cudf::type_id> timestampType) {
   auto const& expression = createAstFromSubfieldFilterImpl(
-      subfield, filter, tree, scalars, inputRowSchema, decimalTypes);
+      subfield,
+      filter,
+      tree,
+      scalars,
+      inputRowSchema,
+      decimalTypes,
+      timestampType);
   if (filter.testNull() && filter.kind() != common::FilterKind::kIsNull &&
       filter.kind() != common::FilterKind::kIsNotNull) {
     using Op = cudf::ast::ast_operator;
@@ -823,7 +948,8 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    const SubfieldFilterDecimalTypes* decimalTypes) {
+    const SubfieldFilterDecimalTypes* decimalTypes,
+    std::optional<cudf::type_id> timestampType) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
@@ -835,7 +961,13 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
       continue;
     }
     auto const& expr = createAstFromSubfieldFilter(
-        subfield, *filterPtr, tree, scalars, inputRowSchema, decimalTypes);
+        subfield,
+        *filterPtr,
+        tree,
+        scalars,
+        inputRowSchema,
+        decimalTypes,
+        timestampType);
     exprRefs.push_back(&expr);
   }
 

@@ -2119,6 +2119,98 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
       << "Expected no remaining filter time when filter is fully extracted";
 }
 
+// A TIMESTAMP range filter, pushed down or extracted from the remaining
+// filter, keeps the rows the CPU scan keeps for each reader timestamp unit,
+// including values a tick from the bounds and nulls. The file holds whole ticks
+// of the unit, so both scans read the values the file holds.
+TEST_F(TableScanTest, timestampRangeFilter) {
+  const auto rowType = ROW({"c0", "c1"}, {TIMESTAMP(), BIGINT()});
+  const Timestamp bound(1'700'000'000, 0);
+  const std::string boundSql = "timestamp '2023-11-14 22:13:20'";
+  const std::vector<std::string> filters{
+      "c0 > " + boundSql,
+      "c0 >= " + boundSql,
+      "c0 < " + boundSql,
+      "c0 = " + boundSql,
+      "c0 > " + boundSql + " OR c0 IS NULL",
+      // Half a millisecond from the bound on each side.
+      "c0 BETWEEN timestamp '2023-11-14 22:13:19.9995' "
+      "AND timestamp '2023-11-14 22:13:20.0005'",
+  };
+
+  for (const auto& [readerUnit, cpuReaderUnit, nanosPerTick] :
+       {std::tuple{cudf::type_id::TIMESTAMP_MILLISECONDS, "3", 1'000'000},
+        std::tuple{cudf::type_id::TIMESTAMP_MICROSECONDS, "6", 1'000}}) {
+    SCOPED_TRACE(static_cast<int32_t>(readerUnit));
+    const auto ticksFromBound = [&](int64_t ticks) {
+      return Timestamp::fromNanos(bound.toNanos() + ticks * nanosPerTick);
+    };
+    auto filePath = TempFilePath::create();
+    writeToFile(
+        filePath->getPath(),
+        makeRowVector(
+            {"c0", "c1"},
+            {makeNullableFlatVector<Timestamp>(
+                 {ticksFromBound(-2),
+                  ticksFromBound(-1),
+                  bound,
+                  std::nullopt,
+                  ticksFromBound(1),
+                  ticksFromBound(2)}),
+             makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5})}));
+
+    for (const auto& filter : filters) {
+      for (const bool pushedDown : {true, false}) {
+        SCOPED_TRACE(fmt::format("{} pushedDown={}", filter, pushedDown));
+        PlanBuilder planBuilder(pool_.get());
+        auto& scan =
+            planBuilder.startTableScan()
+                .connectorId(kCudfHiveConnectorId)
+                .outputType(rowType)
+                .dataColumns(rowType)
+                .assignments(
+                    facebook::velox::exec::test::HiveConnectorTestBase::
+                        allRegularColumns(rowType));
+        if (pushedDown) {
+          scan.subfieldFilter(filter);
+        } else {
+          scan.remainingFilter(filter);
+        }
+        const auto plan = scan.endTableScan().planNode();
+        const auto run = [&](std::shared_ptr<Task>& task) {
+          return AssertQueryBuilder(plan)
+              .connectorSessionProperty(
+                  kCudfHiveConnectorId,
+                  cudf_velox::connector::hive::CudfHiveConfig::
+                      kTimestampTypeSession,
+                  std::to_string(static_cast<int32_t>(readerUnit)))
+              .connectorSessionProperty(
+                  kCudfHiveConnectorId,
+                  hive::HiveConfig::kReadTimestampUnitSession,
+                  cpuReaderUnit)
+              .split(makeCudfHiveSplit(filePath->getPath()))
+              .copyResults(pool_.get(), task);
+        };
+
+        std::shared_ptr<Task> task;
+        const auto gpuResult = run(task);
+        // A remaining filter is extracted into a subfield filter, leaving no
+        // remaining filter to evaluate.
+        EXPECT_EQ(
+            toPlanStats(task->taskStats())
+                .at(plan->id())
+                .customStats.at("totalRemainingFilterWallNanos")
+                .sum,
+            0);
+        unregisterCudf();
+        const auto cpuResult = run(task);
+        registerCudf();
+        assertEqualResults({cpuResult}, {gpuResult});
+      }
+    }
+  }
+}
+
 TEST_F(TableScanTest, decimalSubfieldFilter) {
   auto rowType = ROW({"c0", "c1"}, {DECIMAL(5, 2), BIGINT()});
   auto vector = makeRowVector(

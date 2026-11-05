@@ -493,7 +493,13 @@ CudfHiveDataSource::CudfHiveDataSource(
     hasDecimalSubfieldFilter_ =
         hasDecimalSubfieldFilter(subfieldFilters_, readerFilterType);
     subfieldFilterAst_ = &createAstFromSubfieldFilters(
-        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
+        subfieldFilters_,
+        subfieldTree_,
+        subfieldScalars_,
+        readerFilterType,
+        /*decimalTypes=*/nullptr,
+        constantTimestampType(
+            *cudfHiveConfig_, connectorQueryCtx_->sessionProperties()));
   }
 
   {
@@ -618,7 +624,9 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         pushdownFilterTree_,
         pushdownFilterScalars_,
         readerFilterType,
-        &decimalTypes);
+        &decimalTypes,
+        constantTimestampType(
+            *cudfHiveConfig_, connectorQueryCtx_->sessionProperties()));
     cudfSplitReader_->setPushdownFilter(&filter);
   }
   cudfSplitReader_->prepareSplit(runtimeStats_);
