@@ -75,9 +75,7 @@ Mathematical Functions
 
     Returns the cube root of ``x``.
 
-.. spark:function:: ceil(x) -> [same as x]
-
-    *(ANSI compliant)*
+.. spark:function:: ceil(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded up to the nearest integer.
     Supported types are: BIGINT, DOUBLE and DECIMAL.
@@ -277,9 +275,7 @@ Mathematical Functions
         SELECT factorial(21); -- NULL
         SELECT factorial(-1); -- NULL
 
-.. spark:function:: floor(x) -> [same as x]
-
-    *(ANSI compliant)*
+.. spark:function:: floor(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded down to the nearest integer.
     Supported types are: BIGINT, DOUBLE and DECIMAL.

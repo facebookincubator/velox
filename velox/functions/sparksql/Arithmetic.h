@@ -313,6 +313,7 @@ inline int64_t safeDoubleToInt64(const int64_t& arg) {
 }
 
 namespace detail {
+
 // Converts the rounded double 'value' to BIGINT like Spark's ceil and floor
 // on DOUBLE input: NaN maps to 0 and a value outside the BIGINT range
 // saturates to the BIGINT limits, or is an error when Spark ANSI mode is
@@ -336,6 +337,7 @@ FOLLY_ALWAYS_INLINE Status doubleToInt64(
   result = safeDoubleToInt64(value);
   return Status::OK();
 }
+
 } // namespace detail
 
 template <typename T>
