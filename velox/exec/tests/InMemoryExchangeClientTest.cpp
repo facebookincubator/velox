@@ -701,6 +701,112 @@ TEST_P(InMemoryExchangeClientTest, closeDuringSourceCall) {
   EXPECT_TRUE(weakClient.expired());
 }
 
+// A source whose close() throws must not stop close() from closing the other
+// sources and the queue, and close() must not throw: destructors call it.
+TEST_P(InMemoryExchangeClientTest, closeWithThrowingSource) {
+  enum class CloseFailure { kNone, kVeloxException, kNonStdException };
+
+  // Counts its close() calls, and throws from close() as 'closeFailure' says.
+  class ClosingSource : public ExchangeSource {
+   public:
+    ClosingSource(
+        const std::string& taskId,
+        int destination,
+        std::shared_ptr<ExchangeQueue> queue,
+        memory::MemoryPool* pool,
+        CloseFailure closeFailure)
+        : ExchangeSource(taskId, destination, std::move(queue), pool),
+          closeFailure_(closeFailure) {}
+
+    bool shouldRequestLocked() override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> request(
+        uint32_t /*maxBytes*/,
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> requestDataSizes(
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    void close() override {
+      ++numCloses;
+      if (closeFailure_ == CloseFailure::kVeloxException) {
+        VELOX_FAIL("Testing close failure");
+      }
+      if (closeFailure_ == CloseFailure::kNonStdException) {
+        throw 1;
+      }
+    }
+
+    folly::F14FastMap<std::string, int64_t> stats() const override {
+      return {};
+    }
+
+    int32_t numCloses{0};
+
+   private:
+    const CloseFailure closeFailure_;
+  };
+
+  // The first source throws a VeloxException from close(), the second a value
+  // that is not a std::exception.
+  const std::vector<CloseFailure> closeFailures{
+      CloseFailure::kVeloxException,
+      CloseFailure::kNonStdException,
+      CloseFailure::kNone};
+  std::vector<std::shared_ptr<ClosingSource>> sources;
+  ExchangeSource::factories().clear();
+  ExchangeSource::registerFactory(
+      [&](const auto& taskId, auto destination, auto queue, auto pool)
+          -> std::shared_ptr<ExchangeSource> {
+        sources.push_back(
+            std::make_shared<ClosingSource>(
+                taskId,
+                destination,
+                queue,
+                pool,
+                closeFailures[sources.size()]));
+        return sources.back();
+      });
+  SCOPE_EXIT {
+    ExchangeSource::factories().clear();
+    ExchangeSource::registerFactory(test::createLocalExchangeSource);
+  };
+
+  // With lazy fetching the client makes no calls into the sources, so close()
+  // closes them itself instead of leaving that to a call in flight.
+  auto client = std::make_shared<InMemoryExchangeClient>(
+      "test",
+      0,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
+      1,
+      0,
+      pool(),
+      executor(),
+      10, // requestDataSizesMaxWaitSec
+      false, // skipRequestDataSizeWithSingleSource
+      true); // lazyFetching
+  for (size_t i = 0; i < closeFailures.size(); ++i) {
+    client->addRemoteTaskId(fmt::format("closing://{}", i));
+  }
+  ASSERT_EQ(sources.size(), closeFailures.size());
+
+  EXPECT_NO_THROW(client->close());
+  for (const auto& source : sources) {
+    EXPECT_EQ(source->numCloses, 1);
+  }
+
+  // A closed queue frees a page as soon as it is enqueued.
+  const auto& queue = client->queue();
+  enqueue(*queue, makePage(1'000));
+  EXPECT_TRUE(queue->empty());
+}
+
 TEST_P(InMemoryExchangeClientTest, acknowledge) {
   const int64_t pageSize = 1024;
   const int64_t clientBufferSize = pageSize;
