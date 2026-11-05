@@ -98,6 +98,27 @@ void VectorSearchJoinTable::search(
   indexes_[row]->search(queries, numResults, ids, scores);
 }
 
+namespace {
+
+// Returns a reader of the join's indexes in the query's format of the join.
+std::unique_ptr<common::vectorindex::LocalVectorIndexReader> makeReader(
+    const core::QueryCtx& queryCtx,
+    const core::VectorSearchJoinNode& joinNode) {
+  using common::vectorindex::LocalVectorIndexFormat;
+  const auto formats =
+      queryCtx.registry<common::vectorindex::LocalVectorIndexFormats>(
+          LocalVectorIndexFormat::kRegistryKey);
+  VELOX_CHECK_NOT_NULL(formats, "QueryCtx has no local vector index formats");
+  const auto format = formats->find(joinNode.format());
+  VELOX_USER_CHECK_NOT_NULL(
+      format,
+      "Local vector index format is not registered: {}",
+      joinNode.format());
+  return format->makeReader(joinNode.metric(), joinNode.searchOptions());
+}
+
+} // namespace
+
 VectorSearchJoinBuild::VectorSearchJoinBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -108,10 +129,7 @@ VectorSearchJoinBuild::VectorSearchJoinBuild(
           operatorId,
           joinNode->id(),
           OperatorType::kVectorSearchJoinBuild),
-      metric_{joinNode->metric()},
-      searchOptions_{common::vectorindex::LocalVectorIndexOptions::parseSearch(
-          {joinNode->searchOptions().begin(),
-           joinNode->searchOptions().end()})} {
+      reader_{makeReader(*driverCtx->task->queryCtx(), *joinNode)} {
   const auto& buildType = joinNode->sources()[1]->outputType();
   const auto& outputType = joinNode->outputType();
   channels_.reserve(joinNode->rightKeys().size() + outputType->size());
@@ -154,9 +172,7 @@ void VectorSearchJoinBuild::addInput(RowVectorPtr input) {
     }
     const auto bytes = index.valueAt<StringView>(row);
     const std::string_view packed(bytes.data(), bytes.size());
-    indexes_.push_back(
-        std::make_unique<common::vectorindex::LocalVectorIndex>(
-            packed, metric_, searchOptions_));
+    indexes_.push_back(reader_->open(packed));
     rows.push_back(row);
   }
   if (rows.empty()) {

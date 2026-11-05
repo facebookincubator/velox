@@ -21,6 +21,7 @@
 #include <set>
 
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -368,8 +369,22 @@ class VectorSearchTest : public HiveConnectorTestBase {
     return makeRowVector({makeFlatVector(qids), makeFlatVector(ids)});
   }
 
+  // Returns a context for a query that reads the "faiss" format.
+  std::shared_ptr<core::QueryCtx> makeQueryCtx() {
+    auto formats =
+        std::make_shared<common::vectorindex::LocalVectorIndexFormats>();
+    formats->insert(
+        std::string(common::vectorindex::FaissLocalVectorIndex::kFormat),
+        common::vectorindex::FaissLocalVectorIndex::format());
+    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    queryCtx->setRegistry(
+        common::vectorindex::LocalVectorIndexFormat::kRegistryKey, formats);
+    return queryCtx;
+  }
+
   RowVectorPtr run(const PlanBuilder& plan) {
     return AssertQueryBuilder(plan.planNode())
+        .queryCtx(makeQueryCtx())
         .fixedPointOptions(&LocalFixedPoint::options())
         .copyResults(pool());
   }
@@ -472,6 +487,7 @@ TEST_F(VectorSearchTest, bucketedSearch) {
 
   const auto matches =
       AssertQueryBuilder(searchLocalIndexes(probe, indexes, /*k=*/3).planNode())
+          .queryCtx(makeQueryCtx())
           .splits(queriesScanId, queriesSplits)
           .splits(indexesScanId, writeBucketed(index.indexes))
           .executionStrategy(core::ExecutionStrategy::kGrouped)

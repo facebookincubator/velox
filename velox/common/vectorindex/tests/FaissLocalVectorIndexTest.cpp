@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 
 #include <string>
 #include <vector>
@@ -33,7 +33,7 @@
 namespace facebook::velox::common::vectorindex {
 namespace {
 
-class LocalVectorIndexTest : public testing::Test {
+class FaissLocalVectorIndexTest : public testing::Test {
  protected:
   // Builds a local index of 'kind' over 2-dimensional unit-length embeddings
   // (1, 0), (0, 1) and (-1, 0) with ids 10, 20 and 30.
@@ -41,7 +41,7 @@ class LocalVectorIndexTest : public testing::Test {
     const std::vector<float> embeddings{1, 0, 0, 1, -1, 0};
     const std::vector<int64_t> ids{10, 20, 30};
     std::string bytes;
-    LocalVectorIndex::build(
+    FaissLocalVectorIndex::build(
         kind,
         VectorIndexMetric::kCosine,
         LocalVectorIndexOptions{},
@@ -52,7 +52,7 @@ class LocalVectorIndexTest : public testing::Test {
   }
 };
 
-TEST_F(LocalVectorIndexTest, search) {
+TEST_F(FaissLocalVectorIndexTest, search) {
   for (const auto kind :
        {VectorIndexKind::kFlat,
         VectorIndexKind::kIvfFlat,
@@ -60,12 +60,12 @@ TEST_F(LocalVectorIndexTest, search) {
         VectorIndexKind::kHnswSq}) {
     SCOPED_TRACE(VectorIndexKindName::toName(kind));
     const auto bytes = build(kind);
-    const LocalVectorIndex index(
+    const FaissLocalVectorIndex index(
         bytes, VectorIndexMetric::kCosine, /*searchOptions=*/{});
     EXPECT_EQ(kind, index.kind());
     EXPECT_EQ(2, index.dimension());
     EXPECT_EQ(3, index.size());
-    EXPECT_EQ(3, LocalVectorIndex::size(bytes));
+    EXPECT_EQ(3, FaissLocalVectorIndex::size(bytes));
 
     // Nearest (0.8, 0.6) are ids 10, then 20. 'k' exceeds the size of the
     // index, so the last entry is missing.
@@ -79,14 +79,30 @@ TEST_F(LocalVectorIndexTest, search) {
   }
 }
 
-TEST_F(LocalVectorIndexTest, searchOptions) {
+// The format reads its local indexes with its search settings, and rejects
+// settings that are not search settings before reading any index.
+TEST_F(FaissLocalVectorIndexTest, format) {
+  const auto format = FaissLocalVectorIndex::format();
+  const auto bytes = build(VectorIndexKind::kIvfFlat);
+  const auto index =
+      format->makeReader(VectorIndexMetric::kCosine, {{"ivf.nprobe", "1"}})
+          ->open(bytes);
+  EXPECT_EQ(2, index->dimension());
+  EXPECT_EQ(3, index->size());
+
+  VELOX_ASSERT_USER_THROW(
+      format->makeReader(VectorIndexMetric::kCosine, {{"hnsw.M", "8"}}),
+      "Vector index option is not a search setting: hnsw.M");
+}
+
+TEST_F(FaissLocalVectorIndexTest, searchOptions) {
   const auto ivfBytes = build(VectorIndexKind::kIvfFlat);
-  const LocalVectorIndex ivf(
+  const FaissLocalVectorIndex ivf(
       ivfBytes,
       VectorIndexMetric::kCosine,
       LocalVectorIndexOptions{.nprobe = 5});
   const auto hnswBytes = build(VectorIndexKind::kHnswSq);
-  const LocalVectorIndex hnsw(
+  const FaissLocalVectorIndex hnsw(
       hnswBytes,
       VectorIndexMetric::kCosine,
       LocalVectorIndexOptions{.efSearch = 100});
@@ -99,9 +115,9 @@ TEST_F(LocalVectorIndexTest, searchOptions) {
   EXPECT_THAT(ids, testing::ElementsAre(10));
 }
 
-TEST_F(LocalVectorIndexTest, errors) {
+TEST_F(FaissLocalVectorIndexTest, errors) {
   VELOX_ASSERT_THROW(
-      LocalVectorIndex("not an index", VectorIndexMetric::kCosine, {}),
+      FaissLocalVectorIndex("not an index", VectorIndexMetric::kCosine, {}),
       "Invalid local vector index");
 
   // A flat index without the ids build() keeps.
@@ -111,27 +127,28 @@ TEST_F(LocalVectorIndexTest, errors) {
   faiss::VectorIOWriter writer;
   faiss::write_index(&bare, &writer);
   VELOX_ASSERT_THROW(
-      LocalVectorIndex(
+      FaissLocalVectorIndex(
           std::string(writer.data.begin(), writer.data.end()),
           VectorIndexMetric::kCosine,
           {}),
       "Invalid local vector index: unsupported FAISS index");
   VELOX_ASSERT_THROW(
-      LocalVectorIndex::size(
+      FaissLocalVectorIndex::size(
           std::string(writer.data.begin(), writer.data.end())),
       "Invalid local vector index: unsupported FAISS index");
   VELOX_ASSERT_THROW(
-      LocalVectorIndex::size("IxMp"), "Invalid local vector index: too short");
+      FaissLocalVectorIndex::size("IxMp"),
+      "Invalid local vector index: too short");
   auto negative = build(VectorIndexKind::kFlat);
   const int64_t numEmbeddings{-1};
   std::memcpy(negative.data() + 8, &numEmbeddings, sizeof(numEmbeddings));
   VELOX_ASSERT_THROW(
-      LocalVectorIndex::size(negative),
+      FaissLocalVectorIndex::size(negative),
       "Local vector index must have at least one embedding");
 
   const auto flat = build(VectorIndexKind::kFlat);
   VELOX_ASSERT_THROW(
-      LocalVectorIndex(
+      FaissLocalVectorIndex(
           flat,
           VectorIndexMetric::kCosine,
           LocalVectorIndexOptions{.nprobe = 5}),
@@ -141,7 +158,7 @@ TEST_F(LocalVectorIndexTest, errors) {
   const std::vector<float> embeddings{1, 0};
   const std::vector<int64_t> missingId{-1};
   VELOX_ASSERT_THROW(
-      LocalVectorIndex::build(
+      FaissLocalVectorIndex::build(
           VectorIndexKind::kFlat,
           VectorIndexMetric::kCosine,
           LocalVectorIndexOptions{},
@@ -160,17 +177,17 @@ TEST_F(LocalVectorIndexTest, errors) {
   faiss::IndexIDMap idMap(&flatWithIds);
   idMap.add_with_ids(1, embeddings.data(), missingId.data());
   VELOX_ASSERT_THROW(
-      LocalVectorIndex(write(idMap), VectorIndexMetric::kCosine, {}),
+      FaissLocalVectorIndex(write(idMap), VectorIndexMetric::kCosine, {}),
       "Local vector index embedding id must not be -1");
   faiss::IndexFlatIP quantizer(2);
   faiss::IndexIVFFlat ivf(&quantizer, 2, 1, faiss::METRIC_INNER_PRODUCT);
   ivf.train(1, embeddings.data());
   ivf.add_with_ids(1, embeddings.data(), missingId.data());
   VELOX_ASSERT_THROW(
-      LocalVectorIndex(write(ivf), VectorIndexMetric::kCosine, {}),
+      FaissLocalVectorIndex(write(ivf), VectorIndexMetric::kCosine, {}),
       "Local vector index embedding id must not be -1");
 
-  const LocalVectorIndex index(flat, VectorIndexMetric::kCosine, {});
+  const FaissLocalVectorIndex index(flat, VectorIndexMetric::kCosine, {});
   const std::vector<float> query{1, 0, 0};
   std::vector<int64_t> ids(1);
   std::vector<float> scores(1);
@@ -179,7 +196,7 @@ TEST_F(LocalVectorIndexTest, errors) {
       "Query embedding length must match the vector index's");
 }
 
-TEST_F(LocalVectorIndexTest, parseSearchOptions) {
+TEST_F(FaissLocalVectorIndexTest, parseSearchOptions) {
   using Options = LocalVectorIndexOptions;
   EXPECT_EQ(
       (Options{.nprobe = 4, .efSearch = 100}),

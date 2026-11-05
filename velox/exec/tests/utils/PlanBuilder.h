@@ -1571,6 +1571,8 @@ class PlanBuilder {
   /// @param searchOptions Settings that override the ones recorded in the
   /// indexes.
   /// @param metric The metric the indexes were built for.
+  /// @param format The format of the indexes: its name in the query's
+  /// common::vectorindex::LocalVectorIndexFormats registry.
   PlanBuilder& vectorSearchJoin(
       const std::vector<std::string>& leftKeys,
       const std::vector<std::string>& rightKeys,
@@ -1584,7 +1586,8 @@ class PlanBuilder {
       core::JoinType joinType = core::JoinType::kInner,
       std::vector<std::pair<std::string, std::string>> searchOptions = {},
       common::vectorindex::VectorIndexMetric metric =
-          common::vectorindex::VectorIndexMetric::kCosine);
+          common::vectorindex::VectorIndexMetric::kCosine,
+      std::string format = "faiss");
 
   static core::IndexLookupConditionPtr parseIndexJoinCondition(
       const std::string& joinCondition,

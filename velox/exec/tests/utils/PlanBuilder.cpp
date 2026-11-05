@@ -2057,7 +2057,8 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
     const std::optional<std::string>& score,
     core::JoinType joinType,
     std::vector<std::pair<std::string, std::string>> searchOptions,
-    common::vectorindex::VectorIndexMetric metric) {
+    common::vectorindex::VectorIndexMetric metric,
+    std::string format) {
   VELOX_CHECK_NOT_NULL(planNode_, "VectorSearchJoin cannot be the source node");
   const auto& probeType = planNode_->outputType();
   const auto& buildType = right->outputType();
@@ -2080,6 +2081,7 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
       fields(buildType, rightKeys),
       field(probeType, probeEmbedding),
       field(buildType, buildIndex),
+      std::move(format),
       metric,
       k,
       std::move(searchOptions),

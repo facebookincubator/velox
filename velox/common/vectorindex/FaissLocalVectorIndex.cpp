@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 
 #include <algorithm>
 #include <cmath>
@@ -172,7 +172,7 @@ bool hasMissingId(const faiss::Index* index) {
 
 } // namespace
 
-void LocalVectorIndex::build(
+void FaissLocalVectorIndex::build(
     VectorIndexKind kind,
     VectorIndexMetric metric,
     const LocalVectorIndexOptions& options,
@@ -204,7 +204,7 @@ void LocalVectorIndex::build(
 }
 
 // static
-int64_t LocalVectorIndex::size(std::string_view bytes) {
+int64_t FaissLocalVectorIndex::size(std::string_view bytes) {
   // Every layout build() writes starts with a four-character code, then the
   // index header: the dimension, an int32, and the number of embeddings, an
   // int64.
@@ -225,7 +225,7 @@ int64_t LocalVectorIndex::size(std::string_view bytes) {
   return numEmbeddings;
 }
 
-LocalVectorIndex::LocalVectorIndex(
+FaissLocalVectorIndex::FaissLocalVectorIndex(
     std::string_view bytes,
     VectorIndexMetric metric,
     const LocalVectorIndexOptions& searchOptions) {
@@ -252,7 +252,7 @@ LocalVectorIndex::LocalVectorIndex(
       VELOX_USER_CHECK(
           index_->metric_type == faiss::METRIC_INNER_PRODUCT,
           "Local vector index does not match the metric: {}",
-          VectorIndexMetricName::toName(metric));
+          metric);
       break;
   }
   VELOX_USER_CHECK_GT(
@@ -274,21 +274,21 @@ LocalVectorIndex::LocalVectorIndex(
   }
 }
 
-LocalVectorIndex::~LocalVectorIndex() = default;
+FaissLocalVectorIndex::~FaissLocalVectorIndex() = default;
 
-VectorIndexKind LocalVectorIndex::kind() const {
+VectorIndexKind FaissLocalVectorIndex::kind() const {
   return kind_;
 }
 
-int32_t LocalVectorIndex::dimension() const {
+int32_t FaissLocalVectorIndex::dimension() const {
   return index_->d;
 }
 
-int64_t LocalVectorIndex::size() const {
+int64_t FaissLocalVectorIndex::size() const {
   return index_->ntotal;
 }
 
-void LocalVectorIndex::search(
+void FaissLocalVectorIndex::search(
     const Embeddings& queries,
     int64_t k,
     std::span<int64_t> ids,
@@ -302,6 +302,43 @@ void LocalVectorIndex::search(
   VELOX_CHECK_EQ(scores.size(), queries.size() * k);
   SingleThreadedFaiss singleThreaded;
   index_->search(queries.size(), queries.data(), k, scores.data(), ids.data());
+}
+
+namespace {
+
+class FaissReader : public LocalVectorIndexReader {
+ public:
+  FaissReader(VectorIndexMetric metric, LocalVectorIndexOptions searchOptions)
+      : metric_{metric}, searchOptions_{std::move(searchOptions)} {}
+
+  std::unique_ptr<LocalVectorIndex> open(
+      std::string_view bytes) const override {
+    return std::make_unique<FaissLocalVectorIndex>(
+        bytes, metric_, searchOptions_);
+  }
+
+ private:
+  const VectorIndexMetric metric_;
+  const LocalVectorIndexOptions searchOptions_;
+};
+
+class FaissFormat : public LocalVectorIndexFormat {
+ public:
+  std::unique_ptr<LocalVectorIndexReader> makeReader(
+      VectorIndexMetric metric,
+      const LocalVectorIndex::SearchOptions& searchOptions) const override {
+    return std::make_unique<FaissReader>(
+        metric,
+        LocalVectorIndexOptions::parseSearch(
+            {searchOptions.begin(), searchOptions.end()}));
+  }
+};
+
+} // namespace
+
+// static
+std::shared_ptr<LocalVectorIndexFormat> FaissLocalVectorIndex::format() {
+  return std::make_shared<FaissFormat>();
 }
 
 } // namespace facebook::velox::common::vectorindex
