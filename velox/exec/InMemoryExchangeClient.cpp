@@ -304,24 +304,57 @@ std::vector<std::unique_ptr<SerializedPageBase>> InMemoryExchangeClient::next(
 }
 
 void InMemoryExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
-  auto self = shared_from_this();
+  // A queued response must not keep the client or source alive after close().
+  auto weakSelf = weak_from_this();
   for (auto& spec : requestSpecs) {
+    auto source = std::move(spec.source);
+    const std::weak_ptr<ExchangeSource> weakSource = source;
     auto future = folly::SemiFuture<ExchangeSource::Response>::makeEmpty();
     if (spec.maxBytes == 0) {
-      future = spec.source->requestDataSizes(requestDataSizesMaxWaitSec_);
+      future = source->requestDataSizes(requestDataSizesMaxWaitSec_);
     } else {
-      future = spec.source->request(spec.maxBytes, kRequestDataMaxWait);
+      future = source->request(spec.maxBytes, kRequestDataMaxWait);
     }
     VELOX_CHECK(future.valid());
     std::move(future)
         .via(executor_)
         .thenValue(
-            [self,
-             spec = std::move(spec),
+            [weakSelf,
+             weakSource,
+             maxBytes = spec.maxBytes,
              requestWatch = folly::stop_watch<std::chrono::milliseconds>()](
                 ExchangeSource::Response&& response) {
+              auto self = weakSelf.lock();
+              if (!self) {
+                return;
+              }
               const auto requestTimeMs = requestWatch.elapsed().count();
-              if (spec.maxBytes == 0) {
+              std::vector<RequestSpec> requestSpecs;
+              std::shared_ptr<ExchangeSource> source;
+              {
+                std::lock_guard<std::mutex> l(self->queue_->mutex());
+                if (self->closed_) {
+                  return;
+                }
+                source = weakSource.lock();
+                if (!source) {
+                  return;
+                }
+                if (!response.atEnd) {
+                  if (!response.remainingBytes.empty()) {
+                    for (auto bytes : response.remainingBytes) {
+                      VELOX_CHECK_GT(bytes, 0);
+                    }
+                    self->producingSources_.push(
+                        {source, std::move(response.remainingBytes)});
+                  } else {
+                    self->emptySources_.push(source);
+                  }
+                }
+                self->totalPendingBytes_ -= maxBytes;
+                requestSpecs = self->pickSourcesToRequestLocked();
+              }
+              if (maxBytes == 0) {
                 RECORD_HISTOGRAM_METRIC_VALUE(
                     kMetricExchangeDataSizeTimeMs, requestTimeMs);
                 RECORD_METRIC_VALUE(kMetricExchangeDataSizeCount);
@@ -333,45 +366,34 @@ void InMemoryExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
                     kMetricExchangeDataSize, response.bytes);
                 RECORD_METRIC_VALUE(kMetricExchangeDataCount);
               }
-
-              bool pauseCurrentSource{false};
-              std::vector<RequestSpec> requestSpecs;
-              std::shared_ptr<ExchangeSource> currentSource = spec.source;
-              {
-                std::lock_guard<std::mutex> l(self->queue_->mutex());
-                if (self->closed_) {
-                  return;
-                }
-                if (!response.atEnd) {
-                  if (!response.remainingBytes.empty()) {
-                    for (auto bytes : response.remainingBytes) {
-                      VELOX_CHECK_GT(bytes, 0);
-                    }
-                    self->producingSources_.push(
-                        {std::move(spec.source),
-                         std::move(response.remainingBytes)});
-                  } else {
-                    self->emptySources_.push(std::move(spec.source));
-                  }
-                }
-                self->totalPendingBytes_ -= spec.maxBytes;
-                requestSpecs = self->pickSourcesToRequestLocked();
-                pauseCurrentSource =
-                    std::find_if(
-                        requestSpecs.begin(),
-                        requestSpecs.end(),
-                        [&currentSource](const RequestSpec& spec) -> bool {
-                          return spec.source.get() == currentSource.get();
-                        }) == requestSpecs.end();
-              }
-              if (pauseCurrentSource) {
-                currentSource->pause();
+              if (std::none_of(
+                      requestSpecs.begin(),
+                      requestSpecs.end(),
+                      [&source](const RequestSpec& spec) {
+                        return spec.source == source;
+                      })) {
+                source->pause();
               }
               self->request(std::move(requestSpecs));
             })
         .thenError(
-            folly::tag_t<std::exception>{}, [self](const std::exception& e) {
-              self->queue_->setError(e.what());
+            folly::tag_t<std::exception>{},
+            [weakSelf, weakSource](const std::exception& e) {
+              auto self = weakSelf.lock();
+              if (!self) {
+                return;
+              }
+              std::vector<ContinuePromise> promises;
+              {
+                std::lock_guard<std::mutex> l(self->queue_->mutex());
+                if (self->closed_ || weakSource.expired()) {
+                  return;
+                }
+                promises = self->queue_->setErrorLocked(e.what());
+              }
+              for (auto& promise : promises) {
+                promise.setValue();
+              }
             });
   }
 }
