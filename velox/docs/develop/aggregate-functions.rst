@@ -344,6 +344,8 @@ At this point you have accumulatorFixedWidthSize() and initializeNewGroupsIntern
     * addSingleGroupIntermediateResults() method.
 * Optional logic for converting raw inputs into intermediate results:
     * supportsToIntermediate() and toIntermediate() methods.
+* Optional logic for producing an empty group's intermediate result:
+    * supportsFillEmptyIntermediate() and fillEmptyIntermediate() methods.
 
 Some methods are only used in a subset of aggregation workflows. The following
 table shows which methods are used in which workflows.
@@ -390,6 +392,12 @@ table shows which methods are used in which workflows.
      - N
    * - toIntermediate
      - Y
+     - N
+     - N
+     - N
+     - N
+   * - fillEmptyIntermediate
+     - Y (used by merge companions)
      - N
      - N
      - N
@@ -508,6 +516,30 @@ implement toIntermediate() method which simply returns the input unmodified.
       std::vector<VectorPtr>& args,
       VectorPtr& result) const {
     VELOX_NYI("toIntermediate not supported");
+  }
+
+A `_merge` companion can abandon partial aggregation too. Each input row then
+becomes its own group, so selected non-null rows pass through unchanged, while
+masked-out and null rows must hold an empty group's intermediate result: null
+for most functions, 0 for count, and (0, 0) for Spark's avg. Implement
+fillEmptyIntermediate() and override supportsFillEmptyIntermediate() to write
+it, otherwise the merge companion falls back to creating fake groups.
+
+.. code-block:: c++
+
+  /// Returns true if fillEmptyIntermediate() is supported, allowing merge
+  /// companions to bypass accumulator construction.
+  virtual bool supportsFillEmptyIntermediate() const {
+    return false;
+  }
+
+  /// Writes an empty group's intermediate into selected rows of 'result',
+  /// leaving other rows unchanged, so merge pass-through can handle masked-out
+  /// and null inputs.
+  virtual void fillEmptyIntermediate(
+      const SelectivityVector& rows,
+      VectorPtr& result) const {
+    VELOX_NYI("fillEmptyIntermediate not supported");
   }
 
 GroupBy aggregation code path is done. We proceed to global aggregation.
@@ -715,24 +747,30 @@ Testing
 It is time to put all the pieces together and test how well the new function
 works.
 
-Use AggregationTestBase from velox/aggregates/tests/AggregationTestBase.h as a
-base class for the test.
+Use AggregationTestBase from
+velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h as a base class
+for the test, and AggregationTester to run the function.
 
 If the new aggregate function is supported by `DuckDB
 <https://duckdb.org/docs/sql/aggregates>`_, you can use DuckDB to check
 results. In this case you specify input data, grouping keys, a list of
-aggregates and a SQL query to run on DuckDB to calculate the expected results
-and call helper function testAggregates defined in AggregationTestBase class.
-Grouping keys can be empty for global aggregations.
+aggregates and a SQL query to run on DuckDB to calculate the expected results.
+Leave out the grouping keys for global aggregations.
 
 .. code-block:: c++
 
     // Global aggregation.
-    testAggregations(vectors, {}, {"sum(c1)"}, "SELECT sum(c1) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"sum(c1)"})
+        .assertResults("SELECT sum(c1) FROM tmp");
 
     // Group by aggregation.
-    testAggregations(
-        vectors, {"c0"}, {"sum(c1)"}, "SELECT c0, sum(c1) FROM tmp GROUP BY 1");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"sum(c1)"})
+        .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY 1");
 
 If the new function is not supported by DuckDB, you need to specify the expected
 results manually.
@@ -740,12 +778,23 @@ results manually.
 .. code-block:: c++
 
     // Global aggregation.
-    testAggregations(vectors, {}, {"map_union(c1)"}, expectedResult);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"map_union(c1)"})
+        .assertResults(expectedResult);
 
     // Group by aggregation.
-    testAggregations(vectors, {"c0"}, {"map_union(c1)"}, expectedResult);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"map_union(c1)"})
+        .assertResults(expectedResult);
 
-Under the covers, testAggregations method generates multiple different but
+Use withCompanion() to also run the plans that compute the aggregates with
+their companion functions, and assertError() to check that every plan fails
+with a given error.
+
+Under the covers, AggregationTester generates multiple different but
 logically equivalent plans, executes these plans, verifies successful
 completion and compares the results with DuckDB or specified expected results.
 

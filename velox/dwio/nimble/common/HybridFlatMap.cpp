@@ -19,7 +19,6 @@
 #include <iterator>
 #include <numeric>
 
-#include <folly/Conv.h>
 #include <folly/container/F14Set.h>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -54,17 +53,9 @@ namespace {
 // The decimal form of `key`'s value as an integer of type T, which must be
 // `key` itself.
 template <typename T>
-std::string canonicalIntegerKey(ScalarKind keyKind, std::string_view key) {
-  const auto parsed = folly::tryTo<T>(key);
-  NIMBLE_USER_CHECK(
-      parsed.hasValue(),
-      "Hybrid FlatMap key '{}' cannot be parsed as {}.",
-      key,
-      keyKind);
-  auto canonical = std::to_string(parsed.value());
-  NIMBLE_USER_CHECK_EQ(
-      canonical, key, "Hybrid FlatMap key '{}' is not canonical.", key);
-  return canonical;
+std::string canonicalIntegerKey(std::string_view key) {
+  HybridFlatMap::parseCanonicalIntegerKey<T>(key);
+  return std::string(key);
 }
 
 // Sorts `keys` as strings. Every writer sorts its grouped keys again when it
@@ -84,13 +75,13 @@ std::string HybridFlatMap::canonicalKey(
   NIMBLE_USER_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
   switch (keyKind) {
     case ScalarKind::Int8:
-      return canonicalIntegerKey<int8_t>(keyKind, key);
+      return canonicalIntegerKey<int8_t>(key);
     case ScalarKind::Int16:
-      return canonicalIntegerKey<int16_t>(keyKind, key);
+      return canonicalIntegerKey<int16_t>(key);
     case ScalarKind::Int32:
-      return canonicalIntegerKey<int32_t>(keyKind, key);
+      return canonicalIntegerKey<int32_t>(key);
     case ScalarKind::Int64:
-      return canonicalIntegerKey<int64_t>(keyKind, key);
+      return canonicalIntegerKey<int64_t>(key);
     case ScalarKind::String:
       return std::string(key);
     case ScalarKind::UInt8:
@@ -437,6 +428,12 @@ void checkHybridFlatMapGroupKeys(
   for (size_t i = 0; i < groupKeys.size(); ++i) {
     NIMBLE_CHECK(!groupKeys[i].empty(), "Hybrid FlatMap key cannot be empty.");
     if (isDefaultGroup || i == 0) {
+      continue;
+    }
+
+    // Readers check every schema for every batch. One comparison accepts
+    // ascending keys; the checks below only name the failure.
+    if (groupKeys[i - 1] < groupKeys[i]) {
       continue;
     }
     NIMBLE_CHECK_NE(

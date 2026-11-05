@@ -124,6 +124,42 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
     CudfHiveConnectorTestBase::TearDownTestCase();
   }
 
+  // Writes 'data' to 'filePath' and returns a cuDF Hive scan of it with
+  // 'remainingFilter'.
+  core::PlanNodePtr makeRemainingFilterPlan(
+      const RowVectorPtr& data,
+      const std::string& remainingFilter,
+      const std::shared_ptr<TempFilePath>& filePath) {
+    writeToFile(filePath->getPath(), data);
+    const auto rowType = asRowType(data->type());
+    return PlanBuilder(pool_.get())
+        .startTableScan()
+        .connectorId(kCudfHiveConnectorId)
+        .outputType(rowType)
+        .dataColumns(rowType)
+        .assignments(
+            facebook::velox::exec::test::HiveConnectorTestBase::
+                allRegularColumns(rowType))
+        .remainingFilter(remainingFilter)
+        .endTableScan()
+        .planNode();
+  }
+
+  // Expects the scan of 'data' with 'remainingFilter' to fail as unsupported
+  // with 'message'.
+  void assertRemainingFilterUnsupported(
+      const RowVectorPtr& data,
+      const std::string& remainingFilter,
+      const std::string& message) {
+    const auto filePath = TempFilePath::create();
+    auto plan = makeRemainingFilterPlan(data, remainingFilter, filePath);
+    VELOX_ASSERT_UNSUPPORTED_THROW(
+        AssertQueryBuilder(plan)
+            .splits(makeCudfHiveConnectorSplits({filePath}))
+            .copyResults(pool_.get()),
+        message);
+  }
+
   std::vector<RowVectorPtr> makeVectors(
       int32_t count,
       int32_t rowsPerVector,
@@ -1133,7 +1169,7 @@ TEST_F(TableScanTest, partitionedTable) {
     const auto utcTimestamp =
         util::fromTimestampString(
             StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
-            .thenOrThrow(folly::identity, [&](const Status& status) {
+            .thenOrThrow(std::identity{}, [&](const Status& status) {
               VELOX_USER_FAIL("{}", status.message());
             });
     auto localTimestamp = utcTimestamp;
@@ -2506,29 +2542,50 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
 // The data source cannot apply the session's cast settings, so it rejects a
 // remaining filter that casts from VARCHAR.
 TEST_F(TableScanTest, remainingFilterCastFromVarchar) {
-  auto rowType = ROW({"c0"}, {VARCHAR()});
-  auto filePath = TempFilePath::create();
-  writeToFile(
-      filePath->getPath(),
-      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}));
-
-  auto plan = PlanBuilder(pool_.get())
-                  .startTableScan()
-                  .connectorId(kCudfHiveConnectorId)
-                  .outputType(rowType)
-                  .dataColumns(rowType)
-                  .assignments(
-                      facebook::velox::exec::test::HiveConnectorTestBase::
-                          allRegularColumns(rowType))
-                  .remainingFilter("try_cast(c0 as double) > 1.0")
-                  .endTableScan()
-                  .planNode();
-
-  VELOX_ASSERT_UNSUPPORTED_THROW(
-      AssertQueryBuilder(plan)
-          .splits(makeCudfHiveConnectorSplits({filePath}))
-          .copyResults(pool_.get()),
+  assertRemainingFilterUnsupported(
+      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}),
+      "try_cast(c0 as double) > 1.0",
       "Remaining filter with a cast from VARCHAR is not supported");
+}
+
+// The data source cannot apply the session's legacy_cast or time zone to the
+// text of a TIMESTAMP, so it rejects a remaining filter that casts one to
+// VARCHAR, a constant included: a constant beside a column becomes a pushed
+// down filter through the session's evaluator, but one anywhere else, here
+// under an OR, would be folded by the data source without legacy_cast and the
+// cast lost.
+TEST_F(TableScanTest, remainingFilterCastTimestampToVarchar) {
+  const auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(0, 0), Timestamp(1'767'314'700, 0)}),
+       makeFlatVector<std::string>({"1970-01-01 00:00:00.000", "x"})});
+  for (
+      const auto* filter :
+      {"cast(c0 as varchar) like '2026-%'",
+       "c1 = cast(TIMESTAMP '1970-01-01 00:00:00' as varchar) or c0 is null"}) {
+    SCOPED_TRACE(filter);
+    assertRemainingFilterUnsupported(
+        data,
+        filter,
+        "Remaining filter with a cast from TIMESTAMP to VARCHAR is not "
+        "supported");
+  }
+}
+
+// The text of a DATE depends on no session setting, so a remaining filter that
+// casts one to VARCHAR runs on the data source.
+TEST_F(TableScanTest, remainingFilterCastDateToVarchar) {
+  const auto day = DATE()->toDays("2026-01-02");
+  const auto filePath = TempFilePath::create();
+  auto plan = makeRemainingFilterPlan(
+      makeRowVector({"c0"}, {makeFlatVector<int32_t>({day, 0}, DATE())}),
+      "cast(c0 as varchar) like '2026-%'",
+      filePath);
+  AssertQueryBuilder(plan)
+      .splits(makeCudfHiveConnectorSplits({filePath}))
+      .assertResults(
+          makeRowVector({"c0"}, {makeFlatVector<int32_t>({day}, DATE())}));
 }
 
 TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {

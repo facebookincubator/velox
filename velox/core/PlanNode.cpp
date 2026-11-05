@@ -20,7 +20,6 @@
 #include "velox/core/PlanNode.h"
 
 #include "velox/common/EnumDefine.h"
-#include "velox/common/vectorindex/LocalVectorIndexOptions.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/vector/VectorSaver.h"
@@ -3885,6 +3884,7 @@ VectorSearchJoinNode::VectorSearchJoinNode(
     std::vector<FieldAccessTypedExprPtr> rightKeys,
     FieldAccessTypedExprPtr probeEmbedding,
     FieldAccessTypedExprPtr buildIndex,
+    std::string format,
     common::vectorindex::VectorIndexMetric metric,
     int64_t k,
     std::vector<std::pair<std::string, std::string>> searchOptions,
@@ -3899,6 +3899,7 @@ VectorSearchJoinNode::VectorSearchJoinNode(
       rightKeys_(std::move(rightKeys)),
       probeEmbedding_(std::move(probeEmbedding)),
       buildIndex_(std::move(buildIndex)),
+      format_(std::move(format)),
       metric_(metric),
       k_(k),
       searchOptions_(std::move(searchOptions)),
@@ -3931,9 +3932,9 @@ VectorSearchJoinNode::VectorSearchJoinNode(
       "Build index must be VARBINARY: {}",
       buildIndex_->type()->toString());
 
+  VELOX_USER_CHECK(
+      !format_.empty(), "Vector search join requires a vector index format");
   VELOX_USER_CHECK_GE(k_, 1, "Vector search join requires k of at least 1");
-  common::vectorindex::LocalVectorIndexOptions::parseSearch(
-      {searchOptions_.begin(), searchOptions_.end()});
 
   VELOX_USER_CHECK(
       !idName_.has_value() || idName_ != scoreName_,
@@ -3995,8 +3996,7 @@ void VectorSearchJoinNode::addDetails(std::stringstream& stream) const {
     stream << ", ";
   }
   stream << probeEmbedding_->name() << " nearest in " << buildIndex_->name()
-         << " (" << common::vectorindex::VectorIndexMetricName::toName(metric_)
-         << "), k: " << k_;
+         << " (" << format_ << ", " << metric_ << "), k: " << k_;
   for (const auto& [key, value] : searchOptions_) {
     stream << ", " << key << ": " << value;
   }
@@ -4009,6 +4009,7 @@ folly::dynamic VectorSearchJoinNode::serialize() const {
   obj["rightKeys"] = ISerializable::serialize(rightKeys_);
   obj["probeEmbedding"] = probeEmbedding_->serialize();
   obj["buildIndex"] = buildIndex_->serialize();
+  obj["format"] = format_;
   obj["metric"] = common::vectorindex::VectorIndexMetricName::toName(metric_);
   obj["k"] = k_;
   auto options = folly::dynamic::array();
@@ -4048,6 +4049,7 @@ PlanNodePtr VectorSearchJoinNode::create(
       deserializeFields(obj["rightKeys"], context),
       deserializeField(obj["probeEmbedding"]),
       deserializeField(obj["buildIndex"]),
+      obj["format"].asString(),
       common::vectorindex::VectorIndexMetricName::toVectorIndexMetric(
           obj["metric"].asString()),
       obj["k"].asInt(),

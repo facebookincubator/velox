@@ -34,7 +34,6 @@ class AverageAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    disableTestIncremental();
     registerAggregateFunctions("spark_", true);
   }
 
@@ -42,13 +41,10 @@ class AverageAggregationTest : public AggregationTestBase {
       const std::vector<RowVectorPtr>& input,
       const std::vector<RowVectorPtr>& expected,
       const std::vector<TypePtr>& argTypes) {
-    testAggregations(
-        input,
-        {},
-        {"spark_avg(c0)"},
-        {},
-        expected,
-        /*config*/ {});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_avg(c0)"})
+        .assertResults(expected);
   }
 
   core::PlanNodePtr createMergeExtractDecimal(
@@ -92,7 +88,10 @@ TEST_F(AverageAggregationTest, avgAllNulls) {
           makeAllNullFlatVector<int64_t>(size),
       }),
   };
-  testAggregations(vectors, {}, {"spark_avg(c0)"}, "SELECT NULL");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"spark_avg(c0)"})
+      .assertResults("SELECT NULL");
 
   auto plan = PlanBuilder()
                   .values(vectors)
@@ -133,11 +132,12 @@ TEST_F(AverageAggregationTest, avgAllNulls) {
       }),
   };
   createDuckDbTable(vectors);
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"spark_avg(c1)"},
-      "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"spark_avg(c1)"})
+      .withCompanion()
+      .assertResults("SELECT c0, avg(c1) FROM tmp GROUP BY c0");
 
   plan = PlanBuilder()
              .values(vectors)
@@ -165,8 +165,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   auto shortDecimalInput = makeRowVector({shortDecimal});
   auto shortDecimalExpected = makeRowVector(
       {makeConstant<int64_t>(3'000 * kRescale, 1, DECIMAL(16, 5))});
-  testGlobalAverage(
-      {shortDecimalInput}, {shortDecimalExpected}, {DECIMAL(12, 1)});
+  AggregationTester(*this)
+      .inputs(shortDecimalInput)
+      .aggregates({"spark_avg(c0)"})
+      .withCompanion(CompanionPlans::kMergeOnly)
+      .assertResults(shortDecimalExpected);
 
   // Long decimal aggregation.
   auto longDecimalInput = makeRowVector({makeNullableFlatVector<int128_t>(
@@ -179,8 +182,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       DECIMAL(23, 4))});
   auto longDecimalExpected = makeRowVector({makeConstant<int128_t>(
       HugeInt::build(10, 300) * kRescale, 1, DECIMAL(27, 8))});
-  testGlobalAverage(
-      {longDecimalInput}, {longDecimalExpected}, {DECIMAL(23, 4)});
+  AggregationTester(*this)
+      .inputs(longDecimalInput)
+      .aggregates({"spark_avg(c0)"})
+      .withCompanion(CompanionPlans::kMergeOnly)
+      .assertResults(longDecimalExpected);
 
   // The total sum overflows the max int128_t limit.
   std::vector<int128_t> rawVector;
@@ -244,12 +250,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       makeRowVector(
           {makeNullableFlatVector<int32_t>({3}),
            makeFlatVector(std::vector<int128_t>{-24976667}, DECIMAL(19, 6))})};
-  testAggregations(
-      inputRows,
-      {"c0"},
-      {"spark_avg(c1)"},
-      expectedResult,
-      /*config*/ {});
+  AggregationTester(*this)
+      .inputs(inputRows)
+      .groupBy({"c0"})
+      .aggregates({"spark_avg(c1)"})
+      .assertResults(expectedResult);
 
   // dividePrecision greater than resultScale in computeFinalResult.
   auto valueA = HugeInt::parse("11999999998800000000");
@@ -266,11 +271,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
            std::vector<int128_t>{HugeInt::parse("119999999994857142857143")},
            DECIMAL(38, 22))})};
 
-  testAggregations(
-      longDecimalInputRows,
-      {"c0"},
-      {"spark_avg(c1)"},
-      longDecimalExpectedResult);
+  AggregationTester(*this)
+      .inputs(longDecimalInputRows)
+      .groupBy({"c0"})
+      .aggregates({"spark_avg(c1)"})
+      .assertResults(longDecimalExpectedResult);
 }
 
 TEST_F(AverageAggregationTest, avgDecimalWithMultipleRowVectors) {
@@ -384,6 +389,12 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              kBatchSize, [](auto row) { return row % 3 != 0; })}));
   }
   createDuckDbTable(data);
+
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_avg(i)", "spark_avg(d)"})
+      .withCompanion()
+      .assertResults("SELECT avg(i), avg(d) FROM tmp");
 
   core::PlanNodeId partialNodeId;
   auto plan = PlanBuilder()

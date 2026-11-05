@@ -96,6 +96,12 @@ class Aggregate {
     return false;
   }
 
+  /// Returns true if fillEmptyIntermediate() is supported, allowing merge
+  /// companions to bypass accumulator construction.
+  virtual bool supportsFillEmptyIntermediate() const {
+    return false;
+  }
+
   void setAllocator(HashStringAllocator* allocator) {
     setAllocatorInternal(allocator);
   }
@@ -318,6 +324,15 @@ class Aggregate {
       std::vector<VectorPtr>& args,
       VectorPtr& result) const {
     VELOX_NYI("toIntermediate not supported");
+  }
+
+  /// Writes an empty group's intermediate into selected rows of 'result',
+  /// leaving other rows unchanged, so merge pass-through can handle masked-out
+  /// and null inputs.
+  virtual void fillEmptyIntermediate(
+      const SelectivityVector& rows,
+      VectorPtr& result) const {
+    VELOX_NYI("fillEmptyIntermediate not supported");
   }
 
   // Frees any out of line storage for the accumulator in

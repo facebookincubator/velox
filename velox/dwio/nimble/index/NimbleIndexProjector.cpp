@@ -265,15 +265,6 @@ NimbleIndexProjector::NimbleIndexProjector(
       numStripes_{tablet_->stripeCount()},
       projection_{std::move(projection)},
       hasProjectedHybridFlatMaps_{hasProjectedHybridFlatMaps(*projection_)},
-      streamSlicer_{std::make_unique<serde::StreamSlicer>(
-          projection_->nimbleType,
-          pool_,
-          serde::StreamSlicer::Options{
-              .streamVersion = SerializationVersion::kTablet,
-              .streamHasChunkHeader = true,
-              .streamsUseVarintRowCount =
-                  tablet_->properties().compactRowCountEncoding(),
-          })},
       dataInput_{std::move(dataInput)} {
   NIMBLE_CHECK_NOT_NULL(
       clusterIndex_, "NimbleIndexProjector requires a tablet with an index");
@@ -1202,6 +1193,21 @@ NimbleIndexProjector::processStripeStreams() {
   return result;
 }
 
+serde::StreamSlicer& NimbleIndexProjector::streamSlicer() {
+  if (streamSlicer_ == nullptr) {
+    streamSlicer_ = std::make_unique<serde::StreamSlicer>(
+        projection_->nimbleType,
+        pool_,
+        serde::StreamSlicer::Options{
+            .streamVersion = SerializationVersion::kTablet,
+            .streamHasChunkHeader = true,
+            .streamsUseVarintRowCount =
+                tablet_->properties().compactRowCountEncoding(),
+        });
+  }
+  return *streamSlicer_;
+}
+
 void NimbleIndexProjector::validateProjection() const {
   NIMBLE_CHECK_EQ(
       projection_->nimbleType->kind(),
@@ -1599,7 +1605,7 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
       packRange.numRows(), 0, "Partial stripe range must not be empty");
   const auto& loadedStreams =
       collectStripeStreamViews(stripeOffset, /*resolveCanonicalStreams=*/false);
-  auto sliced = streamSlicer_->slice(
+  auto sliced = streamSlicer().slice(
       loadedStreams.streams,
       packRange.startRow,
       packRange.numRows(),

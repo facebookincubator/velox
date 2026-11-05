@@ -31,7 +31,8 @@ std::unique_ptr<dwio::common::Reader> NimbleReaderFactory::createReader(
   }
 
   addThreadLocalRuntimeStat("batchNimbleReader", RuntimeCounter(1));
-  auto reader = detail::createBatchReader(options, input->getReadFile());
+  auto reader = detail::createBatchReader(
+      options, input->getReadFile(), input->getInputStream()->fileIoContext());
   VELOX_CHECK_NOT_NULL(
       reader,
       "The batch NIMBLE reader is not available in this build. Leave "

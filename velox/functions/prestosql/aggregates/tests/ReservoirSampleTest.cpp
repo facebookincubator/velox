@@ -63,8 +63,10 @@ TEST_F(ReservoirSampleTest, testNoInitialSample) {
 
   auto expected = makeResultDouble(5L, {1.0, 1.0});
 
-  testAggregations(
-      {data}, {}, {"reservoir_sample(c0, c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reservoir_sample(c0, c1, c2, c3)"})
+      .assertResults(expected);
 }
 
 TEST_F(ReservoirSampleTest, testLarge) {
@@ -84,8 +86,10 @@ TEST_F(ReservoirSampleTest, testLarge) {
   auto expected =
       makeResultDouble(static_cast<int64_t>(inputSize), expectedSample);
 
-  testAggregations(
-      {data}, {}, {"reservoir_sample(c0, c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reservoir_sample(c0, c1, c2, c3)"})
+      .assertResults(expected);
 }
 
 TEST_F(ReservoirSampleTest, testInvalidSampleSizeZero) {
@@ -96,10 +100,10 @@ TEST_F(ReservoirSampleTest, testInvalidSampleSizeZero) {
       makeFlatConstantVector<int32_t>(0, 5),
   });
 
-  EXPECT_THROW(
-      testAggregations(
-          {data}, {}, {"reservoir_sample(c0, c1, c2, c3)"}, "Throws exception"),
-      VeloxException);
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reservoir_sample(c0, c1, c2, c3)"})
+      .assertError("sample size must be positive");
 }
 
 TEST_F(ReservoirSampleTest, testInvalidSampleSizeNegative) {
@@ -110,10 +114,10 @@ TEST_F(ReservoirSampleTest, testInvalidSampleSizeNegative) {
       makeFlatConstantVector<int32_t>(-1, 5),
   });
 
-  EXPECT_THROW(
-      testAggregations(
-          {data}, {}, {"reservoir_sample(c0, c1, c2, c3)"}, "Throws exception"),
-      VeloxException);
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reservoir_sample(c0, c1, c2, c3)"})
+      .assertError("sample size must be positive");
 }
 
 TEST_F(ReservoirSampleTest, testInitialSampleSameSize) {
@@ -131,8 +135,10 @@ TEST_F(ReservoirSampleTest, testInitialSampleSameSize) {
 
   auto expected = makeResultDouble(15L, {1.0, 1.0});
 
-  testAggregations(
-      {data}, {}, {"reservoir_sample(c0, c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reservoir_sample(c0, c1, c2, c3)"})
+      .assertResults(expected);
 }
 
 TEST_F(ReservoirSampleTest, testInitialSampleWrongSize) {
@@ -148,10 +154,11 @@ TEST_F(ReservoirSampleTest, testInitialSampleWrongSize) {
       makeFlatConstantVector<int32_t>(2, 5),
   });
 
-  EXPECT_THROW(
-      testAggregations(
-          {data}, {}, {"reservoir_sample(c0, c1, c2, c3)"}, "Throws exception"),
-      VeloxException);
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reservoir_sample(c0, c1, c2, c3)"})
+      .assertError(
+          "the size of the initial sample must be equal to desired_sample_size");
 }
 
 TEST_F(ReservoirSampleTest, testInitialSampleSmallerThanMaxSize) {
@@ -169,8 +176,10 @@ TEST_F(ReservoirSampleTest, testInitialSampleSmallerThanMaxSize) {
 
   auto expected = makeResultDouble(6L, {1.0, 1.0});
 
-  testAggregations(
-      {data}, {}, {"reservoir_sample(c0, c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reservoir_sample(c0, c1, c2, c3)"})
+      .assertResults(expected);
 }
 
 TEST_F(
@@ -188,10 +197,11 @@ TEST_F(
       makeFlatConstantVector<int32_t>(2, 5),
   });
 
-  EXPECT_THROW(
-      testAggregations(
-          {data}, {}, {"reservoir_sample(c0, c1, c2, c3)"}, "Throws exception"),
-      VeloxException);
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reservoir_sample(c0, c1, c2, c3)"})
+      .assertError(
+          "InitialProcessedCount must be greater than or equal to the number");
 }
 
 TEST_F(ReservoirSampleTest, testValidResults) {

@@ -19,6 +19,7 @@
 #include <filesystem>
 
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/iceberg/DeletionVectorWriter.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -194,8 +195,8 @@ void addColumnHandles(
         std::make_shared<const IcebergColumnHandle>(
             columnName,
             partitionColumnIds.contains(i)
-                ? FileColumnHandle::ColumnType::kPartitionKey
-                : FileColumnHandle::ColumnType::kRegular,
+                ? connector::FileColumnHandle::ColumnType::kPartitionKey
+                : connector::FileColumnHandle::ColumnType::kRegular,
             type,
             field));
   }
@@ -414,6 +415,44 @@ IcebergTestBase::writeDwrfFileWithFieldIds(
   return file;
 }
 
+std::pair<std::shared_ptr<TempDirectoryPath>, IcebergDeleteFile>
+IcebergTestBase::writeDeletionVector(
+    const std::string& referencedDataFile,
+    const std::vector<int64_t>& deletedPositions) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions(deletedPositions);
+  const auto blob = writer.serialize();
+
+  // LocalFileSink refuses to open an existing file, so write the Puffin into
+  // a fresh path under a temp directory rather than a pre-created TempFile.
+  auto puffinDir = TempDirectoryPath::create();
+  const std::string puffinPath = puffinDir->getPath() + "/deletes.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  const auto [blobOffset, blobLength] = writePuffinFile(
+      *sink,
+      *pool_,
+      blob,
+      referencedDataFile,
+      static_cast<int64_t>(deletedPositions.size()));
+  sink->close();
+
+  IcebergDeleteFile dvFile(
+      FileContent::kDeletionVector,
+      puffinPath,
+      fileFormat_,
+      /*recordCount=*/deletedPositions.size(),
+      /*fileSizeInBytes=*/getFileSize(puffinPath),
+      /*equalityFieldIds=*/{},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/0,
+      /*contentOffset=*/static_cast<int64_t>(blobOffset),
+      /*contentLength=*/static_cast<int64_t>(blobLength),
+      /*referencedDataFile=*/referencedDataFile);
+  return {puffinDir, dvFile};
+}
+
 #ifdef VELOX_ENABLE_PARQUET
 std::shared_ptr<common::testutil::TempFilePath>
 IcebergTestBase::writeParquetFile(
@@ -469,8 +508,8 @@ ColumnHandleMap IcebergTestBase::makeColumnHandles(
     const auto& columnName = rowType->nameOf(i);
     const auto& columnType = rowType->childAt(i);
     const auto columnHandleType = partitionIndices.contains(i)
-        ? FileColumnHandle::ColumnType::kPartitionKey
-        : FileColumnHandle::ColumnType::kRegular;
+        ? connector::FileColumnHandle::ColumnType::kPartitionKey
+        : connector::FileColumnHandle::ColumnType::kRegular;
     assignments.insert(
         {columnName,
          std::make_shared<HiveColumnHandle>(

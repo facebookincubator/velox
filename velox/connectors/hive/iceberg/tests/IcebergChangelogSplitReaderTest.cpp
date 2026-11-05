@@ -16,8 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/IcebergChangelogSplitReader.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
@@ -46,14 +46,14 @@ class IcebergChangelogSplitReaderTest : public test::IcebergTestBase {
     ChangelogScanContext scanContext{
         std::make_shared<ColumnHandleMap>(makeColumnHandles(dataType)),
         dataType,
-        makeScanSpec(
+        connector::makeScanSpec(
             dataType,
             /*outputSubfields=*/{},
             /*subfieldFilters=*/{},
             dataType,
             /*partitionKeys=*/{},
             /*infoColumns=*/{},
-            SpecialColumnNames{},
+            connector::SpecialColumnNames{},
             /*disableStatsBasedFilterReorder=*/false,
             pool())};
     return std::make_unique<IcebergChangelogSplitReader>(

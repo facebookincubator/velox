@@ -138,6 +138,7 @@ std::shared_ptr<CachedTabletReader> TabletReaderCache::Generator::create(
   ioOptions.setIndexIoStats(indexIoStats);
   ioOptions.setIOExecutor(executor_);
   options.ioOptions = std::move(ioOptions);
+  options.fileIoContext = {};
   auto tablet = TabletReader::create(
       properties.readFile, pools_[shardIdx].get(), options);
   auto section = tablet->loadOptionalSection(

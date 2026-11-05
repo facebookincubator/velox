@@ -57,6 +57,16 @@ TEST_F(DecimalUtilTest, divideWithRoundUp) {
       6, velox::DecimalUtil::kPowersOfTen[17], 20, 6000, false);
 }
 
+TEST_F(DecimalUtilTest, divideWithRoundUpLargeDivisor) {
+  const auto divisor = velox::DecimalUtil::kPowersOfTen[38] - 1;
+  for (int sign : {-1, 1}) {
+    testDivideWithRoundUp<int128_t, int128_t, int128_t>(
+        sign * (divisor - 1), divisor, 0, sign, false);
+    testDivideWithRoundUp<int128_t, int64_t, int128_t>(
+        sign * int64_t{9}, divisor, 37, sign, false);
+  }
+}
+
 TEST_F(DecimalUtilTest, minLeadingZeros) {
   auto result =
       DecimalUtil::minLeadingZeros<int64_t, int64_t>(10000, 6000000, 10, 12);

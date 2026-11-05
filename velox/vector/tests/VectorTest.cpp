@@ -2282,7 +2282,7 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
       std::make_unique<TestingLoader>(makeFlatIdentityVector<int64_t>(size)));
   lazy->loadedVector();
   EXPECT_TRUE(lazy->isLoaded());
-  auto dict = wrapInDictionary(makeIndices(size, folly::identity), size, lazy);
+  auto dict = wrapInDictionary(makeIndices(size, std::identity{}), size, lazy);
   auto valuesVector = dict->valueVector();
   EXPECT_FALSE(valuesVector->isLazy());
 }

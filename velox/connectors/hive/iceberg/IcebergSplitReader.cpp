@@ -24,7 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/encode/Base64.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
@@ -90,7 +90,7 @@ namespace {
 std::unordered_map<std::string, const IcebergColumnHandle*>
 buildIcebergHandleByName(
     const ColumnHandleMap* columnHandles,
-    const FileTableHandle* tableHandle = nullptr) {
+    const connector::FileTableHandle* tableHandle = nullptr) {
   std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
   const auto addHandle = [&handleByName](const auto& handle) {
     if (auto* h = dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
@@ -176,10 +176,11 @@ void removeRows(
 
 IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<const HiveIcebergSplit>& icebergSplit,
-    const FileTableHandlePtr& tableHandle,
-    const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+    const connector::FileTableHandlePtr& tableHandle,
+    const std::unordered_map<std::string, connector::FileColumnHandlePtr>*
+        partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& dataIoStats,
     const std::shared_ptr<io::IoStatistics>& metadataIoStats,
@@ -189,7 +190,7 @@ IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<ColumnHandleMap> columnHandles,
     IcebergScanSpecState* scanSpecState)
-    : FileSplitReader(
+    : connector::FileSplitReader(
           icebergSplit,
           tableHandle,
           partitionKeys,
@@ -211,7 +212,7 @@ IcebergSplitReader::IcebergSplitReader(
       columnHandles_(std::move(columnHandles)) {}
 
 void IcebergSplitReader::configureBaseReaderOptions() {
-  FileSplitReader::configureBaseReaderOptions();
+  connector::FileSplitReader::configureBaseReaderOptions();
   const auto fileFormat = fileSplit_->fileFormat;
   if (fileFormat == dwio::common::FileFormat::PARQUET) {
     auto fieldIds = buildFieldIds();
@@ -622,7 +623,8 @@ void IcebergSplitReader::prepareSplit(
                 ioStats_,
                 runtimeStats,
                 splitOffset_,
-                fileSplit_->connectorId));
+                fileSplit_->connectorId,
+                effectiveFileReadOps));
       }
     } else if (deleteFile.content == FileContent::kEqualityDeletes) {
       if (deleteFile.recordCount > 0 && !deleteFile.equalityFieldIds.empty()) {
@@ -651,7 +653,8 @@ void IcebergSplitReader::prepareSplit(
                   dataIoStats_,
                   ioStats_,
                   runtimeStats,
-                  fileSplit_->connectorId));
+                  fileSplit_->connectorId,
+                  effectiveFileReadOps));
         }
       }
     } else if (deleteFile.content == FileContent::kDeletionVector) {
@@ -684,7 +687,8 @@ void IcebergSplitReader::prepareSplit(
                 deleteFile,
                 splitOffset_,
                 connectorQueryCtx_->memoryPool(),
-                fileConfig_->config()));
+                fileConfig_->config(),
+                effectiveFileReadOps));
       }
     } else {
       VELOX_NYI(
@@ -932,7 +936,7 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
     // Iceberg stores DATE partition values as days since the epoch. No
     // ColumnHandle is available here to say so, hence the type check.
     const bool isDaysSinceEpoch = extraTypes[i]->isDate();
-    auto constant = newConstantFromString(
+    auto constant = connector::newConstantFromString(
         extraTypes[i],
         *extraPartitionValues[i],
         connectorQueryCtx_->memoryPool(),
@@ -988,12 +992,13 @@ void IcebergSplitReader::configureIdentityPartitionColumns() {
       continue;
     }
     // Iceberg stores DATE partition values as days since the epoch.
-    childSpec->setConstantValue(newConstantFromString(
-        type,
-        valueIt->second,
-        connectorQueryCtx_->memoryPool(),
-        readTimestampAsLocalTime,
-        type->isDate()));
+    childSpec->setConstantValue(
+        connector::newConstantFromString(
+            type,
+            valueIt->second,
+            connectorQueryCtx_->memoryPool(),
+            readTimestampAsLocalTime,
+            type->isDate()));
     identityPartitionColumns_.insert(name);
     scanSpecState_->splitConstantColumns.insert(name);
   }
@@ -1313,7 +1318,7 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
     if (auto iter = splitInfoColumns.find(fieldName);
         iter != splitInfoColumns.end()) {
       auto infoColumnType = readerOutputType_->findChild(fieldName);
-      auto constant = newConstantFromString(
+      auto constant = connector::newConstantFromString(
           infoColumnType,
           iter->second,
           connectorQueryCtx_->memoryPool(),
@@ -1439,12 +1444,13 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           auto columnType = tableSchema->findChild(fieldName);
           if (it != handleByName.end() &&
               it->second->initialDefaultValue().has_value()) {
-            childSpec->setConstantValue(newConstantFromString(
-                columnType,
-                it->second->initialDefaultValue().value(),
-                connectorQueryCtx_->memoryPool(),
-                /*isLocalTimestamp=*/false,
-                /*isDaysSinceEpoch=*/false));
+            childSpec->setConstantValue(
+                connector::newConstantFromString(
+                    columnType,
+                    it->second->initialDefaultValue().value(),
+                    connectorQueryCtx_->memoryPool(),
+                    /*isLocalTimestamp=*/false,
+                    /*isDaysSinceEpoch=*/false));
           } else {
             // Fall back to NULL if no default value.
             VELOX_CHECK_NOT_NULL(

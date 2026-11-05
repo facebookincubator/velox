@@ -42,27 +42,27 @@ stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
 const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
     // Start with FileConfig properties.
-    auto properties = FileConfig::registeredProperties();
-#define VELOX_HIVE_CONFIG_REGISTER(constName) \
+    auto properties = connector::FileConfig::registeredProperties();
+#define VELOX_FILE_CONFIG_REGISTER(constName) \
   config::registerConfigProperty<HiveConfig::constName##Property>(properties)
 
-    VELOX_HIVE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
-    VELOX_HIVE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
-    VELOX_HIVE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kUser);
-    VELOX_HIVE_CONFIG_REGISTER(kSource);
-    VELOX_HIVE_CONFIG_REGISTER(kSchema);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxBucketCountSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
+    VELOX_FILE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
+    VELOX_FILE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
+    VELOX_FILE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
+    VELOX_FILE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
+    VELOX_FILE_CONFIG_REGISTER(kUser);
+    VELOX_FILE_CONFIG_REGISTER(kSource);
+    VELOX_FILE_CONFIG_REGISTER(kSchema);
+    VELOX_FILE_CONFIG_REGISTER(kMaxBucketCountSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
 
-#undef VELOX_HIVE_CONFIG_REGISTER
+#undef VELOX_FILE_CONFIG_REGISTER
 
     registerFormatProperties(properties);
     return properties;

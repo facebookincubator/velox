@@ -57,6 +57,7 @@
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace facebook::nimble {
@@ -3601,8 +3602,8 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseCrossReaders) {
           << "Cross-reader should not re-read metadata. "
           << "maxReadOffset=" << trackingFile->maxReadOffset()
           << " metadataBoundary=" << metadataBoundary;
-      ASSERT_EQ(metadataIoStats2->rawBytesRead(), 0)
-          << "Cross-reader should not record any metadata IO";
+      ASSERT_EQ(metadataIoStats2->read().sum(), 0)
+          << "Cross-reader should not read any metadata from the file";
     } else {
       ASSERT_GT(trackingFile->maxReadOffset(), metadataBoundary)
           << "Cross-reader should re-read metadata. "
@@ -4581,35 +4582,13 @@ TEST_F(SmallFilePreloadTest, preloadAttributesSingleReadToData) {
   EXPECT_EQ(dataStats->rawBytesRead(), nimbleFile.size());
 }
 
-// Records the file options passed to every pread.
-class FileOptsRecordingReadFile : public InMemoryReadFile {
- public:
-  using InMemoryReadFile::InMemoryReadFile;
-
-  std::string_view pread(
-      uint64_t offset,
-      uint64_t length,
-      void* buf,
-      const FileIoContext& context = {}) const override {
-    fileOpts_.push_back(context.fileOpts);
-    return InMemoryReadFile::pread(offset, length, buf, context);
-  }
-
-  const std::vector<folly::F14FastMap<std::string, std::string>>& fileOpts()
-      const {
-    return fileOpts_;
-  }
-
- private:
-  mutable std::vector<folly::F14FastMap<std::string, std::string>> fileOpts_;
-};
-
 TEST_F(SmallFilePreloadTest, preloadKeepsFileReadOps) {
   auto input = makeRowVector({makeFlatIdentityVector<int64_t>(500)});
   auto nimbleFile = test::createNimbleFile(*rootPool_, input);
   ASSERT_LE(nimbleFile.size(), 8 << 20);
 
-  auto readFile = std::make_shared<FileOptsRecordingReadFile>(nimbleFile);
+  auto readFile =
+      std::make_shared<nimble::testing::FileOptsRecordingReadFile>(nimbleFile);
   const folly::F14FastMap<std::string, std::string> fileReadOps{
       {"key", "value"},
   };
@@ -4632,6 +4611,45 @@ TEST_F(SmallFilePreloadTest, preloadKeepsFileReadOps) {
       fileReadOps,
   };
   EXPECT_EQ(readFile->fileOpts(), expected);
+}
+
+TEST_F(SmallFilePreloadTest, readsWithoutPreloadKeepFileReadOps) {
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(500)});
+  auto nimbleFile = test::createNimbleFile(*rootPool_, input);
+
+  auto readFile =
+      std::make_shared<nimble::testing::FileOptsRecordingReadFile>(nimbleFile);
+  const folly::F14FastMap<std::string, std::string> fileReadOps{
+      {"key", "value"},
+  };
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      readFile,
+      *pool(),
+      dwio::common::MetricsLog::voidLog(),
+      /*stats=*/nullptr,
+      /*ioStats=*/nullptr,
+      dwio::common::BufferedInput::kMaxMergeDistance,
+      /*wsVRLoad=*/std::nullopt,
+      fileReadOps);
+  dwio::common::ReaderOptions options(pool());
+  options.setFilePreloadThreshold(0);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  options.setScanSpec(scanSpec);
+
+  auto reader = dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
+                    ->createReader(std::move(bufferedInput), options);
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowOptions);
+  VectorPtr result = BaseVector::create(asRowType(input->type()), 0, pool());
+  ASSERT_EQ(rowReader->next(1'000, result), 500);
+  velox::test::assertEqualVectors(input, result);
+
+  EXPECT_THAT(
+      readFile->fileOpts(),
+      ::testing::AllOf(
+          ::testing::SizeIs(::testing::Gt(1)), ::testing::Each(fileReadOps)));
 }
 
 // Preload must skip when a cache is present, else it bypasses the data cache.

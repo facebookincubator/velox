@@ -29,8 +29,9 @@ struct NamedType {
   std::optional<std::string> name;
 };
 
-void validateHybridFlatMapGroups(
-    const std::vector<HybridFlatMapType::Group>& groups);
+void validateAndIndexHybridFlatMapGroups(
+    const std::vector<HybridFlatMapType::Group>& groups,
+    folly::F14FastMap<std::string_view, size_t>& groupIndices);
 
 } // namespace
 
@@ -357,7 +358,7 @@ HybridFlatMapType::HybridFlatMapType(
       HybridFlatMap::supportedKeyKind(keyScalarKind_),
       "Hybrid FlatMap key kind is unsupported: {}.",
       keyScalarKind_);
-  validateHybridFlatMapGroups(groups_);
+  validateAndIndexHybridFlatMapGroups(groups_, groupIndices_);
   for (const auto& group : groups_) {
     detail::checkHybridFlatMapDefaultKeys(
         defaultGroupKeyPresenceMode_, group.groupId, group.groupKeys);
@@ -366,16 +367,6 @@ HybridFlatMapType::HybridFlatMapType(
         useKeyPresentList(group.groupId) ? keyScalarKind_ : ScalarKind::Bool,
         "Hybrid FlatMap key-presence stream must be boolean, or use the map "
         "key kind for a Default group that lists its keys.");
-  }
-  size_t numKeys{0};
-  for (const auto& group : groups_) {
-    numKeys += group.groupKeys.size();
-  }
-  groupIndices_.reserve(numKeys);
-  for (size_t i = 0; i < groups_.size(); ++i) {
-    for (const auto& key : groups_[i].groupKeys) {
-      groupIndices_.emplace(key, i);
-    }
   }
 }
 
@@ -468,15 +459,20 @@ const std::shared_ptr<const Type>& ArrayWithOffsetsType::elements() const {
 
 namespace {
 
-void validateHybridFlatMapGroups(
-    const std::vector<HybridFlatMapType::Group>& groups) {
+// Validates `groups`, filling `groupIndices` from their keys, and checks that
+// every group has the same logical value type. The views in `groupIndices`
+// refer to keys owned by `groups`.
+void validateAndIndexHybridFlatMapGroups(
+    const std::vector<HybridFlatMapType::Group>& groups,
+    folly::F14FastMap<std::string_view, size_t>& groupIndices) {
   detail::validateHybridFlatMapGroups(
       groups.size(),
       /*hasDefault=*/false,
       [&groups](size_t index) { return groups[index].groupId; },
       [&groups](size_t index) -> const auto& {
         return groups[index].groupKeys;
-      });
+      },
+      groupIndices);
   const auto& expectedValueType = *groups.front().valueType;
   for (size_t i = 1; i < groups.size(); ++i) {
     const bool hasSameLogicalType =
@@ -612,14 +608,17 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           .name = node.name()};
     }
     case Kind::HybridFlatMap: {
-      const auto metadata = HybridFlatMap::extractAttribute(attributes);
+      auto metadata = HybridFlatMap::extractAttribute(attributes);
       NIMBLE_CHECK_EQ(
           node.childrenCount(),
           metadata.groups().size(),
           "Hybrid FlatMap group metadata must match its child count.");
+      const auto defaultGroupKeyPresenceMode =
+          metadata.defaultGroupKeyPresenceMode();
+      auto groupsMetadata = std::move(metadata).releaseGroups();
       std::vector<HybridFlatMapType::Group> groups;
-      groups.reserve(metadata.groups().size());
-      for (const auto& groupMetadata : metadata.groups()) {
+      groups.reserve(groupsMetadata.size());
+      for (auto& groupMetadata : groupsMetadata) {
         NIMBLE_CHECK_LT(
             index + 2, nodes.size(), "Incomplete Hybrid FlatMap group.");
         const auto& keyPresenceNode = nodes[index++];
@@ -639,7 +638,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
         groups.push_back(
             HybridFlatMapType::Group{
                 .groupId = groupMetadata.groupId,
-                .groupKeys = groupMetadata.groupKeys,
+                .groupKeys = std::move(groupMetadata.groupKeys),
                 .keyPresenceDescriptor =
                     StreamDescriptor{
                         keyPresenceNode.offset(), keyPresenceNode.scalarKind()},
@@ -654,7 +653,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
               StreamDescriptor{offset, ScalarKind::Bool},
               node.scalarKind(),
               std::move(groups),
-              metadata.defaultGroupKeyPresenceMode(),
+              defaultGroupKeyPresenceMode,
               std::move(attributes)),
           .name = node.name()};
     }
