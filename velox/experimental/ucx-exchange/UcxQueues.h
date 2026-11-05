@@ -30,6 +30,11 @@
 
 namespace facebook::velox::ucx_exchange {
 
+/// The producerError a consumer gets when the producer task ended before it
+/// created its output queue.
+inline constexpr std::string_view kProducerNotInitializedError{
+    "Producer task ended before initializing its output"};
+
 /// @brief  Callback function for getting data from the queues.
 /// A nullptr 'data' ends the stream. Without 'producerError' the producer sent
 /// all its output. With it, the producer ended early and 'producerError' says

@@ -670,7 +670,7 @@ std::optional<std::string> UcxOutputQueue::incompleteOutputError() {
   }
   // The task's accessors take its mutex, which must not nest inside 'mutex_'.
   if (task == nullptr) {
-    return "Producer task ended before initializing its output";
+    return std::string{kProducerNotInitializedError};
   }
   if (atEnd) {
     return truncateProducerError(
