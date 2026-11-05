@@ -61,6 +61,10 @@ class ExchangeQueue {
   /// Exchanges to throw with the message.
   void setError(const std::string& error);
 
+  /// Registers an error under the queue mutex. The caller must fulfill the
+  /// returned promises after releasing the mutex.
+  std::vector<ContinuePromise> setErrorLocked(const std::string& error);
+
   /// Returns pages of data.
   ///
   /// Returns empty list if no data is available. If data is still expected,
