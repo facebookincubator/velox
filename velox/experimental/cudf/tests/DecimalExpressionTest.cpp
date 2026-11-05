@@ -1201,6 +1201,40 @@ TEST_F(CudfDecimalTest, decimalDivideByZeroGuardedByConditional) {
               {"if(g > 0, q / d, CAST('0.00' AS DECIMAL(7, 2))) AS guarded"})
           .planNode());
 
+  // Each divisor turns the masked input of excluded rows 0 and 2 back into a
+  // valid zero, so input masking alone would let the divide abort. The branch
+  // reapplies its mask to every intermediate result instead. d and n are
+  // non-zero on every row, so a zero divisor can only come from the
+  // null-eliminating node. greatest and least skip nulls on the GPU.
+  auto nullEliminatingInput = makeRowVector(
+      {"g", "d", "n"},
+      {
+          makeNullableFlatVector<int32_t>({0, 1, std::nullopt}),
+          makeFlatVector<int64_t>({500, 500, 500}, DECIMAL(5, 2)),
+          makeFlatVector<int64_t>({-500, -500, -500}, DECIMAL(5, 2)),
+      });
+  std::vector<RowVectorPtr> nullEliminatingVectors = {nullEliminatingInput};
+
+  const std::vector<std::string> nullEliminatingDivisors = {
+      "coalesce(d, CAST('0.00' AS DECIMAL(5, 2)))",
+      "CASE WHEN d IS NULL THEN CAST('0.00' AS DECIMAL(5, 2)) ELSE d END",
+      "if(d IS NOT NULL, d, CAST('0.00' AS DECIMAL(5, 2)))",
+      "if(d > CAST('0.00' AS DECIMAL(5, 2)), d, CAST('0.00' AS DECIMAL(5, 2)))",
+      "greatest(d, CAST('0.00' AS DECIMAL(5, 2)))",
+      "least(n, CAST('0.00' AS DECIMAL(5, 2)))",
+  };
+  for (const auto& divisor : nullEliminatingDivisors) {
+    SCOPED_TRACE(divisor);
+    assertCpuAndGpuAgree(
+        exec::test::PlanBuilder()
+            .values(nullEliminatingVectors)
+            .project({fmt::format(
+                "if(g > 0, CAST('1.00' AS DECIMAL(10, 2)) / {}, "
+                "CAST('0.00' AS DECIMAL(12, 2))) AS guarded",
+                divisor)})
+            .planNode());
+  }
+
   // Nested conditionals compose because maskInputRows ANDs each branch mask
   // into the null masks it was handed. Row 1 needs that AND: the outer
   // condition excludes it, while the inner else branch holding the divide

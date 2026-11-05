@@ -53,6 +53,7 @@ target_link_libraries(
     velox_cudf_vector
     velox_exception
     velox_expression
+    velox_function_registry
 )
 
 target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)
