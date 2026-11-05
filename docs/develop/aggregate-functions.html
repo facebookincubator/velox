@@ -779,31 +779,47 @@ the function must check.</p>
 <h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
 <p>It is time to put all the pieces together and test how well the new function
 works.</p>
-<p>Use AggregationTestBase from velox/aggregates/tests/AggregationTestBase.h as a
-base class for the test.</p>
+<p>Use AggregationTestBase from
+velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h as a base class
+for the test, and AggregationTester to run the function.</p>
 <p>If the new aggregate function is supported by <a class="reference external" href="https://duckdb.org/docs/sql/aggregates">DuckDB</a>, you can use DuckDB to check
 results. In this case you specify input data, grouping keys, a list of
-aggregates and a SQL query to run on DuckDB to calculate the expected results
-and call helper function testAggregates defined in AggregationTestBase class.
-Grouping keys can be empty for global aggregations.</p>
+aggregates and a SQL query to run on DuckDB to calculate the expected results.
+Leave out the grouping keys for global aggregations.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Global aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">"sum(c1)"</span><span class="p">},</span><span class="w"> </span><span class="s">"SELECT sum(c1) FROM tmp"</span><span class="p">);</span>
+<span class="n">AggregationTester</span><span class="p">(</span><span class="o">*</span><span class="k">this</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">inputs</span><span class="p">(</span><span class="n">vectors</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">aggregates</span><span class="p">({</span><span class="s">"sum(c1)"</span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">assertResults</span><span class="p">(</span><span class="s">"SELECT sum(c1) FROM tmp"</span><span class="p">);</span>
 
 <span class="c1">// Group by aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span>
-<span class="w">    </span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">"c0"</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">"sum(c1)"</span><span class="p">},</span><span class="w"> </span><span class="s">"SELECT c0, sum(c1) FROM tmp GROUP BY 1"</span><span class="p">);</span>
+<span class="n">AggregationTester</span><span class="p">(</span><span class="o">*</span><span class="k">this</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">inputs</span><span class="p">(</span><span class="n">vectors</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">groupBy</span><span class="p">({</span><span class="s">"c0"</span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">aggregates</span><span class="p">({</span><span class="s">"sum(c1)"</span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">assertResults</span><span class="p">(</span><span class="s">"SELECT c0, sum(c1) FROM tmp GROUP BY 1"</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>If the new function is not supported by DuckDB, you need to specify the expected
 results manually.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Global aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">"map_union(c1)"</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span>
+<span class="n">AggregationTester</span><span class="p">(</span><span class="o">*</span><span class="k">this</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">inputs</span><span class="p">(</span><span class="n">vectors</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">aggregates</span><span class="p">({</span><span class="s">"map_union(c1)"</span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">assertResults</span><span class="p">(</span><span class="n">expectedResult</span><span class="p">);</span>
 
 <span class="c1">// Group by aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">"c0"</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">"map_union(c1)"</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span>
+<span class="n">AggregationTester</span><span class="p">(</span><span class="o">*</span><span class="k">this</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">inputs</span><span class="p">(</span><span class="n">vectors</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">groupBy</span><span class="p">({</span><span class="s">"c0"</span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">aggregates</span><span class="p">({</span><span class="s">"map_union(c1)"</span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">assertResults</span><span class="p">(</span><span class="n">expectedResult</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>Under the covers, testAggregations method generates multiple different but
+<p>Use withCompanion() to also run the plans that compute the aggregates with
+their companion functions, and assertError() to check that every plan fails
+with a given error.</p>
+<p>Under the covers, AggregationTester generates multiple different but
 logically equivalent plans, executes these plans, verifies successful
 completion and compares the results with DuckDB or specified expected results.</p>
 <p>The following query plans are being tested.</p>
