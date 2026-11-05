@@ -17,11 +17,10 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfProjectionCycle.h"
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
-
-#include <cudf/scalar/scalar.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -49,7 +48,7 @@ class CudfExpand : public CudfOperatorBase {
   }
 
   bool isFinished() override {
-    return noMoreInput_ && input_ == nullptr;
+    return noMoreInput_ && !projectionCycle_.hasInput();
   }
 
  protected:
@@ -60,25 +59,8 @@ class CudfExpand : public CudfOperatorBase {
   void doClose() override;
 
  private:
-  // Taken from the plan node because the input vector's type may describe
-  // this operator's output instead of its input.
-  const size_t numInputColumns_;
-
-  // Input channel for each output column, one list per projection.
-  // kConstantChannel marks columns taken from 'constantProjections_'.
-  std::vector<std::vector<column_index_t>> fieldProjections_;
-
-  // Constant expression for each output column, one list per projection.
-  // Null where the column is an input field.
-  std::vector<std::vector<core::ConstantTypedExprPtr>> constantProjections_;
-
-  // cuDF scalars built from 'constantProjections_' on the first input batch,
-  // reused for every batch.
-  std::vector<std::vector<std::unique_ptr<cudf::scalar>>> constantScalars_;
-
-  // Index into 'fieldProjections_' of the next projection to output for the
-  // current input batch.
-  size_t projectionIndex_{0};
+  // Produces one output batch per projection of each input batch.
+  CudfProjectionCycle projectionCycle_;
 };
 
 } // namespace facebook::velox::cudf_velox

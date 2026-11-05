@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfGroupId.h"
+#include "velox/experimental/cudf/exec/CudfProjectionCycle.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -26,6 +27,71 @@
 #include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {
+
+namespace {
+
+// Builds one projection per grouping set. Output columns are the grouping
+// keys, then the aggregation inputs, then the group id.
+std::vector<std::vector<ProjectionColumn>> makeProjections(
+    const core::GroupIdNode& groupIdNode) {
+  const auto& inputType = groupIdNode.sources()[0]->outputType();
+  const auto& outputType = groupIdNode.outputType();
+
+  std::unordered_map<column_index_t, column_index_t> outputToInputKey;
+  for (const auto& groupingKeyInfo : groupIdNode.groupingKeyInfos()) {
+    outputToInputKey[outputType->getChildIdx(groupingKeyInfo.output)] =
+        inputType->getChildIdx(groupingKeyInfo.input->name());
+  }
+
+  // Keys outside a grouping set are all-null columns of the key's cuDF type.
+  const auto numGroupingKeys = groupIdNode.numGroupingKeys();
+  std::vector<cudf::data_type> keyTypes;
+  keyTypes.reserve(numGroupingKeys);
+  for (size_t i = 0; i < numGroupingKeys; ++i) {
+    keyTypes.push_back(veloxToCudfDataType(outputType->childAt(i)));
+  }
+
+  std::vector<std::vector<ProjectionColumn>> projections;
+  projections.reserve(groupIdNode.groupingSets().size());
+  for (const auto& groupingSet : groupIdNode.groupingSets()) {
+    std::vector<std::optional<column_index_t>> keyChannels(numGroupingKeys);
+    for (const auto& groupingKey : groupingSet) {
+      const auto outputChannel = outputType->getChildIdx(groupingKey);
+      VELOX_USER_CHECK_NE(
+          outputToInputKey.count(outputChannel),
+          0,
+          "GroupIdNode didn't map grouping key {} to input channel",
+          groupingKey);
+      VELOX_CHECK_LT(outputChannel, numGroupingKeys);
+      keyChannels[outputChannel] = outputToInputKey.at(outputChannel);
+    }
+
+    auto& columns = projections.emplace_back();
+    for (size_t i = 0; i < numGroupingKeys; ++i) {
+      if (keyChannels[i].has_value()) {
+        columns.push_back(ProjectionColumn::field(*keyChannels[i]));
+      } else {
+        columns.push_back(
+            ProjectionColumn::constant([type = keyTypes[i]](auto stream) {
+              return cudf::make_default_constructed_scalar(
+                  type, stream, get_temp_mr());
+            }));
+      }
+    }
+    for (const auto& input : groupIdNode.aggregationInputs()) {
+      columns.push_back(
+          ProjectionColumn::field(inputType->getChildIdx(input->name())));
+    }
+    const auto groupId = static_cast<int64_t>(projections.size() - 1);
+    columns.push_back(ProjectionColumn::constant([groupId](auto stream) {
+      return std::make_unique<cudf::numeric_scalar<int64_t>>(
+          groupId, true, stream, get_temp_mr());
+    }));
+  }
+  return projections;
+}
+
+} // namespace
 
 CudfGroupId::CudfGroupId(
     int32_t operatorId,
@@ -40,180 +106,32 @@ CudfGroupId::CudfGroupId(
           nvtx3::rgb{128, 0, 128}, // Purple
           NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
           std::nullopt,
-          groupIdNode) {
-  const auto& inputType = groupIdNode->sources()[0]->outputType();
-
-  // Build output-to-input mapping for grouping keys
-  std::unordered_map<column_index_t, column_index_t>
-      outputToInputGroupingKeyMapping;
-  for (const auto& groupingKeyInfo : groupIdNode->groupingKeyInfos()) {
-    outputToInputGroupingKeyMapping[outputType_->getChildIdx(
-        groupingKeyInfo.output)] =
-        inputType->getChildIdx(groupingKeyInfo.input->name());
-  }
-
-  numGroupingKeys_ = groupIdNode->numGroupingKeys();
-  numGroupingSets_ = groupIdNode->groupingSets().size();
-
-  // Build groupingKeyMappings_ - one vector per grouping set
-  groupingKeyMappings_.reserve(numGroupingSets_);
-  for (const auto& groupingSet : groupIdNode->groupingSets()) {
-    std::vector<column_index_t> mappings(numGroupingKeys_, kMissingGroupingKey);
-    for (const auto& groupingKey : groupingSet) {
-      auto outputChannel = outputType_->getChildIdx(groupingKey);
-      VELOX_USER_CHECK_NE(
-          outputToInputGroupingKeyMapping.count(outputChannel),
-          0,
-          "GroupIdNode didn't map grouping key {} to input channel",
-          groupingKey);
-      VELOX_CHECK_LT(
-          outputChannel,
-          outputToInputGroupingKeyMapping.size(),
-          "outputChannel out of bounds in outputToInputGroupingKeyMapping");
-      auto inputChannel = outputToInputGroupingKeyMapping.at(outputChannel);
-      VELOX_CHECK_LT(
-          outputChannel,
-          mappings.size(),
-          "outputChannel out of bounds in mappings");
-      mappings[outputChannel] = inputChannel;
-    }
-    groupingKeyMappings_.emplace_back(std::move(mappings));
-  }
-
-  // Build aggregationInputs_ - indices of aggregation input columns
-  const auto& aggregationInputs = groupIdNode->aggregationInputs();
-  aggregationInputs_.reserve(aggregationInputs.size());
-  for (const auto& input : aggregationInputs) {
-    aggregationInputs_.push_back(inputType->getChildIdx(input->name()));
-  }
-
-  // Precompute cudf data types for grouping key columns (used to create
-  // all-null columns for keys not in a grouping set).
-  groupingKeyCudfTypes_.reserve(numGroupingKeys_);
-  for (size_t i = 0; i < numGroupingKeys_; ++i) {
-    groupingKeyCudfTypes_.push_back(
-        veloxToCudfDataType(outputType_->childAt(i)));
-  }
-}
+          groupIdNode),
+      projectionCycle_(
+          makeProjections(*groupIdNode),
+          groupIdNode->sources()[0]->outputType()->size()) {}
 
 bool CudfGroupId::needsInput() const {
-  return !noMoreInput_ && inputColumns_.empty();
+  return !noMoreInput_ && !projectionCycle_.hasInput();
 }
 
 void CudfGroupId::doAddInput(RowVectorPtr input) {
-  VELOX_CHECK(inputColumns_.empty(), "Previous input not fully consumed");
-
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput, "CudfGroupId expects CudfVector input");
 
-  inputStream_ = cudfInput->stream();
-  inputSize_ = static_cast<cudf::size_type>(cudfInput->size());
-
-  // Store input columns for cycling through grouping sets
-  auto table = cudfInput->release();
-  inputColumns_ = table->release();
-  groupingSetIndex_ = 0;
+  // Read before release(), which invalidates the vector.
+  const auto numRows = static_cast<cudf::size_type>(cudfInput->size());
+  const auto stream = cudfInput->stream();
+  projectionCycle_.setInput(cudfInput->release(), numRows, stream);
 }
 
 RowVectorPtr CudfGroupId::doGetOutput() {
-  if (inputColumns_.empty()) {
+  if (!projectionCycle_.hasInput()) {
     return nullptr;
   }
-
-  auto stream = inputStream_;
-  auto outputMr = get_output_mr();
-  auto tempMr = get_temp_mr();
-  auto numRows = inputSize_;
-
-  VELOX_CHECK_LT(
-      groupingSetIndex_,
-      groupingKeyMappings_.size(),
-      "groupingSetIndex_ out of bounds");
-  const auto& mapping = groupingKeyMappings_[groupingSetIndex_];
-  std::vector<std::unique_ptr<cudf::column>> outputColumns(outputType_->size());
-
-  // Only move columns on the last grouping set; otherwise copy since
-  // inputColumns_ is reused across multiple getOutput() calls.
-  const bool isLastGroupingSet = (groupingSetIndex_ == numGroupingSets_ - 1);
-
-  // Count occurrences of each input column in the last grouping set.
-  // Move columns that occur only once, copy and decrement otherwise.
-  std::unordered_map<column_index_t, int> inputColumnUsage;
-  if (isLastGroupingSet) {
-    for (size_t i = 0; i < numGroupingKeys_; ++i) {
-      if (mapping[i] != kMissingGroupingKey) {
-        ++inputColumnUsage[mapping[i]];
-      }
-    }
-    for (auto inputIdx : aggregationInputs_) {
-      ++inputColumnUsage[inputIdx];
-    }
-  }
-
-  // Fill in grouping keys
-  for (size_t i = 0; i < numGroupingKeys_; ++i) {
-    if (mapping[i] == kMissingGroupingKey) {
-      // Create an all-null column for keys not in this grouping set
-      auto nullScalar = cudf::make_default_constructed_scalar(
-          groupingKeyCudfTypes_[i], stream, tempMr);
-      outputColumns[i] =
-          cudf::make_column_from_scalar(*nullScalar, numRows, stream, outputMr);
-    } else {
-      auto inputIdx = mapping[i];
-      if (isLastGroupingSet && inputColumnUsage[inputIdx] == 1) {
-        outputColumns[i] = std::move(inputColumns_[inputIdx]);
-      } else {
-        outputColumns[i] = std::make_unique<cudf::column>(
-            *inputColumns_[inputIdx], stream, outputMr);
-      }
-      if (isLastGroupingSet) {
-        VELOX_CHECK_GT(inputColumnUsage[inputIdx], 0);
-        --inputColumnUsage[inputIdx];
-      }
-    }
-  }
-
-  // Fill in aggregation inputs
-  for (size_t i = 0; i < aggregationInputs_.size(); ++i) {
-    auto inputIdx = aggregationInputs_[i];
-    auto outputIdx = numGroupingKeys_ + i;
-    VELOX_CHECK_LT(
-        inputIdx,
-        inputColumns_.size(),
-        "inputIdx out of bounds in aggregation inputs");
-    VELOX_CHECK_LT(
-        outputIdx,
-        outputColumns.size(),
-        "outputIdx out of bounds in aggregation inputs");
-    if (isLastGroupingSet && inputColumnUsage[inputIdx] == 1) {
-      outputColumns[outputIdx] = std::move(inputColumns_[inputIdx]);
-    } else {
-      outputColumns[outputIdx] = std::make_unique<cudf::column>(
-          *inputColumns_[inputIdx], stream, outputMr);
-    }
-    if (isLastGroupingSet) {
-      VELOX_CHECK_GT(inputColumnUsage[inputIdx], 0);
-      --inputColumnUsage[inputIdx];
-    }
-  }
-
-  // Add group_id column (constant BIGINT with current grouping set index)
-  auto groupIdScalar = cudf::numeric_scalar<int64_t>(
-      static_cast<int64_t>(groupingSetIndex_), true, stream, tempMr);
-  outputColumns[outputType_->size() - 1] =
-      cudf::make_column_from_scalar(groupIdScalar, numRows, stream, outputMr);
-
-  // Build output table
-  auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
-
-  // Advance to next grouping set
-  ++groupingSetIndex_;
-  if (groupingSetIndex_ == numGroupingSets_) {
-    // All grouping sets processed for this input
-    inputColumns_.clear();
-    groupingSetIndex_ = 0;
-  }
-
+  const auto numRows = projectionCycle_.numRows();
+  const auto stream = projectionCycle_.stream();
+  auto outputTable = projectionCycle_.next(get_output_mr());
   return std::make_shared<CudfVector>(
       pool(), outputType_, numRows, std::move(outputTable), stream);
 }

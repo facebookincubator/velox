@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -40,37 +41,18 @@ class CudfExpandTest : public HiveConnectorTestBase {
     HiveConnectorTestBase::TearDown();
   }
 
-  static bool hasOperator(
-      const std::shared_ptr<Task>& task,
-      std::string_view operatorType) {
-    for (const auto& pipelineStats : task->taskStats().pipelineStats) {
-      for (const auto& operatorStats : pipelineStats.operatorStats) {
-        if (operatorStats.operatorType == operatorType) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
   static void assertExpandStats(
       const std::shared_ptr<Task>& task,
       uint64_t inputRows,
       uint64_t inputBatches,
       uint64_t numProjections) {
-    size_t numExpandOperators = 0;
-    for (const auto& pipelineStats : task->taskStats().pipelineStats) {
-      for (const auto& operatorStats : pipelineStats.operatorStats) {
-        if (operatorStats.operatorType == "CudfExpand") {
-          ++numExpandOperators;
-          EXPECT_EQ(operatorStats.inputPositions, inputRows);
-          EXPECT_EQ(operatorStats.inputVectors, inputBatches);
-          EXPECT_EQ(operatorStats.outputPositions, inputRows * numProjections);
-          EXPECT_EQ(operatorStats.outputVectors, inputBatches * numProjections);
-        }
-      }
-    }
-    EXPECT_EQ(numExpandOperators, 1);
+    const auto operatorStats = toOperatorStats(task->taskStats());
+    ASSERT_EQ(operatorStats.count("CudfExpand"), 1);
+    const auto& stats = operatorStats.at("CudfExpand");
+    EXPECT_EQ(stats.inputPositions, inputRows);
+    EXPECT_EQ(stats.inputVectors, inputBatches);
+    EXPECT_EQ(stats.outputPositions, inputRows * numProjections);
+    EXPECT_EQ(stats.outputVectors, inputBatches * numProjections);
   }
 
   RowVectorPtr makeRowVectorData(vector_size_t size) {
@@ -105,11 +87,6 @@ TEST_F(CudfExpandTest, simpleConstant) {
 // Complex-type constants cannot be built as cuDF scalars, so Expand must stay
 // on the CPU.
 TEST_F(CudfExpandTest, complexConstantFallsBackToCpu) {
-  // The fallback setting is read when cuDF is registered.
-  cudf_velox::unregisterCudf();
-  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
-  cudf_velox::registerCudf();
-
   auto data = makeRowVectorData(3);
   auto children = data->children();
   children.push_back(
@@ -128,9 +105,71 @@ TEST_F(CudfExpandTest, complexConstantFallsBackToCpu) {
                         "null::bigint[] as d"}})
                   .planNode();
 
-  auto task = assertQuery(plan, expected);
-  EXPECT_TRUE(hasOperator(task, OperatorType::kExpand));
-  EXPECT_FALSE(hasOperator(task, "CudfExpand"));
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .copyResults(pool(), task);
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  const auto operatorStats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(operatorStats.count(OperatorType::kExpand), 1);
+  EXPECT_EQ(operatorStats.count("CudfExpand"), 0);
+}
+
+// A non-null INTERVAL DAY TO SECOND constant becomes a duration column in cuDF,
+// while the same column from CudfFromVelox is INT64, so Expand must stay on
+// the CPU.
+TEST_F(CudfExpandTest, intervalDayTimeConstantFallsBackToCpu) {
+  auto input = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto source = PlanBuilder().values({input}).planNode();
+  std::vector<std::vector<core::TypedExprPtr>> projections(2);
+  for (auto& projection : projections) {
+    projection.push_back(
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "k"));
+  }
+  projections[0].push_back(
+      std::make_shared<core::ConstantTypedExpr>(
+          INTERVAL_DAY_TIME(), variant(int64_t{1'000})));
+  projections[1].push_back(
+      std::make_shared<core::ConstantTypedExpr>(
+          INTERVAL_DAY_TIME(), Variant::null(TypeKind::BIGINT)));
+  auto plan = std::make_shared<core::ExpandNode>(
+      "expand",
+      std::move(projections),
+      std::vector<std::string>{"k", "interval"},
+      source);
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+      .copyResults(pool(), task);
+
+  const auto operatorStats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(operatorStats.count(OperatorType::kExpand), 1);
+  EXPECT_EQ(operatorStats.count("CudfExpand"), 0);
+}
+
+// A null INTERVAL DAY TO SECOND constant takes its cuDF type from the type
+// mapping used for input columns, so the key column keeps one type across
+// projections and Expand stays on the GPU.
+TEST_F(CudfExpandTest, nullIntervalDayTimeConstant) {
+  auto input = makeRowVector(
+      {"k"}, {makeFlatVector<int64_t>({1, 2, 3}, INTERVAL_DAY_TIME())});
+  auto source = PlanBuilder().values({input}).planNode();
+  std::vector<std::vector<core::TypedExprPtr>> projections(2);
+  projections[0].push_back(
+      std::make_shared<core::FieldAccessTypedExpr>(INTERVAL_DAY_TIME(), "k"));
+  projections[1].push_back(
+      std::make_shared<core::ConstantTypedExpr>(
+          INTERVAL_DAY_TIME(), Variant::null(TypeKind::BIGINT)));
+  auto plan = std::make_shared<core::ExpandNode>(
+      "expand", std::move(projections), std::vector<std::string>{"k"}, source);
+
+  auto expected = AssertQueryBuilder(plan)
+                      .config(cudf_velox::CudfConfig::kCudfEnabled, false)
+                      .copyResults(pool());
+  auto task = AssertQueryBuilder(plan).assertResults(expected);
+  assertExpandStats(task, 3, 1, 2);
 }
 
 TEST_F(CudfExpandTest, groupingSets) {
@@ -352,9 +391,9 @@ TEST_F(CudfExpandTest, supportedConstantTypes) {
 
   // Compare against CPU Expand to preserve exact decimal scales and
   // nanosecond timestamp values without DuckDB result conversions.
-  cudf_velox::unregisterCudf();
-  auto expected = AssertQueryBuilder(plan).copyResults(pool());
-  cudf_velox::registerCudf();
+  auto expected = AssertQueryBuilder(plan)
+                      .config(cudf_velox::CudfConfig::kCudfEnabled, false)
+                      .copyResults(pool());
   auto task = AssertQueryBuilder(plan).assertResults(expected);
   assertExpandStats(task, 3, 1, 2);
 }
