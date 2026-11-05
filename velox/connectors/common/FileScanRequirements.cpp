@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/common/FileScanConfig.h"
+#include "velox/connectors/common/FileScanRequirements.h"
 
 #include <fmt/ranges.h>
 #include <string_view>
@@ -29,7 +29,7 @@
 
 namespace facebook::velox::connector {
 
-std::vector<FileColumnHandlePtr> FileScanConfig::resolveColumns(
+std::vector<FileColumnHandlePtr> FileScanRequirements::resolveColumns(
     const RowTypePtr& outputType,
     const FileTableHandlePtr& tableHandle,
     const ColumnHandleMap& assignments,
@@ -92,7 +92,8 @@ std::vector<FileColumnHandlePtr> FileScanConfig::resolveColumns(
   return columns;
 }
 
-void FileScanConfig::processColumnHandle(const FileColumnHandlePtr& handle) {
+void FileScanRequirements::processColumnHandle(
+    const FileColumnHandlePtr& handle) {
   switch (handle->columnType()) {
     case FileColumnHandle::ColumnType::kRegular:
       break;
@@ -111,7 +112,7 @@ void FileScanConfig::processColumnHandle(const FileColumnHandlePtr& handle) {
   }
 }
 
-FileScanConfig::FileScanConfig(
+FileScanRequirements::FileScanRequirements(
     const RowTypePtr& outputType,
     const FileTableHandlePtr& tableHandle,
     const ColumnHandleMap& assignments,
@@ -225,45 +226,45 @@ FileScanConfig::FileScanConfig(
   }
 }
 
-std::unique_ptr<FileScanState> FileScanConfig::createState(
-    const std::shared_ptr<const FileScanConfig>& config,
+std::unique_ptr<FileScanState> FileScanRequirements::createState(
+    const std::shared_ptr<const FileScanRequirements>& requirements,
     const ConnectorQueryCtx* context) {
   auto state = std::make_unique<FileScanState>();
-  state->scanConfig = config;
-  for (const auto& [field, filter] : config->filters_) {
+  state->scanRequirements = requirements;
+  for (const auto& [field, filter] : requirements->filters_) {
     state->filters.emplace(field.clone(), filter);
   }
 
   const auto makeSpec = [&](const RowTypePtr& type) {
     return makeScanSpec(
         type,
-        config->subfields_,
+        requirements->subfields_,
         state->filters,
         /*indexColumns=*/{},
-        config->tableHandle_->dataColumns(),
-        config->partitionKeys_,
-        config->infoColumns_,
-        config->specialColumns_,
-        config->options_.disableStatsBasedFilterReorder,
+        requirements->tableHandle_->dataColumns(),
+        requirements->partitionKeys_,
+        requirements->infoColumns_,
+        requirements->specialColumns_,
+        requirements->options_.disableStatsBasedFilterReorder,
         context->memoryPool());
   };
-  state->scanSpec = makeSpec(config->preExtractionType_);
-  if (config->remainingFilter_) {
+  state->scanSpec = makeSpec(requirements->preExtractionType_);
+  if (requirements->remainingFilter_) {
     state->metadataFilter = std::make_shared<common::MetadataFilter>(
         *state->scanSpec,
-        *config->remainingFilter_,
+        *requirements->remainingFilter_,
         context->expressionEvaluator());
   }
 
   // Keep the existing extraction rebuild and metadata preparation order.
-  if (!config->extractionColumns_.empty()) {
-    state->scanSpec = makeSpec(config->readerOutputType_);
-    config->configureExtractionColumns(*state, context->memoryPool());
+  if (!requirements->extractionColumns_.empty()) {
+    state->scanSpec = makeSpec(requirements->readerOutputType_);
+    requirements->configureExtractionColumns(*state, context->memoryPool());
   }
   return state;
 }
 
-void FileScanConfig::configureExtractionColumns(
+void FileScanRequirements::configureExtractionColumns(
     FileScanState& state,
     memory::MemoryPool* pool) const {
   // Configure extraction columns on the ScanSpec.  For each column with

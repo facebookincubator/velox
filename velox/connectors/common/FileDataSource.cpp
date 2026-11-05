@@ -75,7 +75,7 @@ FileDataSource::FileDataSource(
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   tableHandle_ = checkedPointerCast<const FileTableHandle>(tableHandle);
-  auto columns = FileScanConfig::resolveColumns(
+  auto columns = FileScanRequirements::resolveColumns(
       outputType_, tableHandle_, assignments, connectorQueryCtx_, *fileConfig_);
   for (const auto& name : outputType_->names()) {
     auto* handle =
@@ -87,7 +87,7 @@ FileDataSource::FileDataSource(
   for (const auto& [field, filter] : tableHandle_->subfieldFilters()) {
     filters.emplace(field.clone(), filter);
   }
-  FileScanConfig::Options options;
+  FileScanRequirements::Options options;
   options.sampleRate = tableHandle_->sampleRate();
   auto remainingFilter = extractFiltersFromRemainingFilter(
       tableHandle_->remainingFilter(),
@@ -105,7 +105,7 @@ FileDataSource::FileDataSource(
   options.disableStatsBasedFilterReorder =
       fileConfig_->readStatsBasedFilterReorderDisabled(
           connectorQueryCtx_->sessionProperties());
-  fileScanConfig_ = std::make_shared<FileScanConfig>(
+  fileScanRequirements_ = std::make_shared<FileScanRequirements>(
       outputType_,
       tableHandle_,
       assignments,
@@ -114,10 +114,10 @@ FileDataSource::FileDataSource(
       std::move(remainingFilter),
       remainingFilterExprSet_.get(),
       options);
-  fileScanState_ =
-      FileScanConfig::createState(fileScanConfig_, connectorQueryCtx_);
-  readerOutputType_ = fileScanConfig_->readerOutputType();
-  subfields_ = fileScanConfig_->subfields();
+  fileScanState_ = FileScanRequirements::createState(
+      fileScanRequirements_, connectorQueryCtx_);
+  readerOutputType_ = fileScanRequirements_->readerOutputType();
+  subfields_ = fileScanRequirements_->subfields();
 
   dataIoStats_ = std::make_shared<io::IoStatistics>();
   metadataIoStats_ = std::make_shared<io::IoStatistics>();
@@ -159,7 +159,7 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions(randomSkip_);
   splitReader_->setRemainingFilterColumns(
-      fileScanConfig_->remainingFilterColumns());
+      fileScanRequirements_->remainingFilterColumns());
   splitReader_->prepareSplit(
       fileScanState_->metadataFilter, runtimeStats_, fileReadOps_);
 
@@ -382,7 +382,7 @@ int64_t FileDataSource::estimatedRowSize() {
 }
 
 vector_size_t FileDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
-  for (auto fieldIndex : fileScanConfig_->multiReferencedFields()) {
+  for (auto fieldIndex : fileScanRequirements_->multiReferencedFields()) {
     LazyVector::ensureLoadedRows(
         rowVector->childAt(fieldIndex),
         filterRows_,

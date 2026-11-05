@@ -36,8 +36,9 @@ class InspectableDataSource : public DataSourceType {
     return this->fileScanState_.get();
   }
 
-  const std::shared_ptr<const connector::FileScanConfig>& scanConfig() const {
-    return this->fileScanConfig_;
+  const std::shared_ptr<const connector::FileScanRequirements>&
+  scanRequirements() const {
+    return this->fileScanRequirements_;
   }
 
   const RowTypePtr& readerOutputType() const {
@@ -534,7 +535,7 @@ TEST_F(FileDataSourceTest, publishedFilterPayloadIsShared) {
   EXPECT_EQ(second->getFilters()->at(field), filter);
 }
 
-TEST_F(FileDataSourceTest, sharedConfigCreatesIndependentStates) {
+TEST_F(FileDataSourceTest, sharedRequirementsCreateIndependentStates) {
   const auto schema = ROW({{"c0", BIGINT()}, {"c1", BIGINT()}});
   const common::Subfield field("c0");
   const auto filter =
@@ -552,15 +553,17 @@ TEST_F(FileDataSourceTest, sharedConfigCreatesIndependentStates) {
           "test",
           schema),
       assignments_);
-  const auto config = source->scanConfig();
-  auto first = connector::FileScanConfig::createState(config, context_.get());
-  auto second = connector::FileScanConfig::createState(config, context_.get());
-  EXPECT_EQ(first->scanConfig, config);
-  EXPECT_EQ(second->scanConfig, config);
+  const auto requirements = source->scanRequirements();
+  auto first = connector::FileScanRequirements::createState(
+      requirements, context_.get());
+  auto second = connector::FileScanRequirements::createState(
+      requirements, context_.get());
+  EXPECT_EQ(first->scanRequirements, requirements);
+  EXPECT_EQ(second->scanRequirements, requirements);
   EXPECT_NE(first->scanSpec, second->scanSpec);
   ASSERT_TRUE(first->metadataFilter);
   EXPECT_NE(first->metadataFilter, second->metadataFilter);
-  EXPECT_EQ(config->filters().at(field), filter);
+  EXPECT_EQ(requirements->filters().at(field), filter);
   EXPECT_EQ(first->filters.at(field), filter);
   EXPECT_EQ(second->filters.at(field), filter);
   EXPECT_EQ(first->scanSpec->childByName("c0")->filter(), filter.get());
@@ -573,13 +576,13 @@ TEST_F(FileDataSourceTest, sharedConfigCreatesIndependentStates) {
   const auto replacement = std::make_shared<common::BigintRange>(3, 5, false);
   first->filters.at(field) = replacement;
   first->scanSpec->childByName("c0")->setFilter(replacement);
-  EXPECT_EQ(config->filters().at(field), filter);
+  EXPECT_EQ(requirements->filters().at(field), filter);
   EXPECT_EQ(second->filters.at(field), filter);
   EXPECT_EQ(second->scanSpec->childByName("c0")->filter(), filter.get());
-  EXPECT_TRUE(config->readerOutputType()->containsChild("c1"));
+  EXPECT_TRUE(requirements->readerOutputType()->containsChild("c1"));
 }
 
-TEST_F(FileDataSourceTest, configOwnsSubfieldsButNotExecutionContext) {
+TEST_F(FileDataSourceTest, requirementsOwnSubfieldsButNotExecutionContext) {
   const auto nested = ROW({{"a", BIGINT()}, {"b", BIGINT()}});
   const auto schema = ROW({{"r", nested}});
   const auto outputType = ROW({{"value", nested}});
@@ -591,38 +594,41 @@ TEST_F(FileDataSourceTest, configOwnsSubfieldsButNotExecutionContext) {
       assignments.at("value");
   std::weak_ptr<const connector::FileTableHandle> tableOwner = table;
   std::weak_ptr<exec::Expr> compiledExpression;
-  std::shared_ptr<const connector::FileScanConfig> config;
+  std::shared_ptr<const connector::FileScanRequirements> requirements;
   {
     auto context = makeContext();
     auto source = makeSource(outputType, table, assignments, context.get());
     compiledExpression = source->remainingFilterExprSet()->expr(0);
-    config = source->scanConfig();
+    requirements = source->scanRequirements();
   }
   EXPECT_TRUE(compiledExpression.expired());
   assignments.clear();
   table.reset();
   EXPECT_FALSE(columnOwner.expired());
   EXPECT_FALSE(tableOwner.expired());
-  EXPECT_EQ(config->readerOutputType()->names(), std::vector<std::string>{"r"});
-  ASSERT_FALSE(config->subfields().at("r").empty());
-  for (const auto* subfield : config->subfields().at("r")) {
+  EXPECT_EQ(
+      requirements->readerOutputType()->names(), std::vector<std::string>{"r"});
+  ASSERT_FALSE(requirements->subfields().at("r").empty());
+  for (const auto* subfield : requirements->subfields().at("r")) {
     EXPECT_EQ(subfield->toString(), "r.a");
   }
 
   auto context = makeContext();
-  auto state = connector::FileScanConfig::createState(config, context.get());
+  auto state =
+      connector::FileScanRequirements::createState(requirements, context.get());
   EXPECT_NE(state->scanSpec->childByName("r")->childByName("a"), nullptr);
-  std::weak_ptr<const connector::FileScanConfig> configOwner = config;
-  config.reset();
-  EXPECT_FALSE(configOwner.expired());
+  std::weak_ptr<const connector::FileScanRequirements> requirementsOwner =
+      requirements;
+  requirements.reset();
+  EXPECT_FALSE(requirementsOwner.expired());
   EXPECT_FALSE(columnOwner.expired());
   state.reset();
-  EXPECT_TRUE(configOwner.expired());
+  EXPECT_TRUE(requirementsOwner.expired());
   EXPECT_TRUE(columnOwner.expired());
   EXPECT_TRUE(tableOwner.expired());
 }
 
-TEST_F(FileDataSourceTest, configKeepsBaseRequirementsAcrossBucketConversion) {
+TEST_F(FileDataSourceTest, bucketConversionPreservesRequirements) {
   const auto input = makeRowVector(
       {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5}),
        makeConstant<int64_t>(0, 6)});
@@ -630,7 +636,7 @@ TEST_F(FileDataSourceTest, configKeepsBaseRequirementsAcrossBucketConversion) {
   const auto file = writeScanFile(input);
   auto source = makeSource(
       type_, makeTableHandle({}, nullptr, "test", schema), assignments_);
-  const auto config = source->scanConfig();
+  const auto requirements = source->scanRequirements();
   const auto initialScanSpec = source->scanState()->scanSpec;
   std::shared_ptr<common::ScanSpec> adaptedScanSpec;
   for (int i = 0; i < 2; ++i) {
@@ -639,8 +645,8 @@ TEST_F(FileDataSourceTest, configKeepsBaseRequirementsAcrossBucketConversion) {
     split->bucketConversion =
         HiveBucketConversion{4, 1, {regularColumn("c1", BIGINT())}};
     source->addSplit(std::move(split));
-    EXPECT_EQ(source->scanConfig(), config);
-    EXPECT_FALSE(config->readerOutputType()->containsChild("c1"));
+    EXPECT_EQ(source->scanRequirements(), requirements);
+    EXPECT_FALSE(requirements->readerOutputType()->containsChild("c1"));
     EXPECT_TRUE(source->readerOutputType()->containsChild("c1"));
     if (i == 0) {
       adaptedScanSpec = source->scanState()->scanSpec;
@@ -651,40 +657,44 @@ TEST_F(FileDataSourceTest, configKeepsBaseRequirementsAcrossBucketConversion) {
     expectValues(next(*source), {0, 1, 2, 3, 4, 5});
     EXPECT_EQ(next(*source), nullptr);
   }
-  auto fresh = connector::FileScanConfig::createState(config, context_.get());
+  auto fresh = connector::FileScanRequirements::createState(
+      requirements, context_.get());
   EXPECT_EQ(
       fresh->scanSpec->children().size(), initialScanSpec->children().size());
   EXPECT_NE(fresh->scanSpec, adaptedScanSpec);
 }
 
-TEST_F(FileDataSourceTest, takeoverRetainsConfigOwnersNotCompiledExpression) {
+TEST_F(
+    FileDataSourceTest,
+    takeoverRetainsRequirementsOwnersNotCompiledExpression) {
   const auto file =
       writeScanFile(makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})}));
   const auto table =
       makeTableHandle({}, parseExpr("c0 % 2 = 0", type_), "test", type_);
   auto source = makeSource(type_, table, assignments_);
-  const auto config = source->scanConfig();
+  const auto requirements = source->scanRequirements();
   const auto* expression = source->remainingFilterExprSet();
 
   auto preloadContext = makeContext();
   auto preloaded = makeSource(type_, table, assignments_, preloadContext.get());
-  std::weak_ptr<const connector::FileScanConfig> preloadedConfig =
-      preloaded->scanConfig();
+  std::weak_ptr<const connector::FileScanRequirements> preloadedRequirements =
+      preloaded->scanRequirements();
   std::weak_ptr<exec::Expr> preloadedExpression =
       preloaded->remainingFilterExprSet()->expr(0);
   preloaded->addSplit(makeHiveConnectorSplit(file->getPath()));
   source->setFromDataSource(std::move(preloaded));
   preloadContext.reset();
 
-  EXPECT_EQ(source->scanConfig(), config);
+  EXPECT_EQ(source->scanRequirements(), requirements);
   EXPECT_EQ(source->remainingFilterExprSet(), expression);
   EXPECT_TRUE(preloadedExpression.expired());
-  EXPECT_FALSE(preloadedConfig.expired());
-  EXPECT_EQ(source->scanState()->scanConfig, preloadedConfig.lock());
+  EXPECT_FALSE(preloadedRequirements.expired());
+  EXPECT_EQ(
+      source->scanState()->scanRequirements, preloadedRequirements.lock());
   expectValues(next(*source), {0, 2, 4});
   EXPECT_EQ(next(*source), nullptr);
   source.reset();
-  EXPECT_TRUE(preloadedConfig.expired());
+  EXPECT_TRUE(preloadedRequirements.expired());
 }
 
 TEST_F(FileDataSourceTest, inputValidationStillPrecedesCompilation) {
@@ -707,16 +717,16 @@ TEST_F(FileDataSourceTest, inputValidationStillPrecedesCompilation) {
   EXPECT_EQ(compilations, 0);
 }
 
-TEST_F(FileDataSourceTest, configPreservesExtractedSampling) {
+TEST_F(FileDataSourceTest, requirementsPreserveExtractedSampling) {
   const auto original = parseExpr("rand() < 0.5 AND rand() < 0.5", type_);
   auto source = makeSource(
       type_, makeTableHandle({}, original, "test", type_), assignments_);
-  const auto config = source->scanConfig();
-  EXPECT_EQ(config->tableHandle()->remainingFilter(), original);
-  EXPECT_EQ(config->sampleRate(), 0.25);
-  EXPECT_EQ(config->remainingFilter(), nullptr);
+  const auto requirements = source->scanRequirements();
+  EXPECT_EQ(requirements->tableHandle()->remainingFilter(), original);
+  EXPECT_EQ(requirements->sampleRate(), 0.25);
+  EXPECT_EQ(requirements->remainingFilter(), nullptr);
   EXPECT_EQ(source->remainingFilterExprSet(), nullptr);
-  EXPECT_TRUE(config->remainingFilterColumns().empty());
+  EXPECT_TRUE(requirements->remainingFilterColumns().empty());
 }
 
 TEST_F(FileDataSourceTest, postProcessorsRemainDataSourceLocal) {

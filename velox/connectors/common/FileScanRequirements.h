@@ -40,10 +40,10 @@ class FileConfig;
 /// the execution ExprSet and lends it to construction only to derive column
 /// demands.
 ///
-/// A configuration can create independent mutable states for the same scan
-/// requirements. Each state retains this configuration for borrowed inputs;
-/// published filter payloads are shared and must not be modified in place.
-class FileScanConfig {
+/// The same requirements can create independent mutable states. Each state
+/// retains these requirements for borrowed inputs. Published filter payloads
+/// are shared and must not be modified in place.
+class FileScanRequirements {
  public:
   using Subfields =
       folly::F14FastMap<std::string, std::vector<const common::Subfield*>>;
@@ -68,7 +68,7 @@ class FileScanConfig {
   /// filters are the results of the existing filter-extraction step.
   /// remainingFilterExprSet compiles remainingFilter (null iff absent), and is
   /// borrowed only during this constructor.
-  FileScanConfig(
+  FileScanRequirements(
       const RowTypePtr& outputType,
       const FileTableHandlePtr& tableHandle,
       const ColumnHandleMap& assignments,
@@ -78,16 +78,16 @@ class FileScanConfig {
       const exec::ExprSet* remainingFilterExprSet,
       Options options);
 
-  FileScanConfig(const FileScanConfig&) = delete;
-  FileScanConfig& operator=(const FileScanConfig&) = delete;
-  FileScanConfig(FileScanConfig&&) = delete;
-  FileScanConfig& operator=(FileScanConfig&&) = delete;
+  FileScanRequirements(const FileScanRequirements&) = delete;
+  FileScanRequirements& operator=(const FileScanRequirements&) = delete;
+  FileScanRequirements(FileScanRequirements&&) = delete;
+  FileScanRequirements& operator=(FileScanRequirements&&) = delete;
 
   /// Creates independent mutable trees and filter-map entries without compiling
   /// an execution ExprSet. Does not prescribe when a caller creates or reuses
   /// state; Hive continues to reuse its state across serial splits.
   static std::unique_ptr<FileScanState> createState(
-      const std::shared_ptr<const FileScanConfig>& config,
+      const std::shared_ptr<const FileScanRequirements>& requirements,
       const ConnectorQueryCtx* context);
 
   const RowTypePtr& outputType() const {

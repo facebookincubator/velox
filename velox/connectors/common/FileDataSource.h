@@ -26,7 +26,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/common/FileConnectorSplit.h"
 #include "velox/connectors/common/FileConnectorUtil.h"
-#include "velox/connectors/common/FileScanConfig.h"
+#include "velox/connectors/common/FileScanRequirements.h"
 #include "velox/connectors/common/FileScanState.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/common/FileTableHandle.h"
@@ -145,7 +145,7 @@ class FileDataSource : public DataSource {
   const std::shared_ptr<FileConfig> fileConfig_;
   memory::MemoryPool* const pool_;
 
-  std::shared_ptr<const FileScanConfig> fileScanConfig_;
+  std::shared_ptr<const FileScanRequirements> fileScanRequirements_;
 
   // Heap allocation keeps the validation filter map's address stable when
   // ownership moves. Declare before splitReader_ so the reader is destroyed
@@ -170,19 +170,19 @@ class FileDataSource : public DataSource {
   uint64_t lastEventStorageReadBytes_{0};
 
   // Effective pruning requirements can expand during Hive bucket conversion,
-  // independently of the immutable configuration.
-  FileScanConfig::Subfields subfields_;
+  // independently of the immutable scan requirements.
+  FileScanRequirements::Subfields subfields_;
 
-  const FileScanConfig::ColumnHandles& partitionKeys() const {
-    return fileScanConfig_->partitionKeys();
+  const FileScanRequirements::ColumnHandles& partitionKeys() const {
+    return fileScanRequirements_->partitionKeys();
   }
 
-  const FileScanConfig::ColumnHandles& infoColumns() const {
-    return fileScanConfig_->infoColumns();
+  const FileScanRequirements::ColumnHandles& infoColumns() const {
+    return fileScanRequirements_->infoColumns();
   }
 
   const SpecialColumnNames& specialColumns() const {
-    return fileScanConfig_->specialColumns();
+    return fileScanRequirements_->specialColumns();
   }
 
   const exec::ExprSet* remainingFilterExprSet() const {
