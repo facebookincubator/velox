@@ -312,23 +312,31 @@ inline int64_t safeDoubleToInt64(const int64_t& arg) {
   return arg;
 }
 
+namespace detail {
 // Converts the rounded double 'value' to BIGINT like Spark's ceil and floor
 // on DOUBLE input: NaN maps to 0 and a value outside the BIGINT range
 // saturates to the BIGINT limits, or is an error when Spark ANSI mode is
-// enabled.
-FOLLY_ALWAYS_INLINE Status
-doubleToInt64(const double value, const bool ansiEnabled, int64_t& result) {
-  if (ansiEnabled) {
-    VELOX_USER_RETURN(
-        !std::isnan(value) &&
-            (value >= kMinDoubleAboveInt64Max ||
-             value < static_cast<double>(std::numeric_limits<int64_t>::min())),
-        "Arithmetic overflow: {} does not fit in BIGINT",
-        value);
+// enabled. 'functionName' names the function in the error message. A double
+// outside the BIGINT range is already an integer, so 'value' equals the input
+// of the function whenever the error is raised.
+FOLLY_ALWAYS_INLINE Status doubleToInt64(
+    const char* functionName,
+    const double value,
+    const bool ansiEnabled,
+    int64_t& result) {
+  if (ansiEnabled && !std::isnan(value) &&
+      (value >= kMinDoubleAboveInt64Max ||
+       value < static_cast<double>(std::numeric_limits<int64_t>::min()))) {
+    if (threadSkipErrorDetails()) {
+      return Status::UserError();
+    }
+    return Status::UserError(
+        "Arithmetic overflow: {}({})", functionName, value);
   }
   result = safeDoubleToInt64(value);
   return Status::OK();
 }
+} // namespace detail
 
 template <typename T>
 struct CeilFunction {
@@ -346,7 +354,8 @@ struct CeilFunction {
       result = value;
       return Status::OK();
     } else {
-      return doubleToInt64(std::ceil(value), ansiEnabled_, result);
+      return detail::doubleToInt64(
+          "ceil", std::ceil(value), ansiEnabled_, result);
     }
   }
 
@@ -370,7 +379,8 @@ struct FloorFunction {
       result = value;
       return Status::OK();
     } else {
-      return doubleToInt64(std::floor(value), ansiEnabled_, result);
+      return detail::doubleToInt64(
+          "floor", std::floor(value), ansiEnabled_, result);
     }
   }
 

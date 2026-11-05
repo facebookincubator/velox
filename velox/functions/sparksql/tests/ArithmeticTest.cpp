@@ -603,18 +603,34 @@ TEST_F(CeilFloorTest, ansiOverflow) {
   EXPECT_EQ(0, floor<double>(std::numeric_limits<double>::quiet_NaN()));
 
   // Values outside the BIGINT range throw instead of saturating.
-  VELOX_ASSERT_THROW(ceil<double>(1e30), "Arithmetic overflow");
-  VELOX_ASSERT_THROW(floor<double>(1e30), "Arithmetic overflow");
-  VELOX_ASSERT_THROW(ceil<double>(-1e30), "Arithmetic overflow");
-  VELOX_ASSERT_THROW(floor<double>(-1e30), "Arithmetic overflow");
-  VELOX_ASSERT_THROW(ceil<double>(kInfinity), "Arithmetic overflow");
-  VELOX_ASSERT_THROW(floor<double>(-kInfinity), "Arithmetic overflow");
+  VELOX_ASSERT_USER_THROW(
+      ceil<double>(1e30), "Arithmetic overflow: ceil(1e+30)");
+  VELOX_ASSERT_USER_THROW(
+      floor<double>(1e30), "Arithmetic overflow: floor(1e+30)");
+  VELOX_ASSERT_USER_THROW(
+      ceil<double>(-1e30), "Arithmetic overflow: ceil(-1e+30)");
+  VELOX_ASSERT_USER_THROW(
+      floor<double>(-1e30), "Arithmetic overflow: floor(-1e+30)");
+  VELOX_ASSERT_USER_THROW(
+      ceil<double>(kInfinity), "Arithmetic overflow: ceil(inf)");
+  VELOX_ASSERT_USER_THROW(
+      floor<double>(-kInfinity), "Arithmetic overflow: floor(-inf)");
   // 2^63 is the smallest double above the BIGINT range, like Spark's
   // `value >= Long.MaxValue.toDouble`.
-  VELOX_ASSERT_THROW(
-      ceil<double>(9223372036854775808.0), "Arithmetic overflow");
-  VELOX_ASSERT_THROW(
-      floor<double>(9223372036854775808.0), "Arithmetic overflow");
+  VELOX_ASSERT_USER_THROW(
+      ceil<double>(9223372036854775808.0),
+      "Arithmetic overflow: ceil(9.223372036854776e+18)");
+  VELOX_ASSERT_USER_THROW(
+      floor<double>(9223372036854775808.0),
+      "Arithmetic overflow: floor(9.223372036854776e+18)");
+
+  // try() turns the error into NULL.
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<int64_t>("try(ceil(c0))", std::optional<double>(1e30)));
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<int64_t>("try(floor(c0))", std::optional<double>(-1e30)));
 }
 
 TEST_F(ArithmeticTest, sinh) {
