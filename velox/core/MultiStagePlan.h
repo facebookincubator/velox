@@ -70,7 +70,7 @@ struct Stage {
   std::optional<int32_t> numRemotePartitions{};
 
   /// The plan node each task of the stage runs.
-  PlanNodePtr plan;
+  PlanNodePtr plan{};
 
   /// The exchanges of 'plan' that other stages feed.
   std::vector<StageInput> inputs{};
@@ -135,6 +135,20 @@ class MultiStagePlan {
 
   /// Returns the stage that reads stage 'id', or nullptr for the root.
   const Stage* consumer(int32_t id) const;
+
+  /// Serializes the stages with their plan nodes.
+  folly::dynamic serialize() const;
+
+  /// Rebuilds a plan from serialize()'s output.  'context' is passed to the
+  /// plan nodes' deserialization.
+  static MultiStagePlan deserialize(const folly::dynamic& obj, void* context);
+
+  /// Rebuilds the stages of serialize()'s output without checking that they
+  /// form a plan, for a caller that changes them before building one.
+  /// 'context' is passed to the plan nodes' deserialization.
+  static std::vector<Stage> deserializeStages(
+      const folly::dynamic& obj,
+      void* context);
 
  private:
   std::vector<Stage> stages_;

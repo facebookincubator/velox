@@ -1291,7 +1291,8 @@ class PlanBuilder {
   ///
   /// @param stateDeclarations Persistent state entries surviving across
   /// iterations.
-  /// @param plans Per-iteration plans, run sequentially as sub-tasks.
+  /// @param plans Per-iteration plans, a chain joined by shuffle (see
+  /// core::FixedPointNode).
   /// @param convergenceConfig Convergence checking + iteration bound.
   /// @param outputStateEntry The mutable vector state entry whose final
   /// contents are emitted and into which each iteration's last plan output is
@@ -1301,6 +1302,15 @@ class PlanBuilder {
   PlanBuilder& fixedPoint(
       std::vector<core::StateDeclarationPtr> stateDeclarations,
       std::vector<core::PlanNodePtr> plans,
+      core::ConvergenceConfig convergenceConfig,
+      std::string outputStateEntry,
+      bool outputOnWorkerZero = false);
+
+  /// Add a FixedPointNode whose body is 'body' (see
+  /// core::FixedPointNode::body()).  Otherwise as above.
+  PlanBuilder& fixedPoint(
+      std::vector<core::StateDeclarationPtr> stateDeclarations,
+      core::MultiStagePlan body,
       core::ConvergenceConfig convergenceConfig,
       std::string outputStateEntry,
       bool outputOnWorkerZero = false);
