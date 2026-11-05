@@ -89,17 +89,19 @@ std::shared_ptr<facebook::velox::exec::Task> createExchangeTask(
 /// @param numPartitions The number of output partitions
 /// @param partitionKeys The keys to use for hash partitioning (empty for
 /// round-robin)
-/// @param kMaxOutputBufferSize Maximum output buffer size
-/// @return Shared pointer to the created Task
+/// @param maxOutputBufferBytes The task's max_output_buffer_size. Left at the
+/// QueryConfig default when not given, as createSourceTask() does.
+/// @param extraConfig Further query config entries for the task
 /// @param replicateNullsAndAny Whether rows with a null partition key, plus one
 /// arbitrary row, must reach every destination
+/// @return Shared pointer to the created Task
 std::shared_ptr<facebook::velox::exec::Task> createPartitionedOutputTask(
     std::string_view taskId,
     std::shared_ptr<facebook::velox::memory::MemoryPool> pool,
     facebook::velox::RowTypePtr rowType,
     int numPartitions,
     const std::vector<std::string>& partitionKeys = {},
-    uint64_t kMaxOutputBufferSize = FOUR_GBYTES,
+    std::optional<uint64_t> maxOutputBufferBytes = std::nullopt,
     const std::unordered_map<std::string, std::string>& extraConfig = {},
     bool replicateNullsAndAny = false);
 
