@@ -151,11 +151,15 @@ that require custom result verifiers are left unverified.
 Limitations
 -----------
 
-The Aggregation and Window Fuzzers do not generate constant arguments. They
-pass every argument as a column, including arguments that a signature declares
-constant. Functions that read constant arguments through `setConstantInputs()`
-receive null for them, so these functions are on the fuzzers' skip lists and
-are not tested.
+The Aggregation Fuzzer generates typed literals for arguments that a signature
+declares constant. It selects one value per iteration, using custom input
+generators when available, and reuses it across batches and equivalent plans.
+This includes nulls, binary values, and complex types. Functions with additional
+constraints on literal values may still need a custom input generator.
+
+The Window Fuzzer still passes every argument as a column, including arguments
+that a signature declares constant. Functions that require literal arguments
+must remain on its skip list.
 
 How to integrate
 ---------------------------------------

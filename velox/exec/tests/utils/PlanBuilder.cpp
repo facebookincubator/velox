@@ -70,7 +70,7 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
 } // namespace
 
 PlanBuilder PlanBuilder::newPlan() const {
-  PlanBuilder builder(planNodeIdGenerator_, pool_);
+  PlanBuilder builder(planNodeIdGenerator_, pool_, complexConstants_);
   builder.options_ = options_;
   builder.filtersAsNode_ = filtersAsNode_;
   return builder;
@@ -2919,7 +2919,7 @@ core::TypedExprPtr PlanBuilder::inferTypes(
     const std::shared_ptr<const core::IExpr>& untypedExpr) {
   VELOX_CHECK_NOT_NULL(planNode_);
   return core::Expressions::inferTypes(
-      untypedExpr, planNode_->outputType(), pool_);
+      untypedExpr, planNode_->outputType(), pool_, complexConstants_);
 }
 
 core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(

@@ -100,15 +100,27 @@ class PlanBuilder {
   /// When creating tree-shaped plans, e.g. join queries, use the same instance
   /// of PlanNodeIdGenerator for all builders to ensure unique plan node IDs
   /// across the plan.
+  ///
+  /// Supplies typed literals to aggregate and projection expressions.
+  /// __complex_constant(name) references the first value of the corresponding
+  /// column in 'complexConstants', preserving its exact type.
   explicit PlanBuilder(
       std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator,
-      memory::MemoryPool* pool = nullptr)
-      : planNodeIdGenerator_{std::move(planNodeIdGenerator)}, pool_{pool} {}
+      memory::MemoryPool* pool = nullptr,
+      RowVectorPtr complexConstants = nullptr)
+      : planNodeIdGenerator_{std::move(planNodeIdGenerator)},
+        pool_{pool},
+        complexConstants_{std::move(complexConstants)} {}
 
   /// Constructor with no required parameters suitable for creating
   /// straight-line (e.g. no joins) query plans.
-  explicit PlanBuilder(memory::MemoryPool* pool = nullptr)
-      : PlanBuilder(std::make_shared<core::PlanNodeIdGenerator>(), pool) {}
+  explicit PlanBuilder(
+      memory::MemoryPool* pool = nullptr,
+      RowVectorPtr complexConstants = nullptr)
+      : PlanBuilder(
+            std::make_shared<core::PlanNodeIdGenerator>(),
+            pool,
+            std::move(complexConstants)) {}
 
   /// Constructor that allows an initial plane node to be specified for testing
   /// this is useful when testing additional connectors that do not rely on the
@@ -116,16 +128,18 @@ class PlanBuilder {
   PlanBuilder(
       core::PlanNodePtr initialPlanNode,
       std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator,
-      memory::MemoryPool* pool = nullptr)
+      memory::MemoryPool* pool = nullptr,
+      RowVectorPtr complexConstants = nullptr)
       : planNode_(std::move(initialPlanNode)),
         planNodeIdGenerator_{std::move(planNodeIdGenerator)},
-        pool_{pool} {}
+        pool_{pool},
+        complexConstants_{std::move(complexConstants)} {}
 
   virtual ~PlanBuilder() = default;
 
   /// Returns an empty PlanBuilder that shares this builder's
-  /// PlanNodeIdGenerator, memory pool and parse options, to build another
-  /// input of the same plan, e.g. a join's build side.
+  /// PlanNodeIdGenerator, memory pool, constant bindings and parse options, to
+  /// build another input of the same plan, e.g. a join's build side.
   PlanBuilder newPlan() const;
 
   static constexpr const std::string_view kHiveDefaultConnectorId{"test-hive"};
@@ -1958,6 +1972,8 @@ class PlanBuilder {
  private:
   std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
   memory::MemoryPool* pool_;
+  // Stores values referenced by __complex_constant expressions.
+  RowVectorPtr complexConstants_;
   bool filtersAsNode_{false};
 };
 } // namespace facebook::velox::exec::test
