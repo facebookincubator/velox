@@ -26,9 +26,15 @@
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/table/table.hpp>
 
+#include <limits>
+
 namespace facebook::velox::cudf_velox {
 
 namespace {
+
+// Marks a grouping key that is not part of the grouping set.
+constexpr column_index_t kMissingGroupingKey =
+    std::numeric_limits<column_index_t>::max();
 
 // Builds one projection per grouping set. Output columns are the grouping
 // keys, then the aggregation inputs, then the group id.
@@ -54,7 +60,8 @@ std::vector<std::vector<ProjectionColumn>> makeProjections(
   std::vector<std::vector<ProjectionColumn>> projections;
   projections.reserve(groupIdNode.groupingSets().size());
   for (const auto& groupingSet : groupIdNode.groupingSets()) {
-    std::vector<std::optional<column_index_t>> keyChannels(numGroupingKeys);
+    std::vector<column_index_t> keyChannels(
+        numGroupingKeys, kMissingGroupingKey);
     for (const auto& groupingKey : groupingSet) {
       const auto outputChannel = outputType->getChildIdx(groupingKey);
       VELOX_USER_CHECK_NE(
@@ -68,8 +75,8 @@ std::vector<std::vector<ProjectionColumn>> makeProjections(
 
     auto& columns = projections.emplace_back();
     for (size_t i = 0; i < numGroupingKeys; ++i) {
-      if (keyChannels[i].has_value()) {
-        columns.push_back(ProjectionColumn::field(*keyChannels[i]));
+      if (keyChannels[i] != kMissingGroupingKey) {
+        columns.push_back(ProjectionColumn::field(keyChannels[i]));
       } else {
         columns.push_back(
             ProjectionColumn::constant(
