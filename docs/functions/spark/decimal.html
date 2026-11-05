@@ -331,18 +331,22 @@ the full INTEGER range, or NULL.
 A null scale returns null without evaluating the runtime decimal child;
 its resolved output type is the same as for scale zero.
 The expression must supply the resolved decimal result type, which is
-validated against the native precision and scale rules below. Native type
-calculation widens scale arithmetic before negation, avoiding integer
-overflow across the full INTEGER domain. This can differ from Spark/JVM
-result metadata at the most-negative scales; integrations requiring exact
-Spark type parity must retain compatibility validation and fallback.
+validated against the native precision and scale rules below.
 The result precision and scale are decided with the precision and scale of input <code class="docutils literal notranslate"><span class="pre">decimal</span></code> and <code class="docutils literal notranslate"><span class="pre">scale</span></code>.
 After rounding we may need one more digit in the integral part.
 If a negative scale causes the rounded value to exceed decimal precision
 38, evaluation raises a user error regardless of ANSI mode. <code class="docutils literal notranslate"><span class="pre">try</span></code> catches
 that error per row.
-Dropping more than 38 digits returns zero; dropping exactly 38 digits can
-still round away from zero and overflow.</p>
+A scale at or above the input scale returns the value unchanged. If the
+input scale minus the target scale is greater than 38, every non-null input
+rounds to zero. Dropping exactly 38 digits can still round away from zero
+and overflow.</p>
+<p>At scales <code class="docutils literal notranslate"><span class="pre">-2147483648</span></code> and <code class="docutils literal notranslate"><span class="pre">-2147483647</span></code>, the native result type is
+<code class="docutils literal notranslate"><span class="pre">DECIMAL(38,</span> <span class="pre">0)</span></code>. Spark 4.1 computes part of this metadata using 32-bit
+arithmetic and resolves <code class="docutils literal notranslate"><span class="pre">DECIMAL(min(p</span> <span class="pre">-</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">1,</span> <span class="pre">38),</span> <span class="pre">0)</span></code> for input
+<code class="docutils literal notranslate"><span class="pre">DECIMAL(p,</span> <span class="pre">s)</span></code>. The types differ when <code class="docutils literal notranslate"><span class="pre">p</span> <span class="pre">-</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">1</span> <span class="pre">&lt;</span> <span class="pre">38</span></code>. Integrations
+requiring exact Spark type parity must retain compatibility validation and
+fallback for these scales.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">cast</span> <span class="p">(</span><span class="mf">9.9</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)),</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mi">10</span>
 <span class="n">SELECT</span> <span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">cast</span> <span class="p">(</span><span class="mi">99</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">)),</span> <span class="o">-</span><span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mi">100</span>
 </pre></div>
