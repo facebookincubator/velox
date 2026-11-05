@@ -15,6 +15,8 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -39,11 +41,32 @@ class CudfStringFunctionTest : public OperatorTestBase {
     filesystems::registerLocalFileSystem();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions("");
   }
 
   void TearDown() override {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
+  }
+
+  // Runs the projections on the GPU, which fails if any stays on the CPU, and
+  // compares the result with the CPU.
+  void assertProjectMatchesCpu(
+      const RowVectorPtr& input,
+      const std::vector<std::string>& projections) {
+    auto plan = PlanBuilder().values({input}).project(projections).planNode();
+    auto gpuResult = AssertQueryBuilder(plan).copyResults(pool());
+    cudf_velox::unregisterCudf();
+    auto cpuResult = AssertQueryBuilder(plan).copyResults(pool());
+    cudf_velox::registerCudf();
+    facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+  }
+
+  bool canRunOnGpu(const std::string& sql) {
+    auto queryCtx = core::QueryCtx::create();
+    return cudf_velox::canExprRunOnGpu(
+        parseExpr(sql, ROW({"c0"}, {VARCHAR()})), queryCtx.get(), pool());
   }
 };
 
@@ -440,6 +463,47 @@ TEST_F(CudfStringFunctionTest, concatUnicode) {
                   .planNode();
 
   assertQuery(plan, "SELECT concat(c0, c1) AS result FROM tmp");
+}
+
+// ---- TRIM and SPLIT tests -------------------------------------------------
+
+// Presto trims its whitespace code points only: U+2007 and the control byte
+// \x01 stay.
+TEST_F(CudfStringFunctionTest, trimFunctions) {
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {" a ",
+       "\tb\n",
+       "",
+       std::nullopt,
+       "   ",
+       "\u3000c\u3000",
+       "\x01 d \x01",
+       "\u2007e\u2007"})});
+  assertProjectMatchesCpu(input, {"trim(c0)", "ltrim(c0)", "rtrim(c0)"});
+
+  EXPECT_FALSE(canRunOnGpu("trim(c0, 'x')"));
+  EXPECT_FALSE(canRunOnGpu("ltrim(c0, 'x')"));
+  EXPECT_FALSE(canRunOnGpu("rtrim(c0, 'x')"));
+}
+
+TEST_F(CudfStringFunctionTest, splitWithoutLimit) {
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {"a,b", "a,,b", ",a,", "", std::nullopt, "abc"})});
+  assertProjectMatchesCpu(input, {"split(c0, ',')"});
+}
+
+// cuDF splits on whitespace for an empty delimiter, where Presto splits
+// between characters.
+TEST_F(CudfStringFunctionTest, splitEmptyDelimiterFallsBack) {
+  EXPECT_FALSE(canRunOnGpu("split(c0, '')"));
+  EXPECT_FALSE(canRunOnGpu("split(c0, '', 2)"));
+  EXPECT_TRUE(canRunOnGpu("split(c0, ',', 2)"));
+
+  // Presto returns the input for a limit of 1 and raises below; cuDF takes an
+  // int32 limit.
+  EXPECT_FALSE(canRunOnGpu("split(c0, ',', 1)"));
+  EXPECT_FALSE(canRunOnGpu("split(c0, ',', 0)"));
+  EXPECT_FALSE(canRunOnGpu("split(c0, ',', 2147483648)"));
 }
 
 // ---------------------------------------------------------------------------

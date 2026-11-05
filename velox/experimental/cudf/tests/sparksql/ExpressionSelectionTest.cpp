@@ -173,6 +173,20 @@ TEST_F(CudfSparkExpressionSelectionTest, isNullDialectRegistration) {
   }
 }
 
+// Spark trims spaces only, and its two-argument split takes a regular
+// expression, so the cuDF Presto versions must not serve a Spark session.
+TEST_F(CudfSparkExpressionSelectionTest, prestoTrimAndSplitStayOnCpu) {
+  unregisterFunctions();
+  registerBuiltinFunctions("");
+  registerSparkFunctions("");
+  for (const auto* sql :
+       {"trim(name)", "ltrim(name)", "rtrim(name)", "split(name, ',')"}) {
+    SCOPED_TRACE(sql);
+    auto expr = parseAndInferTypedExpr(sql, rowType_, execCtx_.get());
+    EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+}
+
 TEST_F(CudfSparkExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
   // OK: pattern is a constant
   auto ok = optimizeTypedExpr(

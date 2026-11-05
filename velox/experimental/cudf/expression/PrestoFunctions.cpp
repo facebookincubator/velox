@@ -30,9 +30,12 @@
 
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/strings/slice.hpp>
+#include <cudf/strings/strip.hpp>
 
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -125,6 +128,34 @@ class SubstrFunction : public CudfFunction {
   bool hasEnd_{false};
 };
 
+// Lists the code points Presto trims as whitespace
+// (stringImpl::isUnicodeWhiteSpace()).
+constexpr std::string_view kPrestoWhitespace{
+    "\t\n\v\f\r\x1c\x1d\x1e\x1f \u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+    "\u2006\u2008\u2009\u200a\u2028\u2029\u205f\u3000"};
+
+class TrimFunction : public CudfFunction {
+ public:
+  explicit TrimFunction(cudf::strings::side_type side) : side_(side) {}
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) const override {
+    const cudf::string_scalar whitespace(
+        std::string(kPrestoWhitespace), true, stream, mr);
+    return cudf::strings::strip(
+        cudf::strings_column_view(asView(inputColumns[0])),
+        side_,
+        whitespace,
+        stream,
+        mr);
+  }
+
+ private:
+  cudf::strings::side_type side_;
+};
+
 } // namespace
 
 void registerPrestoFunctions(const std::string& prefix) {
@@ -180,6 +211,33 @@ void registerPrestoFunctions(const std::string& prefix) {
            .argumentType("varchar")
            .constantArgumentType("bigint")
            .constantArgumentType("bigint")
+           .build()});
+
+  for (const auto& [name, side] :
+       {std::pair{"trim", cudf::strings::side_type::BOTH},
+        std::pair{"ltrim", cudf::strings::side_type::LEFT},
+        std::pair{"rtrim", cudf::strings::side_type::RIGHT}}) {
+    registerCudfFunction(
+        prefix + name,
+        [side](
+            const std::string&,
+            const core::TypedExprPtr&,
+            memory::MemoryPool*) {
+          return std::make_shared<TrimFunction>(side);
+        },
+        {FunctionSignatureBuilder()
+             .returnType("varchar")
+             .argumentType("varchar")
+             .build()});
+  }
+
+  // Presto only: Spark's two-argument split takes a regular expression.
+  registerSplitFunction(
+      prefix + "split",
+      {FunctionSignatureBuilder()
+           .returnType("array(varchar)")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
            .build()});
 
   registerCudfFunction(

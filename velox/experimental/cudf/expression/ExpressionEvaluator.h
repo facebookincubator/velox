@@ -121,6 +121,14 @@ void registerCudfFunctions(
     bool overwrite = true,
     CudfCanEvaluate canEvaluate = nullptr);
 
+/// Registers cuDF split(string, delimiter[, limit]) as `name` with
+/// `signatures`; the expression stays on the CPU unless the delimiter is a
+/// non-empty constant VARCHAR and the limit, if any, is a constant from 2 to
+/// INT32_MAX.
+void registerSplitFunction(
+    const std::string& name,
+    const std::vector<exec::FunctionSignaturePtr>& signatures);
+
 /// Create a CudfFunction for the given name and expression.
 /// Returns nullptr if no registered function matches the expression's
 /// signature.

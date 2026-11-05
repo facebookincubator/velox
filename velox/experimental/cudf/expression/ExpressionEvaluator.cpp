@@ -439,6 +439,9 @@ class SplitFunction : public CudfFunction {
         "split delimiter must be a constant");
     delimiter_ = constantToString(expr->inputs()[1], pool);
 
+    if (expr->inputs().size() < 3) {
+      return;
+    }
     VELOX_CHECK(
         expr->inputs()[2]->isConstantKind(), "split limit must be a constant");
     maxSplitCount_ = std::stoll(constantToString(expr->inputs()[2], pool));
@@ -460,8 +463,48 @@ class SplitFunction : public CudfFunction {
 
  private:
   std::string delimiter_;
-  cudf::size_type maxSplitCount_;
+  // cuDF reads -1 as no limit.
+  cudf::size_type maxSplitCount_{-1};
 };
+
+void registerSplitFunction(
+    const std::string& name,
+    const std::vector<exec::FunctionSignaturePtr>& signatures) {
+  registerCudfFunction(
+      name,
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<SplitFunction>(expr, pool);
+      },
+      signatures,
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr& expr) {
+        // cuDF splits on whitespace runs for an empty delimiter, where Presto
+        // splits between characters.
+        const auto delimiter = constantVarcharValue(expr->inputs()[1]);
+        if (!delimiter.has_value() || delimiter->empty()) {
+          return false;
+        }
+        if (expr->inputs().size() < 3) {
+          return true;
+        }
+        // Presto returns the input for a limit of 1 and raises for one below,
+        // where cuDF splits without a limit, and cudf::size_type is int32.
+        const auto* limitExpr =
+            expr->inputs()[2]->asUnchecked<core::ConstantTypedExpr>();
+        const auto limit = limitExpr->hasValueVector()
+            ? limitExpr->valueVector()->variantAt(0)
+            : limitExpr->value();
+        if (limit.isNull()) {
+          return false;
+        }
+        const int64_t value = limit.kind() == TypeKind::INTEGER
+            ? limit.value<TypeKind::INTEGER>()
+            : limit.value<TypeKind::BIGINT>();
+        return value >= 2 && value <= std::numeric_limits<int32_t>::max();
+      });
+}
 
 // Lists the characters the Presto cast hooks skip around a floating-point
 // literal: ASCII whitespace only (stringImpl::isAsciiWhiteSpace()).
@@ -2640,13 +2683,8 @@ std::shared_ptr<CudfFunction> createCudfFunction(
 bool registerBuiltinFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
-  registerCudfFunction(
+  registerSplitFunction(
       prefix + "split",
-      [](const std::string&,
-         const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
-        return std::make_shared<SplitFunction>(expr, pool);
-      },
       {FunctionSignatureBuilder()
            .returnType("array(varchar)")
            .argumentType("varchar")
