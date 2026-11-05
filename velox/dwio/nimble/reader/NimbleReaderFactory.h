@@ -28,7 +28,8 @@ namespace detail {
 /// it.
 std::unique_ptr<dwio::common::Reader> createBatchReader(
     const dwio::common::ReaderOptions& options,
-    const std::shared_ptr<ReadFile>& readFile);
+    const std::shared_ptr<ReadFile>& readFile,
+    const FileIoContext& fileIoContext);
 
 } // namespace detail
 

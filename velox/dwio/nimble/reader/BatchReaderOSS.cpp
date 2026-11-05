@@ -22,7 +22,8 @@ namespace facebook::velox::nimble::detail {
 // rather than fail to link.
 std::unique_ptr<dwio::common::Reader> createBatchReader(
     const dwio::common::ReaderOptions& /*options*/,
-    const std::shared_ptr<ReadFile>& /*readFile*/) {
+    const std::shared_ptr<ReadFile>& /*readFile*/,
+    const FileIoContext& /*fileIoContext*/) {
   return nullptr;
 }
 
