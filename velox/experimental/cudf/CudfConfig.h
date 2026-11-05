@@ -217,8 +217,7 @@ struct CudfConfig {
 
   /// Train and fill local indexes of vector_index_build on the GPU. kIvfFlat
   /// and kIvfSq are written as the FAISS serialization the CPU build writes,
-  /// though GPU k-means is not bit-reproducible. kCagra is written as an
-  /// IndexHNSWCagra, which the CPU searches too. Needs vectorSearchEnabled.
+  /// though GPU k-means is not bit-reproducible. Needs vectorSearchEnabled.
   bool vectorIndexBuildEnabled{false};
 
   /// Timestamp unit for cuDF timestamp types.

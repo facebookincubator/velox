@@ -40,14 +40,10 @@ struct GpuLocalVectorIndexOptions {
   int64_t minBuildSize{0};
 };
 
-/// Returns an accelerator that runs local indexes on a GPU through FAISS GPU
-/// and cuVS. kFlat, kIvfFlat, kIvfSq and kCagra indexes are copied to the
-/// device as they are: the first three by index_cpu_to_gpu, and kCagra from
-/// its stored IndexHNSWCagra. A kHnswSq index is the one type rebuilt, as a
-/// CAGRA graph over its reconstructed embeddings, so its scores come from
-/// full-precision embeddings rather than the 8-bit codes. 'hnsw.efSearch' is
-/// CAGRA's intermediate result count. Searches on one device run one at a
-/// time. Throws if 'options.device' is not a CUDA device.
+/// Returns an accelerator that runs local indexes on a GPU through FAISS's
+/// own GPU kernels. kFlat, kIvfFlat and kIvfSq are copied with
+/// index_cpu_to_gpu. kHnswSq stays on the CPU. Searches on one device run one
+/// at a time. Throws if 'options.device' is not a CUDA device.
 std::shared_ptr<const LocalVectorIndexAccelerator>
 makeGpuLocalVectorIndexAccelerator(
     const GpuLocalVectorIndexOptions& options = {});

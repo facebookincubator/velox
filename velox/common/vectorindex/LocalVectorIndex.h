@@ -57,8 +57,7 @@ class LocalVectorIndex {
   /// Builds a local index of 'type' over 'embeddings', with 'ids' giving each
   /// embedding's id, on the calling thread. Throws a user error for an id of
   /// kPaddingId. The same input gives the same bytes, unless an accelerator
-  /// (see LocalVectorIndexAccelerator) builds the index. kCagra is built only
-  /// by an accelerator and stored as an IndexHNSWCagra. The embeddings must be
+  /// (see LocalVectorIndexAccelerator) builds the index. The embeddings must be
   /// normalized for 'metric' (see
   /// EmbeddingNormalizer). Passes the index's bytes to 'write' in order, a
   /// chunk at a time, so the caller can place them without an intermediate
@@ -83,7 +82,7 @@ class LocalVectorIndex {
   /// 'bytes' must outlive it. 'searchOptions', search settings only (see
   /// LocalVectorIndexOptions::parseSearch), override the ones recorded in the
   /// index: 'ivf.nprobe' for IVF types, capped at the number of lists, and
-  /// 'hnsw.efSearch' for kHnswSq and kCagra. Throws a user error if 'bytes' is
+  /// 'hnsw.efSearch' for kHnswSq. Throws a user error if 'bytes' is
   /// not such a local index, if an embedding has kPaddingId, or for a setting
   /// that does not apply to its type. A local index has at least one embedding.
   /// With an accelerator set, the index also gets a device copy for search() to
