@@ -240,6 +240,20 @@ bool testPartitionKeyFilter(
                     kIsoString));
 }
 
+// Returns true if 'filter' passes every non-null value and rejects nulls.
+bool isNotNullOnly(const common::Filter& filter) {
+  if (filter.kind() == common::FilterKind::kIsNotNull) {
+    return true;
+  }
+  if (filter.kind() == common::FilterKind::kBigintRange) {
+    const auto& range = static_cast<const common::BigintRange&>(filter);
+    return !range.nullAllowed() &&
+        range.lower() == std::numeric_limits<int64_t>::min() &&
+        range.upper() == std::numeric_limits<int64_t>::max();
+  }
+  return false;
+}
+
 } // namespace
 
 CudfHiveDataSource::CudfHiveDataSource(
@@ -396,6 +410,26 @@ CudfHiveDataSource::CudfHiveDataSource(
       readColumnSet_.emplace(field.toString());
       readColumnNames_.emplace_back(field.toString());
     }
+  }
+
+  // Keep filters that only reject nulls out of the Parquet reader. The reader
+  // evaluates its filter on every row and, when every row passes, returns a
+  // deep copy of the whole batch. next() drops the null rows itself, and only
+  // from batches where such a column has nulls.
+  for (auto it = subfieldFilters_.begin(); it != subfieldFilters_.end();) {
+    if (it->first.path().size() != 1 || !isNotNullOnly(*it->second)) {
+      ++it;
+      continue;
+    }
+    const auto readColumn = std::find(
+        readColumnNames_.begin(), readColumnNames_.end(), it->first.toString());
+    VELOX_CHECK(
+        readColumn != readColumnNames_.end(),
+        "Filtered column is not read: {}",
+        it->first.toString());
+    notNullColumnIndices_.push_back(
+        static_cast<cudf::size_type>(readColumn - readColumnNames_.begin()));
+    it = subfieldFilters_.erase(it);
   }
   // Optimize (rewrites + constant folding) the remaining filter before
   // evaluator selection so CudfFunctions never see scalar-only operand sets.
@@ -738,6 +772,18 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   auto nRows = chunkOpt.value().numRows;
   auto cudfTable = std::move(chunkOpt.value().table);
   auto stream = cudfSplitReader_->stream();
+
+  std::vector<cudf::size_type> columnsWithNulls;
+  for (const auto index : notNullColumnIndices_) {
+    if (cudfTable->get_column(index).has_nulls()) {
+      columnsWithNulls.push_back(index);
+    }
+  }
+  if (!columnsWithNulls.empty()) {
+    cudfTable = cudf::drop_nulls(
+        cudfTable->view(), columnsWithNulls, stream, get_output_mr());
+    nRows = cudfTable->num_rows();
+  }
 
   if (!partitionKeyNames_.empty()) {
     // The partition key columns follow the read columns, the layout the

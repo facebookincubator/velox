@@ -1665,6 +1665,76 @@ TEST_F(TableScanTest, filterPushdown) {
       "SELECT count(*) FROM tmp");
 }
 
+// A filter that only rejects nulls is applied after the read, and only to
+// batches whose column has nulls. Covers a file with nulls and one without,
+// for both forms Presto pushes down: IsNotNull and a full BIGINT range.
+TEST_F(TableScanTest, notNullFilterPushdown) {
+  auto rowType = ROW({{"c0", BIGINT()}, {"c1", DOUBLE()}});
+  auto filePaths = makeFilePaths(2);
+  std::vector<RowVectorPtr> vectors{
+      makeRowVector(
+          {"c0", "c1"},
+          {
+              makeNullableFlatVector<int64_t>(
+                  {1, std::nullopt, 3, std::nullopt}),
+              makeFlatVector<double>({1.0, 2.0, 3.0, 4.0}),
+          }),
+      makeRowVector(
+          {"c0", "c1"},
+          {
+              makeFlatVector<int64_t>({5, 6, 7}),
+              makeFlatVector<double>({5.0, 6.0, 7.0}),
+          }),
+  };
+  for (int32_t i = 0; i < vectors.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+  std::vector<std::unique_ptr<common::Filter>> filters;
+  filters.push_back(std::make_unique<common::IsNotNull>());
+  filters.push_back(
+      std::make_unique<common::BigintRange>(
+          std::numeric_limits<int64_t>::min(),
+          std::numeric_limits<int64_t>::max(),
+          false));
+  for (auto& filter : filters) {
+    SCOPED_TRACE(filter->toString());
+    auto tableHandle = makeTableHandle(
+        "parquet_table",
+        rowType,
+        common::test::SubfieldFiltersBuilder()
+            .add("c0", std::move(filter))
+            .build(),
+        nullptr);
+    assertQuery(
+        PlanBuilder()
+            .startTableScan()
+            .outputType(rowType)
+            .tableHandle(tableHandle)
+            .assignments(assignments)
+            .endTableScan()
+            .planNode(),
+        filePaths,
+        "SELECT c0, c1 FROM tmp WHERE c0 IS NOT NULL");
+
+    // The filtered column is read but not projected.
+    assertQuery(
+        PlanBuilder()
+            .startTableScan()
+            .outputType(ROW("c1", DOUBLE()))
+            .tableHandle(tableHandle)
+            .assignments(assignments)
+            .endTableScan()
+            .planNode(),
+        filePaths,
+        "SELECT c1 FROM tmp WHERE c0 IS NOT NULL");
+  }
+}
+
 // Presto pushes an equality on a column into the scan and re-creates the
 // column above it as a constant projection. When the scan reads no other
 // column, that projection sits over a zero-column input and still runs on the

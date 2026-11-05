@@ -233,7 +233,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   // The table handle's subfield filters, merged with the ones extracted from
   // its remaining filter, except the ones on partition keys the data source
-  // resolves, which are kept in 'partitionKeyFilters_'.
+  // resolves, which are kept in 'partitionKeyFilters_', and the ones that only
+  // reject nulls, whose columns are in 'notNullColumnIndices_'.
   common::SubfieldFilters subfieldFilters_;
 
   const PartitionKeySource partitionKeySource_;
@@ -261,6 +262,10 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // decides for the whole split, so none is compiled into the reader's
   // filter.
   common::SubfieldFilters partitionKeyFilters_;
+
+  // Positions in 'readColumnNames_' of the columns whose only pushed-down
+  // filter rejects nulls. These filters are kept out of the reader's filter.
+  std::vector<cudf::size_type> notNullColumnIndices_;
 
   // The current split's partition key values as scalars, in
   // 'partitionKeyNames_' order. Built once per split in addSplit(); next()
