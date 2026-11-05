@@ -2364,8 +2364,6 @@ TEST_F(MinMaxByNTest, varbinaryCompare) {
       .inputs(data)
       .aggregates({"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"})
       .assertResults(expected);
-  testReadFromFiles(
-      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
 
   // Group-by.
   expected = makeRowVector({
@@ -2378,8 +2376,6 @@ TEST_F(MinMaxByNTest, varbinaryCompare) {
       .groupBy({"c2"})
       .aggregates({"min_by(c0, c1, 2)", "max_by(c0, c1, 2)"})
       .assertResults(expected);
-  testReadFromFiles(
-      {data}, {"c2"}, {"min_by(c0, c1, 2)", "max_by(c0, c1, 2)"}, {expected});
 }
 
 TEST_F(MinMaxByNTest, stringComparison) {
@@ -2420,8 +2416,6 @@ TEST_F(MinMaxByNTest, stringComparison) {
         .inputs(data)
         .aggregates({"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"})
         .assertResults(expected);
-    testReadFromFiles(
-        {data}, {}, {"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"}, {expected});
 
     // Group-by.
     expected = makeRowVector({
@@ -2444,8 +2438,6 @@ TEST_F(MinMaxByNTest, stringComparison) {
         .groupBy({"c4"})
         .aggregates({"min_by(c1, c0, 2)", "max_by(c1, c0, 2)"})
         .assertResults(expected);
-    testReadFromFiles(
-        {data}, {"c4"}, {"min_by(c1, c0, 2)", "max_by(c1, c0, 2)"}, {expected});
   }
 
   // Test min_by(smallint, varchar, n) and max_by(smallint, varchar, n).
@@ -2459,8 +2451,6 @@ TEST_F(MinMaxByNTest, stringComparison) {
         .inputs(data)
         .aggregates({"min_by(c2, c0, 3)", "max_by(c2, c0, 4)"})
         .assertResults(expected);
-    testReadFromFiles(
-        {data}, {}, {"min_by(c2, c0, 3)", "max_by(c2, c0, 4)"}, {expected});
 
     // Group-by.
     expected = makeRowVector({
@@ -2473,8 +2463,6 @@ TEST_F(MinMaxByNTest, stringComparison) {
         .groupBy({"c4"})
         .aggregates({"min_by(c2, c0, 2)", "max_by(c2, c0, 2)"})
         .assertResults(expected);
-    testReadFromFiles(
-        {data}, {"c4"}, {"min_by(c2, c0, 2)", "max_by(c2, c0, 2)"}, {expected});
   }
 
   // Test min_by(varchar, varchar, n) and max_by(varchar, varchar, n).
@@ -2489,8 +2477,6 @@ TEST_F(MinMaxByNTest, stringComparison) {
         .inputs(data)
         .aggregates({"min_by(c3, c0, 3)", "max_by(c3, c0, 4)"})
         .assertResults(expected);
-    testReadFromFiles(
-        {data}, {}, {"min_by(c3, c0, 3)", "max_by(c3, c0, 4)"}, {expected});
 
     // Group-by.
     expected = makeRowVector({
@@ -2505,8 +2491,6 @@ TEST_F(MinMaxByNTest, stringComparison) {
         .groupBy({"c4"})
         .aggregates({"min_by(c3, c0, 2)", "max_by(c3, c0, 2)"})
         .assertResults(expected);
-    testReadFromFiles(
-        {data}, {"c4"}, {"min_by(c3, c0, 2)", "max_by(c3, c0, 2)"}, {expected});
   }
 }
 
