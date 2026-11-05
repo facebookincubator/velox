@@ -60,12 +60,7 @@ if(VELOX_ENABLE_FAISS)
 
   # A separate library, so that velox_vector_index needs no CUDA.
   if(VELOX_ENABLE_FAISS_GPU)
-    velox_add_library(
-      velox_vector_index_gpu
-      GpuLocalVectorIndex.cpp
-      HEADERS
-      GpuLocalVectorIndex.h
-    )
+    velox_add_library(velox_vector_index_gpu GpuLocalVectorIndex.cpp HEADERS GpuLocalVectorIndex.h)
 
     velox_link_libraries(
       velox_vector_index_gpu
@@ -75,29 +70,15 @@ if(VELOX_ENABLE_FAISS)
       CUDA::cudart_static
       glog::glog
     )
-    velox_compile_definitions(
-      velox_vector_index_gpu
-      PUBLIC
-      VELOX_ENABLE_FAISS_GPU
-    )
+    velox_compile_definitions(velox_vector_index_gpu PUBLIC VELOX_ENABLE_FAISS_GPU)
   endif()
 
   # container-deps/include can hold an older faiss. These targets link the
   # faiss Velox built, so those headers have to win.
   if(faiss_SOURCE_DIR)
-    velox_include_directories(
-      velox_vector_index
-      BEFORE
-      PRIVATE
-      "${faiss_SOURCE_DIR}"
-    )
+    velox_include_directories(velox_vector_index BEFORE PRIVATE "${faiss_SOURCE_DIR}")
     if(VELOX_ENABLE_FAISS_GPU)
-      velox_include_directories(
-        velox_vector_index_gpu
-        BEFORE
-        PRIVATE
-        "${faiss_SOURCE_DIR}"
-      )
+      velox_include_directories(velox_vector_index_gpu BEFORE PRIVATE "${faiss_SOURCE_DIR}")
     endif()
   endif()
 
