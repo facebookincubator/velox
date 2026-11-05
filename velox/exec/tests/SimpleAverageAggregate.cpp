@@ -48,6 +48,13 @@ class AverageAggregate {
     return true;
   }
 
+  // An empty group's intermediate result is null, as with default null
+  // behavior.
+  static bool fillEmptyIntermediate(
+      exec::out_type<Row<double, int64_t>>& /*out*/) {
+    return false;
+  }
+
   struct AccumulatorType {
     double sum_;
     int64_t count_;

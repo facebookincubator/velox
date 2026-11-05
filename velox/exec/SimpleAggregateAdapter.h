@@ -241,9 +241,10 @@ concept NonDefaultNullAccumulator =
 ///   group that received no input, which the merge companion uses for
 ///   masked-out and null rows when it abandons partial aggregation. Returns
 ///   bool, false for a null result, or void when the result is never null.
-///   Only functions that set default_null_behavior_ to false define it,
-///   because the adapter writes null for the others. Without it, the merge
-///   companion falls back to creating fake groups.
+///   Define it only when passing a merged row through unchanged is correct,
+///   that is, when combining a single intermediate result into an empty
+///   group's accumulator leaves it as is. Without it, the merge companion
+///   falls back to creating fake groups.
 ///
 /// Optional members of AccumulatorType:
 /// - is_fixed_size_ (default true): false when the accumulator allocates from
@@ -411,11 +412,6 @@ class SimpleAggregateAdapter : public Aggregate {
   static constexpr bool support_fill_empty_intermediate_ =
       support_fill_empty_intermediate<FUNC>::value;
 
-  static_assert(
-      !(aggregate_default_null_behavior_ && support_fill_empty_intermediate_),
-      "Functions with default null behavior must not define "
-      "fillEmptyIntermediate, because the adapter writes null for them.");
-
   static constexpr bool support_initialize_ = support_initialize<FUNC>::value;
 
   static constexpr bool support_initialize_with_config_ =
@@ -500,14 +496,12 @@ class SimpleAggregateAdapter : public Aggregate {
   }
 
   bool supportsFillEmptyIntermediate() const override {
-    return aggregate_default_null_behavior_ || support_fill_empty_intermediate_;
+    return support_fill_empty_intermediate_;
   }
 
   void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
       const override {
-    if constexpr (aggregate_default_null_behavior_) {
-      result->addNulls(rows);
-    } else if constexpr (support_fill_empty_intermediate_) {
+    if constexpr (support_fill_empty_intermediate_) {
       using IntermediateType = typename FUNC::IntermediateType;
       auto* vector =
           result->as<typename TypeToFlatVector<IntermediateType>::type>();
