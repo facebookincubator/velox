@@ -1975,7 +1975,8 @@ void AggregationTestBase::AggregationTester::assertResults(
 void AggregationTestBase::AggregationTester::assertError(
     const std::string& message) {
   VELOX_CHECK(
-      !preAggregation_ && projections_.empty() && !companion(),
+      !preAggregation_ && projections_.empty() &&
+          companionPlans_ == CompanionPlans::kNone,
       "assertError supports only the input, grouping keys, aggregates and "
       "configs");
   test_.testFailingAggregations(
@@ -1996,7 +1997,7 @@ void AggregationTestBase::AggregationTester::run(
       streaming_,
       incremental_);
 
-  if (companion()) {
+  if (companionPlans_ != CompanionPlans::kNone) {
     SCOPED_TRACE("Companion functions");
     const auto companionInputs = CompanionPlanInputs::make(
         inputs_,
@@ -2012,17 +2013,13 @@ void AggregationTestBase::AggregationTester::run(
         groupingKeys_,
         aggregates_,
         aggregateArgTypes());
-    if (companionExtract_) {
+    if (companionPlans_ == CompanionPlans::kAll) {
       test_.testCompanionExtract(
           companionInputs, projections_, assertResults, config_, streaming_);
-    }
-    if (companionMergeExtract_) {
       test_.testCompanionMergeExtract(
           companionInputs, projections_, assertResults, config_);
     }
-    if (companionMerge_) {
-      test_.testCompanionMerge(companionInputs, config_);
-    }
+    test_.testCompanionMerge(companionInputs, config_);
   }
 }
 

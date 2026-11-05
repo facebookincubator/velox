@@ -44,6 +44,20 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::vector<VectorPtr>& rawInput2,
       const std::unordered_map<std::string, std::string>& config = {});
 
+  /// Which companion plans AggregationTester::withCompanion() runs.
+  enum class CompanionPlans {
+    /// No companion plans.
+    kNone,
+    /// The plans that end with the '_extract', '_merge_extract' and '_merge'
+    /// companions.
+    kAll,
+    /// Only the plans that end with the '_merge' companion, which compare
+    /// partial states. For functions whose '_extract' and '_merge_extract'
+    /// companions cannot resolve their result type from the intermediate type
+    /// alone, such as Spark's decimal avg.
+    kMergeOnly,
+  };
+
   /// Runs an aggregation through the plans that AggregationTestBase generates
   /// and checks that they all produce the same results. Set the input, the
   /// aggregation and the options, then call one of the assert methods:
@@ -113,21 +127,11 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     /// Also runs the plans that compute the aggregates with their companion
     /// functions: '_partial', '_merge', '_merge_extract' and '_extract'. These
     /// plans group the partial step by an extra key 'k0', so that the merge
-    /// step has several values to merge for each group.
-    AggregationTester& withCompanion() {
-      companionExtract_ = true;
-      companionMergeExtract_ = true;
-      companionMerge_ = true;
-      return *this;
-    }
-
-    /// Same as withCompanion(), but runs only the plans that end with the
-    /// '_merge' companion, which compare partial states. Use it for functions
-    /// whose '_extract' and '_merge_extract' companions cannot resolve their
-    /// result type from the intermediate type alone, such as Spark's decimal
-    /// avg.
-    AggregationTester& withCompanionMerge() {
-      companionMerge_ = true;
+    /// step has several values to merge for each group. 'plans' selects which
+    /// of them run; each call overrides the previous one.
+    AggregationTester& withCompanion(
+        CompanionPlans plans = CompanionPlans::kAll) {
+      companionPlans_ = plans;
       return *this;
     }
 
@@ -165,11 +169,6 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     // Runs the plans and checks their results with 'assertResults'.
     void run(const AssertResults& assertResults);
 
-    // Returns whether any companion plans run.
-    bool companion() const {
-      return companionExtract_ || companionMergeExtract_ || companionMerge_;
-    }
-
     // Adds the input and the pre-aggregation nodes to 'builder'.
     void addSource(exec::test::PlanBuilder& builder) const;
 
@@ -184,11 +183,7 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     std::vector<std::string> aggregates_;
     std::vector<std::string> projections_;
     std::unordered_map<std::string, std::string> config_;
-    // Whether to run the companion plans that end with '_extract',
-    // '_merge_extract' and '_merge'.
-    bool companionExtract_{false};
-    bool companionMergeExtract_{false};
-    bool companionMerge_{false};
+    CompanionPlans companionPlans_{CompanionPlans::kNone};
     bool streaming_{true};
     bool incremental_{true};
   };

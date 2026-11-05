@@ -168,7 +168,7 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   AggregationTester(*this)
       .inputs(shortDecimalInput)
       .aggregates({"spark_avg(c0)"})
-      .withCompanionMerge()
+      .withCompanion(CompanionPlans::kMergeOnly)
       .assertResults(shortDecimalExpected);
 
   // Long decimal aggregation.
@@ -185,7 +185,7 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   AggregationTester(*this)
       .inputs(longDecimalInput)
       .aggregates({"spark_avg(c0)"})
-      .withCompanionMerge()
+      .withCompanion(CompanionPlans::kMergeOnly)
       .assertResults(longDecimalExpected);
 
   // The total sum overflows the max int128_t limit.
