@@ -567,6 +567,53 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecutionWithSpill) {
   }
 }
 
+// Covers null-aware anti join with mixed grouped execution and spill enabled.
+TEST_F(
+    GroupedExecutionTest,
+    nullAwareAntiJoinWithMixedGroupedExecutionAndSpill) {
+  const auto probeType = ROW("t0", BIGINT());
+  const auto buildType = ROW("u0", BIGINT());
+
+  auto probeFile =
+      writeToFile(makeRowVector({"t0"}, {makeFlatVector<int64_t>({1})}));
+  auto buildFile = writeToFile(
+      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({std::nullopt})}));
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanId;
+  core::PlanNodeId buildScanId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(probeType)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .tableScan(buildType)
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      "",
+                      {"t0"},
+                      core::JoinType::kAnti,
+                      /*nullAware=*/true)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  AssertQueryBuilder(plan)
+      .maxDrivers(1)
+      .spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kJoinSpillEnabled, true)
+      .config(core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, true)
+      .split(probeScanId, makeHiveSplitWithGroup(probeFile->getPath(), 0))
+      .split(buildScanId, makeHiveSplit(buildFile->getPath()))
+      .executionStrategy(core::ExecutionStrategy::kGrouped)
+      .groupedExecutionLeafNodeIds({probeScanId})
+      .numSplitGroups(1)
+      .numConcurrentSplitGroups(1)
+      .assertEmptyResults();
+}
+
 DEBUG_ONLY_TEST_F(
     GroupedExecutionTest,
     groupedExecutionWithHashJoinSpillCheck) {
