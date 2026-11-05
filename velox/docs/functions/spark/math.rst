@@ -143,11 +143,11 @@ Mathematical Functions
     errors per row.
 
     Shares scale handling and result typing with :spark:func:`decimal_round`.
-    All constant INTEGER scales are accepted. Scales beyond decimal precision
-    are handled without constructing an unrepresentable power of ten.
+    All constant INTEGER scales are accepted.
     For example, rounding DECIMAL(38,38) 0.1 to scale -1 returns 10, not zero.
-    When the quantum is outside the result precision, positive nonzero inputs
-    raise an error; negative inputs and zero return zero.
+    When a negative scale requests a quantum larger than the result precision,
+    positive nonzero inputs raise an error; negative inputs and zero return
+    zero.
 
     A typed NULL scale returns NULL without evaluating the runtime decimal
     child; its result type uses scale zero.
