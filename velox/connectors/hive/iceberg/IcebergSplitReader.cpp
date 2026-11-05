@@ -623,7 +623,8 @@ void IcebergSplitReader::prepareSplit(
                 ioStats_,
                 runtimeStats,
                 splitOffset_,
-                fileSplit_->connectorId));
+                fileSplit_->connectorId,
+                effectiveFileReadOps));
       }
     } else if (deleteFile.content == FileContent::kEqualityDeletes) {
       if (deleteFile.recordCount > 0 && !deleteFile.equalityFieldIds.empty()) {
@@ -652,7 +653,8 @@ void IcebergSplitReader::prepareSplit(
                   dataIoStats_,
                   ioStats_,
                   runtimeStats,
-                  fileSplit_->connectorId));
+                  fileSplit_->connectorId,
+                  effectiveFileReadOps));
         }
       }
     } else if (deleteFile.content == FileContent::kDeletionVector) {
@@ -685,7 +687,8 @@ void IcebergSplitReader::prepareSplit(
                 deleteFile,
                 splitOffset_,
                 connectorQueryCtx_->memoryPool(),
-                fileConfig_->config()));
+                fileConfig_->config(),
+                effectiveFileReadOps));
       }
     } else {
       VELOX_NYI(
