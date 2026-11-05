@@ -48,6 +48,9 @@
 #include "velox/common/io/Options.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/VectorIndexUtility.h"
+#ifdef VELOX_ENABLE_FAISS_GPU
+#include "velox/dwio/nimble/index/VectorIndexGpu.h"
+#endif
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 #include "velox/dwio/nimble/tablet/VectorIndexGenerated.h"
 
@@ -419,6 +422,65 @@ void searchFaissIndex(
       stats.searchTiming);
 }
 
+#ifdef VELOX_ENABLE_FAISS_GPU
+// Returns the IVF options when the batch has a GPU implementation, or null
+// when it must run on the CPU.
+const VectorIndex::IvfSearchOptions* gpuIvfSearchOptions(
+    const VectorIndex::SearchConfig& config,
+    VectorIndexType indexType,
+    size_t numPartitions,
+    faiss::idx_t maxNumNeighbors) {
+  if (!config.useGpu || !isIvfIndexType(indexType) ||
+      !GpuVectorIndex::supports(indexType) ||
+      config.searchOptions->kind() != VectorIndex::SearchOptions::Kind::kIvf) {
+    return nullptr;
+  }
+  const auto* ivfOptions =
+      velox::checkedPointerCast<const VectorIndex::IvfSearchOptions>(
+          config.searchOptions.get());
+  // FAISS GPU rejects max_codes. A zero probe count falls through to the CPU
+  // path, which reports the error.
+  const auto numProbes =
+      std::min<uint64_t>(numPartitions, ivfOptions->numProbes);
+  if (ivfOptions->maxCodes != 0 || numProbes == 0 ||
+      numProbes > static_cast<uint64_t>(GpuVectorIndex::maxSelection()) ||
+      maxNumNeighbors > GpuVectorIndex::maxSelection()) {
+    return nullptr;
+  }
+  return ivfOptions;
+}
+
+// Searches the device copy of an IVF index. Partition assignment runs on the
+// device, so only search timing is reported.
+void searchGpuIndex(
+    const GpuVectorIndex& gpuIndex,
+    size_t numPartitions,
+    faiss::idx_t numQueries,
+    uint32_t requestedNumProbes,
+    const float* queryVectors,
+    faiss::idx_t maxNumNeighbors,
+    float* scores,
+    faiss::idx_t* labels,
+    FaissRowSelection& rowSelection,
+    VectorIndex::SearchStats& stats) {
+  faiss::SearchParametersIVF searchParameters;
+  rowSelection.applyTo(searchParameters);
+  searchParameters.nprobe =
+      std::min(numPartitions, static_cast<size_t>(requestedNumProbes));
+  velox::CpuWallTimer timer{stats.searchTiming};
+  if (gpuIndex.search(
+          numQueries,
+          queryVectors,
+          maxNumNeighbors,
+          scores,
+          labels,
+          searchParameters)) {
+    stats.usedGpu = true;
+  }
+}
+
+#endif
+
 // Validates metadata before allocating or deserializing a FAISS index.
 void validateVectorIndexMetadata(const VectorIndex::Metadata& metadata) {
   NIMBLE_CHECK_FILE(
@@ -722,6 +784,25 @@ VectorIndex::VectorIndex(
 
 VectorIndex::~VectorIndex() = default;
 
+bool VectorIndex::gpuSearchAvailable() {
+#ifdef VELOX_ENABLE_FAISS_GPU
+  return GpuVectorIndex::numDevices() > 0;
+#else
+  return false;
+#endif
+}
+
+const GpuVectorIndex* VectorIndex::gpuIndex() const {
+#ifdef VELOX_ENABLE_FAISS_GPU
+  folly::call_once(gpuIndexOnce_, [this] {
+    if (gpuSearchAvailable() && GpuVectorIndex::supports(indexType_)) {
+      gpuIndex_ = GpuVectorIndex::create(*faissIndex_, indexType_);
+    }
+  });
+#endif
+  return gpuIndex_.get();
+}
+
 VectorIndex::SearchResults::SearchResults(
     std::vector<SearchResult> results,
     std::vector<size_t> resultOffsets,
@@ -814,17 +895,42 @@ VectorIndex::SearchResults VectorIndex::search(
   std::vector<faiss::idx_t> labels(numResultSlots);
 
   SearchStats searchStats;
-  searchFaissIndex(
-      *faissIndex_,
-      indexType_,
-      static_cast<faiss::idx_t>(numQueries),
-      *config.searchOptions,
-      queryData,
-      maxNumNeighbors,
-      scores.data(),
-      labels.data(),
-      rowSelection,
-      searchStats);
+#ifdef VELOX_ENABLE_FAISS_GPU
+  if (isIvfIndexType(indexType_)) {
+    const auto numPartitions =
+        velox::checkedPointerCast<const faiss::IndexIVF>(faissIndex_.get())
+            ->nlist;
+    const auto* ivfOptions =
+        gpuIvfSearchOptions(config, indexType_, numPartitions, maxNumNeighbors);
+    const auto* gpu = ivfOptions != nullptr ? gpuIndex() : nullptr;
+    if (gpu != nullptr) {
+      searchGpuIndex(
+          *gpu,
+          numPartitions,
+          numQueries,
+          ivfOptions->numProbes,
+          queryData,
+          maxNumNeighbors,
+          scores.data(),
+          labels.data(),
+          rowSelection,
+          searchStats);
+    }
+  }
+#endif
+  if (!searchStats.usedGpu) {
+    searchFaissIndex(
+        *faissIndex_,
+        indexType_,
+        static_cast<faiss::idx_t>(numQueries),
+        *config.searchOptions,
+        queryData,
+        maxNumNeighbors,
+        scores.data(),
+        labels.data(),
+        rowSelection,
+        searchStats);
+  }
 
   std::vector<size_t> resultOffsets(numQueries + 1, 0);
   for (size_t queryIndex = 0; queryIndex < numQueries; ++queryIndex) {
