@@ -410,6 +410,13 @@ location of the accumulator.</p>
 </dd>
 </dl>
 </li>
+<li><dl class="simple">
+<dt>Optional logic for producing an empty group’s intermediate result:</dt><dd><ul>
+<li><p>supportsFillEmptyIntermediate() and fillEmptyIntermediate() methods.</p></li>
+</ul>
+</dd>
+</dl>
+</li>
 </ul>
 <p>Some methods are only used in a subset of aggregation workflows. The following
 table shows which methods are used in which workflows.</p>
@@ -469,6 +476,13 @@ table shows which methods are used in which workflows.</p>
 </tr>
 <tr class="row-odd"><td><p>toIntermediate</p></td>
 <td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>N</p></td>
+<td><p>N</p></td>
+<td><p>N</p></td>
+</tr>
+<tr class="row-even"><td><p>fillEmptyIntermediate</p></td>
+<td><p>Y (used by merge companions)</p></td>
 <td><p>N</p></td>
 <td><p>N</p></td>
 <td><p>N</p></td>
@@ -575,6 +589,28 @@ implement toIntermediate() method which simply returns the input unmodified.</p>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
 <span class="w">    </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">"toIntermediate not supported"</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>A <cite>_merge</cite> companion can abandon partial aggregation too. Each input row then
+becomes its own group, so selected non-null rows pass through unchanged, while
+masked-out and null rows must hold an empty group’s intermediate result: null
+for most functions, 0 for count, and (0, 0) for Spark’s avg. Implement
+fillEmptyIntermediate() and override supportsFillEmptyIntermediate() to write
+it, otherwise the merge companion falls back to creating fake groups.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns true if fillEmptyIntermediate() is supported, allowing merge</span>
+<span class="c1">/// companions to bypass accumulator construction.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsFillEmptyIntermediate</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">/// Writes an empty group's intermediate into selected rows of 'result',</span>
+<span class="c1">/// leaving other rows unchanged, so merge pass-through can handle masked-out</span>
+<span class="c1">/// and null inputs.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">fillEmptyIntermediate</span><span class="p">(</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
+<span class="w">    </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">"fillEmptyIntermediate not supported"</span><span class="p">);</span>
 <span class="p">}</span>
 </pre></div>
 </div>
