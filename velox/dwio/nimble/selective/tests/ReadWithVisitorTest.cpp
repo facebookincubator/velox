@@ -1628,6 +1628,9 @@ class ReadWithVisitorTest : public ::testing::Test,
         params,
         scanSpec,
         /*isRoot=*/true);
+    // Matches SelectiveNimbleReader: loading a LazyVector records row sizes,
+    // which requires the projection to be final.
+    ctx.rowSizeTracker->finalizeProjection();
     reader->setIsTopLevel();
     ctx.streams->load();
     return reader;
@@ -2195,8 +2198,14 @@ class ReadWithVisitorTest : public ::testing::Test,
     // RowSet: sequential [0 .. numRows-1]
     std::vector<vector_size_t> rowVec(numRows);
     std::iota(rowVec.begin(), rowVec.end(), 0);
-    RowSet rows(rowVec.data(), rowVec.size());
+    return readColumn(root, RowSet(rowVec.data(), rowVec.size()));
+  }
 
+  // Reads 'rows' through the root struct reader and returns its first child,
+  // read for those rows.
+  dwio::common::SelectiveColumnReader* readColumn(
+      dwio::common::SelectiveColumnReader* root,
+      const RowSet& rows) {
     // Trigger read on the root struct reader which calls read() on children.
     root->read(0, rows, nullptr);
 
@@ -2204,7 +2213,14 @@ class ReadWithVisitorTest : public ::testing::Test,
         dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root);
     EXPECT_NE(structReader, nullptr);
     EXPECT_FALSE(structReader->children().empty());
-    return structReader->children()[0];
+    auto* child = structReader->children()[0];
+    // The root leaves a projected child without a filter for lazy loading.
+    // Read it the way ColumnLoader does when the LazyVector is loaded.
+    if (!child->scanSpec()->hasFilter()) {
+      child->formatData().loadLazyInputStreams();
+      child->read(0, rows, structReader->nulls());
+    }
+    return child;
   }
 
   // Helper: get typed values from a column reader after read().
@@ -2302,9 +2318,8 @@ class ReadWithVisitorTest : public ::testing::Test,
 
   // Reads a nullable column of type 'T' that spans several chunks, with dense
   // and with sparse rows, in each way that can take the bulk path:
-  // - A generic hook checks the delivered rows. The hook reads force the read
-  //   with an AlwaysTrue filter, which passes nulls, so the reader declines its
-  //   bulk path and these reads take the per-row path.
+  // - A generic hook checks that the bulk path ran and delivered the right
+  //   rows.
   // - A SUM hook gives every row its own group, so a value delivered with a
   //   wrong row number lands in another row's group.
   // - A filter-only read checks the passing rows. A filter that rejects nulls
@@ -2358,7 +2373,7 @@ class ReadWithVisitorTest : public ::testing::Test,
               rowType,
               *scanSpec,
               /*scanFastPath=*/true);
-          root->read(0, RowSet(rowNumbers.data(), rowNumbers.size()), nullptr);
+          readColumn(root.get(), RowSet(rowNumbers.data(), rowNumbers.size()));
         };
 
     // Rows 1'000 through 3'000 pass the filter-only reads.
@@ -2412,7 +2427,7 @@ class ReadWithVisitorTest : public ::testing::Test,
       {
         GenericCapturingIntHook hook;
         readWithHook(hook, rowNumbers);
-        EXPECT_EQ(hook.numBulkCalls, 0);
+        EXPECT_GT(hook.numBulkCalls, 0);
         EXPECT_EQ(hook.rows, expectedPositions);
         EXPECT_EQ(hook.values, expectedValues);
       }
@@ -2558,11 +2573,13 @@ TEST_F(ReadWithVisitorTest, alwaysTrueFilterKeepsNulls) {
         std::make_unique<common::AlwaysTrue>());
 
     auto root = buildReader(*ctx, rowType, *scanSpec);
-    auto* child = readColumn(root.get(), kRows);
-    EXPECT_TRUE(child->hasNulls());
+    std::vector<vector_size_t> rowNumbers(kRows);
+    std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+    const RowSet rows(rowNumbers.data(), rowNumbers.size());
+    root->read(0, rows, nullptr);
 
     VectorPtr result = BaseVector::create(rowType, 0, pool());
-    root->getValues(root->outputRows(), &result);
+    root->getValues(rows, &result);
     velox::test::assertEqualVectors(input, result);
   }
 }
@@ -2888,7 +2905,7 @@ TEST_F(ReadWithVisitorTest, constantEncodingHook) {
           rowVec.push_back(row);
         }
       }
-      root->read(0, RowSet(rowVec.data(), rowVec.size()), nullptr);
+      readColumn(root.get(), RowSet(rowVec.data(), rowVec.size()));
 
       // Hooks receive each row's position in the read set.
       std::vector<vector_size_t> expectedPositions(rowVec.size());

@@ -17,7 +17,6 @@
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Coding.h"
-#include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
@@ -34,8 +33,6 @@
 #include <folly/String.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
-#include <numeric>
 
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;
@@ -1227,10 +1224,10 @@ TEST_P(TestColumnReader, testIntDictSkipWithNulls) {
   }
 }
 
-// An AlwaysTrue filter passes nulls, so the reader declines its bulk path and
-// reads the IN_DICTIONARY flags one per row. The decoder must then take the
-// per-row path too: the fast path reads the flags one per non-null value, so
-// it would pick dictionary entries and literals for the wrong rows.
+// The scan spec drops an AlwaysTrue filter, so the column reads as one without
+// a filter: lazily, and on the bulk path, which reads the IN_DICTIONARY flags
+// one per non-null value. Every row comes back, with the right nulls and the
+// right choice between dictionary entries and literals.
 TEST_P(TestColumnReader, testIntDictWithNullsAlwaysTrueFilter) {
   if (!useSelectiveReader()) {
     GTEST_SKIP() << "Scan spec filters apply to the selective reader only";
@@ -1292,21 +1289,12 @@ TEST_P(TestColumnReader, testIntDictWithNullsAlwaysTrueFilter) {
       std::make_unique<common::AlwaysTrue>());
   buildReader(rowType, nullptr, {}, &scanSpec);
 
-  // Reads the column directly to isolate dictionary and literal decoding from
-  // the struct reader's output-row selection.
+  ASSERT_EQ(scanSpec.childByName("myInt")->filter(), nullptr);
+
   constexpr int32_t kNumRows = 90;
-  std::vector<vector_size_t> rowNumbers(kNumRows);
-  std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
-  const RowSet rows(rowNumbers.data(), rowNumbers.size());
-  auto* structReader =
-      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
-          selectiveColumnReader_.get());
-  ASSERT_NE(structReader, nullptr);
-  structReader->read(0, rows, nullptr);
-  VectorPtr result;
-  structReader->children()[0]->getValues(rows, &result);
-  auto intBatch = std::dynamic_pointer_cast<FlatVector<int32_t>>(result);
-  ASSERT_NE(intBatch, nullptr);
+  VectorPtr batch = newBatch(rowType);
+  selectiveColumnReader_->next(kNumRows, batch, nullptr);
+  auto intBatch = getOnlyChild<FlatVector<int32_t>>(batch);
   ASSERT_EQ(intBatch->size(), kNumRows);
   for (int32_t row = 0; row < kNumRows; ++row) {
     SCOPED_TRACE(fmt::format("row={}", row));

@@ -75,10 +75,10 @@ class ScanSpec {
   }
 
   /// Sets 'filter_'. May be used at initialization or when adding a
-  /// pushed down filter, e.g. top k cutoff.
-  void setFilter(std::shared_ptr<Filter> filter) {
-    filter_ = std::move(filter);
-  }
+  /// pushed down filter, e.g. top k cutoff. Drops an AlwaysTrue filter: it
+  /// keeps every row, nulls included, so the field is read as one without a
+  /// filter, lazily when projected.
+  void setFilter(std::shared_ptr<Filter> filter);
 
   /// Enables or disables the filters of 'this' and its descendants in the
   /// readers. While disabled, filter() and numMetadataFilters() report none

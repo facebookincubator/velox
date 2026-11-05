@@ -285,11 +285,11 @@ class SelectiveColumnReader {
 
   /// Resolves which buffer resultNulls() returns for this read, by setting the
   /// returnReaderNulls_ flag (and anyNulls_). Sets it true on the fast path --
-  /// bulk read, no filter that can drop rows, dense rows, and nulls present --
-  /// so the nulls decoded into nullsInReadRange_ can be returned directly;
-  /// otherwise false, so resultNulls() returns the separately-built,
-  /// output-aligned resultNulls_. Resolves the flag only; allocates no buffer.
-  /// Call after the read-range nulls are decoded.
+  /// bulk read, no filter, dense rows, and nulls present -- so the nulls
+  /// decoded into nullsInReadRange_ can be returned directly; otherwise false,
+  /// so resultNulls() returns the separately-built, output-aligned
+  /// resultNulls_. Resolves the flag only; allocates no buffer. Call after the
+  /// read-range nulls are decoded.
   void setReturnNullsMode(const RowSet& rows);
 
   void setNumValues(vector_size_t size) {
@@ -648,13 +648,8 @@ class SelectiveColumnReader {
   }
 
   bool useOutputRows() const {
-    return hasRowFilter() || hasDeletion();
+    return scanSpec_->hasFilter() || hasDeletion();
   }
-
-  // True if the scan spec has a filter that can drop rows. An AlwaysTrue filter
-  // keeps every row, so the column visitors record no output rows for it and
-  // the read-range nulls stay aligned with the output.
-  bool hasRowFilter() const;
 
   memory::MemoryPool* const pool_;
 
