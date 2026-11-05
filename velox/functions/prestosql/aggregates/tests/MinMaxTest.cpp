@@ -64,6 +64,7 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
     AggregationTester(*this)
         .inputs(vectors)
         .aggregates({agg(c1)})
+        .withCompanion()
         .assertResults(fmt::format("SELECT {} FROM tmp", agg(c1)));
 
     // Group by aggregation.

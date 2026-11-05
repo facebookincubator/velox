@@ -25,6 +25,10 @@ class AssertQueryBuilder;
 
 namespace facebook::velox::functions::aggregate::test {
 
+// Input and companion aggregates that the companion plans are built from.
+// Defined in the .cpp.
+struct CompanionPlanInputs;
+
 class AggregationTestBase : public exec::test::OperatorTestBase {
  protected:
   void SetUp() override;
@@ -115,7 +119,19 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     /// plans group the partial step by an extra key 'k0', so that the merge
     /// step has several values to merge for each group.
     AggregationTester& withCompanion() {
-      companion_ = true;
+      companionExtract_ = true;
+      companionMergeExtract_ = true;
+      companionMerge_ = true;
+      return *this;
+    }
+
+    /// Same as withCompanion(), but runs only the plans that end with the
+    /// '_merge' companion, which compare partial states. Use it for functions
+    /// whose '_extract' and '_merge_extract' companions cannot resolve their
+    /// result type from the intermediate type alone, such as Spark's decimal
+    /// avg.
+    AggregationTester& withCompanionMerge() {
+      companionMerge_ = true;
       return *this;
     }
 
@@ -153,6 +169,11 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     // Runs the plans and checks their results with 'assertResults'.
     void run(const AssertResults& assertResults);
 
+    // Returns whether any companion plans run.
+    bool companion() const {
+      return companionExtract_ || companionMergeExtract_ || companionMerge_;
+    }
+
     // Adds the input and the pre-aggregation nodes to 'builder'.
     void addSource(exec::test::PlanBuilder& builder) const;
 
@@ -167,7 +188,11 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     std::vector<std::string> aggregates_;
     std::vector<std::string> projections_;
     std::unordered_map<std::string, std::string> config_;
-    bool companion_{false};
+    // Whether to run the companion plans that end with '_extract',
+    // '_merge_extract' and '_merge'.
+    bool companionExtract_{false};
+    bool companionMergeExtract_{false};
+    bool companionMerge_{false};
     bool streaming_{true};
     bool incremental_{true};
   };
@@ -239,20 +264,31 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::unordered_map<std::string, std::string>& config,
       bool streaming);
 
-  // Runs the companion plans of AggregationTester::withCompanion().
-  // 'makeSource' builds the input of the aggregation, including the extra
-  // grouping key 'k0'.
-  void testAggregationsWithCompanionImpl(
-      const std::vector<RowVectorPtr>& data,
-      const std::function<void(exec::test::PlanBuilder&)>& makeSource,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
+  // Runs the companion plans that end with the extract companion, including
+  // the streaming check, and checks their results with 'assertResults'.
+  void testCompanionExtract(
+      const CompanionPlanInputs& inputs,
       const std::vector<std::string>& postAggregationProjections,
       const std::function<std::shared_ptr<exec::Task>(
           exec::test::AssertQueryBuilder&)>& assertResults,
       const std::unordered_map<std::string, std::string>& config,
       bool streaming);
+
+  // Runs the companion plans that end with the merge_extract companion and
+  // checks their results with 'assertResults'.
+  void testCompanionMergeExtract(
+      const CompanionPlanInputs& inputs,
+      const std::vector<std::string>& postAggregationProjections,
+      const std::function<std::shared_ptr<exec::Task>(
+          exec::test::AssertQueryBuilder&)>& assertResults,
+      const std::unordered_map<std::string, std::string>& config);
+
+  // Runs the companion plans that end with the merge companion: partial merges
+  // with and without abandoning partial aggregation, which compare partial
+  // states.
+  void testCompanionMerge(
+      const CompanionPlanInputs& inputs,
+      const std::unordered_map<std::string, std::string>& config);
 
   void testAggregationsImpl(
       std::function<void(exec::test::PlanBuilder&)> makeSource,

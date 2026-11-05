@@ -701,6 +701,12 @@ TEST_F(SumAggregationTest, abandonPartialAggregation) {
   }
   createDuckDbTable(data);
 
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_sum(i)", "spark_sum(b)", "spark_sum(r)"})
+      .withCompanion()
+      .assertResults("SELECT sum(i), sum(b), sum(r) FROM tmp");
+
   core::PlanNodeId partialNodeId;
   auto plan = PlanBuilder()
                   .values(data)

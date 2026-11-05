@@ -344,6 +344,8 @@ At this point you have accumulatorFixedWidthSize() and initializeNewGroupsIntern
     * addSingleGroupIntermediateResults() method.
 * Optional logic for converting raw inputs into intermediate results:
     * supportsToIntermediate() and toIntermediate() methods.
+* Optional logic for producing an empty group's intermediate result:
+    * supportsFillEmptyIntermediate() and fillEmptyIntermediate() methods.
 
 Some methods are only used in a subset of aggregation workflows. The following
 table shows which methods are used in which workflows.
@@ -390,6 +392,12 @@ table shows which methods are used in which workflows.
      - N
    * - toIntermediate
      - Y
+     - N
+     - N
+     - N
+     - N
+   * - fillEmptyIntermediate
+     - Y (used by merge companions)
      - N
      - N
      - N
@@ -508,6 +516,30 @@ implement toIntermediate() method which simply returns the input unmodified.
       std::vector<VectorPtr>& args,
       VectorPtr& result) const {
     VELOX_NYI("toIntermediate not supported");
+  }
+
+A `_merge` companion can abandon partial aggregation too. Each input row then
+becomes its own group, so selected non-null rows pass through unchanged, while
+masked-out and null rows must hold an empty group's intermediate result: null
+for most functions, 0 for count, and (0, 0) for Spark's avg. Implement
+fillEmptyIntermediate() and override supportsFillEmptyIntermediate() to write
+it, otherwise the merge companion falls back to creating fake groups.
+
+.. code-block:: c++
+
+  /// Returns true if fillEmptyIntermediate() is supported, allowing merge
+  /// companions to bypass accumulator construction.
+  virtual bool supportsFillEmptyIntermediate() const {
+    return false;
+  }
+
+  /// Writes an empty group's intermediate into selected rows of 'result',
+  /// leaving other rows unchanged, so merge pass-through can handle masked-out
+  /// and null inputs.
+  virtual void fillEmptyIntermediate(
+      const SelectivityVector& rows,
+      VectorPtr& result) const {
+    VELOX_NYI("fillEmptyIntermediate not supported");
   }
 
 GroupBy aggregation code path is done. We proceed to global aggregation.

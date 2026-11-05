@@ -121,6 +121,13 @@ struct AggregateCompanionAdapter {
     void setConstantInputs(
         const std::vector<VectorPtr>& /*constantInputs*/) override {}
 
+    bool supportsToIntermediate() const override;
+
+    void toIntermediate(
+        const SelectivityVector& rows,
+        std::vector<VectorPtr>& args,
+        VectorPtr& result) const override;
+
     void addRawInput(
         char** groups,
         const SelectivityVector& rows,
