@@ -24,10 +24,10 @@ HiveColumnHandle::HiveColumnHandle(
     TypePtr dataType,
     TypePtr hiveType,
     std::vector<common::Subfield> requiredSubfields,
-    std::vector<NamedExtraction> extractions,
+    std::vector<connector::NamedExtraction> extractions,
     ColumnParseParameters columnParseParameters,
     std::function<void(VectorPtr&)> postProcessor)
-    : FileColumnHandle(
+    : connector::FileColumnHandle(
           name,
           columnType,
           std::move(dataType),
@@ -47,8 +47,8 @@ HiveColumnHandle::HiveColumnHandle(
   } else {
     // Validate each extraction chain against hiveType and verify output types.
     for (const auto& extraction : this->extractions()) {
-      auto derivedType =
-          deriveExtractionOutputType(this->hiveType(), extraction.chain);
+      auto derivedType = connector::deriveExtractionOutputType(
+          this->hiveType(), extraction.chain);
       VELOX_USER_CHECK(
           derivedType->equivalent(*extraction.dataType),
           "Extraction '{}' declared output type {} does not match "
@@ -92,18 +92,19 @@ std::string HiveColumnHandle::toStringFields() const {
           out << ", ";
         }
         const auto& elem = *extraction.chain[j];
-        out << extractionStepName(elem.step());
-        if (elem.step() == ExtractionStep::kStructField) {
+        out << connector::extractionStepName(elem.step());
+        if (elem.step() == connector::ExtractionStep::kStructField) {
           out << "("
-              << static_cast<const StructFieldExtractionPathElement&>(elem)
+              << static_cast<
+                     const connector::StructFieldExtractionPathElement&>(elem)
                      .fieldName()
               << ")";
         }
-        if (elem.step() == ExtractionStep::kMapKeyFilter) {
+        if (elem.step() == connector::ExtractionStep::kMapKeyFilter) {
           out << "(";
-          if (auto* strFilter =
-                  dynamic_cast<const StringMapKeyFilterExtractionPathElement*>(
-                      &elem)) {
+          if (auto* strFilter = dynamic_cast<
+                  const connector::StringMapKeyFilterExtractionPathElement*>(
+                  &elem)) {
             for (size_t k = 0; k < strFilter->filterKeys().size(); ++k) {
               if (k > 0) {
                 out << ", ";
@@ -111,9 +112,9 @@ std::string HiveColumnHandle::toStringFields() const {
               out << "\"" << strFilter->filterKeys()[k] << "\"";
             }
           } else if (
-              auto* intFilter =
-                  dynamic_cast<const IntMapKeyFilterExtractionPathElement*>(
-                      &elem)) {
+              auto* intFilter = dynamic_cast<
+                  const connector::IntMapKeyFilterExtractionPathElement*>(
+                  &elem)) {
             for (size_t k = 0; k < intFilter->filterKeys().size(); ++k) {
               if (k > 0) {
                 out << ", ";
@@ -142,7 +143,7 @@ ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {
   auto hiveType = ISerializable::deserialize<Type>(obj["hiveType"]);
   ColumnType columnType;
   std::vector<common::Subfield> requiredSubfields;
-  std::vector<NamedExtraction> extractions;
+  std::vector<connector::NamedExtraction> extractions;
   deserializeFileFields(obj, columnType, requiredSubfields, extractions);
 
   return std::make_shared<HiveColumnHandle>(
@@ -171,7 +172,7 @@ HiveTableHandle::HiveTableHandle(
     double sampleRate,
     std::string dbName,
     std::vector<int32_t> dataColumnFieldIds)
-    : FileTableHandle(
+    : connector::FileTableHandle(
           std::move(connectorId),
           tableName,
           std::move(subfieldFilters),
@@ -330,7 +331,7 @@ void HiveTableHandle::deserializeHiveFields(
         "Hive remaining filter must not be null when present");
   }
 
-  std::vector<FileColumnHandlePtr> fileFilterColumns;
+  std::vector<connector::FileColumnHandlePtr> fileFilterColumns;
   deserializeFileFields(
       obj,
       context,

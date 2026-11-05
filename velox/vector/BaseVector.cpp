@@ -1108,7 +1108,7 @@ VectorPtr BaseVector::createConstant(
 }
 
 // static
-VectorPtr BaseVector::createFromVariants(
+VectorPtr BaseVector::createFromVariantsInternal(
     const TypePtr& type,
     const std::vector<Variant>& values,
     velox::memory::MemoryPool* pool) {

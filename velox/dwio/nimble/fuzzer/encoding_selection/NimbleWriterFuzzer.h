@@ -311,6 +311,8 @@ class NimbleWriterFuzzer {
     // Counts indexed groups and stripes.
     uint64_t numStripeGroups{0};
     uint64_t numStripes{0};
+    // Counts files whose chunk stats span more than one stripe group.
+    uint64_t numMultiGroupFiles{0};
     // Counts present scalar-value streams, structural streams emitted for
     // complex types, and streams split into multiple chunks.
     uint64_t numScalarStreams{0};

@@ -1,0 +1,42 @@
+# Golden deletion vectors written by Apache Iceberg Java 1.10.0.
+#
+# Every *.bin file except legacy32_runs is the deletion-vector-v1 blob that
+# BitmapPositionDeleteIndex.serialize() returns: the 4-byte length, magic, 64-bit
+# portable roaring bitmap and CRC-32, exactly as Iceberg writes it into a Puffin
+# file. legacy32_runs is an unframed 32-bit portable bitmap, the legacy format
+# the reader still accepts. Iceberg Java run-encodes containers when that is
+# smaller, which DeletionVectorWriter never does, so these files also cover run
+# containers written by another engine.
+#
+# Each record: <name> TAB <blob SHA-256> TAB <cardinality> TAB <first position>
+#   TAB <last position> TAB <SHA-256 of the positions as little-endian int64>
+# The last four columns are what Iceberg Java decodes from the blob
+# (PositionDeleteIndex.deserialize + forEach). The blob SHA-256 guards against
+# the fixtures changing; regenerate them only from Iceberg Java, never by hand.
+#
+# Cases:
+#   single                   one array container holding one position
+#   sparse_random            1000 random draws below 1M: sixteen array containers
+#   dense_random             about half of the first 200000 rows: bitset containers plus a run container
+#   every_other              every even row below 131072: two bitset containers that never run-encode
+#   ranges                   contiguous ranges, including one that crosses a container boundary: run containers
+#   mixed_containers         array, run and bitset containers in one group
+#   array_bitset_threshold   4096 values (largest array container) next to 4097 (smallest bitset container)
+#   container_boundaries     positions at 0, 65535/65536, 2^31-1/2^31 and 2^32-1
+#   multi_group              groups 0, 1 and 7; Iceberg Java also writes the empty groups in between
+#   high_group               group 0 and group 100, including the last position of group 100
+#   full_container           all 65536 rows of one container: a single run
+#   legacy32_runs            unframed 32-bit portable bitmap written by RoaringBitmap 1.3.0, with runs
+
+single	b600dbb448d786351054406220d99e0492ef23a45bae2b427a473b7fd0f84d5d	1	42	42	ed049108bc18f2c64369e8d0ea42850bdd1a7d1dd340cfde716315579702a76c
+sparse_random	8abd1285fa6a94af4b18a17e2665ebaa58e6d3d2df9684d4eaecf25b77c1ef53	997	3436	998933	73207c46c844751bf73f85a7ed4c26f5acbd97c12f03a46180c522f556d689d4
+dense_random	3086236bc2156b34f469a40f9795294af9fb52487b6b897430f325fa39e9b290	99976	0	199998	c9ebf0c929e71d363934a9dfb61698f35dfb6e6240b05684c1d514d283b8d1a1
+every_other	b12a032d9ea0775a83914429d4c2e5a2a2cc36a076176ff8a090a9c38ef7b423	65536	0	131070	1e1e51c674402c36e4e847ac046ddf6a803939aed3a71901b4e0e810d1fe7976
+ranges	909283c4dcf23d784fcf087ac5cc008eb205fb4f67fe6f035283163b86653c65	125563	10	459999	e15d6caa0a71f65e450ed1b6f9006675731646b962bd82d7c785b08f767bc7e1
+mixed_containers	d7de11705726b7f31ec91fa1eeab16f654ea6742c071e7c5ffb85645696307fd	64512	0	262143	11d19a6a2afb79857ab7db08f88d213b655a7c6487c124460300f186cd0d38b6
+array_bitset_threshold	3ff0be8e2f5742112388410f6b8f55403d2a230de24e2452b7784408c691000f	8193	0	126976	9d49f394616316ec8bff30c84bebe1dc14e1d3853cd00dd0387536f9c63c53ba
+container_boundaries	0d5b516d7cb4a5b67742595bab36b59af2561707266a52226980953a097e8182	12	0	4294967295	8c71808324470d4058b6977a27cdc8d73b9f2a22df62e292eb9c4aad2bd6789c
+multi_group	062a443b808fd6d38eceb49efe273af49d58bf1dc4d8ae67c76daedc829dcc58	15150	0	30064841607	7e60775b74ca6e8fff0e0a3d0e4cfcad3810f2f766b29dfb02a25c23e207e32e
+high_group	673f5a1c0a0e576a27ea11d245e4c58e55b1d2eaa1c848d68c862658ff7d8890	69998	5	433791696895	5236e4f58470c2a55e9692e878aaf8e4129e1d37c49b0003933aeb302a23e2bc
+full_container	36fcf20660eec48fe635c1c9fec83c81845c12840caffdc5e10c02c15e84605a	65536	0	65535	197f7a314b356f70296099420b30d0beddb9fe80e95054af72e1c382cdf1eb9b
+legacy32_runs	6bc69bc8e2ffd52eb50f5b1df989a0d4ce7055dc4744f854b07ad427f4738110	71301	0	4294967295	80cee274490c37e005034a6000bf2bbe8ba11cfb04c4306c2410e40ef2664def

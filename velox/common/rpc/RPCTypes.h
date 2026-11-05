@@ -354,6 +354,20 @@ struct RPCResponse {
   ///     operator for downstream result tracking.
   int64_t rowId{0};
 
+  /// Client-observed duration (nanos) of the final attempt of a transport that
+  /// retries internally. Covers client creation, the executor hop, response
+  /// decoding, and any re-invocations inside the attempt, such as
+  /// malformed-JSON retries. Zero when not reported.
+  int64_t lastAttemptNanos{0};
+
+  /// Attempts before the final one that the transport counts as overloaded,
+  /// such as rate-limited, timed-out or shed attempts, for congestion stats.
+  /// Zero when not reported. Differs from CapacityRetryHint::numInPlaceRetries,
+  /// which a caller-retried rejection also carries: that counts every in-place
+  /// retry that spends the hint's budget, whatever its cause, so a timed-out
+  /// attempt can count in both.
+  int32_t numOverloadedAttempts{0};
+
   /// Returns a successful response containing the function-owned payload.
   template <typename T>
   static RPCResponse ok(int64_t rowId, T&& payload) {

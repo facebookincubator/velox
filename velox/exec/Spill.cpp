@@ -235,11 +235,18 @@ uint64_t SpillState::appendToPartition(
   });
 
   const uint64_t bytes = rows->estimateFlatSize();
-  validateSpillBytesSize(bytes);
-  updateSpilledInputBytes(bytes);
+  auto* writer = partitionWriter(id);
+  // A writer that can't split the rows into pages keeps them in one page.
+  if (!writer->canEstimateWrites(*rows->type())) {
+    validateSpillBytesSize(bytes);
+  }
 
   IndexRange range{0, rows->size()};
-  return partitionWriter(id)->write(rows, folly::Range<IndexRange*>(&range, 1));
+  // The writer can reject the rows, so count them only once they are written.
+  const auto writtenBytes =
+      writer->write(rows, folly::Range<IndexRange*>(&range, 1));
+  updateSpilledInputBytes(bytes);
+  return writtenBytes;
 }
 
 SpillWriter* SpillState::partitionWriter(const SpillPartitionId& id) const {

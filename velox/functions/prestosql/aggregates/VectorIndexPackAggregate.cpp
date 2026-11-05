@@ -19,7 +19,7 @@
 #include <cmath>
 #include <limits>
 
-#include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
@@ -29,7 +29,7 @@ namespace {
 
 using common::vectorindex::EmbeddingNormalizer;
 using common::vectorindex::Embeddings;
-using common::vectorindex::LocalVectorIndex;
+using common::vectorindex::FaissLocalVectorIndex;
 using common::vectorindex::LocalVectorIndexOptions;
 using common::vectorindex::VectorIndexKind;
 using common::vectorindex::VectorIndexMetric;
@@ -212,7 +212,7 @@ class VectorIndexPackAggregate {
       }
       out.reserve(
           centroids.size() * sizeof(float) + numClusters * sizeof(int64_t));
-      LocalVectorIndex::build(
+      FaissLocalVectorIndex::build(
           VectorIndexKind::kFlat,
           groupMetric(),
           LocalVectorIndexOptions{},

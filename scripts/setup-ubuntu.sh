@@ -226,7 +226,13 @@ function install_adapters {
 }
 
 function install_faiss_deps {
-  ${SUDO} apt-get install -y libopenblas-dev libomp-dev
+  # The OpenMP runtime must match Clang's version. libomp-dev is LLVM 14's on
+  # Ubuntu 22.04, and the versioned libomp packages conflict with each other.
+  local omp_package=libomp-dev
+  if [[ ${USE_CLANG} != "false" ]]; then
+    omp_package=libomp-15-dev
+  fi
+  ${SUDO} apt-get install -y libopenblas-dev "${omp_package}"
 }
 
 function install_cxl_deps {

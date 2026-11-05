@@ -20,7 +20,6 @@
 #include <utility>
 
 #include "velox/dwio/nimble/common/Types.h"
-#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/SortedPositionSlots.h"
@@ -47,11 +46,11 @@ struct SlicedSparsePositions {
 // rebasing every retained position by -offset. Locates the slot bounds
 // covering the range via detail::findSortedPositionSlots, slices the
 // retained range plus one terminator slot positionally through
-// EncodingFactory::slice, and wraps the sliced bytes with SliceEncoding.
-// When the sliced inner encoding supports push-down (FixedBitWidth / PFOR /
-// Constant / Nullable / Trivial), the wrapper folds the -offset shift into
-// the inner bytes at write time and the on-wire delta is zero. Otherwise
-// the delta rides on the wire and the reader applies it.
+// EncodingFactory::slice with the -offset value delta, which wraps the sliced
+// bytes with SliceEncoding. When the sliced inner encoding supports push-down
+// (FixedBitWidth / PFOR / Constant / Nullable / Trivial), the wrapper folds
+// the -offset shift into the inner bytes at write time and the on-wire delta
+// is zero. Otherwise the delta rides on the wire and the reader applies it.
 SlicedSparsePositions sliceSortedPositionStream(
     std::string_view encodedPositions,
     uint32_t offset,
@@ -72,15 +71,13 @@ SlicedSparsePositions sliceSortedPositionStream(
       "SparseBool positions must end in a sentinel past the slice end.");
   const uint32_t sparseInRange = slotEnd - slotStart;
   const uint32_t retainedCount = sparseInRange + 1;
-  const auto slicedPositions = EncodingFactory::slice(
-      encodedPositions, slotStart, retainedCount, scratchBuffer, options);
   return {
-      .slicedPositions = SliceEncoding<uint32_t>::wrap(
-          slicedPositions,
-          /*offset=*/0,
-          /*length=*/retainedCount,
-          scratchBuffer,
+      .slicedPositions = EncodingFactory::slice(
+          encodedPositions,
+          slotStart,
+          retainedCount,
           valueDelta,
+          scratchBuffer,
           options),
       .sparseInRange = sparseInRange,
       .sparseBefore = slotStart,

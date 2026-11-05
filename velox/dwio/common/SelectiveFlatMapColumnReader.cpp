@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/SelectiveFlatMapColumnReader.h"
 
+#include "velox/common/base/SimdUtil.h"
+
 namespace facebook::velox::dwio::common {
 namespace {
 
@@ -64,11 +66,24 @@ void SelectiveFlatMapColumnReader::getValues(
     child->getValues(rows, &values);
     resultFlatMap->mapValuesAt(i) = values;
 
-    const auto& inMap = inMapBuffer(i);
-    if (inMap) {
-      resultFlatMap->inMapsAt(i, true) = inMap;
+    if (auto inMap = selectInMap(inMapBuffer(i), rows, resultFlatMap->pool())) {
+      resultFlatMap->inMapsAt(i, true) = std::move(inMap);
     }
   }
+}
+
+// static
+BufferPtr SelectiveFlatMapColumnReader::selectInMap(
+    const BufferPtr& inMap,
+    const RowSet& rows,
+    memory::MemoryPool* pool) {
+  if (inMap == nullptr) {
+    return nullptr;
+  }
+  auto selected = AlignedBuffer::allocate<bool>(rows.size(), pool);
+  simd::gatherBits(
+      inMap->as<uint64_t>(), rows, selected->asMutable<uint64_t>());
+  return selected;
 }
 
 FlatMapVector* SelectiveFlatMapColumnReader::prepareResult(

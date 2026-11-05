@@ -113,7 +113,7 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
       if (!vector->mayHaveNulls()) {
         // Add the size of the offsets in the Row encoding.
         for (int32_t i = 0; i < ranges.size(); ++i) {
-          *sizes[i] += ranges[i].size * sizeof(int32_t);
+          addToSize(sizes[i], saturatedProduct(ranges[i].size, kInt32Bytes));
         }
 
         auto rowVector = vector->as<RowVector>();
@@ -131,13 +131,14 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
       std::vector<vector_size_t*> childSizes;
       for (int32_t i = 0; i < ranges.size(); ++i) {
         // Add the size of the nulls bit mask.
-        *sizes[i] += bits::nbytes(ranges[i].size);
+        addToSize(
+            sizes[i], static_cast<vector_size_t>(bits::nbytes(ranges[i].size)));
 
         auto begin = ranges[i].begin;
         auto end = begin + ranges[i].size;
         for (auto offset = begin; offset < end; ++offset) {
           // Add the size of the offset.
-          *sizes[i] += sizeof(int32_t);
+          addToSize(sizes[i], kInt32Bytes);
           if (!vector->isNullAt(offset)) {
             childRanges.push_back(IndexRange{offset, 1});
             childSizes.push_back(sizes[i]);

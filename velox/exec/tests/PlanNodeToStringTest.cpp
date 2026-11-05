@@ -531,7 +531,7 @@ TEST_F(PlanNodeToStringTest, vectorSearchJoin) {
 
   ASSERT_EQ("-- VectorSearchJoin[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- VectorSearchJoin[1][LEFT t0=u0, t1 nearest in u1 (cosine), k: 10, ivf.nprobe: 4] -> t0:BIGINT, id:BIGINT, score:REAL\n",
+      "-- VectorSearchJoin[1][LEFT t0=u0, t1 nearest in u1 (faiss, cosine), k: 10, ivf.nprobe: 4] -> t0:BIGINT, id:BIGINT, score:REAL\n",
       plan->toString(true, false));
 }
 

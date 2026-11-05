@@ -44,7 +44,6 @@
 #include "velox/dwio/nimble/common/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
-#include "velox/dwio/nimble/common/tests/ScopedFeatureGate.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
@@ -3602,8 +3601,8 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseCrossReaders) {
           << "Cross-reader should not re-read metadata. "
           << "maxReadOffset=" << trackingFile->maxReadOffset()
           << " metadataBoundary=" << metadataBoundary;
-      ASSERT_EQ(metadataIoStats2->rawBytesRead(), 0)
-          << "Cross-reader should not record any metadata IO";
+      ASSERT_EQ(metadataIoStats2->read().sum(), 0)
+          << "Cross-reader should not read any metadata from the file";
     } else {
       ASSERT_GT(trackingFile->maxReadOffset(), metadataBoundary)
           << "Cross-reader should re-read metadata. "
@@ -3930,215 +3929,20 @@ TEST_P(SelectiveNimbleReaderTest, deltaSawtoothSmallBatches) {
   validate(*input, *readers.rowReader, 7, [](auto) { return true; });
 }
 
-TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneIntegralFilter) {
-  auto firstStripe = makeRowVector({
-      makeFlatIdentityVector<int64_t>(100),
-  });
-  auto secondStripe = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return 1000 + row; }),
-  });
-  auto input = makeRowVector({
-      makeFlatVector<int64_t>(
-          200, [](auto row) { return row < 100 ? row : 900 + row; }),
-  });
-
-  WriterOptions writerOptions;
-  writerOptions.enableVectorizedStats = true;
-  writerOptions.flushPolicyFactory = [] {
-    return std::make_unique<LambdaFlushPolicy>(
-        /*flushLambda=*/[](const StripeProgress&) { return true; });
-  };
-  test::ScopedFeatureGate stripeStatsGate{
-      FeatureGate::FeatureSet::kStripeStatsWrite,
-      FeatureGate::FeatureSet::kStripeStatsPruning};
-  auto fileContent = test::createNimbleFile(
-      *rootPool(), {firstStripe, secondStripe}, writerOptions, false);
-
-  auto scanSpec = std::make_shared<common::ScanSpec>("root");
-  scanSpec->addAllChildFields(*input->type());
-  scanSpec->childByName("c0")->setFilter(
-      std::make_unique<common::BigintRange>(10, 20, false));
-  auto readers = makeReaders(input, fileContent, scanSpec);
-
-  validate(
-      *input,
-      *readers.rowReader,
-      7,
-      /*dropColumn=*/-1,
-      [](auto row) { return row >= 10 && row <= 20; },
-      /*allowStripePruning=*/true);
-
-  dwio::common::RuntimeStats stats;
-  readers.rowReader->updateRuntimeStats(stats);
-  EXPECT_GT(stats.skippedStrides, 0);
-}
-
-// The pruning gate defaults to off, so a build with no gate registered must
-// read every stripe. Same file and filter as the integral case above, with
-// only the writer feature enabled: no stripe may be skipped. The reader is
-// drained via allowStripePruning so that a regression here fails on the
-// skippedStrides assertion rather than spinning until the test times out.
-TEST_P(SelectiveNimbleReaderTest, stripeStatsPruningDisabledReadsAllStripes) {
-  auto firstStripe = makeRowVector({
-      makeFlatIdentityVector<int64_t>(100),
-  });
-  auto secondStripe = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return 1000 + row; }),
-  });
-  auto input = makeRowVector({
-      makeFlatVector<int64_t>(
-          200, [](auto row) { return row < 100 ? row : 900 + row; }),
-  });
-
-  WriterOptions writerOptions;
-  writerOptions.enableVectorizedStats = true;
-  writerOptions.flushPolicyFactory = [] {
-    return std::make_unique<LambdaFlushPolicy>(
-        /*flushLambda=*/[](const StripeProgress&) { return true; });
-  };
-  test::ScopedFeatureGate stripeStatsGate{
-      FeatureGate::FeatureSet::kStripeStatsWrite};
-  auto fileContent = test::createNimbleFile(
-      *rootPool(), {firstStripe, secondStripe}, writerOptions, false);
-
-  auto scanSpec = std::make_shared<common::ScanSpec>("root");
-  scanSpec->addAllChildFields(*input->type());
-  scanSpec->childByName("c0")->setFilter(
-      std::make_unique<common::BigintRange>(10, 20, false));
-  auto readers = makeReaders(input, fileContent, scanSpec);
-
-  validate(
-      *input,
-      *readers.rowReader,
-      7,
-      /*dropColumn=*/-1,
-      [](auto row) { return row >= 10 && row <= 20; },
-      /*allowStripePruning=*/true);
-
-  dwio::common::RuntimeStats stats;
-  readers.rowReader->updateRuntimeStats(stats);
-  EXPECT_EQ(stats.skippedStrides, 0);
-}
-
-// The stripe-stats section is optional, so a file whose copy of it cannot be
-// deserialized must still be readable: pruning is an optimization and losing it
-// costs a full scan, not the file. The eager load runs in the ReaderBase
-// constructor and is not covered by the pruning killswitch, so a throw here
-// would fail every read of the file with no way to turn it off.
-TEST_P(SelectiveNimbleReaderTest, corruptStripeStatsSectionStillReads) {
-  auto firstStripe = makeRowVector({
-      makeFlatIdentityVector<int64_t>(100),
-  });
-  auto secondStripe = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return 1000 + row; }),
-  });
-  auto input = makeRowVector({
-      makeFlatVector<int64_t>(
-          200, [](auto row) { return row < 100 ? row : 900 + row; }),
-  });
-
-  WriterOptions writerOptions;
-  writerOptions.enableVectorizedStats = true;
-  writerOptions.flushPolicyFactory = [] {
-    return std::make_unique<LambdaFlushPolicy>(
-        /*flushLambda=*/[](const StripeProgress&) { return true; });
-  };
-  std::string fileContent;
-  {
-    test::ScopedFeatureGate stripeStatsGate{
-        FeatureGate::FeatureSet::kStripeStatsWrite,
-        FeatureGate::FeatureSet::kStripeStatsPruning};
-    fileContent = test::createNimbleFile(
-        *rootPool(), {firstStripe, secondStripe}, writerOptions, false);
-  }
-
-  // Locate the section from the footer and scribble over its payload, leaving
-  // every other section and the footer itself intact.
-  {
-    auto readFile = std::make_shared<InMemoryReadFile>(fileContent);
-    auto tabletOptions = test::makeTestTabletOptions(pool());
-    auto tablet = TabletReader::create(readFile, pool(), tabletOptions);
-    const auto& sections = tablet->optionalSections();
-    auto it = sections.find(std::string(kStripeStatsSection));
-    ASSERT_NE(it, sections.end())
-        << "writer did not emit a stripe-stats section, so this test would "
-           "pass without exercising the corrupt path";
-    ASSERT_GT(it->second.size(), 0);
-    for (uint32_t i = 0; i < it->second.size(); ++i) {
-      fileContent[it->second.offset() + i] = static_cast<char>(0xFF);
-    }
-  }
-
-  // Pin that the corruption really is undeserializable. Without this, a
-  // deserializer that returned null rather than throwing would be absorbed by
-  // the pre-existing null check, and the rest of this test would pass whether
-  // or not the catch below exists.
-  {
-    auto corruptFile = std::make_shared<InMemoryReadFile>(fileContent);
-    auto tablet = TabletReader::create(
-        corruptFile, pool(), test::makeTestTabletOptions(pool()));
-    auto section =
-        tablet->loadOptionalSection(std::string(kStripeStatsSection));
-    ASSERT_TRUE(section.has_value());
-    NIMBLE_ASSERT_THROW(
-        VectorizedStripeStats::deserialize(section->content(), *pool()),
-        "65535");
-  }
-
-  auto scanSpec = std::make_shared<common::ScanSpec>("root");
-  scanSpec->addAllChildFields(*input->type());
-  scanSpec->childByName("c0")->setFilter(
-      std::make_unique<common::BigintRange>(10, 20, false));
-
-  test::ScopedFeatureGate stripeStatsGate{
-      FeatureGate::FeatureSet::kStripeStatsPruning};
-  auto readers = makeReaders(input, fileContent, scanSpec);
-
-  // Falls back to a full scan and returns exactly the matching rows.
-  validate(
-      *input,
-      *readers.rowReader,
-      7,
-      /*dropColumn=*/-1,
-      [](auto row) { return row >= 10 && row <= 20; },
-      /*allowStripePruning=*/true);
-
-  dwio::common::RuntimeStats corruptStats;
-  readers.rowReader->updateRuntimeStats(corruptStats);
-  EXPECT_EQ(corruptStats.skippedStrides, 0);
-}
-
 // BIGINT -> HUGEINT is a permitted widening, so a bigint column can be read as
 // a long decimal. The reader reinterprets the physical value as the decimal's
 // unscaled value, so the two compare identically, but a pushed-down filter on
 // such a column is built over int128 while the column is decoded as int64.
 TEST_P(SelectiveNimbleReaderTest, bigintAsLongDecimalWithFilter) {
-  auto firstStripe = makeRowVector({
-      makeFlatVector<int64_t>(100, folly::identity),
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(200, folly::identity),
   });
-  auto secondStripe = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return 1000 + row; }),
-  });
-
-  WriterOptions writerOptions;
-  writerOptions.enableVectorizedStats = true;
-  writerOptions.flushPolicyFactory = [] {
-    return std::make_unique<LambdaFlushPolicy>(
-        /*flushLambda=*/[](const StripeProgress&) { return true; });
-  };
-  std::string fileContent;
-  {
-    test::ScopedFeatureGate stripeStatsGate{
-        FeatureGate::FeatureSet::kStripeStatsWrite,
-        FeatureGate::FeatureSet::kStripeStatsPruning};
-    fileContent = test::createNimbleFile(
-        *rootPool(), {firstStripe, secondStripe}, writerOptions, false);
-  }
+  auto fileContent = test::createNimbleFile(*rootPool(), input);
 
   std::vector<int128_t> expectedValues;
   expectedValues.reserve(200);
   for (int64_t row = 0; row < 200; ++row) {
-    expectedValues.push_back(row < 100 ? row : 900 + row);
+    expectedValues.push_back(row);
   }
   auto requested = makeRowVector({
       makeFlatVector<int128_t>(expectedValues, DECIMAL(38, 0)),
@@ -4149,171 +3953,11 @@ TEST_P(SelectiveNimbleReaderTest, bigintAsLongDecimalWithFilter) {
   scanSpec->childByName("c0")->setFilter(
       std::make_unique<common::HugeintRange>(10, 20, false));
 
-  test::ScopedFeatureGate stripeStatsGate{
-      FeatureGate::FeatureSet::kStripeStatsPruning};
   auto readers = makeReaders(requested, fileContent, scanSpec);
 
-  validate(
-      *requested,
-      *readers.rowReader,
-      7,
-      /*dropColumn=*/-1,
-      [](auto row) { return row >= 10 && row <= 20; },
-      /*allowStripePruning=*/true);
-
-  // The second stripe holds only values >= 1000, so its statistics prove the
-  // filter cannot match and it is pruned rather than decoded.
-  dwio::common::RuntimeStats stats;
-  readers.rowReader->updateRuntimeStats(stats);
-  EXPECT_GT(stats.skippedStrides, 0);
-}
-
-TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneStringFilter) {
-  auto firstStripe = makeRowVector({
-      makeFlatVector<std::string>(
-          100, [](auto row) { return fmt::format("aaa{:03d}", row); }),
+  validate(*requested, *readers.rowReader, 7, [](auto row) {
+    return row >= 10 && row <= 20;
   });
-  auto secondStripe = makeRowVector({
-      makeFlatVector<std::string>(
-          100, [](auto row) { return fmt::format("zzz{:03d}", row); }),
-  });
-  auto input = makeRowVector({
-      makeFlatVector<std::string>(
-          200,
-          [](auto row) {
-            return row < 100 ? fmt::format("aaa{:03d}", row)
-                             : fmt::format("zzz{:03d}", row - 100);
-          }),
-  });
-
-  WriterOptions writerOptions;
-  writerOptions.enableVectorizedStats = true;
-  writerOptions.flushPolicyFactory = [] {
-    return std::make_unique<LambdaFlushPolicy>(
-        /*flushLambda=*/[](const StripeProgress&) { return true; });
-  };
-  test::ScopedFeatureGate stripeStatsGate{
-      FeatureGate::FeatureSet::kStripeStatsWrite,
-      FeatureGate::FeatureSet::kStripeStatsPruning};
-  auto fileContent = test::createNimbleFile(
-      *rootPool(), {firstStripe, secondStripe}, writerOptions, false);
-
-  auto scanSpec = std::make_shared<common::ScanSpec>("root");
-  scanSpec->addAllChildFields(*input->type());
-  // Range within the first stripe only -> the "zzz..." stripe is pruned.
-  scanSpec->childByName("c0")->setFilter(
-      std::make_unique<common::BytesRange>(
-          "aaa010", false, false, "aaa020", false, false, false));
-  auto readers = makeReaders(input, fileContent, scanSpec);
-
-  validate(
-      *input,
-      *readers.rowReader,
-      7,
-      /*dropColumn=*/-1,
-      [](auto row) { return row >= 10 && row <= 20; },
-      /*allowStripePruning=*/true);
-
-  dwio::common::RuntimeStats stats;
-  readers.rowReader->updateRuntimeStats(stats);
-  EXPECT_GT(stats.skippedStrides, 0);
-}
-
-TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneFloatingPointFilter) {
-  auto firstStripe = makeRowVector({
-      makeFlatVector<double>(100, [](auto row) { return 1.0 * row; }),
-  });
-  auto secondStripe = makeRowVector({
-      makeFlatVector<double>(100, [](auto row) { return 1000.0 + row; }),
-  });
-  auto input = makeRowVector({
-      makeFlatVector<double>(
-          200, [](auto row) { return row < 100 ? 1.0 * row : 900.0 + row; }),
-  });
-
-  WriterOptions writerOptions;
-  writerOptions.enableVectorizedStats = true;
-  writerOptions.flushPolicyFactory = [] {
-    return std::make_unique<LambdaFlushPolicy>(
-        /*flushLambda=*/[](const StripeProgress&) { return true; });
-  };
-  test::ScopedFeatureGate stripeStatsGate{
-      FeatureGate::FeatureSet::kStripeStatsWrite,
-      FeatureGate::FeatureSet::kStripeStatsPruning};
-  auto fileContent = test::createNimbleFile(
-      *rootPool(), {firstStripe, secondStripe}, writerOptions, false);
-
-  auto scanSpec = std::make_shared<common::ScanSpec>("root");
-  scanSpec->addAllChildFields(*input->type());
-  // Range within the first stripe only -> the [1000, 1099] stripe is pruned.
-  scanSpec->childByName("c0")->setFilter(
-      std::make_unique<common::DoubleRange>(
-          10.0, false, false, 20.0, false, false, false));
-  auto readers = makeReaders(input, fileContent, scanSpec);
-
-  validate(
-      *input,
-      *readers.rowReader,
-      7,
-      /*dropColumn=*/-1,
-      [](auto row) { return row >= 10 && row <= 20; },
-      /*allowStripePruning=*/true);
-
-  dwio::common::RuntimeStats stats;
-  readers.rowReader->updateRuntimeStats(stats);
-  EXPECT_GT(stats.skippedStrides, 0);
-}
-
-// File-level stats for a deduplicated column are reconstructed by merging the
-// per-stripe snapshots. Writing identical data as two stripes exercises that
-// merge (including the per-stripe ancestor unwrapping), while writing it as a
-// single stripe needs no merge and serves as the oracle: the resulting
-// file-level column statistics must match.
-TEST_P(SelectiveNimbleReaderTest, stripeStatsMergeDeduplicatedArray) {
-  const std::vector<std::vector<int64_t>> firstRows{{1, 2}, {3, 4}, {1, 2}};
-  const std::vector<std::vector<int64_t>> secondRows{
-      {5, 6}, {5, 6}, {7, 8}, {9}};
-  std::vector<std::vector<int64_t>> allRows = firstRows;
-  allRows.insert(allRows.end(), secondRows.begin(), secondRows.end());
-
-  auto batch1 = makeRowVector({makeArrayVector<int64_t>(firstRows)});
-  auto batch2 = makeRowVector({makeArrayVector<int64_t>(secondRows)});
-  auto combined = makeRowVector({makeArrayVector<int64_t>(allRows)});
-
-  WriterOptions writerOptions;
-  writerOptions.enableVectorizedStats = true;
-  writerOptions.dictionaryArrayColumns = {"c0"};
-
-  test::ScopedFeatureGate stripeStatsGate{
-      FeatureGate::FeatureSet::kStripeStatsWrite,
-      FeatureGate::FeatureSet::kStripeStatsPruning};
-  auto multiStripeFile = test::createNimbleFile(
-      *rootPool(), {batch1, batch2}, writerOptions, /*flushAfterWrite=*/true);
-  auto singleStripeFile = test::createNimbleFile(
-      *rootPool(), combined, writerOptions, /*flushAfterWrite=*/false);
-
-  auto scanSpec = std::make_shared<common::ScanSpec>("root");
-  scanSpec->addAllChildFields(*combined->type());
-  auto multiReaders = makeReaders(combined, multiStripeFile, scanSpec);
-  auto singleReaders = makeReaders(combined, singleStripeFile, scanSpec);
-
-  // Column 1 is the deduplicated array; column 2 is its integral element.
-  for (uint32_t column : {1u, 2u}) {
-    auto multiStats = multiReaders.reader->columnStatistics(column);
-    auto singleStats = singleReaders.reader->columnStatistics(column);
-    ASSERT_NE(multiStats, nullptr);
-    ASSERT_NE(singleStats, nullptr);
-    ASSERT_TRUE(singleStats->getNumberOfValues().has_value());
-    ASSERT_TRUE(multiStats->getNumberOfValues().has_value());
-    EXPECT_EQ(
-        multiStats->getNumberOfValues().value(),
-        singleStats->getNumberOfValues().value())
-        << "column " << column;
-  }
-
-  // Independent oracle: the array column has one entry per row, no nulls.
-  auto arrayStats = multiReaders.reader->columnStatistics(1);
-  EXPECT_EQ(arrayStats->getNumberOfValues().value(), allRows.size());
 }
 
 // Verifies columnStatistics returns IntegerColumnStatistics for BIGINT columns

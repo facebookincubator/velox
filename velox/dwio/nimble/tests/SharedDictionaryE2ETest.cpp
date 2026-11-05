@@ -39,7 +39,6 @@
 #include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
-#include "velox/dwio/nimble/common/tests/ScopedFeatureGate.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -1466,18 +1465,6 @@ TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
 // the omission understated the column badly. Pin the invariant that the root
 // column's rolled-up physical size covers every byte the stripe wrote.
 TEST_F(SharedDictionaryE2ETest, sharedStripeDictionaryColumnPhysicalStats) {
-  verifyStripeDictionaryPhysicalStatsCovered();
-}
-
-// Same invariant with the stripe-stats write path on. File statistics are then
-// rebuilt by merging per-stripe snapshots, so the snapshot must be taken after
-// the stripe dictionary streams are written: snapshotting earlier shifts the
-// alphabet bytes into the next stripe and loses them outright for the last one.
-TEST_F(
-    SharedDictionaryE2ETest,
-    sharedStripeDictionaryColumnPhysicalStatsWithStripeStats) {
-  test::ScopedFeatureGate stripeStatsGate{
-      FeatureGate::FeatureSet::kStripeStatsWrite};
   verifyStripeDictionaryPhysicalStatsCovered();
 }
 

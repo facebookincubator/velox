@@ -2504,17 +2504,8 @@ TEST_F(ReadWithVisitorTest, denseNoFilterNoNulls) {
 
 // ===========================================================================
 // Test: Dense read, no filter, nullable int64 (exercises NullableEncoding)
-//
-// Disabled: T295986475. An AlwaysTrue filter over a nullable column drops the
-// nulls when the encoding takes its bulk fast path. dwio::common::useFastPath
-// allows that path for AlwaysTrue even with nulls present, while useBulkPath
-// and setReturnNullsMode do not, so the bulk path skips addNull() and the
-// reader declines to return the nulls it decoded. This test asserts the right
-// invariant; it reaches the broken configuration only now that removing the
-// legacy encoding path makes every reader-level test here run non-legacy.
-// Re-enable with the fix. Analysis and repro: P2579720545.
 // ===========================================================================
-TEST_F(ReadWithVisitorTest, DISABLED_denseNoFilterWithNulls) {
+TEST_F(ReadWithVisitorTest, denseNoFilterWithNulls) {
   constexpr int kRows = 200;
   auto input = makeRowVector(
       {makeFlatVector<int64_t>(kRows, folly::identity, nullEvery(7))});
@@ -2532,6 +2523,47 @@ TEST_F(ReadWithVisitorTest, DISABLED_denseNoFilterWithNulls) {
   // Every row is "output" since there is no filter.
   EXPECT_EQ(child->numValues(), kRows);
   EXPECT_TRUE(child->hasNulls());
+}
+
+// ===========================================================================
+// Test: AlwaysTrue filter on nullable int64 keeps the nulls in the output
+// when the encoding takes its bulk fast path. High-entropy values select
+// Trivial and sequential values select FixedBitWidth; both have a bulk path.
+// ===========================================================================
+TEST_F(ReadWithVisitorTest, alwaysTrueFilterKeepsNulls) {
+  constexpr int kRows = 40;
+  const auto isNullAt = nullEvery(7);
+  std::mt19937 rng(12'345);
+  std::vector<int64_t> randomValues(kRows);
+  for (auto& value : randomValues) {
+    value = static_cast<int64_t>(folly::Random::rand64(rng));
+  }
+  const std::vector<std::pair<std::string, std::function<int64_t(int)>>>
+      generators = {
+          {"random", [&](auto row) { return randomValues[row]; }},
+          {"sequential", [](auto row) { return row; }},
+      };
+
+  for (const auto& [name, generator] : generators) {
+    SCOPED_TRACE(name);
+    auto input =
+        makeRowVector({makeFlatVector<int64_t>(kRows, generator, isNullAt)});
+    auto rowType = asRowType(input->type());
+
+    auto ctx = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    scanSpec->childByName("c0")->setFilter(
+        std::make_unique<common::AlwaysTrue>());
+
+    auto root = buildReader(*ctx, rowType, *scanSpec);
+    auto* child = readColumn(root.get(), kRows);
+    EXPECT_TRUE(child->hasNulls());
+
+    VectorPtr result = BaseVector::create(rowType, 0, pool());
+    root->getValues(root->outputRows(), &result);
+    velox::test::assertEqualVectors(input, result);
+  }
 }
 
 // ===========================================================================
@@ -7596,6 +7628,112 @@ TEST_F(
   for (int i = 0; i < numSelected; ++i) {
     EXPECT_EQ(values[i], data[rowVec[i]])
         << "selected row " << rowVec[i] << " at index " << i;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// BlockBitPackingV2Encoding<int32_t> + AlwaysTrue + FAST PATH
+// Reads every row, every 3rd row, and a few rows at block boundaries, so the
+// dense and sparse bulkScan paths see each block mode and the short last
+// block.
+// ---------------------------------------------------------------------------
+TEST_F(
+    ReadWithVisitorTest,
+    encodingLevelBlockBitPackingV2AlwaysTrueInt32FastPath) {
+  // blockSize 1024: a packed, a constant and a raw block, then a short packed
+  // block of 428 rows.
+  constexpr int kBlockSize = 1024;
+  constexpr int kRows = kBlockSize * 3 + 428;
+  std::vector<int32_t> data(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    if (i < kBlockSize) {
+      data[i] = 100 + (i % 4);
+    } else if (i < kBlockSize * 2) {
+      data[i] = 42;
+    } else if (i < kBlockSize * 3) {
+      // Small positive and negative values span the full uint32 physical
+      // range.
+      data[i] = i % 2 == 0 ? i : -i;
+    } else {
+      data[i] = i % 16;
+    }
+  }
+  const EncodingLayout layout{
+      EncodingType::BlockBitPackingV2,
+      {},
+      CompressionType::Uncompressed,
+      {std::nullopt, std::nullopt, std::nullopt}};
+
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>(kRows, [&](auto i) { return data[i]; })});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::AlwaysTrue>());
+
+  const auto expectReads = [&](auto isDense,
+                               std::vector<vector_size_t> rowVec) {
+    constexpr bool kIsDense = decltype(isDense)::value;
+    auto root = buildReader(*ctx, rowType, *scanSpec);
+    auto* structReader =
+        dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+            root.get());
+    auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+        dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+    ASSERT_NE(reader, nullptr);
+
+    RowSet rows(rowVec.data(), rowVec.size());
+    reader->doPrepareRead<int32_t>(0, rows, nullptr);
+
+    Buffer buffer(*pool());
+    auto encoding =
+        createFromCustomLayout<int32_t>(layout, data, *pool(), buffer);
+    ASSERT_EQ(encoding->encodingType(), EncodingType::BlockBitPackingV2);
+
+    common::AlwaysTrue filter;
+    dwio::common::ExtractToReader extractValues(reader);
+    DecoderVisitor<
+        int32_t,
+        common::AlwaysTrue,
+        dwio::common::ExtractToReader,
+        kIsDense>
+        visitor(filter, reader, rows, extractValues);
+    auto params = makeReadWithVisitorParams(visitor, rows, pool());
+    dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+    ASSERT_EQ(reader->numValues(), static_cast<vector_size_t>(rowVec.size()));
+    auto values = getValues<int32_t>(reader);
+    for (size_t i = 0; i < rowVec.size(); ++i) {
+      EXPECT_EQ(values[i], data[rowVec[i]]) << "row " << rowVec[i];
+    }
+  };
+
+  {
+    SCOPED_TRACE("all rows");
+    std::vector<vector_size_t> rowVec(kRows);
+    std::iota(rowVec.begin(), rowVec.end(), 0);
+    expectReads(std::true_type{}, std::move(rowVec));
+  }
+  {
+    SCOPED_TRACE("every 3rd row");
+    std::vector<vector_size_t> rowVec;
+    for (int i = 0; i < kRows; i += 3) {
+      rowVec.push_back(i);
+    }
+    expectReads(std::false_type{}, std::move(rowVec));
+  }
+  {
+    SCOPED_TRACE("block boundaries");
+    expectReads(
+        std::false_type{},
+        {0,
+         kBlockSize - 1,
+         kBlockSize,
+         kBlockSize * 2 + 5,
+         kBlockSize * 3,
+         kRows - 1});
   }
 }
 

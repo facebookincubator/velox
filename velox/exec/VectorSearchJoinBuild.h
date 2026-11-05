@@ -123,8 +123,9 @@ class VectorSearchJoinBuild : public Operator {
   // Concatenates 'rows_' into one vector.
   RowVectorPtr mergeRows() const;
 
-  const common::vectorindex::VectorIndexMetric metric_;
-  const common::vectorindex::LocalVectorIndexOptions searchOptions_;
+  // Reads the build indexes with the join's metric and search settings, in the
+  // format the join names, from the query's registry.
+  const std::unique_ptr<common::vectorindex::LocalVectorIndexReader> reader_;
   // Channels of the keys, then of the build columns of the output.
   std::vector<column_index_t> channels_;
   // The type of the input projected on 'channels_'.

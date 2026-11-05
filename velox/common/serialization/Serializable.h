@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <map>
 #include <type_traits>
 #include "folly/Optional.h"
 #include "folly/json.h"

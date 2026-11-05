@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include <gtest/gtest.h>
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -123,7 +125,7 @@ TEST_F(VectorRetainedSizeTest, constantWithValueVector) {
 TEST_F(VectorRetainedSizeTest, dictionaryWithStrings) {
   auto baseVector = makeFlatVector<std::string>(
       1'000, [&](auto /*row*/) { return std::string(100, 'a'); });
-  auto indices = makeIndices(100, folly::identity);
+  auto indices = makeIndices(100, std::identity{});
   auto dictVector = wrapInDictionary(indices, 100, baseVector);
 
   uint64_t totalStringBufferSize = 0;
@@ -137,7 +139,7 @@ TEST_F(VectorRetainedSizeTest, dictionaryWithStrings) {
 
 TEST_F(VectorRetainedSizeTest, dictionaryNoStrings) {
   auto baseVector = makeFlatIdentityVector<int32_t>(1'000);
-  auto indices = makeIndices(100, folly::identity);
+  auto indices = makeIndices(100, std::identity{});
   auto dictVector = wrapInDictionary(indices, 100, baseVector);
 
   uint64_t totalStringBufferSize = 0;
@@ -269,7 +271,7 @@ TEST_F(VectorRetainedSizeTest, sharedStringBuffers) {
   auto baseVector = makeFlatVector<std::string>(
       1'000, [&](auto /*row*/) { return std::string(100, 'a'); });
 
-  auto indices = makeIndices(100, folly::identity);
+  auto indices = makeIndices(100, std::identity{});
   std::vector<VectorPtr> dictionaries;
   dictionaries.emplace_back(wrapInDictionary(indices, 100, baseVector));
   dictionaries.emplace_back(wrapInDictionary(indices, 100, baseVector));

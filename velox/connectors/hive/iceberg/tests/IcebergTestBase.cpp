@@ -19,6 +19,7 @@
 #include <filesystem>
 
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/iceberg/DeletionVectorWriter.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -29,8 +30,6 @@
 #include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
-
-const std::string kIcebergConnectorId{"test-iceberg"};
 
 void IcebergTestBase::SetUp() {
   HiveConnectorTestBase::SetUp();
@@ -196,8 +195,8 @@ void addColumnHandles(
         std::make_shared<const IcebergColumnHandle>(
             columnName,
             partitionColumnIds.contains(i)
-                ? FileColumnHandle::ColumnType::kPartitionKey
-                : FileColumnHandle::ColumnType::kRegular,
+                ? connector::FileColumnHandle::ColumnType::kPartitionKey
+                : connector::FileColumnHandle::ColumnType::kRegular,
             type,
             field));
   }
@@ -416,6 +415,44 @@ IcebergTestBase::writeDwrfFileWithFieldIds(
   return file;
 }
 
+std::pair<std::shared_ptr<TempDirectoryPath>, IcebergDeleteFile>
+IcebergTestBase::writeDeletionVector(
+    const std::string& referencedDataFile,
+    const std::vector<int64_t>& deletedPositions) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions(deletedPositions);
+  const auto blob = writer.serialize();
+
+  // LocalFileSink refuses to open an existing file, so write the Puffin into
+  // a fresh path under a temp directory rather than a pre-created TempFile.
+  auto puffinDir = TempDirectoryPath::create();
+  const std::string puffinPath = puffinDir->getPath() + "/deletes.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  const auto [blobOffset, blobLength] = writePuffinFile(
+      *sink,
+      *pool_,
+      blob,
+      referencedDataFile,
+      static_cast<int64_t>(deletedPositions.size()));
+  sink->close();
+
+  IcebergDeleteFile dvFile(
+      FileContent::kDeletionVector,
+      puffinPath,
+      fileFormat_,
+      /*recordCount=*/deletedPositions.size(),
+      /*fileSizeInBytes=*/getFileSize(puffinPath),
+      /*equalityFieldIds=*/{},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/0,
+      /*contentOffset=*/static_cast<int64_t>(blobOffset),
+      /*contentLength=*/static_cast<int64_t>(blobLength),
+      /*referencedDataFile=*/referencedDataFile);
+  return {puffinDir, dvFile};
+}
+
 #ifdef VELOX_ENABLE_PARQUET
 std::shared_ptr<common::testutil::TempFilePath>
 IcebergTestBase::writeParquetFile(
@@ -452,92 +489,15 @@ IcebergTestBase::writeParquetFile(
 
 core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
     const RowTypePtr& outputType,
-    const RowTypePtr& dataColumns,
-    const std::vector<int32_t>& dataColumnFieldIds,
-    const std::vector<std::string>& subfieldFilters,
-    const std::string& remainingFilter) {
-  VELOX_CHECK_NOT_NULL(dataColumns);
-
-  // Build IcebergColumnHandle assignments for each output-projected column.
-  // The Iceberg field ID is taken from dataColumnFieldIds when available,
-  // otherwise it defaults to the 1-based ordinal position in dataColumns.
-  connector::ColumnHandleMap assignments;
-  assignments.reserve(outputType->size());
-  for (uint32_t i = 0; i < outputType->size(); ++i) {
-    const auto& name = outputType->nameOf(i);
-    const auto& type = outputType->childAt(i);
-    auto tableIdx = dataColumns->getChildIdxIfExists(name);
-    VELOX_CHECK(
-        tableIdx.has_value(),
-        "Output column '{}' not found in dataColumns.",
-        name);
-    const int32_t fieldId = !dataColumnFieldIds.empty()
-        ? dataColumnFieldIds[*tableIdx]
-        : static_cast<int32_t>(*tableIdx + 1);
-    assignments.emplace(
-        name,
-        std::make_shared<IcebergColumnHandle>(
-            name,
-            FileColumnHandle::ColumnType::kRegular,
-            type,
-            parquet::ParquetFieldId{fieldId, {}}));
-  }
-
-  // Build filter-only IcebergColumnHandles for columns referenced by pushed-
-  // down filters but absent from the output projection. These are needed so
-  // buildIcebergHandleByName() can resolve their Iceberg field IDs and
-  // configureEqualityDeleteColumns() can promote them to projected columns
-  // when they also serve as equality-delete keys.
-  std::vector<HiveColumnHandlePtr> filterHandles;
-  if (!subfieldFilters.empty() || !remainingFilter.empty()) {
-    for (uint32_t i = 0; i < dataColumns->size(); ++i) {
-      const auto& name = dataColumns->nameOf(i);
-      if (assignments.count(name)) {
-        continue; // Already in the output projection.
-      }
-      // Include this column as a filter handle if any subfield filter names it.
-      bool usedInFilter = std::any_of(
-          subfieldFilters.begin(),
-          subfieldFilters.end(),
-          [&name](const std::string& f) {
-            return f.find(name) != std::string::npos;
-          });
-      // Also include it if it appears in the remainingFilter expression.
-      if (!usedInFilter && !remainingFilter.empty()) {
-        usedInFilter = remainingFilter.find(name) != std::string::npos;
-      }
-      if (!usedInFilter) {
-        continue;
-      }
-      const auto& type = dataColumns->childAt(i);
-      const int32_t fieldId = !dataColumnFieldIds.empty()
-          ? dataColumnFieldIds[i]
-          : static_cast<int32_t>(i + 1);
-      filterHandles.push_back(
-          std::make_shared<IcebergColumnHandle>(
-              name,
-              FileColumnHandle::ColumnType::kRegular,
-              type,
-              parquet::ParquetFieldId{fieldId, {}}));
-    }
-  }
-
-  return exec::test::PlanBuilder()
-      .startTableScan(kIcebergConnectorId)
+    const RowTypePtr& dataColumns) {
+  const RowTypePtr& effectiveDataColumns =
+      dataColumns != nullptr ? dataColumns : outputType;
+  IcebergPlanBuilder planBuilder;
+  return planBuilder.startTableScan()
       .outputType(outputType)
-      .dataColumns(dataColumns)
-      .subfieldFilters(subfieldFilters)
-      .remainingFilter(remainingFilter)
-      .dataColumnFieldIds(dataColumnFieldIds)
-      .filterColumnHandles(std::move(filterHandles))
-      .assignments(assignments)
+      .dataColumns(effectiveDataColumns)
       .endTableScan()
       .planNode();
-}
-
-core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
-    const RowTypePtr& rowType) {
-  return makeIcebergTableScanPlan(rowType, rowType);
 }
 
 ColumnHandleMap IcebergTestBase::makeColumnHandles(
@@ -548,8 +508,8 @@ ColumnHandleMap IcebergTestBase::makeColumnHandles(
     const auto& columnName = rowType->nameOf(i);
     const auto& columnType = rowType->childAt(i);
     const auto columnHandleType = partitionIndices.contains(i)
-        ? FileColumnHandle::ColumnType::kPartitionKey
-        : FileColumnHandle::ColumnType::kRegular;
+        ? connector::FileColumnHandle::ColumnType::kPartitionKey
+        : connector::FileColumnHandle::ColumnType::kRegular;
     assignments.insert(
         {columnName,
          std::make_shared<HiveColumnHandle>(

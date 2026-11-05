@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <fmt/format.h>
 #include <folly/CPortability.h>
 #include <folly/Random.h>
 #include <folly/container/F14Set.h>
@@ -217,8 +218,15 @@ struct TypeParameter {
 ///                   BigintType
 class Type : public Tree<const TypePtr>, public velox::ISerializable {
  public:
-  constexpr explicit Type(TypeKind kind, bool providesCustomComparison = false)
-      : kind_{kind}, providesCustomComparison_{providesCustomComparison} {}
+  constexpr explicit Type(
+      TypeKind kind,
+      bool providesCustomComparison,
+      bool isPrimitiveType,
+      bool isFixedWidth)
+      : kind_{kind},
+        providesCustomComparison_{providesCustomComparison},
+        isPrimitiveType_{isPrimitiveType},
+        isFixedWidth_{isFixedWidth} {}
 
   TypeKind kind() const {
     return kind_;
@@ -234,7 +242,9 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
     return dynamic_cast<const typename TypeTraits<KIND>::ImplType&>(*this);
   }
 
-  virtual bool isPrimitiveType() const = 0;
+  bool isPrimitiveType() const {
+    return isPrimitiveType_;
+  }
 
   /// Returns true if equality relationship is defined for the values of this
   /// type, i.e. a == b is defined and returns true, false or null. For example,
@@ -303,7 +313,9 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
     throw std::invalid_argument{"Not a fixed width type: " + toString()};
   }
 
-  virtual bool isFixedWidth() const = 0;
+  bool isFixedWidth() const {
+    return isFixedWidth_;
+  }
 
   static TypePtr create(const folly::dynamic& obj);
 
@@ -384,6 +396,10 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
  private:
   const TypeKind kind_;
   const bool providesCustomComparison_;
+  // Both are determined by the kind. They are stored so that the accessors do
+  // not need a virtual call.
+  const bool isPrimitiveType_;
+  const bool isFixedWidth_;
 };
 
 #undef VELOX_FLUENT_CAST
@@ -407,20 +423,22 @@ class TypeBase : public Type {
  public:
   using NativeType = typename TypeTraits<KIND>::NativeType;
 
-  constexpr explicit TypeBase() : Type{KIND, false} {}
+  constexpr explicit TypeBase()
+      : Type{
+            KIND,
+            false,
+            TypeTraits<KIND>::isPrimitiveType,
+            TypeTraits<KIND>::isFixedWidth} {}
 
-  constexpr explicit TypeBase(ProvideCustomComparison tag) : Type{KIND, true} {
+  constexpr explicit TypeBase(ProvideCustomComparison tag)
+      : Type{
+            KIND,
+            true,
+            TypeTraits<KIND>::isPrimitiveType,
+            TypeTraits<KIND>::isFixedWidth} {
     static_assert(
         kindCanProvideCustomComparison<KIND>::value,
         "Custom comparisons are only supported for primitive types that are fixed width.");
-  }
-
-  bool isPrimitiveType() const override {
-    return TypeTraits<KIND>::isPrimitiveType;
-  }
-
-  bool isFixedWidth() const override {
-    return TypeTraits<KIND>::isFixedWidth;
   }
 
   bool isOrderable() const override {
@@ -958,6 +976,35 @@ class RowType : public TypeBase<TypeKind::ROW> {
   /// {a, b, c}->unionWith({d, e, f}) => {a, b, c, d, e, f}.
   std::shared_ptr<const RowType> unionWith(
       const std::shared_ptr<const RowType>& other) const;
+
+  /// The overloads below return the children of 'this' followed by the
+  /// specified fields. They take the same arguments as the ROW() functions
+  /// and avoid building a temporary RowType.
+
+  /// 'names' and 'types' must have the same size.
+  /// {a, b}->unionWith({c, d}, {INTEGER(), VARCHAR()}) => {a, b, c, d}.
+  std::shared_ptr<const RowType> unionWith(
+      const std::vector<std::string>& names,
+      const std::vector<TypePtr>& types) const;
+
+  /// Fields that share a type.
+  /// {a, b}->unionWith({c, d}, BOOLEAN()) => {a, b, c, d}.
+  std::shared_ptr<const RowType> unionWith(
+      const std::vector<std::string>& names,
+      const TypePtr& type) const;
+
+  std::shared_ptr<const RowType> unionWith(
+      std::initializer_list<std::string_view> names,
+      const TypePtr& type) const;
+
+  /// {a, b}->unionWith({{"c", BIGINT()}, {"d", VARCHAR()}}) => {a, b, c, d}.
+  std::shared_ptr<const RowType> unionWith(
+      std::initializer_list<std::pair<std::string_view, TypePtr>> pairs) const;
+
+  /// {a, b}->unionWith("c", BIGINT()) => {a, b, c}.
+  std::shared_ptr<const RowType> unionWith(
+      std::string_view name,
+      const TypePtr& type) const;
 
   folly::dynamic serialize() const override;
 
@@ -2440,43 +2487,6 @@ struct hasher<::facebook::velox::UnknownValue> {
   size_t operator()(const ::facebook::velox::UnknownValue /* value */) const {
     return 0;
   }
-};
-
-// Helper functions to allow TypeKind and some common variations to be
-// transparently used by folly::sformat.
-//
-// e.g: folly::sformat("type: {}", typeKind);
-template <>
-class FormatValue<facebook::velox::TypeKind> {
- public:
-  explicit FormatValue(const facebook::velox::TypeKind& type) : type_(type) {}
-
-  template <typename FormatCallback>
-  void format(FormatArg& arg, FormatCallback& cb) const {
-    return format_value::formatString(
-        facebook::velox::TypeKindName::toName(type_), arg, cb);
-  }
-
- private:
-  facebook::velox::TypeKind type_;
-};
-
-/// Prints all types derived from `velox::Type`.
-template <typename T>
-class FormatValue<
-    std::shared_ptr<T>,
-    typename std::enable_if_t<std::is_base_of_v<facebook::velox::Type, T>>> {
- public:
-  explicit FormatValue(const std::shared_ptr<const facebook::velox::Type>& type)
-      : type_(type) {}
-
-  template <typename FormatCallback>
-  void format(FormatArg& arg, FormatCallback& cb) const {
-    return format_value::formatString(type_->toString(), arg, cb);
-  }
-
- private:
-  std::shared_ptr<const facebook::velox::Type> type_;
 };
 
 } // namespace folly
