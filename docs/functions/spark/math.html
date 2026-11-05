@@ -228,7 +228,16 @@ after the decimal point.</p>
 <p>When <code class="docutils literal notranslate"><span class="pre">scale</span></code> is negative, rounds up to a power of 10 (e.g., scale = -2
 rounds up to the nearest hundred). When <code class="docutils literal notranslate"><span class="pre">scale</span></code> &gt;= the input
 scale, returns the value unchanged. Values that overflow the result
-precision return NULL.</p>
+precision raise a user error regardless of ANSI mode; <code class="docutils literal notranslate"><span class="pre">try</span></code> catches
+errors per row.</p>
+<p>Shares scale handling and result typing with <a class="reference internal" href="decimal.html#decimal_round" title="decimal_round"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">decimal_round()</span></code></a>.
+All constant INTEGER scales are accepted. Scales beyond decimal precision
+are handled without constructing an unrepresentable power of ten.
+For example, rounding DECIMAL(38,38) 0.1 to scale -1 returns 10, not zero.
+When the quantum is outside the result precision, positive nonzero inputs
+raise an error; negative inputs and zero return zero.</p>
+<p>A typed NULL scale returns NULL without evaluating the runtime decimal
+child; its result type uses scale zero.</p>
 <p><strong>Result type rules:</strong></p>
 <p>The result type is determined by the input type <code class="docutils literal notranslate"><span class="pre">DECIMAL(p,</span> <span class="pre">s)</span></code> and
 the target <code class="docutils literal notranslate"><span class="pre">scale</span></code> (n):</p>
@@ -241,7 +250,7 @@ input scale.</p></li>
 The result scale is always 0. <code class="docutils literal notranslate"><span class="pre">|n|</span> <span class="pre">+</span> <span class="pre">1</span></code> digits are needed because rounding
 to the nearest 10^|n| can produce a value one digit wider.</p></li>
 </ul>
-<p>See <a class="reference external" href="https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala">Spark’s RoundBase.dataType</a>.</p>
+<p>See <a class="reference external" href="https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala">https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala</a>.</p>
 <p>Examples (type annotations for clarity, not executable SQL):</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">scale</span> <span class="mi">0</span><span class="p">:</span> <span class="nb">round</span> <span class="n">up</span> <span class="n">to</span> <span class="n">integer</span>
 <span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="mf">1.234</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
@@ -258,7 +267,7 @@ to the nearest 10^|n| can produce a value one digit wider.</p></li>
 <span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">10.1</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mf">10.1</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
 
 <span class="o">--</span> <span class="n">negative</span> <span class="n">scale</span><span class="p">:</span> <span class="nb">round</span> <span class="n">up</span> <span class="n">to</span> <span class="n">power</span> <span class="n">of</span> <span class="mi">10</span>
-<span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">99.0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">100</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
+<span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">99.0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">100</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -272,8 +281,10 @@ second must be a constant INTEGER representing the desired number of digits
 after the decimal point.</p>
 <p>When <code class="docutils literal notranslate"><span class="pre">scale</span></code> is negative, rounds down to a power of 10 (e.g., scale = -2
 rounds down to the nearest hundred). When <code class="docutils literal notranslate"><span class="pre">scale</span></code> &gt;= the input
-scale, returns the value unchanged. Values that overflow the result
-precision return NULL.</p>
+scale, returns the value unchanged. Shares the scale validation, NULL-scale
+handling and row-local overflow errors of <a class="reference internal" href="#decimal_ceil" title="decimal_ceil"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">decimal_ceil()</span></code></a>.
+When the quantum is outside the result precision, negative nonzero inputs
+raise an error; positive inputs and zero return zero.</p>
 <p><strong>Result type rules:</strong></p>
 <p>Same as <code class="docutils literal notranslate"><span class="pre">decimal_ceil</span></code> — see above.</p>
 <p>Examples (type annotations for clarity, not executable SQL):</p>
@@ -292,7 +303,7 @@ precision return NULL.</p>
 <span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">10.1</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mf">10.1</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
 
 <span class="o">--</span> <span class="n">negative</span> <span class="n">scale</span><span class="p">:</span> <span class="nb">round</span> <span class="n">down</span> <span class="n">to</span> <span class="n">power</span> <span class="n">of</span> <span class="mi">10</span>
-<span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">99.0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">90</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
+<span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">99.0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">90</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
 </pre></div>
 </div>
 </dd></dl>

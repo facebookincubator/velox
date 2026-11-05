@@ -324,11 +324,25 @@ Supported type is: SHORT_DECIMAL.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_round">
 <span class="sig-name descname"><span class="pre">decimal_round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">decimal</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">decimal</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#decimal_round" title="Link to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">decimal</span></code> rounded to a new scale using HALF_UP rounding mode. In HALF_UP rounding, the digit 5 is rounded up.
-<code class="docutils literal notranslate"><span class="pre">scale</span></code> is the new scale to be rounded to. It is 0 by default, and integer in [INT_MIN, INT_MAX] is allowed to be its value.
-When the absolute value of scale exceeds the maximum precision of long decimal (38), the round logic is equivalent to the case where it is 38 as we cannot exceed the maximum precision.
+<dd><p>Rounds <code class="docutils literal notranslate"><span class="pre">decimal</span></code> to a new scale using HALF_UP rounding: exact halfway
+cases round away from zero.
+<code class="docutils literal notranslate"><span class="pre">scale</span></code> defaults to zero and must be a constant INTEGER expression in
+the full INTEGER range, or NULL.
+A null scale returns null without evaluating the runtime decimal child;
+its resolved output type is the same as for scale zero.
+The expression must supply the resolved decimal result type, which is
+validated against the native precision and scale rules below. Native type
+calculation widens scale arithmetic before negation, avoiding integer
+overflow across the full INTEGER domain. This can differ from Spark/JVM
+result metadata at the most-negative scales; integrations requiring exact
+Spark type parity must retain compatibility validation and fallback.
 The result precision and scale are decided with the precision and scale of input <code class="docutils literal notranslate"><span class="pre">decimal</span></code> and <code class="docutils literal notranslate"><span class="pre">scale</span></code>.
-After rounding we may need one more digit in the integral part.</p>
+After rounding we may need one more digit in the integral part.
+If a negative scale causes the rounded value to exceed decimal precision
+38, evaluation raises a user error regardless of ANSI mode. <code class="docutils literal notranslate"><span class="pre">try</span></code> catches
+that error per row.
+Dropping more than 38 digits returns zero; dropping exactly 38 digits can
+still round away from zero and overflow.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">cast</span> <span class="p">(</span><span class="mf">9.9</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)),</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mi">10</span>
 <span class="n">SELECT</span> <span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">cast</span> <span class="p">(</span><span class="mi">99</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">)),</span> <span class="o">-</span><span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mi">100</span>
 </pre></div>
@@ -350,7 +364,7 @@ which means we need at least <code class="docutils literal notranslate"><span cl
 <p>When <code class="docutils literal notranslate"><span class="pre">scale</span></code> is positive, the result scale is the minor one of input scale and <code class="docutils literal notranslate"><span class="pre">scale</span></code>.
 The result precision is decided with the number of integral digits and the result scale, but cannot exceed the max precision of decimal.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">round</span><span class="p">(</span><span class="n">cast</span> <span class="p">(</span><span class="mf">85.681</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">)),</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">85.7</span>
-<span class="n">SELECT</span> <span class="nb">round</span><span class="p">(</span><span class="n">cast</span> <span class="p">(</span><span class="mf">85.681</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">)),</span> <span class="mi">999</span><span class="p">);</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">85.681</span>
+<span class="n">SELECT</span> <span class="nb">round</span><span class="p">(</span><span class="n">cast</span> <span class="p">(</span><span class="mf">85.681</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">)),</span> <span class="mi">2147483647</span><span class="p">);</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">85.681</span>
 <span class="n">SELECT</span> <span class="nb">round</span><span class="p">(</span><span class="n">cast</span> <span class="p">(</span><span class="mf">0.1234567890123456789</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">19</span><span class="p">,</span> <span class="mi">19</span><span class="p">)),</span> <span class="mi">14</span><span class="p">);</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">0.12345678901235</span>
 </pre></div>
 </div>
