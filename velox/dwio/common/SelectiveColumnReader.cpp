@@ -118,8 +118,18 @@ void SelectiveColumnReader::seekTo(int64_t offset, bool readsNullsOnly) {
   }
 }
 
+bool SelectiveColumnReader::hasRowFilter() const {
+  if (!scanSpec_->hasFilter()) {
+    return false;
+  }
+  const auto* filter = scanSpec_->filter();
+  return filter == nullptr ||
+      filter->kind() != velox::common::FilterKind::kAlwaysTrue ||
+      !scanSpec_->children().empty();
+}
+
 void SelectiveColumnReader::setReturnNullsMode(const RowSet& rows) {
-  if (useBulkPath() && !scanSpec_->hasFilter()) {
+  if (useBulkPath() && !hasRowFilter()) {
     anyNulls_ = nullsInReadRange_ != nullptr;
     const bool isDense = rows.back() == rows.size() - 1;
     returnReaderNulls_ = anyNulls_ && isDense;

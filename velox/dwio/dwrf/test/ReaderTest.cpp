@@ -2595,6 +2595,61 @@ TEST_F(TestReader, resetFilterCachesOnActiveStripe) {
   EXPECT_EQ(rowReader->next(128, output), 0);
 }
 
+TEST_F(TestReader, alwaysTrueFilterKeepsNulls) {
+  constexpr vector_size_t kSize{1'000};
+  const std::vector<VectorPtr> columns = {
+      makeFlatVector<int64_t>(
+          kSize, [](auto row) { return row * 1'000'003; }, nullEvery(7)),
+      makeFlatVector<int64_t>(
+          kSize, [](auto row) { return row % 5; }, nullEvery(7)),
+      makeFlatVector<std::string>(
+          kSize,
+          [](auto row) { return row % 2 == 0 ? "a" : "b"; },
+          nullEvery(7)),
+  };
+  for (const auto& column : columns) {
+    SCOPED_TRACE(column->toString());
+    auto input = makeRowVector({column});
+    auto schema = asRowType(input->type());
+    auto [writer, reader] =
+        createWriterReader({input}, pool(), dataIoStats_, metadataIoStats_);
+    auto spec = std::make_shared<common::ScanSpec>("<root>");
+    spec->addAllChildFields(*schema);
+    spec->childByName("c0")->setFilter(std::make_unique<common::AlwaysTrue>());
+    RowReaderOptions options;
+    options.setScanSpec(spec);
+    auto rowReader = reader->createRowReader(options);
+    auto output = BaseVector::create(schema, 0, pool());
+    ASSERT_EQ(rowReader->next(kSize, output), kSize);
+    assertEqualVectors(input, output);
+  }
+}
+
+TEST_F(TestReader, alwaysTrueFilterWithRangeFilter) {
+  constexpr vector_size_t kSize{1'000};
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          kSize, [](auto row) { return row * 1'000'003; }, nullEvery(7)),
+      makeFlatVector<int64_t>(kSize, std::identity{}),
+  });
+  auto schema = asRowType(input->type());
+  auto [writer, reader] =
+      createWriterReader({input}, pool(), dataIoStats_, metadataIoStats_);
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  spec->childByName("c0")->setFilter(std::make_unique<common::AlwaysTrue>());
+  spec->childByName("c1")->setFilter(
+      std::make_unique<common::BigintRange>(100, 199, false));
+  RowReaderOptions options;
+  options.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(options);
+  auto output = BaseVector::create(schema, 0, pool());
+  // next() returns rows scanned, including those the BigintRange drops.
+  ASSERT_EQ(rowReader->next(kSize, output), kSize);
+  ASSERT_EQ(output->size(), 100);
+  assertEqualVectors(input->slice(100, 100), output);
+}
+
 TEST_F(TestReader, setRowNumberColumnInfo) {
   std::vector<std::vector<int32_t>> integerValues{
       {0, 1, 2, 3, 4},
