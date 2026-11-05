@@ -290,8 +290,9 @@ RowVectorPtr Merge::getOutput() {
 void Merge::close() {
   recordMergeStats();
   if (spillMerger_ != nullptr) {
+    // Destroying spill streams can wait for file read-ahead. Leave that
+    // cleanup to destruction so close() only signals the readers.
     spillMerger_->close();
-    spillMerger_.reset();
   }
   for (auto& source : sources_) {
     source->close();

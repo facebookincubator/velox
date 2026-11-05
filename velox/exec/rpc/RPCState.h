@@ -356,18 +356,10 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
 
   /// Drop every retained input vector, regardless of activeRowCount.
   ///
-  /// Called from RPCOperator::close() and ~RPCOperator(). In-flight RPC
-  /// callbacks hold a shared_ptr to this object, so it can outlive the
-  /// operator, the Task and the query's memory pools. The input vectors were
-  /// allocated from upstream operators' pools, so holding them past teardown
-  /// leaves a non-zero reservation on those pools; the arbitrator's
-  /// pool->reservedBytes() == 0 check then throws from ~MemoryPoolImpl() and
-  /// terminates the worker. If instead the last callback lands after the pools
-  /// are gone, ~RPCState() frees into freed memory.
-  ///
-  /// Safe to call while RPCs are outstanding: completion callbacks only
-  /// deposit RPCResponse values and never read flatColumns, which is read
-  /// solely by the driver thread when building output.
+  /// The operator releases these vectors while their upstream memory pools
+  /// are still alive. A running RPC completion may hold this state
+  /// temporarily. Completion callbacks deposit responses, and the driver
+  /// owns access to the retained input vectors.
   void releaseAllInputBatches();
 
   /// Stops accepting completions and releases all retained resources.
@@ -386,8 +378,7 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   /// into readyRows_ and notifies waiting drivers. The callback runs on
   /// the RPC client's executor thread, acquiring mutex_ internally.
   ///
-  /// @param selfPtr Shared pointer to this RPCState, captured by the callback
-  ///        to prevent premature destruction.
+  /// @param selfPtr Keeps this RPCState alive while registering the callbacks.
   /// @param rowId Globally unique row ID for correlation.
   /// @param location Row's location in the stored input batch.
   /// @param future The SemiFuture from client->call().
@@ -460,7 +451,7 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   /// The callback runs on the RPC client's executor thread, acquiring
   /// mutex_ internally.
   ///
-  /// @param selfPtr Shared pointer to this RPCState (prevent destruction).
+  /// @param selfPtr Keeps this RPCState alive while registering the callbacks.
   /// @param future The normalized SemiFuture produced from
   ///        AsyncRPCFunction::flushBatch().
   /// @param rowLocations Locations mapping each request to its input batch
@@ -609,9 +600,11 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   // Completes retry rows whose budget ran out with their last rejection.
   void failExpiredRetries(std::vector<RetryRow> expired);
 
-  // Moves a completed row into readyRows_ and notifies waiters. Called from
-  // the RPC completion callback, which runs on an executor thread.
-  void completeRow(
+  bool isClosed() const;
+
+  // Records the row completion and notifies waiters. Returns false if the
+  // state closed before the completion could be recorded.
+  bool completeRow(
       int64_t rowId,
       RowLocation location,
       RPCResponse response,
