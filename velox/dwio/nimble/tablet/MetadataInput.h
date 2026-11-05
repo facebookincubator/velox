@@ -65,6 +65,7 @@ class MetadataInput {
     velox::cache::AsyncDataCache* cache{nullptr};
     /// When set, metadata entries above this size in bytes bypass the cache.
     std::optional<uint32_t> maxCacheEntrySize{};
+    velox::FileIoContext fileIoContext{};
   };
 
   static std::unique_ptr<MetadataInput> create(
@@ -197,6 +198,7 @@ class MetadataInput {
   const int64_t maxCoalesceBytes_;
   folly::Executor* const executor_;
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
+  const velox::FileIoContext fileIoContext_;
 };
 
 /// Direct metadata loading with IO coalescing, no caching.
