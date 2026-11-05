@@ -307,8 +307,7 @@ class HistogramNumericAggregate {
       row.template get_writer_at<0>() =
           HistogramNumericTypes::javaDoubleToLong(center);
     } else if constexpr (kOutput == OutputFamily::kFloat) {
-      row.template get_writer_at<0>() =
-          HistogramNumericTypes::javaDoubleToFloat(center);
+      row.template get_writer_at<0>() = static_cast<float>(center);
     } else if constexpr (kOutput == OutputFamily::kDouble) {
       row.template get_writer_at<0>() = center;
     } else if constexpr (
@@ -605,16 +604,12 @@ void registerLegacy(
 
 void registerHistogramNumericAggregates(
     const std::string& prefix,
-    bool /*withCompanionFunctions*/,
+    bool withCompanionFunctions,
     bool overwrite) {
   registerCanonical(
-      prefix + "histogram_numeric",
-      /*withCompanionFunctions=*/false,
-      overwrite);
+      prefix + "histogram_numeric", withCompanionFunctions, overwrite);
   registerLegacy(
-      prefix + "histogram_numeric_legacy",
-      /*withCompanionFunctions=*/false,
-      overwrite);
+      prefix + "histogram_numeric_legacy", withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql

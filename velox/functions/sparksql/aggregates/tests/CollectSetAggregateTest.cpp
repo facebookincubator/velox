@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook::velox::functions::aggregate::test;
+using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 
@@ -375,6 +378,52 @@ TEST_F(CollectSetAggregateTest, explicitIgnoreNullsTrue) {
   AggregationTester(*this)
       .inputs(data)
       .aggregates({"collect_set(c0, true)"})
+      .assertResults(expected);
+}
+
+TEST_F(CollectSetAggregateTest, windowForwardsIgnoreNulls) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 2, 3}),
+      makeNullableFlatVector<int32_t>({std::nullopt, 1, std::nullopt, 2}),
+  });
+  auto ignored =
+      makeArrayVectorFromJson<int32_t>({"[]", "[1]", "[1]", "[1, 2]"});
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 2, 3}),
+      makeArrayVectorFromJson<int32_t>(
+          {"[null]", "[1, null]", "[1, null]", "[1, 2, null]"}),
+      ignored,
+      ignored,
+  });
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "collect_set(c1, false) over (order by c0 rows between unbounded preceding and current row)",
+              "collect_set(c1, true) over (order by c0 rows between unbounded preceding and current row)",
+              "collect_set(c1) over (order by c0 rows between unbounded preceding and current row)",
+          })
+          .project(
+              {"c0",
+               "spark_array_sort(w0)",
+               "spark_array_sort(w1)",
+               "spark_array_sort(w2)"})
+          .planNode();
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CollectSetAggregateTest, companionsForwardIgnoreNulls) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>({std::nullopt, 1, std::nullopt}),
+  });
+  auto expected = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({"[1, null]"}),
+  });
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, false)"})
+      .project({"spark_array_sort(a0)"})
+      .withCompanion()
       .assertResults(expected);
 }
 

@@ -114,8 +114,9 @@ TEST_F(SparkNumericHistogramTest, unboundAndKnownEmpty) {
   SparkNumericHistogram histogram(&allocator_);
   EXPECT_EQ(histogram.numBins(), 0);
   EXPECT_THAT(histogram.bins(), IsEmpty());
-  VELOX_ASSERT_THROW(histogram.serializedSize(), "not initialized");
-  VELOX_ASSERT_THROW(histogram.add(1), "not initialized");
+  VELOX_ASSERT_THROW(
+      histogram.serializedSize(), "histogram_numeric is not initialized");
+  VELOX_ASSERT_THROW(histogram.add(1), "histogram_numeric is not initialized");
 
   histogram.initialize(3);
   EXPECT_EQ(histogram.numBins(), 3);
@@ -131,21 +132,27 @@ TEST_F(SparkNumericHistogramTest, unboundAndKnownEmpty) {
   // The aggregate adapter uses empty bins for a null final, and skips null
   // intermediate transport without calling mergeSerialized. A zero-length
   // non-null payload, in contrast, is structurally invalid.
-  VELOX_ASSERT_USER_THROW(histogram.mergeSerialized({}), "header");
+  VELOX_ASSERT_USER_THROW(
+      histogram.mergeSerialized({}),
+      "histogram_numeric payload has a short header");
 }
 
 TEST_F(SparkNumericHistogramTest, initializeRejectsInvalidAndChangedCapacity) {
   SparkNumericHistogram histogram(&allocator_);
   for (auto numBins : {std::numeric_limits<int32_t>::min(), -1, 0, 1}) {
-    VELOX_ASSERT_USER_THROW(histogram.initialize(numBins), "at least 2");
+    VELOX_ASSERT_USER_THROW(
+        histogram.initialize(numBins),
+        "histogram_numeric requires numBins at least 2");
     EXPECT_EQ(histogram.numBins(), 0);
   }
   histogram.initialize(2);
   histogram.add(1);
   histogram.initialize(2);
   const auto before = serialize(histogram);
-  VELOX_ASSERT_USER_THROW(histogram.initialize(3), "numBins mismatch");
-  VELOX_ASSERT_USER_THROW(histogram.initialize(1), "at least 2");
+  VELOX_ASSERT_USER_THROW(
+      histogram.initialize(3), "histogram_numeric numBins mismatch");
+  VELOX_ASSERT_USER_THROW(
+      histogram.initialize(1), "histogram_numeric requires numBins at least 2");
   EXPECT_EQ(serialize(histogram), before);
 }
 
@@ -315,7 +322,9 @@ TEST_F(SparkNumericHistogramTest, mergeKeepsDestinationRandom) {
   histogram.initialize(2);
   histogram.mergeSerialized(payload(3, {}));
   EXPECT_EQ(histogram.numBins(), 2);
-  VELOX_ASSERT_USER_THROW(histogram.mergeSerialized("short"), "header");
+  VELOX_ASSERT_USER_THROW(
+      histogram.mergeSerialized("short"),
+      "histogram_numeric payload has a short header");
   histogram.mergeSerialized(payload(2, {{3, 1}}));
   assertBins(histogram, {{1, 3}, {3, 1}});
 }
@@ -484,7 +493,7 @@ TEST_F(SparkNumericHistogramTest, rejectsShortHeaders) {
   for (size_t size = 0; size < 8; ++size) {
     VELOX_ASSERT_USER_THROW(
         histogram.mergeSerialized(std::string_view(header).substr(0, size)),
-        "header");
+        "histogram_numeric payload has a short header");
     EXPECT_EQ(histogram.numBins(), 0);
     EXPECT_THAT(histogram.bins(), IsEmpty());
     EXPECT_EQ(allocator_.currentBytes(), 0);
@@ -528,12 +537,14 @@ TEST_F(SparkNumericHistogramTest, rejectsTruncatedOrTrailing) {
   for (size_t size = 8; size < source.size(); ++size) {
     VELOX_ASSERT_USER_THROW(
         histogram.mergeSerialized(std::string_view(source).substr(0, size)),
-        "length");
+        "histogram_numeric payload length mismatch");
     EXPECT_EQ(serialize(histogram), before);
     EXPECT_EQ(allocator_.currentBytes(), memoryBefore);
   }
   for (const auto& bytes : {source + "x", payload(3, {}) + "x"}) {
-    VELOX_ASSERT_USER_THROW(histogram.mergeSerialized(bytes), "length");
+    VELOX_ASSERT_USER_THROW(
+        histogram.mergeSerialized(bytes),
+        "histogram_numeric payload length mismatch");
     EXPECT_EQ(serialize(histogram), before);
   }
 }
@@ -544,13 +555,16 @@ TEST_F(SparkNumericHistogramTest, rejectsOversizedStateBeforeAllocation) {
            "7fffffff7fffffff",
            "7fffffff08000000", // 8+16*2^27 exceeds INT32_MAX.
        }) {
-    VELOX_ASSERT_USER_THROW(histogram.mergeSerialized(unhex(hex)), "too large");
+    VELOX_ASSERT_USER_THROW(
+        histogram.mergeSerialized(unhex(hex)),
+        "histogram_numeric serialized state is too large");
     EXPECT_EQ(histogram.numBins(), 0);
     EXPECT_EQ(allocator_.currentBytes(), 0);
   }
   // Just below the size limit, the header still cannot claim absent pairs.
   VELOX_ASSERT_USER_THROW(
-      histogram.mergeSerialized(unhex("7fffffff07ffffff")), "length");
+      histogram.mergeSerialized(unhex("7fffffff07ffffff")),
+      "histogram_numeric payload length mismatch");
   histogram.initialize(kMaxNumBins);
   histogram.add(1);
   EXPECT_EQ(serialize(histogram), payload(kMaxNumBins, {{1, 1}}));
