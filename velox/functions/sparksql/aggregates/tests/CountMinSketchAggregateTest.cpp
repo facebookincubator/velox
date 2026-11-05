@@ -750,21 +750,26 @@ TEST_F(CountMinSketchAggregateTest, seedInputTypes) {
   }
   auto expected = makeRowVector(expectedColumns);
 
-  for (const auto bigintSeed : {false, true}) {
+  // Spark truncates BIGINT seeds, so 2^32 + 1 shares seed 1's golden.
+  const std::vector<std::pair<bool, int64_t>> seedCases = {
+      {false, 1},
+      {true, 1},
+      {true, 4'294'967'297},
+  };
+  for (const auto& [bigintSeed, seed] : seedCases) {
     SCOPED_TRACE(bigintSeed);
+    SCOPED_TRACE(seed);
     parse::ParseOptions options;
     options.parseIntegerAsBigint = bigintSeed;
+    std::vector<std::string> aggregates;
+    for (column_index_t i = 0; i < input->childrenSize(); ++i) {
+      aggregates.push_back(
+          fmt::format("count_min_sketch(c{}, 0.5, 0.5, {})", i, seed));
+    }
     auto planNode = exec::test::PlanBuilder(pool())
                         .setParseOptions(options)
                         .values({input})
-                        .singleAggregation(
-                            {},
-                            {"count_min_sketch(c0, 0.5, 0.5, 1)",
-                             "count_min_sketch(c1, 0.5, 0.5, 1)",
-                             "count_min_sketch(c2, 0.5, 0.5, 1)",
-                             "count_min_sketch(c3, 0.5, 0.5, 1)",
-                             "count_min_sketch(c4, 0.5, 0.5, 1)",
-                             "count_min_sketch(c5, 0.5, 0.5, 1)"})
+                        .singleAggregation({}, aggregates)
                         .project(
                             {"to_hex(a0)",
                              "to_hex(a1)",
@@ -1218,6 +1223,23 @@ TEST_F(CountMinSketchAggregateTest, invalidParametersRejected) {
       {"count_min_sketch(c0, 1.0e-300, 0.5, 1)"},
       "count_min_sketch width out of range");
 
+  // Supply these literals directly to avoid SQL parsing of subnormal values.
+  for (const auto eps : {std::numeric_limits<double>::infinity(), 1.0e-310}) {
+    SCOPED_TRACE(eps);
+    VELOX_ASSERT_THROW(
+        exec::Aggregate::create(
+            "count_min_sketch",
+            core::AggregationNode::Step::kSingle,
+            {BIGINT(), DOUBLE(), DOUBLE(), INTEGER()},
+            VARBINARY(),
+            core::QueryConfig({}),
+            {nullptr,
+             makeConstant<double>(eps, 1),
+             makeConstant<double>(0.5, 1),
+             makeConstant<int32_t>(1, 1)}),
+        "count_min_sketch width out of range");
+  }
+
   // eps that produces a valid width but an output larger than StringView can
   // represent.
   testFailingAggregations(
@@ -1227,6 +1249,16 @@ TEST_F(CountMinSketchAggregateTest, invalidParametersRejected) {
       "count_min_sketch serialized size out of range");
 
   // Confidence outside (0, 1).
+  testFailingAggregations(
+      data,
+      {},
+      {"count_min_sketch(c0, 0.5, 0.0, 1)"},
+      "confidence must be positive");
+  testFailingAggregations(
+      data,
+      {},
+      {"count_min_sketch(c0, 0.5, 1.0, 1)"},
+      "confidence must be less than 1.0");
   testFailingAggregations(
       data,
       {},
