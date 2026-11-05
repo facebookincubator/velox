@@ -526,32 +526,35 @@ TEST_F(ArithmeticTest, unhex) {
   EXPECT_EQ(unhex("E4B889E9878DE79A84"), "\u4E09\u91CD\u7684");
 }
 
-TEST_F(ArithmeticTest, checkedUnhex) {
-  const auto checkedUnhex = [&](std::optional<std::string> a) {
-    return evaluateOnce<std::string>("checked_unhex(c0)", a);
+TEST_F(ArithmeticTest, toBinaryHex) {
+  const auto toBinaryHex = [&](std::optional<std::string> a) {
+    return evaluateOnce<std::string>("to_binary_hex(c0)", a);
   };
 
   // Valid input decodes like unhex.
-  EXPECT_EQ(checkedUnhex("737472696E67"), "string");
-  EXPECT_EQ(checkedUnhex(""), "");
-  EXPECT_EQ(checkedUnhex("23"), "#");
-  EXPECT_EQ(checkedUnhex("123"), "\x01#");
-  EXPECT_EQ(checkedUnhex("b23"), "\x0B#");
-  EXPECT_EQ(checkedUnhex("b2323"), "\x0B##");
-  EXPECT_EQ(checkedUnhex("F"), "\x0F");
-  EXPECT_EQ(checkedUnhex("ff"), "\xFF");
-  EXPECT_EQ(checkedUnhex("E4B889E9878DE79A84"), "\u4E09\u91CD\u7684");
-  EXPECT_EQ(checkedUnhex(std::nullopt), std::nullopt);
+  EXPECT_EQ(toBinaryHex("737472696E67"), "string");
+  EXPECT_EQ(toBinaryHex(""), "");
+  EXPECT_EQ(toBinaryHex("23"), "#");
+  EXPECT_EQ(toBinaryHex("123"), "\x01#");
+  EXPECT_EQ(toBinaryHex("b23"), "\x0B#");
+  EXPECT_EQ(toBinaryHex("b2323"), "\x0B##");
+  EXPECT_EQ(toBinaryHex("F"), "\x0F");
+  EXPECT_EQ(toBinaryHex("ff"), "\xFF");
+  EXPECT_EQ(toBinaryHex("E4B889E9878DE79A84"), "\u4E09\u91CD\u7684");
+  EXPECT_EQ(toBinaryHex(std::nullopt), std::nullopt);
 
   // Invalid input throws where unhex returns NULL.
-  VELOX_ASSERT_USER_THROW(checkedUnhex("G"), "violates the constraint 'HEX'");
-  VELOX_ASSERT_USER_THROW(checkedUnhex("GG"), "violates the constraint 'HEX'");
-  VELOX_ASSERT_USER_THROW(checkedUnhex("G23"), "violates the constraint 'HEX'");
+  VELOX_ASSERT_USER_THROW(
+      toBinaryHex("G"), "(HEX) cannot be converted to BINARY");
+  VELOX_ASSERT_USER_THROW(
+      toBinaryHex("GG"), "(HEX) cannot be converted to BINARY");
+  VELOX_ASSERT_USER_THROW(
+      toBinaryHex("G23"), "(HEX) cannot be converted to BINARY");
 
   // try() turns the error into NULL.
   EXPECT_EQ(
       evaluateOnce<std::string>(
-          "try(checked_unhex(c0))", std::optional<std::string>("GG")),
+          "try(to_binary_hex(c0))", std::optional<std::string>("GG")),
       std::nullopt);
 }
 

@@ -701,17 +701,17 @@ struct UnHexFunction {
   }
 };
 
-/// checked_unhex(x): Spark's to_binary(x, 'hex'), which throws if 'x' is not
+/// to_binary_hex(x): Spark's to_binary(x, 'hex'), which throws if 'x' is not
 /// a valid hexadecimal string.
 template <typename T>
-struct CheckedUnHexFunction {
+struct ToBinaryHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE Status
   call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
     VELOX_USER_RETURN(
         !detail::decodeHex(input, result),
-        "The value '{}' of the type STRING is invalid because it violates the constraint 'HEX'",
+        "The value '{}' (HEX) cannot be converted to BINARY because it is malformed",
         std::string(input.data(), input.size()));
     return Status::OK();
   }

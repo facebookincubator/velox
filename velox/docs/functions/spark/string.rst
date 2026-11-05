@@ -53,17 +53,6 @@ String Functions
         char_type_write_side_check("世界人", 2) -- VeloxUserError: "Exceeds allowed length limitation: '2'"
         char_type_write_side_check("abc", 0) -- VeloxUserError: "The length limit must be greater than 0."
 
-.. spark:function:: checked_unbase64(expr) -> varbinary
-
-    Same as :spark:func:`unbase64`, except that an error is raised if ``expr`` is not a
-    well-formed base64 string: groups of four symbols from ``A-Z``, ``a-z``, ``0-9``, ``+``
-    and ``/``, a last group of two to four symbols, optional ``=`` padding that completes
-    the last group to four symbols, and nothing after the padding. Whitespace before the
-    padding is ignored. Corresponds to Spark's ``to_binary(expr, 'base64')``. ::
-
-        SELECT cast(checked_unbase64('U3BhcmsgU1FM') AS STRING); -- 'Spark SQL'
-        SELECT checked_unbase64('cd@'); -- error
-
 .. spark:function:: chr(n) -> varchar
 
     Returns the Unicode code point ``n`` as a single character string.
@@ -608,6 +597,25 @@ String Functions
         SELECT substring_index('aaaaa', 'aa', 0); -- ""
         SELECT substring_index('aaaaa', 'aa', 5); -- "aaaaa"
         SELECT substring_index('aaaaa', 'aa', -5); -- "aaaaa"
+
+.. spark:function:: to_binary_base64(expr) -> varbinary
+
+    Same as :spark:func:`unbase64`, except that an error is raised if ``expr`` is not a
+    well-formed base64 string: groups of four symbols from ``A-Z``, ``a-z``, ``0-9``, ``+``
+    and ``/``, a last group of two to four symbols, optional ``=`` padding that completes
+    the last group to four symbols, and nothing after the padding. Whitespace before the
+    padding is ignored. Corresponds to Spark's ``to_binary(expr, 'base64')``. ::
+
+        SELECT cast(to_binary_base64('U3BhcmsgU1FM') AS STRING); -- 'Spark SQL'
+        SELECT to_binary_base64('cd@'); -- error
+
+.. spark:function:: to_binary_hex(x) -> varbinary
+
+    Same as :spark:func:`unhex`, except that an error is raised if ``x`` contains a
+    non-hexadecimal character. Corresponds to Spark's ``to_binary(x, 'hex')``. ::
+
+        SELECT to_binary_hex('23'); -- #
+        SELECT to_binary_hex('G'); -- error
 
 .. spark:function:: to_pretty_string(x) -> varchar
 
