@@ -199,6 +199,8 @@ class AggregationFuzzer : public AggregationFuzzerBase {
   Stats stats_;
   const std::unordered_map<std::string, DataSpec> functionDataSpec_;
   const std::unordered_set<std::string> functionsRequireSortedInput_;
+  // Binds literal arguments consistently across all plans in an iteration.
+  RowVectorPtr constantInputs_;
 };
 } // namespace
 
@@ -339,6 +341,7 @@ void AggregationFuzzer::go() {
 
   auto vectorOptions = vectorFuzzer_.getOptions();
   while (!isDone(iteration, startTime)) {
+    constantInputs_.reset();
     LOG(INFO) << "==============================> Started iteration "
               << iteration << " (seed: " << currentSeed_ << ")";
 
@@ -395,8 +398,20 @@ void AggregationFuzzer::go() {
 
       std::vector<TypePtr> argTypes = signature.args;
       std::vector<std::string> argNames = makeNames(argTypes.size());
+      const auto sortingKeys = argNames;
+      auto arguments = argNames;
+      for (auto i = 0; i < arguments.size(); ++i) {
+        if (signature.constantArgs[i]) {
+          arguments[i] = fmt::format("__complex_constant({})", arguments[i]);
+        }
+      }
       auto call = makeFunctionCall(
-          signature.name, argNames, sortedInputs, distinctInputs);
+          signature.name,
+          arguments,
+          sortedInputs,
+          distinctInputs,
+          false,
+          sortingKeys);
 
       // 20% of times use mask.
       std::vector<std::string> masks;
@@ -419,6 +434,7 @@ void AggregationFuzzer::go() {
 
       auto input =
           generateInputData(argNames, argTypes, signature, groupingKeys);
+      constantInputs_ = generateConstantInputs(signature, input);
       auto [convertedInput, projections] =
           referenceQueryRunner_->inputProjections(input);
 
@@ -496,25 +512,24 @@ void makeAlternativePlansWithValues(
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& inputVectors,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     std::vector<core::PlanNodePtr>& plans) {
   // Partial -> final aggregation plan.
-  plans.push_back(
-      PlanBuilder()
-          .values(inputVectors)
-          .projectExpressions(projections)
-          .partialAggregation(groupingKeys, aggregates, masks)
-          .finalAggregation()
-          .planNode());
+  plans.push_back(PlanBuilder(nullptr, constantInputs)
+                      .values(inputVectors)
+                      .projectExpressions(projections)
+                      .partialAggregation(groupingKeys, aggregates, masks)
+                      .finalAggregation()
+                      .planNode());
 
   // Partial -> intermediate -> final aggregation plan.
-  plans.push_back(
-      PlanBuilder()
-          .values(inputVectors)
-          .projectExpressions(projections)
-          .partialAggregation(groupingKeys, aggregates, masks)
-          .intermediateAggregation()
-          .finalAggregation()
-          .planNode());
+  plans.push_back(PlanBuilder(nullptr, constantInputs)
+                      .values(inputVectors)
+                      .projectExpressions(projections)
+                      .partialAggregation(groupingKeys, aggregates, masks)
+                      .intermediateAggregation()
+                      .finalAggregation()
+                      .planNode());
 
   // Partial -> local exchange -> final aggregation plan.
   auto numSources = std::min<size_t>(4, inputVectors.size());
@@ -523,7 +538,7 @@ void makeAlternativePlansWithValues(
     sourceInputs[i % numSources].push_back(inputVectors[i]);
   }
 
-  PlanBuilder builder;
+  PlanBuilder builder(nullptr, constantInputs);
   std::vector<core::PlanNodePtr> sources;
   for (const auto& sourceInput : sourceInputs) {
     sources.push_back(builder.newPlan()
@@ -552,6 +567,7 @@ void makeAlternativePlansWithTableScan(
     const std::vector<std::string>& masks,
     const RowTypePtr& inputRowType,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     std::vector<core::PlanNodePtr>& plans) {
 // There is a known issue where LocalPartition will send DictionaryVectors
 // with the same underlying base Vector to multiple threads.  This triggers
@@ -560,25 +576,23 @@ void makeAlternativePlansWithTableScan(
 // the false negatives.
 #ifndef TSAN_BUILD
   // Partial -> final aggregation plan.
-  plans.push_back(
-      PlanBuilder()
-          .tableScan(inputRowType)
-          .projectExpressions(projections)
-          .partialAggregation(groupingKeys, aggregates, masks)
-          .localPartition(groupingKeys)
-          .finalAggregation()
-          .planNode());
+  plans.push_back(PlanBuilder(nullptr, constantInputs)
+                      .tableScan(inputRowType)
+                      .projectExpressions(projections)
+                      .partialAggregation(groupingKeys, aggregates, masks)
+                      .localPartition(groupingKeys)
+                      .finalAggregation()
+                      .planNode());
 
   // Partial -> intermediate -> final aggregation plan.
-  plans.push_back(
-      PlanBuilder()
-          .tableScan(inputRowType)
-          .projectExpressions(projections)
-          .partialAggregation(groupingKeys, aggregates, masks)
-          .localPartition(groupingKeys)
-          .intermediateAggregation()
-          .finalAggregation()
-          .planNode());
+  plans.push_back(PlanBuilder(nullptr, constantInputs)
+                      .tableScan(inputRowType)
+                      .projectExpressions(projections)
+                      .partialAggregation(groupingKeys, aggregates, masks)
+                      .localPartition(groupingKeys)
+                      .intermediateAggregation()
+                      .finalAggregation()
+                      .planNode());
 #endif
 }
 
@@ -588,24 +602,24 @@ void makeStreamingPlansWithValues(
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& inputVectors,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     std::vector<core::PlanNodePtr>& plans) {
   // Single aggregation.
-  plans.push_back(
-      PlanBuilder()
-          .values(inputVectors)
-          .projectExpressions(projections)
-          .orderBy(groupingKeys, false)
-          .streamingAggregation(
-              groupingKeys,
-              aggregates,
-              masks,
-              core::AggregationNode::Step::kSingle,
-              false)
-          .planNode());
+  plans.push_back(PlanBuilder(nullptr, constantInputs)
+                      .values(inputVectors)
+                      .projectExpressions(projections)
+                      .orderBy(groupingKeys, false)
+                      .streamingAggregation(
+                          groupingKeys,
+                          aggregates,
+                          masks,
+                          core::AggregationNode::Step::kSingle,
+                          false)
+                      .planNode());
 
   // Partial -> final aggregation plan.
   plans.push_back(
-      PlanBuilder()
+      PlanBuilder(nullptr, constantInputs)
           .values(inputVectors)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -615,7 +629,7 @@ void makeStreamingPlansWithValues(
 
   // Partial -> intermediate -> final aggregation plan.
   plans.push_back(
-      PlanBuilder()
+      PlanBuilder(nullptr, constantInputs)
           .values(inputVectors)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -631,7 +645,7 @@ void makeStreamingPlansWithValues(
     sourceInputs[i % numSources].push_back(inputVectors[i]);
   }
 
-  PlanBuilder builder;
+  PlanBuilder builder(nullptr, constantInputs);
   std::vector<core::PlanNodePtr> sources;
   for (const auto& sourceInput : sourceInputs) {
     sources.push_back(
@@ -654,24 +668,24 @@ void makeStreamingPlansWithTableScan(
     const std::vector<std::string>& masks,
     const RowTypePtr& inputRowType,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     std::vector<core::PlanNodePtr>& plans) {
   // Single aggregation.
-  plans.push_back(
-      PlanBuilder()
-          .tableScan(inputRowType)
-          .projectExpressions(projections)
-          .orderBy(groupingKeys, false)
-          .streamingAggregation(
-              groupingKeys,
-              aggregates,
-              masks,
-              core::AggregationNode::Step::kSingle,
-              false)
-          .planNode());
+  plans.push_back(PlanBuilder(nullptr, constantInputs)
+                      .tableScan(inputRowType)
+                      .projectExpressions(projections)
+                      .orderBy(groupingKeys, false)
+                      .streamingAggregation(
+                          groupingKeys,
+                          aggregates,
+                          masks,
+                          core::AggregationNode::Step::kSingle,
+                          false)
+                      .planNode());
 
   // Partial -> final aggregation plan.
   plans.push_back(
-      PlanBuilder()
+      PlanBuilder(nullptr, constantInputs)
           .tableScan(inputRowType)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -681,7 +695,7 @@ void makeStreamingPlansWithTableScan(
 
   // Partial -> intermediate -> final aggregation plan.
   plans.push_back(
-      PlanBuilder()
+      PlanBuilder(nullptr, constantInputs)
           .tableScan(inputRowType)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -692,7 +706,7 @@ void makeStreamingPlansWithTableScan(
 
   // Partial -> local merge -> final aggregation plan.
   plans.push_back(
-      PlanBuilder()
+      PlanBuilder(nullptr, constantInputs)
           .tableScan(inputRowType)
           .projectExpressions(projections)
           .orderBy(groupingKeys, true)
@@ -710,7 +724,7 @@ bool AggregationFuzzer::verifyAggregation(
     const std::vector<core::ExprPtr>& projections,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier) {
-  auto firstPlan = PlanBuilder()
+  auto firstPlan = PlanBuilder(nullptr, constantInputs_)
                        .values(input)
                        .projectExpressions(projections)
                        .singleAggregation(groupingKeys, aggregates, masks)
@@ -753,6 +767,7 @@ bool AggregationFuzzer::verifyAggregation(
         masks,
         inputRowType,
         projections,
+        constantInputs_,
         tableScanPlans);
 
     if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
@@ -763,6 +778,7 @@ bool AggregationFuzzer::verifyAggregation(
           masks,
           inputRowType,
           projections,
+          constantInputs_,
           tableScanPlans);
     }
 
@@ -772,7 +788,13 @@ bool AggregationFuzzer::verifyAggregation(
   } else {
     std::vector<core::PlanNodePtr> valuesPlans;
     makeAlternativePlansWithValues(
-        groupingKeys, aggregates, masks, input, projections, valuesPlans);
+        groupingKeys,
+        aggregates,
+        masks,
+        input,
+        projections,
+        constantInputs_,
+        valuesPlans);
 
     // Evaluate same plans on flat inputs.
     std::vector<RowVectorPtr> flatInput;
@@ -784,16 +806,34 @@ bool AggregationFuzzer::verifyAggregation(
     }
 
     makeAlternativePlansWithValues(
-        groupingKeys, aggregates, masks, flatInput, projections, valuesPlans);
+        groupingKeys,
+        aggregates,
+        masks,
+        flatInput,
+        projections,
+        constantInputs_,
+        valuesPlans);
 
     if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       // Use OrderBy + StreamingAggregation on original input.
       makeStreamingPlansWithValues(
-          groupingKeys, aggregates, masks, input, projections, valuesPlans);
+          groupingKeys,
+          aggregates,
+          masks,
+          input,
+          projections,
+          constantInputs_,
+          valuesPlans);
 
       // Use OrderBy + StreamingAggregation on flattened input.
       makeStreamingPlansWithValues(
-          groupingKeys, aggregates, masks, flatInput, projections, valuesPlans);
+          groupingKeys,
+          aggregates,
+          masks,
+          flatInput,
+          projections,
+          constantInputs_,
+          valuesPlans);
     }
 
     for (const auto& plan : valuesPlans) {
@@ -817,7 +857,7 @@ bool AggregationFuzzer::verifySortedAggregation(
     const std::vector<core::ExprPtr>& projections,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier) {
-  auto firstPlan = PlanBuilder()
+  auto firstPlan = PlanBuilder(nullptr, constantInputs_)
                        .values(input)
                        .projectExpressions(projections)
                        .singleAggregation(groupingKeys, {aggregate}, masks)
@@ -855,7 +895,7 @@ bool AggregationFuzzer::verifySortedAggregation(
 
   if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
     plans.push_back(
-        {PlanBuilder()
+        {PlanBuilder(nullptr, constantInputs_)
              .values(input)
              .projectExpressions(projections)
              .orderBy(groupingKeys, false)
@@ -876,7 +916,7 @@ bool AggregationFuzzer::verifySortedAggregation(
     auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
     plans.push_back(
-        {PlanBuilder()
+        {PlanBuilder(nullptr, constantInputs_)
              .tableScan(inputRowType)
              .projectExpressions(projections)
              .singleAggregation(groupingKeys, {aggregate}, masks)
@@ -885,7 +925,7 @@ bool AggregationFuzzer::verifySortedAggregation(
 
     if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       plans.push_back(
-          {PlanBuilder()
+          {PlanBuilder(nullptr, constantInputs_)
                .tableScan(inputRowType)
                .projectExpressions(projections)
                .orderBy(groupingKeys, false)
@@ -1119,7 +1159,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier) {
   const auto firstPlan =
-      PlanBuilder()
+      PlanBuilder(nullptr, constantInputs_)
           .values(input)
           .projectExpressions(projections)
           .singleAggregation(groupingKeys, {aggregate}, masks)
@@ -1151,7 +1191,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
 
   if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
     plans.push_back(
-        {PlanBuilder()
+        {PlanBuilder(nullptr, constantInputs_)
              .values(input)
              .projectExpressions(projections)
              .orderBy(groupingKeys, false)
@@ -1174,7 +1214,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
     auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
     plans.push_back(
-        {PlanBuilder()
+        {PlanBuilder(nullptr, constantInputs_)
              .tableScan(inputRowType)
              .projectExpressions(projections)
              .singleAggregation(groupingKeys, {aggregate}, masks)
@@ -1183,7 +1223,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
 
     if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       plans.push_back(
-          {PlanBuilder()
+          {PlanBuilder(nullptr, constantInputs_)
                .tableScan(inputRowType)
                .projectExpressions(projections)
                .orderBy(groupingKeys, false)
