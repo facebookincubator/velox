@@ -2670,6 +2670,111 @@ TEST_F(AggregationTest, arrayAggWithOtherAggregates) {
   }
 }
 
+// A masked array_agg keeps the rows whose mask is true, nulls included unless
+// presto.array_agg.ignore_nulls is set, in arrival order. A null mask counts
+// as false, and a group with every row masked out (k = 2) yields NULL at every
+// step. The unmasked array_agg beside it checks that each aggregate reads its
+// own lists. With one Values vector per GPU batch, the steps see several
+// batches. ARRAY and ROW values check the ignore_nulls path on nested types.
+TEST_F(AggregationTest, arrayAggMask) {
+  auto first = makeRowVector(
+      {"k", "v", "m", "position"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 1, 3}),
+          makeNullableFlatVector<int64_t>({10, std::nullopt, 20, 30, 40}),
+          makeNullableFlatVector<bool>({true, true, false, std::nullopt, true}),
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+      });
+  auto second = makeRowVector(
+      {"k", "v", "m", "position"},
+      {
+          makeFlatVector<int64_t>({2, 1, 3, 1}),
+          makeNullableFlatVector<int64_t>({50, std::nullopt, std::nullopt, 60}),
+          makeNullableFlatVector<bool>({std::nullopt, false, true, true}),
+          makeFlatVector<int64_t>({5, 6, 7, 8}),
+      });
+  createDuckDbTable({first, second});
+
+  for (const bool ignoreNulls : {false, true}) {
+    SCOPED_TRACE(fmt::format("ignoreNulls: {}", ignoreNulls));
+    const std::string notNull = ignoreNulls ? " AND v IS NOT NULL" : "";
+    const auto sql = fmt::format(
+        "SELECT k, array_agg(v ORDER BY position) FILTER (WHERE m{0}), "
+        "array_agg(v ORDER BY position) FILTER (WHERE true{0}) "
+        "FROM tmp GROUP BY k",
+        notNull);
+    const std::unordered_map<std::string, std::string> configs{
+        {PrestoQueryConfig::qualify(PrestoQueryConfig::kArrayAggIgnoreNulls),
+         ignoreNulls ? "true" : "false"},
+        {cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1"},
+    };
+    for (const auto steps : {
+             AggSteps::kSingle,
+             AggSteps::kPartialFinal,
+             AggSteps::kPartialIntermediateFinal,
+         }) {
+      SCOPED_TRACE(static_cast<int>(steps));
+      testAggregation(
+          {first, second},
+          {"k"},
+          {"array_agg(v)", "array_agg(v)"},
+          sql,
+          steps,
+          configs,
+          {"m", ""});
+    }
+  }
+
+  // Under ignore_nulls the masked rows of a nested column are made null too.
+  auto nested = makeRowVector(
+      {"k", "a", "r", "m"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 1, 2}),
+          makeArrayVectorFromJson<int64_t>(
+              {"[1, null]", "null", "[2]", "[3]", "[]"}),
+          makeRowVector(
+              {"x"},
+              {makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4, 5})},
+              [](auto row) { return row == 1; }),
+          makeNullableFlatVector<bool>({true, true, false, std::nullopt, true}),
+      });
+  for (const auto steps : {
+           AggSteps::kSingle,
+           AggSteps::kPartialFinal,
+           AggSteps::kPartialIntermediateFinal,
+       }) {
+    SCOPED_TRACE(static_cast<int>(steps));
+    auto plan = makeAggregationPlan(
+        PlanBuilder().values({nested}),
+        {"k"},
+        {"array_agg(a)", "array_agg(r)"},
+        steps,
+        {"m", "m"});
+    const std::unordered_map<std::string, std::string> ignoreNulls{
+        {PrestoQueryConfig::qualify(PrestoQueryConfig::kArrayAggIgnoreNulls),
+         "true"}};
+    AssertQueryBuilder(plan)
+        .configs(ignoreNulls)
+        .assertResults(cpuResults(plan, ignoreNulls));
+  }
+
+  // A partial step alone yields NULL for the group every row of which is
+  // masked out (k = 2), as the CPU partial step that a CPU final step may
+  // read does.
+  for (const bool ignoreNulls : {false, true}) {
+    SCOPED_TRACE(fmt::format("ignoreNulls: {}", ignoreNulls));
+    auto plan = PlanBuilder()
+                    .values({first})
+                    .partialAggregation({"k"}, {"array_agg(v)"}, {"m"})
+                    .planNode();
+    const std::unordered_map<std::string, std::string> configs{
+        {PrestoQueryConfig::qualify(PrestoQueryConfig::kArrayAggIgnoreNulls),
+         ignoreNulls ? "true" : "false"}};
+    AssertQueryBuilder(plan).configs(configs).assertResults(
+        cpuResults(plan, configs));
+  }
+}
+
 // A node whose input turns out empty yields no rows at every step.
 TEST_F(AggregationTest, arrayAggWithoutInputRows) {
   auto data = makeRowVector(

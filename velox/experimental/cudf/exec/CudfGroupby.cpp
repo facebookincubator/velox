@@ -39,6 +39,7 @@
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/lists/count_elements.hpp>
 #include <cudf/lists/lists_column_view.hpp>
+#include <cudf/lists/stream_compaction.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
@@ -1196,8 +1197,9 @@ std::unique_ptr<cudf::column> nullifyEmptyLists(
 
 // Collects each group's values into one list for Presto's array_agg, nulls
 // included unless the session sets presto.array_agg.ignore_nulls, and merges
-// the lists of partial results. A group without elements yields NULL at every
-// step, as the CPU function does.
+// the lists of partial results. The rows a FILTER mask excludes are left out.
+// A group without elements yields NULL at every step, as the CPU function
+// does.
 struct GroupbyArrayAggAggregator final : GroupbyAggregator {
   GroupbyArrayAggAggregator(
       core::AggregationNode::Step step,
@@ -1220,21 +1222,28 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
     VELOX_CHECK_NULL(constant, "array_agg does not support constant input");
-    // A masked array_agg falls back to the CPU: cuDF collects every row or
-    // every non-null row of a group, and neither skips the masked rows alone.
-    VELOX_CHECK(!maskIndex.has_value(), "array_agg does not support masks");
     auto& request = requests.emplace_back();
     outputIndex_ = requests.size() - 1;
-    const auto input = table.column(inputIndex);
     if (exec::isRawInput(step)) {
-      request.values = input;
+      // Dropping nulls drops the masked rows too once they are made null.
+      // Otherwise the mask is collected beside the values, in the same row
+      // order, and applied to each list in makeOutputColumn.
+      request.values = ignoreNulls_ ? nullMaskedRows(table, stream)
+                                    : table.column(inputIndex);
       request.aggregations.push_back(
           cudf::make_collect_list_aggregation<cudf::groupby_aggregation>(
               ignoreNulls_ ? cudf::null_policy::EXCLUDE
                            : cudf::null_policy::INCLUDE));
+      if (maskIndex.has_value() && !ignoreNulls_) {
+        auto& maskRequest = requests.emplace_back();
+        maskRequest.values = table.column(*maskIndex);
+        maskRequest.aggregations.push_back(
+            cudf::make_collect_list_aggregation<cudf::groupby_aggregation>(
+                cudf::null_policy::INCLUDE));
+      }
       return;
     }
-    request.values = mergeInput(input, stream, mr);
+    request.values = mergeInput(table.column(inputIndex), stream, mr);
     request.aggregations.push_back(
         cudf::make_merge_lists_aggregation<cudf::groupby_aggregation>());
   }
@@ -1244,9 +1253,19 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
     auto lists = std::move(results[outputIndex_].results[0]);
+    if (maskIndex.has_value() && !ignoreNulls_) {
+      // A null mask element keeps its row out, as a false one does.
+      auto masks = std::move(results[outputIndex_ + 1].results[0]);
+      lists = cudf::lists::apply_retention_mask(
+          cudf::lists_column_view{lists->view()},
+          cudf::lists_column_view{masks->view()},
+          stream,
+          mr);
+    }
     // A raw-input step leaves a group without elements only when it drops
-    // nulls; a merge step whenever the group had NULL and empty lists alone.
-    if (ignoreNulls_ || !exec::isRawInput(step)) {
+    // nulls or masked rows; a merge step whenever the group had NULL and empty
+    // lists alone.
+    if (ignoreNulls_ || maskIndex.has_value() || !exec::isRawInput(step)) {
       return nullifyEmptyLists(std::move(lists), stream, mr);
     }
     return lists;
@@ -1268,9 +1287,51 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
   void releaseInput() override {
     GroupbyAggregator::releaseInput();
     purgedInput_.reset();
+    maskedRowNulls_.reset();
   }
 
  private:
+  // Returns the input column with its masked-out rows also null. Only a new
+  // null mask is built, which works for every element type, and the view
+  // keeps the input's data and children.
+  cudf::column_view nullMaskedRows(
+      cudf::table_view const& table,
+      cuda::stream_ref stream) {
+    const auto input = table.column(inputIndex);
+    if (!maskIndex.has_value()) {
+      return input;
+    }
+    // The new null mask starts at row 0, as the data of a CudfVector column
+    // does.
+    VELOX_CHECK_EQ(input.offset(), 0, "array_agg input has a row offset");
+    auto [rowMask, nullCount] =
+        cudf::bools_to_mask(table.column(*maskIndex), stream, get_temp_mr());
+    maskedRowNulls_ = std::move(rowMask);
+    if (input.nullable()) {
+      const std::vector<const cudf::bitmask_type*> masks{
+          reinterpret_cast<const cudf::bitmask_type*>(maskedRowNulls_->data()),
+          input.null_mask()};
+      const std::vector<cudf::size_type> beginBits{0, 0};
+      auto [combined, combinedNullCount] = cudf::bitmask_and(
+          masks,
+          beginBits,
+          input.size(),
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+      maskedRowNulls_ =
+          std::make_unique<cuda::device_buffer<std::byte>>(std::move(combined));
+      nullCount = combinedNullCount;
+    }
+    return cudf::column_view(
+        input.type(),
+        input.size(),
+        input.head<void>(),
+        reinterpret_cast<const cudf::bitmask_type*>(maskedRowNulls_->data()),
+        nullCount,
+        0,
+        std::vector<cudf::column_view>(input.child_begin(), input.child_end()));
+  }
+
   // Returns 'lists' as a column view without a null mask, which cuDF requires
   // of a merge_lists input. A NULL row becomes an empty list; its elements are
   // dropped first when it still spans some.
@@ -1304,6 +1365,8 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
   // Keeps a merge input whose NULL rows were emptied alive until
   // releaseInput().
   std::unique_ptr<cudf::column> purgedInput_;
+  // Keeps the null mask of nullMaskedRows() alive until releaseInput().
+  std::unique_ptr<cuda::device_buffer<std::byte>> maskedRowNulls_;
 };
 
 std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
