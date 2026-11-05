@@ -470,7 +470,8 @@ std::shared_ptr<Task> Task::create(
       std::move(onError),
       nested != nullptr ? nested->state : std::weak_ptr<PersistentState>{},
       nested != nullptr ? nested->statePool : nullptr,
-      nested != nullptr ? nested->ownerDeletionLatch : nullptr));
+      nested != nullptr ? nested->ownerDeletionLatch : nullptr,
+      nested != nullptr ? nested->uniqueRowIdPool : nullptr));
   if (fixedPoint != nullptr) {
     task->fixedPoint_ = std::make_unique<FixedPointLoop>(
         task.get(),
@@ -495,7 +496,8 @@ Task::Task(
     std::function<void(std::exception_ptr)> onError,
     std::weak_ptr<PersistentState> fixedPointState,
     std::shared_ptr<memory::MemoryPool> fixedPointStatePool,
-    std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch)
+    std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch,
+    std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool)
     : uuid_{makeUuid()},
       taskId_(taskId),
       destination_(destination),
@@ -506,6 +508,10 @@ Task::Task(
       firstNodeNotSupportingBarrier_(
           planFragment_.firstNodeNotSupportingBarrier()),
       traceCtx_(maybeMakeTraceCtx()),
+      uniqueRowIdPool_(
+          uniqueRowIdPool != nullptr
+              ? std::move(uniqueRowIdPool)
+              : std::make_shared<std::atomic_int64_t>(0)),
       consumerSupplier_(std::move(consumerSupplier)),
       fixedPointState_(std::move(fixedPointState)),
       fixedPointStatePool_(std::move(fixedPointStatePool)),

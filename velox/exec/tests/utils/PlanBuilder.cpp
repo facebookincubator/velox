@@ -1425,6 +1425,24 @@ PlanBuilder& PlanBuilder::fixedPoint(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    core::MultiStagePlan body,
+    core::ConvergenceConfig convergenceConfig,
+    std::string outputStateEntry,
+    bool outputOnWorkerZero) {
+  VELOX_CHECK_NULL(
+      planNode_, "FixedPoint is a leaf node and cannot have an input");
+  planNode_ = std::make_shared<core::FixedPointNode>(
+      nextPlanNodeId(),
+      std::move(stateDeclarations),
+      std::move(body),
+      std::move(convergenceConfig),
+      std::move(outputStateEntry),
+      outputOnWorkerZero);
+  return *this;
+}
+
 namespace {
 // Resolves the implicit output state entry: the name of the last
 // VectorStateDeclaration in 'declarations'.  Used when fixedPoint() is called
