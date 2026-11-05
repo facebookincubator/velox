@@ -77,12 +77,13 @@ bool isSupportedConstantType(const TypePtr& type) {
     case TypeKind::BOOLEAN:
     case TypeKind::TINYINT:
     case TypeKind::SMALLINT:
-    case TypeKind::BIGINT:
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::VARCHAR:
     case TypeKind::TIMESTAMP:
       return true;
+    case TypeKind::BIGINT:
+      return !type->isIntervalDayTime();
     case TypeKind::INTEGER:
       return !type->isIntervalYearMonth();
     case TypeKind::HUGEINT:
