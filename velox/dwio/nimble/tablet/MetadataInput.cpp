@@ -495,6 +495,7 @@ void CachedMetadataInput::loadFromSsd(
     }
     auto buffer = tryCacheHit(ssdSize, pin);
     if (buffer != nullptr) {
+      ioStats_->incRawBytesRead(loaded.section.size());
       loaded.buffer = std::move(buffer);
       continue;
     }
@@ -524,6 +525,7 @@ void CachedMetadataInput::loadFromSsd(
   ioStats_->ssdCacheReadLatencyUs().increment(ssdLoadUs);
   for (uint32_t i = 0; i < ssdHits.size(); ++i) {
     const auto& section = sections[ssdHits[i].sectionIndex].section;
+    ioStats_->incRawBytesRead(section.size());
     sections[ssdHits[i].sectionIndex].buffer =
         promoteCachePin(section, std::move(loadPins[i]), ioStats_->ssdRead());
   }
@@ -544,6 +546,7 @@ std::vector<uint32_t> CachedMetadataInput::loadFromCache(
       auto pin = acquireCachePin(key, uncompressedSize.value());
       auto buffer = tryCacheHit(uncompressedSize.value(), pin);
       if (buffer != nullptr) {
+        ioStats_->incRawBytesRead(section.size());
         sections[index].buffer = std::move(buffer);
         continue;
       }
@@ -650,6 +653,9 @@ std::shared_ptr<MetadataBuffer> CachedMetadataInput::store(
   const velox::cache::RawFileCacheKey key{fileId_.id(), section.offset()};
   auto pin = acquireCachePin(key, decompressed->size());
   auto buffer = tryCacheHit(decompressed->size(), pin);
+
+  // Counts no raw bytes, since the read of the section from the file counted
+  // them.
   if (buffer != nullptr) {
     return buffer;
   }
@@ -694,6 +700,7 @@ std::unique_ptr<MetadataBuffer> CachedMetadataInput::findCachedMetadata(
     NIMBLE_CHECK(
         entry->hasContiguousData(), "Cached entry must have contiguous data");
     ioStats_->ramHit().increment(entry->size());
+    ioStats_->incRawBytesRead(entry->size());
     return std::make_unique<MetadataBuffer>(std::move(pin));
   }
 }

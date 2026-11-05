@@ -121,7 +121,6 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
       bool preserveFlatMapsInMemory = false,
       bool lazyColumnIo = false,
       const folly::F14FastSet<std::string>& remainingFilterColumns = {},
-      bool stringDecoderZeroCopy = false,
       bool scanFastPath = false) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
@@ -140,7 +139,6 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
     rowOptions.setRequestedType(type);
     rowOptions.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
     rowOptions.setLazyColumnIo(lazyColumnIo);
-    rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
     rowOptions.setNimbleScanFastPath(scanFastPath);
     if (!remainingFilterColumns.empty()) {
       rowOptions.setRemainingFilterColumns(remainingFilterColumns);
@@ -331,7 +329,6 @@ TEST_P(FlatMapColumnReaderTest, asStructNullFilterOnKeyInEveryRow) {
       /*preserveFlatMapsInMemory=*/false,
       /*lazyColumnIo=*/false,
       /*remainingFilterColumns=*/{},
-      /*stringDecoderZeroCopy=*/true,
       /*scanFastPath=*/true);
 
   auto expected = makeRowVector(
@@ -957,6 +954,90 @@ TEST_P(FlatMapColumnReaderTest, nativeWithNulls) {
       makeReaders(input, file, scanSpec, /*preserveFlatMapsInMemory=*/true);
   auto expected = makeRowVector({flatMap->toMapVector(), flatMap});
   validate(*expected, *readers.rowReader, 3);
+}
+
+// A filter that drops rows, on the flat map or on another column: the flat
+// map's in-map bits must follow the selected rows, not the rows read.
+TEST_P(FlatMapColumnReaderTest, nativeFilter) {
+  constexpr vector_size_t kNumRows{100};
+  std::vector<
+      std::optional<std::vector<std::pair<int32_t, std::optional<int64_t>>>>>
+      data(kNumRows);
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    if (row % 5 == 2) {
+      continue;
+    }
+    data[row].emplace();
+    for (int32_t key = 0; key < 5; ++key) {
+      if ((row + key) % 3 == 0) {
+        data[row]->emplace_back(key, row * 10 + key);
+      }
+    }
+  }
+  auto flatMap = makeNullableFlatMapVector<int32_t, int64_t>(data);
+  auto ids = makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; });
+  auto input = makeRowVector({flatMap->toMapVector(), ids});
+  auto file = writeFlatMapFile(input);
+  std::vector<int64_t> passingIds;
+  for (int64_t row = 0; row < kNumRows; ++row) {
+    if (row % 4 == 1 || row % 7 == 3) {
+      passingIds.push_back(row);
+    }
+  }
+
+  auto verify = [&](bool filterMap, bool filterOther) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*input->type());
+    if (filterMap) {
+      scanSpec->childByName("c0")->setFilter(
+          std::make_unique<common::IsNotNull>());
+    }
+    if (filterOther) {
+      scanSpec->childByName("c1")->setFilter(
+          common::createBigintValues(passingIds, false));
+    }
+    std::vector<vector_size_t> passing;
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      if ((!filterMap || data[row].has_value()) &&
+          (!filterOther ||
+           std::find(passingIds.begin(), passingIds.end(), row) !=
+               passingIds.end())) {
+        passing.push_back(row);
+      }
+    }
+    ASSERT_LT(passing.size(), static_cast<size_t>(kNumRows));
+
+    auto readers =
+        makeReaders(input, file, scanSpec, /*preserveFlatMapsInMemory=*/true);
+    VectorPtr batch = BaseVector::create(input->type(), 0, pool());
+    size_t numPassing{0};
+    while (readers.rowReader->next(16, batch) > 0) {
+      batch->validate();
+      auto* rows = batch->asUnchecked<RowVector>();
+      ASSERT_NE(asFlatMapColumn(rows->childAt(0)), nullptr);
+      for (vector_size_t i = 0; i < batch->size(); ++i) {
+        ASSERT_LT(numPassing, passing.size());
+        const auto row = passing[numPassing++];
+        ASSERT_TRUE(rows->childAt(0)->equalValueAt(flatMap.get(), i, row))
+            << "row " << row << ": expected " << flatMap->toString(row)
+            << " got " << rows->childAt(0)->toString(i);
+      }
+    }
+    EXPECT_EQ(numPassing, passing.size());
+  };
+
+  {
+    SCOPED_TRACE("filter on another column");
+    verify(false, true);
+  }
+  {
+    SCOPED_TRACE("filter on the flat map");
+    verify(true, false);
+  }
+  {
+    SCOPED_TRACE("filters on both");
+    verify(true, true);
+  }
 }
 
 // Regression: float flat-map value streams with mixed sign bits (-0.0f/+0.0f)

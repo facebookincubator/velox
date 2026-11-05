@@ -37,8 +37,9 @@ namespace torch::wave {
 /// escape as graph outputs, then merges the identical ones that remain.
 int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
 
-/// Merges copy_(select(T, dim, i), src_i) for i = 0..k-1 into one
-/// copy_(slice(T, dim, 0, k), stack([src_0 .. src_k-1], dim)). Each copy
+/// Merges copy_(select(T, dim, i), src_i) for each run of consecutive columns
+/// i = s..s+k-1 into one copy_(slice(T, dim, s, s+k), stack([src_s ..
+/// src_s+k-1], dim)). Each copy
 /// mutates T, so the slice of T feeding the next one is ordered after it, and k
 /// copies become a chain of 3k partition layers; the columns are disjoint, so
 /// the one merged copy writes the same values. Applies when the sources are
@@ -48,6 +49,24 @@ int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
 /// WaveConfig::recognizeDisjointCopies by the caller. Returns the number of
 /// copies merged away.
 int64_t rewriteDisjointCopies(nativert::Graph& graph, WaveGraph& waveGraph);
+
+/// Writes functional scatter chains in place. A chain is a run of scatters,
+/// each writing the previous one's result, starting from a root tensor. A link
+/// is a select_scatter / slice_scatter of a constant region, or an
+/// index-tensor write (index_put, scatter_add). Functionalization emits a chain
+/// for every "x[:, i].copy_(v)" loop, together with a full-range slice_scatter
+/// per enclosing view and a copy that only converts v, and a one-link chain for
+/// every in-place update of a slice, "x[:, :k] += y". When the root is a tensor
+/// of its own or a view of one, nothing outside the chain touches that tensor
+/// from the chain's start on, and every intermediate result is used only by
+/// the next link, each region link becomes copy_(select or slice of the root,
+/// v), each index-tensor link becomes its in-place form on the root, and the
+/// chain's result is the root. The chain is then the in-place graph
+/// rewriteDisjointCopies and the disjoint-write ordering handle, and no scatter
+/// copies the whole root first. Call before rewriteDisjointCopies. Gated on
+/// WaveConfig::reinplaceScatters by the caller. Returns the number of scatters
+/// written in place.
+int64_t reinplaceScatterChains(nativert::Graph& graph, WaveGraph& waveGraph);
 
 /// Merges nodes that compute the same value from the same operands, to a
 /// fixpoint: merging two nodes can make their consumers congruent in turn. Only

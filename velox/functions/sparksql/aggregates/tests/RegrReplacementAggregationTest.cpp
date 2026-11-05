@@ -39,20 +39,13 @@ TEST_F(RegrReplacementAggregationTest, groupBy) {
 
   createDuckDbTable({data});
   // m2 is equal to the population variance divided by the size of the group.
-  testAggregations(
-      {data},
-      {"c0"},
-      {"spark_regr_replacement(c1)"},
-      {"c0", "a0 / 100.0"},
-      "select c0, var_pop(c1) from tmp group by c0");
-  testAggregationsWithCompanion(
-      {data},
-      [](auto& /*builder*/) {},
-      {"c0"},
-      {"spark_regr_replacement(c1)"},
-      {{DOUBLE()}},
-      {"c0", "a0 / 100.0"},
-      "select c0, var_pop(c1) from tmp group by c0");
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"spark_regr_replacement(c1)"})
+      .project({"c0", "a0 / 100.0"})
+      .withCompanion()
+      .assertResults("select c0, var_pop(c1) from tmp group by c0");
 }
 
 TEST_F(RegrReplacementAggregationTest, global) {
@@ -63,20 +56,12 @@ TEST_F(RegrReplacementAggregationTest, global) {
 
   createDuckDbTable({data});
   // m2 is equal to the population variance divided by the size of the group.
-  testAggregations(
-      {data},
-      {},
-      {"spark_regr_replacement(c0)"},
-      {"a0 / 1000.0"},
-      "select var_pop(c0) from tmp");
-  testAggregationsWithCompanion(
-      {data},
-      [](auto& /*builder*/) {},
-      {},
-      {"spark_regr_replacement(c0)"},
-      {{DOUBLE()}},
-      {"a0 / 1000.0"},
-      "select var_pop(c0) from tmp");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_regr_replacement(c0)"})
+      .project({"a0 / 1000.0"})
+      .withCompanion()
+      .assertResults("select var_pop(c0) from tmp");
 }
 
 } // namespace

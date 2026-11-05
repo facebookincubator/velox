@@ -843,6 +843,8 @@ struct DriverFactory {
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeHashJoinNodeIds;
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Nested Loop Joins.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeNestedLoopJoinNodeIds;
+  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Vector Search Joins.
+  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeVectorSearchJoinNodeIds;
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for custom join bridges.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeCustomJoinNodeIds;
 
@@ -944,6 +946,10 @@ struct DriverFactory {
   /// Returns plan node IDs for which IndexLookupJoin Bridges must be created
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsIndexLookupJoinBridges() const;
+
+  /// Returns plan node IDs for which Vector Search Join Bridges must be created
+  /// based on this pipeline.
+  std::vector<core::PlanNodeId> needsVectorSearchJoinBridges() const;
 
   /// Returns plan node IDs for which custom join bridges must be created
   /// based on this pipeline.  Mirrors needsHashJoinBridges(): ungrouped

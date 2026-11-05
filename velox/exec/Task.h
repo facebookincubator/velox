@@ -41,6 +41,7 @@ class HashJoinBridge;
 class IndexLookupJoinBridge;
 class NestedLoopJoinBridge;
 class SpatialJoinBridge;
+class VectorSearchJoinBridge;
 class SplitListener;
 
 class FixedPointLoop;
@@ -48,6 +49,25 @@ struct FixedPointExecutionStats;
 struct FixedPointOptions;
 struct NestedFixedPoint;
 class PersistentState;
+
+/// Runs a task's deletion promises once the task and every fixed-point
+/// sub-task created under it are destroyed.  Each task holds its own latch, and
+/// a sub-task's latch holds its owner's, so the owner's latch goes only after
+/// the latches of all its sub-tasks.  Nothing blocks on this: the promises run
+/// on the thread that releases the last reference.
+struct TaskDeletionLatch {
+  explicit TaskDeletionLatch(std::shared_ptr<TaskDeletionLatch> owner)
+      : owner{std::move(owner)} {}
+
+  ~TaskDeletionLatch();
+
+  /// The latch of the task whose fixed point created this one's task, or null.
+  /// Held so the owner's deletion is reported only after this task's.
+  const std::shared_ptr<TaskDeletionLatch> owner;
+
+  /// The task's deletion promises, handed over when the task is destroyed.
+  std::vector<ContinuePromise> promises;
+};
 
 /// Runs one plan fragment.  By default it compiles the fragment into a
 /// Driver/Operator pipeline and executes that.  A fragment containing a
@@ -371,7 +391,9 @@ class Task : public std::enable_shared_from_this<Task> {
   ContinueFuture taskCompletionFuture();
 
   /// Returns a future which is realized when the task has been deleted, and all
-  /// the background activities have finished at that point.
+  /// the background activities have finished at that point.  For a task that
+  /// runs a fixed point, it is realized only once every sub-task the loop
+  /// created is deleted too, since a sub-task can outlive its owner.
   ContinueFuture taskDeletionFuture();
 
   /// Returns a future which is realized once the task is no longer running and
@@ -700,23 +722,9 @@ class Task : public std::enable_shared_from_this<Task> {
       const core::PlanNodeId& planNodeId,
       Driver* caller);
 
-  /// Adds HashJoinBridge's for all the specified plan node IDs.
-  void addHashJoinBridgesLocked(
-      uint32_t splitGroupId,
-      const std::vector<core::PlanNodeId>& planNodeIds);
-
-  /// Adds NestedLoopJoinBridge's for all the specified plan node IDs.
-  void addNestedLoopJoinBridgesLocked(
-      uint32_t splitGroupId,
-      const std::vector<core::PlanNodeId>& planNodeIds);
-
-  /// Adds SpatialJoinBridge's for all the specified plan node IDs.
-  void addSpatialJoinBridgesLocked(
-      uint32_t splitGroupId,
-      const std::vector<core::PlanNodeId>& planNodeIds);
-
-  /// Adds IndexLookupJoinBridge's for all the specified plan node IDs.
-  void addIndexLookupJoinBridgesLocked(
+  /// Adds join bridges of type 'TBridge' for all the specified plan node IDs.
+  template <typename TBridge>
+  void addJoinBridgesLocked(
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
@@ -744,6 +752,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns a SpatialJoinBridge for 'planNodeId'.
   std::shared_ptr<SpatialJoinBridge> getSpatialJoinBridge(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
+  /// Returns a VectorSearchJoinBridge for 'planNodeId'.
+  std::shared_ptr<VectorSearchJoinBridge> getVectorSearchJoinBridge(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
@@ -998,7 +1011,8 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t memoryArbitrationPriority = 0,
       std::function<void(std::exception_ptr)> onError = nullptr,
       std::weak_ptr<PersistentState> fixedPointState = {},
-      std::shared_ptr<memory::MemoryPool> fixedPointStatePool = nullptr);
+      std::shared_ptr<memory::MemoryPool> fixedPointStatePool = nullptr,
+      std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch = nullptr);
 
   // Invoked to do post-create initialization.
   void init(std::optional<common::SpillDiskOptions>&& spillDiskOpts);
@@ -1497,6 +1511,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // task's operators took from the state stay valid after the loop is
   // destroyed.  Released in ~Task after the drivers.
   std::shared_ptr<memory::MemoryPool> fixedPointStatePool_;
+
+  // Runs taskDeletionPromises_, which ~Task hands over, once this task and
+  // every sub-task created under it are destroyed.
+  std::shared_ptr<TaskDeletionLatch> deletionLatch_;
 
   // The function that is executed when the task encounters its first error,
   // that is, setError() is called for the first time.

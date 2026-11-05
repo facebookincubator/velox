@@ -83,9 +83,7 @@ TabletReader::Options TabletReader::configureOptions(
   Options tabletOptions;
   tabletOptions.maxFooterIoBytes = options.footerSpeculativeIoSize();
   tabletOptions.preloadOptionalSections = {
-      std::string(kSchemaSection),
-      std::string(kVectorizedStatsSection),
-      std::string(kStripeStatsSection)};
+      std::string(kSchemaSection), std::string(kVectorizedStatsSection)};
   tabletOptions.loadClusterIndex = options.loadClusterIndex();
   tabletOptions.preloadIndex = options.preloadIndex();
   tabletOptions.loadChunkStats = options.loadChunkStats();
@@ -106,6 +104,8 @@ TabletReader::Options TabletReader::configureOptions(
                 formatOptions)) {
       tabletOptions.externalDictionaryResolver =
           nimbleOptions->externalDictionaryResolver;
+      tabletOptions.cacheKeyEncodingViews =
+          nimbleOptions->cacheKeyEncodingViews;
     }
   }
 
@@ -230,7 +230,8 @@ TabletReader::TabletReader(
             // preloadIndex requires pinIndex; auto-promote so the caller only
             // needs to flip one knob.
             .pinIndex = options.pinIndex || options.preloadIndex,
-            .preloadIndex = options.preloadIndex};
+            .preloadIndex = options.preloadIndex,
+            .cacheKeyEncodingViews = options.cacheKeyEncodingViews};
       }()},
       metadataInput_{[&]() {
         MetadataInput::Options metadataOptions{

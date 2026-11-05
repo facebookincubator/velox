@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/type/TimestampConversion.h"
+#include <functional>
+
 #include <gmock/gmock.h>
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::util {
@@ -28,14 +30,14 @@ Timestamp parseTimestamp(
     const StringView& timestamp,
     TimestampParseMode parseMode = TimestampParseMode::kPrestoCast) {
   return fromTimestampString(timestamp, parseMode)
-      .thenOrThrow(folly::identity, [&](const Status& status) {
+      .thenOrThrow(std::identity{}, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
 }
 
 int32_t parseDate(const StringView& str, ParseMode mode) {
   return fromDateString(str.data(), str.size(), mode)
-      .thenOrThrow(folly::identity, [&](const Status& status) {
+      .thenOrThrow(std::identity{}, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
 }
@@ -44,7 +46,7 @@ ParsedTimestampWithTimeZone parseTimestampWithTimezone(
     const StringView& str,
     TimestampParseMode parseMode = TimestampParseMode::kPrestoCast) {
   return fromTimestampWithTimezoneString(str.data(), str.size(), parseMode)
-      .thenOrThrow(folly::identity, [&](const Status& status) {
+      .thenOrThrow(std::identity{}, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
 }

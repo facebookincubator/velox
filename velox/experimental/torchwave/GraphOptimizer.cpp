@@ -338,10 +338,22 @@ void Optimizer::visitValue(const nativert::Value* value) {
   if (metadata->maybeReplace) {
     auto oldTarget = producer->target();
     auto replacements = metadata->maybeReplace(producer, types_, waveGraph_);
+    bool replacedGraphOutput = false;
     for (auto& [oldValue, newValue] : replacements) {
       graph_->replaceAllUses(
           const_cast<nativert::Value*>(oldValue),
           const_cast<nativert::Value*>(newValue));
+      if (oldValue->id() < types_.constraints.size() &&
+          types_.constraints[oldValue->id()].graphOutput) {
+        ensureConstraint(newValue->id());
+        types_.constraints[newValue->id()].graphOutput = true;
+        replacedGraphOutput = true;
+      }
+    }
+    // replaceAllUses renames a graph output in the signature; the user-output
+    // values the executor returns are rebuilt from it by finalize().
+    if (replacedGraphOutput) {
+      graph_->finalize();
     }
     if (producer->target() != oldTarget) {
       visited_.erase(producer);

@@ -35,6 +35,7 @@ velox_add_library(
   ExchangeSink.cpp
   ExchangeSource.cpp
   ExchangeTransportRegistry.cpp
+  ExchangeWiring.cpp
   FileExchangeFormat.cpp
   FileExchangeSink.cpp
   FileExchangeSource.cpp
@@ -151,6 +152,7 @@ velox_add_library(
   ExchangeSink.h
   ExchangeSource.h
   ExchangeTransportRegistry.h
+  ExchangeWiring.h
   Expand.h
   FileExchangeFormat.h
   FileExchangeSink.h
@@ -249,6 +251,9 @@ velox_add_library(
   Values.h
   VectorHasher-inl.h
   VectorHasher.h
+  VectorSearchJoinBridge.h
+  VectorSearchJoinBuild.h
+  VectorSearchJoinProbe.h
   Window.h
   WindowFunction.h
   WindowPartition.h
@@ -276,6 +281,12 @@ velox_link_libraries(
   velox_test_util
   velox_vector
 )
+
+if(VELOX_ENABLE_FAISS)
+  velox_sources(velox_exec PRIVATE VectorSearchJoinBuild.cpp VectorSearchJoinProbe.cpp)
+  velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_FAISS)
+  velox_link_libraries(velox_exec velox_vector_index)
+endif()
 
 if(VELOX_ENABLE_GEO)
   velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_GEO)

@@ -119,16 +119,17 @@ folly::IOBuf coalesceChunkSlice(const folly::IOBuf& slice) {
 }
 
 HybridFlatMap makeHybridFlatMapConfig(
+    ScalarKind keyKind,
     const std::vector<std::vector<std::string>>& explicitGroups) {
-  HybridFlatMap hybridMap;
-  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(explicitGroups.size() + 1);
   for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
-    hybridMap.groups.push_back(
+    groups.push_back(
         {.groupId = groupId, .groupKeys = explicitGroups[groupId]});
   }
-  hybridMap.groups.push_back(
+  groups.push_back(
       {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
-  return hybridMap;
+  return HybridFlatMap{keyKind, std::move(groups)};
 }
 
 NimbleIndexProjector::RowProjectionResult projectRows(

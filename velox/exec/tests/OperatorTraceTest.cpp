@@ -372,6 +372,7 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
       // Named by isCredentialConfigKey() rather than recorded by a write.
       // Every name on that list is covered, so dropping one from it fails
       // here.
+      {"cat_token", secret},
       {"metagen_key", secret},
       {"model_api_key", secret},
       {"crypto_auth_tokens_metagen", secret},
@@ -425,6 +426,8 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
       testing::UnorderedElementsAre(
           std::pair<const std::string, std::string>{
               credentialKey, std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "cat_token", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
               "metagen_key", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
@@ -620,9 +623,11 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
   // constant expression, so a key given in SQL reaches the trace file inside
   // the serialized plan rather than as a config entry.
   const std::string secret{"sql-options-key-do-not-leak-4c7f1a"};
+  const std::string catSecret{"sql-options-cat-do-not-leak-9b2e5d"};
   const auto optionsJson = fmt::format(
-      R"({{"metagen_key":"{}","inference_backend":"metagen","max_tokens":64}})",
-      secret);
+      R"({{"metagen_key":"{}","cat_token":"{}","inference_backend":"metagen","max_tokens":64}})",
+      secret,
+      catSecret);
 
   const auto rowType = ROW({"c0", "c1"}, BIGINT());
   const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
@@ -647,9 +652,10 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
   const auto metaFile = fileSystem->openFileForRead(metaFilePath);
   const auto rawMetadata = metaFile->pread(0, metaFile->size());
   EXPECT_THAT(rawMetadata, testing::Not(testing::HasSubstr(secret)));
+  EXPECT_THAT(rawMetadata, testing::Not(testing::HasSubstr(catSecret)));
   EXPECT_THAT(
       rawMetadata, testing::HasSubstr(std::string(kRedactedConfigValue)));
-  // Non-credential options survive; only the key is replaced.
+  // Non-credential options survive; only the credentials are replaced.
   EXPECT_THAT(rawMetadata, testing::HasSubstr("inference_backend"));
 
   // Replay reads the plan block back. Constructing the reader deserializes it,
@@ -659,10 +665,10 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
   const auto replayedPlan = reader.queryPlan();
   ASSERT_NE(replayedPlan, nullptr);
   EXPECT_EQ(replayedPlan->id(), traceNodeId);
-  // The secret does not come back on a round trip either.
-  EXPECT_THAT(
-      folly::toJson(replayedPlan->serialize()),
-      testing::Not(testing::HasSubstr(secret)));
+  // The secrets do not come back on a round trip either.
+  const auto replayedJson = folly::toJson(replayedPlan->serialize());
+  EXPECT_THAT(replayedJson, testing::Not(testing::HasSubstr(secret)));
+  EXPECT_THAT(replayedJson, testing::Not(testing::HasSubstr(catSecret)));
 }
 
 TEST_F(OperatorTraceTest, task) {
