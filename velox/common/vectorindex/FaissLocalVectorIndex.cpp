@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <tuple>
 
 #include <faiss/IndexFlat.h>
@@ -170,7 +171,29 @@ bool hasMissingId(const faiss::Index* index) {
   return false;
 }
 
+std::mutex& acceleratorMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+std::shared_ptr<const LocalVectorIndexAccelerator>& acceleratorSlot() {
+  static std::shared_ptr<const LocalVectorIndexAccelerator> accelerator;
+  return accelerator;
+}
+
 } // namespace
+
+void setLocalVectorIndexAccelerator(
+    std::shared_ptr<const LocalVectorIndexAccelerator> accelerator) {
+  const std::lock_guard<std::mutex> lock(acceleratorMutex());
+  acceleratorSlot() = std::move(accelerator);
+}
+
+std::shared_ptr<const LocalVectorIndexAccelerator>
+localVectorIndexAccelerator() {
+  const std::lock_guard<std::mutex> lock(acceleratorMutex());
+  return acceleratorSlot();
+}
 
 void FaissLocalVectorIndex::build(
     VectorIndexKind kind,
@@ -193,8 +216,12 @@ void FaissLocalVectorIndex::build(
           options,
           embeddings.size(),
           embeddings.dimension());
-      index->train(embeddings.size(), embeddings.data());
-      index->add_with_ids(embeddings.size(), embeddings.data(), ids.data());
+      const auto accelerator = localVectorIndexAccelerator();
+      if (accelerator == nullptr ||
+          !accelerator->build(kind, *index, embeddings, ids)) {
+        index->train(embeddings.size(), embeddings.data());
+        index->add_with_ids(embeddings.size(), embeddings.data(), ids.data());
+      }
       CallbackWriter writer(write);
       faiss::write_index(index.get(), &writer);
       return;
@@ -228,7 +255,18 @@ int64_t FaissLocalVectorIndex::size(std::string_view bytes) {
 FaissLocalVectorIndex::FaissLocalVectorIndex(
     std::string_view bytes,
     VectorIndexMetric metric,
-    const LocalVectorIndexOptions& searchOptions) {
+    const LocalVectorIndexOptions& searchOptions)
+    : FaissLocalVectorIndex(
+          bytes,
+          metric,
+          searchOptions,
+          localVectorIndexAccelerator()) {}
+
+FaissLocalVectorIndex::FaissLocalVectorIndex(
+    std::string_view bytes,
+    VectorIndexMetric metric,
+    const LocalVectorIndexOptions& searchOptions,
+    const std::shared_ptr<const LocalVectorIndexAccelerator>& accelerator) {
   VELOX_CHECK(
       !searchOptions.nlist.has_value(),
       "Local vector index search options may not set nlist");
@@ -272,6 +310,9 @@ FaissLocalVectorIndex::FaissLocalVectorIndex(
     dynamic_cast<faiss::IndexHNSW*>(index)->hnsw.efSearch =
         *searchOptions.efSearch;
   }
+  if (accelerator != nullptr) {
+    accelerated_ = accelerator->load(kind_, *index_);
+  }
 }
 
 FaissLocalVectorIndex::~FaissLocalVectorIndex() = default;
@@ -300,6 +341,10 @@ void FaissLocalVectorIndex::search(
       "Query embedding length must match the vector index's");
   VELOX_CHECK_EQ(ids.size(), queries.size() * k);
   VELOX_CHECK_EQ(scores.size(), queries.size() * k);
+  if (accelerated_ != nullptr &&
+      accelerated_->search(queries, k, ids, scores)) {
+    return;
+  }
   SingleThreadedFaiss singleThreaded;
   index_->search(queries.size(), queries.data(), k, scores.data(), ids.data());
 }
