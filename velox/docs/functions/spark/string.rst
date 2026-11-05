@@ -98,7 +98,10 @@ String Functions
     Skips leading spaces. ``number`` may contain other characters not valid for ``fromBase``.
     All characters starting from the first invalid character till the end of the string are
     ignored. Only converts valid characters even though ``fromBase`` = ``toBase``. Returns
-    '0' if no valid character is found. ::
+    '0' if no valid character is found.
+    If ``number`` exceeds the unsigned 64-bit range, it is treated as -1 (all bits set)
+    following the behavior when Spark ANSI mode is disabled, and an exception is thrown
+    when Spark ANSI mode is enabled. ::
 
         SELECT conv('100', 2, 10); -- '4'
         SELECT conv('-10', 16, -10); -- '-16'
