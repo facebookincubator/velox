@@ -483,7 +483,44 @@ const std::string kCopyKey{"__copy"};
 
 } // namespace
 
-struct CompanionPlanInputs {
+struct AggregationTestBase::CompanionPlanInputs {
+  // Builds the inputs for 'aggregates' over 'data' grouped by 'groupingKeys'.
+  static CompanionPlanInputs make(
+      const std::vector<RowVectorPtr>& data,
+      const std::function<void(PlanBuilder&)>& makeSource,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::vector<TypePtr>>& aggregatesArgTypes) {
+    CompanionPlanInputs inputs;
+    inputs.data = data;
+    inputs.makeSource = makeSource;
+    inputs.groupingKeys = groupingKeys;
+    inputs.partialGroupingKeys = groupingKeys;
+    inputs.partialGroupingKeys.push_back("k0");
+    inputs.aggregates = aggregates;
+    inputs.extractExpressions = groupingKeys;
+
+    auto [functionNames, aggregateArgs] = getFunctionNamesAndArgs(aggregates);
+    for (size_t i = 0, size = functionNames.size(); i < size; ++i) {
+      const auto& companionSignatures =
+          exec::getCompanionFunctionSignatures(functionNames[i]);
+      VELOX_CHECK(companionSignatures.has_value());
+
+      const auto& companionFunctions = getCompanionAggregates(
+          i,
+          *companionSignatures,
+          functionNames[i],
+          aggregateArgs[i],
+          aggregatesArgTypes[i]);
+      inputs.partialAggregates.push_back(companionFunctions.partialFunction);
+      inputs.mergeAggregates.push_back(companionFunctions.mergeFunction);
+      inputs.mergeExtractAggregates.push_back(
+          companionFunctions.mergeExtractFunction);
+      inputs.extractExpressions.push_back(companionFunctions.extractFunction);
+    }
+    return inputs;
+  }
+
   // The caller's data, without the extra grouping key.
   std::vector<RowVectorPtr> data;
   // Builds the input of the aggregation, including the extra grouping key k0.
@@ -500,46 +537,6 @@ struct CompanionPlanInputs {
   std::vector<std::string> extractExpressions;
 };
 
-namespace {
-
-CompanionPlanInputs makeCompanionPlanInputs(
-    const std::vector<RowVectorPtr>& data,
-    const std::function<void(PlanBuilder&)>& makeSource,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::vector<std::vector<TypePtr>>& aggregatesArgTypes) {
-  CompanionPlanInputs inputs;
-  inputs.data = data;
-  inputs.makeSource = makeSource;
-  inputs.groupingKeys = groupingKeys;
-  inputs.partialGroupingKeys = groupingKeys;
-  inputs.partialGroupingKeys.push_back("k0");
-  inputs.aggregates = aggregates;
-  inputs.extractExpressions = groupingKeys;
-
-  auto [functionNames, aggregateArgs] = getFunctionNamesAndArgs(aggregates);
-  for (size_t i = 0, size = functionNames.size(); i < size; ++i) {
-    const auto& companionSignatures =
-        exec::getCompanionFunctionSignatures(functionNames[i]);
-    VELOX_CHECK(companionSignatures.has_value());
-
-    const auto& companionFunctions = getCompanionAggregates(
-        i,
-        *companionSignatures,
-        functionNames[i],
-        aggregateArgs[i],
-        aggregatesArgTypes[i]);
-    inputs.partialAggregates.push_back(companionFunctions.partialFunction);
-    inputs.mergeAggregates.push_back(companionFunctions.mergeFunction);
-    inputs.mergeExtractAggregates.push_back(
-        companionFunctions.mergeExtractFunction);
-    inputs.extractExpressions.push_back(companionFunctions.extractFunction);
-  }
-  return inputs;
-}
-
-} // namespace
-
 void AggregationTestBase::testCompanionExtract(
     const CompanionPlanInputs& inputs,
     const std::vector<std::string>& postAggregationProjections,
@@ -547,24 +544,17 @@ void AggregationTestBase::testCompanionExtract(
         assertResults,
     const std::unordered_map<std::string, std::string>& config,
     bool streaming) {
-  const auto& data = inputs.data;
-  const auto& makeSource = inputs.makeSource;
-  const auto& groupingKeys = inputs.groupingKeys;
-  const auto& groupingKeysWithPartialKey = inputs.partialGroupingKeys;
-  const auto& partialAggregates = inputs.partialAggregates;
-  const auto& aggregates = inputs.aggregates;
-  const auto& mergeAggregates = inputs.mergeAggregates;
-  const auto& extractExpressions = inputs.extractExpressions;
-
   {
     SCOPED_TRACE("Run partial + final");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+    inputs.makeSource(builder);
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates)
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates)
         .finalAggregation()
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -575,26 +565,28 @@ void AggregationTestBase::testCompanionExtract(
     assertResults(queryBuilder);
   }
 
-  if (!groupingKeys.empty() && !hasOrderSensitive(data, aggregates, pool())) {
+  if (!inputs.groupingKeys.empty() &&
+      !hasOrderSensitive(inputs.data, inputs.aggregates, pool())) {
     SCOPED_TRACE("Run partial + final with spilling");
     PlanBuilder builder(pool());
-    makeSource(builder);
+    inputs.makeSource(builder);
 
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
     core::PlanNodeId finalNodeId;
     builder.localPartitionRoundRobinRow()
-        .partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
         .capturePlanNodeId(partialNodeId)
-        .localPartition(groupingKeysWithPartialKey)
+        .localPartition(inputs.partialGroupingKeys)
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates)
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates)
         .capturePlanNodeId(partialNodeId)
-        .localPartition(groupingKeys)
+        .localPartition(inputs.groupingKeys)
         .finalAggregation()
         .capturePlanNodeId(finalNodeId)
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -639,10 +631,11 @@ void AggregationTestBase::testCompanionExtract(
   {
     SCOPED_TRACE("Run single");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.singleAggregation(groupingKeysWithPartialKey, partialAggregates)
-        .singleAggregation(groupingKeys, mergeAggregates)
-        .project(extractExpressions);
+    inputs.makeSource(builder);
+    builder
+        .singleAggregation(inputs.partialGroupingKeys, inputs.partialAggregates)
+        .singleAggregation(inputs.groupingKeys, inputs.mergeAggregates)
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -656,14 +649,16 @@ void AggregationTestBase::testCompanionExtract(
   {
     SCOPED_TRACE("Run partial + intermediate + final");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+    inputs.makeSource(builder);
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
         .intermediateAggregation()
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates)
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates)
         .intermediateAggregation()
         .finalAggregation()
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -674,17 +669,19 @@ void AggregationTestBase::testCompanionExtract(
     assertResults(queryBuilder);
   }
 
-  if (!groupingKeys.empty()) {
+  if (!inputs.groupingKeys.empty()) {
     SCOPED_TRACE("Run partial + local exchange + final");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
-        .localPartition(groupingKeysWithPartialKey)
+    inputs.makeSource(builder);
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
+        .localPartition(inputs.partialGroupingKeys)
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates)
-        .localPartition(groupingKeys)
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates)
+        .localPartition(inputs.groupingKeys)
         .finalAggregation()
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -699,24 +696,26 @@ void AggregationTestBase::testCompanionExtract(
     SCOPED_TRACE(
         "Run partial + local exchange + intermediate + local exchange + final");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
-        .localPartition(groupingKeysWithPartialKey)
+    inputs.makeSource(builder);
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
+        .localPartition(inputs.partialGroupingKeys)
         .intermediateAggregation()
-        .localPartition(groupingKeysWithPartialKey)
+        .localPartition(inputs.partialGroupingKeys)
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates);
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates);
 
-    if (groupingKeys.empty()) {
+    if (inputs.groupingKeys.empty()) {
       builder.localPartitionRoundRobinRow();
     } else {
-      builder.localPartition(groupingKeys);
+      builder.localPartition(inputs.groupingKeys);
     }
 
     builder.intermediateAggregation()
-        .localPartition(groupingKeys)
+        .localPartition(inputs.groupingKeys)
         .finalAggregation()
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -727,24 +726,25 @@ void AggregationTestBase::testCompanionExtract(
     assertResults(queryBuilder);
   }
 
-  if (streaming && groupingKeys.empty() && postAggregationProjections.empty()) {
+  if (streaming && inputs.groupingKeys.empty() &&
+      postAggregationProjections.empty()) {
     {
       SCOPED_TRACE("Streaming partial");
       auto partialResult = validateStreamingInTestAggregations(
           [&](auto& builder) {
-            builder.values(addExtraGroupingKey(data, "k0"));
+            builder.values(addExtraGroupingKey(inputs.data, "k0"));
           },
-          partialAggregates,
+          inputs.partialAggregates,
           config,
-          extractExpressions);
+          inputs.extractExpressions);
 
       // The partial check doesn't run with fewer than 2 rows and returns null.
       if (partialResult != nullptr) {
         validateStreamingInTestAggregations(
             [&](auto& builder) { builder.values({partialResult}); },
-            mergeAggregates,
+            inputs.mergeAggregates,
             config,
-            extractExpressions);
+            inputs.extractExpressions);
       }
     }
   }
@@ -756,21 +756,17 @@ void AggregationTestBase::testCompanionMergeExtract(
     const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
         assertResults,
     const std::unordered_map<std::string, std::string>& config) {
-  const auto& makeSource = inputs.makeSource;
-  const auto& groupingKeys = inputs.groupingKeys;
-  const auto& groupingKeysWithPartialKey = inputs.partialGroupingKeys;
-  const auto& partialAggregates = inputs.partialAggregates;
-  const auto& mergeExtractAggregates = inputs.mergeExtractAggregates;
-
   {
     SCOPED_TRACE("Run partial + intermediate + final merge extract");
     PlanBuilder builder(pool());
-    makeSource(builder);
+    inputs.makeSource(builder);
 
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
         .intermediateAggregation()
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeExtractAggregates)
+        .partialAggregation(inputs.groupingKeys, inputs.mergeExtractAggregates)
         .intermediateAggregation()
         .finalAggregation();
 
@@ -800,9 +796,10 @@ void AggregationTestBase::testCompanionMergeExtract(
     // Produce real intermediate states from the raw input, add null-bearing
     // copies, then merge and validate using the original result assertion.
     PlanBuilder partialBuilder(pool());
-    makeSource(partialBuilder);
+    inputs.makeSource(partialBuilder);
     partialBuilder
-        .partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
         .finalAggregation();
     const auto intermediateInput = AssertQueryBuilder(partialBuilder.planNode())
                                        .configs(config)
@@ -810,7 +807,7 @@ void AggregationTestBase::testCompanionMergeExtract(
 
     PlanBuilder mergeExtractBuilder(pool());
     mergeExtractBuilder.values({intermediateInput})
-        .singleAggregation(groupingKeys, mergeExtractAggregates);
+        .singleAggregation(inputs.groupingKeys, inputs.mergeExtractAggregates);
     const auto& mergeExtractNode = static_cast<const core::AggregationNode&>(
         *mergeExtractBuilder.planNode());
 
@@ -821,11 +818,12 @@ void AggregationTestBase::testCompanionMergeExtract(
     }
 
     const auto inputWithNulls = makeNullInput(
-        mergeExtractCalls, groupingKeys, intermediateInput, pool());
+        mergeExtractCalls, inputs.groupingKeys, intermediateInput, pool());
     if (inputWithNulls) {
       PlanBuilder builder(pool());
       builder.values({inputWithNulls})
-          .singleAggregation(groupingKeys, mergeExtractAggregates);
+          .singleAggregation(
+              inputs.groupingKeys, inputs.mergeExtractAggregates);
       if (!postAggregationProjections.empty()) {
         builder.project(postAggregationProjections);
       }
@@ -2000,7 +1998,7 @@ void AggregationTestBase::AggregationTester::run(
 
   if (companion()) {
     SCOPED_TRACE("Companion functions");
-    const auto companionInputs = makeCompanionPlanInputs(
+    const auto companionInputs = CompanionPlanInputs::make(
         inputs_,
         [&](PlanBuilder& builder) {
           addSource(builder);

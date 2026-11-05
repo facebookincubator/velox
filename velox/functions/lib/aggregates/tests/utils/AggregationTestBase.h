@@ -25,10 +25,6 @@ class AssertQueryBuilder;
 
 namespace facebook::velox::functions::aggregate::test {
 
-// Input and companion aggregates that the companion plans are built from.
-// Defined in the .cpp.
-struct CompanionPlanInputs;
-
 class AggregationTestBase : public exec::test::OperatorTestBase {
  protected:
   void SetUp() override;
@@ -263,6 +259,10 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::string& expectedMessage,
       const std::unordered_map<std::string, std::string>& config,
       bool streaming);
+
+  // Input and companion aggregates that the companion plans are built from.
+  // Defined in the .cpp.
+  struct CompanionPlanInputs;
 
   // Runs the companion plans that end with the extract companion, including
   // the streaming check, and checks their results with 'assertResults'.
