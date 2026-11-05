@@ -17,7 +17,7 @@
 #include <numeric>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -36,7 +36,7 @@ class VectorIndexPackTest : public AggregationTestBase {
     std::vector<int64_t> clusterIds(centroids.size() / 2);
     std::iota(clusterIds.begin(), clusterIds.end(), 0);
     std::string result;
-    common::vectorindex::LocalVectorIndex::build(
+    common::vectorindex::FaissLocalVectorIndex::build(
         common::vectorindex::VectorIndexKind::kFlat,
         common::vectorindex::VectorIndexMetric::kCosine,
         common::vectorindex::LocalVectorIndexOptions{},

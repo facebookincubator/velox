@@ -4809,11 +4809,13 @@ class VectorSearchJoinNode : public PlanNode {
   /// embedding.
   /// @param buildIndex Build column of type VARBINARY with the packed local
   /// index. It may not appear in the output.
+  /// @param format The format of the local indexes: its name in the query's
+  /// common::vectorindex::LocalVectorIndexFormats registry.
   /// @param metric The metric the indexes were built for.
   /// @param k The number of embeddings to find in each matching index, at
   /// least 1. At most the size of the index are found.
   /// @param searchOptions Search settings that override the ones recorded in
-  /// the indexes (see LocalVectorIndexOptions::parseSearch).
+  /// the indexes. Their keys and values are the format's.
   /// @param idName Name of the output column with the id of each embedding
   /// found, of type BIGINT. Not set if the output does not include it.
   /// @param scoreName Name of the output column with the score of each
@@ -4827,6 +4829,7 @@ class VectorSearchJoinNode : public PlanNode {
       std::vector<FieldAccessTypedExprPtr> rightKeys,
       FieldAccessTypedExprPtr probeEmbedding,
       FieldAccessTypedExprPtr buildIndex,
+      std::string format,
       common::vectorindex::VectorIndexMetric metric,
       int64_t k,
       std::vector<std::pair<std::string, std::string>> searchOptions,
@@ -4871,6 +4874,10 @@ class VectorSearchJoinNode : public PlanNode {
     return buildIndex_;
   }
 
+  const std::string& format() const {
+    return format_;
+  }
+
   common::vectorindex::VectorIndexMetric metric() const {
     return metric_;
   }
@@ -4904,6 +4911,7 @@ class VectorSearchJoinNode : public PlanNode {
   const std::vector<FieldAccessTypedExprPtr> rightKeys_;
   const FieldAccessTypedExprPtr probeEmbedding_;
   const FieldAccessTypedExprPtr buildIndex_;
+  const std::string format_;
   const common::vectorindex::VectorIndexMetric metric_;
   const int64_t k_;
   const std::vector<std::pair<std::string, std::string>> searchOptions_;
