@@ -32,8 +32,8 @@ namespace {
 // argument is not constant, is null, or holds a null element.
 template <typename T>
 std::optional<std::vector<T>> constantArray(const core::TypedExprPtr& expr) {
-  constexpr auto kind = std::is_same_v<T, double> ? TypeKind::DOUBLE
-                                                  : TypeKind::REAL;
+  constexpr auto kind =
+      std::is_same_v<T, double> ? TypeKind::DOUBLE : TypeKind::REAL;
   if (!expr->isConstantKind()) {
     return std::nullopt;
   }

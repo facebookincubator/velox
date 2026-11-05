@@ -114,8 +114,8 @@ class CudfVectorDistanceFunctionsTest
         functions::test::FunctionBaseTest::evaluate(*exprSet, input);
     const auto actual = evaluate(makeTypedExpr(sql, rowType), input);
     ASSERT_EQ(actual->size(), expected->size());
-    constexpr auto kind = std::is_same_v<T, double> ? TypeKind::DOUBLE
-                                                    : TypeKind::REAL;
+    constexpr auto kind =
+        std::is_same_v<T, double> ? TypeKind::DOUBLE : TypeKind::REAL;
     ASSERT_EQ(actual->type()->kind(), kind);
     const auto* expectedValues = expected->as<SimpleVector<T>>();
     const auto* actualValues = actual->as<SimpleVector<T>>();
@@ -173,11 +173,10 @@ TEST_F(CudfVectorDistanceFunctionsTest, columnColumn) {
 TEST_F(CudfVectorDistanceFunctionsTest, columnConstant) {
   constexpr vector_size_t kNumRows{1'000};
   constexpr vector_size_t kDimensions{8};
-  const auto input =
-      makeRowVector({makeVectors(
-          kNumRows, kDimensions, /*seed=*/3, /*includeEmpty=*/false)});
-  const auto query = arrayLiteral(std::vector<float>{
-      0.5f, -0.25f, 1.0f, 0.0f, 2.0f, -1.5f, 0.75f, 0.125f});
+  const auto input = makeRowVector(
+      {makeVectors(kNumRows, kDimensions, /*seed=*/3, /*includeEmpty=*/false)});
+  const auto query = arrayLiteral(
+      std::vector<float>{0.5f, -0.25f, 1.0f, 0.0f, 2.0f, -1.5f, 0.75f, 0.125f});
   for (const auto* function : kFunctions) {
     assertMatchesCpu(fmt::format("{}(c0, {})", function, query), input);
     assertMatchesCpu(fmt::format("{}({}, c0)", function, query), input);
@@ -203,8 +202,7 @@ TEST_F(CudfVectorDistanceFunctionsTest, sizeMismatchThrows) {
   });
   const auto doubleType = asRowType(doubles->type());
   VELOX_ASSERT_USER_THROW(
-      evaluate(
-          makeTypedExpr("cosine_similarity(c0, c1)", doubleType), doubles),
+      evaluate(makeTypedExpr("cosine_similarity(c0, c1)", doubleType), doubles),
       "Both arrays need to have identical size");
   VELOX_ASSERT_USER_THROW(
       evaluate(makeTypedExpr("l2_squared(c0, c1)", doubleType), doubles),
@@ -231,8 +229,8 @@ TEST_F(CudfVectorDistanceFunctionsTest, doubleColumnConstant) {
   constexpr vector_size_t kDimensions{8};
   const auto input = makeRowVector({makeVectors<double>(
       kNumRows, kDimensions, /*seed=*/13, /*includeEmpty=*/false)});
-  const auto query = arrayLiteral<double>(
-      {0.5, -0.25, 1.0, 0.0, 2.0, -1.5, 0.75, 0.125});
+  const auto query =
+      arrayLiteral<double>({0.5, -0.25, 1.0, 0.0, 2.0, -1.5, 0.75, 0.125});
   for (const auto* function : kFunctions) {
     assertMatchesCpu<double>(fmt::format("{}(c0, {})", function, query), input);
     assertMatchesCpu<double>(fmt::format("{}({}, c0)", function, query), input);

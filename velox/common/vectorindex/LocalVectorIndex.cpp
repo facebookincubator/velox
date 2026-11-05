@@ -125,16 +125,6 @@ std::unique_ptr<faiss::Index> makeIndex(
       graph->hnsw.efSearch = options.efSearch.value_or(kDefaultEfSearch);
       return withIds(std::move(graph));
     }
-    case VectorIndexKind::kCagra: {
-      // Stored as IndexHNSWCagra, wrapped so the embeddings keep their ids.
-      // base_level_only keeps the CAGRA graph as the one level both the CPU
-      // and the GPU search. The GPU build fills it.
-      auto graph = std::make_unique<faiss::IndexHNSWCagra>(
-          dimension, options.m.value_or(kDefaultM), metric);
-      graph->base_level_only = true;
-      graph->hnsw.efSearch = options.efSearch.value_or(kDefaultEfSearch);
-      return withIds(std::move(graph));
-    }
   }
   VELOX_UNREACHABLE();
 }
@@ -144,17 +134,12 @@ std::unique_ptr<faiss::Index> makeIndex(
 // error for any other FAISS index.
 std::pair<VectorIndexKind, faiss::Index*> classify(faiss::Index* index) {
   if (auto* idMap = dynamic_cast<faiss::IndexIDMap*>(index)) {
-    if (dynamic_cast<faiss::IndexHNSWCagra*>(idMap->index)) {
-      return {VectorIndexKind::kCagra, idMap->index};
-    }
     if (dynamic_cast<faiss::IndexHNSWSQ*>(idMap->index)) {
       return {VectorIndexKind::kHnswSq, idMap->index};
     }
     if (dynamic_cast<faiss::IndexFlat*>(idMap->index)) {
       return {VectorIndexKind::kFlat, idMap->index};
     }
-  } else if (dynamic_cast<faiss::IndexHNSWCagra*>(index)) {
-    return {VectorIndexKind::kCagra, index};
   } else if (dynamic_cast<faiss::IndexIVFScalarQuantizer*>(index)) {
     return {VectorIndexKind::kIvfSq, index};
   } else if (dynamic_cast<faiss::IndexIVFFlat*>(index)) {
@@ -173,7 +158,7 @@ bool hasMissingId(const faiss::Index* index) {
                LocalVectorIndex::kPaddingId) != idMap->id_map.end();
   }
   if (dynamic_cast<const faiss::IndexHNSW*>(index) != nullptr) {
-    // A CAGRA graph without an id map numbers its embeddings from 0.
+    // An HNSW index without an id map numbers its embeddings from 0.
     return false;
   }
   const auto* ivf = dynamic_cast<const faiss::IndexIVF*>(index);
@@ -238,11 +223,6 @@ void LocalVectorIndex::build(
       const auto accelerator = localVectorIndexAccelerator();
       if (accelerator == nullptr ||
           !accelerator->build(kind, *index, embeddings, ids)) {
-        // A CAGRA graph is built by NN-descent on the GPU and stored as an
-        // IndexHNSWCagra. There is no CPU build of it.
-        VELOX_USER_CHECK(
-            kind != VectorIndexKind::kCagra,
-            "A CAGRA local vector index is built on the GPU");
         index->train(embeddings.size(), embeddings.data());
         index->add_with_ids(embeddings.size(), embeddings.data(), ids.data());
       }

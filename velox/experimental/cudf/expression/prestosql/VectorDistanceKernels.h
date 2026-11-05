@@ -20,8 +20,9 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/types.hpp>
 
-#include <cuda/stream_ref>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream_ref>
 
 #include <memory>
 #include <optional>

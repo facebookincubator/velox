@@ -156,8 +156,7 @@ TEST_F(GpuLocalVectorIndexTest, searchMatchesCpu) {
   for (const auto type :
        {VectorIndexKind::kFlat,
         VectorIndexKind::kIvfFlat,
-        VectorIndexKind::kIvfSq,
-        VectorIndexKind::kHnswSq}) {
+        VectorIndexKind::kIvfSq}) {
     SCOPED_TRACE(VectorIndexKindName::toName(type));
     const auto bytes = build(type);
     // Every list, so that the IVF searches are exhaustive on both devices.
@@ -186,10 +185,6 @@ TEST_F(GpuLocalVectorIndexTest, searchMatchesCpu) {
         EXPECT_GE(recall(cpuResults.ids, gpuResults.ids), 0.95);
         break;
       case VectorIndexKind::kHnswSq:
-        // CAGRA searches the reconstructed embeddings at full precision.
-        EXPECT_GE(recall(exact, gpuResults.ids), 0.9);
-        break;
-      case VectorIndexKind::kCagra:
         break;
     }
   }
@@ -214,7 +209,7 @@ TEST_F(GpuLocalVectorIndexTest, padding) {
         ids,
         [&](std::string_view chunk) { bytes.append(chunk); });
     const LocalVectorIndex index(bytes, VectorIndexMetric::kCosine, {});
-    // Three embeddings are too few for a CAGRA graph.
+    // HNSW has no FAISS GPU index, so it stays on the CPU.
     EXPECT_EQ(type != VectorIndexKind::kHnswSq, index.accelerated());
 
     const std::vector<float> query{0.8, 0.6};
@@ -228,32 +223,11 @@ TEST_F(GpuLocalVectorIndexTest, padding) {
   }
 }
 
-TEST_F(GpuLocalVectorIndexTest, cagraStoredFormat) {
-  useGpu({.build = true});
-  const auto bytes = build(VectorIndexKind::kCagra);
-  setLocalVectorIndexAccelerator(nullptr);
-
-  // The bytes are an IndexHNSWCagra, so the CPU searches them with no GPU.
-  const LocalVectorIndex cpu(bytes, VectorIndexMetric::kCosine, {});
-  EXPECT_EQ(VectorIndexKind::kCagra, cpu.kind());
-  EXPECT_EQ(kNumEmbeddings, cpu.size());
-  EXPECT_FALSE(cpu.accelerated());
-  const auto exact = exactIds();
-  EXPECT_GE(recall(exact, search(cpu).ids), 0.9);
-
-  // The same bytes are cloned to the GPU once, and hnsw.efSearch is the
-  // CAGRA intermediate result count.
+TEST_F(GpuLocalVectorIndexTest, hnswStaysOnCpu) {
+  const auto bytes = build(VectorIndexKind::kHnswSq);
   useGpu();
-  const LocalVectorIndex gpu(
-      bytes,
-      VectorIndexMetric::kCosine,
-      LocalVectorIndexOptions{.efSearch = 128});
-  EXPECT_TRUE(gpu.accelerated());
-  EXPECT_GE(recall(exact, search(gpu).ids), 0.9);
-}
-
-TEST_F(GpuLocalVectorIndexTest, cagraRequiresGpuBuild) {
-  EXPECT_THROW(build(VectorIndexKind::kCagra), facebook::velox::VeloxUserError);
+  EXPECT_FALSE(
+      LocalVectorIndex(bytes, VectorIndexMetric::kCosine, {}).accelerated());
 }
 
 TEST_F(GpuLocalVectorIndexTest, minSearchSize) {
@@ -341,29 +315,6 @@ void expectSphericalCentroids(std::string_view bytes) {
     }
     EXPECT_NEAR(1.f, std::sqrt(norm), 1e-3) << i;
   }
-}
-
-// Dequantized embeddings of an id-mapped index, in id-map order.
-std::unordered_map<int64_t, int64_t> reconstructedRows(
-    std::string_view bytes,
-    std::vector<float>& vectors) {
-  faiss::ZeroCopyIOReader reader(
-      reinterpret_cast<uint8_t*>(const_cast<char*>(bytes.data())),
-      bytes.size());
-  std::unique_ptr<faiss::Index> index(faiss::read_index(&reader));
-  auto* idMap = dynamic_cast<faiss::IndexIDMap*>(index.get());
-  if (idMap == nullptr || idMap->index == nullptr) {
-    EXPECT_NE(idMap, nullptr);
-    return {};
-  }
-  vectors.resize(idMap->ntotal * idMap->d);
-  idMap->index->reconstruct_n(0, idMap->ntotal, vectors.data());
-  std::unordered_map<int64_t, int64_t> rowOfId;
-  for (faiss::idx_t i = 0; i < idMap->ntotal; ++i) {
-    rowOfId.emplace(idMap->id_map[i], i);
-  }
-  EXPECT_EQ(static_cast<size_t>(idMap->ntotal), rowOfId.size());
-  return rowOfId;
 }
 
 TEST_F(GpuLocalVectorIndexTest, buildOff) {
@@ -517,61 +468,6 @@ TEST_F(GpuLocalVectorIndexTest, scoreIsCosineOfReturnedId) {
       EXPECT_EQ(exact, gpuResults.ids);
     }
   }
-
-  // HNSW-SQ is rebuilt as CAGRA over the dequantized embeddings, so its score
-  // is the cosine of the reconstructed vector.
-  const auto hnswBytes = build(VectorIndexKind::kHnswSq);
-  std::vector<float> reconstructed;
-  const auto reconstructedRow = reconstructedRows(hnswBytes, reconstructed);
-  useGpu();
-  const LocalVectorIndex hnsw(hnswBytes, VectorIndexMetric::kCosine, {});
-  ASSERT_TRUE(hnsw.accelerated());
-  const auto hnswResults = search(hnsw);
-  EXPECT_GE(recall(exact, hnswResults.ids), 0.9);
-  expectScoreContract(
-      queries_,
-      reconstructed,
-      reconstructedRow,
-      hnswResults.ids,
-      hnswResults.scores,
-      kNumQueries,
-      kK,
-      1e-3);
-
-  useGpu({.build = true});
-  const auto cagraBytes = build(VectorIndexKind::kCagra);
-  setLocalVectorIndexAccelerator(nullptr);
-  const LocalVectorIndex cagraCpu(cagraBytes, VectorIndexMetric::kCosine, {});
-  EXPECT_FALSE(cagraCpu.accelerated());
-  const auto cagraCpuResults = search(cagraCpu);
-  expectScoreContract(
-      queries_,
-      embeddings_,
-      rowOfId,
-      cagraCpuResults.ids,
-      cagraCpuResults.scores,
-      kNumQueries,
-      kK,
-      1e-3);
-  EXPECT_GE(recall(exact, cagraCpuResults.ids), 0.9);
-
-  useGpu();
-  const LocalVectorIndex cagraGpu(
-      cagraBytes,
-      VectorIndexMetric::kCosine,
-      LocalVectorIndexOptions{.efSearch = 128});
-  ASSERT_TRUE(cagraGpu.accelerated());
-  const auto cagraGpuResults = search(cagraGpu);
-  expectScoreContract(
-      queries_,
-      embeddings_,
-      rowOfId,
-      cagraGpuResults.ids,
-      cagraGpuResults.scores,
-      kNumQueries,
-      kK,
-      1e-3);
-  EXPECT_GE(recall(exact, cagraGpuResults.ids), 0.9);
 }
 
 TEST_F(GpuLocalVectorIndexTest, gpuBuiltIndexSearchesOnGpu) {

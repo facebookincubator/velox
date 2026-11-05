@@ -46,10 +46,8 @@ struct WrongLength {
 };
 
 // One warp per row: sums the squares, then scales by the inverse norm.
-__global__ void normalizeRowsKernel(
-    float* values,
-    int64_t numRows,
-    int32_t dimension) {
+__global__ void
+normalizeRowsKernel(float* values, int64_t numRows, int32_t dimension) {
   const int64_t row =
       static_cast<int64_t>(blockIdx.x) * kRowsPerBlock + threadIdx.y;
   if (row >= numRows) {
@@ -96,8 +94,8 @@ __global__ void emitResultsKernel(
         id = idMap[id];
       }
     } else {
-      // cuVS writes the largest id where FAISS writes -1.
-      isFound = id >= 0 && id != std::numeric_limits<int64_t>::max();
+      // FAISS writes -1 where a neighbor is missing.
+      isFound = id >= 0;
     }
     ids[i] = isFound ? id : -1;
     found[i] = isFound;

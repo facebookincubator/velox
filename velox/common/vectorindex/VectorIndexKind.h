@@ -36,13 +36,8 @@ enum class VectorIndexKind {
   kIvfSq = 2,
   /// A layered graph of near neighbors over embeddings with each dimension
   /// compressed to 8 bits; a search walks it keeping 'hnsw.efSearch'
-  /// candidates.
+  /// candidates. Searched on the CPU. FAISS has no GPU index for it.
   kHnswSq = 3,
-  /// A CAGRA graph stored as a FAISS IndexHNSWCagra, so the same bytes search
-  /// on CPU and on GPU. 'hnsw.efSearch' is the candidate count; a GPU search
-  /// uses it as CAGRA's intermediate result count. The graph is built on the
-  /// GPU.
-  kCagra = 4,
 };
 
 VELOX_DECLARE_ENUM_NAME(VectorIndexKind);

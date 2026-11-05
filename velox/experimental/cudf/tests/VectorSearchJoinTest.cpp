@@ -20,13 +20,13 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/vectorindex/GpuLocalVectorIndex.h"
 #include "velox/common/vectorindex/LocalVectorIndex.h"
-#include "velox/vector/DecodedVector.h"
-
-#include <folly/ScopeGuard.h>
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/DecodedVector.h"
+
+#include <folly/ScopeGuard.h>
 
 #include <numeric>
 #include <random>
@@ -39,8 +39,8 @@ using namespace facebook::velox::exec::test;
 using common::vectorindex::Embeddings;
 using common::vectorindex::LocalVectorIndex;
 using common::vectorindex::LocalVectorIndexOptions;
-using common::vectorindex::VectorIndexMetric;
 using common::vectorindex::VectorIndexKind;
+using common::vectorindex::VectorIndexMetric;
 
 class CudfVectorSearchJoinTest : public OperatorTestBase {
  protected:
@@ -143,9 +143,9 @@ class CudfVectorSearchJoinTest : public OperatorTestBase {
       const core::PlanNodePtr& plan,
       const RowVectorPtr& expected,
       int32_t maxDrivers = 1) {
-    assertGpuJoin(
-        AssertQueryBuilder(plan).maxDrivers(maxDrivers).assertResults(
-            expected));
+    assertGpuJoin(AssertQueryBuilder(plan)
+                      .maxDrivers(maxDrivers)
+                      .assertResults(expected));
   }
 
   static void assertGpuJoin(const std::shared_ptr<exec::Task>& task) {
@@ -314,14 +314,15 @@ TEST_F(CudfVectorSearchJoinTest, localIndexes) {
       }));
 }
 
-TEST_F(CudfVectorSearchJoinTest, hnswTooSmallForCagra) {
-  // Three embeddings make no CAGRA graph; the index is searched exactly.
+TEST_F(CudfVectorSearchJoinTest, hnswTooSmallForGraph) {
+  // Three embeddings make no HNSW graph. The device search is exact flat.
   auto indexes = makeRowVector(
       {"c_ds", "codec"},
       {
           makeFlatVector<int64_t>({1}),
           makeFlatVector<std::string>(
-              {build({1, 0, 0.6, 0.8, 0, 1}, {5, 6, 7}, VectorIndexKind::kHnswSq)},
+              {build(
+                  {1, 0, 0.6, 0.8, 0, 1}, {5, 6, 7}, VectorIndexKind::kHnswSq)},
               VARBINARY()),
       });
   auto probe = makeRowVector(
@@ -331,7 +332,7 @@ TEST_F(CudfVectorSearchJoinTest, hnswTooSmallForCagra) {
           makeFlatVector<int64_t>({1}),
           makeArrayVector<float>({{0, 1}}),
       });
-  // The index is too small for a CAGRA graph, so the GPU searches an exact
+  // The index is too small for an HNSW graph, so the GPU searches an exact
   // flat index over the reconstructed embeddings. Reconstruction does not
   // reproduce the original unit vectors, so the scores differ in the third
   // digit; the neighbor order is what this checks.
@@ -443,9 +444,7 @@ TEST_F(CudfVectorSearchJoinTest, probeBatches) {
           .vectorSearchJoin(
               {"ds"},
               {"c_ds"},
-              PlanBuilder(planNodeIdGenerator)
-                  .values(makeCodecs())
-                  .planNode(),
+              PlanBuilder(planNodeIdGenerator).values(makeCodecs()).planNode(),
               "embedding",
               "codec",
               /*k=*/2,
@@ -479,10 +478,10 @@ std::vector<std::pair<int64_t, int64_t>> resultIds(const RowVectorPtr& result) {
 } // namespace
 
 TEST_F(CudfVectorSearchJoinTest, faissGpuIndexTypes) {
-  // One local index per Faiss type the GPU searches, including the ANN types.
-  // The device search has to find the same embeddings as Faiss GPU searching
-  // the same bytes on the host. CAGRA is built by cuVS; the others are built
-  // by Faiss on the CPU and cloned to the GPU.
+  // One local index per Faiss type the GPU searches. The device search has to
+  // find the same embeddings as Faiss GPU searching the same bytes on the host.
+  // The indexes are built by Faiss on the CPU and cloned with Faiss GPU
+  // kernels.
   constexpr int32_t kDimension = 8;
   constexpr int32_t kEmbeddings = 40;
   constexpr int64_t kResults = 4;
@@ -519,26 +518,9 @@ TEST_F(CudfVectorSearchJoinTest, faissGpuIndexTypes) {
   const std::vector<VectorIndexKind> types = {
       VectorIndexKind::kIvfFlat,
       VectorIndexKind::kIvfSq,
-      VectorIndexKind::kCagra,
   };
   for (const auto type : types) {
     SCOPED_TRACE(static_cast<int>(type));
-    // CAGRA has no CPU build. Registering cuDF again afterwards puts the
-    // search accelerator back the way SetUp left it.
-    bool restoreBuildAccelerator = false;
-    if (type == VectorIndexKind::kCagra) {
-      unregisterCudf();
-      common::vectorindex::setLocalVectorIndexAccelerator(
-          common::vectorindex::makeGpuLocalVectorIndexAccelerator(
-              {.device = 0, .build = true}));
-      restoreBuildAccelerator = true;
-    }
-    SCOPE_EXIT {
-      if (restoreBuildAccelerator) {
-        common::vectorindex::setLocalVectorIndexAccelerator(nullptr);
-        registerCudf();
-      }
-    };
     auto index = makeRowVector(
         {"c_ds", "codec"},
         {
@@ -546,11 +528,6 @@ TEST_F(CudfVectorSearchJoinTest, faissGpuIndexTypes) {
             makeFlatVector<std::string>(
                 {build(embeddings, ids, type, kDimension)}, VARBINARY()),
         });
-    if (restoreBuildAccelerator) {
-      common::vectorindex::setLocalVectorIndexAccelerator(nullptr);
-      registerCudf();
-      restoreBuildAccelerator = false;
-    }
 
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto plan =
@@ -570,8 +547,7 @@ TEST_F(CudfVectorSearchJoinTest, faissGpuIndexTypes) {
     auto gpu = AssertQueryBuilder(plan).copyResults(pool());
     unregisterCudf();
     common::vectorindex::setLocalVectorIndexAccelerator(
-        common::vectorindex::makeGpuLocalVectorIndexAccelerator(
-            {.device = 0}));
+        common::vectorindex::makeGpuLocalVectorIndexAccelerator({.device = 0}));
     auto faiss = AssertQueryBuilder(plan).copyResults(pool());
     common::vectorindex::setLocalVectorIndexAccelerator(nullptr);
     registerCudf();

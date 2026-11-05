@@ -110,16 +110,14 @@ void LocalVectorIndexOptions::validate(VectorIndexKind kind) const {
   validateSetting(nlist, kNlist, isIvf(kind), kind);
   validateSetting(nprobe, kNprobe, isIvf(kind), kind);
 
-  const bool graph =
-      kind == VectorIndexKind::kHnswSq || kind == VectorIndexKind::kCagra;
+  const bool graph = kind == VectorIndexKind::kHnswSq;
   validateSetting(m, kM, graph, kind);
   if (m.has_value()) {
     VELOX_USER_CHECK_GE(*m, kMinM, "Vector index option is too small: {}", kM);
     VELOX_USER_CHECK_LE(*m, kMaxM, "Vector index option is too large: {}", kM);
   }
 
-  // efConstruction is the HNSW build's candidate count. A CAGRA graph is built
-  // by NN-descent, so that setting does not apply to it.
+  // efConstruction is the HNSW build's candidate count.
   validateSetting(
       efConstruction, kEfConstruction, kind == VectorIndexKind::kHnswSq, kind);
   validateSetting(efSearch, kEfSearch, graph, kind);

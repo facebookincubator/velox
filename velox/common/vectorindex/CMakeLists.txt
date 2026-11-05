@@ -66,15 +66,12 @@ if(VELOX_ENABLE_FAISS)
       GpuLocalVectorIndex.h
     )
 
-    # FAISS GPU headers include RAFT, whose include paths come through cuVS.
     velox_link_libraries(
       velox_vector_index_gpu
       velox_vector_index
       velox_exception
       FAISS::faiss
       CUDA::cudart_static
-      cuvs::cuvs
-      cuvs::cuvs_cpp_headers
       glog::glog
     )
     velox_compile_definitions(velox_vector_index_gpu PUBLIC VELOX_ENABLE_FAISS_GPU)

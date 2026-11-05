@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <exception>
-#include <limits>
 #include <mutex>
 #include <string_view>
 #include <vector>
@@ -30,7 +29,6 @@
 #include <faiss/IndexScalarQuantizer.h>
 #include <faiss/gpu/GpuCloner.h>
 #include <faiss/gpu/GpuClonerOptions.h>
-#include <faiss/gpu/GpuIndexCagra.h>
 #include <faiss/gpu/GpuIndexFlat.h>
 #include <faiss/gpu/GpuIndexIVFFlat.h>
 #include <faiss/gpu/GpuIndexIVFScalarQuantizer.h>
@@ -46,10 +44,6 @@
 namespace facebook::velox::common::vectorindex {
 namespace {
 
-constexpr size_t kCagraBuildIterations{12};
-// CAGRA keeps at least 'k' candidates; a larger 'k' searches on the CPU.
-constexpr int64_t kMaxCagraK{1024};
-
 struct Device {
   explicit Device(int32_t id) : id{id} {}
 
@@ -59,6 +53,44 @@ struct Device {
 
   // Serializes use of 'resources', which FAISS does not make thread-safe.
   std::mutex mutex;
+};
+
+// Owns one device allocation. Freed if a later copy in the constructor fails,
+// which would otherwise skip the index destructor.
+struct DeviceIds {
+  DeviceIds() = default;
+  DeviceIds(const DeviceIds&) = delete;
+  DeviceIds& operator=(const DeviceIds&) = delete;
+
+  ~DeviceIds() {
+    reset();
+  }
+
+  void reset() {
+    cudaFree(pointer);
+    pointer = nullptr;
+  }
+
+  void copyFrom(const void* host, size_t bytes) {
+    if (bytes == 0) {
+      return;
+    }
+    auto error = cudaMalloc(reinterpret_cast<void**>(&pointer), bytes);
+    VELOX_CHECK(
+        error == cudaSuccess,
+        "Cannot allocate the device id map of a local vector index: {}",
+        cudaGetErrorString(error));
+    error = cudaMemcpy(pointer, host, bytes, cudaMemcpyHostToDevice);
+    if (error != cudaSuccess) {
+      cudaFree(pointer);
+      pointer = nullptr;
+      VELOX_FAIL(
+          "Cannot copy the device id map of a local vector index: {}",
+          cudaGetErrorString(error));
+    }
+  }
+
+  int64_t* pointer{nullptr};
 };
 
 // Runs 'search' with 'device''s resources ordered on 'stream'.
@@ -88,12 +120,8 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
   ClonedIndex(
       std::shared_ptr<Device> device,
       std::unique_ptr<faiss::Index> index,
-      int64_t maxK,
-      size_t efSearch = 0)
-      : device_{std::move(device)},
-        index_{std::move(index)},
-        maxK_{maxK},
-        efSearch_{efSearch} {
+      int64_t maxK)
+      : device_{std::move(device)}, index_{std::move(index)}, maxK_{maxK} {
     // The FAISS GPU cloner keeps an id map around the device index and
     // translates its ids on the CPU. A device search uses the device index
     // directly, so the translation moves to the device.
@@ -103,25 +131,20 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
       return;
     }
     static_assert(sizeof(faiss::idx_t) == sizeof(int64_t));
-    const auto bytes = idMap->id_map.size() * sizeof(faiss::idx_t);
-    auto error = cudaMalloc(reinterpret_cast<void**>(&deviceIds_), bytes);
-    VELOX_CHECK(
-        error == cudaSuccess,
-        "Cannot allocate the device id map of a local vector index: {}",
-        cudaGetErrorString(error));
-    error = cudaMemcpy(
-        deviceIds_, idMap->id_map.data(), bytes, cudaMemcpyHostToDevice);
-    VELOX_CHECK(
-        error == cudaSuccess,
-        "Cannot copy the device id map of a local vector index: {}",
-        cudaGetErrorString(error));
+    deviceIds_.copyFrom(
+        idMap->id_map.data(), idMap->id_map.size() * sizeof(faiss::idx_t));
   }
+
+  ClonedIndex(const ClonedIndex&) = delete;
+  ClonedIndex& operator=(const ClonedIndex&) = delete;
+  ClonedIndex(ClonedIndex&&) = delete;
+  ClonedIndex& operator=(ClonedIndex&&) = delete;
 
   ~ClonedIndex() override {
     const std::lock_guard<std::mutex> lock(device_->mutex);
     faiss::gpu::DeviceScope scope(device_->id);
     index_.reset();
-    cudaFree(deviceIds_);
+    deviceIds_.reset();
   }
 
   bool search(
@@ -139,14 +162,6 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
     if (gpuK < 1) {
       return false;
     }
-    // Set for a stored CAGRA index: hnsw.efSearch is its intermediate result
-    // count. Other cloned indexes keep the nprobe copied with them.
-    faiss::gpu::SearchParametersCagra cagraParams;
-    const faiss::SearchParameters* params = nullptr;
-    if (efSearch_ > 0) {
-      cagraParams.itopk_size = std::max(efSearch_, static_cast<size_t>(gpuK));
-      params = &cagraParams;
-    }
     std::vector<int64_t> limitedIds;
     std::vector<float> limitedScores;
     auto* searchIds = ids.data();
@@ -161,24 +176,9 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
       const std::lock_guard<std::mutex> lock(device_->mutex);
       try {
         index_->search(
-            queries.size(),
-            queries.data(),
-            gpuK,
-            searchScores,
-            searchIds,
-            params);
+            queries.size(), queries.data(), gpuK, searchScores, searchIds);
       } catch (const faiss::FaissException& e) {
         VELOX_FAIL("FAISS GPU local vector index search failed: {}", e.what());
-      }
-    }
-    // cuVS writes the maximum id where the CPU search writes kPaddingId.
-    constexpr int64_t kMissing = std::numeric_limits<int64_t>::max();
-    auto* rawIds = gpuK < k ? limitedIds.data() : ids.data();
-    const auto idCount =
-        queries.size() * static_cast<size_t>(gpuK < k ? gpuK : k);
-    for (size_t i = 0; i < idCount; ++i) {
-      if (rawIds[i] == kMissing) {
-        rawIds[i] = -1;
       }
     }
     if (gpuK < k) {
@@ -206,12 +206,6 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
     if (k < 1 || k > maxK_ || k > index_->ntotal) {
       return false;
     }
-    faiss::gpu::SearchParametersCagra cagraParams;
-    const faiss::SearchParameters* params = nullptr;
-    if (efSearch_ > 0) {
-      cagraParams.itopk_size = std::max(efSearch_, static_cast<size_t>(k));
-      params = &cagraParams;
-    }
     auto* gpu = dynamic_cast<faiss::gpu::GpuIndex*>(index_.get());
     if (gpu == nullptr) {
       if (const auto* idMap =
@@ -222,29 +216,27 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
     if (gpu == nullptr) {
       return false;
     }
-    searchOnStream(*device_, stream, "FAISS GPU local vector index search", [&] {
-      gpu->search(numQueries, queries, k, scores, ids, params);
-    });
+    searchOnStream(
+        *device_, stream, "FAISS GPU local vector index search", [&] {
+          gpu->search(numQueries, queries, k, scores, ids);
+        });
     return true;
   }
 
   const int64_t* deviceIdMap() const override {
-    return deviceIds_;
+    return deviceIds_.pointer;
   }
 
  private:
   const std::shared_ptr<Device> device_;
   std::unique_ptr<faiss::Index> index_;
   const int64_t maxK_;
-  const size_t efSearch_;
-  int64_t* deviceIds_{nullptr};
+  DeviceIds deviceIds_;
 };
 
-// A kHnswSq local index rebuilt on the device over its reconstructed
-// embeddings: a CAGRA graph, or a flat index when there are too few for one.
-// The device index numbers embeddings in the order they were added; 'ids'
-// maps them back to the local index ids. An 'efSearch' of 0 marks the flat
-// index.
+// An exact flat copy of a kHnswSq index too small for an HNSW graph. The
+// device index numbers embeddings in the order they were added; 'ids' maps
+// them back to the local index ids.
 class MappedIndex : public LocalVectorIndexAccelerator::Index {
  public:
   // Called with 'device''s mutex held and its device current.
@@ -252,31 +244,24 @@ class MappedIndex : public LocalVectorIndexAccelerator::Index {
       std::shared_ptr<Device> device,
       std::unique_ptr<faiss::Index> index,
       const std::vector<faiss::idx_t>& ids,
-      int64_t maxK,
-      size_t efSearch)
+      int64_t maxK)
       : device_{std::move(device)},
         index_{std::move(index)},
         ids_{ids},
-        maxK_{maxK},
-        efSearch_{efSearch} {
-    const auto bytes = ids_.size() * sizeof(int64_t);
-    auto error = cudaMalloc(reinterpret_cast<void**>(&deviceIds_), bytes);
-    VELOX_CHECK(
-        error == cudaSuccess,
-        "Cannot allocate the device id map of a local vector index: {}",
-        cudaGetErrorString(error));
-    error = cudaMemcpy(deviceIds_, ids_.data(), bytes, cudaMemcpyHostToDevice);
-    VELOX_CHECK(
-        error == cudaSuccess,
-        "Cannot copy the device id map of a local vector index: {}",
-        cudaGetErrorString(error));
+        maxK_{maxK} {
+    deviceIds_.copyFrom(ids_.data(), ids_.size() * sizeof(int64_t));
   }
+
+  MappedIndex(const MappedIndex&) = delete;
+  MappedIndex& operator=(const MappedIndex&) = delete;
+  MappedIndex(MappedIndex&&) = delete;
+  MappedIndex& operator=(MappedIndex&&) = delete;
 
   ~MappedIndex() override {
     const std::lock_guard<std::mutex> lock(device_->mutex);
     faiss::gpu::DeviceScope scope(device_->id);
     index_.reset();
-    cudaFree(deviceIds_);
+    deviceIds_.reset();
   }
 
   bool search(
@@ -290,12 +275,6 @@ class MappedIndex : public LocalVectorIndexAccelerator::Index {
     const auto gpuK = std::min(k, static_cast<int64_t>(ids_.size()));
     if (gpuK < 1) {
       return false;
-    }
-    faiss::gpu::SearchParametersCagra cagraParams;
-    const faiss::SearchParameters* params = nullptr;
-    if (efSearch_ > 0) {
-      cagraParams.itopk_size = std::max(efSearch_, static_cast<size_t>(gpuK));
-      params = &cagraParams;
     }
     std::vector<int64_t> limitedIds;
     std::vector<float> limitedScores;
@@ -311,14 +290,9 @@ class MappedIndex : public LocalVectorIndexAccelerator::Index {
       const std::lock_guard<std::mutex> lock(device_->mutex);
       try {
         index_->search(
-            queries.size(),
-            queries.data(),
-            gpuK,
-            searchScores,
-            searchIds,
-            params);
+            queries.size(), queries.data(), gpuK, searchScores, searchIds);
       } catch (const faiss::FaissException& e) {
-        VELOX_FAIL("CAGRA local vector index search failed: {}", e.what());
+        VELOX_FAIL("FAISS GPU local vector index search failed: {}", e.what());
       }
     }
     const auto queriesSize = static_cast<int64_t>(queries.size());
@@ -353,84 +327,57 @@ class MappedIndex : public LocalVectorIndexAccelerator::Index {
     if (k < 1 || k > maxK_ || k > static_cast<int64_t>(ids_.size())) {
       return false;
     }
-    faiss::gpu::SearchParametersCagra cagraParams;
-    const faiss::SearchParameters* params = nullptr;
-    if (efSearch_ > 0) {
-      cagraParams.itopk_size = std::max(efSearch_, static_cast<size_t>(k));
-      params = &cagraParams;
-    }
     searchOnStream(*device_, stream, "Local vector index device search", [&] {
-      index_->search(numQueries, queries, k, scores, ids, params);
+      index_->search(numQueries, queries, k, scores, ids);
     });
     return true;
   }
 
   const int64_t* deviceIdMap() const override {
-    return deviceIds_;
+    return deviceIds_.pointer;
   }
 
  private:
   const std::shared_ptr<Device> device_;
   std::unique_ptr<faiss::Index> index_;
+  // Aliases the CPU index id map. LocalVectorIndex destroys this accelerator
+  // before that index.
   const std::vector<faiss::idx_t>& ids_;
   const int64_t maxK_;
-  const size_t efSearch_;
-  int64_t* deviceIds_{nullptr};
+  DeviceIds deviceIds_;
 };
 
-// Returns the even graph degree nearest 'requested' that 'numEmbeddings' can
-// fill, or 0 if they are too few for a CAGRA graph.
-size_t graphDegree(size_t requested, int64_t numEmbeddings) {
-  auto degree = std::min<size_t>(requested, numEmbeddings - 1);
-  if (degree % 2 != 0) {
-    --degree;
-  }
-  return degree < 4 ? 0 : degree;
-}
-
-std::unique_ptr<LocalVectorIndexAccelerator::Index> loadCagra(
+// FAISS has no GPU HNSW index. A graph too small to search as HNSW, when the
+// caller requires a device index, is searched exactly with GpuIndexFlat.
+// Returns null for a real HNSW graph and when a device index is not required.
+std::unique_ptr<LocalVectorIndexAccelerator::Index> loadSmallHnsw(
     const std::shared_ptr<Device>& device,
     const faiss::IndexIDMap& idMap,
     bool requireDevice) {
+  if (!requireDevice || idMap.ntotal < 1) {
+    return nullptr;
+  }
   const auto& graph = dynamic_cast<const faiss::IndexHNSW&>(*idMap.index);
-  const auto degree = graphDegree(graph.hnsw.nb_neighbors(0), graph.ntotal);
-  if (degree == 0 && !requireDevice) {
+  auto degree = std::min<size_t>(graph.hnsw.nb_neighbors(0), graph.ntotal - 1);
+  if (degree % 2 != 0) {
+    --degree;
+  }
+  if (degree >= 4) {
     return nullptr;
   }
   std::vector<float> embeddings(graph.ntotal * graph.d);
   graph.reconstruct_n(0, graph.ntotal, embeddings.data());
   faiss::gpu::DeviceScope scope(device->id);
-
-  if (degree == 0) {
-    faiss::gpu::GpuIndexFlatConfig flatConfig;
-    flatConfig.device = device->id;
-    auto flat = std::make_unique<faiss::gpu::GpuIndexFlat>(
-        &device->resources, graph.d, graph.metric_type, flatConfig);
-    flat->add(graph.ntotal, embeddings.data());
-    return std::make_unique<MappedIndex>(
-        device,
-        std::move(flat),
-        idMap.id_map,
-        faiss::gpu::getMaxKSelection(/*use_cuvs=*/false),
-        /*efSearch=*/0);
-  }
-
-  faiss::gpu::GpuIndexCagraConfig config;
-  config.device = device->id;
-  config.build_algo = faiss::gpu::graph_build_algo::NN_DESCENT;
-  config.graph_degree = degree;
-  config.intermediate_graph_degree =
-      std::max<size_t>(degree, std::min<size_t>(2 * degree, graph.ntotal - 1));
-  config.nn_descent_niter = kCagraBuildIterations;
-  auto cagra = std::make_unique<faiss::gpu::GpuIndexCagra>(
-      &device->resources, graph.d, graph.metric_type, config);
-  cagra->add(graph.ntotal, embeddings.data());
+  faiss::gpu::GpuIndexFlatConfig flatConfig;
+  flatConfig.device = device->id;
+  auto flat = std::make_unique<faiss::gpu::GpuIndexFlat>(
+      &device->resources, graph.d, graph.metric_type, flatConfig);
+  flat->add(graph.ntotal, embeddings.data());
   return std::make_unique<MappedIndex>(
       device,
-      std::move(cagra),
+      std::move(flat),
       idMap.id_map,
-      kMaxCagraK,
-      std::max<size_t>(graph.hnsw.efSearch, 1));
+      faiss::gpu::getMaxKSelection(/*use_cuvs=*/false));
 }
 
 // Trains 'cpu' on the device, adds the embeddings, and copies the trained
@@ -454,51 +401,6 @@ void buildIvf(
   gpu.copyTo(&cpu);
 }
 
-// Builds a CAGRA graph on the device and stores it in 'index', an IndexIDMap
-// over an IndexHNSWCagra, so the written bytes search on CPU and on GPU.
-bool buildCagra(
-    Device& device,
-    faiss::Index& index,
-    const Embeddings& embeddings,
-    std::span<const int64_t> ids) {
-  auto& idMap = dynamic_cast<faiss::IndexIDMap&>(index);
-  auto& cpu = dynamic_cast<faiss::IndexHNSWCagra&>(*idMap.index);
-  const auto degree = graphDegree(cpu.hnsw.nb_neighbors(0), embeddings.size());
-  if (degree == 0) {
-    return false;
-  }
-  faiss::gpu::GpuIndexCagraConfig config;
-  config.device = device.id;
-  config.build_algo = faiss::gpu::graph_build_algo::NN_DESCENT;
-  config.graph_degree = degree;
-  config.intermediate_graph_degree = std::max<size_t>(
-      degree, std::min<size_t>(2 * degree, embeddings.size() - 1));
-  config.nn_descent_niter = kCagraBuildIterations;
-  faiss::gpu::DeviceScope scope(device.id);
-  faiss::gpu::GpuIndexCagra gpu(
-      &device.resources, cpu.d, cpu.metric_type, config);
-  gpu.add(embeddings.size(), embeddings.data());
-  const auto efSearch = cpu.hnsw.efSearch;
-  cpu.base_level_only = true;
-  gpu.copyTo(&cpu);
-  cpu.base_level_only = true;
-  cpu.hnsw.efSearch = efSearch;
-  idMap.id_map.assign(ids.begin(), ids.end());
-  idMap.ntotal = cpu.ntotal;
-  return idMap.ntotal == static_cast<faiss::idx_t>(ids.size());
-}
-
-// hnsw.efSearch of a CAGRA local index, which may be the index itself or the
-// index under its id map.
-size_t cagraEfSearch(const faiss::Index& index) {
-  const auto* graph = dynamic_cast<const faiss::IndexHNSWCagra*>(&index);
-  if (graph == nullptr) {
-    graph = dynamic_cast<const faiss::IndexHNSWCagra*>(
-        dynamic_cast<const faiss::IndexIDMap&>(index).index);
-  }
-  return graph->hnsw.efSearch;
-}
-
 class GpuAccelerator : public LocalVectorIndexAccelerator {
  public:
   explicit GpuAccelerator(const GpuLocalVectorIndexOptions& options)
@@ -513,22 +415,24 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
     try {
       faiss::gpu::DeviceScope scope(device_->id);
       if (type == VectorIndexKind::kHnswSq) {
-        return loadCagra(
+        auto flat = loadSmallHnsw(
             device_,
             dynamic_cast<const faiss::IndexIDMap&>(index),
             options_.requireDevice);
+        VELOX_CHECK(
+            flat != nullptr || !options_.requireDevice,
+            "HNSW SQ has no FAISS GPU index");
+        return flat;
       }
       faiss::gpu::GpuClonerOptions options;
-      options.use_cuvs = true;
+      options.use_cuvs = false;
       std::unique_ptr<faiss::Index> copy(
           faiss::gpu::index_cpu_to_gpu(
               &device_->resources, device_->id, &index, &options));
-      const bool cagra = type == VectorIndexKind::kCagra;
       return std::make_unique<ClonedIndex>(
           device_,
           std::move(copy),
-          cagra ? kMaxCagraK : faiss::gpu::getMaxKSelection(/*use_cuvs=*/true),
-          cagra ? cagraEfSearch(index) : 0);
+          faiss::gpu::getMaxKSelection(/*use_cuvs=*/false));
     } catch (const std::exception& e) {
       VELOX_CHECK(
           !options_.requireDevice,
@@ -566,8 +470,6 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
               embeddings,
               ids);
           return true;
-        case VectorIndexKind::kCagra:
-          return buildCagra(*device_, index, embeddings, ids);
         case VectorIndexKind::kFlat:
         case VectorIndexKind::kHnswSq:
           return false;

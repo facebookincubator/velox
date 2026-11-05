@@ -40,19 +40,18 @@ struct GpuLocalVectorIndexOptions {
   int64_t minBuildSize{0};
 
   /// Loads every local index onto the device, ignoring 'minSearchSize'. A
-  /// kHnswSq index too small for a CAGRA graph becomes an exact flat index,
-  /// and a load that fails throws rather than leaving the index on the CPU.
+  /// kHnswSq index too small for an HNSW graph becomes an exact flat index.
+  /// A larger kHnswSq index has no FAISS GPU implementation and the load
+  /// throws rather than leaving the index on the CPU.
   bool requireDevice{false};
 };
 
-/// Returns an accelerator that runs local indexes on a GPU through FAISS GPU
-/// and cuVS. kFlat, kIvfFlat, kIvfSq and kCagra indexes are copied to the
-/// device as they are: the first three by index_cpu_to_gpu, and kCagra from
-/// its stored IndexHNSWCagra. A kHnswSq index is the one type rebuilt, as a
-/// CAGRA graph over its reconstructed embeddings, so its scores come from
-/// full-precision embeddings rather than the 8-bit codes. 'hnsw.efSearch' is
-/// CAGRA's intermediate result count. Searches on one device run one at a
-/// time. Throws if 'options.device' is not a CUDA device.
+/// Returns an accelerator that runs local indexes on a GPU through FAISS's
+/// own GPU kernels. kFlat, kIvfFlat and kIvfSq are copied with
+/// index_cpu_to_gpu. kHnswSq stays on the CPU, except a graph too small to
+/// search, which is an exact flat index when 'requireDevice' is set. Searches
+/// on one device run one at a time. Throws if 'options.device' is not a CUDA
+/// device.
 std::shared_ptr<const LocalVectorIndexAccelerator>
 makeGpuLocalVectorIndexAccelerator(
     const GpuLocalVectorIndexOptions& options = {});

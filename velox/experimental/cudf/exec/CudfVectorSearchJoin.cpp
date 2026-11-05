@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfVectorSearchJoin.h"
 #include "velox/experimental/cudf/exec/CudfVectorSearchKernels.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -41,8 +42,6 @@
 #include <rmm/device_uvector.hpp>
 
 #include <cuda_runtime.h>
-
-#include "velox/experimental/cudf/CudfNoDefaults.h"
 
 #include <algorithm>
 #include <limits>
@@ -297,9 +296,8 @@ std::unique_ptr<cudf::table> CudfVectorSearchJoinProbe::pairsToSearch(
   const auto mr = get_temp_mr();
   std::unique_ptr<cudf::table> pairs;
   if (const auto* hashJoin = table_->hashJoin()) {
-    auto [probeRows, buildRows] =
-        hashJoin->inner_join(
-            probe.select(keyChannels_), std::nullopt, stream, mr);
+    auto [probeRows, buildRows] = hashJoin->inner_join(
+        probe.select(keyChannels_), std::nullopt, stream, mr);
     std::vector<std::unique_ptr<cudf::column>> columns;
     columns.push_back(valuesColumn(std::move(*probeRows), stream));
     columns.push_back(valuesColumn(std::move(*buildRows), stream));
@@ -347,8 +345,7 @@ std::unique_ptr<cudf::table> CudfVectorSearchJoinProbe::search(
   std::unique_ptr<cudf::column> hasResults;
   if (isLeftJoin_) {
     const cudf::numeric_scalar<bool> none(false, true, stream, mr);
-    hasResults =
-        cudf::make_column_from_scalar(none, numProbeRows, stream, mr);
+    hasResults = cudf::make_column_from_scalar(none, numProbeRows, stream, mr);
   }
 
   std::vector<std::unique_ptr<cudf::table>> results;
@@ -447,8 +444,9 @@ std::unique_ptr<cudf::table> CudfVectorSearchJoinProbe::search(
           columns.push_back(valuesColumn(std::move(scores), stream));
           const cudf::table candidates(std::move(columns));
           auto foundColumn = valuesColumn(std::move(found), stream);
-          results.push_back(cudf::apply_boolean_mask(
-              candidates.view(), foundColumn->view(), stream, mr));
+          results.push_back(
+              cudf::apply_boolean_mask(
+                  candidates.view(), foundColumn->view(), stream, mr));
         }
       }
     }
@@ -467,18 +465,20 @@ std::unique_ptr<cudf::table> CudfVectorSearchJoinProbe::search(
       std::vector<std::unique_ptr<cudf::column>> columns;
       columns.push_back(std::move(unmatched->release()[0]));
       columns.push_back(sizeTypeColumn(-1, numUnmatched, stream, mr));
-      columns.push_back(cudf::make_numeric_column(
-          cudf::data_type{cudf::type_id::INT64},
-          numUnmatched,
-          cudf::mask_state::ALL_NULL,
-          stream,
-          mr));
-      columns.push_back(cudf::make_numeric_column(
-          cudf::data_type{cudf::type_id::FLOAT32},
-          numUnmatched,
-          cudf::mask_state::ALL_NULL,
-          stream,
-          mr));
+      columns.push_back(
+          cudf::make_numeric_column(
+              cudf::data_type{cudf::type_id::INT64},
+              numUnmatched,
+              cudf::mask_state::ALL_NULL,
+              stream,
+              mr));
+      columns.push_back(
+          cudf::make_numeric_column(
+              cudf::data_type{cudf::type_id::FLOAT32},
+              numUnmatched,
+              cudf::mask_state::ALL_NULL,
+              stream,
+              mr));
       results.push_back(std::make_unique<cudf::table>(std::move(columns)));
     }
   }
