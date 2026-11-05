@@ -389,11 +389,9 @@ std::string_view EncodingSliceFactory::slice(
     Buffer& buffer,
     const Encoding::Options& options) {
   const auto encodingType = EncodingPrefix::encodingType(encoded);
-  const auto rowCount =
+  const uint32_t rowCount =
       EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, rowCount);
-  NIMBLE_CHECK_LE(length, rowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(rowCount, offset, length);
   if (offset == 0 && length == rowCount &&
       encodingType != EncodingType::SharedDictionary) {
     return buffer.writeString(encoded);

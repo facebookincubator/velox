@@ -886,12 +886,10 @@ std::string_view PartitionedEliasFanoEncoding<T>::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const auto sourceRowCount =
-      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount, "Slice starts past the last row.");
-  NIMBLE_CHECK_LE(
-      length, sourceRowCount - offset, "Slice ends past the last row.");
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+      offset,
+      length);
 
   auto* pool = &buffer.getMemoryPool();
   const PartitionedEliasFanoEncoding<T> source{*pool, encoded, {}, options};
