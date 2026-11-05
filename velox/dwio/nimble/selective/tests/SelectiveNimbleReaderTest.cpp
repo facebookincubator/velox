@@ -57,6 +57,7 @@
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace facebook::nimble {
@@ -4610,6 +4611,45 @@ TEST_F(SmallFilePreloadTest, preloadKeepsFileReadOps) {
       fileReadOps,
   };
   EXPECT_EQ(readFile->fileOpts(), expected);
+}
+
+TEST_F(SmallFilePreloadTest, readsWithoutPreloadKeepFileReadOps) {
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(500)});
+  auto nimbleFile = test::createNimbleFile(*rootPool_, input);
+
+  auto readFile =
+      std::make_shared<nimble::testing::FileOptsRecordingReadFile>(nimbleFile);
+  const folly::F14FastMap<std::string, std::string> fileReadOps{
+      {"key", "value"},
+  };
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      readFile,
+      *pool(),
+      dwio::common::MetricsLog::voidLog(),
+      /*stats=*/nullptr,
+      /*ioStats=*/nullptr,
+      dwio::common::BufferedInput::kMaxMergeDistance,
+      /*wsVRLoad=*/std::nullopt,
+      fileReadOps);
+  dwio::common::ReaderOptions options(pool());
+  options.setFilePreloadThreshold(0);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  options.setScanSpec(scanSpec);
+
+  auto reader = dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
+                    ->createReader(std::move(bufferedInput), options);
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowOptions);
+  VectorPtr result = BaseVector::create(asRowType(input->type()), 0, pool());
+  ASSERT_EQ(rowReader->next(1'000, result), 500);
+  velox::test::assertEqualVectors(input, result);
+
+  EXPECT_THAT(
+      readFile->fileOpts(),
+      ::testing::AllOf(
+          ::testing::SizeIs(::testing::Gt(1)), ::testing::Each(fileReadOps)));
 }
 
 // Preload must skip when a cache is present, else it bypasses the data cache.
