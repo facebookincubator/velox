@@ -364,56 +364,197 @@ bool hasOrderSensitive(
   return hasOrderSensitive(
       [&](PlanBuilder& builder) { builder.values(data); }, aggregates, pool);
 }
+
+// Require every aggregate's fast path so tests can compare partial states.
+bool allSupportToIntermediate(
+    const core::AggregationNode& node,
+    const core::QueryConfig& config) {
+  return !node.aggregates().empty() &&
+      std::all_of(
+          node.aggregates().begin(),
+          node.aggregates().end(),
+          [&](const auto& aggregate) {
+            return exec::Aggregate::create(
+                       aggregate.call->name(),
+                       core::AggregationNode::Step::kPartial,
+                       aggregate.rawInputTypes,
+                       aggregate.call->type(),
+                       config,
+                       {})
+                ->supportsToIntermediate();
+          });
+}
+
+// Runs 'plan', whose root is a partial merge aggregation, with and without
+// abandoning partial aggregation and compares the partial states, so a final
+// merge cannot hide incorrect empty values such as NULL instead of COUNT's 0.
+// Skips merges without the toIntermediate fast path.
+void testAbandonedPartialMerge(
+    const core::PlanNodePtr& plan,
+    const std::unordered_map<std::string, std::string>& config,
+    memory::MemoryPool* pool) {
+  const auto& mergeNode = dynamic_cast<const core::AggregationNode&>(*plan);
+  if (!allSupportToIntermediate(mergeNode, core::QueryConfig(config))) {
+    return;
+  }
+
+  const auto expected =
+      AssertQueryBuilder(plan)
+          .configs(config)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+          .config(core::QueryConfig::kMaxPartialAggregationMemory, 1ULL << 60)
+          .config(
+              core::QueryConfig::kMaxExtendedPartialAggregationMemory,
+              1ULL << 60)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "101")
+          .copyResults(pool);
+
+  // Use a new builder because a run consumes the builder's configs, and a
+  // later run would then drop kMaxOutputBatchRows and 'config'.
+  AssertQueryBuilder queryBuilder(plan);
+  queryBuilder.configs(config).config(
+      core::QueryConfig::kMaxOutputBatchRows, "2");
+  enableAbandonPartialAggregation(queryBuilder);
+  auto task = queryBuilder.assertResults({expected});
+  const auto stats = toPlanStats(task->taskStats());
+  const auto& mergeStats = stats.at(plan->id());
+  // No group reaches the merge, so there is nothing to abandon.
+  if (mergeStats.inputRows == 0) {
+    return;
+  }
+  // The first input vector is aggregated before abandoning, so a single vector
+  // never reaches the fast path. testCompanionMerge sends at least 3 groups,
+  // which 2-row batches split into at least 2 vectors.
+  ASSERT_GT(mergeStats.inputVectors, 1)
+      << "Merge node received one input vector; the abandoned fast path was "
+         "not exercised.";
+  EXPECT_GT(
+      mergeStats.customStats.at("abandonedPartialAggregationRows").sum, 0);
+  EXPECT_GE(
+      mergeStats.customStats.at("toIntermediateFastPathCalls").sum,
+      mergeNode.aggregates().size() * (mergeStats.inputVectors - 1));
+}
+
+// Returns the non-empty vectors of 'inputs' with the first row of each
+// intermediate column set to null. The first 'numGroupingKeys' columns are
+// grouping keys and stay as they are. Wraps the intermediate columns in
+// dictionaries so that the wrapped vectors keep their encodings. Returns one
+// empty vector of 'type' when no input has rows, because a Values node takes
+// its type from its first vector.
+std::vector<RowVectorPtr> nullFirstIntermediateRows(
+    const std::vector<RowVectorPtr>& inputs,
+    size_t numGroupingKeys,
+    const RowTypePtr& type,
+    memory::MemoryPool* pool) {
+  std::vector<RowVectorPtr> nullableInputs;
+  for (const auto& input : inputs) {
+    if (input->size() == 0) {
+      continue;
+    }
+    auto children = input->children();
+    auto indices = allocateIndices(input->size(), pool);
+    auto* rawIndices = indices->asMutable<vector_size_t>();
+    std::iota(rawIndices, rawIndices + input->size(), 0);
+    auto nulls = allocateNulls(input->size(), pool, bits::kNotNull);
+    bits::setNull(nulls->asMutable<uint64_t>(), 0);
+    for (auto i = numGroupingKeys; i < children.size(); ++i) {
+      children[i] = BaseVector::wrapInDictionary(
+          nulls, indices, input->size(), children[i]);
+    }
+    nullableInputs.push_back(
+        std::make_shared<RowVector>(
+            pool, input->type(), nullptr, input->size(), std::move(children)));
+  }
+  if (nullableInputs.empty()) {
+    nullableInputs.push_back(BaseVector::create<RowVector>(type, 0, pool));
+  }
+  return nullableInputs;
+}
+
+// Number of copies of the input in the abandoned partial merge checks. Any
+// non-empty input then has at least 3 groups, which the 2-row batches of
+// testAbandonedPartialMerge send to the merge as at least 2 input vectors.
+constexpr int32_t kNumAbandonedMergeCopies{3};
+
+// Name of the column that numbers the input copies of the abandoned partial
+// merge checks.
+const std::string kCopyKey{"__copy"};
+
 } // namespace
 
-void AggregationTestBase::testAggregationsWithCompanionImpl(
-    const std::vector<RowVectorPtr>& data,
-    const std::function<void(PlanBuilder&)>& makeSource,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
-    const std::vector<std::string>& postAggregationProjections,
-    const std::function<std::shared_ptr<exec::Task>(
-        exec::test::AssertQueryBuilder&)>& assertResults,
-    const std::unordered_map<std::string, std::string>& config,
-    bool streaming) {
-  auto groupingKeysWithPartialKey = groupingKeys;
-  groupingKeysWithPartialKey.push_back("k0");
+struct AggregationTestBase::CompanionPlanInputs {
+  // Builds the inputs for 'aggregates' over 'data' grouped by 'groupingKeys'.
+  static CompanionPlanInputs make(
+      const std::vector<RowVectorPtr>& data,
+      const std::function<void(PlanBuilder&)>& makeSource,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::vector<TypePtr>>& aggregatesArgTypes) {
+    CompanionPlanInputs inputs;
+    inputs.data = data;
+    inputs.makeSource = makeSource;
+    inputs.groupingKeys = groupingKeys;
+    inputs.partialGroupingKeys = groupingKeys;
+    inputs.partialGroupingKeys.push_back("k0");
+    inputs.aggregates = aggregates;
+    inputs.extractExpressions = groupingKeys;
 
+    auto [functionNames, aggregateArgs] = getFunctionNamesAndArgs(aggregates);
+    for (size_t i = 0, size = functionNames.size(); i < size; ++i) {
+      const auto& companionSignatures =
+          exec::getCompanionFunctionSignatures(functionNames[i]);
+      VELOX_CHECK(companionSignatures.has_value());
+
+      const auto& companionFunctions = getCompanionAggregates(
+          i,
+          *companionSignatures,
+          functionNames[i],
+          aggregateArgs[i],
+          aggregatesArgTypes[i]);
+      inputs.partialAggregates.push_back(companionFunctions.partialFunction);
+      inputs.mergeAggregates.push_back(companionFunctions.mergeFunction);
+      inputs.mergeExtractAggregates.push_back(
+          companionFunctions.mergeExtractFunction);
+      inputs.extractExpressions.push_back(companionFunctions.extractFunction);
+    }
+    return inputs;
+  }
+
+  // The caller's data, without the extra grouping key.
+  std::vector<RowVectorPtr> data;
+  // Builds the input of the aggregation, including the extra grouping key k0.
+  std::function<void(PlanBuilder&)> makeSource;
+  std::vector<std::string> groupingKeys;
+  // 'groupingKeys' followed by k0, for the steps that compute partial states.
+  std::vector<std::string> partialGroupingKeys;
+  std::vector<std::string> aggregates;
+  // One companion per aggregate.
   std::vector<std::string> partialAggregates;
   std::vector<std::string> mergeAggregates;
   std::vector<std::string> mergeExtractAggregates;
+  // 'groupingKeys' followed by one extract expression per aggregate.
   std::vector<std::string> extractExpressions;
-  extractExpressions.insert(
-      extractExpressions.end(), groupingKeys.begin(), groupingKeys.end());
+};
 
-  auto [functionNames, aggregateArgs] = getFunctionNamesAndArgs(aggregates);
-  for (size_t i = 0, size = functionNames.size(); i < size; ++i) {
-    const auto& companionSignatures =
-        exec::getCompanionFunctionSignatures(functionNames[i]);
-    VELOX_CHECK(companionSignatures.has_value());
-
-    const auto& companionFunctions = getCompanionAggregates(
-        i,
-        *companionSignatures,
-        functionNames[i],
-        aggregateArgs[i],
-        aggregatesArgTypes[i]);
-    partialAggregates.push_back(companionFunctions.partialFunction);
-    mergeAggregates.push_back(companionFunctions.mergeFunction);
-    mergeExtractAggregates.push_back(companionFunctions.mergeExtractFunction);
-    extractExpressions.push_back(companionFunctions.extractFunction);
-  }
-
+void AggregationTestBase::testCompanionExtract(
+    const CompanionPlanInputs& inputs,
+    const std::vector<std::string>& postAggregationProjections,
+    const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
+        assertResults,
+    const std::unordered_map<std::string, std::string>& config,
+    bool streaming) {
   {
     SCOPED_TRACE("Run partial + final");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+    inputs.makeSource(builder);
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates)
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates)
         .finalAggregation()
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -424,26 +565,28 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
     assertResults(queryBuilder);
   }
 
-  if (!groupingKeys.empty() && !hasOrderSensitive(data, aggregates, pool())) {
+  if (!inputs.groupingKeys.empty() &&
+      !hasOrderSensitive(inputs.data, inputs.aggregates, pool())) {
     SCOPED_TRACE("Run partial + final with spilling");
     PlanBuilder builder(pool());
-    makeSource(builder);
+    inputs.makeSource(builder);
 
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
     core::PlanNodeId finalNodeId;
     builder.localPartitionRoundRobinRow()
-        .partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
         .capturePlanNodeId(partialNodeId)
-        .localPartition(groupingKeysWithPartialKey)
+        .localPartition(inputs.partialGroupingKeys)
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates)
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates)
         .capturePlanNodeId(partialNodeId)
-        .localPartition(groupingKeys)
+        .localPartition(inputs.groupingKeys)
         .finalAggregation()
         .capturePlanNodeId(finalNodeId)
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -488,10 +631,11 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
   {
     SCOPED_TRACE("Run single");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.singleAggregation(groupingKeysWithPartialKey, partialAggregates)
-        .singleAggregation(groupingKeys, mergeAggregates)
-        .project(extractExpressions);
+    inputs.makeSource(builder);
+    builder
+        .singleAggregation(inputs.partialGroupingKeys, inputs.partialAggregates)
+        .singleAggregation(inputs.groupingKeys, inputs.mergeAggregates)
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -505,14 +649,16 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
   {
     SCOPED_TRACE("Run partial + intermediate + final");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+    inputs.makeSource(builder);
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
         .intermediateAggregation()
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates)
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates)
         .intermediateAggregation()
         .finalAggregation()
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -523,38 +669,19 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
     assertResults(queryBuilder);
   }
 
-  {
-    SCOPED_TRACE("Run partial + intermediate + final merge extract");
-    PlanBuilder builder(pool());
-    makeSource(builder);
-
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
-        .intermediateAggregation()
-        .finalAggregation()
-        .partialAggregation(groupingKeys, mergeExtractAggregates)
-        .intermediateAggregation()
-        .finalAggregation();
-
-    if (!postAggregationProjections.empty()) {
-      builder.project(postAggregationProjections);
-    }
-
-    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
-    queryBuilder.configs(config);
-    assertResults(queryBuilder);
-  }
-
-  if (!groupingKeys.empty()) {
+  if (!inputs.groupingKeys.empty()) {
     SCOPED_TRACE("Run partial + local exchange + final");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
-        .localPartition(groupingKeysWithPartialKey)
+    inputs.makeSource(builder);
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
+        .localPartition(inputs.partialGroupingKeys)
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates)
-        .localPartition(groupingKeys)
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates)
+        .localPartition(inputs.groupingKeys)
         .finalAggregation()
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -569,24 +696,26 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
     SCOPED_TRACE(
         "Run partial + local exchange + intermediate + local exchange + final");
     PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
-        .localPartition(groupingKeysWithPartialKey)
+    inputs.makeSource(builder);
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
+        .localPartition(inputs.partialGroupingKeys)
         .intermediateAggregation()
-        .localPartition(groupingKeysWithPartialKey)
+        .localPartition(inputs.partialGroupingKeys)
         .finalAggregation()
-        .partialAggregation(groupingKeys, mergeAggregates);
+        .partialAggregation(inputs.groupingKeys, inputs.mergeAggregates);
 
-    if (groupingKeys.empty()) {
+    if (inputs.groupingKeys.empty()) {
       builder.localPartitionRoundRobinRow();
     } else {
-      builder.localPartition(groupingKeys);
+      builder.localPartition(inputs.groupingKeys);
     }
 
     builder.intermediateAggregation()
-        .localPartition(groupingKeys)
+        .localPartition(inputs.groupingKeys)
         .finalAggregation()
-        .project(extractExpressions);
+        .project(inputs.extractExpressions);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -597,28 +726,61 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
     assertResults(queryBuilder);
   }
 
-  if (streaming && groupingKeys.empty() && postAggregationProjections.empty()) {
+  if (streaming && inputs.groupingKeys.empty() &&
+      postAggregationProjections.empty()) {
     {
       SCOPED_TRACE("Streaming partial");
       auto partialResult = validateStreamingInTestAggregations(
           [&](auto& builder) {
-            builder.values(addExtraGroupingKey(data, "k0"));
+            builder.values(addExtraGroupingKey(inputs.data, "k0"));
           },
-          partialAggregates,
+          inputs.partialAggregates,
           config,
-          extractExpressions);
+          inputs.extractExpressions);
 
       // The partial check doesn't run with fewer than 2 rows and returns null.
       if (partialResult != nullptr) {
         validateStreamingInTestAggregations(
             [&](auto& builder) { builder.values({partialResult}); },
-            mergeAggregates,
+            inputs.mergeAggregates,
             config,
-            extractExpressions);
+            inputs.extractExpressions);
       }
     }
   }
+}
 
+void AggregationTestBase::testCompanionMergeExtract(
+    const CompanionPlanInputs& inputs,
+    const std::vector<std::string>& postAggregationProjections,
+    const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
+        assertResults,
+    const std::unordered_map<std::string, std::string>& config) {
+  {
+    SCOPED_TRACE("Run partial + intermediate + final merge extract");
+    PlanBuilder builder(pool());
+    inputs.makeSource(builder);
+
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
+        .intermediateAggregation()
+        .finalAggregation()
+        .partialAggregation(inputs.groupingKeys, inputs.mergeExtractAggregates)
+        .intermediateAggregation()
+        .finalAggregation();
+
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    queryBuilder.configs(config);
+    assertResults(queryBuilder);
+  }
+
+  const auto functionNames =
+      std::get<0>(getFunctionNamesAndArgs(inputs.aggregates));
   bool allFunctionsIgnoreNullInputs{true};
   for (const auto& functionName : functionNames) {
     const auto* functionEntry = exec::getAggregateFunctionEntry(functionName);
@@ -634,9 +796,10 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
     // Produce real intermediate states from the raw input, add null-bearing
     // copies, then merge and validate using the original result assertion.
     PlanBuilder partialBuilder(pool());
-    makeSource(partialBuilder);
+    inputs.makeSource(partialBuilder);
     partialBuilder
-        .partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
         .finalAggregation();
     const auto intermediateInput = AssertQueryBuilder(partialBuilder.planNode())
                                        .configs(config)
@@ -644,7 +807,7 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
 
     PlanBuilder mergeExtractBuilder(pool());
     mergeExtractBuilder.values({intermediateInput})
-        .singleAggregation(groupingKeys, mergeExtractAggregates);
+        .singleAggregation(inputs.groupingKeys, inputs.mergeExtractAggregates);
     const auto& mergeExtractNode = static_cast<const core::AggregationNode&>(
         *mergeExtractBuilder.planNode());
 
@@ -655,11 +818,12 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
     }
 
     const auto inputWithNulls = makeNullInput(
-        mergeExtractCalls, groupingKeys, intermediateInput, pool());
+        mergeExtractCalls, inputs.groupingKeys, intermediateInput, pool());
     if (inputWithNulls) {
       PlanBuilder builder(pool());
       builder.values({inputWithNulls})
-          .singleAggregation(groupingKeys, mergeExtractAggregates);
+          .singleAggregation(
+              inputs.groupingKeys, inputs.mergeExtractAggregates);
       if (!postAggregationProjections.empty()) {
         builder.project(postAggregationProjections);
       }
@@ -668,6 +832,98 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
       queryBuilder.configs(config);
       assertResults(queryBuilder);
     }
+  }
+}
+
+void AggregationTestBase::testCompanionMerge(
+    const CompanionPlanInputs& inputs,
+    const std::unordered_map<std::string, std::string>& config) {
+  const auto& partialAggregates = inputs.partialAggregates;
+  const auto& mergeAggregates = inputs.mergeAggregates;
+  auto groupingKeys = inputs.partialGroupingKeys;
+  groupingKeys.push_back(kCopyKey);
+
+  // Returns a builder with the intermediate states of the input copies.
+  auto makeIntermediate = [&]() {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder(planNodeIdGenerator, pool());
+    inputs.makeSource(builder);
+
+    // Copy every row with a key that numbers the copies, so that the copies
+    // stay in separate groups.
+    auto copies = makeRowVector(
+        {kCopyKey},
+        {makeFlatVector<int32_t>(
+            kNumAbandonedMergeCopies, [](auto row) { return row; })});
+    auto outputLayout = builder.planNode()->outputType()->names();
+    outputLayout.push_back(kCopyKey);
+    builder
+        .nestedLoopJoin(
+            PlanBuilder(planNodeIdGenerator, pool())
+                .values({copies})
+                .planNode(),
+            outputLayout)
+        .partialAggregation(groupingKeys, partialAggregates)
+        .finalAggregation();
+    return builder;
+  };
+
+  {
+    SCOPED_TRACE("Run abandoned partial merge without mask");
+    auto builder = makeIntermediate();
+
+    // Group by k0 and the copy key because global partial aggregations
+    // cannot be abandoned.
+    builder.partialAggregation(groupingKeys, mergeAggregates);
+    testAbandonedPartialMerge(builder.planNode(), config, pool());
+  }
+
+  for (const auto* mask : {"row_number % 2 = 0", "false"}) {
+    SCOPED_TRACE(
+        fmt::format("Run abandoned partial merge with mask: {}", mask));
+    auto builder = makeIntermediate();
+    builder.rowNumber({});
+
+    auto projections = groupingKeys;
+    for (auto i = 0; i < mergeAggregates.size(); ++i) {
+      projections.push_back(fmt::format("a{}", i));
+    }
+    projections.push_back(fmt::format("{} AS __merge_mask", mask));
+    builder.project(projections);
+
+    // Group by k0 and the copy key because global partial aggregations
+    // cannot be abandoned.
+    builder.partialAggregation(
+        groupingKeys,
+        mergeAggregates,
+        std::vector<std::string>(mergeAggregates.size(), "__merge_mask"));
+    testAbandonedPartialMerge(builder.planNode(), config, pool());
+  }
+
+  {
+    SCOPED_TRACE("Run abandoned partial merge with selected nulls");
+    auto builder = makeIntermediate();
+
+    // Read without copying to keep the encodings that some merges require,
+    // such as constant intermediate fields. 'cursor' owns the memory of
+    // 'intermediateInputs', so it must outlive the merge run.
+    CursorParameters params;
+    params.planNode = builder.planNode();
+    params.queryConfigs = config;
+    params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] = "2";
+    params.copyResult = false;
+    auto [cursor, intermediateInputs] = exec::test::readCursor(params);
+    PlanBuilder mergeBuilder(pool());
+    mergeBuilder.values(nullFirstIntermediateRows(
+        intermediateInputs,
+        groupingKeys.size(),
+        builder.planNode()->outputType(),
+        pool()));
+
+    // Group by k0 and the copy key because global partial aggregations
+    // cannot be abandoned.
+    mergeBuilder.partialAggregation(groupingKeys, mergeAggregates);
+    testAbandonedPartialMerge(mergeBuilder.planNode(), config, pool());
   }
 }
 
@@ -1719,7 +1975,8 @@ void AggregationTestBase::AggregationTester::assertResults(
 void AggregationTestBase::AggregationTester::assertError(
     const std::string& message) {
   VELOX_CHECK(
-      !preAggregation_ && projections_.empty() && !companion_,
+      !preAggregation_ && projections_.empty() &&
+          companionPlans_ == CompanionPlans::kNone,
       "assertError supports only the input, grouping keys, aggregates and "
       "configs");
   test_.testFailingAggregations(
@@ -1740,9 +1997,9 @@ void AggregationTestBase::AggregationTester::run(
       streaming_,
       incremental_);
 
-  if (companion_) {
+  if (companionPlans_ != CompanionPlans::kNone) {
     SCOPED_TRACE("Companion functions");
-    test_.testAggregationsWithCompanionImpl(
+    const auto companionInputs = CompanionPlanInputs::make(
         inputs_,
         [&](PlanBuilder& builder) {
           addSource(builder);
@@ -1755,11 +2012,14 @@ void AggregationTestBase::AggregationTester::run(
         },
         groupingKeys_,
         aggregates_,
-        aggregateArgTypes(),
-        projections_,
-        assertResults,
-        config_,
-        streaming_);
+        aggregateArgTypes());
+    if (companionPlans_ == CompanionPlans::kAll) {
+      test_.testCompanionExtract(
+          companionInputs, projections_, assertResults, config_, streaming_);
+      test_.testCompanionMergeExtract(
+          companionInputs, projections_, assertResults, config_);
+    }
+    test_.testCompanionMerge(companionInputs, config_);
   }
 }
 

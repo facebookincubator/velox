@@ -51,17 +51,20 @@ TEST_F(CountAggregationTest, count) {
   AggregationTester(*this)
       .inputs(vectors)
       .aggregates({"count()"})
+      .withCompanion()
       .assertResults("SELECT count(1) FROM tmp");
 
   AggregationTester(*this)
       .inputs(vectors)
       .aggregates({"count(1)"})
+      .withCompanion()
       .assertResults("SELECT count(1) FROM tmp");
 
   // count over column with nulls; only non-null rows should be counted
   AggregationTester(*this)
       .inputs(vectors)
       .aggregates({"count(c1)"})
+      .withCompanion()
       .assertResults("SELECT count(c1) FROM tmp");
 
   // count over zero rows; the result should be 0, not null

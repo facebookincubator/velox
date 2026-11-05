@@ -70,6 +70,7 @@ class MinMaxAggregationTest
     AggregationTester(*this)
         .inputs(vectors)
         .aggregates({min(c1), max(c1)})
+        .withCompanion()
         .assertResults("SELECT min(c1), max(c1) FROM tmp");
 
     // Group by aggregation.
