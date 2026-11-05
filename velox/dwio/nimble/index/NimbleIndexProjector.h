@@ -528,6 +528,9 @@ class NimbleIndexProjector {
   // Validates the projected row schema.
   void validateProjection() const;
 
+  // Returns the stream slicer, which the first call creates.
+  serde::StreamSlicer& streamSlicer();
+
   // Builds streamChecksum_ and the stream trailer members when
   // `verifyStreamChecksums` is set and the file's stream trailers carry a
   // checksum.
@@ -638,8 +641,6 @@ class NimbleIndexProjector {
   // True when every emitted slice must preserve a native HFM batch boundary,
   // even if the selected group has no physical stream in a stripe.
   const bool hasProjectedHybridFlatMaps_{false};
-  // Reused across stripes; its raw input format is fixed by the tablet.
-  const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
   std::unique_ptr<DataInput> dataInput_;
   // Verifies a stream read from storage against the checksum in its stream
@@ -664,6 +665,11 @@ class NimbleIndexProjector {
   std::unique_ptr<StreamReader> streamReader_;
   // Options::cacheEncodingView of the call that created 'streamReader_'.
   bool cacheEncodingView_{false};
+
+  // Reused across stripes; its raw input format is fixed by the tablet. Only
+  // the serialized path slices streams, so the slicer is created on the first
+  // slice and a projector that decodes rows never builds it.
+  std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
   // One range tagged with the tablet stripe it falls in, before grouping.
   // Sorting a vector of these on (tabletStripeIndex, range.requestIndex) is
