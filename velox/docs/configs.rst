@@ -1698,6 +1698,11 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - bool
      - false
      - Whether to serialize I/O submission batches to prevent requests from concurrent splits from interleaving.
+   * - cudf.hive.split-batching
+     - cudf.hive.split_batching
+     - bool
+     - false
+     - Whether the connector takes the splits passed together to ``Task::addSplits()`` as one batch and reads the whole Parquet files among them that share a schema and partition values with a single multi-file reader. The connector property enables batch delivery; the session property can make a delivered batch read one split at a time.
    * - parquet.reader.use-pandas-metadata
      - parquet.reader.use_pandas_metadata
      - bool

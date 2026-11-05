@@ -33,6 +33,7 @@
 
 #include <cudf/ast/expressions.hpp>
 
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -72,6 +73,12 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
       const ConnectorTableHandlePtr& tableHandle,
       const ConnectorQueryCtx& connectorQueryCtx);
 
+  /// Number of multi-file readers opened for split batches, and of the files
+  /// they read.
+  static constexpr std::string_view kNumMultiFileReaders{
+      "cudfMultiFileReaders"};
+  static constexpr std::string_view kNumBatchedFiles{"cudfBatchedFiles"};
+
   CudfHiveDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
@@ -82,6 +89,13 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
       const std::shared_ptr<CudfHiveConfig>& CudfHiveConfig);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+
+  /// Reads the splits of 'splits' that canBatch() accepts and that share the
+  /// partition key values of the first such split with one multi-file
+  /// reader, and the others one by one. Reads all of them one by one when
+  /// they do not cover whole files of one schema.
+  void addSplits(
+      const std::vector<std::shared_ptr<ConnectorSplit>>& splits) override;
 
   void setFromDataSource(std::unique_ptr<DataSource> source) override;
 
@@ -144,6 +158,18 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Virtual method to convert the input `ConnectorSplit` to appropriate
   // subclass(es).
   virtual void convertSplit(std::shared_ptr<ConnectorSplit> split);
+
+  // Returns 'split' as a `CudfHiveConnectorSplit`, converting a
+  // `HiveConnectorSplit`.
+  static std::shared_ptr<CudfHiveConnectorSplit> toCudfHiveSplit(
+      const std::shared_ptr<ConnectorSplit>& split);
+
+  // Returns whether 'split', converted to 'cudfSplit', may be read with other
+  // splits by one multi-file reader: a Parquet split from the file start that
+  // may cover the whole file.
+  virtual bool canBatch(
+      const ConnectorSplit& split,
+      const CudfHiveConnectorSplit& cudfSplit) const;
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
@@ -215,8 +241,17 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Returns whether TIMESTAMP partition values are read as local time.
   bool readTimestampPartitionValueAsLocalTime() const;
 
-  // Counts the current split as skipped without opening it.
-  void recordSkippedSplit();
+  // Prepares the reader of the first of 'splits', reading the others with it
+  // by one multi-file reader when there are several.
+  void prepareSplits(
+      std::vector<std::shared_ptr<ConnectorSplit>> splits,
+      bool isPreloadedSplit);
+
+  // Adds the size of the file of 'split' to 'completedBytes_'.
+  void addCompletedBytes(const CudfHiveConnectorSplit& split);
+
+  // Counts 'split' as skipped without opening it.
+  void recordSkippedSplit(const CudfHiveConnectorSplit& split);
 
   RowTypePtr cachedTableRowType_{};
 
@@ -228,6 +263,14 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   dwio::common::RuntimeStats runtimeStats_;
 
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
+
+  // Splits of the current batch left to read one by one after the current
+  // reader.
+  std::deque<std::shared_ptr<ConnectorSplit>> pendingSplits_;
+
+  // Values of kNumMultiFileReaders and kNumBatchedFiles.
+  int64_t numMultiFileReaders_{0};
+  int64_t numBatchedFiles_{0};
 
   // Optimized remaining-filter expression, or null when there is no remaining
   // filter or it folded to a constant. Gates remaining-filter evaluation in

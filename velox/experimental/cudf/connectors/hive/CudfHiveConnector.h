@@ -51,6 +51,10 @@ class CudfHiveConnector final
     return true;
   }
 
+  bool supportsSplitBatch() const override {
+    return cudfHiveConfig_->splitBatching();
+  }
+
   // TODO (dm): Re-add data sink
 
  protected:

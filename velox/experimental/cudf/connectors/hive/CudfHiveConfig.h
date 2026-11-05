@@ -96,6 +96,14 @@ class CudfHiveConfig {
   static constexpr const char* kSerializeIoRequestsSession =
       "cudf.hive.serialize_io_requests";
 
+  // Whether the connector takes a batch of splits from Task::addSplits() and
+  // reads the compatible ones with a single multi-file reader. The connector
+  // setting decides whether batches are delivered; the session one whether a
+  // delivered batch is read together or one split at a time.
+  static constexpr const char* kSplitBatching = "cudf.hive.split-batching";
+  static constexpr const char* kSplitBatchingSession =
+      "cudf.hive.split_batching";
+
   // Writer config options
 
   /// Whether new data can be inserted into a CudfHive file
@@ -168,6 +176,9 @@ class CudfHiveConfig {
 
   bool serializeIoRequests() const;
   bool serializeIoRequestsSession(const config::ConfigBase* session) const;
+
+  bool splitBatching() const;
+  bool splitBatchingSession(const config::ConfigBase* session) const;
 
   bool immutableFiles() const;
 
