@@ -103,6 +103,29 @@ using helper methods from the “bits” namespace.
 Since buffers are not typed, the size of the buffer reflects the number of bytes
 in the buffer, not the number of values.
 
+Alignment and Padding
+~~~~~~~~~~~~~~~~~~~~~
+
+Buffers held by vectors (nulls, values, indices, offsets and sizes) follow one
+contract, so that a vector can wrap memory from Arrow and other external sources
+without a copy:
+
+* A buffer starts aligned to its element width. Bitmaps (nulls and boolean
+  values) start 8-byte aligned.
+* A buffer may end at its valid bytes rounded up to its alignment, with nothing
+  addressable after that. Values, indices, offsets and sizes may end at their
+  last element. A bitmap of n bits spans bits::nwords(n) words, not just
+  bits::nbytes(n) bytes.
+* Code may read past the last valid byte only up to that end. Such reads stay
+  inside the buffer's memory and never cross a page.
+
+AlignedBuffer additionally provides at least simd::kPadding addressable bytes
+past its capacity, but a BufferView, such as one wrapping memory imported from
+Arrow, has none. A function that relies on padding says so next to its
+signature, and its callers must pass an AlignedBuffer. Memory from Arrow
+producers that follow Arrow's recommended layout, 64-byte aligned with lengths
+rounded up to 64 bytes, meets the contract.
+
 Null Flags
 ----------
 
