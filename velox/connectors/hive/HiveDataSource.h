@@ -47,7 +47,7 @@ class HiveDataSource : public connector::FileDataSource {
           const HiveTableHandlePtr& hiveTableHandle,
           const std::shared_ptr<common::ScanSpec>& scanSpec,
           const RowTypePtr& readerOutputType,
-          std::unordered_map<std::string, connector::FileColumnHandlePtr>*
+          const std::unordered_map<std::string, connector::FileColumnHandlePtr>*
               partitionKeys,
           FileHandleFactory* fileHandleFactory,
           folly::Executor* executor,

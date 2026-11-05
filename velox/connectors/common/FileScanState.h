@@ -25,8 +25,13 @@
 
 namespace facebook::velox::connector {
 
-/// Scan state owned by a FileDataSource and reused across its splits.
+class FileScanConfig;
+
+/// Mutable scan state. FileDataSource reuses its state across serial splits.
 struct FileScanState {
+  /// Owns the immutable requirements and handles borrowed by the reader.
+  std::shared_ptr<const FileScanConfig> scanConfig;
+
   /// Filters from the table handle and extracted from the remaining expression,
   /// also used for split validation. Filter objects can be shared with the
   /// table handle and other data sources and must not be modified in place.

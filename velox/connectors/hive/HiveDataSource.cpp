@@ -85,9 +85,9 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
         fileScanState_->filters,
         /*indexColumns=*/{},
         tableHandle_->dataColumns(),
-        partitionKeys_,
-        infoColumns_,
-        specialColumns_,
+        partitionKeys(),
+        infoColumns(),
+        specialColumns(),
         fileConfig_->readStatsBasedFilterReorderDisabled(
             connectorQueryCtx_->sessionProperties()),
         pool_);
@@ -101,10 +101,10 @@ void HiveDataSource::setupRowIdColumn() {
   auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split_);
   VELOX_CHECK(hiveSplit->rowIdProperties.has_value());
   const auto& props = *hiveSplit->rowIdProperties;
-  auto* rowId = fileScanState_->scanSpec->childByName(*specialColumns_.rowId);
+  auto* rowId = fileScanState_->scanSpec->childByName(*specialColumns().rowId);
   VELOX_CHECK_NOT_NULL(rowId);
   auto& rowIdType =
-      readerOutputType_->findChild(*specialColumns_.rowId)->asRow();
+      readerOutputType_->findChild(*specialColumns().rowId)->asRow();
   auto rowGroupId = split_->getFileName();
   rowId->childByName(rowIdType.nameOf(1))
       ->setConstantValue<StringView>(
@@ -129,7 +129,7 @@ std::vector<column_index_t> HiveDataSource::prepareSplit() {
   if (hiveSplit->bucketConversion.has_value()) {
     bucketChannels = setupBucketConversion();
   }
-  if (specialColumns_.rowId.has_value()) {
+  if (specialColumns().rowId.has_value()) {
     setupRowIdColumn();
   }
   return bucketChannels;
@@ -143,7 +143,7 @@ HiveDataSource::createSplitReader() {
   return std::make_unique<HiveSplitReader>(
       hiveSplit,
       tableHandle_,
-      &partitionKeys_,
+      &partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
@@ -153,7 +153,7 @@ HiveDataSource::createSplitReader() {
       fileHandleFactory_,
       ioExecutor_,
       fileScanState_->scanSpec,
-      &infoColumns_,
+      &infoColumns(),
       std::move(bucketChannels),
       /*subfieldFiltersForValidation=*/&fileScanState_->filters);
 }
@@ -196,7 +196,7 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
         hiveTableHandle,
         fileScanState_->scanSpec,
         readerOutputType_,
-        &partitionKeys_,
+        &partitionKeys(),
         fileHandleFactory_,
         ioExecutor_,
         connectorQueryCtx_,

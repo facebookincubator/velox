@@ -16,7 +16,7 @@
 
 #include "velox/connectors/common/FileDataSource.h"
 
-#include <fmt/ranges.h>
+#include <fmt/format.h>
 #include <string>
 #include <unordered_map>
 
@@ -24,9 +24,7 @@
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
-#include "velox/connectors/common/ExtractionUtils.h"
 #include "velox/connectors/common/FileConfig.h"
-#include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -61,25 +59,6 @@ void addOperationStatsToRuntimeStats(
 
 } // namespace
 
-void FileDataSource::processColumnHandle(const FileColumnHandlePtr& handle) {
-  switch (handle->columnType()) {
-    case FileColumnHandle::ColumnType::kRegular:
-      break;
-    case FileColumnHandle::ColumnType::kPartitionKey:
-      partitionKeys_.emplace(handle->name(), handle);
-      break;
-    case FileColumnHandle::ColumnType::kSynthesized:
-      infoColumns_.emplace(handle->name(), handle);
-      break;
-    case FileColumnHandle::ColumnType::kRowIndex:
-      specialColumns_.rowIndex = handle->name();
-      break;
-    case FileColumnHandle::ColumnType::kRowId:
-      specialColumns_.rowId = handle->name();
-      break;
-  }
-}
-
 FileDataSource::FileDataSource(
     const RowTypePtr& outputType,
     const connector::ConnectorTableHandlePtr& tableHandle,
@@ -93,310 +72,63 @@ FileDataSource::FileDataSource(
       connectorQueryCtx_(connectorQueryCtx),
       fileConfig_(fileConfig),
       pool_(connectorQueryCtx->memoryPool()),
-      fileScanState_(std::make_unique<FileScanState>()),
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   tableHandle_ = checkedPointerCast<const FileTableHandle>(tableHandle);
-
-  folly::F14FastMap<std::string_view, const FileColumnHandle*> columnHandles;
-  // Column handles keyed on the table column name.
-  for (const auto& [_, columnHandle] : assignments) {
-    auto handle = checkedPointerCast<const FileColumnHandle>(columnHandle);
-    const auto [it, unique] =
-        columnHandles.emplace(handle->name(), handle.get());
-    if (!unique) {
-      // This should not happen normally, but there are cases where we get
-      // duplicate assignments for partitioning columns.
-      checkColumnHandleConsistent(*handle, *it->second);
-      VELOX_CHECK_EQ(
-          handle->columnType(),
-          FileColumnHandle::ColumnType::kPartitionKey,
-          "Cannot map from same table column to different outputs in table scan; a project node should be used instead: {}",
-          handle->name());
-      continue;
-    }
-    processColumnHandle(handle);
-  }
-  for (auto& handle : tableHandle_->filterColumnHandles()) {
-    auto it = columnHandles.find(handle->name());
-    if (it != columnHandles.end()) {
-      checkColumnHandleConsistent(*handle, *it->second);
-      continue;
-    }
-    processColumnHandle(handle);
-  }
-
-  std::vector<std::string> readColumnNames;
-  auto readColumnTypes = outputType_->children();
-  for (const auto& outputName : outputType_->names()) {
-    auto it = assignments.find(outputName);
-    VELOX_CHECK(
-        it != assignments.end(),
-        "ColumnHandle is missing for output column: {}",
-        outputName);
-
-    auto* handle = static_cast<const FileColumnHandle*>(it->second.get());
-    readColumnNames.push_back(handle->name());
-    for (auto& subfield : handle->requiredSubfields()) {
-      VELOX_USER_CHECK_EQ(
-          getColumnName(subfield),
-          handle->name(),
-          "Required subfield does not match column name");
-      subfields_[handle->name()].push_back(&subfield);
-    }
+  auto columns = FileScanConfig::resolveColumns(
+      outputType_, tableHandle_, assignments, connectorQueryCtx_, *fileConfig_);
+  for (const auto& name : outputType_->names()) {
+    auto* handle =
+        static_cast<const FileColumnHandle*>(assignments.at(name).get());
     columnPostProcessors_.push_back(handle->postProcessor());
   }
 
-  if (fileConfig_->isFileColumnNamesReadAsLowerCase(
-          connectorQueryCtx->sessionProperties())) {
-    checkColumnNameLowerCase(outputType_);
-    checkColumnNameLowerCase(tableHandle_->subfieldFilters(), infoColumns_);
-    checkColumnNameLowerCase(tableHandle_->remainingFilter());
+  common::SubfieldFilters filters;
+  for (const auto& [field, filter] : tableHandle_->subfieldFilters()) {
+    filters.emplace(field.clone(), filter);
   }
-
-  for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
-    fileScanState_->filters.emplace(k.clone(), v);
-  }
-  double sampleRate = tableHandle_->sampleRate();
+  FileScanConfig::Options options;
+  options.sampleRate = tableHandle_->sampleRate();
   auto remainingFilter = extractFiltersFromRemainingFilter(
       tableHandle_->remainingFilter(),
       expressionEvaluator_,
-      fileScanState_->filters,
-      sampleRate);
-  if (sampleRate != 1) {
-    randomSkip_ = std::make_shared<random::RandomSkipTracker>(sampleRate);
+      filters,
+      options.sampleRate);
+  if (options.sampleRate != 1) {
+    randomSkip_ =
+        std::make_shared<random::RandomSkipTracker>(options.sampleRate);
   }
 
   if (remainingFilter) {
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
-    auto& remainingFilterExpr = remainingFilterExprSet_->expr(0);
-    folly::F14FastMap<std::string, column_index_t> columnNames;
-    for (int i = 0; i < readColumnNames.size(); ++i) {
-      columnNames[readColumnNames[i]] = i;
-    }
-    // Capture top-level column names referenced by the remaining filter.
-    // These columns must be loaded eagerly (not lazily) so the filter
-    // can evaluate before lazy columns are accessed.
-    folly::F14FastSet<std::string> remainingFilterColumns;
-    for (auto& input : remainingFilterExpr->distinctFields()) {
-      remainingFilterColumns.insert(input->field());
-      auto it = columnNames.find(input->field());
-      if (it != columnNames.end()) {
-        if (shouldEagerlyMaterialize(*remainingFilterExpr, *input)) {
-          multiReferencedFields_.push_back(it->second);
-        }
-        continue;
-      }
-      // Remaining filter may reference columns that are not used otherwise,
-      // e.g. are not being projected out and are not used in range filters.
-      // Make sure to add these columns to readerOutputType_.
-      readColumnNames.push_back(input->field());
-      readColumnTypes.push_back(input->type());
-    }
-    remainingFilterColumns_ = std::move(remainingFilterColumns);
-    remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
-    if (VLOG_IS_ON(1)) {
-      VLOG(1) << fmt::format(
-          "Extracted subfields from remaining filter: [{}]",
-          fmt::join(remainingFilterSubfields_, ", "));
-    }
-    for (auto& subfield : remainingFilterSubfields_) {
-      const auto& name = getColumnName(subfield);
-      auto it = subfields_.find(name);
-      if (it != subfields_.end()) {
-        // Some subfields of the column are already projected out, we append the
-        // remainingFilter subfield
-        it->second.push_back(&subfield);
-      } else if (columnNames.count(name) == 0) {
-        // remainingFilter subfield's column is not projected out, we add the
-        // column and append the subfield
-        subfields_[name].push_back(&subfield);
-      }
-    }
   }
-
-  readerOutputType_ =
-      ROW(std::move(readColumnNames), std::move(readColumnTypes));
-  fileScanState_->scanSpec = makeScanSpec(
-      readerOutputType_,
-      subfields_,
-      fileScanState_->filters,
-      /*indexColumns=*/{},
-      tableHandle_->dataColumns(),
-      partitionKeys_,
-      infoColumns_,
-      specialColumns_,
+  options.disableStatsBasedFilterReorder =
       fileConfig_->readStatsBasedFilterReorderDisabled(
-          connectorQueryCtx_->sessionProperties()),
-      pool_);
-  if (remainingFilter) {
-    fileScanState_->metadataFilter = std::make_shared<common::MetadataFilter>(
-        *fileScanState_->scanSpec, *remainingFilter, expressionEvaluator_);
-  }
-
-  // Detect extraction columns and reconfigure the ScanSpec if needed.
-  bool hasExtractions = false;
-  readColumnTypes = readerOutputType_->children();
-  for (int outputIdx = 0; outputIdx < outputType->size(); ++outputIdx) {
-    const auto& outputName = outputType->nameOf(outputIdx);
-    auto it = assignments.find(outputName);
-    if (it == assignments.end()) {
-      continue;
-    }
-    auto* handle = static_cast<const FileColumnHandle*>(it->second.get());
-    if (!handle->extractions().empty()) {
-      // Column has extraction chains.  Read with schemaType from file, then
-      // apply extraction post-read.  Extractions and requiredSubfields are
-      // mutually exclusive (enforced by the column handle constructor).
-      auto readerIdx = readerOutputType_->getChildIdxIfExists(handle->name());
-      if (readerIdx.has_value()) {
-        readColumnTypes[*readerIdx] = handle->schemaType();
-        extractionColumns_[*readerIdx] = handle;
-        hasExtractions = true;
-      }
-    }
-  }
-
-  if (hasExtractions) {
-    // Rebuild readerOutputType_ with schemaType for extraction columns.
-    readerOutputType_ =
-        ROW(std::vector<std::string>(
-                readerOutputType_->names().begin(),
-                readerOutputType_->names().end()),
-            std::move(readColumnTypes));
-    // Rebuild the ScanSpec with the updated readerOutputType_.
-    fileScanState_->scanSpec = makeScanSpec(
-        readerOutputType_,
-        subfields_,
-        fileScanState_->filters,
-        /*indexColumns=*/{},
-        tableHandle_->dataColumns(),
-        partitionKeys_,
-        infoColumns_,
-        specialColumns_,
-        fileConfig_->readStatsBasedFilterReorderDisabled(
-            connectorQueryCtx->sessionProperties()),
-        pool_);
-    configureExtractionColumns();
-  }
+          connectorQueryCtx_->sessionProperties());
+  fileScanConfig_ = std::make_shared<FileScanConfig>(
+      outputType_,
+      tableHandle_,
+      assignments,
+      columns,
+      std::move(filters),
+      std::move(remainingFilter),
+      remainingFilterExprSet_.get(),
+      options);
+  fileScanState_ =
+      FileScanConfig::createState(fileScanConfig_, connectorQueryCtx_);
+  readerOutputType_ = fileScanConfig_->readerOutputType();
+  subfields_ = fileScanConfig_->subfields();
 
   dataIoStats_ = std::make_shared<io::IoStatistics>();
   metadataIoStats_ = std::make_shared<io::IoStatistics>();
   ioStats_ = std::make_shared<IoStats>();
 }
 
-void FileDataSource::configureExtractionColumns() {
-  // Configure extraction columns on the ScanSpec.  For each column with
-  // extractions, this:
-  // 1. Sets pruning hints so DWRF/Nimble readers skip unneeded sub-streams.
-  // 2. Sets a transform function on the ScanSpec node so the reader applies
-  //    extraction chains and produces the output type directly.
-  for (auto& [colIdx, handle] : extractionColumns_) {
-    auto* fieldSpec = fileScanState_->scanSpec->childByName(
-        readerOutputType_->nameOf(colIdx));
-    if (!fieldSpec) {
-      continue;
-    }
-    const auto& extractions = handle->extractions();
-    auto extractionOutputType = handle->dataType();
-
-    // For multiple extractions, do NOT call configureExtractionScanSpec --
-    // keep ExtractionType as kNone and use full chains in the transform.
-    // This ensures the text reader (which does not handle ExtractionType
-    // natively) produces correct results.
-    if (extractions.size() == 1) {
-      configureExtractionScanSpec(
-          handle->schemaType(), extractions, *fieldSpec, pool_);
-    }
-    if (extractions.size() == 1) {
-      // Store a full-chain transform so hasTransform() returns true.  This
-      // signals to the delta update path that extraction is configured.
-      // The full chain is captured for PrismSplitReader to replace it.
-      fieldSpec->setTransform(
-          [fullChain = extractions[0].chain](
-              const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
-            return applyExtractionChain(input, fullChain, pool);
-          },
-          extractionOutputType);
-    } else {
-      // Multiple extractions: do NOT set ExtractionType on the ScanSpec.
-      // Use full chains in the transform so the text reader (which does
-      // not handle ExtractionType natively) produces correct results.
-      // TODO: Optimization: for agreeing multiple extractions, set
-      // ExtractionType and use remaining chains.  Requires text reader
-      // to handle ExtractionType natively.
-      struct ExtractionInfo {
-        std::string outputName;
-        std::vector<ExtractionPathElementPtr> chain;
-      };
-
-      std::vector<ExtractionInfo> infos;
-      for (const auto& extraction : extractions) {
-        infos.push_back({extraction.outputName, extraction.chain});
-      }
-      // Always need a transform for multiple extractions to assemble ROW.
-      fieldSpec->setTransform(
-          [infos = std::move(infos)](
-              const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
-            std::vector<VectorPtr> children;
-            std::vector<std::string> names;
-            std::vector<TypePtr> types;
-            children.reserve(infos.size());
-            names.reserve(infos.size());
-            types.reserve(infos.size());
-            for (const auto& info : infos) {
-              VectorPtr extracted;
-              if (info.chain.empty()) {
-                extracted = input;
-              } else {
-                extracted = applyExtractionChain(input, info.chain, pool);
-              }
-              names.push_back(info.outputName);
-              types.push_back(extracted->type());
-              children.push_back(std::move(extracted));
-            }
-            return std::make_shared<RowVector>(
-                pool,
-                ROW(std::move(names), std::move(types)),
-                nullptr,
-                input->size(),
-                std::move(children));
-          },
-          extractionOutputType);
-    }
-  }
-
-  // Build the state's readerProducedType: the actual type the reader produces.
-  // For extraction columns where the reader handles extraction natively
-  // (ExtractionType != kNone), the output type differs from schemaType.
-  {
-    auto names = readerOutputType_->names();
-    auto types = readerOutputType_->children();
-    bool needsSeparateType = false;
-    for (auto& [colIdx, handle] : extractionColumns_) {
-      auto* fieldSpec = fileScanState_->scanSpec->childByName(
-          readerOutputType_->nameOf(colIdx));
-      if (fieldSpec &&
-          fieldSpec->extractionType() !=
-              common::ScanSpec::ExtractionType::kNone) {
-        VELOX_CHECK_LT(static_cast<size_t>(colIdx), types.size());
-        types[colIdx] = handle->dataType();
-        needsSeparateType = true;
-      }
-    }
-    if (needsSeparateType) {
-      fileScanState_->readerProducedType =
-          ROW(std::vector<std::string>(names.begin(), names.end()),
-              std::move(types));
-    }
-  }
-}
-
 std::unique_ptr<FileSplitReader> FileDataSource::createSplitReader() {
   return FileSplitReader::create(
       split_,
       tableHandle_,
-      &partitionKeys_,
+      &partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
@@ -426,7 +158,8 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions(randomSkip_);
-  splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
+  splitReader_->setRemainingFilterColumns(
+      fileScanConfig_->remainingFilterColumns());
   splitReader_->prepareSplit(
       fileScanState_->metadataFilter, runtimeStats_, fileReadOps_);
 
@@ -623,7 +356,6 @@ void FileDataSource::setFromDataSource(
   runtimeStats_.processedSplits += source->runtimeStats_.processedSplits;
   runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
   readerOutputType_ = std::move(source->readerOutputType_);
-  extractionColumns_ = std::move(source->extractionColumns_);
   source->fileScanState_->scanSpec->moveAdaptationFrom(
       *fileScanState_->scanSpec);
   fileScanState_ = std::move(source->fileScanState_);
@@ -650,7 +382,7 @@ int64_t FileDataSource::estimatedRowSize() {
 }
 
 vector_size_t FileDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
-  for (auto fieldIndex : multiReferencedFields_) {
+  for (auto fieldIndex : fileScanConfig_->multiReferencedFields()) {
     LazyVector::ensureLoadedRows(
         rowVector->childAt(fieldIndex),
         filterRows_,

@@ -26,7 +26,7 @@ WaveHiveDataSource::WaveHiveDataSource(
     const HiveTableHandlePtr& hiveTableHandle,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const RowTypePtr& readerOutputType,
-    std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
+    const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const connector::ConnectorQueryCtx* connectorQueryCtx,
@@ -172,7 +172,7 @@ void WaveHiveDataSource::registerConnector() {
       [](const HiveTableHandlePtr& hiveTableHandle,
          const std::shared_ptr<common::ScanSpec>& scanSpec,
          const RowTypePtr& readerOutputType,
-         std::unordered_map<std::string, connector::FileColumnHandlePtr>*
+         const std::unordered_map<std::string, connector::FileColumnHandlePtr>*
              partitionKeys,
          FileHandleFactory* fileHandleFactory,
          folly::Executor* executor,
@@ -183,7 +183,7 @@ void WaveHiveDataSource::registerConnector() {
          std::shared_ptr<common::MetadataFilter> metadataFilter) {
         // HiveColumnHandle extends FileColumnHandle, so this cast is safe.
         auto* hivePartitionKeys = reinterpret_cast<
-            std::unordered_map<std::string, HiveColumnHandlePtr>*>(
+            const std::unordered_map<std::string, HiveColumnHandlePtr>*>(
             partitionKeys);
         return std::make_shared<WaveHiveDataSource>(
             hiveTableHandle,

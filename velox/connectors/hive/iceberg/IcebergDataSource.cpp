@@ -91,9 +91,9 @@ IcebergDataSource::IcebergDataSource(
       common::SubfieldFilters{},
       /*indexColumns=*/{},
       tableHandle_->dataColumns(),
-      partitionKeys_,
-      infoColumns_,
-      specialColumns_,
+      partitionKeys(),
+      infoColumns(),
+      specialColumns(),
       fileConfig_->readStatsBasedFilterReorderDisabled(
           connectorQueryCtx_->sessionProperties()),
       pool_);
@@ -170,7 +170,7 @@ IcebergDataSource::createSplitReader() {
     return std::make_unique<IcebergChangelogSplitReader>(
         icebergSplit,
         tableHandle_,
-        &partitionKeys_,
+        &partitionKeys(),
         connectorQueryCtx_,
         fileConfig_,
         *changelogScanContext_,
@@ -189,7 +189,7 @@ IcebergDataSource::createSplitReader() {
   return std::make_unique<IcebergSplitReader>(
       icebergSplit,
       tableHandle_,
-      &partitionKeys_,
+      &partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,

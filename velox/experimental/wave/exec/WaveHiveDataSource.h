@@ -27,8 +27,9 @@ class WaveHiveDataSource : public WaveDataSource {
       const connector::hive::HiveTableHandlePtr& hiveTableHandle,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
       const RowTypePtr& readerOutputType,
-      std::unordered_map<std::string, connector::hive::HiveColumnHandlePtr>*
-          partitionKeys,
+      const std::unordered_map<
+          std::string,
+          connector::hive::HiveColumnHandlePtr>* partitionKeys,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const connector::ConnectorQueryCtx* connectorQueryCtx,
