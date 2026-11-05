@@ -42,7 +42,7 @@ void checkOffsetsType(const StringOffsets& offsets) {
 std::vector<int64_t> prestoPageBoundaries(
     int32_t numRows,
     int64_t fixedBitsPerRow,
-    std::span<const StringOffsets> strings,
+    cudf::host_span<const StringOffsets> strings,
     int64_t pageBytes,
     int64_t maxRows,
     cuda::stream_ref stream) {
@@ -61,7 +61,7 @@ std::vector<int64_t> prestoPageBoundaries(
 }
 
 bool fillPrestoStringOffsets(
-    std::span<const StringOffsetsTask> tasks,
+    cudf::host_span<const StringOffsetsTask> tasks,
     cuda::stream_ref stream) {
   for (const auto& task : tasks) {
     checkOffsetsType(task.offsets);
@@ -71,7 +71,7 @@ bool fillPrestoStringOffsets(
 
 std::vector<int64_t> gatherStringOffsets(
     const StringOffsets& offsets,
-    std::span<const int64_t> rows,
+    cudf::host_span<const int64_t> rows,
     cuda::stream_ref stream) {
   checkOffsetsType(offsets);
   return device::gatherStringOffsets(offsets, rows, stream);

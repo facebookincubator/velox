@@ -20,16 +20,21 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
+#include <cudf/detail/utilities/buffer_factories.hpp>
+#include <cudf/detail/utilities/cuda.hpp>
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
 #include <cudf/utilities/bit.hpp>
+#include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/span.hpp>
 
-#include <rmm/device_uvector.hpp>
+#include <cuda/buffer>
+#include <cuda_runtime.h>
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -51,13 +56,17 @@ constexpr cudf::data_type kInt64{cudf::type_id::INT64};
 class PrestoPageDeviceTest : public testing::Test {
  protected:
   template <typename T>
-  rmm::device_uvector<T> toDevice(const std::vector<T>& values) {
-    return cudf::detail::make_device_uvector(
-        cudf::host_span<const T>{values.data(), values.size()}, stream_, mr_);
+  cuda::device_buffer<T> toDevice(const std::vector<T>& values) {
+    auto result = cudf::detail::make_device_buffer_async(
+        cudf::host_span<const T>{values},
+        stream_,
+        cudf::memory_resources{mr_, mr_});
+    cudf::detail::sync_stream(stream_);
+    return result;
   }
 
   template <typename T>
-  std::vector<T> toHost(const rmm::device_uvector<T>& values) {
+  std::vector<T> toHost(const cuda::device_buffer<T>& values) {
     return cudf::detail::make_std_vector(
         cudf::device_span<const T>{values.data(), values.size()}, stream_);
   }
@@ -172,7 +181,7 @@ TEST_F(PrestoPageDeviceTest, pageBoundariesWithStrings) {
 TEST_F(PrestoPageDeviceTest, nullBytes) {
   auto valid = [](int64_t bit) { return bit % 3 != 0 && bit != 77; };
   auto mask = toDevice(makeMask(200, valid));
-  rmm::device_uvector<uint8_t> out(9 + 1 + 2, stream_, mr_);
+  cuda::device_buffer<uint8_t> out(stream_, mr_, 9 + 1 + 2, cuda::no_init);
   const std::vector<detail::NullBytesTask> tasks = {
       // Crosses two mask words and ends with a partial byte.
       {mask.data(), 37, 70, out.data()},
@@ -180,23 +189,36 @@ TEST_F(PrestoPageDeviceTest, nullBytes) {
       // The last bits of the mask.
       {mask.data(), 191, 9, out.data() + 10},
   };
-  detail::fillPrestoNullBytes(tasks, stream_);
-  const auto result = toHost(out);
-
-  size_t position = 0;
+  std::vector<uint8_t> expected;
   for (const auto& task : tasks) {
-    SCOPED_TRACE(testing::Message() << "firstBit = " << task.firstBit);
     const size_t numBytes = cudf::util::div_rounding_up_safe(task.numRows, 8);
-    std::vector<uint8_t> expected(numBytes, 0);
+    std::vector<uint8_t> bytes(numBytes, 0);
     for (int32_t row = 0; row < task.numRows; ++row) {
       if (!valid(task.firstBit + row)) {
-        expected[row / 8] |= 0x80 >> (row % 8);
+        bytes[row / 8] |= 0x80 >> (row % 8);
       }
     }
-    const std::vector<uint8_t> actual(
-        result.begin() + position, result.begin() + position + numBytes);
-    EXPECT_EQ(actual, expected);
-    position += numBytes;
+    expected.insert(expected.end(), bytes.begin(), bytes.end());
+  }
+
+  // The same tasks from pinned memory, which the function reads in stream
+  // order instead of before it returns.
+  auto pinnedTasks =
+      cudf::detail::make_pinned_vector_async<detail::NullBytesTask>(
+          tasks.size(), stream_);
+  std::copy(tasks.begin(), tasks.end(), pinnedTasks.begin());
+  ASSERT_TRUE(
+      cudf::host_span<const detail::NullBytesTask>(pinnedTasks)
+          .is_device_accessible());
+  for (const bool pinned : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "pinned = " << pinned);
+    CUDF_CUDA_TRY(cudaMemsetAsync(out.data(), 0xff, out.size(), stream_.get()));
+    if (pinned) {
+      detail::fillPrestoNullBytes(pinnedTasks, stream_);
+    } else {
+      detail::fillPrestoNullBytes(tasks, stream_);
+    }
+    EXPECT_EQ(toHost(out), expected);
   }
 }
 
@@ -209,7 +231,8 @@ TEST_F(PrestoPageDeviceTest, stringOffsets) {
     SCOPED_TRACE(
         testing::Message() << "int64 offsets = "
                            << (strings.offsetsType == kInt64));
-    rmm::device_uvector<uint8_t> out(5 * sizeof(int32_t), stream_, mr_);
+    cuda::device_buffer<uint8_t> out(
+        stream_, mr_, 5 * sizeof(int32_t), cuda::no_init);
     const std::vector<detail::StringOffsetsTask> tasks = {
         // Rows 2 to 5 start at offset 12 and end at 22, 23, 24 and 64.
         {strings, 2, 4, out.data()},
@@ -235,7 +258,8 @@ TEST_F(PrestoPageDeviceTest, stringOffsetsBeyondInt32) {
   constexpr int64_t kLimit = std::numeric_limits<int32_t>::max();
   auto offsets = toDevice(std::vector<int64_t>{0, 4, 4 + kLimit, 5 + kLimit});
   const StringOffsets strings{offsets.data(), kInt64, 0};
-  rmm::device_uvector<uint8_t> out(2 * sizeof(int32_t), stream_, mr_);
+  cuda::device_buffer<uint8_t> out(
+      stream_, mr_, 2 * sizeof(int32_t), cuda::no_init);
   EXPECT_TRUE(
       detail::fillPrestoStringOffsets(
           std::vector<detail::StringOffsetsTask>{{strings, 1, 1, out.data()}},
@@ -254,10 +278,12 @@ TEST_F(PrestoPageDeviceTest, alignmentAndArgumentChecks) {
   // Values follow the null bitmap in a Presto page, so a destination inside
   // a page is generally unaligned; the conversions work on aligned scratch
   // buffers and refuse anything else.
-  rmm::device_uvector<uint8_t> buffer(64, stream_, mr_);
-  auto* const aligned = buffer.data();
+  // 64 bytes aligned to 16, which cuda::buffer only guarantees for a 16-byte
+  // element type.
+  cuda::device_buffer<__int128_t> buffer(stream_, mr_, 4, cuda::no_init);
+  auto* const aligned = reinterpret_cast<uint8_t*>(buffer.data());
   auto* const i64 = reinterpret_cast<int64_t*>(aligned);
-  auto* const i64Shifted = reinterpret_cast<int64_t*>(buffer.data() + 4);
+  auto* const i64Shifted = reinterpret_cast<int64_t*>(aligned + 4);
   constexpr auto kSeconds = cudf::type_id::TIMESTAMP_SECONDS;
   VELOX_ASSERT_THROW(
       detail::timestampsToMillis(i64, 2, kSeconds, i64Shifted, stream_),
@@ -275,7 +301,7 @@ TEST_F(PrestoPageDeviceTest, alignmentAndArgumentChecks) {
       "Not a cuDF timestamp type with 64-bit ticks");
 
   auto* const i128 = reinterpret_cast<__int128_t*>(aligned);
-  auto* const i128Shifted = reinterpret_cast<__int128_t*>(buffer.data() + 8);
+  auto* const i128Shifted = reinterpret_cast<__int128_t*>(aligned + 8);
   VELOX_ASSERT_THROW(
       detail::decimalsToJava(i128, 2, i128Shifted, stream_),
       "'dst' must be 16-byte aligned");
@@ -306,7 +332,8 @@ TEST_F(PrestoPageDeviceTest, timestampsToMillis) {
                      cudf::type_id unit,
                      std::vector<int64_t>* result) {
     auto src = toDevice(values);
-    rmm::device_uvector<int64_t> dst(values.size(), stream_, mr_);
+    cuda::device_buffer<int64_t> dst(
+        stream_, mr_, values.size(), cuda::no_init);
     const bool ok = detail::timestampsToMillis(
         src.data(), values.size(), unit, dst.data(), stream_);
     *result = toHost(dst);
@@ -364,7 +391,8 @@ TEST_F(PrestoPageDeviceTest, decimalsToJava) {
     }
   };
   auto src = toDevice(values);
-  rmm::device_uvector<__int128_t> dst(values.size(), stream_, mr_);
+  cuda::device_buffer<__int128_t> dst(
+      stream_, mr_, values.size(), cuda::no_init);
   detail::decimalsToJava(src.data(), values.size(), dst.data(), stream_);
   check(toHost(dst));
   // In place.
