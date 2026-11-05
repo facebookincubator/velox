@@ -38,7 +38,7 @@ using facebook::velox::common::Subfield;
 using facebook::velox::common::SubfieldFilters;
 
 // facebook::velox::connector::hive
-using facebook::velox::connector::hive::FileColumnHandle;
+using facebook::velox::connector::FileColumnHandle;
 using facebook::velox::connector::hive::HiveColumnHandle;
 using facebook::velox::connector::hive::HiveTableHandle;
 

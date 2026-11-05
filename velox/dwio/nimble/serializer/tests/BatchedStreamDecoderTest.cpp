@@ -267,8 +267,8 @@ TEST_F(BatchedStreamDecoderTest, rejectsSelectedReads) {
 
 TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
   SchemaBuilder schemaBuilder;
-  auto hybridMap =
-      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
+      ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
   hybridMap->addGroup(
       0, {"A", "B"}, schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
   hybridMap->addGroup(
@@ -430,8 +430,8 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
 
 TEST_F(BatchedStreamDecoderTest, hybridFlatMapOmittedNullsAreAllNonNull) {
   SchemaBuilder schemaBuilder;
-  auto hybridMap =
-      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
+      ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
   hybridMap->addGroup(
       0,
       {"configured"},

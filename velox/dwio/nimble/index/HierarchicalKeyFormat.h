@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include <bit>
 #include <cstdint>
+#include <type_traits>
 
 namespace facebook::nimble::index {
 
@@ -37,21 +39,34 @@ namespace facebook::nimble::index {
 /// | physicalWidth[level]   | valueCount[level]              |
 /// | u8 * numLevels         | u32 * numLevels                |
 /// +------------------------+--------------------------------+
-/// | childOffsets[level] for levels [0, numLevels - 1)       |
-/// | u32 * (valueCount[level] + 1) per level                 |
-/// +---------------------------------------------------------+
-/// | leafRowOffsets (present when rowCount > leaf value count) |
-/// | u32 * (valueCount[lastLevel] + 1)                       |
-/// +---------------------------------------------------------+
-/// | sequenceSize[sequence] | encodedSequence[sequence]      |
-/// | u32 * numSequences     | bytes * numSequences           |
+///
+/// Sequences, in order
+/// +------------------------+--------------------------------+
+/// | sequenceSize           | values[0]                      |
+/// | u32                    | valueCount[0] values           |
+/// +------------------------+--------------------------------+
+/// | for each level N in [1, numLevels):                     |
+/// +------------------------+--------------------------------+
+/// | sequenceSize           | childOffsets[N - 1]            |
+/// | u32                    | valueCount[N - 1] + 1 values   |
+/// +------------------------+--------------------------------+
+/// | sequenceSize           | values[N]                      |
+/// | u32                    | valueCount[N] values           |
+/// +------------------------+--------------------------------+
+/// | sequenceSize           | leafRowOffsets (present when   |
+/// | u32                    | rowCount > leaf value count)   |
+/// |                        | valueCount[lastLevel] + 1      |
 /// +------------------------+--------------------------------+
 /// ```
 ///
-/// Level 0 has one sequence. Each value at level N owns one sequence at level
-/// N + 1, so `numSequences` is 1 plus the value counts of all non-leaf levels.
-/// Child offsets delimit those owned sequences. Leaf row offsets map each
-/// distinct complete key to the source rows it represents.
+/// Level 0 holds the distinct values of the first key column. Each value at
+/// level N owns a run of children at level N + 1, and childOffsets[N] delimits
+/// those runs. Leaf row offsets map each distinct complete key to the source
+/// rows it represents.
+///
+/// values[N] concatenates every run of level N, so a level takes one encoding
+/// header however many runs it has. Readers validate the child offsets but
+/// trust each run of values to ascend, as the writer enforces key order.
 class HierarchicalKeyFormat final {
  public:
   HierarchicalKeyFormat() = delete;
@@ -66,6 +81,26 @@ class HierarchicalKeyFormat final {
   /// Returns whether a level can store values with the specified byte width.
   static constexpr bool isSupportedKeyValueBytes(uint8_t bytes) {
     return bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8;
+  }
+
+  /// Returns the value that a level stores for 'value', a key column value. A
+  /// level orders its values as unsigned integers, so an integer has its sign
+  /// bit flipped, and false is 1 and true is 2. A descending column has every
+  /// bit of its values inverted.
+  ///
+  /// For an ascending TINYINT column, -1 is 0x7F and 1 is 0x81.
+  template <typename T>
+  static uint64_t normalizeKeyValue(T value, bool ascending) {
+    static_assert(std::is_integral_v<T>);
+    if constexpr (std::is_same_v<T, bool>) {
+      const uint8_t normalized = value ? 2 : 1;
+      return ascending ? normalized : static_cast<uint8_t>(~normalized);
+    } else {
+      using Unsigned = std::make_unsigned_t<T>;
+      const auto normalized =
+          std::bit_cast<Unsigned>(value) ^ (Unsigned{1} << (sizeof(T) * 8 - 1));
+      return ascending ? normalized : static_cast<Unsigned>(~normalized);
+    }
   }
 };
 

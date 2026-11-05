@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <functional>
+
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -32,7 +34,6 @@ class AverageAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    disableTestIncremental();
     registerAggregateFunctions("spark_", true);
   }
 
@@ -40,13 +41,10 @@ class AverageAggregationTest : public AggregationTestBase {
       const std::vector<RowVectorPtr>& input,
       const std::vector<RowVectorPtr>& expected,
       const std::vector<TypePtr>& argTypes) {
-    testAggregations(
-        input,
-        {},
-        {"spark_avg(c0)"},
-        {},
-        expected,
-        /*config*/ {});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_avg(c0)"})
+        .assertResults(expected);
   }
 
   core::PlanNodePtr createMergeExtractDecimal(
@@ -90,7 +88,10 @@ TEST_F(AverageAggregationTest, avgAllNulls) {
           makeAllNullFlatVector<int64_t>(size),
       }),
   };
-  testAggregations(vectors, {}, {"spark_avg(c0)"}, "SELECT NULL");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"spark_avg(c0)"})
+      .assertResults("SELECT NULL");
 
   auto plan = PlanBuilder()
                   .values(vectors)
@@ -131,11 +132,11 @@ TEST_F(AverageAggregationTest, avgAllNulls) {
       }),
   };
   createDuckDbTable(vectors);
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"spark_avg(c1)"},
-      "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"spark_avg(c1)"})
+      .assertResults("SELECT c0, avg(c1) FROM tmp GROUP BY c0");
 
   plan = PlanBuilder()
              .values(vectors)
@@ -242,12 +243,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       makeRowVector(
           {makeNullableFlatVector<int32_t>({3}),
            makeFlatVector(std::vector<int128_t>{-24976667}, DECIMAL(19, 6))})};
-  testAggregations(
-      inputRows,
-      {"c0"},
-      {"spark_avg(c1)"},
-      expectedResult,
-      /*config*/ {});
+  AggregationTester(*this)
+      .inputs(inputRows)
+      .groupBy({"c0"})
+      .aggregates({"spark_avg(c1)"})
+      .assertResults(expectedResult);
 
   // dividePrecision greater than resultScale in computeFinalResult.
   auto valueA = HugeInt::parse("11999999998800000000");
@@ -264,11 +264,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
            std::vector<int128_t>{HugeInt::parse("119999999994857142857143")},
            DECIMAL(38, 22))})};
 
-  testAggregations(
-      longDecimalInputRows,
-      {"c0"},
-      {"spark_avg(c1)"},
-      longDecimalExpectedResult);
+  AggregationTester(*this)
+      .inputs(longDecimalInputRows)
+      .groupBy({"c0"})
+      .aggregates({"spark_avg(c1)"})
+      .assertResults(longDecimalExpectedResult);
 }
 
 TEST_F(AverageAggregationTest, avgDecimalWithMultipleRowVectors) {
@@ -370,11 +370,11 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
          makeFlatVector<int32_t>(
              kBatchSize,
-             folly::identity,
+             std::identity{},
              [](auto row) { return row % 5 == 0; }),
          makeFlatVector<double>(
              kBatchSize,
-             folly::identity,
+             std::identity{},
              [](auto row) { return row % 7 == 0; }),
          makeFlatIdentityVector<int64_t>(kBatchSize),
          makeFlatIdentityVector<double>(kBatchSize),

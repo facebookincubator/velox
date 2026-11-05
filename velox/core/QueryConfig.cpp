@@ -22,6 +22,11 @@
 
 namespace facebook::velox::core {
 
+namespace {
+constexpr const char* kUseSessionTimezoneForTimestampWithTimezone =
+    "use_session_timezone_for_timestamp_with_timezone";
+}
+
 const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
     std::vector<config::ConfigProperty> properties;
@@ -35,7 +40,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kSessionTimezone);
     VELOX_REGISTER_QUERY_CONFIG(kSessionStartTime);
     VELOX_REGISTER_QUERY_CONFIG(kAdjustTimestampToTimezone);
-    VELOX_REGISTER_QUERY_CONFIG(kUseSessionTimezoneForTimestampWithTimezone);
+    VELOX_REGISTER_QUERY_CONFIG(kIgnoreTimeZoneLabel);
 
     // Expression evaluation.
     VELOX_REGISTER_QUERY_CONFIG(kExprEvalSimplified);
@@ -282,6 +287,14 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     return properties;
   }();
   return kProperties;
+}
+
+bool QueryConfig::ignoreTimeZoneLabel() const {
+  const auto ignoreTimeZoneLabel = get<bool>(kIgnoreTimeZoneLabel);
+  if (ignoreTimeZoneLabel.has_value()) {
+    return ignoreTimeZoneLabel.value();
+  }
+  return get<bool>(kUseSessionTimezoneForTimestampWithTimezone, false);
 }
 
 QueryConfig::QueryConfig(std::unordered_map<std::string, std::string> values)

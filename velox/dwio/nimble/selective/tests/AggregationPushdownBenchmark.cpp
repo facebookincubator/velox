@@ -178,7 +178,6 @@ class AggregationPushdownBenchmark : public velox::test::VectorTestBase {
     rowReaderOptions.setScanSpec(scanSpec);
     rowReaderOptions.setRequestedType(kInputType);
     rowReaderOptions.setEagerFirstStripeLoad(true);
-    rowReaderOptions.setStringDecoderZeroCopy(true);
     rowReaderOptions.setNimbleScanFastPath(config.scanFastPath);
     readers.rowReader = readers.reader->createRowReader(rowReaderOptions);
     readers.result = BaseVector::create(

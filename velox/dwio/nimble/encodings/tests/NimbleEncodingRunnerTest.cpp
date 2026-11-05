@@ -87,7 +87,7 @@ PforArtifactOffsets readPforArtifactOffsets(std::string_view artifact) {
   };
 }
 
-struct BlockBitPackingArtifactOffsets {
+struct BlockBitPackingV2ArtifactOffsets {
   size_t compression;
   size_t blockSize;
   size_t numBlocks;
@@ -101,11 +101,10 @@ struct BlockBitPackingArtifactOffsets {
   size_t blockOffsetsSize;
   size_t blockOffsets;
   uint32_t blockOffsetsBytes;
-  size_t firstBlockRows;
   size_t packed;
 };
 
-BlockBitPackingArtifactOffsets readBlockBitPackingArtifactOffsets(
+BlockBitPackingV2ArtifactOffsets readBlockBitPackingV2ArtifactOffsets(
     std::string_view artifact) {
   const char* cursor = artifact.data() + EncodingPrefix::kFixedPrefixSize;
   const size_t compression = cursor - artifact.data();
@@ -126,8 +125,6 @@ BlockBitPackingArtifactOffsets readBlockBitPackingArtifactOffsets(
   const uint32_t blockOffsetsBytes = varint::readVarint32(&cursor);
   const size_t blockOffsets = cursor - artifact.data();
   cursor += blockOffsetsBytes;
-  const size_t firstBlockRows = cursor - artifact.data();
-  varint::readVarint32(&cursor);
   return {
       .compression = compression,
       .blockSize = blockSize,
@@ -142,7 +139,6 @@ BlockBitPackingArtifactOffsets readBlockBitPackingArtifactOffsets(
       .blockOffsetsSize = blockOffsetsSize,
       .blockOffsets = blockOffsets,
       .blockOffsetsBytes = blockOffsetsBytes,
-      .firstBlockRows = firstBlockRows,
       .packed = static_cast<size_t>(cursor - artifact.data()),
   };
 }
@@ -341,9 +337,9 @@ TEST_F(
       "nimble.simd_for_bitpack.encode.v1",
       "nimble.simd_for_bitpack.decode_dense.v1",
       "nimble.simd_for_bitpack.skip_seek.v1",
-      "nimble.block_bit_packing.encode.v1",
-      "nimble.block_bit_packing.decode_dense.v1",
-      "nimble.block_bit_packing.skip_seek.v1",
+      "nimble.block_bit_packing_v2.encode.v1",
+      "nimble.block_bit_packing_v2.decode_dense.v1",
+      "nimble.block_bit_packing_v2.skip_seek.v1",
       "nimble.varint.encode.v1",
       "nimble.varint.decode_dense.v1",
       "nimble.varint.skip_seek.v1",
@@ -401,7 +397,7 @@ TEST_F(NimbleEncodingRunnerTest, taskMatrixProducesRawTimingSamples) {
       {"sparse_bool", "bool", false},
       {"pfor", "uint32", false},
       {"simd_for_bitpack", "uint32", false},
-      {"block_bit_packing", "uint32", false},
+      {"block_bit_packing_v2", "uint32", false},
       {"varint", "uint32", false},
       {"prefix", "string", false},
       {"fsst", "string", false},
@@ -437,7 +433,7 @@ TEST_F(NimbleEncodingRunnerTest, taskMatrixProducesRawTimingSamples) {
           lane != "decode_dense" && lane != "skip_seek") {
         continue;
       }
-      if (encoding.slug == "block_bit_packing" && lane != "encode" &&
+      if (encoding.slug == "block_bit_packing_v2" && lane != "encode" &&
           lane != "decode_dense" && lane != "skip_seek") {
         continue;
       }
@@ -680,15 +676,15 @@ TEST_F(
   }
 }
 
-TEST_F(NimbleEncodingRunnerTest, blockBitPackingUsesNativeBlockLocalProfile) {
-  auto runnerConfig = config("nimble.block_bit_packing.encode.v1");
+TEST_F(NimbleEncodingRunnerTest, blockBitPackingV2UsesNativeBlockLocalProfile) {
+  auto runnerConfig = config("nimble.block_bit_packing_v2.encode.v1");
   runnerConfig.rowCount = 4096;
 
   const auto measurement = runEncodingBenchmark(runnerConfig, *pool_);
   const auto verification =
       verifyEncodingArtifact(runnerConfig, measurement.encodedArtifact, *pool_);
 
-  EXPECT_EQ("block_bit_packing", measurement.encoding);
+  EXPECT_EQ("block_bit_packing_v2", measurement.encoding);
   EXPECT_EQ("uint32", measurement.dataType);
   EXPECT_EQ(
       "29b034edff59da27be03cb8bd347e2528eb71bb49ca9817ed20bd7a2e01cab2d",
@@ -704,7 +700,7 @@ TEST_F(NimbleEncodingRunnerTest, blockBitPackingUsesNativeBlockLocalProfile) {
 
 TEST_F(
     NimbleEncodingRunnerTest,
-    blockBitPackingProfileCrossVerifiesBlockBoundaries) {
+    blockBitPackingV2ProfileCrossVerifiesBlockBoundaries) {
   for (const uint64_t seed :
        {uint64_t{0},
         static_cast<uint64_t>(std::numeric_limits<int64_t>::max())}) {
@@ -712,7 +708,7 @@ TEST_F(
       SCOPED_TRACE(
           "seed=" + std::to_string(seed) +
           ", rows=" + std::to_string(rowCount));
-      auto runnerConfig = config("nimble.block_bit_packing.decode_dense.v1");
+      auto runnerConfig = config("nimble.block_bit_packing_v2.decode_dense.v1");
       runnerConfig.seed = seed;
       runnerConfig.rowCount = rowCount;
 
@@ -726,8 +722,10 @@ TEST_F(
   }
 }
 
-TEST_F(NimbleEncodingRunnerTest, blockBitPackingConsumerUsesPristineArtifact) {
-  const auto runnerConfig = config("nimble.block_bit_packing.skip_seek.v1");
+TEST_F(
+    NimbleEncodingRunnerTest,
+    blockBitPackingV2ConsumerUsesPristineArtifact) {
+  const auto runnerConfig = config("nimble.block_bit_packing_v2.skip_seek.v1");
   const auto reference = runEncodingBenchmark(runnerConfig, *pool_);
 
   const auto candidate = runEncodingBenchmark(
@@ -934,18 +932,19 @@ TEST_F(NimbleEncodingRunnerTest, invalidContractRejectsConfiguration) {
       std::invalid_argument);
   EXPECT_THROW(
       runEncodingBenchmark(
-          config("nimble.block_bit_packing.decode_construct.v1"), *pool_),
+          config("nimble.block_bit_packing_v2.decode_construct.v1"), *pool_),
       std::invalid_argument);
   EXPECT_THROW(
       runEncodingBenchmark(
-          config("nimble.block_bit_packing.view_random.v1"), *pool_),
-      std::invalid_argument);
-  EXPECT_THROW(
-      runEncodingBenchmark(config("nimble.block_bit_packing.slice.v1"), *pool_),
+          config("nimble.block_bit_packing_v2.view_random.v1"), *pool_),
       std::invalid_argument);
   EXPECT_THROW(
       runEncodingBenchmark(
-          config("nimble.block_bit_packing.selection_e2e.v1"), *pool_),
+          config("nimble.block_bit_packing_v2.slice.v1"), *pool_),
+      std::invalid_argument);
+  EXPECT_THROW(
+      runEncodingBenchmark(
+          config("nimble.block_bit_packing_v2.selection_e2e.v1"), *pool_),
       std::invalid_argument);
   EXPECT_THROW(
       runEncodingBenchmark(config("nimble.varint.decode_construct.v1"), *pool_),
@@ -1724,8 +1723,11 @@ TEST_F(NimbleEncodingRunnerTest, malformedSimdForBitpackMetadataIsRejected) {
   }
 }
 
-TEST_F(NimbleEncodingRunnerTest, truncatedBlockBitPackingArtifactsAreRejected) {
-  const auto runnerConfig = config("nimble.block_bit_packing.decode_dense.v1");
+TEST_F(
+    NimbleEncodingRunnerTest,
+    truncatedBlockBitPackingV2ArtifactsAreRejected) {
+  const auto runnerConfig =
+      config("nimble.block_bit_packing_v2.decode_dense.v1");
   const auto reference = runEncodingBenchmark(runnerConfig, *pool_);
 
   for (size_t size = 0; size < reference.encodedArtifact.size(); ++size) {
@@ -1733,16 +1735,17 @@ TEST_F(NimbleEncodingRunnerTest, truncatedBlockBitPackingArtifactsAreRejected) {
     EXPECT_THROW(
         verifyEncodingArtifact(runnerConfig, truncated, *pool_),
         std::runtime_error)
-        << "accepted BlockBitPacking artifact truncated to " << size
+        << "accepted BlockBitPackingV2 artifact truncated to " << size
         << " bytes";
   }
 }
 
-TEST_F(NimbleEncodingRunnerTest, malformedBlockBitPackingMetadataIsRejected) {
-  const auto runnerConfig = config("nimble.block_bit_packing.decode_dense.v1");
+TEST_F(NimbleEncodingRunnerTest, malformedBlockBitPackingV2MetadataIsRejected) {
+  const auto runnerConfig =
+      config("nimble.block_bit_packing_v2.decode_dense.v1");
   const auto reference = runEncodingBenchmark(runnerConfig, *pool_);
   const auto offsets =
-      readBlockBitPackingArtifactOffsets(reference.encodedArtifact);
+      readBlockBitPackingV2ArtifactOffsets(reference.encodedArtifact);
   constexpr size_t kTrivialPayloadOffset =
       EncodingPrefix::kFixedPrefixSize + sizeof(uint8_t);
   ASSERT_EQ(1, offsets.blockCount);
@@ -1811,20 +1814,6 @@ TEST_F(NimbleEncodingRunnerTest, malformedBlockBitPackingMetadataIsRejected) {
       offsets.baselines + kTrivialPayloadOffset,
       std::numeric_limits<uint32_t>::max());
 
-  std::string nonMinimalFirstBlockRows =
-      reference.encodedArtifact.substr(0, offsets.firstBlockRows);
-  nonMinimalFirstBlockRows.push_back(static_cast<char>(0x81));
-  nonMinimalFirstBlockRows.push_back(static_cast<char>(0x82));
-  nonMinimalFirstBlockRows.push_back('\0');
-  nonMinimalFirstBlockRows.append(
-      reference.encodedArtifact.substr(offsets.packed));
-
-  auto zeroFirstBlockRows = reference.encodedArtifact;
-  zeroFirstBlockRows[offsets.firstBlockRows] = 0;
-
-  auto oversizedFirstBlockRows = reference.encodedArtifact;
-  oversizedFirstBlockRows[offsets.firstBlockRows] = static_cast<char>(0x82);
-
   auto nonZeroPackedPadding = reference.encodedArtifact;
   nonZeroPackedPadding.back() |= static_cast<char>(0x80);
 
@@ -1847,9 +1836,6 @@ TEST_F(NimbleEncodingRunnerTest, malformedBlockBitPackingMetadataIsRejected) {
         rawBitWidthWithPackedPayload,
         nonZeroFirstOffset,
         overflowingBaseline,
-        nonMinimalFirstBlockRows,
-        zeroFirstBlockRows,
-        oversizedFirstBlockRows,
         nonZeroPackedPadding,
         trailingPayload}) {
     EXPECT_THROW(

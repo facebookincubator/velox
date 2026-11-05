@@ -1535,7 +1535,12 @@ TEST_P(TabletTest, vectorIndex) {
 
       ASSERT_NE(warmVectorIndex, nullptr);
       EXPECT_EQ(warmVectorIndex->numVectors(), kNumVectors);
-      EXPECT_EQ(indexIoStats_->rawBytesRead(), warmIndexBytesBeforeLoad);
+
+      // Raw bytes read count the cache hits too, at the size of the reads they
+      // replace.
+      EXPECT_EQ(
+          indexIoStats_->rawBytesRead() - warmIndexBytesBeforeLoad,
+          indexBytesAfterLoad - indexBytesBeforeLoad);
       EXPECT_EQ(indexIoStats_->read().count(), warmIndexReadsBeforeLoad);
       EXPECT_GT(indexIoStats_->ramHit().count(), 0);
 
@@ -5547,14 +5552,17 @@ TEST_P(TabletWithIndexTest, loadClusterIndex) {
 
   for (bool loadClusterIndex : {false, true}) {
     SCOPED_TRACE(fmt::format("loadClusterIndex={}", loadClusterIndex));
-    const auto metadataBytesReadBefore = metadataIoStats_->rawBytesRead();
+    const auto metadataBytesReadBefore = metadataIoStats_->read().sum();
     const auto indexBytesReadBefore = indexIoStats_->rawBytesRead();
     nimble::TabletReader::Options options;
     options.loadClusterIndex = loadClusterIndex;
+    // Preload chunk stats as the Velox reader does, so the footer read serves
+    // them.
+    options.preloadOptionalSections = {std::string(nimble::kChunkStatsSection)};
     auto tablet = TabletTest::createTabletReader(readFile, options);
     if (loadClusterIndex) {
       ASSERT_NE(tablet->clusterIndex(), nullptr);
-      EXPECT_GT(metadataIoStats_->rawBytesRead(), metadataBytesReadBefore);
+      EXPECT_GT(metadataIoStats_->read().sum(), metadataBytesReadBefore);
       // Index key stream data is lazy-loaded on first lookup, not during
       // init. Only metadata IO (root section) happens here.
       EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesReadBefore);
@@ -5564,7 +5572,7 @@ TEST_P(TabletWithIndexTest, loadClusterIndex) {
       // cluster index requested, that single tail read (covering this small
       // file in full) is the only metadata IO; no index section is read.
       EXPECT_EQ(
-          metadataIoStats_->rawBytesRead() - metadataBytesReadBefore,
+          metadataIoStats_->read().sum() - metadataBytesReadBefore,
           file.size());
       EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesReadBefore);
     }
@@ -5628,11 +5636,14 @@ TEST_P(TabletWithIndexTest, preloadClusterIndex) {
   // Case 2: preloadIndex=true with loadClusterIndex=false is a no-op for
   // the index (the cluster index section is not even loaded).
   {
-    const auto metadataBytesReadBefore = metadataIoStats_->rawBytesRead();
+    const auto metadataBytesReadBefore = metadataIoStats_->read().sum();
     const auto indexBytesReadBefore = indexIoStats_->rawBytesRead();
     nimble::TabletReader::Options options;
     options.loadClusterIndex = false;
     options.preloadIndex = true;
+    // Preload chunk stats as the Velox reader does, so the footer read serves
+    // them.
+    options.preloadOptionalSections = {std::string(nimble::kChunkStatsSection)};
     auto tablet = TabletTest::createTabletReader(readFile, options);
     EXPECT_EQ(tablet->clusterIndex(), nullptr);
     // loadClusterIndex=false performs no index IO. The only metadata IO is the
@@ -5640,7 +5651,7 @@ TEST_P(TabletWithIndexTest, preloadClusterIndex) {
     // cache (no IO) when caching is enabled.
     const uint64_t expectedMetadataBytes = expectHasCache() ? 0 : file.size();
     EXPECT_EQ(
-        metadataIoStats_->rawBytesRead() - metadataBytesReadBefore,
+        metadataIoStats_->read().sum() - metadataBytesReadBefore,
         expectedMetadataBytes);
     EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesReadBefore);
   }
@@ -6286,7 +6297,7 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPath) {
 
     // Warm path should serve metadata from RAM cache.
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     // Verify stripe groups are accessible from cache.
     for (uint32_t i = 0; i < kNumStripes; ++i) {
@@ -6633,6 +6644,22 @@ TEST_P(TabletTest, configureOptionsIndexFlags) {
   }
 }
 
+TEST_P(TabletTest, configureOptionsCacheKeyEncodingViews) {
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  EXPECT_FALSE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .cacheKeyEncodingViews);
+
+  auto nimbleOptions = std::make_shared<nimble::NimbleReaderOptions>();
+  nimbleOptions->cacheKeyEncodingViews = true;
+  readerOptions.setFormatSpecificOptions(std::move(nimbleOptions));
+  EXPECT_TRUE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .cacheKeyEncodingViews);
+}
+
 TEST_P(TabletTest, configureOptionsCacheFields) {
   // Verify configureOptions wires fileHandle and cache from
   // ReaderOptions into TabletReader::Options, and that a TabletReader
@@ -6723,7 +6750,7 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
     EXPECT_EQ(tablet->stripeCount(), 1);
 
     EXPECT_GT(warmMetadataIoStats->ramHit().count(), 0);
-    EXPECT_EQ(warmMetadataIoStats->rawBytesRead(), 0);
+    EXPECT_EQ(warmMetadataIoStats->read().sum(), 0);
   }
 
   cache->shutdown();
@@ -6923,7 +6950,7 @@ TEST_P(TabletCacheTest, cacheWarmPath) {
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
 
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
     EXPECT_EQ(dataIoStats_->rawBytesRead(), 0);
     EXPECT_EQ(indexIoStats_->rawBytesRead(), 0);
 
@@ -7007,7 +7034,7 @@ TEST_P(TabletCacheTest, cacheMetadataWithChunkStats) {
 
     auto warmReader = createTabletReader(readFile, options);
     nimble::test::TabletReaderTestHelper helper{warmReader.get()};
-    const auto rawBytesBeforeWarmLookup = metadataIoStats_->rawBytesRead();
+    const auto bytesReadBeforeWarmLookup = metadataIoStats_->read().sum();
     const auto ramHitsBeforeWarmLookup = metadataIoStats_->ramHit().count();
 
     auto warmStripe = warmReader->stripeIdentifier(1);
@@ -7016,17 +7043,17 @@ TEST_P(TabletCacheTest, cacheMetadataWithChunkStats) {
         1, 0, warmReader->streamSize(warmStripe, 0));
     ASSERT_NE(warmStreamIndex, nullptr);
     EXPECT_EQ(warmStreamIndex->lookupChunk(50).chunkOffset, 11);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), rawBytesBeforeWarmLookup);
+    EXPECT_EQ(metadataIoStats_->read().sum(), bytesReadBeforeWarmLookup);
     EXPECT_GT(metadataIoStats_->ramHit().count(), ramHitsBeforeWarmLookup);
 
-    const auto rawBytesBeforeColdLookup = metadataIoStats_->rawBytesRead();
+    const auto bytesReadBeforeColdLookup = metadataIoStats_->read().sum();
     auto coldStripe = warmReader->stripeIdentifier(2);
     ASSERT_NE(coldStripe.chunkStats(), nullptr);
     auto coldStreamIndex = coldStripe.chunkStats()->createStreamIndex(
         2, 0, warmReader->streamSize(coldStripe, 0));
     ASSERT_NE(coldStreamIndex, nullptr);
     EXPECT_EQ(coldStreamIndex->lookupChunk(50).chunkOffset, 12);
-    EXPECT_GT(metadataIoStats_->rawBytesRead(), rawBytesBeforeColdLookup);
+    EXPECT_GT(metadataIoStats_->read().sum(), bytesReadBeforeColdLookup);
   }
 }
 
@@ -7114,7 +7141,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedRoundtrip) {
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
 
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
@@ -7125,7 +7152,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedRoundtrip) {
       ASSERT_NE(streamIndex, nullptr);
       EXPECT_EQ(streamIndex->lookupChunk(5).chunkOffset, 5);
     }
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 
   // No evictions — entries should be correct size from cacheMetadata().
@@ -7229,7 +7256,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedSsdRoundtrip) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ssdRead().count(), ssdReadsBefore);
-    const auto rawBytesBeforeLookups = metadataIoStats_->rawBytesRead();
+    const auto bytesReadBeforeLookups = metadataIoStats_->read().sum();
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
       EXPECT_NE(stripeId.stripeGroup(), nullptr);
@@ -7239,7 +7266,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedSsdRoundtrip) {
       ASSERT_NE(streamIndex, nullptr);
       EXPECT_EQ(streamIndex->lookupChunk(5).chunkOffset, 5);
     }
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), rawBytesBeforeLookups);
+    EXPECT_EQ(metadataIoStats_->read().sum(), bytesReadBeforeLookups);
   }
 }
 
@@ -7303,7 +7330,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedContentVerification) {
     auto warmReader = createTabletReader(readFile);
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
@@ -7378,7 +7405,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedMultipleWarmReaders) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
@@ -7450,7 +7477,7 @@ TEST_P(TabletCacheTest, cacheMetadataUncompressedRoundtrip) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 
   auto warmStats = cache_->refreshStats();
@@ -7508,7 +7535,7 @@ TEST_P(TabletCacheTest, cacheMetadataSingleStripe) {
     EXPECT_EQ(warmReader->stripeCount(), 1);
     EXPECT_EQ(warmReader->tabletRowCount(), 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
     EXPECT_NE(warmReader->stripeIdentifier(0).stripeGroup(), nullptr);
   }
 
@@ -7586,7 +7613,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedStripeConsistency) {
     auto warmReader = createTabletReader(readFile);
     EXPECT_EQ(warmReader->tabletRowCount(), coldTotalRows);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       SCOPED_TRACE(fmt::format("Stripe {}", i));
@@ -7766,7 +7793,7 @@ TEST_P(TabletCacheTest, cacheMetadataTwoFileIsolation) {
     EXPECT_EQ(warmA->stripeCount(), 3);
     EXPECT_EQ(warmA->tabletRowCount(), 300);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 
   dataIoStats_ = std::make_shared<velox::io::IoStatistics>();
@@ -7779,7 +7806,7 @@ TEST_P(TabletCacheTest, cacheMetadataTwoFileIsolation) {
     EXPECT_EQ(warmB->stripeCount(), 5);
     EXPECT_EQ(warmB->tabletRowCount(), 1000);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 }
 
@@ -7840,7 +7867,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedStripesSection) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 10);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 
   auto warmStats = cache_->refreshStats();
@@ -7979,7 +8006,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedFooter) {
     EXPECT_EQ(warmReader->stripeCount(), coldStripeCount);
     EXPECT_EQ(warmReader->tabletRowCount(), coldTotalRows);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     // Verify all stripes are accessible via the cached metadata.
     for (uint32_t i = 0; i < coldStripeCount; ++i) {
@@ -8129,7 +8156,7 @@ TEST_P(TabletCacheTest, cacheMetadataRowToStripeNavigation) {
     EXPECT_EQ(warmReader->stripeCount(), 5);
     EXPECT_EQ(warmReader->tabletRowCount(), 900);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     // Verify per-stripe row counts.
     for (size_t i = 0; i < rowCounts.size(); ++i) {
@@ -8182,7 +8209,7 @@ TEST_P(TabletCacheTest, cacheMetadataEmptyFile) {
     auto warmReader = createTabletReader(readFile);
     EXPECT_EQ(warmReader->stripeCount(), 0);
     EXPECT_EQ(warmReader->tabletRowCount(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 }
 
@@ -8319,7 +8346,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedMultipleStripeGroups) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
@@ -8668,7 +8695,7 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPathCompressedChunkIndex) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
     EXPECT_TRUE(warmReader->hasClusterIndex());
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {

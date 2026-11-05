@@ -43,19 +43,20 @@ TEST_F(SumDataSizeForStatsTest, nullValues) {
       makeNullableFlatVector<StringView>({std::nullopt, std::nullopt}),
   })};
 
-  testAggregations(
-      vectors,
-      {},
-      {"sum_data_size_for_stats(c0)",
-       "sum_data_size_for_stats(c1)",
-       "sum_data_size_for_stats(c2)",
-       "sum_data_size_for_stats(c3)",
-       "sum_data_size_for_stats(c4)",
-       "sum_data_size_for_stats(c5)",
-       "sum_data_size_for_stats(c6)",
-       "sum_data_size_for_stats(c7)",
-       "sum_data_size_for_stats(c8)"},
-      "SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"sum_data_size_for_stats(c0)",
+           "sum_data_size_for_stats(c1)",
+           "sum_data_size_for_stats(c2)",
+           "sum_data_size_for_stats(c3)",
+           "sum_data_size_for_stats(c4)",
+           "sum_data_size_for_stats(c5)",
+           "sum_data_size_for_stats(c6)",
+           "sum_data_size_for_stats(c7)",
+           "sum_data_size_for_stats(c8)"})
+      .assertResults(
+          "SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL");
 }
 
 TEST_F(SumDataSizeForStatsTest, nullAndNonNullValues) {
@@ -71,19 +72,19 @@ TEST_F(SumDataSizeForStatsTest, nullAndNonNullValues) {
       makeNullableFlatVector<StringView>({std::nullopt, "std::nullopt"}),
   })};
 
-  testAggregations(
-      vectors,
-      {},
-      {"sum_data_size_for_stats(c0)",
-       "sum_data_size_for_stats(c1)",
-       "sum_data_size_for_stats(c2)",
-       "sum_data_size_for_stats(c3)",
-       "sum_data_size_for_stats(c4)",
-       "sum_data_size_for_stats(c5)",
-       "sum_data_size_for_stats(c6)",
-       "sum_data_size_for_stats(c7)",
-       "sum_data_size_for_stats(c8)"},
-      "SELECT 1, 2, 4, 8, 4, 8, 1, 16, 16");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"sum_data_size_for_stats(c0)",
+           "sum_data_size_for_stats(c1)",
+           "sum_data_size_for_stats(c2)",
+           "sum_data_size_for_stats(c3)",
+           "sum_data_size_for_stats(c4)",
+           "sum_data_size_for_stats(c5)",
+           "sum_data_size_for_stats(c6)",
+           "sum_data_size_for_stats(c7)",
+           "sum_data_size_for_stats(c8)"})
+      .assertResults("SELECT 1, 2, 4, 8, 4, 8, 1, 16, 16");
 }
 
 template <class T>
@@ -109,33 +110,34 @@ TEST_F(SumDataSizeForStatsTest, allScalarTypes) {
        makeFlatVector<Timestamp>(8, generator<Timestamp>)})};
 
   // With grouping keys.
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"sum_data_size_for_stats(c1)",
-       "sum_data_size_for_stats(c2)",
-       "sum_data_size_for_stats(c3)",
-       "sum_data_size_for_stats(c4)",
-       "sum_data_size_for_stats(c5)",
-       "sum_data_size_for_stats(c6)",
-       "sum_data_size_for_stats(c7)",
-       "sum_data_size_for_stats(c8)"},
-      // result for group 1 and 2
-      "VALUES (1,4,8,16,32,16,32,4,64),(2,4,8,16,32,16,32,4,64)");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates(
+          {"sum_data_size_for_stats(c1)",
+           "sum_data_size_for_stats(c2)",
+           "sum_data_size_for_stats(c3)",
+           "sum_data_size_for_stats(c4)",
+           "sum_data_size_for_stats(c5)",
+           "sum_data_size_for_stats(c6)",
+           "sum_data_size_for_stats(c7)",
+           "sum_data_size_for_stats(c8)"})
+      .assertResults( // result for group 1 and 2
+          "VALUES (1,4,8,16,32,16,32,4,64),(2,4,8,16,32,16,32,4,64)");
 
   // Without grouping keys.
-  testAggregations(
-      vectors,
-      {},
-      {"sum_data_size_for_stats(c1)",
-       "sum_data_size_for_stats(c2)",
-       "sum_data_size_for_stats(c3)",
-       "sum_data_size_for_stats(c4)",
-       "sum_data_size_for_stats(c5)",
-       "sum_data_size_for_stats(c6)",
-       "sum_data_size_for_stats(c7)",
-       "sum_data_size_for_stats(c8)"},
-      "VALUES (8,16,32,64,32,64,8,128)");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"sum_data_size_for_stats(c1)",
+           "sum_data_size_for_stats(c2)",
+           "sum_data_size_for_stats(c3)",
+           "sum_data_size_for_stats(c4)",
+           "sum_data_size_for_stats(c5)",
+           "sum_data_size_for_stats(c6)",
+           "sum_data_size_for_stats(c7)",
+           "sum_data_size_for_stats(c8)"})
+      .assertResults("VALUES (8,16,32,64,32,64,8,128)");
 }
 
 TEST_F(SumDataSizeForStatsTest, arrayGlobalAggregate) {
@@ -146,7 +148,10 @@ TEST_F(SumDataSizeForStatsTest, arrayGlobalAggregate) {
           {1, 2, 3},
       }),
   })};
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 76");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"sum_data_size_for_stats(c0)"})
+      .assertResults("SELECT 76");
 }
 
 TEST_F(SumDataSizeForStatsTest, mapGlobalAggregate) {
@@ -157,7 +162,10 @@ TEST_F(SumDataSizeForStatsTest, mapGlobalAggregate) {
           {{1, 1}, {1, 1}, {1, 1}},
       }),
   })};
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 52");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"sum_data_size_for_stats(c0)"})
+      .assertResults("SELECT 52");
 }
 
 TEST_F(SumDataSizeForStatsTest, rowGlobalAggregate) {
@@ -175,7 +183,10 @@ TEST_F(SumDataSizeForStatsTest, rowGlobalAggregate) {
           }),
       }),
   })};
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 140");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"sum_data_size_for_stats(c0)"})
+      .assertResults("SELECT 140");
 }
 
 TEST_F(SumDataSizeForStatsTest, varbinaryGlobalAggregate) {
@@ -186,7 +197,10 @@ TEST_F(SumDataSizeForStatsTest, varbinaryGlobalAggregate) {
   flatVector->set(2, "hello, world !");
 
   auto vectors = {makeRowVector({varbinaryVector})};
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 29");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"sum_data_size_for_stats(c0)"})
+      .assertResults("SELECT 29");
 }
 
 TEST_F(SumDataSizeForStatsTest, varcharGlobalAggregate) {
@@ -197,7 +211,10 @@ TEST_F(SumDataSizeForStatsTest, varcharGlobalAggregate) {
           "{1, 2, 3}",
       }),
   })};
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 38");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"sum_data_size_for_stats(c0)"})
+      .assertResults("SELECT 38");
 }
 
 TEST_F(SumDataSizeForStatsTest, complexRecursiveGlobalAggregate) {
@@ -216,7 +233,10 @@ TEST_F(SumDataSizeForStatsTest, complexRecursiveGlobalAggregate) {
       }),
   })};
 
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 115");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"sum_data_size_for_stats(c0)"})
+      .assertResults("SELECT 115");
 }
 
 TEST_F(SumDataSizeForStatsTest, constantEncodingTest) {
@@ -237,11 +257,16 @@ TEST_F(SumDataSizeForStatsTest, constantEncodingTest) {
 
   auto vectors = {makeRowVector({columnOne, columnTwoConstantEncoded})};
 
-  testAggregations(
-      vectors, {}, {"sum_data_size_for_stats(c1)"}, "VALUES (108)");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"sum_data_size_for_stats(c1)"})
+      .assertResults("VALUES (108)");
 
-  testAggregations(
-      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,72),(2,36)");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"sum_data_size_for_stats(c1)"})
+      .assertResults("VALUES (1,72),(2,36)");
 }
 
 TEST_F(SumDataSizeForStatsTest, dictionaryEncodingTest) {
@@ -268,10 +293,16 @@ TEST_F(SumDataSizeForStatsTest, dictionaryEncodingTest) {
       BaseVector::wrapInDictionary(nullptr, indices, size, columnTwo);
   auto vectors = {makeRowVector({columnOne, columnTwoDictionaryEncoded})};
 
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c1)"}, "SELECT 115");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"sum_data_size_for_stats(c1)"})
+      .assertResults("SELECT 115");
 
-  testAggregations(
-      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,79),(2,36)");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"sum_data_size_for_stats(c1)"})
+      .assertResults("VALUES (1,79),(2,36)");
 }
 
 TEST_F(SumDataSizeForStatsTest, mask) {

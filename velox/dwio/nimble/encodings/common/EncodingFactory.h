@@ -91,6 +91,18 @@ class EncodingFactory {
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  /// Slices like slice() and adds `valueDelta` to every value of the range,
+  /// such as to rebase offsets on the first kept one. Wraps the slice in a
+  /// SliceEncoding, which folds the shift into the sliced bytes when their
+  /// encoding allows it and otherwise applies it at decode.
+  static std::string_view slice(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      int64_t valueDelta,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
+
  private:
   Encoding::Options options_{};
 

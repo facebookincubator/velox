@@ -285,11 +285,11 @@ class SelectiveColumnReader {
 
   /// Resolves which buffer resultNulls() returns for this read, by setting the
   /// returnReaderNulls_ flag (and anyNulls_). Sets it true on the fast path --
-  /// bulk read, no filter, dense rows, and nulls present -- so the nulls
-  /// decoded into nullsInReadRange_ can be returned directly; otherwise false,
-  /// so resultNulls() returns the separately-built, output-aligned
-  /// resultNulls_. Resolves the flag only; allocates no buffer. Call after the
-  /// read-range nulls are decoded.
+  /// bulk read, no filter that can drop rows, dense rows, and nulls present --
+  /// so the nulls decoded into nullsInReadRange_ can be returned directly;
+  /// otherwise false, so resultNulls() returns the separately-built,
+  /// output-aligned resultNulls_. Resolves the flag only; allocates no buffer.
+  /// Call after the read-range nulls are decoded.
   void setReturnNullsMode(const RowSet& rows);
 
   void setNumValues(vector_size_t size) {
@@ -428,14 +428,16 @@ class SelectiveColumnReader {
   }
 
   /// Returns true if no filters or deterministic filters/hooks that discard
-  /// nulls. This is used at read prepare time. useFastPath() in DecoderUtil.h
-  /// is used at read time and is expected to produce the same result.
+  /// nulls, or an AlwaysTrue filter. This is used at read prepare time.
+  /// useFastPath() in DecoderUtil.h is used at read time and is expected to
+  /// produce the same result.
   bool useBulkPath() const {
     auto* filter = scanSpec_->filter();
     return hasBulkPath() && process::hasSimd() &&
         (!filter ||
          (filter->isDeterministic() &&
-          (!nullsInReadRange_ || !filter->testNull()))) &&
+          (!nullsInReadRange_ || !filter->testNull() ||
+           filter->kind() == velox::common::FilterKind::kAlwaysTrue))) &&
         (!scanSpec_->valueHook() || !nullsInReadRange_ ||
          !scanSpec_->valueHook()->acceptsNulls());
   }
@@ -650,8 +652,13 @@ class SelectiveColumnReader {
   }
 
   bool useOutputRows() const {
-    return scanSpec_->hasFilter() || hasDeletion();
+    return hasRowFilter() || hasDeletion();
   }
+
+  // True if the scan spec has a filter that can drop rows. An AlwaysTrue filter
+  // keeps every row, so the column visitors record no output rows for it and
+  // the read-range nulls stay aligned with the output.
+  bool hasRowFilter() const;
 
   memory::MemoryPool* const pool_;
 

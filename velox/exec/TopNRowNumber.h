@@ -182,8 +182,9 @@ class TopNRowNumber : public Operator {
   // Decodes and potentially loads input if lazy vector.
   void prepareInput(RowVectorPtr& input);
 
-  // Handles input row when the partition has not yet accumulated 'limit' rows.
-  // Returns a pointer to the row to add to the partition accumulator.
+  // Handles an input row while the partition's highest rank is below the limit.
+  // Returns a pointer to the row to add to the partition accumulator, or
+  // nullptr if the row's rank exceeds the limit.
   template <core::TopNRowNumberNode::RankFunction TRank>
   char* processRowWithinLimit(vector_size_t index, TopRows& partition);
 

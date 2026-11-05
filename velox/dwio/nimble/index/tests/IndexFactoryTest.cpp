@@ -98,7 +98,8 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
         false,
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         10'000,
-        CompressionType::Uncompressed};
+        CompressionType::Uncompressed,
+        /*hierarchicalKeyEncodingReadFactors=*/{}};
     return ClusterIndexWriter::create(builtInConfig, inputType, pool);
   }
 
@@ -150,7 +151,8 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
         /*noDuplicateKey=*/true,
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         /*maxRowsPerKeyChunk=*/4,
-        CompressionType::Uncompressed};
+        CompressionType::Uncompressed,
+        /*hierarchicalKeyEncodingReadFactors=*/{}};
     return ClusterIndexWriter::create(builtInConfig, inputType, pool);
   }
 

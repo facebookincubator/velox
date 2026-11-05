@@ -17,8 +17,8 @@
 
 #include <algorithm>
 #include <iterator>
+#include <numeric>
 
-#include <folly/Conv.h>
 #include <folly/container/F14Set.h>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -53,17 +53,18 @@ namespace {
 // The decimal form of `key`'s value as an integer of type T, which must be
 // `key` itself.
 template <typename T>
-std::string canonicalIntegerKey(ScalarKind keyKind, std::string_view key) {
-  const auto parsed = folly::tryTo<T>(key);
-  NIMBLE_USER_CHECK(
-      parsed.hasValue(),
-      "Hybrid FlatMap key '{}' cannot be parsed as {}.",
-      key,
-      keyKind);
-  auto canonical = std::to_string(parsed.value());
-  NIMBLE_USER_CHECK_EQ(
-      canonical, key, "Hybrid FlatMap key '{}' is not canonical.", key);
-  return canonical;
+std::string canonicalIntegerKey(std::string_view key) {
+  HybridFlatMap::parseCanonicalIntegerKey<T>(key);
+  return std::string(key);
+}
+
+// Sorts `keys` as strings. Every writer sorts its grouped keys again when it
+// binds its Hybrid FlatMap to a column, and they usually arrive sorted, so a
+// sorted group costs one comparison per key.
+void sortGroupKeys(std::vector<std::string>& keys) {
+  if (!std::is_sorted(keys.begin(), keys.end())) {
+    std::sort(keys.begin(), keys.end());
+  }
 }
 
 } // namespace
@@ -74,13 +75,13 @@ std::string HybridFlatMap::canonicalKey(
   NIMBLE_USER_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
   switch (keyKind) {
     case ScalarKind::Int8:
-      return canonicalIntegerKey<int8_t>(keyKind, key);
+      return canonicalIntegerKey<int8_t>(key);
     case ScalarKind::Int16:
-      return canonicalIntegerKey<int16_t>(keyKind, key);
+      return canonicalIntegerKey<int16_t>(key);
     case ScalarKind::Int32:
-      return canonicalIntegerKey<int32_t>(keyKind, key);
+      return canonicalIntegerKey<int32_t>(key);
     case ScalarKind::Int64:
-      return canonicalIntegerKey<int64_t>(keyKind, key);
+      return canonicalIntegerKey<int64_t>(key);
     case ScalarKind::String:
       return std::string(key);
     case ScalarKind::UInt8:
@@ -103,7 +104,18 @@ HybridFlatMap::HybridFlatMap(ScalarKind keyKind, std::vector<Group> groups)
       supportedKeyKind(keyKind),
       "Unsupported Hybrid FlatMap key kind: {}.",
       keyKind);
+
+  // Reserves room for every grouped key, which can number in the thousands,
+  // so the duplicate check never rehashes the set as it grows.
   folly::F14FastSet<std::string> keys;
+  keys.reserve(
+      std::accumulate(
+          groups_.begin(),
+          groups_.end(),
+          size_t{0},
+          [](size_t numKeys, const Group& group) {
+            return numKeys + group.groupKeys.size();
+          }));
   bool foundDefault{false};
   for (size_t i = 0; i < groups_.size(); ++i) {
     auto& group = groups_[i];
@@ -137,7 +149,7 @@ HybridFlatMap::HybridFlatMap(ScalarKind keyKind, std::vector<Group> groups)
       NIMBLE_USER_CHECK(
           keys.insert(key).second, "Duplicate Hybrid FlatMap key: '{}'.", key);
     }
-    std::sort(group.groupKeys.begin(), group.groupKeys.end());
+    sortGroupKeys(group.groupKeys);
   }
   NIMBLE_USER_CHECK(
       foundDefault, "Hybrid FlatMap must have exactly one Default group.");
@@ -158,7 +170,9 @@ HybridFlatMap::HybridFlatMap(ScalarKind keyKind)
 HybridFlatMap::HybridFlatMap(
     ScalarKind keyKind,
     const HybridFlatMap& configuration)
-    : HybridFlatMap{keyKind, groupsForKeyKind(keyKind, configuration)} {}
+    : HybridFlatMap{keyKind, groupsForKeyKind(keyKind, configuration)} {
+  defaultGroupKeyPresenceMode_ = configuration.defaultGroupKeyPresenceMode_;
+}
 
 std::vector<HybridFlatMap::Group> HybridFlatMap::groupsForKeyKind(
     ScalarKind keyKind,
@@ -211,14 +225,17 @@ void HybridFlatMap::addGroup(uint32_t groupId, std::vector<std::string> keys) {
     const bool inserted = existingKeys.insert(key).second;
     NIMBLE_USER_CHECK(inserted, "Duplicate Hybrid FlatMap key: '{}'.", key);
   }
-  std::sort(keys.begin(), keys.end());
+  sortGroupKeys(keys);
   groups_.insert(
       groups_.end() - 1,
       Group{.groupId = groupId, .groupKeys = std::move(keys)});
 }
 
-HybridFlatMap HybridFlatMap::fromSchema(std::vector<Group> groups) {
-  return HybridFlatMap{AsRecorded{}, std::move(groups)};
+HybridFlatMap HybridFlatMap::fromSchema(
+    std::vector<Group> groups,
+    KeyPresenceMode defaultGroupKeyPresenceMode) {
+  return HybridFlatMap{
+      AsRecorded{}, std::move(groups), defaultGroupKeyPresenceMode};
 }
 
 const HybridFlatMap::Group& HybridFlatMap::groupById(uint32_t groupId) const {
@@ -235,6 +252,9 @@ const HybridFlatMap::Group& HybridFlatMap::groupById(uint32_t groupId) const {
 
 std::string HybridFlatMap::serialize() const {
   flatbuffers::FlatBufferBuilder builder;
+  // Writes the Default key presence mode even when it is Bitmap, since
+  // deserialize() requires it.
+  builder.ForceDefaults(true);
   std::vector<uint32_t> groupIds;
   std::vector<uint32_t> groupKeyCounts;
   std::vector<flatbuffers::Offset<flatbuffers::String>> groupKeys;
@@ -257,7 +277,9 @@ std::string HybridFlatMap::serialize() const {
           builder,
           builder.CreateVector(groupIds),
           builder.CreateVector(groupKeyCounts),
-          builder.CreateVector(groupKeys)));
+          builder.CreateVector(groupKeys),
+          static_cast<serialization::HybridFlatMapKeyPresenceMode>(
+              defaultGroupKeyPresenceMode_)));
   return {
       reinterpret_cast<const char*>(builder.GetBufferPointer()),
       builder.GetSize()};
@@ -286,6 +308,22 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
       numGroupIds,
       groupKeyCounts->size(),
       "Hybrid FlatMap group IDs and key counts must have the same size");
+  const auto* table =
+      flatbuffers::GetRoot<flatbuffers::Table>(serialized.data());
+  NIMBLE_CHECK(
+      table->CheckField(
+          serialization::HybridFlatMap::VT_DEFAULT_GROUP_KEY_PRESENCE_MODE),
+      "Hybrid FlatMap Default key presence is missing.");
+  // The generated accessor converts an unknown value to the enum, which is
+  // undefined behavior, so check the raw byte first.
+  const auto defaultGroupKeyPresenceMode = table->GetField<uint8_t>(
+      serialization::HybridFlatMap::VT_DEFAULT_GROUP_KEY_PRESENCE_MODE, 0);
+  NIMBLE_CHECK_LE(
+      defaultGroupKeyPresenceMode,
+      static_cast<uint8_t>(serialization::HybridFlatMapKeyPresenceMode_MAX),
+      "Hybrid FlatMap Default key presence is unknown.");
+  const auto keyPresenceMode =
+      static_cast<KeyPresenceMode>(defaultGroupKeyPresenceMode);
   std::vector<Group> groups;
   groups.reserve(numGroupIds);
   flatbuffers::uoffset_t groupKeyIndex{0};
@@ -310,12 +348,14 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
       NIMBLE_CHECK_NOT_NULL(key, "Hybrid FlatMap group key cannot be null.");
       group.groupKeys.push_back(key->str());
     }
+    detail::checkHybridFlatMapDefaultKeys(
+        keyPresenceMode, group.groupId, group.groupKeys);
   }
   NIMBLE_CHECK_EQ(
       groupKeyIndex,
       numKeys,
       "Hybrid FlatMap group key counts must match group keys size");
-  return fromSchema(std::move(groups));
+  return fromSchema(std::move(groups), keyPresenceMode);
 }
 
 void HybridFlatMap::setAttribute(
@@ -363,6 +403,18 @@ HybridFlatMap HybridFlatMap::extractAttribute(
   return hybridMap;
 }
 
+std::string toString(HybridFlatMap::KeyPresenceMode mode) {
+  switch (mode) {
+    case HybridFlatMap::KeyPresenceMode::kBitmap:
+      return "Bitmap";
+    case HybridFlatMap::KeyPresenceMode::kKeyList:
+      return "KeyList";
+  }
+  NIMBLE_UNREACHABLE(
+      "Unknown Hybrid FlatMap key presence mode: {}.",
+      static_cast<int32_t>(mode));
+}
+
 namespace detail {
 
 void checkHybridFlatMapGroupKeys(
@@ -378,6 +430,12 @@ void checkHybridFlatMapGroupKeys(
     if (isDefaultGroup || i == 0) {
       continue;
     }
+
+    // Readers check every schema for every batch. One comparison accepts
+    // ascending keys; the checks below only name the failure.
+    if (groupKeys[i - 1] < groupKeys[i]) {
+      continue;
+    }
     NIMBLE_CHECK_NE(
         groupKeys[i - 1],
         groupKeys[i],
@@ -388,6 +446,18 @@ void checkHybridFlatMapGroupKeys(
         groupKeys[i],
         "Hybrid FlatMap group keys must be sorted: {}.",
         groupId);
+  }
+}
+
+void checkHybridFlatMapDefaultKeys(
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
+    uint32_t groupId,
+    const std::vector<std::string>& groupKeys) {
+  if (HybridFlatMap::hasKeyPresenceList(defaultGroupKeyPresenceMode, groupId)) {
+    NIMBLE_CHECK(
+        groupKeys.empty(),
+        "Hybrid FlatMap Default group cannot list keys when batches list "
+        "their Default keys.");
   }
 }
 

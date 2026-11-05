@@ -35,8 +35,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
@@ -56,7 +55,6 @@
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
-#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -119,42 +117,6 @@ std::string encodeTrivialString(
   Buffer buffer{*benchmarkPool()};
   auto encoded = TrivialEncoding<std::string_view>::encode(
       selection, values, buffer, options);
-  return {encoded.data(), encoded.size()};
-}
-
-std::unique_ptr<EncodingSelectionPolicy<uint64_t>>
-makeBitRangeSplitSelectionPolicy() {
-  const auto childLayout = [] {
-    return EncodingLayout{
-        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
-  };
-  EncodingLayout layout{
-      EncodingType::BitRangeSplit,
-      EncodingLayout::Config{{
-          {std::string(BitRangeSplitEncoding<uint64_t>::kRangesConfigKey),
-           "0-15;16-58;59-63"},
-      }},
-      CompressionType::Uncompressed,
-      {childLayout(), childLayout(), childLayout()}};
-  return std::make_unique<ReplayedEncodingSelectionPolicy<uint64_t>>(
-      std::move(layout), std::nullopt, [](DataType dataType) {
-        return makeDefaultPolicy(dataType);
-      });
-}
-
-std::string_view encodeBitRangeSplit(
-    const Vector<uint64_t>& data,
-    Buffer& buffer) {
-  return EncodingFactory::encode<uint64_t>(
-      makeBitRangeSplitSelectionPolicy(),
-      physicalSpan(data),
-      buffer,
-      Encoding::Options{.fixedBitWidthUseExactBits = true});
-}
-
-std::string encodeBitRangeSplit(const Vector<uint64_t>& data) {
-  Buffer buffer{*benchmarkPool()};
-  const auto encoded = encodeBitRangeSplit(data, buffer);
   return {encoded.data(), encoded.size()};
 }
 
@@ -234,7 +196,7 @@ std::shared_ptr<const SharedDictionaryAlphabet> createSharedDictionaryAlphabet(
   Buffer buffer{*benchmarkPool()};
   const auto encoded = SharedDictionaryAlphabet::encode<T>(
       {values.data(), values.size()},
-      std::array{EncodingType::BlockBitPacking},
+      std::array{EncodingType::BlockBitPackingV2},
       buffer);
   auto encodedOwner = std::make_shared<const std::string>(encoded);
   const std::string_view encodedAlphabet{*encodedOwner};
@@ -308,20 +270,6 @@ void readPositionsWithMaterialization(
       encoding.materialize(1, &value);
       folly::doNotOptimizeAway(value);
     }
-  }
-}
-
-template <typename T>
-void readRangesWithMaterialization(Encoding& encoding, uint32_t iters) {
-  auto output =
-      std::make_unique<typename TypeTraits<T>::physicalType[]>(kRangeSize);
-  while (iters--) {
-    encoding.reset();
-    for (uint32_t offset{0}; offset < kRows; offset += kRangeSize) {
-      encoding.materialize(
-          std::min<uint32_t>(kRangeSize, kRows - offset), output.get());
-    }
-    folly::doNotOptimizeAway(output[0]);
   }
 }
 
@@ -696,15 +644,6 @@ Vector<uint32_t> mainlyConstantData(uint32_t rows) {
   data.resize(rows, 7);
   for (uint32_t i = 0; i < rows; i += 17) {
     data[i] = i;
-  }
-  return data;
-}
-
-Vector<uint64_t> bitRangeSplitData(uint32_t rows) {
-  Vector<uint64_t> data{benchmarkPool().get()};
-  data.resize(rows);
-  for (uint64_t row{0}; row < rows; ++row) {
-    data[row] = row * 0x9e37'79b9'7f4a'7c15ULL;
   }
   return data;
 }
@@ -1564,85 +1503,45 @@ MATERIALIZE_BENCHMARK(
         makeNarrow<uint8_t>(10, kRows)),
     randomPositions(kRows))
 VIEW_BENCHMARK(
-    View_BitRangeSplitUint64_Random130,
-    uint64_t,
-    encodeBitRangeSplit(bitRangeSplitData(kRows)),
-    randomPositions(kRows))
-BATCH_VIEW_BENCHMARK(
-    BatchView_BitRangeSplitUint64_Random130,
-    uint64_t,
-    encodeBitRangeSplit(bitRangeSplitData(kRows)),
-    randomPositions(kRows))
-RANGE_VIEW_BENCHMARK(
-    RangeView_BitRangeSplitUint64_Range1024,
-    uint64_t,
-    encodeBitRangeSplit(bitRangeSplitData(kRows)))
-MATERIALIZE_BENCHMARK(
-    Materialize_BitRangeSplitUint64_Random130,
-    uint64_t,
-    encodeBitRangeSplit(bitRangeSplitData(kRows)),
-    randomPositions(kRows))
-BENCHMARK(Materialize_BitRangeSplitUint64_Range1024, iters) {
-  std::string encoded;
-  std::vector<facebook::velox::BufferPtr> stringBuffers;
-  std::unique_ptr<Encoding> encoding;
-  BENCHMARK_SUSPEND {
-    encoded = encodeBitRangeSplit(bitRangeSplitData(kRows));
-    encoding = createRegularEncoding(encoded, stringBuffers);
-  }
-  readRangesWithMaterialization<uint64_t>(*encoding, iters);
-}
-BENCHMARK(Encode_BitRangeSplitUint64_4096, iters) {
-  Vector<uint64_t> data{benchmarkPool().get()};
-  BENCHMARK_SUSPEND {
-    data = bitRangeSplitData(kRows);
-  }
-  while (iters--) {
-    Buffer buffer{*benchmarkPool()};
-    const auto encoded = encodeBitRangeSplit(data, buffer);
-    folly::doNotOptimizeAway(encoded);
-  }
-}
-VIEW_BENCHMARK(
     View_BlockBitPackingUint32_Random130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     randomPositions(kRows))
 VIEW_BENCHMARK(
     View_BlockBitPackingUint32_Sorted130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     sortedRandomPositions(kRows))
 VIEW_BENCHMARK(
     View_BlockBitPackingUint32_Clustered130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     clusteredPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BlockBitPackingUint32_Random130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     randomPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BlockBitPackingUint32_Sorted130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     sortedRandomPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BlockBitPackingUint32_Clustered130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     clusteredPositions(kRows))
 SHARED_DICTIONARY_ALPHABET_BENCHMARK(
@@ -1684,26 +1583,26 @@ SHARED_DICTIONARY_ALPHABET_BENCHMARK(
 RANGE_VIEW_BENCHMARK(
     RangeView_BlockBitPackingUint32_Range1024,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)))
 UNALIGNED_RANGE_VIEW_BENCHMARK(
     RangeView_BlockBitPackingUint32_UnalignedRange1024,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)))
 UNALIGNED_RANGE_VIEW_BENCHMARK(
     RangeView_BlockBitPackingUint16_UnalignedRange1024,
     uint16_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint16_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint16_t>>(
+        EncodingType::BlockBitPackingV2,
         makeNarrow<uint16_t>(10, kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_BlockBitPackingUint32_Random130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     randomPositions(kRows))
 
@@ -1888,8 +1787,8 @@ const std::vector<CreateReadCase>& createReadCases() {
     result.push_back(
         makeCreateReadCase<uint32_t>(
             "BlockBitPacking_uint32", [](uint32_t rows) {
-              return encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-                  EncodingType::BlockBitPacking, pforData(rows));
+              return encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+                  EncodingType::BlockBitPackingV2, pforData(rows));
             }));
     result.push_back(
         makeCreateReadCase<uint32_t>("DeltaBlock_uint32", [](uint32_t rows) {
@@ -1900,10 +1799,6 @@ const std::vector<CreateReadCase>& createReadCases() {
         makeCreateReadCase<uint32_t>("EliasFano_uint32", [](uint32_t rows) {
           return encodeWithSelection<EliasFanoEncoding<uint32_t>>(
               EncodingType::EliasFano, makeIncreasing<uint32_t>(rows));
-        }));
-    result.push_back(
-        makeCreateReadCase<uint64_t>("BitRangeSplit_uint64", [](uint32_t rows) {
-          return encodeBitRangeSplit(bitRangeSplitData(rows));
         }));
     result.push_back(
         makeCreateReadCase<uint64_t>("SubIntSplit_uint64", [](uint32_t rows) {
