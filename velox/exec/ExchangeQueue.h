@@ -51,7 +51,8 @@ class ExchangeQueue {
   /// returned in 'promises' if 'page' is not nullptr. When 'page' is nullptr
   /// and the queue is completed serving data, all left over promises will be
   /// returned in 'promises'. When 'page' is nullptr and the queue is not
-  /// completed serving data, no 'promises' will be added and returned.
+  /// completed serving data, no 'promises' will be added and returned. A
+  /// closed queue frees 'page' instead of enqueuing it.
   void enqueueLocked(
       std::unique_ptr<SerializedPageBase>&& page,
       std::vector<ContinuePromise>& promises);
@@ -111,10 +112,12 @@ class ExchangeQueue {
     return noMoreSources_;
   }
 
+  /// Frees the queued pages and unblocks the waiting consumers.
   void close();
 
  private:
   std::vector<ContinuePromise> closeLocked() {
+    closed_ = true;
     queue_.clear();
     return clearAllPromisesLocked();
   }
@@ -172,6 +175,10 @@ class ExchangeQueue {
   // completing normally or an error. Note that the queue itself may still
   // contain data to be consumed.
   bool noMoreInput_{false};
+
+  // Set by close(). enqueueLocked() frees later pages at once: nothing consumes
+  // them, and the queue can outlive the memory pool they came from.
+  bool closed_{false};
 
   std::mutex mutex_;
   std::deque<std::unique_ptr<SerializedPageBase>> queue_;
