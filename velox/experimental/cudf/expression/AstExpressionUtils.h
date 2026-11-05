@@ -380,11 +380,13 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
   }
 
   if (expr->isCastKind()) {
-    // Cast operations: only INTEGER, BIGINT, DOUBLE supported in pure AST
-    // Compare types, not kinds: DATE, DECIMAL and INTERVAL share kinds with
-    // INTEGER and BIGINT but are not plain integers.
+    // Cast operations: only BIGINT and DOUBLE supported in pure AST. The AST
+    // has no 32-bit cast, and CAST_TO_INT64 for INTEGER would leave a BIGINT
+    // operand where an INTEGER one is expected.
+    // Compare types, not kinds: DECIMAL and INTERVAL share the BIGINT kind
+    // but are not plain integers.
     const auto& outputType = *expr->type();
-    if (outputType.equivalent(*INTEGER()) || outputType.equivalent(*BIGINT())) {
+    if (outputType.equivalent(*BIGINT())) {
       return isOpAndInputsSupported(Op::CAST_TO_INT64, inputCudfDataTypes);
     }
     if (outputType.equivalent(*DOUBLE())) {
@@ -669,7 +671,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     }
     case core::ExprKind::kCast: {
       VELOX_CHECK_EQ(len, 1);
-      if (type->equivalent(*INTEGER()) || type->equivalent(*BIGINT())) {
+      if (type->equivalent(*BIGINT())) {
         auto const& op1 = pushExprToTree(expr->inputs()[0]);
         return tree.push(Operation{Op::CAST_TO_INT64, op1});
       } else if (type->equivalent(*DOUBLE())) {

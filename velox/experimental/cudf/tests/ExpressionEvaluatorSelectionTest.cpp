@@ -557,6 +557,15 @@ TEST_F(CudfExpressionSelectionTest, castAndTryCast) {
       "try_cast(a AS double)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(okTryCast, queryCtx_.get(), pool_.get()));
 
+  // OK: cast bigint -> integer, which the AST does not lower
+  auto okIntegerCast = optimizeTypedExpr(
+      "cast(a AS integer) = 5",
+      rowType_,
+      queryCtx_.get(),
+      execCtx_.get(),
+      {.parseIntegerAsBigint = false, .functionPrefix = ""});
+  ASSERT_TRUE(canExprRunOnGpu(okIntegerCast, queryCtx_.get(), pool_.get()));
+
   // BAD: cast boolean -> date (expected unsupported by cuDF)
   auto badCast = optimizeTypedExpr(
       "cast(length(name) < 10 AS date)",

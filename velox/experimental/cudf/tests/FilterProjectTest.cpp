@@ -2947,6 +2947,34 @@ TEST_F(CudfFilterProjectTest, betweenDouble) {
   assertQuery(plan, "SELECT c0 BETWEEN 0.0 AND 2.0 AS result FROM tmp");
 }
 
+// The AST has no 32-bit cast, so a cast to INTEGER must keep INTEGER type
+// next to INTEGER literals and columns.
+TEST_F(CudfFilterProjectTest, castToIntegerInAst) {
+  auto data = makeRowVector(
+      {"event_id", "c_bigint", "c_smallint", "c_int"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+       makeNullableFlatVector<int64_t>({5, std::nullopt, -5, 5, 7}),
+       makeNullableFlatVector<int16_t>({1, 2, std::nullopt, -3, 4}),
+       makeNullableFlatVector<int32_t>({1, 4, 2, std::nullopt, 0})});
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  assertPlanMatchesVelox(
+      PlanBuilder()
+          .setParseOptions(options)
+          .values({data})
+          .filter("cast(c_bigint AS INTEGER) = 5")
+          .project({"event_id"})
+          .planNode());
+  assertPlanMatchesVelox(
+      PlanBuilder()
+          .setParseOptions(options)
+          .values({data})
+          .project(
+              {"cast(c_smallint AS INTEGER) + 1 AS a",
+               "cast(c_smallint AS INTEGER) + 1 > c_int AS b"})
+          .planNode());
+}
+
 class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
