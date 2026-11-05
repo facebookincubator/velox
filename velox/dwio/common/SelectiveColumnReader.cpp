@@ -128,6 +128,15 @@ bool SelectiveColumnReader::hasRowFilter() const {
       !scanSpec_->children().empty();
 }
 
+bool SelectiveColumnReader::useBulkPath(bool hasNulls) const {
+  auto* filter = scanSpec_->filter();
+  return hasBulkPath() && process::hasSimd() &&
+      (!filter ||
+       (filter->isDeterministic() && (!hasNulls || !filter->testNull()))) &&
+      (!scanSpec_->valueHook() || !hasNulls ||
+       !scanSpec_->valueHook()->acceptsNulls());
+}
+
 void SelectiveColumnReader::setReturnNullsMode(const RowSet& rows) {
   if (useBulkPath() && !hasRowFilter()) {
     anyNulls_ = nullsInReadRange_ != nullptr;
