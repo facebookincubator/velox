@@ -737,6 +737,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
         partitionKeys.count(name) == 0) {
       VELOX_CHECK(!isSpecialColumn(name, specialColumns.rowIndex));
       VELOX_CHECK(!isSpecialColumn(name, specialColumns.rowId));
+      VELOX_CHECK(!isSpecialColumn(name, specialColumns.readRange));
       filterSubfields[getColumnName(subfield)].push_back(&subfield);
     }
   }
@@ -758,6 +759,15 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       fieldSpec->setColumnType(common::ScanSpec::ColumnType::kComposite);
       fieldSpec->childByName(rowIdType.nameOf(0))
           ->setColumnType(common::ScanSpec::ColumnType::kRowIndex);
+      continue;
+    }
+    if (isSpecialColumn(name, specialColumns.readRange)) {
+      VELOX_USER_CHECK(
+          type->kindEquals(ROW({BIGINT(), INTEGER()})),
+          "Read range column must be ROW(BIGINT, INTEGER): {}",
+          type->toString());
+      auto* fieldSpec = spec->addField(name, i);
+      fieldSpec->setColumnType(common::ScanSpec::ColumnType::kReadRange);
       continue;
     }
     auto it = outputSubfields.find(name);
