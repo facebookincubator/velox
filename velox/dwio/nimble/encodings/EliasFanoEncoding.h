@@ -284,6 +284,10 @@ class EliasFanoEncoding<T>::List {
     return payload_;
   }
 
+  uint32_t rowCount() const {
+    return rowCount_;
+  }
+
   uint32_t upperBytes() const {
     return upperBytes_;
   }
