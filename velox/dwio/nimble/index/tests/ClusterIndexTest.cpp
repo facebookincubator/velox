@@ -62,6 +62,35 @@ IndexLookup::LookupRequest makeKeyRequest(std::string_view key) {
   return IndexLookup::LookupRequest::rangeScan({bounds});
 }
 
+// Reads the keys of 'cursor' through batches of up to 'maxKeys' keys, and
+// checks that only the last batch holds fewer keys, that a short last batch
+// still holds every key left, and that a batch past the end appends nothing
+// and allocates nothing. Copies the keys once all are read, so the keys of a
+// batch must stay valid past later batches and past the chunk they came from.
+std::vector<std::string> readKeyBatches(KeyCursor& cursor, size_t maxKeys) {
+  std::vector<std::unique_ptr<char[]>> buffers;
+  const KeyCursor::BufferAllocator bufferAllocator = [&](size_t size) {
+    return buffers.emplace_back(std::make_unique<char[]>(size)).get();
+  };
+  std::vector<std::string_view> keys;
+  while (cursor.hasNext()) {
+    const auto numKeys = keys.size();
+    cursor.next(maxKeys, keys, bufferAllocator);
+    const auto numRead = keys.size() - numKeys;
+    EXPECT_GT(numRead, 0);
+    EXPECT_LE(numRead, maxKeys);
+    if (cursor.hasNext()) {
+      EXPECT_EQ(numRead, maxKeys);
+    }
+  }
+  const auto numKeys = keys.size();
+  const auto numBuffers = buffers.size();
+  cursor.next(maxKeys, keys, bufferAllocator);
+  EXPECT_EQ(keys.size(), numKeys);
+  EXPECT_EQ(buffers.size(), numBuffers);
+  return {keys.begin(), keys.end()};
+}
+
 class ClusterIndexTest : public ClusterIndexTestBase {
  protected:
   struct EncodedKeyStream {
@@ -1487,6 +1516,18 @@ TEST_F(ClusterIndexTest, keyIteratorMultiplePartitionsMultipleChunks) {
   }
   const std::vector<std::string> expectedRange = {"key_d", "key_e", "key_f"};
   EXPECT_EQ(scanned, expectedRange);
+
+  // Batches cross chunk and partition boundaries mid-batch. The larger ones ask
+  // for more keys than the range has left, so their read is short.
+  for (const auto maxKeys : {size_t{1}, size_t{3}, size_t{8}, size_t{100}}) {
+    SCOPED_TRACE(fmt::format("maxKeys={}", maxKeys));
+    EXPECT_EQ(
+        readKeyBatches(*clusterIndex->keyCursor(RowRange{0, 8}), maxKeys),
+        expected);
+    EXPECT_EQ(
+        readKeyBatches(*clusterIndex->keyCursor(RowRange{3, 6}), maxKeys),
+        expectedRange);
+  }
 }
 
 TEST_F(ClusterIndexTest, keyIteratorPrefixEncodedChunks) {
@@ -1540,6 +1581,20 @@ TEST_F(ClusterIndexTest, keyIteratorPrefixEncodedChunks) {
   }
   EXPECT_EQ(
       scanned, std::vector<std::string>(allKeys.begin() + 25, allKeys.end()));
+
+  // Batches cross restart blocks and the chunk boundary, from a chunk start
+  // and from mid-chunk.
+  for (const auto maxKeys : {size_t{7}, size_t{kNumRows}}) {
+    SCOPED_TRACE(fmt::format("maxKeys={}", maxKeys));
+    EXPECT_EQ(
+        readKeyBatches(
+            *clusterIndex->keyCursor(RowRange{0, kNumRows}), maxKeys),
+        allKeys);
+    EXPECT_EQ(
+        readKeyBatches(
+            *clusterIndex->keyCursor(RowRange{25, kNumRows}), maxKeys),
+        std::vector<std::string>(allKeys.begin() + 25, allKeys.end()));
+  }
 }
 
 TEST_F(ClusterIndexTest, keyIteratorDuplicateKeys) {

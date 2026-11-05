@@ -16,15 +16,18 @@
 #pragma once
 
 // Device primitives for laying out Presto SerializedPage bytes on the GPU. They
-// return no device memory and take their scratch from get_temp_mr().
+// return no device memory and take their scratch from get_temp_mr(). A host
+// span is read before the function returns, unless it is device accessible
+// (pinned memory, as cudf::detail::make_pinned_vector_async gives): that one
+// is read in stream order and must stay valid until then.
 
 #include <cudf/types.hpp>
+#include <cudf/utilities/span.hpp>
 
 #include <cuda/stream>
 
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::detail {
@@ -80,33 +83,33 @@ struct CopyTask {
 std::vector<int64_t> prestoPageBoundaries(
     int32_t numRows,
     int64_t fixedBitsPerRow,
-    std::span<const StringOffsets> strings,
+    cudf::host_span<const StringOffsets> strings,
     int64_t pageBytes,
     int64_t maxRows,
     cuda::stream_ref stream);
 
 /// Runs every NullBytesTask.
 void fillPrestoNullBytes(
-    std::span<const NullBytesTask> tasks,
+    cudf::host_span<const NullBytesTask> tasks,
     cuda::stream_ref stream);
 
 /// Runs every StringOffsetsTask. Returns false when the strings of a range
 /// take more bytes than an int32 offset holds, so that no Presto page can
 /// carry the range; 'dst' is unspecified in that case.
 bool fillPrestoStringOffsets(
-    std::span<const StringOffsetsTask> tasks,
+    cudf::host_span<const StringOffsetsTask> tasks,
     cuda::stream_ref stream);
 
 /// Runs all copies with one batched device memcpy.
 void batchedDeviceCopy(
-    std::span<const CopyTask> tasks,
+    cudf::host_span<const CopyTask> tasks,
     cuda::stream_ref stream);
 
 /// Returns the offset at which each of 'rows' starts, rows counted from the
 /// column's first row. A row equal to the row count yields the end offset.
 std::vector<int64_t> gatherStringOffsets(
     const StringOffsets& offsets,
-    std::span<const int64_t> rows,
+    cudf::host_span<const int64_t> rows,
     cuda::stream_ref stream);
 
 /// Converts timestamps to the milliseconds Presto carries: dst[i] is src[i],

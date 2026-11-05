@@ -19,31 +19,36 @@
 #include "velox/experimental/cudf/serializers/PrestoPageDeviceKernels.h"
 
 #include <cudf/detail/offsets_iterator.cuh>
+#include <cudf/detail/utilities/buffer_factories.hpp>
+#include <cudf/detail/utilities/cuda.hpp>
+#include <cudf/detail/utilities/cuda_memcpy.hpp>
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
 #include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/error.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/span.hpp>
 
-#include <rmm/device_buffer.hpp>
 #include <rmm/device_scalar.hpp>
-#include <rmm/device_uvector.hpp>
 #include <rmm/exec_policy.hpp>
+#include <rmm/resource_ref.hpp>
 
 #include <cub/device/device_memcpy.cuh>
+#include <cub/device/device_scan.cuh>
+#include <cub/device/device_select.cuh>
+#include <cuda/buffer>
 #include <cuda/iterator>
+#include <cuda/memory_resource>
 #include <cuda/numeric>
 #include <cuda/std/cstring>
+#include <cuda/std/execution>
 #include <cuda/std/functional>
 #include <cuda_runtime.h>
-#include <thrust/copy.h>
 #include <thrust/gather.h>
-#include <thrust/iterator/counting_iterator.h>
-#include <thrust/iterator/transform_iterator.h>
 #include <thrust/transform.h>
-#include <thrust/transform_scan.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
@@ -174,25 +179,6 @@ struct ToMillis {
   }
 };
 
-// The three views of a CopyTask that cub::DeviceMemcpy::Batched reads.
-struct CopySource {
-  __device__ const uint8_t* operator()(const CopyTask& t) const {
-    return t.src;
-  }
-};
-
-struct CopyDestination {
-  __device__ uint8_t* operator()(const CopyTask& t) const {
-    return t.dst;
-  }
-};
-
-struct CopySize {
-  __device__ size_t operator()(const CopyTask& t) const {
-    return t.size;
-  }
-};
-
 struct ToJavaDecimal {
   __device__ __int128_t operator()(__int128_t v) const {
     if (v >= 0) {
@@ -211,12 +197,44 @@ uint32_t gridXFor(int64_t maxItems) {
   return static_cast<uint32_t>(std::clamp<int64_t>(blocks, 1, 128));
 }
 
+// A device copy of 'values' for a function that does not wait for the stream:
+// pinned memory, which a device-accessible span marks, is read in stream
+// order, as the header says; pageable memory is read before this returns,
+// since the caller may free it.
+template <typename T>
+cuda::device_buffer<T> toDevice(
+    cudf::host_span<const T> values,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  auto result = cudf::detail::make_device_buffer_async(
+      values, stream, cudf::memory_resources{mr, mr});
+  if (!values.is_device_accessible()) {
+    cudf::detail::sync_stream(stream);
+  }
+  return result;
+}
+
+// cub's execution environment: the stream and the scratch resource. The prop
+// and env template arguments are spelled out because nvcc 12.9 does not
+// deduce them here.
+using StreamProp =
+    cuda::std::execution::prop<cuda::get_stream_t, cuda::stream_ref>;
+using MrProp = cuda::std::execution::
+    prop<cuda::mr::get_memory_resource_t, rmm::device_async_resource_ref>;
+using CubEnv = cuda::std::execution::env<StreamProp, MrProp>;
+
+CubEnv cubEnv(cuda::stream_ref stream, rmm::device_async_resource_ref mr) {
+  return CubEnv{
+      StreamProp{cuda::get_stream_t{}, stream},
+      MrProp{cuda::mr::get_memory_resource_t{}, mr}};
+}
+
 } // namespace
 
 std::vector<int64_t> device::prestoPageBoundaries(
     int32_t numRows,
     int64_t fixedBitsPerRow,
-    std::span<const StringOffsets> strings,
+    cudf::host_span<const StringOffsets> strings,
     int64_t pageBytes,
     int64_t maxRows,
     cuda::stream_ref stream) {
@@ -237,29 +255,50 @@ std::vector<int64_t> device::prestoPageBoundaries(
   }
 
   // The scan of the row bits is consumed as it is produced: one flag per row
-  // and the last value, not the 8 bytes per row of the scan itself. The
-  // upload of 'strings' waits for the stream: the scan allocates its scratch
-  // and can throw before the stream has read the caller's span.
+  // and the last value, not the 8 bytes per row of the scan itself. Its
+  // scratch is allocated before the upload of 'strings', as hash_join.cu
+  // allocates cub's, so that no allocation can fail while the stream still
+  // has to read the caller's span; only the scan launch sits between the
+  // upload and the read of 'total', which waits for it.
   auto mr = get_temp_mr();
-  auto deviceStrings = cudf::detail::make_device_uvector(
-      cudf::host_span<StringOffsets const>{strings.data(), strings.size()},
-      stream,
-      mr);
-  rmm::device_uvector<bool> starts(numRows, stream, mr);
+  cuda::device_buffer<StringOffsets> deviceStrings(
+      stream, mr, strings.size(), cuda::no_init);
+  cuda::device_buffer<bool> starts(stream, mr, numRows, cuda::no_init);
   rmm::device_scalar<int64_t> total(stream, mr);
   const RowBits rowBits{
       fixedBitsPerRow,
       deviceStrings.data(),
       static_cast<int32_t>(strings.size())};
-  thrust::transform_inclusive_scan(
-      rmm::exec_policy_nosync(stream, mr),
-      thrust::counting_iterator<int32_t>(0),
-      thrust::counting_iterator<int32_t>(numRows),
-      cuda::make_tabulate_output_iterator(
-          MarkPageStarts{
-              rowBits, pageBits, numRows, starts.data(), total.data()}),
-      rowBits,
-      cuda::std::plus<int64_t>{});
+  const auto rowBitsOf = cuda::make_transform_iterator(
+      cuda::counting_iterator<int32_t>(0), rowBits);
+  const auto pageStarts = cuda::make_tabulate_output_iterator(
+      MarkPageStarts{rowBits, pageBits, numRows, starts.data(), total.data()});
+  size_t scanBytes = 0;
+  CUDF_CUDA_TRY(
+      cub::DeviceScan::InclusiveScan(
+          nullptr,
+          scanBytes,
+          rowBitsOf,
+          pageStarts,
+          cuda::std::plus<int64_t>{},
+          numRows,
+          stream.get()));
+  cuda::device_buffer<std::byte> scanScratch(
+      stream, mr, scanBytes, cuda::no_init);
+  cudf::detail::cuda_memcpy_async<StringOffsets>(
+      cudf::device_span<StringOffsets>{
+          deviceStrings.data(), deviceStrings.size()},
+      strings,
+      stream);
+  CUDF_CUDA_TRY(
+      cub::DeviceScan::InclusiveScan(
+          scanScratch.data(),
+          scanBytes,
+          rowBitsOf,
+          pageStarts,
+          cuda::std::plus<int64_t>{},
+          numRows,
+          stream.get()));
   // Page k holds the rows whose last bit lies in (k * pageBits, (k + 1) *
   // pageBits], so a page exceeds pageBits by less than one row and a row
   // larger than a page forms one page. The scan never decreases, since no row
@@ -269,19 +308,24 @@ std::vector<int64_t> device::prestoPageBoundaries(
   const int64_t maxCuts = std::min<int64_t>(
       totalBits > 0 ? (totalBits - 1) / pageBits : 0,
       static_cast<int64_t>(numRows) - 1);
-  rmm::device_uvector<int32_t> cuts(maxCuts, stream, mr);
-  auto cutsEnd = thrust::copy_if(
-      rmm::exec_policy_nosync(stream, mr),
-      thrust::counting_iterator<int32_t>(1),
-      thrust::counting_iterator<int32_t>(numRows),
-      starts.begin() + 1,
-      cuts.begin(),
-      cuda::std::identity{});
-  const auto hostCuts = cudf::detail::make_std_vector(
-      cudf::device_span<int32_t const>{
-          cuts.data(), static_cast<size_t>(cutsEnd - cuts.begin())},
-      stream);
-  bounds.insert(bounds.end(), hostCuts.begin(), hostCuts.end());
+  // The cut count lands in front of the cuts, so one copy brings both back:
+  // cub leaves the count on the device, where thrust::copy_if would wait for
+  // it. A single page has no cuts to fetch.
+  if (maxCuts > 0) {
+    cuda::device_buffer<int32_t> cuts(stream, mr, maxCuts + 1, cuda::no_init);
+    CUDF_CUDA_TRY(
+        cub::DeviceSelect::Flagged(
+            cuda::counting_iterator<int32_t>(1),
+            starts.data() + 1,
+            cuts.data() + 1,
+            cuts.data(),
+            numRows - 1,
+            cubEnv(stream, mr)));
+    const auto hostCuts = cudf::detail::make_std_vector(
+        cudf::device_span<int32_t const>{cuts.data(), cuts.size()}, stream);
+    bounds.insert(
+        bounds.end(), hostCuts.begin() + 1, hostCuts.begin() + 1 + hostCuts[0]);
+  }
   bounds.push_back(numRows);
 
   if (maxRows < numRows) {
@@ -298,17 +342,14 @@ std::vector<int64_t> device::prestoPageBoundaries(
 }
 
 void fillPrestoNullBytes(
-    std::span<const NullBytesTask> tasks,
+    cudf::host_span<const NullBytesTask> tasks,
     cuda::stream_ref stream) {
   if (tasks.empty()) {
     return;
   }
-  // Nothing below waits for the stream and the caller may free 'tasks' on
-  // return, so the upload waits.
-  auto deviceTasks = cudf::detail::make_device_uvector(
-      cudf::host_span<NullBytesTask const>{tasks.data(), tasks.size()},
-      stream,
-      get_temp_mr());
+  // Nothing below waits for the stream, so a pageable 'tasks' is read before
+  // the upload returns.
+  auto deviceTasks = toDevice(tasks, stream, get_temp_mr());
   int64_t maxWords = 0;
   for (const auto& t : tasks) {
     maxWords = std::max<int64_t>(
@@ -325,7 +366,7 @@ void fillPrestoNullBytes(
 }
 
 bool device::fillPrestoStringOffsets(
-    std::span<const StringOffsetsTask> tasks,
+    cudf::host_span<const StringOffsetsTask> tasks,
     cuda::stream_ref stream) {
   if (tasks.empty()) {
     return true;
@@ -335,10 +376,8 @@ bool device::fillPrestoStringOffsets(
   auto mr = get_temp_mr();
   rmm::device_scalar<int32_t> overflow(stream, mr);
   overflow.set_value_to_zero_async(stream);
-  auto deviceTasks = cudf::detail::make_device_uvector_async(
-      cudf::host_span<StringOffsetsTask const>{tasks.data(), tasks.size()},
-      stream,
-      mr);
+  auto deviceTasks = cudf::detail::make_device_buffer_async(
+      tasks, stream, cudf::memory_resources{mr, mr});
   int64_t maxRows = 0;
   for (const auto& t : tasks) {
     maxRows = std::max<int64_t>(maxRows, t.numRows);
@@ -355,41 +394,34 @@ bool device::fillPrestoStringOffsets(
 }
 
 void batchedDeviceCopy(
-    std::span<const CopyTask> tasks,
+    cudf::host_span<const CopyTask> tasks,
     cuda::stream_ref stream) {
   if (tasks.empty()) {
     return;
   }
   // One upload for the three arrays cub reads, which it takes from the tasks
-  // in place; cub skips a task of zero bytes. The upload waits for the
-  // stream, since the caller may free 'tasks' on return.
+  // in place; cub skips a task of zero bytes. Nothing below waits for the
+  // stream, so a pageable 'tasks' is read before the upload returns.
   auto mr = get_temp_mr();
-  auto deviceTasks = cudf::detail::make_device_uvector(
-      cudf::host_span<CopyTask const>{tasks.data(), tasks.size()}, stream, mr);
-  const auto srcs =
-      thrust::make_transform_iterator(deviceTasks.data(), CopySource{});
-  const auto dsts =
-      thrust::make_transform_iterator(deviceTasks.data(), CopyDestination{});
-  const auto sizes =
-      thrust::make_transform_iterator(deviceTasks.data(), CopySize{});
+  auto deviceTasks = toDevice(tasks, stream, mr);
+  const auto srcs = cuda::make_transform_iterator(
+      deviceTasks.data(), cuda::std::mem_fn(&CopyTask::src));
+  const auto dsts = cuda::make_transform_iterator(
+      deviceTasks.data(), cuda::std::mem_fn(&CopyTask::dst));
+  const auto sizes = cuda::make_transform_iterator(
+      deviceTasks.data(), cuda::std::mem_fn(&CopyTask::size));
   const auto count = static_cast<int64_t>(tasks.size());
   // cudf::detail::batched_memcpy_async takes its scratch from
   // cudf::get_current_device_resource_ref(), which CudfNoDefaults.h rejects
   // in this tree, so cub is called directly with the same scratch resource.
-  size_t tempBytes = 0;
   CUDF_CUDA_TRY(
-      cub::DeviceMemcpy::Batched(
-          nullptr, tempBytes, srcs, dsts, sizes, count, stream.get()));
-  rmm::device_buffer temp(tempBytes, stream, mr);
-  CUDF_CUDA_TRY(
-      cub::DeviceMemcpy::Batched(
-          temp.data(), tempBytes, srcs, dsts, sizes, count, stream.get()));
+      cub::DeviceMemcpy::Batched(srcs, dsts, sizes, count, cubEnv(stream, mr)));
   CUDF_CHECK_CUDA(stream.get());
 }
 
 std::vector<int64_t> device::gatherStringOffsets(
     const StringOffsets& offsets,
-    std::span<const int64_t> rows,
+    cudf::host_span<const int64_t> rows,
     cuda::stream_ref stream) {
   if (rows.empty()) {
     return {};
@@ -397,18 +429,18 @@ std::vector<int64_t> device::gatherStringOffsets(
   // The output is allocated before the upload of 'rows', which the read of
   // the result below waits for.
   auto mr = get_temp_mr();
-  rmm::device_uvector<int64_t> out(rows.size(), stream, mr);
-  auto deviceRows = cudf::detail::make_device_uvector_async(
-      cudf::host_span<int64_t const>{rows.data(), rows.size()}, stream, mr);
+  cuda::device_buffer<int64_t> out(stream, mr, rows.size(), cuda::no_init);
+  auto deviceRows = cudf::detail::make_device_buffer_async(
+      rows, stream, cudf::memory_resources{mr, mr});
   thrust::gather(
       rmm::exec_policy_nosync(stream, mr),
-      deviceRows.begin(),
-      deviceRows.end(),
+      deviceRows.data(),
+      deviceRows.data() + deviceRows.size(),
       cudf::detail::input_offsetalator(
           offsets.offsets,
           offsets.offsetsType,
           static_cast<cudf::size_type>(offsets.firstIndex)),
-      out.begin());
+      out.data());
   return cudf::detail::make_std_vector(
       cudf::device_span<int64_t const>{out.data(), out.size()}, stream);
 }

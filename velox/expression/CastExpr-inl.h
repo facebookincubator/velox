@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <functional>
+
 #include "velox/common/base/CountBits.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
@@ -476,7 +478,7 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
             unscaledValue, scale, rowSize, buffer.data());
         resultBuffer[row] =
             util::Converter<ToKind>::tryCast(StringView(buffer.data(), size))
-                .thenOrThrow(folly::identity, [&](const Status& status) {
+                .thenOrThrow(std::identity{}, [&](const Status& status) {
                   VELOX_USER_FAIL("{}", status.message());
                 });
       }
@@ -492,14 +494,14 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
       if constexpr (ToKind == TypeKind::REAL) {
         const double output =
             util::Converter<TypeKind::DOUBLE>::tryCast(unscaledValue)
-                .thenOrThrow(folly::identity, [&](const Status& status) {
+                .thenOrThrow(std::identity{}, [&](const Status& status) {
                   VELOX_USER_FAIL("{}", status.message());
                 });
         resultBuffer[row] = static_cast<To>(output / scaleFactor);
       } else {
         const auto output =
             util::Converter<ToKind>::tryCast(unscaledValue)
-                .thenOrThrow(folly::identity, [&](const Status& status) {
+                .thenOrThrow(std::identity{}, [&](const Status& status) {
                   VELOX_USER_FAIL("{}", status.message());
                 });
         resultBuffer[row] = output / scaleFactor;

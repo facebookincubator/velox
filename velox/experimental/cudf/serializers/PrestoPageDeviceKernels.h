@@ -28,20 +28,20 @@ namespace facebook::velox::cudf_velox::detail::device {
 std::vector<int64_t> prestoPageBoundaries(
     int32_t numRows,
     int64_t fixedBitsPerRow,
-    std::span<const StringOffsets> strings,
+    cudf::host_span<const StringOffsets> strings,
     int64_t pageBytes,
     int64_t maxRows,
     cuda::stream_ref stream);
 
 /// fillPrestoStringOffsets() without the offsets type check.
 bool fillPrestoStringOffsets(
-    std::span<const StringOffsetsTask> tasks,
+    cudf::host_span<const StringOffsetsTask> tasks,
     cuda::stream_ref stream);
 
 /// gatherStringOffsets() without the offsets type check.
 std::vector<int64_t> gatherStringOffsets(
     const StringOffsets& offsets,
-    std::span<const int64_t> rows,
+    cudf::host_span<const int64_t> rows,
     cuda::stream_ref stream);
 
 /// timestampsToMillis() with the scale resolved: dst[i] = floor(src[i] * mul /

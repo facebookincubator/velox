@@ -738,6 +738,14 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
 
   std::string_view next() override;
 
+  // Reads the keys of each chunk that the batch crosses from the key cursor of
+  // the chunk, which writes them to the caller's memory, so a key stays valid
+  // past its chunk.
+  void next(
+      size_t maxKeys,
+      std::vector<std::string_view>& keys,
+      const BufferAllocator& bufferAllocator) override;
+
  private:
   // Loads the chunk holding 'row' and positions the key cursor at it. Runs
   // once per chunk, so the binary searches it performs are amortized over
@@ -758,7 +766,9 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
   std::shared_ptr<DecodedKeyChunk> chunk_;
 
   // Reads keys from chunk_. Exhausted exactly at the chunk boundary, which
-  // is what drives the transition to the next chunk.
+  // is what drives the transition to the next chunk. Null until the first
+  // read: the constructor opens no chunk, so a cursor that is never read loads
+  // none.
   std::unique_ptr<KeyCursor> cursor_;
 };
 
@@ -796,6 +806,32 @@ std::string_view ClusterIndexBase::KeyIterator::next() {
   const auto key = cursor_->next();
   ++nextRow_;
   return key;
+}
+
+void ClusterIndexBase::KeyIterator::next(
+    size_t maxKeys,
+    std::vector<std::string_view>& keys,
+    const BufferAllocator& bufferAllocator) {
+  auto remainingKeys = maxKeys;
+  while (remainingKeys > 0 && hasNext()) {
+    // cursor_ is null on the first read and exhausted at the end of its chunk.
+    // openChunkAt() sets it or throws, so it is not null past this point.
+    if (cursor_ == nullptr || !cursor_->hasNext()) {
+      openChunkAt(nextRow_);
+    }
+
+    // The key cursor stops at the end of its chunk, and the iteration may stop
+    // before it.
+    const auto numKeys = keys.size();
+    cursor_->next(
+        std::min<size_t>(remainingKeys, endRow_ - nextRow_),
+        keys,
+        bufferAllocator);
+    const auto numRead = keys.size() - numKeys;
+    NIMBLE_CHECK_GT(numRead, 0, "Cluster index key cursor returned no key");
+    nextRow_ += static_cast<uint32_t>(numRead);
+    remainingKeys -= numRead;
+  }
 }
 
 void ClusterIndexBase::KeyIterator::openChunkAt(uint32_t row) {
