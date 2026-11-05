@@ -350,6 +350,57 @@ using GroupbyMinAggregator = SimpleGroupbyAggregator<
 using GroupbyMaxAggregator = SimpleGroupbyAggregator<
     &cudf::make_max_aggregation<cudf::groupby_aggregation>>;
 
+// Counts the distinct non-null values of each group for a single-step
+// count(DISTINCT). Its state, the set of distinct values, cannot be merged from
+// per-batch counts, so the node aggregates all of its input at once.
+struct GroupbyCountDistinctAggregator final : GroupbyAggregator {
+  GroupbyCountDistinctAggregator(
+      core::AggregationNode::Step step,
+      uint32_t inputIndex,
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : GroupbyAggregator(step, inputIndex, nullptr, resultType, maskIndex) {}
+
+  void addGroupbyRequest(
+      cudf::table_view const& tbl,
+      std::vector<cudf::groupby::aggregation_request>& requests,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK_EQ(step, core::AggregationNode::Step::kSingle);
+    auto& request = requests.emplace_back();
+    outputIndex_ = requests.size() - 1;
+    // Masked rows become nulls, which nunique excludes.
+    request.values = materializeMaskedInput(tbl, inputIndex, stream, mr);
+    request.aggregations.push_back(
+        cudf::make_nunique_aggregation<cudf::groupby_aggregation>(
+            cudf::null_policy::EXCLUDE));
+  }
+
+  std::unique_ptr<cudf::column> makeOutputColumn(
+      std::vector<cudf::groupby::aggregation_result>& results,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    // cuDF counts in INT32; Velox expects BIGINT.
+    auto counts = std::move(results[outputIndex_].results[0]);
+    return cudf::cast(
+        *counts, cudf_velox::veloxToCudfDataType(resultType), stream, mr);
+  }
+
+  std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> /*state*/,
+      cuda::stream_ref /*stream*/,
+      rmm::device_async_resource_ref /*mr*/) override {
+    VELOX_UNREACHABLE("count(DISTINCT) is not aggregated incrementally");
+  }
+
+  bool stateGrowsWithInput() const override {
+    return true;
+  }
+
+ private:
+  uint32_t outputIndex_{0};
+};
+
 // Decimal SUM and AVG aggregators are separate implementations, as they need to
 // handle the VARBINARY encoded intermediate state for streaming aggregation.
 // Due to the packing and unpacking of that intermediate state, and the special
@@ -1311,6 +1362,13 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
     const core::QueryConfig& queryConfig) {
   auto const& kind = aggregate.kind;
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
+  if (aggregate.distinct) {
+    return std::make_unique<GroupbyCountDistinctAggregator>(
+        aggregate.companionStep,
+        aggregate.inputIndex,
+        aggregate.resultType,
+        aggregate.maskIndex);
+  }
   if (kind.rfind(prefix + "sum", 0) == 0) {
     if (aggregate.isDecimalAggregate) {
       return std::make_unique<GroupbyDecimalSumAggregator>(
@@ -1397,7 +1455,8 @@ std::unique_ptr<StreamingGroupbyAggregator> createStreamingGroupbyAggregator(
     column_index_t inputIndex,
     const TypePtr& inputType,
     const TypePtr& resultType) {
-  if (aggregate.constant != nullptr || aggregate.maskIndex.has_value()) {
+  if (aggregate.constant != nullptr || aggregate.maskIndex.has_value() ||
+      aggregate.distinct) {
     return nullptr;
   }
 
@@ -1586,10 +1645,28 @@ bool canGroupbyBeEvaluatedByCudf(
       return false;
     }
 
-    // `distinct` aggregations are not supported, in testing fails with "De-dup
-    // before aggregation is not yet supported"
+    // Only a single-step count(DISTINCT) of a column runs on cuDF (see
+    // GroupbyCountDistinctAggregator). nunique compares raw values, so
+    // floating-point inputs, where Velox treats all NaNs as equal and -0.0 as
+    // 0.0, stay on the CPU, as do types without a plain cuDF equivalent and
+    // timestamps truncated to a unit coarser than nanoseconds.
     if (aggregate.distinct) {
-      return false;
+      const auto& inputs = aggregate.call->inputs();
+      if (!isCountFunctionName(aggregate.call->name()) ||
+          getCompanionStep(aggregate.call->name(), step) !=
+              core::AggregationNode::Step::kSingle ||
+          inputs.size() != 1 || !inputs[0]->isFieldAccessKind()) {
+        return false;
+      }
+      const auto& inputType = inputs[0]->type();
+      if (!inputType->isPrimitiveType() || !isTypeSupportedByCudf(inputType) ||
+          inputType->kind() == TypeKind::REAL ||
+          inputType->kind() == TypeKind::DOUBLE ||
+          (inputType->kind() == TypeKind::TIMESTAMP &&
+           CudfConfig::getInstance().timestampUnit !=
+               cudf::type_id::TIMESTAMP_NANOSECONDS)) {
+        return false;
+      }
     }
 
     if (!sortingKeysSupportedByCudf(aggregate)) {

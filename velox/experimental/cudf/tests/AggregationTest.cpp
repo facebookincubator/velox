@@ -2707,6 +2707,49 @@ TEST_F(AggregationTest, maskedCountAndSumGrouped) {
           "SELECT k, count(v) FILTER (WHERE m), sum(v) FROM tmp GROUP BY k");
 }
 
+// count(DISTINCT) over INTEGER, VARCHAR and DECIMAL inputs, with nulls, an
+// all-null group (k = 3), a FILTER mask and a plain sum in the same node. With
+// one GPU batch per input vector, groups 1 and 2 span both batches, so a merge
+// of per-batch counts would give group 1 a wrong count for i.
+TEST_F(AggregationTest, countDistinctGroupby) {
+  auto first = makeRowVector(
+      {"k", "i", "s", "d", "m"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+          makeNullableFlatVector<int32_t>(
+              {10, 30, std::nullopt, 20, std::nullopt}),
+          makeNullableFlatVector<std::string>(
+              {"a", "b", std::nullopt, "a", std::nullopt}),
+          makeNullableFlatVector<int64_t>(
+              {100, 100, std::nullopt, 200, std::nullopt}, DECIMAL(10, 2)),
+          makeFlatVector<bool>({true, false, true, true, true}),
+      });
+  auto second = makeRowVector(
+      {"k", "i", "s", "d", "m"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 1}),
+          makeNullableFlatVector<int32_t>({20, 20, std::nullopt, 10}),
+          makeNullableFlatVector<std::string>({"a", "c", std::nullopt, "c"}),
+          makeNullableFlatVector<int64_t>(
+              {300, 200, std::nullopt, 100}, DECIMAL(10, 2)),
+          makeFlatVector<bool>({true, true, false, false}),
+      });
+  auto plan = PlanBuilder()
+                  .values({first, second})
+                  .singleAggregation(
+                      {"k"},
+                      {"count(distinct i)",
+                       "count(distinct s)",
+                       "count(distinct d)",
+                       "count(distinct i)",
+                       "sum(i)"},
+                      {"", "", "", "m", ""})
+                  .planNode();
+  AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+      .assertResults(cpuResults(plan));
+}
+
 // Multi-stage masked count (partial + final).
 TEST_F(AggregationTest, maskedCountMultiStage) {
   auto data = makeRowVector(
