@@ -78,8 +78,7 @@ target_link_libraries(
 # container-deps/include can hold an older faiss. These tests detect features
 # of the faiss this build links.
 if(faiss_SOURCE_DIR)
-  target_include_directories(
-    nimble_index_tests BEFORE PRIVATE "${faiss_SOURCE_DIR}")
+  target_include_directories(nimble_index_tests BEFORE PRIVATE "${faiss_SOURCE_DIR}")
 endif()
 
 # Moved from velox/index/tests/CMakeLists.txt when the nimble/velox/ folder
