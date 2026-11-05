@@ -171,6 +171,109 @@ TEST_F(SparkQueryRunnerTest, toSql) {
              .planNode();
   EXPECT_EQ(
       queryRunner->toSql(plan), "SELECT sum(distinct c0) as a0 FROM (t_0)");
+
+  const std::vector<std::pair<VectorPtr, std::string>> cases{
+      {makeFlatVector<bool>({true}), "cast('true' as BOOLEAN)"},
+      {makeFlatVector<int8_t>({-1}), "cast('-1' as TINYINT)"},
+      {makeFlatVector<int16_t>({-123}), "cast('-123' as SMALLINT)"},
+      {makeFlatVector<int32_t>({42}), "cast('42' as INTEGER)"},
+      {makeFlatVector<int64_t>({9'007'199'254'740'993LL}),
+       "cast('9007199254740993' as BIGINT)"},
+      {makeFlatVector<float>({0.125f}), "cast('0.125' as REAL)"},
+      {makeFlatVector<double>({0.10000000000000002}),
+       "cast('0.10000000000000002' as DOUBLE)"},
+      {makeNullableFlatVector<double>({std::nullopt}), "cast(null as DOUBLE)"},
+      {makeNullableFlatVector<StringView>({std::nullopt}),
+       "cast(null as STRING)"},
+      {makeFlatVector<StringView>({StringView("a'b\\c\0", 6)}),
+       "cast(X'6127625c6300' as STRING)"},
+      {makeFlatVector<StringView>({StringView("\0\x80\xff", 3)}, VARBINARY()),
+       "X'0080ff'"},
+      {makeNullableFlatVector<StringView>({std::nullopt}, VARBINARY()),
+       "cast(null as BINARY)"},
+  };
+  for (const auto& [value, literalSql] : cases) {
+    SCOPED_TRACE(literalSql);
+    auto constants = makeRowVector({value});
+    auto plan =
+        exec::test::PlanBuilder(pool(), constants)
+            .tableScan(
+                "tmp",
+                ROW({{"c0", value->type()}, {"g", BIGINT()}, {"m", BOOLEAN()}}))
+            .singleAggregation(
+                {"g"}, {"first(distinct __complex_constant(c0))"}, {"m"})
+            .planNode();
+    EXPECT_EQ(
+        queryRunner->toSql(plan),
+        fmt::format(
+            "SELECT g, first(distinct {}) filter (where m) as a0 FROM (tmp) GROUP BY g",
+            literalSql));
+  }
+
+  plan = exec::test::PlanBuilder()
+             .tableScan("tmp", ROW("c0", BIGINT()))
+             .singleAggregation({}, {"first(true)", "first('abc')"})
+             .planNode();
+  EXPECT_EQ(
+      queryRunner->toSql(plan),
+      "SELECT first(cast('true' as BOOLEAN)) as a0, first(cast(X'616263' as STRING)) as a1 FROM (tmp)");
+
+  const auto* aggregation =
+      dynamic_cast<const core::AggregationNode*>(plan.get());
+  ASSERT_NE(aggregation, nullptr);
+  auto aggregate = aggregation->aggregates()[0];
+  aggregate.call = std::make_shared<core::CallTypedExpr>(
+      VARBINARY(),
+      "first",
+      std::make_shared<core::ConstantTypedExpr>(
+          VARBINARY(), variant::binary(std::string("\0\x80\xff", 3))));
+  aggregate.rawInputTypes = {VARBINARY()};
+  auto binaryPlan = core::AggregationNode::Builder(*aggregation)
+                        .aggregates({aggregate})
+                        .aggregateNames({"a0"})
+                        .build();
+  EXPECT_EQ(
+      queryRunner->toSql(binaryPlan),
+      "SELECT first(X'0080ff') as a0 FROM (tmp)");
+
+  auto constants = makeRowVector({makeFlatVector<double>({0.125})});
+  plan = exec::test::PlanBuilder(pool(), constants)
+             .tableScan("tmp", ROW("c0", BIGINT()))
+             .singleAggregation(
+                 {}, {"approx_percentile(c0, __complex_constant(c0))"})
+             .planNode();
+  EXPECT_EQ(
+      queryRunner->toSql(plan),
+      "SELECT approx_percentile(c0, cast('0.125' as DOUBLE)) as a0 FROM (tmp)");
+}
+
+// This test requires a Spark coordinator running at localhost, so disable it
+// by default.
+TEST_F(SparkQueryRunnerTest, DISABLED_literalArguments) {
+  auto aggregatePool = rootPool_->addAggregateChild("literalArguments");
+  auto queryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
+      aggregatePool.get(), "localhost:15002", "test", "literalArguments");
+  auto constants = makeRowVector({
+      makeFlatVector<double>({0.125}),
+      makeFlatVector<double>({0.99}),
+      makeFlatVector<int32_t>({42}),
+      makeFlatVector<int64_t>({9'007'199'254'740'993LL}),
+      makeNullableFlatVector<double>({std::nullopt}),
+      makeFlatVector<StringView>({StringView("a'b\\c\0", 6)}),
+      makeFlatVector<StringView>({StringView("\0\x80\xff", 3)}, VARBINARY()),
+  });
+  std::vector<std::string> aggregates;
+  for (auto i = 0; i < constants->childrenSize(); ++i) {
+    aggregates.push_back(fmt::format("first(__complex_constant(c{}))", i));
+  }
+  auto plan = exec::test::PlanBuilder(pool(), constants)
+                  .values({makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})})
+                  .singleAggregation({}, aggregates)
+                  .planNode();
+  auto sparkResults = queryRunner->executeAndReturnVector(plan);
+  ASSERT_EQ(sparkResults.second, exec::test::ReferenceQueryErrorCode::kSuccess);
+  ASSERT_TRUE(sparkResults.first.has_value());
+  exec::test::assertEqualResults(sparkResults.first.value(), {constants});
 }
 
 } // namespace

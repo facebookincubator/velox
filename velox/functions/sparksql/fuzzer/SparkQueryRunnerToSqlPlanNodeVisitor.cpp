@@ -15,9 +15,67 @@
  */
 
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunnerToSqlPlanNodeVisitor.h"
+
+#include <folly/String.h>
+
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
+#include "velox/functions/prestosql/types/PrestoTypes.h"
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::functions::sparksql::fuzzer {
+namespace {
+
+std::string toSparkConstantSql(const core::ConstantTypedExpr& constant) {
+  const auto& type = constant.type();
+  if (!type->isPrimitiveType()) {
+    VELOX_NYI("Unsupported Spark SQL constant type: {}", type->toString());
+  }
+  const auto typeSql = type->isVarchar() ? "STRING"
+      : type->isVarbinary()              ? "BINARY"
+                                         : PrestoTypes::toSql(type);
+  if (constant.isNull()) {
+    return fmt::format("cast(null as {})", typeSql);
+  }
+  if (type->isVarchar() || type->isVarbinary()) {
+    const auto value = constant.hasValueVector()
+        ? constant.valueVector()
+              ->as<SimpleVector<StringView>>()
+              ->valueAt(0)
+              .getString()
+        : type->isVarbinary() ? constant.value().value<TypeKind::VARBINARY>()
+                              : constant.value().value<TypeKind::VARCHAR>();
+    // Avoid dependence on Spark's string-literal escape configuration.
+    const auto binary = fmt::format("X'{}'", folly::hexlify(value));
+    return type->isVarbinary() ? binary
+                               : fmt::format("cast({} as STRING)", binary);
+  }
+  // Spark does not support Presto's numeric TYPE 'value' literal syntax.
+  return fmt::format("cast('{}' as {})", constant.toString(), typeSql);
+}
+
+std::string toSparkAggregateCallSql(
+    const core::AggregationNode::Aggregate& aggregate) {
+  std::stringstream sql;
+  sql << aggregate.call->name() << "(";
+  if (aggregate.distinct) {
+    sql << "distinct ";
+  }
+  const auto& inputs = aggregate.call->inputs();
+  for (auto i = 0; i < inputs.size(); ++i) {
+    exec::test::appendComma(i, sql);
+    if (auto constant =
+            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                inputs[i])) {
+      sql << toSparkConstantSql(*constant);
+    } else {
+      exec::test::toCallInputsSql({inputs[i]}, sql);
+    }
+  }
+  sql << ")";
+  return sql.str();
+}
+
+} // namespace
 
 void SparkQueryRunnerToSqlPlanNodeVisitor::visit(
     const core::AggregationNode& node,
@@ -48,8 +106,7 @@ void SparkQueryRunnerToSqlPlanNodeVisitor::visit(
       VELOX_CHECK(
           aggregate.sortingKeys.empty(),
           "Sort key is not supported in Spark's aggregation. You may need to disable 'enable_sorted_aggregations' when running the fuzzer test.");
-      sql << exec::test::toAggregateCallSql(
-          aggregate.call, {}, {}, aggregate.distinct);
+      sql << toSparkAggregateCallSql(aggregate);
 
       if (aggregate.mask != nullptr) {
         sql << " filter (where " << aggregate.mask->name() << ")";

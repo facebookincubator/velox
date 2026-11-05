@@ -17,6 +17,7 @@
 #include <gflags/gflags.h>
 #include <gmock/gmock.h>
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/fuzzer/AggregationFuzzer.h"
 #include "velox/exec/fuzzer/AggregationFuzzerBase.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
