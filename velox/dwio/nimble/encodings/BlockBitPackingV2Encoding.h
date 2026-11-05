@@ -1234,20 +1234,14 @@ std::string_view BlockBitPackingV2Encoding<T>::sliceBlockRange(
 
   // Structurally slice the offsets and record -sourcePayloadStart. When the
   // source offsets are FixedBitWidth / PFOR / Constant (the common cost-model
-  // picks), SliceEncoding::wrap folds the shift into the inner encoding's
-  // baseline at write time and the on-wire delta is zero.
-  const auto slicedOffsets = EncodingFactory::slice(
+  // picks), the SliceEncoding wrapper folds the shift into the inner
+  // encoding's baseline at write time and the on-wire delta is zero.
+  const auto encodedOffsets = EncodingFactory::slice(
       source.encodedBlockOffsets,
       firstBlock,
       numBlocks,
-      scopedBuffer.get(),
-      options);
-  const auto encodedOffsets = SliceEncoding<uint32_t>::wrap(
-      slicedOffsets,
-      /*offset=*/0,
-      numBlocks,
-      scopedBuffer.get(),
       /*valueDelta=*/-static_cast<int64_t>(sourcePayloadStart),
+      scopedBuffer.get(),
       options);
 
   // Structurally slice the metadata sub-encodings -- values are unchanged.
