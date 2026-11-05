@@ -82,6 +82,10 @@ int main(int argc, char** argv) {
       // timestamp_millis(bigint) can generate timestamps out of the supported
       // range that make other functions throw VeloxRuntimeErrors.
       "timestamp_millis(bigint) -> timestamp",
+      // https://github.com/facebookincubator/velox/issues/19880
+      // make_ym_interval throws VeloxUserError on integer overflow when random
+      // 32-bit integers exceed the month range.
+      "make_ym_interval",
   };
 
   // Required by spark_partition_id function.
