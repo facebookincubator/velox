@@ -1497,6 +1497,50 @@ TEST_P(InMemoryExchangeClientTest, atEndReadWhileSet) {
   ASSERT_TRUE(source->toJson()["atEnd"].asBool());
 }
 
+// The source below advances 'sequence_' under the queue mutex, while toJson()
+// reads it under no lock. A TSAN build reports a data race here unless
+// 'sequence_' is atomic.
+TEST_P(InMemoryExchangeClientTest, sequenceReadWhileSet) {
+  class AdvancingSource : public ExchangeSource {
+   public:
+    AdvancingSource(
+        std::shared_ptr<ExchangeQueue> queue,
+        memory::MemoryPool* pool)
+        : ExchangeSource("task.0.0.0", 0, std::move(queue), pool) {}
+
+    bool shouldRequestLocked() override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> request(
+        uint32_t /*maxBytes*/,
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> requestDataSizes(
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    void close() override {}
+
+    void advance() {
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      ++sequence_;
+    }
+  };
+
+  auto queue = std::make_shared<ExchangeQueue>(1, 0);
+  auto source = std::make_shared<AdvancingSource>(queue, pool());
+  std::thread advancer([&] { source->advance(); });
+  for (int i = 0; i < 1'000; ++i) {
+    source->toJson();
+  }
+  advancer.join();
+  ASSERT_EQ(source->toJson()["sequence"].asInt(), 1);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     InMemoryExchangeClientTest,
     InMemoryExchangeClientTest,
