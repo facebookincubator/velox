@@ -125,6 +125,9 @@ General Aggregate Functions
     included in the result set. In this mode, an all-null input produces an
     array containing a single null instead of an empty array.
 
+    The ``ignoreNulls`` argument is also honored when ``collect_set`` is used
+    as a window function. Omitting it defaults to ignoring null inputs.
+
     Example::
 
         SELECT collect_set(i)
@@ -165,27 +168,34 @@ General Aggregate Functions
     Returns the first non-null value of ``x``. Supports the same types as
     :spark:func:`first`.
 
-.. spark:function:: histogram_numeric(x, integer) -> array(row(x x, y double))
+.. spark:function:: histogram_numeric(x, numBins) -> array(row(x [same as x], y double))
 
     Computes an approximate numeric histogram with at most ``numBins`` bins.
     ``numBins`` must be a non-null constant INTEGER of at least 2. Null input
     values are ignored. Empty and all-null input returns null.
 
+    Matches Spark's default
+    ``spark.sql.legacy.histogramNumericPropagateInputType=true``, except for
+    DECIMAL inputs.
+
     Supported input and center types are TINYINT, SMALLINT, INTEGER, BIGINT,
     REAL, DOUBLE, DATE, TIMESTAMP, TIMESTAMP_UTC, and INTERVAL_YEAR_MONTH.
     DECIMAL centers are not supported because Spark's Decimal reconstruction
-    depends on the Java runtime version.
+    depends on the Java runtime version. Spark's DayTimeIntervalType inputs
+    are not supported.
 
     Results can vary with input order and aggregation-tree shape. See Spark's
     `histogram_numeric documentation
     <https://spark.apache.org/docs/latest/api/sql/index.html#histogram_numeric>`_
     for the function semantics.
 
-.. spark:function:: histogram_numeric_legacy(x, integer) -> array(row(x double, y double))
+.. spark:function:: histogram_numeric_legacy(x, numBins) -> array(row(x double, y double))
 
     Computes a histogram using the same input and bin-count rules as
     ``histogram_numeric``, but returns DOUBLE centers. Also supports DECIMAL
-    inputs without reconstructing Decimal centers.
+    inputs without reconstructing Decimal centers. Matches
+    ``spark.sql.legacy.histogramNumericPropagateInputType=false``.
+    Spark's DayTimeIntervalType inputs are not supported.
 
 .. spark:function:: kurtosis(x) -> double
 
