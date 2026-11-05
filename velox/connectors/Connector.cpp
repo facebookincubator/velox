@@ -18,6 +18,7 @@
 
 #include "velox/common/EnumDefine.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -26,6 +27,65 @@
 #include "velox/connectors/ConnectorRegistryInternal.h"
 
 namespace facebook::velox::connector {
+
+namespace {
+
+int64_t sumSplitWeights(
+    const std::string& connectorId,
+    const std::vector<std::shared_ptr<ConnectorSplit>>& splits) {
+  VELOX_CHECK(!splits.empty(), "A split batch must not be empty");
+  int64_t weight{0};
+  for (const auto& split : splits) {
+    VELOX_CHECK_NOT_NULL(split, "A split batch must not hold a null split");
+    VELOX_CHECK(
+        !split->is<ConnectorSplitBatch>(), "Split batches must not be nested");
+    VELOX_CHECK_NULL(
+        split->dataSource, "A split batch must not hold a preloaded split");
+    VELOX_CHECK_EQ(
+        split->connectorId,
+        connectorId,
+        "A split batch must hold splits of a single connector");
+    VELOX_CHECK(
+        !__builtin_add_overflow(weight, split->splitWeight, &weight),
+        "Split batch weight overflows");
+  }
+  return weight;
+}
+
+// Tolerates null splits, which sumSplitWeights() rejects: the arguments of the
+// base constructor are evaluated in no particular order.
+bool allCacheable(const std::vector<std::shared_ptr<ConnectorSplit>>& splits) {
+  return std::ranges::all_of(splits, [](const auto& split) {
+    return split != nullptr && split->cacheable;
+  });
+}
+
+} // namespace
+
+ConnectorSplitBatch::ConnectorSplitBatch(
+    const std::string& connectorId,
+    std::vector<std::shared_ptr<ConnectorSplit>> _splits)
+    : ConnectorSplit(
+          connectorId,
+          sumSplitWeights(connectorId, _splits),
+          allCacheable(_splits)),
+      splits(std::move(_splits)) {}
+
+uint64_t ConnectorSplitBatch::size() const {
+  uint64_t size{0};
+  for (const auto& split : splits) {
+    size += split->size();
+  }
+  return size;
+}
+
+std::string ConnectorSplitBatch::toString() const {
+  return fmt::format(
+      "[split batch: connector id {}, {} splits, weight {}]",
+      connectorId,
+      splits.size(),
+      splitWeight);
+}
 
 std::unique_ptr<ConnectorQueryCtx> ConnectorQueryCtx::Builder::build() {
   VELOX_CHECK(!built_, "ConnectorQueryCtx::Builder can only build once");

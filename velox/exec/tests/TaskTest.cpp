@@ -16,6 +16,7 @@
 
 #include "velox/exec/Task.h"
 
+#include <deque>
 #include <functional>
 
 #include <gmock/gmock.h>
@@ -31,6 +32,8 @@
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
@@ -633,6 +636,110 @@ struct TestExchangeTransportState {
   TestExchangeClient* clientInOperator{nullptr};
 };
 
+// Reads the splits of a batch one after another with a Hive data source.
+class BatchHiveDataSource : public connector::DataSource {
+ public:
+  explicit BatchHiveDataSource(std::unique_ptr<connector::DataSource> source)
+      : source_(std::move(source)) {}
+
+  void addSplit(std::shared_ptr<connector::ConnectorSplit> split) override {
+    source_->addSplit(std::move(split));
+  }
+
+  void addSplits(
+      const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits)
+      override {
+    pendingSplits_.assign(splits.begin() + 1, splits.end());
+    source_->addSplit(splits.front());
+  }
+
+  std::optional<RowVectorPtr> next(uint64_t size, ContinueFuture& future)
+      override {
+    for (;;) {
+      auto result = source_->next(size, future);
+      if (!result.has_value() || result.value() != nullptr ||
+          pendingSplits_.empty()) {
+        return result;
+      }
+      source_->addSplit(std::move(pendingSplits_.front()));
+      pendingSplits_.pop_front();
+    }
+  }
+
+  const common::SubfieldFilters* getFilters() const override {
+    return source_->getFilters();
+  }
+
+  void addDynamicFilter(
+      column_index_t outputChannel,
+      const std::shared_ptr<common::Filter>& filter) override {
+    source_->addDynamicFilter(outputChannel, filter);
+  }
+
+  uint64_t getCompletedBytes() override {
+    return source_->getCompletedBytes();
+  }
+
+  uint64_t getCompletedRows() override {
+    return source_->getCompletedRows();
+  }
+
+  void setFromDataSource(
+      std::unique_ptr<connector::DataSource> source) override {
+    auto* prepared = dynamic_cast<BatchHiveDataSource*>(source.get());
+    pendingSplits_ = std::move(prepared->pendingSplits_);
+    source_->setFromDataSource(std::move(prepared->source_));
+  }
+
+ private:
+  std::unique_ptr<connector::DataSource> source_;
+  std::deque<std::shared_ptr<connector::ConnectorSplit>> pendingSplits_;
+};
+
+// Hive connector that takes split batches.
+class BatchHiveConnector : public connector::hive::HiveConnector {
+ public:
+  using HiveConnector::HiveConnector;
+
+  bool supportsSplitBatch() const override {
+    return true;
+  }
+
+  std::unique_ptr<connector::DataSource> createDataSource(
+      const RowTypePtr& outputType,
+      const connector::ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
+      connector::ConnectorQueryCtx* connectorQueryCtx) override {
+    return std::make_unique<BatchHiveDataSource>(
+        HiveConnector::createDataSource(
+            outputType, tableHandle, columnHandles, connectorQueryCtx));
+  }
+};
+
+// Counts the splits added to all tasks.
+std::atomic_int64_t numListenedSplits{0};
+
+class CountingSplitListener : public SplitListener {
+ public:
+  using SplitListener::SplitListener;
+
+  void onAddSplit(const core::PlanNodeId&, const exec::Split&) override {
+    ++numListenedSplits;
+  }
+
+  void onTaskCompletion() override {}
+};
+
+class CountingSplitListenerFactory : public SplitListenerFactory {
+ public:
+  std::unique_ptr<SplitListener> create(
+      const std::string& taskId,
+      const std::string& taskUuid,
+      const core::QueryConfig& /*config*/) override {
+    return std::make_unique<CountingSplitListener>(taskId, taskUuid);
+  }
+};
+
 } // namespace
 
 class TaskTest : public HiveConnectorTestBase {
@@ -845,6 +952,95 @@ TEST_F(TaskTest, stateChangeFutureNotFiredWhenNoMoreSplits) {
   EXPECT_FALSE(future.isReady());
 
   task->requestCancel().wait();
+}
+
+TEST_F(TaskTest, addSplits) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  const auto files = makeFilePaths(3);
+  for (const auto& file : files) {
+    writeToFile(file->getPath(), {data});
+  }
+  const auto makeSplits = [&]() {
+    std::vector<exec::Split> splits;
+    for (const auto& file : files) {
+      splits.emplace_back(makeHiveConnectorSplit(
+          file->getPath(), 0, std::numeric_limits<uint64_t>::max(), 10));
+    }
+    return splits;
+  };
+  // Returns a QueryCtx whose Hive connector takes split batches if
+  // 'batching'.
+  const auto makeQueryCtx = [&](bool batching) {
+    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    if (batching) {
+      auto registry = connector::ConnectorRegistry::create(
+          &connector::ConnectorRegistry::global());
+      registry->insert(
+          kHiveConnectorId,
+          std::make_shared<BatchHiveConnector>(
+              kHiveConnectorId,
+              std::make_shared<config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>()),
+              ioExecutor_.get()));
+      queryCtx->setRegistry(
+          connector::ConnectorRegistry::kRegistryKey, std::move(registry));
+    }
+    return queryCtx;
+  };
+  const auto plan = PlanBuilder().tableScan(asRowType(data->type())).planNode();
+
+  auto listenerFactory = std::make_shared<CountingSplitListenerFactory>();
+  ASSERT_TRUE(exec::registerSplitListenerFactory(listenerFactory));
+  SCOPE_EXIT {
+    exec::unregisterSplitListenerFactory(listenerFactory);
+  };
+
+  for (const bool batching : {false, true}) {
+    SCOPED_TRACE(fmt::format("batching {}", batching));
+    numListenedSplits = 0;
+    auto task = Task::create(
+        "task-1",
+        core::PlanFragment{plan},
+        0,
+        makeQueryCtx(batching),
+        Task::ExecutionMode::kSerial,
+        exec::Consumer{});
+    task->addSplits("0", {});
+    ASSERT_EQ(task->taskStats().numTotalSplits, 0);
+    // Callers read the watermark to drop splits sent again before
+    // addSplits().
+    task->setMaxSplitSequenceId("0", 5);
+    ASSERT_EQ(task->maxSplitSequenceId("0"), 5);
+
+    // A batch is one split of the summed weight. Listeners see its splits.
+    task->addSplits("0", makeSplits());
+    ASSERT_EQ(task->taskStats().numTotalSplits, batching ? 1 : 3);
+    ASSERT_EQ(task->taskStats().queuedTableScanSplitWeights, 30);
+    ASSERT_EQ(numListenedSplits, 3);
+    exec::Split split;
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    ASSERT_EQ(
+        task->getSplitOrFuture(
+            0, kUngroupedGroupId, "0", 0, nullptr, split, future),
+        BlockingReason::kNotBlocked);
+    const auto* batch =
+        split.connectorSplit->as<connector::ConnectorSplitBatch>();
+    ASSERT_EQ(batch != nullptr, batching);
+    if (batching) {
+      ASSERT_EQ(batch->splits.size(), 3);
+      ASSERT_EQ(batch->splitWeight, 30);
+    }
+    task->requestCancel().wait();
+
+    // The scan reads all splits of the batch.
+    const auto scanTask =
+        AssertQueryBuilder(plan)
+            .queryCtx(makeQueryCtx(batching))
+            .splits(makeSplits())
+            .addSplitsInBatches(3)
+            .assertResults(std::vector<RowVectorPtr>{data, data, data});
+    ASSERT_EQ(scanTask->taskStats().numFinishedSplits, batching ? 1 : 3);
+  }
 }
 
 TEST_F(TaskTest, wrongPlanNodeForSplit) {

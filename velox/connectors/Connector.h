@@ -131,6 +131,25 @@ struct ConnectorSplit : public ISerializable {
   }
 };
 
+/// Groups splits of one connector so that a DataSource reads them together
+/// through DataSource::addSplits(). Built by Task::addSplits() only for
+/// connectors that return true from Connector::supportsSplitBatch(). Exists
+/// only within the process and is not serializable.
+struct ConnectorSplitBatch final : public ConnectorSplit {
+  /// Throws if 'splits' is empty, holds a null, nested or preloaded split, or
+  /// a split of a connector other than 'connectorId'. The weight is the sum of
+  /// the split weights.
+  ConnectorSplitBatch(
+      const std::string& connectorId,
+      std::vector<std::shared_ptr<ConnectorSplit>> _splits);
+
+  uint64_t size() const override;
+
+  std::string toString() const override;
+
+  const std::vector<std::shared_ptr<ConnectorSplit>> splits;
+};
+
 class ColumnHandle : public ISerializable {
  public:
   virtual ~ColumnHandle() = default;
@@ -356,6 +375,14 @@ class DataSource {
   /// added. Next returns nullptr to indicate that current split is fully
   /// processed.
   virtual void addSplit(std::shared_ptr<ConnectorSplit> split) = 0;
+
+  /// Adds the splits of a ConnectorSplitBatch to process together. next()
+  /// returns nullptr only after all of them are fully processed. Called only
+  /// when Connector::supportsSplitBatch() returns true.
+  virtual void addSplits(
+      const std::vector<std::shared_ptr<ConnectorSplit>>& /*splits*/) {
+    VELOX_UNSUPPORTED("This DataSource does not support split batches");
+  }
 
   /// Process a split added via addSplit. Returns nullptr if split has been
   /// fully processed. Returns std::nullopt and sets the 'future' if started
@@ -893,6 +920,13 @@ class Connector {
   /// so that file opening and metadata operations are off the Driver'
   /// thread.
   virtual bool supportsSplitPreload() const {
+    return false;
+  }
+
+  /// Returns true if DataSource::addSplits() reads a batch of splits together,
+  /// in which case Task::addSplits() delivers compatible splits as one
+  /// ConnectorSplitBatch.
+  virtual bool supportsSplitBatch() const {
     return false;
   }
 
