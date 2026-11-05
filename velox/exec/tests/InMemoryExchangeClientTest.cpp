@@ -1348,6 +1348,49 @@ DEBUG_ONLY_TEST_P(InMemoryExchangeClientTest, requestRacingClose) {
   ASSERT_TRUE(source.expired());
 }
 
+// The source below sets 'atEnd_' under the queue mutex, while toString() and
+// toJson() read it under no lock. A TSAN build reports a data race here unless
+// 'atEnd_' is atomic.
+TEST_P(InMemoryExchangeClientTest, atEndReadWhileSet) {
+  class EndingSource : public ExchangeSource {
+   public:
+    EndingSource(std::shared_ptr<ExchangeQueue> queue, memory::MemoryPool* pool)
+        : ExchangeSource("task.0.0.0", 0, std::move(queue), pool) {}
+
+    bool shouldRequestLocked() override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> request(
+        uint32_t /*maxBytes*/,
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> requestDataSizes(
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    void close() override {}
+
+    void end() {
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      atEnd_ = true;
+    }
+  };
+
+  auto queue = std::make_shared<ExchangeQueue>(1, 0);
+  auto source = std::make_shared<EndingSource>(queue, pool());
+  std::thread ender([&] { source->end(); });
+  for (int i = 0; i < 1'000; ++i) {
+    source->toString();
+    source->toJson();
+  }
+  ender.join();
+  ASSERT_TRUE(source->toJson()["atEnd"].asBool());
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     InMemoryExchangeClientTest,
     InMemoryExchangeClientTest,
