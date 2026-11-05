@@ -115,7 +115,9 @@ bool CudfExpand::canRunOnGPU(
     std::string* reason) {
   // Building each constant is the check, so it cannot disagree with what the
   // operator later builds. This runs once when the plan is adapted.
-  auto pool = memory::memoryManager()->addLeafPool("CudfExpand::canRunOnGPU");
+  // Pool names must be unique among live pools and this runs on several driver
+  // threads at once, so leave the name empty to get a generated one.
+  auto pool = memory::memoryManager()->addLeafPool();
   const auto stream = getDefaultStreamForCurrentThread();
   for (const auto& rowProjections : expandNode.projections()) {
     for (const auto& columnProjection : rowProjections) {
