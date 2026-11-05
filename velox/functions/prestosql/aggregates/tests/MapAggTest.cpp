@@ -426,7 +426,10 @@ TEST_F(MapAggTest, stringLifeCycle) {
       [&](vector_size_t i) { return StringView(s[i]); },
       [&](vector_size_t i) { return i + 0.05; })});
 
-  testReadFromFiles(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapAggTest, arrayCheckNulls) {

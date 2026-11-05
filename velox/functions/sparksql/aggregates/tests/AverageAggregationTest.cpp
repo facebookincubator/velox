@@ -34,7 +34,6 @@ class AverageAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    disableTestIncremental();
     registerAggregateFunctions("spark_", true);
   }
 

@@ -111,42 +111,6 @@ void AggregationTestBase::TearDown() {
   OperatorTestBase::TearDown();
 }
 
-void AggregationTestBase::testAggregations(
-    const std::vector<RowVectorPtr>& data,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::string& duckDbSql,
-    const std::unordered_map<std::string, std::string>& config) {
-  SCOPED_TRACE(duckDbSql);
-  testAggregations(data, groupingKeys, aggregates, {}, duckDbSql, config);
-}
-
-void AggregationTestBase::testAggregations(
-    const std::vector<RowVectorPtr>& data,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::vector<RowVectorPtr>& expectedResult,
-    const std::unordered_map<std::string, std::string>& config) {
-  testAggregations(data, groupingKeys, aggregates, {}, expectedResult, config);
-}
-
-void AggregationTestBase::testAggregations(
-    const std::vector<RowVectorPtr>& data,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::vector<std::string>& postAggregationProjections,
-    const std::string& duckDbSql,
-    const std::unordered_map<std::string, std::string>& config) {
-  SCOPED_TRACE(duckDbSql);
-  testAggregations(
-      [&](PlanBuilder& builder) { builder.values(data); },
-      groupingKeys,
-      aggregates,
-      postAggregationProjections,
-      [&](auto& builder) { return builder.assertResults(duckDbSql); },
-      config);
-}
-
 namespace {
 // Returns total spilled bytes inside 'task'.
 int64_t spilledBytes(const exec::Task& task) {
@@ -402,71 +366,6 @@ bool hasOrderSensitive(
 }
 } // namespace
 
-void AggregationTestBase::testAggregationsWithCompanion(
-    const std::vector<RowVectorPtr>& data,
-    const std::function<void(PlanBuilder&)>& preAggregationProcessing,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
-    const std::vector<std::string>& postAggregationProjections,
-    const std::string& duckDbSql,
-    const std::unordered_map<std::string, std::string>& config) {
-  testAggregationsWithCompanion(
-      data,
-      preAggregationProcessing,
-      groupingKeys,
-      aggregates,
-      aggregatesArgTypes,
-      postAggregationProjections,
-      [&](auto& builder) { return builder.assertResults(duckDbSql); },
-      config);
-}
-
-void AggregationTestBase::testAggregationsWithCompanion(
-    const std::vector<RowVectorPtr>& data,
-    const std::function<void(PlanBuilder&)>& preAggregationProcessing,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
-    const std::vector<std::string>& postAggregationProjections,
-    const std::vector<RowVectorPtr>& expectedResult,
-    const std::unordered_map<std::string, std::string>& config) {
-  testAggregationsWithCompanion(
-      data,
-      preAggregationProcessing,
-      groupingKeys,
-      aggregates,
-      aggregatesArgTypes,
-      postAggregationProjections,
-      [&](auto& builder) { return builder.assertResults(expectedResult); },
-      config);
-}
-
-void AggregationTestBase::testAggregationsWithCompanion(
-    const std::vector<RowVectorPtr>& data,
-    const std::function<void(PlanBuilder&)>& preAggregationProcessing,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
-    const std::vector<std::string>& postAggregationProjections,
-    std::function<std::shared_ptr<exec::Task>(exec::test::AssertQueryBuilder&)>
-        assertResults,
-    const std::unordered_map<std::string, std::string>& config) {
-  const auto dataWithExtraGroupingKey = addExtraGroupingKey(data, "k0");
-  testAggregationsWithCompanionImpl(
-      data,
-      [&](PlanBuilder& builder) {
-        builder.values(dataWithExtraGroupingKey);
-        preAggregationProcessing(builder);
-      },
-      groupingKeys,
-      aggregates,
-      aggregatesArgTypes,
-      postAggregationProjections,
-      assertResults,
-      config);
-}
-
 void AggregationTestBase::testAggregationsWithCompanionImpl(
     const std::vector<RowVectorPtr>& data,
     const std::function<void(PlanBuilder&)>& makeSource,
@@ -476,7 +375,8 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
     const std::vector<std::string>& postAggregationProjections,
     const std::function<std::shared_ptr<exec::Task>(
         exec::test::AssertQueryBuilder&)>& assertResults,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    bool streaming) {
   auto groupingKeysWithPartialKey = groupingKeys;
   groupingKeysWithPartialKey.push_back("k0");
 
@@ -697,8 +597,7 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
     assertResults(queryBuilder);
   }
 
-  if (testStreaming_ && groupingKeys.empty() &&
-      postAggregationProjections.empty()) {
+  if (streaming && groupingKeys.empty() && postAggregationProjections.empty()) {
     {
       SCOPED_TRACE("Streaming partial");
       auto partialResult = validateStreamingInTestAggregations(
@@ -706,12 +605,17 @@ void AggregationTestBase::testAggregationsWithCompanionImpl(
             builder.values(addExtraGroupingKey(data, "k0"));
           },
           partialAggregates,
-          config);
+          config,
+          extractExpressions);
 
-      validateStreamingInTestAggregations(
-          [&](auto& builder) { builder.values({partialResult}); },
-          mergeAggregates,
-          config);
+      // The partial check doesn't run with fewer than 2 rows and returns null.
+      if (partialResult != nullptr) {
+        validateStreamingInTestAggregations(
+            [&](auto& builder) { builder.values({partialResult}); },
+            mergeAggregates,
+            config,
+            extractExpressions);
+      }
     }
   }
 
@@ -784,23 +688,6 @@ void writeToFile(
   writer.write(vector);
   writer.close();
 }
-
-template <typename T>
-class ScopedChange {
- public:
-  ScopedChange(T* value, const T& newValue) : value_(value) {
-    oldValue_ = *value_;
-    *value_ = newValue;
-  }
-
-  ~ScopedChange() {
-    *value_ = oldValue_;
-  }
-
- private:
-  T oldValue_;
-  T* value_;
-};
 
 bool isTableScanSupported(const TypePtr& type) {
   if (type->kind() == TypeKind::ROW && type->size() == 0) {
@@ -877,51 +764,18 @@ void AggregationTestBase::testReadFromFiles(
   }
   // No need to test streaming as the streaming test generates its own inputs,
   // so it would be the same as the original test.
-  {
-    ScopedChange<bool> disableTestStreaming(&testStreaming_, false);
-    testAggregationsImpl(
-        [&](auto& builder) { builder.tableScan(asRowType(input->type())); },
-        groupingKeys,
-        aggregates,
-        postAggregationProjections,
-        [&](auto& builder) { return assertResults(builder.splits(splits)); },
-        config);
-  }
+  testAggregationsImpl(
+      [&](auto& builder) { builder.tableScan(asRowType(input->type())); },
+      groupingKeys,
+      aggregates,
+      postAggregationProjections,
+      [&](auto& builder) { return assertResults(builder.splits(splits)); },
+      config,
+      /*streaming=*/false);
 
   for (const auto& file : files) {
     remove(file->getPath().c_str());
   }
-}
-
-void AggregationTestBase::testAggregations(
-    const std::vector<RowVectorPtr>& data,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::vector<std::string>& postAggregationProjections,
-    const std::vector<RowVectorPtr>& expectedResult,
-    const std::unordered_map<std::string, std::string>& config) {
-  testAggregations(
-      [&](PlanBuilder& builder) { builder.values(data); },
-      groupingKeys,
-      aggregates,
-      postAggregationProjections,
-      [&](auto& builder) { return builder.assertResults(expectedResult); },
-      config);
-}
-
-void AggregationTestBase::testAggregations(
-    std::function<void(PlanBuilder&)> makeSource,
-    const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates,
-    const std::string& duckDbSql,
-    const std::unordered_map<std::string, std::string>& config) {
-  testAggregations(
-      makeSource,
-      groupingKeys,
-      aggregates,
-      {},
-      [&](auto& builder) { return builder.assertResults(duckDbSql); },
-      config);
 }
 
 namespace {
@@ -956,7 +810,8 @@ std::vector<VectorPtr> extractArgColumns(
 RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
     const std::function<void(PlanBuilder&)>& makeSource,
     const std::vector<std::string>& aggregates,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    const std::vector<std::string>& projections) {
   PlanBuilder builder(pool());
   makeSource(builder);
   auto input = AssertQueryBuilder(builder.planNode())
@@ -975,10 +830,16 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
   auto& aggregationNode =
       static_cast<const core::AggregationNode&>(*builder.planNode());
   EXPECT_EQ(expected->childrenSize(), aggregationNode.aggregates().size());
+  std::vector<VectorPtr> actualResults1;
+  std::vector<VectorPtr> actualResults2;
   for (int i = 0; i < aggregationNode.aggregates().size(); ++i) {
     const auto& aggregate = aggregationNode.aggregates()[i];
     if (aggregate.distinct || !aggregate.sortingKeys.empty() ||
-        aggregate.mask != nullptr) {
+        aggregate.mask != nullptr ||
+        std::any_of(
+            aggregate.call->inputs().begin(),
+            aggregate.call->inputs().end(),
+            [](const auto& input) { return input->isLambdaKind(); })) {
       // TODO Add support for all these cases.
       return nullptr;
     }
@@ -1001,16 +862,39 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
       rawInput2.push_back(column->slice(size1, size2));
     }
 
-    auto actualResult1 =
-        testStreaming(name, true, rawInput1, size1, rawInput2, size2, config);
-    velox::exec::test::assertEqualResults(
-        {makeRowVector({expected->childAt(i)})},
-        {makeRowVector({actualResult1})});
-    auto actualResult2 =
-        testStreaming(name, false, rawInput1, size1, rawInput2, size2, config);
-    velox::exec::test::assertEqualResults(
-        {makeRowVector({expected->childAt(i)})},
-        {makeRowVector({actualResult2})});
+    actualResults1.push_back(
+        testStreaming(name, true, rawInput1, size1, rawInput2, size2, config));
+    actualResults2.push_back(
+        testStreaming(name, false, rawInput1, size1, rawInput2, size2, config));
+  }
+
+  // Projects in the plan that produced the results, since copying them out of
+  // it can change encodings the projections rely on, such as the constant
+  // fields of a KLL sketch.
+  auto expectedProjected = expected;
+  if (!projections.empty()) {
+    builder.project(projections);
+    expectedProjected = AssertQueryBuilder(builder.planNode())
+                            .configs(config)
+                            .copyResults(pool());
+  }
+  const auto& names = asRowType(expected->type())->names();
+  for (const auto& actualResults : {actualResults1, actualResults2}) {
+    auto actual = makeRowVector(names, actualResults);
+    if (!projections.empty()) {
+      actual = AssertQueryBuilder(PlanBuilder(pool())
+                                      .values({actual})
+                                      .project(projections)
+                                      .planNode())
+                   .configs(config)
+                   .copyResults(pool());
+    }
+    for (auto i = 0; i < actual->childrenSize(); ++i) {
+      SCOPED_TRACE(aggregationNode.aggregates()[i].call->name());
+      velox::exec::test::assertEqualResults(
+          {makeRowVector({expectedProjected->childAt(i)})},
+          {makeRowVector({actual->childAt(i)})});
+    }
   }
   return expected;
 }
@@ -1022,7 +906,8 @@ void AggregationTestBase::testAggregationsImpl(
     const std::vector<std::string>& postAggregationProjections,
     std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>
         assertResults,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    bool streaming) {
   {
     SCOPED_TRACE("Run partial + final");
     PlanBuilder builder(pool());
@@ -1250,8 +1135,7 @@ void AggregationTestBase::testAggregationsImpl(
     assertResults(queryBuilder.maxDrivers(2));
   }
 
-  if (testStreaming_ && groupingKeys.empty() &&
-      postAggregationProjections.empty()) {
+  if (streaming && groupingKeys.empty() && postAggregationProjections.empty()) {
     SCOPED_TRACE("Streaming");
     validateStreamingInTestAggregations(makeSource, aggregates, config);
   }
@@ -1328,14 +1212,17 @@ void AggregationTestBase::testAggregations(
     const std::vector<std::string>& postAggregationProjections,
     std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>
         assertResults,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    bool streaming,
+    bool incremental) {
   testAggregationsImpl(
       makeSource,
       groupingKeys,
       aggregates,
       postAggregationProjections,
       assertResults,
-      config);
+      config,
+      streaming);
 
   testIgnoreNullInputs(
       makeSource,
@@ -1347,7 +1234,7 @@ void AggregationTestBase::testAggregations(
       duckDbQueryRunner_,
       pool());
 
-  if (testIncremental_) {
+  if (incremental) {
     SCOPED_TRACE("testIncrementalAggregation");
     testIncrementalAggregation(makeSource, aggregates, config);
   }
@@ -1718,7 +1605,8 @@ void AggregationTestBase::testFailingAggregations(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::string& expectedMessage,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    bool streaming) {
   {
     SCOPED_TRACE("Run single");
     auto builder = PlanBuilder(pool()).values(data);
@@ -1798,7 +1686,7 @@ void AggregationTestBase::testFailingAggregations(
   for (const auto& vector : data) {
     numRows += vector->size();
   }
-  if (testStreaming_ && groupingKeys.empty() && numRows >= 2) {
+  if (streaming && groupingKeys.empty() && numRows >= 2) {
     SCOPED_TRACE("Streaming");
     auto makeSource = [&](PlanBuilder& builder) { builder.values(data); };
     VELOX_ASSERT_THROW(
@@ -1835,23 +1723,22 @@ void AggregationTestBase::AggregationTester::assertError(
       "assertError supports only the input, grouping keys, aggregates and "
       "configs");
   test_.testFailingAggregations(
-      inputs_, groupingKeys_, aggregates_, message, config_);
+      inputs_, groupingKeys_, aggregates_, message, config_, streaming_);
 }
 
 void AggregationTestBase::AggregationTester::run(
     const AssertResults& assertResults) {
   VELOX_CHECK(!inputs_.empty(), "The inputs are not set");
   VELOX_CHECK(!aggregates_.empty(), "The aggregates are not set");
-  ScopedChange<bool> incremental(
-      &test_.testIncremental_, test_.testIncremental_ && incremental_);
-
   test_.testAggregations(
       [&](PlanBuilder& builder) { addSource(builder); },
       groupingKeys_,
       aggregates_,
       projections_,
       assertResults,
-      config_);
+      config_,
+      streaming_,
+      incremental_);
 
   if (companion_) {
     SCOPED_TRACE("Companion functions");
@@ -1871,7 +1758,8 @@ void AggregationTestBase::AggregationTester::run(
         aggregateArgTypes(),
         projections_,
         assertResults,
-        config_);
+        config_,
+        streaming_);
   }
 }
 

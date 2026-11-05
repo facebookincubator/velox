@@ -178,8 +178,10 @@ TEST_F(ApproxMostFrequentTestStringView, stringLifeCycle) {
             {StringView(s[29]), 118},
             {StringView(s[28]), 114}}}),
   });
-  testReadFromFiles(
-      {rows, rows}, {}, {"approx_most_frequent(3, c0, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs({rows, rows})
+      .aggregates({"approx_most_frequent(3, c0, 31)"})
+      .assertResults(expected);
 }
 
 TEST_F(ApproxMostFrequentTestStringView, globalAggregationWithCompaction) {
