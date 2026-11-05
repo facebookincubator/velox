@@ -79,8 +79,7 @@ if(VELOX_ENABLE_UCX_EXCHANGE)
 endif()
 
 if(VELOX_ENABLE_FAISS AND VELOX_ENABLE_FAISS_GPU)
-  target_link_libraries(
-    velox_cudf_exec PRIVATE velox_vector_index velox_vector_index_gpu)
+  target_link_libraries(velox_cudf_exec PRIVATE velox_vector_index velox_vector_index_gpu)
   target_compile_definitions(velox_cudf_exec PRIVATE VELOX_ENABLE_FAISS_GPU)
 endif()
 
