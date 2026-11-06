@@ -142,9 +142,13 @@ Overflow results in null output. Corresponds to Spark’s operator <code class="
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="ceil">
-<span class="sig-name descname"><span class="pre">ceil</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#ceil" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">ceil</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x)</span> <span class="pre">-&gt;</span> <span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span> <span class="pre">(ANSI</span> <span class="pre">compliant</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ceil" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded up to the nearest integer.
-Supported types are: BIGINT, DOUBLE and DECIMAL.</p>
+Supported types are: BIGINT, DOUBLE and DECIMAL.
+For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+is enabled (<code class="docutils literal notranslate"><span class="pre">spark.ansi_enabled</span></code>).
+The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -387,9 +391,13 @@ The input must be between 0 and 20 inclusive. Returns NULL for values outside th
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="floor">
-<span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#floor" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x)</span> <span class="pre">-&gt;</span> <span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span> <span class="pre">(ANSI</span> <span class="pre">compliant</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#floor" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded down to the nearest integer.
-Supported types are: BIGINT,  DOUBLE and DECIMAL.</p>
+Supported types are: BIGINT, DOUBLE and DECIMAL.
+For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+is enabled (<code class="docutils literal notranslate"><span class="pre">spark.ansi_enabled</span></code>).
+The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.</p>
 </dd></dl>
 
 <dl class="spark function">
