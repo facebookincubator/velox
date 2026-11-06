@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -1221,8 +1222,9 @@ TEST_F(CudfDecimalTest, decimalSumGlobalSingleRescalesOutput) {
         false,
         false,
         source);
+    auto physical = toCudfPlanNode<CudfAggregationNode>(aggregation);
     auto aggregators = toReduceAggregators(
-        *aggregation,
+        *physical,
         core::AggregationNode::Step::kSingle,
         aggregation->outputType(),
         {nullptr},
