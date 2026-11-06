@@ -2201,6 +2201,77 @@ TEST(SchemaUtilsTest, projectionEncodingHintsMixed) {
            false}));
 }
 
+TEST(SchemaUtilsTest, projectionEncodingHintsFlatMapValues) {
+  // A writer column in flatMapColumns and dictionaryArrayColumns stores the
+  // array of every key as ArrayWithOffsets, and one in flatMapColumns and
+  // deduplicatedMapColumns stores the map of every key as SlidingWindowMap.
+  // The projection keeps these value kinds for present and missing keys, so
+  // its schema has one stream for every projected source stream.
+  SchemaBuilder schemaBuilder;
+  test::FlatMapChildAdder idListsAdder;
+  test::FlatMapChildAdder scoreMapsAdder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({
+          {"id_lists",
+           NIMBLE_FLATMAP(
+               Int32, NIMBLE_OFFSETARRAY(NIMBLE_BIGINT()), idListsAdder)},
+          {"score_maps",
+           NIMBLE_FLATMAP(
+               Int32,
+               NIMBLE_SLIDINGWINDOWMAP(NIMBLE_INTEGER(), NIMBLE_REAL()),
+               scoreMapsAdder)},
+      }));
+  idListsAdder.addChild("1");
+  scoreMapsAdder.addChild("2");
+  const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+
+  const auto projection = buildProjectedNimbleType(
+      source.get(),
+      makeSubfields({"id_lists[1]", "id_lists[3]", "score_maps[2]"}));
+
+  const auto& root = projection.nimbleType->asRow();
+  ASSERT_EQ(root.childrenCount(), 2);
+  const auto& idLists = root.childAt(0)->asFlatMap();
+  ASSERT_EQ(idLists.childrenCount(), 2);
+  EXPECT_EQ(idLists.nameAt(0), "1");
+  EXPECT_EQ(idLists.childAt(0)->kind(), Kind::ArrayWithOffsets);
+  EXPECT_EQ(idLists.nameAt(1), "3");
+  EXPECT_EQ(idLists.childAt(1)->kind(), Kind::ArrayWithOffsets);
+  const auto& scoreMaps = root.childAt(1)->asFlatMap();
+  ASSERT_EQ(scoreMaps.childrenCount(), 1);
+  EXPECT_EQ(scoreMaps.childAt(0)->kind(), Kind::SlidingWindowMap);
+
+  const auto& sourceRoot = source->asRow();
+  const auto& sourceIdLists = sourceRoot.childAt(0)->asFlatMap();
+  const auto& sourceIdList = sourceIdLists.childAt(0)->asArrayWithOffsets();
+  const auto& sourceScoreMaps = sourceRoot.childAt(1)->asFlatMap();
+  const auto& sourceScoreMap = sourceScoreMaps.childAt(0)->asSlidingWindowMap();
+  EXPECT_THAT(
+      projection.streamOffsets,
+      ElementsAre(
+          sourceRoot.nullsDescriptor().offset(),
+          sourceIdLists.nullsDescriptor().offset(),
+          sourceIdList.offsetsDescriptor().offset(),
+          sourceIdList.lengthsDescriptor().offset(),
+          sourceIdList.elements()->asScalar().scalarDescriptor().offset(),
+          sourceIdLists.inMapDescriptorAt(0).offset(),
+          // Missing key 3: offsets, lengths, elements, and in-map.
+          UINT32_MAX,
+          UINT32_MAX,
+          UINT32_MAX,
+          UINT32_MAX,
+          sourceScoreMaps.nullsDescriptor().offset(),
+          sourceScoreMap.offsetsDescriptor().offset(),
+          sourceScoreMap.lengthsDescriptor().offset(),
+          sourceScoreMap.keys()->asScalar().scalarDescriptor().offset(),
+          sourceScoreMap.values()->asScalar().scalarDescriptor().offset(),
+          sourceScoreMaps.inMapDescriptorAt(0).offset()));
+  EXPECT_EQ(
+      projectionStreamOffsets(*projection.nimbleType).size(),
+      projection.streamOffsets.size());
+}
+
 TEST(SchemaUtilsTest, projectionEmptySubfieldsFails) {
   auto type = velox::ROW({{"a", velox::BIGINT()}, {"b", velox::VARCHAR()}});
   std::vector<Subfield> subfields;
