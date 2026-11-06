@@ -75,6 +75,10 @@ class VarianceAggregate : public exec::Aggregate {
   explicit VarianceAggregate(TypePtr resultType)
       : exec::Aggregate(resultType) {}
 
+  int32_t accumulatorAlignmentSize() const override {
+    return alignof(VarianceAccumulator);
+  }
+
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(VarianceAccumulator);
   }
