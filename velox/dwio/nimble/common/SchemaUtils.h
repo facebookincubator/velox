@@ -107,7 +107,7 @@ struct NimbleTypeProjection {
   /// and the offsets and lengths streams of ArrayWithOffsets and
   /// SlidingWindowMap, whose offsets index the distinct values of their own
   /// stripe.
-  std::vector<bool> rowOrFlatMapNullStreams;
+  std::vector<bool> barrierStreams;
 };
 
 /// Builds a projected Nimble schema and its source-stream mapping. A projected

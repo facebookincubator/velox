@@ -291,8 +291,8 @@ NimbleIndexProjector::NimbleIndexProjector(
 
   NIMBLE_CHECK_EQ(
       projection_->streamOffsets.size(),
-      projection_->rowOrFlatMapNullStreams.size(),
-      "Projected stream offsets and Row/FlatMap null stream mask must align");
+      projection_->barrierStreams.size(),
+      "Projected stream offsets and barrier stream mask must align");
 }
 
 NimbleIndexProjector::~NimbleIndexProjector() = default;
@@ -1296,7 +1296,7 @@ NimbleIndexProjector::StripeStreams NimbleIndexProjector::locateStripeStreams(
     }
     ++streams.numStreams;
     streams.projectedBytes += stream.size;
-    if (projection_->rowOrFlatMapNullStreams[i]) {
+    if (projection_->barrierStreams[i]) {
       // A present barrier-sensitive stream also requires isolated decoding.
       streams.requiredBarrier = true;
     }
