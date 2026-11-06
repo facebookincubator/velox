@@ -56,7 +56,8 @@ class SpillWriter : public serializer::SerializedPageFileWriter {
   /// of leading columns on which the data is sorted. 'path' is a file path
   /// prefix. ' 'targetFileSize' is the target byte size of a single file.
   /// 'writeBufferSize' specifies the size limit of the buffered data before
-  /// write to file. 'fileOptions' specifies the file layout on remote storage
+  /// write to file, capped at 1GB to keep pages under the serializer's 2GB
+  /// limit. 'fileOptions' specifies the file layout on remote storage
   /// which is storage system specific. 'pool' is used for buffering and
   /// constructing the result data read from 'this'. 'stats' is used to collect
   /// the spill write stats.

@@ -158,6 +158,16 @@ class TimeZone {
   /// If the local time exists then the same time is returned.
   seconds correct_nonexistent_time(seconds timestamp) const;
 
+  /// Same conversion as to_local(). An out-of-range timestamp is a user error
+  /// (see validateRange()). Timestamp::toTimezone() is built on it.
+  seconds toLocalChecked(seconds timestamp) const;
+
+  /// Converts a local time to the system time of the same instant the way
+  /// Presto does: an ambiguous local time resolves to the earlier of its two
+  /// instants, and a nonexistent or out-of-range one is a user error.
+  /// Timestamp::toGMT() is built on it.
+  seconds toSysChecked(seconds timestamp) const;
+
   const std::string& name() const {
     return timeZoneName_;
   }

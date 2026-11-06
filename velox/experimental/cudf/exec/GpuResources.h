@@ -67,7 +67,8 @@ createMemoryResource(std::string_view mode, int percent);
 /// @param device The CUDA device ordinal that was current during registration.
 void setCudfContextDevice(int device);
 
-/// Binds the primary CUDA context on the calling thread, once (thread-local).
+/// Binds the primary CUDA context on the calling thread for the registered
+/// device, rebinding when cuDF is registered on another device.
 /// Needed as `cuda::stream_ref` uses the driver API, which does not lazily
 /// create a context like the runtime API does.
 void ensureCudaContextForThread();

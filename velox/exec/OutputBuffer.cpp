@@ -438,13 +438,10 @@ void OutputBuffer::updateStatsWithFreedPagesLocked(
 }
 
 void OutputBuffer::updateTotalBufferedBytesMsLocked() {
-  const auto nowMs = getCurrentTimeMs();
+  const auto deltaMs = bufferWatch_.lap().count();
   if (bufferedBytes_ > 0) {
-    const auto deltaMs = nowMs - bufferStartMs_;
     totalBufferedBytesMs_ += bufferedBytes_ * deltaMs;
   }
-
-  bufferStartMs_ = nowMs;
 }
 
 bool OutputBuffer::enqueue(
@@ -754,12 +751,21 @@ void OutputBuffer::terminate() {
   VELOX_CHECK(!task_->isRunning());
 
   std::vector<ContinuePromise> outstandingPromises;
+  std::vector<DataAvailable> outstandingReaders;
   {
     std::lock_guard<std::mutex> l(mutex_);
     outstandingPromises.swap(promises_);
+    for (auto& buffer : buffers_) {
+      if (buffer != nullptr) {
+        outstandingReaders.push_back(buffer->getAndClearNotify());
+      }
+    }
   }
   for (auto& promise : outstandingPromises) {
     promise.setValue();
+  }
+  for (auto& reader : outstandingReaders) {
+    reader.notify();
   }
 }
 

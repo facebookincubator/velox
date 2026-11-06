@@ -67,13 +67,26 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
       const core::TypedExprPtr& expr,
       const RowVectorPtr& input) {
     auto stream = cudfGlobalStreamPool().get_stream();
+    return evaluate(
+        expr,
+        input->rowType(),
+        velox::cudf_velox::with_arrow::toCudfTable(
+            input, pool_.get(), stream, get_output_mr()),
+        stream);
+  }
+
+  // Optimizes and evaluates a typed expression on the GPU over 'cudfTable',
+  // the cuDF form of a batch of 'rowType', returning the result column.
+  VectorPtr evaluate(
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& rowType,
+      std::unique_ptr<cudf::table> cudfTable,
+      cuda::stream_ref stream) {
     auto mr = get_output_mr();
-    auto cudfTable = velox::cudf_velox::with_arrow::toCudfTable(
-        input, pool_.get(), stream, mr);
     auto optimized =
         expression::optimize(expr, execCtx_.queryCtx(), execCtx_.pool());
-    auto filterEvaluator =
-        createCudfExpression(optimized, input->rowType(), pool_.get());
+    auto filterEvaluator = createCudfExpression(
+        optimized, rowType, pool_.get(), execCtx_.queryCtx()->queryConfig());
     auto ownedColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(ownedColumns.size());

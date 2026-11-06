@@ -216,7 +216,7 @@ bool HashBuild::receivedCachedHashTable() {
   if (!useHashTableCache() || future_.valid()) {
     return false;
   }
-  // Builder task drivers coordinate via allPeersFinished and should fall
+  // Builder task drivers coordinate via allPeersArrived and should fall
   // through to the kWaitForProbe path in isBlocked(). Only waiter task
   // drivers (different taskId than the builder) should enter here.
   VELOX_CHECK_NOT_NULL(cacheEntry_);
@@ -828,13 +828,13 @@ bool HashBuild::finishHashBuild() {
   // The last Driver to hit HashBuild::finish gathers the data from
   // all build Drivers and hands it over to the probe side. At this
   // point all build Drivers are continued and will free their
-  // state. allPeersFinished is true only for the last Driver of the
+  // state. allPeersArrived is true only for the last Driver of the
   // build pipeline.
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     if (useHashTableCache() && !hashTableCacheBuilderTask()) {
       // Waiter task non-last driver: no partial table was built (we used the
       // cached table). Nothing to contribute — finish immediately. Clear the
-      // future since allPeersFinished() set it but we don't need to wait.
+      // future since allPeersArrived() set it but we don't need to wait.
       VELOX_CHECK_NULL(
           table_, "Waiter task should not have built a partial hash table");
       future_ = folly::SemiFuture<folly::Unit>::makeEmpty();

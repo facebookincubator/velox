@@ -17,11 +17,12 @@
 #pragma once
 
 #include <folly/Executor.h>
+#include <folly/container/F14Map.h>
 #include <memory>
 #include <unordered_set>
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -67,6 +68,8 @@ class EqualityDeleteFileReader {
   /// @param ioStats IO stats tracker.
   /// @param runtimeStats Runtime statistics for recording skipped bytes.
   /// @param connectorId Connector identifier.
+  /// @param fileReadOps Options forwarded to the FileSystem when the delete
+  ///   file is opened and on every read from it.
   EqualityDeleteFileReader(
       const IcebergDeleteFile& deleteFile,
       const std::vector<std::string>& equalityColumnNames,
@@ -75,11 +78,12 @@ class EqualityDeleteFileReader {
       FileHandleFactory* fileHandleFactory,
       const ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const connector::FileConfig>& fileConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       dwio::common::RuntimeStats& runtimeStats,
-      const std::string& connectorId);
+      const std::string& connectorId,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps);
 
   /// Applies equality deletes to the output vector by setting bits in the
   /// delete bitmap for rows whose equality column values match any delete
@@ -108,11 +112,12 @@ class EqualityDeleteFileReader {
   const std::vector<column_index_t>& resolveOutputColumnIndices(
       const RowVectorPtr& row) const;
 
-  // Re-encodes any geometry equality-delete column of 'deleteRows' from the
-  // file's ISO WKB into Velox's internal geometry encoding, so the delete keys
-  // hash in the same logical encoding as the already-converted base rows they
-  // are probed with. No-op when no equality column contains geometry.
-  void convertGeometryColumns(const RowVectorPtr& deleteRows) const;
+  // Re-encodes any geometry or geography equality-delete column of
+  // 'deleteRows' from the file's ISO WKB into Velox's internal geospatial
+  // encoding, so the delete keys hash in the same logical encoding as the
+  // already-converted base rows they are probed with. No-op when no equality
+  // column is geospatial.
+  void convertGeospatialColumns(const RowVectorPtr& deleteRows) const;
 
   // Hashes a single row's equality delete columns into a uint64_t key.
   uint64_t hashRow(

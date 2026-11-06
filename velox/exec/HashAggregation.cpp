@@ -509,7 +509,7 @@ bool HashAggregation::shouldEmitDefaultGlobalGroupingSetRows() {
 bool HashAggregation::electDefaultGlobalGroupingSetDriver() {
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Operator>> peerOperators;
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     VELOX_CHECK(future_.valid());
     return false;
   }
@@ -521,7 +521,7 @@ bool HashAggregation::electDefaultGlobalGroupingSetDriver() {
     }
   };
 
-  // allPeersFinished returned true, so every peer has finished noMoreInput()
+  // allPeersArrived returned true, so every peer has finished noMoreInput()
   // and its input count is final.
   uint64_t totalInputRows = groupingSet_->numInputRows();
   for (const auto& peer : peerOperators) {
@@ -551,7 +551,7 @@ void HashAggregation::combineGlobalPartialAggregation() {
 
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Operator>> peerOperators;
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     VELOX_CHECK(future_.valid());
     return;
   }

@@ -45,8 +45,11 @@ class AggregateWindowFunction : public exec::WindowFunction {
     argTypes_.reserve(args.size());
     argIndices_.reserve(args.size());
     argVectors_.reserve(args.size());
+    std::vector<VectorPtr> constantInputs;
+    constantInputs.reserve(args.size());
     for (const auto& arg : args) {
       argTypes_.push_back(arg.type);
+      constantInputs.push_back(arg.constantValue);
       if (arg.constantValue) {
         argIndices_.push_back(kConstantChannel);
         argVectors_.push_back(arg.constantValue);
@@ -64,7 +67,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
         core::AggregationNode::Step::kSingle,
         argTypes_,
         resultType,
-        config);
+        config,
+        constantInputs);
     aggregate_->setAllocator(stringAllocator_);
 
     // Aggregate initialization.

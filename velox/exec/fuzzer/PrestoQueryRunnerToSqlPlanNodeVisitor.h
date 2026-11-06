@@ -148,6 +148,12 @@ class PrestoQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
     VELOX_NYI();
   }
 
+  void visit(
+      const core::VectorSearchJoinNode& node,
+      core::PlanNodeVisitorContext& ctx) const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::TableScanNode& node, core::PlanNodeVisitorContext& ctx)
       const override {
     PrestoSqlPlanNodeVisitor::visit(node, ctx);
@@ -190,6 +196,21 @@ class PrestoQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
       const override;
 
   void visit(const core::MixedUnionNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::FixedPointNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::StateSourceNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::StateHashJoinNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
   }

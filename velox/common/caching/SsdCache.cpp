@@ -16,11 +16,11 @@
 #include "velox/common/caching/SsdCache.h"
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
+#include <folly/stop_watch.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/common/time/Timer.h"
 
 #include <filesystem>
 
@@ -100,7 +100,7 @@ void SsdCache::write(std::vector<CachePin> pins) {
 
   TestValue::adjust("facebook::velox::cache::SsdCache::write", this);
 
-  const auto startTimeUs = getCurrentTimeMicro();
+  const folly::stop_watch<std::chrono::microseconds> writeWatch;
 
   uint64_t bytes = 0;
   std::vector<std::vector<CachePin>> shards(numShards_);
@@ -127,7 +127,7 @@ void SsdCache::write(std::vector<CachePin> pins) {
     // We move the mutable vector of pins to the executor. These must be wrapped
     // in a shared struct to be passed via lambda capture.
     auto pinHolder = std::make_shared<PinHolder>(std::move(shards[i]));
-    executor_->add([this, i, pinHolder, bytes, startTimeUs]() {
+    executor_->add([this, i, pinHolder, bytes, writeWatch]() {
       try {
         files_[i]->write(pinHolder->pins);
       } catch (const std::exception& e) {
@@ -144,7 +144,7 @@ void SsdCache::write(std::vector<CachePin> pins) {
             "Wrote {} to SSD, {} bytes/s",
             succinctBytes(bytes),
             static_cast<double>(bytes) * 1'000'000 /
-                (getCurrentTimeMicro() - startTimeUs));
+                writeWatch.elapsed().count());
       }
     });
   }

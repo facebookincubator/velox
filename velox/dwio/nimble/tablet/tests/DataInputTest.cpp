@@ -33,6 +33,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 
 namespace facebook::nimble {
 namespace {
@@ -77,8 +78,20 @@ class DataInputTest : public ::testing::Test {
   }
 
   void SetUp() override {
+    velox::ThreadLocalIoUringReader::testingClear();
+    velox::IoUringReader::setOptions({
+        .submissionQueueDepth = 8,
+        .completionQueueDepth = 8,
+        .registeredFileSlots = 8,
+    });
     pool_ = velox::memory::memoryManager()->addLeafPool("DataInputTest");
     ioStats_ = std::make_shared<velox::io::IoStatistics>();
+  }
+
+  void TearDown() override {
+    testingResetBlockCache();
+    velox::ThreadLocalIoUringReader::testingClear();
+    velox::IoUringReader::setOptions(velox::IoUringReader::Options{});
   }
 
   std::unique_ptr<velox::InMemoryReadFile> createFile(
@@ -140,11 +153,12 @@ TEST_F(DataInputTest, reportsCacheUsage) {
 
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "DataInputTest.reportsCacheUsage"};
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -350,12 +364,13 @@ TEST_F(DataInputTest, cachesWholeGroups) {
   auto file = createFile(data);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.cachesWholeGroups"};
 
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -457,12 +472,13 @@ TEST_F(DataInputTest, cachedDataInputVerifiesMissesOnly) {
   auto file = createFile(data);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.verifiesMissesOnly"};
 
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -510,12 +526,13 @@ TEST_F(DataInputTest, cachedDataInputRejectedGroupIsNotCached) {
   auto file = createFile(data);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.rejectedGroupIsNotCached"};
 
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -583,11 +600,12 @@ TEST_F(DataInputTest, loadCallbackSeesExactBytesUnderDirectIo) {
   DirectIoInMemoryReadFile file(data);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.directIoLoadCallback"};
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -621,11 +639,12 @@ TEST_F(DataInputTest, cachedDataInputPassesDuplicateRegionsOnce) {
   auto file = createFile(data);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.duplicateRegionsOnce"};
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -660,11 +679,12 @@ TEST_F(DataInputTest, loadHandlePinsCachedGroups) {
   auto file = createFile(data);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.loadHandlePinsCachedGroups"};
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -704,11 +724,12 @@ TEST_F(DataInputTest, cacheMissFailureReleasesEntries) {
   }
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.cacheMissFailureReleasesEntries"};
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -766,6 +787,7 @@ TEST_P(CachedDataInputLocalFileTest, cachesWholeGroups) {
       readMode.useIoUring);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(),
       fmt::format("CachedDataInputLocalFileTest.{}", readMode.name)};
@@ -774,7 +796,7 @@ TEST_P(CachedDataInputLocalFileTest, cachesWholeGroups) {
   constexpr uint64_t kPayloadBytes = 80 + 50 + 100 + 256;
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };

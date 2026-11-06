@@ -52,11 +52,10 @@ TEST_F(NoisyAvgGaussianAggregationTest, basicNoNoise) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      {vectors},
-      {},
-      {"noisy_avg_gaussian(c2, 0.0)"},
-      "SELECT AVG(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_avg_gaussian(c2, 0.0)"})
+      .assertResults("SELECT AVG(c2) FROM tmp");
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, basicWithNoise) {
@@ -86,11 +85,10 @@ TEST_F(NoisyAvgGaussianAggregationTest, invalidNoiseScale) {
   createDuckDbTable(vectors);
 
   // Test invalid noise scale.
-  testFailingAggregations(
-      vectors,
-      {},
-      {"noisy_avg_gaussian(c2, -1.0)"},
-      "Noise scale must be a non-negative value.");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_avg_gaussian(c2, -1.0)"})
+      .assertError("Noise scale must be a non-negative value.");
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, groupbyNullsNoNoise) {
@@ -107,8 +105,11 @@ TEST_F(NoisyAvgGaussianAggregationTest, groupbyNullsNoNoise) {
       {makeNullableFlatVector<double>({std::nullopt, 1.0}),
        makeFlatVector<double>({3.0, 3.0})});
 
-  testAggregations(
-      vectors, {"c0"}, {"noisy_avg_gaussian(c1, 0.0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"noisy_avg_gaussian(c1, 0.0)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, aggregateNullsNoNoise) {
@@ -125,41 +126,43 @@ TEST_F(NoisyAvgGaussianAggregationTest, aggregateNullsNoNoise) {
       {makeFlatVector<int32_t>({1, 2}),
        makeNullableFlatVector<double>({std::nullopt, 1.0})});
 
-  testAggregations(
-      vectors, {"c0"}, {"noisy_avg_gaussian(c1, 0.0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"noisy_avg_gaussian(c1, 0.0)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, singleGroupSingleAggregateNoNoise) {
   auto vectors = makeVectors(doubleRowType_, 5, 3);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_avg_gaussian(c1, 0.0)"},
-      {"SELECT AVG(c1) FROM tmp"});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_avg_gaussian(c1, 0.0)"})
+      .assertResults("SELECT AVG(c1) FROM tmp");
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, singleGroupMultipleAggregationNoNoise) {
   auto vectors = makeVectors(doubleRowType_, 5, 3);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_avg_gaussian(c1, 0.0)", "noisy_avg_gaussian(c2, 0.0)"},
-      {"SELECT AVG(c1), AVG(c2) FROM tmp"});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"noisy_avg_gaussian(c1, 0.0)", "noisy_avg_gaussian(c2, 0.0)"})
+      .assertResults("SELECT AVG(c1), AVG(c2) FROM tmp");
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, multipleGroupSingleAggregationNoNoise) {
   auto vectors = makeVectors(doubleRowType_, 5, 3);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"noisy_avg_gaussian(c2, 0.0)"},
-      {"SELECT c0, AVG(c2) FROM tmp GROUP BY c0"});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"noisy_avg_gaussian(c2, 0.0)"})
+      .assertResults("SELECT c0, AVG(c2) FROM tmp GROUP BY c0");
 }
 
 TEST_F(
@@ -168,11 +171,12 @@ TEST_F(
   auto vectors = makeVectors(doubleRowType_, 5, 3);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"noisy_avg_gaussian(c1, 0.0)", "noisy_avg_gaussian(c2, 0.0)"},
-      {"SELECT c0, AVG(c1), AVG(c2) FROM tmp GROUP BY c0"});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates(
+          {"noisy_avg_gaussian(c1, 0.0)", "noisy_avg_gaussian(c2, 0.0)"})
+      .assertResults("SELECT c0, AVG(c1), AVG(c2) FROM tmp GROUP BY c0");
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, emptyInputTest) {
@@ -184,16 +188,20 @@ TEST_F(NoisyAvgGaussianAggregationTest, emptyInputTest) {
 
   createDuckDbTable(vectors);
   // Should return NULL for empty input. consistent with DuckDB.
-  testAggregations(
-      vectors, {}, {"noisy_avg_gaussian(c2, 0.0)"}, "SELECT AVG(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_avg_gaussian(c2, 0.0)"})
+      .assertResults("SELECT AVG(c2) FROM tmp");
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, bigintNoiseScaleType) {
   auto vectors = makeVectors(doubleRowType_, 3, 3);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors, {}, {"noisy_avg_gaussian(c2, 0)"}, "SELECT AVG(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_avg_gaussian(c2, 0)"})
+      .assertResults("SELECT AVG(c2) FROM tmp");
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, numericInputTypeTestNoNoise) {
@@ -210,11 +218,10 @@ TEST_F(NoisyAvgGaussianAggregationTest, numericInputTypeTestNoNoise) {
     auto vectors = makeVectors(rowType, 3, 3);
     createDuckDbTable(vectors);
 
-    testAggregations(
-        vectors,
-        {},
-        {"noisy_avg_gaussian(c2, 0.0)"},
-        "SELECT AVG(c2) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"noisy_avg_gaussian(c2, 0.0)"})
+        .assertResults("SELECT AVG(c2) FROM tmp");
   }
 }
 
@@ -313,11 +320,10 @@ TEST_F(NoisyAvgGaussianAggregationTest, randomSeedNoNoise) {
   auto vectors = makeVectors(doubleRowType_, 3, 3);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_avg_gaussian(c2, 0.0, 12345)"},
-      "SELECT AVG(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_avg_gaussian(c2, 0.0, 12345)"})
+      .assertResults("SELECT AVG(c2) FROM tmp");
 }
 
 TEST_F(NoisyAvgGaussianAggregationTest, randomSeedDeterminismTestWithNoise) {
@@ -335,8 +341,10 @@ TEST_F(NoisyAvgGaussianAggregationTest, randomSeedDeterminismTestWithNoise) {
   // Test that the noise is deterministic given the same noise_scale,
   // random_seed.
   for (int i = 0; i < 10; i++) {
-    testAggregations(
-        vectors, {}, {"noisy_avg_gaussian(c2, 0.5, 12345)"}, {result});
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"noisy_avg_gaussian(c2, 0.5, 12345)"})
+        .assertResults(result);
   }
 }
 

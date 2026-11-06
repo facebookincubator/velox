@@ -21,8 +21,6 @@
 #include "velox/connectors/hive/iceberg/IcebergFieldMetadata.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -45,11 +43,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 
@@ -70,11 +64,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
       const RowTypePtr& rowType,
       const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
       const RowVectorPtr& expected) {
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
         {expected});
   }
@@ -97,7 +87,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
       columnHandles.push_back(
           std::make_shared<const IcebergColumnHandle>(
               name,
-              FileColumnHandle::ColumnType::kRegular,
+              connector::FileColumnHandle::ColumnType::kRegular,
               type,
               field,
               /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -218,11 +208,7 @@ TEST_F(IcebergInsertTest, singleColumnPartition) {
       ASSERT_TRUE(taskJson.count("partitionDataJson") > 0);
     }
 
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 }
@@ -334,11 +320,7 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
     ASSERT_EQ(commitTasks.size(), vectorSize);
     ASSERT_EQ(splits.size(), commitTasks.size());
 
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 }
@@ -390,18 +372,15 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
     EXPECT_EQ(files.size(), commitTasks.size());
 
     auto splits = createSplitsForDirectory(outputPath);
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
 
     return files.size();
   };
 
-  ASSERT_EQ(writeAndRead("1KB"), kNumBatches);
+  // Each batch compresses to under 1KB, so the threshold must stay below one
+  // batch's written size for every batch to start a new file.
+  ASSERT_EQ(writeAndRead("512B"), kNumBatches);
   ASSERT_EQ(writeAndRead("10MB"), 1);
 }
 
@@ -586,14 +565,6 @@ TEST_F(IcebergInsertTest, changedWriteDefaultAcrossInserts) {
   const auto rowType =
       ROW({"id", "amount", "country"}, {BIGINT(), DOUBLE(), VARCHAR()});
 
-  auto omittedCountryRow = [&](int64_t id, double amount) {
-    return makeRowVector(
-        rowType->names(),
-        {makeFlatVector<int64_t>({id}),
-         makeFlatVector<double>({amount}),
-         makeNullableFlatVector<std::string>({std::nullopt})});
-  };
-
   // INSERT 1: write-default = 'IN', two rows.
   icebergAddInputWithDefault(
       rowType,
@@ -759,13 +730,13 @@ TEST_F(IcebergInsertTest, writeDefaultPartitionedTable) {
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "id",
-          FileColumnHandle::ColumnType::kPartitionKey,
+          connector::FileColumnHandle::ColumnType::kPartitionKey,
           BIGINT(),
           parquet::ParquetFieldId{1, {}}));
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "country",
-          FileColumnHandle::ColumnType::kRegular,
+          connector::FileColumnHandle::ColumnType::kRegular,
           VARCHAR(),
           parquet::ParquetFieldId{2, {}},
           /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -886,7 +857,7 @@ TEST_F(IcebergInsertTest, writeDefaultMixedCaseColumnName) {
 TEST_F(IcebergInsertTest, columnHandleToStringIncludesWriteDefault) {
   auto col = std::make_shared<IcebergColumnHandle>(
       "country",
-      FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       VARCHAR(),
       parquet::ParquetFieldId{3, {}},
       /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -910,7 +881,7 @@ TEST_F(IcebergInsertTest, writeDefaultOnPartitionColumn) {
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "region",
-          FileColumnHandle::ColumnType::kPartitionKey,
+          connector::FileColumnHandle::ColumnType::kPartitionKey,
           VARCHAR(),
           parquet::ParquetFieldId{1, {}},
           /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -921,7 +892,7 @@ TEST_F(IcebergInsertTest, writeDefaultOnPartitionColumn) {
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "value",
-          FileColumnHandle::ColumnType::kRegular,
+          connector::FileColumnHandle::ColumnType::kRegular,
           BIGINT(),
           parquet::ParquetFieldId{2, {}}));
 

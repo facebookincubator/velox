@@ -18,7 +18,6 @@
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/table/table.hpp>
-#include <rmm/cuda_stream_view.hpp>
 #include <rmm/exec_policy.hpp>
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 

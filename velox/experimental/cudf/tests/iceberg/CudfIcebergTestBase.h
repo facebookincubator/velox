@@ -22,6 +22,8 @@
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
+#include <unordered_set>
+
 namespace facebook::velox::cudf_velox::exec::test {
 
 static const std::string kCudfIcebergConnectorId = "test-cudf-iceberg";
@@ -70,6 +72,13 @@ class CudfIcebergTestBase : public CudfHiveConnectorTestBase {
   /// Builds a table scan plan using the cudf iceberg connector.
   facebook::velox::core::PlanNodePtr makeTableScanPlan(
       const RowTypePtr& rowType);
+
+  /// Returns column handles for every column of 'rowType', declaring the
+  /// columns in 'partitionColumnNames' as partition keys and the rest as
+  /// regular columns.
+  static facebook::velox::connector::ColumnHandleMap makeAssignments(
+      const RowTypePtr& rowType,
+      const std::unordered_set<std::string>& partitionColumnNames);
 };
 
 } // namespace facebook::velox::cudf_velox::exec::test

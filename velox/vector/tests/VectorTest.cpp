@@ -31,6 +31,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/DictionaryVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -585,8 +586,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     }
     rowsToCopy.updateBounds();
 
-    SelectivityVector rowsToKeep(size);
-    rowsToKeep.deselect(rowsToCopy);
+    auto rowsToKeep = rowsToCopy.complement(size);
 
     // Copy from row N to N - 10 for N >= 0 and from row N to N for N < 10;
     std::vector<vector_size_t> toSourceRow(size);
@@ -1433,6 +1433,15 @@ TEST_F(VectorTest, copyFromUnknown) {
         [](auto row) { return row * 0.1; });
   });
 
+  // Copy to FLAT_MAP.
+  test([&]() {
+    return FlatMapVector::fromMapVector(*makeMapVector<int64_t, double>(
+        size,
+        [](auto row) { return row % 7; },
+        [](auto index) { return index % 7; },
+        [](auto index) { return index * 0.1; }));
+  });
+
   // Copy to ROW.
   test([&]() {
     return makeRowVector({
@@ -2273,7 +2282,7 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
       std::make_unique<TestingLoader>(makeFlatIdentityVector<int64_t>(size)));
   lazy->loadedVector();
   EXPECT_TRUE(lazy->isLoaded());
-  auto dict = wrapInDictionary(makeIndices(size, folly::identity), size, lazy);
+  auto dict = wrapInDictionary(makeIndices(size, std::identity{}), size, lazy);
   auto valuesVector = dict->valueVector();
   EXPECT_FALSE(valuesVector->isLazy());
 }

@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <thread>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "folly/ScopeGuard.h"
@@ -30,9 +31,10 @@
 #include "velox/common/file/File.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
+#include "velox/dwio/nimble/common/tests/TestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -320,6 +322,68 @@ TEST_F(TabletReaderCacheTest, cacheHitAndMiss) {
   EXPECT_EQ(cache.stats().numLookups, 3);
   EXPECT_EQ(cache.stats().numHits, 1);
   EXPECT_EQ(cache.stats().numElements, 2);
+}
+
+TEST_F(TabletReaderCacheTest, createBypassesCache) {
+  std::vector<const CachedTabletReader*> created;
+  std::vector<const CachedTabletReader*> released;
+  auto options = makeOptions();
+  options.onCreate = [&](const CachedTabletReader& tablet) {
+    created.push_back(&tablet);
+  };
+  options.onRelease = [&](const CachedTabletReader& tablet) {
+    released.push_back(&tablet);
+  };
+  TabletReaderCache cache(options);
+  const auto contents = writeTestFile();
+  const auto cached = cache.get(makeReadFile("file0", contents), {});
+  const auto statsBefore = cache.stats();
+
+  auto uncached = cache.create(makeReadFile("file0", contents), {});
+
+  verifySchema(uncached);
+  // A new entry, although the cache holds one for the same filename, which
+  // stays in place.
+  EXPECT_NE(uncached->tablet().get(), cached->tablet().get());
+  EXPECT_EQ(cache.stats().numLookups, statsBefore.numLookups);
+  EXPECT_EQ(cache.stats().numElements, statsBefore.numElements);
+  EXPECT_EQ(cache.testingGet("file0"), cached);
+  EXPECT_EQ(
+      created,
+      (std::vector<const CachedTabletReader*>{cached.get(), uncached.get()}));
+  EXPECT_TRUE(released.empty());
+
+  // The caller holds the only reference, so dropping it retires the entry.
+  const auto* uncachedEntry = uncached.get();
+  uncached.reset();
+  EXPECT_EQ(released, std::vector<const CachedTabletReader*>{uncachedEntry});
+}
+
+TEST_F(TabletReaderCacheTest, dropsCallerFileIoContext) {
+  TabletReaderCache cache(makeOptions());
+  const auto contents = writeTestFile();
+  TabletReader::Options tabletOptions;
+  tabletOptions.fileIoContext.fileOpts = {{"key", "value"}};
+  {
+    auto readFile =
+        std::make_shared<nimble::testing::FileOptsRecordingReadFile>(contents);
+    ASSERT_NE(cache.get(readFile, tabletOptions), nullptr);
+    EXPECT_THAT(
+        readFile->fileOpts(),
+        ::testing::AllOf(
+            ::testing::Not(::testing::IsEmpty()),
+            ::testing::Each(::testing::IsEmpty())));
+  }
+  {
+    auto readFile =
+        std::make_shared<nimble::testing::FileOptsRecordingReadFile>(contents);
+    ASSERT_NE(cache.create(readFile, tabletOptions), nullptr);
+    EXPECT_THAT(
+        readFile->fileOpts(),
+        ::testing::AllOf(
+            ::testing::Not(::testing::IsEmpty()),
+            ::testing::Each(::testing::IsEmpty())));
+  }
 }
 
 TEST_F(TabletReaderCacheTest, eviction) {

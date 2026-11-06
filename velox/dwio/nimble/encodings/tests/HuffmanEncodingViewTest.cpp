@@ -24,7 +24,7 @@ using namespace facebook;
 
 using HuffmanEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(HuffmanEncodingViewTest, readsAcrossCheckpoints) {
+TEST_P(HuffmanEncodingViewTest, readsAcrossCheckpoints) {
   nimble::Vector<int32_t> values{pool_.get()};
   values.reserve(1025);
   for (uint32_t row = 0; row < 1025; ++row) {
@@ -34,7 +34,7 @@ TEST_F(HuffmanEncodingViewTest, readsAcrossCheckpoints) {
       values, {1024, 0, 255, 256, 257, 511, 512, 768});
 }
 
-TEST_F(HuffmanEncodingViewTest, readsAllIntegralTypes) {
+TEST_P(HuffmanEncodingViewTest, readsAllIntegralTypes) {
   expectReads<nimble::HuffmanEncoding<int8_t>>(
       makeVector<int8_t>({-2, -1, 0, 1, 2}), {4, 0, 2});
   expectReads<nimble::HuffmanEncoding<uint8_t>>(
@@ -53,13 +53,13 @@ TEST_F(HuffmanEncodingViewTest, readsAllIntegralTypes) {
       makeVector<uint64_t>({0, 100000, 1000000, 100000}), {2, 0, 3});
 }
 
-TEST_F(HuffmanEncodingViewTest, concurrent) {
+TEST_P(HuffmanEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::HuffmanEncoding<uint32_t>>(
       randomNarrowUnsigned<uint32_t>(/*seed=*/41),
       randomizedPositions(/*seed=*/42));
 }
 
-TEST_F(HuffmanEncodingViewTest, reusesMetadataBuffers) {
+TEST_P(HuffmanEncodingViewTest, reusesMetadataBuffers) {
   auto values = randomNarrowUnsigned<uint32_t>(/*seed=*/43);
   const auto encoded =
       nimble::test::Encoder<nimble::HuffmanEncoding<uint32_t>>::encode(
@@ -87,3 +87,5 @@ TEST_F(HuffmanEncodingViewTest, reusesMetadataBuffers) {
   readAndRelease();
   EXPECT_EQ(decodePool->stats().numAllocs, numAllocsAfterFirstView);
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(HuffmanEncodingViewTest);

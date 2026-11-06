@@ -58,6 +58,26 @@ class TestConnector : public connector::Connector {
   }
 };
 
+// Implements only the pure virtuals, so numChangedRows keeps its default.
+class TestDataSink : public connector::DataSink {
+ public:
+  void appendData(RowVectorPtr /*input*/) override {}
+
+  bool finish() override {
+    return true;
+  }
+
+  std::vector<std::string> close() override {
+    return {};
+  }
+
+  void abort() override {}
+
+  Stats stats() const override {
+    return {};
+  }
+};
+
 TEST(ConnectorTest, exceptionProperties) {
   auto makeProperties = [](VeloxException::Type /*exceptionType*/,
                            void* untypedConnector)
@@ -370,6 +390,18 @@ TEST(ConnectorTest, connectorSplit) {
         split.toString(),
         "[split: connector id test, weight 50, cacheable false]");
   }
+}
+
+TEST_F(ConnectorQueryCtxTest, dataSinkNumChangedRowsDefaultsToInputSize) {
+  auto pool = memory::memoryManager()->addLeafPool("sink");
+  const auto input = std::make_shared<RowVector>(
+      pool.get(),
+      ROW({"c0"}, {BIGINT()}),
+      /*nulls=*/nullptr,
+      7,
+      std::vector<VectorPtr>{BaseVector::create(BIGINT(), 7, pool.get())});
+  TestDataSink sink;
+  EXPECT_EQ(sink.numChangedRows(*input), 7);
 }
 } // namespace
 } // namespace facebook::velox::connector

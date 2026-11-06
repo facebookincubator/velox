@@ -27,9 +27,9 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaTypes.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/SchemaTypes.h"
 
 namespace facebook::nimble::serde {
 
@@ -114,6 +114,12 @@ class StreamData {
   void decode(T* output, uint32_t count) {
     decode(output, /*offset=*/0, count, sizeof(T));
   }
+
+  /// Decodes the next `count` rows of a non-nullable bool stream as bits,
+  /// overwriting bits [0, count) of `bits`. Sparse bool encodings fill words
+  /// and set only their sparse positions, so a caller that needs the set rows
+  /// can visit them with ctz instead of scanning one bool per row.
+  void decodeBoolsAsBits(uint32_t count, uint64_t* bits);
 
   void reset(std::string_view data, bool streamEncodingUsesVarintRowCount);
 

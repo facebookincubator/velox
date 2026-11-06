@@ -136,6 +136,12 @@ class AssertQueryBuilder {
   /// when the query runs.
   AssertQueryBuilder& addSplitWithSequence(bool addWithSequence);
 
+  /// Options for running FixedPointNode loops.
+  AssertQueryBuilder& fixedPointOptions(const FixedPointOptions* options) {
+    params_.fixedPointOptions = options;
+    return *this;
+  }
+
   /// Sets the QueryCtx.
   AssertQueryBuilder& queryCtx(const std::shared_ptr<core::QueryCtx>& ctx) {
     params_.queryCtx = ctx;

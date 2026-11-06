@@ -72,6 +72,7 @@ class NullableEncoding final
 
   void reset() final;
   void skip(uint32_t rowCount) final;
+  void readNulls(uint32_t rowCount, uint64_t* nulls, int begin) final;
   void materialize(uint32_t rowCount, void* buffer) final;
   uint32_t materializeNullable(
       uint32_t rowCount,
@@ -233,6 +234,17 @@ void NullableEncoding<T>::skip(uint32_t rowCount) {
   const uint32_t nonNullCount =
       std::accumulate(nullBuffer_.begin(), nullBuffer_.end(), 0U);
   nonNullValues_->skip(nonNullCount);
+}
+
+template <typename T>
+void NullableEncoding<T>::readNulls(
+    uint32_t rowCount,
+    uint64_t* nulls,
+    int begin) {
+  nulls_->materializeBoolsAsBits(rowCount, nulls, begin);
+  nonNullValues_->skip(
+      static_cast<uint32_t>(velox::bits::countBits(
+          nulls, begin, begin + static_cast<int>(rowCount))));
 }
 
 template <typename T>
@@ -497,8 +509,8 @@ std::string_view NullableEncoding<T>::encodeNullable(
 
   auto* pool = &buffer.getMemoryPool();
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
-  // Keep physical child selection and type tags, except when an explicit
-  // ALP/ALPRD child requires the parent's logical floating-point type.
+  // Preserve physical layouts unless the policy opts in to floating-point
+  // selection. Explicit ALP/ALPRD layouts also retain their logical type.
   const auto serializedValues =
       selection.template encodeNested<physicalType, T>(
           EncodingIdentifiers::Nullable::Data,
@@ -590,11 +602,10 @@ std::string_view NullableEncoding<T>::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const auto sourceRowCount =
-      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+      offset,
+      length);
 
   const char* pos = encoded.data() +
       EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);

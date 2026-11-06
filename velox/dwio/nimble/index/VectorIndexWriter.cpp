@@ -30,6 +30,9 @@
 #include <faiss/IndexIVFFlat.h>
 #include <faiss/IndexIVFPQ.h>
 #include <faiss/IndexIVFRaBitQ.h>
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+#include <faiss/IndexIVFRaBitQFastScan.h>
+#endif
 #include <faiss/IndexScalarQuantizer.h>
 #include <faiss/impl/io.h>
 #include <faiss/index_io.h>
@@ -52,6 +55,8 @@ constexpr uint32_t kMaxHnswNumConnections{512};
 constexpr int kHnswConstructionSearchDepth{200};
 
 constexpr uint8_t kMaxPqBits{24};
+
+constexpr uint8_t kRaBitQQueryBits{4};
 
 // Clamps the requested partition count to the available training data.
 uint32_t calculateNumPartitions(
@@ -184,6 +189,18 @@ std::unique_ptr<faiss::Index> createFaissIndex(
       index = std::make_unique<faiss::IndexIVFRaBitQ>(
           quantizer.get(), dimensions, numPartitions, faissMetric);
       break;
+    case VectorIndexType::kIvfRaBitQFastScan: {
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+      auto fastScanIndex = std::make_unique<faiss::IndexIVFRaBitQFastScan>(
+          quantizer.get(), dimensions, numPartitions, faissMetric);
+      fastScanIndex->qb = kRaBitQQueryBits;
+      index = std::move(fastScanIndex);
+      break;
+#else
+      NIMBLE_USER_FAIL(
+          "IVF RaBitQ FastScan requires a FAISS build with FastScan support");
+#endif
+    }
     case VectorIndexType::kHnswSq8:
       NIMBLE_UNREACHABLE("HNSW index must be created before IVF dispatch");
     default:

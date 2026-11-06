@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <functional>
 #include <string_view>
 
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
@@ -45,7 +46,7 @@ class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
     auto parsed =
         util::fromTimestampWithTimezoneString(
             str.c_str(), str.size(), util::TimestampParseMode::kPrestoCast)
-            .thenOrThrow(folly::identity, [&](const Status& status) {
+            .thenOrThrow(std::identity{}, [&](const Status& status) {
               VELOX_USER_FAIL("{}", status.message());
             });
 
@@ -82,16 +83,14 @@ class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
   void useSessionZoneForRendering(std::string_view timeZone) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, std::string{timeZone}},
-        {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone,
-         "true"},
+        {core::QueryConfig::kIgnoreTimeZoneLabel, "true"},
     });
   }
 
   void useEmbeddedZoneForRendering(std::string_view timeZone) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, std::string{timeZone}},
-        {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone,
-         "false"},
+        {core::QueryConfig::kIgnoreTimeZoneLabel, "false"},
     });
   }
 
@@ -341,7 +340,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toTimestampSessionZone) {
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, "America/New_York"},
       {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
+      {core::QueryConfig::kIgnoreTimeZoneLabel, "true"},
   });
 
   // 1970-01-01 05:30 UTC read in the session zone (EST, -05:00) is 00:30, for
@@ -365,7 +364,7 @@ TEST_F(
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, "America/New_York"},
       {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
-      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
+      {core::QueryConfig::kIgnoreTimeZoneLabel, "true"},
   });
 
   const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
@@ -384,7 +383,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toTimestampEmbeddedZoneRegressionGuard) {
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, "America/New_York"},
       {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "false"},
+      {core::QueryConfig::kIgnoreTimeZoneLabel, "false"},
   });
 
   const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
@@ -444,7 +443,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toDateSessionZone) {
 
 TEST_F(TimestampWithTimeZoneCastTest, toDateUnsetSessionZoneRendersGmt) {
   queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
+      {core::QueryConfig::kIgnoreTimeZoneLabel, "true"},
   });
 
   // 1970-01-01 05:30 UTC falls on 1970-01-01 in GMT, so both values render to
@@ -461,7 +460,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toDateUnsetSessionZoneRendersGmt) {
 TEST_F(TimestampWithTimeZoneCastTest, toDateInvalidSessionZoneThrows) {
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, "Not/AZone"},
-      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
+      {core::QueryConfig::kIgnoreTimeZoneLabel, "true"},
   });
 
   auto input = makeFlatVector<int64_t>(

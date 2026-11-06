@@ -1286,6 +1286,104 @@ TEST(SignatureBinderTest, coercions) {
   }
 }
 
+// An integer argument of a DECIMAL(p, s) parameter binds p and s from the
+// DECIMAL its coercion rule targets.
+TEST(SignatureBinderTest, integerToDecimalCoercions) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .integerVariable("a_precision")
+                       .integerVariable("a_scale")
+                       .integerVariable("b_precision")
+                       .integerVariable("b_scale")
+                       .returnType("decimal(a_precision, a_scale)")
+                       .argumentType("decimal(a_precision, a_scale)")
+                       .argumentType("decimal(b_precision, b_scale)")
+                       .build();
+
+  testCoercions(
+      signature,
+      {DECIMAL(38, 8), INTEGER()},
+      {nullptr, DECIMAL(10, 0)},
+      DECIMAL(38, 8));
+  testCoercions(
+      signature,
+      {DECIMAL(38, 8), TINYINT()},
+      {nullptr, DECIMAL(3, 0)},
+      DECIMAL(38, 8));
+  testCoercions(
+      signature,
+      {DECIMAL(38, 8), SMALLINT()},
+      {nullptr, DECIMAL(5, 0)},
+      DECIMAL(38, 8));
+  testCoercions(
+      signature,
+      {BIGINT(), DECIMAL(38, 8)},
+      {DECIMAL(19, 0), nullptr},
+      DECIMAL(19, 0));
+  assertCannotBind(
+      signature, {DECIMAL(38, 8), DOUBLE()}, /*allowCoercion=*/true);
+}
+
+// Binds UNKNOWN through its coercion target before evaluating result
+// constraints.
+TEST(SignatureBinderTest, unknownToDecimal) {
+  auto signature =
+      exec::FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .integerVariable("b_precision")
+          .integerVariable("b_scale")
+          .integerVariable(
+              "r_precision",
+              "min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)")
+          .integerVariable("r_scale", "max(a_scale, b_scale)")
+          .returnType("decimal(r_precision, r_scale)")
+          .argumentType("decimal(a_precision, a_scale)")
+          .argumentType("decimal(b_precision, b_scale)")
+          .build();
+  const TypeCoercer coercer({{UNKNOWN(), DECIMAL(1, 0), 1}});
+  const std::vector<TypePtr> actualTypes{DECIMAL(10, 2), UNKNOWN()};
+  exec::SignatureBinder binder(*signature, actualTypes, coercer);
+  std::vector<Coercion> coercions;
+
+  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+  ASSERT_EQ(2, coercions.size());
+  EXPECT_EQ(nullptr, coercions[0].type);
+  VELOX_EXPECT_EQ_TYPES(coercions[1].type, DECIMAL(1, 0));
+  VELOX_EXPECT_EQ_TYPES(binder.tryResolveReturnType(), DECIMAL(11, 2));
+}
+
+// Arguments that share DECIMAL(p, s) variables bind p and s from their common
+// type, which every argument coerces to.
+TEST(SignatureBinderTest, sharedDecimalCoercions) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .integerVariable("p")
+                       .integerVariable("s")
+                       .returnType("boolean")
+                       .argumentType("decimal(p, s)")
+                       .argumentType("decimal(p, s)")
+                       .argumentType("decimal(p, s)")
+                       .build();
+
+  testCoercions(
+      signature,
+      {DECIMAL(10, 2), INTEGER(), INTEGER()},
+      {DECIMAL(12, 2), DECIMAL(12, 2), DECIMAL(12, 2)},
+      BOOLEAN());
+  testCoercions(
+      signature,
+      {DECIMAL(10, 2), DECIMAL(10, 8), DECIMAL(12, 2)},
+      {DECIMAL(18, 8), DECIMAL(18, 8), DECIMAL(18, 8)},
+      BOOLEAN());
+
+  // A fixed DECIMAL(10, 2) cannot hold every INTEGER.
+  auto fixedSignature = exec::FunctionSignatureBuilder()
+                            .returnType("boolean")
+                            .argumentType("decimal(10, 2)")
+                            .build();
+  assertCannotBind(fixedSignature, {INTEGER()}, /*allowCoercion=*/true);
+  assertCannotBind(fixedSignature, {DECIMAL(12, 2)}, /*allowCoercion=*/true);
+}
+
 TEST(SignatureBinderTest, complexTypeCoercions) {
   {
     auto signature = exec::FunctionSignatureBuilder()

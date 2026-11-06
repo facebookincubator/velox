@@ -24,6 +24,7 @@
 
 #include <assert.h>
 #include <atomic>
+#include <cstring>
 #include <mutex>
 #include <sstream>
 
@@ -274,6 +275,29 @@ void Stream::prefetch(Device* device, void* ptr, size_t size) {
 
 void Stream::memset(void* ptr, int32_t value, size_t size) {
   CUDA_CHECK(cudaMemsetAsync(ptr, value, size, stream_->stream));
+}
+
+void Stream::writeValue64(void* deviceAddress, uint64_t value) {
+  CU_CHECK(cuStreamWriteValue64(
+      reinterpret_cast<CUstream>(stream_->stream),
+      reinterpret_cast<CUdeviceptr>(deviceAddress),
+      value,
+      CU_STREAM_WRITE_VALUE_DEFAULT));
+}
+
+void* allocateHostMapped(size_t size, void** deviceAddress) {
+  void* host = nullptr;
+  CU_CHECK(cuMemHostAlloc(
+      &host, size, CU_MEMHOSTALLOC_DEVICEMAP | CU_MEMHOSTALLOC_PORTABLE));
+  std::memset(host, 0, size);
+  CUdeviceptr device = 0;
+  CU_CHECK(cuMemHostGetDevicePointer(&device, host, 0));
+  *deviceAddress = reinterpret_cast<void*>(device);
+  return host;
+}
+
+void freeHostMapped(void* hostAddress) {
+  cuMemFreeHost(hostAddress);
 }
 
 void Stream::hostToDeviceAsync(

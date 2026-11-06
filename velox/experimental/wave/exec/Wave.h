@@ -76,14 +76,16 @@ struct WaveTime {
   uint64_t clocks{0};
 
   static uint64_t getMicro() {
-    return FLAGS_wave_timing ? getCurrentTimeMicro() : 0;
+    return FLAGS_wave_timing ? SteadyTime::now<std::chrono::microseconds>() : 0;
   }
 
   static WaveTime now() {
     if (!FLAGS_wave_timing) {
       return {0, 0};
     }
-    return {getCurrentTimeMicro(), folly::hardware_timestamp()};
+    return {
+        SteadyTime::now<std::chrono::microseconds>(),
+        folly::hardware_timestamp()};
   }
 
   WaveTime operator-(const WaveTime right) const {

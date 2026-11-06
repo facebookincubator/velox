@@ -17,6 +17,8 @@
 
 #include <algorithm>
 
+#include "velox/common/base/Nulls.h"
+
 namespace facebook::nimble {
 
 Encoding::Encoding(
@@ -41,6 +43,16 @@ Encoding::Encoding(
     length -= data.size();
   }
   NIMBLE_DCHECK_EQ(length, 0, "IOBuf chain length corruption");
+}
+
+void Encoding::readNulls(uint32_t rowCount, uint64_t* nulls, int begin) {
+  NIMBLE_CHECK(
+      !isNullable(),
+      "Nullable encoding must override readNulls: {}",
+      toString(encodingType()));
+  velox::bits::fillBits(
+      nulls, begin, begin + static_cast<int>(rowCount), velox::bits::kNotNull);
+  skip(rowCount);
 }
 
 std::string Encoding::debugString(int offset) const {

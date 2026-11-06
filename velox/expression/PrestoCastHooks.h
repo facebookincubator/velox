@@ -50,11 +50,13 @@ class PrestoCastHooks : public CastHooks {
       int64_t sessionStartTimeMs) const override;
 
   // Allows casting 'NaN', 'Infinity', and '-Infinity' to real, but not 'Inf' or
-  // these strings with different letter cases.
+  // these strings with different letter cases unless the
+  // cast_string_to_floating_point_lenient_inf_nan query config is set.
   Expected<float> castStringToReal(const StringView& data) const override;
 
   // Allows casting 'NaN', 'Infinity', and '-Infinity' to double, but not 'Inf'
-  // or these strings with different letter cases.
+  // or these strings with different letter cases unless the
+  // cast_string_to_floating_point_lenient_inf_nan query config is set.
   Expected<double> castStringToDouble(const StringView& data) const override;
 
   // Returns the input as is.
@@ -89,6 +91,8 @@ class PrestoCastHooks : public CastHooks {
 
  private:
   const bool legacyCast_;
+  // See QueryConfig::kCastStringToFloatingPointLenientInfNan.
+  const bool lenientInfNan_;
   TimestampToStringOptions options_ = {
       .precision = TimestampToStringOptions::Precision::kMilliseconds};
 };

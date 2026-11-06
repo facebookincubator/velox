@@ -13,9 +13,77 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
+
+#include <folly/CPortability.h>
+
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions::sparksql {
+
+/// Computes Spark's hash of a single value using the hash function in
+/// HashClass, e.g. XxHash64 from XxHash64.h. HashClass provides hashInt32,
+/// hashInt64, hashFloat, hashDouble, hashLongDecimal, hashTimestamp and
+/// hashBytes. Exposed so that aggregates can hash a value the way Spark does.
+///
+/// The fixed-width overloads are force-inlined: they are called once per row,
+/// and without it the per-row hash loops in Hash.cpp exceed GCC's inlining
+/// limits and keep a call per row, which blocks vectorization.
+template <typename HashClass>
+FOLLY_ALWAYS_INLINE typename HashClass::ReturnType hashOne(
+    int32_t input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashInt32(input, seed);
+}
+
+template <typename HashClass>
+FOLLY_ALWAYS_INLINE typename HashClass::ReturnType hashOne(
+    int64_t input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashInt64(input, seed);
+}
+
+template <typename HashClass>
+FOLLY_ALWAYS_INLINE typename HashClass::ReturnType hashOne(
+    float input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashFloat(input, seed);
+}
+
+template <typename HashClass>
+FOLLY_ALWAYS_INLINE typename HashClass::ReturnType hashOne(
+    double input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashDouble(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    int128_t input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashLongDecimal(input, seed);
+}
+
+template <typename HashClass>
+FOLLY_ALWAYS_INLINE typename HashClass::ReturnType hashOne(
+    Timestamp input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashTimestamp(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    StringView input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashBytes(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    UnknownValue /*input*/,
+    typename HashClass::SeedType seed) {
+  return seed;
+}
 
 // Supported types:
 //   - Boolean

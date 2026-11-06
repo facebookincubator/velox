@@ -112,7 +112,8 @@ std::vector<AggregateInfo> ColumnStatsCollector::createAggregates(
                               : core::AggregationNode::Step::kSingle,
         aggregate.rawInputTypes,
         aggResultType,
-        *queryConfig_);
+        *queryConfig_,
+        /*constantInputs=*/{});
     VELOX_CHECK(aggregate.sortingKeys.empty());
     VELOX_CHECK(aggregate.sortingOrders.empty());
     info.output = outputChannel;

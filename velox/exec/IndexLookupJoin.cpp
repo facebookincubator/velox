@@ -559,10 +559,6 @@ void IndexLookupJoin::initLookupOutput() {
         lookupSourceOutputType->childAt(lookupChannelOpt.value()));
     VELOX_CHECK(outputType_->childAt(i)->equivalent(*lookupOutputTypes.back()));
   }
-  // TODO: support index lookup without output value columns.
-  VELOX_CHECK(
-      !lookupOutputNames.empty(),
-      "Must read at least one value column from index lookup table");
   lookupOutputType_ =
       ROW(std::move(lookupOutputNames), std::move(lookupOutputTypes));
 }
@@ -575,11 +571,6 @@ void IndexLookupJoin::initOutputProjections() {
       continue;
     }
     probeOutputProjections_.emplace_back(i, outputChannelOpt.value());
-  }
-  if (joinType_ == core::JoinType::kLeft) {
-    VELOX_USER_CHECK(
-        !probeOutputProjections_.empty(),
-        "Lookup join with left join type must read at least one column from probe side");
   }
 
   for (auto i = 0; i < lookupOutputType_->size(); ++i) {
@@ -631,6 +622,7 @@ void IndexLookupJoin::initFilter() {
     projections.emplace_back(channel, filterChannel++);
   };
 
+  const auto& lookupSourceOutputType = joinNode_->lookupSource()->outputType();
   for (const auto& field : filter_->expr(0)->distinctFields()) {
     const auto& name = field->field();
     auto channel = probeType_->getChildIdxIfExists(name);
@@ -639,6 +631,20 @@ void IndexLookupJoin::initFilter() {
       continue;
     }
     channel = lookupOutputType_->getChildIdxIfExists(name);
+    // The filter can also read lookup columns the join does not output.
+    if (!channel.has_value() && lookupSourceOutputType->containsChild(name)) {
+      VELOX_USER_CHECK_EQ(
+          lookupColumnHandles_.count(name),
+          1,
+          "Lookup output column {} is not found in lookup table handle",
+          name);
+      auto lookupNames = lookupOutputType_->names();
+      auto lookupTypes = lookupOutputType_->children();
+      lookupNames.push_back(name);
+      lookupTypes.push_back(lookupSourceOutputType->findChild(name));
+      lookupOutputType_ = ROW(std::move(lookupNames), std::move(lookupTypes));
+      channel = lookupOutputType_->size() - 1;
+    }
     if (channel.has_value()) {
       addChannel(
           channel.value(), lookupOutputType_, filterLookupInputProjections_);
@@ -778,22 +784,18 @@ BlockingReason IndexLookupJoin::isBlocked(ContinueFuture* future) {
 }
 
 void IndexLookupJoin::startLookupBlockWait() {
-  VELOX_CHECK(!blockWaitStartNs_.has_value());
-  blockWaitStartNs_ = getCurrentTimeNano();
+  VELOX_CHECK(!blockWaitWatch_.has_value());
+  blockWaitWatch_.emplace();
 }
 
 void IndexLookupJoin::endLookupBlockWait() {
-  if (!blockWaitStartNs_.has_value()) {
+  if (!blockWaitWatch_.has_value()) {
     return;
   }
-  SCOPE_EXIT {
-    blockWaitStartNs_ = std::nullopt;
-  };
-  const auto blockWaitEndNs = getCurrentTimeNano();
-  VELOX_CHECK_GE(blockWaitEndNs, blockWaitStartNs_.value());
-  const auto blockWaitNs = blockWaitEndNs - blockWaitStartNs_.value();
   RECORD_HISTOGRAM_METRIC_VALUE(
-      velox::kMetricIndexLookupBlockedWaitTimeMs, blockWaitNs / 1'000'000);
+      velox::kMetricIndexLookupBlockedWaitTimeMs,
+      blockWaitWatch_->elapsed().count());
+  blockWaitWatch_.reset();
 }
 
 void IndexLookupJoin::addInput(RowVectorPtr input) {
@@ -1533,6 +1535,12 @@ void IndexLookupJoin::prepareOutputRowMappings(size_t outputBatchSize) {
 }
 
 void IndexLookupJoin::close() {
+  // Only the collector owns split records. Early closure leaves unfinished
+  // splits for Driver's abandonment path.
+  if (isIndexSplitCollector_ && noMoreIndexSplits_ && isFinished()) {
+    operatorCtx_->task()->splitsFinished(
+        indexSourceNodeId_, *operatorCtx_->driverCtx());
+  }
   recordConnectorStats();
   // TODO: add close method for index source if needed to free up resource
   // or shutdown index source gracefully.

@@ -44,8 +44,9 @@ namespace facebook::velox::cudf_velox {
  * The input tables are consumed and deallocated when the function returns.
  * If the input vector is empty, returns an empty table matching tableType.
  *
- * @param tables Input vector of CudfVectors to concatenate (consumed during
- * operation)
+ * @param tables Input vector of CudfVectors to concatenate. Taken by value so
+ * that the caller's vector is left empty and the inputs are released when this
+ * function returns.
  * @param tableType Velox type representation for creating empty tables when
  * needed
  * @param stream CUDA stream for concatenation and memory management
@@ -53,7 +54,7 @@ namespace facebook::velox::cudf_velox {
  * @return Single concatenated table
  */
 [[nodiscard]] std::unique_ptr<cudf::table> getConcatenatedTable(
-    std::vector<CudfVectorPtr>&& tables,
+    std::vector<CudfVectorPtr> tables,
     const TypePtr& tableType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
@@ -89,7 +90,7 @@ namespace facebook::velox::cudf_velox {
  */
 [[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
 getConcatenatedTableBatched(
-    std::vector<CudfVectorPtr>&& tables,
+    std::vector<CudfVectorPtr> tables,
     const TypePtr& tableType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
@@ -179,6 +180,16 @@ class CudaEvent {
    */
   const CudaEvent& waitOn(cuda::stream_ref stream) const;
 
+  /**
+   * @brief Blocks the host thread until the most recent recordFrom() has
+   * completed.
+   *
+   * Returns immediately if the event has never been recorded.
+   *
+   * @return Reference to this CudaEvent for method chaining
+   */
+  const CudaEvent& synchronize() const;
+
  private:
   cudaEvent_t event_{};
 };
@@ -211,6 +222,15 @@ void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
     std::span<const cuda::stream_ref> inputStreams,
     cuda::stream_ref stream);
+
+/// Creates an all-null cuDF column of \p numRows for the given Velox \p type.
+/// Supports cuDF-compatible scalar types and nested Velox ARRAY and ROW types.
+/// Throws for unsupported types.
+std::unique_ptr<cudf::column> makeAllNullColumn(
+    const TypePtr& type,
+    cudf::size_type numRows,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
 
 /// Extract the base function name from a possibly-prefixed name.
 /// Handles both Presto-style "presto.default.lag" and simple "lag".

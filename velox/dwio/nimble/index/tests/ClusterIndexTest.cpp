@@ -36,7 +36,7 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/SeekableInputStream.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 #include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::nimble::index::test {
@@ -51,6 +51,44 @@ IndexLookup::LookupRequest makeRangeScanRequest(std::string_view key) {
   velox::serializer::EncodedKeyBounds bounds{
       .lowerKey = std::string(key), .upperKey = std::nullopt};
   return IndexLookup::LookupRequest::rangeScan({bounds});
+}
+
+// Returns the request for the rows of one key, which is the range from the key
+// to its successor, the key followed by a zero byte.
+IndexLookup::LookupRequest makeKeyRequest(std::string_view key) {
+  velox::serializer::EncodedKeyBounds bounds{
+      .lowerKey = std::string(key),
+      .upperKey = std::string(key) + std::string(1, '\0')};
+  return IndexLookup::LookupRequest::rangeScan({bounds});
+}
+
+// Reads the keys of 'cursor' through batches of up to 'maxKeys' keys, and
+// checks that only the last batch holds fewer keys, that a short last batch
+// still holds every key left, and that a batch past the end appends nothing
+// and allocates nothing. Copies the keys once all are read, so the keys of a
+// batch must stay valid past later batches and past the chunk they came from.
+std::vector<std::string> readKeyBatches(KeyCursor& cursor, size_t maxKeys) {
+  std::vector<std::unique_ptr<char[]>> buffers;
+  const KeyCursor::BufferAllocator bufferAllocator = [&](size_t size) {
+    return buffers.emplace_back(std::make_unique<char[]>(size)).get();
+  };
+  std::vector<std::string_view> keys;
+  while (cursor.hasNext()) {
+    const auto numKeys = keys.size();
+    cursor.next(maxKeys, keys, bufferAllocator);
+    const auto numRead = keys.size() - numKeys;
+    EXPECT_GT(numRead, 0);
+    EXPECT_LE(numRead, maxKeys);
+    if (cursor.hasNext()) {
+      EXPECT_EQ(numRead, maxKeys);
+    }
+  }
+  const auto numKeys = keys.size();
+  const auto numBuffers = buffers.size();
+  cursor.next(maxKeys, keys, bufferAllocator);
+  EXPECT_EQ(keys.size(), numKeys);
+  EXPECT_EQ(buffers.size(), numBuffers);
+  return {keys.begin(), keys.end()};
 }
 
 class ClusterIndexTest : public ClusterIndexTestBase {
@@ -625,6 +663,125 @@ TEST_F(ClusterIndexTest, lookupWithKeyStreamMultiplePartitions) {
     } else {
       EXPECT_EQ(ranges.size(), 0);
     }
+  }
+}
+
+TEST_F(ClusterIndexTest, lookupKeyRangeSpanningChunks) {
+  struct TestCase {
+    // Keys of each chunk. The chunk key of a chunk is its last key.
+    std::vector<std::vector<std::string>> keyChunks;
+    std::vector<std::string> chunkKeys;
+    std::string key;
+    std::optional<RowRange> expected;
+
+    std::string debugString() const {
+      return fmt::format(
+          "{} chunks, key '{}', expected {}",
+          keyChunks.size(),
+          key,
+          expected.has_value()
+              ? fmt::format("[{}, {})", expected->startRow, expected->endRow)
+              : "empty");
+    }
+  };
+
+  // The rows of key_b run through two chunk boundaries and end inside the last
+  // chunk: key_a(0), key_b(1..4), key_c(5).
+  const std::vector<std::vector<std::string>> endsInLastChunk = {
+      {"key_a", "key_b"}, {"key_b", "key_b"}, {"key_b", "key_c"}};
+  const std::vector<std::string> endsInLastChunkKeys = {
+      "key_b", "key_b", "key_c"};
+  // The rows of key_b end at a chunk boundary and the next chunk starts with a
+  // larger key: key_a(0), key_b(1..3), key_c(4), key_d(5).
+  const std::vector<std::vector<std::string>> endsAtBoundary = {
+      {"key_a", "key_b"}, {"key_b", "key_b"}, {"key_c", "key_d"}};
+  const std::vector<std::string> endsAtBoundaryKeys = {
+      "key_b", "key_b", "key_d"};
+  // The rows of key_b run to the last row of the last chunk: key_a(0),
+  // key_b(1..4).
+  const std::vector<std::vector<std::string>> endsAtLastRow = {
+      {"key_a", "key_b"}, {"key_b", "key_b"}, {"key_b"}};
+  const std::vector<std::string> endsAtLastRowKeys = {
+      "key_b", "key_b", "key_b"};
+
+  const std::vector<TestCase> testCases = {
+      {endsInLastChunk, endsInLastChunkKeys, "key_a", RowRange(0, 1)},
+      {endsInLastChunk, endsInLastChunkKeys, "key_b", RowRange(1, 5)},
+      {endsInLastChunk, endsInLastChunkKeys, "key_c", RowRange(5, 6)},
+      {endsInLastChunk, endsInLastChunkKeys, "key_bb", std::nullopt},
+      {endsAtBoundary, endsAtBoundaryKeys, "key_b", RowRange(1, 4)},
+      {endsAtBoundary, endsAtBoundaryKeys, "key_c", RowRange(4, 5)},
+      {endsAtLastRow, endsAtLastRowKeys, "key_b", RowRange(1, 5)},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+    auto encodedStream = encodeKeyStream(testCase.keyChunks);
+    std::vector<int> chunkRows;
+    for (const auto& chunk : testCase.keyChunks) {
+      chunkRows.push_back(static_cast<int>(chunk.size()));
+    }
+    std::vector<Stripe> stripes = {createStripeWithKeys(
+        {.streamOffset = 0,
+         .streamSize = static_cast<uint32_t>(encodedStream.data.size()),
+         .stream =
+             {.numChunks = static_cast<uint32_t>(testCase.keyChunks.size()),
+              .chunkRows = chunkRows,
+              .chunkOffsets = encodedStream.chunkOffsets},
+         .chunkKeys = testCase.chunkKeys})};
+    auto indexBuffers = createTestClusterIndex(
+        {"col1"}, "key_0", stripes, /*stripeGroups=*/{1});
+    auto clusterIndex = createClusterIndex(
+        indexBuffers, createKeyStreamFile(encodedStream.data));
+
+    const auto result = clusterIndex->lookup(makeKeyRequest(testCase.key));
+    ASSERT_EQ(result.size(), 1);
+    const auto ranges = result[0];
+    if (!testCase.expected.has_value()) {
+      EXPECT_EQ(ranges.size(), 0);
+      continue;
+    }
+    ASSERT_EQ(ranges.size(), 1);
+    EXPECT_EQ(ranges[0].startRow, testCase.expected->startRow);
+    EXPECT_EQ(ranges[0].endRow, testCase.expected->endRow);
+  }
+}
+
+TEST_F(ClusterIndexTest, lookupKeyRangeSpanningPartitions) {
+  // The rows of key_b continue from partition 0 into partition 1: key_a(0),
+  // key_b(1..3) | key_b(4), key_c(5).
+  auto encoded0 = encodeKeyStream({{"key_a", "key_b", "key_b", "key_b"}});
+  auto encoded1 = encodeKeyStream({{"key_b", "key_c"}});
+  const std::string combinedStream = encoded0.data + encoded1.data;
+  std::vector<Stripe> stripes = {
+      createStripeWithKeys(
+          {.streamOffset = 0,
+           .streamSize = static_cast<uint32_t>(encoded0.data.size()),
+           .stream = {.numChunks = 1, .chunkRows = {4}, .chunkOffsets = {0}},
+           .chunkKeys = {"key_b"}}),
+      createStripeWithKeys(
+          {.streamOffset = static_cast<uint32_t>(encoded0.data.size()),
+           .streamSize = static_cast<uint32_t>(encoded1.data.size()),
+           .stream = {.numChunks = 1, .chunkRows = {2}, .chunkOffsets = {0}},
+           .chunkKeys = {"key_c"}})};
+  auto indexBuffers = createTestClusterIndex(
+      {"col1"}, "key_0", stripes, /*stripeGroups=*/{1, 1});
+  auto clusterIndex =
+      createClusterIndex(indexBuffers, createKeyStreamFile(combinedStream));
+
+  const std::vector<std::pair<std::string, RowRange>> testCases = {
+      {"key_a", RowRange(0, 1)},
+      {"key_b", RowRange(1, 5)},
+      {"key_c", RowRange(5, 6)},
+  };
+  for (const auto& [key, expected] : testCases) {
+    SCOPED_TRACE(key);
+    const auto result = clusterIndex->lookup(makeKeyRequest(key));
+    ASSERT_EQ(result.size(), 1);
+    const auto ranges = result[0];
+    ASSERT_EQ(ranges.size(), 1);
+    EXPECT_EQ(ranges[0].startRow, expected.startRow);
+    EXPECT_EQ(ranges[0].endRow, expected.endRow);
   }
 }
 
@@ -1359,6 +1516,18 @@ TEST_F(ClusterIndexTest, keyIteratorMultiplePartitionsMultipleChunks) {
   }
   const std::vector<std::string> expectedRange = {"key_d", "key_e", "key_f"};
   EXPECT_EQ(scanned, expectedRange);
+
+  // Batches cross chunk and partition boundaries mid-batch. The larger ones ask
+  // for more keys than the range has left, so their read is short.
+  for (const auto maxKeys : {size_t{1}, size_t{3}, size_t{8}, size_t{100}}) {
+    SCOPED_TRACE(fmt::format("maxKeys={}", maxKeys));
+    EXPECT_EQ(
+        readKeyBatches(*clusterIndex->keyCursor(RowRange{0, 8}), maxKeys),
+        expected);
+    EXPECT_EQ(
+        readKeyBatches(*clusterIndex->keyCursor(RowRange{3, 6}), maxKeys),
+        expectedRange);
+  }
 }
 
 TEST_F(ClusterIndexTest, keyIteratorPrefixEncodedChunks) {
@@ -1412,6 +1581,20 @@ TEST_F(ClusterIndexTest, keyIteratorPrefixEncodedChunks) {
   }
   EXPECT_EQ(
       scanned, std::vector<std::string>(allKeys.begin() + 25, allKeys.end()));
+
+  // Batches cross restart blocks and the chunk boundary, from a chunk start
+  // and from mid-chunk.
+  for (const auto maxKeys : {size_t{7}, size_t{kNumRows}}) {
+    SCOPED_TRACE(fmt::format("maxKeys={}", maxKeys));
+    EXPECT_EQ(
+        readKeyBatches(
+            *clusterIndex->keyCursor(RowRange{0, kNumRows}), maxKeys),
+        allKeys);
+    EXPECT_EQ(
+        readKeyBatches(
+            *clusterIndex->keyCursor(RowRange{25, kNumRows}), maxKeys),
+        std::vector<std::string>(allKeys.begin() + 25, allKeys.end()));
+  }
 }
 
 TEST_F(ClusterIndexTest, keyIteratorDuplicateKeys) {

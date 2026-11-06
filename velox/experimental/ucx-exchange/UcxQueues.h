@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
+#include <folly/stop_watch.h>
 #include <atomic>
 #include <deque>
 #include <functional>
@@ -363,9 +364,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   int64_t totalRowsSent_{0};
   int64_t totalPackedColumnsSent_{0};
 
-  // Time since last change in queuedBytes_. Used to compute total time data
+  // Restarted at each change in queuedBytes_. Used to compute total time data
   // is queued. Ignored if queuedBytes_ is zero.
-  uint64_t queueStartMs_;
+  folly::stop_watch<std::chrono::milliseconds> queueWatch_;
 
   // Total time data is queued as bytes * time.
   double totalQueuedBytesMs_;

@@ -40,8 +40,10 @@ class QDigestAggTest : public AggregationTestBase {
         {makeFlatVector<T>(inputs), makeFlatVector<double>(accuracies)});
     auto dummyExpected = makeRowVector(
         {makeExpectedVector({inputs.size(), std::nullopt}, type)});
-    testAggregations(
-        {inputVector}, {}, {"qdigest_agg(c0, 1, c1)"}, {dummyExpected});
+    AggregationTester(*this)
+        .inputs(inputVector)
+        .aggregates({"qdigest_agg(c0, 1, c1)"})
+        .assertResults(dummyExpected);
   }
 
   template <typename T>
@@ -78,7 +80,11 @@ class QDigestAggTest : public AggregationTestBase {
     auto inputVector = makeRowVector(inputNames, inputVectors);
     expectedVectors.emplace_back(makeExpectedVector(expected, type));
     auto expectedRowVector = makeRowVector(expectedVectors);
-    testAggregations({inputVector}, groupByNames, {call}, {expectedRowVector});
+    AggregationTester(*this)
+        .inputs(inputVector)
+        .groupBy(groupByNames)
+        .aggregates({call})
+        .assertResults(expectedRowVector);
   }
 
  private:
@@ -112,7 +118,8 @@ TEST_F(QDigestAggTest, metadata) {
       core::AggregationNode::Step::kSingle,
       {BIGINT()},
       QDIGEST(BIGINT()),
-      config);
+      config,
+      /*constantInputs=*/{});
   EXPECT_FALSE(function->isFixedSize());
   EXPECT_FALSE(function->accumulatorUsesExternalMemory());
   EXPECT_EQ(function->accumulatorAlignmentSize(), 8);

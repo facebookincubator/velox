@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <bit>
 #include <numeric>
@@ -22,9 +23,10 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/views/ALPRDEncodingView.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 
 namespace facebook::nimble {
@@ -71,9 +73,9 @@ class ALPRDEncodingTest : public ::testing::Test {
   std::string_view encode(
       const std::vector<Physical>& values,
       EncodingLayout layout = makeLayout()) {
-    std::vector<T> logical;
-    for (const auto value : values) {
-      logical.push_back(std::bit_cast<T>(value));
+    ScopedVector<T> logical{values.size(), pool_.get(), options_.bufferPool};
+    for (size_t i = 0; i < values.size(); ++i) {
+      logical[i] = std::bit_cast<T>(values[i]);
     }
     return EncodingFactory::encode<T>(
         makePolicy<T>(std::move(layout)), logical, *buffer_, options_);
@@ -84,17 +86,15 @@ class ALPRDEncodingTest : public ::testing::Test {
   }
 
   void check(std::string_view encoded, std::span<const Physical> expected) {
-    for (auto useLegacy : {false, true}) {
-      SCOPED_TRACE(useLegacy);
-      auto reader = useLegacy
-          ? legacy::EncodingFactory(options_).create(*pool_, encoded, nullptr)
-          : decoder(encoded);
-      ASSERT_EQ(reader->rowCount(), expected.size());
-      std::vector<Physical> actual(expected.size());
-      reader->materialize(actual.size(), actual.data());
-      EXPECT_EQ(
-          actual, (std::vector<Physical>{expected.begin(), expected.end()}));
-    }
+    auto reader = decoder(encoded);
+    ASSERT_EQ(reader->rowCount(), expected.size());
+    ScopedVector<Physical> actual{
+        expected.size(), pool_.get(), options_.bufferPool};
+    std::fill(actual.begin(), actual.end(), 0);
+    reader->materialize(actual.size(), actual.data());
+    EXPECT_THAT(
+        (std::span<const Physical>{actual}),
+        ::testing::ElementsAreArray(expected));
   }
 
   std::vector<Physical> valuesWithLateException(uint32_t count) {
@@ -307,6 +307,37 @@ TYPED_TEST(ALPRDEncodingTest, dictionarySizesAndExceptionRates) {
   this->check(encoded, expected);
 }
 
+TYPED_TEST(ALPRDEncodingTest, parametersAccountForByteRounding) {
+  using Physical = typename TestFixture::Physical;
+  constexpr auto kRightBits = sizeof(Physical) * 8 - 16;
+  const auto mask = (Physical{1} << kRightBits) - 1;
+  std::mt19937_64 random{73};
+  std::vector<Physical> values(1'024);
+  for (auto& value : values) {
+    const Physical high = (random() & 1) ? 0x3f00 : 0x3f80;
+    value = (high << kRightBits) | (random() & mask);
+  }
+  for (auto exactBits : {false, true}) {
+    SCOPED_TRACE(exactBits);
+    this->options_.fixedBitWidthUseExactBits = exactBits;
+    const EncodingLayout leaf{
+        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+    const auto encoded = this->encode(
+        values,
+        EncodingLayout{
+            EncodingType::ALPRD,
+            {},
+            CompressionType::Uncompressed,
+            {std::nullopt, leaf, leaf, leaf}});
+    const auto metadata =
+        ALPRDEncodingBase::readMetadata(encoded, this->options_);
+    // A constant code stream uses Constant. With two prefixes, byte-rounded
+    // FBW codes cost a whole byte and do not save low-part payload bytes.
+    EXPECT_EQ(metadata.parameters.dictionarySize, exactBits ? 2 : 1);
+    this->check(encoded, values);
+  }
+}
+
 TYPED_TEST(ALPRDEncodingTest, shortAndConstantInputs) {
   using Physical = typename TestFixture::Physical;
   for (uint32_t count :
@@ -323,18 +354,14 @@ TYPED_TEST(ALPRDEncodingTest, shortAndConstantInputs) {
 
 TYPED_TEST(ALPRDEncodingTest, splitCostTiePrefersNarrowerRightPart) {
   using Physical = typename TestFixture::Physical;
-  constexpr auto kShift = sizeof(Physical) * 8 - 16;
-  std::vector<Physical> values;
-  for (uint16_t high : {0x1000, 0x1001, 0x2000, 0x4000}) {
-    for (uint32_t low = 0; low < 4; ++low) {
-      values.push_back((Physical{high} << kShift) | low);
-    }
-  }
-  // Splitting at 15 or 16 high bits has the same minimum estimated cost:
-  // the extra dictionary entry costs exactly the 16 saved low bits.
-  const auto parameters = ALPRDEncodingBase::selectParameters<Physical>(values);
-  EXPECT_EQ(parameters.rightBitWidth, kShift);
-  EXPECT_EQ(parameters.dictionarySize, 4);
+  const std::vector<Physical> values(
+      32, std::bit_cast<Physical>(typename TestFixture::T{1.25}));
+  // Every split produces one dictionary entry and constant child estimates.
+  // Equal costs prefer the narrower right part.
+  const auto parameters =
+      ALPRDEncodingBase::selectParameters<Physical>(values, this->options_);
+  EXPECT_EQ(parameters.rightBitWidth, sizeof(Physical) * 8 - 16);
+  EXPECT_EQ(parameters.dictionarySize, 1);
   this->check(this->encode(values), values);
 }
 
@@ -357,7 +384,9 @@ TYPED_TEST(ALPRDEncodingTest, nullableKeepsExistingPhysicalChildLayout) {
       values.push_back(value);
       physicalValues.push_back(std::bit_cast<Physical>(value));
     }
-    Vector<bool> notNulls(this->pool_.get(), 2 * values.size(), false);
+    ScopedVector<bool> notNulls{
+        2 * values.size(), this->pool_.get(), this->options_.bufferPool};
+    std::fill(notNulls.begin(), notNulls.end(), false);
     for (uint32_t row = 0; row < notNulls.size(); row += 2) {
       notNulls[row] = true;
     }
@@ -405,9 +434,10 @@ TYPED_TEST(ALPRDEncodingTest, nullableKeepsExistingPhysicalChildLayout) {
           EncodingPrefix::dataType(encoded.substr(childOffset)),
           TypeTraits<Physical>::dataType);
       if constexpr (!TypeParam::useVarint) {
-        auto reader =
-            legacy::EncodingFactory().create(*this->pool_, encoded, nullptr);
-        std::vector<Physical> actual(notNulls.size());
+        auto reader = EncodingFactory().create(*this->pool_, encoded, nullptr);
+        ScopedVector<Physical> actual{
+            notNulls.size(), this->pool_.get(), this->options_.bufferPool};
+        std::fill(actual.begin(), actual.end(), 0);
         reader->materialize(actual.size(), actual.data());
         for (size_t row = 0; row < actual.size(); ++row) {
           EXPECT_EQ(actual[row], row % 2 == 0 ? physicalValues[row / 2] : 0);
@@ -422,7 +452,9 @@ TYPED_TEST(ALPRDEncodingTest, nullableExplicitFloatingCodecs) {
   using Physical = typename TestFixture::Physical;
   std::vector<T> values;
   std::vector<Physical> expected(514, 0);
-  Vector<bool> notNulls(this->pool_.get(), expected.size(), false);
+  ScopedVector<bool> notNulls{
+      expected.size(), this->pool_.get(), this->options_.bufferPool};
+  std::fill(notNulls.begin(), notNulls.end(), false);
   for (uint32_t row = 0; row < expected.size(); row += 2) {
     const auto value = static_cast<T>(1 + row % 67) / 4;
     values.push_back(value);
@@ -449,9 +481,13 @@ TYPED_TEST(ALPRDEncodingTest, nullableExplicitFloatingCodecs) {
     ASSERT_EQ(EncodingPrefix::encodingType(child), codec);
     EXPECT_EQ(EncodingPrefix::dataType(child), TypeTraits<T>::dataType);
     auto reader = this->decoder(encoded);
-    std::vector<Physical> actual(expected.size());
+    ScopedVector<Physical> actual{
+        expected.size(), this->pool_.get(), this->options_.bufferPool};
+    std::fill(actual.begin(), actual.end(), 0);
     reader->materialize(actual.size(), actual.data());
-    EXPECT_EQ(actual, expected);
+    EXPECT_THAT(
+        (std::span<const Physical>{actual}),
+        ::testing::ElementsAreArray(expected));
   }
 }
 
@@ -465,14 +501,17 @@ TYPED_TEST(ALPRDEncodingTest, skipResetAndSliceWithLargePositions) {
   ASSERT_EQ(metadata.parameters.rightBitWidth, sizeof(Physical) * 8 - 16);
   this->check(encoded, values);
   auto reader = this->decoder(encoded);
-  std::vector<Physical> actual(values.size());
+  ScopedVector<Physical> actual{
+      values.size(), this->pool_.get(), this->options_.bufferPool};
+  std::fill(actual.begin(), actual.end(), 0);
   uint32_t position = 0;
   while (position < values.size()) {
     const auto count = std::min<uint32_t>(113, values.size() - position);
     reader->materialize(count, actual.data() + position);
     position += count;
   }
-  EXPECT_EQ(actual, values);
+  EXPECT_THAT(
+      (std::span<const Physical>{actual}), ::testing::ElementsAreArray(values));
   reader->reset();
   reader->skip(values.size() - 2);
   std::array<Physical, 2> tail;
@@ -484,17 +523,194 @@ TYPED_TEST(ALPRDEncodingTest, skipResetAndSliceWithLargePositions) {
   reader->skip(1);
   reader->materialize(0, nullptr);
   EXPECT_THROW(reader->skip(1), NimbleException);
-  for (const auto& [offset, count] : std::vector<std::pair<uint32_t, uint32_t>>{
-           {0, 31},
-           {17, 513},
-           {65'536, 1'000},
-           {uint32_t(values.size() - 5), 5}}) {
-    const auto sliced = EncodingFactory::slice(
-        encoded, offset, count, *this->buffer_, this->options_);
-    EXPECT_EQ(EncodingPrefix::encodingType(sliced), EncodingType::ALPRD);
-    this->check(
-        sliced, std::span<const Physical>(values).subspan(offset, count));
+  velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
+  for (const bool useBufferPool : {false, true}) {
+    SCOPED_TRACE(useBufferPool);
+    auto options = this->options_;
+    options.bufferPool = useBufferPool ? &bufferPool : nullptr;
+    for (const auto& [offset, count] :
+         std::vector<std::pair<uint32_t, uint32_t>>{
+             {0, 31},
+             {17, 513},
+             {65'536, 1'000},
+             {uint32_t(values.size() - 5), 5}}) {
+      const auto sliced = EncodingFactory::slice(
+          encoded, offset, count, *this->buffer_, options);
+      EXPECT_EQ(EncodingPrefix::encodingType(sliced), EncodingType::ALPRD);
+      this->check(
+          sliced, std::span<const Physical>(values).subspan(offset, count));
+    }
   }
+}
+
+TYPED_TEST(ALPRDEncodingTest, nativeExceptionSlicesAndComposition) {
+  using Physical = typename TestFixture::Physical;
+  constexpr uint32_t kNumRows = 513;
+  constexpr auto kShift = sizeof(Physical) * 8 - 16;
+  const std::vector<uint32_t> positions{0, 1, 127, 128, 255, 256, 511, 512};
+  const std::vector<uint16_t> highParts{2, 3, 4, 5, 6, 7, 8, 9};
+  std::vector<Physical> right(kNumRows);
+  std::iota(right.begin(), right.end(), 0);
+  std::vector<Physical> expected(kNumRows);
+  for (uint32_t i = 0; i < kNumRows; ++i) {
+    expected[i] = (Physical{1} << kShift) | right[i];
+  }
+  for (uint32_t i = 0; i < positions.size(); ++i) {
+    expected[positions[i]] =
+        (Physical{highParts[i]} << kShift) | right[positions[i]];
+  }
+  for (const auto childType :
+       {EncodingType::Trivial,
+        EncodingType::FixedBitWidth,
+        EncodingType::RLE,
+        EncodingType::Varint}) {
+    SCOPED_TRACE(fmt::format("child={}", childType));
+    const auto encodeChild = [&]<typename U>(const std::vector<U>& values) {
+      const auto type = childType == EncodingType::Varint && sizeof(U) < 4
+          ? EncodingType::Trivial
+          : childType;
+      const auto layout = type == EncodingType::RLE
+          ? EncodingLayout{type, {}, CompressionType::Uncompressed, {std::nullopt, std::nullopt}}
+          : EncodingLayout{type, {}, CompressionType::Uncompressed};
+      return EncodingFactory::encode<U>(
+          makePolicy<U>(layout), values, *this->buffer_, this->options_);
+    };
+    auto codes = encodeChild(std::vector<uint16_t>(kNumRows, 0));
+    auto lows = encodeChild(right);
+    const auto encodedPositions = encodeChild(positions);
+    const auto highs = encodeChild(highParts);
+    for (const bool wrappedMain : {false, true}) {
+      if (wrappedMain) {
+        codes = SliceEncoding<uint16_t>::wrap(
+            codes, 0, kNumRows, *this->buffer_, 0, this->options_);
+        lows = SliceEncoding<Physical>::wrap(
+            lows, 0, kNumRows, *this->buffer_, 0, this->options_);
+      }
+      const auto encoded = this->fixtureWithChildren(
+          kNumRows, positions.size(), {codes, lows, encodedPositions, highs});
+      for (const auto& [offset, length] :
+           std::vector<std::pair<uint32_t, uint32_t>>{
+               {0, kNumRows},
+               {1, kNumRows - 1},
+               {126, 132},
+               {2, 124},
+               {511, 2}}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "offset={} length={} wrapped={}", offset, length, wrappedMain));
+        const auto sliced = EncodingFactory::slice(
+            encoded, offset, length, *this->buffer_, this->options_);
+        this->check(
+            sliced,
+            std::span<const Physical>(expected).subspan(offset, length));
+        const auto metadata =
+            ALPRDEncodingBase::readMetadata(sliced, this->options_);
+        if (metadata.exceptionCount > 0 && offset > 0) {
+          ASSERT_EQ(
+              EncodingPrefix::encodingType(metadata.children[2]),
+              EncodingType::Slice);
+          SliceEncoding<uint32_t> positionsSlice(
+              *this->pool_, metadata.children[2], nullptr, this->options_);
+          if (childType == EncodingType::Trivial ||
+              childType == EncodingType::FixedBitWidth) {
+            EXPECT_EQ(positionsSlice.valueDelta(), 0);
+          } else {
+            EXPECT_EQ(positionsSlice.valueDelta(), -int64_t(offset));
+          }
+          EXPECT_EQ(
+              EncodingLayoutCapture::capture(sliced, this->options_)
+                  .child(2)
+                  ->encodingType(),
+              EncodingType::Slice);
+        }
+        // Retain an exception at the boundary through a second slice. Any
+        // existing value delta must be applied exactly once per slice.
+        const auto twice = EncodingFactory::slice(
+            sliced, length - 1, 1, *this->buffer_, this->options_);
+        this->check(
+            twice,
+            std::span<const Physical>(expected).subspan(
+                offset + length - 1, 1));
+      }
+    }
+  }
+}
+
+TYPED_TEST(ALPRDEncodingTest, sliceOffsetsAboveSignedPositionRange) {
+  using Physical = typename TestFixture::Physical;
+  constexpr uint32_t kOffset = (uint32_t{1} << 31) + 17;
+  const auto codes = this->constantChild(uint16_t{0}, kOffset + 3);
+  const auto right = this->constantChild(Physical{1}, kOffset + 3);
+  const auto high = this->constantChild(uint16_t{3}, 1);
+  const auto positions = EncodingFactory::encode<uint32_t>(
+      makePolicy<uint32_t>(EncodingLayout{
+          EncodingType::Varint, {}, CompressionType::Uncompressed}),
+      std::vector<uint32_t>{kOffset + 1},
+      *this->buffer_,
+      this->options_);
+  const auto encoded = this->fixtureWithChildren(
+      kOffset + 3, 1, {codes, right, positions, high});
+  const auto sliced = EncodingFactory::slice(
+      encoded, kOffset, 3, *this->buffer_, this->options_);
+  constexpr auto kShift = sizeof(Physical) * 8 - 16;
+  this->check(
+      sliced,
+      std::vector<Physical>{
+          (Physical{1} << kShift) | 1,
+          (Physical{3} << kShift) | 1,
+          (Physical{1} << kShift) | 1});
+}
+
+TYPED_TEST(ALPRDEncodingTest, viewIndependentFixtureAndValidation) {
+  using T = typename TestFixture::T;
+  using Physical = typename TestFixture::Physical;
+  const auto valid = this->fixture();
+  auto view = createEncodingView(valid, this->pool_.get(), this->options_);
+  std::array<Physical, 3> output;
+  view->read(0, 3, output.data());
+  constexpr auto kShift = sizeof(Physical) * 8 - 16;
+  EXPECT_THAT(
+      output,
+      ::testing::ElementsAre(
+          (Physical{2} << kShift) | 1,
+          (Physical{3} << kShift) | 2,
+          (Physical{2} << kShift) | 3));
+  for (size_t size = 0; size < valid.size(); ++size) {
+    SCOPED_TRACE(size);
+    EXPECT_THROW(
+        (ALPRDEncodingView<T>(
+            std::string_view(valid).substr(0, size),
+            this->pool_.get(),
+            this->options_)),
+        NimbleException);
+  }
+  for (const auto& invalid : {
+           valid + 'x',
+           this->fixture({1, 1}),
+           this->fixture({1, 2}, {1, 0, 1}, {1, 2, 3}, {3}),
+           this->fixture({1, 2}, {1, 0, 1}, {1, 2, 3}, {1, 1}, {3, 3}),
+           this->fixture({1, 2}, {1, 0, 1}, {1, 2, 3}, {2, 1}, {3, 3}),
+           this->fixture(
+               {0, 1}, {1, 0, 1}, {1, 2, 3}, {1}, {2}, sizeof(T) * 8 - 1),
+       }) {
+    EXPECT_THROW(
+        createEncodingView(invalid, this->pool_.get(), this->options_),
+        NimbleException);
+  }
+  // Main-stream validation still applies on exception rows and on both APIs.
+  for (const auto& invalid : {
+           this->fixture({1, 2}, {1, 2, 1}),
+           this->fixture({1, 2}, {1, 0, 1}, {1, Physical{1} << kShift, 3}),
+       }) {
+    auto invalidView =
+        createEncodingView(invalid, this->pool_.get(), this->options_);
+    EXPECT_THROW(invalidView->readAt(1, output.data()), NimbleException);
+    EXPECT_THROW(invalidView->read(0, 3, output.data()), NimbleException);
+  }
+  const auto empty = this->fixture({1}, {}, {}, {}, {});
+  NIMBLE_ASSERT_THROW(
+      createEncodingView(empty, this->pool_.get(), this->options_),
+      "Empty ALPRD encoding");
 }
 
 TYPED_TEST(ALPRDEncodingTest, replayUsesCurrentDictionary) {
@@ -606,6 +822,55 @@ TYPED_TEST(ALPRDEncodingTest, rejectsCorruptMetadataAndValues) {
   }
 }
 
+TYPED_TEST(ALPRDEncodingTest, rejectsCorruptValuesAnywhereInLongReads) {
+  using T = typename TestFixture::T;
+  using Physical = typename TestFixture::Physical;
+  // Spans several 256-value decode batches. Each corrupt value is the last.
+  constexpr uint32_t kNumRows = 600;
+  constexpr auto kRightWidth = sizeof(T) * 8 - 16;
+  const std::vector<uint16_t> dictionary{1, 2};
+  std::vector<uint16_t> codes(kNumRows);
+  std::vector<Physical> right(kNumRows);
+  std::vector<Physical> expected(kNumRows);
+  for (uint32_t i = 0; i < kNumRows; ++i) {
+    codes[i] = i % 2;
+    right[i] = i;
+    expected[i] = (Physical{dictionary[codes[i]]} << kRightWidth) | i;
+  }
+  const auto valid = this->fixture(dictionary, codes, right, {}, {});
+  this->check(valid, expected);
+  std::vector<Physical> output(kNumRows);
+  createEncodingView(valid, this->pool_.get(), this->options_)
+      ->read(0, kNumRows, output.data());
+  EXPECT_EQ(output, expected);
+
+  {
+    // The low three bits of code 9 select a valid dictionary entry.
+    auto corruptCodes = codes;
+    corruptCodes.back() = 9;
+    const auto corrupt = this->fixture(dictionary, corruptCodes, right, {}, {});
+    NIMBLE_ASSERT_THROW(
+        this->decoder(corrupt)->materialize(kNumRows, output.data()),
+        "Invalid ALPRD dictionary code.");
+    NIMBLE_ASSERT_THROW(
+        createEncodingView(corrupt, this->pool_.get(), this->options_)
+            ->read(0, kNumRows, output.data()),
+        "Invalid ALPRD dictionary code.");
+  }
+  {
+    auto corruptRight = right;
+    corruptRight.back() = Physical{1} << kRightWidth;
+    const auto corrupt = this->fixture(dictionary, codes, corruptRight, {}, {});
+    NIMBLE_ASSERT_THROW(
+        this->decoder(corrupt)->materialize(kNumRows, output.data()),
+        "Invalid ALPRD low part.");
+    NIMBLE_ASSERT_THROW(
+        createEncodingView(corrupt, this->pool_.get(), this->options_)
+            ->read(0, kNumRows, output.data()),
+        "Invalid ALPRD low part.");
+  }
+}
+
 TYPED_TEST(ALPRDEncodingTest, exceptionLoadingRespectsMemoryPool) {
   using Physical = typename TestFixture::Physical;
   constexpr uint32_t kNumRows = 1'048'576;
@@ -621,20 +886,19 @@ TYPED_TEST(ALPRDEncodingTest, exceptionLoadingRespectsMemoryPool) {
   // larger limit also exercises cleanup after the first array is allocated.
   for (const auto maxCapacity : {1 << 20, 5 << 20}) {
     SCOPED_TRACE(maxCapacity);
-    for (const bool useLegacy : {false, true}) {
-      SCOPED_TRACE(useLegacy);
-      auto root = velox::memory::memoryManager()->addRootPool(
-          "alprdExceptionMemoryLimit", maxCapacity);
-      auto pool = root->addLeafChild("decode");
-      VELOX_ASSERT_RUNTIME_THROW_CODE(
-          useLegacy
-              ? legacy::EncodingFactory(this->options_)
-                    .create(*pool, encoded, nullptr)
-              : EncodingFactory(this->options_).create(*pool, encoded, nullptr),
-          velox::error_code::kMemCapExceeded,
-          "Exceeded memory pool capacity");
-      EXPECT_EQ(pool->usedBytes(), 0);
-    }
+    auto root = velox::memory::memoryManager()->addRootPool(
+        "alprdExceptionMemoryLimit", maxCapacity);
+    auto pool = root->addLeafChild("decode");
+    VELOX_ASSERT_RUNTIME_THROW_CODE(
+        EncodingFactory(this->options_).create(*pool, encoded, nullptr),
+        velox::error_code::kMemCapExceeded,
+        "Exceeded memory pool capacity");
+    EXPECT_EQ(pool->usedBytes(), 0);
+    VELOX_ASSERT_RUNTIME_THROW_CODE(
+        createEncodingView(encoded, pool.get(), this->options_),
+        velox::error_code::kMemCapExceeded,
+        "Exceeded memory pool capacity");
+    EXPECT_EQ(pool->usedBytes(), 0);
   }
   // Slicing needs two arena buffers of at least 1 MiB each in addition to
   // the exception arrays, whose complete allocation would exceed this cap.
@@ -689,14 +953,8 @@ TYPED_TEST(ALPRDEncodingTest, rejectsUnorderedExceptionPositions) {
         std::vector<Physical>(kNumRows, 1),
         corruptPositions,
         std::vector<uint16_t>(kNumRows, 3));
-    for (const bool useLegacy : {false, true}) {
-      SCOPED_TRACE(useLegacy);
-      NIMBLE_ASSERT_THROW(
-          useLegacy ? legacy::EncodingFactory(this->options_)
-                          .create(*this->pool_, encoded, nullptr)
-                    : this->decoder(encoded),
-          "ALPRD exception positions must increase");
-    }
+    NIMBLE_ASSERT_THROW(
+        this->decoder(encoded), "ALPRD exception positions must increase");
     NIMBLE_ASSERT_THROW(
         EncodingFactory::slice(encoded, 0, 1, *this->buffer_, this->options_),
         "ALPRD exception positions must increase");

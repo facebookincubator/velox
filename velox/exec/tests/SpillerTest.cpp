@@ -671,6 +671,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowType_,
           hashBits_,
           sortingKeys,
+          false,
           &spillConfig_,
           spillStats_.wlock().operator->());
     } else if (type_ == SpillerType::AGGREGATION_OUTPUT) {
@@ -734,7 +735,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           auto stream = merge->next();
           if (!stream) {
             FAIL() << "Stream ends after " << i << " entries";
-            break;
           }
           ASSERT_TRUE(rowVector_->equalValueAt(
               stream->current().get(), indices[i], stream->currentIndex()));

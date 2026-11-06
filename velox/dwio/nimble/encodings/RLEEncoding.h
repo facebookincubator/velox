@@ -18,12 +18,15 @@
 #include <algorithm>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "velox/common/base/SimdUtil.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/SliceEncoding.h"
@@ -35,7 +38,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
-#include "velox/dwio/nimble/encodings/selection/NestedAlpSizeEstimation.h"
 
 // Holds data in RLE format. Consecutive equal values are collapsed into runs:
 //
@@ -233,11 +235,10 @@ class RLEEncodingBase
       uint32_t length,
       Buffer& buffer,
       const Encoding::Options& options = {}) {
-    const auto sourceRowCount =
-        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-    NIMBLE_CHECK_LE(offset, sourceRowCount);
-    NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+    EncodingPrefix::checkSliceRange(
+        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+        offset,
+        length);
 
     const auto sourcePrefixSize =
         EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
@@ -612,25 +613,30 @@ class RLEEncoding final : public internal::RLEEncodingBase<T, RLEEncoding<T>> {
         rawIndices);
   }
 
+  /// Estimates RLE bytes, including configured ALP/ALPRD run-value candidates
+  /// for floating-point logical types.
   static uint64_t estimateSize(
       uint64_t rowCount,
       const Statistics<physicalType>& statistics,
-      const Encoding::Options& options = {}) {
+      const Encoding::Options& options = {},
+      std::span<const std::pair<EncodingType, float>>
+          runValueEncodingReadFactors = {}) {
     // Estimate the two nested streams produced by RLE:
     //
     //   run lengths: one length per consecutive run, estimated as
     //     FixedBitWidth<uint32_t> over [minRepeat, maxRepeat].
     //   run values: one value per consecutive run. Numeric values are
-    //     estimated as FixedBitWidth over the original value range. String
-    //     values are estimated as Dictionary over the run values.
+    //     estimated as FixedBitWidth over the original value range, plus
+    //     configured ALP/ALPRD for floating-point logical types. String values
+    //     are estimated as Dictionary over the run values.
     const uint64_t runCount = statistics.consecutiveRepeatCount();
     // Run lengths are encoded as a FixedBitWidth child.
     const uint64_t runLengthsEncodingSize =
         FixedBitWidthEncoding<uint32_t>::estimateSize(
             runCount, statistics.minRepeat(), statistics.maxRepeat(), options);
 
-    const uint64_t runValuesEncodingSize =
-        estimateRunValuesSize(runCount, statistics, options);
+    const uint64_t runValuesEncodingSize = estimateRunValuesSize(
+        runCount, statistics, options, runValueEncodingReadFactors);
     const uint64_t outerEncodingSize =
         EncodingPrefix::kFixedPrefixSize + sizeof(uint32_t);
     return outerEncodingSize + runValuesEncodingSize + runLengthsEncodingSize;
@@ -652,21 +658,30 @@ class RLEEncoding final : public internal::RLEEncodingBase<T, RLEEncoding<T>> {
   static uint64_t estimateRunValuesSize(
       uint64_t runCount,
       const Statistics<physicalType>& statistics,
-      const Encoding::Options& options) {
+      const Encoding::Options& options,
+      std::span<const std::pair<EncodingType, float>>
+          runValueEncodingReadFactors) {
     if constexpr (isStringType<physicalType>()) {
       return DictionaryEncoding<std::string_view>::estimateSize(
           runCount, statistics, options);
     } else {
-      uint64_t bestSize = FixedBitWidthEncoding<physicalType>::estimateSize(
+      auto bestSize = FixedBitWidthEncoding<physicalType>::estimateSize(
           runCount, statistics, options);
       if constexpr (isFloatingPointType<T>()) {
-        if (options.allowNestedAlpSelection) {
+        for (const auto& candidate : runValueEncodingReadFactors) {
+          const auto encodingType = candidate.first;
+          if (encodingType != EncodingType::ALP &&
+              encodingType != EncodingType::ALPRD) {
+            continue;
+          }
           const auto& runValues = statistics.runValues();
-          if (const auto alpEncodingSize = detail::nestedAlpSize<T>(
-                  std::span<const physicalType>{
-                      runValues.data(), runValues.size()},
-                  options)) {
-            bestSize = std::min(bestSize, *alpEncodingSize);
+          const std::span<const physicalType> values{
+              runValues.data(), runValues.size()};
+          const auto estimate = encodingType == EncodingType::ALP
+              ? ALPEncoding<T>::estimateSize(values, options)
+              : ALPRDEncoding<T>::estimateSize(values, options);
+          if (estimate.has_value()) {
+            bestSize = std::min(bestSize, estimate.value());
           }
         }
       }

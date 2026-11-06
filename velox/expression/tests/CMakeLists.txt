@@ -21,6 +21,7 @@ add_executable(
   ConjunctTest.cpp
   ConstantFlatVectorReaderTest.cpp
   CustomTypeTest.cpp
+  DecodedArgsTest.cpp
   ExprCompilerTest.cpp
   ExprEncodingsTest.cpp
   ExprOptimizerTest.cpp

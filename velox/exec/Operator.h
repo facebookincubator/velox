@@ -19,6 +19,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include "velox/common/base/IdentityProjection.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -29,17 +30,7 @@
 
 namespace facebook::velox::exec {
 
-/// Represents a column that is copied from input to output, possibly
-/// with cardinality change, i.e. values removed or duplicated.
-struct IdentityProjection {
-  IdentityProjection(
-      column_index_t _inputChannel,
-      column_index_t _outputChannel)
-      : inputChannel(_inputChannel), outputChannel(_outputChannel) {}
-
-  column_index_t inputChannel;
-  column_index_t outputChannel;
-};
+using facebook::velox::IdentityProjection;
 
 class OperatorCtx {
  public:
@@ -64,7 +55,7 @@ class OperatorCtx {
   /// The last peer must fulfill every promise, including when an exception
   /// occurs. If 'future' is null, non-last peers do not wait and are not
   /// returned. Each peer operator retains its owning driver until released.
-  bool allPeersFinished(
+  bool allPeersArrived(
       ContinueFuture* future,
       std::vector<ContinuePromise>& promises,
       std::vector<std::shared_ptr<Operator>>& peerOperators) const;
@@ -415,6 +406,8 @@ class Operator : public BaseRuntimeStatWriter {
     return stats_;
   }
 
+  /// Records the time blocked for 'reason' since 'start', a SteadyTime reading
+  /// in microseconds.
   void recordBlockingTime(uint64_t start, BlockingReason reason);
 
   virtual std::string toString() const;

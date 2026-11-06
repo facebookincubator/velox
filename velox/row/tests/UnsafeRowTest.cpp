@@ -129,6 +129,27 @@ class UnsafeRowTest : public ::testing::Test, public VectorTestBase {
       memory::memoryManager()->addLeafPool();
 };
 
+TEST_F(UnsafeRowTest, fixedWidthMapPadding) {
+  auto floats = makeMapVector<int32_t, float>({{{7, 1.25f}}});
+  auto strings =
+      makeMapVector<int64_t, StringView>({{{9, StringView("after")}}});
+  auto data = makeRowVector({floats, strings});
+  UnsafeRowFast serializer(data);
+  auto buffer =
+      AlignedBuffer::allocate<char>(serializer.rowSize(0), pool_.get(), 0);
+  EXPECT_EQ(
+      serializer.serialize(0, buffer->asMutable<char>()),
+      serializer.rowSize(0));
+
+  const auto* words = buffer->as<uint64_t>();
+  const auto mapOffset = words[1] >> 32;
+  EXPECT_EQ(static_cast<uint32_t>(words[1]), 56);
+  EXPECT_EQ(words[2] >> 32, mapOffset + 56);
+  const auto* map =
+      reinterpret_cast<const uint64_t*>(buffer->as<char>() + mapOffset);
+  EXPECT_EQ(map[0], 24);
+}
+
 TEST_F(UnsafeRowTest, fuzz) {
   auto rowType = ROW({
       BOOLEAN(),

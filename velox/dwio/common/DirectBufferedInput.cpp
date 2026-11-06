@@ -392,16 +392,15 @@ std::unique_ptr<SeekableInputStream> DirectBufferedInput::read(
 }
 
 std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
-  const int64_t overAllocatedBytes = computeLoadSizes();
+  const int64_t avoidableAllocationBytes = computeLoadSizes();
 
-  // Use the shared allocation only when per-request page-rounding would
-  // over-allocate more than its minimum run; below that its own floor would
-  // over-reserve.
+  // The shared allocation has its own minimum run, so use it only when it
+  // avoids more page padding and duplicate buffers than that minimum.
   constexpr int64_t kMinPaddingBytesToUseSharedAllocation =
       static_cast<int64_t>(memory::AllocationPool::kMinPages) *
       static_cast<int64_t>(memory::AllocationTraits::kPageSize);
   const bool useSharedAllocation =
-      overAllocatedBytes > kMinPaddingBytesToUseSharedAllocation;
+      avoidableAllocationBytes > kMinPaddingBytesToUseSharedAllocation;
 
   int64_t size = 0;
   int64_t overread = 0;
@@ -430,12 +429,17 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
 }
 
 int64_t DirectCoalescedLoad::computeLoadSizes() {
-  int64_t overAllocatedBytes{0};
+  int64_t avoidableAllocationBytes{0};
   for (size_t i = 0; i < requests_.size(); ++i) {
     auto& request = requests_[i];
     const auto& region = request.region;
     if (i > 0 && duplicateRegion(requests_[i - 1], request)) {
       request.buffer.requestBytes = requests_[i - 1].buffer.requestBytes;
+      if (request.buffer.requestBytes > DirectBufferedInput::kTinySize) {
+        avoidableAllocationBytes +=
+            static_cast<int64_t>(memory::AllocationTraits::roundUpPageBytes(
+                request.buffer.requestBytes));
+      }
       continue;
     }
     if (region.length > DirectBufferedInput::kTinySize) {
@@ -458,13 +462,13 @@ int64_t DirectCoalescedLoad::computeLoadSizes() {
       }
       const auto paddedBytes = memory::AllocationTraits::roundUpPageBytes(
           request.buffer.requestBytes);
-      overAllocatedBytes +=
+      avoidableAllocationBytes +=
           static_cast<int64_t>(paddedBytes) - request.buffer.requestBytes;
     } else {
       request.buffer.requestBytes = static_cast<int32_t>(region.length);
     }
   }
-  return overAllocatedBytes;
+  return avoidableAllocationBytes;
 }
 
 std::vector<folly::Range<char*>> DirectCoalescedLoad::buildReadRanges(

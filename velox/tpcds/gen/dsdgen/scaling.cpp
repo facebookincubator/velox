@@ -386,7 +386,7 @@ ds_key_t get_rowcount(int table, DSDGenContext& dsdGenContext) {
  */
 void setUpdateDates(DSDGenContext& dsdGenContext) {
   assert(0);
-  int nDay, nUpdate, i;
+  int nDay, nUpdate;
   date_t dtTemp;
 
   nUpdate = get_int("UPDATE", dsdGenContext);
@@ -779,7 +779,6 @@ void setUpdateScaling(int nTable, DSDGenContext& dsdGenContext) {
       if (result < 0)
         perror("sprintf failed");
       exit(1);
-      break;
     }
   }
 

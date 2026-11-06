@@ -45,7 +45,10 @@ TEST_F(MinMaxByAggregateTest, maxBy) {
       makeFlatVector<int32_t>(std::vector<int32_t>({3})),
   })};
 
-  testAggregations(vectors, {}, {"spark_max_by(c0, c1)"}, expected);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"spark_max_by(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByAggregateTest, minBy) {
@@ -58,7 +61,10 @@ TEST_F(MinMaxByAggregateTest, minBy) {
       makeFlatVector<int32_t>(std::vector<int32_t>({3})),
   })};
 
-  testAggregations(vectors, {}, {"spark_min_by(c0, c1)"}, expected);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"spark_min_by(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByAggregateTest, trackRowSize) {
@@ -125,8 +131,10 @@ TEST_F(MinMaxByAggregateTest, arrayCompare) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"})
+      .assertResults(expected);
 
   data = makeRowVector({
       makeArrayVector<int64_t>({
@@ -150,8 +158,10 @@ TEST_F(MinMaxByAggregateTest, arrayCompare) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByAggregateTest, mapCompare) {
@@ -159,14 +169,15 @@ TEST_F(MinMaxByAggregateTest, mapCompare) {
       makeArrayVector<int64_t>({}),
       makeNullableMapVector<int64_t, int64_t>({}),
   });
-  std::vector<RowVectorPtr> expected = {};
 
   VELOX_ASSERT_USER_THROW(
-      testAggregations({data}, {}, {"spark_min_by(c0, c1)"}, expected),
+      exec::test::PlanBuilder().values({data}).singleAggregation(
+          {}, {"spark_min_by(c0, c1)"}),
       "Aggregate function signature is not supported");
 
   VELOX_ASSERT_USER_THROW(
-      testAggregations({data}, {}, {"spark_max_by(c0, c1)"}, expected),
+      exec::test::PlanBuilder().values({data}).singleAggregation(
+          {}, {"spark_max_by(c0, c1)"}),
       "Aggregate function signature is not supported");
 }
 
@@ -193,8 +204,10 @@ TEST_F(MinMaxByAggregateTest, rowCompare) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"})
+      .assertResults(expected);
 
   data = makeRowVector({
       makeArrayVector<int64_t>({
@@ -218,8 +231,10 @@ TEST_F(MinMaxByAggregateTest, rowCompare) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"})
+      .assertResults(expected);
 }
 
 } // namespace

@@ -38,6 +38,16 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     return true;
   }
 
+  bool supportsFillEmptyIntermediate() const override {
+    return true;
+  }
+
+  void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
+      const override {
+    auto* vector = result->asFlatVector<int64_t>();
+    rows.applyToSelected([&](vector_size_t row) { vector->set(row, 0); });
+  }
+
   void toIntermediate(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,

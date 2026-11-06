@@ -16,6 +16,8 @@
 #include <fmt/ranges.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <array>
+#include <limits>
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -30,10 +32,14 @@
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/HierarchicalClusterIndexWriter.h"
+#include "velox/dwio/nimble/index/HierarchicalKeyFormat.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/SortOrder.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
@@ -51,6 +57,65 @@ velox::BufferPtr toBufferPtr(
   std::memcpy(buffer->asMutable<char>(), data.data(), data.size());
   return buffer;
 }
+
+// Orders keys in reverse bytewise order.
+class ReverseKeyComparator final : public KeyComparator {
+ public:
+  int compare(std::string_view lhs, std::string_view rhs) const override {
+    return rhs.compare(lhs);
+  }
+};
+
+// A hierarchical key codec whose keys are the levels big-endian at their
+// widths with every bit inverted, so they sort in reverse bytewise order, which
+// its comparator gives. It takes only complete keys.
+class InvertedKeyCodec final : public HierarchicalKeyCodec {
+ public:
+  size_t keySize(std::span<const uint8_t> levelWidths) const override {
+    size_t bytes{0};
+    for (const auto width : levelWidths) {
+      bytes += width;
+    }
+    return bytes;
+  }
+
+  void encodeKey(
+      std::span<const uint64_t> levels,
+      std::span<const uint8_t> levelWidths,
+      char* key) const override {
+    for (size_t level = 0; level < levels.size(); ++level) {
+      for (int byte = levelWidths[level] - 1; byte >= 0; --byte) {
+        *key++ = static_cast<char>(~(levels[level] >> (8 * byte)));
+      }
+    }
+  }
+
+  bool parseKey(
+      std::string_view target,
+      std::span<const uint8_t> levelWidths,
+      std::span<uint64_t> levels) const override {
+    size_t offset{0};
+    for (size_t level = 0; level < levelWidths.size(); ++level) {
+      const auto width = levelWidths[level];
+      NIMBLE_CHECK_LE(offset + width, target.size());
+      uint64_t value{0};
+      for (size_t byte = 0; byte < width; ++byte) {
+        value = (value << 8) | static_cast<uint8_t>(~target[offset + byte]);
+      }
+      levels[level] = value;
+      offset += width;
+    }
+    NIMBLE_CHECK_EQ(offset, target.size());
+    return false;
+  }
+
+  const KeyComparator* keyComparator() const override {
+    return &comparator_;
+  }
+
+ private:
+  const ReverseKeyComparator comparator_;
+};
 
 class ClusterIndexWriterTest : public testing::Test,
                                public velox::test::VectorTestBase {
@@ -344,7 +409,15 @@ TEST_F(ClusterIndexWriterTest, keyChunkCompressionProducesRequestedChunkCodec) {
     auto decoded = decodeKeyChunk(
         std::make_unique<velox::dwio::common::SeekableArrayInputStream>(
             keyStreamData.data(), keyStreamData.size()),
-        createFlatKeyReader,
+        [](std::string_view encodedKeys,
+           std::function<void*(uint32_t)> stringBufferFactory,
+           velox::memory::MemoryPool* pool) {
+          return createFlatKeyReader(
+              encodedKeys,
+              std::move(stringBufferFactory),
+              /*comparator=*/nullptr,
+              pool);
+        },
         decodeBuffer,
         pool_.get());
     ASSERT_NE(decoded, nullptr);
@@ -1201,11 +1274,13 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
   EXPECT_EQ(descriptor->name, kHierarchicalClusterIndexName);
   ASSERT_EQ(metadata.size(), 2);
 
-  Section rootSection{MetadataBuffer(
-      MetadataBuffer::decompress(
-          toBufferPtr(metadata.at(metadata.size() - 1), pool_.get()),
-          CompressionType::Uncompressed,
-          pool_.get()))};
+  const auto makeRootSection = [&]() {
+    return Section{MetadataBuffer(
+        MetadataBuffer::decompress(
+            toBufferPtr(metadata.at(metadata.size() - 1), pool_.get()),
+            CompressionType::Uncompressed,
+            pool_.get()))};
+  };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
   velox::io::ReaderOptions ioOptions{pool_.get()};
@@ -1214,9 +1289,23 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
   IndexLookup::Options indexOptions{.file = file, .ioOptions = &ioOptions};
   const auto index =
       clusterIndexFactory(descriptor->name)
-          .createReader(std::move(rootSection), pool_.get(), indexOptions);
+          .createReader(makeRootSection(), pool_.get(), indexOptions);
   EXPECT_NE(
       dynamic_cast<const HierarchicalClusterIndex*>(index.get()), nullptr);
+
+  {
+    // Hierarchical key chunks keep bytewise order, so a key comparator fails.
+    const ReverseKeyComparator comparator;
+    auto comparatorOptions = indexOptions;
+    comparatorOptions.keyComparator = &comparator;
+    NIMBLE_ASSERT_THROW(
+        HierarchicalClusterIndex::create(
+            makeRootSection(),
+            NimbleHierarchicalClusterIndexFactory{}.testingKeyCodec(),
+            pool_.get(),
+            comparatorOptions),
+        "Hierarchical cluster index requires bytewise key order");
+  }
 
   ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 2);
 
@@ -1242,6 +1331,29 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     hierarchicalKeys.emplace_back(keyCursor->next());
   }
   EXPECT_EQ(hierarchicalKeys, flatKeys);
+
+  // Batches of hierarchical keys cross the chunk boundary mid-batch, and the
+  // keys of the first chunk stay valid past it.
+  for (const auto& [startRow, maxKeys] :
+       std::vector<std::pair<uint32_t, size_t>>{
+           {0, 2}, {0, 6}, {1, 4}, {4, 1}}) {
+    SCOPED_TRACE(fmt::format("startRow={} maxKeys={}", startRow, maxKeys));
+    auto batchCursor = index->keyCursor(
+        RowRange{startRow, static_cast<uint32_t>(flatKeys.size())});
+    std::vector<velox::BufferPtr> buffers;
+    std::vector<std::string_view> keys;
+    while (batchCursor->hasNext()) {
+      batchCursor->next(maxKeys, keys, [&](size_t size) {
+        return buffers
+            .emplace_back(
+                velox::AlignedBuffer::allocate<char>(size, pool_.get()))
+            ->asMutable<void>();
+      });
+    }
+    EXPECT_EQ(
+        std::vector<std::string>(keys.begin(), keys.end()),
+        std::vector<std::string>(flatKeys.begin() + startRow, flatKeys.end()));
+  }
 
   const auto keyType = velox::ROW(
       {{keyColumns[0], velox::BOOLEAN()},
@@ -1293,6 +1405,479 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0].startRow, 4);
     EXPECT_EQ(result[0][0].endRow, 5);
+  }
+}
+
+// A level stores a key column value as an unsigned integer in the order of the
+// column: an integer with its sign bit flipped, false as 1 and true as 2, and
+// every bit inverted for a descending column.
+TEST_F(ClusterIndexWriterTest, normalizeHierarchicalKeyValue) {
+  const auto normalize = [](const auto& values, bool ascending) {
+    std::vector<uint64_t> levels;
+    levels.reserve(values.size());
+    for (const auto value : values) {
+      levels.emplace_back(
+          HierarchicalKeyFormat::normalizeKeyValue(value, ascending));
+    }
+    return levels;
+  };
+  {
+    const std::array<bool, 2> values{false, true};
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/true), (std::vector<uint64_t>{1, 2}));
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/false),
+        (std::vector<uint64_t>{0xFE, 0xFD}));
+  }
+  {
+    const std::array<int8_t, 4> values{
+        std::numeric_limits<int8_t>::min(),
+        -1,
+        0,
+        std::numeric_limits<int8_t>::max()};
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/true),
+        (std::vector<uint64_t>{0x00, 0x7F, 0x80, 0xFF}));
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/false),
+        (std::vector<uint64_t>{0xFF, 0x80, 0x7F, 0x00}));
+  }
+  {
+    const std::array<int16_t, 4> values{
+        std::numeric_limits<int16_t>::min(),
+        -1,
+        0,
+        std::numeric_limits<int16_t>::max()};
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/true),
+        (std::vector<uint64_t>{0x0000, 0x7FFF, 0x8000, 0xFFFF}));
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/false),
+        (std::vector<uint64_t>{0xFFFF, 0x8000, 0x7FFF, 0x0000}));
+  }
+  {
+    const std::array<int32_t, 4> values{
+        std::numeric_limits<int32_t>::min(),
+        -1,
+        0,
+        std::numeric_limits<int32_t>::max()};
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/true),
+        (std::vector<uint64_t>{
+            0x0000'0000, 0x7FFF'FFFF, 0x8000'0000, 0xFFFF'FFFF}));
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/false),
+        (std::vector<uint64_t>{
+            0xFFFF'FFFF, 0x8000'0000, 0x7FFF'FFFF, 0x0000'0000}));
+  }
+  {
+    const std::array<int64_t, 4> values{
+        std::numeric_limits<int64_t>::min(),
+        -1,
+        0,
+        std::numeric_limits<int64_t>::max()};
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/true),
+        (std::vector<uint64_t>{
+            0x0000'0000'0000'0000,
+            0x7FFF'FFFF'FFFF'FFFF,
+            0x8000'0000'0000'0000,
+            0xFFFF'FFFF'FFFF'FFFF}));
+    EXPECT_EQ(
+        normalize(values, /*ascending=*/false),
+        (std::vector<uint64_t>{
+            0xFFFF'FFFF'FFFF'FFFF,
+            0x8000'0000'0000'0000,
+            0x7FFF'FFFF'FFFF'FFFF,
+            0x0000'0000'0000'0000}));
+  }
+}
+
+// A hierarchical index takes and returns the keys of its codec, in the order
+// of the codec's comparator, across the chunks that those keys bound. It opens
+// only with that comparator.
+TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
+  const std::vector<std::string> keyColumns{"first", "second"};
+  const auto type = velox::ROW(keyColumns, velox::BIGINT());
+  const auto config = buildHierarchicalIndexConfig(
+      keyColumns,
+      {SortOrder{.ascending = true}, SortOrder{.ascending = true}},
+      /*enforceKeyOrder=*/true,
+      /*noDuplicateKey=*/false,
+      /*maxRowsPerKeyChunk=*/2);
+  const std::shared_ptr<const HierarchicalKeyCodec> keyCodec =
+      std::make_shared<const InvertedKeyCodec>();
+  auto writer = HierarchicalClusterIndexWriter::create(
+      *config, type, keyCodec, pool_.get());
+  for (const auto& [first, second] :
+       std::vector<std::pair<std::vector<int64_t>, std::vector<int64_t>>>{
+           {{1, 1}, {10, 10}},
+           {{1, 2}, {20, 5}},
+           {{2, 3}, {6, 1}},
+       }) {
+    writer->write(makeRowVector(
+        keyColumns,
+        {makeFlatVector<int64_t>(first), makeFlatVector<int64_t>(second)}));
+  }
+
+  std::string keyStreamData;
+  std::vector<std::string> metadata;
+  const auto writeData =
+      [&keyStreamData](const std::vector<std::string_view>& segments)
+      -> std::pair<uint64_t, uint32_t> {
+    const auto offset = keyStreamData.size();
+    for (const auto segment : segments) {
+      keyStreamData.append(segment);
+    }
+    return {
+        offset,
+        static_cast<uint32_t>(keyStreamData.size() - offset),
+    };
+  };
+  const auto createMetadata =
+      [&keyStreamData, &metadata](std::string_view data) -> MetadataSection {
+    metadata.emplace_back(data);
+    return MetadataSection{
+        static_cast<uint64_t>(keyStreamData.size()),
+        static_cast<uint32_t>(data.size()),
+        CompressionType::Uncompressed,
+        static_cast<uint32_t>(data.size()),
+    };
+  };
+  writer->flush(writeData, createMetadata);
+  ASSERT_TRUE(writer->close(writeData, createMetadata).has_value());
+  const auto makeRootSection = [&]() {
+    return Section{MetadataBuffer(
+        MetadataBuffer::decompress(
+            toBufferPtr(metadata.back(), pool_.get()),
+            CompressionType::Uncompressed,
+            pool_.get()))};
+  };
+  auto file =
+      std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
+  velox::io::ReaderOptions ioOptions{pool_.get()};
+  ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
+  ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+  IndexLookup::Options options{.file = file, .ioOptions = &ioOptions};
+
+  {
+    NIMBLE_ASSERT_THROW(
+        HierarchicalClusterIndex::create(
+            makeRootSection(), keyCodec, pool_.get(), options),
+        "Hierarchical cluster index requires the key order of its codec");
+  }
+  options.keyComparator = keyCodec->keyComparator();
+  const auto index = HierarchicalClusterIndex::create(
+      makeRootSection(), keyCodec, pool_.get(), options);
+  ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 3);
+
+  // The codec's key of a row: the levels hold each BIGINT with its sign bit
+  // flipped.
+  const auto key = [&](int64_t first, int64_t second) {
+    const std::vector<uint64_t> levels{
+        std::bit_cast<uint64_t>(first) ^ (uint64_t{1} << 63),
+        std::bit_cast<uint64_t>(second) ^ (uint64_t{1} << 63)};
+    const std::vector<uint8_t> levelWidths{8, 8};
+    return keyCodec->encodeKey(levels, levelWidths);
+  };
+  std::vector<std::string> keys;
+  auto keyCursor = index->keyCursor(RowRange{0, 6});
+  while (keyCursor->hasNext()) {
+    keys.emplace_back(keyCursor->next());
+  }
+  EXPECT_EQ(
+      keys,
+      (std::vector<std::string>{
+          key(1, 10),
+          key(1, 10),
+          key(1, 20),
+          key(2, 5),
+          key(2, 6),
+          key(3, 1)}));
+
+  struct TestParam {
+    std::string testName;
+    std::string lowerKey;
+    std::string upperKey;
+    uint32_t startRow;
+    uint32_t endRow;
+
+    std::string debugString() const {
+      return testName;
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {"first chunk", key(1, 10), key(1, 11), 0, 2},
+      {"second chunk", key(2, 5), key(2, 6), 3, 4},
+      {"third chunk", key(3, 1), key(3, 2), 5, 6},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto result = index->lookup(
+        IndexLookup::LookupRequest::rangeScan({
+            velox::serializer::EncodedKeyBounds{
+                .lowerKey = testData.lowerKey,
+                .upperKey = testData.upperKey,
+            },
+        }));
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0].startRow, testData.startRow);
+    EXPECT_EQ(result[0][0].endRow, testData.endRow);
+  }
+}
+
+// Returns the key that 'keyEncoder' writes for each row of 'rows'.
+std::vector<std::string> encodeKeys(
+    IndexKeyEncoder& keyEncoder,
+    const velox::RowVectorPtr& rows,
+    velox::memory::MemoryPool* pool) {
+  std::vector<std::string_view> encodedKeys;
+  auto buffer =
+      velox::AlignedBuffer::allocate<char>(rows->estimateFlatSize(), pool);
+  keyEncoder.encode(rows, encodedKeys, [&](size_t bytes) -> void* {
+    velox::AlignedBuffer::reallocate<char>(&buffer, bytes);
+    return buffer->asMutable<void>();
+  });
+  return {encodedKeys.begin(), encodedKeys.end()};
+}
+
+// Returns the lower and the upper key of each row of the bounds from 'lower'
+// to 'upper' that 'keyEncoder' writes.
+std::vector<std::pair<std::optional<std::string>, std::optional<std::string>>>
+encodeBounds(
+    IndexKeyEncoder& keyEncoder,
+    const std::vector<std::string>& keyColumns,
+    velox::serializer::IndexBound lower,
+    velox::serializer::IndexBound upper) {
+  velox::serializer::IndexBounds bounds;
+  bounds.indexColumns = keyColumns;
+  bounds.set(std::move(lower), std::move(upper));
+  std::vector<std::pair<std::optional<std::string>, std::optional<std::string>>>
+      keys;
+  for (auto& encodedBounds : keyEncoder.encodeIndexBounds(bounds)) {
+    keys.emplace_back(
+        std::move(encodedBounds.lowerKey), std::move(encodedBounds.upperKey));
+  }
+  return keys;
+}
+
+// The built-in hierarchical index has the default key format, whose key encoder
+// writes the keys and the lookup bounds of the Velox key encoder byte for byte.
+// An exclusive lower bound and an inclusive upper bound move to the next values
+// in sort order, carrying into the columns before. An inclusive upper bound on
+// the last values has no upper key, and an exclusive lower bound on them fails.
+// The key encoder requires a sort order for each key column.
+TEST_F(ClusterIndexWriterTest, hierarchicalFactoryKeyEncoderWritesNimbleKeys) {
+  const auto& factory = clusterIndexFactory(kHierarchicalClusterIndexName);
+  ASSERT_NE(
+      dynamic_cast<const NimbleHierarchicalClusterIndexFactory*>(&factory),
+      nullptr);
+  EXPECT_EQ(factory.keyComparator(), nullptr);
+
+  const std::vector<std::string> keyColumns{"tinyKey", "smallKey", "bigKey"};
+  const std::vector<SortOrder> sortOrders{
+      SortOrder{.ascending = true},
+      SortOrder{.ascending = false},
+      SortOrder{.ascending = true},
+  };
+  const auto type = velox::ROW({
+      {keyColumns[0], velox::TINYINT()},
+      {keyColumns[1], velox::SMALLINT()},
+      {keyColumns[2], velox::BIGINT()},
+  });
+  const auto encoder =
+      factory.createKeyEncoder(keyColumns, type, sortOrders, pool_.get());
+  const auto nimbleEncoder =
+      createNimbleIndexKeyEncoder(keyColumns, type, sortOrders, pool_.get());
+
+  // The third row carries from its last column into its first, whose next
+  // value follows. Every column of the last row has its last value in sort
+  // order.
+  constexpr auto kMaxTiny = std::numeric_limits<int8_t>::max();
+  constexpr auto kMinSmall = std::numeric_limits<int16_t>::min();
+  constexpr auto kMaxBig = std::numeric_limits<int64_t>::max();
+  const auto rows = makeRowVector(
+      keyColumns,
+      {makeFlatVector<int8_t>({-5, 7, 7, kMaxTiny}),
+       makeFlatVector<int16_t>({100, 3, kMinSmall, kMinSmall}),
+       makeFlatVector<int64_t>({0, -1, kMaxBig, kMaxBig})});
+  EXPECT_EQ(
+      encodeKeys(*encoder, rows, pool_.get()),
+      encodeKeys(*nimbleEncoder, rows, pool_.get()));
+
+  {
+    const auto keys = encodeBounds(
+        *encoder,
+        keyColumns,
+        velox::serializer::IndexBound{rows, true},
+        velox::serializer::IndexBound{rows, true});
+    EXPECT_EQ(
+        keys,
+        encodeBounds(
+            *nimbleEncoder,
+            keyColumns,
+            velox::serializer::IndexBound{rows, true},
+            velox::serializer::IndexBound{rows, true}));
+    ASSERT_EQ(keys.size(), 4);
+    EXPECT_FALSE(keys.back().second.has_value());
+  }
+  {
+    const auto leadingRows = makeRowVector(
+        keyColumns,
+        {makeFlatVector<int8_t>({-5, 7, 7}),
+         makeFlatVector<int16_t>({100, 3, kMinSmall}),
+         makeFlatVector<int64_t>({0, -1, kMaxBig})});
+    EXPECT_EQ(
+        encodeBounds(
+            *encoder,
+            keyColumns,
+            velox::serializer::IndexBound{leadingRows, false},
+            velox::serializer::IndexBound{leadingRows, false}),
+        encodeBounds(
+            *nimbleEncoder,
+            keyColumns,
+            velox::serializer::IndexBound{leadingRows, false},
+            velox::serializer::IndexBound{leadingRows, false}));
+  }
+  {
+    const auto lastRow = makeRowVector(
+        keyColumns,
+        {makeFlatVector<int8_t>({kMaxTiny}),
+         makeFlatVector<int16_t>({kMinSmall}),
+         makeFlatVector<int64_t>({kMaxBig})});
+    NIMBLE_ASSERT_USER_THROW(
+        encodeBounds(
+            *encoder,
+            keyColumns,
+            velox::serializer::IndexBound{lastRow, false},
+            velox::serializer::IndexBound{lastRow, true}),
+        "Exclusive lower bound of a hierarchical index has no next key");
+  }
+  {
+    NIMBLE_ASSERT_USER_THROW(
+        factory.createKeyEncoder(keyColumns, type, {}, pool_.get()),
+        "Hierarchical index key encoder requires a sort order for each key column");
+  }
+}
+
+// A hierarchical index factory with its own key codec makes every part of the
+// index use it: its writer writes those keys, and its reader opens with their
+// order, which the caller does not pass. Its key encoder writes the keys that
+// the key cursor returns, and lookup bounds that find their rows.
+TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
+  const NimbleHierarchicalClusterIndexFactory factory{
+      "test.inverted_keys", std::make_shared<const InvertedKeyCodec>()};
+  EXPECT_NE(factory.keyComparator(), nullptr);
+
+  const std::vector<std::string> keyColumns{"first", "second"};
+  const std::vector<SortOrder> sortOrders{
+      SortOrder{.ascending = true}, SortOrder{.ascending = true}};
+  const auto type = velox::ROW(keyColumns, velox::BIGINT());
+  const auto config = ClusterIndexConfigBuilder{factory.name()}
+                          .withKeyColumns(keyColumns)
+                          .withSortOrders(sortOrders)
+                          .withEnforceKeyOrder(true)
+                          .withMaxRowsPerKeyChunk(2)
+                          .build();
+  const auto rows = makeRowVector(
+      keyColumns,
+      {makeFlatVector<int64_t>({1, 1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 5, 1})});
+  auto writer = factory.createWriter(*config, type, pool_.get());
+  writer->write(rows);
+
+  std::string keyStreamData;
+  std::vector<std::string> metadata;
+  const auto writeData =
+      [&keyStreamData](const std::vector<std::string_view>& segments)
+      -> std::pair<uint64_t, uint32_t> {
+    const auto offset = keyStreamData.size();
+    for (const auto segment : segments) {
+      keyStreamData.append(segment);
+    }
+    return {
+        offset,
+        static_cast<uint32_t>(keyStreamData.size() - offset),
+    };
+  };
+  const auto createMetadata =
+      [&keyStreamData, &metadata](std::string_view data) -> MetadataSection {
+    metadata.emplace_back(data);
+    return MetadataSection{
+        static_cast<uint64_t>(keyStreamData.size()),
+        static_cast<uint32_t>(data.size()),
+        CompressionType::Uncompressed,
+        static_cast<uint32_t>(data.size()),
+    };
+  };
+  writer->flush(writeData, createMetadata);
+  ASSERT_TRUE(writer->close(writeData, createMetadata).has_value());
+  auto file =
+      std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
+  velox::io::ReaderOptions ioOptions{pool_.get()};
+  ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
+  ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+  const auto index = factory.createReader(
+      Section{MetadataBuffer(
+          MetadataBuffer::decompress(
+              toBufferPtr(metadata.back(), pool_.get()),
+              CompressionType::Uncompressed,
+              pool_.get()))},
+      pool_.get(),
+      IndexLookup::Options{.file = file, .ioOptions = &ioOptions});
+  ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 2);
+
+  const auto encoder =
+      factory.createKeyEncoder(keyColumns, type, sortOrders, pool_.get());
+  std::vector<std::string> cursorKeys;
+  auto keyCursor = index->keyCursor(RowRange{0, 4});
+  while (keyCursor->hasNext()) {
+    cursorKeys.emplace_back(keyCursor->next());
+  }
+  EXPECT_EQ(encodeKeys(*encoder, rows, pool_.get()), cursorKeys);
+
+  struct TestParam {
+    std::string testName;
+    std::pair<int64_t, int64_t> lower;
+    bool lowerInclusive;
+    std::pair<int64_t, int64_t> upper;
+    bool upperInclusive;
+    uint32_t startRow;
+    uint32_t endRow;
+
+    std::string debugString() const {
+      return testName;
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {"point", {1, 20}, true, {1, 20}, true, 1, 2},
+      {"exclusive lower", {1, 10}, false, {2, 5}, true, 1, 3},
+      {"exclusive upper", {1, 10}, true, {3, 1}, false, 0, 3},
+      {"every row", {1, 10}, true, {3, 1}, true, 0, 4},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto bound = [&](std::pair<int64_t, int64_t> values) {
+      return makeRowVector(
+          keyColumns,
+          {makeFlatVector<int64_t>({values.first}),
+           makeFlatVector<int64_t>({values.second})});
+    };
+    velox::serializer::IndexBounds bounds;
+    bounds.indexColumns = keyColumns;
+    bounds.set(
+        velox::serializer::IndexBound{
+            bound(testData.lower), testData.lowerInclusive},
+        velox::serializer::IndexBound{
+            bound(testData.upper), testData.upperInclusive});
+    const auto result = index->lookup(
+        IndexLookup::LookupRequest::rangeScan(
+            encoder->encodeIndexBounds(bounds)));
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0].startRow, testData.startRow);
+    EXPECT_EQ(result[0][0].endRow, testData.endRow);
   }
 }
 

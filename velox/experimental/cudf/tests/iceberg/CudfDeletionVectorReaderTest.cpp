@@ -283,7 +283,7 @@ TEST_F(CudfDeletionVectorReaderTest, basicArrayContainer) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   constexpr auto numRows = 100;
   auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
@@ -302,7 +302,7 @@ TEST_F(CudfDeletionVectorReaderTest, batchRangeFiltering) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   // First batch: rows 0-24 (should contain positions 10, 20).
   auto mask1 = makeDeletionColumn(25, stream(), mr());
@@ -334,7 +334,7 @@ TEST_F(CudfDeletionVectorReaderTest, noDeletesInRange) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
   // Table has 100 rows; deleted positions 1000/2000 are out of range.
   constexpr auto numRows = 100;
   auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
@@ -358,7 +358,7 @@ TEST_F(CudfDeletionVectorReaderTest, runContainers) {
   auto expected = expandRuns<IndexType>(containerRuns);
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), fileSize, expected.size());
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   constexpr auto numRows = 100;
   auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
@@ -384,7 +384,7 @@ TEST_F(CudfDeletionVectorReaderTest, runContainersWithOffsetHeader) {
   auto expected = expandRuns<IndexType>(containerRuns);
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), fileSize, expected.size());
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   constexpr auto numRows = 200'000;
   auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
@@ -405,7 +405,7 @@ TEST_F(CudfDeletionVectorReaderTest, largePositionsMultipleContainers) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   constexpr auto numRows = 66000;
   auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
@@ -430,7 +430,7 @@ TEST_F(CudfDeletionVectorReaderTest, blobOffset) {
 
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), fileSize, 1, 64, bitmapData.size());
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   constexpr auto numRows = 20;
   auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
@@ -448,7 +448,7 @@ TEST_F(CudfDeletionVectorReaderTest, singlePosition) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   constexpr auto numRows = 100;
   auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
@@ -468,7 +468,7 @@ TEST_F(CudfDeletionVectorReaderTest, consecutivePositions) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   // Chunk covers rows 0-99; all 100 should be deleted.
   constexpr auto numRows = 100;
@@ -490,7 +490,7 @@ TEST_F(CudfDeletionVectorReaderTest, startRowOffset) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   // Create a 20-row chunk; startRow=100 means the reader maps row 0 of this
   // chunk to absolute position 100.
@@ -514,7 +514,7 @@ TEST_F(CudfDeletionVectorReaderTest, reusableAcrossChunks) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   constexpr uint64_t numRows = 10;
   auto mask1 = makeDeletionColumn(numRows, stream(), mr());
@@ -551,7 +551,7 @@ TEST_F(CudfDeletionVectorReaderTest, largeDeletionVector) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   // Apply to a 2000-row chunk starting at row 0. Only positions in
   // container 0 (key=0, positions 0,64,128,...,65472) overlap with [0,2000).
@@ -579,7 +579,7 @@ TEST_F(CudfDeletionVectorReaderTest, singleBitmapNonZeroHighBits) {
 
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), fileSize, /*recordCount=*/2);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   constexpr auto numRows = 20;
   auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
@@ -597,7 +597,7 @@ TEST_F(CudfDeletionVectorReaderTest, applyDeletesByRowIndex) {
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   std::vector<uint64_t> rowIndexHost = {0, 2, 5, 8, 11, 12};
   auto rowIndex = makeRowIndexColumn(rowIndexHost, stream(), mr());
@@ -622,7 +622,7 @@ TEST_F(CudfDeletionVectorReaderTest, deleteOverflowing64BitRowIndices) {
       {7, std::numeric_limits<uint32_t>::max()});
   auto tempFile = writeDvFile(bitmapData);
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), bitmapData.size());
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   std::vector<uint64_t> rowIndexHost = {
       7,
@@ -651,7 +651,7 @@ TEST_F(CudfDeletionVectorReaderTest, emptyRowIndex) {
   auto bitmapData = serializeRoaringBitmapNoRun<int64_t>({7});
   auto tempFile = writeDvFile(bitmapData);
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), bitmapData.size());
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   auto rowIndex = makeRowIndexColumn({}, stream(), mr());
   auto deleteMask = makeDeletionColumn(0, stream(), mr());
@@ -666,7 +666,7 @@ TEST_F(CudfDeletionVectorReaderTest, rowIndexMatches64BitBitmap) {
   auto blob = serializeDvV1Envelope(payload);
   auto tempFile = writeDvFile(blob);
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), blob.size());
-  CudfDeletionVectorReader reader(dvFile);
+  CudfDeletionVectorReader reader(dvFile, nullptr);
 
   std::vector<uint64_t> rowIndexHost = {
       static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 8, 7};

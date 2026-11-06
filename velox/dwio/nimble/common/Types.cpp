@@ -39,9 +39,11 @@ constexpr auto kEncodingTypes =
         {EncodingType::Prefix, "Prefix"},
         {EncodingType::ALP, "ALP"},
         {EncodingType::ALPRD, "ALPRD"},
+        {EncodingType::PartitionedEliasFano, "PartitionedEliasFano"},
         {EncodingType::PFOR, "PFOR"},
         {EncodingType::SimdForBitpack, "SimdForBitpack"},
         {EncodingType::BlockBitPacking, "BlockBitPacking"},
+        {EncodingType::BlockBitPackingV2, "BlockBitPackingV2"},
         {EncodingType::SubIntSplit, "SubIntSplit"},
         {EncodingType::FrequencyPartition, "FrequencyPartition"},
         {EncodingType::FOR, "FOR"},
@@ -51,7 +53,6 @@ constexpr auto kEncodingTypes =
         {EncodingType::SharedDictionary, "SharedDictionary"},
         {EncodingType::Slice, "Slice"},
         {EncodingType::EliasFano, "EliasFano"},
-        {EncodingType::BitRangeSplit, "BitRangeSplit"},
     });
 
 constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({

@@ -33,9 +33,16 @@ cudf::ast::expression const& createAstTree(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     std::vector<PrecomputeInstruction>& precomputeInstructions,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   AstContext context{
-      tree, scalars, {inputRowSchema}, {precomputeInstructions}, pool, expr};
+      tree,
+      scalars,
+      {inputRowSchema},
+      {precomputeInstructions},
+      pool,
+      expr,
+      config};
   return context.pushExprToTree(expr);
 }
 
@@ -47,21 +54,24 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
     std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   AstContext context{
       tree,
       scalars,
       {leftRowSchema, rightRowSchema},
       {leftPrecomputeInstructions, rightPrecomputeInstructions},
       pool,
-      expr};
+      expr,
+      config};
   return context.pushExprToTree(expr);
 }
 
 ASTExpression::ASTExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config)
     : expr_(expr), inputRowSchema_(inputRowSchema), pool_(pool) {
   createAstTree(
       expr,
@@ -69,7 +79,8 @@ ASTExpression::ASTExpression(
       scalars_,
       inputRowSchema,
       precomputeInstructions_,
-      pool_);
+      pool_,
+      config);
 }
 
 void ASTExpression::close() {
@@ -144,8 +155,9 @@ void registerAstEvaluator(int priority) {
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         memory::MemoryPool* pool) {
-        return std::make_shared<ASTExpression>(expr, row, pool);
+         memory::MemoryPool* pool,
+         const core::QueryConfig& config) {
+        return std::make_shared<ASTExpression>(expr, row, pool, config);
       },
       /*overwrite=*/false);
 }

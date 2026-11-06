@@ -26,6 +26,7 @@ add_executable(
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
   ArrayUnionTest.cpp
+  ArraysOverlapTest.cpp
   ArgTypesGeneratorTest.cpp
   AssertNotNullTest.cpp
   AtLeastNNonNullsTest.cpp
@@ -42,9 +43,11 @@ add_executable(
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   ElementAtTest.cpp
+  EncodeTest.cpp
   FactorialTest.cpp
   FilterTest.cpp
   FormatNumberTest.cpp
+  FormatStringTest.cpp
   FromJsonTest.cpp
   FromToJsonRoundTripTest.cpp
   GetArrayStructFieldsTest.cpp
@@ -54,8 +57,10 @@ add_executable(
   InitcapTest.cpp
   InTest.cpp
   IntervalArithmeticTest.cpp
+  JavaFloatingPointTest.cpp
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
+  LastWinTest.cpp
   LeastGreatestTest.cpp
   LuhnCheckTest.cpp
   MakeDecimalTest.cpp
@@ -73,6 +78,7 @@ add_executable(
   RandnTest.cpp
   ReadSidePaddingFunctionTest.cpp
   RegexFunctionsTest.cpp
+  RoundTest.cpp
   SequenceTest.cpp
   SliceTest.cpp
   SizeTest.cpp
@@ -86,6 +92,7 @@ add_executable(
   StringToMapTest.cpp
   ToJsonTest.cpp
   ToPrettyStringTest.cpp
+  TransformKeysTest.cpp
   TransformTest.cpp
   TransformValuesTest.cpp
   UnBase64Test.cpp

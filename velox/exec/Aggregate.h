@@ -96,15 +96,25 @@ class Aggregate {
     return false;
   }
 
+  /// Returns true if fillEmptyIntermediate() is supported, allowing merge
+  /// companions to bypass accumulator construction.
+  virtual bool supportsFillEmptyIntermediate() const {
+    return false;
+  }
+
   void setAllocator(HashStringAllocator* allocator) {
     setAllocatorInternal(allocator);
   }
 
-  /// Called after construction to pass constant input values to the aggregate.
-  /// Non-constant inputs have null entries in 'constantInputs'. This is called
-  /// before any data is processed, allowing the aggregate to read constant
-  /// arguments (e.g., flags, configuration values) at initialization time
-  /// rather than extracting them from 'args' at runtime.
+  /// Called by Aggregate::create() to pass constant input values to the
+  /// aggregate, one entry per raw input argument; non-constant inputs have null
+  /// entries. Called only in steps that read raw input (see isRawInput()):
+  /// steps that merge intermediate results have no raw arguments. The step
+  /// passed to create() says only whether the output is partial, so callers
+  /// that run a merge step pass no constant inputs. This is
+  /// called before any data is processed, allowing the aggregate to read
+  /// constant arguments (e.g., flags, configuration values) at initialization
+  /// time rather than extracting them from 'args' at runtime.
   ///
   /// Default implementation is a no-op. Override in subclasses that need
   /// access to constant arguments.
@@ -158,7 +168,7 @@ class Aggregate {
   // @param indices Indices into 'groups' of the new entries.
   virtual void initializeNewGroups(
       char** groups,
-      folly::Range<const vector_size_t*> indices) {
+      folly::Range<const vector_size_t*> indices) final {
     initializeNewGroupsInternal(groups, indices);
 
     for (auto index : indices) {
@@ -316,9 +326,18 @@ class Aggregate {
     VELOX_NYI("toIntermediate not supported");
   }
 
+  /// Writes an empty group's intermediate into selected rows of 'result',
+  /// leaving other rows unchanged, so merge pass-through can handle masked-out
+  /// and null inputs.
+  virtual void fillEmptyIntermediate(
+      const SelectivityVector& rows,
+      VectorPtr& result) const {
+    VELOX_NYI("fillEmptyIntermediate not supported");
+  }
+
   // Frees any out of line storage for the accumulator in
   // 'groups' and marks the aggregate as uninitialized.
-  virtual void destroy(folly::Range<char**> groups) {
+  virtual void destroy(folly::Range<char**> groups) final {
     destroyInternal(groups);
 
     for (auto* group : groups) {
@@ -367,13 +386,18 @@ class Aggregate {
   /// result type is step is kFinal. This parameter is redundant since it can be
   /// derived from rawInput types and step. Present for legacy reasons.
   /// @param config Query config.
+  /// @param constantInputs Constant input values, aligned with the aggregate's
+  /// inputs, with null for inputs that are not constant. May be empty if the
+  /// caller has no constant inputs. Passed to setConstantInputs() unless
+  /// empty.
   /// @return An instance of the aggregate function.
   static std::unique_ptr<Aggregate> create(
       const std::string& name,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType,
-      const core::QueryConfig& config);
+      const core::QueryConfig& config,
+      const std::vector<VectorPtr>& constantInputs);
 
  protected:
   virtual void setAllocatorInternal(HashStringAllocator* allocator);

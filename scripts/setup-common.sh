@@ -142,6 +142,14 @@ function install_boost {
   wget_and_untar https://github.com/boostorg/boost/releases/download/"${BOOST_VERSION}"/"${BOOST_VERSION}".tar.gz boost
   (
     cd "${DEPENDENCY_DIR}"/boost || exit
+    if [ -d "bin.v2" ]; then
+      if prompt "Do you want to rebuild boost?"; then
+        ${SUDO} rm -rf "bin.v2"
+      else
+        echo "Boost already installed in this run, skipping."
+        return 0
+      fi
+    fi
     if [[ "$(uname)" == "Linux" && ${USE_CLANG} != "false" ]]; then
       ./bootstrap.sh --prefix="${INSTALL_PREFIX}" --with-toolset="clang-15"
       # Switch the compiler from the clang-15 toolset which doesn't exist (clang-15.jam) to
@@ -179,11 +187,6 @@ function install_grpc {
 function install_double_conversion {
   wget_and_untar https://github.com/google/double-conversion/archive/refs/tags/"${DOUBLE_CONVERSION_VERSION}".tar.gz double-conversion
   cmake_install_dir double-conversion -DBUILD_TESTING=OFF
-}
-
-function install_ranges_v3 {
-  wget_and_untar https://github.com/ericniebler/range-v3/archive/refs/tags/"${RANGE_V3_VERSION}".tar.gz ranges_v3
-  cmake_install_dir ranges_v3 -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
 }
 
 function install_abseil {
@@ -378,7 +381,7 @@ function install_silo {
   local SILO_TARBALL="silo_${SILO_BUILD}_${SILO_OS}_${SILO_ARCH}.tar.gz"
   local SILO_TMPDIR
   SILO_TMPDIR=$(mktemp -d)
-  wget "${WGET_OPTS[@]}" https://github.com/pgsty/silo/releases/download/"${SILO_VERSION}"/"${SILO_TARBALL}" -O "${SILO_TARBALL}" || {
+  wget "${WGET_OPTS[@]+"${WGET_OPTS[@]}"}" https://github.com/pgsty/silo/releases/download/"${SILO_VERSION}"/"${SILO_TARBALL}" -O "${SILO_TARBALL}" || {
     echo "failed to download ${SILO_TARBALL}" >&2
     rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
     return 1
@@ -486,9 +489,9 @@ function install_hdfs_deps {
   [[ ${arch} == "aarch64" ]] && hadoop_tarball="hadoop-${HADOOP_VERSION}-aarch64.tar.gz"
   wget_and_untar "https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/${hadoop_tarball}" hadoop
   cp -a "${DEPENDENCY_DIR}"/hadoop "$INSTALL_PREFIX"
-  wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
+  wget "${WGET_OPTS[@]+"${WGET_OPTS[@]}"}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
   # Needed for HADOOP 3.3.6 minicluster. Can remove after updating to 3.4.2.
-  wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/mapreduce/ https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar
+  wget "${WGET_OPTS[@]+"${WGET_OPTS[@]}"}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/mapreduce/ https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar
 }
 
 function install_uv {

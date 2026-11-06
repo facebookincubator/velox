@@ -136,19 +136,19 @@ bridge to pass the build-side data to the probe-side.
 HashBuilder operators running in parallel need to coordinate among themselves to
 wait until all are finished processing input to combine the results into a
 single hash table. When an operator finishes processing, it calls
-Task::allPeersFinished() API which returns false for all but the last operator.
+Task::allPeersArrived() API which returns false for all but the last operator.
 Last operator receives true and is responsible for assembling the hash table
 and sending it over the bridge to the probe side.
 
-Task::allPeersFinished() API uses BarrierState structure to maintain state to
+Task::allPeersArrived() API uses BarrierState structure to maintain state to
 know which operator is the last one.
 
 Similarly, NestedLoopJoinBuild operators running in parallel use
-Task::allPeersFinished() API to choose a single operator to combine the results
+Task::allPeersArrived() API to choose a single operator to combine the results
 and send them over the bridge to the probe side.
 
 In addition, in case of RIGHT and FULL OUTER join, HashProbe operators use
-Task::allPeersFinished() API to choose a single operator that would emit
+Task::allPeersArrived() API to choose a single operator that would emit
 build-side rows with no match after all probe rows have been processed.
 
 .. image:: images/task-join-bridges.png

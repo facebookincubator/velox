@@ -81,17 +81,18 @@ Generic Configuration
        supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
        to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
        since epoch) for "America/Los_Angeles".
-   * - use_session_timezone_for_timestamp_with_timezone
+   * - ignore_time_zone_label
      - bool
      - false
-     - Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, values render the UTC instant in
-       the session time zone, so values that compare equal produce equal results. If false, each value renders in its
-       own embedded time zone. Covers field extraction (except ``timezone_hour`` and ``timezone_minute``, which report
+     - Selects whether to ignore a TIMESTAMP WITH TIME ZONE value's stored time zone label. If true, values render the
+       UTC instant in the session time zone, so values that compare equal produce equal results. If false, each value
+       renders using its stored time zone label. Covers field extraction (except ``timezone_hour`` and
+       ``timezone_minute``, which report
        the offset stored in the value), formatting, date arithmetic, and ``CAST`` to ``VARCHAR``, ``DATE``, ``TIME``
        and ``TIMESTAMP``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO
        SECOND`` operates on milliseconds and never consults a time zone. For ``CAST`` to ``TIMESTAMP``,
        ``adjust_timestamp_to_session_timezone=true`` returns the UTC instant. When that property is false, this
-       property selects the session or embedded time zone.
+       property selects the session or stored time zone.
    * - track_operator_cpu_usage
      - bool
      - true
@@ -290,12 +291,28 @@ Generic Configuration
      - Floor the RPC flow\-control congestion window may shrink to under overload in the RPC operator.
        Default 1, which never fully stalls dispatch. The controller clamps this to the range
        [1, maxWindow].
+   * - rpc.congestion.batch_start_window
+     - integer
+     - 0
+     - Initial per\-driver BATCH RPC congestion window. 0 keeps the built\-in default of 2.
+       Positive values are clamped to [minWindow, maxWindow]. PER_ROW always starts at its ceiling.
+       Size at or below the backend's measured concurrency knee: starting above it seeds the
+       unloaded\-RTT baseline with queueing delay, leaving only explicit overload errors to shrink
+       the window.
    * - rpc.congestion.step_coef
      - double
      - 1.0
      - Multiplier on the RPC congestion window's sqrt(window) additive\-increase headroom. Default 1.0
        is the plain sqrt headroom; lower values converge tighter at small windows. The controller
        clamps this to be non\-negative.
+   * - rpc.congestion.async_growth_max_window
+     - integer
+     - 0
+     - Cap for per\-driver BATCH window growth on clean completions that carry no usable latency
+       sample. 0 (default) disables recovery growth: overload may shrink the window, and clean
+       completions do not grow it back toward the start. Positive values let the window discover
+       capacity additively up to the cap. A positive value below the effective BATCH start window
+       is raised to that start. The congestion max window remains the overall ceiling.
 
 
 Expression Evaluation Configuration
@@ -355,6 +372,14 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
+   * - cast_string_to_floating_point_lenient_inf_nan
+     - bool
+     - false
+     - If true, casting a VARCHAR to REAL or DOUBLE with Presto semantics also accepts the C-style spellings of the
+       special floating-point values: ``inf``, ``infinity`` and ``nan`` in any letter case, with an optional leading
+       sign. By default only the Presto spellings ``Infinity`` and ``NaN`` are accepted, in exactly that letter case.
+       This deviates from Presto; enable it to cast data whose writer printed the values the way glibc, Python and
+       numpy do. Spark CAST and casts from JSON are not affected.
    * - expression.max_array_size_in_reduce
      - integer
      - 100000
@@ -1163,11 +1188,19 @@ Parquet Options (prefix ``hive.parquet.``)
        Session: ``hive.parquet.writer.enable_store_decimal_as_integer``.
    * - ``writer.enable-page-index``
      - bool
-     - false
+     - true
      - Whether to write the Parquet page index (column index and offset index) when writing into
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.
        Session: ``hive.parquet.writer.enable_page_index``.
+   * - ``writer.size-statistics-level``
+     - string
+     - PAGE_AND_COLUMN_CHUNK
+     - Controls Parquet size statistics written by the Arrow bridge. ``NONE`` disables size
+       statistics; ``COLUMN_CHUNK`` writes only column-chunk statistics; and
+       ``PAGE_AND_COLUMN_CHUNK`` writes both column-chunk and page-level statistics. Page-level
+       statistics require ``writer.enable-page-index`` to be enabled.
+       Session: ``hive.parquet.writer.size_statistics_level``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1197,10 +1230,6 @@ Nimble Options (prefix ``hive.nimble.``)
        not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
        allow lazy IO across stripes. Configure as ``nimble.lazy-column-io``; do not prepend ``hive.``.
        Session: ``nimble_lazy_column_io``.
-   * - ``string-decoder-zero-copy``
-     - bool
-     - false
-     - Enable zero-copy string decoding in Nimble selective reader. Configure as ``nimble.string-decoder-zero-copy``; do not prepend ``hive.``. Session: ``nimble_string_decoder_zero_copy``.
    * - ``preserve-dictionary-encoding``
      - bool
      - false
@@ -1286,6 +1315,11 @@ key set with the ``s3.`` prefix takes precedence over the same key set with the
      - bool
      - false
      - Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.
+   * - ``s3.use-fips``
+     - bool
+     -
+     - Use AWS FIPS endpoints. When unset, the ``AWS_USE_FIPS_ENDPOINT`` environment variable decides. Cannot be combined
+       with ``s3.endpoint``. See `FIPS Endpoints`_.
    * - ``s3.connect-timeout``
      - string
      -
@@ -1340,6 +1374,18 @@ explicitly set will override the base ``s3.`` values. The deprecated
 ``hive.s3.`` prefix follows the same rules (for example
 ``hive.s3.bucket.velox.endpoint``).
 These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html>`_.
+
+FIPS Endpoints
+""""""""""""""
+``s3.use-fips`` sets ``useFIPS`` on the AWS SDK client, which then resolves the
+AWS FIPS endpoint for the region. It also applies to the STS calls of
+``s3.iam-role``. When unset, the environment variable ``AWS_USE_FIPS_ENDPOINT``
+decides. The AWS SDK rejects FIPS combined with ``s3.endpoint``, so requests
+fail with "A custom endpoint cannot be combined with FIPS". Set
+``s3.use-fips=false`` for buckets with a custom endpoint, including an explicit
+AWS FIPS endpoint. Web identity credentials also need ``AWS_ENDPOINT_URL_STS``
+set to the STS FIPS host name, such as ``sts-fips.us-east-1.amazonaws.com``.
+The CRT uses the value as the host, so a URL with a scheme fails to resolve.
 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1483,6 +1529,13 @@ Spark-specific Configuration
      - integer
      -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.legacy_coding_error_action
+     - bool
+     - false
+     - If true, the Spark ``encode`` function replaces unmappable characters instead of reporting an error.
+       Corresponds to Spark 4.0's ``spark.sql.legacy.codingErrorAction``.
+       Set to true to match Spark 3.x's replacement behavior for the supported charsets.
+       Additional JDK charset names and aliases remain unsupported in either mode.
    * - spark.legacy_date_formatter
      - bool
      - false

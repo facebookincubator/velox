@@ -29,6 +29,9 @@
 #include <torch/nativert/executor/OpKernel.h>
 #include <torch/nativert/graph/Graph.h>
 
+#include "velox/experimental/torchwave/KernelParams.h"
+#include "velox/experimental/torchwave/Reserve.h"
+
 namespace torch::wave {
 
 using GraphP = nativert::Graph*;
@@ -68,6 +71,14 @@ struct ElementwiseOp {
   /// index_select know the shape it is iterating over, distinct from its own
   /// (possibly broadcast) output shape.
   bool hasOutputArg{false};
+
+  /// If true, the op's own output tensor is passed after the enclosing
+  /// expression's output (hasOutputArg) and before blockInfo. A fused op that
+  /// decomposes 'idx' into coordinates reads them from its own shape, which
+  /// a reshaping view between it and the expression output does not change.
+  /// Needs sizeFromOutput so the output exists as a shape-only tensor when
+  /// fused.
+  bool hasOwnOutputArg{false};
 };
 
 /// Common cases of determining output size: kNone is a custom function, kMax is
@@ -93,6 +104,9 @@ enum class StandaloneShortcut {
   kExpand,
   kSymSize,
   kSymNumel,
+  // A new_* factory with a constant size of zero elements: an empty tensor
+  // with no kernel and no storage.
+  kEmptyFactory,
 };
 
 /// Specifies which arguments determine the number of elements a kernel
@@ -102,24 +116,12 @@ struct SizeArguments {
   std::vector<bool> isList;
 };
 
-using Dim = uint32_t;
-
-/// A map from value ids in a lambda matching OutputReserveFunc and
-/// the value ids in the frame passed to OutputReserveFunc. The same
-/// kernel operation can be invoked with many different sets of
-/// inputs to produce sizes for each.
+/// A map from the value ids of a kernel operation's formal subgraph to the
+/// value ids of one invocation of it. The same kernel operation can be invoked
+/// with many different sets of inputs.
 using FormalToActual = folly::F14FastMap<int32_t, int32_t>;
 
 using NodeMap = folly::F14FastMap<NodeCP, NodeCP>;
-
-// Returns shapes to reserve for outputs given inputs. Can return multiple
-// shapes for output params that are tuples of tensors.
-using OutputReserveFunc = std::function<std::vector<std::vector<Dim>>(
-    NodeCP node,
-    nativert::ExecutionFrame&,
-    const FormalToActual& map,
-    NodeCP originalFormalNode,
-    const NodeMap& nodeMap)>;
 
 /// Per-argument metadata controlling how an argument is passed to device code.
 struct ArgumentMeta {
@@ -127,11 +129,12 @@ struct ArgumentMeta {
   /// to tensor if needed.
   bool isRegister{false};
 
-  /// For outputs that are materialized tensors, function that determines the
-  /// size to allocate based on inputs and execution state.
-  OutputReserveFunc reserveShape{nullptr};
+  /// For outputs that are materialized tensors, the function that computes the
+  /// shape to allocate from table entries, with the operands it reads.
+  ReserveFn reserve{nullptr};
+  ReserveInputs reserveInputs{};
 
-  /// Ordinal of the input whose shape 'reserveShape' returns, or -1 when the
+  /// Ordinal of the input whose shape 'reserve' returns, or -1 when the
   /// shape is the reserve's own business. An elementwise or *_like output has
   /// the extent of an operand, so anything that only needs to know WHEN the
   /// shape becomes computable -- rather than what it is -- can look at that
@@ -465,7 +468,7 @@ struct Metadata {
 
   /// List of type, name pairs for __shared__ variables to be declared at head
   /// of containing kernel and then passed as last args in the call to the
-  /// function.
+  /// function. "{blockSize}" in a type is replaced by the kernel's block size.
   std::vector<std::pair<std::string, std::string>> sharedDecls;
 
   /// Like sharedDecls but the type is determined at compile time from the dtype
@@ -481,12 +484,26 @@ struct Metadata {
   /// that it lowers the occupancy of every other op sharing the kernel.
   int32_t minBlocksPerSm{0};
 
+  /// If true, several consumers of this node may share it inside one compiled
+  /// node instead of the node being placed in an earlier one of its own. Only
+  /// for an op whose outputs are always written to memory and read by its
+  /// consumers after a kernel boundary, so that sharing it computes it once.
+  /// Lets a multi-stage op whose stages all read one state buffer run as
+  /// consecutive steps of one node.
+  bool sharedWithinNode{false};
+
+  /// If set, returns the threads per block this node's device function wants,
+  /// or 0 for no preference. A kernel runs at one block size, so it takes the
+  /// largest any of its nodes asks for and WaveConfig::blockSize, and every
+  /// device function in it gets that as its block size template parameter.
+  std::function<int32_t(NodeCP)> blockSize;
+
   /// If set, returns the bytes of dynamic (extern __shared__) shared memory
-  /// this node's device function needs. The kernel op takes the max over its
-  /// nodes and the launch passes that as the kernel's dynamic shared memory
-  /// size, so an op that needs a large scratch buffer only costs occupancy in
-  /// the launches that contain it.
-  std::function<int64_t(NodeCP)> dynamicSharedMemory;
+  /// this node's device function needs at the kernel's block size. The kernel
+  /// op takes the max over its nodes and the launch passes that as the
+  /// kernel's dynamic shared memory size, so an op that needs a large scratch
+  /// buffer only costs occupancy in the launches that contain it.
+  std::function<int64_t(NodeCP, int32_t blockSize)> dynamicSharedMemory;
 
   /// Ordinal value meaning the type comes from the node's dtype attribute.
   static constexpr int32_t kTypeFromDtype = -1;
@@ -495,8 +512,8 @@ struct Metadata {
   /// device func, set according to the dtype of the arg at the ordinal.
   std::vector<int32_t> typeTemplateParams;
 
-  /// If true, the device function takes WaveConfig::blockSize as its first
-  /// template parameter.
+  /// If true, the device function takes its kernel's block size as its first
+  /// template parameter. See blockSize.
   bool hasBlockSizeTemplateParam{false};
 
   /// If true, the resolved dtype attribute is emitted as an additional type
@@ -717,8 +734,12 @@ class MetadataBuilder {
       std::vector<std::pair<std::string, std::string>> decls);
   MetadataBuilder& dynamicSharedDecls(
       std::vector<std::pair<int32_t, std::string>> decls);
-  MetadataBuilder& dynamicSharedMemory(std::function<int64_t(NodeCP)> func);
+  MetadataBuilder& dynamicSharedMemory(
+      std::function<int64_t(NodeCP, int32_t blockSize)> func);
   MetadataBuilder& minBlocksPerSm(int32_t blocks);
+  MetadataBuilder& sharedWithinNode(bool value = true);
+  MetadataBuilder& blockSize(int32_t threads);
+  MetadataBuilder& blockSize(std::function<int32_t(NodeCP)> func);
   MetadataBuilder& typeTemplateParams(std::vector<int32_t> params);
   MetadataBuilder& hasBlockSizeTemplateParam(bool val = true);
   MetadataBuilder& hasDtypeTemplateParam(bool val = true);
@@ -740,6 +761,7 @@ class MetadataBuilder {
   MetadataBuilder& hasSizeArg(bool val = true);
   MetadataBuilder& hasBlockInfo(bool val = true);
   MetadataBuilder& hasOutputArg(bool val = true);
+  MetadataBuilder& hasOwnOutputArg(bool val = true);
   MetadataBuilder& isScalarElementwise(bool val = true);
 
   Metadata build();

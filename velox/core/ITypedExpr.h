@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <atomic>
+
 #include <folly/container/F14Map.h>
 
 #include "velox/type/Type.h"
@@ -73,6 +75,23 @@ class ITypedExpr : public ISerializable {
 
   ITypedExpr(ExprKind kind, TypePtr type, std::vector<TypedExprPtr> inputs)
       : kind_{kind}, type_{std::move(type)}, inputs_{std::move(inputs)} {}
+
+  // A copy keeps the stored hash, since it describes the same tree. Defined
+  // explicitly because std::atomic is not copyable.
+  ITypedExpr(const ITypedExpr& other)
+      : ISerializable{other},
+        kind_{other.kind_},
+        type_{other.type_},
+        inputs_{other.inputs_},
+        hash_{other.hash_.load(std::memory_order_relaxed)} {}
+
+  // The members are const, so a move would copy them. Subclasses' moves fall
+  // back to their copy constructors.
+  ITypedExpr(ITypedExpr&&) = delete;
+
+  // Expressions are immutable.
+  ITypedExpr& operator=(const ITypedExpr&) = delete;
+  ITypedExpr& operator=(ITypedExpr&&) = delete;
 
   virtual ~ITypedExpr() = default;
 
@@ -163,11 +182,26 @@ class ITypedExpr : public ISerializable {
   ///
   /// STABILITY GUARANTEE: This hash is stable across different processes,
   /// builds, and machines.
+  ///
+  /// The hash is computed on first use and stored in the node, which relies on
+  /// expressions being immutable. Each node is hashed once, so hashing every
+  /// node of a tree costs time linear in its size.
   size_t hash() const {
-    size_t hash = bits::hashMix(type_->hashKind(), localHash());
-    for (size_t i = 0; i < inputs_.size(); ++i) {
-      hash = bits::hashMix(hash, inputs_[i]->hash());
+    // Return the stored hash if a previous call computed it.
+    if (const auto cached = hash_.load(std::memory_order_relaxed)) {
+      return cached;
     }
+
+    // Combine this node's hash with its inputs' stored hashes.
+    size_t hash = bits::hashMix(type_->hashKind(), localHash());
+    for (const auto& input : inputs_) {
+      hash = bits::hashMix(hash, input->hash());
+    }
+
+    // Store it. Zero marks a hash that is not computed yet, so a hash of zero
+    // is stored as one. Threads racing here compute and store the same value.
+    hash = hash == 0 ? 1 : hash;
+    hash_.store(hash, std::memory_order_relaxed);
     return hash;
   }
 
@@ -210,6 +244,8 @@ class ITypedExpr : public ISerializable {
   const ExprKind kind_;
   const TypePtr type_;
   const std::vector<TypedExprPtr> inputs_;
+  // Hash of the tree rooted at this node, or 0 until hash() computes it.
+  mutable std::atomic<size_t> hash_{0};
 };
 
 } // namespace facebook::velox::core

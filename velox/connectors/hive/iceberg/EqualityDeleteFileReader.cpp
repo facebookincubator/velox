@@ -17,9 +17,9 @@
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 
 #include "velox/common/base/BitUtil.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
@@ -144,11 +144,12 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStats& runtimeStats,
-    const std::string& connectorId)
+    const std::string& connectorId,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps)
     : equalityColumnNames_(equalityColumnNames),
       equalityColumnTypes_(equalityColumnTypes),
       pool_(connectorQueryCtx->memoryPool()) {
@@ -165,18 +166,18 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
       equalityColumnTypes_.size(),
       "Equality column names and types must have the same size.");
 
-  // Iceberg geometry support in this connector is Parquet-only, and an equality
-  // delete file carries its own format independent of the base data file. The
-  // WKB re-encoding below is format-agnostic, but no non-Parquet geometry
-  // fixture exists to verify it against, so refuse rather than convert values
-  // from an unverified path. This mirrors the base-file check in
-  // IcebergSplitReader::prepareSplit().
+  // Iceberg geometry and geography support in this connector is Parquet-only,
+  // and an equality delete file carries its own format independent of the base
+  // data file. The WKB re-encoding below is format-agnostic, but no non-Parquet
+  // geometry or geography fixture exists to verify it against, so refuse rather
+  // than convert values from an unverified path. This mirrors the base-file
+  // check in IcebergSplitReader::prepareSplit().
   for (size_t i = 0; i < equalityColumnTypes_.size(); ++i) {
-    if (containsGeometry(equalityColumnTypes_[i])) {
+    if (containsGeospatial(equalityColumnTypes_[i])) {
       VELOX_USER_CHECK_EQ(
           deleteFile.fileFormat,
           dwio::common::FileFormat::PARQUET,
-          "Reading Iceberg geometry equality delete columns is only supported for Parquet delete files; column '{}'",
+          "Reading Iceberg geometry or geography equality delete columns is only supported for Parquet delete files; column '{}'",
           equalityColumnNames_[i]);
     }
   }
@@ -203,7 +204,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   // TODO: Use separate IoStatistics for data and metadata.
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
-  configureReaderOptions(
+  connector::configureReaderOptions(
       fileConfig,
       connectorQueryCtx,
       deleteFileSchema,
@@ -214,20 +215,24 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   const FileHandleKey fileHandleKey{
       .filename = deleteFile.filePath,
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
-  auto deleteFileHandleCachePtr = fileHandleFactory->generate(fileHandleKey);
-  auto deleteFileInput = BufferedInputBuilder::getInstance()->create(
+  FileProperties fileProperties;
+  fileProperties.fileReadOps = fileReadOps;
+  auto deleteFileHandleCachePtr =
+      fileHandleFactory->generate(fileHandleKey, &fileProperties);
+  auto deleteFileInput = connector::BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
       ioStatistics,
       ioStats,
-      executor);
+      executor,
+      fileReadOps);
 
   auto deleteReader =
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
-  if (!testFilters(
+  if (!connector::testFilters(
           scanSpec.get(),
           deleteReader.get(),
           deleteSplit->filePath,
@@ -240,7 +245,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   }
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  configureRowReaderOptions(
+  connector::configureRowReaderOptions(
       {},
       scanSpec,
       nullptr,
@@ -273,14 +278,14 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     auto rowOutput = std::dynamic_pointer_cast<RowVector>(output);
     VELOX_CHECK_NOT_NULL(rowOutput);
 
-    // A geometry equality-delete column arrives from the delete file as the
-    // ISO WKB the Iceberg spec mandates, but the base rows this set is probed
-    // with have already been re-encoded into Velox's internal geometry
-    // encoding by IcebergSplitReader. Hashing the two representations would
-    // never collide, so geometry equality deletes would silently never match.
-    // Re-encode the delete keys with the same converter the base path uses, so
-    // both sides hash the same logical encoding.
-    convertGeometryColumns(rowOutput);
+    // A geometry or geography equality-delete column arrives from the delete
+    // file as the ISO WKB the Iceberg spec mandates, but the base rows this set
+    // is probed with have already been re-encoded into Velox's internal
+    // geometry or geography encoding by IcebergSplitReader. Hashing the two
+    // representations would never collide, so geometry equality deletes would
+    // silently never match. Re-encode the delete keys with the same converter
+    // the base path uses, so both sides hash the same logical encoding.
+    convertGeospatialColumns(rowOutput);
 
     size_t batchIndex = deleteRows_.size();
     deleteRows_.push_back(rowOutput);
@@ -304,25 +309,25 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   }
 }
 
-void EqualityDeleteFileReader::convertGeometryColumns(
+void EqualityDeleteFileReader::convertGeospatialColumns(
     const RowVectorPtr& deleteRows) const {
   for (size_t i = 0; i < equalityColumnTypes_.size(); ++i) {
     const auto& type = equalityColumnTypes_[i];
-    if (!containsGeometry(type)) {
+    if (!containsGeospatial(type)) {
       continue;
     }
 #ifdef VELOX_ENABLE_GEO
     const auto childIndex = deleteRows->type()->as<TypeKind::ROW>().getChildIdx(
         equalityColumnNames_[i]);
     auto& child = deleteRows->childAt(childIndex);
-    child = convertIcebergGeometry(
+    child = convertIcebergGeospatial(
         child, type, deleteRows->pool(), equalityColumnNames_[i]);
 #else
     // Matches the read-side guard in IcebergSplitReader::prepareSplit(): a
     // geospatial-free build cannot re-encode WKB, and hashing the two sides in
     // different encodings would silently drop every delete.
     VELOX_USER_FAIL(
-        "Applying an Iceberg equality delete on the geometry column '{}' requires a build with geospatial support (VELOX_ENABLE_GEO=ON)",
+        "Applying an Iceberg equality delete on the geometry or geography column '{}' requires a build with geospatial support (VELOX_ENABLE_GEO=ON)",
         equalityColumnNames_[i]);
 #endif
   }

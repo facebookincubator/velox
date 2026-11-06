@@ -16,6 +16,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,11 +26,16 @@ namespace facebook::nimble::subintsplit {
 
 /// Describes the split boundaries and ordered child encodings for one column.
 struct ColumnEncodingConfig {
+  /// Lets the SubIntSplit planner choose boundaries from the column values.
+  bool autoSelectBoundaries{false};
+
   /// Covers every bit of the column's physical type in LSB-first order.
+  /// Empty when autoSelectBoundaries is true.
   std::string boundaries;
 
   /// Selects one encoding for each boundary section in the same order.
-  std::vector<EncodingType> childEncodings;
+  /// An absent entry delegates that section to encoding selection.
+  std::vector<std::optional<EncodingType>> childEncodings;
 
   bool operator==(const ColumnEncodingConfig&) const = default;
 };

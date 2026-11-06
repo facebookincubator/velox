@@ -15,6 +15,7 @@
  */
 
 #include <cmath>
+#include <functional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -53,7 +54,10 @@ TEST_F(GeometricMeanTest, globalEmpty) {
       makeFlatVector(std::vector<int64_t>{}),
   });
 
-  testAggregations({data}, {}, {"geometric_mean(c0)"}, "SELECT NULL");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"geometric_mean(c0)"})
+      .assertResults("SELECT NULL");
 }
 
 TEST_F(GeometricMeanTest, globalNulls) {
@@ -64,13 +68,19 @@ TEST_F(GeometricMeanTest, globalNulls) {
   });
 
   // All nulls.
-  testAggregations({data}, {}, {"geometric_mean(c0)"}, "SELECT NULL");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"geometric_mean(c0)"})
+      .assertResults("SELECT NULL");
 
   auto expected = makeRowVector({
-      makeConstant(geometricMean<double>(1, 100, 2, folly::identity), 1),
+      makeConstant(geometricMean<double>(1, 100, 2, std::identity{}), 1),
   });
 
-  testAggregations({data}, {}, {"geometric_mean(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"geometric_mean(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(GeometricMeanTest, globalIntegers) {
@@ -85,7 +95,10 @@ TEST_F(GeometricMeanTest, globalIntegers) {
           }),
   });
 
-  testAggregations({data}, {}, {"geometric_mean(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"geometric_mean(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(GeometricMeanTest, groupByNulls) {
@@ -116,7 +129,11 @@ TEST_F(GeometricMeanTest, groupByNulls) {
           [](auto row) { return row == 3; }),
   });
 
-  testAggregations({data}, {"c0"}, {"geometric_mean(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"geometric_mean(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(GeometricMeanTest, groupByIntegers) {
@@ -135,7 +152,11 @@ TEST_F(GeometricMeanTest, groupByIntegers) {
           }),
   });
 
-  testAggregations({data}, {"c0"}, {"geometric_mean(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"geometric_mean(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(GeometricMeanTest, globalDoubles) {
@@ -149,7 +170,10 @@ TEST_F(GeometricMeanTest, globalDoubles) {
               0, 100, 1, [&](int32_t i) { return i * 0.1 / 7; })}),
   });
 
-  testAggregations({data}, {}, {"geometric_mean(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"geometric_mean(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(GeometricMeanTest, groupByDoubles) {
@@ -168,7 +192,11 @@ TEST_F(GeometricMeanTest, groupByDoubles) {
           }),
   });
 
-  testAggregations({data}, {"c0"}, {"geometric_mean(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"geometric_mean(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(GeometricMeanTest, globalReals) {
@@ -182,7 +210,10 @@ TEST_F(GeometricMeanTest, globalReals) {
               0, 100, 1, [&](int32_t i) { return i * 0.1 / 7; })}),
   });
 
-  testAggregations({data}, {}, {"geometric_mean(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"geometric_mean(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(GeometricMeanTest, groupByReals) {
@@ -201,7 +232,11 @@ TEST_F(GeometricMeanTest, groupByReals) {
           }),
   });
 
-  testAggregations({data}, {"c0"}, {"geometric_mean(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"geometric_mean(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(GeometricMeanTest, groupByMultipleBatches) {
@@ -225,7 +260,11 @@ TEST_F(GeometricMeanTest, groupByMultipleBatches) {
           }),
   });
 
-  testAggregations(data, {"c0"}, {"geometric_mean(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"geometric_mean(c1)"})
+      .assertResults(expected);
 }
 
 } // namespace

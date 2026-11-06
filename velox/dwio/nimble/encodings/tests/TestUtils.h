@@ -19,7 +19,8 @@
 #include <optional>
 
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
@@ -28,11 +29,14 @@
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
 #include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SentinelEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
@@ -42,6 +46,7 @@
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
 namespace facebook::nimble::test {
@@ -56,9 +61,21 @@ struct EncodingTypeTraits<nimble::ALPEncoding<T>> {
 };
 
 template <typename T>
-struct EncodingTypeTraits<nimble::BlockBitPackingEncoding<T>> {
+struct EncodingTypeTraits<nimble::ALPRDEncoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::ALPRD;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::deprecated::BlockBitPackingEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::BlockBitPacking;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::BlockBitPackingV2Encoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::BlockBitPackingV2;
 };
 
 template <typename T>
@@ -86,6 +103,12 @@ struct EncodingTypeTraits<nimble::EliasFanoEncoding<T>> {
 };
 
 template <typename T>
+struct EncodingTypeTraits<nimble::PartitionedEliasFanoEncoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::PartitionedEliasFano;
+};
+
+template <typename T>
 struct EncodingTypeTraits<nimble::DictionaryEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::Dictionary;
@@ -109,6 +132,12 @@ struct EncodingTypeTraits<nimble::ForEncoding<T>> {
       nimble::EncodingType::FOR;
 };
 
+template <>
+struct EncodingTypeTraits<nimble::FsstEncoding> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::Fsst;
+};
+
 template <typename T>
 struct EncodingTypeTraits<nimble::HuffmanEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
@@ -125,6 +154,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::RLEEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::RLE;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::SentinelEncoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::Sentinel;
 };
 
 template <>

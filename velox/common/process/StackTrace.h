@@ -53,9 +53,10 @@ class StackTrace {
     return btPtrs_;
   }
 
-  /// Log stacktrace into a file under /tmp. If "out" is not null, also store
-  /// translated stack trace into the variable. Returns the name of the
-  /// generated file.
+  /// Log stacktrace into a file under the directory named by the TMPDIR
+  /// environment variable, or /tmp if it is unset. If "out" is not null,
+  /// also store translated stack trace into the variable. Returns the name
+  /// of the generated file.
   std::string log(const char* errorType, std::string* out = nullptr) const;
 
  private:

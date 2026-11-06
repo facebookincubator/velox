@@ -60,6 +60,8 @@ class IPAddressType final : public HugeintType {
   constexpr IPAddressType() : HugeintType{ProvideCustomComparison{}} {}
 
  public:
+  static std::shared_ptr<const IPAddressType> create() = delete;
+
   static std::shared_ptr<const IPAddressType> get() {
     VELOX_CONSTEXPR_SINGLETON IPAddressType kInstance;
     return {std::shared_ptr<const IPAddressType>{}, &kInstance};

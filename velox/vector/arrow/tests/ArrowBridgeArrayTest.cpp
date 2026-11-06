@@ -23,6 +23,7 @@
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -32,6 +33,29 @@ namespace {
 
 void mockSchemaRelease(ArrowSchema*) {}
 void mockArrayRelease(ArrowArray*) {}
+
+std::shared_ptr<arrow::Array> toArrow(
+    const VectorPtr& vector,
+    const ArrowOptions& options,
+    memory::MemoryPool* pool) {
+  ArrowSchema schema;
+  ArrowArray array;
+  exportToArrow(vector, schema, options);
+  exportToArrow(vector, array, pool, options);
+  EXPECT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
+  EXPECT_OK_AND_ASSIGN(auto result, arrow::ImportArray(&array, type));
+  return result;
+}
+
+void validateOffsets(
+    const arrow::ListArray& array,
+    const std::vector<int32_t>& offsets) {
+  ASSERT_EQ(array.length() + 1, offsets.size());
+  for (int i = 0; i < array.length(); ++i) {
+    EXPECT_EQ(array.value_offset(i), offsets[i]);
+    EXPECT_EQ(array.value_length(i), offsets[i + 1] - offsets[i]);
+  }
+}
 
 template <typename T>
 struct VeloxToArrowType {
@@ -54,10 +78,14 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const std::vector<std::optional<T>>& inputData,
       const TypePtr& type = CppToType<T>::create()) {
     auto flatVector = vectorMaker_.flatVectorNullable(inputData, type);
+    auto expected = BaseVector::copy(*flatVector);
     ArrowArray arrowArray;
     velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
 
     validateArray(inputData, arrowArray);
+
+    // Exporting must leave the source vector unchanged.
+    test::assertEqualVectors(expected, flatVector);
 
     arrowArray.release(&arrowArray);
     EXPECT_EQ(nullptr, arrowArray.release);
@@ -75,6 +103,41 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     arrowArray.release(&arrowArray);
     EXPECT_EQ(nullptr, arrowArray.release);
     EXPECT_EQ(nullptr, arrowArray.private_data);
+  }
+
+  // Exports two arrays over element rows 0-1 and 3-4. Row 2 is a gap, so only
+  // a subset of the element rows is exported.
+  template <typename T>
+  void testArrayVectorWithGap(
+      const std::vector<std::optional<T>>& elementData,
+      const std::shared_ptr<arrow::DataType>& elementType) {
+    auto elements = vectorMaker_.flatVectorNullable(elementData);
+    auto expectedElements = BaseVector::copy(*elements);
+    auto offsets = makeBuffer<vector_size_t>({0, 3});
+    auto sizes = makeBuffer<vector_size_t>({2, 2});
+    auto arrayVector = std::make_shared<ArrayVector>(
+        pool_.get(),
+        ARRAY(elements->type()),
+        nullptr,
+        2,
+        offsets,
+        sizes,
+        elements);
+    auto array = toArrow(arrayVector, options_, pool_.get());
+    ASSERT_OK(array->ValidateFull());
+    EXPECT_EQ(array->null_count(), 0);
+    ASSERT_EQ(*array->type(), *arrow::list(elementType));
+    auto& listArray = static_cast<const arrow::ListArray&>(*array);
+    validateOffsets(listArray, {0, 2, 4});
+    ArrowArray values;
+    ASSERT_OK(arrow::ExportArray(*listArray.values(), &values));
+    validateArray<T>(
+        {elementData[0], elementData[1], elementData[3], elementData[4]},
+        values);
+    values.release(&values);
+
+    // Exporting must leave the source vector unchanged.
+    test::assertEqualVectors(expectedElements, elements);
   }
 
   void testFlatTimestampType(const TypePtr& type) {
@@ -157,6 +220,9 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     if constexpr (isString) {
       if (options_.varTypeLayout == ArrowOptions::VarTypeLayout::kLarge) {
         validateStringArray<T, int64_t>(inputData, arrowArray);
+      } else if (
+          options_.varTypeLayout == ArrowOptions::VarTypeLayout::kStringView) {
+        validateStringViewArray(inputData, arrowArray);
       } else {
         validateStringArray<T, int32_t>(inputData, arrowArray);
       }
@@ -238,6 +304,46 @@ class ArrowBridgeArrayExportTest : public testing::Test {
                 inputData[i]->data(),
                 values + offsets[i],
                 offsets[i + 1] - offsets[i]));
+      }
+    }
+  }
+
+  template <typename T>
+  void validateStringViewArray(
+      const std::vector<std::optional<T>>& inputData,
+      const ArrowArray& arrowArray) {
+    // Null, views, data buffers, and the data buffer sizes.
+    ASSERT_GE(arrowArray.n_buffers, 3);
+    ASSERT_NE(nullptr, arrowArray.buffers);
+    const auto numDataBuffers = arrowArray.n_buffers - 3;
+
+    const uint64_t* nulls = static_cast<const uint64_t*>(arrowArray.buffers[0]);
+    // Each view is [length, prefix, buffer index, buffer offset], or
+    // [length, inline data] for strings of 12 bytes or less.
+    const auto* views = static_cast<const uint32_t*>(arrowArray.buffers[1]);
+
+    for (size_t i = 0; i < inputData.size(); ++i) {
+      if (inputData[i] == std::nullopt) {
+        EXPECT_TRUE(bits::isBitNull(nulls, i));
+      } else {
+        if (nulls) {
+          EXPECT_FALSE(bits::isBitNull(nulls, i));
+        }
+        const auto* view = views + 4 * i;
+        const auto size = view[0];
+        ASSERT_EQ(size, inputData[i]->size()) << "mismatch at index " << i;
+        const char* data;
+        if (StringView::isInline(size)) {
+          data = reinterpret_cast<const char*>(view + 1);
+        } else {
+          ASSERT_LT(view[2], numDataBuffers) << "mismatch at index " << i;
+          data = static_cast<const char*>(arrowArray.buffers[2 + view[2]]) +
+              view[3];
+        }
+        EXPECT_EQ(
+            std::string_view(data, size),
+            std::string_view(inputData[i]->data(), size))
+            << "mismatch at index " << i;
       }
     }
   }
@@ -629,7 +735,8 @@ TEST_F(ArrowBridgeArrayExportTest, flatString) {
 
   for (auto layout :
        {ArrowOptions::VarTypeLayout::kDefault,
-        ArrowOptions::VarTypeLayout::kLarge}) {
+        ArrowOptions::VarTypeLayout::kLarge,
+        ArrowOptions::VarTypeLayout::kStringView}) {
     options_.varTypeLayout = layout;
     testFlatVector(inputData);
 
@@ -775,29 +882,6 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   EXPECT_EQ(nullptr, arrowArray.private_data);
 }
 
-std::shared_ptr<arrow::Array> toArrow(
-    const VectorPtr& vec,
-    const ArrowOptions& options,
-    memory::MemoryPool* pool) {
-  ArrowSchema schema;
-  ArrowArray array;
-  exportToArrow(vec, schema, options);
-  exportToArrow(vec, array, pool, options);
-  EXPECT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
-  EXPECT_OK_AND_ASSIGN(auto ans, arrow::ImportArray(&array, type));
-  return ans;
-}
-
-void validateOffsets(
-    const arrow::ListArray& array,
-    const std::vector<int32_t>& offsets) {
-  ASSERT_EQ(array.length() + 1, offsets.size());
-  for (int i = 0; i < array.length(); ++i) {
-    EXPECT_EQ(array.value_offset(i), offsets[i]);
-    EXPECT_EQ(array.value_length(i), offsets[i + 1] - offsets[i]);
-  }
-}
-
 template <typename T>
 using TArrayContainer =
     std::vector<std::optional<std::vector<std::optional<T>>>>;
@@ -853,28 +937,97 @@ TEST_F(ArrowBridgeArrayExportTest, arrayDictionary) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, arrayGap) {
-  auto elements = vectorMaker_.flatVector<int64_t>({1, 2, 3, 4, 5});
-  elements->setNull(3, true);
-  elements->setNullCount(1);
+  testArrayVectorWithGap<int64_t>({1, 2, 3, std::nullopt, 5}, arrow::int64());
+
+  const std::vector<
+      std::pair<ArrowOptions::VarTypeLayout, std::shared_ptr<arrow::DataType>>>
+      stringLayouts = {
+          {ArrowOptions::VarTypeLayout::kDefault, arrow::utf8()},
+          {ArrowOptions::VarTypeLayout::kLarge, arrow::large_utf8()},
+          {ArrowOptions::VarTypeLayout::kStringView, arrow::utf8_view()},
+      };
+  for (const auto& [layout, elementType] : stringLayouts) {
+    options_.varTypeLayout = layout;
+    testArrayVectorWithGap<std::string>(
+        {
+            "first string that is not inline",
+            "short",
+            "skipped string that is not inline",
+            std::nullopt,
+            "last string that is not inline",
+        },
+        elementType);
+  }
+}
+
+TEST_F(ArrowBridgeArrayExportTest, allNullTimestampValues) {
+  constexpr vector_size_t kSize = 5;
+  auto nulls = allocateNulls(kSize, pool_.get(), bits::kNull);
+  auto vec = std::make_shared<FlatVector<Timestamp>>(
+      pool_.get(),
+      TIMESTAMP(),
+      nulls,
+      kSize,
+      /*values=*/nullptr,
+      std::vector<BufferPtr>{});
+
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vec, schema, options_);
+  velox::exportToArrow(vec, data, pool_.get(), options_);
+
+  ASSERT_NE(nullptr, data.buffers[1]);
+  const auto* rawValues = static_cast<const int64_t*>(data.buffers[1]);
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    EXPECT_EQ(rawValues[i], 0);
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
+  ASSERT_OK_AND_ASSIGN(auto array, arrow::ImportArray(&data, type));
+  ASSERT_OK(array->ValidateFull());
+  EXPECT_EQ(array->length(), kSize);
+  EXPECT_EQ(array->null_count(), kSize);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, arrayGapAllNullBigintChild) {
+  constexpr vector_size_t kElementCount = 5;
+  auto nulls = allocateNulls(kElementCount, pool_.get(), bits::kNull);
+  auto elements = std::make_shared<FlatVector<int64_t>>(
+      pool_.get(),
+      BIGINT(),
+      nulls,
+      kElementCount,
+      /*values=*/nullptr,
+      std::vector<BufferPtr>{});
+  // The gap between the two arrays forces the child selection to change.
   auto offsets = makeBuffer<vector_size_t>({0, 3});
   auto sizes = makeBuffer<vector_size_t>({2, 2});
   auto vec = std::make_shared<ArrayVector>(
       pool_.get(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, elements);
-  auto array = toArrow(vec, options_, pool_.get());
+
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vec, schema, options_);
+  velox::exportToArrow(vec, data, pool_.get(), options_);
+
+  ASSERT_EQ(1, data.n_children);
+  ASSERT_NE(nullptr, data.children[0]);
+  ASSERT_NE(nullptr, data.children[0]->buffers[1]);
+  const auto* rawValues =
+      static_cast<const int64_t*>(data.children[0]->buffers[1]);
+  for (vector_size_t i = 0; i < 4; ++i) {
+    EXPECT_EQ(rawValues[i], 0);
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
+  ASSERT_OK_AND_ASSIGN(auto array, arrow::ImportArray(&data, type));
   ASSERT_OK(array->ValidateFull());
-  EXPECT_EQ(array->null_count(), 0);
   ASSERT_EQ(*array->type(), *arrow::list(arrow::int64()));
-  auto& listArray = static_cast<const arrow::ListArray&>(*array);
-  validateOffsets(listArray, {0, 2, 4});
-  ASSERT_EQ(*listArray.values()->type(), *arrow::int64());
-  auto& values = static_cast<const arrow::Int64Array&>(*listArray.values());
-  EXPECT_EQ(values.null_count(), 1);
-  ASSERT_EQ(values.length(), 4);
-  EXPECT_EQ(values.Value(0), 1);
-  EXPECT_EQ(values.Value(1), 2);
-  EXPECT_TRUE(values.IsNull(2));
-  EXPECT_FALSE(values.IsNull(3));
-  EXPECT_EQ(values.Value(3), 5);
+  const auto& listArray = static_cast<const arrow::ListArray&>(*array);
+  const auto& values =
+      static_cast<const arrow::Int64Array&>(*listArray.values());
+  EXPECT_EQ(values.length(), 4);
+  EXPECT_EQ(values.null_count(), 4);
 }
 
 TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
@@ -1426,6 +1579,34 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
          std::nullopt});
   }
 
+  void testImportDecimal32() {
+    const auto type = DECIMAL(9, 2);
+    const std::vector<std::vector<std::optional<int32_t>>> inputs = {
+        {},
+        {0, 1, -1, 999'999'999, -999'999'999},
+        {12'345, std::nullopt, -12'345},
+        {std::nullopt, std::nullopt}};
+    for (const auto& input : inputs) {
+      ArrowContextHolder holder;
+      auto array = fillArrowArray(input, holder);
+      if (array.null_count == array.length) {
+        holder.buffers[1] = nullptr;
+      }
+      auto schema = makeArrowSchema("d:9,2,32");
+      auto actual = importFromArrow(schema, array, pool_.get());
+      std::vector<std::optional<int64_t>> expectedValues(
+          input.begin(), input.end());
+      auto expected = vectorMaker_.flatVectorNullable(expectedValues, type);
+      facebook::velox::test::assertEqualVectors(expected, actual);
+      const auto* rawValues = actual->asFlatVector<int64_t>()->rawValues();
+      for (vector_size_t i = 0; i < actual->size(); ++i) {
+        if (!input[i].has_value()) {
+          EXPECT_EQ(rawValues[i], 0);
+        }
+      }
+    }
+  }
+
   void testTimestampUtcRoundtrip() {
     auto roundtripVector = [&](const VectorPtr& input) {
       ArrowSchema schema;
@@ -1826,6 +2007,25 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     testImportRowEmpty();
   }
 
+  // Widths 4 and 16 cover inlined and buffer-backed StringViews.
+  void testImportFixedSizeBinary() {
+    for (const int32_t width : {4, 16}) {
+      const std::vector<std::optional<std::string>> values = {
+          std::string(width, 'a'), std::nullopt, std::string(width, 'b')};
+      arrow::FixedSizeBinaryBuilder builder(arrow::fixed_size_binary(width));
+      for (const auto& value : values) {
+        ASSERT_OK(value ? builder.Append(*value) : builder.AppendNull());
+      }
+      std::shared_ptr<arrow::Array> array;
+      ASSERT_OK(builder.Finish(&array));
+
+      VectorPtr vector;
+      toVeloxVector(*array, vector);
+      test::assertEqualVectors(
+          vectorMaker_.flatVectorNullable(values, VARBINARY()), vector);
+    }
+  }
+
  private:
   void toVeloxVector(const arrow::Array& array, VectorPtr& outVector) {
     ArrowSchema schema;
@@ -2154,6 +2354,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, scalar) {
   testImportScalar();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, decimal32) {
+  testImportDecimal32();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
@@ -2174,6 +2378,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, string64) {
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, stringview) {
   testImportStringView();
+}
+
+TEST_F(ArrowBridgeArrayImportAsViewerTest, fixedSizeBinary) {
+  testImportFixedSizeBinary();
 }
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, nullType) {
@@ -2273,6 +2481,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, scalar) {
   testImportScalar();
 }
 
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, decimal32) {
+  testImportDecimal32();
+}
+
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
@@ -2293,6 +2505,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, string64) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, stringview) {
   testImportStringView();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, fixedSizeBinary) {
+  testImportFixedSizeBinary();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, nullType) {

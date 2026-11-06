@@ -16,14 +16,19 @@
 #pragma once
 
 #include "velox/dwio/nimble/index/ClusterIndexBase.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndexFactory.h"
 
 namespace facebook::nimble::index {
 
 /// Cluster index whose key chunks use HierarchicalKeyReader.
 class HierarchicalClusterIndex final : public ClusterIndexBase {
  public:
+  /// Opens the index. 'keyCodec' defines the keys that lookups take and return,
+  /// and must be the codec of the factory that wrote the index. 'options' must
+  /// carry the comparator of 'keyCodec', null for bytewise keys.
   static std::unique_ptr<HierarchicalClusterIndex> create(
       Section rootSection,
+      std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
       velox::memory::MemoryPool* pool,
       const Options& options);
 
@@ -32,10 +37,12 @@ class HierarchicalClusterIndex final : public ClusterIndexBase {
  private:
   HierarchicalClusterIndex(
       Section rootSection,
+      std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
       std::shared_ptr<MetadataInput> metadataInput,
       std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
       bool pinIndex,
       bool preloadIndex,
+      bool cacheKeyEncodingViews,
       velox::memory::MemoryPool* pool);
 };
 

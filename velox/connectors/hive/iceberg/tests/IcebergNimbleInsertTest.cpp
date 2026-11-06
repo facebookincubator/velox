@@ -24,10 +24,10 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
-#include "velox/dwio/nimble/velox/reader/NimbleReaderFactory.h"
+#include "velox/connectors/hive/iceberg/tests/utils/IcebergPlanBuilder.h"
+#include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/writer/WriterFactory.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -75,9 +75,8 @@ class IcebergNimbleInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder()
+    auto plan = test::IcebergPlanBuilder()
                     .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -101,6 +100,24 @@ TEST_F(IcebergNimbleInsertTest, roundTrip) {
   test(rowType, 0.2);
 }
 
+// The Java coordinator stamps the commit message's fileFormat onto the Iceberg
+// DataFile via FileFormat.toIceberg(), which has a first-class NIMBLE value.
+// Reporting "ORC" would record NIMBLE files as ORC in the manifest.
+TEST_F(IcebergNimbleInsertTest, commitMessageFormat) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto vectors =
+      createTestData(ROW({"c1", "c2"}, {BIGINT(), VARCHAR()}), 2, 100);
+  const auto commitTasks =
+      createDataSinkAndAppendData(vectors, outputDirectory->getPath())->close();
+
+  ASSERT_FALSE(commitTasks.empty());
+  for (const auto& task : commitTasks) {
+    const auto taskJson = folly::parseJson(task);
+    ASSERT_TRUE(taskJson.count("fileFormat"));
+    EXPECT_EQ(taskJson["fileFormat"].asString(), "NIMBLE");
+  }
+}
+
 // Builds an Iceberg column handle with an explicit field-id tree, used to drive
 // reads whose requested schema differs from the written schema.
 std::shared_ptr<const connector::ColumnHandle> makeIcebergColumnHandle(
@@ -108,7 +125,7 @@ std::shared_ptr<const connector::ColumnHandle> makeIcebergColumnHandle(
     const TypePtr& type,
     const parquet::ParquetFieldId& field) {
   return std::make_shared<const IcebergColumnHandle>(
-      name, FileColumnHandle::ColumnType::kRegular, type, field);
+      name, connector::FileColumnHandle::ColumnType::kRegular, type, field);
 }
 
 // Schema evolution: a top-level column is renamed (c -> c2, id 3) and
@@ -136,9 +153,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameReorderDropAdd) {
               {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
               {"d", makeIcebergColumnHandle("d", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -176,9 +192,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdDropReaddSameName) {
       unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
           assignments{{"c", makeIcebergColumnHandle("c", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -225,9 +240,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdNestedStructReorderDrop) {
                    ROW({"z", "x"}, {INTEGER(), INTEGER()}),
                    {1, {{4, {}}, {2, {}}}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -295,9 +309,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameInsideArrayStruct) {
                makeIcebergColumnHandle(
                    "items", readItemsType, {1, {{2, {{3, {}}, {4, {}}}}}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)

@@ -448,6 +448,36 @@ VectorPtr newFlat(
   }
 }
 
+// Returns the part of 'ranges' that falls within the first 'childSize' rows. A
+// row vector child may be shorter than its parent when the parent rows past its
+// end are null, and those rows need no child values. Returns 'ranges' itself
+// when no clipping is needed, else fills and returns 'clipped'.
+folly::Range<const BaseVector::CopyRange*> toChildRanges(
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    vector_size_t childSize,
+    std::vector<BaseVector::CopyRange>& clipped) {
+  // Most children are as long as their parent: copy the ranges as they are.
+  const bool fitsChild =
+      std::all_of(ranges.begin(), ranges.end(), [&](const auto& range) {
+        return range.sourceIndex + range.count <= childSize;
+      });
+  if (fitsChild) {
+    return ranges;
+  }
+
+  // Drop the rows past the end of the child.
+  clipped.clear();
+  for (const auto& range : ranges) {
+    if (range.sourceIndex < childSize) {
+      clipped.push_back(
+          {range.sourceIndex,
+           range.targetIndex,
+           std::min(range.count, childSize - range.sourceIndex)});
+    }
+  }
+  return clipped;
+}
+
 VectorPtr newRow(
     const EncodedVectorCopyOptions& options,
     const RowVector& source,
@@ -455,8 +485,15 @@ VectorPtr newRow(
   auto size = newTargetSize(ranges);
   auto nulls = newNulls(size, options.pool, source.rawNulls(), ranges);
   std::vector<VectorPtr> children(source.childrenSize());
+  std::vector<BaseVector::CopyRange> clipped;
   for (column_index_t i = 0; i < children.size(); ++i) {
-    copyImpl(options, source.childAt(i), ranges, children[i], false);
+    const auto& child = source.childAt(i);
+    copyImpl(
+        options,
+        child,
+        toChildRanges(ranges, child->size(), clipped),
+        children[i],
+        false);
   }
   return std::make_shared<RowVector>(
       options.pool, source.type(), std::move(nulls), size, std::move(children));
@@ -702,6 +739,7 @@ void copyIntoRow(
   const auto size = targetSize(target->size(), ranges);
   auto* targetRow = target->asUnchecked<RowVector>();
   auto* sourceNulls = source.rawNulls();
+  std::vector<BaseVector::CopyRange> clipped;
   if (targetMutable) {
     const auto oldSize = target->size();
     targetRow->unsafeResize(size);
@@ -714,8 +752,13 @@ void copyIntoRow(
         // Shrink the size to allow unreferenced nested rows to be released.
         targetChild->resize(oldSize);
       }
+      const auto& sourceChild = source.childAt(i);
       copyImpl(
-          options, source.childAt(i), ranges, targetChild, targetChildMutable);
+          options,
+          sourceChild,
+          toChildRanges(ranges, sourceChild->size(), clipped),
+          targetChild,
+          targetChildMutable);
     }
     targetRow->invalidateContainsLazyNotLoaded();
   } else {
@@ -731,7 +774,13 @@ void copyIntoRow(
     }
     auto children = targetRow->children();
     for (column_index_t i = 0; i < children.size(); ++i) {
-      copyImpl(options, source.childAt(i), ranges, children[i], false);
+      const auto& sourceChild = source.childAt(i);
+      copyImpl(
+          options,
+          sourceChild,
+          toChildRanges(ranges, sourceChild->size(), clipped),
+          children[i],
+          false);
     }
     target = std::make_shared<RowVector>(
         options.pool,
@@ -940,16 +989,7 @@ void copyIntoFlatMapMutable(
   for (column_index_t i = 0; i < startingNumDistinctKeys; ++i) {
     if (source.getKeyChannel(targetFlatMap->distinctKeys(), i) ==
         std::nullopt) {
-      auto& targetInMapsBuffer = targetFlatMap->inMapsAt(i, true);
-      if (targetInMapsBuffer == nullptr) {
-        targetInMapsBuffer =
-            AlignedBuffer::allocate<bool>(size, options.pool, false);
-      }
-      if (targetInMapsBuffer->isView()) {
-        targetInMapsBuffer =
-            AlignedBuffer::copy(options.pool, targetInMapsBuffer);
-      }
-      auto* targetInMaps = targetInMapsBuffer->asMutable<uint64_t>();
+      auto* targetInMaps = targetFlatMap->ensureInMapAt(i);
 
       applyToEachRange(
           ranges, [targetInMaps](auto targetIndex, auto, auto count) {
@@ -1012,6 +1052,35 @@ void copyIntoFlatMapImmutable(
   copyIntoFlatMapMutable(options, source, ranges, target);
 }
 
+// Converts the copied rows of a map source to a new flat map, then copies that
+// into 'target'. The flat map path writes into the parts of 'target' that may
+// be wrapped or shared without making the whole target writable first.
+void copyMapIntoFlatMap(
+    const EncodedVectorCopyOptions& options,
+    const VectorPtr& source,
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    VectorPtr& target,
+    bool targetMutable) {
+  std::vector<BaseVector::CopyRange> toFlatMapRanges;
+  std::vector<BaseVector::CopyRange> flatMapRanges;
+  vector_size_t numRows{0};
+  for (const auto& range : ranges) {
+    toFlatMapRanges.push_back({range.sourceIndex, numRows, range.count});
+    flatMapRanges.push_back({numRows, range.targetIndex, range.count});
+    numRows += range.count;
+  }
+  VectorPtr flatMap = std::make_shared<FlatMapVector>(
+      options.pool,
+      source->type(),
+      nullptr,
+      numRows,
+      nullptr,
+      std::vector<VectorPtr>{},
+      std::vector<BufferPtr>{});
+  flatMap->copyRanges(source.get(), toFlatMapRanges);
+  copyImpl(options, flatMap, flatMapRanges, target, targetMutable);
+}
+
 void copyIntoFlatMap(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
@@ -1021,7 +1090,7 @@ void copyIntoFlatMap(
     VectorPtr& target,
     bool targetMutable) {
   if (decodedSource.isIdentityMapping()) {
-    auto& flatMapSource = *source->asUnchecked<FlatMapVector>();
+    auto& flatMapSource = *sourceBase->asUnchecked<FlatMapVector>();
     if (targetMutable) {
       copyIntoFlatMapMutable(options, flatMapSource, ranges, target);
     } else {
@@ -1180,10 +1249,11 @@ void copyIntoExisting(
       copyIntoFlat(options, source, ranges, target, targetMutable);
       break;
     case VectorEncoding::Simple::MAP:
-      VELOX_CHECK_NE(
-          sourceBase->encoding(),
-          VectorEncoding::Simple::FLAT_MAP,
-          "Cannot copy FlatMapVector into MapVector.");
+      // copyRanges copies between the two map encodings.
+      if (sourceBase->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+        copyIntoFlat(options, source, ranges, target, targetMutable);
+        break;
+      }
       [[fallthrough]];
     case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
@@ -1191,6 +1261,10 @@ void copyIntoExisting(
           options, decodedSource, sourceBase, ranges, target, targetMutable);
       break;
     case VectorEncoding::Simple::FLAT_MAP:
+      if (sourceBase->encoding() == VectorEncoding::Simple::MAP) {
+        copyMapIntoFlatMap(options, source, ranges, target, targetMutable);
+        break;
+      }
       copyIntoFlatMap(
           options,
           source,
@@ -1215,13 +1289,17 @@ void copyImpl(
     const folly::Range<const BaseVector::CopyRange*>& ranges,
     VectorPtr& target,
     bool targetMutable) {
-  if (ranges.empty()) {
+  // An empty source, such as the base of a dictionary whose rows are all null,
+  // comes with ranges that copy no rows.
+  if (ranges.empty() || source->size() == 0) {
+    for (const auto& range : ranges) {
+      VELOX_CHECK_EQ(range.count, 0);
+    }
     if (!target) {
       target = BaseVector::createEmptyLike(source.get(), 0, options.pool);
     }
     return;
   }
-  VELOX_CHECK_GT(source->size(), 0);
   DecodedVector decodedSource;
   auto sourceBase = decodedSource.decodeAndGetBase(source);
   if (target) {

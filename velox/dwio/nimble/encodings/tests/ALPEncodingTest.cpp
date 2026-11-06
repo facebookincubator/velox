@@ -24,10 +24,12 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <random>
@@ -209,6 +211,232 @@ void expectEstimateUsesPackedExceptionValues() {
 TEST(ALPSizeEstimationTest, packsExceptionValuesWhenEstimating) {
   expectEstimateUsesPackedExceptionValues<float>();
   expectEstimateUsesPackedExceptionValues<double>();
+}
+
+TYPED_TEST(ALPEncodingTest, heuristicEstimateAndConfiguredChildren) {
+  using D = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  using ReadFactors = std::vector<std::pair<nimble::EncodingType, float>>;
+  const auto alp = nimble::EncodingType::ALP;
+  const auto trivial = nimble::EncodingType::Trivial;
+  const auto packed = nimble::EncodingType::FixedBitWidth;
+  const std::vector<std::pair<ReadFactors, nimble::EncodingType>> cases{
+      {{{trivial, 1}}, trivial},
+      {{{packed, 1}}, packed},
+      {{{nimble::EncodingType::Varint, 1}}, nimble::EncodingType::Varint},
+      {{{packed, 1}, {trivial, 0.01f}}, trivial},
+      {{{packed, 1}, {trivial, 10}}, packed},
+  };
+  nimble::Encoding::Options options{.useVarintRowCount = TypeParam::useVarint};
+  for (auto exactBits : {false, true}) {
+    options.fixedBitWidthUseExactBits = exactBits;
+    for (uint32_t numRows : {127, 1'024}) {
+      nimble::ScopedVector<D> values{
+          numRows, this->pool_.get(), options.bufferPool};
+      nimble::ScopedVector<PhysicalType> physicals{
+          numRows, this->pool_.get(), options.bufferPool};
+      for (auto i = 0; i < numRows; ++i) {
+        values[i] = static_cast<D>((i % 97) - 48) / 8;
+      }
+      // Exercise all three child streams and preserve special IEEE bits.
+      values[3] = -D{0};
+      values[9] = std::numeric_limits<D>::infinity();
+      values[17] = std::bit_cast<D>(
+          std::bit_cast<PhysicalType>(std::numeric_limits<D>::quiet_NaN()) |
+          PhysicalType{0x1234});
+      for (auto i = 0; i < numRows; ++i) {
+        physicals[i] = std::bit_cast<PhysicalType>(values[i]);
+      }
+      for (const auto& [children, expectedChild] : cases) {
+        SCOPED_TRACE(
+            fmt::format(
+                "exact={} rows={} child={} weight={}",
+                exactBits,
+                numRows,
+                expectedChild,
+                children.back().second));
+        auto policy =
+            std::make_unique<nimble::ManualEncodingSelectionPolicy<D>>(
+                ReadFactors{{alp, 1}}, std::nullopt, std::nullopt, children);
+        const auto result = policy->select(
+            physicals,
+            nimble::Statistics<PhysicalType>::create(physicals),
+            options);
+        ASSERT_EQ(result.encodingType, alp);
+        ASSERT_TRUE(result.estimatedSize);
+        const auto encoded = nimble::EncodingFactory::encode<D>(
+            std::move(policy), values, *this->buffer_, options);
+        const auto layout =
+            nimble::EncodingLayoutCapture::capture(encoded, options);
+        ASSERT_EQ(layout.encodingType(), alp);
+        ASSERT_TRUE(layout.child(0));
+        EXPECT_EQ(layout.child(0)->encodingType(), expectedChild);
+        ASSERT_TRUE(layout.child(1));
+        ASSERT_TRUE(layout.child(2));
+        EXPECT_EQ(
+            result.estimatedSize,
+            nimble::ALPEncoding<D>::estimateSize(physicals, options));
+        auto decoder = nimble::EncodingFactory(options).create(
+            *this->pool_, encoded, nullptr);
+        nimble::ScopedVector<PhysicalType> actual{
+            numRows, this->pool_.get(), options.bufferPool};
+        decoder->materialize(numRows, actual.data());
+        for (auto i = 0; i < numRows; ++i) {
+          EXPECT_EQ(actual[i], physicals[i]) << i;
+        }
+      }
+      auto replay =
+          std::make_unique<nimble::ReplayedEncodingSelectionPolicy<D>>(
+              alpWithFixedBitWidthPayloadLayout(),
+              std::nullopt,
+              unusedNestedPolicyCreator());
+      const auto replayed = nimble::EncodingFactory::encode<D>(
+          std::move(replay), values, *this->buffer_, options);
+      const auto replayedLayout =
+          nimble::EncodingLayoutCapture::capture(replayed, options);
+      ASSERT_TRUE(replayedLayout.child(0));
+      EXPECT_EQ(replayedLayout.child(0)->encodingType(), packed);
+    }
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, estimatesPeriodicInput) {
+  using D = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint,
+      .fixedBitWidthUseExactBits = true};
+  nimble::ScopedVector<D> values{65'536, this->pool_.get(), options.bufferPool};
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = i % 512;
+  }
+  // Vary the sample offsets to preserve the range of periodic input. The
+  // writer can choose a Dictionary child even though estimation uses FBW.
+  const auto physicals =
+      nimble::EncodingPhysicalType<D>::asEncodingPhysicalTypeSpan(
+          std::span<const D>{values});
+  auto policy = std::make_unique<nimble::ManualEncodingSelectionPolicy<D>>(
+      std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::ALP, 1}},
+      std::nullopt,
+      std::nullopt,
+      std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::Dictionary, 1},
+          {nimble::EncodingType::FixedBitWidth, 1},
+          {nimble::EncodingType::Trivial, 1}});
+  const auto result = policy->select(
+      physicals, nimble::Statistics<PhysicalType>::create(physicals), options);
+  ASSERT_TRUE(result.estimatedSize);
+  const auto encoded = nimble::EncodingFactory::encode<D>(
+      std::move(policy), values, *this->buffer_, options);
+  const auto layout = nimble::EncodingLayoutCapture::capture(encoded, options);
+  ASSERT_EQ(layout.encodingType(), nimble::EncodingType::ALP);
+  ASSERT_TRUE(layout.child(0));
+  ASSERT_EQ(layout.child(0)->encodingType(), nimble::EncodingType::Dictionary);
+  EXPECT_NEAR(*result.estimatedSize, encoded.size(), encoded.size() * 0.15);
+}
+
+TYPED_TEST(ALPEncodingTest, nullableSelectionAndReplay) {
+  using D = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const auto alp = nimble::EncodingType::ALP;
+  const auto dictionary = nimble::EncodingType::Dictionary;
+  const auto runLength = nimble::EncodingType::RLE;
+  const auto mainlyConstant = nimble::EncodingType::MainlyConstant;
+  const std::vector<std::pair<nimble::EncodingType, float>> candidates{
+      {alp, 1},
+      {nimble::EncodingType::Trivial, 1},
+      {nimble::EncodingType::FixedBitWidth, 1},
+  };
+  const auto createPolicy = [&](nimble::DataType type) {
+    return nimble::ManualEncodingSelectionPolicyFactory{
+        candidates, std::nullopt}
+        .createPolicy(type);
+  };
+  nimble::ScopedVector<D> values{1'024, this->pool_.get(), options.bufferPool};
+  nimble::ScopedVector<bool> notNulls{
+      2 * values.size(), this->pool_.get(), options.bufferPool};
+  for (uint32_t i = 0; i < notNulls.size(); ++i) {
+    notNulls[i] = i % 2 == 0;
+  }
+  const auto check = [&](std::string_view encoded) {
+    auto decoder =
+        nimble::EncodingFactory(options).create(*this->pool_, encoded, nullptr);
+    nimble::ScopedVector<PhysicalType> actual{
+        notNulls.size(), this->pool_.get(), options.bufferPool};
+    decoder->materialize(notNulls.size(), actual.data());
+    for (uint32_t i = 0; i < values.size(); ++i) {
+      EXPECT_EQ(actual[2 * i], std::bit_cast<PhysicalType>(values[i])) << i;
+    }
+  };
+  for (auto parent : {alp, dictionary, runLength, mainlyConstant}) {
+    SCOPED_TRACE(parent);
+    for (uint32_t i = 0; i < values.size(); ++i) {
+      const auto ordinal = parent == runLength ? i / 8 : i;
+      values[i] = (static_cast<int>(ordinal % 127) - 63) / D{8};
+      if (parent == mainlyConstant && i % 8 != 0) {
+        values[i] = 0;
+      }
+    }
+    values[0] = -D{0};
+    std::unique_ptr<nimble::EncodingSelectionPolicy<D>> policy;
+    if (parent == alp) {
+      policy = std::make_unique<nimble::ManualEncodingSelectionPolicy<D>>(
+          candidates, std::nullopt, std::nullopt);
+    } else {
+      policy = std::make_unique<nimble::ReplayedEncodingSelectionPolicy<D>>(
+          nimble::EncodingLayout{
+              parent,
+              {},
+              nimble::CompressionType::Uncompressed,
+              {std::nullopt, std::nullopt}},
+          std::nullopt,
+          createPolicy);
+    }
+    const auto encoded = nimble::EncodingFactory::encodeNullable<D>(
+        std::move(policy), values, notNulls, *this->buffer_, options);
+    const auto layout =
+        nimble::EncodingLayoutCapture::capture(encoded, options);
+    ASSERT_EQ(layout.encodingType(), parent);
+    if (parent != alp) {
+      const auto slot = parent == dictionary ? 0 : 1;
+      ASSERT_TRUE(layout.child(slot));
+      EXPECT_EQ(layout.child(slot)->encodingType(), alp);
+    }
+    check(encoded);
+    // The recorded ALP descendant must preserve logical types even when the
+    // fallback candidates contain only a physical scalar codec.
+    auto replay = std::make_unique<nimble::ReplayedEncodingSelectionPolicy<D>>(
+        layout, std::nullopt, [](nimble::DataType type) {
+          return nimble::ManualEncodingSelectionPolicyFactory{
+              {{nimble::EncodingType::Trivial, 1}}, std::nullopt}
+              .createPolicy(type);
+        });
+    const auto replayed = nimble::EncodingFactory::encodeNullable<D>(
+        std::move(replay), values, notNulls, *this->buffer_, options);
+    EXPECT_EQ(
+        nimble::EncodingLayoutCapture::capture(replayed, options)
+            .encodingType(),
+        parent);
+    check(replayed);
+  }
+  bool foundAlp{false};
+  for (uint64_t seed = 0; seed < 16; ++seed) {
+    auto random =
+        std::make_unique<nimble::testing::RandomEncodingSelectionPolicy<D>>(
+            seed,
+            std::vector<nimble::EncodingType>{
+                alp, nimble::EncodingType::Trivial},
+            std::nullopt);
+    const auto encoded = nimble::EncodingFactory::encodeNullable<D>(
+        std::move(random), values, notNulls, *this->buffer_, options);
+    foundAlp |= nimble::EncodingLayoutCapture::capture(encoded, options)
+                    .encodingType() == alp;
+    check(encoded);
+  }
+  EXPECT_TRUE(foundAlp);
 }
 
 TEST(ALPEncodingHeaderTest, compactControlWordRoundTrip) {
@@ -997,6 +1225,71 @@ TYPED_TEST(ALPEncodingTest, roundTripSignedDecimals) {
   }
 }
 
+TYPED_TEST(ALPEncodingTest, selectsExponentByEncodedSize) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  // Returns the (exponent, factor) pair 'values' encode with, after checking
+  // that they decode back.
+  const auto encodedExponentFactor = [&](const nimble::Vector<D>& values) {
+    const auto serialized = encodeWithLayout<D>(
+        *this->buffer_, values, alpWithFixedBitWidthPayloadLayout(), options);
+    std::vector<velox::BufferPtr> stringBuffers;
+    auto encoding =
+        createEncoding(this->pool_.get(), serialized, options, stringBuffers);
+    nimble::Vector<D> decoded{this->pool_.get(), values.size()};
+    encoding->materialize(values.size(), decoded.data());
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      EXPECT_TRUE(nimble::NimbleCompare<D>::equals(decoded[i], values[i]));
+    }
+    const char* pos = serialized.data() +
+        nimble::EncodingPrefix::prefixSize(
+                          serialized, options.useVarintRowCount);
+    const auto header = nimble::detail::alp::readHeader(pos);
+    return std::pair<int, int>{header.exponent, header.factor};
+  };
+
+  constexpr uint32_t kNumRows = 4'096;
+  std::mt19937 random{11};
+  std::uniform_int_distribution<int32_t> digits{0, 99'999};
+  {
+    // Two decimals take 18 bits. Exponent 6 also represents the six-decimal
+    // outliers in every 100th row, but needs 31 bits for every value.
+    nimble::Vector<D> values{this->pool_.get(), kNumRows};
+    for (uint32_t i = 0; i < kNumRows; ++i) {
+      values[i] = i % 100 == 0 ? static_cast<D>(0.123456)
+                               : static_cast<D>(digits(random)) / 100;
+    }
+    EXPECT_EQ(encodedExponentFactor(values), (std::pair<int, int>{2, 0}));
+  }
+  {
+    // One decimal in the first 1,024 rows and three after them. Exponent 1
+    // would make three quarters of the values exceptions.
+    nimble::Vector<D> values{this->pool_.get(), kNumRows};
+    for (uint32_t i = 0; i < kNumRows; ++i) {
+      values[i] = static_cast<D>(digits(random)) / (i < 1'024 ? 10 : 1'000);
+    }
+    EXPECT_EQ(encodedExponentFactor(values), (std::pair<int, int>{3, 0}));
+  }
+  {
+    // Two decimals take 18 bits and three take 21, so exponent 2 is smaller
+    // while its exceptions cost under 3 bits per value. The sample takes one
+    // of every 4 rows, and every 18th (float) or 30th (double) group of 4 rows
+    // holds three decimals: 57 or 35 of the 1,024 sampled values. An exception
+    // costs its raw bits and a position, which FixedBitWidth packs in 16 bits
+    // for 4,096 rows: 2.7 bits per value for both types. A 32-bit position
+    // would make that 3.6 and 3.3 bits, and select exponent 3.
+    const uint32_t groupsPerException = sizeof(D) == sizeof(float) ? 18 : 30;
+    nimble::Vector<D> values{this->pool_.get(), kNumRows};
+    for (uint32_t i = 0; i < kNumRows; ++i) {
+      values[i] = i / 4 % groupsPerException == 0
+          ? static_cast<D>(digits(random) * 10 + 5) / 1'000
+          : static_cast<D>(digits(random)) / 100;
+    }
+    EXPECT_EQ(encodedExponentFactor(values), (std::pair<int, int>{2, 0}));
+  }
+}
+
 TYPED_TEST(ALPEncodingTest, manualSelectionUsesAlpEstimate) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
@@ -1067,12 +1360,10 @@ TYPED_TEST(ALPEncodingTest, manualSelectionUsesAlpEstimate) {
   }
 }
 
-TYPED_TEST(ALPEncodingTest, dictionaryAlphabetUsesNestedAlpWhenEnabled) {
+TYPED_TEST(ALPEncodingTest, dictionaryAlphabetUsesConfiguredNestedAlp) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
-      .useVarintRowCount = false,
-      .fixedBitWidthUseExactBits = true,
-      .allowNestedAlpSelection = true};
+      .useVarintRowCount = false, .fixedBitWidthUseExactBits = true};
 
   nimble::Vector<D> values{this->pool_.get()};
   for (auto i = 0; i < 256; ++i) {
@@ -1084,7 +1375,10 @@ TYPED_TEST(ALPEncodingTest, dictionaryAlphabetUsesNestedAlpWhenEnabled) {
           {nimble::EncodingType::Dictionary, 1.0},
       },
       std::nullopt,
-      std::nullopt);
+      std::nullopt,
+      std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::ALP, 1.0},
+      });
 
   const auto serialized = nimble::EncodingFactory::encode<D>(
       std::move(policy),
@@ -1142,12 +1436,10 @@ TYPED_TEST(ALPEncodingTest, dictionaryAlphabetUsesNestedAlpWhenEnabled) {
   }
 }
 
-TYPED_TEST(ALPEncodingTest, rleRunValuesUseNestedAlpWhenEnabled) {
+TYPED_TEST(ALPEncodingTest, rleRunValuesUseConfiguredNestedAlp) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
-      .useVarintRowCount = false,
-      .fixedBitWidthUseExactBits = true,
-      .allowNestedAlpSelection = true};
+      .useVarintRowCount = false, .fixedBitWidthUseExactBits = true};
 
   nimble::Vector<D> values{this->pool_.get()};
   for (auto i = 0; i < 128; ++i) {
@@ -1162,7 +1454,10 @@ TYPED_TEST(ALPEncodingTest, rleRunValuesUseNestedAlpWhenEnabled) {
           {nimble::EncodingType::RLE, 1.0},
       },
       std::nullopt,
-      std::nullopt);
+      std::nullopt,
+      std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::ALP, 1.0},
+      });
 
   const auto serialized = nimble::EncodingFactory::encode<D>(
       std::move(policy),
@@ -1218,12 +1513,10 @@ TYPED_TEST(ALPEncodingTest, rleRunValuesUseNestedAlpWhenEnabled) {
   }
 }
 
-TYPED_TEST(ALPEncodingTest, mainlyConstantOtherValuesUseNestedAlpWhenEnabled) {
+TYPED_TEST(ALPEncodingTest, mainlyConstantOtherValuesUseConfiguredNestedAlp) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
-      .useVarintRowCount = false,
-      .fixedBitWidthUseExactBits = true,
-      .allowNestedAlpSelection = true};
+      .useVarintRowCount = false, .fixedBitWidthUseExactBits = true};
 
   nimble::Vector<D> values{this->pool_.get()};
   for (auto i = 0; i < 256; ++i) {
@@ -1238,7 +1531,10 @@ TYPED_TEST(ALPEncodingTest, mainlyConstantOtherValuesUseNestedAlpWhenEnabled) {
           {nimble::EncodingType::MainlyConstant, 1.0},
       },
       std::nullopt,
-      std::nullopt);
+      std::nullopt,
+      std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::ALP, 1.0},
+      });
 
   const auto serialized = nimble::EncodingFactory::encode<D>(
       std::move(policy),
