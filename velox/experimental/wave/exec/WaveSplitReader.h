@@ -33,7 +33,7 @@ struct SplitReaderParams {
   connector::hive::HiveTableHandlePtr hiveTableHandle;
   std::shared_ptr<common::ScanSpec> scanSpec;
   RowTypePtr readerOutputType;
-  std::unordered_map<std::string, connector::hive::HiveColumnHandlePtr>*
+  const std::unordered_map<std::string, connector::hive::HiveColumnHandlePtr>*
       partitionKeys;
   FileHandleFactory* fileHandleFactory;
   folly::Executor* executor;

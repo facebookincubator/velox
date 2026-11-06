@@ -92,7 +92,7 @@ PaimonDataSource::createSplitReader() {
       split_,
       paimonSplit_,
       paimonTableHandle_,
-      &partitionKeys_,
+      &partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,

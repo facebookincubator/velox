@@ -19,6 +19,7 @@
 #include <functional>
 #include <utility>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
@@ -33,6 +34,11 @@ class InspectableDataSource : public DataSourceType {
 
   connector::FileScanState* scanState() const {
     return this->fileScanState_.get();
+  }
+
+  const std::shared_ptr<const connector::FileScanRequirements>&
+  scanRequirements() const {
+    return this->fileScanRequirements_;
   }
 
   const RowTypePtr& readerOutputType() const {
@@ -81,7 +87,7 @@ class BorrowingFileDataSource : public InspectableFileDataSource {
     return std::make_unique<BorrowingFileSplitReader>(
         split_,
         tableHandle_,
-        &partitionKeys_,
+        &partitionKeys(),
         connectorQueryCtx_,
         fileConfig_,
         readerOutputType_,
@@ -527,6 +533,227 @@ TEST_F(FileDataSourceTest, publishedFilterPayloadIsShared) {
   expectValues(next(*second), values);
   EXPECT_EQ(first->getFilters()->at(field), filter);
   EXPECT_EQ(second->getFilters()->at(field), filter);
+}
+
+TEST_F(FileDataSourceTest, sharedRequirementsCreateIndependentStates) {
+  const auto schema = ROW({{"c0", BIGINT()}, {"c1", BIGINT()}});
+  const common::Subfield field("c0");
+  const auto filter =
+      std::make_shared<common::BigintValuesUsingBloomFilter>(8'000'000, false);
+  for (auto value : {1, 3, 5}) {
+    filter->insert(value);
+  }
+  common::SubfieldFilters filters;
+  filters.emplace(field.clone(), filter);
+  auto source = makeSource(
+      type_,
+      makeTableHandle(
+          std::move(filters),
+          parseExpr("c0 > 1 OR c1 > 10", schema),
+          "test",
+          schema),
+      assignments_);
+  const auto requirements = source->scanRequirements();
+  auto first = connector::FileScanRequirements::createState(
+      requirements, context_.get());
+  auto second = connector::FileScanRequirements::createState(
+      requirements, context_.get());
+  EXPECT_EQ(first->scanRequirements, requirements);
+  EXPECT_EQ(second->scanRequirements, requirements);
+  EXPECT_NE(first->scanSpec, second->scanSpec);
+  ASSERT_TRUE(first->metadataFilter);
+  EXPECT_NE(first->metadataFilter, second->metadataFilter);
+  EXPECT_EQ(requirements->filters().at(field), filter);
+  EXPECT_EQ(first->filters.at(field), filter);
+  EXPECT_EQ(second->filters.at(field), filter);
+  EXPECT_EQ(first->scanSpec->childByName("c0")->filter(), filter.get());
+  EXPECT_EQ(second->scanSpec->childByName("c0")->filter(), filter.get());
+  ASSERT_GT(first->scanSpec->childByName("c0")->numMetadataFilters(), 0);
+  EXPECT_NE(
+      first->scanSpec->childByName("c0")->metadataFilterNodeAt(0),
+      second->scanSpec->childByName("c0")->metadataFilterNodeAt(0));
+
+  const auto replacement = std::make_shared<common::BigintRange>(3, 5, false);
+  first->filters.at(field) = replacement;
+  first->scanSpec->childByName("c0")->setFilter(replacement);
+  EXPECT_EQ(requirements->filters().at(field), filter);
+  EXPECT_EQ(second->filters.at(field), filter);
+  EXPECT_EQ(second->scanSpec->childByName("c0")->filter(), filter.get());
+  EXPECT_TRUE(requirements->readerOutputType()->containsChild("c1"));
+}
+
+TEST_F(FileDataSourceTest, requirementsOwnSubfieldsButNotExecutionContext) {
+  const auto nested = ROW({{"a", BIGINT()}, {"b", BIGINT()}});
+  const auto schema = ROW({{"r", nested}});
+  const auto outputType = ROW({{"value", nested}});
+  ColumnHandleMap assignments{
+      {"value", makeColumnHandle("r", nested, {"r.a"})}};
+  auto table =
+      makeTableHandle({}, parseExpr("r.a % 2 = 0", schema), "test", schema);
+  std::weak_ptr<const connector::ColumnHandle> columnOwner =
+      assignments.at("value");
+  std::weak_ptr<const connector::FileTableHandle> tableOwner = table;
+  std::weak_ptr<exec::Expr> compiledExpression;
+  std::shared_ptr<const connector::FileScanRequirements> requirements;
+  {
+    auto context = makeContext();
+    auto source = makeSource(outputType, table, assignments, context.get());
+    compiledExpression = source->remainingFilterExprSet()->expr(0);
+    requirements = source->scanRequirements();
+  }
+  EXPECT_TRUE(compiledExpression.expired());
+  assignments.clear();
+  table.reset();
+  EXPECT_FALSE(columnOwner.expired());
+  EXPECT_FALSE(tableOwner.expired());
+  EXPECT_EQ(
+      requirements->readerOutputType()->names(), std::vector<std::string>{"r"});
+  ASSERT_FALSE(requirements->subfields().at("r").empty());
+  for (const auto* subfield : requirements->subfields().at("r")) {
+    EXPECT_EQ(subfield->toString(), "r.a");
+  }
+
+  auto context = makeContext();
+  auto state =
+      connector::FileScanRequirements::createState(requirements, context.get());
+  EXPECT_NE(state->scanSpec->childByName("r")->childByName("a"), nullptr);
+  std::weak_ptr<const connector::FileScanRequirements> requirementsOwner =
+      requirements;
+  requirements.reset();
+  EXPECT_FALSE(requirementsOwner.expired());
+  EXPECT_FALSE(columnOwner.expired());
+  state.reset();
+  EXPECT_TRUE(requirementsOwner.expired());
+  EXPECT_TRUE(columnOwner.expired());
+  EXPECT_TRUE(tableOwner.expired());
+}
+
+TEST_F(FileDataSourceTest, bucketConversionPreservesRequirements) {
+  const auto input = makeRowVector(
+      {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5}),
+       makeConstant<int64_t>(0, 6)});
+  const auto schema = asRowType(input->type());
+  const auto file = writeScanFile(input);
+  auto source = makeSource(
+      type_, makeTableHandle({}, nullptr, "test", schema), assignments_);
+  const auto requirements = source->scanRequirements();
+  const auto initialScanSpec = source->scanState()->scanSpec;
+  std::shared_ptr<common::ScanSpec> adaptedScanSpec;
+  for (int i = 0; i < 2; ++i) {
+    auto split = makeHiveConnectorSplit(file->getPath());
+    split->tableBucketNumber = 0;
+    split->bucketConversion =
+        HiveBucketConversion{4, 1, {regularColumn("c1", BIGINT())}};
+    source->addSplit(std::move(split));
+    EXPECT_EQ(source->scanRequirements(), requirements);
+    EXPECT_FALSE(requirements->readerOutputType()->containsChild("c1"));
+    EXPECT_TRUE(source->readerOutputType()->containsChild("c1"));
+    if (i == 0) {
+      adaptedScanSpec = source->scanState()->scanSpec;
+      EXPECT_NE(adaptedScanSpec, initialScanSpec);
+    } else {
+      EXPECT_EQ(source->scanState()->scanSpec, adaptedScanSpec);
+    }
+    expectValues(next(*source), {0, 1, 2, 3, 4, 5});
+    EXPECT_EQ(next(*source), nullptr);
+  }
+  auto fresh = connector::FileScanRequirements::createState(
+      requirements, context_.get());
+  EXPECT_EQ(
+      fresh->scanSpec->children().size(), initialScanSpec->children().size());
+  EXPECT_NE(fresh->scanSpec, adaptedScanSpec);
+}
+
+TEST_F(
+    FileDataSourceTest,
+    takeoverRetainsRequirementsOwnersNotCompiledExpression) {
+  const auto file =
+      writeScanFile(makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})}));
+  const auto table =
+      makeTableHandle({}, parseExpr("c0 % 2 = 0", type_), "test", type_);
+  auto source = makeSource(type_, table, assignments_);
+  const auto requirements = source->scanRequirements();
+  const auto* expression = source->remainingFilterExprSet();
+
+  auto preloadContext = makeContext();
+  auto preloaded = makeSource(type_, table, assignments_, preloadContext.get());
+  std::weak_ptr<const connector::FileScanRequirements> preloadedRequirements =
+      preloaded->scanRequirements();
+  std::weak_ptr<exec::Expr> preloadedExpression =
+      preloaded->remainingFilterExprSet()->expr(0);
+  preloaded->addSplit(makeHiveConnectorSplit(file->getPath()));
+  source->setFromDataSource(std::move(preloaded));
+  preloadContext.reset();
+
+  EXPECT_EQ(source->scanRequirements(), requirements);
+  EXPECT_EQ(source->remainingFilterExprSet(), expression);
+  EXPECT_TRUE(preloadedExpression.expired());
+  EXPECT_FALSE(preloadedRequirements.expired());
+  EXPECT_EQ(
+      source->scanState()->scanRequirements, preloadedRequirements.lock());
+  expectValues(next(*source), {0, 2, 4});
+  EXPECT_EQ(next(*source), nullptr);
+  source.reset();
+  EXPECT_TRUE(preloadedRequirements.expired());
+}
+
+TEST_F(FileDataSourceTest, inputValidationStillPrecedesCompilation) {
+  int compilations = 0;
+  auto context = makeContext(&compilations);
+  const auto table =
+      makeTableHandle({}, parseExpr("c0 % 2 = 0", type_), "test", type_);
+  VELOX_ASSERT_THROW(
+      makeSource(type_, table, {}, context.get()),
+      "ColumnHandle is missing for output column: c0");
+  EXPECT_EQ(compilations, 0);
+
+  const auto duplicateOutputs = ROW({{"left", BIGINT()}, {"right", BIGINT()}});
+  const ColumnHandleMap duplicateAssignments{
+      {"left", regularColumn("c0", BIGINT())},
+      {"right", regularColumn("c0", BIGINT())}};
+  VELOX_ASSERT_THROW(
+      makeSource(duplicateOutputs, table, duplicateAssignments, context.get()),
+      "Cannot map from same table column to different outputs in table scan");
+  EXPECT_EQ(compilations, 0);
+}
+
+TEST_F(FileDataSourceTest, requirementsPreserveExtractedSampling) {
+  const auto original = parseExpr("rand() < 0.5 AND rand() < 0.5", type_);
+  auto source = makeSource(
+      type_, makeTableHandle({}, original, "test", type_), assignments_);
+  const auto requirements = source->scanRequirements();
+  EXPECT_EQ(requirements->tableHandle()->remainingFilter(), original);
+  EXPECT_EQ(requirements->sampleRate(), 0.25);
+  EXPECT_EQ(requirements->remainingFilter(), nullptr);
+  EXPECT_EQ(source->remainingFilterExprSet(), nullptr);
+  EXPECT_TRUE(requirements->remainingFilterColumns().empty());
+}
+
+TEST_F(FileDataSourceTest, postProcessorsRemainDataSourceLocal) {
+  std::vector<int> calls;
+  const auto handle = std::make_shared<HiveColumnHandle>(
+      "c0",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::vector<common::Subfield>{},
+      std::vector<connector::NamedExtraction>{},
+      HiveColumnHandle::ColumnParseParameters{},
+      [count = 0, &calls](VectorPtr&) mutable { calls.push_back(++count); });
+  const ColumnHandleMap assignments{{"c0", handle}};
+  const auto table = makeTableHandle({}, nullptr, "test", type_);
+  const auto file =
+      writeScanFile(makeRowVector({makeFlatVector<int64_t>({1, 2})}));
+  auto first = makeSource(type_, table, assignments);
+  auto second = makeSource(type_, table, assignments);
+  for (int i = 0; i < 2; ++i) {
+    for (auto* source : {first.get(), second.get()}) {
+      source->addSplit(makeHiveConnectorSplit(file->getPath()));
+      expectValues(next(*source), {1, 2});
+      EXPECT_EQ(next(*source), nullptr);
+    }
+  }
+  EXPECT_EQ(calls, (std::vector<int>{1, 1, 2, 2}));
 }
 
 } // namespace

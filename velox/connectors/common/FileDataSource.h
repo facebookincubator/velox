@@ -26,6 +26,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/common/FileConnectorSplit.h"
 #include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileScanRequirements.h"
 #include "velox/connectors/common/FileScanState.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/common/FileTableHandle.h"
@@ -144,6 +145,8 @@ class FileDataSource : public DataSource {
   const std::shared_ptr<FileConfig> fileConfig_;
   memory::MemoryPool* const pool_;
 
+  std::shared_ptr<const FileScanRequirements> fileScanRequirements_;
+
   // Heap allocation keeps the validation filter map's address stable when
   // ownership moves. Declare before splitReader_ so the reader is destroyed
   // first.
@@ -158,10 +161,6 @@ class FileDataSource : public DataSource {
   /// in the remaining filter.
   RowTypePtr readerOutputType_;
 
-  /// Column handles for the partition key columns keyed on partition key column
-  /// name.
-  std::unordered_map<std::string, FileColumnHandlePtr> partitionKeys_;
-
   std::shared_ptr<io::IoStatistics> dataIoStats_;
   std::shared_ptr<io::IoStatistics> metadataIoStats_;
   std::shared_ptr<IoStats> ioStats_;
@@ -170,13 +169,21 @@ class FileDataSource : public DataSource {
   // each event reports only the bytes read since the previous one.
   uint64_t lastEventStorageReadBytes_{0};
 
-  /// Column handles for the split info columns keyed on their column names.
-  std::unordered_map<std::string, FileColumnHandlePtr> infoColumns_;
-  SpecialColumnNames specialColumns_{};
+  // Effective pruning requirements can expand during Hive bucket conversion,
+  // independently of the immutable scan requirements.
+  FileScanRequirements::Subfields subfields_;
 
-  /// Subfield pruning info collected from column handles and remaining filter.
-  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
-      subfields_;
+  const FileScanRequirements::ColumnHandles& partitionKeys() const {
+    return fileScanRequirements_->partitionKeys();
+  }
+
+  const FileScanRequirements::ColumnHandles& infoColumns() const {
+    return fileScanRequirements_->infoColumns();
+  }
+
+  const SpecialColumnNames& specialColumns() const {
+    return fileScanRequirements_->specialColumns();
+  }
 
   const exec::ExprSet* remainingFilterExprSet() const {
     return remainingFilterExprSet_.get();
@@ -193,22 +200,9 @@ class FileDataSource : public DataSource {
     return outputType_;
   }
 
-  // Output columns that have extraction chains.  Maps output column index to
-  // the column handle.  These columns are read with schemaType and transformed
-  // post-read using the extraction chains.
-  folly::F14FastMap<column_index_t, const FileColumnHandle*> extractionColumns_;
-
   dwio::common::RuntimeStats runtimeStats_;
 
  private:
-  // Configure extraction columns on the state's ScanSpec and build its
-  // readerProducedType. Called from the constructor after the tree is created.
-  void configureExtractionColumns();
-
-  /// Adds the information from column handle to the corresponding fields in
-  /// this object.
-  void processColumnHandle(const FileColumnHandlePtr& handle);
-
   /// Evaluates remainingFilter_ on the specified vector. Returns number of rows
   /// passed. Populates filterEvalCtx_.selectedIndices and selectedBits if only
   /// some rows passed the filter. If none or all rows passed
@@ -231,7 +225,6 @@ class FileDataSource : public DataSource {
   const RowTypePtr outputType_;
   core::ExpressionEvaluator* const expressionEvaluator_;
 
-  std::vector<common::Subfield> remainingFilterSubfields_;
   /// Optional post-processors for each output column, collected from
   /// HiveColumnHandle::postProcessor(). Applied after reading and filtering to
   /// transform column values. Indexed by output column position.
@@ -243,13 +236,6 @@ class FileDataSource : public DataSource {
   std::atomic_uint64_t totalRemainingFilterTime_{0};
   std::atomic_uint64_t totalRemainingFilterCpuTime_{0};
   uint64_t completedRows_{0};
-  /// Field indices referenced in both remaining filter and output type. These
-  /// columns need to be materialized eagerly to avoid missing values in output.
-  std::vector<column_index_t> multiReferencedFields_;
-
-  // Column names referenced by the remaining filter expression.
-  folly::F14FastSet<std::string> remainingFilterColumns_;
-
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
 
   /// Reusable memory for remaining filter evaluation.

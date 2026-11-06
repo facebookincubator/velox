@@ -34,6 +34,7 @@ velox_add_library(
   FileConnector.cpp
   FileConnectorUtil.cpp
   FileDataSource.cpp
+  FileScanRequirements.cpp
   FileSplitReader.cpp
   FileTableHandle.cpp
   PartitionValue.cpp
@@ -45,6 +46,7 @@ velox_add_library(
   FileConnectorSplit.h
   FileConnectorUtil.h
   FileDataSource.h
+  FileScanRequirements.h
   FileScanState.h
   FileSplitReader.h
   FileTableHandle.h
