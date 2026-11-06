@@ -346,13 +346,12 @@ bool CudfHiveDataSource::isSupported(
       connectorQueryCtx.expressionEvaluator(),
       queryCtx.get(),
       connectorQueryCtx.memoryPool());
-  // The cuDF data source does not sample rows and reads top-level columns only.
+  // The cuDF data source does not sample rows.
   if (filters.sampleRate < 1) {
     return false;
   }
   for (const auto& [subfield, filter] : filters.subfieldFilters) {
-    if (subfield.path().size() != 1 ||
-        !canCreateAstFromSubfieldFilter(*filter)) {
+    if (!canCreateAstFromSubfieldFilter(subfield, *filter)) {
       return false;
     }
   }

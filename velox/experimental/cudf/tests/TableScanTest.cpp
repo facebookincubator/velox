@@ -2456,6 +2456,33 @@ TEST_F(TableScanTest, remainingFilterCastFromVarcharEligibility) {
           {makeFlatVector<std::string>({"x", "0.5"}),
            makeFlatVector<int64_t>({2, 4})}),
       true);
+
+  // Under legacy_cast the CPU reads a TIMESTAMP literal in UTC rather than the
+  // session time zone. The literal is under an OR, so it stays in the remaining
+  // filter, which the data source would fold without legacy_cast and miss the
+  // row.
+  // TODO: Expect the row instead of the error once the data source folds with
+  // the session QueryConfig (facebookincubator/velox#19476).
+  {
+    const auto timestampData = makeRowVector(
+        {"c0", "c1"},
+        {makeFlatVector<Timestamp>({Timestamp(1'767'314'700, 0)}),
+         makeFlatVector<std::string>({"x"})});
+    const auto timestampFilePath = TempFilePath::create();
+    const auto scanPlan = makeRemainingFilterPlan(
+        timestampData,
+        "c1 = 'y' or c0 = TIMESTAMP '2026-01-02 00:45:00'",
+        timestampFilePath);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(scanPlan)
+            .config(CudfConfig::kCudfEnabled, true)
+            .config(core::QueryConfig::kLegacyCast, "true")
+            .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+            .config(core::QueryConfig::kSessionTimezone, "Asia/Kolkata")
+            .splits(makeCudfHiveConnectorSplits({timestampFilePath}))
+            .copyResults(pool()),
+        "Remaining filter with a cast from VARCHAR under legacy_cast is not supported by the cuDF data source");
+  }
 }
 
 // The connector does not see legacy_cast, under which the CPU prints a

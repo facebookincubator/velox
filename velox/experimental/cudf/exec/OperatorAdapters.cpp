@@ -49,6 +49,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
@@ -156,7 +157,7 @@ class TableScanAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto tableScanNode =
         std::dynamic_pointer_cast<const core::TableScanNode>(planNode);
     if (!tableScanNode) {
@@ -195,6 +196,24 @@ class TableScanAdapter : public OperatorAdapter {
           "TableScan table handle, subfield filter or remaining filter is not supported by cuDF, PlanNode id: {}",
           planNode->id());
       return false;
+    }
+
+    // The data source folds the remaining filter without legacy_cast, which
+    // changes how a VARCHAR literal casts, such as a TIMESTAMP literal. The
+    // connector cannot see legacy_cast to fall back, so the scan fails rather
+    // than return different rows.
+    // TODO: Remove this check once the data source folds with the session
+    // QueryConfig (facebookincubator/velox#19476).
+    const auto hiveTableHandle = std::dynamic_pointer_cast<
+        const velox::connector::hive::HiveTableHandle>(
+        tableScanNode->tableHandle());
+    VELOX_CHECK_NOT_NULL(hiveTableHandle);
+    const auto& remainingFilter = hiveTableHandle->remainingFilter();
+    if (ctx->queryConfig().isLegacyCast() && remainingFilter &&
+        containsCastFromVarchar(remainingFilter, /*floatingPointOnly=*/false)) {
+      VELOX_UNSUPPORTED(
+          "Remaining filter with a cast from VARCHAR under legacy_cast is not supported by the cuDF data source: {}",
+          remainingFilter->toString());
     }
 
     return true;
