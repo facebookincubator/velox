@@ -26,6 +26,101 @@ using namespace detail;
 
 static constexpr const char* kDenyPrecisionLoss = "_deny_precision_loss";
 
+// Computes Spark's decimal positive modulo after aligning operand scales.
+// Correction can exceed the result precision when the dividend has fewer
+// integral digits than the divisor.
+template <typename TExec, bool checked>
+struct DecimalPmodFunction {
+  using CallResult = std::conditional_t<checked, Status, bool>;
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      const A* /*dividend*/,
+      const B* /*divisor*/) {
+    const auto [dividendPrecision, dividendScale] =
+        getDecimalPrecisionScale(*inputTypes[0]);
+    const auto [divisorPrecision, divisorScale] =
+        getDecimalPrecisionScale(*inputTypes[1]);
+    const auto resultScale = std::max(dividendScale, divisorScale);
+    const auto resultPrecision = std::min(
+                                     dividendPrecision - dividendScale,
+                                     divisorPrecision - divisorScale) +
+        resultScale;
+    dividendFactor_ =
+        velox::DecimalUtil::kPowersOfTen[resultScale - dividendScale];
+    divisorFactor_ =
+        velox::DecimalUtil::kPowersOfTen[resultScale - divisorScale];
+    resultLimit_ = velox::DecimalUtil::kPowersOfTen[resultPrecision];
+  }
+
+  template <typename R, typename A, typename B>
+  CallResult call(R& out, const A& dividend, const B& divisor) {
+    if (UNLIKELY(divisor == 0)) {
+      return error("Division by zero");
+    }
+    const auto result = compute(dividend, divisor);
+    if (UNLIKELY(!result.has_value())) {
+      return error("Decimal overflow in pmod");
+    }
+    out = static_cast<R>(result.value());
+    if constexpr (checked) {
+      return Status::OK();
+    } else {
+      return true;
+    }
+  }
+
+ private:
+  CallResult error(std::string_view errorMessage) const {
+    if constexpr (checked) {
+      return Status::UserError(errorMessage);
+    } else {
+      return false;
+    }
+  }
+
+  std::optional<int128_t> compute(int128_t dividend, int128_t divisor) const {
+    int128_t scaledDividend;
+    int128_t scaledDivisor;
+    if (!__builtin_mul_overflow(dividend, dividendFactor_, &scaledDividend) &&
+        !__builtin_mul_overflow(divisor, divisorFactor_, &scaledDivisor)) {
+      auto result = scaledDividend % scaledDivisor;
+      if (result < 0 && scaledDivisor > 0) {
+        result += scaledDivisor;
+      }
+      if (result <= -resultLimit_ || result >= resultLimit_) {
+        return std::nullopt;
+      }
+      return result;
+    }
+
+    // A 38-digit decimal scaled by up to 10^38 needs at most 76 digits.
+    // Keep the correction and precision check wide before narrowing.
+    const int256_t wideDividend = int256_t(dividend) * dividendFactor_;
+    const int256_t wideDivisor = int256_t(divisor) * divisorFactor_;
+    int256_t result = wideDividend % wideDivisor;
+    if (result < 0 && wideDivisor > 0) {
+      result += wideDivisor;
+    }
+    if (result <= -resultLimit_ || result >= resultLimit_) {
+      return std::nullopt;
+    }
+    return result.convert_to<int128_t>();
+  }
+
+  int128_t dividendFactor_;
+  int128_t divisorFactor_;
+  int128_t resultLimit_;
+};
+
+template <typename TExec>
+using PmodFunction = DecimalPmodFunction<TExec, false>;
+
+template <typename TExec>
+using CheckedPmodFunction = DecimalPmodFunction<TExec, true>;
+
 template <template <class> typename Func>
 void registerDecimalBinary(
     const std::string& name,
@@ -242,6 +337,32 @@ void registerIntegralDecimalDivide(const std::string& functionName) {
   registerFunction<Func, int64_t, LongDecimal<P1, S1>, ShortDecimal<P2, S2>>(
       {functionName});
 }
+
+template <template <class> typename Func>
+void registerDecimalPmod(const std::string& name) {
+  const auto resultScale = fmt::format("max({}, {})", S1::name(), S2::name());
+  const auto resultPrecision = fmt::format(
+      "min({} - {}, {} - {}) + {}",
+      P1::name(),
+      S1::name(),
+      P2::name(),
+      S2::name(),
+      resultScale);
+  const auto constraints = makeConstraints(resultPrecision, resultScale, false);
+  registerDecimalBinary<Func>(name, constraints);
+  // The smaller integral precision can produce a short result when one
+  // operand is a long decimal.
+  registerFunction<
+      Func,
+      ShortDecimal<P3, S3>,
+      ShortDecimal<P1, S1>,
+      LongDecimal<P2, S2>>({name}, constraints);
+  registerFunction<
+      Func,
+      ShortDecimal<P3, S3>,
+      LongDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>({name}, constraints);
+}
 } // namespace
 
 void registerDecimalAdd(const std::string& prefix) {
@@ -305,5 +426,13 @@ void registerDecimalIntegralDivide(const std::string& prefix) {
   registerIntegralDecimalDivide<DecimalIntegralDivideFunction>(prefix + "div");
   registerIntegralDecimalDivide<CheckedDecimalIntegralDivideFunction>(
       prefix + "checked_div");
+}
+
+void registerDecimalPmod(const std::string& prefix) {
+  registerDecimalPmod<PmodFunction>(prefix + "pmod");
+  registerDecimalPmod<PmodFunction>(prefix + "pmod" + kDenyPrecisionLoss);
+  registerDecimalPmod<CheckedPmodFunction>(prefix + "checked_pmod");
+  registerDecimalPmod<CheckedPmodFunction>(
+      prefix + "checked_pmod" + kDenyPrecisionLoss);
 }
 } // namespace facebook::velox::functions::sparksql

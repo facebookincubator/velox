@@ -27,6 +27,7 @@
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/fuzzer/SparkSpecialFormSignatureGenerator.h"
 #include "velox/functions/prestosql/fuzzer/FloorCeilRoundArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/fuzzer/AddSubtractArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/DivideArgTypesGenerator.h"
@@ -115,6 +116,18 @@ int main(int argc, char** argv) {
           {"divide", std::make_shared<DivideArgTypesGenerator>(true)},
           {"divide_deny_precision_loss",
            std::make_shared<DivideArgTypesGenerator>(false)},
+          {"pmod",
+           std::make_shared<
+               facebook::velox::exec::test::ModulusArgTypesGenerator>()},
+          {"pmod_deny_precision_loss",
+           std::make_shared<
+               facebook::velox::exec::test::ModulusArgTypesGenerator>()},
+          {"checked_pmod",
+           std::make_shared<
+               facebook::velox::exec::test::ModulusArgTypesGenerator>()},
+          {"checked_pmod_deny_precision_loss",
+           std::make_shared<
+               facebook::velox::exec::test::ModulusArgTypesGenerator>()},
           {"ceil",
            std::make_shared<
                facebook::velox::exec::test::FloorCeilRoundArgTypesGenerator>()},

@@ -29,4 +29,8 @@ void registerDecimalDivide(const std::string& prefix);
 
 void registerDecimalIntegralDivide(const std::string& prefix);
 
+/// Registers decimal pmod and checked_pmod, including deny-precision-loss
+/// aliases.
+void registerDecimalPmod(const std::string& prefix);
+
 } // namespace facebook::velox::functions::sparksql

@@ -19,6 +19,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -355,6 +356,179 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
         "Decimal overflow in subtract");
   }
 };
+
+TEST_F(DecimalArithmeticTest, pmod) {
+  for (const auto* ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          ansiEnabled}});
+    for (const auto* name :
+         {"pmod",
+          "pmod_deny_precision_loss",
+          "checked_pmod",
+          "checked_pmod_deny_precision_loss"}) {
+      SCOPED_TRACE(fmt::format("{} ANSI={}", name, ansiEnabled));
+      const auto expression = fmt::format("{}(c0, c1)", name);
+      const auto decimal = DECIMAL(6, 2);
+      const auto dividends = makeNullableFlatVector<int64_t>(
+          {1050, -1050, 1050, -1050, 0, -900, std::nullopt, 1050}, decimal);
+      const auto divisors = makeNullableFlatVector<int64_t>(
+          {300, 300, -300, -300, 300, 300, 0, std::nullopt}, decimal);
+      const auto expected = makeNullableFlatVector<int64_t>(
+          {150, 150, 150, -150, 0, 0, std::nullopt, std::nullopt}, decimal);
+      assertEqualVectors(
+          expected, evaluate(expression, makeRowVector({dividends, divisors})));
+
+      const auto indices = makeIndices(8, [](auto row) { return 7 - row; });
+      assertEqualVectors(
+          wrapInDictionary(indices, 8, expected),
+          evaluate(
+              expression,
+              makeRowVector(
+                  {wrapInDictionary(indices, 8, dividends),
+                   wrapInDictionary(indices, 8, divisors)})));
+      assertEqualVectors(
+          makeFlatVector<int64_t>({150, 150, 150, 150, 0, 0, 0, 150}, decimal),
+          evaluate(
+              expression,
+              makeRowVector(
+                  {makeFlatVector<int64_t>(
+                       {1050, -1050, 1050, -1050, 0, -900, 0, 1050}, decimal),
+                   BaseVector::wrapInConstant(8, 0, divisors)})));
+
+      // Mixed storage widths can resolve to a short result in either order.
+      for (const auto& types :
+           {std::pair{DECIMAL(10, 2), DECIMAL(30, 2)},
+            std::pair{DECIMAL(30, 2), DECIMAL(10, 2)}}) {
+        VectorPtr dividend = types.first->isShortDecimal()
+            ? makeNullableFlatVector<int64_t>({-1050, 1050}, types.first)
+            : makeNullableLongDecimalVector({"-1050", "1050"}, types.first);
+        VectorPtr divisor = types.second->isShortDecimal()
+            ? makeNullableFlatVector<int64_t>({300, -300}, types.second)
+            : makeNullableLongDecimalVector({"300", "-300"}, types.second);
+        assertEqualVectors(
+            makeFlatVector<int64_t>({150, 150}, DECIMAL(10, 2)),
+            evaluate(expression, makeRowVector({dividend, divisor})));
+      }
+
+      // Align to the larger scale before applying the positive correction.
+      assertEqualVectors(
+          makeFlatVector<int64_t>({15000, 15000}, DECIMAL(10, 4)),
+          evaluate(
+              expression,
+              makeRowVector(
+                  {makeFlatVector<int64_t>({-1050, 1050}, DECIMAL(8, 2)),
+                   makeNullableLongDecimalVector(
+                       {"30000", "-30000"}, DECIMAL(20, 4))})));
+      assertEqualVectors(
+          makeNullableLongDecimalVector({"150", "150"}, DECIMAL(20, 2)),
+          evaluate(
+              expression,
+              makeRowVector(
+                  {makeNullableLongDecimalVector(
+                       {"-1050", "1050"}, DECIMAL(20, 2)),
+                   makeNullableLongDecimalVector(
+                       {"300", "-300"}, DECIMAL(20, 2))})));
+    }
+  }
+}
+
+TEST_F(DecimalArithmeticTest, pmodWideRescaling) {
+  const auto maximum = "99999999999999999999999999999999999999";
+  const auto negativeMaximum = "-99999999999999999999999999999999999999";
+  for (const auto* name :
+       {"pmod",
+        "pmod_deny_precision_loss",
+        "checked_pmod",
+        "checked_pmod_deny_precision_loss"}) {
+    SCOPED_TRACE(name);
+    const auto expression = fmt::format("{}(c0, c1)", name);
+    // The dividend needs 76 digits after scale alignment. Expected values
+    // are unscaled integers: e.g. 2 represents 0.000...002 at scale 38.
+    assertEqualVectors(
+        makeNullableLongDecimalVector({"2", "5", "-2"}, DECIMAL(38, 38)),
+        evaluate(
+            expression,
+            makeRowVector(
+                {makeNullableLongDecimalVector(
+                     {maximum, negativeMaximum, negativeMaximum},
+                     DECIMAL(38, 0)),
+                 makeNullableLongDecimalVector(
+                     {"7", "7", "-7"}, DECIMAL(38, 38))})));
+    // A large rescaled divisor does not require narrowing before modulo.
+    assertEqualVectors(
+        makeNullableLongDecimalVector({"1", "-1"}, DECIMAL(38, 38)),
+        evaluate(
+            expression,
+            makeRowVector(
+                {makeNullableLongDecimalVector({"1", "-1"}, DECIMAL(38, 38)),
+                 makeNullableLongDecimalVector(
+                     {maximum, negativeMaximum}, DECIMAL(38, 0))})));
+  }
+}
+
+TEST_F(DecimalArithmeticTest, pmodErrors) {
+  for (const auto* ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          ansiEnabled}});
+    for (const auto* name :
+         {"pmod",
+          "pmod_deny_precision_loss",
+          "checked_pmod",
+          "checked_pmod_deny_precision_loss"}) {
+      SCOPED_TRACE(fmt::format("{} ANSI={}", name, ansiEnabled));
+      const auto expression = fmt::format("{}(c0, c1)", name);
+      const bool checked = std::string_view(name).find("checked_") == 0;
+      const auto input = makeRowVector(
+          {makeNullableFlatVector<int64_t>(
+               {-1, 1, 1, std::nullopt}, DECIMAL(1, 0)),
+           makeFlatVector<int64_t>({100, 0, 3, 0}, DECIMAL(3, 0))});
+      const auto expected = makeNullableFlatVector<int64_t>(
+          {std::nullopt, std::nullopt, 1, std::nullopt}, DECIMAL(1, 0));
+      const auto divisionByZeroInput = makeRowVector(
+          {makeFlatVector<int64_t>({1}, DECIMAL(1, 0)),
+           makeFlatVector<int64_t>({0}, DECIMAL(3, 0))});
+      assertEqualVectors(
+          expected, evaluate(fmt::format("try({})", expression), input));
+      if (!checked) {
+        assertEqualVectors(expected, evaluate(expression, input));
+        assertEqualVectors(
+            makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(1, 0)),
+            evaluate(expression, divisionByZeroInput));
+      } else {
+        VELOX_ASSERT_USER_THROW(
+            evaluate(expression, input), "Decimal overflow in pmod");
+        VELOX_ASSERT_USER_THROW(
+            evaluate(expression, divisionByZeroInput), "Division by zero");
+      }
+      // The correction itself can exceed 128 bits, then the result precision.
+      const auto wideInput = makeRowVector(
+          {makeNullableLongDecimalVector({"-1"}, DECIMAL(38, 38)),
+           makeNullableLongDecimalVector(
+               {"99999999999999999999999999999999999999"}, DECIMAL(38, 0))});
+      const auto nullResult =
+          makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 38));
+      assertEqualVectors(
+          nullResult, evaluate(fmt::format("try({})", expression), wideInput));
+      if (!checked) {
+        assertEqualVectors(nullResult, evaluate(expression, wideInput));
+      } else {
+        VELOX_ASSERT_USER_THROW(
+            evaluate(expression, wideInput), "Decimal overflow in pmod");
+      }
+      // An unselected row must not report its overflow.
+      assertEqualVectors(
+          makeFlatVector<int64_t>({0, 1}, DECIMAL(1, 0)),
+          evaluate(
+              fmt::format("if(c2, cast(0 as decimal(1, 0)), {})", expression),
+              makeRowVector(
+                  {makeFlatVector<int64_t>({-1, 1}, DECIMAL(1, 0)),
+                   makeFlatVector<int64_t>({100, 3}, DECIMAL(3, 0)),
+                   makeFlatVector<bool>({true, false})})));
+    }
+  }
+}
 
 TEST_F(DecimalArithmeticTest, add) {
   // Precision < 38.

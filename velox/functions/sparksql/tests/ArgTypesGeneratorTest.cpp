@@ -15,6 +15,7 @@
  */
 #include "velox/expression/fuzzer/tests/ArgTypesGeneratorTestUtils.h"
 #include "velox/functions/FunctionRegistry.h"
+#include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/AddSubtractArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/DivideArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/MakeTimestampArgTypesGenerator.h"
@@ -154,6 +155,28 @@ TEST_F(ArgTypesGeneratorTest, divideDenyPrecisionLoss) {
   assertReturnType(generator, signature, DECIMAL(38, 38));
   assertEmptyArgs(generator, signature, DECIMAL(38, 0));
   assertEmptyArgs(generator, signature, DECIMAL(10, 2));
+}
+
+TEST_F(ArgTypesGeneratorTest, pmod) {
+  const auto generator =
+      std::make_shared<exec::test::ModulusArgTypesGenerator>();
+  for (const auto& name :
+       {"pmod",
+        "pmod_deny_precision_loss",
+        "checked_pmod",
+        "checked_pmod_deny_precision_loss"}) {
+    SCOPED_TRACE(name);
+    const auto& signature = getOnlySignature(name);
+    for (const auto& type :
+         {DECIMAL(1, 0),
+          DECIMAL(10, 2),
+          DECIMAL(18, 18),
+          DECIMAL(19, 2),
+          DECIMAL(38, 0),
+          DECIMAL(38, 38)}) {
+      assertReturnType(generator, signature, type);
+    }
+  }
 }
 
 TEST_F(ArgTypesGeneratorTest, makeTimestamp) {
