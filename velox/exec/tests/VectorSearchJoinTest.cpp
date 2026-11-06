@@ -64,7 +64,7 @@ class VectorSearchJoinTest : public OperatorTestBase {
   }
 
   // Packs 2-dimensional unit-length centroids given in cluster-id order into a
-  // codec, as vector_index_pack does.
+  // codec, as vector_index_train returns it.
   static std::string pack(const std::vector<float>& centroids) {
     std::vector<int64_t> clusterIds(centroids.size() / 2);
     std::iota(clusterIds.begin(), clusterIds.end(), 0);

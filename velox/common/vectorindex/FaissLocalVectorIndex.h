@@ -20,6 +20,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include <folly/Function.h>
 
@@ -79,6 +80,30 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
       const Embeddings& embeddings,
       std::span<const int64_t> ids,
       folly::FunctionRef<void(std::string_view)> write);
+
+  /// trainCentroids() trains up to this many clusters in one level.
+  static constexpr int64_t kMaxFlatClusters{10'000};
+
+  /// Clusters 'embeddings' with k-means and returns the centroids, one after
+  /// another, normalized for 'metric'. The embeddings must be normalized for
+  /// 'metric' (see EmbeddingNormalizer). Returns min('numClusters', number of
+  /// embeddings) centroids; with no more embeddings than clusters, the
+  /// centroids are the embeddings. The same embeddings in the same order give
+  /// the same centroids on the same number of threads. For kCosine the k-means
+  /// is spherical: an embedding goes to the centroid with the largest inner
+  /// product, and each centroid is the normalized mean of its embeddings.
+  ///
+  /// More than kMaxFlatClusters clusters train in two levels: about
+  /// sqrt('numClusters') coarse clusters, then within each a share of
+  /// 'numClusters' in proportion to its embeddings. That cuts the work by about
+  /// sqrt('numClusters') / 2.
+  ///
+  /// Runs on all of FAISS's OpenMP threads: training is one long computation
+  /// per codec.
+  static std::vector<float> trainCentroids(
+      VectorIndexMetric metric,
+      int64_t numClusters,
+      const Embeddings& embeddings);
 
   /// Reads a local index that build() wrote for 'metric'. The index refers to
   /// its embeddings, codes and graph in 'bytes' rather than copying them, so
