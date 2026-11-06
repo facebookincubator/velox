@@ -162,7 +162,7 @@ class PrefixSortBenchmark {
           });
       folly::addBenchmark(
           __FILE__,
-          "%PrefixSort",
+          "%PrefixSort_" + testCase->testName(),
           [rows = testCase->rows(),
            container = testCase->rowContainer(),
            sortFlags = testCase->compareFlags(),
