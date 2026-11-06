@@ -106,6 +106,8 @@ TabletReader::Options TabletReader::configureOptions(
           nimbleOptions->externalDictionaryResolver;
       tabletOptions.cacheKeyEncodingViews =
           nimbleOptions->cacheKeyEncodingViews;
+      tabletOptions.stripeGroupEncodingViewDeduplicationEnabled =
+          nimbleOptions->experimentalStripeGroupEncodingViewDeduplication;
     }
   }
 
@@ -208,6 +210,8 @@ TabletReader::TabletReader(
       clusterIndexName_{options.clusterIndexName},
       loadChunkStats_{options.loadChunkStats},
       loadDenseIndexes_{options.loadDenseIndexes},
+      stripeGroupEncodingViewDeduplicationEnabled_{
+          options.stripeGroupEncodingViewDeduplicationEnabled},
       ioOptions_{[&]() {
         NIMBLE_CHECK(options.ioOptions.has_value(), "ioOptions is not set.");
         NIMBLE_CHECK_NOT_NULL(
@@ -707,12 +711,31 @@ void TabletReader::initStripes(
   stripeOffsets_ = stripes->offsets()->data();
   stripeSizes_ = stripes->sizes()->data();
 
-  // Build prefix sum for O(log n) rowToStripe lookup.
+  // Build prefix sum for O(log n) rowToStripe lookup. Check that group_indices
+  // starts at 0 and grows by 0 or 1 per stripe: firstStripe(), stripeCount()
+  // and StripeGroup binary search it, and every stripe group must hold a
+  // stripe.
   const auto* rowCounts = stripes->row_counts()->data();
+  const auto* groupIndices = stripes->group_indices();
   stripeRows_.resize(stripeCount_ + 1);
   stripeRows_[0] = 0;
   for (uint32_t i = 0; i < stripeCount_; ++i) {
     stripeRows_[i + 1] = stripeRows_[i] + rowCounts[i];
+    if (i == 0) {
+      NIMBLE_CHECK_FILE_EQ(
+          groupIndices->Get(0),
+          0,
+          "The first stripe must be in stripe group 0.");
+      continue;
+    }
+    NIMBLE_CHECK_FILE_LE(
+        groupIndices->Get(i - 1),
+        groupIndices->Get(i),
+        "Stripe group indices must be non-decreasing.");
+    NIMBLE_CHECK_FILE_LE(
+        groupIndices->Get(i),
+        groupIndices->Get(i - 1) + 1,
+        "Stripe group indices must grow by at most one per stripe.");
   }
 
   // Eagerly pin the first stripe group if covered by the speculative buffer.
@@ -732,7 +755,11 @@ void TabletReader::initStripes(
       stripeGroupCache_.pin(
           0,
           std::make_shared<StripeGroup>(
-              0, *stripes_, std::move(metadataBuffer), pool_));
+              0,
+              *stripes_,
+              std::move(metadataBuffer),
+              stripeGroupEncodingViewDeduplicationEnabled_,
+              pool_));
     }
   }
 }
@@ -920,7 +947,11 @@ std::shared_ptr<StripeGroup> TabletReader::loadStripeGroup(
 
   const auto section = toMetadataSection(stripeGroupInfo);
   return std::make_shared<StripeGroup>(
-      stripeGroupIndex, *stripes_, readMetadata(section), pool_);
+      stripeGroupIndex,
+      *stripes_,
+      readMetadata(section),
+      stripeGroupEncodingViewDeduplicationEnabled_,
+      pool_);
 }
 
 std::shared_ptr<StripeGroup> TabletReader::stripeGroup(
@@ -970,7 +1001,11 @@ TabletReader::loadStripeGroupMetadata(
     auto metadata =
         std::make_unique<MetadataBuffer>(std::move(*buffers[bufferIndex++]));
     group.stripeGroup = std::make_shared<StripeGroup>(
-        stripeGroupIndex, *stripes_, std::move(metadata), pool_);
+        stripeGroupIndex,
+        *stripes_,
+        std::move(metadata),
+        stripeGroupEncodingViewDeduplicationEnabled_,
+        pool_);
     if (hasChunkStats(stripeGroupIndex)) {
       auto chunkMetadata =
           std::make_unique<MetadataBuffer>(std::move(*buffers[bufferIndex++]));
@@ -1009,7 +1044,7 @@ uint32_t TabletReader::streamSize(
     const StripeIdentifier& stripe,
     uint32_t streamId) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  // Mirrors streamOffset: StripeGroup::streamSize already returns 0 for an
+  // Mirrors streamOffset: StripeGroup::streamSize already rejects an
   // out-of-range streamId, so delegate without a redundant guard here.
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
 }
@@ -1028,6 +1063,13 @@ void TabletReader::streamLocations(
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
   stripe.stripeGroup()->streamLocations(
       stripe.stripeId(), streamIds, locations);
+}
+
+TabletReader::StreamMetadata TabletReader::streamLocation(
+    const StripeIdentifier& stripe,
+    uint32_t streamId) const {
+  NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
+  return stripe.stripeGroup()->streamLocation(stripe.stripeId(), streamId);
 }
 
 uint32_t TabletReader::streamCount(const StripeIdentifier& stripe) const {
@@ -1174,22 +1216,18 @@ std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
   regionToStreamIndices.reserve(streamsToLoad);
   uniqueRegions.reserve(streamsToLoad);
 
+  std::vector<StreamMetadata> locations(streamsToLoad);
+  stripeGroup->streamLocations(stripeId, streamIdentifiers, locations);
   for (uint32_t i = 0; i < streamsToLoad; ++i) {
     const uint32_t streamIdentifier = streamIdentifiers[i];
-    if (streamIdentifier >= stripeGroup->streamCount()) {
-      streams[i] = nullptr;
-      continue;
-    }
-
-    const uint32_t streamSize =
-        stripeGroup->streamSize(stripeId, streamIdentifier);
+    const StreamMetadata& location = locations[i];
+    const uint32_t streamSize = location.size;
     if (streamSize == 0) {
       streams[i] = nullptr;
       continue;
     }
 
-    const auto streamStart =
-        stripeOffset + stripeGroup->streamOffset(stripeId, streamIdentifier);
+    const auto streamStart = stripeOffset + location.offset;
 
     auto it = regionToStreamIndices.emplace(
         velox::common::Region{streamStart, streamSize},
@@ -1511,13 +1549,17 @@ uint32_t TabletReader::firstStripe(uint32_t stripeGroupIndex) const {
   const auto* groupIndices = stripesRoot->group_indices();
   NIMBLE_CHECK_NOT_NULL(groupIndices);
 
-  for (uint32_t s = 0; s < stripeCount_; ++s) {
-    if (groupIndices->Get(s) == stripeGroupIndex) {
-      return s;
-    }
-  }
-  NIMBLE_UNREACHABLE(
-      fmt::format("No stripes found for group {}", stripeGroupIndex));
+  // Stripes are assigned to groups in order, so group_indices is
+  // non-decreasing.
+  const auto first = std::lower_bound(
+      groupIndices->begin(), groupIndices->end(), stripeGroupIndex);
+  NIMBLE_CHECK(
+      first != groupIndices->end(),
+      "No stripes found for stripe group {}.",
+      stripeGroupIndex);
+  NIMBLE_CHECK_EQ(
+      *first, stripeGroupIndex, "No stripes found for stripe group.");
+  return static_cast<uint32_t>(first - groupIndices->begin());
 }
 
 uint32_t TabletReader::rowToStripe(uint64_t row) const {
@@ -1542,13 +1584,9 @@ uint32_t TabletReader::stripeCount(uint32_t stripeGroupIndex) const {
   const auto* groupIndices = stripesRoot->group_indices();
   NIMBLE_CHECK_NOT_NULL(groupIndices);
 
-  uint32_t count = 0;
-  for (uint32_t s = 0; s < stripeCount_; ++s) {
-    if (groupIndices->Get(s) == stripeGroupIndex) {
-      ++count;
-    }
-  }
-  return count;
+  const auto [first, last] = std::equal_range(
+      groupIndices->begin(), groupIndices->end(), stripeGroupIndex);
+  return static_cast<uint32_t>(last - first);
 }
 
 std::shared_ptr<ChunkStatsGroup> TabletReader::chunkStats(

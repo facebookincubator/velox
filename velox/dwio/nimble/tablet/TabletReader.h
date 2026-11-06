@@ -83,6 +83,13 @@ class NimbleReaderOptions : public velox::dwio::common::FormatSpecificOptions {
   /// Whether key chunk readers cache their encoding views. See
   /// TabletReader::Options::cacheKeyEncodingViews.
   bool cacheKeyEncodingViews{false};
+
+  /// NOTE: !!! This is under experimentation and please do not turn on in
+  /// production use case !!!
+  /// When true, kStreamMajor stripe groups share one EncodingView among streams
+  /// whose offsets or sizes arrays reference the same encoded payload, which
+  /// files written with experimentalStripeGroupMetadataDeduplication contain.
+  bool experimentalStripeGroupEncodingViewDeduplication{false};
 };
 
 namespace test {
@@ -198,6 +205,14 @@ class TabletReader {
     /// when the weak-pointer cache entries would otherwise expire. Works
     /// independently of cacheMetadata.
     bool pinMetadata{false};
+
+    /// If true, kStreamMajor stripe groups build one EncodingView per distinct
+    /// encoded offsets or sizes payload instead of one per stream, so streams
+    /// whose arrays TabletWriter deduplicated share a view. Reduces resident
+    /// stripe-group metadata for files written with stripe-group metadata
+    /// deduplication. Set from
+    /// NimbleReaderOptions::experimentalStripeGroupEncodingViewDeduplication.
+    bool stripeGroupEncodingViewDeduplicationEnabled{false};
 
     /// If true, caches file metadata and index metadata in the async data
     /// cache. Takes effect only when fileHandle and cache are provided.
@@ -443,14 +458,14 @@ class TabletReader {
   }
 
   /// Returns the byte offset of `streamId` within `stripe` (relative to the
-  /// stripe's start). O(1) point read into the per-stream FBW-encoded blob
-  /// held by the StripeGroup. Callers must ensure
-  /// `streamId < streamCount(stripe)`.
+  /// stripe's start), with the cost of StripeGroup::streamOffset(). Callers
+  /// must ensure `streamId < streamCount(stripe)`.
   uint32_t streamOffset(const StripeIdentifier& stripe, uint32_t streamId)
       const;
 
   /// Returns the byte size of `streamId` within `stripe`. Returns 0 if the
-  /// stream does not exist in this stripe. O(1) point read.
+  /// stream does not exist in this stripe, with the cost of
+  /// StripeGroup::streamSize().
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
 
   /// Relative byte location of one stream within a stripe. A zero size means
@@ -469,6 +484,13 @@ class TabletReader {
       const StripeIdentifier& stripe,
       std::span<const uint32_t> streamIds,
       std::span<StreamMetadata> locations) const;
+
+  /// Returns the location of `streamId` in `stripe`, absent when the stream has
+  /// no data there or `streamId >= streamCount(stripe)`. One lookup, unlike
+  /// streamOffset() plus streamSize().
+  StreamMetadata streamLocation(
+      const StripeIdentifier& stripe,
+      uint32_t streamId) const;
 
   /// Returns the schema's leaf-stream count at the time `stripe`'s stripe
   /// group was written. May be less than the final schema's node count.
@@ -690,6 +712,8 @@ class TabletReader {
   const std::string clusterIndexName_;
   const bool loadChunkStats_;
   const bool loadDenseIndexes_;
+  // Copied from Options::stripeGroupEncodingViewDeduplicationEnabled.
+  const bool stripeGroupEncodingViewDeduplicationEnabled_;
   // IO options copied from Options.ioOptions (required, with non-null
   // metadataIoStats).
   const velox::io::ReaderOptions ioOptions_;

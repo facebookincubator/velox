@@ -121,22 +121,25 @@ struct WriterOptions {
   /// Selects how per-stripe-group stream offsets/sizes are serialized:
   /// - kRaw: flat stripe-major uint32 arrays (default; all readers).
   /// - kStreamMajor: one encoding per stream.
+  /// - kStreamMajorSparse: one encoding per stream, holding only the stripes
+  ///   where the stream has data, plus the list of those stripes.
   StripeGroup::EncodingLayout experimentalStripeGroupEncodingLayout{
       StripeGroup::EncodingLayout::kRaw};
 
   /// Candidate encodings (with read-cost weights) the writer considers when
-  /// encoding per-stripe-group stream offsets/sizes (kStreamMajor). Only
-  /// encodings with O(1) stateless point access (via EncodingView) are valid.
-  /// Empty (default) lets the writer pick its own candidate set (Constant,
-  /// Trivial, FixedBitWidth, Dictionary).
+  /// encoding per-stripe-group metadata arrays of the stream-major layouts.
+  /// Only encodings with O(1) stateless point access (via EncodingView) are
+  /// valid. Empty (default) lets the writer pick its own candidate set
+  /// (Constant, Trivial, FixedBitWidth, Dictionary).
   std::vector<std::pair<EncodingType, float>>
       experimentalStripeGroupEncodingLayoutReadFactors{};
 
   /// NOTE: !!! This is under experimentation and please do not turn on in
   /// production use case !!!
-  /// When true, kStreamMajor stripe-group metadata encodes each distinct
-  /// offsets or sizes array once per stripe group, and streams with identical
-  /// arrays reference the same copy. Existing readers read such files.
+  /// When true, stream-major stripe-group metadata (kStreamMajor or
+  /// kStreamMajorSparse) encodes each distinct offsets, sizes or stripe-list
+  /// array once per stripe group, and streams with identical arrays reference
+  /// the same copy. Always on for kStreamMajorSparse.
   /// Enabling this can increase temporary writer memory.
   bool experimentalStripeGroupMetadataDeduplication{false};
 
@@ -319,11 +322,11 @@ struct WriterOptions {
   /// compressed.
   std::optional<uint32_t> metadataCompressionThreshold{};
 
-  /// If present, overrides how much estimated stripe group metadata the tablet
-  /// writer accumulates before closing a stripe group. One index partition is
-  /// emitted per stripe group, so lowering this is the only way to produce a
-  /// multi-partition index without writing enough stripes to reach the 8MB
-  /// default.
+  /// If present, overrides how much stripe group metadata, in bytes, the
+  /// tablet writer accumulates before closing a stripe group. One index
+  /// partition is emitted per stripe group, so lowering this is the only way to
+  /// produce a multi-partition index without writing enough stripes to reach
+  /// the 8MB default.
   std::optional<uint32_t> metadataFlushThreshold{};
 
   /// When flushing data streams into chunks, streams with raw data size smaller

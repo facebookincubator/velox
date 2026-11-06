@@ -16,8 +16,11 @@
 
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 
+#include <algorithm>
 #include <limits>
 #include <string_view>
+
+#include <folly/container/F14Map.h>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -29,6 +32,130 @@
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 
 namespace facebook::nimble {
+
+namespace detail {
+
+// Progress of the current stripe group, which TabletWriter tracks.
+struct StripeGroupProgress {
+  const uint64_t numStripes;
+  // Streams that the last stripe records.
+  const uint64_t numStreams;
+  // (stream, stripe) entries with data.
+  const uint64_t numEntries;
+};
+
+// Decides when TabletWriter closes a stripe group, against
+// metadataFlushThreshold.
+class StripeGroupFlushPolicy {
+ public:
+  virtual ~StripeGroupFlushPolicy() = default;
+
+  // Returns whether to serialize the group.
+  virtual bool shouldSerialize(const StripeGroupProgress& progress) const = 0;
+
+  // Returns whether the group, serialized to 'serializedBytes', flushes. A
+  // policy can also update what it decides next, such as when to serialize the
+  // group again.
+  virtual bool shouldFlush(
+      const StripeGroupProgress& progress,
+      uint64_t serializedBytes) = 0;
+};
+
+} // namespace detail
+
+namespace {
+
+// Flushes kRaw and kStreamMajor stripe groups once their size as kRaw entries
+// reaches the threshold, so a serialized group always flushes.
+// TODO: Flush kStreamMajor by its serialized size too. It encodes its entries,
+// so their size as kRaw entries can overstate its groups.
+class StripeGroupRawSizeFlushPolicy final
+    : public detail::StripeGroupFlushPolicy {
+ public:
+  explicit StripeGroupRawSizeFlushPolicy(uint32_t thresholdBytes)
+      : thresholdBytes_{thresholdBytes} {}
+
+  bool shouldSerialize(
+      const detail::StripeGroupProgress& progress) const override {
+    // 8 bytes for the offset, 4 for the size and 1 for the compression type
+    // of each (stream, stripe) entry.
+    return 4 + progress.numStripes * progress.numStreams * 13 >=
+        thresholdBytes_;
+  }
+
+  bool shouldFlush(
+      const detail::StripeGroupProgress& /*progress*/,
+      uint64_t /*serializedBytes*/) override {
+    return true;
+  }
+
+ private:
+  const uint64_t thresholdBytes_;
+};
+
+// Flushes kStreamMajorSparse stripe groups by their serialized size, since
+// their metadata has no closed-form size. A measurement serializes the whole
+// group, so each one aims the next at the entry count where the group reaches
+// the threshold at its bytes per entry so far. The checkpoint carries over to
+// the next group, since the groups of a file have about the same bytes per
+// entry.
+class StripeGroupSerializedSizeFlushPolicy final
+    : public detail::StripeGroupFlushPolicy {
+ public:
+  explicit StripeGroupSerializedSizeFlushPolicy(uint32_t thresholdBytes)
+      : thresholdBytes_{thresholdBytes},
+        minGroupBytes_{static_cast<uint64_t>(thresholdBytes * kMinFillRatio)} {}
+
+  bool shouldSerialize(
+      const detail::StripeGroupProgress& progress) const override {
+    return progress.numEntries >= checkpointNumEntries_;
+  }
+
+  // Also sets the next checkpoint, whether the group flushes or not. A flushed
+  // group passes it on as the first checkpoint of the next group.
+  bool shouldFlush(
+      const detail::StripeGroupProgress& progress,
+      uint64_t serializedBytes) override {
+    NIMBLE_CHECK_GT(serializedBytes, 0);
+    // For example, 1M entries that serialize to 2 MB under a 4 MB threshold
+    // are measured again at 2M entries.
+    checkpointNumEntries_ =
+        progress.numEntries * thresholdBytes_ / serializedBytes;
+    return serializedBytes >= minGroupBytes_;
+  }
+
+ private:
+  // A group flushes from this fraction of the threshold. Checkpoints come
+  // early, because a group's first entries also carry each stream's fixed
+  // cost, and creeping up to the threshold would serialize the whole group
+  // again at each check.
+  static constexpr double kMinFillRatio{0.9};
+
+  const uint64_t thresholdBytes_;
+  const uint64_t minGroupBytes_;
+  // 0 measures the first group at its first stripe.
+  uint64_t checkpointNumEntries_{0};
+};
+
+// Returns the flush policy of 'layout'. kRaw and kStreamMajor flush by the size
+// of a group as kRaw entries. kStreamMajorSparse has no closed-form size and
+// flushes by the serialized size.
+std::unique_ptr<detail::StripeGroupFlushPolicy> createStripeGroupFlushPolicy(
+    StripeGroup::EncodingLayout layout,
+    uint32_t thresholdBytes) {
+  switch (layout) {
+    case StripeGroup::EncodingLayout::kRaw:
+    case StripeGroup::EncodingLayout::kStreamMajor:
+      return std::make_unique<StripeGroupRawSizeFlushPolicy>(thresholdBytes);
+    case StripeGroup::EncodingLayout::kStreamMajorSparse:
+      return std::make_unique<StripeGroupSerializedSizeFlushPolicy>(
+          thresholdBytes);
+  }
+  NIMBLE_UNREACHABLE(
+      "Unknown StripeGroup encoding layout: {}", static_cast<int>(layout));
+}
+
+} // namespace
 
 std::unique_ptr<TabletWriter> TabletWriter::create(
     velox::WriteFile* file,
@@ -60,9 +187,15 @@ TabletWriter::TabletWriter(
                             options_.chunkStatsMinAvgChunks,
                         .maxStringStatSize = options_.maxChunkStringStatSize,
                     })
-              : nullptr} {}
+              : nullptr},
+      stripeGroupFlushPolicy_{createStripeGroupFlushPolicy(
+          options_.stripeGroupEncodingLayout,
+          options_.metadataFlushThreshold)} {}
+
+TabletWriter::~TabletWriter() = default;
 
 namespace {
+
 template <typename Source, typename Target = Source>
 flatbuffers::Offset<flatbuffers::Vector<Target>> createFlattenedVector(
     flatbuffers::FlatBufferBuilder& builder,
@@ -429,6 +562,11 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
     }
   }
 
+  numStripeGroupEntries_ += std::count_if(
+      stripeStreamSizes.begin(), stripeStreamSizes.end(), [](uint32_t size) {
+        return size != 0;
+      });
+
   stripeSizes_.push_back(file_->size() - stripeOffsets_.back());
 
   stripeGroupIndices_.push_back(stripeGroupIndex_);
@@ -517,22 +655,6 @@ void TabletWriter::writeOptionalSection(
       std::move(name), createMetadataSection(content));
 }
 
-bool TabletWriter::shouldWriteStripeGroup(bool force) const {
-  const auto stripeCount = streamOffsets_.size();
-  if (stripeCount == 0) {
-    return false;
-  }
-
-  // Estimate size
-  // 8 bytes for offsets, 4 for size, 1 for compression type, so 13.
-  const size_t estimatedSize =
-      4 + stripeCount * streamOffsets_.back().size() * 13;
-  if (!force && (estimatedSize < options_.metadataFlushThreshold)) {
-    return false;
-  }
-  return true;
-}
-
 namespace {
 // Build an encoding policy restricted to the given read factors. Read factors
 // must list only encodings with O(1) stateless point access (the EncodingView
@@ -572,6 +694,82 @@ std::vector<uint32_t> transposeStreamMetadata(
   }
   return streamValues;
 }
+
+// Encodes the metadata arrays of a stream-major stripe group into
+// EncodedStream entries. With deduplication, each distinct array is encoded
+// once, and every stream holding it references the same entry. Create one
+// encoder per stripe-group write so the deduplication map holds only that
+// group's arrays.
+class MetadataArrayEncoder {
+ public:
+  MetadataArrayEncoder(
+      const std::vector<std::pair<EncodingType, float>>& encodingReadFactors,
+      bool deduplicationEnabled,
+      flatbuffers::FlatBufferBuilder& builder,
+      velox::memory::MemoryPool* pool)
+      : builder_{builder},
+        encodingReadFactors_{encodingReadFactors},
+        deduplicationEnabled_{deduplicationEnabled},
+        encodingBuffer_{*pool} {}
+
+  // Returns the entry of `values`, reusing the entry of an identical array when
+  // deduplicating.
+  flatbuffers::Offset<serialization::EncodedStream> encode(
+      std::vector<uint32_t> values) {
+    if (!deduplicationEnabled_) {
+      return encodeArray(values);
+    }
+
+    // Every metadata array has the same type and encoding policy, so identical
+    // arrays can share an entry.
+    auto [it, inserted] = uniqueArrays_.try_emplace(std::move(values));
+    if (inserted) {
+      it->second = encodeArray(it->first);
+    }
+    return it->second;
+  }
+
+ private:
+  // Encodes one array, copies it into the flatbuffer, then rewinds the scratch
+  // buffer for reuse.
+  flatbuffers::Offset<serialization::EncodedStream> encodeArray(
+      const std::vector<uint32_t>& values) {
+    const std::string_view encoded = EncodingFactory::encode<uint32_t>(
+        makeMetadataEncodingPolicy<uint32_t>(encodingReadFactors_),
+        std::span<const uint32_t>(values),
+        encodingBuffer_,
+        encodingOptions_);
+    const auto encodedStream = serialization::CreateEncodedStream(
+        builder_,
+        builder_.CreateVector(
+            reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size()));
+    encodingBuffer_.reset();
+    return encodedStream;
+  }
+
+  // Receives the encoded entries.
+  flatbuffers::FlatBufferBuilder& builder_;
+
+  // Selects the encoding of each array. Empty selects kDefaultReadFactors.
+  const std::vector<std::pair<EncodingType, float>>& encodingReadFactors_;
+
+  // Encodes each distinct array once when true.
+  const bool deduplicationEnabled_;
+
+  // FixedBitWidth rounds bit widths up to whole bytes by default. Readers that
+  // pin metadata keep these arrays resident, so pack them at exact widths.
+  const Encoding::Options encodingOptions_{.fixedBitWidthUseExactBits = true};
+
+  // Holds one encoded array until encodeArray() copies it into builder_.
+  Buffer encodingBuffer_;
+
+  // Maps each distinct array to its entry when deduplicating. Owns the arrays
+  // to compare them on hash matches.
+  folly::F14FastMap<
+      std::vector<uint32_t>,
+      flatbuffers::Offset<serialization::EncodedStream>>
+      uniqueArrays_;
+};
 } // namespace
 
 void TabletWriter::writeStripeGroupWithRawLayout(
@@ -600,61 +798,21 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
   // For each leaf streamId, gather that stream's values across every stripe and
   // encode the resulting stripeCount-length array independently. The per-stream
   // bit width is tight to that stream's value range.
-  // Identical arrays can reuse an existing encoding.
   std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedOffsets;
   std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedSizes;
   encodedOffsets.reserve(streamCount);
   encodedSizes.reserve(streamCount);
-
-  // FixedBitWidth rounds bit widths up to whole bytes by default. Readers that
-  // pin metadata keep these arrays resident, so pack them at exact widths.
-  Encoding::Options encodingOptions;
-  encodingOptions.fixedBitWidthUseExactBits = true;
-
-  // Encodes one array, copies it into the flatbuffer, then rewinds the scratch
-  // buffer for reuse.
-  Buffer encodingBuffer{*pool_};
-  auto encodeStream = [&](const std::vector<uint32_t>& values) {
-    const auto encoded = EncodingFactory::encode<uint32_t>(
-        makeMetadataEncodingPolicy<uint32_t>(
-            options_.stripeGroupEncodingLayoutReadFactors),
-        std::span<const uint32_t>(values),
-        encodingBuffer,
-        encodingOptions);
-    const auto encodedStream = serialization::CreateEncodedStream(
-        builder,
-        builder.CreateVector(
-            reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size()));
-    encodingBuffer.reset();
-    return encodedStream;
+  MetadataArrayEncoder encoder{
+      options_.stripeGroupEncodingLayoutReadFactors,
+      options_.stripeGroupMetadataDeduplicationEnabled,
+      builder,
+      pool_,
   };
-  auto writeMetadataArrays = [&](const auto& encode) {
-    for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-      encodedOffsets.push_back(encode(
-          transposeStreamMetadata(streamId, stripeCount, streamOffsets_)));
-      encodedSizes.push_back(
-          encode(transposeStreamMetadata(streamId, stripeCount, streamSizes_)));
-    }
-  };
-
-  if (options_.stripeGroupMetadataDeduplicationEnabled) {
-    // Offsets and sizes have the same type and encoding policy, so identical
-    // arrays can share an entry.
-    // Own the original arrays for equality checks on hash matches.
-    // Keep the raw-key cache local to this stripe-group write.
-    folly::F14FastMap<
-        std::vector<uint32_t>,
-        flatbuffers::Offset<serialization::EncodedStream>>
-        uniqueArrays;
-    writeMetadataArrays([&](std::vector<uint32_t> values) {
-      auto [it, inserted] = uniqueArrays.try_emplace(std::move(values));
-      if (inserted) {
-        it->second = encodeStream(it->first);
-      }
-      return it->second;
-    });
-  } else {
-    writeMetadataArrays(encodeStream);
+  for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+    encodedOffsets.push_back(encoder.encode(
+        transposeStreamMetadata(streamId, stripeCount, streamOffsets_)));
+    encodedSizes.push_back(encoder.encode(
+        transposeStreamMetadata(streamId, stripeCount, streamSizes_)));
   }
 
   // Tag the blob with the kStreamMajor file identifier so the reader detects
@@ -669,7 +827,86 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
       StripeGroup::kStreamMajorLayoutIdentifier.data());
 }
 
-void TabletWriter::writeStripeGroup(size_t streamCount, size_t stripeCount) {
+void TabletWriter::writeStripeGroupWithStreamMajorSparseLayout(
+    flatbuffers::FlatBufferBuilder& builder,
+    size_t streamCount,
+    size_t stripeCount) {
+  // Keeps, for each stream, only the stripes where it has data; see Footer.fbs.
+  std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedStripes;
+  std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedOffsets;
+  std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedSizes;
+  encodedStripes.reserve(streamCount);
+  encodedOffsets.reserve(streamCount);
+  encodedSizes.reserve(streamCount);
+  // Always deduplicates: readers share one view and one stripe search among
+  // streams with the same list.
+  MetadataArrayEncoder encoder{
+      options_.stripeGroupEncodingLayoutReadFactors,
+      /*deduplicationEnabled=*/true,
+      builder,
+      pool_,
+  };
+
+  // An entry without data marks an omitted array. Every omitted array shares
+  // it.
+  const flatbuffers::Offset<serialization::EncodedStream> omitted =
+      serialization::CreateEncodedStream(builder);
+  for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+    std::vector<uint32_t> allSizes =
+        transposeStreamMetadata(streamId, stripeCount, streamSizes_);
+    const auto numStripes = static_cast<size_t>(
+        std::count_if(allSizes.begin(), allSizes.end(), [](uint32_t size) {
+          return size != 0;
+        }));
+    if (numStripes == 0) {
+      encodedStripes.push_back(omitted);
+      encodedOffsets.push_back(omitted);
+      encodedSizes.push_back(omitted);
+      continue;
+    }
+    if (numStripes == stripeCount) {
+      // Data in every stripe: the stripe list would be the identity.
+      encodedStripes.push_back(omitted);
+      encodedOffsets.push_back(encoder.encode(
+          transposeStreamMetadata(streamId, stripeCount, streamOffsets_)));
+      encodedSizes.push_back(encoder.encode(std::move(allSizes)));
+      continue;
+    }
+
+    // Sized exactly, because the deduplicating encoder keeps the arrays.
+    std::vector<uint32_t> stripes;
+    std::vector<uint32_t> offsets;
+    std::vector<uint32_t> sizes;
+    stripes.reserve(numStripes);
+    offsets.reserve(numStripes);
+    sizes.reserve(numStripes);
+    for (uint32_t stripe = 0; stripe < stripeCount; ++stripe) {
+      if (allSizes[stripe] != 0) {
+        stripes.push_back(stripe);
+        // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
+        offsets.push_back(streamOffsets_[stripe][streamId]);
+        sizes.push_back(allSizes[stripe]);
+      }
+    }
+    encodedStripes.push_back(encoder.encode(std::move(stripes)));
+    encodedOffsets.push_back(encoder.encode(std::move(offsets)));
+    encodedSizes.push_back(encoder.encode(std::move(sizes)));
+  }
+
+  builder.Finish(
+      serialization::CreateStreamMajorSparseStripeGroup(
+          builder,
+          static_cast<uint32_t>(stripeCount),
+          static_cast<uint32_t>(streamCount),
+          builder.CreateVector(encodedStripes),
+          builder.CreateVector(encodedOffsets),
+          builder.CreateVector(encodedSizes)),
+      StripeGroup::kStreamMajorSparseLayoutIdentifier.data());
+}
+
+flatbuffers::FlatBufferBuilder TabletWriter::serializeStripeGroup(
+    size_t streamCount,
+    size_t stripeCount) {
   flatbuffers::FlatBufferBuilder builder(kInitialFooterSize);
 
   switch (options_.stripeGroupEncodingLayout) {
@@ -679,14 +916,17 @@ void TabletWriter::writeStripeGroup(size_t streamCount, size_t stripeCount) {
     case StripeGroup::EncodingLayout::kStreamMajor:
       writeStripeGroupWithStreamMajorLayout(builder, streamCount, stripeCount);
       break;
+    case StripeGroup::EncodingLayout::kStreamMajorSparse:
+      writeStripeGroupWithStreamMajorSparseLayout(
+          builder, streamCount, stripeCount);
+      break;
     default:
       NIMBLE_UNREACHABLE(
           fmt::format(
               "Unknown StripeGroup encoding layout: {}",
               static_cast<int>(options_.stripeGroupEncodingLayout)));
   }
-
-  stripeGroups_.emplace_back(createMetadataSection(asView(builder)));
+  return builder;
 }
 
 MetadataSection TabletWriter::writeStripes(size_t stripeCount) {
@@ -739,12 +979,18 @@ TabletWriter::createOptionalMetadataSection(
 }
 
 void TabletWriter::tryWriteStripeGroup(bool force) {
-  if (!shouldWriteStripeGroup(force)) {
+  const auto stripeCount = streamOffsets_.size();
+  if (stripeCount == 0) {
     return;
   }
-
-  const auto stripeCount = streamOffsets_.size();
-  NIMBLE_CHECK_GT(stripeCount, 0);
+  const detail::StripeGroupProgress progress{
+      .numStripes = stripeCount,
+      .numStreams = streamOffsets_.back().size(),
+      .numEntries = numStripeGroupEntries_,
+  };
+  if (!force && !stripeGroupFlushPolicy_->shouldSerialize(progress)) {
+    return;
+  }
 
   const auto maxStreamCountIt = std::max_element(
       streamOffsets_.begin(),
@@ -756,8 +1002,16 @@ void TabletWriter::tryWriteStripeGroup(bool force) {
 
   // Each stripe may have different stream count recorded.
   // We need to pad shorter stripes to the full length of stream count.
-  // Handled by the |transposeStreamMetadata| helper inside writeStripeGroup.
-  writeStripeGroup(streamCount, stripeCount);
+  // Handled by the |transposeStreamMetadata| helper inside
+  // serializeStripeGroup.
+  auto builder = serializeStripeGroup(streamCount, stripeCount);
+  // A forced flush ends the file, so it skips the policy: no later group needs
+  // the checkpoint that shouldFlush() would set.
+  if (!force &&
+      !stripeGroupFlushPolicy_->shouldFlush(progress, builder.GetSize())) {
+    return;
+  }
+  stripeGroups_.emplace_back(createMetadataSection(asView(builder)));
 
   writeChunkStatsGroup(streamCount, stripeCount);
 
@@ -769,6 +1023,7 @@ void TabletWriter::tryWriteStripeGroup(bool force) {
 void TabletWriter::finishStripeGroup() {
   streamOffsets_.clear();
   streamSizes_.clear();
+  numStripeGroupEntries_ = 0;
   // Move to the next stripe group
   ++stripeGroupIndex_;
 }
