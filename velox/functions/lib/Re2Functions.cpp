@@ -1216,7 +1216,7 @@ class Re2ExtractAll final : public exec::VectorFunction {
 
     exec::LocalDecodedVector inputStrs(context, *args[0], rows);
     exec::LocalDecodedVector pattern(context, *args[1], rows);
-    FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
+    std::vector<re2::StringPiece> groups;
 
     if (args.size() == 2) {
       // Case 1: No groupId -- use 0 as the default groupId
