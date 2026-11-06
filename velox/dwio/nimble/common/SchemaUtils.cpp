@@ -1506,7 +1506,7 @@ NimbleTypeProjection buildProjectedNimbleType(
   // (UINT32_MAX for missing keys).
   appendProjectedStream(
       projection.streamOffsets,
-      projection.rowOrFlatMapNullStreams,
+      projection.barrierStreams,
       rootRow.nullsDescriptor().offset(),
       /*isBarrierStream=*/true);
   for (size_t columnIdx : selectedColumnIndices) {
@@ -1517,20 +1517,20 @@ NimbleTypeProjection buildProjectedNimbleType(
       projectHybridFlatMapStreamOffsets(
           projectedHybridFlatMap,
           projection.streamOffsets,
-          projection.rowOrFlatMapNullStreams);
+          projection.barrierStreams);
     } else if (child->kind() == Kind::FlatMap) {
       projectFlatmapStreamOffsets(
           child->asFlatMap(),
           selectedChildren,
           missingChildren,
           projection.streamOffsets,
-          projection.rowOrFlatMapNullStreams);
+          projection.barrierStreams);
     } else {
       projectStreamOffsets(
           child,
           selectedChildren,
           projection.streamOffsets,
-          projection.rowOrFlatMapNullStreams);
+          projection.barrierStreams);
     }
   }
   validateProjectedHybridFlatMapSchema(*projection.nimbleType);
@@ -1540,8 +1540,7 @@ NimbleTypeProjection buildProjectedNimbleType(
       schemaNodes(*projection.nimbleType).size(),
       "Projected visible stream count does not match projected schema.");
   NIMBLE_DCHECK_EQ(
-      projection.streamOffsets.size(),
-      projection.rowOrFlatMapNullStreams.size());
+      projection.streamOffsets.size(), projection.barrierStreams.size());
 
   return projection;
 }

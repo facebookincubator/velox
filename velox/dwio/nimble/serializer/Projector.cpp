@@ -387,7 +387,7 @@ Projector::Projector(
   projection_ = buildProjectedNimbleType(inputSchema_.get(), projectSubfields);
   NIMBLE_CHECK_EQ(
       projection_.streamOffsets.size(),
-      projection_.rowOrFlatMapNullStreams.size(),
+      projection_.barrierStreams.size(),
       "Projected stream indices and decode-barrier stream mask must align");
   hasProjectedHybridFlatMaps_ = selectsHybridGroup(projection_);
 
@@ -845,7 +845,7 @@ folly::IOBuf Projector::projectContiguous(
         projection_.streamOffsets,
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
+        projection_.barrierStreams,
         outputRequiredBarrier,
         output);
   } else {
@@ -857,7 +857,7 @@ folly::IOBuf Projector::projectContiguous(
         projection_.streamOffsets,
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
+        projection_.barrierStreams,
         outputRequiredBarrier,
         output);
   }
@@ -908,7 +908,7 @@ folly::IOBuf Projector::projectChained(
         projection_.streamOffsets,
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
+        projection_.barrierStreams,
         outputRequiredBarrier,
         output);
   } else {
@@ -919,7 +919,7 @@ folly::IOBuf Projector::projectChained(
         sortedStreamMappings_,
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
+        projection_.barrierStreams,
         outputRequiredBarrier,
         output);
   }

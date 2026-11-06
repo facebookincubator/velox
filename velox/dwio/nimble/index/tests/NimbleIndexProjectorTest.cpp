@@ -167,8 +167,7 @@ TEST(NimbleTypeProjectionTest, buildsScalarProjection) {
   EXPECT_EQ(projectedRow.nameAt(0), "value");
   EXPECT_EQ(projectedRow.childAt(0)->kind(), Kind::Scalar);
   EXPECT_EQ(projection.streamOffsets, std::vector<uint32_t>({2, 1}));
-  EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams, std::vector<bool>({true, false}));
+  EXPECT_EQ(projection.barrierStreams, std::vector<bool>({true, false}));
 }
 
 TEST(NimbleTypeProjectionTest, buildsFlatMapProjectionWithMissingKey) {
@@ -202,7 +201,7 @@ TEST(NimbleTypeProjectionTest, buildsFlatMapProjectionWithMissingKey) {
       projection.streamOffsets,
       std::vector<uint32_t>({1, 0, 2, 3, UINT32_MAX, UINT32_MAX}));
   EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams,
+      projection.barrierStreams,
       std::vector<bool>({true, true, false, false, false, false}));
 }
 
