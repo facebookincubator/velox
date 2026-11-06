@@ -408,8 +408,19 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// attempts the reservation increment and returns true if succeeded.
   virtual bool maybeReserve(uint64_t size) = 0;
 
-  /// If a minimum reservation has been set with maybeReserve(), resets the
-  /// minimum reservation. If the current usage is below the minimum
+  /// Reserves 'size' only when the root's already-granted capacity can cover
+  /// the complete quantized increment. Never invokes memory arbitration,
+  /// capacity growth, reclaim, or abort. Returns false without changing the
+  /// pool hierarchy when capacity is unavailable. Existing unused leaf
+  /// reservation remains usable even when the root is temporarily over capacity
+  /// during arbitration. Retains the reservation until 'release()' is called.
+  virtual bool tryReserveWithinCapacity(uint64_t /*size*/) {
+    return false;
+  }
+
+  /// If a minimum reservation has been set with maybeReserve() or
+  /// tryReserveWithinCapacity(), resets the minimum reservation. If the current
+  /// usage is below the minimum
   /// reservation, decreases reservation and usage down to the rounded actual
   /// usage.
   virtual void release() = 0;
@@ -483,7 +494,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// The number of memory reservations.
     ///
     /// NOTE: this only counts the explicit memory reservations called by
-    /// maybeReserve().
+    /// maybeReserve() or tryReserveWithinCapacity().
     uint64_t numReserves{0};
     /// The number of memory reservation releases.
     ///
@@ -727,6 +738,8 @@ class MemoryPoolImpl : public MemoryPool {
 
   bool maybeReserve(uint64_t size) override;
 
+  bool tryReserveWithinCapacity(uint64_t size) override;
+
   void release() override;
 
   uint64_t freeBytes() const override;
@@ -908,6 +921,10 @@ class MemoryPoolImpl : public MemoryPool {
   // capacity. Should be called without holding 'mutex_'. This function throws
   // if max capacity is exceeded or arbitration fails.
   void incrementReservationThreadSafe(MemoryPool* requestor, uint64_t size);
+
+  // Atomically reserves from root capacity without invoking arbitration, then
+  // propagates the infallible reservation update down to this pool.
+  bool tryIncrementReservationWithinCapacity(uint64_t size);
 
   // Increments the reservation for a non-thread-safe leaf pool. Even though
   // this leaf skips its own locking, it propagates the increment to the parent
@@ -1155,7 +1172,8 @@ class MemoryPoolImpl : public MemoryPool {
   // The number of memory frees.
   std::atomic_uint64_t numFrees_{0};
 
-  // The number of external memory reservations made through maybeReserve().
+  // The number of explicit memory reservation attempts through maybeReserve()
+  // or tryReserveWithinCapacity().
   std::atomic_uint64_t numReserves_{0};
 
   // The number of external memory releases made through release().
