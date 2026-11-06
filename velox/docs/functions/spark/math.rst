@@ -75,10 +75,14 @@ Mathematical Functions
 
     Returns the cube root of ``x``.
 
-.. spark:function:: ceil(x) -> [same as x]
+.. spark:function:: ceil(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded up to the nearest integer.
     Supported types are: BIGINT, DOUBLE and DECIMAL.
+    For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+    BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+    is enabled (``spark.ansi_enabled``).
+    The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.
 
 .. spark:function:: checked_add(x, y) -> [same as x]
    :noindex:
@@ -284,10 +288,14 @@ Mathematical Functions
         SELECT factorial(21); -- NULL
         SELECT factorial(-1); -- NULL
 
-.. spark:function:: floor(x) -> [same as x]
+.. spark:function:: floor(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded down to the nearest integer.
-    Supported types are: BIGINT,  DOUBLE and DECIMAL.
+    Supported types are: BIGINT, DOUBLE and DECIMAL.
+    For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+    BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+    is enabled (``spark.ansi_enabled``).
+    The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.
 
 .. spark:function:: hex(x) -> varchar
 
