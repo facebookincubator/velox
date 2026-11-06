@@ -74,6 +74,7 @@ velox_add_library(
 velox_link_libraries(
   velox_vector
   velox_encode
+  velox_flag_definitions
   velox_memory
   velox_row_fast
   velox_time
