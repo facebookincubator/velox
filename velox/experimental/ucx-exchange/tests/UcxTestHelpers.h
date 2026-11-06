@@ -97,7 +97,8 @@ std::shared_ptr<facebook::velox::exec::Task> createPartitionedOutputTask(
     const std::vector<std::string>& partitionKeys = {},
     uint64_t kMaxOutputBufferSize = FOUR_GBYTES,
     const std::unordered_map<std::string, std::string>& extraConfig = {},
-    bool replicateNullsAndAny = false);
+    bool replicateNullsAndAny = false,
+    core::PartitionFunctionSpecPtr partitionFunctionSpecOverride = nullptr);
 
 /// @brief Helper function to create a CudfVector for testing.
 /// Uses makeTable when tableGenerator is null, or tableGenerator->makeTable()

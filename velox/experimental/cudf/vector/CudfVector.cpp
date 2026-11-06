@@ -26,6 +26,8 @@
 #include <cudf/column/column_stream.hpp>
 #include <cudf/table/table.hpp>
 
+#include <exception>
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -138,7 +140,8 @@ CudfVector::CudfVector(
     TypePtr type,
     vector_size_t size,
     std::unique_ptr<cudf::packed_table>&& packedTable,
-    cuda::stream_ref stream)
+    cuda::stream_ref stream,
+    ReleaseCallback releaseCallback)
     : RowVector(
           pool,
           std::move(type),
@@ -147,13 +150,63 @@ CudfVector::CudfVector(
           std::vector<VectorPtr>(),
           std::nullopt),
       tableStorage_{std::move(packedTable)},
-      stream_{stream} {
+      stream_{stream},
+      releaseCallback_{std::move(releaseCallback)} {
   logDefaultStreamIfNeeded(stream_, "CudfVector(packed_table)");
   auto& packedPtr =
       std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
   tabView_ = packedPtr->table;
   // For packed table, flatSize is the size of the GPU data buffer
   flatSize_ = packedPtr->data.gpu_data->size();
+}
+
+CudfVector::~CudfVector() {
+  // Release the GPU allocation first. device_buffer deallocation is ordered on
+  // its associated stream; runReleaseCallback() synchronizes that stream before
+  // reporting the bytes as available to exchange flow control.
+  if (auto* packedPtr =
+          std::get_if<std::unique_ptr<cudf::packed_table>>(&tableStorage_);
+      packedPtr && *packedPtr) {
+    // The logical stream can differ from the original packing stream even if
+    // the vector is dropped before its first rebindStream().
+    (*packedPtr)->data.gpu_data->set_stream(stream_);
+    packedPtr->reset();
+  }
+  runReleaseCallback();
+}
+
+void CudfVector::runReleaseCallback(
+    bool synchronizeStream,
+    std::exception_ptr synchronizeError) noexcept {
+  ReleaseCallback callback;
+  callback.swap(releaseCallback_);
+  if (!callback) {
+    return;
+  }
+
+  // rebindStream() may move ownership to a downstream operator's stream. Use
+  // stream_ at release time rather than capturing the receive stream when the
+  // callback is installed.
+  if (synchronizeStream) {
+    try {
+      stream_.sync();
+    } catch (const std::exception& e) {
+      synchronizeError = std::current_exception();
+      LOG(ERROR) << "Failed to synchronize CudfVector release stream: "
+                 << e.what();
+    } catch (...) {
+      synchronizeError = std::current_exception();
+      LOG(ERROR) << "Failed to synchronize CudfVector release stream";
+    }
+  }
+
+  try {
+    callback(std::move(synchronizeError));
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "CudfVector release callback failed: " << e.what();
+  } catch (...) {
+    LOG(ERROR) << "CudfVector release callback failed";
+  }
 }
 
 std::unique_ptr<cudf::table> CudfVector::release() {
@@ -171,9 +224,18 @@ std::unique_ptr<cudf::table> CudfVector::release() {
   auto mr = packedPtr->data.gpu_data->memory_resource();
   packedPtr->data.gpu_data->set_stream(stream_);
   auto materializedTable = std::make_unique<cudf::table>(tabView_, stream_, mr);
-  stream_.sync();
-  // Clear the packed table since we've materialized
+  // Clear the packed table once its materialization is ordered on stream_. The
+  // following synchronization waits for both the copy and the stream-ordered
+  // deallocation before returning its receive credit.
   packedPtr.reset();
+  try {
+    stream_.sync();
+  } catch (...) {
+    auto error = std::current_exception();
+    runReleaseCallback(/*synchronizeStream=*/false, error);
+    std::rethrow_exception(error);
+  }
+  runReleaseCallback(/*synchronizeStream=*/false);
   return materializedTable;
 }
 

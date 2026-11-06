@@ -65,6 +65,10 @@ std::shared_ptr<Task> createSourceTask(
 
   auto queryCtx = core::QueryCtx::create(
       executor.get(), core::QueryConfig(std::move(configSettings)));
+  // UCXX requests may retain the task after the fixture has finished. Keep
+  // both the Values vectors' pool and QueryCtx's borrowed executor alive until
+  // the task releases its query context.
+  queryCtx->addReleaseCallback([pool, executor]() {});
 
   auto task = Task::create(
       std::string{taskId},
@@ -109,7 +113,8 @@ std::shared_ptr<Task> createPartitionedOutputTask(
     const std::vector<std::string>& partitionKeys,
     uint64_t kMaxOutputBufferSize,
     const std::unordered_map<std::string, std::string>& extraConfig,
-    bool replicateNullsAndAny) {
+    bool replicateNullsAndAny,
+    core::PartitionFunctionSpecPtr partitionFunctionSpecOverride) {
   VLOG(3) << "Creating PartitionedOutput task with " << numPartitions
           << " partitions";
 
@@ -133,6 +138,17 @@ std::shared_ptr<Task> createPartitionedOutputTask(
           .partitionedOutput(partitionKeys, numPartitions, replicateNullsAndAny)
           .planFragment();
 
+  if (partitionFunctionSpecOverride != nullptr) {
+    const auto partitionedOutput =
+        std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
+            planFragment.planNode);
+    VELOX_CHECK_NOT_NULL(partitionedOutput);
+    planFragment.planNode =
+        core::PartitionedOutputNode::Builder(*partitionedOutput)
+            .partitionFunctionSpec(std::move(partitionFunctionSpecOverride))
+            .build();
+  }
+
   std::shared_ptr<folly::Executor> executor(
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency()));
@@ -144,6 +160,8 @@ std::shared_ptr<Task> createPartitionedOutputTask(
 
   auto queryCtx = core::QueryCtx::create(
       executor.get(), core::QueryConfig(std::move(configSettings)));
+  // Deferred exchange cleanup may outlive the fixture that supplied the pool.
+  queryCtx->addReleaseCallback([pool, executor]() {});
 
   auto task = Task::create(
       std::string{taskId},

@@ -33,23 +33,138 @@
 #include <cuda_runtime.h>
 
 #include <common/base/Exceptions.h>
+#include <glog/logging.h>
 
+#include <array>
 #include <cstdlib>
+#include <limits>
+#include <mutex>
 #include <string_view>
+#include <unordered_map>
+#include <utility>
 
 namespace facebook::velox::cudf_velox {
 
+namespace {
+
+std::mutex deviceMemoryStateMutex;
+struct ResourceAdmissionInfo {
+  bool supported{false};
+  cudaMemPool_t pool{nullptr};
+};
+std::unordered_map<int, std::array<ResourceAdmissionInfo, 2>> currentResources;
+std::unordered_map<int, uint64_t> inProcessReservations;
+
+uint64_t addSaturated(uint64_t left, uint64_t right) {
+  if (right > std::numeric_limits<uint64_t>::max() - left) {
+    return std::numeric_limits<uint64_t>::max();
+  }
+  return left + right;
+}
+
+std::optional<CudfDeviceMemoryInfo> currentDeviceMemoryInfoLocked(
+    int device,
+    CudfMemoryResourceKind resource) {
+  size_t freeBytes = 0;
+  size_t totalBytes = 0;
+  const auto memInfoStatus = cudaMemGetInfo(&freeBytes, &totalBytes);
+  if (memInfoStatus != cudaSuccess) {
+    VLOG(1) << "cudaMemGetInfo failed while reading cuDF memory info: "
+            << cudaGetErrorString(memInfoStatus);
+    return std::nullopt;
+  }
+
+  CudfDeviceMemoryInfo info{
+      .deviceId = device,
+      .freeBytes = static_cast<uint64_t>(freeBytes),
+      .totalBytes = static_cast<uint64_t>(totalBytes)};
+  if (const auto reservation = inProcessReservations.find(device);
+      reservation != inProcessReservations.end()) {
+    info.inProcessReservedBytes = reservation->second;
+  }
+
+  const auto resources = currentResources.find(device);
+  if (resources == currentResources.end()) {
+    return info;
+  }
+  const auto& admission = resources->second[static_cast<size_t>(resource)];
+  if (!admission.supported) {
+    return info;
+  }
+  if (admission.pool == nullptr) {
+    info.hasAdmissionStats = true;
+    return info;
+  }
+
+  uint64_t reservedBytes = 0;
+  uint64_t usedBytes = 0;
+  const auto reservedStatus = cudaMemPoolGetAttribute(
+      admission.pool, cudaMemPoolAttrReservedMemCurrent, &reservedBytes);
+  const auto usedStatus = cudaMemPoolGetAttribute(
+      admission.pool, cudaMemPoolAttrUsedMemCurrent, &usedBytes);
+  if (reservedStatus != cudaSuccess || usedStatus != cudaSuccess) {
+    VLOG(1) << "cudaMemPoolGetAttribute failed while reading cuDF pool info: "
+            << "reservedStatus=" << cudaGetErrorString(reservedStatus)
+            << " usedStatus=" << cudaGetErrorString(usedStatus);
+    return info;
+  }
+
+  info.poolReservedBytes = reservedBytes;
+  info.poolUsedBytes = usedBytes;
+  info.poolReusableBytes =
+      reservedBytes > usedBytes ? reservedBytes - usedBytes : 0;
+  info.hasPoolStats = true;
+  info.hasAdmissionStats = true;
+  return info;
+}
+
+void trackMemoryResource(
+    ResourceAdmissionInfo admission,
+    std::optional<CudfMemoryResourceKind> trackAs) {
+  if (!trackAs.has_value()) {
+    return;
+  }
+
+  int device = 0;
+  const auto status = cudaGetDevice(&device);
+  if (status != cudaSuccess) {
+    VLOG(1) << "cudaGetDevice failed while tracking cuDF memory resource: "
+            << cudaGetErrorString(status);
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(deviceMemoryStateMutex);
+  currentResources[device][static_cast<size_t>(*trackAs)] = admission;
+}
+
+} // namespace
+
 cuda::mr::any_resource<cuda::mr::device_accessible> createMemoryResource(
     std::string_view mode,
-    int percent) {
+    int percent,
+    std::optional<CudfMemoryResourceKind> trackAs) {
+  // Do not inherit another allocator's capacity. RMM pool/arena resources do
+  // not expose their reusable bytes here, and device free bytes do not bound
+  // managed-memory allocation capacity. Let those allocators attempt the
+  // allocation and use the caller's existing allocation-failure retry path.
+  trackMemoryResource({}, trackAs);
+
   if (mode == "cuda") {
+    trackMemoryResource({.supported = true}, trackAs);
     return rmm::mr::cuda_memory_resource{};
   } else if (mode == "pool") {
     return rmm::mr::pool_memory_resource(
         rmm::mr::cuda_memory_resource{},
         rmm::percent_of_free_device_memory(percent));
   } else if (mode == "async") {
-    return rmm::mr::cuda_async_memory_resource{};
+    auto asyncResource = rmm::mr::cuda_async_memory_resource{};
+    const auto poolHandle = asyncResource.pool_handle();
+    // Type erasure may allocate. Publish the non-owning pool handle only
+    // after the returned owner exists; moving that owner is noexcept.
+    cuda::mr::any_resource<cuda::mr::device_accessible> resource{
+        std::move(asyncResource)};
+    trackMemoryResource({.supported = true, .pool = poolHandle}, trackAs);
+    return resource;
   } else if (mode == "arena") {
     return rmm::mr::arena_memory_resource(
         rmm::mr::cuda_memory_resource{},
@@ -151,6 +266,111 @@ int64_t cudfAllocatedBytes() {
     bytes += outputStatsMr_->get_bytes_counter().value;
   }
   return bytes;
+}
+
+std::optional<CudfDeviceMemoryInfo> currentDeviceMemoryInfo(
+    CudfMemoryResourceKind resource) {
+  int device = 0;
+  const auto deviceStatus = cudaGetDevice(&device);
+  if (deviceStatus != cudaSuccess) {
+    VLOG(1) << "cudaGetDevice failed while reading cuDF memory info: "
+            << cudaGetErrorString(deviceStatus);
+    return std::nullopt;
+  }
+
+  // Keep the lock through the CUDA queries. unregisterCudf() clears this map
+  // before destroying the owning RMM resource; serialization here prevents a
+  // query from racing with invalidation of the raw cudaMemPool_t handle.
+  std::lock_guard<std::mutex> lock(deviceMemoryStateMutex);
+  return currentDeviceMemoryInfoLocked(device, resource);
+}
+
+CudfDeviceMemoryAdmission tryReserveCurrentDeviceMemory(
+    uint64_t bytes,
+    uint64_t requiredHeadroomBytes,
+    CudfMemoryResourceKind resource) {
+  int device = 0;
+  const auto deviceStatus = cudaGetDevice(&device);
+  if (deviceStatus != cudaSuccess) {
+    VLOG(1) << "cudaGetDevice failed while reserving cuDF device memory: "
+            << cudaGetErrorString(deviceStatus);
+    return {};
+  }
+
+  std::lock_guard<std::mutex> lock(deviceMemoryStateMutex);
+  const auto memoryInfo = currentDeviceMemoryInfoLocked(device, resource);
+  if (!memoryInfo.has_value() || !memoryInfo->hasAdmissionStats) {
+    return {};
+  }
+
+  const auto effectiveFreeBytes =
+      addSaturated(memoryInfo->freeBytes, memoryInfo->poolReusableBytes);
+  const auto requiredBytes = addSaturated(
+      addSaturated(memoryInfo->inProcessReservedBytes, bytes),
+      requiredHeadroomBytes);
+  if (effectiveFreeBytes <= requiredBytes) {
+    return CudfDeviceMemoryAdmission{
+        .status = CudfDeviceMemoryAdmissionStatus::kInsufficient,
+        .deviceId = device,
+        .bytes = bytes};
+  }
+
+  inProcessReservations[device] =
+      addSaturated(memoryInfo->inProcessReservedBytes, bytes);
+  return CudfDeviceMemoryAdmission{
+      .status = CudfDeviceMemoryAdmissionStatus::kAdmitted,
+      .deviceId = device,
+      .bytes = bytes};
+}
+
+void releaseDeviceMemoryReservation(
+    const CudfDeviceMemoryAdmission& admission) noexcept {
+  if (admission.status != CudfDeviceMemoryAdmissionStatus::kAdmitted ||
+      admission.bytes == 0) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(deviceMemoryStateMutex);
+  const auto reservation = inProcessReservations.find(admission.deviceId);
+  if (reservation == inProcessReservations.end()) {
+    VLOG(1) << "No cuDF device-memory reservation found for device "
+            << admission.deviceId << " while releasing " << admission.bytes
+            << " bytes";
+    return;
+  }
+  if (reservation->second < admission.bytes) {
+    VLOG(1) << "cuDF device-memory reservation underflow for device "
+            << admission.deviceId << ": tracked=" << reservation->second
+            << " release=" << admission.bytes;
+    inProcessReservations.erase(reservation);
+    return;
+  }
+
+  reservation->second -= admission.bytes;
+  if (reservation->second == 0) {
+    inProcessReservations.erase(reservation);
+  }
+}
+
+void clearCurrentDeviceMemoryInfo() {
+  std::lock_guard<std::mutex> lock(deviceMemoryStateMutex);
+  currentResources.clear();
+  inProcessReservations.clear();
+}
+
+void sharePrimaryMemoryResourceWithOutput() {
+  int device = 0;
+  const auto status = cudaGetDevice(&device);
+  if (status != cudaSuccess) {
+    VLOG(1)
+        << "cudaGetDevice failed while tracking cuDF output memory resource: "
+        << cudaGetErrorString(status);
+    return;
+  }
+  std::lock_guard<std::mutex> lock(deviceMemoryStateMutex);
+  auto& resources = currentResources[device];
+  resources[static_cast<size_t>(CudfMemoryResourceKind::kOutput)] =
+      resources[static_cast<size_t>(CudfMemoryResourceKind::kPrimary)];
 }
 
 } // namespace facebook::velox::cudf_velox

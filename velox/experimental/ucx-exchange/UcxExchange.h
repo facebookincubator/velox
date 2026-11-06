@@ -73,6 +73,10 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
   // Converts the cudf packed table into a CudfVector.
   RowVectorPtr getOutputFromPackedTable();
 
+  // Drops a dequeued table that was not handed to a CudfVector and returns its
+  // in-flight receive credit after stream-ordered destruction completes.
+  void releaseCurrentData();
+
   // Fetches runtime stats from ExchangeClient and replaces these in this
   // operator's stats.
   void recordExchangeClientStats();

@@ -50,13 +50,93 @@ rmm::device_async_resource_ref get_output_mr();
 /// queries free their allocations.
 int64_t cudfAllocatedBytes();
 
+enum class CudfMemoryResourceKind { kPrimary, kOutput };
+
+/// Snapshot of memory visible to the current CUDA device. CUDA async pools
+/// retain freed allocations for reuse, so cudaMemGetInfo() alone understates
+/// memory available to RMM. When the selected cuDF resource is a non-managed
+/// CUDA async pool, the pool fields expose that reusable capacity as well.
+struct CudfDeviceMemoryInfo {
+  int deviceId{-1};
+  uint64_t freeBytes{0};
+  uint64_t totalBytes{0};
+  uint64_t poolReservedBytes{0};
+  uint64_t poolUsedBytes{0};
+  uint64_t poolReusableBytes{0};
+  uint64_t inProcessReservedBytes{0};
+  bool hasPoolStats{false};
+  // False when the selected resource's capacity cannot be inferred from the
+  // snapshot. In particular, device free bytes do not describe reusable RMM
+  // pool/arena capacity or managed-memory allocation capacity.
+  bool hasAdmissionStats{false};
+};
+
+[[nodiscard]] std::optional<CudfDeviceMemoryInfo> currentDeviceMemoryInfo(
+    CudfMemoryResourceKind resource = CudfMemoryResourceKind::kPrimary);
+
+enum class CudfDeviceMemoryAdmissionStatus {
+  /// CUDA or the selected allocator could not provide admission statistics.
+  /// The caller may proceed without local admission accounting and let the
+  /// allocation report any failure.
+  kUnavailable,
+  /// The request and its required headroom fit in the current device budget.
+  kAdmitted,
+  /// Admitting the request would consume the required device headroom.
+  kInsufficient,
+};
+
+/// Token returned by tryReserveCurrentDeviceMemory(). The token is deliberately
+/// not self-releasing: callers normally put releaseDeviceMemoryReservation()
+/// in the same scope guard that owns the allocation attempt.
+struct CudfDeviceMemoryAdmission {
+  CudfDeviceMemoryAdmissionStatus status{
+      CudfDeviceMemoryAdmissionStatus::kUnavailable};
+  int deviceId{-1};
+  uint64_t bytes{0};
+
+  [[nodiscard]] bool mayProceed() const noexcept {
+    return status != CudfDeviceMemoryAdmissionStatus::kInsufficient;
+  }
+};
+
+/// Atomically snapshots and reserves memory for a materialization on the
+/// current CUDA device. The availability check and per-device accounting are
+/// serialized, so concurrent producers cannot all pass against the same free
+/// bytes before publishing their reservations. Reservations are shared across
+/// resources on a device, conservatively accounting for concurrent allocations
+/// even when the resources use distinct pools. Unsupported resources return
+/// kUnavailable and rely on the caller's allocation-failure retry path. Only
+/// the cuda and async resource modes currently support this admission check.
+[[nodiscard]] CudfDeviceMemoryAdmission tryReserveCurrentDeviceMemory(
+    uint64_t bytes,
+    uint64_t requiredHeadroomBytes,
+    CudfMemoryResourceKind resource = CudfMemoryResourceKind::kPrimary);
+
+/// Releases a token returned with kAdmitted status. Safe to call for an
+/// unavailable or insufficient token.
+void releaseDeviceMemoryReservation(
+    const CudfDeviceMemoryAdmission& admission) noexcept;
+
+/// Clears resource capabilities and materialization reservations recorded for
+/// device-memory admission. Call only after active cuDF work has stopped.
+void clearCurrentDeviceMemoryInfo();
+
+/// Records that output allocations use the primary resource on this device.
+/// Call during registration when no separate output resource is configured.
+void sharePrimaryMemoryResourceWithOutput();
+
 /// Creates a memory resource based on the given mode.
 ///
 /// @param mode rmm::mr::pool_memory_resource mode.
 /// @param percent The initial percent of GPU memory to allocate for memory
 /// resource.
+/// @param trackAs If present, records admission statistics for this resource.
+/// The caller must clear the tracking before destroying the returned owner.
 [[nodiscard]] cuda::mr::any_resource<cuda::mr::device_accessible>
-createMemoryResource(std::string_view mode, int percent);
+createMemoryResource(
+    std::string_view mode,
+    int percent,
+    std::optional<CudfMemoryResourceKind> trackAs = std::nullopt);
 
 /// Returns the global CUDA stream pool used by cudf.
 [[nodiscard]] cudf::detail::cuda_stream_pool& cudfGlobalStreamPool();
