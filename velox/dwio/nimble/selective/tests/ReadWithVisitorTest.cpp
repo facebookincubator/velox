@@ -2303,8 +2303,9 @@ class ReadWithVisitorTest : public ::testing::Test,
 
   // Reads a nullable column of type 'T' that spans several chunks, with dense
   // and with sparse rows, in each way that can take the bulk path:
-  // - A generic hook checks that the bulk path ran and delivered the right
-  //   rows.
+  // - A generic hook checks the delivered rows. The hook reads force the read
+  //   with an AlwaysTrue filter, which passes nulls, so the reader declines its
+  //   bulk path and these reads take the per-row path.
   // - A SUM hook gives every row its own group, so a value delivered with a
   //   wrong row number lands in another row's group.
   // - A filter-only read checks the passing rows. A filter that rejects nulls
@@ -2412,7 +2413,7 @@ class ReadWithVisitorTest : public ::testing::Test,
       {
         GenericCapturingIntHook hook;
         readWithHook(hook, rowNumbers);
-        EXPECT_GT(hook.numBulkCalls, 0);
+        EXPECT_EQ(hook.numBulkCalls, 0);
         EXPECT_EQ(hook.rows, expectedPositions);
         EXPECT_EQ(hook.values, expectedValues);
       }
@@ -2527,9 +2528,9 @@ TEST_F(ReadWithVisitorTest, denseNoFilterWithNulls) {
 }
 
 // ===========================================================================
-// Test: AlwaysTrue filter on nullable int64 keeps the nulls in the output
-// when the encoding takes its bulk fast path. High-entropy values select
-// Trivial and sequential values select FixedBitWidth; both have a bulk path.
+// Test: AlwaysTrue filter on nullable int64 keeps the nulls in the output.
+// High-entropy values select Trivial and sequential values select
+// FixedBitWidth; both encodings support a bulk path.
 // ===========================================================================
 TEST_F(ReadWithVisitorTest, alwaysTrueFilterKeepsNulls) {
   constexpr int kRows = 40;
@@ -2565,6 +2566,120 @@ TEST_F(ReadWithVisitorTest, alwaysTrueFilterKeepsNulls) {
     root->getValues(root->outputRows(), &result);
     velox::test::assertEqualVectors(input, result);
   }
+}
+
+// ===========================================================================
+// Test: an encoding takes its dense fast path only when the reader takes its
+// bulk path. The scan spec's filter passes nulls, so the reader skips its bulk
+// path and keeps the nulls it decoded to itself. The visitor's filter is
+// AlwaysTrue, but useFastPath() follows the reader, so the encoding falls back
+// to the per-row path, which writes the nulls the dense fast path would not.
+// ===========================================================================
+TEST_F(ReadWithVisitorTest, encodingFastPathFollowsReaderNulls) {
+  if (!process::hasAvx2()) {
+    GTEST_SKIP() << "The encoding fast path requires AVX2";
+  }
+  constexpr vector_size_t kRows = 200;
+  const auto isNullAt = nullEvery(7);
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(kRows, folly::identity, isNullAt)});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(
+          0, std::numeric_limits<int64_t>::max(), /*nullAllowed=*/true));
+  auto root = buildReader(*ctx, rowType, *scanSpec);
+  auto* structReader =
+      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
+  ASSERT_NE(structReader, nullptr);
+  auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+      dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+  ASSERT_NE(reader, nullptr);
+
+  std::vector<vector_size_t> rowVec(kRows);
+  std::iota(rowVec.begin(), rowVec.end(), 0);
+  const RowSet rows(rowVec.data(), rowVec.size());
+  reader->doPrepareRead<int64_t>(0, rows, nullptr);
+
+  const auto valueAt = [](vector_size_t row) { return row * 1'000'003L; };
+  std::vector<int64_t> nonNullValues;
+  Vector<bool> notNulls(pool(), kRows, true);
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    notNulls[row] = !isNullAt(row);
+    if (!isNullAt(row)) {
+      nonNullValues.push_back(valueAt(row));
+    }
+  }
+  Buffer buffer(*pool());
+  const auto encoded = encodeConstantTestChunk(
+      EncodingLayout{EncodingType::Trivial, {}, CompressionType::Uncompressed},
+      nonNullValues,
+      notNulls,
+      /*nullable=*/true,
+      buffer);
+  auto encoding =
+      EncodingFactory().create(*pool(), encoded, nullptr, Encoding::Options{});
+
+  common::AlwaysTrue filter;
+  dwio::common::ExtractToReader extract(reader);
+  DecoderVisitor<
+      int64_t,
+      common::AlwaysTrue,
+      dwio::common::ExtractToReader,
+      /*isDense=*/true>
+      visitor(filter, reader, rows, extract);
+  // The visitor's AlwaysTrue filter would allow the fast path; the reader's
+  // bulk-path decision rules it out.
+  ASSERT_FALSE(dwio::common::useFastPath(visitor, /*hasNulls=*/true));
+  auto params = makeReadWithVisitorParams(visitor, rows, pool());
+  dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+  ASSERT_EQ(reader->numValues(), kRows);
+  ASSERT_FALSE(reader->returnReaderNulls());
+  const auto& resultNulls = reader->resultNullsForTest();
+  ASSERT_NE(resultNulls, nullptr);
+  const auto* rawNulls = resultNulls->as<uint64_t>();
+  const auto values = getValues<int64_t>(reader);
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    SCOPED_TRACE(fmt::format("row={}", row));
+    ASSERT_EQ(bits::isBitNull(rawNulls, row), isNullAt(row));
+    if (!isNullAt(row)) {
+      EXPECT_EQ(values[row], valueAt(row));
+    }
+  }
+}
+
+// ===========================================================================
+// Test: null-passing range filter — reader nulls stay off when rows are
+// rejected, so the row-indexed read-range nulls are not returned directly
+// ===========================================================================
+TEST_F(ReadWithVisitorTest, nullPassingRangeFilterPreservesNulls) {
+  constexpr int kRows = 200;
+  const auto isNullAt = nullEvery(7);
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(kRows, folly::identity, isNullAt)});
+  auto rowType = asRowType(input->type());
+
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(0, 99, /*nullAllowed=*/true));
+
+  auto root = buildReader(*ctx, rowType, *scanSpec);
+  auto* child = readColumn(root.get(), kRows);
+
+  int expected = 0;
+  for (int row = 0; row < kRows; ++row) {
+    if (isNullAt(row) || row <= 99) {
+      ++expected;
+    }
+  }
+  EXPECT_EQ(child->numValues(), expected);
+  EXPECT_TRUE(child->hasNulls());
+  EXPECT_FALSE(child->returnReaderNulls());
 }
 
 // ===========================================================================
