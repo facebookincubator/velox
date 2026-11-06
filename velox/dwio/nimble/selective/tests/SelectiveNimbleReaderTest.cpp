@@ -50,6 +50,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/selective/ReaderBase.h"
 #include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
@@ -997,6 +998,40 @@ TEST_P(SelectiveNimbleReaderTest, readsWithoutMetadataIoStats) {
   rowOptions.setRequestedType(asRowType(input->type()));
   auto rowReader = reader->createRowReader(rowOptions);
   validate(*input, *rowReader, 101, [](auto /*i*/) { return true; });
+}
+
+TEST_P(SelectiveNimbleReaderTest, createReaderFromSharedReaderBase) {
+  auto input = makeRowVector({
+      makeFlatIdentityVector<int64_t>(200),
+  });
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+
+  const auto file = test::createNimbleFile(*rootPool(), input);
+  dwio::common::ReaderOptions options(pool());
+  options.setScanSpec(scanSpec);
+  auto readerBase = ReaderBase::create(
+      std::make_unique<dwio::common::BufferedInput>(
+          std::make_shared<InMemoryReadFile>(file), *pool()),
+      options);
+
+  auto reader =
+      SelectiveNimbleReaderFactory().createReader(readerBase, options);
+  EXPECT_EQ(reader->numberOfRows(), input->size());
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(scanSpec);
+  rowOptions.setRequestedType(asRowType(input->type()));
+  auto rowReader = reader->createRowReader(rowOptions);
+  validate(*input, *rowReader, 101, [](auto /*i*/) { return true; });
+}
+
+TEST_P(SelectiveNimbleReaderTest, createReaderRejectsNullReaderBase) {
+  dwio::common::ReaderOptions options(pool());
+  NIMBLE_ASSERT_USER_THROW(
+      SelectiveNimbleReaderFactory().createReader(
+          std::shared_ptr<ReaderBase>{}, options),
+      "readerBase must not be null");
 }
 
 TEST_P(SelectiveNimbleReaderTest, denseWithNulls) {
