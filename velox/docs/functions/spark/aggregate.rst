@@ -148,6 +148,36 @@ General Aggregate Functions
     Returns Pearson coefficient of correlation between a set of number pairs. When the count of pairs is
     greater than or equal to 2, a non-null output will be generated.
 
+.. spark:function:: count_min_sketch(x, eps, confidence, seed) -> varbinary
+
+    Returns a Count-min sketch of the input column ``x`` serialized into
+    VARBINARY. A Count-min sketch is a probabilistic data structure used for
+    estimating the frequency of items in a stream, trading accuracy for memory.
+
+    ``x`` may be of type ``TINYINT``, ``SMALLINT``, ``INTEGER``, ``BIGINT``,
+    ``VARCHAR``, or ``VARBINARY``. Null inputs are ignored; consistent with
+    Spark, the function is non-nullable, so empty input or a group with only
+    null inputs returns an empty sketch rather than null.
+
+    ``eps`` is the relative error of the sketch and must be a positive constant
+    ``DOUBLE``. It determines the sketch width as ``ceil(2 / eps)``.
+
+    ``confidence`` is the confidence of the sketch and must be a constant
+    ``DOUBLE`` in the range ``(0.0, 1.0)``. It determines the sketch depth as
+    ``ceil(-log(1 - confidence) / log(2))``.
+
+    ``seed`` is a constant ``INTEGER`` or ``BIGINT`` used to seed the hash
+    functions.
+
+    ``eps``, ``confidence``, and ``seed`` must be non-null constant arguments,
+    not input columns, even if a column contains the same value in every row.
+
+    The serialized output is byte-compatible with Spark's ``CountMinSketch``
+    (version 1, big-endian), so it can be merged with or consumed by Spark.
+
+    See the `Spark count_min_sketch reference
+    <https://spark.apache.org/docs/4.1.1/api/sql/index.html#count_min_sketch>`_.
+
 .. spark:function:: covar_samp(x, y) -> double
 
     Returns the sample covariance of a set of number pairs. When the count of pairs is
