@@ -26,7 +26,6 @@ add_executable(
   CovarianceAggregatesTest.cpp
   FirstAggregateTest.cpp
   HistogramNumericAggregateTest.cpp
-  HistogramNumericTypesTest.cpp
   LastAggregateTest.cpp
   Main.cpp
   MinMaxAggregationTest.cpp

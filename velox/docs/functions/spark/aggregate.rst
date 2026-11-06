@@ -125,9 +125,6 @@ General Aggregate Functions
     included in the result set. In this mode, an all-null input produces an
     array containing a single null instead of an empty array.
 
-    The ``ignoreNulls`` argument is also honored when ``collect_set`` is used
-    as a window function. Omitting it defaults to ignoring null inputs.
-
     Example::
 
         SELECT collect_set(i)
@@ -195,6 +192,9 @@ General Aggregate Functions
     ``histogram_numeric``, but returns DOUBLE centers. Also supports DECIMAL
     inputs without reconstructing Decimal centers. Matches
     ``spark.sql.legacy.histogramNumericPropagateInputType=false``.
+    DECIMAL input handling matches Spark 3.5.5+ and 4.0.0+
+    (`SPARK-50769 <https://issues.apache.org/jira/browse/SPARK-50769>`_).
+    Earlier Spark versions throw ``ClassCastException`` for DECIMAL inputs.
     Spark's DayTimeIntervalType inputs are not supported.
 
 .. spark:function:: kurtosis(x) -> double

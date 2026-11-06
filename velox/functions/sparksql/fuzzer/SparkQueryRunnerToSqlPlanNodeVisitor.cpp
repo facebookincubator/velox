@@ -45,6 +45,12 @@ void SparkQueryRunnerToSqlPlanNodeVisitor::visit(
     for (auto i = 0; i < aggregates.size(); ++i) {
       exec::test::appendComma(i, sql);
       const auto& aggregate = aggregates[i];
+      // Spark 3.5.1 rejects INTEGER numBins literals and has no legacy name.
+      if (aggregate.call->name() == "histogram_numeric" ||
+          aggregate.call->name() == "histogram_numeric_legacy") {
+        visitorContext.sql = std::nullopt;
+        return;
+      }
       VELOX_CHECK(
           aggregate.sortingKeys.empty(),
           "Sort key is not supported in Spark's aggregation. You may need to disable 'enable_sorted_aggregations' when running the fuzzer test.");

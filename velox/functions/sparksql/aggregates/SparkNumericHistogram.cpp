@@ -38,16 +38,6 @@ constexpr uint64_t kRandomMask = (1ULL << 48) - 1;
 constexpr uint64_t kHeaderSize = 8;
 constexpr uint64_t kBinSize = 16;
 
-void validateNumBins(int32_t numBins, int32_t currentNumBins) {
-  VELOX_USER_CHECK_GE(
-      numBins, 2, "histogram_numeric requires numBins at least 2");
-  VELOX_USER_CHECK(
-      currentNumBins == 0 || currentNumBins == numBins,
-      "histogram_numeric numBins mismatch: {} vs {}",
-      currentNumBins,
-      numBins);
-}
-
 template <typename T>
 T readBigEndian(const char*& input) {
   T value;
@@ -99,8 +89,17 @@ SparkNumericHistogram::SparkNumericHistogram(HashStringAllocator* allocator)
     : bins_{AlignedStlAllocator<Bin, alignof(Bin)>(allocator)},
       randomState_{(31'183ULL ^ kRandomMultiplier) & kRandomMask} {}
 
+void SparkNumericHistogram::validateNumBins(int32_t numBins) {
+  VELOX_USER_CHECK_GE(numBins, 2, "numBins must be at least 2");
+}
+
 void SparkNumericHistogram::initialize(int32_t numBins) {
-  validateNumBins(numBins, numBins_);
+  validateNumBins(numBins);
+  VELOX_USER_CHECK(
+      numBins_ == 0 || numBins_ == numBins,
+      "histogram_numeric numBins mismatch: {} vs {}",
+      numBins_,
+      numBins);
   numBins_ = numBins;
 }
 
@@ -139,7 +138,7 @@ void SparkNumericHistogram::mergeSerialized(std::string_view payload) {
   const char* input = payload.data();
   const auto numBins = readBigEndian<int32_t>(input);
   const auto numUsedBins = readBigEndian<int32_t>(input);
-  validateNumBins(numBins, 0);
+  validateNumBins(numBins);
   VELOX_USER_CHECK_GE(
       numUsedBins, 0, "histogram_numeric usedBins must be nonnegative");
   VELOX_USER_CHECK_LE(

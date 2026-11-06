@@ -16,50 +16,90 @@
 
 #include "velox/functions/sparksql/aggregates/HistogramNumericAggregate.h"
 
+#include <array>
+#include <cstdint>
 #include <optional>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <fmt/format.h>
+#include <folly/Conv.h>
 
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/sparksql/aggregates/HistogramNumericTypes.h"
 #include "velox/functions/sparksql/aggregates/SparkNumericHistogram.h"
+#include "velox/type/Conversions.h"
+#include "velox/type/CppToType.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
 namespace {
 
-enum class InputFamily {
-  kByte,
-  kShort,
-  kInteger,
-  kLong,
-  kFloat,
-  kDouble,
-  kDecimal,
-  kDate,
-  kTimestamp,
-  kTimestampNtz,
-  kYearMonthInterval,
+constexpr std::string_view kInputTypes[] = {
+    "tinyint",
+    "smallint",
+    "integer",
+    "bigint",
+    "real",
+    "double",
+    "date",
+    "timestamp",
+    "timestamp utc",
+    "interval year to month",
 };
 
-enum class OutputFamily {
-  kByte,
-  kShort,
-  kInteger,
-  kLong,
-  kFloat,
-  kDouble,
-  kDate,
-  kTimestamp,
-  kTimestampNtz,
-  kYearMonthInterval,
+// Keep both division operands exact to avoid double rounding.
+constexpr int128_t kMaxExactDoubleInteger = int128_t{1} << 53;
+constexpr std::array<double, 23> kExactPowersOfTen = {
+    1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
+    1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
 };
 
-void validateNumBins(int32_t numBins) {
-  VELOX_USER_CHECK_GE(
-      numBins, 2, "histogram_numeric requires numBins at least 2");
+class HistogramNumericDecimal {
+ public:
+  HistogramNumericDecimal(int32_t precision, int32_t scale)
+      : scale_{scale}, type_{DECIMAL(precision, scale)} {}
+
+  double decimalToDouble(int128_t unscaled) const {
+    if (scale_ <= 22 && unscaled >= -kMaxExactDoubleInteger &&
+        unscaled <= kMaxExactDoubleInteger) {
+      return static_cast<double>(unscaled) / kExactPowersOfTen[scale_];
+    }
+    return folly::to<double>(DecimalUtil::toString(unscaled, *type_));
+  }
+
+ private:
+  int32_t scale_;
+  TypePtr type_;
+};
+
+double timestampToDouble(const Timestamp& value) {
+  VELOX_USER_CHECK_EQ(
+      value.getNanos() % 1'000,
+      0,
+      "histogram_numeric timestamp requires microsecond precision");
+  return static_cast<double>(value.toMicros());
+}
+
+template <typename T>
+T narrowCenter(double value) {
+  return util::Converter<CppToType<T>::typeKind, void, util::SparkCastPolicy>::
+      tryCast(value)
+          .value();
+}
+
+Timestamp timestampFromDouble(double value) {
+  const auto micros = narrowCenter<int64_t>(value);
+  // Avoid multiplying a negative seconds value near INT64_MIN.
+  auto seconds = micros / 1'000'000;
+  auto remainder = micros % 1'000'000;
+  if (remainder < 0) {
+    --seconds;
+    remainder += 1'000'000;
+  }
+  return Timestamp(seconds, static_cast<uint64_t>(remainder) * 1'000);
 }
 
 int32_t readRequiredConstant(
@@ -126,11 +166,7 @@ void validateResultCenterType(
       centerType->toString());
 }
 
-template <
-    typename TInput,
-    typename TOutput,
-    InputFamily kInput,
-    OutputFamily kOutput>
+template <typename TInput, typename TOutput>
 class HistogramNumericAggregate {
  public:
   using InputType = Row<TInput, int32_t>;
@@ -144,8 +180,10 @@ class HistogramNumericAggregate {
   void initialize(
       core::AggregationNode::Step /*step*/,
       const std::vector<TypePtr>& argTypes,
-      const TypePtr& resultType) {
-    if constexpr (kInput == InputFamily::kDecimal) {
+      const TypePtr& /*resultType*/) {
+    if constexpr (
+        std::is_same_v<TInput, ShortDecimal<P1, S1>> ||
+        std::is_same_v<TInput, LongDecimal<P1, S1>>) {
       for (const auto& type : argTypes) {
         if (type->isDecimal()) {
           setDecimalType(type);
@@ -153,19 +191,13 @@ class HistogramNumericAggregate {
         }
       }
     }
-    if (resultType->isArray()) {
-      resultCenterType(resultType);
-    }
   }
 
   // Binds raw-input numBins even when the input is empty, masked, or all null.
   void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
-    if (constantInputs.size() < 2) {
-      return;
-    }
     const auto numBins = readRequiredConstant(constantInputs, 1, "numBins");
-    validateNumBins(numBins);
-    bindRawNumBins(numBins);
+    SparkNumericHistogram::validateNumBins(numBins);
+    rawNumBins_ = numBins;
   }
 
   struct AccumulatorType {
@@ -185,13 +217,7 @@ class HistogramNumericAggregate {
     bool addInput(
         HashStringAllocator* /*allocator*/,
         exec::optional_arg_type<TInput> value,
-        exec::optional_arg_type<int32_t> numBins) {
-      VELOX_USER_CHECK(
-          numBins.has_value(),
-          "histogram_numeric numBins argument must not be null");
-      validateNumBins(numBins.value());
-      function_->bindRawNumBins(numBins.value());
-      histogram_.initialize(numBins.value());
+        exec::optional_arg_type<int32_t> /*numBins*/) {
       if (!value.has_value()) {
         return false;
       }
@@ -211,17 +237,10 @@ class HistogramNumericAggregate {
     }
 
     bool writeIntermediateResult(
-        bool nonNullGroup,
+        bool /*nonNullGroup*/,
         exec::out_type<IntermediateType>& out) {
-      if (!nonNullGroup && histogram_.numBins() == 0 &&
-          !function_->rawNumBins_.has_value()) {
-        return false;
-      }
       if (histogram_.numBins() == 0) {
-        VELOX_CHECK(
-            function_->rawNumBins_.has_value(),
-            "histogram_numeric numBins is unknown for an empty partial state");
-        histogram_.initialize(*function_->rawNumBins_);
+        return false;
       }
       out.resize(histogram_.serializedSize());
       histogram_.serialize(out.data());
@@ -249,17 +268,6 @@ class HistogramNumericAggregate {
   };
 
  private:
-  void bindRawNumBins(int32_t numBins) {
-    if (rawNumBins_.has_value()) {
-      VELOX_USER_CHECK_EQ(
-          *rawNumBins_,
-          numBins,
-          "histogram_numeric numBins must be consistent");
-    } else {
-      rawNumBins_ = numBins;
-    }
-  }
-
   void setDecimalType(const TypePtr& type) {
     const auto [precision, scale] = getDecimalPrecisionScale(*type);
     if (decimal_.has_value()) {
@@ -277,44 +285,35 @@ class HistogramNumericAggregate {
   template <typename TValue>
   double normalize(TValue value) const {
     if constexpr (
-        kInput == InputFamily::kTimestamp ||
-        kInput == InputFamily::kTimestampNtz) {
-      return HistogramNumericTypes::timestampToDouble(value);
-    } else if constexpr (kInput == InputFamily::kDecimal) {
+        std::is_same_v<TInput, Timestamp> ||
+        std::is_same_v<TInput, TimestampUtc>) {
+      return timestampToDouble(value);
+    } else if constexpr (
+        std::is_same_v<TInput, ShortDecimal<P1, S1>> ||
+        std::is_same_v<TInput, LongDecimal<P1, S1>>) {
       VELOX_CHECK(
           decimal_.has_value(),
           "histogram_numeric Decimal metadata is unavailable");
       return decimal_->decimalToDouble(static_cast<int128_t>(value));
     } else {
-      return HistogramNumericTypes::numericToDouble(value);
+      return static_cast<double>(value);
     }
   }
 
   template <typename TRow>
   void writeCenter(TRow& row, double center) const {
-    if constexpr (kOutput == OutputFamily::kByte) {
-      row.template get_writer_at<0>() =
-          HistogramNumericTypes::javaDoubleToByte(center);
-    } else if constexpr (kOutput == OutputFamily::kShort) {
-      row.template get_writer_at<0>() =
-          HistogramNumericTypes::javaDoubleToShort(center);
+    if constexpr (std::is_floating_point_v<TOutput>) {
+      row.template get_writer_at<0>() = static_cast<TOutput>(center);
     } else if constexpr (
-        kOutput == OutputFamily::kInteger || kOutput == OutputFamily::kDate ||
-        kOutput == OutputFamily::kYearMonthInterval) {
-      row.template get_writer_at<0>() =
-          HistogramNumericTypes::javaDoubleToInt(center);
-    } else if constexpr (kOutput == OutputFamily::kLong) {
-      row.template get_writer_at<0>() =
-          HistogramNumericTypes::javaDoubleToLong(center);
-    } else if constexpr (kOutput == OutputFamily::kFloat) {
-      row.template get_writer_at<0>() = static_cast<float>(center);
-    } else if constexpr (kOutput == OutputFamily::kDouble) {
-      row.template get_writer_at<0>() = center;
+        std::is_same_v<TOutput, Timestamp> ||
+        std::is_same_v<TOutput, TimestampUtc>) {
+      row.template get_writer_at<0>() = timestampFromDouble(center);
     } else if constexpr (
-        kOutput == OutputFamily::kTimestamp ||
-        kOutput == OutputFamily::kTimestampNtz) {
-      row.template get_writer_at<0>() =
-          HistogramNumericTypes::javaDoubleToTimestamp(center);
+        std::is_same_v<TOutput, Date> ||
+        std::is_same_v<TOutput, IntervalYearMonth>) {
+      row.template get_writer_at<0>() = narrowCenter<int32_t>(center);
+    } else {
+      row.template get_writer_at<0>() = narrowCenter<TOutput>(center);
     }
   }
 
@@ -324,22 +323,18 @@ class HistogramNumericAggregate {
   TypePtr decimalType_;
 };
 
-template <
-    typename TInput,
-    typename TOutput,
-    InputFamily kInput,
-    OutputFamily kOutput>
+template <typename TInput, typename TOutput>
 std::unique_ptr<exec::Aggregate> makeAggregate(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
     const core::QueryConfig& config) {
-  return std::make_unique<exec::SimpleAggregateAdapter<
-      HistogramNumericAggregate<TInput, TOutput, kInput, kOutput>>>(
+  return std::make_unique<
+      exec::SimpleAggregateAdapter<HistogramNumericAggregate<TInput, TOutput>>>(
       step, argTypes, resultType, &config);
 }
 
-template <typename TOutput, OutputFamily kOutput>
+template <typename TOutput>
 std::unique_ptr<exec::Aggregate> makeByInputType(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
@@ -349,63 +344,44 @@ std::unique_ptr<exec::Aggregate> makeByInputType(
       !argTypes.empty() && !argTypes[0]->isVarbinary() ? argTypes[0] : DOUBLE();
   switch (inputType->kind()) {
     case TypeKind::TINYINT:
-      return makeAggregate<int8_t, TOutput, InputFamily::kByte, kOutput>(
-          step, argTypes, resultType, config);
+      return makeAggregate<int8_t, TOutput>(step, argTypes, resultType, config);
     case TypeKind::SMALLINT:
-      return makeAggregate<int16_t, TOutput, InputFamily::kShort, kOutput>(
+      return makeAggregate<int16_t, TOutput>(
           step, argTypes, resultType, config);
     case TypeKind::INTEGER:
       if (inputType->isDate()) {
-        return makeAggregate<Date, TOutput, InputFamily::kDate, kOutput>(
-            step, argTypes, resultType, config);
+        return makeAggregate<Date, TOutput>(step, argTypes, resultType, config);
       }
       if (inputType->isIntervalYearMonth()) {
-        return makeAggregate<
-            IntervalYearMonth,
-            TOutput,
-            InputFamily::kYearMonthInterval,
-            kOutput>(step, argTypes, resultType, config);
+        return makeAggregate<IntervalYearMonth, TOutput>(
+            step, argTypes, resultType, config);
       }
-      return makeAggregate<int32_t, TOutput, InputFamily::kInteger, kOutput>(
+      return makeAggregate<int32_t, TOutput>(
           step, argTypes, resultType, config);
     case TypeKind::BIGINT:
       if (inputType->isShortDecimal()) {
-        return makeAggregate<
-            ShortDecimal<P1, S1>,
-            TOutput,
-            InputFamily::kDecimal,
-            kOutput>(step, argTypes, resultType, config);
+        return makeAggregate<ShortDecimal<P1, S1>, TOutput>(
+            step, argTypes, resultType, config);
       }
-      return makeAggregate<int64_t, TOutput, InputFamily::kLong, kOutput>(
+      return makeAggregate<int64_t, TOutput>(
           step, argTypes, resultType, config);
     case TypeKind::HUGEINT:
       VELOX_CHECK(
           inputType->isLongDecimal(),
           "histogram_numeric supports HUGEINT only as Decimal");
-      return makeAggregate<
-          LongDecimal<P1, S1>,
-          TOutput,
-          InputFamily::kDecimal,
-          kOutput>(step, argTypes, resultType, config);
+      return makeAggregate<LongDecimal<P1, S1>, TOutput>(
+          step, argTypes, resultType, config);
     case TypeKind::REAL:
-      return makeAggregate<float, TOutput, InputFamily::kFloat, kOutput>(
-          step, argTypes, resultType, config);
+      return makeAggregate<float, TOutput>(step, argTypes, resultType, config);
     case TypeKind::DOUBLE:
-      return makeAggregate<double, TOutput, InputFamily::kDouble, kOutput>(
-          step, argTypes, resultType, config);
+      return makeAggregate<double, TOutput>(step, argTypes, resultType, config);
     case TypeKind::TIMESTAMP:
       if (inputType->equivalent(*TIMESTAMP_UTC())) {
-        return makeAggregate<
-            TimestampUtc,
-            TOutput,
-            InputFamily::kTimestampNtz,
-            kOutput>(step, argTypes, resultType, config);
+        return makeAggregate<TimestampUtc, TOutput>(
+            step, argTypes, resultType, config);
       }
-      return makeAggregate<
-          Timestamp,
-          TOutput,
-          InputFamily::kTimestamp,
-          kOutput>(step, argTypes, resultType, config);
+      return makeAggregate<Timestamp, TOutput>(
+          step, argTypes, resultType, config);
     default:
       VELOX_USER_FAIL(
           "Unsupported histogram_numeric input type: {}",
@@ -413,27 +389,26 @@ std::unique_ptr<exec::Aggregate> makeByInputType(
   }
 }
 
-std::vector<exec::AggregateFunctionSignaturePtr> fixedSignature(
+exec::AggregateFunctionSignaturePtr fixedSignature(
     std::string_view argument,
     std::string_view result) {
-  return {exec::AggregateFunctionSignatureBuilder()
-              .argumentType(std::string(argument))
-              .constantArgumentType("integer")
-              .intermediateType("varbinary")
-              .returnType(fmt::format("array(row(x {},y double))", result))
-              .build()};
+  return exec::AggregateFunctionSignatureBuilder()
+      .argumentType(std::string(argument))
+      .constantArgumentType("integer")
+      .intermediateType("varbinary")
+      .returnType(fmt::format("array(row(x {},y double))", result))
+      .build();
 }
 
-std::vector<exec::AggregateFunctionSignaturePtr> decimalSignature(
-    std::string_view result) {
-  return {exec::AggregateFunctionSignatureBuilder()
-              .integerVariable("p")
-              .integerVariable("s")
-              .argumentType("decimal(p,s)")
-              .constantArgumentType("integer")
-              .intermediateType("varbinary")
-              .returnType(fmt::format("array(row(x {},y double))", result))
-              .build()};
+exec::AggregateFunctionSignaturePtr decimalSignature(std::string_view result) {
+  return exec::AggregateFunctionSignatureBuilder()
+      .integerVariable("p")
+      .integerVariable("s")
+      .argumentType("decimal(p,s)")
+      .constantArgumentType("integer")
+      .intermediateType("varbinary")
+      .returnType(fmt::format("array(row(x {},y double))", result))
+      .build();
 }
 
 TypePtr canonicalType(
@@ -458,71 +433,37 @@ std::unique_ptr<exec::Aggregate> makeCanonical(
       !type->isDecimal(),
       "histogram_numeric does not support DECIMAL centers; use "
       "histogram_numeric_legacy for DOUBLE centers");
+  validateResultCenterType(resultType, type);
   switch (type->kind()) {
     case TypeKind::TINYINT:
-      return makeAggregate<
-          int8_t,
-          int8_t,
-          InputFamily::kByte,
-          OutputFamily::kByte>(step, argTypes, resultType, config);
+      return makeAggregate<int8_t, int8_t>(step, argTypes, resultType, config);
     case TypeKind::SMALLINT:
-      return makeAggregate<
-          int16_t,
-          int16_t,
-          InputFamily::kShort,
-          OutputFamily::kShort>(step, argTypes, resultType, config);
+      return makeAggregate<int16_t, int16_t>(
+          step, argTypes, resultType, config);
     case TypeKind::INTEGER:
       if (type->isDate()) {
-        return makeAggregate<
-            Date,
-            Date,
-            InputFamily::kDate,
-            OutputFamily::kDate>(step, argTypes, resultType, config);
+        return makeAggregate<Date, Date>(step, argTypes, resultType, config);
       }
       if (type->isIntervalYearMonth()) {
-        return makeAggregate<
-            IntervalYearMonth,
-            IntervalYearMonth,
-            InputFamily::kYearMonthInterval,
-            OutputFamily::kYearMonthInterval>(
+        return makeAggregate<IntervalYearMonth, IntervalYearMonth>(
             step, argTypes, resultType, config);
       }
-      return makeAggregate<
-          int32_t,
-          int32_t,
-          InputFamily::kInteger,
-          OutputFamily::kInteger>(step, argTypes, resultType, config);
+      return makeAggregate<int32_t, int32_t>(
+          step, argTypes, resultType, config);
     case TypeKind::BIGINT:
-      return makeAggregate<
-          int64_t,
-          int64_t,
-          InputFamily::kLong,
-          OutputFamily::kLong>(step, argTypes, resultType, config);
+      return makeAggregate<int64_t, int64_t>(
+          step, argTypes, resultType, config);
     case TypeKind::REAL:
-      return makeAggregate<
-          float,
-          float,
-          InputFamily::kFloat,
-          OutputFamily::kFloat>(step, argTypes, resultType, config);
+      return makeAggregate<float, float>(step, argTypes, resultType, config);
     case TypeKind::DOUBLE:
-      return makeAggregate<
-          double,
-          double,
-          InputFamily::kDouble,
-          OutputFamily::kDouble>(step, argTypes, resultType, config);
+      return makeAggregate<double, double>(step, argTypes, resultType, config);
     case TypeKind::TIMESTAMP:
       if (type->equivalent(*TIMESTAMP_UTC())) {
-        return makeAggregate<
-            TimestampUtc,
-            TimestampUtc,
-            InputFamily::kTimestampNtz,
-            OutputFamily::kTimestampNtz>(step, argTypes, resultType, config);
+        return makeAggregate<TimestampUtc, TimestampUtc>(
+            step, argTypes, resultType, config);
       }
-      return makeAggregate<
-          Timestamp,
-          Timestamp,
-          InputFamily::kTimestamp,
-          OutputFamily::kTimestamp>(step, argTypes, resultType, config);
+      return makeAggregate<Timestamp, Timestamp>(
+          step, argTypes, resultType, config);
     default:
       VELOX_USER_FAIL(
           "Unsupported histogram_numeric input type: {}", type->toString());
@@ -531,20 +472,8 @@ std::unique_ptr<exec::Aggregate> makeCanonical(
 
 std::vector<exec::AggregateFunctionSignaturePtr> canonicalSignatures() {
   std::vector<exec::AggregateFunctionSignaturePtr> signatures;
-  for (const auto* type : {
-           "tinyint",
-           "smallint",
-           "integer",
-           "bigint",
-           "real",
-           "double",
-           "date",
-           "timestamp",
-           "timestamp utc",
-           "interval year to month",
-       }) {
-    auto signature = fixedSignature(type, type);
-    signatures.push_back(std::move(signature.front()));
+  for (const auto type : kInputTypes) {
+    signatures.push_back(fixedSignature(type, type));
   }
   return signatures;
 }
@@ -567,23 +496,10 @@ void registerLegacy(
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<exec::AggregateFunctionSignaturePtr> signatures;
-  for (const auto* argument : {
-           "tinyint",
-           "smallint",
-           "integer",
-           "bigint",
-           "real",
-           "double",
-           "date",
-           "timestamp",
-           "timestamp utc",
-           "interval year to month",
-       }) {
-    auto signature = fixedSignature(argument, "double");
-    signatures.push_back(std::move(signature.front()));
+  for (const auto argument : kInputTypes) {
+    signatures.push_back(fixedSignature(argument, "double"));
   }
-  auto decimal = decimalSignature("double");
-  signatures.push_back(std::move(decimal.front()));
+  signatures.push_back(decimalSignature("double"));
   exec::registerAggregateFunction(
       name,
       std::move(signatures),
@@ -592,8 +508,7 @@ void registerLegacy(
          const TypePtr& resultType,
          const core::QueryConfig& config) {
         validateResultCenterType(resultType, DOUBLE());
-        return makeByInputType<double, OutputFamily::kDouble>(
-            step, argTypes, resultType, config);
+        return makeByInputType<double>(step, argTypes, resultType, config);
       },
       {},
       withCompanionFunctions,
