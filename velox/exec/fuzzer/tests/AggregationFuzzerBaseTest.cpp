@@ -65,26 +65,54 @@ class FixedInputGenerator : public InputGenerator {
 };
 
 // Checks that successful fuzzer comparisons use literal aggregate arguments.
-class MockResultVerifier : public ResultVerifier {
+class LiteralArgumentResultVerifier : public ResultVerifier {
  public:
-  MOCK_METHOD(bool, supportsCompare, (), (override));
-  MOCK_METHOD(bool, supportsVerify, (), (override));
-  MOCK_METHOD(
-      void,
-      initialize,
-      (const std::vector<RowVectorPtr>&,
-       const std::vector<core::ExprPtr>&,
-       const std::vector<std::string>&,
-       const core::AggregationNode::Aggregate&,
-       const std::string&),
-      (override));
-  MOCK_METHOD(
-      bool,
-      compare,
-      (const RowVectorPtr&, const RowVectorPtr&),
-      (override));
-  MOCK_METHOD(bool, verify, (const RowVectorPtr&), (override));
-  MOCK_METHOD(void, reset, (), (override));
+  bool supportsCompare() override {
+    return true;
+  }
+
+  bool supportsVerify() override {
+    return false;
+  }
+
+  void initialize(
+      const std::vector<RowVectorPtr>& /*input*/,
+      const std::vector<core::ExprPtr>& /*projections*/,
+      const std::vector<std::string>& /*groupingKeys*/,
+      const core::AggregationNode::Aggregate& aggregate,
+      const std::string& /*aggregateName*/) override {
+    ASSERT_EQ(aggregate.call->inputs().size(), 2);
+    ASSERT_NE(
+        std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+            aggregate.call->inputs()[1]),
+        nullptr);
+    ++numInitializations_;
+  }
+
+  bool compare(const RowVectorPtr& result, const RowVectorPtr& otherResult)
+      override {
+    ++numComparisons_;
+    return assertEqualResults({result}, {otherResult});
+  }
+
+  bool verify(const RowVectorPtr& /*result*/) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  void reset() override {}
+
+  uint32_t numInitializations() const {
+    return numInitializations_;
+  }
+
+  uint32_t numComparisons() const {
+    return numComparisons_;
+  }
+
+ private:
+  // Retain totals across per-iteration resets to detect vacuous coverage.
+  uint32_t numInitializations_{0};
+  uint32_t numComparisons_{0};
 };
 
 } // namespace
@@ -290,31 +318,7 @@ TEST_F(AggregationFuzzerBaseTest, constantArgumentsInFuzzer) {
   FLAGS_enable_streaming_aggregations = true;
   releaseFuzzer();
 
-  auto verifier = std::make_shared<testing::NiceMock<MockResultVerifier>>();
-  ON_CALL(*verifier, supportsCompare()).WillByDefault(testing::Return(true));
-  ON_CALL(*verifier, supportsVerify()).WillByDefault(testing::Return(false));
-  EXPECT_CALL(
-      *verifier,
-      initialize(testing::_, testing::_, testing::_, testing::_, testing::_))
-      .Times(testing::AtLeast(1))
-      .WillRepeatedly(
-          testing::Invoke([](const std::vector<RowVectorPtr>&,
-                             const std::vector<core::ExprPtr>&,
-                             const std::vector<std::string>&,
-                             const core::AggregationNode::Aggregate& aggregate,
-                             const std::string&) {
-            ASSERT_NE(
-                std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
-                    aggregate.call->inputs()[1]),
-                nullptr);
-          }));
-  EXPECT_CALL(*verifier, compare(testing::_, testing::_))
-      .Times(testing::AtLeast(1))
-      .WillRepeatedly(
-          testing::Invoke(
-              [](const RowVectorPtr& result, const RowVectorPtr& otherResult) {
-                return assertEqualResults({result}, {otherResult});
-              }));
+  auto verifier = std::make_shared<LiteralArgumentResultVerifier>();
   auto generator = std::make_shared<FixedInputGenerator>(std::vector<VectorPtr>{
       makeFlatVector<int64_t>({1, 2, 3}),
       makeFlatVector<int64_t>({7, 9, 11}),
@@ -333,6 +337,8 @@ TEST_F(AggregationFuzzerBaseTest, constantArgumentsInFuzzer) {
       true,
       std::nullopt,
       std::make_unique<DuckQueryRunner>(rootPool_.get()));
+  EXPECT_GT(verifier->numInitializations(), 0);
+  EXPECT_GT(verifier->numComparisons(), 0);
 }
 
 TEST_F(AggregationFuzzerBaseTest, emptyInput) {
