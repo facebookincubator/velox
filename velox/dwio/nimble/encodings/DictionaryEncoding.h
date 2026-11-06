@@ -617,18 +617,15 @@ template <typename V>
 void DictionaryEncoding<T>::readWithVisitor(
     V& visitor,
     ReadWithVisitorParams& params) {
-  // Decode indices with an AlwaysTrue visitor and forward them directly into
-  // the shared logical-value dictionary visitor.
   if (params.dictionaryAwareReads) {
-    if constexpr (
-        isNumericType<T>() && sizeof(T) >= sizeof(int16_t) && !V::kHasHook &&
-        V::FilterType::deterministic && V::kHasBulkPath) {
+    if constexpr (detail::fusedDictionaryReadSupported<T, V>()) {
       using DictionaryVisitor = velox::dwio::common::DictionaryColumnVisitor<
           T,
           typename V::FilterType,
           typename V::Extract,
           V::dense>;
 
+      // Set up this chunk's dictionary and verdict cache.
       auto& scanState = visitor.reader().scanState();
 
       // Projection-only reads never consult the verdict cache.
@@ -649,6 +646,7 @@ void DictionaryEncoding<T>::readWithVisitor(
           static_cast<int32_t>(alphabet_.size());
       dictionaryState.filterCache = scanState.filterCache.data();
 
+      // Read the chunk through the dictionary visitor.
       const auto numRows = visitor.numRows() - visitor.rowIndex();
       const auto outputCapacity = visitor.reader().numValues() + numRows;
       const auto requiredBytes = std::max(
@@ -672,6 +670,8 @@ void DictionaryEncoding<T>::readWithVisitor(
         params.prepareResultNulls();
       }
 
+      // The filter applies to dictionary values, not indices, so decode indices
+      // unfiltered and let the dictionary visitor translate and filter them.
       detail::FusedDictionaryIndicesHook<DictionaryVisitor> dictionaryHook{
           dictionaryVisitor, dictionaryState.filterCache};
       detail::ForwardingIndicesHook indicesHook{dictionaryHook};
@@ -692,6 +692,8 @@ void DictionaryEncoding<T>::readWithVisitor(
       callReadWithVisitor(*indicesEncoding_, indicesVisitor, params);
       dictionaryHook.processTrailingNulls();
       visitor.setRowIndex(dictionaryVisitor.rowIndex());
+
+      // Records fuzzer-only stats, which are no-ops in regular builds.
       if constexpr (std::is_same_v<T, int16_t>) {
         fuzzer::updateSmallintDictionaryAwareReads();
       } else if constexpr (std::is_same_v<T, int32_t>) {
@@ -703,6 +705,7 @@ void DictionaryEncoding<T>::readWithVisitor(
       } else if constexpr (std::is_same_v<T, double>) {
         fuzzer::updateDoubleDictionaryAwareReads();
       }
+
       return;
     }
   }
