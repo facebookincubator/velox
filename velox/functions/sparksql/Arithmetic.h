@@ -668,6 +668,8 @@ FOLLY_ALWAYS_INLINE bool decodeHex(const StringView& input, TResult& result) {
   char* resultBuffer = result.data();
 
   int32_t i = 0;
+  // An odd-length input is read as if it had a leading '0', so the first
+  // character alone makes the first byte.
   if ((input.size() & 0x01) != 0) {
     const auto v = fromHex(inputBuffer[0]);
     if (v == -1) {
