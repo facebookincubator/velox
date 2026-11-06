@@ -105,15 +105,15 @@ inline void updateRequiredBarrier(
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
     uint32_t streamSize,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     size_t outputStreamIdx,
     bool& outputRequiredBarrier) {
   if (!inputRequiredBarrier || streamSize == 0) {
     return;
   }
-  NIMBLE_DCHECK_LT(outputStreamIdx, rowOrFlatMapNullStreams.size());
+  NIMBLE_DCHECK_LT(outputStreamIdx, barrierStreams.size());
   outputRequiredBarrier |=
-      hasProjectedHybridFlatMaps || rowOrFlatMapNullStreams[outputStreamIdx];
+      hasProjectedHybridFlatMaps || barrierStreams[outputStreamIdx];
 }
 
 // Forward declaration for recursive calls from per-type helpers.
@@ -450,7 +450,7 @@ std::vector<uint32_t> Projector::projectStreamsContiguousUnsorted(
     const std::vector<uint32_t>& selectedStreamIndices,
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     bool& outputRequiredBarrier,
     std::unique_ptr<folly::IOBuf>& output) {
   std::vector<uint32_t> outputSizes(selectedStreamIndices.size(), 0);
@@ -505,7 +505,7 @@ std::vector<uint32_t> Projector::projectStreamsContiguousUnsorted(
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps,
         streamSize,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         i,
         outputRequiredBarrier);
     if (numRunBytes > 0 && streamOffset == runStart + numRunBytes) {
@@ -533,7 +533,7 @@ std::vector<uint32_t> Projector::projectStreamsContiguousSorted(
     const std::vector<uint32_t>& selectedStreamIndices,
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     bool& outputRequiredBarrier,
     std::unique_ptr<folly::IOBuf>& output) {
   std::vector<uint32_t> outputSizes(selectedStreamIndices.size(), 0);
@@ -584,7 +584,7 @@ std::vector<uint32_t> Projector::projectStreamsContiguousSorted(
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps,
         streamSize,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         selectedPosition,
         outputRequiredBarrier);
     if (numRunBytes > 0 && currentOffset == runStart + numRunBytes) {
@@ -616,7 +616,7 @@ std::vector<uint32_t> Projector::projectStreamsChainedSorted(
     const std::vector<uint32_t>& selectedStreamIndices,
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     bool& outputRequiredBarrier,
     std::unique_ptr<folly::IOBuf>& output) {
   std::vector<uint32_t> outputSizes(selectedStreamIndices.size(), 0);
@@ -664,7 +664,7 @@ std::vector<uint32_t> Projector::projectStreamsChainedSorted(
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps,
         streamSize,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         selectedPosition,
         outputRequiredBarrier);
     numRunBytes += streamSize;
@@ -691,7 +691,7 @@ std::vector<uint32_t> Projector::projectStreamsChainedUnsorted(
     const std::vector<StreamMapping>& sortedStreamMappings,
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     bool& outputRequiredBarrier,
     std::unique_ptr<folly::IOBuf>& output) {
   std::vector<uint32_t> outputSizes(sortedStreamMappings.size(), 0);
@@ -748,7 +748,7 @@ std::vector<uint32_t> Projector::projectStreamsChainedUnsorted(
           inputRequiredBarrier,
           hasProjectedHybridFlatMaps,
           streamSize,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           outputStreamIdx,
           outputRequiredBarrier);
       numRunBytes += streamSize;

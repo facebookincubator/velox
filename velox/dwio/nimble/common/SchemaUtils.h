@@ -103,8 +103,10 @@ struct NimbleTypeProjection {
   std::shared_ptr<const Type> nimbleType;
   std::vector<uint32_t> streamOffsets;
   /// Marks streams whose presence requires retaining the input decode barrier.
-  /// This includes Row/FlatMap null streams and Hybrid FlatMap group key
-  /// streams.
+  /// This includes Row/FlatMap null streams, Hybrid FlatMap group key streams,
+  /// and the offsets and lengths streams of ArrayWithOffsets and
+  /// SlidingWindowMap, whose offsets index the distinct values of their own
+  /// stripe.
   std::vector<bool> rowOrFlatMapNullStreams;
 };
 

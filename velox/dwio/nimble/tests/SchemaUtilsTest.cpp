@@ -683,6 +683,12 @@ TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
   expectedBarriers[0] = true;
   expectedBarriers[1] = true;
   expectedBarriers[2] = true;
+  // The offsets and lengths of offset_array and sliding_map are barrier
+  // streams.
+  expectedBarriers[8] = true;
+  expectedBarriers[9] = true;
+  expectedBarriers[14] = true;
+  expectedBarriers[15] = true;
   expectedBarriers[18] = true;
   EXPECT_EQ(projection.rowOrFlatMapNullStreams, expectedBarriers);
 
@@ -1877,6 +1883,12 @@ TEST(SchemaUtilsTest, hybridFlatMapEmptyDefaultNumbersFollowingColumn) {
   expectedBarriers[0] = true;
   expectedBarriers[1] = true;
   expectedBarriers[2] = true;
+  // The placeholder offsets and lengths of offset_array and sliding_map are
+  // barrier streams.
+  expectedBarriers[8] = true;
+  expectedBarriers[9] = true;
+  expectedBarriers[14] = true;
+  expectedBarriers[15] = true;
   expectedBarriers[2 + kNumValueStreams] = true;
   EXPECT_EQ(projection.rowOrFlatMapNullStreams, expectedBarriers);
 
@@ -2106,12 +2118,13 @@ TEST(SchemaUtilsTest, projectionEncodingHintsSlidingWindowMap) {
   EXPECT_EQ(root.childAt(1)->kind(), Kind::SlidingWindowMap);
 
   // Walker visits: outer-Row.nulls (5), id Scalar (0), dedup_map offsets (3),
-  // lengths (4), keys (1), values (2).
+  // lengths (4), keys (1), values (2). The offsets and lengths of the
+  // SlidingWindowMap are barrier streams.
   EXPECT_EQ(
       projection.streamOffsets, std::vector<uint32_t>({5, 0, 3, 4, 1, 2}));
   EXPECT_EQ(
       projection.rowOrFlatMapNullStreams,
-      std::vector<bool>({true, false, false, false, false, false}));
+      std::vector<bool>({true, false, true, true, false, false}));
 }
 
 TEST(SchemaUtilsTest, projectionEncodingHintsMixed) {
@@ -2182,16 +2195,18 @@ TEST(SchemaUtilsTest, projectionEncodingHintsMixed) {
       projection.streamOffsets,
       std::vector<uint32_t>(
           {9, 0, 2, 3, 1, 6, 7, 4, 5, 8, 10, 11, UINT32_MAX, UINT32_MAX}));
+  // Barrier streams: the Row and FlatMap nulls, and the offsets and lengths of
+  // the ArrayWithOffsets and the SlidingWindowMap.
   EXPECT_EQ(
       projection.rowOrFlatMapNullStreams,
       std::vector<bool>(
           {true,
            false,
+           true,
+           true,
            false,
-           false,
-           false,
-           false,
-           false,
+           true,
+           true,
            false,
            false,
            true,
