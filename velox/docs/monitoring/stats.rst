@@ -90,6 +90,24 @@ These stats are reported only by HashBuild and HashAggregation operators.
      - Time spent on building the hash table from rows collected by all the
        hash build operators. This stat is only reported by the HashBuild operator.
 
+HashProbe
+---------
+These stats are reported only by HashProbe operator.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - preEvaluatedFilterRows
+     -
+     - Number of probe rows with a key match on which a join filter that only
+       references probe columns was evaluated once per row, instead of once per
+       matching build row. Only reported for deterministic filters in right,
+       full, right semi filter and right anti joins.
+
 TableScan
 ---------
 These stats are reported only by TableScan operator

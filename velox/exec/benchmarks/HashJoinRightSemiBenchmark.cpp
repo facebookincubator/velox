@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
 #include <random>
+#include <tuple>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -30,14 +32,25 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::test;
 
+// Benchmarks hash joins that track probed build rows: right semi filter,
+// right anti, right and full joins, with and without a filter that only
+// references probe columns.
 namespace {
 
 struct BenchmarkParams {
-  int32_t numDistinctKeys;
+  core::JoinType joinType;
+  // Number of distinct keys on both sides.
+  int32_t numMatchedKeys;
+  // Number of distinct keys that only appear once on the build side.
+  int32_t numBuildOnlyKeys{0};
+  // Number of distinct keys that only appear once on the probe side.
+  int32_t numProbeOnlyKeys{0};
   int32_t buildDuplicates;
   int32_t probeDuplicates;
   int32_t numProbeBatches;
-  bool withFilter;
+  // Join filter. Empty means no filter.
+  std::string filter{};
+  std::vector<std::string> outputLayout;
   std::string title;
 };
 
@@ -57,12 +70,16 @@ class HashJoinRightSemiBenchmark : public VectorTestBase {
     BenchmarkData data;
 
     auto buildKeys = makeKeys(
-        params.numDistinctKeys,
+        params.numMatchedKeys,
         params.buildDuplicates,
+        params.numMatchedKeys,
+        params.numBuildOnlyKeys,
         31 /*seed for deterministic shuffling*/);
     auto probeKeys = makeKeys(
-        params.numDistinctKeys,
+        params.numMatchedKeys,
         params.probeDuplicates,
+        params.numMatchedKeys + params.numBuildOnlyKeys,
+        params.numProbeOnlyKeys,
         97 /*seed for deterministic shuffling*/);
 
     data.buildVectors = makeBatchesFromKeys(buildKeys, 1, 0);
@@ -73,7 +90,6 @@ class HashJoinRightSemiBenchmark : public VectorTestBase {
 
   int64_t run(const BenchmarkParams& params, const BenchmarkData& data) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    const std::string filter = params.withFilter ? "t1 >= 0" : "";
 
     auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
                     .values(data.probeVectors)
@@ -85,24 +101,35 @@ class HashJoinRightSemiBenchmark : public VectorTestBase {
                             .values(data.buildVectors)
                             .project({"c0 AS u0", "c1 AS u1"})
                             .planNode(),
-                        filter,
-                        {"u1"},
-                        core::JoinType::kRightSemiFilter)
+                        params.filter,
+                        params.outputLayout,
+                        params.joinType)
                     .planNode();
 
-    auto results = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
-    return results->size();
+    return AssertQueryBuilder(plan).maxDrivers(1).countResults();
   }
 
  private:
-  std::vector<int64_t>
-  makeKeys(int32_t numDistinctKeys, int32_t duplicates, uint32_t seed) {
-    VELOX_CHECK_GT(numDistinctKeys, 0);
+  // Returns keys [0, numMatchedKeys) repeated 'duplicates' times and keys
+  // [onlyKeysStart, onlyKeysStart + numOnlyKeys) once, in a deterministic
+  // random order.
+  std::vector<int64_t> makeKeys(
+      int32_t numMatchedKeys,
+      int32_t duplicates,
+      int64_t onlyKeysStart,
+      int32_t numOnlyKeys,
+      uint32_t seed) {
+    VELOX_CHECK_GT(numMatchedKeys, 0);
     VELOX_CHECK_GT(duplicates, 0);
+    VELOX_CHECK_GE(numOnlyKeys, 0);
 
-    std::vector<int64_t> keys(numDistinctKeys * duplicates);
-    for (int64_t i = 0; i < keys.size(); ++i) {
-      keys[i] = i % numDistinctKeys;
+    const int64_t numRepeatedKeys = numMatchedKeys * duplicates;
+    std::vector<int64_t> keys(numRepeatedKeys + numOnlyKeys);
+    for (int64_t i = 0; i < numRepeatedKeys; ++i) {
+      keys[i] = i % numMatchedKeys;
+    }
+    for (int32_t i = 0; i < numOnlyKeys; ++i) {
+      keys[numRepeatedKeys + i] = onlyKeysStart + i;
     }
 
     std::mt19937 random(seed);
@@ -154,29 +181,66 @@ int main(int argc, char** argv) {
   auto benchmark = std::make_unique<HashJoinRightSemiBenchmark>();
   std::vector<BenchmarkCase> benchmarkCases;
 
-  const std::vector<BenchmarkParams> params = {
+  std::vector<BenchmarkParams> params = {
       {// A moderate duplicate workload.
-       .numDistinctKeys = 20'000,
+       .joinType = core::JoinType::kRightSemiFilter,
+       .numMatchedKeys = 20'000,
        .buildDuplicates = 8,
        .probeDuplicates = 8,
        .numProbeBatches = 4,
-       .withFilter = false,
+       .outputLayout = {"u1"},
        .title = "right_semi_no_filter_dup8x8"},
       {// A heavy duplicate/skew-sensitive workload.
-       .numDistinctKeys = 10'000,
+       .joinType = core::JoinType::kRightSemiFilter,
+       .numMatchedKeys = 10'000,
        .buildDuplicates = 32,
        .probeDuplicates = 32,
        .numProbeBatches = 4,
-       .withFilter = false,
+       .outputLayout = {"u1"},
        .title = "right_semi_no_filter_dup32x32"},
       {// Control: keep filter=true path to compare against no-filter fast path.
-       .numDistinctKeys = 10'000,
+       .joinType = core::JoinType::kRightSemiFilter,
+       .numMatchedKeys = 10'000,
        .buildDuplicates = 32,
        .probeDuplicates = 32,
        .numProbeBatches = 4,
-       .withFilter = true,
+       .filter = "t1 >= 0",
+       .outputLayout = {"u1"},
        .title = "right_semi_with_filter_dup32x32"},
   };
+
+  // Each probe key matches a few build rows and appears in many probe rows,
+  // so a probe-only filter is evaluated once per probe row instead of once
+  // per matching build row. Compares filters that pass all and 1/4 of the
+  // probe rows with no filter. Some keys only appear on one side.
+  const std::vector<
+      std::tuple<core::JoinType, std::string, std::vector<std::string>>>
+      joinTypes = {
+          {core::JoinType::kRight, "right_outer", {"t1", "u1"}},
+          {core::JoinType::kFull, "full_outer", {"t1", "u1"}},
+          {core::JoinType::kRightSemiFilter, "right_semi", {"u1"}},
+          {core::JoinType::kRightAnti, "right_anti", {"u1"}},
+      };
+  const std::vector<std::pair<std::string, std::string>> filters = {
+      {"", "no_filter"},
+      {"t1 >= 0", "with_filter"},
+      {"t1 % 4 = 0", "selective_filter"},
+  };
+  for (const auto& [joinType, joinName, outputLayout] : joinTypes) {
+    for (const auto& [filter, filterName] : filters) {
+      params.push_back(
+          {.joinType = joinType,
+           .numMatchedKeys = 1'000,
+           .numBuildOnlyKeys = 1'000,
+           .numProbeOnlyKeys = 1'000,
+           .buildDuplicates = 4,
+           .probeDuplicates = 128,
+           .numProbeBatches = 8,
+           .filter = filter,
+           .outputLayout = outputLayout,
+           .title = fmt::format("{}_{}_dup4x128", joinName, filterName)});
+    }
+  }
 
   for (const auto& param : params) {
     benchmarkCases.push_back({param, benchmark->prepareData(param)});

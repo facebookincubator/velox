@@ -186,6 +186,15 @@ void HashProbe::initialize() {
   auto tableType = makeTableType(buildType.get(), joinNode_->rightKeys());
   if (joinNode_->filter()) {
     initializeFilter(joinNode_->filter(), probeType_, tableType);
+    // For right and full joins, a probe row that fails a probe-only filter
+    // fails it for every matching build row, so it can be treated as a miss.
+    // Right semi filter and right anti joins only need to know which build
+    // rows are paired with at least one passing probe row. A NULL filter
+    // result is treated as false for all these join types.
+    canPreEvaluateProbeOnlyFilter_ = filterTableProjections_.empty() &&
+        filter_->expr(0)->isDeterministic() &&
+        (isRightJoin(joinType_) || isFullJoin(joinType_) ||
+         isRightSemiFilterJoin(joinType_) || isRightAntiJoin(joinType_));
   }
 
   size_t numIdentityProjections = 0;
@@ -816,6 +825,8 @@ void HashProbe::addInput(RowVectorPtr input) {
 
   // Reset passingInputRowsInitialized_ as input_ as changed.
   passingInputRowsInitialized_ = false;
+  probeOnlyFilterPending_ = false;
+  probeOnlyFilterPreEvaluated_ = false;
 
   const auto numInput = input_->size();
 
@@ -911,6 +922,10 @@ void HashProbe::addInput(RowVectorPtr input) {
   }
 
   resultIter_->reset(*lookup_);
+
+  // Defer the filter evaluation to getOutput(), which may load lazy probe
+  // columns in a reclaimable section. addInput() is not reclaimable.
+  probeOnlyFilterPending_ = canPreEvaluateProbeOnlyFilter_;
 }
 
 void HashProbe::prepareOutput(vector_size_t size) {
@@ -1192,7 +1207,7 @@ RowVectorPtr HashProbe::getOutput() {
   return getOutputInternal(/*toSpillOutput=*/false);
 }
 
-void HashProbe::processRightSemiNoFilter(bool emptyBuildSide) {
+void HashProbe::markProbedBuildRows(bool emptyBuildSide) {
   if (emptyBuildSide) {
     input_ = nullptr;
     return;
@@ -1217,6 +1232,75 @@ void HashProbe::processRightSemiNoFilter(bool emptyBuildSide) {
   }
 
   input_ = nullptr;
+}
+
+void HashProbe::preEvaluateProbeOnlyFilter(bool toSpillOutput) {
+  VELOX_CHECK(probeOnlyFilterPending_);
+  VELOX_CHECK(!probeOnlyFilterPreEvaluated_);
+  probeOnlyFilterPending_ = false;
+
+  // Only evaluate the filter on probe rows with a key match. Rows without a
+  // match are not affected by the filter result.
+  const auto numInput = input_->size();
+  filterInputRows_.resizeFill(numInput, false);
+  for (const auto probeRow : lookup_->rows) {
+    if (lookup_->hits[probeRow] != nullptr) {
+      filterInputRows_.setValid(probeRow, true);
+    }
+  }
+  filterInputRows_.updateBounds();
+
+  if (filterInputRows_.hasSelections()) {
+    if (!toSpillOutput && needLazyLoadProbeInput() &&
+        std::any_of(
+            filterInputProjections_.begin(),
+            filterInputProjections_.end(),
+            [&](const auto& projection) {
+              return isLazyNotLoaded(*input_->childAt(projection.inputChannel));
+            })) {
+      if (!loadLazyInputInReclaimableSection(
+              [&]() { loadProbeOnlyFilterInput(); })) {
+        return;
+      }
+    } else {
+      loadProbeOnlyFilterInput();
+    }
+
+    std::vector<VectorPtr> filterColumns(filterInputType_->size());
+    for (const auto& projection : filterInputProjections_) {
+      filterColumns[projection.outputChannel] =
+          input_->childAt(projection.inputChannel);
+    }
+    auto filterInput = std::make_shared<RowVector>(
+        pool(), filterInputType_, nullptr, numInput, std::move(filterColumns));
+    EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput.get());
+    filter_->eval(0, 1, true, filterInputRows_, evalCtx, filterResult_);
+    decodedFilterResult_.decode(*filterResult_[0], filterInputRows_);
+
+    filterInputRows_.applyToSelected([&](auto row) {
+      if (!filterPassed(row)) {
+        lookup_->hits[row] = nullptr;
+      }
+    });
+
+    // Lazy columns loaded later only need the rows that still have a hit.
+    passingInputRowsInitialized_ = false;
+
+    addRuntimeStat(
+        std::string(kPreEvaluatedFilterRows),
+        RuntimeCounter(filterInputRows_.countSelected()));
+  }
+
+  probeOnlyFilterPreEvaluated_ = true;
+}
+
+void HashProbe::loadProbeOnlyFilterInput() {
+  // A lazy vector is loaded only once. Load the filter columns for the same
+  // rows as ensureLazyInputLoaded(), i.e. all rows that may be output or
+  // spilled, not only the rows the filter is evaluated on.
+  for (const auto& projection : filterInputProjections_) {
+    ensureLoaded(projection.inputChannel);
+  }
 }
 
 RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
@@ -1307,13 +1391,22 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   const bool isLeftSemiOrAntiJoinNoFilter = !filter_ &&
       (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
        isAntiJoin(joinType_) || isCountingJoin(joinType_));
-  const bool isRightSemiFilterJoinNoFilter =
-      !filter_ && isRightSemiFilterJoin(joinType_);
 
   const bool emptyBuildSide = (table_->numDistinct() == 0);
 
-  if (isRightSemiFilterJoinNoFilter) {
-    processRightSemiNoFilter(emptyBuildSide);
+  if (probeOnlyFilterPending_) {
+    VELOX_CHECK(!emptyBuildSide);
+    preEvaluateProbeOnlyFilter(toSpillOutput);
+    // The hash table was spilled while loading the filter input.
+    if (input_ == nullptr) {
+      return nullptr;
+    }
+  }
+
+  if ((!filter_ && isRightSemiFilterJoin(joinType_)) ||
+      (probeOnlyFilterPreEvaluated_ &&
+       (isRightSemiFilterJoin(joinType_) || isRightAntiJoin(joinType_)))) {
+    markProbedBuildRows(emptyBuildSide);
     return nullptr;
   }
 
@@ -1432,7 +1525,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       VELOX_CHECK_NOT_NULL(table_);
     }
 
-    numOut = evalFilter(numOut);
+    if (!probeOnlyFilterPreEvaluated_) {
+      numOut = evalFilter(numOut);
+    }
 
     if (numOut == 0) {
       // The hash probe might get stuck in the output loop if the filter is
@@ -2139,9 +2234,12 @@ void HashProbe::ensureLazyInputLoaded() {
   // When atEnd (single output batch), fillOutput() skips loading via
   // ensureLoadedIfNotAtEnd() and wraps lazy vectors zero-copy.
   // However, createFilterInput() unconditionally loads filter+projected
-  // columns, so those still need preloading when a filter is present.
+  // columns, so those still need preloading when a filter is present and has
+  // not been pre-evaluated.
   const bool atEnd{resultIter_->atEnd()};
-  if (atEnd && !filter_) {
+  const bool needFilterInput{
+      filter_ != nullptr && !probeOnlyFilterPreEvaluated_};
+  if (atEnd && !needFilterInput) {
     return;
   }
 
@@ -2153,7 +2251,7 @@ void HashProbe::ensureLazyInputLoaded() {
       }
     }
   }
-  if (filter_) {
+  if (needFilterInput) {
     for (const auto& projection : filterInputProjections_) {
       if (atEnd &&
           projectedInputColumns_.find(projection.inputChannel) ==
@@ -2169,6 +2267,16 @@ void HashProbe::ensureLazyInputLoaded() {
     return;
   }
 
+  loadLazyInputInReclaimableSection([&]() {
+    for (const auto channel : lazyChannels) {
+      ensureLoaded(channel);
+    }
+  });
+}
+
+bool HashProbe::loadLazyInputInReclaimableSection(
+    const std::function<void()>& load) {
+  VELOX_CHECK_NOT_NULL(input_);
   const bool tableWasNonEmpty{table_->numDistinct() > 0};
   {
     loadingLazyInput_ = true;
@@ -2179,9 +2287,7 @@ void HashProbe::ensureLazyInputLoaded() {
     if (testingTriggerSpill(pool()->name())) {
       memory::testingRunArbitration(pool());
     }
-    for (const auto channel : lazyChannels) {
-      ensureLoaded(channel);
-    }
+    load();
   }
 
   // If the hash table was spilled during lazy loading (it was non-empty
@@ -2200,7 +2306,9 @@ void HashProbe::ensureLazyInputLoaded() {
       VELOX_CHECK(skipProbeOnEmptyBuild());
     }
     input_ = nullptr;
+    return false;
   }
+  return true;
 }
 
 bool HashProbe::canReclaim() const {

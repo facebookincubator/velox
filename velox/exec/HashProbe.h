@@ -43,6 +43,10 @@ class HashProbe : public Operator {
   /// Number of rows bypassed via dynamic filter replacement.
   static constexpr std::string_view kReplacedWithDynamicFilterRows =
       "replacedWithDynamicFilterRows";
+  /// Number of probe rows with a key match on which a probe-only join filter
+  /// was evaluated once per row instead of once per matching build row.
+  static constexpr std::string_view kPreEvaluatedFilterRows =
+      "preEvaluatedFilterRows";
 
   HashProbe(
       int32_t operatorId,
@@ -171,10 +175,23 @@ class HashProbe : public Operator {
   // arbitration.
   RowVectorPtr getOutputInternal(bool toSpillOutput);
 
-  // Handles the right semi filter join fast path when there is no extra
-  // filter. Marks matching build rows as probed and consumes the current
-  // input batch.
-  void processRightSemiNoFilter(bool emptyBuildSide);
+  // Handles the right semi filter and right anti join fast path when there is
+  // no extra filter or the filter has been pre-evaluated on the probe rows.
+  // Marks all build rows that match a probe row as probed and consumes the
+  // current input batch.
+  void markProbedBuildRows(bool emptyBuildSide);
+
+  // Evaluates a deterministic filter that only references probe columns once
+  // per probe row with a key match, and clears 'lookup_->hits' for rows that
+  // do not pass. This avoids evaluating the filter once per matching build
+  // row. Lazy filter columns are loaded in a reclaimable section unless
+  // 'toSpillOutput' is true. Sets 'input_' to nullptr if the hash table is
+  // spilled while loading.
+  void preEvaluateProbeOnlyFilter(bool toSpillOutput);
+
+  // Loads the lazy probe filter columns for all the rows that may be output or
+  // spilled.
+  void loadProbeOnlyFilterInput();
 
   // Check if output_ can be re-used and if not make a new one.
   void prepareOutput(vector_size_t size);
@@ -307,6 +324,12 @@ class HashProbe : public Operator {
   // Called after listJoinResults() so that atEnd() is known and preloading
   // can be skipped for columns that fillOutput/createFilterInput won't load.
   void ensureLazyInputLoaded();
+
+  // Runs 'load' to load lazy input vectors in a reclaimable section. If memory
+  // reclaim spills the hash table while loading, spills the current input and
+  // sets 'input_' to nullptr as 'lookup_' and 'resultIter_' reference freed
+  // hash table rows. Returns false in that case.
+  bool loadLazyInputInReclaimableSection(const std::function<void()>& load);
 
   // Setups spilled output reader if 'spillOutputPartitionSet_' is not empty.
   void maybeSetupSpillOutputReader();
@@ -524,6 +547,20 @@ class HashProbe : public Operator {
 
   // Maps from column index in hash table to channel in 'filterInputType_'.
   std::vector<IdentityProjection> filterTableProjections_;
+
+  // True if 'filter_' is deterministic and only references probe columns, so
+  // its result is the same for all build rows matching a probe row, and the
+  // join type supports applying it to 'lookup_->hits' before listing join
+  // results. See preEvaluateProbeOnlyFilter().
+  bool canPreEvaluateProbeOnlyFilter_{false};
+
+  // True if 'filter_' still needs to be pre-evaluated on the current probe
+  // input batch before listing join results.
+  bool probeOnlyFilterPending_{false};
+
+  // True if 'filter_' has already been applied to 'lookup_->hits' for the
+  // current probe input batch.
+  bool probeOnlyFilterPreEvaluated_{false};
 
   // The following six fields are used in null-aware anti join filter
   // processing.
