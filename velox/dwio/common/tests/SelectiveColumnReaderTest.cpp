@@ -181,6 +181,18 @@ class TestColumnReader : public SelectiveColumnReader {
     ensureValuesCapacity<T>(n);
     std::memcpy(rawValues_, data.data(), n * sizeof(T));
   }
+
+  /// Calls addNull<T>() for the value at 'index'.
+  template <typename T>
+  void addNullAt(vector_size_t index) {
+    numValues_ = index;
+    addNull<T>();
+  }
+
+  template <typename T>
+  T rawValueAt(vector_size_t index) const {
+    return reinterpret_cast<const T*>(rawValues_)[index];
+  }
 };
 
 class GetFlatValuesTest : public ::testing::Test {
@@ -352,6 +364,18 @@ TEST_F(GetFlatValuesTest, int64ToInt64) {
 TEST_F(GetFlatValuesTest, int64ToInt32) {
   testConversion<int64_t, int32_t>(INTEGER(), {0, 1, -1, 42, -100});
   testConversion<int64_t, int32_t>(INTEGER(), {0, 1, -1, 42, -100}, {2, 3});
+}
+
+// The integer readers' IS NULL filter calls addNull<int64_t>() for values
+// stored at a narrower width.
+TEST_F(GetFlatValuesTest, addNullKeepsValueWidth) {
+  auto reader = makeReader(INTEGER());
+  const std::vector<int32_t> rows{0, 1, 2};
+  reader->setupValuesWithNulls<int32_t>({1, 2, 3}, {false, false, false}, rows);
+  reader->addNullAt<int64_t>(1);
+  EXPECT_EQ(reader->rawValueAt<int32_t>(0), 1);
+  EXPECT_EQ(reader->rawValueAt<int32_t>(1), 0);
+  EXPECT_EQ(reader->rawValueAt<int32_t>(2), 3);
 }
 
 TEST_F(GetFlatValuesTest, int16ToInt16) {
