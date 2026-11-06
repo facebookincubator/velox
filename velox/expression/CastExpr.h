@@ -21,6 +21,7 @@
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
+#include "velox/vector/FlatMapVector.h"
 
 namespace facebook::velox::exec {
 
@@ -112,6 +113,15 @@ class CastExpr : public SpecialForm {
   VectorPtr applyMap(
       const SelectivityVector& rows,
       const MapVector* input,
+      exec::EvalCtx& context,
+      const MapType& fromType,
+      const MapType& toType);
+
+  // Casts a flat map into a flat map. Each distinct key and the values of
+  // each key are cast once.
+  VectorPtr applyFlatMap(
+      const SelectivityVector& rows,
+      const FlatMapVector* input,
       exec::EvalCtx& context,
       const MapType& fromType,
       const MapType& toType);
