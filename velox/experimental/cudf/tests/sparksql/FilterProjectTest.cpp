@@ -249,50 +249,52 @@ TEST_F(CudfFilterProjectTest, castDateToVarcharMatchesCpu) {
 }
 
 TEST_F(CudfFilterProjectTest, hashWithSeed) {
-  auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
-  auto data = makeRowVector({input});
-  auto hashPlan = PlanBuilder()
-                      .setParseOptions(options_)
-                      .values({data})
-                      .project({"hash_with_seed(42, c0) AS c1"})
-                      .planNode();
-  auto hashResults = AssertQueryBuilder(hashPlan).copyResults(pool());
+  auto bigintData = makeRowVector({makeNullableFlatVector<int64_t>(
+      {0, -1, INT64_MIN, INT64_MAX, std::nullopt})});
+  assertExpressionMatchesCpu(
+      "hash_with_seed(42, c0)", bigintData, bigintData->rowType());
 
-  auto expected = makeRowVector({
-      makeFlatVector<int32_t>({
-          -1604625029,
-          -853646085,
-      }),
-  });
-  facebook::velox::test::assertEqualVectors(expected, hashResults);
+  // cuDF's Spark hash requires microsecond timestamps.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  auto timestampData = makeRowVector({makeNullableFlatVector<Timestamp>(
+      {Timestamp(0, 0),
+       Timestamp(1, 1'000),
+       Timestamp(-1, 999'000),
+       Timestamp(1'700'000'000, 123'456'000),
+       std::nullopt})});
+  assertExpressionMatchesCpu(
+      "hash_with_seed(42, c0)", timestampData, timestampData->rowType());
 }
 
-// TODO: Re-enable after https://github.com/rapidsai/cudf/issues/21720.
-// cuDF's murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),
-// h(col1, seed)), while Spark instead hashes columns iteratively:
-// h(col1, h(col0, seed)).
-// These produce different results for multi-column inputs. The cudf hashing
-// API only accepts a scalar uint32_t seed (no per-row seed column), so
-// Spark's iterative semantics cannot be replicated without a custom CUDA
-// kernel. Single-column hash_with_seed works correctly since there is no
-// combining step.
-TEST_F(CudfFilterProjectTest, DISABLED_hashWithSeedMultiColumns) {
-  auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
-  auto data = makeRowVector({input, input});
-  auto hashPlan = PlanBuilder()
-                      .setParseOptions(options_)
-                      .values({data})
-                      .project({"hash_with_seed(42, c0, c1) AS c2"})
-                      .planNode();
-  auto hashResults = AssertQueryBuilder(hashPlan).copyResults(pool());
-
-  auto expected = makeRowVector({
-      makeFlatVector<int32_t>({
-          -572895191,
-          724095561,
-      }),
+TEST_F(CudfFilterProjectTest, hashWithSeedMultiColumns) {
+  // The last row is null in every column.
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>({1, std::nullopt, -7, 0, std::nullopt}),
+      makeNullableFlatVector<std::string>(
+          {"spark", "über", std::nullopt, "", std::nullopt}),
+      makeNullableFlatVector<int128_t>(
+          {0, -1, 123'456'789, std::nullopt, std::nullopt}, DECIMAL(38, 10)),
+      makeNullableFlatVector<int32_t>(
+          {0, std::nullopt, 18'000, -18'000, std::nullopt}, DATE()),
+      makeNullableArrayVector<int32_t>(
+          {{{1, 2, 3}},
+           std::vector<std::optional<int32_t>>{},
+           {{4, std::nullopt}},
+           {{5}},
+           std::nullopt}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, 4, 5}),
+           makeNullableFlatVector<std::string>(
+               {"a", "b", std::nullopt, "d", "e"})},
+          [](vector_size_t row) { return row == 4; }),
   });
-  facebook::velox::test::assertEqualVectors(expected, hashResults);
+  assertExpressionMatchesCpu(
+      "hash_with_seed(42, c0, c1, c2, c3, c4, c5)", data, data->rowType());
 }
 
 TEST_F(CudfFilterProjectTest, dateAdd) {

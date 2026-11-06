@@ -310,21 +310,40 @@ TEST_F(CudfSparkExpressionSelectionTest, signatureVarargsHashWithSeed) {
     CudfConfig::getInstance().allowCpuFallback = false;
   };
 
-  // TODO: Assert TRUE after https://github.com/rapidsai/cudf/issues/21720.
-  // Multi-column hash_with_seed cannot be evaluated by cudf because cudf's
-  // murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),
-  // h(col1, seed)), while Spark hashes iteratively: h(col1, h(col0, seed)).
-  // The cudf API only accepts a scalar seed, so per-row seeding is not
-  // possible without a custom CUDA kernel.
   auto multiCol = optimizeTypedExpr(
       "hash_with_seed(42, a, b)",
       rowType_,
       queryCtx_.get(),
       execCtx_.get(),
       {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  ASSERT_FALSE(canExprRunOnGpu(multiCol, queryCtx_.get(), pool_.get()));
+  ASSERT_TRUE(canExprRunOnGpu(multiCol, queryCtx_.get(), pool_.get()));
 
-  // Single-column hash_with_seed is supported (no column combining needed).
+  // cuDF's Spark hash rejects non-microsecond timestamps at any nesting depth
+  // and arrays of rows. The default timestamp unit is nanoseconds. The GPU
+  // evaluator receives no column for a constant data argument.
+  auto unsupportedRowType = ROW({
+      {"a", BIGINT()},
+      {"ts", TIMESTAMP()},
+      {"row_ts", ROW({{"ts", TIMESTAMP()}})},
+      {"arr_row", ARRAY(ROW({{"x", INTEGER()}}))},
+  });
+  for (const auto* sql : {
+           "hash_with_seed(42, ts)",
+           "hash_with_seed(42, row_ts)",
+           "hash_with_seed(42, arr_row)",
+           "hash_with_seed(42, a, 7)",
+       }) {
+    SCOPED_TRACE(sql);
+    auto expr = optimizeTypedExpr(
+        sql,
+        unsupportedRowType,
+        queryCtx_.get(),
+        execCtx_.get(),
+        {.parseIntegerAsBigint = false, .functionPrefix = ""});
+    ASSERT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+
+  // Single-column hash_with_seed is supported.
   auto singleCol = optimizeTypedExpr(
       "hash_with_seed(42, a)",
       rowType_,
