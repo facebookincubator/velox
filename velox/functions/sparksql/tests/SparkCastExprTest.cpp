@@ -3572,18 +3572,29 @@ TEST_F(SparkCastExprTestAnsiOff, castNumericToIntegralOverflow) {
 }
 
 TEST_F(SparkCastExprTestAnsiOff, castFloatToIntegralRoundedUpperLimit) {
-  testCast<double, int64_t>(
-      "bigint",
-      {std::nextafter(0x1p63, 0.0), 0x1p63, -0x1p63},
-      {std::numeric_limits<int64_t>::max() - 1'023,
-       std::numeric_limits<int64_t>::max(),
-       std::numeric_limits<int64_t>::min()});
-  testCast<float, int64_t>(
-      "bigint", {0x1p63f}, {std::numeric_limits<int64_t>::max()});
-  testCast<float, int32_t>(
-      "integer", {0x1p31f}, {std::numeric_limits<int32_t>::max()});
-  testCast<float, int8_t>("tinyint", {0x1p31f}, {-1});
-  testCast<float, int16_t>("smallint", {0x1p31f}, {-1});
+  testCast(
+      makeFlatVector<double>({0x1p63, std::nextafter(0x1p63, 0.0), -0x1p63}),
+      makeFlatVector<int64_t>(
+          {std::numeric_limits<int64_t>::max(),
+           std::numeric_limits<int64_t>::max() - 1'023,
+           std::numeric_limits<int64_t>::min()}),
+      /*isTryCast=*/false);
+  testCast(
+      makeFlatVector<float>({0x1p63f}),
+      makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()}),
+      /*isTryCast=*/false);
+  testCast(
+      makeFlatVector<float>({0x1p31f}),
+      makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()}),
+      /*isTryCast=*/false);
+  testCast(
+      makeFlatVector<float>({0x1p31f}),
+      makeFlatVector<int8_t>({-1}),
+      /*isTryCast=*/false);
+  testCast(
+      makeFlatVector<float>({0x1p31f}),
+      makeFlatVector<int16_t>({-1}),
+      /*isTryCast=*/false);
 }
 
 TEST_F(SparkCastExprTestAnsiOff, tryCastFloatToIntegralSaturation) {
