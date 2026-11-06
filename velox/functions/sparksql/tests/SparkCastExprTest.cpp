@@ -3571,6 +3571,21 @@ TEST_F(SparkCastExprTestAnsiOff, castNumericToIntegralOverflow) {
       "integer", {3.0e10}, {std::numeric_limits<int32_t>::max()});
 }
 
+TEST_F(SparkCastExprTestAnsiOff, castFloatToIntegralRoundedUpperLimit) {
+  testCast<double, int64_t>(
+      "bigint",
+      {std::nextafter(0x1p63, 0.0), 0x1p63, -0x1p63},
+      {std::numeric_limits<int64_t>::max() - 1'023,
+       std::numeric_limits<int64_t>::max(),
+       std::numeric_limits<int64_t>::min()});
+  testCast<float, int64_t>(
+      "bigint", {0x1p63f}, {std::numeric_limits<int64_t>::max()});
+  testCast<float, int32_t>(
+      "integer", {0x1p31f}, {std::numeric_limits<int32_t>::max()});
+  testCast<float, int8_t>("tinyint", {0x1p31f}, {-1});
+  testCast<float, int16_t>("smallint", {0x1p31f}, {-1});
+}
+
 TEST_F(SparkCastExprTestAnsiOff, tryCastFloatToIntegralSaturation) {
   // Spark try_cast for float/double to integral saturates when the value
   // equals the target type's limit after floating-point rounding, and returns

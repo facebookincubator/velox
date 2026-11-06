@@ -468,7 +468,8 @@ struct Converter<
 
       if constexpr (std::is_same_v<T, int128_t>) {
         return std::numeric_limits<int128_t>::max();
-      } else if (v > LimitType::maxLimit()) {
+      } else if (v >= LimitType::maxLimit()) {
+        // The integral maximum can round up past its range in FP.
         return LimitType::max();
       } else if (v < LimitType::minLimit()) {
         return LimitType::min();
