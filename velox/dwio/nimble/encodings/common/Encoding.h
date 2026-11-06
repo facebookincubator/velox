@@ -943,6 +943,20 @@ constexpr bool bulkFastPathByDefault() {
        hookAllowsBulkFastPath<typename V::HookType>());
 }
 
+// Returns whether DictionaryEncoding<T> can use the fused dictionary read for
+// visitor 'V'. Returns true only when all of these hold:
+//   - T is a 2-, 4- or 8-byte numeric type.
+//   - V has no hook, such as aggregation pushdown: the fused read writes only
+//     into the reader's buffers.
+//   - V's filter is deterministic: verdicts are cached per dictionary value.
+//   - V has a bulk path, which rules out REAL read as DOUBLE: the fused read
+//     writes values at the width of T.
+template <typename T, typename V>
+constexpr bool fusedDictionaryReadSupported() {
+  return isNumericType<T>() && sizeof(T) >= sizeof(int16_t) && !V::kHasHook &&
+      V::FilterType::deterministic && V::kHasBulkPath;
+}
+
 } // namespace detail
 
 } // namespace facebook::nimble
