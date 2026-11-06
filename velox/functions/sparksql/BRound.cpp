@@ -36,8 +36,7 @@ namespace {
 template <typename T>
 FOLLY_ALWAYS_INLINE T wrapToSigned(int128_t value) {
   static_assert(std::is_integral_v<T> && std::is_signed_v<T>);
-  using UnsignedT = std::make_unsigned_t<T>;
-  return std::bit_cast<T>(static_cast<UnsignedT>(value));
+  return std::bit_cast<T>(static_cast<std::make_unsigned_t<T>>(value));
 }
 
 template <typename T>

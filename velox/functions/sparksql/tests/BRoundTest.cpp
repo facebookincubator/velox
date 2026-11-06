@@ -24,6 +24,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
@@ -228,9 +229,11 @@ TEST_P(BRoundTest, floatingPointExtremePositiveScales) {
   EXPECT_EQ(bround<double>(3 * minimum, 323), 3 * minimum);
   EXPECT_EQ(bround<double>(-3 * minimum, 323), -3 * minimum);
 
-  // Normal doubles are preserved exactly at these scales, which here matches
-  // the exact decimal result because their magnitude far exceeds the quantum.
+  // Rounding at this scale also preserves this normal double.
   EXPECT_EQ(bround<double>(4.7e-36, 309), 4.7e-36);
+
+  // These subnormal values are intentionally preserved. Exact decimal
+  // HALF_EVEN rounding at scale 309 would produce +/-1e-309.
   EXPECT_EQ(bround<double>(6e-310, 309), 6e-310);
   EXPECT_EQ(bround<double>(-6e-310, 309), -6e-310);
 
@@ -285,9 +288,8 @@ TEST_P(BRoundTest, constantScaleRequired) {
   size_t numBinarySignatures{0};
   for (const auto* signature : signatures) {
     if (signature->argumentTypes().size() == 2) {
-      ASSERT_EQ(signature->constantArguments().size(), 2);
-      EXPECT_FALSE(signature->constantArguments()[0]);
-      EXPECT_TRUE(signature->constantArguments()[1]);
+      EXPECT_THAT(
+          signature->constantArguments(), testing::ElementsAre(false, true));
       ++numBinarySignatures;
     }
   }
