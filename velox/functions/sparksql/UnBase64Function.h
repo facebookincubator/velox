@@ -76,10 +76,10 @@ struct ToBinaryBase64Function : public UnBase64Function<T> {
   // Spark's UnBase64.isValidBase64.
   static bool isValidBase64(const StringView& input) {
     const char* data = input.data();
-    const int64_t size = input.size();
-    size_t position = 0;
-    size_t padSize = 0;
-    int64_t i = 0;
+    const size_t size{input.size()};
+    size_t position{0};
+    size_t padSize{0};
+    size_t i{0};
     while (i < size) {
       const char c = data[i];
       if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
