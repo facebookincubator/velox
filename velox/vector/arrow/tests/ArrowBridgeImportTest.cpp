@@ -509,6 +509,24 @@ class ArrowBridgeImportTest : public testing::TestWithParam<bool>,
       EXPECT_EQ(vec.size(), expectedSize);
     });
   }
+
+  void assertRoundTrip(const VectorPtr& vector) {
+    ArrowSchema schema;
+    ArrowArray data;
+    velox::exportToArrow(vector, schema, ArrowOptions{});
+    velox::exportToArrow(vector, data, pool(), ArrowOptions{});
+
+    auto output = importFromArrow(schema, data, pool());
+    assertEqualVectors(vector, output);
+
+    if (isViewer()) {
+      schema.release(&schema);
+      data.release(&data);
+    } else {
+      EXPECT_EQ(nullptr, schema.release);
+      EXPECT_EQ(nullptr, data.release);
+    }
+  }
 };
 
 TEST_P(ArrowBridgeImportTest, scalar) {
@@ -609,24 +627,6 @@ TEST_P(ArrowBridgeImportTest, decimal32) {
 }
 
 TEST_P(ArrowBridgeImportTest, timestampUtc) {
-  auto roundtripVector = [&](const VectorPtr& input) {
-    ArrowSchema schema;
-    ArrowArray data;
-    velox::exportToArrow(input, schema, ArrowOptions{});
-    velox::exportToArrow(input, data, pool(), ArrowOptions{});
-
-    auto output = importFromArrow(schema, data, pool());
-    facebook::velox::test::assertEqualVectors(input, output);
-
-    if (isViewer()) {
-      schema.release(&schema);
-      data.release(&data);
-    } else {
-      EXPECT_EQ(nullptr, schema.release);
-      EXPECT_EQ(nullptr, data.release);
-    }
-  };
-
   auto flatVector = makeNullableFlatVector<Timestamp>(
       {
           Timestamp(0, 0),
@@ -636,7 +636,7 @@ TEST_P(ArrowBridgeImportTest, timestampUtc) {
           Timestamp(3155788800, 999'999'999),
       },
       TIMESTAMP_UTC());
-  roundtripVector(flatVector);
+  assertRoundTrip(flatVector);
 
   auto dictionaryValues = makeFlatVector<Timestamp>(
       {
@@ -647,7 +647,7 @@ TEST_P(ArrowBridgeImportTest, timestampUtc) {
       TIMESTAMP_UTC());
   auto dictionaryVector = BaseVector::wrapInDictionary(
       nullptr, makeIndicesInReverse(3), 3, dictionaryValues);
-  roundtripVector(dictionaryVector);
+  assertRoundTrip(dictionaryVector);
 
   using NullableTimestampArray =
       std::optional<std::vector<std::optional<Timestamp>>>;
@@ -663,7 +663,7 @@ TEST_P(ArrowBridgeImportTest, timestampUtc) {
   };
   auto nestedVector =
       makeNullableArrayVector<Timestamp>(nestedValues, ARRAY(TIMESTAMP_UTC()));
-  roundtripVector(nestedVector);
+  assertRoundTrip(nestedVector);
 }
 
 TEST_P(ArrowBridgeImportTest, withoutNullsBuffer) {
@@ -951,6 +951,30 @@ TEST_P(ArrowBridgeImportTest, dictionary) {
     EXPECT_EQ(vec.encoding(), VectorEncoding::Simple::DICTIONARY);
     EXPECT_EQ(vec.size(), 60);
   });
+}
+
+TEST_P(ArrowBridgeImportTest, nestedDictionary) {
+  // Export writes a dictionary over a dictionary as an Arrow dictionary whose
+  // values are dictionary encoded too. Structs, arrays and maps take the
+  // types of their children from the schema.
+  auto dictionaryOverDictionary = wrapInDictionary(
+      makeIndices({2, 0, 1}),
+      wrapInDictionary(
+          makeIndices({1, 0, 1}), makeFlatVector<int64_t>({10, 20})));
+
+  // Struct child.
+  assertRoundTrip(makeRowVector({dictionaryOverDictionary}));
+
+  // Array elements.
+  assertRoundTrip(makeArrayVector({0, 1}, dictionaryOverDictionary));
+
+  // Map values.
+  assertRoundTrip(makeMapVector(
+      {0, 1}, makeFlatVector<int64_t>({1, 2, 3}), dictionaryOverDictionary));
+
+  // Three levels of dictionaries.
+  assertRoundTrip(makeRowVector(
+      {wrapInDictionary(makeIndices({1, 2, 0}), dictionaryOverDictionary)}));
 }
 
 TEST_P(ArrowBridgeImportTest, dictionaryEncodedNullType) {
