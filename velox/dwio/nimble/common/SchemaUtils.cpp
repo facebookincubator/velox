@@ -594,8 +594,11 @@ void resolveVeloxSubfields(
 // - If the node is NOT in selectedChildren: converts the full subtree.
 //   Encoding hints (useDictionaryArray, useDeduplicatedMap, useFlatMap) create
 //   ArrayWithOffsets, SlidingWindowMap, or FlatMap respectively. These flags
-//   are only set for top-level children by the caller; recursive calls always
-//   pass false.
+//   are only set for top-level children by the caller. A FlatMap passes
+//   useDictionaryArray and useDeduplicatedMap on to the value of every key,
+//   because the writer applies dictionaryArrayColumns and
+//   deduplicatedMapColumns to the arrays and maps inside a column. Other
+//   recursive calls pass false.
 //
 // When useFlatMap is true and the MAP column is projected without key
 // subscripts, fails because key names/order cannot be recovered from the
@@ -669,8 +672,8 @@ std::shared_ptr<TypeBuilder> buildProjectedNimbleType(
                   builder,
                   *mapType.valueType(),
                   selectedChildren,
-                  /*useDictionaryArray=*/false,
-                  /*useDeduplicatedMap=*/false,
+                  useDictionaryArray,
+                  useDeduplicatedMap,
                   /*useFlatMap=*/false));
         }
         return flatMap;
@@ -1410,16 +1413,30 @@ void projectHybridFlatMapStreamOffsets(
 // build the encoding hints the velox-source `buildProjectedNimbleType`
 // overload requires: FlatMap → flatMapColumns, ArrayWithOffsets →
 // dictionaryArrayColumns, SlidingWindowMap → deduplicatedMapColumns. Other
-// kinds produce no entry (plain encoding).
+// kinds produce no entry (plain encoding). A FlatMap whose values are
+// ArrayWithOffsets or SlidingWindowMap also lands in dictionaryArrayColumns or
+// deduplicatedMapColumns, so that its projected keys keep the value kind of
+// the source streams.
 // Internal helper of `buildProjectedNimbleType` (nimble-source overload).
 ColumnEncodings getColumnEncodings(const RowType& nimbleType) {
   ColumnEncodings encodings;
   for (size_t i = 0; i < nimbleType.childrenCount(); ++i) {
     const auto& name = nimbleType.nameAt(i);
     switch (nimbleType.childAt(i)->kind()) {
-      case Kind::FlatMap:
+      case Kind::FlatMap: {
         encodings.flatMapColumns.insert(std::string(name));
+        // The writer gives every FlatMap at least one key, a dummy one when all
+        // maps are empty, and the values of all keys the same kind, which the
+        // projections of missing keys follow as well.
+        const auto valueKind =
+            nimbleType.childAt(i)->asFlatMap().childAt(0)->kind();
+        if (valueKind == Kind::ArrayWithOffsets) {
+          encodings.dictionaryArrayColumns.insert(std::string(name));
+        } else if (valueKind == Kind::SlidingWindowMap) {
+          encodings.deduplicatedMapColumns.insert(std::string(name));
+        }
         break;
+      }
       case Kind::ArrayWithOffsets:
         encodings.dictionaryArrayColumns.insert(std::string(name));
         break;

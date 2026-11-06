@@ -57,7 +57,9 @@ const TypeBuilder& resolveValueStreamSubfield(
 /// Encoding types for top-level columns extracted from a nimble file schema.
 /// Records which columns use encoding-specific types (ArrayWithOffsets,
 /// SlidingWindowMap, FlatMap), enabling the Serializer
-/// to produce output consistent with the file's encoding.
+/// to produce output consistent with the file's encoding. A FlatMap column
+/// that is also in dictionaryArrayColumns or deduplicatedMapColumns holds
+/// ArrayWithOffsets or SlidingWindowMap values under every key.
 struct ColumnEncodings {
   folly::F14FastSet<std::string> dictionaryArrayColumns;
   folly::F14FastSet<std::string> deduplicatedMapColumns;
