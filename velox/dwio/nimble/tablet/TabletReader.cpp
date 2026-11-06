@@ -106,6 +106,8 @@ TabletReader::Options TabletReader::configureOptions(
           nimbleOptions->externalDictionaryResolver;
       tabletOptions.cacheKeyEncodingViews =
           nimbleOptions->cacheKeyEncodingViews;
+      tabletOptions.stripeGroupEncodingViewDeduplicationEnabled =
+          nimbleOptions->experimentalStripeGroupEncodingViewDeduplication;
     }
   }
 
@@ -208,6 +210,8 @@ TabletReader::TabletReader(
       clusterIndexName_{options.clusterIndexName},
       loadChunkStats_{options.loadChunkStats},
       loadDenseIndexes_{options.loadDenseIndexes},
+      stripeGroupEncodingViewDeduplicationEnabled_{
+          options.stripeGroupEncodingViewDeduplicationEnabled},
       ioOptions_{[&]() {
         NIMBLE_CHECK(options.ioOptions.has_value(), "ioOptions is not set.");
         NIMBLE_CHECK_NOT_NULL(
@@ -732,7 +736,11 @@ void TabletReader::initStripes(
       stripeGroupCache_.pin(
           0,
           std::make_shared<StripeGroup>(
-              0, *stripes_, std::move(metadataBuffer), pool_));
+              0,
+              *stripes_,
+              std::move(metadataBuffer),
+              stripeGroupEncodingViewDeduplicationEnabled_,
+              pool_));
     }
   }
 }
@@ -920,7 +928,11 @@ std::shared_ptr<StripeGroup> TabletReader::loadStripeGroup(
 
   const auto section = toMetadataSection(stripeGroupInfo);
   return std::make_shared<StripeGroup>(
-      stripeGroupIndex, *stripes_, readMetadata(section), pool_);
+      stripeGroupIndex,
+      *stripes_,
+      readMetadata(section),
+      stripeGroupEncodingViewDeduplicationEnabled_,
+      pool_);
 }
 
 std::shared_ptr<StripeGroup> TabletReader::stripeGroup(
@@ -970,7 +982,11 @@ TabletReader::loadStripeGroupMetadata(
     auto metadata =
         std::make_unique<MetadataBuffer>(std::move(*buffers[bufferIndex++]));
     group.stripeGroup = std::make_shared<StripeGroup>(
-        stripeGroupIndex, *stripes_, std::move(metadata), pool_);
+        stripeGroupIndex,
+        *stripes_,
+        std::move(metadata),
+        stripeGroupEncodingViewDeduplicationEnabled_,
+        pool_);
     if (hasChunkStats(stripeGroupIndex)) {
       auto chunkMetadata =
           std::make_unique<MetadataBuffer>(std::move(*buffers[bufferIndex++]));
@@ -1009,7 +1025,7 @@ uint32_t TabletReader::streamSize(
     const StripeIdentifier& stripe,
     uint32_t streamId) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  // Mirrors streamOffset: StripeGroup::streamSize already returns 0 for an
+  // Mirrors streamOffset: StripeGroup::streamSize already rejects an
   // out-of-range streamId, so delegate without a redundant guard here.
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
 }
@@ -1028,6 +1044,13 @@ void TabletReader::streamLocations(
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
   stripe.stripeGroup()->streamLocations(
       stripe.stripeId(), streamIds, locations);
+}
+
+TabletReader::StreamMetadata TabletReader::streamLocation(
+    const StripeIdentifier& stripe,
+    uint32_t streamId) const {
+  NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
+  return stripe.stripeGroup()->streamLocation(stripe.stripeId(), streamId);
 }
 
 uint32_t TabletReader::streamCount(const StripeIdentifier& stripe) const {
@@ -1174,22 +1197,18 @@ std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
   regionToStreamIndices.reserve(streamsToLoad);
   uniqueRegions.reserve(streamsToLoad);
 
+  std::vector<StreamMetadata> locations(streamsToLoad);
+  stripeGroup->streamLocations(stripeId, streamIdentifiers, locations);
   for (uint32_t i = 0; i < streamsToLoad; ++i) {
     const uint32_t streamIdentifier = streamIdentifiers[i];
-    if (streamIdentifier >= stripeGroup->streamCount()) {
-      streams[i] = nullptr;
-      continue;
-    }
-
-    const uint32_t streamSize =
-        stripeGroup->streamSize(stripeId, streamIdentifier);
+    const StreamMetadata& location = locations[i];
+    const uint32_t streamSize = location.size;
     if (streamSize == 0) {
       streams[i] = nullptr;
       continue;
     }
 
-    const auto streamStart =
-        stripeOffset + stripeGroup->streamOffset(stripeId, streamIdentifier);
+    const auto streamStart = stripeOffset + location.offset;
 
     auto it = regionToStreamIndices.emplace(
         velox::common::Region{streamStart, streamSize},
