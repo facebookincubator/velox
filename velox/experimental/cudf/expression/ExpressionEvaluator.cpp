@@ -90,63 +90,6 @@ namespace facebook::velox::cudf_velox {
 // Implementation details in anonymous namespace
 namespace {
 
-bool decimalScalarIsZero(const cudf::scalar& scalar, cuda::stream_ref stream) {
-  if (!scalar.is_valid(stream)) {
-    return false;
-  }
-  if (scalar.type().id() == cudf::type_id::DECIMAL64) {
-    auto const& dec =
-        static_cast<cudf::fixed_point_scalar<numeric::decimal64> const&>(
-            scalar);
-    return dec.value(stream) == 0;
-  }
-  if (scalar.type().id() == cudf::type_id::DECIMAL128) {
-    auto const& dec =
-        static_cast<cudf::fixed_point_scalar<numeric::decimal128> const&>(
-            scalar);
-    return dec.value(stream) == 0;
-  }
-  return false;
-}
-
-bool hasDecimalZero(
-    const cudf::column_view& col,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
-  if (col.is_empty()) {
-    return false;
-  }
-  std::unique_ptr<cudf::scalar> zero;
-  auto scale = numeric::scale_type{col.type().scale()};
-  if (col.type().id() == cudf::type_id::DECIMAL64) {
-    zero =
-        cudf::make_fixed_point_scalar<numeric::decimal64>(0, scale, stream, mr);
-  } else if (col.type().id() == cudf::type_id::DECIMAL128) {
-    zero = cudf::make_fixed_point_scalar<numeric::decimal128>(
-        0, scale, stream, mr);
-  } else {
-    return false;
-  }
-
-  auto equals = cudf::binary_operation(
-      col,
-      *zero,
-      cudf::binary_operator::EQUAL,
-      cudf::data_type{cudf::type_id::BOOL8},
-      stream,
-      mr);
-  auto anyAgg = cudf::make_any_aggregation<cudf::reduce_aggregation>();
-  auto anyScalar = cudf::reduce(
-      equals->view(),
-      *anyAgg,
-      cudf::data_type{cudf::type_id::BOOL8},
-      stream,
-      mr);
-  auto const& boolScalar =
-      static_cast<cudf::numeric_scalar<bool> const&>(*anyScalar);
-  return boolScalar.is_valid(stream) && boolScalar.value(stream);
-}
-
 std::unique_ptr<cudf::scalar> castDecimalScalar(
     const cudf::scalar& src,
     cudf::data_type targetType,
@@ -1253,32 +1196,6 @@ __device__ void velox_round_double(
   std::unique_ptr<cudf::numeric_scalar<double>> factorScalar_;
 };
 
-// A short-decimal result can still have a long-decimal operand. The divide
-// kernels require matching column widths and cannot write a DECIMAL64 result
-// from DECIMAL128 input.
-cudf::data_type decimalDivisionWorkingType(
-    cudf::data_type lhsType,
-    cudf::data_type rhsType,
-    cudf::data_type resultType) {
-  const auto typeId = lhsType.id() == cudf::type_id::DECIMAL128 ||
-          rhsType.id() == cudf::type_id::DECIMAL128 ||
-          resultType.id() == cudf::type_id::DECIMAL128
-      ? cudf::type_id::DECIMAL128
-      : cudf::type_id::DECIMAL64;
-  return cudf::data_type{typeId, resultType.scale()};
-}
-
-std::unique_ptr<cudf::column> finalizeDecimalDivision(
-    std::unique_ptr<cudf::column> result,
-    cudf::data_type resultType,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
-  if (result->type() == resultType) {
-    return result;
-  }
-  return cudf::cast(result->view(), resultType, stream, mr);
-}
-
 class BinaryFunction : public CudfFunction {
  public:
   BinaryFunction(
@@ -1321,33 +1238,14 @@ class BinaryFunction : public CudfFunction {
     };
     if (left_ == nullptr && right_ == nullptr) {
       if (op_ == cudf::binary_operator::DIV && cudf::is_fixed_point(type_)) {
-        auto lhsView = asView(inputColumns[0]);
-        auto rhsView = asView(inputColumns[1]);
-        std::unique_ptr<cudf::column> lhsCast;
-        std::unique_ptr<cudf::column> rhsCast;
-        const auto workingType =
-            decimalDivisionWorkingType(lhsView.type(), rhsView.type(), type_);
-        if (workingType.id() == cudf::type_id::DECIMAL128) {
-          if (lhsView.type().id() == cudf::type_id::DECIMAL64) {
-            auto castType = cudf::data_type{
-                cudf::type_id::DECIMAL128, lhsView.type().scale()};
-            lhsCast = cudf::cast(lhsView, castType, stream, mr);
-            lhsView = lhsCast->view();
-          }
-          if (rhsView.type().id() == cudf::type_id::DECIMAL64) {
-            auto castType = cudf::data_type{
-                cudf::type_id::DECIMAL128, rhsView.type().scale()};
-            rhsCast = cudf::cast(rhsView, castType, stream, mr);
-            rhsView = rhsCast->view();
-          }
-        }
-        auto lhsScale = -lhsView.type().scale();
-        auto rhsScale = -rhsView.type().scale();
-        auto outScale = -type_.scale();
-        auto aRescale = outScale - lhsScale + rhsScale;
-        auto result =
-            decimalDivide(lhsView, rhsView, workingType, aRescale, stream, mr);
-        return finalizeDecimalDivision(std::move(result), type_, stream, mr);
+        // Operands keep their own storage width and scale; cudf divides and
+        // rescales directly into the result type.
+        return decimalDivide(
+            asView(inputColumns[0]),
+            asView(inputColumns[1]),
+            type_,
+            stream,
+            mr);
       }
       auto lhsView = asView(inputColumns[0]);
       auto rhsView = asView(inputColumns[1]);
@@ -1394,28 +1292,8 @@ class BinaryFunction : public CudfFunction {
       return cudf::binary_operation(lhsView, rhsView, op_, type_, stream, mr);
     } else if (left_ == nullptr) {
       if (op_ == cudf::binary_operator::DIV && cudf::is_fixed_point(type_)) {
-        if (decimalScalarIsZero(*right_, stream)) {
-          VELOX_USER_FAIL("Division by zero");
-        }
-        auto lhsView = asView(inputColumns[0]);
-        const auto workingType =
-            decimalDivisionWorkingType(lhsView.type(), right_->type(), type_);
-        std::unique_ptr<cudf::column> lhsCast;
-        if (lhsView.type().id() != workingType.id()) {
-          lhsCast = cudf::cast(
-              lhsView,
-              cudf::data_type{workingType.id(), lhsView.type().scale()},
-              stream,
-              mr);
-          lhsView = lhsCast->view();
-        }
-        auto lhsScale = -lhsView.type().scale();
-        auto rhsScale = -right_->type().scale();
-        auto outScale = -type_.scale();
-        auto aRescale = outScale - lhsScale + rhsScale;
-        auto result =
-            decimalDivide(lhsView, *right_, workingType, aRescale, stream, mr);
-        return finalizeDecimalDivision(std::move(result), type_, stream, mr);
+        return decimalDivide(
+            asView(inputColumns[0]), *right_, type_, stream, mr);
       }
       auto lhsView = asView(inputColumns[0]);
       if (isComparisonOp(op_) && cudf::is_fixed_point(lhsView.type()) &&
@@ -1456,25 +1334,7 @@ class BinaryFunction : public CudfFunction {
           asView(inputColumns[0]), *right_, op_, type_, stream, mr);
     }
     if (op_ == cudf::binary_operator::DIV && cudf::is_fixed_point(type_)) {
-      auto rhsView = asView(inputColumns[0]);
-      const auto workingType =
-          decimalDivisionWorkingType(left_->type(), rhsView.type(), type_);
-      std::unique_ptr<cudf::column> rhsCast;
-      if (rhsView.type().id() != workingType.id()) {
-        rhsCast = cudf::cast(
-            rhsView,
-            cudf::data_type{workingType.id(), rhsView.type().scale()},
-            stream,
-            mr);
-        rhsView = rhsCast->view();
-      }
-      auto lhsScale = -left_->type().scale();
-      auto rhsScale = -rhsView.type().scale();
-      auto outScale = -type_.scale();
-      auto aRescale = outScale - lhsScale + rhsScale;
-      auto result =
-          decimalDivide(*left_, rhsView, workingType, aRescale, stream, mr);
-      return finalizeDecimalDivision(std::move(result), type_, stream, mr);
+      return decimalDivide(*left_, asView(inputColumns[0]), type_, stream, mr);
     }
     auto rhsView = asView(inputColumns[0]);
     if (isComparisonOp(op_) && cudf::is_fixed_point(left_->type()) &&
