@@ -1232,7 +1232,7 @@ TEST_F(ArrowBridgeArrayExportTest, dictionaryNested) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, unknownType) {
-  VectorPtr vector = BaseVector::createNullConstant(UNKNOWN(), 2048, pool());
+  VectorPtr vector = makeNullConstant(TypeKind::UNKNOWN, 2048);
   testConstantVector<true, UnknownValue>(
       vector, std::vector<std::optional<UnknownValue>>{std::nullopt});
 }
@@ -1245,7 +1245,7 @@ TEST_F(ArrowBridgeArrayExportTest, constants) {
   testConstant(StringView("inlined"));
 
   // Null constant.
-  VectorPtr vector = BaseVector::createNullConstant(TINYINT(), 2048, pool());
+  VectorPtr vector = makeNullConstant(TypeKind::TINYINT, 2048);
   testConstantVector<true, int8_t>(
       vector, std::vector<std::optional<int8_t>>{std::nullopt});
 }
@@ -1264,7 +1264,7 @@ TEST_F(ArrowBridgeArrayExportTest, constantComplex) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, constantCrossValidate) {
-  auto vector = BaseVector::createConstant(VARCHAR(), "hello", 100, pool());
+  auto vector = makeConstant("hello", 100);
   auto array = toArrow(vector, options_, pool());
 
   ASSERT_OK(array->ValidateFull());
