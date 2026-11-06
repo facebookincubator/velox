@@ -33,6 +33,130 @@
 
 namespace facebook::nimble {
 
+namespace detail {
+
+// Progress of the current stripe group, which TabletWriter tracks.
+struct StripeGroupProgress {
+  const uint64_t numStripes;
+  // Streams that the last stripe records.
+  const uint64_t numStreams;
+  // (stream, stripe) entries with data.
+  const uint64_t numEntries;
+};
+
+// Decides when TabletWriter closes a stripe group, against
+// metadataFlushThreshold.
+class StripeGroupFlushPolicy {
+ public:
+  virtual ~StripeGroupFlushPolicy() = default;
+
+  // Returns whether to serialize the group.
+  virtual bool shouldSerialize(const StripeGroupProgress& progress) const = 0;
+
+  // Returns whether the group, serialized to 'serializedBytes', flushes. A
+  // policy can also update what it decides next, such as when to serialize the
+  // group again.
+  virtual bool shouldFlush(
+      const StripeGroupProgress& progress,
+      uint64_t serializedBytes) = 0;
+};
+
+} // namespace detail
+
+namespace {
+
+// Flushes kRaw and kStreamMajor stripe groups once their size as kRaw entries
+// reaches the threshold, so a serialized group always flushes.
+// TODO: Flush kStreamMajor by its serialized size too. It encodes its entries,
+// so their size as kRaw entries can overstate its groups.
+class StripeGroupRawSizeFlushPolicy final
+    : public detail::StripeGroupFlushPolicy {
+ public:
+  explicit StripeGroupRawSizeFlushPolicy(uint32_t thresholdBytes)
+      : thresholdBytes_{thresholdBytes} {}
+
+  bool shouldSerialize(
+      const detail::StripeGroupProgress& progress) const override {
+    // 8 bytes for the offset, 4 for the size and 1 for the compression type
+    // of each (stream, stripe) entry.
+    return 4 + progress.numStripes * progress.numStreams * 13 >=
+        thresholdBytes_;
+  }
+
+  bool shouldFlush(
+      const detail::StripeGroupProgress& /*progress*/,
+      uint64_t /*serializedBytes*/) override {
+    return true;
+  }
+
+ private:
+  const uint64_t thresholdBytes_;
+};
+
+// Flushes kStreamMajorSparse stripe groups by their serialized size, since
+// their metadata has no closed-form size. A measurement serializes the whole
+// group, so each one aims the next at the entry count where the group reaches
+// the threshold at its bytes per entry so far. The checkpoint carries over to
+// the next group, since the groups of a file have about the same bytes per
+// entry.
+class StripeGroupSerializedSizeFlushPolicy final
+    : public detail::StripeGroupFlushPolicy {
+ public:
+  explicit StripeGroupSerializedSizeFlushPolicy(uint32_t thresholdBytes)
+      : thresholdBytes_{thresholdBytes},
+        minGroupBytes_{static_cast<uint64_t>(thresholdBytes * kMinFillRatio)} {}
+
+  bool shouldSerialize(
+      const detail::StripeGroupProgress& progress) const override {
+    return progress.numEntries >= checkpointNumEntries_;
+  }
+
+  // Also sets the next checkpoint, whether the group flushes or not. A flushed
+  // group passes it on as the first checkpoint of the next group.
+  bool shouldFlush(
+      const detail::StripeGroupProgress& progress,
+      uint64_t serializedBytes) override {
+    NIMBLE_CHECK_GT(serializedBytes, 0);
+    // For example, 1M entries that serialize to 2 MB under a 4 MB threshold
+    // are measured again at 2M entries.
+    checkpointNumEntries_ =
+        progress.numEntries * thresholdBytes_ / serializedBytes;
+    return serializedBytes >= minGroupBytes_;
+  }
+
+ private:
+  // A group flushes from this fraction of the threshold. Checkpoints come
+  // early, because a group's first entries also carry each stream's fixed
+  // cost, and creeping up to the threshold would serialize the whole group
+  // again at each check.
+  static constexpr double kMinFillRatio{0.9};
+
+  const uint64_t thresholdBytes_;
+  const uint64_t minGroupBytes_;
+  // 0 measures the first group at its first stripe.
+  uint64_t checkpointNumEntries_{0};
+};
+
+// Returns the flush policy of 'layout'. kRaw and kStreamMajor flush by the size
+// of a group as kRaw entries. kStreamMajorSparse has no closed-form size and
+// flushes by the serialized size.
+std::unique_ptr<detail::StripeGroupFlushPolicy> createStripeGroupFlushPolicy(
+    StripeGroup::EncodingLayout layout,
+    uint32_t thresholdBytes) {
+  switch (layout) {
+    case StripeGroup::EncodingLayout::kRaw:
+    case StripeGroup::EncodingLayout::kStreamMajor:
+      return std::make_unique<StripeGroupRawSizeFlushPolicy>(thresholdBytes);
+    case StripeGroup::EncodingLayout::kStreamMajorSparse:
+      return std::make_unique<StripeGroupSerializedSizeFlushPolicy>(
+          thresholdBytes);
+  }
+  NIMBLE_UNREACHABLE(
+      "Unknown StripeGroup encoding layout: {}", static_cast<int>(layout));
+}
+
+} // namespace
+
 std::unique_ptr<TabletWriter> TabletWriter::create(
     velox::WriteFile* file,
     velox::memory::MemoryPool& pool,
@@ -63,9 +187,15 @@ TabletWriter::TabletWriter(
                             options_.chunkStatsMinAvgChunks,
                         .maxStringStatSize = options_.maxChunkStringStatSize,
                     })
-              : nullptr} {}
+              : nullptr},
+      stripeGroupFlushPolicy_{createStripeGroupFlushPolicy(
+          options_.stripeGroupEncodingLayout,
+          options_.metadataFlushThreshold)} {}
+
+TabletWriter::~TabletWriter() = default;
 
 namespace {
+
 template <typename Source, typename Target = Source>
 flatbuffers::Offset<flatbuffers::Vector<Target>> createFlattenedVector(
     flatbuffers::FlatBufferBuilder& builder,
@@ -432,6 +562,11 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
     }
   }
 
+  numStripeGroupEntries_ += std::count_if(
+      stripeStreamSizes.begin(), stripeStreamSizes.end(), [](uint32_t size) {
+        return size != 0;
+      });
+
   stripeSizes_.push_back(file_->size() - stripeOffsets_.back());
 
   stripeGroupIndices_.push_back(stripeGroupIndex_);
@@ -518,22 +653,6 @@ void TabletWriter::writeOptionalSection(
       name);
   optionalSections_.try_emplace(
       std::move(name), createMetadataSection(content));
-}
-
-bool TabletWriter::shouldWriteStripeGroup(bool force) const {
-  const auto stripeCount = streamOffsets_.size();
-  if (stripeCount == 0) {
-    return false;
-  }
-
-  // Estimate size
-  // 8 bytes for offsets, 4 for size, 1 for compression type, so 13.
-  const size_t estimatedSize =
-      4 + stripeCount * streamOffsets_.back().size() * 13;
-  if (!force && (estimatedSize < options_.metadataFlushThreshold)) {
-    return false;
-  }
-  return true;
 }
 
 namespace {
@@ -785,7 +904,9 @@ void TabletWriter::writeStripeGroupWithStreamMajorSparseLayout(
       StripeGroup::kStreamMajorSparseLayoutIdentifier.data());
 }
 
-void TabletWriter::writeStripeGroup(size_t streamCount, size_t stripeCount) {
+flatbuffers::FlatBufferBuilder TabletWriter::serializeStripeGroup(
+    size_t streamCount,
+    size_t stripeCount) {
   flatbuffers::FlatBufferBuilder builder(kInitialFooterSize);
 
   switch (options_.stripeGroupEncodingLayout) {
@@ -805,8 +926,7 @@ void TabletWriter::writeStripeGroup(size_t streamCount, size_t stripeCount) {
               "Unknown StripeGroup encoding layout: {}",
               static_cast<int>(options_.stripeGroupEncodingLayout)));
   }
-
-  stripeGroups_.emplace_back(createMetadataSection(asView(builder)));
+  return builder;
 }
 
 MetadataSection TabletWriter::writeStripes(size_t stripeCount) {
@@ -859,12 +979,18 @@ TabletWriter::createOptionalMetadataSection(
 }
 
 void TabletWriter::tryWriteStripeGroup(bool force) {
-  if (!shouldWriteStripeGroup(force)) {
+  const auto stripeCount = streamOffsets_.size();
+  if (stripeCount == 0) {
     return;
   }
-
-  const auto stripeCount = streamOffsets_.size();
-  NIMBLE_CHECK_GT(stripeCount, 0);
+  const detail::StripeGroupProgress progress{
+      .numStripes = stripeCount,
+      .numStreams = streamOffsets_.back().size(),
+      .numEntries = numStripeGroupEntries_,
+  };
+  if (!force && !stripeGroupFlushPolicy_->shouldSerialize(progress)) {
+    return;
+  }
 
   const auto maxStreamCountIt = std::max_element(
       streamOffsets_.begin(),
@@ -876,8 +1002,16 @@ void TabletWriter::tryWriteStripeGroup(bool force) {
 
   // Each stripe may have different stream count recorded.
   // We need to pad shorter stripes to the full length of stream count.
-  // Handled by the |transposeStreamMetadata| helper inside writeStripeGroup.
-  writeStripeGroup(streamCount, stripeCount);
+  // Handled by the |transposeStreamMetadata| helper inside
+  // serializeStripeGroup.
+  auto builder = serializeStripeGroup(streamCount, stripeCount);
+  // A forced flush ends the file, so it skips the policy: no later group needs
+  // the checkpoint that shouldFlush() would set.
+  if (!force &&
+      !stripeGroupFlushPolicy_->shouldFlush(progress, builder.GetSize())) {
+    return;
+  }
+  stripeGroups_.emplace_back(createMetadataSection(asView(builder)));
 
   writeChunkStatsGroup(streamCount, stripeCount);
 
@@ -889,6 +1023,7 @@ void TabletWriter::tryWriteStripeGroup(bool force) {
 void TabletWriter::finishStripeGroup() {
   streamOffsets_.clear();
   streamSizes_.clear();
+  numStripeGroupEntries_ = 0;
   // Move to the next stripe group
   ++stripeGroupIndex_;
 }

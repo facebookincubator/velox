@@ -44,6 +44,10 @@ class LayoutPlanner {
   virtual ~LayoutPlanner() = default;
 };
 
+namespace detail {
+class StripeGroupFlushPolicy;
+} // namespace detail
+
 constexpr uint32_t kMetadataFlushThreshold = 8 * 1024 * 1024; // 8MB
 constexpr uint32_t kMetadataCompressionThreshold = 64 * 1024; // 64kB
 
@@ -66,6 +70,12 @@ class TabletWriter {
 
   struct Options {
     std::unique_ptr<LayoutPlanner> layoutPlanner{nullptr};
+    /// Target size of a stripe group's metadata, before compression. The
+    /// writer closes a group once its metadata reaches about this size.
+    /// kRaw and kStreamMajor estimate the size at 13 bytes per (stream,
+    /// stripe) entry. kStreamMajorSparse serializes the group at checkpoints
+    /// to measure it, and closes the group at 90% of this size or more, so a
+    /// group can end up above it.
     uint32_t metadataFlushThreshold{kMetadataFlushThreshold};
     uint32_t metadataCompressionThreshold{kMetadataCompressionThreshold};
     ChecksumType checksumType{ChecksumType::XXH3_64};
@@ -121,6 +131,8 @@ class TabletWriter {
       velox::WriteFile* file,
       velox::memory::MemoryPool& pool,
       TabletWriter::Options options);
+
+  ~TabletWriter();
 
   // Writes out the footer. Remember that the underlying file is not readable
   // until the write file itself is closed.
@@ -204,10 +216,13 @@ class TabletWriter {
   // Write stripe group metadata entry and also add that to footer sections if
   // exceeds metadata flush size.
   void tryWriteStripeGroup(bool force = false);
-  bool shouldWriteStripeGroup(bool force) const;
+
   // Serialize the current stripe group's metadata, dispatching to the
   // layout-specific helper below per options_.stripeGroupEncodingLayout.
-  void writeStripeGroup(size_t streamCount, size_t stripeCount);
+  flatbuffers::FlatBufferBuilder serializeStripeGroup(
+      size_t streamCount,
+      size_t stripeCount);
+
   // Serialize the current stripe group's per-stream offsets/sizes into
   // `builder` using the kRaw / kStreamMajor / kStreamMajorSparse layout
   // respectively.
@@ -272,6 +287,9 @@ class TabletWriter {
   const std::unique_ptr<Checksum> streamChecksum_;
   // Chunk-level position index.
   const std::unique_ptr<ChunkStatsWriter> chunkStatsWriter_;
+  // Decides when to close the current stripe group, by the stripe group
+  // encoding layout.
+  const std::unique_ptr<detail::StripeGroupFlushPolicy> stripeGroupFlushPolicy_;
 
   // Number of rows in each stripe.
   std::vector<uint32_t> stripeRowCounts_;
@@ -288,6 +306,8 @@ class TabletWriter {
   // Accumulated stream sizes within each stripe. Same behavior as
   // streamOffsets_.
   std::vector<std::vector<uint32_t>> streamSizes_;
+  // The (stream, stripe) entries with data in the current stripe group.
+  uint64_t numStripeGroupEntries_{0};
 
   // Current stripe group index.
   uint32_t stripeGroupIndex_{0};

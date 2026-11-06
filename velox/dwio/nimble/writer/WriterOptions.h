@@ -322,11 +322,11 @@ struct WriterOptions {
   /// compressed.
   std::optional<uint32_t> metadataCompressionThreshold{};
 
-  /// If present, overrides how much estimated stripe group metadata the tablet
-  /// writer accumulates before closing a stripe group. One index partition is
-  /// emitted per stripe group, so lowering this is the only way to produce a
-  /// multi-partition index without writing enough stripes to reach the 8MB
-  /// default.
+  /// If present, overrides how much stripe group metadata, in bytes, the
+  /// tablet writer accumulates before closing a stripe group. One index
+  /// partition is emitted per stripe group, so lowering this is the only way to
+  /// produce a multi-partition index without writing enough stripes to reach
+  /// the 8MB default.
   std::optional<uint32_t> metadataFlushThreshold{};
 
   /// When flushing data streams into chunks, streams with raw data size smaller
