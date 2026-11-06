@@ -28,6 +28,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateCompanionSignatures.h"
+#include "velox/exec/DistinctAggregations.h"
 #include "velox/exec/GroupingSet.h"
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -800,6 +801,22 @@ TEST_F(AggregationTest, manyGlobalAggregations) {
   assertQuery(op, "SELECT " + folly::join(", ", aggregates) + " FROM tmp");
 
   EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
+}
+
+TEST_F(AggregationTest, distinctAccumulatorAlignment) {
+  // RowContainer rounds the accumulator offset up to this alignment. The
+  // distinct set accumulator holds an F14 set and vectors, so it needs 8.
+  AggregateInfo info;
+  info.inputs = {0};
+  info.constantInputs = {nullptr};
+  info.distinct = true;
+  for (const auto& type : std::vector<TypePtr>{
+           BOOLEAN(), INTEGER(), BIGINT(), VARCHAR(), ARRAY(INTEGER())}) {
+    SCOPED_TRACE(type->toString());
+    auto distinct =
+        DistinctAggregations::create({&info}, ROW({"c0"}, {type}), pool());
+    EXPECT_EQ(distinct->accumulator().alignment(), 8);
+  }
 }
 
 TEST_F(AggregationTest, singleBigintKey) {

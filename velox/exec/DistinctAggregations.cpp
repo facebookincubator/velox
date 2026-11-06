@@ -188,7 +188,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
     return {/*isFixedSize=*/false,
             sizeof(AccumulatorType),
             /*usesExternalMemory=*/false,
-            /*alignment=*/1,
+            /*alignment=*/alignof(AccumulatorType),
             spillType_,
             /*spillExtractFunction=*/
             [this](folly::Range<char**> groups, VectorPtr& result) {
