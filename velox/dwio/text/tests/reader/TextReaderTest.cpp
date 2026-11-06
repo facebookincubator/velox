@@ -928,14 +928,14 @@ TEST_F(TextReaderTest, readRanges) {
       "examples/simple_types_10_bytes_per_row");
   const int bytesPerRows = 10;
 
+  auto reader = createReader(path, type, dwio::common::SerDeOptions());
   dwio::common::RowReaderOptions rowReaderOptions;
   VectorPtr result;
 
   // read from 1st row to 6th row
   rowReaderOptions.range(0, 5 * bytesPerRows);
   setScanSpec(*type, rowReaderOptions);
-  auto rowReader = createRowReader(
-      path, type, dwio::common::SerDeOptions(), rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
 
   uint64_t scanned = rowReader->next(1024, result);
   EXPECT_EQ(scanned, 6);
@@ -946,8 +946,7 @@ TEST_F(TextReaderTest, readRanges) {
   // read from 6th row to 10th row
   rowReaderOptions.range(5 * bytesPerRows, 5 * bytesPerRows);
   setScanSpec(*type, rowReaderOptions);
-  rowReader = createRowReader(
-      path, type, dwio::common::SerDeOptions(), rowReaderOptions);
+  rowReader = reader->createRowReader(rowReaderOptions);
   scanned = rowReader->next(1024, result);
   EXPECT_EQ(scanned, 5);
   for (int i = 0; i < 5; ++i) {
@@ -957,8 +956,7 @@ TEST_F(TextReaderTest, readRanges) {
   // read from 11th row to 15th row
   rowReaderOptions.range(10 * bytesPerRows, 5 * bytesPerRows);
   setScanSpec(*type, rowReaderOptions);
-  rowReader = createRowReader(
-      path, type, dwio::common::SerDeOptions(), rowReaderOptions);
+  rowReader = reader->createRowReader(rowReaderOptions);
   scanned = rowReader->next(1024, result);
   EXPECT_EQ(scanned, 4);
   for (int i = 0; i < 4; ++i) {
