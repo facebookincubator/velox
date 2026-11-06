@@ -103,12 +103,12 @@ struct MarkPageStarts {
 // only within the word that holds it.
 __device__ __forceinline__ uint32_t maskWord(
     const cudf::bitmask_type* mask,
-    int32_t word,
+    uint32_t word,
     cudf::size_type begin,
     cudf::size_type end) {
   const auto index = word + cudf::word_index(begin);
-  const auto next = cudf::word_index(end - 1) > index ? mask[index + 1]
-                                                      : cudf::bitmask_type{0};
+  const auto last = static_cast<uint32_t>(cudf::word_index(end - 1));
+  const auto next = last > index ? mask[index + 1] : cudf::bitmask_type{0};
   return __funnelshift_r(mask[index], next, begin);
 }
 
@@ -122,15 +122,17 @@ __global__ void nullBytesKernel(
   const NullBytesTask t = tasks[taskOffset + blockIdx.y];
   const auto begin = static_cast<cudf::size_type>(t.firstBit);
   const auto end = static_cast<cudf::size_type>(t.firstBit + t.numRows);
-  const int32_t numBytes = cudf::util::div_rounding_up_safe(t.numRows, 8);
-  const int32_t numWords = cudf::util::div_rounding_up_safe(t.numRows, 32);
-  for (int32_t w = blockIdx.x * blockDim.x + threadIdx.x; w < numWords;
+  // The indices stay unsigned, as the kernel indices they derive from.
+  const auto numRows = static_cast<uint32_t>(t.numRows);
+  const auto numBytes = cudf::util::div_rounding_up_safe(numRows, 8u);
+  const auto numWords = cudf::util::div_rounding_up_safe(numRows, 32u);
+  for (auto w = blockIdx.x * blockDim.x + threadIdx.x; w < numWords;
        w += gridDim.x * blockDim.x) {
-    const int32_t rows = min(32, t.numRows - 32 * w);
+    const auto rows = min(32u, numRows - 32 * w);
     const uint32_t inRange = rows == 32 ? ~0u : (1u << rows) - 1;
     const uint32_t nulls = ~maskWord(t.mask, w, begin, end) & inRange;
     const uint32_t out = __byte_perm(__brev(nulls), 0, 0x0123);
-    cuda::std::memcpy(t.dst + 4 * w, &out, min(4, numBytes - 4 * w));
+    cuda::std::memcpy(t.dst + 4 * w, &out, min(4u, numBytes - 4 * w));
   }
 }
 
@@ -145,7 +147,8 @@ __global__ void stringOffsetsKernel(
       t.offsets.offsetsType,
       static_cast<cudf::size_type>(t.offsets.firstIndex + t.firstRow));
   const int64_t start = offsets[0];
-  for (int32_t i = blockIdx.x * blockDim.x + threadIdx.x; i < t.numRows;
+  const auto numRows = static_cast<uint32_t>(t.numRows);
+  for (auto i = blockIdx.x * blockDim.x + threadIdx.x; i < numRows;
        i += gridDim.x * blockDim.x) {
     const int64_t bytes = offsets[i + 1] - start;
     if (bytes > INT32_MAX) {
@@ -153,8 +156,7 @@ __global__ void stringOffsetsKernel(
     }
     // The destination follows a null bitmap, so it is not int32 aligned.
     const auto offset = static_cast<int32_t>(bytes);
-    cuda::std::memcpy(
-        t.dst + 4 * static_cast<int64_t>(i), &offset, sizeof(offset));
+    cuda::std::memcpy(t.dst + int64_t{4} * i, &offset, sizeof(offset));
   }
 }
 
