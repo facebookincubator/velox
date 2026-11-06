@@ -240,6 +240,9 @@ class TabletReader {
     /// Resolves External shared integer dictionaries referenced by this file.
     std::shared_ptr<const ExternalDictionaryResolver>
         externalDictionaryResolver;
+
+    /// The stats and pool inside this context must outlive this tablet.
+    velox::FileIoContext fileIoContext;
   };
 
   /// Compute checksum from the beginning of the file all the way to footer
@@ -690,6 +693,7 @@ class TabletReader {
   // IO options copied from Options.ioOptions (required, with non-null
   // metadataIoStats).
   const velox::io::ReaderOptions ioOptions_;
+  const velox::FileIoContext fileIoContext_;
   // IO config for index creation — indexes create their own MetadataInput
   // with index-specific IO stats.
   const index::IndexLookup::Options indexOptions_;

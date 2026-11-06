@@ -693,13 +693,15 @@ const Type& schemaChild(const std::shared_ptr<const Type>& type) {
 }
 
 void validateForSerialization(const HybridFlatMapTypeBuilder& hybridMap) {
+  folly::F14FastMap<std::string_view, size_t> groupIndices;
   detail::validateHybridFlatMapGroups(
       hybridMap.groupCount(),
       hybridMap.requiresDefaultGroup(),
       [&hybridMap](size_t index) { return hybridMap.groupAt(index).groupId; },
       [&hybridMap](size_t index) -> const auto& {
         return hybridMap.groupAt(index).groupKeys;
-      });
+      },
+      groupIndices);
 
   // Group validation guarantees at least one group, so group 0 is the
   // reference and the comparison starts at 1.

@@ -16,8 +16,8 @@
 
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 
-#include "velox/connectors/hive/FileConfig.h"
-#include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileTableHandle.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -107,10 +107,10 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
 }
 
 void configureReaderOptions(
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const FileTableHandlePtr& tableHandle,
-    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const connector::FileTableHandlePtr& tableHandle,
+    const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
     const std::unordered_map<std::string, std::string>& serdeParameters,
     dwio::common::ReaderOptions& readerOptions) {
   configureReaderOptions(
@@ -124,10 +124,10 @@ void configureReaderOptions(
 }
 
 void configureReaderOptions(
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
     const RowTypePtr& fileSchema,
-    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
     const std::unordered_map<std::string, std::string>& tableParameters,
     const std::unordered_map<std::string, std::string>& serdeParameters,
     dwio::common::ReaderOptions& readerOptions) {
@@ -139,7 +139,7 @@ void configureReaderOptions(
 
   // Call the generic version which handles everything except serde.
   // Use fully qualified call to the generic overload (6 params, no serde).
-  configureReaderOptions(
+  connector::configureReaderOptions(
       fileConfig,
       connectorQueryCtx,
       fileSchema,
@@ -161,15 +161,15 @@ void configureRowReaderOptions(
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
-    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const config::ConfigBase* sessionProperties,
     folly::Executor* const ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions) {
   // Call the generic version which handles everything except serde.
   // Use fully qualified call to the generic overload (9 params, no serde).
-  configureRowReaderOptions(
+  connector::configureRowReaderOptions(
       tableParameters,
       scanSpec,
       std::move(metadataFilter),

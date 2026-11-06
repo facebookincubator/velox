@@ -48,31 +48,37 @@ TEST_F(SumTest, sumTinyint) {
   createDuckDbTable(vectors);
 
   // Global aggregation.
-  testAggregations(vectors, {}, {"sum(c1)"}, "SELECT sum(c1) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"sum(c1)"})
+      .withCompanion()
+      .assertResults("SELECT sum(c1) FROM tmp");
 
   // Group by aggregation.
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).project({"c0 % 10", "c1"});
-      },
-      {"p0"},
-      {"sum(c1)"},
-      "SELECT c0 % 10, sum(c1) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation(
+          [&](auto& builder) { builder.project({"c0 % 10", "c1"}); })
+      .groupBy({"p0"})
+      .aggregates({"sum(c1)"})
+      .assertResults("SELECT c0 % 10, sum(c1) FROM tmp GROUP BY 1");
 
   // Encodings: use filter to wrap aggregation inputs in a dictionary.
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
-      },
-      {"p0"},
-      {"sum(c1)"},
-      "SELECT c0 % 11, sum(c1) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
+      })
+      .groupBy({"p0"})
+      .aggregates({"sum(c1)"})
+      .assertResults(
+          "SELECT c0 % 11, sum(c1) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
 
-  testAggregations(
-      [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 0"); },
-      {},
-      {"sum(c1)"},
-      "SELECT sum(c1) FROM tmp WHERE c0 % 2 = 0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 0"); })
+      .aggregates({"sum(c1)"})
+      .assertResults("SELECT sum(c1) FROM tmp WHERE c0 % 2 = 0");
 }
 
 TEST_F(SumTest, sumIntervalDayToSecond) {
@@ -90,19 +96,20 @@ TEST_F(SumTest, sumIntervalDayToSecond) {
                std::vector<int64_t>{3}, INTERVAL_DAY_TIME())}),
   };
 
-  testAggregations(inputRows, {}, {"sum(c0)", "sum(c1)"}, expectedResult);
-  AggregationTestBase::enableTestIncremental();
+  AggregationTester(*this)
+      .inputs(inputRows)
+      .aggregates({"sum(c0)", "sum(c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(SumTest, sumFloat) {
   auto data = makeRowVector({makeFlatVector<float>({2.00, 1.00})});
   createDuckDbTable({data});
 
-  testAggregations(
-      [&](auto& builder) { builder.values({data}); },
-      {},
-      {"sum(c0)"},
-      "SELECT sum(c0) FROM tmp");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"sum(c0)"})
+      .assertResults("SELECT sum(c0) FROM tmp");
 }
 
 TEST_F(SumTest, sumDoubleAndFloat) {
@@ -114,18 +121,18 @@ TEST_F(SumTest, sumDoubleAndFloat) {
     createDuckDbTable(vectors);
 
     // With group by.
-    testAggregations(
-        vectors,
-        {"c2"},
-        {"sum(c0)", "sum(c1)"},
-        "SELECT c2, sum(c0), sum(c1) FROM tmp GROUP BY c2");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c2"})
+        .aggregates({"sum(c0)", "sum(c1)"})
+        .assertResults("SELECT c2, sum(c0), sum(c1) FROM tmp GROUP BY c2");
 
     // Without group by.
-    testAggregations(
-        vectors,
-        {},
-        {"sum(c0)", "sum(c1)"},
-        "SELECT sum(c0), sum(c1) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"sum(c0)", "sum(c1)"})
+        .withCompanion()
+        .assertResults("SELECT sum(c0), sum(c1) FROM tmp");
   }
 }
 
@@ -133,8 +140,6 @@ TEST_F(SumTest, sumDecimal) {
   // Disable incremental aggregation tests because DecimalAggregate doesn't set
   // StringView::prefix when extracting accumulators, leaving the prefix field
   // undefined that fails the test.
-  AggregationTestBase::disableTestIncremental();
-
   // Skip testing with TableScan because decimal is not supported in writers.
   std::vector<std::optional<int64_t>> shortDecimalRawVector;
   std::vector<std::optional<int128_t>> longDecimalRawVector;
@@ -148,8 +153,11 @@ TEST_F(SumTest, sumDecimal) {
       {makeNullableFlatVector<int64_t>(shortDecimalRawVector, DECIMAL(10, 1)),
        makeNullableFlatVector<int128_t>(longDecimalRawVector, DECIMAL(23, 4))});
   createDuckDbTable({input});
-  testAggregations(
-      {input}, {}, {"sum(c0)", "sum(c1)"}, "SELECT sum(c0), sum(c1) FROM tmp");
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"sum(c0)", "sum(c1)"})
+      .disableIncremental()
+      .assertResults("SELECT sum(c0), sum(c1) FROM tmp");
 
   // Decimal sum aggregation with multiple groups.
   auto inputRows = {
@@ -184,14 +192,15 @@ TEST_F(SumTest, sumDecimal) {
            makeFlatVector<int128_t>(
                std::vector<int128_t>{-7493}, DECIMAL(38, 2))})};
 
-  testAggregations(inputRows, {"c0"}, {"sum(c1)"}, expectedResult);
-
-  AggregationTestBase::enableTestIncremental();
+  AggregationTester(*this)
+      .inputs(inputRows)
+      .groupBy({"c0"})
+      .aggregates({"sum(c1)"})
+      .disableIncremental()
+      .assertResults(expectedResult);
 }
 
 TEST_F(SumTest, sumDecimalOverflow) {
-  AggregationTestBase::disableTestIncremental();
-
   // Short decimals do not overflow easily.
   std::vector<int64_t> shortDecimalInput;
   for (int i = 0; i < 10'000; ++i) {
@@ -200,7 +209,11 @@ TEST_F(SumTest, sumDecimalOverflow) {
   auto input = makeRowVector(
       {makeFlatVector<int64_t>(shortDecimalInput, DECIMAL(17, 5))});
   createDuckDbTable({input});
-  testAggregations({input}, {}, {"sum(c0)"}, "SELECT sum(c0) FROM tmp");
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"sum(c0)"})
+      .disableIncremental()
+      .assertResults("SELECT sum(c0) FROM tmp");
 
   auto decimalSumOverflow = [this](
                                 const std::vector<int128_t>& input,
@@ -213,7 +226,7 @@ TEST_F(SumTest, sumDecimalOverflow) {
     builder.singleAggregation({}, {"sum(c0)"});
     AssertQueryBuilder queryBuilder(
         builder.planNode(), this->duckDbQueryRunner_);
-    queryBuilder.assertResults({expected});
+    queryBuilder.assertResults(expected);
   };
 
   // Test Positive Overflow.
@@ -266,8 +279,6 @@ TEST_F(SumTest, sumDecimalOverflow) {
   VELOX_ASSERT_THROW(
       decimalSumOverflow(longDecimalInput, longDecimalOutput),
       "Value '-100000000000000000000000000000000000000' is not in the range of Decimal Type");
-
-  AggregationTestBase::enableTestIncremental();
 }
 
 TEST_F(SumTest, sumWithMask) {
@@ -383,8 +394,11 @@ TEST_F(SumTest, boolKey) {
   }
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors, {"c0"}, {"sum(c1)"}, "SELECT c0, sum(c1) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"sum(c1)"})
+      .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY 1");
 }
 
 TEST_F(SumTest, emptyValues) {
@@ -393,7 +407,11 @@ TEST_F(SumTest, emptyValues) {
       {makeFlatVector<int32_t>(std::vector<int32_t>{}),
        makeFlatVector<int64_t>(std::vector<int64_t>{})});
 
-  testAggregations({vector}, {"c0"}, {"sum(c1)"}, "");
+  AggregationTester(*this)
+      .inputs(vector)
+      .groupBy({"c0"})
+      .aggregates({"sum(c1)"})
+      .assertResults("");
 }
 
 /// Test aggregating over lots of null values.
@@ -410,11 +428,11 @@ TEST_F(SumTest, nulls) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"sum(c1) AS sum_c1"},
-      "SELECT c0, sum(c1) as sum_c1 FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"sum(c1) AS sum_c1"})
+      .assertResults("SELECT c0, sum(c1) as sum_c1 FROM tmp GROUP BY 1");
 }
 
 TEST_F(SumTest, hook) {

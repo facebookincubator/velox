@@ -61,13 +61,12 @@ TEST_F(MultiMapAggTest, integerKeyGlobal) {
           })),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"multimap_agg(c0, c1)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"multimap_agg(c0, c1)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 }
 
 TEST_F(MultiMapAggTest, integerKeyGroupBy) {
@@ -94,13 +93,13 @@ TEST_F(MultiMapAggTest, integerKeyGroupBy) {
           })),
   });
 
-  testAggregations(
-      {data},
-      {"c0"},
-      {"multimap_agg(c1, c2)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"c0", "transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"multimap_agg(c1, c2)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"c0", "transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 }
 
 TEST_F(MultiMapAggTest, stringKeyGlobal) {
@@ -129,13 +128,12 @@ TEST_F(MultiMapAggTest, stringKeyGlobal) {
           })),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"multimap_agg(c0, c1)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"multimap_agg(c0, c1)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 }
 
 TEST_F(MultiMapAggTest, stringKeyGroupBy) {
@@ -172,13 +170,13 @@ TEST_F(MultiMapAggTest, stringKeyGroupBy) {
           })),
   });
 
-  testAggregations(
-      {data},
-      {"c0"},
-      {"multimap_agg(c1, c2)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"c0", "transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"multimap_agg(c1, c2)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"c0", "transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 }
 
 TEST_F(MultiMapAggTest, arrayKeyGlobal) {
@@ -213,13 +211,12 @@ TEST_F(MultiMapAggTest, arrayKeyGlobal) {
           })),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"multimap_agg(c0, c1)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"multimap_agg(c0, c1)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 }
 
 TEST_F(MultiMapAggTest, arrayKeyGroupBy) {
@@ -258,13 +255,13 @@ TEST_F(MultiMapAggTest, arrayKeyGroupBy) {
           })),
   });
 
-  testAggregations(
-      {data},
-      {"c0"},
-      {"multimap_agg(c1, c2)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"c0", "transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"multimap_agg(c1, c2)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"c0", "transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 }
 
 TEST_F(MultiMapAggTest, doubleKeyGlobal) {
@@ -293,13 +290,12 @@ TEST_F(MultiMapAggTest, doubleKeyGlobal) {
           })),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"multimap_agg(c0, c1)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"multimap_agg(c0, c1)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 
   // Input keys are complex type (row).
   data = makeRowVector({
@@ -338,13 +334,12 @@ TEST_F(MultiMapAggTest, doubleKeyGlobal) {
           })),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"multimap_agg(c0, c1)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"multimap_agg(c0, c1)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 }
 
 TEST_F(MultiMapAggTest, timestampWithTimeZoneGlobal) {
@@ -370,13 +365,12 @@ TEST_F(MultiMapAggTest, timestampWithTimeZoneGlobal) {
           TIMESTAMP_WITH_TIME_ZONE()),
       makeArrayVector<int32_t>({{1, 4}, {2, 5, 6, 9}, {3, 7}, {8, 10}}))});
 
-  testAggregations(
-      {data},
-      {},
-      {"multimap_agg(c0, c1)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"multimap_agg(c0, c1)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 
   // Input keys are complex type (row).
   data = makeRowVector(
@@ -401,13 +395,12 @@ TEST_F(MultiMapAggTest, timestampWithTimeZoneGlobal) {
           TIMESTAMP_WITH_TIME_ZONE())}),
       makeArrayVector<int32_t>({{1, 4}, {2, 5, 6, 9}, {3, 7}, {8, 10}}))});
 
-  testAggregations(
-      {data},
-      {},
-      {"multimap_agg(c0, c1)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"multimap_agg(c0, c1)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 }
 
 TEST_F(MultiMapAggTest, timestampWithTimeZoneGroupBy) {
@@ -434,13 +427,13 @@ TEST_F(MultiMapAggTest, timestampWithTimeZoneGroupBy) {
           TIMESTAMP_WITH_TIME_ZONE()),
       makeArrayVector<int32_t>({{1, 4}, {2, 3, 5}, {8, 10}, {6, 7, 9}}))});
 
-  testAggregations(
-      {data},
-      {"c2"},
-      {"multimap_agg(c0, c1)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c2"})
+      .aggregates({"multimap_agg(c0, c1)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 
   // Input keys are complex type (row).
   data = makeRowVector(
@@ -466,13 +459,13 @@ TEST_F(MultiMapAggTest, timestampWithTimeZoneGroupBy) {
           TIMESTAMP_WITH_TIME_ZONE())}),
       makeArrayVector<int32_t>({{1, 4}, {2, 3, 5}, {8, 10}, {6, 7, 9}}))});
 
-  testAggregations(
-      {data},
-      {"c2"},
-      {"multimap_agg(c0, c1)"},
-      // Sort the result arrays to ensure deterministic results.
-      {"transform_values(a0, (k, v) -> array_sort(v))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c2"})
+      .aggregates({"multimap_agg(c0, c1)"})
+      .project( // Sort the result arrays to ensure deterministic results.
+          {"transform_values(a0, (k, v) -> array_sort(v))"})
+      .assertResults(expected);
 }
 
 TEST_F(MultiMapAggTest, unknownKey) {
@@ -482,10 +475,16 @@ TEST_F(MultiMapAggTest, unknownKey) {
       makeConstant<int32_t>(123, 6),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"multimap_agg(c1, c2)"}, "VALUES (1, NULL), (2, NULL)");
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"multimap_agg(c1, c2)"})
+      .assertResults("VALUES (1, NULL), (2, NULL)");
 
-  testAggregations({data}, {}, {"multimap_agg(c1, c2)"}, "VALUES (NULL)");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"multimap_agg(c1, c2)"})
+      .assertResults("VALUES (NULL)");
 }
 } // namespace
 } // namespace facebook::velox::aggregate::prestosql

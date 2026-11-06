@@ -5432,10 +5432,7 @@ class HybridFlatMapGroupReader {
       if (!keyPresenceBits_[schemaKeyIndex]) {
         continue;
       }
-      const auto keyName = keyNameAt(schemaKeyIndex);
-      const bool selected = selectionMode_ == SelectionMode::Include
-          ? selectedKeys_.contains(keyName)
-          : !selectedKeys_.contains(keyName);
+      const bool selected = isSelected(schemaKeyIndex);
       const auto keyOffset = presentKeyIndex * nonNullRowCount_;
       bool hasPresentValue{false};
       if (selected) {
@@ -5460,7 +5457,7 @@ class HybridFlatMapGroupReader {
       NIMBLE_CHECK_FILE(
           hasPresentValue,
           "Hybrid FlatMap key '{}' has no present rows.",
-          keyName);
+          keyNameAt(schemaKeyIndex));
       ++presentKeyIndex;
     }
     NIMBLE_CHECK_FILE_EQ(presentKeyIndex, numPresentKeys);
@@ -5563,15 +5560,10 @@ class HybridFlatMapGroupReader {
       if constexpr (std::is_same_v<T, velox::StringView>) {
         keys.emplace_back(key);
       } else {
-        const auto parsed = folly::tryTo<T>(key);
-        NIMBLE_CHECK_FILE(
-            parsed.hasValue(), "Invalid Hybrid FlatMap schema key '{}'.", key);
-        NIMBLE_CHECK_FILE_EQ(
-            folly::to<std::string>(parsed.value()),
-            key,
-            "Hybrid FlatMap schema key is not canonical: '{}'.",
-            key);
-        keys.push_back(parsed.value());
+        // Callers that build a reader for every serialized value parse these
+        // keys for every batch, so canonical keys take the allocation-free
+        // path. Any other key throws an error that names its problem.
+        keys.push_back(HybridFlatMap::parseCanonicalIntegerKey<T>(key));
       }
     }
     return keys;
@@ -5600,6 +5592,17 @@ class HybridFlatMapGroupReader {
 
   DecodedKey keyAt(size_t index) const {
     return keys()[index];
+  }
+
+  // Returns whether the feature selection keeps the key at `index`. An empty
+  // selection decides without the key, so this skips building its name for
+  // every present key of every batch.
+  bool isSelected(size_t index) const {
+    if (selectedKeys_.empty()) {
+      return selectionMode_ == SelectionMode::Exclude;
+    }
+    const bool listed = selectedKeys_.contains(keyNameAt(index));
+    return selectionMode_ == SelectionMode::Include ? listed : !listed;
   }
 
   // Allocates implicit null values for metadata-only groups.

@@ -214,6 +214,7 @@ TabletReader::TabletReader(
             options.ioOptions->metadataIoStats(), "metadataIoStats is null.");
         return *options.ioOptions;
       }()},
+      fileIoContext_{options.fileIoContext},
       indexOptions_{[&]() {
         // cacheIndex takes effect only when fileHandle and cache are provided.
         const bool cacheEnabled =
@@ -231,7 +232,8 @@ TabletReader::TabletReader(
             // needs to flip one knob.
             .pinIndex = options.pinIndex || options.preloadIndex,
             .preloadIndex = options.preloadIndex,
-            .cacheKeyEncodingViews = options.cacheKeyEncodingViews};
+            .cacheKeyEncodingViews = options.cacheKeyEncodingViews,
+            .fileIoContext = fileIoContext_};
       }()},
       metadataInput_{[&]() {
         MetadataInput::Options metadataOptions{
@@ -239,7 +241,8 @@ TabletReader::TabletReader(
             .ioStats = ioOptions_.metadataIoStats(),
             .maxCoalesceDistance = ioOptions_.maxCoalesceDistance(),
             .maxCoalesceBytes = ioOptions_.maxCoalesceBytes(),
-            .executor = ioOptions_.ioExecutor().get()};
+            .executor = ioOptions_.ioExecutor().get(),
+            .fileIoContext = fileIoContext_};
         // cacheMetadata takes effect only when fileHandle and cache are
         // provided.
         if (options.cacheMetadata && options.fileHandle != nullptr) {
@@ -1199,7 +1202,8 @@ std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
   }
   if (!uniqueRegions.empty()) {
     std::vector<folly::IOBuf> iobufs(uniqueRegions.size());
-    file_->preadv(uniqueRegions, {iobufs.data(), iobufs.size()});
+    file_->preadv(
+        uniqueRegions, {iobufs.data(), iobufs.size()}, fileIoContext_);
     NIMBLE_DCHECK_EQ(
         iobufs.size(), uniqueRegions.size(), "Buffer size mismatch.");
     for (uint32_t i = 0; i < uniqueRegions.size(); ++i) {

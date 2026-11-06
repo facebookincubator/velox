@@ -104,6 +104,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_vector_fuzzer
+    GTest::gmock
     GTest::gtest
     GTest::gtest_main
   )

@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
@@ -110,7 +111,7 @@ void checkCodecRoundtrip(
   auto compressedLength =
       c1->compress(
             data.data(), data.size(), compressed.data(), maxCompressedLength)
-          .thenOrThrow(folly::identity, throwsNotOk);
+          .thenOrThrow(std::identity{}, throwsNotOk);
   compressed.resize(compressedLength);
 
   // Decompress with codec c2.
@@ -119,7 +120,7 @@ void checkCodecRoundtrip(
                                   compressed.size(),
                                   decompressed.data(),
                                   decompressed.size())
-                                .thenOrThrow(folly::identity, throwsNotOk);
+                                .thenOrThrow(std::identity{}, throwsNotOk);
   decompressed.resize(data.size());
   ASSERT_EQ(data, decompressed);
   ASSERT_EQ(data.size(), decompressedLength);
@@ -196,7 +197,7 @@ void streamingCompress(
     // Compress once.
     auto compressResult =
         compressor->compress(input, inputLength, output, outputLength)
-            .thenOrThrow(folly::identity, throwsNotOk);
+            .thenOrThrow(std::identity{}, throwsNotOk);
     ASSERT_LE(compressResult.bytesRead, inputLength);
     ASSERT_LE(compressResult.bytesWritten, outputLength);
 
@@ -217,7 +218,7 @@ void streamingCompress(
         outputLength = compressed.size() - compressedSize;
         output = compressed.data() + compressedSize;
         auto flushResult = compressor->flush(output, outputLength)
-                               .thenOrThrow(folly::identity, throwsNotOk);
+                               .thenOrThrow(std::identity{}, throwsNotOk);
         ASSERT_LE(flushResult.bytesWritten, outputLength);
         compressedSize += flushResult.bytesWritten;
 
@@ -237,7 +238,7 @@ void streamingCompress(
       int64_t outputLength = compressed.size() - compressedSize;
       uint8_t* output = compressed.data() + compressedSize;
       auto endResult = compressor->finalize(output, outputLength)
-                           .thenOrThrow(folly::identity, throwsNotOk);
+                           .thenOrThrow(std::identity{}, throwsNotOk);
       ASSERT_LE(endResult.bytesWritten, outputLength);
       compressedSize += endResult.bytesWritten;
 
@@ -272,7 +273,7 @@ void streamingDecompress(
     // Decompress once.
     auto decompressResult =
         decompressor->decompress(input, inputLength, output, outputLength)
-            .thenOrThrow(folly::identity, throwsNotOk);
+            .thenOrThrow(std::identity{}, throwsNotOk);
     ASSERT_LE(decompressResult.bytesRead, inputLength);
     ASSERT_LE(decompressResult.bytesWritten, outputLength);
     ASSERT_TRUE(
@@ -297,12 +298,12 @@ void streamingDecompress(
 
 std::shared_ptr<StreamingCompressor> makeStreamingCompressor(Codec* codec) {
   return codec->makeStreamingCompressor().thenOrThrow(
-      folly::identity, throwsNotOk);
+      std::identity{}, throwsNotOk);
 }
 
 std::shared_ptr<StreamingDecompressor> makeStreamingDecompressor(Codec* codec) {
   return codec->makeStreamingDecompressor().thenOrThrow(
-      folly::identity, throwsNotOk);
+      std::identity{}, throwsNotOk);
 }
 
 // Check the streaming compressor against one-shot decompression.
@@ -335,7 +336,7 @@ void checkStreamingDecompressor(
       codec
           ->compress(
               data.data(), data.size(), compressed.data(), maxCompressedLen)
-          .thenOrThrow(folly::identity, throwsNotOk);
+          .thenOrThrow(std::identity{}, throwsNotOk);
   compressed.resize(compressedLength);
 
   // Run streaming decompression.
@@ -433,7 +434,7 @@ TEST_P(CodecTest, specifyCompressionLevel) {
   ASSERT_TRUE(Codec::isAvailable(kind));
 
   auto codecDefault =
-      Codec::create(kind).thenOrThrow(folly::identity, throwsNotOk);
+      Codec::create(kind).thenOrThrow(std::identity{}, throwsNotOk);
   checkCodecRoundtrip(codecDefault, data);
 
   for (const auto& compressionLevel :
@@ -441,7 +442,7 @@ TEST_P(CodecTest, specifyCompressionLevel) {
         codecDefault->minCompressionLevel(),
         codecDefault->maxCompressionLevel()}) {
     auto codec = Codec::create(kind, compressionLevel)
-                     .thenOrThrow(folly::identity, throwsNotOk);
+                     .thenOrThrow(std::identity{}, throwsNotOk);
     checkCodecRoundtrip(codec, data);
   }
 }
@@ -455,13 +456,13 @@ TEST_P(CodecTest, getUncompressedLength) {
       codec
           ->compress(
               input.data(), inputLength, compressed.data(), compressed.size())
-          .thenOrThrow(folly::identity, throwsNotOk);
+          .thenOrThrow(std::identity{}, throwsNotOk);
   compressed.resize(compressedLength);
 
   if (Codec::supportsGetUncompressedLength(getCompressionKind())) {
     auto uncompressedLength =
         codec->getUncompressedLength(compressed.data(), compressedLength)
-            .thenOrThrow(folly::identity, throwsNotOk);
+            .thenOrThrow(std::identity{}, throwsNotOk);
     ASSERT_EQ(uncompressedLength, inputLength);
   } else {
     VELOX_ASSERT_ERROR_STATUS(

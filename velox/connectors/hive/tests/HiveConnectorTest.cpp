@@ -17,13 +17,14 @@
 #include <gtest/gtest.h>
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
+#include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/ExtractionUtils.h"
-#include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/common/ExtractionUtils.h"
+#include "velox/connectors/common/FileDataSource.h"
+
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprConstants.h"
@@ -103,7 +104,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMultilevel) {
             "statsBasedFilterReorderDisabled {}",
             statsBasedFilterReorderDisabled));
 
-    auto scanSpec = makeScanSpec(
+    auto scanSpec = connector::makeScanSpec(
         rowType,
         groupSubfields(subfields),
         /*subfieldFilters=*/{},
@@ -146,7 +147,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeFields) {
              {"c0c0c2", BIGINT()}})},
        {"c0c1", ROW({{"c0c1c0", BIGINT()}, {"c0c1c1", BIGINT()}})}});
   auto rowType = ROW({{"c0", columnType}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields(
           {"c0.c0c0.c0c0c0", "c0.c0c0.c0c0c2", "c0.c0c1", "c0.c0c1.c0c1c0"})),
@@ -173,7 +174,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeArray) {
   auto columnType =
       ARRAY(ROW({{"c0c0", BIGINT()}, {"c0c1", BIGINT()}, {"c0c2", BIGINT()}}));
   auto rowType = ROW({{"c0", columnType}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[1].c0c0", "c0[2].c0c2"})),
       /*subfieldFilters=*/{},
@@ -200,7 +201,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeArrayNegative) {
   auto subfields = makeSubfields({"c0[1].c0c0", "c0[-1].c0c2"});
   auto groupedSubfields = groupSubfields(subfields);
   VELOX_ASSERT_USER_THROW(
-      makeScanSpec(
+      connector::makeScanSpec(
           rowType,
           groupedSubfields,
           /*subfieldFilters=*/{},
@@ -219,7 +220,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeMap) {
       MAP(BIGINT(),
           ROW({{"c0c0", BIGINT()}, {"c0c1", BIGINT()}, {"c0c2", BIGINT()}}));
   auto rowType = ROW({{"c0", columnType}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[10].c0c0", "c0[20].c0c2"})),
       /*subfieldFilters=*/{},
@@ -251,7 +252,7 @@ TEST_F(
     HiveConnectorTest,
     makeScanSpecRequiredSubfieldsFlatMapFeatureSelectionStringKeys) {
   auto rowType = ROW({{"c0", MAP(VARCHAR(), BIGINT())}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[\"foo\"]"})),
       /*subfieldFilters=*/{},
@@ -274,7 +275,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsAllSubscripts) {
   auto rowType = ROW({{"c0", columnType}});
   for (auto* path : {"c0", "c0[*]", "c0[*][*]"}) {
     SCOPED_TRACE(path);
-    auto scanSpec = makeScanSpec(
+    auto scanSpec = connector::makeScanSpec(
         rowType,
         groupSubfields(makeSubfields({path})),
         /*subfieldFilters=*/{},
@@ -297,7 +298,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsAllSubscripts) {
     ASSERT_FALSE(elements->childByName("c0c0")->isConstant());
     ASSERT_FALSE(elements->childByName("c0c1")->isConstant());
   }
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[*][*].c0c0"})),
       /*subfieldFilters=*/{},
@@ -323,7 +324,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsAllSubscripts) {
 TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
   auto rowType =
       ROW({{"c0", MAP(REAL(), BIGINT())}, {"c1", MAP(DOUBLE(), BIGINT())}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[0]", "c1[-1]"})),
       /*subfieldFilters=*/{},
@@ -353,7 +354,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
   ASSERT_FALSE(applyFilter(*keysFilter, -2.0));
 
   // Integer min and max means infinities.
-  scanSpec = makeScanSpec(
+  scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields(
           {"c0[-9223372036854775808]", "c1[9223372036854775807]"})),
@@ -375,7 +376,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
                    ->filter();
   ASSERT_TRUE(applyFilter(*keysFilter, 1e100));
   ASSERT_FALSE(applyFilter(*keysFilter, 9223372036854700000.0));
-  scanSpec = makeScanSpec(
+  scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields(
           {"c0[9223372036854775807]", "c0[-9223372036854775808]"})),
@@ -395,7 +396,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
   ASSERT_TRUE(applyFilter(*keysFilter, 1e30f));
 
   // Unrepresentable values.
-  scanSpec = makeScanSpec(
+  scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[-100000000]", "c0[100000000]"})),
       /*subfieldFilters=*/{},
@@ -438,7 +439,7 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsOnlyInFilters) {
   filters.emplace(Subfield("c0.c0c3"), exec::isNotNull());
   filters.emplace(Subfield("c1.c1c0.c1c0c0"), exec::equal(43));
 
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       readerOutputType,
       groupSubfields(makeSubfields({"c0.c0c1", "c0.c0c3"})),
       filters,
@@ -520,7 +521,7 @@ TEST_F(HiveConnectorTest, makeScanSpecDuplicateSubfields) {
   auto c0Type = MAP(BIGINT(), MAP(BIGINT(), BIGINT()));
   auto c1Type = MAP(VARCHAR(), MAP(BIGINT(), BIGINT()));
   auto rowType = ROW({{"c0", c0Type}, {"c1", c1Type}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields(
           {"c0[10][1]", "c0[10][2]", "c1[\"foo\"][1]", "c1[\"foo\"][2]"})),
@@ -543,7 +544,7 @@ TEST_F(HiveConnectorTest, makeScanSpecFilterPartitionKey) {
   auto rowType = ROW({{"c0", BIGINT()}});
   SubfieldFilters filters;
   filters.emplace(Subfield("ds"), exec::equal("2023-10-13"));
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       filters,
@@ -564,7 +565,7 @@ TEST_F(HiveConnectorTest, makeScanSpecPrunedMapNonNullMapKey) {
           {ROW(
               {{"c0c0", MAP(BIGINT(), MAP(BIGINT(), BIGINT()))},
                {"c0c1", BIGINT()}})});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0.c0c1"})),
       /*subfieldFilters=*/{},
@@ -581,7 +582,7 @@ TEST_F(HiveConnectorTest, makeScanSpecPrunedMapNonNullMapKey) {
       *c0->childByName("c0c0"), *MAP(BIGINT(), MAP(BIGINT(), BIGINT())));
   ASSERT_FALSE(c0->childByName("c0c1")->isConstant());
 
-  scanSpec = makeScanSpec(
+  scanSpec = connector::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0.c0c0"})),
       /*subfieldFilters=*/{},
@@ -610,8 +611,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   auto expr = parseExpr("not (c0 > 0 or c1 > 0)", rowType);
   SubfieldFilters filters;
   double sampleRate = 1;
-  auto remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  auto remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 2);
@@ -620,8 +621,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
 
   expr = parseExpr("not (c0 > 0 or c1 > c0)", rowType);
   filters.clear();
-  remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 1);
   ASSERT_GT(filters.count(Subfield("c0")), 0);
@@ -631,8 +632,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   expr = parseExpr(
       "not (c2 > 1::decimal(20, 0) or c2 < 0::decimal(20, 0))", rowType);
   filters.clear();
-  remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_GT(filters.count(Subfield("c2")), 0);
   auto expectedFilter = exec::betweenHugeint(0, 1);
@@ -641,8 +642,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
 
   expr = parseExpr("c3", rowType);
   filters.clear();
-  remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(filters.size(), 1);
   ASSERT_TRUE(
@@ -650,8 +651,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
 
   expr = parseExpr("not c3", rowType);
   filters.clear();
-  remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(filters.size(), 1);
   ASSERT_TRUE(
@@ -666,8 +667,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
       parseExpr("c1 > 0", rowType),
       parseExpr("c2 > 0::decimal(20, 0)", rowType));
   filters.clear();
-  remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 3);
   ASSERT_TRUE(filters.contains(Subfield("c0")));
@@ -682,8 +683,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
       parseExpr("c1 % 3 = 0", rowType),
       parseExpr("c2 > 0::decimal(20, 0)", rowType));
   filters.clear();
-  remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 1);
   ASSERT_TRUE(filters.contains(Subfield("c2")));
@@ -699,7 +700,7 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
     auto varcharRowType = ROW({"n_name"}, {VARCHAR()});
     expr = parseExpr("n_name = 'FRANCE' or n_name = 'GERMANY'", varcharRowType);
     filters.clear();
-    remaining = extractFiltersFromRemainingFilter(
+    remaining = connector::extractFiltersFromRemainingFilter(
         expr, &evaluator, filters, sampleRate);
     ASSERT_FALSE(remaining);
     ASSERT_EQ(sampleRate, 1);
@@ -722,8 +723,8 @@ TEST_F(HiveConnectorTest, prestoTableSampling) {
   auto expr = parseExpr("rand() < 0.5", rowType);
   SubfieldFilters filters;
   double sampleRate = 1;
-  auto remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  auto remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(sampleRate, 0.5);
   ASSERT_TRUE(filters.empty());
@@ -731,8 +732,8 @@ TEST_F(HiveConnectorTest, prestoTableSampling) {
   expr = parseExpr("c0 > 0 and rand() < 0.5", rowType);
   filters.clear();
   sampleRate = 1;
-  remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(sampleRate, 0.5);
   ASSERT_EQ(filters.size(), 1);
@@ -741,8 +742,8 @@ TEST_F(HiveConnectorTest, prestoTableSampling) {
   expr = parseExpr("rand() < 0.5 and rand() < 0.5", rowType);
   filters.clear();
   sampleRate = 1;
-  remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(sampleRate, 0.25);
   ASSERT_TRUE(filters.empty());
@@ -750,8 +751,8 @@ TEST_F(HiveConnectorTest, prestoTableSampling) {
   expr = parseExpr("c0 > 0 or rand() < 0.5", rowType);
   filters.clear();
   sampleRate = 1;
-  remaining =
-      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  remaining = connector::extractFiltersFromRemainingFilter(
+      expr, &evaluator, filters, sampleRate);
   ASSERT_TRUE(remaining);
   ASSERT_EQ(*remaining, *expr);
   ASSERT_EQ(sampleRate, 1);
@@ -773,7 +774,7 @@ TEST_F(HiveConnectorTest, disjuncts) {
 
     SubfieldFilters filters;
     double sampleRate = 1;
-    auto remaining = extractFiltersFromRemainingFilter(
+    auto remaining = connector::extractFiltersFromRemainingFilter(
         expr, &evaluator, filters, sampleRate);
     ASSERT_TRUE(remaining == nullptr);
     ASSERT_EQ(sampleRate, 1);
@@ -786,7 +787,7 @@ TEST_F(HiveConnectorTest, disjuncts) {
 
     SubfieldFilters filters;
     double sampleRate = 1;
-    auto remaining = extractFiltersFromRemainingFilter(
+    auto remaining = connector::extractFiltersFromRemainingFilter(
         expr, &evaluator, filters, sampleRate);
     ASSERT_TRUE(remaining == nullptr);
     ASSERT_EQ(sampleRate, 1);
@@ -795,7 +796,7 @@ TEST_F(HiveConnectorTest, disjuncts) {
     VELOX_ASSERT_FILTER(exec::between(-10, 12), filters.begin()->second);
 
     expr = parseExpr("(c0 > 0 and c0 < 10) or (c0 > 5 and c0 < 15)", rowType);
-    remaining = extractFiltersFromRemainingFilter(
+    remaining = connector::extractFiltersFromRemainingFilter(
         expr, &evaluator, filters, sampleRate);
     ASSERT_TRUE(remaining == nullptr);
     ASSERT_EQ(sampleRate, 1);
@@ -808,7 +809,7 @@ TEST_F(HiveConnectorTest, disjuncts) {
     auto expr = parseExpr("c0 not in (1, 3) or c0 in (1, 2)", rowType);
     SubfieldFilters filters;
     double sampleRate = 1;
-    auto remaining = extractFiltersFromRemainingFilter(
+    auto remaining = connector::extractFiltersFromRemainingFilter(
         expr, &evaluator, filters, sampleRate);
     ASSERT_EQ(remaining, expr);
     ASSERT_EQ(sampleRate, 1);
@@ -886,8 +887,7 @@ class CapturingFileSystem : public filesystems::FileSystem {
   }
 };
 
-TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
-  // Register the capturing filesystem once.
+void registerCapturingFileSystem() {
   static bool registered = false;
   if (!registered) {
     filesystems::registerFileSystem(
@@ -899,6 +899,10 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
         });
     registered = true;
   }
+}
+
+TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
+  registerCapturingFileSystem();
 
   // Write test data to a local temp file.
   auto rowType = ROW({"c0"}, {BIGINT()});
@@ -947,6 +951,136 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
   ASSERT_EQ(captured.at(std::string(kTableNameKey)), "test_table");
 }
 
+TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
+  registerCapturingFileSystem();
+
+  const auto rowType = ROW({"c0"}, {BIGINT()});
+  const auto tableHandle = makeTableHandle(
+      SubfieldFilters{},
+      /*remainingFilter=*/nullptr,
+      "test_table",
+      /*dataColumns=*/nullptr,
+      /*indexColumns=*/{},
+      /*storageParameters=*/{},
+      "test_db");
+  const config::ConfigBase sessionProperties({});
+  auto connector = ConnectorRegistry::tryGet(kHiveConnectorId);
+
+  // Returns the options a new data source opens its split's file with, calling
+  // setFileReadOps() first when 'fileReadOps' is set. Each call writes its own
+  // file because file handles are cached by path and a cached handle is not
+  // reopened.
+  auto openFileReadOps =
+      [&](std::optional<folly::F14FastMap<std::string, std::string>>
+              fileReadOps) {
+        auto filePath = TempFilePath::create();
+        writeToFile(
+            filePath->getPath(),
+            makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+        auto connectorQueryCtx = ConnectorQueryCtx::Builder()
+                                     .operatorPool(pool_.get())
+                                     .connectorPool(pool_.get())
+                                     .sessionProperties(&sessionProperties)
+                                     .queryId("query.HiveConnectorTest")
+                                     .taskId("task.HiveConnectorTest")
+                                     .planNodeId("planNodeId.HiveConnectorTest")
+                                     .build();
+        auto dataSource = connector->createDataSource(
+            rowType,
+            tableHandle,
+            allRegularColumns(rowType),
+            connectorQueryCtx.get());
+        if (fileReadOps.has_value()) {
+          checkedPointerCast<FileDataSource>(dataSource.get())
+              ->setFileReadOps(std::move(*fileReadOps));
+        }
+        CapturingFileSystem::capturedFileReadOps().clear();
+        dataSource->addSplit(
+            exec::test::HiveConnectorSplitBuilder(
+                fmt::format("capture:{}", filePath->getPath()))
+                .fileFormat(dwio::common::FileFormat::DWRF)
+                .build());
+        return CapturingFileSystem::capturedFileReadOps();
+      };
+
+  const folly::F14FastMap<std::string, std::string> tableIdentity{
+      {std::string(kDbNameKey), "test_db"},
+      {std::string(kTableNameKey), "test_table"},
+  };
+  EXPECT_EQ(openFileReadOps(std::nullopt), tableIdentity);
+
+  auto expected = tableIdentity;
+  expected.emplace("test.key", "test.value");
+  EXPECT_EQ(
+      openFileReadOps(
+          folly::F14FastMap<std::string, std::string>{
+              {"test.key", "test.value"},
+          }),
+      expected);
+}
+
+TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
+  registerCapturingFileSystem();
+
+  const auto rowType = ROW({"c0"}, {BIGINT()});
+  const auto filePath = TempFilePath::create();
+  writeToFile(
+      filePath->getPath(),
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+  const auto tableHandle = makeTableHandle(
+      SubfieldFilters{},
+      /*remainingFilter=*/nullptr,
+      "test_table",
+      /*dataColumns=*/nullptr,
+      /*indexColumns=*/{},
+      /*storageParameters=*/{},
+      "test_db");
+  const config::ConfigBase sessionProperties({});
+  const auto connectorQueryCtx = ConnectorQueryCtx::Builder()
+                                     .operatorPool(pool_.get())
+                                     .connectorPool(pool_.get())
+                                     .sessionProperties(&sessionProperties)
+                                     .queryId("query.HiveConnectorTest")
+                                     .taskId("task.HiveConnectorTest")
+                                     .planNodeId("planNodeId.HiveConnectorTest")
+                                     .build();
+  auto dataSource = ConnectorRegistry::tryGet(kHiveConnectorId)
+                        ->createDataSource(
+                            rowType,
+                            tableHandle,
+                            allRegularColumns(rowType),
+                            connectorQueryCtx.get());
+  checkedPointerCast<FileDataSource>(dataSource.get())
+      ->setFileReadOps(
+          folly::F14FastMap<std::string, std::string>{
+              {"readerKey", "readerValue"},
+              {"sharedKey", "readerValue"},
+          });
+
+  FileProperties fileProperties;
+  fileProperties.fileReadOps = {
+      {"splitKey", "splitValue"},
+      {"sharedKey", "splitValue"},
+      {std::string(kTableNameKey), "split_table"},
+  };
+  CapturingFileSystem::capturedFileReadOps().clear();
+  dataSource->addSplit(
+      exec::test::HiveConnectorSplitBuilder(
+          fmt::format("capture:{}", filePath->getPath()))
+          .fileFormat(dwio::common::FileFormat::DWRF)
+          .fileProperties(fileProperties)
+          .build());
+
+  const folly::F14FastMap<std::string, std::string> expected{
+      {"splitKey", "splitValue"},
+      {"readerKey", "readerValue"},
+      {"sharedKey", "readerValue"},
+      {std::string(kDbNameKey), "test_db"},
+      {std::string(kTableNameKey), "test_table"},
+  };
+  EXPECT_EQ(CapturingFileSystem::capturedFileReadOps(), expected);
+}
+
 /// Verifies that getRuntimeStats() merge logic allows IoStats (ReadFile-layer)
 /// to override the storageReadBytes value from IoStatistics (DWIO-level).
 TEST_F(HiveConnectorTest, ioStatsOverridesStorageReadBytes) {
@@ -957,7 +1091,7 @@ TEST_F(HiveConnectorTest, ioStatsOverridesStorageReadBytes) {
   // Step 2: Simulate ReadFile-layer IoStats with ground-truth values.
   IoStats ioStats;
   ioStats.addCounter(
-      std::string(FileDataSource::kStorageReadBytes),
+      std::string(connector::FileDataSource::kStorageReadBytes),
       RuntimeCounter(50, RuntimeCounter::Unit::kBytes));
   ioStats.addCounter(
       "extentCacheHitBytes", RuntimeCounter(250, RuntimeCounter::Unit::kBytes));
@@ -967,7 +1101,7 @@ TEST_F(HiveConnectorTest, ioStatsOverridesStorageReadBytes) {
 
   // IoStatistics inserts first (Step 2 in getRuntimeStats).
   res.insert(
-      {std::string(FileDataSource::kStorageReadBytes),
+      {std::string(connector::FileDataSource::kStorageReadBytes),
        RuntimeMetric(
            ioStatistics->read().sum(),
            ioStatistics->read().count(),
@@ -978,7 +1112,7 @@ TEST_F(HiveConnectorTest, ioStatsOverridesStorageReadBytes) {
   // IoStats merge (Step 3 in getRuntimeStats) -- override storageReadBytes.
   const auto ioStatsMap = ioStats.stats();
   for (const auto& [key, value] : ioStatsMap) {
-    if (key == FileDataSource::kStorageReadBytes) {
+    if (key == connector::FileDataSource::kStorageReadBytes) {
       res[std::string(key)] = value;
     } else {
       res.emplace(key, value);
@@ -1005,7 +1139,7 @@ TEST_F(HiveConnectorTest, storageReadBytesWithoutOverride) {
 
   std::unordered_map<std::string, RuntimeMetric> res;
   res.insert(
-      {std::string(FileDataSource::kStorageReadBytes),
+      {std::string(connector::FileDataSource::kStorageReadBytes),
        RuntimeMetric(
            ioStatistics->read().sum(),
            ioStatistics->read().count(),
@@ -1015,7 +1149,7 @@ TEST_F(HiveConnectorTest, storageReadBytesWithoutOverride) {
 
   const auto ioStatsMap = ioStats.stats();
   for (const auto& [key, value] : ioStatsMap) {
-    if (key == FileDataSource::kStorageReadBytes) {
+    if (key == connector::FileDataSource::kStorageReadBytes) {
       res[std::string(key)] = value;
     } else {
       res.emplace(key, value);
@@ -1035,7 +1169,7 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeepsBothChildren) {
   // does not prune map children.  The extraction is applied post-read.
   auto hiveType = MAP(VARCHAR(), BIGINT());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
@@ -1048,14 +1182,16 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeepsBothChildren) {
       pool_.get());
 
   // MapKeys extraction -- map children should still be readable.
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"keys",
-       {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kMapKeys)},
        ARRAY(VARCHAR())}};
 
   auto* colSpec = scanSpec->childByName("col");
   ASSERT_NE(colSpec, nullptr);
-  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+  connector::configureExtractionScanSpec(
+      hiveType, extractions, *colSpec, pool_.get());
 
   auto* keysSpec = colSpec->childByName(ScanSpec::kMapKeysFieldName);
   ASSERT_NE(keysSpec, nullptr);
@@ -1070,7 +1206,7 @@ TEST_F(HiveConnectorTest, extractionScanSpecSizeKeepsBothChildren) {
   // (extraction is post-read).
   auto hiveType = MAP(VARCHAR(), BIGINT());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
@@ -1082,11 +1218,15 @@ TEST_F(HiveConnectorTest, extractionScanSpecSizeKeepsBothChildren) {
       /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
 
-  std::vector<NamedExtraction> extractions = {
-      {"sz", {ExtractionPathElement::simple(ExtractionStep::kSize)}, BIGINT()}};
+  std::vector<connector::NamedExtraction> extractions = {
+      {"sz",
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kSize)},
+       BIGINT()}};
 
   auto* colSpec = scanSpec->childByName("col");
-  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+  connector::configureExtractionScanSpec(
+      hiveType, extractions, *colSpec, pool_.get());
 
   auto* keysSpec = colSpec->childByName(ScanSpec::kMapKeysFieldName);
   ASSERT_FALSE(keysSpec->isConstant());
@@ -1098,7 +1238,7 @@ TEST_F(HiveConnectorTest, extractionScanSpecStructFieldPruning) {
   // Extraction with StructField should prune unneeded fields.
   auto hiveType = ROW({{"x", INTEGER()}, {"y", DOUBLE()}, {"z", VARCHAR()}});
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
@@ -1110,11 +1250,14 @@ TEST_F(HiveConnectorTest, extractionScanSpecStructFieldPruning) {
       /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
 
-  std::vector<NamedExtraction> extractions = {
-      {"col_x", {ExtractionPathElement::structField("x")}, INTEGER()}};
+  std::vector<connector::NamedExtraction> extractions = {
+      {"col_x",
+       {connector::ExtractionPathElement::structField("x")},
+       INTEGER()}};
 
   auto* colSpec = scanSpec->childByName("col");
-  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+  connector::configureExtractionScanSpec(
+      hiveType, extractions, *colSpec, pool_.get());
 
   // x should be readable, y and z should be constant null.
   ASSERT_FALSE(colSpec->childByName("x")->isConstant());
@@ -1134,11 +1277,12 @@ TEST_F(HiveConnectorTest, scanSpecTransformApplied) {
   ASSERT_FALSE(colSpec->hasTransform());
 
   // Set a MapKeys extraction transform.
-  auto chain = std::vector<ExtractionPathElementPtr>{
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
+  auto chain = std::vector<connector::ExtractionPathElementPtr>{
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapKeys)};
   colSpec->setTransform(
       [chain](const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
-        return applyExtractionChain(input, chain, pool);
+        return connector::applyExtractionChain(input, chain, pool);
       },
       ARRAY(VARCHAR()));
 
@@ -1163,7 +1307,7 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterString) {
   // type-preserving.
   auto hiveType = MAP(VARCHAR(), BIGINT());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
@@ -1175,15 +1319,16 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterString) {
       /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
 
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"filtered",
-       {ExtractionPathElement::mapKeyFilter(
+       {connector::ExtractionPathElement::mapKeyFilter(
            std::vector<std::string>{"a", "b"})},
        hiveType}};
 
   auto* colSpec = scanSpec->childByName("col");
   ASSERT_NE(colSpec, nullptr);
-  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+  connector::configureExtractionScanSpec(
+      hiveType, extractions, *colSpec, pool_.get());
 
   // ExtractionType should remain kNone.
   ASSERT_EQ(colSpec->extractionType(), ScanSpec::ExtractionType::kNone);
@@ -1203,7 +1348,7 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterInt) {
   // ScanSpec.
   auto hiveType = MAP(BIGINT(), VARCHAR());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
@@ -1215,14 +1360,16 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterInt) {
       /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
 
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"filtered",
-       {ExtractionPathElement::mapKeyFilter(std::vector<int64_t>{10, 20, 30})},
+       {connector::ExtractionPathElement::mapKeyFilter(
+           std::vector<int64_t>{10, 20, 30})},
        hiveType}};
 
   auto* colSpec = scanSpec->childByName("col");
   ASSERT_NE(colSpec, nullptr);
-  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+  connector::configureExtractionScanSpec(
+      hiveType, extractions, *colSpec, pool_.get());
 
   // ExtractionType should remain kNone.
   ASSERT_EQ(colSpec->extractionType(), ScanSpec::ExtractionType::kNone);
@@ -1243,7 +1390,7 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterThenMapKeys) {
   // configure kKeys extraction on the remaining chain.
   auto hiveType = MAP(VARCHAR(), BIGINT());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
@@ -1255,15 +1402,18 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterThenMapKeys) {
       /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
 
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"keys",
-       {ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"x", "y"}),
-        ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       {connector::ExtractionPathElement::mapKeyFilter(
+            std::vector<std::string>{"x", "y"}),
+        connector::ExtractionPathElement::simple(
+            connector::ExtractionStep::kMapKeys)},
        ARRAY(VARCHAR())}};
 
   auto* colSpec = scanSpec->childByName("col");
   ASSERT_NE(colSpec, nullptr);
-  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+  connector::configureExtractionScanSpec(
+      hiveType, extractions, *colSpec, pool_.get());
 
   // Filter should be set on keys.
   auto* keysSpec = colSpec->childByName(ScanSpec::kMapKeysFieldName);

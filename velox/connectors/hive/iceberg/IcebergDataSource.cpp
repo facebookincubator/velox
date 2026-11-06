@@ -85,7 +85,7 @@ IcebergDataSource::IcebergDataSource(
 
   // Changelog metadata filters (operation/ordinal/snapshotid) must NOT be
   // forwarded — those names don't exist in the base-table schema.
-  auto dataScanSpec = makeScanSpec(
+  auto dataScanSpec = connector::makeScanSpec(
       dataReaderOutputType,
       /*outputSubfields=*/{},
       common::SubfieldFilters{},
@@ -121,7 +121,7 @@ void IcebergDataSource::addDynamicFilter(
       VELOX_CHECK_NOT_NULL(icebergSplitReader);
       icebergSplitReader->enableFilterForDynamicFilter(columnName);
     }
-    FileDataSource::addDynamicFilter(outputChannel, filter);
+    connector::FileDataSource::addDynamicFilter(outputChannel, filter);
     return;
   }
 
@@ -151,7 +151,8 @@ void IcebergDataSource::addDynamicFilter(
   }
 }
 
-std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
+std::unique_ptr<connector::FileSplitReader>
+IcebergDataSource::createSplitReader() {
   prepareSplit();
   auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split_);
   auto* icebergTableHandle = tableHandle_->as<IcebergTableHandle>();

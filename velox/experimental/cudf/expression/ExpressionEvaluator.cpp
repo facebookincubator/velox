@@ -60,6 +60,7 @@
 #include <cudf/strings/convert/convert_floats.hpp>
 #include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/find.hpp>
+#include <cudf/strings/padding.hpp>
 #include <cudf/strings/replace.hpp>
 #include <cudf/strings/split/split.hpp>
 #include <cudf/strings/string_view.hpp>
@@ -70,9 +71,13 @@
 #include <cudf/transform.hpp>
 #include <cudf/types.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/error.hpp>
 #include <cudf/utilities/traits.hpp>
+#include <cudf/utilities/type_dispatcher.hpp>
 
 #include <rmm/device_uvector.hpp>
+
+#include <cuda/std/chrono>
 
 #include <cctype>
 #include <cmath>
@@ -669,23 +674,247 @@ bool isPlainType(const TypePtr& type) {
   return std::string_view(type->name()) == type->kindName();
 }
 
-// Whether the GPU casts VARCHAR at all: CastFunction follows Presto's rules,
-// so the Presto function registration turns it on and the Spark one off.
+namespace {
+
+// Whether the GPU runs the casts CastFunction implements with Presto's rules:
+// the cast from VARCHAR, whose strings it parses as Presto does, and the cast
+// from TIMESTAMP to VARCHAR, which it prints as Presto does. The Presto
+// function registration turns them on and the Spark one off.
 // TODO: Register cast as a special form per dialect in place of this switch
 // (https://github.com/facebookincubator/velox/issues/19748).
-bool castFromVarcharEnabled = false;
+bool prestoCastEnabled{false};
 
 // Returns true if CastFunction casts 'sourceType' to 'targetType'.
 bool isCastFromVarcharEnabled(
     const TypePtr& sourceType,
     const TypePtr& targetType) {
-  if (!castFromVarcharEnabled || !sourceType->isVarchar() ||
+  if (!prestoCastEnabled || !sourceType->isVarchar() ||
       !isPlainType(sourceType) || !isPlainType(targetType)) {
     return false;
   }
   const auto target = cudf_velox::tryVeloxToCudfDataType(targetType);
   return target.has_value() && isCastFromVarcharSupported(*target);
 }
+
+// Returns true if CastFunction formats 'sourceType', a DATE or TIMESTAMP, as
+// 'targetType', a plain VARCHAR. A DATE prints the same in every dialect; a
+// TIMESTAMP prints Presto's text, so it needs the switch.
+bool isTemporalToVarcharCastEnabled(
+    const TypePtr& sourceType,
+    const TypePtr& targetType) {
+  if (!targetType->isVarchar() || !isPlainType(targetType)) {
+    return false;
+  }
+  if (sourceType->isDate()) {
+    return true;
+  }
+  return prestoCastEnabled && sourceType->isTimestamp() &&
+      isPlainType(sourceType);
+}
+
+// The day numbers, counted from 1970-01-01, of the first days of the years 0
+// and 10000: cuDF's %Y prints the years between them as the CPU does.
+constexpr int64_t kFirstDayOfYear0{-719'528};
+constexpr int64_t kFirstDayOfYear10000{2'932'897};
+
+// The days cudf::strings::from_timestamps places on the calendar: it floors a
+// timestamp to a 32-bit day count and, as cuda::std::chrono::year_month_day,
+// adds 719468 to it in 32-bit arithmetic.
+constexpr int64_t kFirstDayOnCalendar{std::numeric_limits<int32_t>::min()};
+constexpr int64_t kLastDayOnCalendar{
+    std::numeric_limits<int32_t>::max() - 719'468};
+
+// A count of days wide enough for the ticks of any timestamp type.
+using Days = cuda::std::chrono::duration<int64_t, cuda::std::ratio<86'400>>;
+
+// Finds the first and last day, counted from 1970-01-01, that the valid rows
+// of a timestamp column fall on, from the column's minimum and maximum. The
+// two values are copied straight to the host and read after one stream.sync().
+struct DaySpanOf {
+  template <typename T, CUDF_ENABLE_IF(cudf::is_timestamp<T>())>
+  std::pair<int64_t, int64_t> operator()(
+      cudf::column_view input,
+      cuda::stream_ref stream) const {
+    using Rep = typename T::rep;
+    auto tempMr = get_temp_mr();
+    auto [minimum, maximum] = cudf::minmax(input, stream, tempMr);
+    // A copy into pageable host memory may block until it is done, but CUDA
+    // promises only that it might; the sync is what makes ticks safe to read.
+    Rep ticks[2];
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        &ticks[0],
+        static_cast<cudf::timestamp_scalar<T>&>(*minimum).data(),
+        sizeof(Rep),
+        cudaMemcpyDeviceToHost,
+        stream.get()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        &ticks[1],
+        static_cast<cudf::timestamp_scalar<T>&>(*maximum).data(),
+        sizeof(Rep),
+        cudaMemcpyDeviceToHost,
+        stream.get()));
+    stream.sync();
+    const auto dayOf = [](Rep rep) {
+      return cuda::std::chrono::floor<Days>(typename T::duration{rep}).count();
+    };
+    return {dayOf(ticks[0]), dayOf(ticks[1])};
+  }
+
+  template <typename T, CUDF_ENABLE_IF(!cudf::is_timestamp<T>())>
+  std::pair<int64_t, int64_t> operator()(cudf::column_view, cuda::stream_ref)
+      const {
+    VELOX_UNREACHABLE("Not a timestamp column");
+  }
+};
+
+// How a batch of DATE or TIMESTAMP values prints its years.
+enum class YearRange {
+  // Every year lies in 0 to 9999, which %Y prints as the CPU does.
+  kFourDigits,
+  // Some year lies outside 0 to 9999, so the batch formats its years apart.
+  kFormatted,
+  // Some day lies off the calendar from_timestamps places a day on
+  // (https://github.com/facebookincubator/velox/issues/19785).
+  kBeyond,
+};
+
+// Classifies the years 'input' spans. An empty or all-null column spans no
+// year and takes the %Y path.
+YearRange yearRangeOf(cudf::column_view input, cuda::stream_ref stream) {
+  if (input.size() == input.null_count()) {
+    return YearRange::kFourDigits;
+  }
+  const auto [firstDay, lastDay] =
+      cudf::type_dispatcher(input.type(), DaySpanOf{}, input, stream);
+  if (firstDay >= kFirstDayOfYear0 && lastDay < kFirstDayOfYear10000) {
+    return YearRange::kFourDigits;
+  }
+  if (firstDay >= kFirstDayOnCalendar && lastDay <= kLastDayOnCalendar) {
+    return YearRange::kFormatted;
+  }
+  return YearRange::kBeyond;
+}
+
+// Writes the proleptic Gregorian year of a timestamp, found the way
+// cuda::std::chrono::year_month_day finds it (Howard Hinnant's
+// civil_from_days) but in 64-bit arithmetic, since cuda::std::chrono::year
+// holds 16 bits. makeYearUdf() defines T, the timestamp type, ahead of it.
+constexpr std::string_view kYearUdf = R"***(
+__device__ void velox_year(int32_t* year, T timestamp) {
+  using Days = cuda::std::chrono::duration<int64_t, cuda::std::ratio<86400>>;
+  const int64_t days =
+      cuda::std::chrono::floor<Days>(timestamp.time_since_epoch()).count();
+  const int64_t z = days + 719468;
+  const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const int64_t doe = z - era * 146097;
+  const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const int64_t mp = (5 * doy + 2) / 153;
+  const int64_t month = mp < 10 ? mp + 3 : mp - 9;
+  *year = static_cast<int32_t>(yoe + era * 400 + (month <= 2 ? 1 : 0));
+}
+)***";
+
+// Returns kYearUdf for the timestamp 'type', with T defined ahead of it.
+std::string makeYearUdf(cudf::data_type type) {
+  return fmt::format("using T = {};\n{}", cudf::type_to_name(type), kYearUdf);
+}
+
+// Returns the year of each row of the timestamp column 'input' as INT32, with
+// the input's nulls.
+std::unique_ptr<cudf::column> yearsOf(
+    cudf::column_view input,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  const cudf::transform_input inputs[] = {input};
+  const cudf::transform_output outputs[] = {
+      {cudf::data_type{cudf::type_id::INT32},
+       cudf::output_nullability::PRESERVE}};
+  return std::move(
+      cudf::transform(
+          makeYearUdf(input.type()),
+          cudf::udf_source_type::CUDA,
+          cudf::null_aware::NO,
+          std::nullopt,
+          inputs,
+          outputs,
+          {},
+          std::nullopt,
+          stream,
+          mr)
+          ->release()
+          .front());
+}
+
+// Formats a DATE as YYYY-MM-DD and a TIMESTAMP as YYYY-MM-DD HH:MM:SS.mmm, as
+// the CPU's Presto cast prints them: the year padded to four digits and led by
+// a minus sign when negative, the fraction cut to milliseconds. 'isDate' comes
+// from the Velox type, since a TIMESTAMP a reader stores at day resolution is
+// a TIMESTAMP_DAYS column as well. cuDF's %Y writes the low four digits of a
+// year and nothing for a negative one, so a batch with a year outside 0 to
+// 9999 takes its years from velox_year and the rest of the text from
+// from_timestamps; a batch with a day the latter cannot place on the calendar,
+// which a TIMESTAMP in the seconds or milliseconds unit or a DATE in its last
+// 719468 days reaches, fails rather than print a wrong date.
+std::unique_ptr<cudf::column> castTemporalToVarchar(
+    cudf::column_view input,
+    bool isDate,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  const std::string afterYear{isDate ? "-%m-%d" : "-%m-%d %H:%M:%S.%3f"};
+  switch (yearRangeOf(input, stream)) {
+    case YearRange::kFourDigits:
+      return cudf::strings::from_timestamps(
+          input, "%Y" + afterYear, cudf::strings_column_view{}, stream, mr);
+    case YearRange::kFormatted:
+      break;
+    case YearRange::kBeyond:
+      VELOX_UNSUPPORTED(
+          "Cast to VARCHAR of a {} before day {} or after day {} of "
+          "1970-01-01 is not supported on the GPU "
+          "(https://github.com/facebookincubator/velox/issues/19785)",
+          isDate ? "DATE" : "TIMESTAMP",
+          kFirstDayOnCalendar,
+          kLastDayOnCalendar);
+  }
+
+  auto tempMr = get_temp_mr();
+  auto years = yearsOf(input, stream, tempMr);
+  auto yearStrings =
+      cudf::strings::from_integers(years->view(), stream, tempMr);
+  // zfill_by_widths() counts the minus sign toward the width, so a negative
+  // year needs five.
+  cudf::numeric_scalar<int32_t> zero(0, /*is_valid=*/true, stream, tempMr);
+  auto negative = cudf::binary_operation(
+      years->view(),
+      zero,
+      cudf::binary_operator::LESS,
+      cudf::data_type{cudf::type_id::BOOL8},
+      stream,
+      tempMr);
+  auto widths = cudf::copy_if_else(
+      cudf::numeric_scalar<int32_t>(5, /*is_valid=*/true, stream, tempMr),
+      cudf::numeric_scalar<int32_t>(4, /*is_valid=*/true, stream, tempMr),
+      negative->view(),
+      stream,
+      tempMr);
+  auto year = cudf::strings::zfill_by_widths(
+      cudf::strings_column_view(yearStrings->view()),
+      widths->view(),
+      stream,
+      tempMr);
+  auto rest = cudf::strings::from_timestamps(
+      input, afterYear, cudf::strings_column_view{}, stream, tempMr);
+  return cudf::strings::concatenate(
+      cudf::table_view({year->view(), rest->view()}),
+      /*separator=*/cudf::string_scalar("", /*is_valid=*/true, stream, tempMr),
+      /*narep=*/cudf::string_scalar("", /*is_valid=*/false, stream, tempMr),
+      cudf::strings::separator_on_nulls::YES,
+      stream,
+      mr);
+}
+
+} // namespace
 
 class CastFunction : public CudfFunction {
  public:
@@ -709,6 +938,12 @@ class CastFunction : public CudfFunction {
       }
       return;
     }
+    temporalToVarchar_ =
+        isTemporalToVarcharCastEnabled(sourceType, expr->type());
+    if (temporalToVarchar_) {
+      isDate_ = sourceType->isDate();
+      return;
+    }
     const auto sourceCudfType = cudf_velox::veloxToCudfDataType(sourceType);
     VELOX_CHECK(
         cudf::is_supported_cast(sourceCudfType, targetCudfType_),
@@ -724,6 +959,9 @@ class CastFunction : public CudfFunction {
     auto inputCol = asView(inputColumns[0]);
     if (fromVarchar_) {
       return castFromVarchar(inputCol, stream, mr);
+    }
+    if (temporalToVarchar_) {
+      return castTemporalToVarchar(inputCol, isDate_, stream, mr);
     }
     return cudf::cast(inputCol, targetCudfType_, stream, mr);
   }
@@ -860,6 +1098,11 @@ class CastFunction : public CudfFunction {
   cudf::data_type targetCudfType_;
   // Set when the source is VARCHAR.
   bool fromVarchar_{false};
+  // Set when eval() formats a DATE or TIMESTAMP as text itself, which
+  // cudf::cast cannot, and whether that source is the DATE: a TIMESTAMP a
+  // reader stores at day resolution shares cuDF's TIMESTAMP_DAYS with it.
+  bool temporalToVarchar_{false};
+  bool isDate_{false};
   bool isTryCast_{false};
   std::string targetTypeName_;
   // The kernel casting strings to the integral target type.
@@ -3699,6 +3942,9 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     if (srcType->isVarchar()) {
       return isCastFromVarcharEnabled(srcType, dstType);
     }
+    if (isTemporalToVarcharCastEnabled(srcType, dstType)) {
+      return true;
+    }
     return cudf::is_supported_cast(*src, *dst);
   }
 
@@ -3784,13 +4030,18 @@ bool containsTimezoneSensitiveDateTrunc(const core::TypedExprPtr& expr) {
 
 // True if `expr` must fall back to CPU because it contains a timezone-sensitive
 // date_trunc while the session enables adjust_timestamp_to_session_timezone,
-// which cuDF cannot honor. False when `queryCtx` is null or the config is
-// disabled.
+// or a cast from TIMESTAMP to VARCHAR while the session enables that and sets
+// a time zone, which cuDF cannot honor: the CPU prints such a cast in the
+// session time zone, cuDF formats in UTC. False when `queryCtx` is null or the
+// config is disabled.
 bool requiresCpuForTimezone(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx) {
-  if (queryCtx == nullptr ||
-      !queryCtx->queryConfig().adjustTimestampToTimezone()) {
+  if (queryCtx == nullptr) {
+    return false;
+  }
+  const auto& config = queryCtx->queryConfig();
+  if (!config.adjustTimestampToTimezone()) {
     return false;
   }
   if (containsTimezoneSensitiveDateTrunc(expr)) {
@@ -3799,15 +4050,24 @@ bool requiresCpuForTimezone(
         "adjust_timestamp_to_session_timezone is enabled");
     return true;
   }
+  if (!config.sessionTimezone().empty() &&
+      containsTimestampToVarcharCast(expr)) {
+    LOG_FALLBACK(
+        "cast(timestamp as varchar) requires CPU evaluation when "
+        "adjust_timestamp_to_session_timezone is enabled with a session time "
+        "zone");
+    return true;
+  }
   return false;
 }
 
-// Returns true if 'expr' must stay on the CPU because it casts from VARCHAR
-// while a session config selects rules CastFunction does not implement:
-// legacy_cast, for every target, and
+// Returns true if 'expr' must stay on the CPU because it holds a cast whose
+// rules a session config changes in a way CastFunction does not implement:
+// legacy_cast, for every cast from VARCHAR and for the cast from TIMESTAMP to
+// VARCHAR, which it prints with a 'T' separator and an unpadded year, and
 // cast_string_to_floating_point_lenient_inf_nan, which admits inf, infinity
-// and nan in any letter case, for REAL and DOUBLE. False when 'queryCtx' is
-// null or both configs are off.
+// and nan in any letter case, for the casts from VARCHAR to REAL and DOUBLE.
+// False when 'queryCtx' is null or both configs are off.
 bool requiresCpuForCastConfig(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx) {
@@ -3816,8 +4076,11 @@ bool requiresCpuForCastConfig(
   }
   const auto& config = queryCtx->queryConfig();
   if (config.isLegacyCast() &&
-      containsCastFromVarchar(expr, /*floatingPointOnly=*/false)) {
-    LOG_FALLBACK("A cast from VARCHAR stays on the CPU under legacy_cast");
+      (containsCastFromVarchar(expr, /*floatingPointOnly=*/false) ||
+       containsTimestampToVarcharCast(expr))) {
+    LOG_FALLBACK(
+        "A cast from VARCHAR, or from TIMESTAMP to VARCHAR, stays on the CPU "
+        "under legacy_cast");
     return true;
   }
   if (config.isCastStringToFloatingPointLenientInfNan() &&
@@ -3870,6 +4133,22 @@ bool containsCastFromVarchar(
   return false;
 }
 
+bool containsTimestampToVarcharCast(const core::TypedExprPtr& expr) {
+  if (expr->isCastKind() && !expr->inputs().empty()) {
+    const auto& sourceType = expr->inputs()[0]->type();
+    if (sourceType->isTimestamp() && isPlainType(sourceType) &&
+        expr->type()->isVarchar() && isPlainType(expr->type())) {
+      return true;
+    }
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsTimestampToVarcharCast(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool canExprRunOnGpu(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
@@ -3908,11 +4187,11 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 void unregisterFunctions() {
   auto& registry = getCudfFunctionRegistry();
   registry.clear();
-  castFromVarcharEnabled = false;
+  prestoCastEnabled = false;
 }
 
-void setCastFromVarcharEnabled(bool enabled) {
-  castFromVarcharEnabled = enabled;
+void setPrestoCastEnabled(bool enabled) {
+  prestoCastEnabled = enabled;
 }
 
 } // namespace facebook::velox::cudf_velox

@@ -48,16 +48,11 @@ class SumAggregationTest : public SumTestBase {
     auto in = makeRowVector({makeNullableFlatVector<int128_t>({input}, type)});
     auto expected =
         makeRowVector({makeNullableFlatVector<int128_t>({output}, type)});
-    testAggregations({in}, {}, {"spark_sum(c0)"}, {expected});
-    testAggregationsWithCompanion(
-        {in},
-        [](auto& /*builder*/) {},
-        {},
-        {"spark_sum(c0)"},
-        {{type}},
-        {},
-        {expected},
-        {});
+    AggregationTester(*this)
+        .inputs(in)
+        .aggregates({"spark_sum(c0)"})
+        .withCompanion()
+        .assertResults(expected);
   }
 
   // Check group by partial agg overflow, and final agg output null.
@@ -71,16 +66,12 @@ class SumAggregationTest : public SumTestBase {
         {makeFlatVector<int32_t>(10, [](auto row) { return row; }),
          makeNullableFlatVector<int128_t>(
              std::vector<std::optional<int128_t>>(10, std::nullopt), type)});
-    testAggregations({in}, {"c0"}, {"spark_sum(c1)"}, {expected});
-    testAggregationsWithCompanion(
-        {in},
-        [](auto& /*builder*/) {},
-        {"c0"},
-        {"spark_sum(c1)"},
-        {{type}},
-        {"c0", "a0"},
-        {expected},
-        {});
+    AggregationTester(*this)
+        .inputs(in)
+        .groupBy({"c0"})
+        .aggregates({"spark_sum(c1)"})
+        .withCompanion()
+        .assertResults(expected);
   }
 
   template <typename TIn, typename TOut>
@@ -103,16 +94,12 @@ class SumAggregationTest : public SumTestBase {
     auto expected = makeRowVector(
         {makeFlatVector<int32_t>(std::vector<int32_t>{0, 1, 2, 3}),
          outputDecimalVector});
-    testAggregations({vectors}, {"c0"}, {"spark_sum(c1)"}, {expected});
-    testAggregationsWithCompanion(
-        {vectors},
-        [](auto& /*builder*/) {},
-        {"c0"},
-        {"spark_sum(c1)"},
-        {{inputType}},
-        {"c0", "a0"},
-        {expected},
-        {});
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"spark_sum(c1)"})
+        .withCompanion()
+        .assertResults(expected);
   }
 
   // Registers a dummy sum aggregate function whose result type cannot be
@@ -317,20 +304,11 @@ TEST_F(SumAggregationTest, decimalSum) {
       {makeNullableFlatVector<int64_t>(shortDecimalRawVector, DECIMAL(10, 1)),
        makeNullableFlatVector<int128_t>(longDecimalRawVector, DECIMAL(23, 4))});
   createDuckDbTable({input});
-  testAggregations(
-      {input},
-      {},
-      {"spark_sum(c0)", "spark_sum(c1)"},
-      "SELECT sum(c0), sum(c1) FROM tmp");
-  testAggregationsWithCompanion(
-      {input},
-      [](auto& /*builder*/) {},
-      {},
-      {"spark_sum(c0)", "spark_sum(c1)"},
-      {{DECIMAL(10, 1)}, {DECIMAL(23, 4)}},
-      {},
-      "SELECT sum(c0), sum(c1) FROM tmp",
-      {});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"spark_sum(c0)", "spark_sum(c1)"})
+      .withCompanion()
+      .assertResults("SELECT sum(c0), sum(c1) FROM tmp");
 
   // Short decimal sum aggregation with multiple groups.
   auto inputShortDecimalRows = {
@@ -370,20 +348,12 @@ TEST_F(SumAggregationTest, decimalSum) {
            makeFlatVector<int64_t>(
                std::vector<int64_t>{-7493}, DECIMAL(15, 2))})};
 
-  testAggregations(
-      inputShortDecimalRows,
-      {"c0"},
-      {"spark_sum(c1)"},
-      expectedShortDecimalResult);
-  testAggregationsWithCompanion(
-      {inputShortDecimalRows},
-      [](auto& /*builder*/) {},
-      {"c0"},
-      {"spark_sum(c1)"},
-      {{DECIMAL(5, 2)}},
-      {"c0", "a0"},
-      expectedShortDecimalResult,
-      {});
+  AggregationTester(*this)
+      .inputs(inputShortDecimalRows)
+      .groupBy({"c0"})
+      .aggregates({"spark_sum(c1)"})
+      .withCompanion()
+      .assertResults(expectedShortDecimalResult);
 
   // Long decimal sum aggregation with multiple groups.
   auto inputLongDecimalRows = {
@@ -431,20 +401,12 @@ TEST_F(SumAggregationTest, decimalSum) {
                std::vector<int128_t>{HugeInt::build(87, 18073)},
                DECIMAL(38, 2))})};
 
-  testAggregations(
-      inputLongDecimalRows,
-      {"c0"},
-      {"spark_sum(c1)"},
-      expectedLongDecimalResult);
-  testAggregationsWithCompanion(
-      {inputShortDecimalRows},
-      [](auto& /*builder*/) {},
-      {"c0"},
-      {"spark_sum(c1)"},
-      {{DECIMAL(20, 2)}},
-      {"c0", "a0"},
-      expectedShortDecimalResult,
-      {});
+  AggregationTester(*this)
+      .inputs(inputLongDecimalRows)
+      .groupBy({"c0"})
+      .aggregates({"spark_sum(c1)"})
+      .withCompanion()
+      .assertResults(expectedLongDecimalResult);
 }
 
 TEST_F(SumAggregationTest, decimalGlobalSumOverflow) {
@@ -549,16 +511,11 @@ TEST_F(SumAggregationTest, decimalAllNullValues) {
   std::vector<std::optional<int128_t>> result = {std::nullopt};
   auto expected =
       makeRowVector({makeNullableFlatVector<int128_t>(result, DECIMAL(30, 2))});
-  testAggregations({input}, {}, {"spark_sum(c0)"}, {expected});
-  testAggregationsWithCompanion(
-      {input},
-      [](auto& /*builder*/) {},
-      {},
-      {"spark_sum(c0)"},
-      {{DECIMAL(20, 2)}},
-      {},
-      {expected},
-      {});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"spark_sum(c0)"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 // Test if all values in some groups are null, the final sum of this group
@@ -610,17 +567,11 @@ TEST_F(SumAggregationTest, decimalRangeOverflow) {
   std::vector<std::optional<int128_t>> result = {std::nullopt};
   auto expected = makeRowVector(
       {makeNullableFlatVector<int128_t>(result, DECIMAL(38, 18))});
-  testAggregations(
-      {firstInput, secondInput}, {}, {"spark_sum(c0)"}, {expected});
-  testAggregationsWithCompanion(
-      {firstInput, secondInput},
-      [](auto& /*builder*/) {},
-      {},
-      {"spark_sum(c0)"},
-      {{DECIMAL(38, 18)}},
-      {},
-      {expected},
-      {});
+  AggregationTester(*this)
+      .inputs({firstInput, secondInput})
+      .aggregates({"spark_sum(c0)"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(SumAggregationTest, sumFloat) {
@@ -628,11 +579,10 @@ TEST_F(SumAggregationTest, sumFloat) {
       makeRowVector({makeFlatVector<float>({3.4028235E38, 3.4028235E38})});
   createDuckDbTable({data});
 
-  testAggregations(
-      [&](auto& builder) { builder.values({data}); },
-      {},
-      {"spark_sum(c0)"},
-      "SELECT sum(c0) FROM tmp");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_sum(c0)"})
+      .assertResults("SELECT sum(c0) FROM tmp");
 }
 
 // Spark executes aggregates using a mix of partial, intermediate, and final
@@ -750,6 +700,12 @@ TEST_F(SumAggregationTest, abandonPartialAggregation) {
              kBatchSize, [](auto row) { return row % 3 != 0; })}));
   }
   createDuckDbTable(data);
+
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_sum(i)", "spark_sum(b)", "spark_sum(r)"})
+      .withCompanion()
+      .assertResults("SELECT sum(i), sum(b), sum(r) FROM tmp");
 
   core::PlanNodeId partialNodeId;
   auto plan = PlanBuilder()

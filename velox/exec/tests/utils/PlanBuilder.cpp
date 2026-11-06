@@ -405,7 +405,7 @@ PlanBuilder::TableScanBuilder::buildConnectorColumnHandle(
     const TypePtr& type,
     uint32_t /*outputIndex*/) {
   return std::make_shared<HiveColumnHandle>(
-      name, FileColumnHandle::ColumnType::kRegular, type, type);
+      name, connector::FileColumnHandle::ColumnType::kRegular, type, type);
 }
 
 connector::ConnectorTableHandlePtr
@@ -450,8 +450,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
           std::make_shared<connector::hive::HiveColumnHandle>(
               column,
               isPartitionKey
-                  ? connector::hive::FileColumnHandle::ColumnType::kPartitionKey
-                  : connector::hive::FileColumnHandle::ColumnType::kRegular,
+                  ? connector::FileColumnHandle::ColumnType::kPartitionKey
+                  : connector::FileColumnHandle::ColumnType::kRegular,
               targetColumns->childAt(i),
               targetColumns->childAt(i)));
     }
@@ -1425,6 +1425,24 @@ PlanBuilder& PlanBuilder::fixedPoint(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    core::MultiStagePlan body,
+    core::ConvergenceConfig convergenceConfig,
+    std::string outputStateEntry,
+    bool outputOnWorkerZero) {
+  VELOX_CHECK_NULL(
+      planNode_, "FixedPoint is a leaf node and cannot have an input");
+  planNode_ = std::make_shared<core::FixedPointNode>(
+      nextPlanNodeId(),
+      std::move(stateDeclarations),
+      std::move(body),
+      std::move(convergenceConfig),
+      std::move(outputStateEntry),
+      outputOnWorkerZero);
+  return *this;
+}
+
 namespace {
 // Resolves the implicit output state entry: the name of the last
 // VectorStateDeclaration in 'declarations'.  Used when fixedPoint() is called
@@ -2057,7 +2075,8 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
     const std::optional<std::string>& score,
     core::JoinType joinType,
     std::vector<std::pair<std::string, std::string>> searchOptions,
-    common::vectorindex::VectorIndexMetric metric) {
+    common::vectorindex::VectorIndexMetric metric,
+    std::string format) {
   VELOX_CHECK_NOT_NULL(planNode_, "VectorSearchJoin cannot be the source node");
   const auto& probeType = planNode_->outputType();
   const auto& buildType = right->outputType();
@@ -2080,6 +2099,7 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
       fields(buildType, rightKeys),
       field(probeType, probeEmbedding),
       field(buildType, buildIndex),
+      std::move(format),
       metric,
       k,
       std::move(searchOptions),

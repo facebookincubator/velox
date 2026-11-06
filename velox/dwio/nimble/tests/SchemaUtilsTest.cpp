@@ -683,8 +683,14 @@ TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
   expectedBarriers[0] = true;
   expectedBarriers[1] = true;
   expectedBarriers[2] = true;
+  // The offsets and lengths of offset_array and sliding_map are barrier
+  // streams.
+  expectedBarriers[8] = true;
+  expectedBarriers[9] = true;
+  expectedBarriers[14] = true;
+  expectedBarriers[15] = true;
   expectedBarriers[18] = true;
-  EXPECT_EQ(projection.rowOrFlatMapNullStreams, expectedBarriers);
+  EXPECT_EQ(projection.barrierStreams, expectedBarriers);
 
   SchemaBuilder nestedFlatMapBuilder;
   auto nestedRoot = nestedFlatMapBuilder.createRowTypeBuilder(1);
@@ -757,8 +763,7 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
           sourceGroup.keyPresenceDescriptor.offset(),
           sourceGroup.inMapDescriptor.offset()));
   EXPECT_THAT(
-      projection.rowOrFlatMapNullStreams,
-      ElementsAre(true, true, false, true, false));
+      projection.barrierStreams, ElementsAre(true, true, false, true, false));
 
   SchemaSerializer serializer;
   const auto serializedProjection =
@@ -819,7 +824,7 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
           sourceDefault.keyPresenceDescriptor.offset(),
           sourceDefault.inMapDescriptor.offset()));
   EXPECT_THAT(
-      mixedProjection.rowOrFlatMapNullStreams,
+      mixedProjection.barrierStreams,
       ElementsAre(true, true, false, true, false, false, true, false));
 
   // Group selection is deduplicated and emitted in source schema order, not
@@ -882,8 +887,7 @@ TEST(SchemaUtilsTest, hybridProjectionUsesEmptyDefaultForAbsentKeys) {
             UINT32_MAX,
             UINT32_MAX));
     EXPECT_THAT(
-        projection.rowOrFlatMapNullStreams,
-        ElementsAre(true, true, false, true, false));
+        projection.barrierStreams, ElementsAre(true, true, false, true, false));
 
     SchemaSerializer serializer;
     const auto roundTripped = SchemaDeserializer::deserialize(
@@ -1442,7 +1446,7 @@ TEST(SchemaUtilsTest, projectionDeepWithStreamOffsets) {
   // key1.Row.nulls (4), key1.inner_b (3), key1.inMap (5).
   EXPECT_EQ(projection.streamOffsets, std::vector<uint32_t>({1, 0, 4, 3, 5}));
   EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams,
+      projection.barrierStreams,
       std::vector<bool>({true, true, true, false, false}));
 }
 
@@ -1505,8 +1509,7 @@ TEST(SchemaUtilsTest, projectionKeepsStructSelectedWhole) {
         convertToVeloxType(*projection.nimbleType)->toString(),
         convertToVeloxType(*expected.nimbleType)->toString());
     EXPECT_EQ(projection.streamOffsets, expected.streamOffsets);
-    EXPECT_EQ(
-        projection.rowOrFlatMapNullStreams, expected.rowOrFlatMapNullStreams);
+    EXPECT_EQ(projection.barrierStreams, expected.barrierStreams);
 
     // The velox-source overload, which builds the projected schema above,
     // agrees on its own.
@@ -1521,7 +1524,7 @@ TEST(SchemaUtilsTest, projectionKeepsStructSelectedWhole) {
   }
 }
 
-TEST(SchemaUtilsTest, projectionMarksRowOrFlatMapNullStreams) {
+TEST(SchemaUtilsTest, projectionMarksBarrierStreams) {
   SchemaBuilder schemaBuilder;
   test::FlatMapChildAdder featuresAdder;
   NIMBLE_SCHEMA(
@@ -1595,7 +1598,7 @@ TEST(SchemaUtilsTest, projectionMarksRowOrFlatMapNullStreams) {
     std::string subfield;
     ProjectedShape shape;
     std::vector<uint32_t> expectedStreamOffsets;
-    std::vector<bool> expectedRowOrFlatMapNullStreams;
+    std::vector<bool> expectedBarrierStreams;
   };
   const std::vector<TestCase> testCases{
       {"scalar",
@@ -1681,9 +1684,7 @@ TEST(SchemaUtilsTest, projectionMarksRowOrFlatMapNullStreams) {
       }
     }
     EXPECT_EQ(metadata.streamOffsets, testCase.expectedStreamOffsets);
-    EXPECT_EQ(
-        metadata.rowOrFlatMapNullStreams,
-        testCase.expectedRowOrFlatMapNullStreams);
+    EXPECT_EQ(metadata.barrierStreams, testCase.expectedBarrierStreams);
   }
 }
 
@@ -1721,7 +1722,7 @@ TEST(SchemaUtilsTest, projectionMissingFlatMapComplexValueUsesPlaceholders) {
   expectedBarriers[0] = true;
   expectedBarriers[1] = true;
   expectedBarriers[2] = true;
-  EXPECT_EQ(projection.rowOrFlatMapNullStreams, expectedBarriers);
+  EXPECT_EQ(projection.barrierStreams, expectedBarriers);
 }
 
 TEST(SchemaUtilsTest, nestedFlatMapProjectionFails) {
@@ -1834,9 +1835,7 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingColumn) {
   EXPECT_EQ(projectedMap.groupAt(0).keyPresenceDescriptor.offset(), 3);
   EXPECT_EQ(projectedMap.groupAt(0).inMapDescriptor.offset(), 4);
   EXPECT_EQ(projection.streamOffsets.size(), 6);
-  EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams.size(),
-      projection.streamOffsets.size());
+  EXPECT_EQ(projection.barrierStreams.size(), projection.streamOffsets.size());
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapEmptyDefaultNumbersFollowingColumn) {
@@ -1877,8 +1876,14 @@ TEST(SchemaUtilsTest, hybridFlatMapEmptyDefaultNumbersFollowingColumn) {
   expectedBarriers[0] = true;
   expectedBarriers[1] = true;
   expectedBarriers[2] = true;
+  // The placeholder offsets and lengths of offset_array and sliding_map are
+  // barrier streams.
+  expectedBarriers[8] = true;
+  expectedBarriers[9] = true;
+  expectedBarriers[14] = true;
+  expectedBarriers[15] = true;
   expectedBarriers[2 + kNumValueStreams] = true;
-  EXPECT_EQ(projection.rowOrFlatMapNullStreams, expectedBarriers);
+  EXPECT_EQ(projection.barrierStreams, expectedBarriers);
 
   const auto& projectedRoot = projection.nimbleType->asRow();
   const auto& projectedMap = projectedRoot.childAt(0)->asHybridFlatMap();
@@ -2106,12 +2111,13 @@ TEST(SchemaUtilsTest, projectionEncodingHintsSlidingWindowMap) {
   EXPECT_EQ(root.childAt(1)->kind(), Kind::SlidingWindowMap);
 
   // Walker visits: outer-Row.nulls (5), id Scalar (0), dedup_map offsets (3),
-  // lengths (4), keys (1), values (2).
+  // lengths (4), keys (1), values (2). The offsets and lengths of the
+  // SlidingWindowMap are barrier streams.
   EXPECT_EQ(
       projection.streamOffsets, std::vector<uint32_t>({5, 0, 3, 4, 1, 2}));
   EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams,
-      std::vector<bool>({true, false, false, false, false, false}));
+      projection.barrierStreams,
+      std::vector<bool>({true, false, true, true, false, false}));
 }
 
 TEST(SchemaUtilsTest, projectionEncodingHintsMixed) {
@@ -2182,16 +2188,18 @@ TEST(SchemaUtilsTest, projectionEncodingHintsMixed) {
       projection.streamOffsets,
       std::vector<uint32_t>(
           {9, 0, 2, 3, 1, 6, 7, 4, 5, 8, 10, 11, UINT32_MAX, UINT32_MAX}));
+  // Barrier streams: the Row and FlatMap nulls, and the offsets and lengths of
+  // the ArrayWithOffsets and the SlidingWindowMap.
   EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams,
+      projection.barrierStreams,
       std::vector<bool>(
           {true,
            false,
+           true,
+           true,
            false,
-           false,
-           false,
-           false,
-           false,
+           true,
+           true,
            false,
            false,
            true,
@@ -2199,6 +2207,77 @@ TEST(SchemaUtilsTest, projectionEncodingHintsMixed) {
            false,
            false,
            false}));
+}
+
+TEST(SchemaUtilsTest, projectionEncodingHintsFlatMapValues) {
+  // A writer column in flatMapColumns and dictionaryArrayColumns stores the
+  // array of every key as ArrayWithOffsets, and one in flatMapColumns and
+  // deduplicatedMapColumns stores the map of every key as SlidingWindowMap.
+  // The projection keeps these value kinds for present and missing keys, so
+  // its schema has one stream for every projected source stream.
+  SchemaBuilder schemaBuilder;
+  test::FlatMapChildAdder idListsAdder;
+  test::FlatMapChildAdder scoreMapsAdder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({
+          {"id_lists",
+           NIMBLE_FLATMAP(
+               Int32, NIMBLE_OFFSETARRAY(NIMBLE_BIGINT()), idListsAdder)},
+          {"score_maps",
+           NIMBLE_FLATMAP(
+               Int32,
+               NIMBLE_SLIDINGWINDOWMAP(NIMBLE_INTEGER(), NIMBLE_REAL()),
+               scoreMapsAdder)},
+      }));
+  idListsAdder.addChild("1");
+  scoreMapsAdder.addChild("2");
+  const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+
+  const auto projection = buildProjectedNimbleType(
+      source.get(),
+      makeSubfields({"id_lists[1]", "id_lists[3]", "score_maps[2]"}));
+
+  const auto& root = projection.nimbleType->asRow();
+  ASSERT_EQ(root.childrenCount(), 2);
+  const auto& idLists = root.childAt(0)->asFlatMap();
+  ASSERT_EQ(idLists.childrenCount(), 2);
+  EXPECT_EQ(idLists.nameAt(0), "1");
+  EXPECT_EQ(idLists.childAt(0)->kind(), Kind::ArrayWithOffsets);
+  EXPECT_EQ(idLists.nameAt(1), "3");
+  EXPECT_EQ(idLists.childAt(1)->kind(), Kind::ArrayWithOffsets);
+  const auto& scoreMaps = root.childAt(1)->asFlatMap();
+  ASSERT_EQ(scoreMaps.childrenCount(), 1);
+  EXPECT_EQ(scoreMaps.childAt(0)->kind(), Kind::SlidingWindowMap);
+
+  const auto& sourceRoot = source->asRow();
+  const auto& sourceIdLists = sourceRoot.childAt(0)->asFlatMap();
+  const auto& sourceIdList = sourceIdLists.childAt(0)->asArrayWithOffsets();
+  const auto& sourceScoreMaps = sourceRoot.childAt(1)->asFlatMap();
+  const auto& sourceScoreMap = sourceScoreMaps.childAt(0)->asSlidingWindowMap();
+  EXPECT_THAT(
+      projection.streamOffsets,
+      ElementsAre(
+          sourceRoot.nullsDescriptor().offset(),
+          sourceIdLists.nullsDescriptor().offset(),
+          sourceIdList.offsetsDescriptor().offset(),
+          sourceIdList.lengthsDescriptor().offset(),
+          sourceIdList.elements()->asScalar().scalarDescriptor().offset(),
+          sourceIdLists.inMapDescriptorAt(0).offset(),
+          // Missing key 3: offsets, lengths, elements, and in-map.
+          UINT32_MAX,
+          UINT32_MAX,
+          UINT32_MAX,
+          UINT32_MAX,
+          sourceScoreMaps.nullsDescriptor().offset(),
+          sourceScoreMap.offsetsDescriptor().offset(),
+          sourceScoreMap.lengthsDescriptor().offset(),
+          sourceScoreMap.keys()->asScalar().scalarDescriptor().offset(),
+          sourceScoreMap.values()->asScalar().scalarDescriptor().offset(),
+          sourceScoreMaps.inMapDescriptorAt(0).offset()));
+  EXPECT_EQ(
+      projectionStreamOffsets(*projection.nimbleType).size(),
+      projection.streamOffsets.size());
 }
 
 TEST(SchemaUtilsTest, projectionEmptySubfieldsFails) {

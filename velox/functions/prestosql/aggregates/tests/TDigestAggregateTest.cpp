@@ -55,7 +55,10 @@ TEST_F(TDigestAggregateTest, testAggregation) {
   createDuckDbTable({vectors});
   auto expected = createExpectedVector(
       "AQAAAAAAAADwPwAAAAAAABRAAAAAAAAALkAAAAAAAABZQAAAAAAAABRABQAAAAAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAABAAAAAAAAACEAAAAAAAAAQQAAAAAAAABRA");
-  testAggregations({vectors}, {}, {"tdigest_agg(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"tdigest_agg(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(TDigestAggregateTest, testAggregationWithWeight) {
@@ -68,7 +71,10 @@ TEST_F(TDigestAggregateTest, testAggregationWithWeight) {
   createDuckDbTable({vectors});
   auto expected = createExpectedVector(
       "AQAAAAAAAADwPwAAAAAAABRAAAAAAAAAPkAAAAAAAABZQAAAAAAAACRABQAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAEAAAAAAAADwPwAAAAAAAABAAAAAAAAACEAAAAAAAAAQQAAAAAAAABRA");
-  testAggregations({vectors}, {}, {"tdigest_agg(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"tdigest_agg(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(TDigestAggregateTest, testAggregationWithWeightAndCompression) {
@@ -83,7 +89,10 @@ TEST_F(TDigestAggregateTest, testAggregationWithWeightAndCompression) {
   createDuckDbTable({vectors});
   auto expected = createExpectedVector(
       "AQAAAAAAAADwPwAAAAAAABRAAAAAAAAAPkAAAAAAAABJQAAAAAAAACRABQAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAEAAAAAAAADwPwAAAAAAAABAAAAAAAAACEAAAAAAAAAQQAAAAAAAABRA");
-  testAggregations({vectors}, {}, {"tdigest_agg(c0, c1, c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"tdigest_agg(c0, c1, c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(TDigestAggregateTest, testAggregationWithVaryingWeights) {
@@ -94,7 +103,10 @@ TEST_F(TDigestAggregateTest, testAggregationWithVaryingWeights) {
   createDuckDbTable({vectors});
   auto expected = createExpectedVector(
       "AQAAAAAAAADwPwAAAAAAABRAAAAAAACAS0AAAAAAAABZQAAAAAAAAC5ABQAAAAAAAAAAAPA/AAAAAAAAAEAAAAAAAAAIQAAAAAAAABBAAAAAAAAAFEAAAAAAAADwPwAAAAAAAABAAAAAAAAACEAAAAAAAAAQQAAAAAAAABRA");
-  testAggregations({vectors}, {}, {"tdigest_agg(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"tdigest_agg(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(TDigestAggregateTest, testAggregationWithVaryingCompression) {
@@ -106,9 +118,10 @@ TEST_F(TDigestAggregateTest, testAggregationWithVaryingCompression) {
        makeConstant<int64_t>(weight, static_cast<vector_size_t>(inputs.size())),
        makeFlatVector<double>(compression)});
   createDuckDbTable({vectors});
-  VELOX_ASSERT_THROW(
-      testAggregations({vectors}, {}, {"tdigest_agg(c0, c1, c2)"}, {""}),
-      "Compression factor must be same for all rows");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"tdigest_agg(c0, c1, c2)"})
+      .assertError("Compression factor must be same for all rows");
 }
 
 TEST_F(TDigestAggregateTest, testAggregationMap) {
@@ -124,11 +137,10 @@ TEST_F(TDigestAggregateTest, testAggregationMap) {
   createDuckDbTable({vectors});
   //   auto expected = makeRowVector({makeAllNullFlatVector<Varbinary>(1)});
   //  facebook::velox::TDigestType::get(DOUBLE())});
-  testAggregations(
-      {vectors},
-      {},
-      {"tdigest_agg(c0, c1, c2) filter (where c3)"},
-      {"VALUES (NULL)"});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"tdigest_agg(c0, c1, c2) filter (where c3)"})
+      .assertResults("VALUES (NULL)");
 }
 
 } // namespace facebook::velox::aggregate::test

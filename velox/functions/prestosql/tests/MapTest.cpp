@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <functional>
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -63,7 +64,7 @@ class MapTest : public FunctionBaseTest {
     // Case 4: Check for duplicate NaNs when the keys vector wrapped in a
     // dictionary.
     VectorPtr keysInDictionary =
-        wrapInDictionary(makeIndices(1, folly::identity), keysDifferentNaNs);
+        wrapInDictionary(makeIndices(1, std::identity{}), keysDifferentNaNs);
     checkDuplicate(
         keysInDictionary, "Duplicate map keys (NaN) are not allowed");
     // Case 5: Check for equality of +0.0 and -0.0.
@@ -567,7 +568,7 @@ TEST_F(MapTest, timestampWithTimeZone) {
 
   // Check for duplicate keys when the keys vector wrapped in a dictionary.
   VectorPtr keysInDictionary =
-      wrapInDictionary(makeIndices(1, folly::identity), keysDifferentTimeZones);
+      wrapInDictionary(makeIndices(1, std::identity{}), keysDifferentTimeZones);
   checkDuplicate(
       keysInDictionary, "Duplicate map keys (12294) are not allowed");
 

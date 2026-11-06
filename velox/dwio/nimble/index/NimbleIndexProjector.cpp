@@ -265,15 +265,6 @@ NimbleIndexProjector::NimbleIndexProjector(
       numStripes_{tablet_->stripeCount()},
       projection_{std::move(projection)},
       hasProjectedHybridFlatMaps_{hasProjectedHybridFlatMaps(*projection_)},
-      streamSlicer_{std::make_unique<serde::StreamSlicer>(
-          projection_->nimbleType,
-          pool_,
-          serde::StreamSlicer::Options{
-              .streamVersion = SerializationVersion::kTablet,
-              .streamHasChunkHeader = true,
-              .streamsUseVarintRowCount =
-                  tablet_->properties().compactRowCountEncoding(),
-          })},
       dataInput_{std::move(dataInput)} {
   NIMBLE_CHECK_NOT_NULL(
       clusterIndex_, "NimbleIndexProjector requires a tablet with an index");
@@ -300,8 +291,8 @@ NimbleIndexProjector::NimbleIndexProjector(
 
   NIMBLE_CHECK_EQ(
       projection_->streamOffsets.size(),
-      projection_->rowOrFlatMapNullStreams.size(),
-      "Projected stream offsets and Row/FlatMap null stream mask must align");
+      projection_->barrierStreams.size(),
+      "Projected stream offsets and barrier stream mask must align");
 }
 
 NimbleIndexProjector::~NimbleIndexProjector() = default;
@@ -1202,6 +1193,21 @@ NimbleIndexProjector::processStripeStreams() {
   return result;
 }
 
+serde::StreamSlicer& NimbleIndexProjector::streamSlicer() {
+  if (streamSlicer_ == nullptr) {
+    streamSlicer_ = std::make_unique<serde::StreamSlicer>(
+        projection_->nimbleType,
+        pool_,
+        serde::StreamSlicer::Options{
+            .streamVersion = SerializationVersion::kTablet,
+            .streamHasChunkHeader = true,
+            .streamsUseVarintRowCount =
+                tablet_->properties().compactRowCountEncoding(),
+        });
+  }
+  return *streamSlicer_;
+}
+
 void NimbleIndexProjector::validateProjection() const {
   NIMBLE_CHECK_EQ(
       projection_->nimbleType->kind(),
@@ -1290,7 +1296,7 @@ NimbleIndexProjector::StripeStreams NimbleIndexProjector::locateStripeStreams(
     }
     ++streams.numStreams;
     streams.projectedBytes += stream.size;
-    if (projection_->rowOrFlatMapNullStreams[i]) {
+    if (projection_->barrierStreams[i]) {
       // A present barrier-sensitive stream also requires isolated decoding.
       streams.requiredBarrier = true;
     }
@@ -1599,7 +1605,7 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
       packRange.numRows(), 0, "Partial stripe range must not be empty");
   const auto& loadedStreams =
       collectStripeStreamViews(stripeOffset, /*resolveCanonicalStreams=*/false);
-  auto sliced = streamSlicer_->slice(
+  auto sliced = streamSlicer().slice(
       loadedStreams.streams,
       packRange.startRow,
       packRange.numRows(),

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include "velox/common/base/SplitBlockBloomFilter.h"
 
 #include <folly/Benchmark.h>
@@ -104,7 +106,7 @@ int main(int argc, char* argv[]) {
   VELOX_BENCHMARK(
       makeBenchmark<int64_t>,
       int64_nohash,
-      folly::identity,
+      std::identity{},
       0.01,
       5'000'000,
       10'000'000);
@@ -125,7 +127,7 @@ int main(int argc, char* argv[]) {
   VELOX_BENCHMARK(
       makeBenchmark<int64_t>,
       int64_nohash_small,
-      folly::identity,
+      std::identity{},
       0.01,
       500'000,
       1'000'000);
@@ -146,7 +148,7 @@ int main(int argc, char* argv[]) {
   VELOX_BENCHMARK(
       makeBenchmark<int64_t>,
       int64_nohash_large,
-      folly::identity,
+      std::identity{},
       0.01,
       50'000'000,
       100'000'000);

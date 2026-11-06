@@ -21,10 +21,10 @@
 #include <set>
 
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/LocalFixedPoint.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::exec {
@@ -43,128 +43,10 @@ class VectorSearchTest : public HiveConnectorTestBase {
     RowVectorPtr indexes;
   };
 
-  // Returns a plan of spherical k-means over 'points' (ds, id, embedding),
-  // which produces the centroids (ds, cluster_id, centroid). It uses
-  // relational plans only, as a library of algorithms would provide it.
-  //  - Seeds: the first point of each group. PALM seeds with random points
-  //    instead, which can put two seeds in one group, split it across
-  //    clusters and make a search that probes one cluster miss nearest
-  //    points.
-  //  - Iteration: assigns each point to the most similar centroid of its
-  //    partition, then averages and normalizes each cluster's points. A
-  //    cluster with no points keeps its centroid.
-  //  - Stops when no centroid moves.
-  PlanBuilder kMeans(const RowVectorPtr& points) {
-    PlanBuilder plan(pool());
-    // 'movement' is how far the centroid moved in the last iteration: one
-    // minus the cosine similarity of its old and new positions.
-    auto centroidsType = ROW({
-        {"ds", VARCHAR()},
-        {"cluster_id", BIGINT()},
-        {"centroid", ARRAY(REAL())},
-        {"movement", REAL()},
-    });
-    const auto normalize = [](const std::string& column) {
-      return fmt::format(
-          "transform({0}, x -> (x / l2_norm({0})::REAL))", column);
-    };
-
-    // The points are a state entry because the iteration's plan must start
-    // with a state source.
-    return plan
-        .fixedPoint(
-            {
-                std::make_shared<core::VectorStateDeclaration>(
-                    "points",
-                    points->rowType(),
-                    plan.newPlan()
-                        .values({points})
-                        .project({
-                            "ds",
-                            "id",
-                            normalize("embedding") + " AS embedding",
-                        })
-                        .planNode()),
-                std::make_shared<core::VectorStateDeclaration>(
-                    "centroids",
-                    centroidsType,
-                    plan.newPlan()
-                        .values({points})
-                        .filter("id % 10 = 0")
-                        .project({
-                            "ds",
-                            "id % 100 / 10 AS cluster_id",
-                            normalize("embedding") + " AS centroid",
-                            "0::REAL AS movement",
-                        })
-                        .planNode()),
-            },
-            plan.newPlan()
-                .stateSource("points", points->rowType())
-                .hashJoin(
-                    {"ds"},
-                    {"c_ds"},
-                    plan.newPlan()
-                        .stateSource("centroids", centroidsType)
-                        .project({"ds AS c_ds", "cluster_id", "centroid"})
-                        .planNode(),
-                    /*filter=*/"",
-                    {"ds", "id", "embedding", "cluster_id", "centroid"})
-                .project({
-                    "ds",
-                    "id",
-                    "embedding",
-                    "cluster_id",
-                    "cosine_similarity(embedding, centroid) AS score",
-                })
-                .singleAggregation(
-                    {"ds", "id"},
-                    {
-                        "max_by(cluster_id, score) AS cluster_id",
-                        "arbitrary(embedding) AS embedding",
-                    })
-                .singleAggregation(
-                    {"ds", "cluster_id"}, {"vector_sum(embedding) AS sum"})
-                .project({
-                    "ds AS new_ds",
-                    "cluster_id AS new_cluster_id",
-                    normalize("sum") + " AS new_centroid",
-                })
-                // The RIGHT join keeps the clusters that drew no points.
-                .hashJoin(
-                    {"new_ds", "new_cluster_id"},
-                    {"ds", "cluster_id"},
-                    plan.newPlan()
-                        .stateSource("centroids", centroidsType)
-                        .project(
-                            {"ds", "cluster_id", "centroid AS old_centroid"})
-                        .planNode(),
-                    /*filter=*/"",
-                    {"ds", "cluster_id", "old_centroid", "new_centroid"},
-                    core::JoinType::kRight)
-                .project({
-                    "ds",
-                    "cluster_id",
-                    "coalesce(new_centroid, old_centroid) AS centroid",
-                    "coalesce(1::REAL - "
-                    "cosine_similarity(old_centroid, new_centroid), "
-                    "0::REAL) AS movement",
-                }),
-            core::ConvergenceConfig::converging(
-                plan.newPlan()
-                    .stateSource("centroids", centroidsType)
-                    .singleAggregation({}, {"max(movement)"})
-                    .project({"a0 <= 1e-6 AS converged"})
-                    .planNode(),
-                /*maxIterations=*/20),
-            "centroids")
-        .project({"ds", "cluster_id", "centroid"});
-  }
-
   // Runs the plans of CREATE VECTOR INDEX ... AS SELECT over points given by
   // their partitions 'ds', 'ids' and 'embeddings'. Two writes:
-  //  - the codec table: kMeans() with its centroids packed into a codec per
-  //    partition, with a new codec id;
+  //  - the codec table: a codec per partition, trained on its points, with a
+  //    new codec id;
   //  - the index table: each point assigned to the nearest cluster of its
   //    partition's codec, then a local index per group of a cluster's points.
   VectorIndex createVectorIndex(
@@ -176,15 +58,16 @@ class VectorSearchTest : public HiveConnectorTestBase {
         {"id", makeFlatVector(ids)},
         {"embedding", makeArrayVector(embeddings)},
     });
-    auto codecs = run(
-        kMeans(points)
-            .singleAggregation(
-                {"ds"},
-                {"vector_index_pack(cluster_id, centroid, 'cosine') AS codec"})
-            .rowNumber({})
-            .project({"codec", "ds", "row_number AS codec_id"}));
-
     PlanBuilder plan(pool());
+    auto codecs =
+        run(plan.newPlan()
+                .values({points})
+                .singleAggregation(
+                    {"ds"},
+                    {"vector_index_train(embedding, id, 3, 'cosine') AS codec"})
+                .rowNumber({})
+                .project({"codec", "ds", "row_number AS codec_id"}));
+
     auto indexes =
         run(plan.values({points})
                 .hashJoin(
@@ -368,9 +251,22 @@ class VectorSearchTest : public HiveConnectorTestBase {
     return makeRowVector({makeFlatVector(qids), makeFlatVector(ids)});
   }
 
+  // Returns a context for a query that reads the "faiss" format.
+  std::shared_ptr<core::QueryCtx> makeQueryCtx() {
+    auto formats =
+        std::make_shared<common::vectorindex::LocalVectorIndexFormats>();
+    formats->insert(
+        std::string(common::vectorindex::FaissLocalVectorIndex::kFormat),
+        common::vectorindex::FaissLocalVectorIndex::format());
+    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    queryCtx->setRegistry(
+        common::vectorindex::LocalVectorIndexFormat::kRegistryKey, formats);
+    return queryCtx;
+  }
+
   RowVectorPtr run(const PlanBuilder& plan) {
     return AssertQueryBuilder(plan.planNode())
-        .fixedPointOptions(&LocalFixedPoint::options())
+        .queryCtx(makeQueryCtx())
         .copyResults(pool());
   }
 
@@ -472,6 +368,7 @@ TEST_F(VectorSearchTest, bucketedSearch) {
 
   const auto matches =
       AssertQueryBuilder(searchLocalIndexes(probe, indexes, /*k=*/3).planNode())
+          .queryCtx(makeQueryCtx())
           .splits(queriesScanId, queriesSplits)
           .splits(indexesScanId, writeBucketed(index.indexes))
           .executionStrategy(core::ExecutionStrategy::kGrouped)

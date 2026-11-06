@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
+#include <atomic>
 #include <numeric>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -28,15 +29,42 @@ namespace {
 using namespace facebook::velox::exec::test;
 
 using common::vectorindex::Embeddings;
+using common::vectorindex::FaissLocalVectorIndex;
 using common::vectorindex::LocalVectorIndex;
+using common::vectorindex::LocalVectorIndexFormat;
+using common::vectorindex::LocalVectorIndexFormats;
 using common::vectorindex::LocalVectorIndexOptions;
+using common::vectorindex::LocalVectorIndexReader;
 using common::vectorindex::VectorIndexKind;
 using common::vectorindex::VectorIndexMetric;
 
 class VectorSearchJoinTest : public OperatorTestBase {
  protected:
+  void SetUp() override {
+    OperatorTestBase::SetUp();
+    auto formats = std::make_shared<LocalVectorIndexFormats>();
+    formats->insert(
+        std::string(FaissLocalVectorIndex::kFormat),
+        FaissLocalVectorIndex::format());
+    queryCtx_ = core::QueryCtx::create(driverExecutor_.get());
+    queryCtx_->setRegistry(LocalVectorIndexFormat::kRegistryKey, formats);
+  }
+
+  void TearDown() override {
+    queryCtx_.reset();
+    OperatorTestBase::TearDown();
+  }
+
+  // Returns a builder that runs 'plan' with the query's local vector index
+  // formats.
+  AssertQueryBuilder queryBuilder(const core::PlanNodePtr& plan) const {
+    AssertQueryBuilder builder(plan);
+    builder.queryCtx(queryCtx_);
+    return builder;
+  }
+
   // Packs 2-dimensional unit-length centroids given in cluster-id order into a
-  // codec, as vector_index_pack does.
+  // codec, as vector_index_train returns it.
   static std::string pack(const std::vector<float>& centroids) {
     std::vector<int64_t> clusterIds(centroids.size() / 2);
     std::iota(clusterIds.begin(), clusterIds.end(), 0);
@@ -50,7 +78,7 @@ class VectorSearchJoinTest : public OperatorTestBase {
       VectorIndexKind kind = VectorIndexKind::kIvfFlat,
       int32_t dimension = 2) {
     std::string bytes;
-    LocalVectorIndex::build(
+    FaissLocalVectorIndex::build(
         kind,
         VectorIndexMetric::kCosine,
         LocalVectorIndexOptions{},
@@ -128,17 +156,20 @@ class VectorSearchJoinTest : public OperatorTestBase {
         makeFlatVector<float>({1, 0.6, 1, 0.8, 0}),
     });
   }
+
+  // The context of the test's queries, which read the "faiss" format.
+  std::shared_ptr<core::QueryCtx> queryCtx_;
 };
 
 TEST_F(VectorSearchJoinTest, codec) {
-  AssertQueryBuilder(makeCodecPlan(makeCodecProbe(), makeCodecs()))
+  queryBuilder(makeCodecPlan(makeCodecProbe(), makeCodecs()))
       .assertResults(makeCodecResults());
 }
 
 TEST_F(VectorSearchJoinTest, driversAndBatches) {
   // The build rows come from several build drivers, and the results fill
   // several output batches.
-  AssertQueryBuilder(makeCodecPlan(makeCodecProbe(), makeCodecs()))
+  queryBuilder(makeCodecPlan(makeCodecProbe(), makeCodecs()))
       .maxDrivers(4)
       .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
       .assertResults(makeCodecResults());
@@ -170,7 +201,7 @@ TEST_F(VectorSearchJoinTest, noKeys) {
               "cluster_id")
           .planNode();
 
-  AssertQueryBuilder(plan).assertResults(makeRowVector({
+  queryBuilder(plan).assertResults(makeRowVector({
       makeFlatVector<int64_t>({0, 1}),
       makeFlatVector<int64_t>({0, 1}),
   }));
@@ -185,7 +216,7 @@ TEST_F(VectorSearchJoinTest, probeEncodings) {
           makeFlatVector<int64_t>({1, 1}),
           BaseVector::createNullConstant(ARRAY(REAL()), 2, pool()),
       });
-  AssertQueryBuilder(makeCodecPlan(probe, makeCodecs(), core::JoinType::kLeft))
+  queryBuilder(makeCodecPlan(probe, makeCodecs(), core::JoinType::kLeft))
       .assertResults(makeRowVector({
           makeFlatVector<int64_t>({0, 1}),
           makeNullConstant(TypeKind::BIGINT, 2),
@@ -201,7 +232,7 @@ TEST_F(VectorSearchJoinTest, probeEncodings) {
           wrapInDictionary(
               makeIndices({1, 0}), makeArrayVector<float>({{1, 0}, {0, 1}})),
       });
-  AssertQueryBuilder(makeCodecPlan(probe, makeCodecs()))
+  queryBuilder(makeCodecPlan(probe, makeCodecs()))
       .assertResults(makeRowVector({
           makeFlatVector<int64_t>({0, 0, 1, 1}),
           makeFlatVector<int64_t>({2, 1, 0, 1}),
@@ -220,7 +251,7 @@ TEST_F(VectorSearchJoinTest, leftJoin) {
               {{{1, 0}}, std::nullopt, {{1, 0}}, {{1, 0}}}),
       });
 
-  AssertQueryBuilder(makeCodecPlan(probe, makeCodecs(), core::JoinType::kLeft))
+  queryBuilder(makeCodecPlan(probe, makeCodecs(), core::JoinType::kLeft))
       .assertResults(makeRowVector({
           makeFlatVector<int64_t>({0, 1, 2, 3}),
           makeNullableFlatVector<int64_t>(
@@ -249,11 +280,11 @@ TEST_F(VectorSearchJoinTest, emptyBuild) {
   const std::vector<std::string> outputLayout{
       "t0", "c_ds", "cluster_id", "score"};
 
-  AssertQueryBuilder(
+  queryBuilder(
       makeCodecPlan(probe, {codecs}, core::JoinType::kInner, outputLayout))
       .assertEmptyResults();
 
-  AssertQueryBuilder(
+  queryBuilder(
       makeCodecPlan(probe, {codecs}, core::JoinType::kLeft, outputLayout))
       .assertResults(makeRowVector({
           makeFlatVector<int64_t>({0, 1}),
@@ -303,11 +334,90 @@ TEST_F(VectorSearchJoinTest, localIndexes) {
               {{std::string(LocalVectorIndexOptions::kNprobe), "1"}})
           .planNode();
 
-  AssertQueryBuilder(plan).assertResults(makeRowVector({
+  queryBuilder(plan).assertResults(makeRowVector({
       makeFlatVector<int64_t>({10, 20, 30, 40}),
       makeFlatVector<int64_t>({0, 0, 0, 1}),
       makeFlatVector<int64_t>({0, 0, 1, 0}),
   }));
+}
+
+// A search reads its indexes with the format it names, among the query's
+// formats. The format checks the search's settings before reading any index. A
+// format the query does not have fails.
+TEST_F(VectorSearchJoinTest, format) {
+  // Reads indexes as "faiss" does and counts them.
+  class CountingReader : public LocalVectorIndexReader {
+   public:
+    CountingReader(
+        std::unique_ptr<LocalVectorIndexReader> faiss,
+        std::atomic<int32_t>& numOpened)
+        : faiss_{std::move(faiss)}, numOpened_{numOpened} {}
+
+    std::unique_ptr<LocalVectorIndex> open(
+        std::string_view bytes) const override {
+      ++numOpened_;
+      return faiss_->open(bytes);
+    }
+
+   private:
+    const std::unique_ptr<LocalVectorIndexReader> faiss_;
+    std::atomic<int32_t>& numOpened_;
+  };
+
+  class CountingFormat : public LocalVectorIndexFormat {
+   public:
+    std::unique_ptr<LocalVectorIndexReader> makeReader(
+        VectorIndexMetric metric,
+        const LocalVectorIndex::SearchOptions& searchOptions) const override {
+      return std::make_unique<CountingReader>(
+          FaissLocalVectorIndex::format()->makeReader(metric, searchOptions),
+          numOpened);
+    }
+
+    mutable std::atomic<int32_t> numOpened{0};
+  };
+  const auto counting = std::make_shared<CountingFormat>();
+  queryCtx_
+      ->registry<LocalVectorIndexFormats>(LocalVectorIndexFormat::kRegistryKey)
+      ->insert("counting", counting);
+
+  const auto makePlan = [&](const std::string& format,
+                            LocalVectorIndex::SearchOptions searchOptions) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({makeCodecProbe()})
+        .vectorSearchJoin(
+            {"ds"},
+            {"c_ds"},
+            PlanBuilder(planNodeIdGenerator).values(makeCodecs()).planNode(),
+            "embedding",
+            "codec",
+            /*k=*/2,
+            {"t0", "cluster_id", "score"},
+            "cluster_id",
+            "score",
+            core::JoinType::kInner,
+            std::move(searchOptions),
+            VectorIndexMetric::kCosine,
+            format)
+        .planNode();
+  };
+
+  // The codecs of partitions 1 and 2 can match; the others have a null
+  // partition or a null codec.
+  const auto expected = queryBuilder(makePlan("faiss", {})).copyResults(pool());
+  queryBuilder(makePlan("counting", {})).assertResults(expected);
+  EXPECT_EQ(2, counting->numOpened);
+
+  VELOX_ASSERT_USER_THROW(
+      queryBuilder(makePlan("counting", {{"ivf.nlist", "4"}}))
+          .copyResults(pool()),
+      "Vector index option is not a search setting: ivf.nlist");
+  EXPECT_EQ(2, counting->numOpened);
+
+  VELOX_ASSERT_USER_THROW(
+      queryBuilder(makePlan("no_such_format", {})).copyResults(pool()),
+      "Local vector index format is not registered: no_such_format");
 }
 
 TEST_F(VectorSearchJoinTest, errors) {
@@ -319,8 +429,7 @@ TEST_F(VectorSearchJoinTest, errors) {
           makeArrayVector<float>({{1, 0, 0}}),
       });
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(makeCodecPlan(probe, makeCodecs()))
-          .copyResults(pool()),
+      queryBuilder(makeCodecPlan(probe, makeCodecs())).copyResults(pool()),
       "Query embedding length must match the vector index's");
 
   probe = makeRowVector(
@@ -333,8 +442,7 @@ TEST_F(VectorSearchJoinTest, errors) {
                   {{1, std::nullopt}}}),
       });
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(makeCodecPlan(probe, makeCodecs()))
-          .copyResults(pool()),
+      queryBuilder(makeCodecPlan(probe, makeCodecs())).copyResults(pool()),
       "Query embedding must not contain nulls");
 
   auto codecs = makeRowVector(
@@ -344,7 +452,7 @@ TEST_F(VectorSearchJoinTest, errors) {
           makeFlatVector<std::string>({"not a codec"}, VARBINARY()),
       });
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(makeCodecPlan(probe, {codecs})).copyResults(pool()),
+      queryBuilder(makeCodecPlan(probe, {codecs})).copyResults(pool()),
       "Invalid local vector index");
 
   codecs = makeRowVector(
@@ -356,7 +464,7 @@ TEST_F(VectorSearchJoinTest, errors) {
               VARBINARY()),
       });
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(makeCodecPlan(probe, {codecs})).copyResults(pool()),
+      queryBuilder(makeCodecPlan(probe, {codecs})).copyResults(pool()),
       "Vector search join indexes must have the same dimension");
 }
 
@@ -476,23 +584,6 @@ TEST_F(VectorSearchJoinTest, planValidation) {
               {"t0"},
               /*id=*/"cluster_id"),
       "Vector search join id or score is not an output column: cluster_id");
-
-  VELOX_ASSERT_THROW(
-      PlanBuilder(planNodeIdGenerator)
-          .values({probe})
-          .vectorSearchJoin(
-              {"t0"},
-              {"c0"},
-              PlanBuilder(planNodeIdGenerator).values({codecs}).planNode(),
-              "embedding",
-              "codec",
-              /*k=*/1,
-              {"t0", "cluster_id"},
-              /*id=*/"cluster_id",
-              /*score=*/std::nullopt,
-              core::JoinType::kInner,
-              {{"ivf.nlist", "4"}}),
-      "Vector index option is not a search setting: ivf.nlist");
 }
 
 } // namespace
