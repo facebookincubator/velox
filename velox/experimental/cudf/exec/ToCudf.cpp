@@ -17,8 +17,12 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfLocalMerge.h"
+#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeTranslator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/GpuCapabilities.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
@@ -34,6 +38,8 @@
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/exec/LocalPartition.h"
+#include "velox/exec/Merge.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -41,6 +47,7 @@
 #include <cuda.h>
 
 static const std::string kCudfAdapterName = "cuDF";
+static const std::string kCudfLocalBoundaryAdapterName = "cuDF-LocalBoundary";
 
 namespace facebook::velox::cudf_velox {
 
@@ -334,6 +341,50 @@ struct CudfDriverAdapter {
   }
 };
 
+/// Mechanical construction for the two local-boundary nodes still selected
+/// by core's built-in factories. Placement is already explicit in the plan.
+struct CudfLocalBoundaryAdapter {
+  bool operator()(const exec::DriverFactory& factory, exec::Driver& driver)
+      const {
+    auto findNode = [&](const core::PlanNodeId& id) -> core::PlanNodePtr {
+      for (const auto& node : factory.planNodes) {
+        if (node->id() == id) {
+          return node;
+        }
+      }
+      return factory.consumerNode && factory.consumerNode->id() == id
+          ? factory.consumerNode
+          : nullptr;
+    };
+    const auto operators = driver.operators();
+    for (int32_t i = 0; i < operators.size(); ++i) {
+      const auto* op = operators[i];
+      if (!op->is<exec::LocalPartition>() && !op->is<exec::LocalMerge>()) {
+        continue;
+      }
+      const auto node = findNode(op->planNodeId());
+      std::unique_ptr<exec::Operator> replacement;
+      if (auto partition =
+              std::dynamic_pointer_cast<const CudfLocalPartitionNode>(node);
+          partition && op->is<exec::LocalPartition>()) {
+        replacement = std::make_unique<CudfLocalPartition>(
+            op->operatorId(), driver.driverCtx(), partition);
+      } else if (auto merge =
+                     std::dynamic_pointer_cast<const CudfLocalMergeNode>(node);
+                 merge && op->is<exec::LocalMerge>()) {
+        replacement = std::make_unique<CudfLocalMerge>(
+            op->operatorId(), driver.driverCtx(), merge);
+      }
+      if (replacement) {
+        std::vector<std::unique_ptr<exec::Operator>> replacements;
+        replacements.push_back(std::move(replacement));
+        factory.replaceOperators(driver, i, i + 1, std::move(replacements));
+      }
+    }
+    return false;
+  }
+};
+
 static bool isCudfRegistered = false;
 
 bool cudfIsRegistered() {
@@ -345,8 +396,12 @@ void registerCudf() {
     return;
   }
 
-  // Register operator adapters
-  registerAllOperatorAdapters();
+  // The physical-plan path does not depend on the legacy operator-adapter
+  // registry. Keep it entirely out of that path so missing plan-node coverage
+  // cannot be hidden by post-planning replacement.
+  if (CudfConfig::getInstance().enableDriverAdapter) {
+    registerAllOperatorAdapters();
+  }
 
   auto prefix = CudfConfig::getInstance().functionNamePrefix;
   registerBuiltinFunctions(prefix);
@@ -388,11 +443,37 @@ void registerCudf() {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
+
+  exec::Operator::registerOperator(std::make_unique<CudfPlanNodeTranslator>());
+
   exec::Operator::registerOperator(
       std::make_unique<CudfNestedLoopJoinBridgeTranslator>());
   CudfDriverAdapter cda;
-  exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
-  exec::DriverFactory::registerAdapter(cudfAdapter);
+  if (CudfConfig::getInstance().enableDriverAdapter) {
+    exec::DriverAdapter cudfAdapter{
+        kCudfAdapterName,
+        [](const core::PlanFragment& fragment) {
+          const auto* physical = core::PlanNode::findFirstNode(
+              fragment.planNode.get(), [](const core::PlanNode* node) {
+                return dynamic_cast<const CudfPlanNode*>(node) ||
+                    dynamic_cast<const CudfLocalPartitionNode*>(node) ||
+                    dynamic_cast<const CudfLocalMergeNode*>(node);
+              });
+          VELOX_USER_CHECK(
+              physical == nullptr,
+              "Disable cudf.driver_adapter_enabled before executing physical cuDF plans");
+        },
+        cda};
+    exec::DriverFactory::registerAdapter(cudfAdapter);
+  }
+  if (!CudfConfig::getInstance().enableDriverAdapter) {
+    // These explicit nodes require mechanical replacement until LocalPlanner
+    // exposes custom local-boundary construction. This is not optional: the
+    // built-in operators cannot consume CudfVectors.
+    exec::DriverAdapter cudfLocalBoundaryAdapter{
+        kCudfLocalBoundaryAdapterName, {}, CudfLocalBoundaryAdapter()};
+    exec::DriverFactory::registerAdapter(cudfLocalBoundaryAdapter);
+  }
 
   if (CudfConfig::getInstance().astExpressionEnabled) {
     registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
@@ -432,7 +513,8 @@ void unregisterCudf() {
           exec::DriverFactory::adapters.begin(),
           exec::DriverFactory::adapters.end(),
           [](const exec::DriverAdapter& adapter) {
-            return adapter.label == kCudfAdapterName;
+            return adapter.label == kCudfAdapterName ||
+                adapter.label == kCudfLocalBoundaryAdapterName;
           }),
       exec::DriverFactory::adapters.end());
 
@@ -448,6 +530,13 @@ void CudfConfig::initialize(
     std::unordered_map<std::string, std::string>&& config) {
   if (config.find(kCudfEnabled) != config.end()) {
     enabled = folly::to<bool>(config[kCudfEnabled]);
+  }
+  if (config.find(kCudfDriverAdapterEnabled) != config.end()) {
+    enableDriverAdapter = folly::to<bool>(config[kCudfDriverAdapterEnabled]);
+  }
+  if (config.find(kCudfMaxDrivers) != config.end()) {
+    maxDrivers = folly::to<int32_t>(config[kCudfMaxDrivers]);
+    VELOX_USER_CHECK_GT(*maxDrivers, 0, "{} must be positive", kCudfMaxDrivers);
   }
   if (config.find(kCudfDebugEnabled) != config.end()) {
     debugEnabled = folly::to<bool>(config[kCudfDebugEnabled]);
