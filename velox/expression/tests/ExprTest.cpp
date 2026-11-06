@@ -237,6 +237,43 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return result[0];
   }
 
+  // Evaluates 'sql' with and without constant folding, and with
+  // ExprSetSimplified. Verifies that each result matches 'expected'.
+  void assertEvaluateAllPaths(
+      const std::string& sql,
+      const RowVectorPtr& input,
+      const VectorPtr& expected) {
+    SCOPED_TRACE(sql);
+    const auto rowType = asRowType(input->type());
+    assertEqualVectors(expected, evaluate(sql, input));
+    assertEqualVectors(
+        expected,
+        evaluate(compileNoConstantFolding(sql, rowType).get(), input));
+    assertEqualVectors(
+        expected,
+        evaluate<exec::ExprSetSimplified>(
+            compileExpression<exec::ExprSetSimplified>(sql, rowType).get(),
+            input));
+  }
+
+  // Like assertEvaluateAllPaths, but verifies that each evaluation throws an
+  // error with 'message'.
+  void assertErrorAllPaths(
+      const std::string& sql,
+      const RowVectorPtr& input,
+      const std::string& message) {
+    SCOPED_TRACE(sql);
+    const auto rowType = asRowType(input->type());
+    VELOX_ASSERT_THROW(evaluate(sql, input), message);
+    VELOX_ASSERT_THROW(
+        evaluate(compileNoConstantFolding(sql, rowType).get(), input), message);
+    VELOX_ASSERT_THROW(
+        evaluate<exec::ExprSetSimplified>(
+            compileExpression<exec::ExprSetSimplified>(sql, rowType).get(),
+            input),
+        message);
+  }
+
   template <typename T = exec::ExprSet>
   void evalWithEmptyRows(
       const std::string& expr,
@@ -2060,7 +2097,8 @@ TEST_P(ParameterizedExprTest, caseExprExceptionHandling) {
   // All THEN/ELSE reference c0, subject is c0, WHEN value uses c0 → subset
   // of THEN/ELSE fields → propagatesNulls_ is true.
   // Rows where c0 is null are pre-deselected so always_throws_bigint is never
-  // called for them, and they return null cleanly.
+  // called for them, and they return null cleanly. THEN and ELSE differ, so
+  // the WHEN-value error is kept on non-null rows.
   //
   // c0 = {0, null, 2}.
   {
@@ -2070,16 +2108,38 @@ TEST_P(ParameterizedExprTest, caseExprExceptionHandling) {
     // Without try: non-null rows call always_throws_bigint → throws.
     VELOX_ASSERT_THROW(
         evaluate(
-            "case c0 when always_throws_bigint(c0) then c0 else c0 end", input),
+            "case c0 when always_throws_bigint(c0) then c0 else c0 + 1 end",
+            input),
         "");
 
     // With try: non-null rows → error → null; null row → propagation → null.
     auto result = evaluate(
-        "try(case c0 when always_throws_bigint(c0) then c0 else c0 end)",
+        "try(case c0 when always_throws_bigint(c0) then c0 else c0 + 1 end)",
         input);
     EXPECT_TRUE(result->isNullAt(0));
     EXPECT_TRUE(result->isNullAt(1));
     EXPECT_TRUE(result->isNullAt(2));
+  }
+
+  // Null propagation masks subject exceptions.
+  // c0 is lazy and c1 is a second field, so the rows where c0 is null reach
+  // CASE, which deselects them before evaluating the subject. The subject
+  // fails only on these rows.
+  //
+  // c0 = {0, null, 4}, c1 = {10, 20, 30}.
+  {
+    auto input = makeRowVector(
+        {makeLazyFlatVector<int64_t>(
+             3,
+             [](auto row) { return row * 2; },
+             [](auto row) { return row == 1; }),
+         makeFlatVector<int64_t>({10, 20, 30})});
+    auto result = evaluate(
+        "case coalesce(c0, always_throws_bigint(1)) when 0 then c0 + c1 "
+        "when 2 then c0 - c1 else c0 * c1 end",
+        input);
+    assertEqualVectors(
+        makeNullableFlatVector<int64_t>({10, std::nullopt, 120}), result);
   }
 
   // THEN/ELSE exception with null subject, without null propagation.
@@ -2236,7 +2296,7 @@ TEST_P(ParameterizedExprTest, switchSetNullsForThrowIndices) {
   {
     auto input = vectorMaker_.flatVector<int64_t>({1, 1, 1, 4, 4});
     auto result = eval(
-        "if(always_throws(c0), row_constructor(1,2), row_constructor(1,2))",
+        "if(always_throws(c0), row_constructor(1,2), row_constructor(3,4))",
         vectorMaker_.rowVector({input}));
     EXPECT_EQ(result->size(), input->size());
     for (int i = 0; i < input->size(); i++) {
@@ -2258,13 +2318,245 @@ TEST_P(ParameterizedExprTest, switchSetNullsForThrowIndices) {
   {
     auto input = vectorMaker_.flatVector<int64_t>({1, 1, 1, 4, 4});
     auto result = eval(
-        "if(throw_at_odd(c0), array_constructor(1,2), array_constructor(1,2))",
+        "if(throw_at_odd(c0), array_constructor(1,2), array_constructor(3,4))",
         vectorMaker_.rowVector({input}));
     EXPECT_EQ(result->size(), input->size());
     for (int i = 0; i < input->size(); i++) {
       EXPECT_EQ(result->isNullAt(i), input->valueAt(i) % 2);
     }
   }
+}
+
+// A row where a condition fails still gets a value when all results the
+// condition can select are equal, like 'x AND false' is false even if 'x'
+// fails.
+TEST_P(ParameterizedExprTest, conditionErrorWithEqualResults) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, -2, std::nullopt, 4}),
+      makeNullableFlatVector<bool>({true, false, true, std::nullopt}),
+  });
+  const auto c0 = input->childAt(0);
+
+  // IF.
+  assertEvaluateAllPaths("if(1 / 0 = 5 AND (c1 OR true), c0, c0)", input, c0);
+  assertErrorAllPaths("if(1 / 0 = 5, c0, abs(c0))", input, "division by zero");
+  assertEvaluateAllPaths(
+      "try(if(1 / 0 = 5, c0, abs(c0)))",
+      input,
+      makeNullableFlatVector<int64_t>({1, std::nullopt, std::nullopt, 4}));
+
+  // SWITCH. A failed condition compares the value of its case with the value
+  // of the following cases.
+  assertEvaluateAllPaths(
+      "case when c0 < 0 then negate(c0) when 1 / 0 = 5 then c0 "
+      "when c1 then abs(c0) else c0 end",
+      input,
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 4}));
+  assertErrorAllPaths(
+      "case when c0 < 0 then negate(c0) when 1 / 0 = 5 then c0 + 1 "
+      "else c0 end",
+      input,
+      "division by zero");
+  assertEvaluateAllPaths(
+      "try(case when c0 < 0 then negate(c0) when 1 / 0 = 5 then c0 + 1 "
+      "else c0 end)",
+      input,
+      makeNullableFlatVector<int64_t>(
+          {std::nullopt, 2, std::nullopt, std::nullopt}));
+  // Same results whether or not constant folding removes the false condition.
+  assertEvaluateAllPaths(
+      "try(case when 1 / 0 = 5 then c0 when false then c0 + 1 "
+      "else abs(c0) end)",
+      input,
+      makeNullableFlatVector<int64_t>({1, std::nullopt, std::nullopt, 4}));
+  // Without ELSE, rows that match no case get NULL.
+  assertEvaluateAllPaths(
+      "case when 1 / 0 = 5 then cast(null as bigint) when c0 > 5 then c0 end",
+      input,
+      makeNullConstant(TypeKind::BIGINT, input->size()));
+  assertErrorAllPaths(
+      "case when 1 / 0 = 5 then c0 when c0 > 5 then c0 end",
+      input,
+      "division by zero");
+  // A true condition ends the comparison. Rows where c0 < 0 can't get the ELSE
+  // value.
+  assertEvaluateAllPaths(
+      "case when 1 / 0 = 5 then c0 when c0 < 0 then c0 else abs(c0) end",
+      input,
+      c0);
+  // A second failed condition continues the comparison.
+  assertEvaluateAllPaths(
+      "try(case when 1 / 0 = 5 then c0 when c0 / 0 = 1 then abs(c0) "
+      "else c0 end)",
+      input,
+      makeNullableFlatVector<int64_t>({1, std::nullopt, std::nullopt, 4}));
+
+  // Simple CASE. A failed subject compares the values of all cases and ELSE.
+  assertEvaluateAllPaths(
+      "case 1 / 0 when 5 then c0 when 6 then ceil(c0) else c0 end", input, c0);
+  assertErrorAllPaths(
+      "case 1 / 0 when 5 then c0 when 6 then abs(c0) else c0 end",
+      input,
+      "division by zero");
+  assertEvaluateAllPaths(
+      "try(case 1 / 0 when 5 then c0 when 6 then abs(c0) else c0 end)",
+      input,
+      makeNullableFlatVector<int64_t>({1, std::nullopt, std::nullopt, 4}));
+
+  // A failed WHEN value compares the value of its case with the value of the
+  // following cases.
+  assertEvaluateAllPaths(
+      "case c0 when 1 / 0 then c0 * 1 when 7 then c0 else c0 end", input, c0);
+  assertErrorAllPaths(
+      "case c0 when 1 / 0 then c0 + 1 when 7 then c0 else c0 end",
+      input,
+      "division by zero");
+}
+
+// The rule applies to IF inside other expressions and to an IF inside the
+// condition of another IF.
+TEST_P(ParameterizedExprTest, conditionErrorNested) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, -2, std::nullopt, 4}),
+      makeNullableFlatVector<bool>({true, false, true, std::nullopt}),
+  });
+  const auto c0 = input->childAt(0);
+
+  assertEvaluateAllPaths(
+      "if(1 / 0 = 5, c0, c0) > 0 AND c1",
+      input,
+      makeNullableFlatVector<bool>({true, false, std::nullopt, std::nullopt}));
+  assertEvaluateAllPaths(
+      "abs(if(1 / 0 = 5, c0, c0))",
+      input,
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 4}));
+
+  // The inner IF fails where c0 < 0. The outer IF returns c0 either way.
+  assertEvaluateAllPaths(
+      "if(if(1 / 0 = 5, c0, abs(c0)) > 0, c0, c0)", input, c0);
+  assertErrorAllPaths(
+      "if(if(1 / 0 = 5, c0, abs(c0)) > 0, c0, abs(c0))",
+      input,
+      "division by zero");
+  assertEvaluateAllPaths(
+      "try(if(if(1 / 0 = 5, c0, abs(c0)) > 0, c0, abs(c0)))",
+      input,
+      makeNullableFlatVector<int64_t>({1, std::nullopt, std::nullopt, 4}));
+}
+
+// A condition fails on some rows and is true or false on the others. The rows
+// where it fails get a value when all values they can get are equal. The other
+// rows get the value of the case they select.
+TEST_P(ParameterizedExprTest, conditionErrorOnSomeRows) {
+  // 10 / c1 = 5 is true on row 0, fails on rows 1 and 3, and is false on row
+  // 2. In 'input', c0 equals abs(c0) on rows 1 and 3. In 'badInput', c0 is
+  // negative on row 1.
+  const auto c1 = makeFlatVector<int64_t>({2, 0, 5, 0});
+  const auto input =
+      makeRowVector({makeFlatVector<int64_t>({-1, 2, -3, 4}), c1});
+  const auto badInput =
+      makeRowVector({makeFlatVector<int64_t>({-1, -2, -3, 4}), c1});
+
+  // SWITCH. The first case selects row 3, so the condition doesn't run there.
+  assertEvaluateAllPaths(
+      "case when c0 > 3 then negate(c0) when 10 / c1 = 5 then c0 "
+      "else abs(c0) end",
+      input,
+      makeFlatVector<int64_t>({-1, 2, 3, -4}));
+  assertErrorAllPaths(
+      "case when c0 > 3 then negate(c0) when 10 / c1 = 5 then c0 "
+      "else abs(c0) end",
+      badInput,
+      "division by zero");
+  assertEvaluateAllPaths(
+      "try(case when c0 > 3 then negate(c0) when 10 / c1 = 5 then c0 "
+      "else abs(c0) end)",
+      badInput,
+      makeNullableFlatVector<int64_t>({-1, std::nullopt, 3, -4}));
+
+  // Simple CASE whose subject fails on rows 1 and 3.
+  assertEvaluateAllPaths(
+      "case 10 / c1 when 5 then c0 when 2 then abs(c0) else c0 end",
+      input,
+      makeFlatVector<int64_t>({-1, 2, 3, 4}));
+  assertErrorAllPaths(
+      "case 10 / c1 when 5 then c0 when 2 then abs(c0) else c0 end",
+      badInput,
+      "division by zero");
+  assertEvaluateAllPaths(
+      "try(case 10 / c1 when 5 then c0 when 2 then abs(c0) else c0 end)",
+      badInput,
+      makeNullableFlatVector<int64_t>({-1, std::nullopt, 3, 4}));
+
+  // Simple CASE whose first WHEN value fails on rows 1 and 3.
+  assertEvaluateAllPaths(
+      "case 5 when 10 / c1 then c0 when 7 then c0 else abs(c0) end",
+      input,
+      makeFlatVector<int64_t>({-1, 2, 3, 4}));
+  assertErrorAllPaths(
+      "case 5 when 10 / c1 then c0 when 7 then c0 else abs(c0) end",
+      badInput,
+      "division by zero");
+  assertEvaluateAllPaths(
+      "try(case 5 when 10 / c1 then c0 when 7 then c0 else abs(c0) end)",
+      badInput,
+      makeNullableFlatVector<int64_t>({-1, std::nullopt, 3, 4}));
+
+  // The first condition fails on all rows, so each row compares c0 with the
+  // values of the following cases. Row 0 selects the second case, where
+  // abs(c0) differs. Row 2 skips the second case and gets c0 from ELSE. Rows 1
+  // and 3 compare c0 with both values.
+  assertEvaluateAllPaths(
+      "try(case when 1 / 0 = 5 then c0 when 10 / c1 = 5 then abs(c0) "
+      "else c0 end)",
+      input,
+      makeNullableFlatVector<int64_t>({std::nullopt, 2, -3, 4}));
+}
+
+// The condition fails on some rows of a dictionary-encoded input. The errors
+// must be mapped to the rows of the input.
+TEST_P(ParameterizedExprTest, conditionErrorOnDictionary) {
+  // c1 is 5, 2, 0, 5, 2, 0.
+  const auto c1 = wrapInDictionary(
+      makeIndices({2, 1, 0, 2, 1, 0}), makeFlatVector<int64_t>({0, 2, 5}));
+
+  assertEvaluateAllPaths(
+      "if(10 / c1 = 5, c0, abs(c0))",
+      makeRowVector({makeFlatVector<int64_t>({-1, -2, 3, -4, -5, 6}), c1}),
+      makeFlatVector<int64_t>({1, -2, 3, 4, -5, 6}));
+  assertErrorAllPaths(
+      "if(10 / c1 = 5, c0, abs(c0))",
+      makeRowVector({makeFlatVector<int64_t>({-1, -2, -3, -4, -5, 6}), c1}),
+      "division by zero");
+}
+
+// Arrays and rows are compared by value. A null element equals a null element.
+TEST_P(ParameterizedExprTest, conditionErrorComplexTypes) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, -2, std::nullopt, 4}),
+      makeNullableFlatVector<bool>({true, false, true, std::nullopt}),
+  });
+
+  // ceil(c0) equals c0. THEN and ELSE are different expressions, so constant
+  // folding keeps the condition. Row 2 gets [null] from both.
+  assertEvaluateAllPaths(
+      "if(1 / 0 = 5, array_constructor(c0), array_constructor(ceil(c0)))",
+      input,
+      makeArrayVectorFromJson<int64_t>({"[1]", "[-2]", "[null]", "[4]"}));
+  assertErrorAllPaths(
+      "if(1 / 0 = 5, array_constructor(c0), array_constructor(abs(c0)))",
+      input,
+      "division by zero");
+  assertEvaluateAllPaths(
+      "try(if(1 / 0 = 5, array_constructor(c0), array_constructor(abs(c0))))",
+      input,
+      makeArrayVectorFromJson<int64_t>({"[1]", "null", "[null]", "[4]"}));
+
+  // Rows 2 and 3 have a null field.
+  assertEvaluateAllPaths(
+      "if(1 / 0 = 5, row_constructor(c0, c1), row_constructor(ceil(c0), c1))",
+      input,
+      input);
 }
 
 namespace {
