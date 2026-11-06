@@ -2204,6 +2204,22 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
       "c0 not in (1, 3)",
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
       false);
+
+  // The data source extracts this filter into a sample rate. The cuDF data
+  // source does not sample, so the scan falls back to the CPU Hive data source.
+  {
+    SCOPED_TRACE("rand() < 0.5");
+    const auto sampledFilePath = TempFilePath::create();
+    auto scanPlan =
+        makeRemainingFilterPlan(data, "rand() < 0.5", sampledFilePath);
+    std::shared_ptr<Task> task;
+    auto actual = AssertQueryBuilder(scanPlan)
+                      .config(CudfConfig::kCudfEnabled, true)
+                      .splits(makeCudfHiveConnectorSplits({sampledFilePath}))
+                      .copyResults(pool(), task);
+    EXPECT_LE(actual->size(), data->size());
+    EXPECT_FALSE(wasCudfToVeloxUsed(task, scanPlan->id()));
+  }
 }
 
 TEST_F(TableScanTest, subfieldFilterEligibility) {
@@ -2252,6 +2268,36 @@ TEST_F(TableScanTest, subfieldFilterEligibility) {
       "c0 not in (1, 3)",
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
       false);
+
+  // The cuDF data source reads top-level columns only, so a filter on a nested
+  // field falls back to the CPU Hive data source.
+  {
+    SCOPED_TRACE("s.a = 1");
+    const auto nestedType = ROW({{"s", ROW("a", BIGINT())}, {"c1", BIGINT()}});
+    const auto nestedFilePath = TempFilePath::create();
+    writeToFile(
+        nestedFilePath->getPath(),
+        makeRowVector(
+            {"s", "c1"},
+            {makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2})}),
+             makeFlatVector<int64_t>({10, 20})}));
+    auto scanPlan = PlanBuilder(pool_.get())
+                        .startTableScan()
+                        .connectorId(kCudfHiveConnectorId)
+                        .outputType(ROW("c1", BIGINT()))
+                        .dataColumns(nestedType)
+                        .subfieldFilter("s.a = 1")
+                        .endTableScan()
+                        .planNode();
+    std::shared_ptr<Task> task;
+    auto actual = AssertQueryBuilder(scanPlan)
+                      .config(CudfConfig::kCudfEnabled, true)
+                      .splits(makeCudfHiveConnectorSplits({nestedFilePath}))
+                      .copyResults(pool(), task);
+    assertEqualResults(
+        {makeRowVector({"c1"}, {makeFlatVector<int64_t>({10})})}, {actual});
+    EXPECT_FALSE(wasCudfToVeloxUsed(task, scanPlan->id()));
+  }
 }
 
 TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {

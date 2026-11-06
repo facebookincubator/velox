@@ -293,6 +293,9 @@ struct ScanFilters {
   // Whether the remaining filter must run on the CPU data source, because it
   // depends on a session setting the local QueryCtx lacks.
   bool needsSessionQueryConfig{false};
+
+  // Fraction of rows to keep, from the table handle and the remaining filter.
+  double sampleRate{1};
 };
 
 ScanFilters splitAndFoldFilters(
@@ -307,13 +310,13 @@ ScanFilters splitAndFoldFilters(
 
   // Extract single-column filters like "col = 'X'" or "col <> 'Y'" from the
   // remaining filter into subfield filters, as the CPU data source does.
-  double sampleRate = tableHandle.sampleRate();
+  filters.sampleRate = tableHandle.sampleRate();
   const auto remainingFilter =
       facebook::velox::connector::extractFiltersFromRemainingFilter(
           tableHandle.remainingFilter(),
           expressionEvaluator,
           filters.subfieldFilters,
-          sampleRate);
+          filters.sampleRate);
 
   // Optimize (rewrites + constant folding) the remaining filter before
   // evaluator selection so CudfFunctions never see scalar-only operand sets.
@@ -343,8 +346,13 @@ bool CudfHiveDataSource::isSupported(
       connectorQueryCtx.expressionEvaluator(),
       queryCtx.get(),
       connectorQueryCtx.memoryPool());
-  for (const auto& [_, filter] : filters.subfieldFilters) {
-    if (!canCreateAstFromSubfieldFilter(*filter)) {
+  // The cuDF data source does not sample rows and reads top-level columns only.
+  if (filters.sampleRate < 1) {
+    return false;
+  }
+  for (const auto& [subfield, filter] : filters.subfieldFilters) {
+    if (subfield.path().size() != 1 ||
+        !canCreateAstFromSubfieldFilter(*filter)) {
       return false;
     }
   }

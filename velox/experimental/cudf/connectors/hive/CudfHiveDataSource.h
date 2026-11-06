@@ -49,7 +49,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   /// Returns whether this data source can scan 'tableHandle' on the GPU:
   ///  - 'tableHandle' is a Hive table handle,
-  ///  - the cuDF AST converts every subfield filter, and
+  ///  - no rows are sampled,
+  ///  - every subfield filter is on a top-level column the cuDF AST converts,
+  ///    and
   ///  - cuDF evaluates the remaining filter.
   /// The filters are split and folded with 'connectorQueryCtx', as the
   /// constructor does.
