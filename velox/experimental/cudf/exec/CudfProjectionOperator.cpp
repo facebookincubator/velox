@@ -96,8 +96,8 @@ RowVectorPtr CudfProjectionOperator::doGetOutput() {
   }
 
   const auto outputMr = get_output_mr();
-  if (scalars_.empty()) {
-    scalarStream_ = stream_;
+  if (projectionIndex_ == 0) {
+    scalars_.clear();
     scalars_.reserve(projections_.size());
     for (const auto& columns : projections_) {
       auto& scalars = scalars_.emplace_back();
@@ -108,11 +108,6 @@ RowVectorPtr CudfProjectionOperator::doGetOutput() {
       }
     }
   }
-
-  // The scalars are used without synchronization, so every batch must run on
-  // the stream that built them.
-  VELOX_CHECK(
-      stream_ == scalarStream_, "Input batches must share one CUDA stream");
 
   const auto& columns = projections_[projectionIndex_];
   const auto& moveInputColumns = moveInputColumns_[projectionIndex_];
@@ -140,6 +135,7 @@ RowVectorPtr CudfProjectionOperator::doGetOutput() {
   if (++projectionIndex_ == projections_.size()) {
     projectionIndex_ = 0;
     inputColumns_.clear();
+    scalars_.clear();
     hasInput_ = false;
   }
 

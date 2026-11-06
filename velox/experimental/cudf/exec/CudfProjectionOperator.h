@@ -112,12 +112,10 @@ class CudfProjectionOperator : public CudfOperatorBase {
   // projections.
   std::vector<std::vector<bool>> moveInputColumns_;
 
-  // Scalars built from the constants on the first batch and reused for every
-  // later batch. Null for input channels.
+  // Scalars built from the constants for the current input, on its stream.
+  // Input batches may come from different streams, so they are not reused
+  // across batches. Null for input channels.
   std::vector<std::vector<std::unique_ptr<cudf::scalar>>> scalars_;
-
-  // Stream that 'scalars_' were built on.
-  std::optional<cuda::stream_ref> scalarStream_;
 
   // Columns of the current input, released from its table.
   std::vector<std::unique_ptr<cudf::column>> inputColumns_;
