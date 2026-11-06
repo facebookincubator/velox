@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(aggregation_fuzzer_base_test AggregationFuzzerBaseTest.cpp)
+add_executable(aggregation_fuzzer_base_test AggregationFuzzerBaseTest.cpp ../../tests/Main.cpp)
 add_test(aggregation_fuzzer_base_test aggregation_fuzzer_base_test)
 
 target_link_libraries(
@@ -23,7 +23,7 @@ target_link_libraries(
   velox_functions_prestosql
   velox_vector_test_lib
   GTest::gmock
-  GTest::gtest_main
+  GTest::gtest
 )
 
 add_executable(duck_query_runner_test DuckQueryRunnerTest.cpp)
