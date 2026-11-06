@@ -16,25 +16,40 @@
 
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunnerToSqlPlanNodeVisitor.h"
 
+#include <optional>
+
 #include <folly/String.h>
 
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/functions/prestosql/types/PrestoTypes.h"
+#include "velox/type/Timestamp.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::functions::sparksql::fuzzer {
 namespace {
 
-std::string toSparkConstantSql(const core::ConstantTypedExpr& constant) {
+std::optional<std::string> toSparkConstantSql(
+    const core::ConstantTypedExpr& constant) {
   const auto& type = constant.type();
   if (!type->isPrimitiveType()) {
-    VELOX_NYI("Unsupported Spark SQL constant type: {}", type->toString());
+    return std::nullopt;
   }
   const auto typeSql = type->isVarchar() ? "STRING"
       : type->isVarbinary()              ? "BINARY"
                                          : PrestoTypes::toSql(type);
   if (constant.isNull()) {
     return fmt::format("cast(null as {})", typeSql);
+  }
+  if (type->isTimestamp()) {
+    const auto value = constant.hasValueVector()
+        ? constant.valueVector()->as<SimpleVector<Timestamp>>()->valueAt(0)
+        : constant.value().value<TypeKind::TIMESTAMP>();
+    // Spark stores UTC epoch microseconds and cannot preserve finer precision.
+    if (value.getNanos() % 1'000 != 0 || value < Timestamp::minMicros() ||
+        value > Timestamp::maxMicros()) {
+      return std::nullopt;
+    }
+    return fmt::format("timestamp_micros({})", value.toMicros());
   }
   if (type->isVarchar() || type->isVarbinary()) {
     const auto value = constant.hasValueVector()
@@ -53,7 +68,7 @@ std::string toSparkConstantSql(const core::ConstantTypedExpr& constant) {
   return fmt::format("cast('{}' as {})", constant.toString(), typeSql);
 }
 
-std::string toSparkAggregateCallSql(
+std::optional<std::string> toSparkAggregateCallSql(
     const core::AggregationNode::Aggregate& aggregate) {
   std::stringstream sql;
   sql << aggregate.call->name() << "(";
@@ -66,7 +81,11 @@ std::string toSparkAggregateCallSql(
     if (auto constant =
             std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
                 inputs[i])) {
-      sql << toSparkConstantSql(*constant);
+      const auto constantSql = toSparkConstantSql(*constant);
+      if (!constantSql) {
+        return std::nullopt;
+      }
+      sql << *constantSql;
     } else {
       exec::test::toCallInputsSql({inputs[i]}, sql);
     }
@@ -106,7 +125,12 @@ void SparkQueryRunnerToSqlPlanNodeVisitor::visit(
       VELOX_CHECK(
           aggregate.sortingKeys.empty(),
           "Sort key is not supported in Spark's aggregation. You may need to disable 'enable_sorted_aggregations' when running the fuzzer test.");
-      sql << toSparkAggregateCallSql(aggregate);
+      const auto aggregateSql = toSparkAggregateCallSql(aggregate);
+      if (!aggregateSql) {
+        visitorContext.sql = std::nullopt;
+        return;
+      }
+      sql << *aggregateSql;
 
       if (aggregate.mask != nullptr) {
         sql << " filter (where " << aggregate.mask->name() << ")";
