@@ -32,6 +32,10 @@ uint32_t fnv1a_32(std::string_view s) {
 }
 
 std::pair<std::shared_ptr<uint8_t>, size_t> MetadataMsg::serialize() {
+  VELOX_CHECK(
+      !producerError.has_value() || atEnd,
+      "producerError is only valid on an end-of-stream message");
+
   uint32_t totalSize = getSerializedSize();
 
   VELOX_CHECK_LE(
@@ -81,6 +85,17 @@ std::pair<std::shared_ptr<uint8_t>, size_t> MetadataMsg::serialize() {
 
   uint8_t atEndByte = atEnd ? 1 : 0;
   *ptr = atEndByte;
+  ptr += sizeof(atEndByte);
+
+  WireErrorLengthType errorSize = producerError.has_value()
+      ? static_cast<WireErrorLengthType>(producerError->size())
+      : -1;
+  std::memcpy(ptr, &errorSize, sizeof(errorSize));
+  ptr += sizeof(errorSize);
+
+  if (producerError.has_value()) {
+    std::memcpy(ptr, producerError->data(), producerError->size());
+  }
 
   return std::make_pair<std::shared_ptr<uint8_t>, size_t>(
       std::move(buffer), totalSize);
@@ -151,6 +166,23 @@ MetadataMsg MetadataMsg::deserializeMetadataMsg(const uint8_t* buffer) {
     throw std::runtime_error("Insufficient data for atEnd flag");
   }
   record.atEnd = (*ptr != 0);
+  ptr += 1;
+
+  WireErrorLengthType errorSize = 0;
+  if (ptr + sizeof(errorSize) > endPtr) {
+    throw std::runtime_error("Insufficient data for producerError length");
+  }
+  std::memcpy(&errorSize, ptr, sizeof(errorSize));
+  ptr += sizeof(errorSize);
+
+  if (errorSize >= 0) {
+    if (errorSize > endPtr - ptr) {
+      throw std::runtime_error("Insufficient data for producerError bytes");
+    }
+    record.producerError.emplace(reinterpret_cast<const char*>(ptr), errorSize);
+  } else if (errorSize != -1) {
+    throw std::runtime_error("Invalid producerError length");
+  }
 
   return record;
 }

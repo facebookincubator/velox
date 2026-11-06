@@ -19,8 +19,10 @@
 #include <velox/exec/OutputBufferManager.h>
 #include <velox/exec/Task.h>
 #include <functional>
+#include <optional>
+#include <string>
 #include <string_view>
-#include <unordered_set>
+#include <unordered_map>
 #include "velox/experimental/ucx-exchange/UcxQueues.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -100,7 +102,8 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// the callback function is triggered immediately and true is returned.
   /// Otherwise, the callback function is registered and called once data is
   /// available. If the queue is closed and no more data is available, then the
-  /// callback function is called immediately with a nullptr. If the destination
+  /// callback function is called immediately with a nullptr, and with the
+  /// producerError the task was removed with. If the destination
   /// doesn't exist, then additional queues will be added for this task.
   /// @param taskId The unique taskId.
   /// @param destination The destination.
@@ -110,6 +113,20 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       int destination,
       UcxDataAvailableCallback notify);
 
+  /// @brief Same as getData(), for a server that hands pages to its consumer
+  /// through IntraNodeTransferRegistry, which drops them if the task is
+  /// removed. Each page the server receives counts as undelivered from the
+  /// moment it leaves the queue until the matching intraNodePageRetrieved().
+  void getIntraNodeData(
+      std::string_view taskId,
+      int destination,
+      UcxDataAvailableCallback notify);
+
+  /// @brief Records that the consumer of 'destination' read a page it got
+  /// through getIntraNodeData(). Called from IntraNodeTransferRegistry::poll()
+  /// under the registry lock, so it must not throw or call into the registry.
+  void intraNodePageRetrieved(std::string_view taskId, int destination);
+
   /// Returns true if the given task can use intra-node transfer.
   /// Returns false if the task is not yet initialized (placeholder queue
   /// from early sink connections) or if the task uses broadcast mode
@@ -118,7 +135,11 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   bool canUseIntraNode(std::string_view taskId);
 
   /// @brief Removes the queue for the given task from the queue manager.
-  /// Calls "terminate" on the queue to awake waiting producers.
+  /// Calls "terminate" on the queue to awake waiting producers and to end each
+  /// destination's stream. If the task had not sent all its output, every
+  /// consumer, including one that connects later, gets an end marker that
+  /// carries the reason. Intra-node consumers stop reading while that is
+  /// decided; see IntraNodeTransferRegistry::freezeTask().
   void removeTask(const std::string& taskId) override;
 
   /// @brief Returns the queue statistics of the queue associated with the given
@@ -143,6 +164,13 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   // Throws an exception if queue doesn't exist.
   std::shared_ptr<UcxOutputQueue> getQueue(std::string_view taskId);
 
+  // Shared by getData() and getIntraNodeData().
+  void getDataImpl(
+      std::string_view taskId,
+      int destination,
+      UcxDataAvailableCallback notify,
+      bool intraNode);
+
   folly::Synchronized<
       std::unordered_map<std::string, std::shared_ptr<UcxOutputQueue>>,
       std::mutex>
@@ -151,8 +179,11 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   // Tasks that have been removed via removeTask(). Prevents getData() from
   // re-creating placeholder queues for tasks that are already dead, which
   // would cause crashes when deleteResults() is called with destinations
-  // that exceed the placeholder's undersized queues_ vector.
-  folly::Synchronized<std::unordered_set<std::string>, std::mutex>
+  // that exceed the placeholder's undersized queues_ vector. Maps each to the
+  // producerError it was removed with, which a late getData() reports.
+  folly::Synchronized<
+      std::unordered_map<std::string, std::optional<std::string>>,
+      std::mutex>
       removedTasks_;
 };
 

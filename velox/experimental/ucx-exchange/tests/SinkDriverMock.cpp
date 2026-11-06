@@ -15,6 +15,8 @@
  */
 #include "velox/experimental/ucx-exchange/tests/SinkDriverMock.h"
 
+#include <gtest/gtest.h>
+
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/column/column_view.hpp>
@@ -82,31 +84,43 @@ void SinkDriverMock::run() {
 }
 
 void SinkDriverMock::receiveAllData(UcxExchange* hybridExchange) {
-  while (true) {
-    ContinueFuture future;
-    auto blocked = hybridExchange->isBlocked(&future);
-    if (blocked != BlockingReason::kNotBlocked) {
-      future.wait();
-    } else {
-      // not blocked.
-      RowVectorPtr res = hybridExchange->getOutput();
-      if (res) {
-        facebook::velox::cudf_velox::CudfVectorPtr cudfRes =
-            std::dynamic_pointer_cast<facebook::velox::cudf_velox::CudfVector>(
-                res);
-        numBytes_.fetch_add(cudfRes->estimateFlatSize());
-        numRows_ += cudfRes->getTableView().num_rows();
-        numChunksReceived_.fetch_add(1);
-        // If we have Reference data check the received data is the same
-        if (referenceData_)
-          updateDataValidity(cudfRes->getTableView());
+  try {
+    while (true) {
+      ContinueFuture future;
+      auto blocked = hybridExchange->isBlocked(&future);
+      if (blocked != BlockingReason::kNotBlocked) {
+        future.wait();
+      } else {
+        // not blocked.
+        RowVectorPtr res = hybridExchange->getOutput();
+        if (res) {
+          facebook::velox::cudf_velox::CudfVectorPtr cudfRes =
+              std::dynamic_pointer_cast<
+                  facebook::velox::cudf_velox::CudfVector>(res);
+          numBytes_.fetch_add(cudfRes->estimateFlatSize());
+          numRows_ += cudfRes->getTableView().num_rows();
+          numChunksReceived_.fetch_add(1);
+          // If we have Reference data check the received data is the same
+          if (referenceData_)
+            updateDataValidity(cudfRes->getTableView());
+        }
+      }
+      if (hybridExchange->isFinished()) {
+        break;
       }
     }
-    if (hybridExchange->isFinished()) {
-      break;
+  } catch (const std::exception& e) {
+    std::lock_guard<std::mutex> l(errorMutex_);
+    if (!error_.has_value()) {
+      error_ = e.what();
     }
   }
   hybridExchange->close();
+}
+
+std::optional<std::string> SinkDriverMock::error() const {
+  std::lock_guard<std::mutex> l(errorMutex_);
+  return error_;
 }
 
 void SinkDriverMock::joinThreads() {
@@ -114,6 +128,12 @@ void SinkDriverMock::joinThreads() {
     thread.join();
   }
   threads_.clear();
+  if (!errorExpected_) {
+    if (const auto caught = error()) {
+      ADD_FAILURE() << "Consumer failed in a case that expects success: "
+                    << *caught;
+    }
+  }
 }
 
 void SinkDriverMock::addSplits(
