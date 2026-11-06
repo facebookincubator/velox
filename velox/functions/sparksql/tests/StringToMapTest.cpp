@@ -23,8 +23,14 @@ namespace {
 class StringToMapTest : public SparkFunctionBaseTest {
  protected:
   VectorPtr evaluateStringToMap(const std::vector<StringView>& inputs) {
-    const std::string expr =
-        fmt::format("str_to_map(c0, '{}', '{}')", inputs[1], inputs[2]);
+    std::string expr;
+    if (inputs.size() == 1) {
+      expr = "str_to_map(c0)";
+    } else if (inputs.size() == 2) {
+      expr = fmt::format("str_to_map(c0, '{}')", inputs[1]);
+    } else {
+      expr = fmt::format("str_to_map(c0, '{}', '{}')", inputs[1], inputs[2]);
+    }
     return evaluate<MapVector>(
         expr, makeRowVector({makeFlatVector<StringView>({inputs[0]})}));
   }
@@ -72,28 +78,61 @@ TEST_F(StringToMapTest, basic) {
       {"a:1_b:2_c:3", "_", "_"},
       {{"a:1", std::nullopt}, {"b:2", std::nullopt}, {"c:3", std::nullopt}});
 
-  // Exception for illegal delimiters.
-  // Empty string is used.
+  // Exception for illegal empty delimiters.
   VELOX_ASSERT_THROW(
       evaluateStringToMap({"a:1,b:2", "", ":"}),
-      "entryDelimiter's size should be 1.");
+      "entryDelimiter cannot be empty");
   VELOX_ASSERT_THROW(
       evaluateStringToMap({"a:1,b:2", ",", ""}),
-      "keyValueDelimiter's size should be 1.");
-  // Delimiter's length > 1.
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", ";;", ":"}),
-      "entryDelimiter's size should be 1.");
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", ",", "::"}),
-      "keyValueDelimiter's size should be 1.");
-  // Unicode character is used.
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", "å", ":"}),
-      "entryDelimiter's size should be 1.");
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", ",", "æ"}),
-      "keyValueDelimiter's size should be 1.");
+      "keyValueDelimiter cannot be empty");
+}
+
+TEST_F(StringToMapTest, defaultDelimiters) {
+  // 1 argument (defaults to ',' and ':')
+  testStringToMap({"a:1,b:2,c:3"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap({"a: ,b:2"}, {{"a", " "}, {"b", "2"}});
+  testStringToMap({"a:,b:2"}, {{"a", ""}, {"b", "2"}});
+  testStringToMap({""}, {{"", std::nullopt}});
+  testStringToMap({"a"}, {{"a", std::nullopt}});
+
+  // 2 arguments (keyValueDelimiter defaults to ':')
+  testStringToMap(
+      {"a:1_b:2_c:3", "_"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"a:1,b:2", "_"}, {{"a:1,b:2", std::nullopt}});
+  testStringToMap({"", "_"}, {{"", std::nullopt}});
+}
+
+TEST_F(StringToMapTest, multiCharDelimiters) {
+  testStringToMap(
+      {"a::1__b::2__c::3", "__", "::"},
+      {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"a::1__b:::2__c::::3", "__", "::"},
+      {{"a", "1"}, {"b", ":2"}, {"c", "::3"}});
+  testStringToMap(
+      {"a->1;b->2;c->3", ";", "->"},
+      {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"a==1&&b==2&&c==3", "&&", "=="},
+      {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"a::1,b::2,c::3", ",", "::"},
+      {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"a:1,,b:2,,c:3", ",,", ":"},
+      {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"a:1,b:2,c:3", ",,", "::"},
+      {{"a:1,b:2,c:3", std::nullopt}});
+
+  // Multi-byte Unicode delimiters.
+  testStringToMap(
+      {"a::1\xe2\x98\xba\x62::2\xe2\x98\xba\x63::3", "\xe2\x98\xba", "::"},
+      {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"a==1\xe2\x9e\x94\x62==2\xe2\x9e\x94\x63==3", "\xe2\x9e\x94", "=="},
+      {{"a", "1"}, {"b", "2"}, {"c", "3"}});
 }
 
 TEST_F(StringToMapTest, duplicateKeysThrow) {
@@ -112,6 +151,14 @@ TEST_F(StringToMapTest, duplicateKeysThrow) {
       "Duplicate keys are not allowed: 'a'.");
   VELOX_ASSERT_USER_THROW(
       evaluateStringToMap({"a:1,a", ",", ":"}),
+      "Duplicate keys are not allowed: 'a'.");
+
+  // Duplicate keys with default and multi-character delimiters.
+  VELOX_ASSERT_USER_THROW(
+      evaluateStringToMap({"a:1,b:2,a:3"}),
+      "Duplicate keys are not allowed: 'a'.");
+  VELOX_ASSERT_USER_THROW(
+      evaluateStringToMap({"a::1__b::2__a::3", "__", "::"}),
       "Duplicate keys are not allowed: 'a'.");
 }
 
@@ -134,6 +181,12 @@ TEST_F(StringToMapTest, duplicateKeysLastWin) {
   // Distinct keys are unaffected.
   testStringToMap(
       {"a:1,b:2,c:3", ",", ":"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+
+  // Multi-character delimiters with last win.
+  testStringToMap(
+      {"a::1__b::2__a::3", "__", "::"}, {{"a", "3"}, {"b", "2"}});
+  testStringToMap(
+      {"a:1,b:2,a:3"}, {{"a", "3"}, {"b", "2"}});
 }
 
 TEST_F(StringToMapTest, lastWinPreservesFirstKeyPosition) {

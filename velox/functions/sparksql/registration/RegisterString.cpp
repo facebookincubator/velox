@@ -153,6 +153,15 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunction<
       sparksql::StringToMapFunction,
       Map<Varchar, Varchar>,
+      Varchar>({prefix + "str_to_map"});
+  registerFunction<
+      sparksql::StringToMapFunction,
+      Map<Varchar, Varchar>,
+      Varchar,
+      Varchar>({prefix + "str_to_map"});
+  registerFunction<
+      sparksql::StringToMapFunction,
+      Map<Varchar, Varchar>,
       Varchar,
       Varchar,
       Varchar>({prefix + "str_to_map"});

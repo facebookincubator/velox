@@ -35,6 +35,23 @@ struct StringToMapFunction {
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
+      const arg_type<Varchar>* /*input*/) {
+    throwExceptionOnDuplicateMapKeys_ =
+        config.throwExceptionOnDuplicateMapKeys();
+  }
+
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*input*/,
+      const arg_type<Varchar>* /*entryDelimiter*/) {
+    throwExceptionOnDuplicateMapKeys_ =
+        config.throwExceptionOnDuplicateMapKeys();
+  }
+
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* /*entryDelimiter*/,
       const arg_type<Varchar>* /*keyValueDelimiter*/) {
@@ -44,14 +61,22 @@ struct StringToMapFunction {
 
   void call(
       out_type<Map<Varchar, Varchar>>& out,
+      const arg_type<Varchar>& input) {
+    callImpl(out, toStringView(input), ",", ":");
+  }
+
+  void call(
+      out_type<Map<Varchar, Varchar>>& out,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& entryDelimiter) {
+    callImpl(out, toStringView(input), toStringView(entryDelimiter), ":");
+  }
+
+  void call(
+      out_type<Map<Varchar, Varchar>>& out,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter,
       const arg_type<Varchar>& keyValueDelimiter) {
-    VELOX_USER_CHECK_EQ(
-        entryDelimiter.size(), 1, "entryDelimiter's size should be 1.");
-    VELOX_USER_CHECK_EQ(
-        keyValueDelimiter.size(), 1, "keyValueDelimiter's size should be 1.");
-
     callImpl(
         out,
         toStringView(input),
@@ -76,6 +101,11 @@ struct StringToMapFunction {
       std::string_view input,
       std::string_view entryDelimiter,
       std::string_view keyValueDelimiter) {
+    VELOX_USER_CHECK(
+        !entryDelimiter.empty(), "entryDelimiter cannot be empty");
+    VELOX_USER_CHECK(
+        !keyValueDelimiter.empty(), "keyValueDelimiter cannot be empty");
+
     // Entries are buffered before writing so that a repeated key can either
     // raise an error or overwrite the value of its first occurrence, which is
     // how Spark's ArrayBasedMapBuilder deduplicates under LAST_WIN: the key
@@ -90,7 +120,7 @@ struct StringToMapFunction {
           std::string_view(input.data() + pos, nextEntryPos - pos),
           keyValueDelimiter);
 
-      pos = nextEntryPos + 1;
+      pos = nextEntryPos + entryDelimiter.size();
       nextEntryPos = input.find(entryDelimiter, pos);
     }
 
@@ -121,7 +151,8 @@ struct StringToMapFunction {
     if (delimiterPos != std::string::npos) {
       key = std::string_view(entry.data(), delimiterPos);
       value = std::string_view(
-          entry.data() + delimiterPos + 1, entry.size() - delimiterPos - 1);
+          entry.data() + delimiterPos + keyValueDelimiter.size(),
+          entry.size() - delimiterPos - keyValueDelimiter.size());
     }
 
     auto [it, inserted] = keyToIndex_.try_emplace(key, entries_.size());
