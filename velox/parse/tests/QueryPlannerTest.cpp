@@ -121,6 +121,37 @@ TEST_F(QueryPlannerTest, tableScan) {
       "    -- NestedLoopJoin[2]\n"
       "      -- Values[0]\n"
       "      -- Values[1]\n");
+
+  assertPlan(
+      "SELECT t.a, u.b FROM t JOIN u ON t.a = u.a",
+      inMemoryTables,
+      "-- Project[3]\n"
+      "  -- HashJoin[2]\n"
+      "    -- Values[0]\n"
+      "    -- Values[1]\n");
+}
+
+TEST_F(QueryPlannerTest, lateralJoin) {
+  const std::unordered_map<std::string, std::vector<RowVectorPtr>>
+      inMemoryTables = {
+          {"t", {makeEmptyRowVector(ROW({{"a", BIGINT()}, {"b", INTEGER()}}))}},
+          {"u", {makeEmptyRowVector(ROW({{"a", BIGINT()}, {"b", INTEGER()}}))}},
+      };
+
+  assertPlan(
+      "SELECT t.a, sub.b FROM t CROSS JOIN LATERAL "
+      "(SELECT u.b FROM u WHERE u.a > t.a) sub",
+      inMemoryTables,
+      "-- Project[9]\n"
+      "  -- NestedLoopJoin[8]\n"
+      "    -- Values[0]\n"
+      "    -- Project[7]\n"
+      "      -- Filter[6]\n"
+      "        -- NestedLoopJoin[5]\n"
+      "          -- Values[1]\n"
+      "          -- Aggregation[4]\n"
+      "            -- Project[3]\n"
+      "              -- Values[2]\n");
 }
 
 TEST_F(QueryPlannerTest, customScalarFunctions) {
@@ -169,6 +200,10 @@ TEST_F(QueryPlannerTest, error) {
       "SELECT x % 5, my_agg(x) FROM UNNEST([1, 2, 3]) as t(x) GROUP BY 1",
       "Scalar Function with name my_agg does not exist");
   assertPlanError("SELECT 'test ", "unterminated quoted string");
+  assertPlanError(
+      "SELECT t.a, sub.b FROM (SELECT random() a) t "
+      "CROSS JOIN LATERAL (SELECT t.a AS b) sub",
+      "Correlated joins with non-deterministic left inputs are not supported");
 }
 
 } // namespace facebook::velox::core::test
