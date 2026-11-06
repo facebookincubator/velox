@@ -208,6 +208,25 @@ TEST_F(SparkQueryRunnerTest, toSql) {
       queryRunner->toSql(plan), "SELECT sum(distinct c0) as a0 FROM (t_0)");
 }
 
+TEST_F(SparkQueryRunnerTest, histogramReferenceUnsupported) {
+  auto aggregatePool = rootPool_->addAggregateChild("histogramReference");
+  auto queryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
+      aggregatePool.get(), "unused", "unused", "unused");
+  auto input = makeRowVector({makeFlatVector<double>({1, 2, 3})});
+  for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
+    SCOPED_TRACE(name);
+    exec::test::PlanBuilder builder;
+    auto plan =
+        builder.values({input})
+            .singleAggregation(
+                {}, {"sum(c0)", fmt::format("{}(c0, INTEGER '4')", name)})
+            .planNode();
+    EXPECT_FALSE(queryRunner->toSql(plan).has_value());
+    auto projected = builder.project({"a1"}).planNode();
+    EXPECT_FALSE(queryRunner->toSql(projected).has_value());
+  }
+}
+
 TEST_F(SparkQueryRunnerTest, histogramFuzzerConstantArguments) {
   gflags::FlagSaver flagSaver;
   FLAGS_batch_size = 4;

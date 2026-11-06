@@ -46,6 +46,9 @@ class SparkNumericHistogram {
   /// Starts unbound, with an independent Java Random stream seeded with 31183.
   explicit SparkNumericHistogram(HashStringAllocator* allocator);
 
+  /// Rejects invalid capacity before input rows or groups are created.
+  static void validateNumBins(int32_t numBins);
+
   /// Binds numBins in [2, INT32_MAX], or checks agreement with an existing
   /// binding. Does not allocate bins, clear contents, or reset the random
   /// stream.

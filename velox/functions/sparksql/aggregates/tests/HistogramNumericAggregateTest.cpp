@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -38,6 +39,7 @@
 #include "velox/functions/sparksql/aggregates/HistogramNumericAggregate.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/type/HugeInt.h"
+#include "velox/vector/DecodedVector.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -112,6 +114,42 @@ TEST_F(HistogramNumericAggregateTest, registrationAndSignatures) {
   }
 }
 
+TEST_F(HistogramNumericAggregateTest, rejectsMismatchedResultCenterType) {
+  const core::QueryConfig config({});
+  const auto* canonical = exec::getAggregateFunctionEntry("histogram_numeric");
+  const auto* legacy =
+      exec::getAggregateFunctionEntry("histogram_numeric_legacy");
+  ASSERT_NE(canonical, nullptr);
+  ASSERT_NE(legacy, nullptr);
+  const std::vector<std::pair<TypePtr, TypePtr>> cases{
+      {INTEGER(), DOUBLE()},
+      {DATE(), INTEGER()},
+      {TIMESTAMP_UTC(), TIMESTAMP()},
+  };
+  for (const auto& [inputType, centerType] : cases) {
+    for (const auto step : {
+             core::AggregationNode::Step::kSingle,
+             core::AggregationNode::Step::kPartial,
+         }) {
+      SCOPED_TRACE(inputType->toString());
+      const auto resultType = ARRAY(ROW({{"x", centerType}, {"y", DOUBLE()}}));
+      VELOX_ASSERT_USER_THROW(
+          canonical->factory(step, {inputType, INTEGER()}, resultType, config),
+          fmt::format(
+              "histogram_numeric result center type mismatch: expected {}, got {}",
+              inputType->toString(),
+              centerType->toString()));
+    }
+  }
+  VELOX_ASSERT_USER_THROW(
+      legacy->factory(
+          core::AggregationNode::Step::kSingle,
+          {INTEGER(), INTEGER()},
+          ARRAY(ROW({{"x", INTEGER()}, {"y", DOUBLE()}})),
+          config),
+      "histogram_numeric result center type mismatch: expected DOUBLE, got INTEGER");
+}
+
 TEST_F(HistogramNumericAggregateTest, doubleAndLegacyResults) {
   auto input = makeRowVector({makeFlatVector<double>({1, 2, 3})});
   auto expected = expectedDouble({{1, 1}, {2, 1}, {3, 1}});
@@ -128,6 +166,35 @@ TEST_F(HistogramNumericAggregateTest, typedIntegralResults) {
            std::tuple<int8_t, double>{4, 1}}},
       ROW({{"x", TINYINT()}, {"y", DOUBLE()}}))});
   assertSingle(input, "histogram_numeric(c0, 3)", expected);
+}
+
+TEST_F(HistogramNumericAggregateTest, bigintCenterLimitsAndRounding) {
+  const std::vector<std::pair<int64_t, int64_t>> cases{
+      {std::numeric_limits<int64_t>::max(),
+       std::numeric_limits<int64_t>::max()},
+      {std::numeric_limits<int64_t>::min(),
+       std::numeric_limits<int64_t>::min()},
+      {9'007'199'254'740'993, 9'007'199'254'740'992},
+      {9'007'199'254'740'995, 9'007'199'254'740'996},
+      {-9'007'199'254'740'993, -9'007'199'254'740'992},
+  };
+  for (const auto& [value, center] : cases) {
+    SCOPED_TRACE(value);
+    auto input = makeRowVector({makeFlatVector<int64_t>({value})});
+    auto expected = makeRowVector({makeArrayOfRowVector(
+        std::vector<std::vector<std::optional<std::tuple<int64_t, double>>>>{
+            {std::tuple<int64_t, double>{center, 1}}},
+        ROW({{"x", BIGINT()}, {"y", DOUBLE()}}))});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"histogram_numeric(c0, INTEGER '2')"})
+        .withCompanion()
+        .assertResults(expected);
+    assertSingle(
+        input,
+        "histogram_numeric_legacy(c0, 2)",
+        expectedDouble({{static_cast<double>(value), 1}}));
+  }
 }
 
 TEST_F(HistogramNumericAggregateTest, groupedTypedResults) {
@@ -298,6 +365,67 @@ TEST_F(HistogramNumericAggregateTest, typedTemporalResults) {
   assertSingle(timestamps, "histogram_numeric(c0, 3)", expectedTimestamps);
 }
 
+TEST_F(HistogramNumericAggregateTest, timestampCentersAtMicrosecondLimits) {
+  for (const auto& type : {TIMESTAMP(), TIMESTAMP_UTC()}) {
+    for (const auto& value : {
+             Timestamp(-9'223'372'036'855, 224'192'000),
+             Timestamp(9'223'372'036'854, 775'807'000),
+             Timestamp(-1, 998'999'000),
+             Timestamp(0, 1'001'000),
+         }) {
+      SCOPED_TRACE(type->toString());
+      SCOPED_TRACE(
+          fmt::format(
+              "{} seconds, {} nanos", value.getSeconds(), value.getNanos()));
+      auto centers = makeFlatVector<Timestamp>({value}, type);
+      auto input = makeRowVector({centers});
+      auto expected = makeRowVector({makeArrayVector(
+          {0},
+          makeRowVector({"x", "y"}, {centers, makeFlatVector<double>({1})}))});
+      AggregationTester(*this)
+          .inputs(input)
+          .aggregates({"histogram_numeric(c0, INTEGER '2')"})
+          .withCompanion()
+          .assertResults(expected);
+      assertSingle(
+          input,
+          "histogram_numeric_legacy(c0, 2)",
+          expectedDouble({{static_cast<double>(value.toMicros()), 1}}));
+    }
+  }
+}
+
+TEST_F(HistogramNumericAggregateTest, rejectsInvalidTimestampInputs) {
+  const std::vector<std::pair<Timestamp, std::string>> cases{
+      {Timestamp(0, 1),
+       "histogram_numeric timestamp requires microsecond precision"},
+      {Timestamp(-1, 999'999'999),
+       "histogram_numeric timestamp requires microsecond precision"},
+      {Timestamp(-9'223'372'036'855, 224'191'000),
+       "Could not convert Timestamp(-9223372036855, 224191000) to microseconds"},
+      {Timestamp(9'223'372'036'854, 775'808'000),
+       "Could not convert Timestamp(9223372036854, 775808000) to microseconds"},
+  };
+  for (const auto& type : {TIMESTAMP(), TIMESTAMP_UTC()}) {
+    for (const auto& [value, message] : cases) {
+      const auto input =
+          makeRowVector({makeFlatVector<Timestamp>({value}, type)});
+      for (const auto* name :
+           {"histogram_numeric", "histogram_numeric_legacy"}) {
+        SCOPED_TRACE(name);
+        const auto plan =
+            PlanBuilder()
+                .values({input})
+                .singleAggregation(
+                    {}, {fmt::format("{}(c0, INTEGER '2')", name)})
+                .planNode();
+        VELOX_ASSERT_USER_THROW(
+            AssertQueryBuilder(plan).copyResults(pool()), message);
+      }
+    }
+  }
+}
+
 TEST_F(HistogramNumericAggregateTest, nullEmptyAndAllNull) {
   auto input = makeRowVector(
       {makeNullableFlatVector<double>({std::nullopt, std::nullopt})});
@@ -363,7 +491,7 @@ TEST_F(HistogramNumericAggregateTest, companionsValidateEmptyNumBins) {
         VELOX_ASSERT_USER_THROW(
             AssertQueryBuilder(plan).copyResults(pool()),
             std::string_view(numBins) == "INTEGER '1'"
-                ? "histogram_numeric requires numBins at least 2"
+                ? "numBins must be at least 2"
                 : "histogram_numeric numBins argument must not be null");
       }
     }
@@ -382,7 +510,7 @@ TEST_F(HistogramNumericAggregateTest, validatesNumBinsWithoutNonNullValues) {
                         .planNode();
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(singlePlan).copyResults(pool()),
-      "histogram_numeric requires numBins at least 2");
+      "numBins must be at least 2");
 
   auto partialFinalPlan =
       PlanBuilder()
@@ -393,7 +521,7 @@ TEST_F(HistogramNumericAggregateTest, validatesNumBinsWithoutNonNullValues) {
           .planNode();
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(partialFinalPlan).copyResults(pool()),
-      "histogram_numeric requires numBins at least 2");
+      "numBins must be at least 2");
 }
 
 TEST_F(HistogramNumericAggregateTest, windowEmptyFramesValidateNumBins) {
@@ -418,7 +546,7 @@ TEST_F(HistogramNumericAggregateTest, windowEmptyFramesValidateNumBins) {
       if (numBins == 1) {
         VELOX_ASSERT_THROW(
             AssertQueryBuilder(plan).copyResults(pool()),
-            "histogram_numeric requires numBins at least 2");
+            "numBins must be at least 2");
       } else {
         AssertQueryBuilder(plan).assertResults(expected);
       }
@@ -506,6 +634,72 @@ TEST_F(HistogramNumericAggregateTest, decimalLegacy) {
         .aggregates({"histogram_numeric_legacy(c0, INTEGER '2')"})
         .withCompanion()
         .assertResults(expected);
+  }
+}
+
+TEST_F(HistogramNumericAggregateTest, decimalLegacyNormalizationBoundaries) {
+  struct TestCase {
+    int32_t precision;
+    int32_t scale;
+    std::string unscaled;
+    double expected;
+  };
+  const std::vector<TestCase> cases{
+      {18, 18, "999999999999999999", 1.0},
+      {18, 18, "-1", -1e-18},
+      {3, 2, "10", 0.1},
+      {1, 1, "0", 0.0},
+      {19, 0, "9999999999999999999", 1e19},
+      {19, 19, "9999999999999999999", 1.0},
+      {38, 0, "99999999999999999999999999999999999999", 1e38},
+      {38, 38, "99999999999999999999999999999999999999", 1.0},
+      {38, 38, "-99999999999999999999999999999999999999", -1.0},
+      {38, 38, "-1", -1e-38},
+      {21,
+       20,
+       "100000000000000011103",
+       std::bit_cast<double>(uint64_t{0x3ff0000000000001})},
+      {21,
+       20,
+       "-100000000000000011103",
+       std::bit_cast<double>(uint64_t{0xbff0000000000001})},
+      {21, 20, "100000000000000011102", 1.0},
+      {16, 0, "9007199254740992", 0x1p53},
+      {16, 0, "-9007199254740992", -0x1p53},
+      {23, 22, "9007199254740992", 9.007199254740992e-7},
+      {24, 23, "9007199254740992", 9.007199254740992e-8},
+      {23, 22, "9007199254740993", 9.007199254740993e-7},
+  };
+  for (const auto& test : cases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "DECIMAL({}, {}): {}", test.precision, test.scale, test.unscaled));
+    const auto type = DECIMAL(test.precision, test.scale);
+    const auto unscaled = HugeInt::parse(test.unscaled);
+    const VectorPtr values = type->isShortDecimal()
+        ? VectorPtr(
+              makeFlatVector<int64_t>({static_cast<int64_t>(unscaled)}, type))
+        : makeFlatVector<int128_t>({unscaled}, type);
+    const auto input = makeRowVector({values});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"histogram_numeric_legacy(c0, INTEGER '2')"})
+        .withCompanion()
+        .assertResults(expectedDouble({{test.expected, 1}}));
+    const auto plan = PlanBuilder()
+                          .values({input})
+                          .singleAggregation(
+                              {}, {"histogram_numeric_legacy(c0, INTEGER '2')"})
+                          .planNode();
+    const auto result = AssertQueryBuilder(plan).copyResults(pool());
+    const auto* bins = result->childAt(0)->as<ArrayVector>();
+    ASSERT_FALSE(bins->isNullAt(0));
+    ASSERT_EQ(bins->sizeAt(0), 1);
+    const auto* rows = bins->elements()->as<RowVector>();
+    DecodedVector centers(*rows->childAt(0));
+    EXPECT_EQ(
+        std::bit_cast<uint64_t>(centers.valueAt<double>(bins->offsetAt(0))),
+        std::bit_cast<uint64_t>(test.expected));
   }
 }
 

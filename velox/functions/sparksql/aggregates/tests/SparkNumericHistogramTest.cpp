@@ -141,8 +141,7 @@ TEST_F(SparkNumericHistogramTest, initializeRejectsInvalidAndChangedCapacity) {
   SparkNumericHistogram histogram(&allocator_);
   for (auto numBins : {std::numeric_limits<int32_t>::min(), -1, 0, 1}) {
     VELOX_ASSERT_USER_THROW(
-        histogram.initialize(numBins),
-        "histogram_numeric requires numBins at least 2");
+        histogram.initialize(numBins), "numBins must be at least 2");
     EXPECT_EQ(histogram.numBins(), 0);
   }
   histogram.initialize(2);
@@ -152,7 +151,7 @@ TEST_F(SparkNumericHistogramTest, initializeRejectsInvalidAndChangedCapacity) {
   VELOX_ASSERT_USER_THROW(
       histogram.initialize(3), "histogram_numeric numBins mismatch");
   VELOX_ASSERT_USER_THROW(
-      histogram.initialize(1), "histogram_numeric requires numBins at least 2");
+      histogram.initialize(1), "numBins must be at least 2");
   EXPECT_EQ(serialize(histogram), before);
 }
 
@@ -510,9 +509,9 @@ TEST_F(SparkNumericHistogramTest, rejectsInvalidHeaderCounts) {
     std::string_view expectedError;
   };
   const std::vector<TestCase> cases{
-      {"ffffffff00000000", "histogram_numeric requires numBins at least 2"},
-      {"0000000000000000", "histogram_numeric requires numBins at least 2"},
-      {"0000000100000000", "histogram_numeric requires numBins at least 2"},
+      {"ffffffff00000000", "numBins must be at least 2"},
+      {"0000000000000000", "numBins must be at least 2"},
+      {"0000000100000000", "numBins must be at least 2"},
       {"00000003ffffffff", "histogram_numeric usedBins must be nonnegative"},
       {"0000000380000000", "histogram_numeric usedBins must be nonnegative"},
       {"0000000300000004", "histogram_numeric usedBins exceeds numBins"},
