@@ -15,6 +15,8 @@
  */
 
 #include <optional>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -29,10 +31,11 @@ class ArrayGetTest : public SparkFunctionBaseTest {
   template <typename T, typename IndexType>
   std::optional<T> arrayGet(
       const ArrayVectorPtr& arrayVector,
-      const std::optional<IndexType>& index) {
+      const std::optional<IndexType>& index,
+      const std::string& functionName = "get") {
     auto input =
         makeRowVector({arrayVector, makeConstant(index, arrayVector->size())});
-    return evaluateOnce<T>("get(c0, c1)", input);
+    return evaluateOnce<T>(fmt::format("{}(c0, c1)", functionName), input);
   }
 
   template <typename IndexType>
@@ -60,6 +63,45 @@ TEST_F(ArrayGetTest, basic) {
   testArrayGet<int16_t>();
   testArrayGet<int32_t>();
   testArrayGet<int64_t>();
+}
+
+TEST_F(ArrayGetTest, getArrayItem) {
+  auto arrayVector = makeNullableArrayVector<int32_t>({{1, std::nullopt, 2}});
+  auto getArrayItem = [&](std::optional<int64_t> index) {
+    return arrayGet<int32_t, int64_t>(arrayVector, index, "get_array_item");
+  };
+
+  for (const auto& ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          ansiEnabled}});
+    EXPECT_EQ(getArrayItem(0), 1);
+    EXPECT_EQ(getArrayItem(1), std::nullopt);
+    EXPECT_EQ(getArrayItem(2), 2);
+    EXPECT_EQ(getArrayItem(std::nullopt), std::nullopt);
+
+    // All integer index types are supported.
+    EXPECT_EQ((arrayGet<int32_t, int8_t>(arrayVector, 2, "get_array_item")), 2);
+    EXPECT_EQ(
+        (arrayGet<int32_t, int16_t>(arrayVector, 2, "get_array_item")), 2);
+    EXPECT_EQ(
+        (arrayGet<int32_t, int32_t>(arrayVector, 2, "get_array_item")), 2);
+  }
+
+  // ANSI disabled: a negative or out-of-bounds index returns NULL.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+  EXPECT_EQ(getArrayItem(-1), std::nullopt);
+  EXPECT_EQ(getArrayItem(3), std::nullopt);
+
+  // ANSI enabled: throws. get keeps returning NULL.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+  VELOX_ASSERT_THROW(
+      getArrayItem(-1), "Array subscript index cannot be negative");
+  VELOX_ASSERT_THROW(getArrayItem(3), "Array subscript index out of bounds");
+  EXPECT_EQ((arrayGet<int32_t, int64_t>(arrayVector, -1)), std::nullopt);
+  EXPECT_EQ((arrayGet<int32_t, int64_t>(arrayVector, 3)), std::nullopt);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
