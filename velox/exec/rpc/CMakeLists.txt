@@ -50,10 +50,20 @@ velox_link_libraries(
   Folly::folly
 )
 
+velox_add_library(
+  velox_rpc_flow_control_policy
+  RPCFlowControlPolicy.cpp
+  HEADERS
+  RPCFlowControlPolicy.h
+)
+
+velox_link_libraries(velox_rpc_flow_control_policy velox_exception)
+
 velox_add_library(velox_rpc_rate_limiter RPCRateLimiter.cpp HEADERS RPCRateLimiter.h)
 
 velox_link_libraries(
   velox_rpc_rate_limiter
+  velox_rpc_flow_control_policy
   velox_exception
   velox_future
   velox_test_util

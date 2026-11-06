@@ -41,6 +41,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <future>
 #include <limits>
 #include <stdexcept>
@@ -93,9 +94,14 @@ class ManualPacingClock {
   }
 
   template <typename Rep, typename Period>
-  void advance(std::chrono::duration<Rep, Period> duration) {
+  void advanceClockOnly(std::chrono::duration<Rep, Period> duration) {
     now_ += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         duration);
+  }
+
+  template <typename Rep, typename Period>
+  void advance(std::chrono::duration<Rep, Period> duration) {
+    advanceClockOnly(duration);
     timekeeper_.advance(duration);
   }
 
@@ -155,6 +161,230 @@ std::shared_ptr<RPCRateLimiter> makePacingLimiter(
       [] { return 1.0; });
 }
 
+struct RateSimulationResult {
+  int64_t elapsedMs{0};
+  int64_t attempts{0};
+  int64_t completed{0};
+  int64_t peakPending{0};
+  struct RateCut {
+    int64_t atMs;
+    int64_t admissionBucket;
+    int64_t sendRateMilli;
+  };
+  std::vector<RateCut> rateCuts;
+};
+
+struct RateSimulationConfig {
+  // An empty algorithm selects transport-owned retries.
+  std::optional<RPCRateLimiter::RateAlgorithm> algorithm{};
+  bool mixedCost{false};
+  bool changingQuota{false};
+  int64_t rows{1'000};
+  int64_t responseMs{100};
+  bool growingQuota{false};
+  // Rejects the first attempt against a backend with spare capacity.
+  bool rejectFirst{false};
+  int64_t changeAtMs{10'000};
+  int32_t workers{1};
+  // Rejects every fifth attempt against a backend with spare capacity.
+  bool independentRejections{false};
+  int64_t concurrency{20};
+  bool equalJitter{false};
+  int64_t quotaPerSecond{50};
+  std::optional<int64_t> quotaAfterChange{};
+  // Zero keeps continuous refill; positive values reset a fixed-window budget.
+  int64_t quotaWindowMs{0};
+};
+
+RateSimulationResult runFiniteRateSimulation(
+    const RateSimulationConfig& config) {
+  ManualPacingClock clock;
+  std::vector<std::shared_ptr<RPCRateLimiter>> limiters;
+  for (int32_t worker = 0; worker < config.workers; ++worker) {
+    auto limiter = makePacingLimiter("test.finite-rate", clock);
+    limiter->configure(
+        {.adaptive = true,
+         .ceiling = config.concurrency,
+         .floor = 1,
+         .ratePolicy =
+             config.algorithm.value_or(RPCFlowControlPolicy::kWindowAimd),
+         .scheduleFixes = config.algorithm.has_value() &&
+             config.algorithm.value() != RPCFlowControlPolicy::kWindowAimd});
+    limiters.push_back(std::move(limiter));
+  }
+  struct Work {
+    int64_t id;
+    int64_t cost;
+    int32_t worker;
+    int32_t retries{0};
+    int64_t notBeforeMs{0};
+  };
+  struct Response {
+    Work work;
+    std::shared_ptr<RPCRateLimiter::AdmissionLease> lease;
+    uint64_t epoch;
+    int64_t dueMs;
+    bool accepted;
+  };
+  std::deque<Work> queued;
+  for (int64_t row = 0; row < config.rows; ++row) {
+    queued.push_back(
+        {.id = row,
+         .cost = config.mixedCost && row % 2 == 0 ? 3 : 1,
+         .worker = static_cast<int32_t>(row % config.workers)});
+  }
+  std::vector<Response> pending;
+  std::vector<Response> inPlaceRetries;
+  RateSimulationResult result;
+  std::vector<int64_t> admissionWindowStarts(
+      static_cast<size_t>(config.workers), -1);
+  std::vector<int64_t> admissionBuckets(static_cast<size_t>(config.workers), 0);
+  int64_t lastQuotaWindow{-1};
+  const double burst =
+      config.rejectFirst || config.independentRejections ? 20 : 5;
+  double bucket{burst};
+  const auto send = [&](Work work,
+                        std::shared_ptr<RPCRateLimiter::AdmissionLease> lease,
+                        uint64_t epoch,
+                        int64_t nowMs) {
+    ++result.attempts;
+    const auto cost = static_cast<double>(work.cost);
+    const bool accepted = bucket >= cost &&
+        !(config.rejectFirst && result.attempts == 1) &&
+        !(config.independentRejections && result.attempts % 5 == 0);
+    if (accepted) {
+      bucket -= cost;
+    }
+    pending.push_back(
+        {work,
+         std::move(lease),
+         epoch,
+         nowMs + (accepted ? config.responseMs : 1),
+         accepted});
+  };
+  for (int64_t ms = 0; ms < 120'000; ++ms) {
+    clock.advance(1ms);
+    const auto quota = config.rejectFirst || config.independentRejections
+        ? 10'000
+        : config.changingQuota && ms >= config.changeAtMs
+        ? config.quotaAfterChange.value_or(config.growingQuota ? 100 : 25)
+        : config.quotaPerSecond;
+    if (config.quotaWindowMs > 0) {
+      const auto quotaWindow = ms / config.quotaWindowMs;
+      if (quotaWindow != lastQuotaWindow) {
+        bucket = static_cast<double>(quota) *
+            static_cast<double>(config.quotaWindowMs) / 1'000.0;
+        lastQuotaWindow = quotaWindow;
+      }
+    } else {
+      bucket = std::min(burst, bucket + static_cast<double>(quota) / 1'000.0);
+    }
+    for (size_t i = 0; i < pending.size();) {
+      if (pending[i].dueMs > ms) {
+        ++i;
+        continue;
+      }
+      auto response = std::move(pending[i]);
+      pending.erase(
+          pending.begin() +
+          static_cast<std::vector<Response>::difference_type>(i));
+      if (response.accepted) {
+        response.lease->completeAndRelease(
+            RPCRateLimiter::Outcome::kSuccess, config.responseMs * 1'000'000);
+        limiters[response.work.worker]->onSuccessForEpoch(
+            response.epoch, 1, config.responseMs * 1'000'000);
+        ++result.completed;
+      } else {
+        const auto retry = response.work.retries++;
+        const auto nominal = config.equalJitter
+            ? std::min<int64_t>(30'000, 100LL << std::min(retry, 9))
+            : 100LL << std::min(retry, 5);
+        auto seed = static_cast<uint64_t>(response.work.id + 1) *
+                0x9e3779b97f4a7c15ULL ^
+            static_cast<uint64_t>(retry) * 0xbf58476d1ce4e5b9ULL;
+        seed ^= seed >> 30;
+        seed *= 0xbf58476d1ce4e5b9ULL;
+        seed ^= seed >> 27;
+        const auto waitMs = config.equalJitter
+            ? nominal / 2 + static_cast<int64_t>(seed % (nominal / 2 + 1))
+            : nominal;
+        response.work.notBeforeMs = ms + waitMs;
+        if (config.algorithm.has_value()) {
+          const auto worker = static_cast<size_t>(response.work.worker);
+          const auto previousCuts = config.quotaWindowMs > 0
+              ? limiters[worker]->stats().rateDecreases
+              : 0;
+          response.lease->completeAndRelease(
+              RPCRateLimiter::Outcome::kOverload, 1'000'000, true);
+          if (config.quotaWindowMs > 0) {
+            const auto stats = limiters[worker]->stats();
+            if (stats.rateDecreases > previousCuts) {
+              result.rateCuts.push_back(
+                  {ms, admissionBuckets[worker], stats.sendRateMilli});
+            }
+          }
+          queued.push_back(response.work);
+        } else {
+          response.dueMs = response.work.notBeforeMs;
+          inPlaceRetries.push_back(std::move(response));
+        }
+      }
+    }
+    for (size_t i = 0; i < inPlaceRetries.size();) {
+      if (inPlaceRetries[i].dueMs > ms) {
+        ++i;
+        continue;
+      }
+      auto retry = std::move(inPlaceRetries[i]);
+      inPlaceRetries.erase(
+          inPlaceRetries.begin() +
+          static_cast<std::vector<Response>::difference_type>(i));
+      send(retry.work, std::move(retry.lease), retry.epoch, ms);
+    }
+    for (int32_t worker = 0; worker < config.workers; ++worker) {
+      const auto eligible = [ms, worker](const auto& work) {
+        return work.worker == worker && work.notBeforeMs <= ms;
+      };
+      const auto ready = std::count_if(queued.begin(), queued.end(), eligible);
+      auto granted = limiters[worker]->tryAcquireUpTo(ready);
+      if (config.quotaWindowMs > 0 && !granted.empty()) {
+        auto& start = admissionWindowStarts[worker];
+        if (start < 0) {
+          start = ms;
+        }
+        // Observe the same admission-triggered 500 ms measurement windows as
+        // the limiter; this does not change the controller or backend model.
+        if (ms - start >= 500) {
+          ++admissionBuckets[worker];
+          start = ms;
+        }
+      }
+      for (auto& token : granted) {
+        auto it =
+            std::find_if(queued.begin(), queued.end(), [&](const auto& work) {
+              return eligible(work) && work.retries > 0;
+            });
+        if (it == queued.end()) {
+          it = std::find_if(queued.begin(), queued.end(), eligible);
+        }
+        VELOX_CHECK(it != queued.end());
+        const auto work = *it;
+        queued.erase(it);
+        const auto epoch = token.overloadEpoch();
+        send(work, limiters[worker]->makeLease(std::move(token)), epoch, ms);
+      }
+    }
+    result.elapsedMs = ms + 1;
+    if (result.completed == config.rows) {
+      break;
+    }
+  }
+  for (const auto& limiter : limiters) {
+    result.peakPending += limiter->stats().peakPending;
+  }
+  return result;
+}
+
 void enableFractionalLimit(RPCRateLimiter& limiter, double minimumLimit) {
   limiter.configure(
       RPCRateLimiter::Config{
@@ -179,6 +409,83 @@ class RPCRateLimiterTest : public testing::Test {
     RPCRateLimiterRegistry::global().testingReset();
   }
 };
+
+TEST_F(
+    RPCRateLimiterTest,
+    flowPolicyDefaultsToWindowAimdAndParsesPublicChoices) {
+  const RPCRateLimiter::Config defaults;
+  EXPECT_EQ(defaults.ratePolicy, RPCFlowControlPolicy::kWindowAimd);
+  EXPECT_FALSE(defaults.scheduleFixes);
+  EXPECT_EQ(
+      parseRPCFlowControlPolicy("WINDOW_AIMD"),
+      RPCFlowControlPolicy::kWindowAimd);
+  EXPECT_EQ(
+      parseRPCFlowControlPolicy("window_AiMd"),
+      RPCFlowControlPolicy::kWindowAimd);
+  EXPECT_EQ(
+      parseRPCFlowControlPolicy("rate_aimd"), RPCFlowControlPolicy::kRateAimd);
+  EXPECT_EQ(parseRPCFlowControlPolicy("CuBiC"), RPCFlowControlPolicy::kCubic);
+  EXPECT_EQ(
+      rpcFlowControlPolicyName(RPCFlowControlPolicy::kWindowAimd),
+      "WINDOW_AIMD");
+  EXPECT_EQ(
+      rpcFlowControlPolicyName(RPCFlowControlPolicy::kRateAimd), "RATE_AIMD");
+  EXPECT_EQ(rpcFlowControlPolicyName(RPCFlowControlPolicy::kCubic), "CUBIC");
+  EXPECT_THROW(parseRPCFlowControlPolicy(""), std::exception);
+  EXPECT_THROW(parseRPCFlowControlPolicy("VEGAS"), std::exception);
+  EXPECT_THROW(parseRPCFlowControlPolicy("AIMD"), std::exception);
+  EXPECT_THROW(parseRPCFlowControlPolicy("LEGACY"), std::exception);
+  EXPECT_THROW(parseRPCFlowControlPolicy("CUBIC extra"), std::exception);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    ratePolicyImpliesRepairsAndDisabledRateRetainsRepairs) {
+  auto limiter = std::make_shared<RPCRateLimiter>("test.policy-normalization");
+  limiter->configure(
+      {.adaptive = true, .ratePolicy = RPCFlowControlPolicy::kCubic});
+  EXPECT_EQ(limiter->config().ratePolicy, RPCFlowControlPolicy::kCubic);
+  EXPECT_TRUE(limiter->config().scheduleFixes);
+  limiter->configure(
+      {.adaptive = false, .ratePolicy = RPCFlowControlPolicy::kRateAimd});
+  EXPECT_EQ(limiter->config().ratePolicy, RPCFlowControlPolicy::kWindowAimd);
+  EXPECT_TRUE(limiter->config().scheduleFixes);
+}
+
+TEST_F(RPCRateLimiterTest, policyCacheDistinguishesRepairsWithInactiveRate) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config legacy{.ceiling = 1};
+  auto* original =
+      registry.getForPolicy("test.scheduler-policy", legacy).limiter;
+  auto repaired = legacy;
+  repaired.scheduleFixes = true;
+  auto* modern =
+      registry.getForPolicy("test.scheduler-policy", repaired).limiter;
+  EXPECT_NE(original, modern);
+  EXPECT_EQ(modern->config().ratePolicy, RPCFlowControlPolicy::kWindowAimd);
+  EXPECT_TRUE(modern->config().scheduleFixes);
+  EXPECT_FALSE(original->config().scheduleFixes);
+}
+
+TEST_F(RPCRateLimiterTest, policyCacheSeparatesSendingRateStrategies) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config cubic{
+      .adaptive = true,
+      .ceiling = 100,
+      .ratePolicy = RPCFlowControlPolicy::kCubic,
+      .scheduleFixes = true};
+  auto* first =
+      registry.getForPolicy("test.rate-strategy-policy", cubic).limiter;
+  auto aimd = cubic;
+  aimd.ratePolicy = RPCFlowControlPolicy::kRateAimd;
+  auto* second =
+      registry.getForPolicy("test.rate-strategy-policy", aimd).limiter;
+  EXPECT_NE(first, second);
+  EXPECT_EQ(
+      registry.getForPolicy("test.rate-strategy-policy", cubic).limiter, first);
+  EXPECT_EQ(first->stats().ratePolicy, RPCFlowControlPolicy::kCubic);
+  EXPECT_EQ(second->stats().ratePolicy, RPCFlowControlPolicy::kRateAimd);
+}
 
 TEST_F(RPCRateLimiterTest, acquireAndRelease) {
   const std::string backend = "test.backend";
@@ -275,6 +582,859 @@ TEST_F(
   EXPECT_NE(nextCompletion.overloadEpoch, firstCompletion.overloadEpoch);
   EXPECT_EQ(limiter->stats().limitMilli, 50'000);
   EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 50'000);
+}
+
+TEST_F(RPCRateLimiterTest, rateFeedbackIsRecordedOnceAtCompletion) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.rate-feedback-completion", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 100,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto tokens = limiter->tryAcquireUpTo(2);
+  ASSERT_EQ(tokens.size(), 2);
+  const auto epoch = tokens.front().overloadEpoch();
+  auto lease = limiter->makeLease(std::move(tokens));
+  EXPECT_EQ(limiter->stats().completionAttempts, 0);
+  clock.advance(1s);
+  lease->completeAndRelease(RPCRateLimiter::Outcome::kSuccess, 1'000'000'000);
+  auto completed = limiter->stats();
+  EXPECT_EQ(completed.admittedAttempts, 2);
+  EXPECT_EQ(completed.completionAttempts, 2);
+  EXPECT_EQ(completed.successfulAttempts, 2);
+  lease->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  limiter->onSuccessForEpoch(epoch, 2, 1'000'000'000);
+  completed = limiter->stats();
+  EXPECT_EQ(completed.completionAttempts, 2);
+  EXPECT_EQ(completed.successfulAttempts, 2);
+  EXPECT_EQ(completed.overloadAttempts, 0);
+  EXPECT_EQ(completed.rateDecreases, 0);
+}
+
+TEST_F(RPCRateLimiterTest, unclassifiedCompletionMatchesRelease) {
+  for (const bool rateSelected : {false, true}) {
+    int64_t clockReads{0};
+    auto limiter = std::make_shared<RPCRateLimiter>(
+        "test.unclassified-completion",
+        [&] {
+          ++clockReads;
+          return std::chrono::steady_clock::time_point{};
+        },
+        nullptr,
+        [] { return 1.0; });
+    limiter->configure(
+        {.adaptive = true,
+         .ceiling = 100,
+         .floor = 1,
+         .ratePolicy = rateSelected ? RPCFlowControlPolicy::kCubic
+                                    : RPCFlowControlPolicy::kWindowAimd,
+         .scheduleFixes = rateSelected});
+    auto tokens = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(tokens.size(), 1);
+    auto canceled = limiter->makeLease(std::move(tokens.front()));
+    clockReads = 0;
+    canceled->release();
+    const auto releaseClockReads = clockReads;
+
+    tokens = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(tokens.size(), 1);
+    auto completed = limiter->makeLease(std::move(tokens.front()));
+    clockReads = 0;
+    completed->completeAndRelease(/*hardOverload=*/false);
+    EXPECT_EQ(clockReads, releaseClockReads);
+    EXPECT_EQ(limiter->stats().completionAttempts, 0);
+    EXPECT_EQ(limiter->stats().successfulAttempts, 0);
+    EXPECT_EQ(limiter->stats().pending, 0);
+  }
+}
+
+TEST_F(RPCRateLimiterTest, firstHandoffBootstrapsAfterCanonicalOverload) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.stale-first-handoff", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 100,
+       .floor = 100,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto tokens = limiter->tryAcquireUpTo(2);
+  ASSERT_EQ(tokens.size(), 2);
+  auto terminal = limiter->makeLease(std::move(tokens.front()));
+  auto handedOff = limiter->makeLease(std::move(tokens.back()));
+  terminal->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, false);
+  EXPECT_EQ(limiter->stats().sendRateMilli, 0);
+  EXPECT_EQ(limiter->stats().limitMilli, 100'000);
+
+  const auto completion = handedOff->completeAndRelease(
+      RPCRateLimiter::Outcome::kOverload, 0, true);
+  EXPECT_TRUE(completion.sharedOverloadHandled);
+  EXPECT_GT(limiter->stats().sendRateMilli, 0);
+  EXPECT_EQ(limiter->stats().rateDecreases, 1);
+  EXPECT_EQ(limiter->stats().limitMilli, 100'000);
+  clock.advance(20ms);
+  EXPECT_EQ(limiter->tryAcquireUpTo(10).size(), 1);
+}
+
+TEST_F(RPCRateLimiterTest, rateProbeWithoutIntervalUsesBootstrapHorizon) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.rate-bootstrap-probe", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 100,
+       .floor = 0.01,
+       .maxProbeInterval = 0ms,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto rejected = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  limiter->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  const auto initial = limiter->stats();
+  EXPECT_EQ(initial.serviceHorizonNanos, 1'000'000'000);
+  EXPECT_GT(initial.sendRateMilli, 0);
+  EXPECT_GT(initial.nextPermitDelayNanos, 0);
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  clock.advance(100ms);
+  EXPECT_TRUE(wait.wait.isReady());
+  auto admitted = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(admitted.size(), 1);
+  limiter->makeLease(std::move(admitted.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kSuccess, 0);
+  EXPECT_EQ(limiter->stats().serviceHorizonNanos, 1'000'000'000);
+  EXPECT_GT(limiter->stats().sendRateMilli, 0);
+}
+
+TEST_F(RPCRateLimiterTest, rateTargetSurvivesIdleAndOutputDrain) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.rate-idle", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 100,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+  limiter->makeLease(std::move(tokens.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  const auto target = limiter->stats().sendRateMilli;
+  EXPECT_GT(target, 0);
+  clock.advance(1min);
+  limiter->onSuccessForEpoch(0, 1, 0);
+  EXPECT_EQ(limiter->stats().sendRateMilli, target);
+  EXPECT_EQ(limiter->tryAcquireUpTo(10).size(), 1);
+  EXPECT_TRUE(limiter->tryAcquireUpTo(10).empty());
+}
+
+TEST_F(RPCRateLimiterTest, abandonedRateWaitDoesNotTurnIdleIntoRecovery) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.rate-abandoned-wait", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto rejected = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  limiter->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  clock.advance(20ms);
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+  auto lease = limiter->makeLease(std::move(tokens.front()));
+  {
+    auto abandoned = limiter->admitOrWait();
+    ASSERT_FALSE(abandoned.admitted);
+    clock.advance(1ms);
+  }
+  clock.advance(20ms);
+  const auto waiting = limiter->stats().rateWaitingNanos;
+  EXPECT_GT(waiting, 0);
+  const auto rate = limiter->stats().sendRateMilli;
+  clock.advance(1min);
+  EXPECT_EQ(limiter->stats().rateWaitingNanos, waiting);
+  EXPECT_GT(limiter->stats().ratePacingNanos, waiting);
+  lease->completeAndRelease(RPCRateLimiter::Outcome::kSuccess, 100'000'000);
+  EXPECT_LT(limiter->stats().sendRateMilli, rate + 1'000);
+}
+
+TEST_F(RPCRateLimiterTest, zeroDemandStopsPollOnlyRecoveryClock) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.rate-poll-idle", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto rejected = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  limiter->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  clock.advance(20ms);
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+  auto lease = limiter->makeLease(std::move(tokens.front()));
+  EXPECT_TRUE(limiter->tryAcquireUpTo(1).empty());
+  clock.advance(1ms);
+  EXPECT_TRUE(limiter->tryAcquireUpTo(0).empty());
+  const auto waiting = limiter->stats().rateWaitingNanos;
+  const auto rate = limiter->stats().sendRateMilli;
+  clock.advance(1min);
+  EXPECT_EQ(limiter->stats().rateWaitingNanos, waiting);
+  lease->completeAndRelease(RPCRateLimiter::Outcome::kSuccess, 100'000'000);
+  EXPECT_LT(limiter->stats().sendRateMilli, rate + 1'000);
+}
+
+TEST_F(RPCRateLimiterTest, canceledRateWaitDoesNotCancelAnotherDriver) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.rate-wait-ownership", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto rejected = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  limiter->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  clock.advance(20ms);
+  auto held = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(held.size(), 1);
+  auto first = limiter->admitOrWait();
+  auto second = limiter->admitOrWait();
+  ASSERT_FALSE(first.admitted);
+  ASSERT_FALSE(second.admitted);
+  clock.advance(1ms);
+  first.registration.reset();
+  EXPECT_TRUE(first.wait.isReady());
+  EXPECT_FALSE(second.wait.isReady());
+  const auto waiting = limiter->stats().rateWaitingNanos;
+  clock.advance(1ms);
+  EXPECT_GT(limiter->stats().rateWaitingNanos, waiting);
+  second.registration.reset();
+  EXPECT_TRUE(second.wait.isReady());
+  const auto afterCancel = limiter->stats().rateWaitingNanos;
+  auto later = limiter->admitOrWait();
+  ASSERT_FALSE(later.admitted);
+  later.registration.reset();
+  clock.advance(1min);
+  EXPECT_EQ(limiter->stats().rateWaitingNanos, afterCancel);
+}
+
+TEST_F(RPCRateLimiterTest, ratePolicyDoesNotPaceOrdinaryRetryPolicy) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config policy{.adaptive = true, .ceiling = 100, .floor = 1};
+  auto* ordinary =
+      registry.getForPolicy("test.rate-mode-isolation", policy).limiter;
+  policy.ratePolicy = RPCFlowControlPolicy::kCubic;
+  policy.scheduleFixes = true;
+  auto* controlled =
+      registry.getForPolicy("test.rate-mode-isolation", policy).limiter;
+  ASSERT_NE(ordinary, controlled);
+  auto rejected = controlled->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  controlled->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  EXPECT_GT(controlled->stats().sendRateMilli, 0);
+  EXPECT_EQ(ordinary->stats().sendRateMilli, 0);
+  EXPECT_EQ(ordinary->tryAcquireUpTo(10).size(), 10);
+}
+
+TEST_F(RPCRateLimiterTest, windowRollbackDoesNotReuseActivatedModernPrimary) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config modern{
+      .adaptive = true,
+      .ceiling = 100,
+      .floor = 1,
+      .ratePolicy = RPCFlowControlPolicy::kCubic,
+      .scheduleFixes = true};
+  const auto primary =
+      registry.getForPolicy("test.modern-primary-rollback", modern);
+  EXPECT_FALSE(primary.policyScoped);
+  auto rejected = primary.limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  primary.limiter->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  EXPECT_GT(primary.limiter->stats().sendRateMilli, 0);
+
+  auto window = modern;
+  window.ratePolicy = RPCFlowControlPolicy::kWindowAimd;
+  window.scheduleFixes = false;
+  const auto rollback =
+      registry.getForPolicy("test.modern-primary-rollback", window);
+  ASSERT_NE(primary.limiter, rollback.limiter);
+  EXPECT_TRUE(rollback.policyScoped);
+  EXPECT_EQ(
+      rollback.limiter->stats().ratePolicy, RPCFlowControlPolicy::kWindowAimd);
+  EXPECT_FALSE(rollback.limiter->stats().scheduleFixes);
+  EXPECT_EQ(rollback.limiter->stats().sendRateMilli, 0);
+  EXPECT_EQ(rollback.limiter->tryAcquireUpTo(10).size(), 10);
+}
+
+TEST_F(RPCRateLimiterTest, ordinaryTemporaryAdmissionKeepsWaitRegistered) {
+  auto limiter =
+      std::make_shared<RPCRateLimiter>("test.ordinary-admission-future");
+  limiter->configure({.ceiling = 1});
+  auto held = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(held.size(), 1);
+  auto wait = limiter->admitOrWait().wait;
+  EXPECT_FALSE(wait.isReady());
+  held.clear();
+  EXPECT_TRUE(wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, scheduleOnlyPolicyKeepsTemporaryWaitRegistered) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.scheduler-only-temporary", clock);
+  limiter->configure(
+      {.adaptive = true, .ceiling = 1, .floor = 0.01, .scheduleFixes = true});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto wait = limiter->admitOrWait().wait;
+  EXPECT_FALSE(wait.isReady());
+  clock.advance(2'100ms);
+  EXPECT_TRUE(wait.isReady());
+  EXPECT_EQ(limiter->stats().ratePolicy, RPCFlowControlPolicy::kWindowAimd);
+  EXPECT_TRUE(limiter->stats().scheduleFixes);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    fixedConcurrencyDoesNotMergeRateAndOrdinaryPolicies) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config policy{.adaptive = true, .ceiling = 1, .floor = 1};
+  auto* ordinary =
+      registry.getForPolicy("test.fixed-rate-policy", policy).limiter;
+  policy.ratePolicy = RPCFlowControlPolicy::kCubic;
+  policy.scheduleFixes = true;
+  auto* controlled =
+      registry.getForPolicy("test.fixed-rate-policy", policy).limiter;
+  ASSERT_NE(ordinary, controlled);
+  auto rejected = controlled->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  controlled->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  EXPECT_EQ(controlled->stats().capacity, 1);
+  EXPECT_GT(controlled->stats().sendRateMilli, 0);
+  EXPECT_EQ(ordinary->stats().sendRateMilli, 0);
+  EXPECT_EQ(ordinary->tryAcquireUpTo(1).size(), 1);
+}
+
+TEST_F(RPCRateLimiterTest, rateOverloadCoalescesOldAdmissionWave) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.rate-wave", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 100,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto tokens = limiter->tryAcquireUpTo(20);
+  ASSERT_EQ(tokens.size(), 20);
+  for (auto& token : tokens) {
+    limiter->makeLease(std::move(token))
+        ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+    clock.advance(1s);
+  }
+  EXPECT_EQ(limiter->stats().overloadAttempts, 20);
+  EXPECT_EQ(limiter->stats().rateDecreases, 1);
+}
+
+TEST_F(RPCRateLimiterTest, currentEpochOverloadInSameBucketPreservesPacing) {
+  for (const auto policy :
+       {RPCFlowControlPolicy::kRateAimd, RPCFlowControlPolicy::kCubic}) {
+    ManualPacingClock clock;
+    auto limiter = makePacingLimiter("test.current-epoch-coalescing", clock);
+    limiter->configure(
+        {.adaptive = true,
+         .ceiling = 100,
+         .floor = 1,
+         .ratePolicy = policy,
+         .scheduleFixes = true});
+    auto first = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(first.size(), 1);
+    const auto originalEpoch = first.front().overloadEpoch();
+    limiter->makeLease(std::move(first.front()))
+        ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+    const auto initial = limiter->stats();
+    ASSERT_GT(initial.sendRateMilli, 0);
+    ASSERT_GT(initial.nextPermitDelayNanos, 0);
+    ASSERT_LT(initial.nextPermitDelayNanos, 500'000'000);
+    clock.advanceClockOnly(
+        std::chrono::nanoseconds(initial.nextPermitDelayNanos));
+
+    auto current = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(current.size(), 1);
+    ASSERT_NE(current.front().overloadEpoch(), originalEpoch);
+    const auto before = limiter->stats();
+    const auto completion =
+        limiter->makeLease(std::move(current.front()))
+            ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+    const auto after = limiter->stats();
+    EXPECT_TRUE(completion.sharedOverloadHandled);
+    EXPECT_EQ(after.rateDecreases, before.rateDecreases);
+    EXPECT_EQ(after.sendRateMilli, before.sendRateMilli);
+    EXPECT_GT(after.sendRateMilli, 0);
+    EXPECT_EQ(after.nextPermitDelayNanos, before.nextPermitDelayNanos);
+    EXPECT_EQ(limiter->available(), 0);
+    EXPECT_TRUE(limiter->tryAcquireUpTo(10).empty());
+
+    ASSERT_GT(after.nextPermitDelayNanos, 0);
+    clock.advanceClockOnly(
+        std::chrono::nanoseconds(after.nextPermitDelayNanos - 1));
+    EXPECT_TRUE(limiter->tryAcquireUpTo(10).empty());
+    clock.advanceClockOnly(std::chrono::nanoseconds(1));
+    EXPECT_EQ(limiter->tryAcquireUpTo(10).size(), 1);
+    EXPECT_TRUE(limiter->tryAcquireUpTo(10).empty());
+  }
+}
+
+TEST_F(RPCRateLimiterTest, rateAndFractionalPacingUseStricterDeadline) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.combined-pacing", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 2,
+       .floor = 0.01,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  for (int i = 0; i < 10; ++i) {
+    clock.advance(1min);
+    auto rejected = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(rejected.size(), 1);
+    limiter->makeLease(std::move(rejected.front()))
+        ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  }
+  EXPECT_THROW(limiter->acquire(), std::exception);
+  for (int i = 0; i < 2; ++i) {
+    clock.advance(1min);
+    auto terminal = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(terminal.size(), 1);
+    limiter->makeLease(std::move(terminal.front()))
+        ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, false);
+  }
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+  clock.advance(3s);
+  EXPECT_TRUE(limiter->tryAcquireUpTo(1).empty());
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  clock.advance(20s);
+  EXPECT_TRUE(wait.wait.isReady());
+  EXPECT_EQ(limiter->tryAcquireUpTo(1).size(), 1);
+}
+
+TEST_F(RPCRateLimiterTest, finiteRateRecoveryIncludesBootstrapAndTail) {
+  for (const bool mixedCost : {false, true}) {
+    for (const bool changingQuota : {false, true}) {
+      const auto ordinary = runFiniteRateSimulation(
+          {.mixedCost = mixedCost, .changingQuota = changingQuota});
+      const auto cubic = runFiniteRateSimulation(
+          {.algorithm = RPCRateLimiter::RateAlgorithm::kCubic,
+           .mixedCost = mixedCost,
+           .changingQuota = changingQuota});
+      const auto aimd = runFiniteRateSimulation(
+          {.algorithm = RPCRateLimiter::RateAlgorithm::kRateAimd,
+           .mixedCost = mixedCost,
+           .changingQuota = changingQuota});
+      LOG(INFO) << "RPC finite rate simulation mixedCost=" << mixedCost
+                << " changingQuota=" << changingQuota
+                << " ordinary=" << ordinary.elapsedMs << "/"
+                << ordinary.attempts << " cubic=" << cubic.elapsedMs << "/"
+                << cubic.attempts << " rateAimd=" << aimd.elapsedMs << "/"
+                << aimd.attempts;
+      EXPECT_EQ(ordinary.completed, 1'000);
+      EXPECT_EQ(cubic.completed, 1'000);
+      EXPECT_EQ(aimd.completed, 1'000);
+      EXPECT_LE(cubic.elapsedMs, ordinary.elapsedMs);
+      EXPECT_LE(
+          cubic.attempts - cubic.completed,
+          (ordinary.attempts - ordinary.completed) / 2);
+    }
+  }
+}
+
+TEST_F(RPCRateLimiterTest, finiteRateRecoveryWithSlowResponsesAndRisingQuota) {
+  for (const int64_t responseMs : {100, 1'000}) {
+    const auto rows = responseMs == 1'000 ? 200 : 1'000;
+    const auto ordinary = runFiniteRateSimulation(
+        {.changingQuota = true,
+         .rows = rows,
+         .responseMs = responseMs,
+         .growingQuota = true,
+         .changeAtMs = 3'000});
+    const auto cubic = runFiniteRateSimulation(
+        {.algorithm = RPCRateLimiter::RateAlgorithm::kCubic,
+         .changingQuota = true,
+         .rows = rows,
+         .responseMs = responseMs,
+         .growingQuota = true,
+         .changeAtMs = 3'000});
+    const auto aimd = runFiniteRateSimulation(
+        {.algorithm = RPCRateLimiter::RateAlgorithm::kRateAimd,
+         .changingQuota = true,
+         .rows = rows,
+         .responseMs = responseMs,
+         .growingQuota = true,
+         .changeAtMs = 3'000});
+    LOG(INFO) << "RPC rising quota simulation responseMs=" << responseMs
+              << " ordinary=" << ordinary.elapsedMs << "/" << ordinary.attempts
+              << " cubic=" << cubic.elapsedMs << "/" << cubic.attempts
+              << " rateAimd=" << aimd.elapsedMs << "/" << aimd.attempts;
+    EXPECT_EQ(ordinary.completed, rows);
+    EXPECT_EQ(cubic.completed, rows);
+    EXPECT_EQ(aimd.completed, rows);
+    EXPECT_LE(cubic.elapsedMs, ordinary.elapsedMs);
+    EXPECT_LE(
+        cubic.attempts - cubic.completed,
+        (ordinary.attempts - ordinary.completed) / 2);
+  }
+}
+
+TEST_F(RPCRateLimiterTest, isolatedRejectionDoesNotSlowShortJobs) {
+  for (const int64_t rows : {1, 20}) {
+    const auto ordinary = runFiniteRateSimulation(
+        {.rows = rows, .responseMs = 1'000, .rejectFirst = true});
+    const auto cubic = runFiniteRateSimulation(
+        {.algorithm = RPCRateLimiter::RateAlgorithm::kCubic,
+         .rows = rows,
+         .responseMs = 1'000,
+         .rejectFirst = true});
+    LOG(INFO) << "RPC isolated rejection simulation rows=" << rows
+              << " ordinary=" << ordinary.elapsedMs << "/" << ordinary.attempts
+              << " cubic=" << cubic.elapsedMs << "/" << cubic.attempts;
+    EXPECT_EQ(ordinary.completed, rows);
+    EXPECT_EQ(cubic.completed, rows);
+    EXPECT_LE(cubic.elapsedMs, ordinary.elapsedMs);
+    EXPECT_EQ(cubic.attempts, rows + 1);
+  }
+  const auto ordinary = runFiniteRateSimulation(
+      {.rows = 20, .responseMs = 10'000, .rejectFirst = true});
+  const auto cubic = runFiniteRateSimulation(
+      {.algorithm = RPCRateLimiter::RateAlgorithm::kCubic,
+       .rows = 20,
+       .responseMs = 10'000,
+       .rejectFirst = true});
+  LOG(INFO) << "RPC ten second response simulation ordinary="
+            << ordinary.elapsedMs << "/" << ordinary.attempts
+            << " cubic=" << cubic.elapsedMs << "/" << cubic.attempts;
+  EXPECT_EQ(ordinary.completed, 20);
+  EXPECT_EQ(cubic.completed, 20);
+  EXPECT_LE(cubic.elapsedMs, ordinary.elapsedMs);
+}
+
+TEST_F(RPCRateLimiterTest, longServiceCallsRetainFiniteJobThroughput) {
+  const auto ordinary =
+      runFiniteRateSimulation({.rows = 20, .responseMs = 10'000});
+  const auto cubic = runFiniteRateSimulation(
+      {.algorithm = RPCRateLimiter::RateAlgorithm::kCubic,
+       .rows = 20,
+       .responseMs = 10'000});
+  LOG(INFO) << "RPC long service quota simulation ordinary="
+            << ordinary.elapsedMs << "/" << ordinary.attempts
+            << " cubic=" << cubic.elapsedMs << "/" << cubic.attempts;
+  EXPECT_EQ(ordinary.completed, 20);
+  EXPECT_EQ(cubic.completed, 20);
+  EXPECT_LE(cubic.elapsedMs, ordinary.elapsedMs);
+  EXPECT_LE(
+      cubic.attempts - cubic.completed,
+      (ordinary.attempts - ordinary.completed) / 2);
+}
+
+TEST_F(RPCRateLimiterTest, independentWorkersShareOneRateQuota) {
+  const auto ordinary = runFiniteRateSimulation({.workers = 2});
+  const auto cubic = runFiniteRateSimulation(
+      {.algorithm = RPCRateLimiter::RateAlgorithm::kCubic, .workers = 2});
+  LOG(INFO) << "RPC two worker rate simulation ordinary=" << ordinary.elapsedMs
+            << "/" << ordinary.attempts << " cubic=" << cubic.elapsedMs << "/"
+            << cubic.attempts;
+  EXPECT_EQ(ordinary.completed, 1'000);
+  EXPECT_EQ(cubic.completed, 1'000);
+  EXPECT_LE(cubic.elapsedMs, ordinary.elapsedMs);
+  EXPECT_LE(
+      cubic.attempts - cubic.completed,
+      (ordinary.attempts - ordinary.completed) / 2);
+}
+
+TEST_F(RPCRateLimiterTest, irreducibleRejectionFloorRetainsLiveness) {
+  // Every fifth attempt fails independently of load. This is a robustness
+  // model, not a claim about MetaGen's quota or an attainable rejection target.
+  const auto ordinary =
+      runFiniteRateSimulation({.rows = 100, .independentRejections = true});
+  const auto cubic = runFiniteRateSimulation(
+      {.algorithm = RPCRateLimiter::RateAlgorithm::kCubic,
+       .rows = 100,
+       .independentRejections = true});
+  LOG(INFO) << "RPC irreducible rejection simulation ordinary="
+            << ordinary.elapsedMs << "/" << ordinary.attempts << "/"
+            << ordinary.completed << " cubic=" << cubic.elapsedMs << "/"
+            << cubic.attempts << "/" << cubic.completed;
+  EXPECT_EQ(ordinary.completed, 100);
+  EXPECT_EQ(cubic.completed, 100);
+  EXPECT_GE(cubic.attempts, cubic.completed);
+  EXPECT_LT(cubic.elapsedMs, 120'000);
+}
+
+TEST_F(RPCRateLimiterTest, finiteRateControlWithJitteredTransportRetries) {
+  // The jitter draw depends on row and retry identities, so both modes use the
+  // same retry schedule even when their dispatch orders differ.
+  const auto ordinary = runFiniteRateSimulation(
+      {.mixedCost = true,
+       .rows = 2'000,
+       .concurrency = 100,
+       .equalJitter = true});
+  const auto cubic = runFiniteRateSimulation(
+      {.algorithm = RPCRateLimiter::RateAlgorithm::kCubic,
+       .mixedCost = true,
+       .rows = 2'000,
+       .concurrency = 100,
+       .equalJitter = true});
+  const auto aimd = runFiniteRateSimulation(
+      {.algorithm = RPCRateLimiter::RateAlgorithm::kRateAimd,
+       .mixedCost = true,
+       .rows = 2'000,
+       .concurrency = 100,
+       .equalJitter = true});
+  LOG(INFO) << "RPC jittered retry simulation ordinary=" << ordinary.elapsedMs
+            << "/" << ordinary.attempts << "/" << ordinary.completed
+            << " cubic=" << cubic.elapsedMs << "/" << cubic.attempts << "/"
+            << cubic.completed << " rateAimd=" << aimd.elapsedMs << "/"
+            << aimd.attempts << "/" << aimd.completed;
+  EXPECT_EQ(ordinary.completed, 2'000);
+  EXPECT_EQ(cubic.completed, 2'000);
+  EXPECT_EQ(aimd.completed, 2'000);
+  EXPECT_LE(cubic.elapsedMs, ordinary.elapsedMs);
+  EXPECT_LE(
+      cubic.attempts - cubic.completed,
+      (ordinary.attempts - ordinary.completed) / 2);
+}
+
+TEST_F(RPCRateLimiterTest, rateControlAdaptsToFixedWindowQuotaChanges) {
+  for (const int64_t responseMs : {150, 3'000}) {
+    const RateSimulationConfig ordinaryConfig{
+        .changingQuota = true,
+        .rows = 160,
+        .responseMs = responseMs,
+        .equalJitter = true,
+        .quotaPerSecond = 8,
+        .quotaAfterChange = 4,
+        .quotaWindowMs = 1'000};
+    auto controlledConfig = ordinaryConfig;
+    controlledConfig.algorithm = RPCRateLimiter::RateAlgorithm::kCubic;
+    const auto ordinary = runFiniteRateSimulation(ordinaryConfig);
+    const auto controlled = runFiniteRateSimulation(controlledConfig);
+    const auto ordinaryRejected = ordinary.attempts - ordinary.completed;
+    const auto controlledRejected = controlled.attempts - controlled.completed;
+    LOG(INFO) << "RPC fixed-window quota simulation responseMs=" << responseMs
+              << " ordinary=" << ordinary.elapsedMs << "/" << ordinaryRejected
+              << " controlled=" << controlled.elapsedMs << "/"
+              << controlledRejected << " cuts=" << controlled.rateCuts.size();
+    EXPECT_EQ(ordinary.completed, 160);
+    EXPECT_EQ(controlled.completed, 160);
+    EXPECT_LE(ordinary.peakPending, 20);
+    EXPECT_LE(controlled.peakPending, 20);
+    EXPECT_LE(controlled.elapsedMs, ordinary.elapsedMs);
+    EXPECT_LE(2 * controlledRejected, ordinaryRejected);
+    if (controlled.elapsedMs > ordinary.elapsedMs ||
+        2 * controlledRejected > ordinaryRejected) {
+      for (const auto& cut : controlled.rateCuts) {
+        LOG(INFO) << "RPC fixed-window quota cut tMs=" << cut.atMs
+                  << " admissionBucket=" << cut.admissionBucket
+                  << " rateMilli=" << cut.sendRateMilli;
+      }
+    }
+  }
+}
+
+TEST_F(RPCRateLimiterTest, ratePacingPreservesDeadlineOnSuccess) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.rate-pacing-feedback", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  limiter->onSuccessForEpoch(0, 40, 0);
+  auto rejected = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  limiter->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(/*hardOverload=*/true, /*handedOff=*/true);
+
+  clock.advance(20ms);
+  auto admitted = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(admitted.size(), 1);
+  const auto epoch = admitted.front().overloadEpoch();
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+
+  clock.advance(1ms);
+  limiter->onSuccessForEpoch(epoch, 1, 0);
+  EXPECT_FALSE(wait.wait.isReady());
+  EXPECT_EQ(limiter->available(), 0);
+  EXPECT_TRUE(limiter->tryAcquireUpTo(1).empty());
+}
+
+TEST_F(RPCRateLimiterTest, ratePacingWakesWhileOtherCallsRemainInFlight) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.rate-pacing-delayed", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  limiter->onSuccessForEpoch(0, 40, 0);
+  auto rejected = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  limiter->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(/*hardOverload=*/true, /*handedOff=*/true);
+
+  clock.advance(20ms);
+  auto first = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(first.size(), 1);
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  clock.advance(1ms);
+  EXPECT_FALSE(wait.wait.isReady());
+  clock.advance(50ms);
+  EXPECT_TRUE(wait.wait.isReady());
+  auto second = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(second.size(), 1);
+  EXPECT_EQ(limiter->stats().pending, 2);
+}
+
+TEST_F(RPCRateLimiterTest, rateGrantRearmsExistingWaiterAfterStaleTimer) {
+  FailOncePacingClock clock;
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.rate-grant-existing-waiter",
+      [&clock] { return clock.now(); },
+      &clock,
+      [] { return 1.0; });
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto rejected = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  limiter->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  clock.advance(20ms);
+  auto first = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(first.size(), 1);
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  // The first timer is deliberately held while another driver takes its due
+  // permit. The second grant must replace that now-stale timer.
+  clock.advance(20ms);
+  auto second = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(second.size(), 1);
+  clock.advance(10ms);
+  EXPECT_TRUE(wait.wait.isReady());
+  EXPECT_EQ(limiter->stats().pending, 2);
+  clock.failFirstTimer();
+}
+
+TEST_F(RPCRateLimiterTest, admissionCrossingPermitDeadlineStillGetsWakeup) {
+  ManualPacingClock clock;
+  bool crossDeadline{false};
+  int clockReads{0};
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.pacing-deadline-crossing",
+      [&] {
+        if (crossDeadline && ++clockReads == 2) {
+          crossDeadline = false;
+          clock.advanceClockOnly(1s);
+        }
+        return clock.now();
+      },
+      clock.timekeeper(),
+      [] { return 1.0; });
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 1,
+       .ratePolicy = RPCFlowControlPolicy::kCubic,
+       .scheduleFixes = true});
+  auto rejected = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  limiter->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, 0, true);
+  clock.advance(20ms);
+  auto first = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(first.size(), 1);
+  crossDeadline = true;
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  EXPECT_TRUE(limiter->stats().admissionTimerArmed);
+  clock.advance(1ms);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    fractionalAdmissionCrossingPermitDeadlineStillGetsWakeup) {
+  ManualPacingClock clock;
+  bool crossDeadline{false};
+  int clockReads{0};
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.fractional-deadline-crossing",
+      [&] {
+        if (crossDeadline && ++clockReads == 2) {
+          crossDeadline = false;
+          clock.advanceClockOnly(2s);
+        }
+        return clock.now();
+      },
+      clock.timekeeper(),
+      [] { return 1.0; });
+  limiter->configure(
+      {.adaptive = true, .ceiling = 1, .floor = 0.01, .scheduleFixes = true});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+  clock.advance(1s);
+  crossDeadline = true;
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  EXPECT_TRUE(limiter->stats().admissionTimerArmed);
+  clock.advance(1ms);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, windowAimdPolicyRetainsOriginalDeadlineRace) {
+  ManualPacingClock clock;
+  bool crossDeadline{false};
+  int clockReads{0};
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.legacy-deadline-rollback",
+      [&] {
+        if (crossDeadline && ++clockReads == 2) {
+          crossDeadline = false;
+          clock.advanceClockOnly(2s);
+        }
+        return clock.now();
+      },
+      clock.timekeeper(),
+      [] { return 1.0; });
+  limiter->configure({.adaptive = true, .ceiling = 1, .floor = 0.01});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  clock.advance(1s);
+  crossDeadline = true;
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  EXPECT_FALSE(limiter->stats().admissionTimerArmed);
+  clock.advance(1ms);
+  EXPECT_FALSE(wait.wait.isReady());
+  // Release the deliberately preserved old wait without leaving a pending
+  // promise at fixture teardown.
+  limiter->amend([](auto& config) { config.adaptive = false; });
+  EXPECT_TRUE(wait.wait.isReady());
 }
 
 TEST_F(RPCRateLimiterTest, configAmendDoesNotSuppressCanonicalOverload) {

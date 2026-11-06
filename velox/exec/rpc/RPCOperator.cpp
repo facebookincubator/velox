@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
@@ -81,6 +82,7 @@ RPCOperator::RPCOperator(
 }
 
 RPCOperator::~RPCOperator() {
+  admissionWait_.reset();
   if (state_ == nullptr) {
     return;
   }
@@ -157,12 +159,19 @@ void RPCOperator::initialize() {
   auto* driverCtx = operatorCtx_->driverCtx();
   VELOX_CHECK_NOT_NULL(driverCtx);
   const auto& queryConfig = driverCtx->queryConfig();
+  requestedFlowControlPolicy_ =
+      parseRPCFlowControlPolicy(queryConfig.rpcFlowControlPolicy());
+  scheduleFixesEnabled_ =
+      requestedFlowControlPolicy_ != RPCFlowControlPolicy::kWindowAimd;
   function_->initialize(
       queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
   capacityRetryEnabled_ =
       rpcNode_->streamingMode() == RPCStreamingMode::kPerRow &&
       function_->mayReturnCapacityRetries();
+  operatorRetryRateControlEnabled_ = capacityRetryEnabled_ &&
+      queryConfig.rpcRateLimiterAdaptiveEnabled() && scheduleFixesEnabled_;
   state_->setCapacityRetryEnabled(capacityRetryEnabled_);
+  state_->setOperatorRetryRateControlEnabled(operatorRetryRateControlEnabled_);
   *liveStatsSources_.wlock() =
       LiveStatsSources{.state = state_, .function = function_};
   requiresRowInspectionBeforeAdmission_ =
@@ -226,6 +235,10 @@ void RPCOperator::initializeRateLimiter() {
   const bool functionBoundsFirst = sessionHardLimit >= 0;
   RPCRateLimiter::Config policy;
   policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
+  policy.ratePolicy = operatorRetryRateControlEnabled_
+      ? requestedFlowControlPolicy_
+      : RPCFlowControlPolicy::kWindowAimd;
+  policy.scheduleFixes = scheduleFixesEnabled_;
   const auto functionFloor = function_->configuredAdaptiveFloor();
   if (functionBoundsFirst && functionFloor > 0) {
     policy.floor = functionFloor;
@@ -412,7 +425,10 @@ void RPCOperator::addInput(RowVectorPtr input) {
 
 void RPCOperator::dispatchDueRetries() {
   const auto feedback = state_->takeRetryFeedback();
-  if (feedback.overloaded) {
+  // The selected shared rate controller handles these rejections without
+  // also cutting the driver's concurrency window.
+  if (feedback.overloaded &&
+      !(operatorRetryRateControlEnabled_ && feedback.sharedOverloadHandled)) {
     recordCongestion(
         AsyncRPCFunction::CongestionSignal::kOverloaded,
         /*roundTripTimesNs=*/{},
@@ -449,6 +465,7 @@ void RPCOperator::dispatchDueRetries() {
           1,
           "dispatchPerRow returned {} futures for one retried row",
           futures.size());
+      numAttemptsDispatched_.fetch_add(1, std::memory_order_relaxed);
       for (auto& [_, future] : futures) {
         state_->addRetriedRow(
             state_,
@@ -500,6 +517,8 @@ void RPCOperator::dispatchRowsUnderAdmission() {
         futures.size(),
         numRowsInChunk);
     numRequestsDispatched_.fetch_add(
+        static_cast<int64_t>(futures.size()), std::memory_order_relaxed);
+    numAttemptsDispatched_.fetch_add(
         static_cast<int64_t>(futures.size()), std::memory_order_relaxed);
     size_t reservedIndex = 0;
     for (auto& [originalRowIndex, future] : futures) {
@@ -1100,6 +1119,7 @@ RowVectorPtr RPCOperator::getOutput() {
 }
 
 void RPCOperator::endBlockWait() {
+  admissionWait_.reset();
   if (!blockWaitWatch_.has_value()) {
     return;
   }
@@ -1119,7 +1139,20 @@ exec::BlockingReason RPCOperator::park(
   *future = std::move(waitFuture);
   blockWaitWatch_.emplace();
   blockWaitIsBackpressure_ = isBackpressure;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::rpc::RPCOperator::park", this);
   return exec::BlockingReason::kWaitForRPC;
+}
+
+RPCOperator::TestingDispatchSnapshot RPCOperator::testingDispatchSnapshot()
+    const {
+  return {
+      .pendingCursor = pendingCursor_,
+      .pendingNumRows = pendingNumRows_,
+      .claimedRows = claimedRows_.size(),
+      .noMoreInput = noMoreInput_,
+      .finished = finished_,
+  };
 }
 
 void RPCOperator::claimBatch(RPCState::ReadyBatch batch) {
@@ -1147,6 +1180,7 @@ exec::BlockingReason RPCOperator::parkOnAdmission(ContinueFuture* future) {
     // Capacity is available; retry dispatch.
     return exec::BlockingReason::kNotBlocked;
   }
+  admissionWait_ = std::move(admission.registration);
   return park(future, std::move(admission.wait), /*isBackpressure=*/true);
 }
 
@@ -1159,18 +1193,31 @@ std::optional<exec::BlockingReason> RPCOperator::tryClaimOrParkOnRow(
       claimedRows_.push_back(std::move(*claimed));
       return exec::BlockingReason::kNotBlocked;
     case RPCState::ClaimResult::kMustWait:
-      // Nothing in flight here, so no completion can wake this driver; its
-      // buffered rows wait for a shared slot, not for the next retry's timer.
-      if (capacityRetryEnabled_ && state_->numInFlight() == 0 &&
-          hasPendingRows()) {
-        return parkOnAdmission(future);
+      if (operatorRetryRateControlEnabled_ && state_->dispatchHeadroom() > 0 &&
+          (hasPendingRows() || state_->numDueRetries() > 0)) {
+        auto admission = limiter_->admitOrWait();
+        if (admission.admitted) {
+          return exec::BlockingReason::kNotBlocked;
+        }
+        admissionWait_ = std::move(admission.registration);
+        // Admission can become due before an in-flight call completes. The
+        // state future also wakes on a completion or retry deadline, so a
+        // slow call cannot strand available admission or ready output.
+        std::vector<ContinueFuture> waits;
+        waits.push_back(std::move(waitFuture));
+        waits.push_back(std::move(admission.wait));
+        waitFuture = folly::collectAny(waits).deferValue(
+            [](auto&& first) { return std::move(first.second).value(); });
       }
-      // A retry that became due while this driver was deciding to park goes
-      // now if its window and the shared limiter have room, rather than after
-      // an unrelated call completes.
-      if (state_->numDueRetries() > 0 && state_->dispatchHeadroom() > 0 &&
-          limiter_->available() > 0) {
-        return exec::BlockingReason::kNotBlocked;
+      if (!operatorRetryRateControlEnabled_) {
+        if (capacityRetryEnabled_ && state_->numInFlight() == 0 &&
+            hasPendingRows()) {
+          return parkOnAdmission(future);
+        }
+        if (state_->numDueRetries() > 0 && state_->dispatchHeadroom() > 0 &&
+            limiter_->available() > 0) {
+          return exec::BlockingReason::kNotBlocked;
+        }
       }
       return park(future, std::move(waitFuture), /*isBackpressure=*/false);
     case RPCState::ClaimResult::kIdle:
@@ -1349,6 +1396,10 @@ bool RPCOperator::startDrain() {
 }
 
 void RPCOperator::close() {
+  // Keep close-time accounting consistent with WINDOW_AIMD's rollback contract.
+  if (scheduleFixesEnabled_) {
+    endBlockWait();
+  }
   recordRuntimeStats();
 
   // Release resources explicitly. RPCState may be held alive by in-flight RPC
@@ -1449,8 +1500,12 @@ void RPCOperator::addLiveProgressStats(
   if (sources->state == nullptr) {
     return;
   }
+  stats.runtimeStats[kRpcFlowControlRequestedPolicy] =
+      RuntimeMetric(static_cast<int64_t>(requestedFlowControlPolicy_));
   stats.runtimeStats[kRpcRequestsDispatched] =
       RuntimeMetric(numRequestsDispatched_.load(std::memory_order_relaxed));
+  stats.runtimeStats[kRpcAttemptsDispatched] =
+      RuntimeMetric(numAttemptsDispatched_.load(std::memory_order_relaxed));
   const auto snapshot = sources->state->operatorSnapshot();
   stats.runtimeStats[kRpcCompletionsSignaled] =
       RuntimeMetric(snapshot.numCompletionsSignaled);
@@ -1476,6 +1531,10 @@ void RPCOperator::addLiveProgressStats(
   // report in that case, and no stats worth reporting either.
   if (sources->limiter != nullptr) {
     const auto limiterStats = sources->limiter->stats();
+    stats.runtimeStats[kRpcFlowControlRatePolicy] =
+        RuntimeMetric(static_cast<int64_t>(limiterStats.ratePolicy));
+    stats.runtimeStats[kRpcFlowControlScheduleFixes] =
+        RuntimeMetric(static_cast<int64_t>(limiterStats.scheduleFixes));
     stats.runtimeStats[kRpcRateLimiterCap] =
         RuntimeMetric(limiterStats.capacity);
     stats.runtimeStats[kRpcRateLimiterHardLimit] =
@@ -1490,6 +1549,18 @@ void RPCOperator::addLiveProgressStats(
         RuntimeMetric(limiterStats.lowWaterLimitMilli);
     stats.runtimeStats[kRpcRateLimiterServiceHorizonNanos] =
         RuntimeMetric(limiterStats.serviceHorizonNanos);
+    stats.runtimeStats[kRpcRateLimiterSendRateMilli] =
+        RuntimeMetric(limiterStats.sendRateMilli);
+    stats.runtimeStats[kRpcRateLimiterRateDecreasesLifetime] =
+        RuntimeMetric(limiterStats.rateDecreases);
+    if (includeGauges) {
+      stats.runtimeStats[kRpcRateLimiterAdmissionWaiters] =
+          RuntimeMetric(limiterStats.admissionWaiters);
+      stats.runtimeStats[kRpcRateLimiterAdmissionTimerArmed] =
+          RuntimeMetric(limiterStats.admissionTimerArmed ? 1 : 0);
+      stats.runtimeStats[kRpcRateLimiterNextPermitDelayNanos] = RuntimeMetric(
+          limiterStats.nextPermitDelayNanos, RuntimeCounter::Unit::kNanos);
+    }
     if (sources->policyScoped) {
       stats.runtimeStats[kRpcRateLimiterPolicyScoped] = RuntimeMetric(1);
     }
@@ -1500,6 +1571,12 @@ void RPCOperator::addLiveProgressStats(
           RuntimeCounter::Unit::kNanos);
       stats.runtimeStats[kRpcRateLimiterPacingNanos] = RuntimeMetric(
           limiterStats.pacingNanos - baseline.pacingNanos,
+          RuntimeCounter::Unit::kNanos);
+      stats.runtimeStats[kRpcRateLimiterRatePacingNanos] = RuntimeMetric(
+          limiterStats.ratePacingNanos - baseline.ratePacingNanos,
+          RuntimeCounter::Unit::kNanos);
+      stats.runtimeStats[kRpcRateLimiterRateWaitingNanos] = RuntimeMetric(
+          limiterStats.rateWaitingNanos - baseline.rateWaitingNanos,
           RuntimeCounter::Unit::kNanos);
       stats.runtimeStats[kRpcRateLimiterLimitMilliUnitSeconds] = RuntimeMetric(
           static_cast<int64_t>(std::llround(

@@ -317,6 +317,12 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     capacityRetryEnabled_.store(enabled, std::memory_order_relaxed);
   }
 
+  /// Select completion-time rate feedback before dispatch. Ordinary policies
+  /// retain the legacy overload-only completion path.
+  void setOperatorRetryRateControlEnabled(bool enabled) {
+    operatorRetryRateControlEnabled_.store(enabled, std::memory_order_relaxed);
+  }
+
   /// Set both the starting limit and the ceiling to maxWindow, overriding the
   /// per-mode default chosen in setStreamingMode(). This yields a fixed window
   /// only while no samples/errors are fed: onUnitError still halves it and
@@ -557,6 +563,23 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   /// lock acquisition. Thread-safe.
   OperatorSnapshot operatorSnapshot() const;
 
+  /// Queue ownership for diagnosing stalled tasks in tests.
+  struct TestingQueuesSnapshot {
+    /// Completed rows waiting to be claimed by the driver.
+    size_t readyRows{0};
+    /// Rejected rows retained for another attempt.
+    size_t retryRows{0};
+    /// Input batches with any row still retained.
+    size_t retainedInputBatches{0};
+    /// Whether the driver declared all input dispatched.
+    bool noMoreInput{false};
+    /// Whether completion and input ownership were closed.
+    bool closed{false};
+  };
+
+  /// Thread-safe test-only snapshot; scans retained input batches.
+  TestingQueuesSnapshot testingQueuesSnapshot() const;
+
  private:
   // tryClaimOrWait() under mutex_. Sets 'retryWakeDelayNs' when the caller
   // must arm a retry wake-up timer after releasing the lock.
@@ -653,6 +676,8 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   // Set once before dispatch, read by the driver and by completion callbacks.
   // Atomic so the setter needs no lock.
   std::atomic<bool> capacityRetryEnabled_{false};
+  // Selected before dispatch; read by completion callbacks without extra locks.
+  std::atomic<bool> operatorRetryRateControlEnabled_{false};
   // Rows rejected for capacity that wait for their retry. They count toward
   // the finish condition but not toward inFlight_, so they hold no window or
   // admission slot. They have not been output, so their input batch's

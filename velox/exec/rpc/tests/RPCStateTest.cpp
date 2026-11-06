@@ -191,6 +191,68 @@ TEST_F(RPCStateTest, basicAddAndClaim) {
   EXPECT_EQ(responseAs<TextPayload>(claimedRow->response).text, "test result");
 }
 
+TEST_F(RPCStateTest, completionFeedbackMatchesSelectedRatePolicy) {
+  for (const bool rateSelected : {false, true}) {
+    auto state = std::make_shared<RPCState>(testPool());
+    state->setStreamingMode(RPCStreamingMode::kPerRow);
+    state->setCapacityRetryEnabled(true);
+    state->setOperatorRetryRateControlEnabled(rateSelected);
+    auto limiter = std::make_shared<RPCRateLimiter>("test.completion-policy");
+    limiter->configure(
+        {.adaptive = true,
+         .ceiling = 100,
+         .floor = 1,
+         .ratePolicy = rateSelected ? RPCFlowControlPolicy::kCubic
+                                    : RPCFlowControlPolicy::kWindowAimd,
+         .scheduleFixes = rateSelected});
+    auto tokens = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(tokens.size(), 1);
+    auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+    state->addPendingRow(
+        state,
+        42,
+        RPCState::RowLocation{0, 0},
+        std::move(future),
+        limiter->makeLease(std::move(tokens.front())));
+    RPCResponse response;
+    response.rowId = 42;
+    response.setPayload(makeTextPayload("success"));
+    promise.setValue(std::move(response));
+    waitFor([&] { return state->numInFlight() == 0; });
+    auto ready = state->tryClaimReady();
+    ASSERT_TRUE(ready.has_value());
+    ASSERT_TRUE(ready->admissionEpoch.has_value());
+    const auto beforeDrain = limiter->stats();
+    EXPECT_EQ(beforeDrain.completionAttempts, rateSelected ? 1 : 0);
+    EXPECT_EQ(beforeDrain.successfulAttempts, rateSelected ? 1 : 0);
+    EXPECT_EQ(
+        beforeDrain.serviceHorizonNanos,
+        rateSelected && ready->rttNs > 0 ? ready->rttNs : 1'000'000'000);
+    limiter->onSuccessForEpoch(ready->admissionEpoch.value(), 1, 250'000'000);
+    EXPECT_EQ(
+        limiter->stats().serviceHorizonNanos,
+        rateSelected ? beforeDrain.serviceHorizonNanos : 250'000'000);
+
+    tokens = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(tokens.size(), 1);
+    state->addPendingRow(
+        state,
+        43,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(
+            RPCResponse::failed(
+                43, velox::rpc::RPCErrorKind::kBackendError, "failed")),
+        limiter->makeLease(std::move(tokens.front())));
+    waitFor([&] { return state->numInFlight() == 0; });
+    ready = state->tryClaimReady();
+    ASSERT_TRUE(ready.has_value());
+    EXPECT_TRUE(ready->response.hasError());
+    EXPECT_EQ(limiter->stats().completionAttempts, rateSelected ? 2 : 0);
+    EXPECT_EQ(limiter->stats().successfulAttempts, rateSelected ? 1 : 0);
+    EXPECT_EQ(limiter->stats().pending, 0);
+  }
+}
+
 TEST_F(RPCStateTest, claimReportsIdleWithoutCreatingAWaiter) {
   state_->setStreamingMode(RPCStreamingMode::kPerRow);
   ContinueFuture waitFuture{ContinueFuture::makeEmpty()};

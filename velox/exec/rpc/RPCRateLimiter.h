@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/exec/rpc/RPCFlowControlPolicy.h"
 
 namespace folly {
 class exception_wrapper;
@@ -60,11 +61,16 @@ namespace facebook::velox::exec::rpc {
 /// After the first success it doubles every service horizon, so recovery takes
 /// a few horizons however deep the back-off went. A separate ceiling limits
 /// concurrency even when the learned horizon is short.
+/// Selected operator retries also pace a separate sending rate in requests per
+/// second while retaining the concurrency bound.
 class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Restricts owner-backed token construction without using friendship.
   struct TokenConstructionKey {};
 
  public:
+  /// Alias used by the finite-workload comparison fixtures.
+  using RateAlgorithm = RPCFlowControlPolicy;
+
   /// Resolved tuning a limiter runs: one query's rate-limiter policy. The
   /// operator combines session overrides with stable function-provided bounds
   /// before initialization.
@@ -94,6 +100,14 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// apart as the floor allows. Maps to
     /// rpc.ratelimiter.max_probe_interval_ms.
     std::chrono::milliseconds maxProbeInterval{60'000};
+
+    /// Effective sending-rate policy after resolving streaming mode and retry
+    /// capability. WINDOW_AIMD retains completion-time overload-only feedback.
+    RPCFlowControlPolicy ratePolicy{RPCFlowControlPolicy::kWindowAimd};
+
+    /// Enables the scheduling repairs selected by RATE_AIMD or CUBIC,
+    /// including fractional pacing when independent rate control is inactive.
+    bool scheduleFixes{false};
 
     /// Field-wise equality. Limiters compare policies after reducing them to
     /// the fields a limiter reads; see initializeOrMatch().
@@ -175,6 +189,37 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// The limiter's clock at this snapshot, for timing the interval between
     /// two snapshots.
     int64_t clockNanos{0};
+
+    /// Explicit sending target in milli-requests per second; zero before the
+    /// first overload engages rate control.
+    int64_t sendRateMilli{0};
+
+    /// Time rate control has been engaged, independently of fractional pacing.
+    int64_t ratePacingNanos{0};
+
+    /// Eligible demand time spent waiting for rate admission, including the
+    /// current wait. Shared-controller time, not a sum over driver waits.
+    int64_t rateWaitingNanos{0};
+
+    /// Admission and completion counts over this limiter's lifetime.
+    int64_t admittedAttempts{0};
+    int64_t completionAttempts{0};
+    int64_t successfulAttempts{0};
+    int64_t overloadAttempts{0};
+
+    /// Number of distinct rate reductions, excluding coalesced feedback.
+    int64_t rateDecreases{0};
+
+    /// Current registered admission waits and whether their timer is armed.
+    int64_t admissionWaiters{0};
+    bool admissionTimerArmed{false};
+
+    /// Remaining time until the next pacing permit, zero when already due.
+    int64_t nextPermitDelayNanos{0};
+
+    /// Resolved sending-rate policy and independent scheduling-repair choice.
+    RPCFlowControlPolicy ratePolicy{RPCFlowControlPolicy::kWindowAimd};
+    bool scheduleFixes{false};
   };
 
   /// One in-flight request slot, released on destruction so a slot is returned
@@ -247,6 +292,16 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// token destruction can wake waiters. Canonical overloads from the same
     /// admission epoch are coalesced into one multiplicative decrease.
     Completion completeAndRelease(bool hardOverload) noexcept;
+
+    /// As above, with a retry returned to the operator indicated by handedOff.
+    Completion completeAndRelease(bool hardOverload, bool handedOff) noexcept;
+
+    /// Records one real completion before releasing admission. Successful
+    /// units and rate feedback are counted here, independently of output drain.
+    Completion completeAndRelease(
+        Outcome outcome,
+        int64_t rttNs,
+        bool handedOff = false) noexcept;
 
     /// Releases without feedback, as used when the owning query closes.
     void release() noexcept;
@@ -323,6 +378,24 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// and the pacing deadline has arrived.
   int64_t available() const;
 
+  /// Owns one admission-wait registration. Destruction removes only that
+  /// waiter, so a completion winning a race does not leave phantom demand.
+  class AdmissionWait {
+   public:
+    AdmissionWait(std::weak_ptr<RPCRateLimiter> owner, uint64_t id);
+    ~AdmissionWait();
+    AdmissionWait(const AdmissionWait&) = delete;
+    AdmissionWait& operator=(const AdmissionWait&) = delete;
+    AdmissionWait(AdmissionWait&&) = delete;
+    AdmissionWait& operator=(AdmissionWait&&) = delete;
+
+   private:
+    // Weak ownership avoids retaining a limiter through an abandoned wait.
+    std::weak_ptr<RPCRateLimiter> owner_;
+    // Identifies this registration independently of other drivers' waits.
+    const uint64_t id_;
+  };
+
   /// The answer to "can you take work now, and if not, what do I wait on?" --
   /// the same question a Velox operator asks its consumer.
   struct Admission {
@@ -332,6 +405,11 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// Valid exactly when 'admitted' is false: resolves when admission may be
     /// retried.
     ContinueFuture wait;
+
+    /// Rate-control policies retain this while parked and release it when
+    /// another wake-up wins or on close. Empty for ordinary admission policies,
+    /// whose future alone retains the original wait semantics.
+    std::shared_ptr<AdmissionWait> registration;
   };
 
   /// Decides and enrols under one lock, so a slot freeing cannot slip between
@@ -461,6 +539,10 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
       uint64_t generation,
       const folly::exception_wrapper& error) noexcept;
 
+  // Removes one registration and wakes its promise outside the lock. A
+  // completed registration is already absent, so cancellation is idempotent.
+  void cancelAdmissionWait(uint64_t id) noexcept;
+
   // Lock-free high-water update for stats.
   void notePeakPending(int64_t pending);
 
@@ -468,9 +550,49 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // to the floor. A no-op when adaptation is off, and never raises capacity.
   void onOverload();
 
-  // Handles canonical overload once per admission epoch. Returns true when
-  // handled or coalesced, so the driver never repeats shared feedback.
-  bool handleOverloadForEpoch(uint64_t overloadEpoch);
+  // Counts admitted units and measures offered rate for initial exploration.
+  // Caller holds mutex_.
+  void noteAdmissionLocked(
+      int64_t units,
+      std::chrono::steady_clock::time_point now);
+
+  // Records exactly-once completion evidence and handles canonical overload.
+  bool recordCompletionForEpoch(
+      uint64_t overloadEpoch,
+      int64_t units,
+      Outcome outcome,
+      int64_t rttNs,
+      bool handedOff);
+
+  // Applies CUBIC rate feedback using the current target, never a successful
+  // completion-rate ceiling. Caller holds mutex_.
+  void updateSendRateLocked(
+      uint64_t overloadEpoch,
+      Outcome outcome,
+      std::chrono::steady_clock::time_point now);
+
+  // Accumulates recovery time only while eligible demand awaits rate admission.
+  // Caller holds mutex_.
+  void accrueRateDemandLocked(std::chrono::steady_clock::time_point now);
+
+  // Starts or ends an interval of eligible demand waiting for rate admission.
+  // Caller holds mutex_.
+  void setRateDemandBlockedLocked(bool blocked);
+
+  // Changes the sending target while preserving start-to-start spacing.
+  // Caller holds mutex_.
+  void setSendRateLocked(double requestsPerSecond);
+
+  // Lowers the limit to 'target', never raising it and never below the floor.
+  // Caller holds mutex_.
+  void decreaseLimitLocked(double target);
+
+  // True after explicit operator-retry rate control has engaged. Caller holds
+  // mutex_.
+  bool isRatePacingLocked() const;
+
+  // Spacing between rate-paced admissions. Caller holds mutex_.
+  std::chrono::steady_clock::duration ratePacingIntervalLocked() const;
 
   // Applies one decrease with mutex_ held.
   void applyOverloadLocked();
@@ -516,6 +638,8 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Mutable so initialization can install one resolved policy atomically and
   // tests can exercise controlled policy changes.
   Config config_;
+  // Publishes the zero-demand fast-path choice without unlocked Config reads.
+  std::atomic<bool> ratePolicySelected_{false};
 
   // Set once initializeOrMatch() seals a policy. Later calls compare against
   // config_ rather than change it; the adapted capacity below keeps moving,
@@ -566,6 +690,33 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // from the same wave.
   uint64_t overloadEpoch_{0};
 
+  // Sending target and prior peak used by the rate CUBIC curve. Zero leaves
+  // rate admission disabled until a typed retry overload engages it.
+  double sendRatePerSecond_{0.0};
+  double priorMaxSendRate_{0.0};
+  // Admission-rate measurement ordinal used by the latest rate reduction.
+  std::optional<uint64_t> lastRateDecreaseBucket_;
+  // Recovery clock counts eligible rate-blocked demand, not idle wall time.
+  double cubicDemandSeconds_{0.0};
+  bool rateDemandBlocked_{false};
+  std::chrono::steady_clock::time_point rateDemandUpdatedAt_;
+  // Actual admitted units over a measurement window. The rate estimate seeds
+  // initial exploration; completed windows delimit fresh feedback.
+  int64_t admissionWindowUnits_{0};
+  double measuredAdmissionRate_{0.0};
+  std::optional<std::chrono::steady_clock::time_point> admissionWindowStart_;
+  // Ordinal of completed windows in the client's admission-rate estimate.
+  uint64_t admissionRateBucket_{0};
+  // Exactly-once activity counters and rate-control duration.
+  int64_t admittedAttempts_{0};
+  int64_t completionAttempts_{0};
+  int64_t successfulAttempts_{0};
+  int64_t overloadAttempts_{0};
+  int64_t rateDecreases_{0};
+  std::chrono::steady_clock::duration ratePacingTime_{0};
+  // Rate-limited demand wait, independent of the CUBIC epoch's recovery clock.
+  std::chrono::steady_clock::duration rateWaitingTime_{0};
+
   // True while the current generation has one reserved or scheduled timer.
   bool pacingTimerArmed_{false};
 
@@ -580,7 +731,15 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
 
   // Drivers parked waiting for a slot. Woken together when admission becomes
   // possible; each retries the atomic reservation.
-  std::deque<ContinuePromise> waiters_;
+  struct AdmissionWaiter {
+    // Monotonic identity; never reused when testingReset() clears the queue.
+    uint64_t id;
+    // Wakes this driver's next admission attempt.
+    ContinuePromise promise;
+  };
+  std::deque<AdmissionWaiter> waiters_;
+  // Next wait identity, independent of pacing timer generations.
+  uint64_t nextAdmissionWaitId_{0};
 
   // Prevents callers from constructing owner-backed tokens directly.
   [[no_unique_address]] TokenConstructionKey tokenConstructionKey_;
