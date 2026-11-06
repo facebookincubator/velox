@@ -20,6 +20,8 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/sparksql/LastWin.h"
 #include "velox/functions/sparksql/MapFromArrays.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/vector/FlatMapVector.h"
 
 // The description of the map function in Spark
 // https://kontext.tech/article/586/spark-sql-map-functions
@@ -321,9 +323,12 @@ class MapFunction : public exec::VectorFunction {
     }
 
     bool throwExceptionOnDuplicateMapKeys{false};
+    bool generateConstantMapsAsFlatMaps{false};
     if (auto* ctx = context.execCtx()->queryCtx()) {
       throwExceptionOnDuplicateMapKeys =
           ctx->queryConfig().throwExceptionOnDuplicateMapKeys();
+      generateConstantMapsAsFlatMaps =
+          SparkQueryConfig{ctx->queryConfig()}.generateConstantMapsAsFlatMaps();
     }
 
     bool constantKeys{true};
@@ -332,6 +337,46 @@ class MapFunction : public exec::VectorFunction {
     }
 
     auto* pool = context.pool();
+    if (generateConstantMapsAsFlatMaps && constantKeys) {
+      // Spark keeps -0.0 and 0.0 as distinct map keys, but flat map key
+      // lookup and comparison treat them as equal.
+      VELOX_USER_CHECK(
+          keyType->kind() != TypeKind::REAL &&
+              keyType->kind() != TypeKind::DOUBLE,
+          "Flat maps do not support floating-point keys: {}",
+          keyType->toString());
+      auto keys = BaseVector::create(keyType, mapSize, pool);
+      for (vector_size_t i = 0; i < mapSize; ++i) {
+        keys->copy(args[i * 2].get(), i, rows.begin(), 1);
+      }
+      DecodedVector decodedKeys(*keys);
+      LastWin<SparkMapKeyEquality> lastWin;
+      const auto& entries = lastWin.resolve(
+          decodedKeys, 0, mapSize, throwExceptionOnDuplicateMapKeys);
+      VectorPtr distinctKeys = keys;
+      if (entries.size() < mapSize) {
+        distinctKeys = BaseVector::create(keyType, entries.size(), pool);
+        for (vector_size_t i = 0; i < entries.size(); ++i) {
+          distinctKeys->copy(keys.get(), i, entries[i].key, 1);
+        }
+      }
+      std::vector<VectorPtr> mapValues;
+      mapValues.reserve(entries.size());
+      for (const auto& entry : entries) {
+        mapValues.push_back(args[entry.value * 2 + 1]);
+      }
+      auto flatMap = std::make_shared<FlatMapVector>(
+          pool,
+          outputType,
+          nullptr,
+          rows.end(),
+          std::move(distinctKeys),
+          std::move(mapValues),
+          std::vector<BufferPtr>{});
+      context.moveOrCopyResult(flatMap, rows, result);
+      return;
+    }
+
     auto [keys, values] = toArrays(rows, args, mapSize, constantKeys, pool);
     std::vector<VectorPtr> arrays{std::move(keys), std::move(values)};
     MapFromArraysFunction(throwExceptionOnDuplicateMapKeys)

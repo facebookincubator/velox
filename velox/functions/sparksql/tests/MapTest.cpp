@@ -632,6 +632,61 @@ TEST_F(MapTest, constantKeys) {
       "Duplicate map key was found: 1");
 }
 
+TEST_F(MapTest, constantKeysBuildFlatMap) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({10, 11}),
+      makeNullableFlatVector<int64_t>({20, std::nullopt}),
+      makeFlatVector<int64_t>({30, 31}),
+  });
+  setGenerateConstantMapsAsFlatMaps(false);
+  {
+    auto result = evaluate("map(1, c0, 2, c1, 1, c2)", data);
+    ASSERT_EQ(result->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    result->validate();
+    const auto& flatMap = *result->asUnchecked<FlatMapVector>();
+    ::facebook::velox::test::assertEqualVectors(
+        makeFlatVector<int64_t>({1, 2}), flatMap.distinctKeys());
+    EXPECT_EQ(flatMap.mapValuesAt(0), data->childAt(2));
+    EXPECT_EQ(flatMap.mapValuesAt(1), data->childAt(1));
+    EXPECT_EQ(flatMap.rawInMapsAt(0), nullptr);
+    EXPECT_EQ(flatMap.rawInMapsAt(1), nullptr);
+    ::facebook::velox::test::assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1:30, 2:20}",
+            "{1:31, 2:null}",
+        }),
+        result);
+  }
+
+  setGenerateConstantMapsAsFlatMaps(true);
+  VELOX_ASSERT_THROW(
+      evaluate("map(1, c0, 2, c1, 1, c2)", data),
+      "Duplicate map key was found: 1");
+  {
+    auto result = evaluate("map(1, c0, 2, c1)", data);
+    ASSERT_EQ(result->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    const auto& flatMap = *result->asUnchecked<FlatMapVector>();
+    ::facebook::velox::test::assertEqualVectors(
+        makeFlatVector<int64_t>({1, 2}), flatMap.distinctKeys());
+    EXPECT_EQ(flatMap.mapValuesAt(0), data->childAt(0));
+    EXPECT_EQ(flatMap.mapValuesAt(1), data->childAt(1));
+  }
+
+  VELOX_ASSERT_THROW(
+      evaluate("map(cast(null as bigint), c0)", data),
+      "Cannot use null as map key!");
+  VELOX_ASSERT_THROW(
+      evaluate("map(1.5, c0)", data),
+      "Flat maps do not support floating-point keys: DOUBLE");
+  EXPECT_EQ(
+      evaluate("map(c0, c1)", data)->encoding(), VectorEncoding::Simple::MAP);
+
+  setThrowExceptionOnDuplicateMapKeys(false);
+  EXPECT_EQ(
+      evaluate("map(1, c0, 2, c1)", data)->encoding(),
+      VectorEncoding::Simple::MAP);
+}
+
 TEST_F(MapTest, resultSize) {
   auto condition = makeFlatVector<int64_t>({1, 2, 3});
   auto keys = makeFlatVector<int64_t>({3, 2, 1});
