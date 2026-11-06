@@ -323,62 +323,27 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
     streams = options_.layoutPlanner->getLayout(std::move(streams));
   }
 
-  if (options_.streamDeduplicationEnabled) {
-    // Maps a stream's content to the (offset, size) already recorded for the
-    // first copy written in this stripe.
-    folly::F14FastMap<
-        const Stream*,
-        std::pair<uint32_t, uint32_t>,
-        StreamHash,
-        StreamEqual>
-        uniqueStreams;
+  // Maps a stream's content to the index of the original, the first copy
+  // written in this stripe. Empty unless stream deduplication is enabled.
+  folly::F14FastMap<const Stream*, uint32_t, StreamHash, StreamEqual>
+      uniqueStreams;
 
-    for (const auto& stream : streams) {
-      const uint32_t index = stream.offset;
-      auto it =
-          uniqueStreams.emplace(&stream, std::pair<uint32_t, uint32_t>{0, 0});
+  for (const auto& stream : streams) {
+    const uint32_t index = stream.offset;
+    NIMBLE_DCHECK_GT(
+        stripeStreamOffsets.size(),
+        index,
+        "Invalid stripe stream offsets capacity.");
+    NIMBLE_DCHECK_GT(
+        stripeStreamSizes.size(),
+        index,
+        "Invalid stripe stream sizes capacity.");
 
-      NIMBLE_DCHECK_GT(
-          stripeStreamOffsets.size(),
-          index,
-          "Invalid stripe stream offsets capacity.");
-      NIMBLE_DCHECK_GT(
-          stripeStreamSizes.size(),
-          index,
-          "Invalid stripe stream sizes capacity.");
-
-      if (it.second) {
-        // If we are here, this is a new stream, and needs to be added to the
-        // file.
-        NIMBLE_CHECK_LT(
-            file_->size() - stripeOffsets_.back(),
-            std::numeric_limits<uint32_t>::max(),
-            "Unexpected stream offset");
-        stripeStreamOffsets[index] =
-            static_cast<uint32_t>(file_->size() - stripeOffsets_.back());
-
-        const auto streamChecksum = writeStreamWithChecksum(stream);
-        addStreamChunkStats(stream.offset, stream.chunks);
-
-        NIMBLE_DCHECK_LT(
-            file_->size() -
-                (stripeStreamOffsets[index] + stripeOffsets_.back()),
-            std::numeric_limits<uint32_t>::max(),
-            "Unexpected stream size");
-        stripeStreamSizes[index] = static_cast<uint32_t>(
-            file_->size() -
-            (stripeStreamOffsets[index] + stripeOffsets_.back()));
-
-        // A zero-length stream reads back as absent, so it gets no trailer.
-        if (stripeStreamSizes[index] != 0) {
-          writeStreamTrailer(streamChecksum);
-        }
-
-        it.first->second = {
-            stripeStreamOffsets[index], stripeStreamSizes[index]};
-      } else {
-        // If we are here, this is a duplicate stream, so we need to reference
-        // the original stream instead of this one.
+    if (options_.streamDeduplicationEnabled) {
+      const auto [it, inserted] = uniqueStreams.emplace(&stream, index);
+      if (!inserted) {
+        // This is a duplicate stream, so it references the original stream
+        // instead of being written again.
         ++stats_.duplicateStreamCount;
         for (const auto& chunk : stream.chunks) {
           stats_.duplicateStreamBytes += chunk.contentSize();
@@ -386,46 +351,38 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
 
         // The duplicate points at the original's bytes, so it shares the
         // original's trailer too.
+        const uint32_t originalIndex = it->second;
         // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-        stripeStreamOffsets[index] = it.first->second.first;
+        stripeStreamOffsets[index] = stripeStreamOffsets[originalIndex];
         // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-        stripeStreamSizes[index] = it.first->second.second;
-        addStreamChunkStats(index, it.first->first->chunks);
+        stripeStreamSizes[index] = stripeStreamSizes[originalIndex];
+        addStreamChunkStats(index, it->first->chunks);
+        continue;
       }
     }
-  } else {
-    for (const auto& stream : streams) {
-      const uint32_t index = stream.offset;
 
-      NIMBLE_DCHECK_GT(
-          stripeStreamOffsets.size(),
-          index,
-          "Invalid stripe stream offsets capacity.");
-      NIMBLE_DCHECK_GT(
-          stripeStreamSizes.size(),
-          index,
-          "Invalid stripe stream sizes capacity.");
+    // This is a new stream, so it is added to the file.
+    NIMBLE_CHECK_LT(
+        file_->size() - stripeOffsets_.back(),
+        std::numeric_limits<uint32_t>::max(),
+        "Unexpected stream offset");
+    stripeStreamOffsets[index] =
+        static_cast<uint32_t>(file_->size() - stripeOffsets_.back());
 
-      NIMBLE_DCHECK_LT(
-          file_->size() - stripeOffsets_.back(),
-          std::numeric_limits<uint32_t>::max(),
-          "Unexpected stream offset");
-      stripeStreamOffsets[index] =
-          static_cast<uint32_t>(file_->size() - stripeOffsets_.back());
+    const auto streamChecksum = writeStreamWithChecksum(stream);
+    addStreamChunkStats(index, stream.chunks);
 
-      const auto streamChecksum = writeStreamWithChecksum(stream);
-      addStreamChunkStats(stream.offset, stream.chunks);
+    NIMBLE_DCHECK_LT(
+        file_->size() - (stripeStreamOffsets[index] + stripeOffsets_.back()),
+        std::numeric_limits<uint32_t>::max(),
+        "Unexpected stream size");
+    // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
+    stripeStreamSizes[index] = static_cast<uint32_t>(
+        file_->size() - (stripeStreamOffsets[index] + stripeOffsets_.back()));
 
-      NIMBLE_DCHECK_LT(
-          file_->size() - (stripeStreamOffsets[index] + stripeOffsets_.back()),
-          std::numeric_limits<uint32_t>::max(),
-          "Unexpected stream size");
-      // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-      stripeStreamSizes[index] = static_cast<uint32_t>(
-          file_->size() - (stripeStreamOffsets[index] + stripeOffsets_.back()));
-      if (stripeStreamSizes[index] != 0) {
-        writeStreamTrailer(streamChecksum);
-      }
+    // A zero-length stream reads back as absent, so it gets no trailer.
+    if (stripeStreamSizes[index] != 0) {
+      writeStreamTrailer(streamChecksum);
     }
   }
 

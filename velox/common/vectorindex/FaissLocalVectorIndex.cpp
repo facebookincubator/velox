@@ -17,11 +17,17 @@
 #include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
+#include <exception>
+#include <limits>
 #include <memory>
+#include <mutex>
+#include <numeric>
 #include <tuple>
 
+#include <faiss/Clustering.h>
 #include <faiss/IndexFlat.h>
 #include <faiss/IndexHNSW.h>
 #include <faiss/IndexIDMap.h>
@@ -86,7 +92,7 @@ std::unique_ptr<faiss::Index> makeIvfIndex(
   // resolveNlist() keeps kMinEmbeddingsPerList per list except for groups too
   // small for two lists, which FAISS would warn about on every build.
   index->cp.min_points_per_centroid = 1;
-  index->nprobe = std::min(options.nprobe.value_or((nlist + 9) / 10), nlist);
+  index->nprobe = std::min<size_t>(options.nprobe.value_or(nlist), nlist);
   return index;
 }
 
@@ -199,6 +205,146 @@ void FaissLocalVectorIndex::build(
       faiss::write_index(index.get(), &writer);
       return;
     }
+  }
+  VELOX_UNREACHABLE();
+}
+
+namespace {
+
+// Clusters 'numPoints' points of 'dimension' floats at 'points', normalized
+// to length 1, into 'numClusters' clusters, at most 'numPoints', with
+// spherical k-means. Returns the centroids one after another.
+std::vector<float> sphericalKMeans(
+    int32_t dimension,
+    int64_t numClusters,
+    const float* points,
+    int64_t numPoints) {
+  faiss::ClusteringParameters parameters;
+  parameters.spherical = true;
+  // The caller chooses the training points, so FAISS neither samples them nor
+  // warns that there are few per centroid.
+  parameters.min_points_per_centroid = 1;
+  parameters.max_points_per_centroid = std::numeric_limits<int>::max();
+  faiss::Clustering clustering(dimension, numClusters, parameters);
+  faiss::IndexFlatIP index(dimension);
+  clustering.train(numPoints, points, index);
+  return std::move(clustering.centroids);
+}
+
+// Trains 'numClusters' centroids, fewer than 'embeddings', in two levels (see
+// FaissLocalVectorIndex::trainCentroids).
+std::vector<float> twoLevelSphericalKMeans(
+    int64_t numClusters,
+    const Embeddings& embeddings) {
+  const auto dimension = embeddings.dimension();
+  const auto numPoints = embeddings.size();
+  const auto coarse = sphericalKMeans(
+      dimension,
+      static_cast<int64_t>(std::ceil(std::sqrt(numClusters))),
+      embeddings.data(),
+      numPoints);
+  const int64_t numCoarse = coarse.size() / dimension;
+
+  std::vector<faiss::idx_t> assignment(numPoints);
+  {
+    std::vector<float> scores(numPoints);
+    faiss::IndexFlatIP index(dimension);
+    index.add(numCoarse, coarse.data());
+    index.search(
+        numPoints, embeddings.data(), 1, scores.data(), assignment.data());
+  }
+
+  // Groups the embeddings by coarse cluster, in their order within each.
+  std::vector<int64_t> offsets(numCoarse + 1, 0);
+  for (auto cluster : assignment) {
+    ++offsets[cluster + 1];
+  }
+  std::partial_sum(offsets.begin(), offsets.end(), offsets.begin());
+  std::vector<float> grouped(numPoints * dimension);
+  {
+    auto next = offsets;
+    for (int64_t i = 0; i < numPoints; ++i) {
+      std::copy_n(
+          embeddings.data() + i * dimension,
+          dimension,
+          grouped.data() + next[assignment[i]]++ * dimension);
+    }
+  }
+
+  // Coarse cluster i gets floor(c(i + 1)) - floor(c(i)) fine clusters, where
+  // c(i) = numClusters * offsets[i] / numPoints: the shares add up to
+  // 'numClusters', and none exceeds its cluster's embeddings because
+  // 'numClusters' is less than 'numPoints'.
+  const auto boundary = [&](int64_t i) {
+    return numClusters * offsets[i] / numPoints;
+  };
+  // Threads take coarse clusters one at a time because their sizes differ.
+  // An exception must not leave the parallel region, so the first one stops
+  // the others and is rethrown after it.
+  std::vector<std::vector<float>> fine(numCoarse);
+  std::atomic<int64_t> nextCluster{0};
+  std::exception_ptr error;
+  std::mutex errorMutex;
+#pragma omp parallel
+  {
+    for (auto i = nextCluster++; i < numCoarse; i = nextCluster++) {
+      const auto share = boundary(i + 1) - boundary(i);
+      if (share == 0) {
+        continue;
+      }
+      try {
+        fine[i] = sphericalKMeans(
+            dimension,
+            share,
+            grouped.data() + offsets[i] * dimension,
+            offsets[i + 1] - offsets[i]);
+      } catch (...) {
+        std::lock_guard<std::mutex> lock(errorMutex);
+        if (!error) {
+          error = std::current_exception();
+        }
+        nextCluster = numCoarse;
+      }
+    }
+  }
+  if (error) {
+    std::rethrow_exception(error);
+  }
+
+  std::vector<float> centroids;
+  centroids.reserve(numClusters * dimension);
+  for (const auto& clusterCentroids : fine) {
+    centroids.insert(
+        centroids.end(), clusterCentroids.begin(), clusterCentroids.end());
+  }
+  return centroids;
+}
+
+} // namespace
+
+// static
+std::vector<float> FaissLocalVectorIndex::trainCentroids(
+    VectorIndexMetric metric,
+    int64_t numClusters,
+    const Embeddings& embeddings) {
+  VELOX_CHECK_GT(numClusters, 0);
+  if (numClusters >= embeddings.size()) {
+    return {
+        embeddings.data(),
+        embeddings.data() + embeddings.size() * embeddings.dimension()};
+  }
+  // TODO: Cap the threads of concurrent trainings, which each take all of
+  // FAISS's OpenMP threads and so oversubscribe the host.
+  switch (metric) {
+    case VectorIndexMetric::kCosine:
+      if (numClusters > kMaxFlatClusters) {
+        return twoLevelSphericalKMeans(numClusters, embeddings);
+      }
+      return sphericalKMeans(
+          embeddings.dimension(),
+          numClusters,
+          embeddings.data(),
+          embeddings.size());
   }
   VELOX_UNREACHABLE();
 }

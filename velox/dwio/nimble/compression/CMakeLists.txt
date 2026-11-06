@@ -22,6 +22,7 @@ add_library(
   OpenZLCompressor.h
   Lz4Compressor.h
   Compression.h
+  Compressor.h
 )
 
 target_link_libraries(nimble_compression nimble_common Folly::folly lz4 ${VELOX_OPENZL_LIBRARIES})

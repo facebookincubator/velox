@@ -93,12 +93,11 @@ struct StringView {
       // this makes sure that inline strings can be compared for equality with 2
       // int64 compares.
       memset(prefix_, 0, kPrefixSize);
+      value_.data = nullptr;
       if (size_ == 0) {
         return;
       }
-      // small string: inlined. Zero the last 8 bytes first to allow for whole
-      // word comparison.
-      value_.data = nullptr;
+      // small string: inlined.
 #ifdef __GNUC__
       // Use asm volatile to prevent GCC's interprocedural analysis from
       // incorrectly concluding that size could exceed kInlineSize. This is a

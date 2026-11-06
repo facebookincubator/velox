@@ -57,7 +57,9 @@ const TypeBuilder& resolveValueStreamSubfield(
 /// Encoding types for top-level columns extracted from a nimble file schema.
 /// Records which columns use encoding-specific types (ArrayWithOffsets,
 /// SlidingWindowMap, FlatMap), enabling the Serializer
-/// to produce output consistent with the file's encoding.
+/// to produce output consistent with the file's encoding. A FlatMap column
+/// that is also in dictionaryArrayColumns or deduplicatedMapColumns holds
+/// ArrayWithOffsets or SlidingWindowMap values under every key.
 struct ColumnEncodings {
   folly::F14FastSet<std::string> dictionaryArrayColumns;
   folly::F14FastSet<std::string> deduplicatedMapColumns;
@@ -101,9 +103,11 @@ struct NimbleTypeProjection {
   std::shared_ptr<const Type> nimbleType;
   std::vector<uint32_t> streamOffsets;
   /// Marks streams whose presence requires retaining the input decode barrier.
-  /// This includes Row/FlatMap null streams and Hybrid FlatMap group key
-  /// streams.
-  std::vector<bool> rowOrFlatMapNullStreams;
+  /// This includes Row/FlatMap null streams, Hybrid FlatMap group key streams,
+  /// and the offsets and lengths streams of ArrayWithOffsets and
+  /// SlidingWindowMap, whose offsets index the distinct values of their own
+  /// stripe.
+  std::vector<bool> barrierStreams;
 };
 
 /// Builds a projected Nimble schema and its source-stream mapping. A projected

@@ -20,6 +20,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include <folly/Function.h>
 
@@ -69,8 +70,8 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
   /// 'ivf.nlist' defaults to 4 * sqrt(number of embeddings), between 8 and
   /// 16384. The build reduces it, even when set, to give each list at least 39
   /// embeddings, the fewest FAISS recommends for training a list; a group of
-  /// fewer than 39 embeddings gets one list. 'ivf.nprobe' defaults to a tenth
-  /// of the lists, rounded up, and is capped at the number of lists. 'hnsw.M',
+  /// fewer than 39 embeddings gets one list. 'ivf.nprobe' defaults to all the
+  /// lists and is capped at the number of lists. 'hnsw.M',
   /// 'hnsw.efConstruction' and 'hnsw.efSearch' default to 32, 200 and 64.
   static void build(
       VectorIndexKind kind,
@@ -79,6 +80,30 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
       const Embeddings& embeddings,
       std::span<const int64_t> ids,
       folly::FunctionRef<void(std::string_view)> write);
+
+  /// trainCentroids() trains up to this many clusters in one level.
+  static constexpr int64_t kMaxFlatClusters{10'000};
+
+  /// Clusters 'embeddings' with k-means and returns the centroids, one after
+  /// another, normalized for 'metric'. The embeddings must be normalized for
+  /// 'metric' (see EmbeddingNormalizer). Returns min('numClusters', number of
+  /// embeddings) centroids; with no more embeddings than clusters, the
+  /// centroids are the embeddings. The same embeddings in the same order give
+  /// the same centroids on the same number of threads. For kCosine the k-means
+  /// is spherical: an embedding goes to the centroid with the largest inner
+  /// product, and each centroid is the normalized mean of its embeddings.
+  ///
+  /// More than kMaxFlatClusters clusters train in two levels: about
+  /// sqrt('numClusters') coarse clusters, then within each a share of
+  /// 'numClusters' in proportion to its embeddings. That cuts the work by about
+  /// sqrt('numClusters') / 2.
+  ///
+  /// Runs on all of FAISS's OpenMP threads: training is one long computation
+  /// per codec.
+  static std::vector<float> trainCentroids(
+      VectorIndexMetric metric,
+      int64_t numClusters,
+      const Embeddings& embeddings);
 
   /// Reads a local index that build() wrote for 'metric'. The index refers to
   /// its embeddings, codes and graph in 'bytes' rather than copying them, so

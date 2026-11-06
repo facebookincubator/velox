@@ -1065,8 +1065,7 @@ These functions are available when Velox is built with FAISS
         ``n`` embeddings, between 8 and 16384. Reduced, even when set, to give
         each list at least 39 embeddings.
       * ``ivf.nprobe``: the number of lists a search scans by default.
-        Defaults to a tenth of the lists, rounded up, and is capped at the
-        number of lists.
+        Defaults to all the lists, and is capped at the number of lists.
       * ``hnsw.M``: the number of neighbors of each embedding in the graph,
         between 2 and 256. Defaults to 32.
       * ``hnsw.efConstruction``: the number of candidates the build explores.
@@ -1084,22 +1083,29 @@ These functions are available when Velox is built with FAISS
         FROM items
         GROUP BY cluster_id;
 
-.. function:: vector_index_pack(cluster_id, cluster_centroid, metric) -> vector_index
+.. function:: vector_index_train(embedding, id, num_clusters, metric) -> vector_index
 
-    Packs the centroids of ``n`` clusters into a vector index codec: a
-    ``'flat'`` local index over the centroids, as :func:`vector_index_build`
-    writes it, with each cluster's id as its centroid's id.
+    Clusters the embeddings with k-means and returns the codec of the
+    clusters: a ``'flat'`` local index over the centroids, as
+    :func:`vector_index_build` writes it, with clusters numbered from 0.
 
-    * ``cluster_id`` (BIGINT): ids must be 0 to ``n - 1``, each once.
-    * ``cluster_centroid`` (ARRAY(REAL)): all centroids must have the same,
-      non-zero length and must not contain null, NaN or infinite elements.
-    * ``metric`` (VARCHAR): a constant. Supported values: ``'cosine'``, which
-      normalizes centroids to length 1 and compares by dot product.
+    * ``embedding`` (ARRAY(REAL)): all embeddings must have the same, non-zero
+      length and must not contain null, NaN or infinite elements.
+    * ``id`` (BIGINT): orders the embeddings before the k-means, so the result
+      does not depend on the order of rows, if the ids are distinct.
+    * ``num_clusters`` (BIGINT): a positive constant. A group with fewer
+      embeddings gets one cluster per embedding.
+    * ``metric`` (VARCHAR): a constant. Supported values: ``'cosine'``, for
+      which the k-means is spherical: embeddings and centroids are normalized
+      to length 1, and an embedding goes to the centroid with the largest dot
+      product.
 
-    Rows with a null ``cluster_id`` or ``cluster_centroid`` are ignored. The
-    result does not depend on the order rows arrive in.
+    Rows with a null ``embedding`` or ``id`` are ignored. The k-means runs over
+    all of the group's embeddings, on FAISS's threads, so a large group is
+    best sampled first.
 
     Example::
 
-        SELECT vector_index_pack(cluster_id, centroid, 'cosine')
-        FROM centroids;
+        SELECT ds, vector_index_train(embedding, id, 1000, 'cosine')
+        FROM items
+        GROUP BY ds;
