@@ -526,6 +526,40 @@ TEST_F(ArithmeticTest, unhex) {
   EXPECT_EQ(unhex("E4B889E9878DE79A84"), "\u4E09\u91CD\u7684");
 }
 
+TEST_F(ArithmeticTest, toBinaryHex) {
+  const auto toBinaryHex = [&](std::optional<std::string> a) {
+    return evaluateOnce<std::string>("to_binary_hex(c0)", a);
+  };
+
+  // Valid input decodes like unhex.
+  EXPECT_EQ(toBinaryHex("737472696E67"), "string");
+  EXPECT_EQ(toBinaryHex(""), "");
+  EXPECT_EQ(toBinaryHex("23"), "#");
+  EXPECT_EQ(toBinaryHex("123"), "\x01#");
+  EXPECT_EQ(toBinaryHex("b23"), "\x0B#");
+  EXPECT_EQ(toBinaryHex("b2323"), "\x0B##");
+  EXPECT_EQ(toBinaryHex("F"), "\x0F");
+  EXPECT_EQ(toBinaryHex("ff"), "\xFF");
+  EXPECT_EQ(toBinaryHex("E4B889E9878DE79A84"), "\u4E09\u91CD\u7684");
+  EXPECT_EQ(toBinaryHex(std::nullopt), std::nullopt);
+
+  // Invalid input throws where unhex returns NULL.
+  VELOX_ASSERT_USER_THROW(
+      toBinaryHex("G"), "Malformed HEX input cannot be converted to BINARY: G");
+  VELOX_ASSERT_USER_THROW(
+      toBinaryHex("GG"),
+      "Malformed HEX input cannot be converted to BINARY: GG");
+  VELOX_ASSERT_USER_THROW(
+      toBinaryHex("G23"),
+      "Malformed HEX input cannot be converted to BINARY: G23");
+
+  // try() turns the error into NULL.
+  EXPECT_EQ(
+      evaluateOnce<std::string>(
+          "try(to_binary_hex(c0))", std::optional<std::string>("GG")),
+      std::nullopt);
+}
+
 class CeilFloorTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
