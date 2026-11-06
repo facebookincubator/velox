@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 
+#include <algorithm>
 #include <optional>
 
 #include <folly/container/F14Map.h>
@@ -242,19 +243,19 @@ StripeGroup::StripeGroup(
   NIMBLE_CHECK_NOT_NULL(pool);
 
   // The group's first stripe is the first stripe assigned to this group in the
-  // tablet's per-stripe group_indices.
+  // tablet's per-stripe group_indices, which is non-decreasing because stripes
+  // are assigned to groups in order.
   const auto* groupIndices = stripesRoot(stripes)->group_indices();
   NIMBLE_CHECK_NOT_NULL(groupIndices, "Missing group_indices in stripes.");
-  firstStripe_ = 0;
-  bool found = false;
-  for (uint32_t stripe = 0; stripe < groupIndices->size(); ++stripe) {
-    if (groupIndices->Get(stripe) == stripeGroupIndex) {
-      firstStripe_ = stripe;
-      found = true;
-      break;
-    }
-  }
-  NIMBLE_CHECK(found, "No stripes found for stripe group.");
+  const auto first = std::lower_bound(
+      groupIndices->begin(), groupIndices->end(), stripeGroupIndex);
+  NIMBLE_CHECK(
+      first != groupIndices->end(),
+      "No stripes found for stripe group {}.",
+      stripeGroupIndex);
+  NIMBLE_CHECK_EQ(
+      *first, stripeGroupIndex, "No stripes found for stripe group.");
+  firstStripe_ = static_cast<uint32_t>(first - groupIndices->begin());
 
   switch (encodingLayout_) {
     case EncodingLayout::kRaw: {

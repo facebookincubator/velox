@@ -1175,6 +1175,57 @@ TEST_P(TabletTest, stripeGroupDescriptors) {
   }
 }
 
+TEST_P(TabletTest, rejectsMalformedStripeGroupIndices) {
+  // Each stripe of the written file is its own stripe group, so its
+  // group_indices are {0, 1, 2, 3}. Each case overwrites one of them.
+  struct TestCase {
+    uint32_t stripe;
+    uint32_t groupIndex;
+    std::string_view message;
+
+    std::string debugString() const {
+      return fmt::format("stripe={} groupIndex={}", stripe, groupIndex);
+    }
+  };
+  constexpr uint32_t kNumStripes{4};
+  for (const auto& testCase : {
+           TestCase{/*stripe=*/2,
+                    /*groupIndex=*/0,
+                    "Stripe group indices must be non-decreasing."},
+           TestCase{/*stripe=*/0,
+                    /*groupIndex=*/1,
+                    "The first stripe must be in stripe group 0."},
+           TestCase{
+               /*stripe=*/1,
+               /*groupIndex=*/0,
+               "Stripe group indices must grow by at most one per stripe."},
+       }) {
+    SCOPED_TRACE(testCase.debugString());
+    auto file = writeOneStreamStripes(
+        *pool_,
+        kNumStripes,
+        /*metadataFlushThreshold=*/1,
+        kNoMetadataCompression);
+    const auto layout = nimble::FileLayout::create(
+        std::make_shared<velox::InMemoryReadFile>(file), pool_.get());
+    ASSERT_EQ(
+        layout.stripes.compressionType(),
+        nimble::CompressionType::Uncompressed);
+
+    const auto* stripes = flatbuffers::GetRoot<nimble::serialization::Stripes>(
+        file.data() + layout.stripes.offset());
+    auto* groupIndices =
+        const_cast<flatbuffers::Vector<uint32_t>*>(stripes->group_indices());
+    ASSERT_EQ(groupIndices->size(), kNumStripes);
+    for (uint32_t stripe = 0; stripe < kNumStripes; ++stripe) {
+      ASSERT_EQ(groupIndices->Get(stripe), stripe);
+    }
+    groupIndices->Mutate(testCase.stripe, testCase.groupIndex);
+
+    NIMBLE_ASSERT_FILE_THROW(createTabletReader(file), testCase.message);
+  }
+}
+
 TEST_P(TabletTest, emptyWrite) {
   // Creating an Nimble file without writing any stripes
   test(/* stripes */ {});
