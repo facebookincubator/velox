@@ -52,7 +52,7 @@ class MapConcatFunction : public exec::VectorFunction {
     if (outputType->asMap().keyType()->kind() == TypeKind::UNKNOWN) {
       for (auto i = 0; i < numArgs; ++i) {
         auto* decoded = decodedArgs.at(i);
-        auto* map = decoded->base()->as<MapVector>();
+        auto* map = decoded->base()->asChecked<MapVector>();
         rows.applyToSelected([&](vector_size_t row) {
           VELOX_CHECK_EQ(
               map->sizeAt(decoded->index(row)),
