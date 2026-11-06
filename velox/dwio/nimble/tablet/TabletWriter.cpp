@@ -16,8 +16,11 @@
 
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 
+#include <algorithm>
 #include <limits>
 #include <string_view>
+
+#include <folly/container/F14Map.h>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -705,6 +708,83 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
       StripeGroup::kStreamMajorLayoutIdentifier.data());
 }
 
+void TabletWriter::writeStripeGroupWithStreamMajorSparseLayout(
+    flatbuffers::FlatBufferBuilder& builder,
+    size_t streamCount,
+    size_t stripeCount) {
+  // Keeps, for each stream, only the stripes where it has data; see Footer.fbs.
+  std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedStripes;
+  std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedOffsets;
+  std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedSizes;
+  encodedStripes.reserve(streamCount);
+  encodedOffsets.reserve(streamCount);
+  encodedSizes.reserve(streamCount);
+  // Always deduplicates: readers share one view and one stripe search among
+  // streams with the same list.
+  MetadataArrayEncoder encoder{
+      options_.stripeGroupEncodingLayoutReadFactors,
+      /*deduplicationEnabled=*/true,
+      builder,
+      pool_,
+  };
+
+  // An entry without data marks an omitted array. Every omitted array shares
+  // it.
+  const flatbuffers::Offset<serialization::EncodedStream> omitted =
+      serialization::CreateEncodedStream(builder);
+  for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+    std::vector<uint32_t> allSizes =
+        transposeStreamMetadata(streamId, stripeCount, streamSizes_);
+    const auto numStripes = static_cast<size_t>(
+        std::count_if(allSizes.begin(), allSizes.end(), [](uint32_t size) {
+          return size != 0;
+        }));
+    if (numStripes == 0) {
+      encodedStripes.push_back(omitted);
+      encodedOffsets.push_back(omitted);
+      encodedSizes.push_back(omitted);
+      continue;
+    }
+    if (numStripes == stripeCount) {
+      // Data in every stripe: the stripe list would be the identity.
+      encodedStripes.push_back(omitted);
+      encodedOffsets.push_back(encoder.encode(
+          transposeStreamMetadata(streamId, stripeCount, streamOffsets_)));
+      encodedSizes.push_back(encoder.encode(std::move(allSizes)));
+      continue;
+    }
+
+    // Sized exactly, because the deduplicating encoder keeps the arrays.
+    std::vector<uint32_t> stripes;
+    std::vector<uint32_t> offsets;
+    std::vector<uint32_t> sizes;
+    stripes.reserve(numStripes);
+    offsets.reserve(numStripes);
+    sizes.reserve(numStripes);
+    for (uint32_t stripe = 0; stripe < stripeCount; ++stripe) {
+      if (allSizes[stripe] != 0) {
+        stripes.push_back(stripe);
+        // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
+        offsets.push_back(streamOffsets_[stripe][streamId]);
+        sizes.push_back(allSizes[stripe]);
+      }
+    }
+    encodedStripes.push_back(encoder.encode(std::move(stripes)));
+    encodedOffsets.push_back(encoder.encode(std::move(offsets)));
+    encodedSizes.push_back(encoder.encode(std::move(sizes)));
+  }
+
+  builder.Finish(
+      serialization::CreateStreamMajorSparseStripeGroup(
+          builder,
+          static_cast<uint32_t>(stripeCount),
+          static_cast<uint32_t>(streamCount),
+          builder.CreateVector(encodedStripes),
+          builder.CreateVector(encodedOffsets),
+          builder.CreateVector(encodedSizes)),
+      StripeGroup::kStreamMajorSparseLayoutIdentifier.data());
+}
+
 void TabletWriter::writeStripeGroup(size_t streamCount, size_t stripeCount) {
   flatbuffers::FlatBufferBuilder builder(kInitialFooterSize);
 
@@ -714,6 +794,10 @@ void TabletWriter::writeStripeGroup(size_t streamCount, size_t stripeCount) {
       break;
     case StripeGroup::EncodingLayout::kStreamMajor:
       writeStripeGroupWithStreamMajorLayout(builder, streamCount, stripeCount);
+      break;
+    case StripeGroup::EncodingLayout::kStreamMajorSparse:
+      writeStripeGroupWithStreamMajorSparseLayout(
+          builder, streamCount, stripeCount);
       break;
     default:
       NIMBLE_UNREACHABLE(

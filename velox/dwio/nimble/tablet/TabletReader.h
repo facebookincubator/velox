@@ -458,14 +458,14 @@ class TabletReader {
   }
 
   /// Returns the byte offset of `streamId` within `stripe` (relative to the
-  /// stripe's start). O(1) point read into the per-stream FBW-encoded blob
-  /// held by the StripeGroup. Callers must ensure
-  /// `streamId < streamCount(stripe)`.
+  /// stripe's start), with the cost of StripeGroup::streamOffset(). Callers
+  /// must ensure `streamId < streamCount(stripe)`.
   uint32_t streamOffset(const StripeIdentifier& stripe, uint32_t streamId)
       const;
 
   /// Returns the byte size of `streamId` within `stripe`. Returns 0 if the
-  /// stream does not exist in this stripe. O(1) point read.
+  /// stream does not exist in this stripe, with the cost of
+  /// StripeGroup::streamSize().
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
 
   /// Relative byte location of one stream within a stripe. A zero size means

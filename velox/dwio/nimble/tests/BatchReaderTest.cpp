@@ -1684,12 +1684,62 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
   }
 }
 
+TEST_P(BatchReaderStripeGroupFormatTest, readsFlatMapKeysMissingFromStripes) {
+  // Each stripe holds keys of its own plus one key every stripe has, so most
+  // key streams have data in some stripes only.
+  constexpr int32_t kStripeCount{4};
+  constexpr int32_t kRowsPerStripe{5};
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  std::vector<velox::VectorPtr> batches;
+  for (int32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    std::vector<velox::vector_size_t> offsets;
+    std::vector<int32_t> keys;
+    std::vector<int64_t> values;
+    for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+      offsets.push_back(static_cast<velox::vector_size_t>(keys.size()));
+      for (const int32_t key : {stripe, stripe + kStripeCount, 100}) {
+        keys.push_back(key);
+        values.push_back(key * 1'000 + row);
+      }
+    }
+    batches.push_back(vectorMaker.rowVector(
+        {"features"},
+        {vectorMaker.mapVector(
+            offsets,
+            vectorMaker.flatVector<int32_t>(keys),
+            vectorMaker.flatVector<int64_t>(values))}));
+  }
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.flatMapColumns["features"];
+  writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+  // Each vector is flushed into its own stripe.
+  const auto file =
+      nimble::test::createNimbleFile(*rootPool_, batches, writerOptions);
+
+  velox::InMemoryReadFile readFile(file);
+  auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
+      std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type()));
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, std::move(selector), nimble::BatchReadParams{});
+  for (int32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    SCOPED_TRACE(fmt::format("stripe={}", stripe));
+    velox::VectorPtr result;
+    ASSERT_TRUE(reader.next(kRowsPerStripe, result));
+    ASSERT_EQ(result->size(), kRowsPerStripe);
+    for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+      EXPECT_TRUE(batches[stripe]->equalValueAt(result.get(), row, row));
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     BatchReaderStripeGroupFormatTestSuite,
     BatchReaderStripeGroupFormatTest,
     ::testing::Values(
         nimble::StripeGroup::EncodingLayout::kRaw,
-        nimble::StripeGroup::EncodingLayout::kStreamMajor),
+        nimble::StripeGroup::EncodingLayout::kStreamMajor,
+        nimble::StripeGroup::EncodingLayout::kStreamMajorSparse),
     [](const ::testing::TestParamInfo<nimble::StripeGroup::EncodingLayout>&
            info) {
       switch (info.param) {
@@ -1697,6 +1747,8 @@ INSTANTIATE_TEST_SUITE_P(
           return "Raw";
         case nimble::StripeGroup::EncodingLayout::kStreamMajor:
           return "StreamMajor";
+        case nimble::StripeGroup::EncodingLayout::kStreamMajorSparse:
+          return "StreamMajorSparse";
       }
       return "Unknown";
     });

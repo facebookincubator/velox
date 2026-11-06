@@ -590,8 +590,16 @@ INSTANTIATE_TEST_CASE_P(
     StripeStreamsMultiStripeTest,
     ::testing::Values(
         StripeGroup::EncodingLayout::kRaw,
-        StripeGroup::EncodingLayout::kStreamMajor),
+        StripeGroup::EncodingLayout::kStreamMajor,
+        StripeGroup::EncodingLayout::kStreamMajorSparse),
     [](const ::testing::TestParamInfo<StripeGroup::EncodingLayout>& info) {
-      return info.param == StripeGroup::EncodingLayout::kRaw ? "raw"
-                                                             : "streamMajor";
+      switch (info.param) {
+        case StripeGroup::EncodingLayout::kRaw:
+          return "raw";
+        case StripeGroup::EncodingLayout::kStreamMajor:
+          return "streamMajor";
+        case StripeGroup::EncodingLayout::kStreamMajorSparse:
+          return "streamMajorSparse";
+      }
+      return "unknown";
     });

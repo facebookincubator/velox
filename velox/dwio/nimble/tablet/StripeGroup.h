@@ -18,6 +18,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <span>
 #include <string_view>
@@ -39,35 +40,46 @@ class StripeGroup {
  public:
   /// Selects how a stripe group's per-stream offsets/sizes are serialized (see
   /// Footer.fbs). kRaw is the default, universally-readable layout;
-  /// kStreamMajor (per-stream encoded) is experimental. Each non-kRaw blob
-  /// self-identifies via a FlatBuffers file identifier, so no separate on-disk
-  /// flag is needed; a kRaw blob carries no identifier, hence an unrecognized
-  /// one decodes as kRaw and pre-existing files keep reading as kRaw. The
-  /// values are a frozen on-disk contract (encoded in the identifier):
-  /// append-only, never renumber/reorder.
+  /// kStreamMajor and kStreamMajorSparse are experimental. Each non-kRaw blob
+  /// self-identifies via a FlatBuffers file identifier; a kRaw blob carries
+  /// none, so pre-existing files keep reading as kRaw. An unknown layout
+  /// identifier is rejected as unsupported, but readers that predate a layout
+  /// misread its blobs as kRaw, so every reader must support a layout before
+  /// any writer uses it. The values are a frozen on-disk contract (encoded in
+  /// the identifier): append-only, never renumber/reorder.
   enum class EncodingLayout : uint8_t {
     kRaw = 0,
     kStreamMajor = 1,
+    kStreamMajorSparse = 2,
   };
 
-  /// Composes an EncodingLayout's 4-byte FlatBuffers file identifier from a
-  /// fixed "SGL" (Stripe Group Layout) prefix + the EncodingLayout value as an
-  /// ASCII digit. Returns a null-terminated 5-char array so the same storage
-  /// serves both FlatBufferBuilder::Finish (which strlen's the id and requires
-  /// exactly 4 bytes) and flatbuffers::BufferHasIdentifier (see stripeGroup's
-  /// layout detection). The digit is derived from the enum, so the enum values
-  /// are a frozen on-disk contract: append-only, never renumber/reorder.
+  /// Prefix ("Stripe Group Layout") of every layout identifier, reserved for
+  /// stripe-group layouts.
+  static constexpr std::string_view kLayoutIdentifierPrefix{"SGL"};
+
+  /// Composes an EncodingLayout's 4-byte FlatBuffers file identifier from
+  /// kLayoutIdentifierPrefix + the EncodingLayout value as an ASCII digit.
+  /// Returns a null-terminated 5-char array so the same storage serves both
+  /// FlatBufferBuilder::Finish (which strlen's the id and requires exactly 4
+  /// bytes) and the layout detection, which compares it with a blob's
+  /// identifier. The digit is derived from the enum, so the enum values are a
+  /// frozen on-disk contract: append-only, never renumber/reorder.
   static constexpr std::array<char, 5> makeLayoutIdentifier(
       EncodingLayout layout) {
     return {
-        'S', 'G', 'L', static_cast<char>('0' + static_cast<int>(layout)), '\0'};
+        kLayoutIdentifierPrefix[0],
+        kLayoutIdentifierPrefix[1],
+        kLayoutIdentifierPrefix[2],
+        static_cast<char>('0' + static_cast<int>(layout)),
+        '\0',
+    };
   }
 
   /// kStreamMajor blob identifier ("SGL1"). kRaw blobs are written bare, so an
-  /// absent or unrecognized identifier (including pre-existing files) decodes
-  /// as kRaw. Spelled out here (rather than makeLayoutIdentifier(kStreamMajor))
-  /// because a static constexpr member cannot be initialized by a same-class
-  /// static method; the static_assert below keeps the two in sync.
+  /// absent identifier (including pre-existing files) decodes as kRaw. Spelled
+  /// out here (rather than makeLayoutIdentifier(kStreamMajor)) because a static
+  /// constexpr member cannot be initialized by a same-class static method; the
+  /// static_assert below keeps the two in sync.
   static constexpr std::array<char, 5> kStreamMajorLayoutIdentifier{
       'S',
       'G',
@@ -75,9 +87,20 @@ class StripeGroup {
       static_cast<char>('0' + static_cast<int>(EncodingLayout::kStreamMajor)),
       '\0'};
 
+  /// kStreamMajorSparse blob identifier ("SGL2"). Spelled out for the same
+  /// reason as kStreamMajorLayoutIdentifier.
+  static constexpr std::array<char, 5> kStreamMajorSparseLayoutIdentifier{
+      'S',
+      'G',
+      'L',
+      static_cast<char>(
+          '0' + static_cast<int>(EncodingLayout::kStreamMajorSparse)),
+      '\0'};
+
   /// When `encodingViewDeduplicationEnabled` is true, kStreamMajor streams
-  /// whose offsets or sizes arrays reference the same encoded payload share one
-  /// EncodingView.
+  /// whose arrays reference the same encoded payload share one EncodingView.
+  /// kStreamMajorSparse streams always share them, since its writer always
+  /// deduplicates arrays.
   StripeGroup(
       uint32_t stripeGroupIndex,
       const MetadataBuffer& stripes,
@@ -103,20 +126,26 @@ class StripeGroup {
     return stripeCount_;
   }
 
-  /// O(1) random-access read of the byte offset of `streamId` within
-  /// `stripeIndex` (relative to the stripe's start). Backed by the EncodingView
-  /// over `streamId`'s offsets array, which other streams may share. Stateless
-  /// and safe to call concurrently. `streamId` must be less than streamCount().
+  /// Random-access read of the byte offset of `streamId` within `stripeIndex`
+  /// (relative to the stripe's start). Backed by the EncodingView over
+  /// `streamId`'s offsets array, which other streams may share. Stateless and
+  /// safe to call concurrently. O(1), except that kStreamMajorSparse first
+  /// searches the stream's stripe list, which is O(log k) for a stream with
+  /// data in k stripes. `streamId` must be less than streamCount(). The offset
+  /// of a stream without data in the stripe (size 0) carries no meaning;
+  /// kStreamMajorSparse returns 0 for it.
   uint32_t streamOffset(uint32_t stripeIndex, uint32_t streamId) const;
 
-  /// O(1) random-access read of the byte length of `streamId` within
-  /// `stripeIndex`. Stateless. `streamId` must be less than streamCount().
+  /// Random-access read of the byte length of `streamId` within `stripeIndex`,
+  /// with the same cost as streamOffset(). Stateless. `streamId` must be less
+  /// than streamCount().
   uint32_t streamSize(uint32_t stripeIndex, uint32_t streamId) const;
 
   /// Returns the number of encoding views this group holds for random access
   /// to its stream-major metadata. With encoding view deduplication, streams
   /// whose encoded arrays share one payload share one view, so this can be
-  /// below 2 * streamCount(). Zero for kRaw.
+  /// below the number of arrays: two per stream, three for kStreamMajorSparse.
+  /// Zero for kRaw.
   size_t testingEncodingViewCount() const;
 
   /// Relative byte location of one stream within a stripe. A zero size means
@@ -150,6 +179,28 @@ class StripeGroup {
   // index. Debug-checks that the stripe belongs to this group.
   uint32_t stripeOffset(uint32_t stripeIndex) const;
 
+  // The last stripe-list search of a batched kStreamMajorSparse lookup.
+  // Streams that share a list share the stripe's row in it, and a column's
+  // streams, such as a flat-map key's, have adjacent ids and the same list, so
+  // reusing the last search skips most searches.
+  struct StripeSearch {
+    // The stripe list searched last. Null before the first search.
+    const EncodingView* stripeList{nullptr};
+
+    // The row of the looked-up stripe in `stripeList`, or std::nullopt when the
+    // list does not contain it.
+    std::optional<uint32_t> row;
+  };
+
+  // Returns the kStreamMajorSparse location of `streamId` in group-local
+  // stripe `localStripe`, or an absent location when the stream has no data
+  // there. A batched lookup passes one `lastSearch` for all its streams to
+  // reuse the previous stream's search when both share a stripe list.
+  StreamMetadata sparseLocation(
+      uint32_t streamId,
+      uint32_t localStripe,
+      StripeSearch& lastSearch) const;
+
   // kRaw: raw pointers into the flatbuffer blob, laid out stripe-major
   // (stripeCount x streamCount). The blob is owned by metadata_ and outlives
   // the StripeGroup.
@@ -170,6 +221,23 @@ class StripeGroup {
     std::vector<EncodingView*> sizes;
   };
 
+  // kStreamMajorSparse views of one stream. `stripeList` lists the group-local
+  // stripes where the stream has data and is null when every stripe does.
+  // `offsets` and `sizes` hold one value per listed stripe and are null when no
+  // stripe does.
+  struct SparseStreamViews {
+    EncodingView* stripeList{nullptr};
+    EncodingView* offsets{nullptr};
+    EncodingView* sizes{nullptr};
+  };
+
+  // kStreamMajorSparse: one SparseStreamViews per stream.
+  struct StreamMajorSparseMetadata {
+    // Owns the views that streams point at.
+    std::vector<std::unique_ptr<EncodingView>> views;
+    std::vector<SparseStreamViews> streams;
+  };
+
   const std::unique_ptr<MetadataBuffer> metadata_;
   const uint32_t index_;
   // How this group's per-stream offsets/sizes are laid out; detected once at
@@ -184,6 +252,7 @@ class StripeGroup {
   uint32_t firstStripe_{0};
   RawMetadata raw_;
   StreamMajorMetadata streamMajor_;
+  StreamMajorSparseMetadata streamMajorSparse_;
 };
 
 static_assert(
@@ -194,6 +263,14 @@ static_assert(
 static_assert(
     static_cast<int>(StripeGroup::EncodingLayout::kStreamMajor) == 1,
     "On-disk identifier contract: kStreamMajor must stay 1.");
+static_assert(
+    StripeGroup::kStreamMajorSparseLayoutIdentifier ==
+        StripeGroup::makeLayoutIdentifier(
+            StripeGroup::EncodingLayout::kStreamMajorSparse),
+    "kStreamMajorSparseLayoutIdentifier must match its layout.");
+static_assert(
+    static_cast<int>(StripeGroup::EncodingLayout::kStreamMajorSparse) == 2,
+    "On-disk identifier contract: kStreamMajorSparse must stay 2.");
 
 /// Returns the enumerator name (e.g. "kStreamMajor") for logging/formatting.
 std::string_view toString(StripeGroup::EncodingLayout layout);
