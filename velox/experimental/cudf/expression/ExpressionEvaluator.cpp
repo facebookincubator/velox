@@ -312,13 +312,14 @@ void collectReferencedInputFields(
 // Returns the highest-priority evaluator entry that can handle `expr`, or
 // nullptr when none can.
 const CudfExpressionEvaluatorEntry* findBestEvaluator(
-    const core::TypedExprPtr& expr) {
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   const CudfExpressionEvaluatorEntry* best = nullptr;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+    if (entry.canEvaluate && entry.canEvaluate(expr, config)) {
       if (best == nullptr || entry.priority > best->priority) {
         best = &entry;
       }
@@ -373,17 +374,19 @@ bool castFromVarcharNeedsCpu(const core::TypedExprPtr& expr) {
   return nonConstantOrNullInputs >= 2 && containsFailingCastFromVarchar(expr);
 }
 
-// Recursive, context-free check that some cuDF evaluator supports every node in
-// the expression tree. canExprRunOnGpu wraps this with expression optimization
-// and the session-dependent fallbacks.
-bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
+// Recursively checks that some cuDF evaluator supports every node with the
+// session config. canExprRunOnGpu wraps this with expression optimization and
+// the centralized session-dependent fallbacks.
+bool canBeEvaluatedByCudf(
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config) {
   ensureBuiltinExpressionEvaluatorsRegistered();
 
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   bool supported = false;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+    if (entry.canEvaluate && entry.canEvaluate(expr, config)) {
       supported = true;
       break;
     }
@@ -405,7 +408,7 @@ bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
     if (input->isConstantKind() || input->isInputKind()) {
       continue;
     }
-    if (!canBeEvaluatedByCudf(input)) {
+    if (!canBeEvaluatedByCudf(input, config)) {
       return false;
     }
   }
@@ -2030,7 +2033,8 @@ struct ExtractComponentFactory {
   std::shared_ptr<CudfFunction> operator()(
       const std::string&,
       const core::TypedExprPtr& expr,
-      memory::MemoryPool*) const {
+      memory::MemoryPool*,
+      const core::QueryConfig&) const {
     return std::make_shared<ExtractComponentFunction>(expr, component);
   }
 };
@@ -2859,7 +2863,8 @@ void registerCudfFunctions(
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
     const core::TypedExprPtr& expr,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(name);
   if (it == registry.end()) {
@@ -2872,10 +2877,10 @@ std::shared_ptr<CudfFunction> createCudfFunction(
         !matchCallAgainstSignatures(expr, spec.signatures)) {
       continue;
     }
-    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
+    if (spec.canEvaluate && !spec.canEvaluate(expr, config)) {
       continue;
     }
-    return spec.factory(name, expr, pool);
+    return spec.factory(name, expr, pool, config);
   }
   return nullptr;
 }
@@ -2887,7 +2892,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "split",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<SplitFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -2910,7 +2916,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "cardinality",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
         return std::make_shared<CardinalityFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2923,7 +2930,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "coalesce",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<CoalesceFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -2938,7 +2946,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "row_constructor",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<RowConstructorFunction>(expr, pool);
       },
       {});
@@ -2947,7 +2956,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "and",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<LogicalFunction>(
             expr, cudf::binary_operator::NULL_LOGICAL_AND, pool);
       },
@@ -2961,7 +2971,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "or",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<LogicalFunction>(
             expr, cudf::binary_operator::NULL_LOGICAL_OR, pool);
       },
@@ -2975,7 +2986,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "not",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
         return std::make_shared<UnaryFunction>(expr, cudf::unary_operator::NOT);
       },
       {FunctionSignatureBuilder()
@@ -2987,7 +2999,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "isnotnull",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
         return std::make_shared<IsNotNullFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -3000,7 +3013,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "round",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<RoundFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -3096,7 +3110,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {prefix + "doy", prefix + "day_of_year"},
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
         return std::make_shared<DayOfYearFunction>(expr);
       },
       timestampDateIntegerSignatures);
@@ -3105,14 +3120,18 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {prefix + "week", prefix + "week_of_year"},
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) { return std::make_shared<WeekFunction>(expr); },
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
+        return std::make_shared<WeekFunction>(expr);
+      },
       timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "quarter",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
         return std::make_shared<QuarterFunction>(expr);
       },
       timestampDateIntegerSignatures);
@@ -3121,7 +3140,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {prefix + "yow", prefix + "year_of_week"},
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
         return std::make_shared<YearOfWeekFunction>(expr);
       },
       timestampDateIntegerSignatures);
@@ -3150,7 +3170,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "length",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
         return std::make_shared<LengthFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -3162,7 +3183,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "lower",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) { return std::make_shared<LowerFunction>(expr); },
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
+        return std::make_shared<LowerFunction>(expr);
+      },
       {FunctionSignatureBuilder()
            .returnType("varchar")
            .argumentType("varchar")
@@ -3172,7 +3196,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "upper",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) { return std::make_shared<UpperFunction>(expr); },
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
+        return std::make_shared<UpperFunction>(expr);
+      },
       {FunctionSignatureBuilder()
            .returnType("varchar")
            .argumentType("varchar")
@@ -3182,7 +3209,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "replace",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<ReplaceFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -3198,7 +3226,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .build()},
       /*overwrite=*/true,
       /*canEvaluate=*/
-      [](const core::TypedExprPtr& expr) {
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         // Decline an empty constant search_str: the expected semantics insert
         // the replacement_str around every character, i.e. replace('abc', '',
         // 'X') → 'XaXbXcX', which cudf::strings::replace does not implement.
@@ -3210,7 +3238,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "like",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<LikeFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -3229,7 +3258,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "startswith",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<StartswithFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -3242,7 +3272,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "endswith",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<EndswithFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -3255,7 +3286,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "contains",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<ContainsFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -3268,7 +3300,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "concat",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<ConcatFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -3281,7 +3314,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // form needs a scalar for the implicit null ELSE.
   auto switchFactory = [](const std::string&,
                           const core::TypedExprPtr& expr,
-                          memory::MemoryPool* pool) {
+                          memory::MemoryPool* pool,
+                          const core::QueryConfig&) {
     return std::make_shared<SwitchFunction>(expr, pool);
   };
   registerCudfFunctions(
@@ -3294,7 +3328,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("T")
            .build()},
       /*overwrite=*/true,
-      [](const core::TypedExprPtr& expr) {
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return !expr->inputs()[0]->isConstantKind() &&
             supportsImplicitNullElse(expr->type());
       });
@@ -3309,7 +3343,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("T")
            .build()},
       /*overwrite=*/true,
-      [](const core::TypedExprPtr& expr) {
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return !expr->inputs()[0]->isConstantKind();
       });
 
@@ -3318,7 +3352,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {"try_cast", "cast"},
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) { return std::make_shared<CastFunction>(expr); },
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
+        return std::make_shared<CastFunction>(expr);
+      },
       {
           // Cast needs special handling dynamically using cudf.
       });
@@ -3348,7 +3385,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         [op](
             const std::string&,
             const core::TypedExprPtr& expr,
-            memory::MemoryPool* pool) {
+            memory::MemoryPool* pool,
+            const core::QueryConfig&) {
           return std::make_shared<BinaryFunction>(expr, op, pool);
         },
         {FunctionSignatureBuilder()
@@ -3409,7 +3447,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         [op](
             const std::string&,
             const core::TypedExprPtr& expr,
-            memory::MemoryPool* pool) {
+            memory::MemoryPool* pool,
+            const core::QueryConfig&) {
           return std::make_shared<BinaryFunction>(expr, op, pool);
         },
         comparisonSignatures);
@@ -3442,7 +3481,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         [op](
             const std::string&,
             const core::TypedExprPtr& expr,
-            memory::MemoryPool*) {
+            memory::MemoryPool*,
+            const core::QueryConfig&) {
           return std::make_shared<UnaryFunction>(expr, op);
         },
         {FunctionSignatureBuilder()
@@ -3503,7 +3543,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "between",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<BetweenFunction>(expr, pool);
       },
       betweenSignatures);
@@ -3516,7 +3557,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "greatest",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<GreatestLeastFunction>(
             expr, cudf::binary_operator::NULL_MAX, pool);
       },
@@ -3537,7 +3579,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "least",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<GreatestLeastFunction>(
             expr, cudf::binary_operator::NULL_MIN, pool);
       },
@@ -3587,7 +3630,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
   node->inputRowSchema_ = inputRowSchema;
 
   auto name = exprRegistryName(expr);
-  node->function_ = createCudfFunction(name, expr, pool);
+  node->function_ = createCudfFunction(name, expr, pool, config);
 
   // For nested field accesses on computed ROW values (e.g. dereferencing the
   // result of row_constructor), pre-resolve the child index inside the parent
@@ -3904,7 +3947,9 @@ void FunctionExpression::close() {
   subexpressions_.clear();
 }
 
-bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
+bool FunctionExpression::canEvaluate(
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config) {
   if (isInputFieldReference(expr)) {
     return true;
   }
@@ -3940,25 +3985,30 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
       return false;
     }
     if (srcType->isVarchar()) {
-      return isCastFromVarcharEnabled(srcType, dstType);
+      if (!isCastFromVarcharEnabled(srcType, dstType)) {
+        return false;
+      }
+    } else if (
+        !isTemporalToVarcharCastEnabled(srcType, dstType) &&
+        !cudf::is_supported_cast(*src, *dst)) {
+      return false;
     }
-    if (isTemporalToVarcharCastEnabled(srcType, dstType)) {
-      return true;
-    }
-    return cudf::is_supported_cast(*src, *dst);
+    // A supported type pair must also satisfy the registered cast function's
+    // eligibility predicate, including any session restrictions.
   }
 
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(opName);
   if (it == registry.end()) {
-    return false;
+    // Preserve the standalone cast type check when no cast is registered.
+    return expr->isCastKind();
   }
   for (const auto& spec : it->second) {
     if (!spec.signatures.empty() &&
         !matchCallAgainstSignatures(expr, spec.signatures)) {
       continue;
     }
-    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
+    if (spec.canEvaluate && !spec.canEvaluate(expr, config)) {
       continue;
     }
     return true;
@@ -4105,13 +4155,20 @@ core::TypedExprPtr optimizeForCheck(
       : expr;
 }
 
+// Returns the session config, or the default settings when there is no
+// session.
+const core::QueryConfig& sessionConfigOrDefault(core::QueryCtx* queryCtx) {
+  static const core::QueryConfig kDefaultConfig{{}};
+  return queryCtx != nullptr ? queryCtx->queryConfig() : kDefaultConfig;
+}
+
 // Decides canExprRunOnGpu() for an expression optimizeForCheck() returned.
 bool canOptimizedExprRunOnGpu(
     const core::TypedExprPtr& checked,
     core::QueryCtx* queryCtx) {
   return !requiresCpuForTimezone(checked, queryCtx) &&
       !requiresCpuForCastConfig(checked, queryCtx) &&
-      canBeEvaluatedByCudf(checked);
+      canBeEvaluatedByCudf(checked, sessionConfigOrDefault(queryCtx));
 }
 
 } // namespace
@@ -4178,7 +4235,7 @@ std::shared_ptr<CudfExpression> createCudfExpression(
     const RowTypePtr& inputRowSchema,
     memory::MemoryPool* pool,
     const core::QueryConfig& config) {
-  const auto* best = findBestEvaluator(expr);
+  const auto* best = findBestEvaluator(expr, config);
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
   return best->create(expr, inputRowSchema, pool, config);

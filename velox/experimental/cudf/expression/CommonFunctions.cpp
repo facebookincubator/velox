@@ -63,7 +63,8 @@ void registerArrayAccessFunction(
       [policy](
           const std::string&,
           const core::TypedExprPtr& expr,
-          memory::MemoryPool* pool) {
+          memory::MemoryPool* pool,
+          const core::QueryConfig&) {
         return makeArrayAccessFunction(expr, policy, pool);
       },
       signatures);
