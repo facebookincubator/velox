@@ -73,6 +73,7 @@ namespace facebook::nimble {
       using Type = std::string_view;                                   \
       return (expression);                                             \
     }                                                                  \
+    case ::facebook::nimble::DataType::Undefined:                      \
     default: {                                                         \
       __VA_ARGS__;                                                     \
     }                                                                  \

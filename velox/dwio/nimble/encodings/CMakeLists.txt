@@ -102,6 +102,7 @@ add_library(
   selection/EncodingSelectionPolicy.h
   selection/EncodingSelection.h
   selection/EncodingIdentifier.h
+  selection/TimedEncodingSelectionPolicy.h
   common/EncodingUtils.h
   common/SortedPositionSlots.h
   common/EncodingType.h
@@ -183,6 +184,7 @@ target_link_libraries(
   nimble_shared_dictionary_fb
   velox_common_base
   velox_fastpforlib
+  velox_time
   fsst
   Folly::folly
   absl::flat_hash_map
