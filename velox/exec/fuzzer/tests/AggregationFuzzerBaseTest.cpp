@@ -17,10 +17,12 @@
 #include <gflags/gflags.h>
 #include <gmock/gmock.h>
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/fuzzer/AggregationFuzzer.h"
 #include "velox/exec/fuzzer/AggregationFuzzerBase.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -272,7 +274,14 @@ TEST_F(AggregationFuzzerBaseTest, constantForwardingPlans) {
       .returnType = BIGINT(),
       .constantArgs = {false, true},
   };
-  std::vector<RowVectorPtr> batches{input};
+  std::vector<RowVectorPtr> batches{
+      input,
+      makeRowVector({
+          makeFlatVector<int64_t>({4, 5, 6}),
+          makeFlatVector<int64_t>({13, 15, 17}),
+          makeFlatVector<bool>({false, true, true}),
+      }),
+  };
   auto constants = fuzzer_->generateConstantInputs(signature, batches);
   auto call = makeFunctionCall(
       signature.name,
@@ -282,27 +291,40 @@ TEST_F(AggregationFuzzerBaseTest, constantForwardingPlans) {
       false,
       {"c0", "c1"});
   auto builder = PlanBuilder(pool_.get(), constants);
-  auto scan = builder.newPlan()
-                  .tableScan(asRowType(input->type()))
-                  .singleAggregation({}, {call}, {"c2"})
-                  .planNode();
-  auto scanAggregation =
-      std::dynamic_pointer_cast<const core::AggregationNode>(scan);
-  EXPECT_NE(
-      std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
-          scanAggregation->aggregates()[0].call->inputs()[1]),
-      nullptr);
-  for (bool partial : {false, true}) {
-    auto plan = builder.newPlan().values(batches);
-    if (partial) {
-      plan.partialAggregation({}, {call}, {"c2"})
-          .intermediateAggregation()
-          .finalAggregation();
-    } else {
-      plan.singleAggregation({}, {call}, {"c2"});
+  const auto directory = common::testutil::TempDirectoryPath::create();
+  const auto writerPool = rootPool_->addAggregateChild("writer");
+  const auto splits = makeSplits(batches, directory->getPath(), writerPool);
+  const auto expected = makeRowVector({makeFlatVector<int64_t>({43})});
+  for (bool tableScan : {false, true}) {
+    for (bool partial : {false, true}) {
+      SCOPED_TRACE(fmt::format("tableScan={}, partial={}", tableScan, partial));
+      auto plan = builder.newPlan();
+      if (tableScan) {
+        plan.tableScan(asRowType(input->type()));
+      } else {
+        plan.values(batches);
+      }
+      if (partial) {
+        plan.partialAggregation({}, {call}, {"c2"});
+      } else {
+        plan.singleAggregation({}, {call}, {"c2"});
+      }
+      auto aggregation = std::dynamic_pointer_cast<const core::AggregationNode>(
+          plan.planNode());
+      ASSERT_NE(aggregation, nullptr);
+      EXPECT_NE(
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+              aggregation->aggregates()[0].call->inputs()[1]),
+          nullptr);
+      if (partial) {
+        plan.intermediateAggregation().finalAggregation();
+      }
+      auto query = AssertQueryBuilder(plan.planNode());
+      if (tableScan) {
+        query.splits(splits);
+      }
+      query.assertResults(expected);
     }
-    AssertQueryBuilder(plan.planNode())
-        .assertResults(makeRowVector({makeFlatVector<int64_t>({18})}));
   }
 }
 
