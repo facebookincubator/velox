@@ -69,8 +69,8 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
   /// 'ivf.nlist' defaults to 4 * sqrt(number of embeddings), between 8 and
   /// 16384. The build reduces it, even when set, to give each list at least 39
   /// embeddings, the fewest FAISS recommends for training a list; a group of
-  /// fewer than 39 embeddings gets one list. 'ivf.nprobe' defaults to a tenth
-  /// of the lists, rounded up, and is capped at the number of lists. 'hnsw.M',
+  /// fewer than 39 embeddings gets one list. 'ivf.nprobe' defaults to all the
+  /// lists and is capped at the number of lists. 'hnsw.M',
   /// 'hnsw.efConstruction' and 'hnsw.efSearch' default to 32, 200 and 64.
   static void build(
       VectorIndexKind kind,

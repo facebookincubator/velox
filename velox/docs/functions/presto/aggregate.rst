@@ -1065,8 +1065,7 @@ These functions are available when Velox is built with FAISS
         ``n`` embeddings, between 8 and 16384. Reduced, even when set, to give
         each list at least 39 embeddings.
       * ``ivf.nprobe``: the number of lists a search scans by default.
-        Defaults to a tenth of the lists, rounded up, and is capped at the
-        number of lists.
+        Defaults to all the lists, and is capped at the number of lists.
       * ``hnsw.M``: the number of neighbors of each embedding in the graph,
         between 2 and 256. Defaults to 32.
       * ``hnsw.efConstruction``: the number of candidates the build explores.

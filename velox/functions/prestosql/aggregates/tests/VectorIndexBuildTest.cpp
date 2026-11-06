@@ -258,9 +258,8 @@ TEST_F(VectorIndexBuildTest, options) {
       checkIvf(2, 2));
 
   // The default 'ivf.nlist', 35 for 80 embeddings, is reduced to give each list
-  // at least 39 embeddings. 'ivf.nprobe' defaults to a tenth of the lists,
-  // rounded up.
-  testBuild(embeddings, ids, "ivf_flat", kNoOptions, checkIvf(2, 1));
+  // at least 39 embeddings. 'ivf.nprobe' defaults to all the lists.
+  testBuild(embeddings, ids, "ivf_flat", kNoOptions, checkIvf(2, 2));
 
   // The build reduces 'ivf.nlist' even when set, and caps 'ivf.nprobe' at the
   // number of lists.

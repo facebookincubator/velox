@@ -86,7 +86,7 @@ std::unique_ptr<faiss::Index> makeIvfIndex(
   // resolveNlist() keeps kMinEmbeddingsPerList per list except for groups too
   // small for two lists, which FAISS would warn about on every build.
   index->cp.min_points_per_centroid = 1;
-  index->nprobe = std::min(options.nprobe.value_or((nlist + 9) / 10), nlist);
+  index->nprobe = std::min<size_t>(options.nprobe.value_or(nlist), nlist);
   return index;
 }
 
