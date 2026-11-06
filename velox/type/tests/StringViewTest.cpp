@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <folly/Benchmark.h>
+#include <folly/lang/Hint.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <optional>
@@ -60,7 +60,7 @@ TEST(StringView, emptyZeroesInlinePart) {
   // full string as a dead store.
   const std::string dirty(StringView::kInlineSize, '\xff');
   StringView view(dirty);
-  folly::doNotOptimizeAway(view);
+  folly::compiler_must_not_elide(view);
   new (&view) StringView("", 0);
 
   // The default constructor zeroes all the bytes.
