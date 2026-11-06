@@ -2619,13 +2619,18 @@ TEST_P(TabletTest, stripeGroupEncodingLayouts) {
     }
   }
 
-  // An out-of-range streamId is a programming error: point access check-fails
-  // rather than silently returning 0.
+  // Point access check-fails on an out-of-range streamId rather than silently
+  // returning 0. Location lookups, load() and totalStreamSize() read it as
+  // absent, like a stream added after this stripe group was written.
   for (const auto& tablet : {rawTablet, streamMajorTablet}) {
     auto stripe = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripe);
     EXPECT_ANY_THROW(tablet->streamOffset(stripe, streamCount));
     EXPECT_ANY_THROW(tablet->streamSize(stripe, streamCount));
+    EXPECT_EQ(tablet->streamLocation(stripe, streamCount).size, 0);
+    const std::vector<uint32_t> outOfRangeStreamIds{streamCount};
+    EXPECT_EQ(tablet->load(stripe, outOfRangeStreamIds)[0], nullptr);
+    EXPECT_EQ(tablet->totalStreamSize(stripe, outOfRangeStreamIds), 0);
   }
 
   auto expectAllLocations = [](const std::shared_ptr<nimble::TabletReader>&
@@ -2836,9 +2841,14 @@ TEST_P(TabletTest, stripeGroupEncodingLayoutsMultipleGroups) {
         EXPECT_EQ(
             rawTablet->streamOffset(rawStripe, streamId),
             encodedTablet->streamOffset(encStripe, streamId));
+        const auto rawSize = rawTablet->streamSize(rawStripe, streamId);
+        EXPECT_EQ(rawSize, encodedTablet->streamSize(encStripe, streamId));
+        const nimble::TabletReader::StreamMetadata location =
+            encodedTablet->streamLocation(encStripe, streamId);
+        EXPECT_EQ(location.size, rawSize);
         EXPECT_EQ(
-            rawTablet->streamSize(rawStripe, streamId),
-            encodedTablet->streamSize(encStripe, streamId));
+            location.offset,
+            rawSize == 0 ? 0 : rawTablet->streamOffset(rawStripe, streamId));
       }
 
       std::vector<nimble::TabletReader::StreamMetadata> rawLocations(
