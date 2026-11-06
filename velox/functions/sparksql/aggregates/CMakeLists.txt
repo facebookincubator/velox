@@ -25,7 +25,6 @@ velox_add_library(
   CovarianceAggregate.cpp
   FirstLastAggregate.cpp
   HistogramNumericAggregate.cpp
-  HistogramNumericTypes.cpp
   MinMaxAggregate.cpp
   MinMaxByAggregate.cpp
   ModeAggregate.cpp
@@ -47,7 +46,6 @@ velox_add_library(
   DecimalAverageAggregate.h
   DecimalSumAggregate.h
   HistogramNumericAggregate.h
-  HistogramNumericTypes.h
   Register.h
   RegrReplacementAggregate.h
   SparkNumericHistogram.h
@@ -57,7 +55,7 @@ velox_add_library(
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set_source_files_properties(
-    HistogramNumericTypes.cpp
+    HistogramNumericAggregate.cpp
     SparkNumericHistogram.cpp
     TARGET_DIRECTORY velox_functions_spark_aggregates
     PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
