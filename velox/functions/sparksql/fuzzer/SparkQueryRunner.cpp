@@ -147,8 +147,12 @@ const std::vector<TypePtr>& SparkQueryRunner::supportedScalarTypes() const {
 
 const std::unordered_map<std::string, DataSpec>&
 SparkQueryRunner::aggregationFunctionDataSpecs() const {
+  // With infinite inputs, covar_samp returns NaN or infinity depending on the
+  // order of input rows, so its results are not comparable across plans.
   static const std::unordered_map<std::string, DataSpec>
-      kAggregationFunctionDataSpecs{};
+      kAggregationFunctionDataSpecs{
+          {"covar_samp", DataSpec{true, false}},
+      };
 
   return kAggregationFunctionDataSpecs;
 }

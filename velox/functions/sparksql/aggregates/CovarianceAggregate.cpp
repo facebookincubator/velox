@@ -26,7 +26,12 @@ using functions::sparksql::SparkQueryConfig;
 
 namespace {
 
-template <bool nullOnDivideByZero>
+// @tparam nullOnDivideByZero If true, return NULL instead of NaN when dividing
+// by zero during the calculating.
+// @tparam legacyCorrCovarSampNan If true, return NaN for an infinite
+// covariance, as Spark 4.2 and earlier do for infinite inputs when merging
+// aggregation buffers. Otherwise, return it as is.
+template <bool nullOnDivideByZero, bool legacyCorrCovarSampNan>
 struct CovarSampResultAccessor {
   static bool hasResult(const CovarAccumulator& accumulator) {
     if constexpr (nullOnDivideByZero) {
@@ -43,14 +48,21 @@ struct CovarSampResultAccessor {
           "NaN is returned only when m2 is 0 and nullOnDivideByZero is false.");
       return std::numeric_limits<double>::quiet_NaN();
     }
-    if (FOLLY_UNLIKELY(std::isinf(accumulator.c2()))) {
-      return std::numeric_limits<double>::quiet_NaN();
+    if constexpr (legacyCorrCovarSampNan) {
+      if (FOLLY_UNLIKELY(std::isinf(accumulator.c2()))) {
+        return std::numeric_limits<double>::quiet_NaN();
+      }
     }
     return accumulator.c2() / (accumulator.count() - 1);
   }
 };
 
-template <bool nullOnDivideByZero>
+// @tparam nullOnDivideByZero If true, return NULL instead of NaN when dividing
+// by zero during the calculating.
+// @tparam legacyCorrCovarSampNan If true, return NaN when m2X or m2Y is 0 but
+// any of m2X, m2Y and c2 is NaN, as Spark 4.2 and earlier do. Otherwise,
+// return NULL whenever m2X or m2Y is 0.
+template <bool nullOnDivideByZero, bool legacyCorrCovarSampNan>
 struct CorrResultAccessor {
   static bool hasResult(const CorrAccumulator& accumulator) {
     if (accumulator.count() == 1) {
@@ -61,12 +73,16 @@ struct CorrResultAccessor {
       }
     }
 
-    // Returns true if any of the following conditions are met:
-    // 1. m2Y or m2X or c2 is NaN.
-    // 2. m2Y and m2X are not zero.
-    return std::isnan(accumulator.m2Y()) || std::isnan(accumulator.m2X()) ||
-        std::isnan(accumulator.c2()) ||
-        (accumulator.m2Y() != 0 && accumulator.m2X() != 0);
+    if constexpr (legacyCorrCovarSampNan) {
+      // Returns true if any of the following conditions are met:
+      // 1. m2Y or m2X or c2 is NaN.
+      // 2. m2Y and m2X are not zero.
+      return std::isnan(accumulator.m2Y()) || std::isnan(accumulator.m2X()) ||
+          std::isnan(accumulator.c2()) ||
+          (accumulator.m2Y() != 0 && accumulator.m2X() != 0);
+    } else {
+      return accumulator.m2Y() != 0 && accumulator.m2X() != 0;
+    }
   }
 
   static double result(const CorrAccumulator& accumulator) {
@@ -93,7 +109,32 @@ template <
     typename TAccumulator,
     typename TIntermediateInput,
     typename TIntermediateResult,
-    template <bool> class TResultAccessor>
+    template <bool, bool> class TResultAccessor,
+    bool legacyCorrCovarSampNan>
+std::unique_ptr<exec::Aggregate> createCovariance(
+    const TypePtr& resultType,
+    bool legacyStatisticalAggregate) {
+  if (legacyStatisticalAggregate) {
+    return std::make_unique<CovarianceAggregate<
+        double,
+        TAccumulator,
+        TIntermediateInput,
+        TIntermediateResult,
+        TResultAccessor<false, legacyCorrCovarSampNan>>>(resultType);
+  }
+  return std::make_unique<CovarianceAggregate<
+      double,
+      TAccumulator,
+      TIntermediateInput,
+      TIntermediateResult,
+      TResultAccessor<true, legacyCorrCovarSampNan>>>(resultType);
+}
+
+template <
+    typename TAccumulator,
+    typename TIntermediateInput,
+    typename TIntermediateResult,
+    template <bool, bool> class TResultAccessor>
 exec::AggregateRegistrationResult registerCovariance(
     const std::string& name,
     bool withCompanionFunctions,
@@ -124,20 +165,21 @@ exec::AggregateRegistrationResult registerCovariance(
             "Expected DOUBLE.",
             inputType->toString());
 
-        if (SparkQueryConfig{config}.legacyStatisticalAggregate()) {
-          return std::make_unique<CovarianceAggregate<
-              double,
+        const SparkQueryConfig sparkConfig{config};
+        if (sparkConfig.legacyCorrCovarSampNan()) {
+          return createCovariance<
               TAccumulator,
               TIntermediateInput,
               TIntermediateResult,
-              TResultAccessor<false>>>(resultType);
+              TResultAccessor,
+              true>(resultType, sparkConfig.legacyStatisticalAggregate());
         }
-        return std::make_unique<CovarianceAggregate<
-            double,
+        return createCovariance<
             TAccumulator,
             TIntermediateInput,
             TIntermediateResult,
-            TResultAccessor<true>>>(resultType);
+            TResultAccessor,
+            false>(resultType, sparkConfig.legacyStatisticalAggregate());
       },
       withCompanionFunctions,
       overwrite);

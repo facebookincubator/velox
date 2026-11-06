@@ -144,6 +144,17 @@ class SparkQueryConfig {
       false,
       "Return NaN instead of NULL for Spark statistical aggregation on divide-by-zero.")
 
+  /// If true, Spark corr and covar_samp aggregation functions follow Spark 4.2
+  /// and earlier for NaN and infinite inputs, and return NaN where Spark 4.3
+  /// and later return NULL or infinity.
+  VELOX_SPARK_CONFIG(
+      kLegacyCorrCovarSampNan,
+      legacyCorrCovarSampNan,
+      "legacy_corr_covar_samp_nan",
+      bool,
+      false,
+      "Return NaN in Spark corr and covar_samp as Spark 4.2 and earlier do.")
+
   /// If true, encode replaces unmappable characters instead of failing.
   VELOX_SPARK_CONFIG(
       kLegacyCodingErrorAction,
