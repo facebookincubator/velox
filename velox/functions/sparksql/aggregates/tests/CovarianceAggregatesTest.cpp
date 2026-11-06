@@ -39,7 +39,8 @@ class CovarianceAggregatesTest : public AggregationTestBase {
       const std::string& agg,
       const RowVectorPtr& input,
       const RowVectorPtr& expected,
-      bool legacy = false) {
+      bool legacy = false,
+      bool legacyCorrCovarSampNan = false) {
     auto plan =
         PlanBuilder()
             .values({input})
@@ -50,6 +51,10 @@ class CovarianceAggregatesTest : public AggregationTestBase {
             SparkQueryConfig::qualify(
                 SparkQueryConfig::kLegacyStatisticalAggregate),
             legacy ? "true" : "false")
+        .config(
+            SparkQueryConfig::qualify(
+                SparkQueryConfig::kLegacyCorrCovarSampNan),
+            legacyCorrCovarSampNan ? "true" : "false")
         .assertResults({expected});
   }
 };
@@ -103,7 +108,8 @@ TEST_F(CovarianceAggregatesTest, corr) {
       std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
   testCovarianceAggResult(agg, input, expected, true);
 
-  // Output NaN when m2x or m2y equals 0 but c2 is NaN.
+  // Output NaN when m2x or m2y equals 0 but c2 is NaN, if
+  // legacyCorrCovarSampNan is true.
   input = makeRowVector(
       {makeFlatVector<double>({0, 0, 0, 0, 0, 0}),
        makeFlatVector<double>(
@@ -111,8 +117,24 @@ TEST_F(CovarianceAggregatesTest, corr) {
 
   expected = makeRowVector({makeFlatVector<double>(
       std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
+  for (bool legacy : {false, true}) {
+    testCovarianceAggResult(
+        agg, input, expected, legacy, /*legacyCorrCovarSampNan=*/true);
+  }
+
+  // Output NULL when m2x or m2y equals 0, even if c2 is NaN.
+  expected = makeRowVector({makeNullableFlatVector<double>(
+      std::vector<std::optional<double>>{std::nullopt})});
   testCovarianceAggResult(agg, input, expected);
   testCovarianceAggResult(agg, input, expected, true);
+
+  // Output NaN when count equals 1 for legacy aggregate, if
+  // legacyCorrCovarSampNan is true.
+  input = makeRowVector({makeFlatVector<double>(1), makeFlatVector<double>(1)});
+  expected = makeRowVector({makeFlatVector<double>(
+      std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
+  testCovarianceAggResult(
+      agg, input, expected, /*legacy=*/true, /*legacyCorrCovarSampNan=*/true);
 
   // Output NULL when count equals 0 for legacy aggregate.
   input = makeRowVector(
@@ -170,12 +192,23 @@ TEST_F(CovarianceAggregatesTest, covarSamp) {
       std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
   testCovarianceAggResult(agg, input, expected, true);
 
-  // Output NaN when c2 is ±inf.
+  // Output NaN when c2 is ±inf, if legacyCorrCovarSampNan is true.
   input = makeRowVector(
       {makeFlatVector<double>({22, std::numeric_limits<double>::infinity()}),
        makeFlatVector<double>({0.688, 0.225})});
   expected = makeRowVector({makeFlatVector<double>(
       std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
+  for (bool legacy : {false, true}) {
+    testCovarianceAggResult(
+        agg, input, expected, legacy, /*legacyCorrCovarSampNan=*/true);
+  }
+
+  // Output c2 as is when c2 overflows to inf.
+  input = makeRowVector(
+      {makeFlatVector<double>({1e200, -1e200}),
+       makeFlatVector<double>({1e200, -1e200})});
+  expected = makeRowVector({makeFlatVector<double>(
+      std::vector<double>{std::numeric_limits<double>::infinity()})});
   testCovarianceAggResult(agg, input, expected);
   testCovarianceAggResult(agg, input, expected, true);
 }

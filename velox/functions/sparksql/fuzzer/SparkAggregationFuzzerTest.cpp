@@ -25,6 +25,7 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunner.h"
 #include "velox/serializers/CompactRowSerializer.h"
@@ -156,6 +157,15 @@ int main(int argc, char** argv) {
   options.orderableGroupKeys = true;
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;
+
+  using facebook::velox::functions::sparksql::SparkQueryConfig;
+
+  // The reference Spark server runs Spark 3.5, whose corr and covar_samp
+  // return NaN where Spark 4.3 and later return NULL or infinity.
+  options.queryConfigs = {
+      {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyCorrCovarSampNan),
+       "true"},
+  };
   options.hiveConfigs = {
       {facebook::velox::connector::hive::HiveConfig::kReadTimestampUnit, "6"}};
   return Runner::run(initialSeed, std::move(sparkQueryRunner), options);
