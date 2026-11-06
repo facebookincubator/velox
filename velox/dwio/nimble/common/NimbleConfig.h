@@ -245,7 +245,8 @@ class Config : public velox::config::ConfigBase {
   static Entry<uint32_t> METADATA_COMPRESSION_THRESHOLD;
 
   /// Selects how per-stripe-group stream offsets/sizes are serialized:
-  /// "raw" (default, readable by all readers) or "stream_major".
+  /// "raw" (default, readable by all readers), "stream_major" or
+  /// "stream_major_sparse".
   /// EXPERIMENTAL: see WriterOptions::experimentalStripeGroupEncodingLayout.
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<std::string> STRIPE_GROUP_ENCODING_LAYOUT;
