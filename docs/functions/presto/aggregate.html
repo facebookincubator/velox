@@ -1254,8 +1254,7 @@ errors.</p>
 <code class="docutils literal notranslate"><span class="pre">n</span></code> embeddings, between 8 and 16384. Reduced, even when set, to give
 each list at least 39 embeddings.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">ivf.nprobe</span></code>: the number of lists a search scans by default.
-Defaults to a tenth of the lists, rounded up, and is capped at the
-number of lists.</p></li>
+Defaults to all the lists, and is capped at the number of lists.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">hnsw.M</span></code>: the number of neighbors of each embedding in the graph,
 between 2 and 256. Defaults to 32.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">hnsw.efConstruction</span></code>: the number of candidates the build explores.
