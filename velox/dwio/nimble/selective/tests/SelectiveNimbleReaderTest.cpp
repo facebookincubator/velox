@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <set>
@@ -340,7 +341,7 @@ class SelectiveNimbleReaderTest
       }
     };
     auto values = makeFlatVector<T>(kNumRows, valueAt, isNullAt);
-    auto rowIds = makeFlatVector<int64_t>(kNumRows, folly::identity);
+    auto rowIds = makeFlatVector<int64_t>(kNumRows, std::identity{});
     auto input = makeRowVector({"c0", "c1"}, {values, rowIds});
     const auto file =
         createDictionaryFile(input, /*maxStreamChunkRawSize=*/512);
@@ -943,7 +944,7 @@ TEST_P(SelectiveNimbleReaderTest, basic) {
   setNulls(c0, nullEvery(11));
   auto input = makeRowVector({
       c0,
-      makeFlatVector<int64_t>(1009, folly::identity, nullEvery(17)),
+      makeFlatVector<int64_t>(1009, std::identity{}, nullEvery(17)),
       makeRowVector({c0}, nullEvery(13)),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -1319,7 +1320,7 @@ TEST_P(SelectiveNimbleReaderTest, multiChunkNulls) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, filterIsNull) {
-  auto c0 = makeFlatVector<int64_t>(11, folly::identity, nullEvery(2));
+  auto c0 = makeFlatVector<int64_t>(11, std::identity{}, nullEvery(2));
   auto input = makeRowVector({makeRowVector({c0}, nullEvery(3))});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -1450,7 +1451,7 @@ TEST_P(SelectiveNimbleReaderTest, bigintInList) {
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<int64_t>(
-            1009, folly::identity, hasNulls ? nullEvery(11) : nullptr);
+            1009, std::identity{}, hasNulls ? nullEvery(11) : nullptr);
       },
       *common::createBigintValues(inList, /*nullAllowed=*/false),
       101,
@@ -1617,7 +1618,7 @@ TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsFilterChange) {
   auto input = makeRowVector(
       {"c0", "c1"},
       {makeFlatVector<int64_t>(kNumRows, valueAt),
-       makeFlatVector<int64_t>(kNumRows, folly::identity)});
+       makeFlatVector<int64_t>(kNumRows, std::identity{})});
   const auto file =
       createDictionaryFile(input, /*maxStreamChunkRawSize=*/std::nullopt);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -3936,7 +3937,7 @@ TEST_P(SelectiveNimbleReaderTest, deltaSawtoothSmallBatches) {
 // such a column is built over int128 while the column is decoded as int64.
 TEST_P(SelectiveNimbleReaderTest, bigintAsLongDecimalWithFilter) {
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(200, folly::identity),
+      makeFlatVector<int64_t>(200, std::identity{}),
   });
   auto fileContent = test::createNimbleFile(*rootPool(), input);
 
@@ -4086,7 +4087,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsNoStats) {
 TEST_P(SelectiveNimbleReaderTest, columnStatisticsWithNulls) {
   constexpr int kSize = 100;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity, nullEvery(5)),
+      makeFlatVector<int64_t>(kSize, std::identity{}, nullEvery(5)),
   });
   WriterOptions writerOptions;
   writerOptions.enableVectorizedStats = true;
@@ -4107,7 +4108,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsAllNull) {
   constexpr int kSize = 50;
   auto input = makeRowVector({
       makeFlatVector<int64_t>(
-          kSize, folly::identity, [](auto) { return true; }),
+          kSize, std::identity{}, [](auto) { return true; }),
   });
   WriterOptions writerOptions;
   writerOptions.enableVectorizedStats = true;
