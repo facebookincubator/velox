@@ -710,6 +710,100 @@ TEST_F(DirectBufferedInputTest, sharedAllocationReducesAllocations) {
   EXPECT_LT(allocsDelta, static_cast<uint64_t>(kNumRegions));
 }
 
+// An executor that holds every submitted closure without ever running it. This
+// models the IO-thread-pool starvation case: a speculative prefetch is enqueued
+// on the shared connector IO executor but never gets scheduled before the
+// owning task is torn down.
+class HoldingExecutor : public folly::Executor {
+ public:
+  void add(folly::Func func) override {
+    held_.push_back(std::move(func));
+  }
+
+  size_t size() const {
+    return held_.size();
+  }
+
+  void clear() {
+    held_.clear();
+  }
+
+ private:
+  // Retains submitted callbacks without executing them.
+  std::vector<folly::Func> held_;
+};
+
+// A prefetch that is enqueued on the IO executor but never scheduled must not
+// keep the reader's memory pool alive once the reader is torn down. The queued
+// closure holds only a weak reference to the load, so destroying the
+// DirectBufferedInput destroys the load (freeing its buffers and dropping its
+// pool reference); otherwise the orphaned closure would pin the pool past the
+// owning MemoryManager's destruction and abort the process.
+TEST_F(DirectBufferedInputTest, orphanedPrefetchDoesNotPinPool) {
+  HoldingExecutor holdingExecutor;
+
+  constexpr int32_t kContentSize{4 << 20};
+  std::string content(kContentSize, '\0');
+  for (int32_t i{0}; i < kContentSize; ++i) {
+    content[i] = static_cast<char>('a' + (i % 26));
+  }
+  // Non-tiny region so loadData() would allocate from the pool if it ran.
+  const uint64_t regionSize{DirectBufferedInput::kTinySize + 1'000};
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  // Dedicated leaf pool whose lifetime we track via a weak_ptr.
+  auto leafPool = rootPool_->addLeafChild("orphanedPrefetchDoesNotPinPool");
+  std::weak_ptr<MemoryPool> weakLeaf = leafPool;
+
+  io::ReaderOptions readerOptions(leafPool.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setLoadQuantum(1 << 20);
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "cancelQueuedPrefetch");
+  StringIdLease groupId(ids, "cancelQueuedPrefetchGroup");
+
+  auto input = std::make_unique<DirectBufferedInput>(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      dataIoStats_,
+      nullptr,
+      &holdingExecutor,
+      readerOptions);
+
+  auto stream1 = input->enqueue(common::Region{0, regionSize}, nullptr);
+  auto stream2 =
+      input->enqueue(common::Region{regionSize, regionSize}, nullptr);
+  ASSERT_NE(stream1, nullptr);
+  ASSERT_NE(stream2, nullptr);
+
+  // Schedules the coalesced prefetch onto the holding executor; it never runs.
+  input->load(LogType::TEST);
+  EXPECT_EQ(input->testingCoalescedLoads().size(), 1);
+  EXPECT_EQ(holdingExecutor.size(), 1);
+  // The prefetch never ran, so no buffers were allocated.
+  ASSERT_EQ(leafPool->usedBytes(), 0);
+
+  // Tear down the reader while the prefetch is still queued and unscheduled.
+  stream1.reset();
+  stream2.reset();
+  input.reset();
+
+  // Drop our own reference. The only remaining potential owner is the queued
+  // closure still held by 'holdingExecutor'. With the fix it holds no pool
+  // reference, so the pool is destroyed now.
+  leafPool.reset();
+  EXPECT_TRUE(weakLeaf.expired())
+      << "queued prefetch closure still pins the memory pool after teardown";
+
+  // The held closure would lock an expired weak_ptr and no-op; drop it.
+  holdingExecutor.clear();
+}
+
 DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
   constexpr int32_t kContentSize = 4 << 20; // 4MB
   std::string content;

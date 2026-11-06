@@ -93,6 +93,7 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
         input_(std::move(input)),
         loadQuantum_(loadQuantum),
         pool_(pool),
+        poolShared_(pool->shared_from_this()),
         sharedAllocation_(pool) {
     VELOX_DCHECK_NOT_NULL(pool_);
     VELOX_DCHECK(
@@ -154,6 +155,9 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   const std::shared_ptr<ReadFileInputStream> input_;
   const int32_t loadQuantum_;
   memory::MemoryPool* const pool_;
+  // The load can outlive the reader while asynchronous I/O runs. Keep the
+  // pool alive until both the request buffers and shared allocation are freed.
+  std::shared_ptr<memory::MemoryPool> poolShared_;
   // Shared allocation backing all non-tiny request buffers; bump-packs them
   // into a few allocations, freed as a unit on destruction.
   memory::AllocationPool sharedAllocation_;
@@ -333,24 +337,6 @@ class DirectBufferedInput : public BufferedInput {
       const std::vector<LoadRequest*>& requests,
       bool prefetch,
       const std::vector<int32_t>& groupEnds);
-
-  // Holds the reference on the memory pool for async load in case of early task
-  // terminate.
-  struct AsyncLoadHolder {
-    std::shared_ptr<cache::CoalescedLoad> load;
-    std::shared_ptr<memory::MemoryPool> pool;
-
-    ~AsyncLoadHolder() {
-      // Release the load reference before the memory pool reference.
-      // This is to make sure the memory pool is not destroyed before we free up
-      // the allocated buffers.
-      // This is to handle the case that the associated task has already
-      // destroyed before the async load is done. The async load holds
-      // the last reference to the memory pool in that case.
-      load.reset();
-      pool.reset();
-    }
-  };
 
   // Coalesced loads spanning multiple streams in one IO.
   folly::Synchronized<folly::F14FastMap<

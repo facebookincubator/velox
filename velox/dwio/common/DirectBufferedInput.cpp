@@ -228,11 +228,18 @@ void DirectBufferedInput::readRegions(
     for (auto i = 0; i < coalescedLoads_.size(); ++i) {
       auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
-        AsyncLoadHolder loadHolder{
-            .load = load, .pool = pool_->shared_from_this()};
-        executor_->add([asyncLoad = std::move(loadHolder)]() {
-          VELOX_CHECK_NOT_NULL(asyncLoad.load);
-          asyncLoad.load->loadOrFuture(nullptr);
+        // Capture a weak reference so this queued prefetch does not keep the
+        // load (and, through it, the reader's memory pool) alive. The load is
+        // owned by 'coalescedLoads_'; if the owning reader is torn down before
+        // this runs (e.g. an orphaned prefetch on a saturated IO executor), the
+        // load is destroyed with the reader -- freeing its buffers and dropping
+        // its pool reference -- and this closure becomes a no-op. If the reader
+        // is still alive, the load is loaded normally.
+        std::weak_ptr<CoalescedLoad> weakLoad = load;
+        executor_->add([weakLoad = std::move(weakLoad)]() {
+          if (auto load = weakLoad.lock()) {
+            load->loadOrFuture(nullptr);
+          }
         });
       }
     }
