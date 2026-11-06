@@ -176,6 +176,51 @@ TEST_F(SplitLifecycleTest, earlyClosure) {
   }
 }
 
+TEST_F(SplitLifecycleTest, barrierAfterSourceClosure) {
+  const auto data = makeRowVector({makeFlatIdentityVector<int32_t>(10'000)});
+  const auto file = writeToFile(data);
+  constexpr uint32_t kNumDrivers = 4;
+  core::PlanNodeId sourceId;
+  core::PlanNodeId siblingId;
+  CursorParameters params;
+  params.planNode = makeScanUnion(data->rowType(), sourceId, siblingId);
+  params.maxDrivers = kNumDrivers;
+  const auto cursor = TaskCursor::create(params);
+  const auto task = cursor->task();
+  for (uint32_t i = 0; i < kNumDrivers; ++i) {
+    task->addSplit(sourceId, makeSplit(file->getPath(), 100));
+  }
+  readRows(*cursor, 2 * kNumDrivers);
+  waitForDrivers(*task, kNumDrivers);
+  ASSERT_TRUE(task->isRunning());
+
+  // A closed source ignores late markers just like late data splits, even
+  // after noMoreSplits. The sibling source keeps the task running.
+  for (const auto noMoreSplits : {false, true}) {
+    if (noMoreSplits) {
+      task->noMoreSplits(sourceId);
+    }
+    EXPECT_NO_THROW(task->addSplit(sourceId, Split::createBarrier()));
+    EXPECT_FALSE(task->addSplitWithSequence(
+        sourceId, Split::createBarrier(kNumDrivers), 100));
+    Split split;
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    ASSERT_EQ(
+        task->getSplitOrFuture(
+            0, kUngroupedGroupId, sourceId, 0, nullptr, split, future),
+        BlockingReason::kNotBlocked);
+    EXPECT_FALSE(split.isBarrier());
+    EXPECT_FALSE(split.hasConnectorSplit());
+    const auto stats = task->taskStats();
+    expectNoOutstandingSplits(stats);
+    EXPECT_EQ(stats.numTotalSplits, kNumDrivers);
+    EXPECT_EQ(stats.numAbandonedSplits, kNumDrivers);
+    EXPECT_EQ(stats.numFinishedSplits, 0);
+  }
+  test::assertEqualResults(
+      {data}, finishScan(*cursor, siblingId, makeSplit(file->getPath(), 100)));
+}
+
 // Adds 'split' once the task's queued and running scan split weight is below
 // 'maxWeight', waiting for task state changes as a coordinator with split
 // back-pressure does. Fails after five seconds without capacity.

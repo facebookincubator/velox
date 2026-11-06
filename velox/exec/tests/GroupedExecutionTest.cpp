@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/executors/ManualExecutor.h>
 #include <regex>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1159,6 +1160,57 @@ TEST_F(GroupedExecutionTest, groupedExecution) {
   EXPECT_EQ(
       std::unordered_set<int32_t>({1, 3, 5, 8}), getCompletedSplitGroups(task));
   EXPECT_EQ(numRead, numSplits * 10'000);
+}
+
+TEST_F(GroupedExecutionTest, cursorWaitsForFutureSplitGroups) {
+  auto vectors = makeVectors(1, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  folly::ManualExecutor executor;
+  CursorParameters params;
+  params.planNode = tableScanNode(ROW({}, {}));
+  params.maxDrivers = 2;
+  params.executionStrategy = core::ExecutionStrategy::kGrouped;
+  params.groupedExecutionLeafNodeIds.emplace(params.planNode->id());
+  params.numSplitGroups = 3;
+  params.numConcurrentSplitGroups = 1;
+  params.queryCtx = core::QueryCtx::create(&executor);
+  auto cursor = TaskCursor::create(params);
+  auto task = cursor->task();
+  SCOPE_EXIT {
+    auto finished = task->requestAbort();
+    executor.drain();
+    finished.wait();
+  };
+  cursor->start();
+
+  int32_t numRows{0};
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  for (const auto groupId : {1, 5, 8}) {
+    task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), groupId));
+    task->noMoreSplitsForGroup("0", groupId);
+    executor.drain();
+    if (future.valid()) {
+      ASSERT_TRUE(future.isReady());
+      future = ContinueFuture::makeEmpty();
+    }
+    while (cursor->moveNext(&future)) {
+      numRows += cursor->current()->size();
+    }
+    ASSERT_EQ(task->numRunningDrivers(), 0);
+    if (groupId != 8) {
+      // All created producers have finished, but more groups will arrive.
+      ASSERT_TRUE(future.valid());
+      ASSERT_FALSE(future.isReady());
+    } else {
+      ASSERT_FALSE(future.valid());
+    }
+  }
+  task->noMoreSplits("0");
+  ASSERT_EQ(numRows, 3'000);
+  ASSERT_EQ(task->numFinishedDrivers(), 6);
+  ASSERT_EQ(task->state(), TaskState::kFinished);
 }
 
 TEST_F(GroupedExecutionTest, allGroupSplitsReceivedBeforeTaskStart) {

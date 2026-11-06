@@ -21,6 +21,7 @@
 #include <gmock/gmock.h>
 
 #include "folly/OperationCancelled.h"
+#include "folly/executors/ManualExecutor.h"
 #include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -637,6 +638,36 @@ struct TestExchangeTransportState {
 
 class TaskTest : public HiveConnectorTestBase {
  protected:
+  static BlockingReason getSplit(
+      Task& task,
+      uint32_t driverId,
+      const core::PlanNodeId& sourceId,
+      Split& split,
+      ContinueFuture& future) {
+    return task.getSplitOrFuture(
+        driverId, kUngroupedGroupId, sourceId, 0, nullptr, split, future);
+  }
+
+  static void expectSplitStats(
+      const TaskStats& actual,
+      const TaskStats& expected) {
+    EXPECT_EQ(actual.numTotalSplits, expected.numTotalSplits);
+    EXPECT_EQ(actual.numQueuedSplits, expected.numQueuedSplits);
+    EXPECT_EQ(actual.numRunningSplits, expected.numRunningSplits);
+    EXPECT_EQ(actual.numFinishedSplits, expected.numFinishedSplits);
+    EXPECT_EQ(actual.numAbandonedSplits, expected.numAbandonedSplits);
+    EXPECT_EQ(
+        actual.numQueuedTableScanSplits, expected.numQueuedTableScanSplits);
+    EXPECT_EQ(
+        actual.numRunningTableScanSplits, expected.numRunningTableScanSplits);
+    EXPECT_EQ(
+        actual.queuedTableScanSplitWeights,
+        expected.queuedTableScanSplitWeights);
+    EXPECT_EQ(
+        actual.runningTableScanSplitWeights,
+        expected.runningTableScanSplitWeights);
+  }
+
   std::shared_ptr<Task> createTaskWithSpillDirectory(
       const std::string& spillDirectory) {
     auto data = makeRowVector({makeFlatVector<int32_t>({1})});
@@ -940,6 +971,366 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   VELOX_ASSERT_THROW(
       valuesTask->addSplit("0", exec::Split(folly::copy(connectorSplit))),
       errorMessage)
+}
+
+TEST_F(TaskTest, addBarrierSplitBeforeStart) {
+  for (const auto withSequence : {false, true}) {
+    for (const uint32_t numDrivers : {0, 1, 4}) {
+      SCOPED_TRACE(
+          fmt::format("sequence={} drivers={}", withSequence, numDrivers));
+      const auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+      const auto rowType = ROW({"a"}, {BIGINT()});
+      core::PlanNodeId sourceId;
+      core::PlanNodeId siblingId;
+      auto plan = PlanBuilder(ids)
+                      .localPartition(
+                          {},
+                          {
+                              PlanBuilder(ids)
+                                  .tableScan(rowType)
+                                  .capturePlanNodeId(sourceId)
+                                  .planNode(),
+                              PlanBuilder(ids)
+                                  .tableScan(rowType)
+                                  .capturePlanNodeId(siblingId)
+                                  .planNode(),
+                          })
+                      .planFragment();
+      auto task = Task::create(
+          "addBarrierSplitBeforeStart",
+          plan,
+          0,
+          core::QueryCtx::create(driverExecutor_.get()),
+          Task::ExecutionMode::kParallel,
+          exec::Consumer{});
+      ASSERT_EQ(task->numTotalDrivers(), 0);
+      Split split;
+      ContinueFuture siblingFuture = ContinueFuture::makeEmpty();
+      ASSERT_EQ(
+          getSplit(*task, 0, siblingId, split, siblingFuture),
+          BlockingReason::kWaitForSplit);
+
+      auto connectorSplit = makeHiveConnectorSplit("file:/tmp/unused");
+      task->addSplit(sourceId, Split(folly::copy(connectorSplit)));
+      const auto queuedStats = task->taskStats();
+      auto marker = numDrivers == 1 ? Split::createBarrier()
+                                    : Split::createBarrier(numDrivers);
+      ASSERT_EQ(marker.barrier->numDrivers, numDrivers);
+      if (withSequence) {
+        ASSERT_TRUE(task->addSplitWithSequence(sourceId, std::move(marker), 1));
+      } else {
+        task->addSplit(sourceId, std::move(marker));
+      }
+      expectSplitStats(task->taskStats(), queuedStats);
+      EXPECT_FALSE(task->underBarrier());
+      EXPECT_EQ(task->taskStats().numBarriers, 0);
+      EXPECT_FALSE(siblingFuture.isReady());
+
+      // Queued data precedes markers, which never enter split accounting.
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      ASSERT_EQ(
+          getSplit(*task, 0, sourceId, split, future),
+          BlockingReason::kNotBlocked);
+      ASSERT_EQ(split.connectorSplit, connectorSplit);
+      const auto runningStats = task->taskStats();
+      for (uint32_t driverId = 0; driverId < numDrivers; ++driverId) {
+        split = Split{};
+        ASSERT_EQ(
+            getSplit(*task, driverId, sourceId, split, future),
+            BlockingReason::kNotBlocked);
+        ASSERT_TRUE(split.isBarrier());
+        EXPECT_EQ(split.barrier->numDrivers, 1);
+        EXPECT_FALSE(split.hasConnectorSplit());
+      }
+      expectSplitStats(task->taskStats(), runningStats);
+
+      // Each target receives its marker once; an ID outside [0, N) gets none.
+      std::vector<ContinueFuture> waiters;
+      for (uint32_t driverId = 0; driverId <= numDrivers; ++driverId) {
+        split = Split{};
+        ASSERT_EQ(
+            getSplit(*task, driverId, sourceId, split, future),
+            BlockingReason::kWaitForSplit);
+        EXPECT_FALSE(split.isBarrier());
+        waiters.push_back(std::move(future));
+      }
+      task->splitsFinished(
+          sourceId, DriverCtx(task, 0, 0, kUngroupedGroupId, 0));
+      EXPECT_EQ(task->taskStats().numFinishedSplits, 1);
+      EXPECT_EQ(task->taskStats().numRunningSplits, 0);
+      task->noMoreSplits(sourceId);
+      task->noMoreSplits(siblingId);
+      EXPECT_TRUE(siblingFuture.isReady());
+      for (auto& waiter : waiters) {
+        EXPECT_TRUE(waiter.isReady());
+      }
+      const auto finishedStats = task->taskStats();
+      task->requestAbort().wait();
+      expectSplitStats(task->taskStats(), finishedStats);
+    }
+  }
+}
+
+TEST_F(TaskTest, addBarrierSplitWakesWaiters) {
+  for (const auto withSequence : {false, true}) {
+    for (const uint32_t numDrivers : {1, 4}) {
+      SCOPED_TRACE(
+          fmt::format("sequence={} drivers={}", withSequence, numDrivers));
+      auto task = Task::create(
+          "addBarrierSplitWakesWaiters",
+          PlanBuilder().tableScan(ROW({"a"}, {BIGINT()})).planFragment(),
+          0,
+          core::QueryCtx::create(driverExecutor_.get()),
+          Task::ExecutionMode::kParallel,
+          exec::Consumer{});
+      for (int round = 0; round < 3; ++round) {
+        SCOPED_TRACE(round);
+        Split split;
+        std::vector<ContinueFuture> waiters;
+        for (uint32_t driverId = 0; driverId < numDrivers; ++driverId) {
+          ContinueFuture future = ContinueFuture::makeEmpty();
+          ASSERT_EQ(
+              getSplit(*task, driverId, "0", split, future),
+              BlockingReason::kWaitForSplit);
+          ASSERT_FALSE(future.isReady());
+          waiters.push_back(std::move(future));
+        }
+        auto marker = numDrivers == 1 ? Split::createBarrier()
+                                      : Split::createBarrier(numDrivers);
+        if (withSequence) {
+          ASSERT_TRUE(
+              task->addSplitWithSequence("0", std::move(marker), round));
+        } else {
+          task->addSplit("0", std::move(marker));
+        }
+        for (uint32_t driverId = 0; driverId < numDrivers; ++driverId) {
+          ASSERT_TRUE(waiters[driverId].isReady());
+          ContinueFuture future = ContinueFuture::makeEmpty();
+          ASSERT_EQ(
+              getSplit(*task, driverId, "0", split, future),
+              BlockingReason::kNotBlocked);
+          ASSERT_TRUE(split.isBarrier());
+          EXPECT_EQ(split.barrier->numDrivers, 1);
+        }
+        expectSplitStats(task->taskStats(), TaskStats{});
+        EXPECT_FALSE(task->underBarrier());
+      }
+      task->requestAbort().wait();
+      expectSplitStats(task->taskStats(), TaskStats{});
+    }
+  }
+}
+
+TEST_F(TaskTest, legacySplitsStoreBarrier) {
+  // Exercise the old store implementation pattern: requestBarrier delegates
+  // back to SplitsStore::addSplit. This test store only serves markers.
+  class LegacySplitsStore : public SplitsStore {
+   public:
+    LegacySplitsStore() : SplitsStore(false) {}
+
+    using SplitsStore::requestBarrier;
+
+    void requestBarrier(
+        uint32_t numDrivers,
+        std::vector<ContinuePromise>& promises) override {
+      addSplit(Split::createBarrier(numDrivers), promises);
+    }
+
+    bool nextSplit(
+        uint32_t driverId,
+        int /*maxPreloadSplits*/,
+        const ConnectorSplitPreloadFunc& /*preload*/,
+        Split& split,
+        ContinueFuture& future) override {
+      VELOX_CHECK(queuedSplits().empty());
+      if (tryGetBarrier(driverId, split) || noMoreSplits_) {
+        return true;
+      }
+      future = makeFuture();
+      return false;
+    }
+
+    bool allSplitsConsumed() const override {
+      return noMoreSplits_ && queuedSplits().empty();
+    }
+  };
+
+  auto task = Task::create(
+      "legacySplitsStoreBarrier",
+      PlanBuilder().tableScan(ROW({"a"}, {BIGINT()})).planFragment(),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+  task->setSplitsStore("0", std::make_unique<LegacySplitsStore>());
+  for (const auto withSequence : {false, true}) {
+    if (withSequence) {
+      ASSERT_TRUE(task->addSplitWithSequence("0", Split::createBarrier(4), 1));
+    } else {
+      task->addSplit("0", Split::createBarrier(4));
+    }
+    for (uint32_t driverId = 0; driverId < 4; ++driverId) {
+      Split split;
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      ASSERT_EQ(
+          getSplit(*task, driverId, "0", split, future),
+          BlockingReason::kNotBlocked);
+      ASSERT_TRUE(split.isBarrier());
+      EXPECT_EQ(split.barrier->numDrivers, 1);
+    }
+    expectSplitStats(task->taskStats(), TaskStats{});
+  }
+  task->requestAbort().wait();
+  expectSplitStats(task->taskStats(), TaskStats{});
+}
+
+TEST_F(TaskTest, addBarrierSplitValidation) {
+  for (const auto withSequence : {false, true}) {
+    SCOPED_TRACE(withSequence);
+    auto task = Task::create(
+        "addBarrierSplitValidation",
+        PlanBuilder()
+            .tableScan(ROW({"a"}, {BIGINT()}))
+            .project({"a + 1"})
+            .planFragment(),
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+    const auto addMarker = [&](const core::PlanNodeId& sourceId,
+                               long sequence) {
+      if (withSequence) {
+        return task->addSplitWithSequence(
+            sourceId, Split::createBarrier(), sequence);
+      }
+      task->addSplit(sourceId, Split::createBarrier());
+      return true;
+    };
+    for (const auto& invalidId : {"1", "12"}) {
+      VELOX_ASSERT_THROW(
+          addMarker(invalidId, 1),
+          "Splits can be associated only with leaf plan nodes which require splits");
+    }
+    Split split;
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    ASSERT_EQ(
+        getSplit(*task, 0, "0", split, future), BlockingReason::kWaitForSplit);
+    if (withSequence) {
+      task->setMaxSplitSequenceId("0", 1);
+      EXPECT_FALSE(addMarker("0", 1));
+      EXPECT_FALSE(future.isReady());
+    }
+    EXPECT_TRUE(addMarker("0", 2));
+    EXPECT_TRUE(future.isReady());
+    if (withSequence) {
+      task->setMaxSplitSequenceId("0", 2);
+      // Deduplication also applies while the accepted marker is still pending.
+      EXPECT_FALSE(addMarker("0", 2));
+    }
+    ASSERT_EQ(
+        getSplit(*task, 0, "0", split, future), BlockingReason::kNotBlocked);
+    ASSERT_TRUE(split.isBarrier());
+    task->noMoreSplits("0");
+    EXPECT_THROW(addMarker("0", 3), VeloxRuntimeError);
+    split = Split{};
+    ASSERT_EQ(
+        getSplit(*task, 0, "0", split, future), BlockingReason::kNotBlocked);
+    EXPECT_FALSE(split.isBarrier());
+    EXPECT_FALSE(split.hasConnectorSplit());
+    task->requestAbort().wait();
+    if (withSequence) {
+      EXPECT_FALSE(addMarker("0", 3));
+    } else {
+      EXPECT_NO_THROW(addMarker("0", 3));
+    }
+    VELOX_ASSERT_THROW(
+        task->addSplit("0", Split{}), "Cannot add an empty split");
+    VELOX_ASSERT_THROW(
+        task->addSplitWithSequence("0", Split{}, 4),
+        "Cannot add an empty split");
+    expectSplitStats(task->taskStats(), TaskStats{});
+  }
+}
+
+TEST_F(TaskTest, addBarrierSplitConsumerClosure) {
+  const auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  const auto file = writeToFile(data);
+  constexpr uint32_t kNumDrivers = 4;
+  for (const auto withSequence : {false, true}) {
+    for (const auto finishBeforeMarker : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "sequence={} finishBeforeMarker={}",
+              withSequence,
+              finishBeforeMarker));
+      folly::ManualExecutor executor;
+      auto task = Task::create(
+          "addBarrierSplitConsumerClosure",
+          PlanBuilder()
+              .tableScan(data->rowType())
+              .limit(0, data->size(), true)
+              .planFragment(),
+          0,
+          core::QueryCtx::create(&executor),
+          Task::ExecutionMode::kParallel,
+          [](RowVectorPtr, bool, ContinueFuture*) {
+            return BlockingReason::kNotBlocked;
+          });
+      SCOPE_EXIT {
+        auto finished = task->requestAbort();
+        executor.drain();
+        finished.wait();
+      };
+      task->start(kNumDrivers);
+      ASSERT_EQ(task->numTotalDrivers(), kNumDrivers);
+      ASSERT_EQ(executor.step(), 1); // Driver 0 waits; driver 1 runs next.
+      task->addSplit("0", Split(makeHiveConnectorSplit(file->getPath())));
+      if (finishBeforeMarker) {
+        ASSERT_EQ(executor.step(), 1);
+        ASSERT_EQ(task->numFinishedDrivers(), 1);
+      }
+      for (int round = 0; round < 3; ++round) {
+        SCOPED_TRACE(round);
+        const auto beforeMarker = task->taskStats();
+        if (withSequence) {
+          ASSERT_TRUE(task->addSplitWithSequence(
+              "0", Split::createBarrier(kNumDrivers), round));
+        } else {
+          task->addSplit("0", Split::createBarrier(kNumDrivers));
+        }
+        expectSplitStats(task->taskStats(), beforeMarker);
+        if (round == 0 && !finishBeforeMarker) {
+          // Driver 1 reaches LIMIT without consuming its pending marker.
+          ASSERT_EQ(executor.step(), 1);
+          ASSERT_EQ(task->numFinishedDrivers(), 1);
+        }
+        EXPECT_FALSE(task->underBarrier());
+        const auto beforeRead = task->taskStats();
+        for (const uint32_t driverId : {0, 2, 3}) {
+          Split split;
+          ContinueFuture future = ContinueFuture::makeEmpty();
+          ASSERT_EQ(
+              getSplit(*task, driverId, "0", split, future),
+              BlockingReason::kNotBlocked);
+          ASSERT_TRUE(split.isBarrier());
+        }
+        expectSplitStats(task->taskStats(), beforeRead);
+        // The next round also verifies that no marker remains for driver 1.
+      }
+      Split split;
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      ASSERT_EQ(
+          getSplit(*task, 1, "0", split, future),
+          BlockingReason::kWaitForSplit);
+      EXPECT_FALSE(split.isBarrier());
+      const auto beforeFinish = task->taskStats();
+      task->noMoreSplits("0");
+      EXPECT_TRUE(future.isReady());
+      executor.drain();
+      ASSERT_TRUE(task->isFinished());
+      expectSplitStats(task->taskStats(), beforeFinish);
+    }
+  }
 }
 
 TEST_F(TaskTest, errorsOnUnregisteredExchangeTransport) {
