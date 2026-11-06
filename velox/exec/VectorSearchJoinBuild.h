@@ -77,6 +77,13 @@ class VectorSearchJoinTable {
       std::span<int64_t> ids,
       std::span<float> scores) const;
 
+  virtual ~VectorSearchJoinTable() = default;
+
+ protected:
+  /// For a build side that keeps its rows and indexes elsewhere, such as on a
+  /// GPU, and has the probe side use them there. Holds no rows.
+  VectorSearchJoinTable() : numKeys_{0} {}
+
  private:
   const RowVectorPtr rows_;
   const column_index_t numKeys_;

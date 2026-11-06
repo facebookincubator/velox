@@ -36,7 +36,7 @@ enum class VectorIndexKind {
   kIvfSq = 2,
   /// A layered graph of near neighbors over embeddings with each dimension
   /// compressed to 8 bits; a search walks it keeping 'hnsw.efSearch'
-  /// candidates.
+  /// candidates. Searched on the CPU. FAISS has no GPU index for it.
   kHnswSq = 3,
 };
 

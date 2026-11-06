@@ -289,6 +289,14 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
 )
 
+if(VELOX_ENABLE_FAISS AND VELOX_ENABLE_FAISS_GPU)
+  velox_add_cudf_test(
+    NAME velox_cudf_vector_search_join_test
+    SOURCES Main.cpp VectorSearchJoinTest.cpp
+    LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_index velox_vector_index_gpu
+  )
+endif()
+
 velox_add_cudf_test(
   NAME velox_cudf_subfield_filter_ast_test
   SOURCES Main.cpp SubfieldFilterAstTest.cpp
