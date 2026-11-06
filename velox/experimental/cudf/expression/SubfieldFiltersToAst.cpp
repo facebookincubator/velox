@@ -792,6 +792,36 @@ bool hasDecimalSubfieldFilter(
   return false;
 }
 
+bool canCreateAstFromSubfieldFilter(const common::Filter& filter) {
+  // Lists the kinds createAstFromSubfieldFilterImpl() converts.
+  switch (filter.kind()) {
+    case common::FilterKind::kBigintRange:
+    case common::FilterKind::kHugeintRange:
+    case common::FilterKind::kBigintValuesUsingHashTable:
+    case common::FilterKind::kBigintValuesUsingBitmask:
+    case common::FilterKind::kHugeintValuesUsingHashTable:
+    case common::FilterKind::kBytesValues:
+    case common::FilterKind::kNegatedBytesValues:
+    case common::FilterKind::kDoubleRange:
+    case common::FilterKind::kFloatRange:
+    case common::FilterKind::kBytesRange:
+    case common::FilterKind::kBoolValue:
+    case common::FilterKind::kIsNull:
+    case common::FilterKind::kIsNotNull:
+    case common::FilterKind::kBigintMultiRange:
+    case common::FilterKind::kNegatedBigintRange:
+      return true;
+    case common::FilterKind::kMultiRange:
+      return std::ranges::all_of(
+          static_cast<const common::MultiRange&>(filter).filters(),
+          [](const auto& child) {
+            return canCreateAstFromSubfieldFilter(*child);
+          });
+    default:
+      return false;
+  }
+}
+
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,

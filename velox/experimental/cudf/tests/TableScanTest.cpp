@@ -148,21 +148,6 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
         .planNode();
   }
 
-  // Expects the scan of 'data' with 'remainingFilter' to fail as unsupported
-  // with 'message'.
-  void assertRemainingFilterUnsupported(
-      const RowVectorPtr& data,
-      const std::string& remainingFilter,
-      const std::string& message) {
-    const auto filePath = TempFilePath::create();
-    auto plan = makeRemainingFilterPlan(data, remainingFilter, filePath);
-    VELOX_ASSERT_UNSUPPORTED_THROW(
-        AssertQueryBuilder(plan)
-            .splits(makeCudfHiveConnectorSplits({filePath}))
-            .copyResults(pool_.get()),
-        message);
-  }
-
   std::vector<RowVectorPtr> makeVectors(
       int32_t count,
       int32_t rowsPerVector,
@@ -2212,6 +2197,61 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
       "to_big_endian_64(c0) = to_big_endian_64(CAST(1 AS BIGINT))",
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({1})}),
       false);
+
+  // The data source extracts this filter into a subfield filter the cuDF AST
+  // cannot express, so the scan falls back to the CPU Hive data source.
+  testFilter(
+      "c0 not in (1, 3)",
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      false);
+}
+
+TEST_F(TableScanTest, subfieldFilterEligibility) {
+  auto rowType = ROW("c0", BIGINT());
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  const auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto testFilter = [&](const std::string& filter,
+                        const RowVectorPtr& expected,
+                        bool expectCudfScan) {
+    SCOPED_TRACE(filter);
+
+    auto scanPlan = PlanBuilder(pool_.get())
+                        .startTableScan()
+                        .connectorId(kCudfHiveConnectorId)
+                        .outputType(rowType)
+                        .dataColumns(rowType)
+                        .assignments(assignments)
+                        .subfieldFilter(filter)
+                        .endTableScan()
+                        .planNode();
+
+    std::shared_ptr<Task> task;
+    auto actual = AssertQueryBuilder(scanPlan)
+                      .config(CudfConfig::kCudfEnabled, true)
+                      .splits(makeCudfHiveConnectorSplits({filePath}))
+                      .copyResults(pool(), task);
+
+    assertEqualResults({expected}, {actual});
+    EXPECT_EQ(wasCudfToVeloxUsed(task, scanPlan->id()), expectCudfScan);
+  };
+
+  testFilter(
+      "c0 in (1, 3)",
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 3})}),
+      true);
+
+  // The cuDF AST has no negated list of values, so the scan falls back to the
+  // CPU Hive data source.
+  testFilter(
+      "c0 not in (1, 3)",
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      false);
 }
 
 TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
@@ -2283,12 +2323,144 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
       noRows,
       false);
 
-  // Minute truncation is timezone-insensitive and remains eligible.
+  // Minute truncation is timezone-insensitive and remains eligible. With
+  // adjustment enabled the literal is Asia/Kolkata time, so 01:30 on January 2
+  // there is the first row's 20:00 UTC on January 1.
   testFilter(
-      "date_trunc('minute', event_ts) = TIMESTAMP '2026-01-01 20:00:00'",
+      "date_trunc('minute', event_ts) = TIMESTAMP '2026-01-02 01:30:00'",
       true,
       firstRow,
       true);
+}
+
+TEST_F(TableScanTest, remainingFilterCastFromVarcharEligibility) {
+  auto rowType = ROW({{"c0", VARCHAR()}, {"c1", BIGINT()}});
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<std::string>({"1.5", "x", "inf", "0.5"}),
+       makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  const auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto testFilter =
+      [&](const std::string& filter,
+          const std::unordered_map<std::string, std::string>& sessionConfig,
+          const RowVectorPtr& expected,
+          bool expectCudfScan) {
+        SCOPED_TRACE(filter);
+
+        auto scanPlan = PlanBuilder(pool_.get())
+                            .startTableScan()
+                            .connectorId(kCudfHiveConnectorId)
+                            .outputType(rowType)
+                            .dataColumns(rowType)
+                            .assignments(assignments)
+                            .remainingFilter(filter)
+                            .endTableScan()
+                            .planNode();
+
+        std::shared_ptr<Task> task;
+        auto actual = AssertQueryBuilder(scanPlan)
+                          .config(CudfConfig::kCudfEnabled, true)
+                          .configs(sessionConfig)
+                          .splits(makeCudfHiveConnectorSplits({filePath}))
+                          .copyResults(pool(), task);
+
+        assertEqualResults({expected}, {actual});
+        EXPECT_EQ(wasCudfToVeloxUsed(task, scanPlan->id()), expectCudfScan);
+      };
+
+  const std::string tryCastFilter = "try_cast(c0 as double) > 1.0";
+  auto firstRow = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<std::string>({"1.5"}), makeFlatVector<int64_t>({1})});
+
+  // The connector does not see the session's cast settings, so a cast from
+  // VARCHAR stays on the CPU data source in every session.
+  testFilter(tryCastFilter, {}, firstRow, false);
+
+  // The GPU cast would follow Presto's strict rules and drop 'inf', which
+  // this session accepts.
+  testFilter(
+      tryCastFilter,
+      {{core::QueryConfig::kCastStringToFloatingPointLenientInfNan, "true"}},
+      makeRowVector(
+          {"c0", "c1"},
+          {makeFlatVector<std::string>({"1.5", "inf"}),
+           makeFlatVector<int64_t>({1, 3})}),
+      false);
+
+  testFilter(
+      tryCastFilter,
+      {{core::QueryConfig::kLegacyCast, "true"}},
+      firstRow,
+      false);
+
+  // A cast of a literal folds away before the check, so the scan stays on the
+  // GPU.
+  testFilter(
+      "c1 % 2 = cast('0' as bigint)",
+      {},
+      makeRowVector(
+          {"c0", "c1"},
+          {makeFlatVector<std::string>({"x", "0.5"}),
+           makeFlatVector<int64_t>({2, 4})}),
+      true);
+}
+
+// The connector does not see legacy_cast, under which the CPU prints a
+// TIMESTAMP with a 'T' separator, so a remaining filter that casts a TIMESTAMP
+// to VARCHAR stays on the CPU data source. A constant beside a column becomes a
+// subfield filter through the session's evaluator, so the constant cast here is
+// under an OR, where the data source would fold it without legacy_cast.
+TEST_F(TableScanTest, remainingFilterCastTimestampToVarcharEligibility) {
+  const auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(0, 0), Timestamp(1'767'314'700, 0)}),
+       makeFlatVector<std::string>({"1970-01-01 00:00:00.000", "x"})});
+
+  auto testFilter =
+      [&](const std::string& filter,
+          const std::unordered_map<std::string, std::string>& sessionConfig,
+          const RowVectorPtr& expected) {
+        SCOPED_TRACE(filter);
+
+        const auto filePath = TempFilePath::create();
+        auto scanPlan = makeRemainingFilterPlan(data, filter, filePath);
+        std::shared_ptr<Task> task;
+        auto actual = AssertQueryBuilder(scanPlan)
+                          .config(CudfConfig::kCudfEnabled, true)
+                          .configs(sessionConfig)
+                          .splits(makeCudfHiveConnectorSplits({filePath}))
+                          .copyResults(pool(), task);
+
+        assertEqualResults({expected}, {actual});
+        EXPECT_FALSE(wasCudfToVeloxUsed(task, scanPlan->id()));
+      };
+
+  const auto secondRow = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<Timestamp>({Timestamp(1'767'314'700, 0)}),
+       makeFlatVector<std::string>({"x"})});
+
+  testFilter("cast(c0 as varchar) like '2026-%'", {}, secondRow);
+
+  const std::string constantCastFilter =
+      "c1 = cast(TIMESTAMP '1970-01-01 00:00:00' as varchar) "
+      "or c0 = TIMESTAMP '2026-01-02 00:45:00'";
+  testFilter(constantCastFilter, {}, data);
+
+  // Under legacy_cast the constant reads '1970-01-01T00:00:00.000', so only the
+  // second row passes.
+  testFilter(
+      constantCastFilter,
+      {{core::QueryConfig::kLegacyCast, "true"}},
+      secondRow);
 }
 
 TEST_F(TableScanTest, decimalSubfieldFilter) {
@@ -2673,40 +2845,6 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       plan,
       {filePath},
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
-}
-
-// The data source cannot apply the session's cast settings, so it rejects a
-// remaining filter that casts from VARCHAR.
-TEST_F(TableScanTest, remainingFilterCastFromVarchar) {
-  assertRemainingFilterUnsupported(
-      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}),
-      "try_cast(c0 as double) > 1.0",
-      "Remaining filter with a cast from VARCHAR is not supported");
-}
-
-// The data source cannot apply the session's legacy_cast or time zone to the
-// text of a TIMESTAMP, so it rejects a remaining filter that casts one to
-// VARCHAR, a constant included: a constant beside a column becomes a pushed
-// down filter through the session's evaluator, but one anywhere else, here
-// under an OR, would be folded by the data source without legacy_cast and the
-// cast lost.
-TEST_F(TableScanTest, remainingFilterCastTimestampToVarchar) {
-  const auto data = makeRowVector(
-      {"c0", "c1"},
-      {makeFlatVector<Timestamp>(
-           {Timestamp(0, 0), Timestamp(1'767'314'700, 0)}),
-       makeFlatVector<std::string>({"1970-01-01 00:00:00.000", "x"})});
-  for (
-      const auto* filter :
-      {"cast(c0 as varchar) like '2026-%'",
-       "c1 = cast(TIMESTAMP '1970-01-01 00:00:00' as varchar) or c0 is null"}) {
-    SCOPED_TRACE(filter);
-    assertRemainingFilterUnsupported(
-        data,
-        filter,
-        "Remaining filter with a cast from TIMESTAMP to VARCHAR is not "
-        "supported");
-  }
 }
 
 // The text of a DATE depends on no session setting, so a remaining filter that

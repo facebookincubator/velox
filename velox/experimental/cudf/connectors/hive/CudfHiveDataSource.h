@@ -47,13 +47,20 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   static constexpr std::string_view kDwioStorageReadBytes{
       "dwio.storageReadBytes"};
 
-  /// Returns whether the table handle's remaining filter can be evaluated by
-  /// this data source under the connector query's semantic configuration.
-  /// Returns false for non-Hive table handles.
+  /// Returns whether this data source can scan 'tableHandle' on the GPU:
+  ///  - 'tableHandle' is a Hive table handle,
+  ///  - the cuDF AST converts every subfield filter, and
+  ///  - cuDF evaluates the remaining filter.
+  /// The filters are split and folded with 'connectorQueryCtx', as the
+  /// constructor does.
+  /// NOTE: A remaining filter that casts from VARCHAR, or from TIMESTAMP to
+  /// VARCHAR, is not supported, since such a cast depends on session settings
+  /// a connector does not see.
+  /// NOTE: Partition key filters are checked too, although the Hive data source
+  /// tests them per split instead of compiling them.
   static bool isSupported(
       const ConnectorTableHandlePtr& tableHandle,
-      bool adjustTimestampToTimezone,
-      memory::MemoryPool* pool);
+      const ConnectorQueryCtx& connectorQueryCtx);
 
   CudfHiveDataSource(
       const RowTypePtr& outputType,

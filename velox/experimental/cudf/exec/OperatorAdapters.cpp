@@ -156,7 +156,7 @@ class TableScanAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* ctx) const override {
+      exec::DriverCtx* /*ctx*/) const override {
     auto tableScanNode =
         std::dynamic_pointer_cast<const core::TableScanNode>(planNode);
     if (!tableScanNode) {
@@ -181,14 +181,18 @@ class TableScanAdapter : public OperatorAdapter {
       return false;
     }
 
-    const auto* queryCtx = ctx->task->queryCtx().get();
+    // Ask with the ConnectorQueryCtx the TableScan creates for the connector,
+    // so that this decision matches the data source the connector picks.
+    // isSupported() allocates only from the operator pool, so no connector
+    // pool is needed.
+    const auto connectorQueryCtx = op->operatorCtx()->createConnectorQueryCtx(
+        tableScanNode->tableHandle()->connectorId(),
+        planNode->id(),
+        /*connectorPool=*/nullptr);
     if (!facebook::velox::cudf_velox::connector::hive::CudfHiveDataSource::
-            isSupported(
-                tableScanNode->tableHandle(),
-                queryCtx->queryConfig().adjustTimestampToTimezone(),
-                op->pool())) {
+            isSupported(tableScanNode->tableHandle(), *connectorQueryCtx)) {
       LOG_FALLBACK(
-          "TableScan table handle or remaining filter is not supported by cuDF, PlanNode id: {}",
+          "TableScan table handle, subfield filter or remaining filter is not supported by cuDF, PlanNode id: {}",
           planNode->id());
       return false;
     }
