@@ -188,18 +188,20 @@ class FlatMapVector : public BaseVector {
       const SelectivityVector& rows,
       const DecodedVector& keys) const;
 
-  /// Returns a vector containing a projection for a specific primitive key.
-  /// This is an efficient operation in flat maps (zero-copy).
-  ///
-  /// The projection has an entry for every row, including rows whose map does
-  /// not contain the key; callers must check isInMap() to tell them apart.
+  /// Returns the values of a specific primitive key, with nulls in the rows
+  /// whose map is null or does not contain the key, or nullptr if this flat
+  /// map does not have the key. The values are not copied: they are returned
+  /// as they are when every row has the key, and otherwise share their buffers
+  /// or are wrapped in a dictionary, so the result may be a new vector that
+  /// callers must hold. The raw values, with an entry for every row, are
+  /// available through mapValuesAt().
   ///
   /// The key restrictions are the same as the ones listed above for
   /// `getKeyChannel()`.
   template <typename TKey>
   VectorPtr projectKey(TKey scalarKey) const {
     if (auto channel = getKeyChannel(scalarKey)) {
-      return mapValues_[channel.value()];
+      return projectChannel(channel.value());
     }
     return nullptr;
   }
@@ -208,7 +210,7 @@ class FlatMapVector : public BaseVector {
   /// distinction between getKeyChannel we see above).
   VectorPtr projectKey(const VectorPtr& keysVector, vector_size_t index) const {
     if (auto channel = getKeyChannel(keysVector, index)) {
-      return mapValues_[channel.value()];
+      return projectChannel(channel.value());
     }
     return nullptr;
   }
@@ -399,6 +401,10 @@ class FlatMapVector : public BaseVector {
   void copyMapRanges(
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges);
+
+  // Returns the values of the key at 'channel', with nulls in the rows whose
+  // map is null or does not contain the key. See projectKey().
+  VectorPtr projectChannel(column_index_t channel) const;
 
   void setDistinctKeysImpl(VectorPtr distinctKeys);
 

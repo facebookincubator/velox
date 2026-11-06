@@ -1021,6 +1021,64 @@ TEST_F(ChunkStatsWriterTest, v2RoundTripsTypedAndMissingBounds) {
   EXPECT_FALSE(partial->chunkMaxValue(5).has_value());
 }
 
+TEST_F(ChunkStatsWriterTest, v2BoundViewsKeepTheirOffsets) {
+  // A group reads the bounds of many chunks, so its views build and keep their
+  // lookup structures. A Trivial string view keeps one offset per row.
+  constexpr uint32_t kNumChunks{4'096};
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(1);
+  auto chunks = createChunks(
+      buffer,
+      std::vector<ChunkSpec>(kNumChunks, ChunkSpec{.rowCount = 1, .size = 1}));
+  for (uint32_t i = 0; i < kNumChunks; ++i) {
+    chunks[i].minValue = "a" + std::to_string(i);
+    chunks[i].maxValue = "b" + std::to_string(i);
+  }
+  writer.addStream(0, chunks);
+  writer.writeGroup(1, 1, createMetadataSectionCallback(fileIndex));
+
+  const auto* serializedGroup =
+      flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+          fileIndex.groupMetadataSections.front().data());
+  const auto* encodedMin = serializedGroup->chunk_min_values()->Get(0)->data();
+  // The pool check below needs a Trivial string array, which is the encoding
+  // the writer picks for distinct strings. Constant, for example, keeps no
+  // offsets whatever the option is, so the check would prove nothing.
+  ASSERT_EQ(
+      EncodingPrefix::encodingType(
+          std::string_view{
+              reinterpret_cast<const char*>(encodedMin->data()),
+              encodedMin->size()}),
+      EncodingType::Trivial);
+
+  // The metadata comes from the fixture pool, so only the views count against
+  // this one. The shared memory manager does not track usage.
+  velox::memory::MemoryManager::Options viewManagerOptions;
+  viewManagerOptions.trackDefaultUsage = true;
+  velox::memory::MemoryManager viewManager{viewManagerOptions};
+  const auto viewPool = viewManager.addLeafPool();
+  const auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *viewPool);
+  // A cached Trivial string view keeps one uint32 offset per row, for the min
+  // array and for the max array. An uncached view keeps its lengths stream
+  // instead and builds no offsets, so this pool stays empty. That is how the
+  // test notices a group that no longer sets cacheEncodingView.
+  EXPECT_GE(viewPool->usedBytes(), 2ULL * kNumChunks * sizeof(uint32_t));
+
+  // The cached views return the written bounds.
+  const auto stream = chunkStats->createStreamIndex(0, 0, kNumChunks);
+  ASSERT_NE(stream, nullptr);
+  EXPECT_EQ(std::get<std::string>(*stream->chunkMinValue(7)), "a7");
+  EXPECT_EQ(std::get<std::string>(*stream->chunkMaxValue(7)), "b7");
+}
+
 TEST_F(ChunkStatsWriterTest, v2StreamIndexExtendedApis) {
   auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
   Buffer buffer{*pool_};

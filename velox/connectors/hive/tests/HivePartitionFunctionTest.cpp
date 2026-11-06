@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include <bit>
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/functions/lib/HiveHash.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -66,6 +69,25 @@ class HivePartitionFunctionTest : public ::testing::Test,
       EXPECT_EQ(expectedPartitions[size - 1 - i], partitions[i])
           << "at " << i << ": " << vector->toString(i);
     }
+  }
+
+  template <typename T>
+  void assertFloatingPointHashes(
+      const std::vector<std::optional<T>>& values,
+      const std::vector<uint32_t>& expected) {
+    ASSERT_EQ(values.size(), expected.size());
+    auto scalars = makeNullableFlatVector<T>(values);
+
+    std::vector<std::unique_ptr<std::vector<uint32_t>>> hashesPool;
+    std::vector<std::unique_ptr<SelectivityVector>> rowsPool;
+    std::vector<std::unique_ptr<DecodedVector>> decodedVectorsPool;
+    functions::HiveHash hiveHash(hashesPool, rowsPool, decodedVectorsPool);
+
+    std::vector<uint32_t> hashes(2);
+    SelectivityVector rows(2);
+    DecodedVector decoded(*scalars, rows);
+    hiveHash.hash(decoded, rows, false, hashes);
+    EXPECT_THAT(hashes, testing::ElementsAreArray(expected));
   }
 
   // Run one function with 3 columns (two of which have the same values in each
@@ -227,6 +249,17 @@ TEST_F(HivePartitionFunctionTest, real) {
   assertPartitionsWithConstChannel(values, 2);
   assertPartitionsWithConstChannel(values, 500);
   assertPartitionsWithConstChannel(values, 997);
+}
+
+TEST_F(HivePartitionFunctionTest, realRepresentations) {
+  assertFloatingPointHashes<float>(
+      {-0.0f, std::bit_cast<float>(0xffc00001U)}, {0x80000000U, 0x7fc00000U});
+}
+
+TEST_F(HivePartitionFunctionTest, doubleRepresentations) {
+  assertFloatingPointHashes<double>(
+      {-0.0, std::bit_cast<double>(0xfff8000000000001ULL)},
+      {0x80000000U, 0x7ff80000U});
 }
 
 TEST_F(HivePartitionFunctionTest, double) {
@@ -501,6 +534,25 @@ TEST_F(HivePartitionFunctionTest, row) {
   assertPartitionsWithConstChannel(values, 2);
   assertPartitionsWithConstChannel(values, 500);
   assertPartitionsWithConstChannel(values, 997);
+}
+
+TEST_F(HivePartitionFunctionTest, emptyRows) {
+  // Verify empty rows hash to zero when scratch buffers contain array hashes
+  // from a preceding key or partition call.
+  auto empty = makeRowVector(ROW({}, {}), 3);
+  empty->setNull(1, true);
+  auto arrays = makeArrayVector<int32_t>({{1}, {2}, {3}});
+
+  connector::hive::HivePartitionFunction partitionFunction(
+      97, std::vector<column_index_t>{0, 1});
+  std::vector<uint32_t> partitions;
+  partitionFunction.partition(*makeRowVector({arrays, empty}), partitions);
+  EXPECT_THAT(partitions, testing::ElementsAre(31, 62, 93));
+
+  partitionFunction.partition(*makeRowVector({empty, arrays}), partitions);
+  EXPECT_THAT(partitions, testing::ElementsAre(1, 2, 3));
+
+  assertPartitions(makeRowVector({arrays, empty}), 97, {31, 62, 93});
 }
 
 TEST_F(HivePartitionFunctionTest, rowFieldsEncoded) {

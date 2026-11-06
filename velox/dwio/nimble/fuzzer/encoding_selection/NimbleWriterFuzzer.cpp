@@ -44,21 +44,21 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
+#include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/BatchReader.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -77,8 +77,11 @@ using ::facebook::velox::fuzzer::FuzzerGenerator;
 // The unfiltered random policy also omits these; this list keeps the repair
 // phase and coverage gate from adding them back. This is not a global
 // unsupported-encoding list.
+// TODO: Remove BlockBitPackingV2 once readers have fully rolled out support for
+// it, in the same change that adds it to
+// RandomEncodingSelectionPolicyFactory::defaultEncodingChoices().
 constexpr auto kExcludedFuzzerCandidateEncodings =
-    std::to_array({EncodingType::Huffman, EncodingType::SubIntSplit});
+    std::to_array({EncodingType::SubIntSplit, EncodingType::BlockBitPackingV2});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -153,6 +156,7 @@ bool isNumericCompatible(EncodingType encodingType) {
     case EncodingType::Dictionary:
     case EncodingType::RLE:
     case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2:
       return true;
     // Gated on isIntegralType<physicalType>(), which holds for float and
     // double as well since their physical types are uint32_t and uint64_t.
@@ -213,6 +217,7 @@ bool hasDataPrecondition(EncodingType encodingType) {
   return encodingType == EncodingType::Constant ||
       encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -278,7 +283,9 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
   options.compressionOptions.internalMinCompressionSize = 0;
   options.compressionOptions.openzlMinCompressionSize = 0;
 
-  options.enableChunking = !folly::Random::oneIn(4, rng);
+  // Keeps some files unchunked because tables created with
+  // nimble.chunking.enabled=false still write unchunked files.
+  options.enableChunking = !folly::Random::oneIn(8, rng);
   options.minStreamChunkRawSize = folly::Random::oneIn(2, rng)
       ? 0
       : (uint64_t{1} << folly::Random::rand32(14, rng));
@@ -288,6 +295,14 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
       options.enableChunking && !folly::Random::oneIn(4, rng);
   options.chunkStatsVersion = ChunkStatsVersion::kV2;
   options.chunkStatsMinAvgChunks = 0;
+
+  // Closes a stripe group every few stripes in some files, so the chunk stats
+  // span several groups. At the 8MB default a fuzzed file has one group.
+  if (folly::Random::oneIn(4, rng)) {
+    options.metadataFlushThreshold = uint32_t{1}
+        << folly::Random::rand32(13, rng);
+  }
+
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
   // Ratios above 1.0 keep FSST even when it does not shrink the data, so the
@@ -776,6 +791,13 @@ void makeConstant(velox::FlatVector<T>* vector) {
   }
 }
 
+// Nulls every row of 'vector', whatever its type.
+void makeAllNull(velox::BaseVector& vector) {
+  for (velox::vector_size_t row = 0; row < vector.size(); ++row) {
+    vector.setNull(row, true);
+  }
+}
+
 // Rewrites an integer column to a non-decreasing sequence, the one shape
 // DeltaBlock accepts. Repeats are drawn in so the result is not a pure ramp,
 // which would make the delta stream uniformly one. 'cursor' carries the last
@@ -851,6 +873,10 @@ enum class ColumnShape {
   kNonDecreasing,
   kCappingJson,
   kSharedPrefixes,
+  // Nulls every row of every other batch, so a chunk cut at a batch boundary
+  // is fully null. Nulling the whole column would not: the writer omits a
+  // values stream that is all null within its stripe.
+  kNullBatches,
 };
 
 // Draws one shape per top-level column. Drawn once per iteration rather than
@@ -863,7 +889,9 @@ std::vector<ColumnShape> drawColumnShapes(
   std::vector<ColumnShape> shapes;
   shapes.reserve(schema->size());
   for (auto i = 0; i < schema->size(); ++i) {
-    if (folly::Random::oneIn(5, rng)) {
+    if (folly::Random::oneIn(10, rng)) {
+      shapes.push_back(ColumnShape::kNullBatches);
+    } else if (folly::Random::oneIn(5, rng)) {
       shapes.push_back(ColumnShape::kConstant);
     } else if (
         isIntegerKind(schema->childAt(i)->kind()) &&
@@ -887,17 +915,20 @@ std::vector<ColumnShape> drawColumnShapes(
 
 // Reshapes the top-level scalar columns of a fuzzed batch toward the data
 // layouts the encodings target. Nested columns keep their random content, and
-// nulls are preserved so the null-handling paths stay covered. Applied to only
-// some iterations so purely random data is still exercised.
+// nulls are preserved so the null-handling paths stay covered. kNullBatches is
+// the one shape that also applies to complex columns. Applied to only some
+// iterations so purely random data is still exercised.
 //
 // 'cursors' holds the running value of each non-decreasing column and is
-// updated in place, so successive batches continue the sequence.
+// updated in place, so successive batches continue the sequence. 'batchIndex'
+// picks the batches kNullBatches nulls.
 void applyEncodingFriendlyShapes(
     velox::RowVector* batch,
     const std::vector<ColumnShape>& shapes,
     std::vector<int64_t>& cursors,
     uint64_t totalRows,
     uint64_t rowOffset,
+    uint32_t batchIndex,
     FuzzerGenerator& rng) {
   NIMBLE_CHECK_EQ(
       batch->childrenSize(),
@@ -909,6 +940,12 @@ void applyEncodingFriendlyShapes(
       "Every column needs a cursor slot, drawn shape or not.");
   for (auto childIndex = 0; childIndex < batch->childrenSize(); ++childIndex) {
     const auto& child = batch->childAt(childIndex);
+    if (shapes.at(childIndex) == ColumnShape::kNullBatches) {
+      if (child != nullptr && batchIndex % 2 == 1) {
+        makeAllNull(*child);
+      }
+      continue;
+    }
     if (child == nullptr || !child->isFlatEncoding()) {
       continue;
     }
@@ -1109,14 +1146,10 @@ std::string makeCappingJsonValue(uint64_t seed, uint64_t rowIndex) {
 
 std::string_view toString(ReaderPath readerPath) {
   switch (readerPath) {
-    case ReaderPath::kLegacyFactory:
-      return "BatchReader/legacyFactory";
-    case ReaderPath::kDefaultFactory:
-      return "BatchReader/defaultFactory";
-    case ReaderPath::kSelectiveLegacyDispatch:
-      return "selective/legacyDispatch";
-    case ReaderPath::kSelectiveDefaultDispatch:
-      return "selective/defaultDispatch";
+    case ReaderPath::kBatchReader:
+      return "BatchReader";
+    case ReaderPath::kSelectiveReader:
+      return "selective";
   }
   NIMBLE_UNREACHABLE("Unknown reader path: {}.", static_cast<int>(readerPath));
 }
@@ -1152,7 +1185,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
     return isFloatingPointDataType(dataType);
   }
   if (encodingType == EncodingType::DeltaBlock ||
-      encodingType == EncodingType::EliasFano) {
+      encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano) {
     return !isFloatingPointDataType(dataType);
   }
   // Varint's gate is isIntegralType<physicalType>() && sizeof(T) >= 4, so the
@@ -1167,6 +1201,7 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;
@@ -1441,6 +1476,9 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
     }
   }
   chunkStatsCoverage_.numStripeGroups += stripeGroups.size();
+  if (stripeGroups.size() > 1) {
+    ++chunkStatsCoverage_.numMultiGroupFiles;
+  }
 }
 
 namespace {
@@ -1960,17 +1998,8 @@ void NimbleWriterFuzzer::readAndVerify(
   uint64_t rowsRead{0};
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
 
-  if (readerPath == ReaderPath::kLegacyFactory ||
-      readerPath == ReaderPath::kDefaultFactory) {
+  if (readerPath == ReaderPath::kBatchReader) {
     BatchReadParams params;
-    if (readerPath == ReaderPath::kDefaultFactory) {
-      params.encodingFactory =
-          [](velox::memory::MemoryPool& pool,
-             std::string_view data,
-             std::function<void*(uint32_t)> stringBufferFactory) {
-            return EncodingFactory().create(pool, data, stringBufferFactory);
-          };
-    }
     BatchReader reader(readFile, *leafPool_, /*selector=*/nullptr, params);
     checkSchema(*reader.type());
 
@@ -1999,8 +2028,6 @@ void NimbleWriterFuzzer::readAndVerify(
     velox::dwio::common::RowReaderOptions rowOptions;
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(schema);
-    rowOptions.setStringDecoderZeroCopy(
-        readerPath == ReaderPath::kSelectiveDefaultDispatch);
     auto rowReader = reader->createRowReader(rowOptions);
 
     auto result = velox::BaseVector::create(schema, 0, leafPool_.get());
@@ -2352,6 +2379,7 @@ void NimbleWriterFuzzer::run() {
           monotonicCursors,
           uint64_t{options_.batchSize} * options_.numBatches,
           uint64_t{batch} * options_.batchSize,
+          batch,
           rng);
     }
     batches.push_back(std::move(vector));
@@ -2539,9 +2567,10 @@ void NimbleWriterFuzzer::logCoverage() const {
 
 void NimbleWriterFuzzer::logChunkStatsCoverage() const {
   LOG(WARNING) << fmt::format(
-      "Chunk-index coverage: files(v2={},unindexed={}) groups={} stripes={} streams(scalar={},structural={},multiChunk={},v2Indexed={}) chunks(first={},middle={},final={},v2Bounded={},zeroNull={},partialNull={},fullNull={},compressed={},uncompressed={})",
+      "Chunk-index coverage: files(v2={},unindexed={},multiGroup={}) groups={} stripes={} streams(scalar={},structural={},multiChunk={},v2Indexed={}) chunks(first={},middle={},final={},v2Bounded={},zeroNull={},partialNull={},fullNull={},compressed={},uncompressed={})",
       chunkStatsCoverage_.numV2IndexedFiles,
       chunkStatsCoverage_.numUnindexedFiles,
+      chunkStatsCoverage_.numMultiGroupFiles,
       chunkStatsCoverage_.numStripeGroups,
       chunkStatsCoverage_.numStripes,
       chunkStatsCoverage_.numScalarStreams,
@@ -2571,9 +2600,10 @@ std::vector<std::string_view> NimbleWriterFuzzer::uncoveredChunkStatsShapes()
   require(chunkStatsCoverage_.numV2IndexedStreams > 0, "V2 indexed stream");
   require(chunkStatsCoverage_.numV2BoundedChunks > 0, "V2 bounded chunk");
   require(chunkStatsCoverage_.numUnindexedFiles > 0, "unindexed file");
-  // TabletWithIndexTest.multipleGroups deterministically covers multiple
-  // stripe groups. WriterOptions does not expose the tablet metadata flush
-  // threshold, so requiring that layout here would be unreachable.
+  // randomizeWriterOptions lowers metadataFlushThreshold in some files to split
+  // them into stripe groups. TabletWithIndexTest.multipleGroups also covers
+  // multiple stripe groups deterministically.
+  require(chunkStatsCoverage_.numMultiGroupFiles > 0, "multiple stripe groups");
   require(
       chunkStatsCoverage_.numStripes > chunkStatsCoverage_.numStripeGroups,
       "multiple stripes per group");
@@ -2586,9 +2616,11 @@ std::vector<std::string_view> NimbleWriterFuzzer::uncoveredChunkStatsShapes()
   require(chunkStatsCoverage_.numZeroNullChunks > 0, "zero-null chunk");
   require(
       chunkStatsCoverage_.numPartiallyNullChunks > 0, "partially-null chunk");
-  // Fully-null chunks are generated deterministically by
-  // WriterTest.chunkNullCountsForStructNullStream. Requiring a random schema
-  // and chunk boundary to align around one here would make CI probabilistic.
+  // ColumnShape::kNullBatches writes a fully-null chunk wherever a chunk is
+  // cut at one of its null batches.
+  // WriterTest.chunkNullCountsForStructNullStream also covers a fully-null
+  // struct null stream deterministically.
+  require(chunkStatsCoverage_.numFullyNullChunks > 0, "fully-null chunk");
   require(chunkStatsCoverage_.numUncompressedChunks > 0, "uncompressed chunk");
   return uncovered;
 }

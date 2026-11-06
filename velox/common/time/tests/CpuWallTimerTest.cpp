@@ -178,4 +178,32 @@ TEST_F(CpuWallTimerTest, deltaCpuWallTimer) {
   EXPECT_LT(cpuFirstTime, timing.cpuNanos);
 }
 
+TEST_F(CpuWallTimerTest, optionalCpuWallTimer) {
+  constexpr std::chrono::nanoseconds sleepTime{110'000'000};
+
+  CpuWallTiming enabledTiming;
+  {
+    OptionalCpuWallTimer timer{
+        /*enabled=*/true,
+        [&](const CpuWallTiming& delta) { enabledTiming.add(delta); }};
+    workAndSleep(sleepTime);
+  }
+  // An enabled timer adds a single measurement with sleep + some execution.
+  EXPECT_EQ(1, enabledTiming.count);
+  EXPECT_LT(sleepTime.count(), enabledTiming.wallNanos);
+  EXPECT_LT(0, enabledTiming.cpuNanos);
+
+  CpuWallTiming disabledTiming;
+  {
+    OptionalCpuWallTimer timer{
+        /*enabled=*/false,
+        [&](const CpuWallTiming& delta) { disabledTiming.add(delta); }};
+    workAndSleep(sleepTime);
+  }
+  // A disabled timer never calls back.
+  EXPECT_EQ(0, disabledTiming.count);
+  EXPECT_EQ(0, disabledTiming.wallNanos);
+  EXPECT_EQ(0, disabledTiming.cpuNanos);
+}
+
 } // namespace facebook::velox::test

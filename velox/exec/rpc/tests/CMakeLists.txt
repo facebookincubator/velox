@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_rpc_state_test RPCStateTest.cpp)
+add_executable(velox_rpc_state_test RPCStateTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_state_test
   velox_rpc_state
   velox_rpc_types
+  velox_memory
+  velox_process
   GTest::gtest
-  GTest::gtest_main
   Folly::folly
 )
 

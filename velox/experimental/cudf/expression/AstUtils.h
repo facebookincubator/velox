@@ -123,7 +123,12 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
   // Synchronize before returning as scalar construction can enqueue an
   // asynchronous copy from the caller's host value.
   if constexpr (std::is_same_v<T, Timestamp>) {
-    auto unit = CudfConfig::getInstance().timestampUnit;
+    // A timestamp target type sets the unit; otherwise the configured one
+    // applies.
+    const auto unit =
+        toType.has_value() && cudf::is_timestamp(cudf::data_type{*toType})
+        ? *toType
+        : CudfConfig::getInstance().timestampUnit;
     if (unit == cudf::type_id::TIMESTAMP_MICROSECONDS) {
       using CudfTimestampType = cudf::timestamp_us;
       auto micros = isNull ? 0 : value.toMicros();

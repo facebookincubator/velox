@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/AdaptivePrefetch.h"
+#include <folly/lang/Hint.h>
 #include <gtest/gtest.h>
 #include <thread>
 
@@ -45,6 +46,31 @@ TEST(AdaptivePrefetchTest, fastIterationsProduceHighLookAhead) {
   auto lookAhead = prefetch.lookAhead();
   EXPECT_GE(lookAhead, 4);
   EXPECT_LE(lookAhead, 32);
+}
+
+// A clock whose readings never advance, like a clock coarser than the
+// measurement iterations.
+struct FrozenClock {
+  using duration = std::chrono::nanoseconds;
+  using rep = duration::rep;
+  using period = duration::period;
+  using time_point = std::chrono::time_point<FrozenClock>;
+
+  static time_point now() {
+    rep nowNs{0};
+    // Keeps optimized builds from folding the zero elapsed time into the
+    // division it feeds.
+    folly::compiler_must_not_predict(nowNs);
+    return time_point{duration{nowNs}};
+  }
+};
+
+TEST(AdaptivePrefetchTest, frozenClockUsesMaxLookAhead) {
+  AdaptivePrefetch<FrozenClock> prefetch(1000);
+  for (int i = 0; i < 16; ++i) {
+    prefetch.lookAhead();
+  }
+  EXPECT_EQ(prefetch.lookAhead(), 32);
 }
 
 TEST(AdaptivePrefetchTest, returnsZeroNearEnd) {

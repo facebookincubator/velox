@@ -16,13 +16,15 @@
 
 /// Basic end-to-end read tests for the cudf Iceberg connector.
 
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
@@ -38,6 +40,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
+
+#include <cudf/types.hpp>
 
 #include <folly/Random.h>
 #include <folly/ScopeGuard.h>
@@ -58,10 +62,10 @@ namespace facebook::velox::cudf_velox::exec::test {
 namespace {
 
 class CountingBufferedInputBuilder final
-    : public ::facebook::velox::connector::hive::BufferedInputBuilder {
+    : public ::facebook::velox::connector::BufferedInputBuilder {
  public:
   explicit CountingBufferedInputBuilder(
-      std::shared_ptr<::facebook::velox::connector::hive::BufferedInputBuilder>
+      std::shared_ptr<::facebook::velox::connector::BufferedInputBuilder>
           delegate)
       : delegate_(std::move(delegate)) {}
 
@@ -90,8 +94,7 @@ class CountingBufferedInputBuilder final
   }
 
  private:
-  std::shared_ptr<::facebook::velox::connector::hive::BufferedInputBuilder>
-      delegate_;
+  std::shared_ptr<::facebook::velox::connector::BufferedInputBuilder> delegate_;
   std::atomic_uint64_t createCount_{0};
 };
 
@@ -480,6 +483,56 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
       IcebergMetadataColumn::icebergDeletePosColumn();
 };
 
+TEST_F(CudfIcebergReadTest, ignoreMissingFiles) {
+  auto file = TempFilePath::create();
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  writeToFile(file->getPath(), {data});
+  auto plan = makeTableScanPlan(data->rowType());
+  // The delete file is missing too. Opening it would fail the query, so this
+  // checks that delete-file setup is skipped for a missing data file.
+  auto missing = [&]() {
+    return std::make_shared<HiveIcebergSplit>(
+        kCudfIcebergConnectorId,
+        file->getPath() + ".missing",
+        dwio::common::FileFormat::PARQUET,
+        0,
+        123,
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        std::nullopt,
+        std::unordered_map<std::string, std::string>{},
+        nullptr,
+        true,
+        std::vector<IcebergDeleteFile>{IcebergDeleteFile(
+            FileContent::kPositionalDeletes,
+            file->getPath() + ".missing-delete",
+            dwio::common::FileFormat::PARQUET,
+            1,
+            1024)});
+  };
+  for (const auto preload : {0, 4}) {
+    auto splits = makeIcebergSplits(file->getPath());
+    splits.insert(splits.begin(), missing());
+    splits.push_back(missing());
+    auto task = AssertQueryBuilder(plan)
+                    .maxDrivers(1)
+                    .config(
+                        core::QueryConfig::kMaxSplitPreloadPerDriver,
+                        std::to_string(preload))
+                    .connectorSessionProperty(
+                        kCudfIcebergConnectorId,
+                        ::facebook::velox::connector::hive::HiveConfig::
+                            kIgnoreMissingFilesSession,
+                        "true")
+                    .splits(splits)
+                    .assertResults({data});
+    const auto stats =
+        toPlanStats(task->taskStats()).at(plan->id()).customStats;
+    EXPECT_EQ(stats.count("skippedSplits"), 0);
+    EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
+    EXPECT_EQ(stats.at("processedSplits").sum, 1);
+  }
+}
+
 /// Basic read without any deletes.
 TEST_F(CudfIcebergReadTest, basicRead) {
   auto rowType = ROW({"c0"}, {BIGINT()});
@@ -517,13 +570,13 @@ TEST_F(CudfIcebergReadTest, reusesFooterMetadataDuringReaderSetup) {
   writeToFile(dataFile->getPath(), data);
 
   auto originalBuilder =
-      ::facebook::velox::connector::hive::BufferedInputBuilder::getInstance();
+      ::facebook::velox::connector::BufferedInputBuilder::getInstance();
   auto countingBuilder =
       std::make_shared<CountingBufferedInputBuilder>(originalBuilder);
-  ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+  ::facebook::velox::connector::BufferedInputBuilder::registerBuilder(
       countingBuilder);
   SCOPE_EXIT {
-    ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+    ::facebook::velox::connector::BufferedInputBuilder::registerBuilder(
         originalBuilder);
   };
 
@@ -2132,6 +2185,106 @@ TEST_F(CudfIcebergReadTest, timestampPartitionHonorsLocalTimeSetting) {
 
   // Interpret the partition string as local time and convert it to UTC.
   assertValue(true, localTimestamp);
+}
+
+// A TIMESTAMP partition column the split reader injects takes the type the
+// reader gives file timestamps, whatever unit cuDF expressions default to, so
+// an expression can combine the two.
+TEST_F(CudfIcebergReadTest, partitionTimestampMixedWithFileTimestamp) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  auto input = makeRowVector(
+      {"flag", "file_ts"},
+      {makeFlatVector<bool>({true, false}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(1'700'000'000, 0), Timestamp(1'700'000'001, 0)})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), input);
+  const auto tableType =
+      ROW({"flag", "file_ts", "partition_ts"},
+          {BOOLEAN(), TIMESTAMP(), TIMESTAMP()});
+  const auto fileValues = makeRowVector({input->childAt(1)});
+  const auto caseValues = makeRowVector({makeFlatVector<Timestamp>(
+      {Timestamp(1'577'836'800, 0), Timestamp(1'700'000'001, 0)})});
+
+  // The reader's timestamp type is pinned through the session to a unit
+  // distinct from both default units below, so each scan proves the column
+  // follows the reader rather than a fixed unit. The setting takes the
+  // enumerator's integer value.
+  const auto readerTimestampType = std::to_string(
+      static_cast<int32_t>(cudf::type_id::TIMESTAMP_MICROSECONDS));
+
+  // Projects 'projection' over the file and partition timestamps of a split
+  // in the partition 'partitionValue', expecting 'expected'.
+  const auto check = [&](const std::string& projection,
+                         const std::optional<std::string>& partitionValue,
+                         const RowVectorPtr& expected) {
+    SCOPED_TRACE(projection);
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kCudfIcebergConnectorId)
+                    .outputType(tableType)
+                    .dataColumns(tableType)
+                    .assignments(makeAssignments(tableType, {"partition_ts"}))
+                    .endTableScan()
+                    .project({projection})
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .connectorSessionProperty(
+            kCudfIcebergConnectorId,
+            facebook::velox::connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            "false")
+        .connectorSessionProperty(
+            kCudfIcebergConnectorId,
+            cudf_velox::connector::hive::CudfHiveConfig::kTimestampTypeSession,
+            readerTimestampType)
+        .splits(makeIcebergSplits(
+            dataFile->getPath(), {}, {{"partition_ts", partitionValue}}))
+        .assertResults(expected);
+  };
+
+  for (const auto& [unit, label] :
+       {std::pair{cudf::type_id::TIMESTAMP_MILLISECONDS, "ms default unit"},
+        std::pair{cudf::type_id::TIMESTAMP_NANOSECONDS, "ns default unit"}}) {
+    SCOPED_TRACE(label);
+    config.timestampUnit = unit;
+    check("file_ts", std::nullopt, fileValues);
+    check("coalesce(partition_ts, file_ts)", std::nullopt, fileValues);
+    check(
+        "CASE WHEN flag THEN partition_ts ELSE file_ts END",
+        "2020-01-01 00:00:00",
+        caseValues);
+  }
+}
+
+// The Iceberg data source shares the Hive constructor, so it rejects a
+// remaining filter that casts from VARCHAR the same way.
+TEST_F(CudfIcebergReadTest, remainingFilterCastFromVarchar) {
+  auto rowType = ROW({"c0"}, {VARCHAR()});
+  auto dataFile = TempFilePath::create();
+  writeToFile(
+      dataFile->getPath(),
+      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}));
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .remainingFilter("try_cast(c0 as double) > 1.0")
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_UNSUPPORTED_THROW(
+      AssertQueryBuilder(plan)
+          .splits(makeIcebergSplits(dataFile->getPath()))
+          .copyResults(pool()),
+      "Remaining filter with a cast from VARCHAR is not supported");
 }
 
 /// A remaining filter is allowed with positional deletes

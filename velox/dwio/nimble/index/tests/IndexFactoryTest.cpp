@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <numeric>
 #include <thread>
 
 #include "folly/Synchronized.h"
@@ -29,6 +30,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndexWriter.h"
@@ -49,6 +51,8 @@ namespace facebook::nimble::index::test {
 namespace {
 
 constexpr std::string_view kCustomClusterIndexName{"test.cluster.v1"};
+constexpr std::string_view kReverseOrderClusterIndexName{
+    "test.cluster.reverse_order.v1"};
 constexpr std::string_view kCustomDenseIndexName{"test.dense.v1"};
 constexpr std::string_view kValidationDenseIndexName{
     "test.dense.validation.v1"};
@@ -94,7 +98,8 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
         false,
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         10'000,
-        CompressionType::Uncompressed};
+        CompressionType::Uncompressed,
+        /*hierarchicalKeyEncodingReadFactors=*/{}};
     return ClusterIndexWriter::create(builtInConfig, inputType, pool);
   }
 
@@ -114,6 +119,67 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
     return clusterIndexFactory(kClusterIndexName)
         .createReader(std::move(rootSection), pool, options);
   }
+};
+
+// Orders encoded keys in reverse bytewise order.
+class ReverseKeyComparator final : public KeyComparator {
+ public:
+  int compare(std::string_view lhs, std::string_view rhs) const override {
+    return rhs.compare(lhs);
+  }
+};
+
+// Writes and reads the built-in flat cluster index over keys that ascend in
+// reverse bytewise order: the encoded keys of descending ids. Key chunks hold
+// 4 rows, so lookups cross chunk boundaries.
+class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
+ public:
+  std::string_view name() const override {
+    return kReverseOrderClusterIndexName;
+  }
+
+  std::unique_ptr<IndexWriter> createWriter(
+      const IndexConfig& config,
+      const velox::TypePtr& inputType,
+      velox::memory::MemoryPool* pool) const override {
+    const auto& options = checkedIndexConfig<TestIndexConfig>(config);
+    const ClusterIndexConfig builtInConfig{
+        std::string{name()},
+        {options.column},
+        {},
+        /*enforceKeyOrder=*/true,
+        /*noDuplicateKey=*/true,
+        EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
+        /*maxRowsPerKeyChunk=*/4,
+        CompressionType::Uncompressed,
+        /*hierarchicalKeyEncodingReadFactors=*/{}};
+    return ClusterIndexWriter::create(builtInConfig, inputType, pool);
+  }
+
+  std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
+      const std::vector<std::string>& columns,
+      const velox::RowTypePtr& inputType,
+      const std::vector<SortOrder>& sortOrders,
+      velox::memory::MemoryPool* pool) const override {
+    return clusterIndexFactory(kClusterIndexName)
+        .createKeyEncoder(columns, inputType, sortOrders, pool);
+  }
+
+  std::unique_ptr<ClusterIndexBase> createReader(
+      Section rootSection,
+      velox::memory::MemoryPool* pool,
+      const IndexLookup::Options& options) const override {
+    auto readerOptions = options;
+    readerOptions.keyComparator = keyComparator();
+    return ClusterIndex::create(std::move(rootSection), pool, readerOptions);
+  }
+
+  const KeyComparator* keyComparator() const override {
+    return &comparator_;
+  }
+
+ private:
+  const ReverseKeyComparator comparator_;
 };
 
 class NamedIndexWriter final : public IndexWriter {
@@ -345,6 +411,8 @@ class IndexFactoryTest : public testing::Test {
     velox::memory::MemoryManager::testingSetInstance({});
     registerClusterIndexFactory(
         std::make_shared<const TestClusterIndexFactory>());
+    registerClusterIndexFactory(
+        std::make_shared<const ReverseOrderClusterIndexFactory>());
     registerDenseIndexFactory(
         std::make_shared<const HashDelegatingDenseIndexFactory>());
     registerDenseIndexFactory(
@@ -371,18 +439,47 @@ class IndexFactoryTest : public testing::Test {
 
   velox::RowVectorPtr makeBatch() {
     constexpr int32_t kNumRows{20};
-    auto ids =
-        velox::BaseVector::create(velox::INTEGER(), kNumRows, leafPool_.get());
-    auto* flatIds = ids->asFlatVector<int32_t>();
-    for (int32_t i = 0; i < kNumRows; ++i) {
-      flatIds->set(i, i);
+    std::vector<int32_t> ids(kNumRows);
+    std::iota(ids.begin(), ids.end(), 0);
+    return makeBatch(ids);
+  }
+
+  // Returns a batch with one row per id in 'ids', in order.
+  velox::RowVectorPtr makeBatch(const std::vector<int32_t>& ids) {
+    const auto numRows = static_cast<velox::vector_size_t>(ids.size());
+    auto idVector =
+        velox::BaseVector::create(velox::INTEGER(), numRows, leafPool_.get());
+    auto* flatIds = idVector->asFlatVector<int32_t>();
+    for (velox::vector_size_t row = 0; row < numRows; ++row) {
+      flatIds->set(row, ids[row]);
     }
     return std::make_shared<velox::RowVector>(
         leafPool_.get(),
         rowType(),
         nullptr,
-        kNumRows,
-        std::vector<velox::VectorPtr>{ids});
+        numRows,
+        std::vector<velox::VectorPtr>{idVector});
+  }
+
+  // Writes 'ids' to a file whose only index is the cluster index of factory
+  // 'clusterIndexName', and returns its path.
+  std::string writeClusterIndexFile(
+      std::string_view clusterIndexName,
+      const std::vector<int32_t>& ids) {
+    const auto path =
+        tempDirectory_->getPath() + "/" + std::string{clusterIndexName};
+    auto fileSystem = velox::filesystems::getFileSystem(path, {});
+    auto file = fileSystem->openFileForWrite(
+        path,
+        {.shouldCreateParentDirectories = true,
+         .shouldThrowOnFileAlreadyExists = false});
+    WriterOptions options;
+    options.clusterIndexConfig = std::make_shared<const TestIndexConfig>(
+        IndexFamily::Cluster, std::string{clusterIndexName});
+    Writer writer(rowType(), std::move(file), *rootPool_, options);
+    writer.write(makeBatch(ids));
+    writer.close();
+    return path;
   }
 
   std::unique_ptr<Writer> makeWriter(
@@ -480,6 +577,52 @@ TEST_F(IndexFactoryTest, customFactoriesEndToEnd) {
 
   auto wrongClusterName = openFile(path, std::string{kClusterIndexName});
   EXPECT_EQ(wrongClusterName->clusterIndex(), nullptr);
+}
+
+TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
+  // Descending ids have encoded keys that ascend in the factory's reverse
+  // bytewise order, so the writer accepts them. Id 'id' lands on row 19 - id.
+  std::vector<int32_t> ids(20);
+  std::iota(ids.rbegin(), ids.rend(), 0);
+  auto tablet = openFile(
+      writeClusterIndexFile(kReverseOrderClusterIndexName, ids),
+      std::string{kReverseOrderClusterIndexName});
+  const auto* index = tablet->clusterIndex();
+  ASSERT_NE(index, nullptr);
+
+  {
+    const auto result = index->lookup(
+        IndexLookup::LookupRequest::pointLookup(
+            {encodeKey(19), encodeKey(7), encodeKey(0)}));
+    ASSERT_EQ(result.size(), 3);
+    const std::vector<RowRange> expected{
+        RowRange(0, 1), RowRange(12, 13), RowRange(19, 20)};
+    for (uint32_t i = 0; i < expected.size(); ++i) {
+      ASSERT_EQ(result[i].size(), 1);
+      EXPECT_EQ(result[i][0], expected[i]);
+    }
+  }
+
+  {
+    // Ids 15 down to 6, then an empty range whose upper bound sorts before
+    // its lower bound in the reverse order.
+    const auto result = index->lookup(
+        IndexLookup::LookupRequest::rangeScan({
+            {.lowerKey = encodeKey(15), .upperKey = encodeKey(5)},
+            {.lowerKey = encodeKey(5), .upperKey = encodeKey(15)},
+        }));
+    ASSERT_EQ(result.size(), 2);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0], RowRange(4, 14));
+    EXPECT_TRUE(result[1].empty());
+  }
+
+  // Ascending ids descend in the reverse order, which the writer rejects.
+  std::vector<int32_t> ascendingIds(20);
+  std::iota(ascendingIds.begin(), ascendingIds.end(), 0);
+  NIMBLE_ASSERT_USER_THROW(
+      writeClusterIndexFile(kReverseOrderClusterIndexName, ascendingIds),
+      "Encoded keys must be in strictly ascending order");
 }
 
 TEST_F(IndexFactoryTest, builtInClusterFactoryIsRegistered) {

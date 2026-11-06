@@ -25,7 +25,6 @@
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/views/ALPRDEncodingView.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
@@ -87,20 +86,15 @@ class ALPRDEncodingTest : public ::testing::Test {
   }
 
   void check(std::string_view encoded, std::span<const Physical> expected) {
-    for (auto useLegacy : {false, true}) {
-      SCOPED_TRACE(useLegacy);
-      auto reader = useLegacy
-          ? legacy::EncodingFactory(options_).create(*pool_, encoded, nullptr)
-          : decoder(encoded);
-      ASSERT_EQ(reader->rowCount(), expected.size());
-      ScopedVector<Physical> actual{
-          expected.size(), pool_.get(), options_.bufferPool};
-      std::fill(actual.begin(), actual.end(), 0);
-      reader->materialize(actual.size(), actual.data());
-      EXPECT_THAT(
-          (std::span<const Physical>{actual}),
-          ::testing::ElementsAreArray(expected));
-    }
+    auto reader = decoder(encoded);
+    ASSERT_EQ(reader->rowCount(), expected.size());
+    ScopedVector<Physical> actual{
+        expected.size(), pool_.get(), options_.bufferPool};
+    std::fill(actual.begin(), actual.end(), 0);
+    reader->materialize(actual.size(), actual.data());
+    EXPECT_THAT(
+        (std::span<const Physical>{actual}),
+        ::testing::ElementsAreArray(expected));
   }
 
   std::vector<Physical> valuesWithLateException(uint32_t count) {
@@ -440,8 +434,7 @@ TYPED_TEST(ALPRDEncodingTest, nullableKeepsExistingPhysicalChildLayout) {
           EncodingPrefix::dataType(encoded.substr(childOffset)),
           TypeTraits<Physical>::dataType);
       if constexpr (!TypeParam::useVarint) {
-        auto reader =
-            legacy::EncodingFactory().create(*this->pool_, encoded, nullptr);
+        auto reader = EncodingFactory().create(*this->pool_, encoded, nullptr);
         ScopedVector<Physical> actual{
             notNulls.size(), this->pool_.get(), this->options_.bufferPool};
         std::fill(actual.begin(), actual.end(), 0);
@@ -829,6 +822,55 @@ TYPED_TEST(ALPRDEncodingTest, rejectsCorruptMetadataAndValues) {
   }
 }
 
+TYPED_TEST(ALPRDEncodingTest, rejectsCorruptValuesAnywhereInLongReads) {
+  using T = typename TestFixture::T;
+  using Physical = typename TestFixture::Physical;
+  // Spans several 256-value decode batches. Each corrupt value is the last.
+  constexpr uint32_t kNumRows = 600;
+  constexpr auto kRightWidth = sizeof(T) * 8 - 16;
+  const std::vector<uint16_t> dictionary{1, 2};
+  std::vector<uint16_t> codes(kNumRows);
+  std::vector<Physical> right(kNumRows);
+  std::vector<Physical> expected(kNumRows);
+  for (uint32_t i = 0; i < kNumRows; ++i) {
+    codes[i] = i % 2;
+    right[i] = i;
+    expected[i] = (Physical{dictionary[codes[i]]} << kRightWidth) | i;
+  }
+  const auto valid = this->fixture(dictionary, codes, right, {}, {});
+  this->check(valid, expected);
+  std::vector<Physical> output(kNumRows);
+  createEncodingView(valid, this->pool_.get(), this->options_)
+      ->read(0, kNumRows, output.data());
+  EXPECT_EQ(output, expected);
+
+  {
+    // The low three bits of code 9 select a valid dictionary entry.
+    auto corruptCodes = codes;
+    corruptCodes.back() = 9;
+    const auto corrupt = this->fixture(dictionary, corruptCodes, right, {}, {});
+    NIMBLE_ASSERT_THROW(
+        this->decoder(corrupt)->materialize(kNumRows, output.data()),
+        "Invalid ALPRD dictionary code.");
+    NIMBLE_ASSERT_THROW(
+        createEncodingView(corrupt, this->pool_.get(), this->options_)
+            ->read(0, kNumRows, output.data()),
+        "Invalid ALPRD dictionary code.");
+  }
+  {
+    auto corruptRight = right;
+    corruptRight.back() = Physical{1} << kRightWidth;
+    const auto corrupt = this->fixture(dictionary, codes, corruptRight, {}, {});
+    NIMBLE_ASSERT_THROW(
+        this->decoder(corrupt)->materialize(kNumRows, output.data()),
+        "Invalid ALPRD low part.");
+    NIMBLE_ASSERT_THROW(
+        createEncodingView(corrupt, this->pool_.get(), this->options_)
+            ->read(0, kNumRows, output.data()),
+        "Invalid ALPRD low part.");
+  }
+}
+
 TYPED_TEST(ALPRDEncodingTest, exceptionLoadingRespectsMemoryPool) {
   using Physical = typename TestFixture::Physical;
   constexpr uint32_t kNumRows = 1'048'576;
@@ -844,25 +886,19 @@ TYPED_TEST(ALPRDEncodingTest, exceptionLoadingRespectsMemoryPool) {
   // larger limit also exercises cleanup after the first array is allocated.
   for (const auto maxCapacity : {1 << 20, 5 << 20}) {
     SCOPED_TRACE(maxCapacity);
-    for (const bool useLegacy : {false, true}) {
-      SCOPED_TRACE(useLegacy);
-      auto root = velox::memory::memoryManager()->addRootPool(
-          "alprdExceptionMemoryLimit", maxCapacity);
-      auto pool = root->addLeafChild("decode");
-      VELOX_ASSERT_RUNTIME_THROW_CODE(
-          useLegacy
-              ? legacy::EncodingFactory(this->options_)
-                    .create(*pool, encoded, nullptr)
-              : EncodingFactory(this->options_).create(*pool, encoded, nullptr),
-          velox::error_code::kMemCapExceeded,
-          "Exceeded memory pool capacity");
-      EXPECT_EQ(pool->usedBytes(), 0);
-      VELOX_ASSERT_RUNTIME_THROW_CODE(
-          createEncodingView(encoded, pool.get(), this->options_),
-          velox::error_code::kMemCapExceeded,
-          "Exceeded memory pool capacity");
-      EXPECT_EQ(pool->usedBytes(), 0);
-    }
+    auto root = velox::memory::memoryManager()->addRootPool(
+        "alprdExceptionMemoryLimit", maxCapacity);
+    auto pool = root->addLeafChild("decode");
+    VELOX_ASSERT_RUNTIME_THROW_CODE(
+        EncodingFactory(this->options_).create(*pool, encoded, nullptr),
+        velox::error_code::kMemCapExceeded,
+        "Exceeded memory pool capacity");
+    EXPECT_EQ(pool->usedBytes(), 0);
+    VELOX_ASSERT_RUNTIME_THROW_CODE(
+        createEncodingView(encoded, pool.get(), this->options_),
+        velox::error_code::kMemCapExceeded,
+        "Exceeded memory pool capacity");
+    EXPECT_EQ(pool->usedBytes(), 0);
   }
   // Slicing needs two arena buffers of at least 1 MiB each in addition to
   // the exception arrays, whose complete allocation would exceed this cap.
@@ -917,14 +953,8 @@ TYPED_TEST(ALPRDEncodingTest, rejectsUnorderedExceptionPositions) {
         std::vector<Physical>(kNumRows, 1),
         corruptPositions,
         std::vector<uint16_t>(kNumRows, 3));
-    for (const bool useLegacy : {false, true}) {
-      SCOPED_TRACE(useLegacy);
-      NIMBLE_ASSERT_THROW(
-          useLegacy ? legacy::EncodingFactory(this->options_)
-                          .create(*this->pool_, encoded, nullptr)
-                    : this->decoder(encoded),
-          "ALPRD exception positions must increase");
-    }
+    NIMBLE_ASSERT_THROW(
+        this->decoder(encoded), "ALPRD exception positions must increase");
     NIMBLE_ASSERT_THROW(
         EncodingFactory::slice(encoded, 0, 1, *this->buffer_, this->options_),
         "ALPRD exception positions must increase");

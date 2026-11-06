@@ -26,6 +26,8 @@
 #include "folly/container/F14Set.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
@@ -34,8 +36,6 @@
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 
@@ -479,6 +479,41 @@ TEST_F(DeserializerSkipTest, denseStringWithNullsSingleBatch) {
 
   checkSkip(schema, serialized, 2, 4);
   checkSkip(schema, serialized, 3, 3);
+}
+
+TEST_F(DeserializerSkipTest, sparseStringDeserialize) {
+  auto type = velox::ROW({{"col", velox::VARCHAR()}});
+  constexpr velox::vector_size_t kSize = 10'000;
+
+  auto col = velox::BaseVector::create<velox::FlatVector<velox::StringView>>(
+      velox::VARCHAR(), kSize, pool_.get());
+  for (velox::vector_size_t i = 0; i < kSize; ++i) {
+    if (i % 10 == 0) {
+      col->setNull(i, true);
+    } else {
+      col->set(i, velox::StringView("abcd"));
+    }
+  }
+  auto input = vm_->rowVector({"col"}, {col});
+
+  auto [serialized, schema] = serialize(type, {input});
+
+  std::vector<nimble::RowRange> rowRanges;
+  for (uint32_t base = 0; base + 5 <= kSize; base += 500) {
+    rowRanges.emplace_back(base, base + 5);
+  }
+
+  DeserializerOptions dsOpts{};
+  Deserializer ds{schema, pool_.get(), dsOpts};
+  velox::VectorPtr partial;
+  ds.deserialize(serialized[0], rowRanges, partial);
+
+  velox::vector_size_t outIdx = 0;
+  for (const auto& r : rowRanges) {
+    for (uint32_t srcRow = r.startRow; srcRow < r.endRow; ++srcRow, ++outIdx) {
+      ASSERT_TRUE(partial->equalValueAt(input.get(), outIdx, srcRow));
+    }
+  }
 }
 
 // --- Concurrent skip: regression guard for per-decoder skipStringBuffers_ ---

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -291,6 +292,50 @@ struct RpcError {
   std::string message;
 };
 
+/// How a capacity-retry hint spreads the waits of rows rejected together.
+enum class CapacityRetryJitter {
+  /// Wait the nominal wait.
+  kNone,
+  /// Draw each wait from [0, nominal wait], which spreads retries the most.
+  kFull,
+  /// Draw each wait from [nominal wait / 2, nominal wait], so a row always
+  /// waits at least half: suits a rate limit, whose quota frees up over time.
+  kEqual,
+};
+
+/// Asks the caller to retry a capacity rejection itself. The function returns
+/// this instead of retrying internally, so the caller can give back the
+/// request's admission slot while it waits and admit the retry again.
+struct CapacityRetry {
+  /// The nominal wait before the row's first retry.
+  std::chrono::milliseconds retryAfter{0};
+  /// How long, from the row's first attempt, the row may keep retrying, for a
+  /// hint without 'maxRetries'. A retry that would start after this fails with
+  /// the response's error. Any duration above a week counts as a week. Zero
+  /// with 'minRetries' allows only those retries.
+  std::chrono::milliseconds budget{0};
+  /// Each further rejection of the same row doubles its nominal wait, up to
+  /// this. Zero keeps every wait at 'retryAfter'.
+  std::chrono::milliseconds maxRetryAfter{0};
+  /// How the waits are spread out.
+  CapacityRetryJitter jitter{CapacityRetryJitter::kNone};
+  /// When set, positive: the row retries at most this many times in total,
+  /// counting the retries the transport made in place ('numInPlaceRetries' of
+  /// each hinted attempt), and 'budget' does not apply. A transport that
+  /// retries a fixed number of times in place sets it, so the transport and
+  /// the caller share one retry count. Retries under hints with and without a
+  /// maxRetries are counted, and back off, apart.
+  std::optional<int32_t> maxRetries{};
+  /// Retries the transport made in place during this attempt before it
+  /// returned the rejection. Counted toward 'maxRetries' and 'minRetries'.
+  int32_t numInPlaceRetries{0};
+  /// For a hint without a 'maxRetries': the fewest retries the row gets even
+  /// after 'budget' runs out, counting 'numInPlaceRetries', but never past an
+  /// hour from the row's first attempt. Guards against a budget too short for
+  /// slow attempts. Zero lets the budget alone decide.
+  int32_t minRetries{0};
+};
+
 /// Carries the framework-visible correlation and outcome of a response.
 ///
 /// A response is a payload or an error, never both and never neither. The
@@ -308,6 +353,20 @@ struct RPCResponse {
   ///   - After operator processing: a globally unique ID assigned by the
   ///     operator for downstream result tracking.
   int64_t rowId{0};
+
+  /// Client-observed duration (nanos) of the final attempt of a transport that
+  /// retries internally. Covers client creation, the executor hop, response
+  /// decoding, and any re-invocations inside the attempt, such as
+  /// malformed-JSON retries. Zero when not reported.
+  int64_t lastAttemptNanos{0};
+
+  /// Attempts before the final one that the transport counts as overloaded,
+  /// such as rate-limited, timed-out or shed attempts, for congestion stats.
+  /// Zero when not reported. Differs from CapacityRetryHint::numInPlaceRetries,
+  /// which a caller-retried rejection also carries: that counts every in-place
+  /// retry that spends the hint's budget, whatever its cause, so a timed-out
+  /// attempt can count in both.
+  int32_t numOverloadedAttempts{0};
 
   /// Returns a successful response containing the function-owned payload.
   template <typename T>
@@ -334,10 +393,21 @@ struct RPCResponse {
     } else {
       result_ = RpcPayload{std::forward<T>(payload)};
     }
+    capacityRetry_.reset();
   }
 
   /// Stores a typed failure and rejects the non-error sentinel.
   void setError(RPCErrorKind kind, std::string errorMessage);
+
+  /// Marks an overload error as retryable by the caller. Only valid after
+  /// setError() with a kind in RPCErrorCategory::kOverload. The caller ignores
+  /// the hint unless it was configured to retry capacity rejections.
+  void setCapacityRetry(CapacityRetry retry);
+
+  /// Returns the caller-retry hint, if the function set one.
+  const std::optional<CapacityRetry>& capacityRetry() const {
+    return capacityRetry_;
+  }
 
   /// Returns true if this response represents an error.
   bool hasError() const {
@@ -373,6 +443,8 @@ struct RPCResponse {
   // is filled, so a longer one would put a heap allocation on the per-row path.
   folly::Expected<RpcPayload, RpcError> result_{
       folly::makeUnexpected(RpcError{RPCErrorKind::kUnset, "unset response"})};
+  // Set only on an overload error; cleared whenever the outcome changes.
+  std::optional<CapacityRetry> capacityRetry_;
 };
 
 /// Returns the checked sum of bytes retained by a response collection.

@@ -17,6 +17,7 @@
 
 #include <chrono>
 
+#include "velox/common/base/Macros.h"
 #include "velox/functions/lib/DateTimeUnitArithmetic.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
@@ -30,7 +31,7 @@ namespace facebook::velox::functions {
 /// completes the month whatever the day of fromTimestamp: '2020-01-31' to
 /// '2020-02-29' is 1 month. If false it is 0 months, which is what Spark
 /// expects.
-FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     DateTimeUnit unit,
     const Timestamp& fromTimestamp,
     const Timestamp& toTimestamp,
@@ -42,7 +43,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
       respectLastDay);
 }
 
-FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     DateTimeUnit unit,
     const Timestamp& fromTimestamp,
     const Timestamp& toTimestamp,
@@ -71,8 +72,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
 }
 
 /// Returns toDate - fromDate expressed in terms of unit.
-FOLLY_ALWAYS_INLINE
-int64_t diffDate(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t diffDate(
     const DateTimeUnit unit,
     const int32_t fromDate,
     const int32_t toDate) {
@@ -80,21 +80,21 @@ int64_t diffDate(
 }
 
 /// Adds value units to a DATE. See addToDays for the end-of-month rules.
-FOLLY_ALWAYS_INLINE
-int32_t addToDate(int32_t input, DateTimeUnit unit, int32_t value) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t
+addToDate(int32_t input, DateTimeUnit unit, int32_t value) {
   return addToDays(input, unit, value);
 }
 
 /// Adds value units to a timestamp with no time zone applied. See
 /// addToEpochTime.
-FOLLY_ALWAYS_INLINE Timestamp
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Timestamp
 addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
   const auto result = addToEpochTime(
       {timestamp.getSeconds(), timestamp.getNanos()}, unit, value);
   return Timestamp(result.seconds, result.nanos);
 }
 
-FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
     DateTimeUnit unit,
     int32_t value,
     const Timestamp& timestamp,

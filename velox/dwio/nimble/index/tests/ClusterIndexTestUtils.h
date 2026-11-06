@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
@@ -31,7 +32,6 @@
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -189,6 +189,7 @@ class ClusterIndexTestHelper {
         std::move(rootSection),
         std::move(metadataInput),
         std::move(dataInput),
+        /*keyComparator=*/nullptr,
         pinIndex,
         preloadIndex,
         pool));

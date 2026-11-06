@@ -389,11 +389,8 @@ void Operator::loadLazyReclaimable(RowVectorPtr& vector) {
 }
 
 void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
-  uint64_t now =
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::high_resolution_clock::now().time_since_epoch())
-          .count();
-  const auto wallNanos = (now - start) * 1000;
+  const auto wallNanos =
+      (SteadyTime::now<std::chrono::microseconds>() - start) * 1000;
   const auto blockReason = BlockingReasonName::toName(reason).substr(1);
 
   auto lockedStats = stats_.wlock();

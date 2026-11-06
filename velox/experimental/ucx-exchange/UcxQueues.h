@@ -16,11 +16,13 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
+#include <folly/stop_watch.h>
 #include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputBuffer.h" // for the Stats structure
@@ -166,14 +168,16 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// exists, the queue manager can create an unitialized queue just for the
   /// sake of storing the callback notification. The queue is then initialized
   /// later properly, and eventually the callback fires.
+  /// Appends ready notifications for the caller to invoke outside manager
+  /// locks.
   /// @return True, if initialization was successful, i.e. the queue wasn't
   /// already initialized.
   bool initialize(
       std::shared_ptr<exec::Task> task,
       uint32_t numDestinations,
       uint32_t numDrivers,
-      core::PartitionedOutputNode::Kind kind =
-          core::PartitionedOutputNode::Kind::kPartitioned);
+      core::PartitionedOutputNode::Kind kind,
+      std::vector<UcxDataAvailable>& notifications);
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;
@@ -213,10 +217,13 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// @return True if blocked (queue over capacity), false otherwise.
   bool checkBlocked(ContinueFuture* future);
 
-  /// @brief Returns the data for the given destination through the callback
-  /// function. If data is available, notify will be called immediately. If
-  /// there is no data, 'notify' is installed and it will be called when data
-  /// becomes available.
+  /// @brief Returns data for the destination through 'notify', immediately if
+  /// available. Otherwise, installs 'notify' until data becomes available.
+  /// Unpublished readers wait for initialize() or updateOutputBuffers() to
+  /// publish their destination and backfill any broadcast data and end marker.
+  /// Invokes 'notify' with nullptr when the final count excludes the reader,
+  /// results have been deleted, or the queue has terminated. Negative
+  /// destinations also receive nullptr.
   void getData(int destination, UcxDataAvailableCallback notify);
 
   /// @brief Indicates that a driver is done and won't enqueue any more data.
@@ -306,6 +313,18 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       vector_size_t numRows,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
 
+  // Returns true when no more destinations can be published. Requires mutex_.
+  bool isDestinationCountFinalLocked() const;
+
+  // Adds destination queues and restores broadcast data and end markers.
+  void addDestinationQueuesLocked(
+      int32_t numDestinations,
+      std::vector<UcxDataAvailable>& notifications);
+
+  // Completes unpublished readers with EOS; the caller invokes notifications
+  // outside the locks. Pending queues never contain data.
+  void clearPendingReadersLocked(std::vector<UcxDataAvailable>& notifications);
+
   // Reference to the task that owns this UcxQueue.
   std::shared_ptr<exec::Task> task_{nullptr};
 
@@ -346,6 +365,16 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // One buffer per destination.
   std::vector<std::unique_ptr<UcxDestinationQueue>> queues_;
 
+  // Only control-plane updates grow queues_. Early readers keep an empty queue
+  // here for their notification. A null entry remembers deleted results until
+  // the destination is published or the final count discards it.
+  std::unordered_map<int, std::unique_ptr<UcxDestinationQueue>> pendingQueues_;
+
+  // Set by terminate() when this output queue is shut down, including on task
+  // completion, failure, or cancellation. Later getData() reports EOS, and
+  // updateOutputBuffers() ignores further updates.
+  bool terminated_{false};
+
   // keep track of the number of drivers that have finished.
   uint32_t numFinished_{0};
 
@@ -363,9 +392,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   int64_t totalRowsSent_{0};
   int64_t totalPackedColumnsSent_{0};
 
-  // Time since last change in queuedBytes_. Used to compute total time data
+  // Restarted at each change in queuedBytes_. Used to compute total time data
   // is queued. Ignored if queuedBytes_ is zero.
-  uint64_t queueStartMs_;
+  folly::stop_watch<std::chrono::milliseconds> queueWatch_;
 
   // Total time data is queued as bytes * time.
   double totalQueuedBytesMs_;

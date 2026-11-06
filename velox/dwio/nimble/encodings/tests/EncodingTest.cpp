@@ -254,12 +254,6 @@ struct EncodingTypeTraits<nimble::RLEEncoding<T>> {
       nimble::EncodingType::RLE;
 };
 
-template <>
-struct EncodingTypeTraits<nimble::SparseBoolEncoding> {
-  static constexpr inline nimble::EncodingType encodingType =
-      nimble::EncodingType::SparseBool;
-};
-
 template <typename T>
 struct EncodingTypeTraits<nimble::TrivialEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =

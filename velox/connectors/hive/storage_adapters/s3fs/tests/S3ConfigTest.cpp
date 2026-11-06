@@ -41,6 +41,7 @@ TEST(S3ConfigTest, defaultConfig) {
   ASSERT_EQ(s3Config.bucket(), "");
   ASSERT_EQ(s3Config.useIMDS(), true);
   ASSERT_EQ(s3Config.minPartSize(), 10485760);
+  ASSERT_EQ(s3Config.useFips(), std::nullopt);
 }
 
 TEST(S3ConfigTest, overrideConfig) {
@@ -59,7 +60,8 @@ TEST(S3ConfigTest, overrideConfig) {
       {S3Config::baseConfigKey(S3Config::Keys::kCredentialsProvider),
        "my-credentials-provider"},
       {S3Config::baseConfigKey(S3Config::Keys::kIMDSEnabled), "false"},
-      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"}};
+      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"},
+      {S3Config::baseConfigKey(S3Config::Keys::kUseFips), "true"}};
   auto configBase =
       std::make_shared<config::ConfigBase>(std::move(configFromFile));
   auto s3Config = S3Config("bucket", configBase);
@@ -79,6 +81,7 @@ TEST(S3ConfigTest, overrideConfig) {
   ASSERT_EQ(s3Config.credentialsProvider(), "my-credentials-provider");
   ASSERT_EQ(s3Config.useIMDS(), false);
   ASSERT_EQ(s3Config.minPartSize(), 20971520);
+  ASSERT_EQ(s3Config.useFips(), true);
 }
 
 TEST(S3ConfigTest, overrideBucketConfig) {
@@ -105,7 +108,9 @@ TEST(S3ConfigTest, overrideBucketConfig) {
       {S3Config::bucketConfigKey(S3Config::Keys::kCredentialsProvider, bucket),
        "override-credentials-provider"},
       {S3Config::baseConfigKey(S3Config::Keys::kIMDSEnabled), "false"},
-      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"}};
+      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"},
+      {S3Config::baseConfigKey(S3Config::Keys::kUseFips), "true"},
+      {S3Config::bucketConfigKey(S3Config::Keys::kUseFips, bucket), "false"}};
   auto configBase =
       std::make_shared<config::ConfigBase>(std::move(bucketConfigFromFile));
   auto s3Config = S3Config(bucket, configBase);
@@ -127,6 +132,7 @@ TEST(S3ConfigTest, overrideBucketConfig) {
   ASSERT_EQ(s3Config.credentialsProvider(), "override-credentials-provider");
   ASSERT_EQ(s3Config.useIMDS(), false);
   ASSERT_EQ(s3Config.minPartSize(), 20971520);
+  ASSERT_EQ(s3Config.useFips(), false);
 }
 
 TEST(S3ConfigTest, deprecatedPrefixFallback) {

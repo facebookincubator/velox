@@ -195,7 +195,7 @@ ManualEncodingSelectionPolicyFactory::createPolicy(DataType dataType) const {
       ManualEncodingSelectionPolicy,
       encodingReadFactors_,
       compressionOptions_,
-      std::nullopt,
+      /*identifier=*/std::nullopt,
       nestedEncodingReadFactors_);
 }
 
@@ -219,8 +219,10 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::SimdForBitpack,
       EncodingType::SubIntSplit,
       EncodingType::BlockBitPacking,
+      EncodingType::BlockBitPackingV2,
       EncodingType::DeltaBlock,
       EncodingType::EliasFano,
+      EncodingType::PartitionedEliasFano,
       EncodingType::Fsst,
       EncodingType::Huffman,
   };

@@ -266,12 +266,6 @@ struct UnixTimestampParseWithFormatFunction
     return true;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
-      int64_t& result,
-      const arg_type<Timestamp>& input) {
-    result = input.getSeconds();
-  }
-
   FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& input) {
     auto timestamp = Timestamp::fromDate(input);
     toGMTWithGapCorrection(timestamp, *this->sessionTimeZone_);
@@ -293,6 +287,21 @@ struct UnixTimestampParseWithFormatFunction
   bool isConstFormat_{false};
   bool invalidFormat_{false};
   bool legacyFormatter_{false};
+};
+
+// Returns the UNIX timestamp in seconds for a Timestamp or TimestampUtc
+// input, truncating toward zero like Spark.
+template <typename T, typename TTimestamp>
+struct UnixTimestampFromTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TTimestamp>& input) {
+    auto seconds = input.getSeconds();
+    // Spark truncates toward zero; getSeconds() floors for negative timestamps.
+    result = (seconds < 0 && input.getNanos() > 0) ? seconds + 1 : seconds;
+  }
 };
 
 // Parses unix time in seconds to a formatted string.
@@ -556,6 +565,8 @@ struct DateFromUnixDateFunction {
 
 /// Truncates a timestamp to a specified time unit. Return NULL if the format is
 /// invalid. Format as abbreviated unit string and "microseconds" are allowed.
+/// Throws if the result is outside the range of int64 microseconds since the
+/// epoch.
 template <typename T>
 struct DateTruncFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -582,6 +593,11 @@ struct DateTruncFunction {
       return false;
     }
     result = truncateTimestamp(timestamp, unitOption.value(), timeZone_);
+    // Spark timestamps are int64 microseconds since the epoch, so truncating
+    // the minimum timestamp to a coarser unit cannot be represented.
+    if (result < Timestamp::minMicros() || result > Timestamp::maxMicros()) {
+      VELOX_ARITHMETIC_ERROR("long overflow");
+    }
     return true;
   }
 
@@ -1049,9 +1065,9 @@ struct SecondsToTimestampFunction {
       const double secondsD = static_cast<double>(seconds);
 
       if (secondsD >= kMaxSecondsD) {
-        result = Timestamp(kMaxSeconds, kMaxNanoseconds);
+        result = Timestamp::maxMicros();
       } else if (secondsD <= kMinSecondsD) {
-        result = Timestamp(kMinSeconds, kMinNanoseconds);
+        result = Timestamp::minMicros();
       } else {
         // Scale to microseconds and truncate toward zero.
         const double microsD = secondsD * Timestamp::kMicrosecondsInSecond;
@@ -1082,12 +1098,6 @@ struct SecondsToTimestampFunction {
       kMaxMicrosD / Timestamp::kMicrosecondsInSecond;
   static constexpr double kMinSecondsD =
       kMinMicrosD / Timestamp::kMicrosecondsInSecond;
-
-  // Cutoff values are based on Java's Long.MAX_VALUE and Long.MIN_VALUE.
-  static constexpr int64_t kMaxSeconds = 9223372036854LL;
-  static constexpr int64_t kMaxNanoseconds = 775807000LL;
-  static constexpr int64_t kMinSeconds = -9223372036855LL;
-  static constexpr int64_t kMinNanoseconds = 224192000LL;
 };
 
 template <typename T>

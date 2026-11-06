@@ -54,7 +54,8 @@ MetadataInput::MetadataInput(velox::ReadFile* file, const Options& options)
       maxCoalesceDistance_{options.maxCoalesceDistance},
       maxCoalesceBytes_{options.maxCoalesceBytes},
       executor_{options.executor},
-      ioStats_{options.ioStats} {
+      ioStats_{options.ioStats},
+      fileIoContext_{options.fileIoContext} {
   NIMBLE_CHECK_NOT_NULL(pool_);
   NIMBLE_CHECK_NOT_NULL(ioStats_.get());
 }
@@ -77,7 +78,7 @@ void MetadataInput::readRaw(uint64_t offset, uint64_t size, void* dest) {
   uint64_t storageReadNs{0};
   {
     velox::NanosecondTimer timer{&storageReadNs};
-    file_->pread(offset, size, static_cast<char*>(dest));
+    file_->pread(offset, size, static_cast<char*>(dest), fileIoContext_);
   }
   const uint64_t storageReadUs = storageReadNs / 1'000;
   ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
@@ -207,18 +208,19 @@ std::vector<MetadataInput::IoGroup> MetadataInput::computeIoGroups(
 }
 
 void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) {
-  std::vector<std::unique_ptr<velox::AsyncSource<folly::Unit>>> asyncIos;
+  // Shared with the executor tasks below, which can outlive this call.
+  std::vector<std::shared_ptr<velox::AsyncSource<folly::Unit>>> asyncIos;
   asyncIos.reserve(ioGroups.size());
   for (const auto& group : ioGroups) {
     asyncIos.emplace_back(
-        std::make_unique<velox::AsyncSource<folly::Unit>>([this, &group]() {
+        std::make_shared<velox::AsyncSource<folly::Unit>>([this, &group]() {
           // Measure at nanosecond resolution so that fast reads still register
           // a non-zero scan time; truncating to microseconds would lose
           // sub-microsecond reads entirely.
           uint64_t storageReadNs{0};
           {
             velox::NanosecondTimer ioTimer(&storageReadNs);
-            file_->preadv(group.offset, group.ranges);
+            file_->preadv(group.offset, group.ranges, fileIoContext_);
           }
           ioStats_->storageReadLatencyUs().increment(storageReadNs / 1'000);
           ioStats_->incTotalScanTimeNs(storageReadNs);
@@ -228,14 +230,19 @@ void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) {
 
   QueryIoLatencyGuard queryIoGuard{ioStats_.get()};
   if (executor_ != nullptr && asyncIos.size() > 1) {
-    for (size_t i = 0; i + 1 < asyncIos.size(); ++i) {
-      executor_->add([&asyncIo = asyncIos[i]]() { asyncIo->prepare(); });
+    // Queues every group but the first. This thread reads the first group
+    // below, which gives the executor time to start the others.
+    for (size_t i = 1; i < asyncIos.size(); ++i) {
+      // move() below reads any group whose task has not started, so a task can
+      // run after this call returns. It then finds its read done and exits
+      // without touching 'group' or this object.
+      executor_->add([asyncIo = asyncIos[i]]() { asyncIo->prepare(); });
     }
   }
   std::exception_ptr error;
-  for (auto& asyncIo : asyncIos) {
+  for (size_t i = 0; i < asyncIos.size(); ++i) {
     try {
-      asyncIo->move();
+      asyncIos[i]->move();
     } catch (...) {
       if (error == nullptr) {
         error = std::current_exception();
@@ -489,6 +496,7 @@ void CachedMetadataInput::loadFromSsd(
     }
     auto buffer = tryCacheHit(ssdSize, pin);
     if (buffer != nullptr) {
+      ioStats_->incRawBytesRead(loaded.section.size());
       loaded.buffer = std::move(buffer);
       continue;
     }
@@ -518,6 +526,7 @@ void CachedMetadataInput::loadFromSsd(
   ioStats_->ssdCacheReadLatencyUs().increment(ssdLoadUs);
   for (uint32_t i = 0; i < ssdHits.size(); ++i) {
     const auto& section = sections[ssdHits[i].sectionIndex].section;
+    ioStats_->incRawBytesRead(section.size());
     sections[ssdHits[i].sectionIndex].buffer =
         promoteCachePin(section, std::move(loadPins[i]), ioStats_->ssdRead());
   }
@@ -538,6 +547,7 @@ std::vector<uint32_t> CachedMetadataInput::loadFromCache(
       auto pin = acquireCachePin(key, uncompressedSize.value());
       auto buffer = tryCacheHit(uncompressedSize.value(), pin);
       if (buffer != nullptr) {
+        ioStats_->incRawBytesRead(section.size());
         sections[index].buffer = std::move(buffer);
         continue;
       }
@@ -644,6 +654,9 @@ std::shared_ptr<MetadataBuffer> CachedMetadataInput::store(
   const velox::cache::RawFileCacheKey key{fileId_.id(), section.offset()};
   auto pin = acquireCachePin(key, decompressed->size());
   auto buffer = tryCacheHit(decompressed->size(), pin);
+
+  // Counts no raw bytes, since the read of the section from the file counted
+  // them.
   if (buffer != nullptr) {
     return buffer;
   }
@@ -688,6 +701,7 @@ std::unique_ptr<MetadataBuffer> CachedMetadataInput::findCachedMetadata(
     NIMBLE_CHECK(
         entry->hasContiguousData(), "Cached entry must have contiguous data");
     ioStats_->ramHit().increment(entry->size());
+    ioStats_->incRawBytesRead(entry->size());
     return std::make_unique<MetadataBuffer>(std::move(pin));
   }
 }

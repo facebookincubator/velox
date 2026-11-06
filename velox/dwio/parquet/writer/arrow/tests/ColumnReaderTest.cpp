@@ -801,27 +801,6 @@ TEST_F(TestPrimitiveReader, testNonDictionaryEncodedPagesWithExposeEncoding) {
   pages_.clear();
 }
 
-namespace {
-
-LevelInfo computeLevelInfo(const ColumnDescriptor* descr) {
-  LevelInfo levelInfo;
-  levelInfo.defLevel = descr->maxDefinitionLevel();
-  levelInfo.repLevel = descr->maxRepetitionLevel();
-
-  int16_t minSpacedDefLevel = descr->maxDefinitionLevel();
-  const schema::Node* Node = descr->schemaNode().get();
-  while (Node != nullptr && !Node->isRepeated()) {
-    if (Node->isOptional()) {
-      minSpacedDefLevel--;
-    }
-    Node = Node->parent();
-  }
-  levelInfo.repeatedAncestorDefLevel = minSpacedDefLevel;
-  return levelInfo;
-}
-
-} // namespace
-
 using ReadDenseForNullable = bool;
 class RecordReaderPrimitiveTypeTest
     : public ::testing::TestWithParam<ReadDenseForNullable> {
@@ -834,7 +813,7 @@ class RecordReaderPrimitiveTypeTest
     descr_ = schemaDescriptor_.column(0);
     recordReader_ = internal::RecordReader::make(
         descr_,
-        computeLevelInfo(descr_),
+        descr_->levelInfo(),
         ::arrow::default_memory_pool(),
         false,
         GetParam());

@@ -22,11 +22,11 @@
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/reader/Decoder.h"
 #include "velox/dwio/nimble/serializer/BatchedStreamDecoder.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/velox/Decoder.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 #include <algorithm>
 #include <limits>
@@ -52,11 +52,27 @@ const StreamDescriptor& getMainDescriptor(const Type& type) {
       return type.asFlatMap().nullsDescriptor();
     case Kind::HybridFlatMap:
       return type.asHybridFlatMap().nullsDescriptor();
+    case Kind::ArrayWithOffsets:
+      return type.asArrayWithOffsets().offsetsDescriptor();
+    case Kind::SlidingWindowMap:
+      return type.asSlidingWindowMap().offsetsDescriptor();
     default:
-      // ArrayWithOffsets and SlidingWindowMap are not supported.
-      NIMBLE_UNSUPPORTED(
-          "Schema type {} is not supported.", toString(type.kind()));
+      NIMBLE_UNREACHABLE("Unknown schema type: {}.", type.kind());
   }
+}
+
+// Returns the offset of the stream of the dedup kinds, ArrayWithOffsets and
+// SlidingWindowMap, that holds the lengths of their distinct arrays or maps,
+// next to the per-row offsets of their main stream. Returns std::nullopt for
+// other types.
+std::optional<offset_size> getDedupLengthsOffset(const Type& type) {
+  if (type.isArrayWithOffsets()) {
+    return type.asArrayWithOffsets().lengthsDescriptor().offset();
+  }
+  if (type.isSlidingWindowMap()) {
+    return type.asSlidingWindowMap().lengthsDescriptor().offset();
+  }
+  return std::nullopt;
 }
 
 bool checkColumnProjectionSubfield(
@@ -491,6 +507,47 @@ void Deserializer::createDeserializersForType(
         inserted,
         "Duplicate stream offset in deserializer schema: {}.",
         streamOffset);
+  }
+  // A timestamp keeps its sub-microsecond nanoseconds in a stream of its own,
+  // next to the microseconds of its main stream. Their values are narrower than
+  // the microseconds, so the stream is decoded as a scalar stream.
+  if (type.isTimestampMicroNano()) {
+    const ScalarType nanosType{type.asTimestampMicroNano().nanosDescriptor()};
+    const auto nanosOffset = nanosType.scalarDescriptor().offset();
+    if (shouldDecodeStream(nanosOffset)) {
+      const bool inserted = deserializerMap_
+                                .emplace(
+                                    nanosOffset,
+                                    std::make_unique<BatchedStreamDecoder>(
+                                        nanosType,
+                                        /*isInMapStream=*/false,
+                                        options_.bufferPoolCapacity,
+                                        pool_))
+                                .second;
+      NIMBLE_CHECK(
+          inserted,
+          "Duplicate stream offset in deserializer schema: {}.",
+          nanosOffset);
+    }
+  }
+  if (const auto lengthsOffset = getDedupLengthsOffset(type)) {
+    // Both the offsets and the lengths streams hold 32-bit values, which the
+    // decoder of the type reads.
+    if (shouldDecodeStream(*lengthsOffset)) {
+      const bool inserted = deserializerMap_
+                                .emplace(
+                                    *lengthsOffset,
+                                    std::make_unique<BatchedStreamDecoder>(
+                                        type,
+                                        /*isInMapStream=*/false,
+                                        options_.bufferPoolCapacity,
+                                        pool_))
+                                .second;
+      NIMBLE_CHECK(
+          inserted,
+          "Duplicate stream offset in deserializer schema: {}.",
+          *lengthsOffset);
+    }
   }
   // FlatMap is only supported at depth 1 (top-level columns). Register each
   // child in-map stream so it is decoded like other physical streams.

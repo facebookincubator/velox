@@ -205,6 +205,12 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
   SCOPE_EXIT {
     waveGraph() = prevWaveGraph;
   };
+  if (WaveConfig::get().reinplaceScatters) {
+    reinplaceScatterChains(graph, *wg);
+  }
+  if (WaveConfig::get().recognizeDisjointCopies) {
+    rewriteDisjointCopies(graph, *wg);
+  }
   wg->normalizeAndAnnotateGraph();
   for (auto* v : graph.values()) {
     wg->idToValue_[v->id()] = v;
@@ -228,6 +234,12 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
 
   initValueTypes(*graph_, types_, metaStorage_);
 
+  if (WaveConfig::get().reinplaceScatters) {
+    reinplaceScatterChains(*graph_, *this);
+  }
+  if (WaveConfig::get().recognizeDisjointCopies) {
+    rewriteDisjointCopies(*graph_, *this);
+  }
   normalizeAndAnnotateGraph();
   for (auto* v : graph_->values()) {
     idToValue_[v->id()] = v;
@@ -330,8 +342,9 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     }
     auto* ck = inv->kernel();
     ck->warmup();
-    auto info = ck->kernelInfo();
-    LOG(INFO) << "Kernel " << ck->entryPoint() << ": " << info.toString();
+    for (int32_t entry = 0; entry < ck->numEntries(); ++entry) {
+      LOG(INFO) << "Kernel " << ck->entryInfoString(entry);
+    }
     // With configPerOp, the same numbers for each op on its own. Waiting here
     // rather than at construction keeps the per-op compiles overlapped with the
     // composites'.
@@ -414,6 +427,23 @@ std::unique_ptr<ExecutionState> WaveGraph::getState() {
 void WaveGraph::returnState(std::unique_ptr<ExecutionState> state) {
   std::lock_guard<std::mutex> lock(statePoolMutex_);
   statePool_.push_back(std::move(state));
+}
+
+std::vector<int64_t> WaveGraph::lastValueSizes(nativert::ValueId id) {
+  std::lock_guard<std::mutex> lock(statePoolMutex_);
+  if (statePool_.empty()) {
+    return {};
+  }
+  const auto& state = *statePool_.back();
+  if (id < 0 || static_cast<size_t>(id) >= state.valueEntries.size()) {
+    return {};
+  }
+  const auto& entry = state.valueEntries[id];
+  if (entry.generation != state.tableGeneration ||
+      entry.kind != ValueEntry::kTensor) {
+    return {};
+  }
+  return std::vector<int64_t>(entry.t.dims, entry.t.dims + entry.t.rank);
 }
 
 void WaveGraph::normalizeAndAnnotateGraph() {

@@ -41,6 +41,10 @@
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxExchange.h"
+#include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
+#endif
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
@@ -227,14 +231,31 @@ class FilterProjectAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::ProjectNode>(planNode);
     auto filterNode = filterProjectOp->filterNode();
 
-    if (projectPlanNode) {
-      if (projectPlanNode->sources()[0]->outputType()->size() == 0) {
-        if (filterNode || !projectPlanNode->projections().empty()) {
-          LOG_FALLBACK(
-              "FilterProject empty input type with filter or projections, PlanNode id: {}",
-              planNode->id());
-          return false;
-        }
+    // cuDF sizes an expression result from an input column. Over a
+    // zero-column input a filter has nothing to evaluate against, and only
+    // constant projections, which CudfFilterProject fills to the row count
+    // of each batch, can run. A FilterNode keeps its input type, so the
+    // source of 'planNode' gives the input type of a fused FilterProject too.
+    const auto& inputType = planNode->sources()[0]->outputType();
+    if (inputType->size() == 0) {
+      if (filterNode) {
+        LOG_FALLBACK(
+            "FilterProject filter over a zero-column input, PlanNode id: {}",
+            planNode->id());
+        return false;
+      }
+      if (projectPlanNode &&
+          !std::all_of(
+              projectPlanNode->projections().begin(),
+              projectPlanNode->projections().end(),
+              [&](const auto& projection) {
+                return isConstantProjectionOverZeroColumns(
+                    inputType, projection);
+              })) {
+        LOG_FALLBACK(
+            "FilterProject non-constant projection over a zero-column input, PlanNode id: {}",
+            planNode->id());
+        return false;
       }
     }
 
@@ -409,7 +430,7 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     }
 
     if (joinPlanNode->filter()) {
-      if (!canExprRunOnGpu(
+      if (!canJoinFilterRunOnGpu(
               joinPlanNode->filter(),
               ctx->task->queryCtx().get(),
               op->pool())) {
@@ -550,7 +571,7 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
             planNode->id());
         return false;
       }
-      if (!canExprRunOnGpu(
+      if (!canJoinFilterRunOnGpu(
               joinPlanNode->joinCondition(),
               ctx->task->queryCtx().get(),
               op->pool())) {
@@ -744,8 +765,7 @@ class TopNRowNumberAdapter : public OperatorAdapter {
     if (!node) {
       return false;
     }
-    return node->rankFunction() ==
-        core::TopNRowNumberNode::RankFunction::kRowNumber;
+    return CudfTopNRowNumber::canRunOnGPU(*node);
   }
 
   bool acceptsGpuInput() const override {
@@ -1316,6 +1336,117 @@ class GroupIdAdapter : public OperatorAdapter {
   }
 };
 
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+
+/// UcxExchangeAdapter - Keeps the operator; describes its GPU capabilities and,
+/// for a merge exchange, the sort that follows it.
+///
+/// UcxExchange itself is not a replacement produced here: it is built directly
+/// by the exec::ExchangeTransportEntry registered under
+/// core::TransportKind::kUcx, so by the time the cuDF driver adapter runs, the
+/// operator already exists. Describing it here is what tells CompileState the
+/// operator emits CudfVectors and is not a CPU operator, which keeps it from
+/// being wrapped in conversion operators or reported as a failed replacement.
+///
+/// A core::MergeExchangeNode additionally needs a sort behind the exchange,
+/// because UcxExchangeClient multiplexes every source into one queue and so
+/// destroys the per-source orderings exec::MergeExchange relies on. That sort
+/// is described here rather than built by the transport, so that
+/// DriverFactory::replaceOperators splices it in and renumbers the driver's
+/// operator ids -- one plan node, two operators, consecutive ids.
+class UcxExchangeAdapter : public OperatorAdapter {
+ public:
+  UcxExchangeAdapter() : OperatorAdapter("UcxExchange") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<ucx_exchange::UcxExchange>();
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    // A source operator; it has no upstream operator in its pipeline.
+    return false;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    // Inserted after the kept UcxExchange, not in place of it.
+    const auto mergeExchangeNode =
+        std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode);
+    if (mergeExchangeNode == nullptr) {
+      return {}; // A plain exchange needs no sort.
+    }
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfOrderBy>(operatorId, ctx, mergeExchangeNode));
+    return result;
+  }
+
+  bool keepOperator() const override {
+    return true;
+  }
+};
+
+/// UcxPartitionedOutputAdapter - Keeps the operator; describes its GPU
+/// capabilities.
+///
+/// The counterpart of UcxExchangeAdapter for the producer side: the operator
+/// comes from the exec::OutputTransportEntry registered under
+/// core::TransportKind::kUcx, and this adapter only tells CompileState that it
+/// consumes CudfVectors and emits nothing.
+class UcxPartitionedOutputAdapter : public OperatorAdapter {
+ public:
+  UcxPartitionedOutputAdapter() : OperatorAdapter("UcxPartitionedOutput") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<ucx_exchange::UcxPartitionedOutput>();
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    // Terminal operator: getOutput() always returns nullptr, so no conversion
+    // operator may be appended after it.
+    return false;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/,
+      int32_t /*operatorId*/) const override {
+    return {}; // Keep original operator.
+  }
+
+  bool keepOperator() const override {
+    return true;
+  }
+};
+
+#endif // VELOX_ENABLE_UCX_EXCHANGE
+
 /// Registration Function
 void registerAllOperatorAdapters() {
   auto& registry = OperatorAdapterRegistry::getInstance();
@@ -1346,6 +1477,10 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
   registry.registerAdapter(std::make_unique<PartitionedOutputAdapter>());
   registry.registerAdapter(std::make_unique<WindowAdapter>());
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  registry.registerAdapter(std::make_unique<UcxExchangeAdapter>());
+  registry.registerAdapter(std::make_unique<UcxPartitionedOutputAdapter>());
+#endif
 }
 
 } // namespace facebook::velox::cudf_velox

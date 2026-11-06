@@ -350,6 +350,7 @@ bool canApplyValueDeltaPushdown(
     case EncodingType::ALPRD:
     case EncodingType::SimdForBitpack:
     case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2:
     case EncodingType::SubIntSplit:
     case EncodingType::FrequencyPartition:
     case EncodingType::FOR:
@@ -359,7 +360,7 @@ bool canApplyValueDeltaPushdown(
     case EncodingType::SharedDictionary:
     case EncodingType::Slice:
     case EncodingType::EliasFano:
-    case EncodingType::BitRangeSplit:
+    case EncodingType::PartitionedEliasFano:
       return false;
   }
   NIMBLE_UNREACHABLE(
@@ -433,6 +434,7 @@ size_t applyValueDeltaPushdown(
     case EncodingType::ALPRD:
     case EncodingType::SimdForBitpack:
     case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2:
     case EncodingType::SubIntSplit:
     case EncodingType::FrequencyPartition:
     case EncodingType::FOR:
@@ -442,7 +444,7 @@ size_t applyValueDeltaPushdown(
     case EncodingType::SharedDictionary:
     case EncodingType::Slice:
     case EncodingType::EliasFano:
-    case EncodingType::BitRangeSplit:
+    case EncodingType::PartitionedEliasFano:
       NIMBLE_UNREACHABLE(
           "SliceEncoding push-down invoked on unsupported inner encoding: {}",
           encodingType);

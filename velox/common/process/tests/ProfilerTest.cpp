@@ -18,6 +18,7 @@
 #include <folly/futures/Future.h>
 #include <folly/futures/Promise.h>
 #include <folly/init/Init.h>
+#include <folly/stop_watch.h>
 #include <gtest/gtest.h>
 #include <signal.h>
 #include <thread>
@@ -31,7 +32,7 @@ int32_t fi(int32_t x) {
   return x < 2 ? x : fi(x - 1) + fi(x - 2);
 }
 void compute(int32_t seconds) {
-  auto start = getCurrentTimeMs();
+  const folly::stop_watch<std::chrono::milliseconds> watch;
   constexpr int32_t kNumThreads = 10;
   for (;;) {
     std::vector<std::thread> threads;
@@ -47,7 +48,7 @@ void compute(int32_t seconds) {
       thread.join();
     }
     LOG(INFO) << "Sum " << sum;
-    if (getCurrentTimeMs() - start > seconds * 1000) {
+    if (watch.elapsed().count() > seconds * 1'000) {
       break;
     }
   }
@@ -139,5 +140,4 @@ int main(int argc, char** argv) {
   // Signal handler required for ThreadDebugInfoTest
   folly::Init init(&argc, &argv, false);
   return RUN_ALL_TESTS();
-  return 0;
 }

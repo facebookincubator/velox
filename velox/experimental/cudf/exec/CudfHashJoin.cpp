@@ -298,8 +298,10 @@ CudfHashJoinBuild::CudfHashJoinBuild(
       joinNode_(joinNode) {}
 
 void CudfHashJoinBuild::recordInputStats(const CudfVector& input) {
-  auto [_, nullCount] =
-      cudf::bitmask_and(input.getTableView(), input.stream(), get_temp_mr());
+  auto [_, nullCount] = cudf::bitmask_and(
+      input.getTableView(),
+      input.stream(),
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   {
     auto lockedStats = stats_.wlock();
     lockedStats->numNullKeys += nullCount;
@@ -586,7 +588,9 @@ void CudfHashJoinProbe::doAddInput(RowVectorPtr input) {
   VELOX_CHECK_NOT_NULL(cudfInput);
   // Count nulls in join key columns
   auto [_, null_count] = cudf::bitmask_and(
-      cudfInput->getTableView(), cudfInput->stream(), get_temp_mr());
+      cudfInput->getTableView(),
+      cudfInput->stream(),
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   {
     // Update statistics for null keys in join operator.
     auto lockedStats = stats_.wlock();
@@ -1273,9 +1277,9 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
   auto numProbeRows = leftTableView.num_rows();
 
   // For now, AST support is necessary to filter join output
-  if (joinNode_->filter() && !useAstFilter_) {
-    VELOX_NYI("Full join requires AST support for filtering");
-  }
+  VELOX_NYI_CHECK(
+      !joinNode_->filter() || useAstFilter_,
+      "Full join requires AST support for filtering");
 
   // Track which probe rows matched in any build batch so that unmatched probe
   // rows can be emitted with NULL build columns after the loop.
@@ -1573,9 +1577,9 @@ CudfHashJoinProbe::leftSemiProjectJoin(
   std::vector<JoinOutput> cudfOutputs;
 
   // For now, AST support is necessary to filter join output
-  if (joinNode_->filter() && !useAstFilter_) {
-    VELOX_NYI("Left semi project join requires AST support for filtering");
-  }
+  VELOX_NYI_CHECK(
+      !joinNode_->filter() || useAstFilter_,
+      "Left semi project join requires AST support for filtering");
 
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;

@@ -331,15 +331,13 @@ WaveDriver::WaveDriver(
   pipelines_.front().canAdvance = true;
 }
 
-bool WaveDriver::shouldYield(
-    exec::StopReason taskStopReason,
-    size_t startTimeMs) const {
+bool WaveDriver::shouldYield(exec::StopReason taskStopReason) const {
   // Checks task-level yield signal, driver-level yield signal and table scan
   // output processing time limit.
   return taskStopReason == exec::StopReason::kYield ||
       operatorCtx()->driverCtx()->driver->shouldYield() ||
       ((getOutputTimeLimitMs_ != 0) &&
-       (getCurrentTimeMs() - startTimeMs) >= getOutputTimeLimitMs_);
+       getOutputWatch_.elapsed().count() >= getOutputTimeLimitMs_);
 }
 
 RowVectorPtr WaveDriver::getOutput() {
@@ -347,7 +345,7 @@ RowVectorPtr WaveDriver::getOutput() {
     return nullptr;
   }
   barrier_->enter();
-  startTimeMs_ = getCurrentTimeMs();
+  getOutputWatch_.reset();
   [[maybe_unused]] auto guard = folly::makeGuard([&]() { barrier_->leave(); });
   int32_t last = pipelines_.size() - 1;
   try {
@@ -619,8 +617,7 @@ Advance WaveDriver::advance(int pipelineIdx) {
   for (;;) {
     const exec::StopReason taskStopReason =
         operatorCtx()->driverCtx()->task->shouldStop();
-    if (shouldStop(taskStopReason) ||
-        shouldYield(taskStopReason, startTimeMs_)) {
+    if (shouldStop(taskStopReason) || shouldYield(taskStopReason)) {
       blockingReason_ = exec::BlockingReason::kYield;
       blockingFuture_ = ContinueFuture{folly::Unit{}};
       // A point for test code injection.

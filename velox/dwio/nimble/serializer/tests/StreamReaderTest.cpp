@@ -33,13 +33,15 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/NimbleException.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/serializer/StreamReader.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -130,6 +132,14 @@ class StreamReaderTest : public ::testing::Test {
         reader.co_read(streams, ranges, outputOffset, output));
   }
 
+  void runRead(
+      StreamReader& reader,
+      std::span<const RowRange> ranges,
+      velox::vector_size_t outputOffset,
+      velox::VectorPtr& output) {
+    folly::coro::blockingWait(reader.co_read(ranges, outputOffset, output));
+  }
+
   std::vector<std::optional<std::vector<int64_t>>> readArrays(
       const velox::VectorPtr& output,
       velox::vector_size_t offset,
@@ -178,6 +188,42 @@ class StreamReaderTest : public ::testing::Test {
         const auto entry = maps->offsetAt(row) + i;
         entries.emplace_back(
             keys->valueAt(entry).str(), values->valueAt(entry));
+      }
+      result.emplace_back(std::move(entries));
+    }
+    return result;
+  }
+
+  // Same as readMaps(), for maps whose values can be null.
+  std::vector<std::optional<
+      std::vector<std::pair<std::string, std::optional<int64_t>>>>>
+  readMapsWithNullValues(
+      const velox::VectorPtr& output,
+      velox::vector_size_t offset,
+      velox::vector_size_t count) {
+    const auto* maps = output->as<velox::MapVector>();
+    NIMBLE_CHECK_NOT_NULL(maps);
+    const auto* keys = maps->mapKeys()->asFlatVector<velox::StringView>();
+    const auto* values = maps->mapValues()->asFlatVector<int64_t>();
+    NIMBLE_CHECK_NOT_NULL(keys);
+    NIMBLE_CHECK_NOT_NULL(values);
+    std::vector<std::optional<
+        std::vector<std::pair<std::string, std::optional<int64_t>>>>>
+        result;
+    result.reserve(count);
+    for (velox::vector_size_t row{offset}; row < offset + count; ++row) {
+      if (maps->isNullAt(row)) {
+        result.emplace_back(std::nullopt);
+        continue;
+      }
+      std::vector<std::pair<std::string, std::optional<int64_t>>> entries;
+      for (velox::vector_size_t i{0}; i < maps->sizeAt(row); ++i) {
+        const auto entry = maps->offsetAt(row) + i;
+        entries.emplace_back(
+            keys->valueAt(entry).str(),
+            values->isNullAt(entry)
+                ? std::nullopt
+                : std::optional<int64_t>(values->valueAt(entry)));
       }
       result.emplace_back(std::move(entries));
     }
@@ -438,7 +484,7 @@ TEST_F(StreamReaderTest, readsRowAfterResettingOutput) {
   }
 }
 
-TEST_F(StreamReaderTest, rejectsMultipleEncodingChunks) {
+TEST_F(StreamReaderTest, decodesMultipleEncodingChunks) {
   const auto stream =
       encodeChunk<int64_t>(
           std::vector<int64_t>{10, 11, 12}, EncodingType::Trivial) +
@@ -451,12 +497,12 @@ TEST_F(StreamReaderTest, rejectsMultipleEncodingChunks) {
   auto output = velox::BaseVector::create(velox::BIGINT(), 4, pool_.get());
   const std::array<RowRange, 2> ranges{{{1, 4}, {5, 6}}};
 
-  NIMBLE_ASSERT_THROW(
-      runRead(reader, streams, ranges, /*outputOffset=*/0, output),
-      "StreamReader requires a single encoding chunk per stream");
+  runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+  EXPECT_THAT(readScalars(output, 0, 4), testing::ElementsAre(11, 12, 20, 22));
 }
 
-TEST_F(StreamReaderTest, rejectsMultipleNullableEncodingChunks) {
+TEST_F(StreamReaderTest, decodesMultipleNullableEncodingChunks) {
   const auto stream =
       encodeNullableChunk<std::string_view>(
           {"alpha", std::nullopt, "gamma"}, EncodingType::Trivial) +
@@ -469,9 +515,215 @@ TEST_F(StreamReaderTest, rejectsMultipleNullableEncodingChunks) {
   auto output = velox::BaseVector::create(velox::VARCHAR(), 5, pool_.get());
   const std::array<RowRange, 2> ranges{{{0, 2}, {3, 6}}};
 
-  NIMBLE_ASSERT_THROW(
-      runRead(reader, streams, ranges, /*outputOffset=*/0, output),
-      "StreamReader requires a single encoding chunk per stream");
+  runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+  const auto* flat = output->asFlatVector<velox::StringView>();
+  ASSERT_NE(flat, nullptr);
+  std::vector<std::optional<std::string>> actual;
+  for (velox::vector_size_t row{0}; row < output->size(); ++row) {
+    actual.push_back(
+        flat->isNullAt(row) ? std::nullopt
+                            : std::optional<std::string>{flat->valueAt(row)});
+  }
+  EXPECT_THAT(
+      actual,
+      testing::ElementsAre(
+          "alpha", std::nullopt, std::nullopt, "epsilon", "zeta"));
+}
+
+TEST_F(StreamReaderTest, decodesMultipleCompressedEncodingChunks) {
+  // Encodes 256 copies of 'value' into one Zstd chunk.
+  const auto encodeCompressedChunk = [&](const std::string& value) {
+    auto chunk = encodeChunk<std::string_view>(
+        std::vector<std::string_view>(256, value),
+        EncodingType::Trivial,
+        CompressionParams{
+            .type = CompressionType::Zstd,
+            .acceptRatio = 1.0F,
+        });
+    const char* position = chunk.data();
+    EXPECT_EQ(readChunkHeader(position).compressionType, CompressionType::Zstd);
+    return chunk;
+  };
+  const std::string firstValue(500, 'a');
+  const std::string secondValue(500, 'b');
+  const std::string thirdValue(500, 'c');
+  const std::string fourthValue(500, 'd');
+  const auto firstStream =
+      encodeCompressedChunk(firstValue) + encodeCompressedChunk(secondValue);
+  const auto secondStream =
+      encodeCompressedChunk(thirdValue) + encodeCompressedChunk(fourthValue);
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"first", "second"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{1, ScalarKind::String}),
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{2, ScalarKind::String}),
+      });
+  StreamReader reader{type, pool_.get(), {}};
+  const std::array<std::string_view, 3> streams{
+      std::string_view{}, firstStream, secondStream};
+  auto output = velox::BaseVector::create(
+      velox::ROW({"first", "second"}, velox::VARCHAR()), 4, pool_.get());
+
+  // The second range reads the end of each stream's first chunk and the start
+  // of its second, so the decompressed chunks of both streams must be alive at
+  // once.
+  const std::array<RowRange, 3> ranges{{{7, 8}, {255, 257}, {400, 401}}};
+
+  runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+  const auto readStrings = [](const velox::VectorPtr& vector) {
+    const auto* flat = vector->asFlatVector<velox::StringView>();
+    NIMBLE_CHECK_NOT_NULL(flat);
+    std::vector<std::string> values;
+    for (velox::vector_size_t row{0}; row < vector->size(); ++row) {
+      values.push_back(flat->valueAt(row).str());
+    }
+    return values;
+  };
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  EXPECT_THAT(
+      readStrings(row->childAt(0)),
+      testing::ElementsAre(firstValue, firstValue, secondValue, secondValue));
+  EXPECT_THAT(
+      readStrings(row->childAt(1)),
+      testing::ElementsAre(thirdValue, thirdValue, fourthValue, fourthValue));
+}
+
+TEST_F(StreamReaderTest, rejectsInvalidChunkHeaders) {
+  const auto chunk = encodeChunk<int64_t>(
+      std::vector<int64_t>{10, 11, 12}, EncodingType::Trivial);
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::Int64});
+  StreamReader reader{type, pool_.get(), {}};
+
+  {
+    const auto stream = chunk + chunk.substr(0, kChunkHeaderSize - 1);
+    const std::array<std::string_view, 1> streams{stream};
+    NIMBLE_ASSERT_FILE_THROW(
+        reader.setStreams(streams), "Truncated chunk header in stream");
+  }
+
+  {
+    const auto stream = chunk.substr(0, chunk.size() - 1);
+    const std::array<std::string_view, 1> streams{stream};
+    NIMBLE_ASSERT_FILE_THROW(
+        reader.setStreams(streams), "Chunk data exceeds stream boundary");
+  }
+
+  {
+    auto stream = chunk;
+    char* header = stream.data();
+    writeChunkHeader(
+        static_cast<uint32_t>(stream.size() - kChunkHeaderSize),
+        CompressionType::OpenZL,
+        header);
+    const std::array<std::string_view, 1> streams{stream};
+    NIMBLE_ASSERT_FILE_THROW(
+        reader.setStreams(streams), "Unsupported chunk compression type");
+  }
+}
+
+TEST_F(StreamReaderTest, readsSequentialRowsAcrossEncodingChunks) {
+  {
+    const auto stream =
+        encodeChunk<int64_t>(
+            std::vector<int64_t>{10, 11, 12}, EncodingType::Trivial) +
+        encodeChunk<int64_t>(
+            std::vector<int64_t>{20, 21}, EncodingType::Trivial);
+    const auto type = std::make_shared<const ScalarType>(
+        StreamDescriptor{0, ScalarKind::Int64});
+    StreamReader reader{type, pool_.get(), {}};
+    const std::array<std::string_view, 1> streams{stream};
+    reader.setStreams(streams);
+    velox::VectorPtr output;
+
+    folly::coro::blockingWait(reader.co_skip(1));
+    folly::coro::blockingWait(reader.co_next(3, output));
+
+    ASSERT_NE(output, nullptr);
+    EXPECT_THAT(readScalars(output, 0, 3), testing::ElementsAre(11, 12, 20));
+  }
+
+  // The null row makes the row reader scatter the child's values, and the
+  // child's scattered read crosses the child's chunk boundary.
+  {
+    const auto presence = encodeChunk<bool>(
+        std::array<bool, 5>{true, false, true, true, true},
+        EncodingType::Trivial);
+    const auto values =
+        encodeChunk<int64_t>(
+            std::array<int64_t, 2>{10, 12}, EncodingType::Trivial) +
+        encodeChunk<int64_t>(
+            std::array<int64_t, 2>{13, 14}, EncodingType::Trivial);
+    const auto type = std::make_shared<const RowType>(
+        StreamDescriptor{0, ScalarKind::Bool},
+        std::vector<std::string>{"value"},
+        std::vector<std::shared_ptr<const Type>>{
+            std::make_shared<const ScalarType>(
+                StreamDescriptor{1, ScalarKind::Int64}),
+        });
+    StreamReader reader{type, pool_.get(), {}};
+    const std::array<std::string_view, 2> streams{presence, values};
+    reader.setStreams(streams);
+    velox::VectorPtr output;
+
+    folly::coro::blockingWait(reader.co_skip(1));
+    folly::coro::blockingWait(reader.co_next(4, output));
+
+    ASSERT_NE(output, nullptr);
+    const auto* row = output->as<velox::RowVector>();
+    ASSERT_NE(row, nullptr);
+    EXPECT_TRUE(row->isNullAt(0));
+    EXPECT_THAT(
+        readScalars(row->childAt(0), 1, 3), testing::ElementsAre(12, 13, 14));
+  }
+}
+
+TEST_F(StreamReaderTest, rebindsStreamsWithDifferentChunkCounts) {
+  const auto oneChunk = encodeChunk<int64_t>(
+      std::vector<int64_t>{10, 11, 12}, EncodingType::Trivial);
+  const auto threeChunks =
+      encodeChunk<int64_t>(std::vector<int64_t>{20}, EncodingType::Trivial) +
+      encodeChunk<int64_t>(
+          std::vector<int64_t>{21, 22}, EncodingType::Trivial) +
+      encodeChunk<int64_t>(std::vector<int64_t>{23}, EncodingType::Trivial);
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::Int64});
+  StreamReader reader{type, pool_.get(), {}};
+  auto output = velox::BaseVector::create(velox::BIGINT(), 4, pool_.get());
+
+  // Every stripe has the same presence pattern, so each stripe after the first
+  // rebinds the cached reader's decoder.
+  const std::array<std::string_view, 1> oneChunkStreams{oneChunk};
+  reader.setStreams(oneChunkStreams);
+  runRead(
+      reader,
+      std::array<RowRange, 1>{{{0, 3}}},
+      /*outputOffset=*/0,
+      output);
+  EXPECT_THAT(readScalars(output, 0, 3), testing::ElementsAre(10, 11, 12));
+
+  const std::array<std::string_view, 1> threeChunkStreams{threeChunks};
+  reader.setStreams(threeChunkStreams);
+  runRead(
+      reader,
+      std::array<RowRange, 1>{{{0, 4}}},
+      /*outputOffset=*/0,
+      output);
+  EXPECT_THAT(readScalars(output, 0, 4), testing::ElementsAre(20, 21, 22, 23));
+
+  reader.setStreams(oneChunkStreams);
+  runRead(
+      reader,
+      std::array<RowRange, 1>{{{1, 3}}},
+      /*outputOffset=*/0,
+      output);
+  EXPECT_THAT(readScalars(output, 0, 2), testing::ElementsAre(11, 12));
 }
 
 TEST_F(StreamReaderTest, decodesCompressedStreamChunk) {
@@ -619,32 +871,37 @@ TEST_F(StreamReaderTest, rejectsEmptySourceRange) {
 TEST_F(StreamReaderTest, rejectsUnsupportedEncodingViews) {
   const auto type = std::make_shared<const ScalarType>(
       StreamDescriptor{0, ScalarKind::Int64});
-  for (const bool nullable : {false, true}) {
-    SCOPED_TRACE(fmt::format("nullable={}", nullable));
-    const auto stream = nullable
-        ? encodeNullableChunk<int64_t>(
-              {10, std::nullopt, 12}, EncodingType::Varint)
-        : encodeChunk<int64_t>(
-              std::vector<int64_t>{10, 11, 12}, EncodingType::Varint);
-    const std::array<std::string_view, 1> streams{stream};
-    StreamReader reader{type, pool_.get(), {}};
-    auto output = velox::BaseVector::create(velox::BIGINT(), 1, pool_.get());
-    const std::array<RowRange, 1> ranges{{{1, 2}}};
-    const auto expectUnsupported = [](auto read) {
-      try {
-        read();
-        FAIL() << "Expected unsupported EncodingView to throw";
-      } catch (const NimbleException& exception) {
-        EXPECT_EQ(exception.errorCode(), error_code::NotSupported);
-        EXPECT_EQ(
-            exception.errorMessage(), "Varint does not support EncodingView.");
-      }
-    };
-
-    expectUnsupported(
-        [&] { runRead(reader, streams, ranges, /*outputOffset=*/0, output); });
-    expectUnsupported([&] { reader.setStreams(streams); });
+  // The encoding prefix alone selects the unsupported encoding.
+  std::string encoded(EncodingPrefix::kFixedPrefixSize, 0);
+  char* pos = encoded.data();
+  encoding::writeChar(static_cast<char>(EncodingType::Delta), pos);
+  encoding::writeChar(static_cast<char>(DataType::Int64), pos);
+  encoding::writeUint32(/*value=*/3, pos);
+  Buffer buffer{*pool_};
+  ChunkedStreamWriter writer{
+      buffer, CompressionParams{.type = CompressionType::Uncompressed}};
+  std::string stream;
+  for (const auto segment : writer.encode(encoded)) {
+    stream.append(segment);
   }
+  const std::array<std::string_view, 1> streams{stream};
+  StreamReader reader{type, pool_.get(), {}};
+  auto output = velox::BaseVector::create(velox::BIGINT(), 1, pool_.get());
+  const std::array<RowRange, 1> ranges{{{1, 2}}};
+  const auto expectUnsupported = [](auto read) {
+    try {
+      read();
+      FAIL() << "Expected unsupported EncodingView to throw";
+    } catch (const NimbleException& exception) {
+      EXPECT_EQ(exception.errorCode(), error_code::NotSupported);
+      EXPECT_EQ(
+          exception.errorMessage(), "Delta does not support EncodingView.");
+    }
+  };
+
+  expectUnsupported(
+      [&] { runRead(reader, streams, ranges, /*outputOffset=*/0, output); });
+  expectUnsupported([&] { reader.setStreams(streams); });
 }
 
 TEST_F(StreamReaderTest, readsNewStreamsAcrossCalls) {
@@ -670,6 +927,315 @@ TEST_F(StreamReaderTest, readsNewStreamsAcrossCalls) {
   const std::array<std::string_view, 1> secondStreams{secondStream};
   runRead(reader, secondStreams, ranges, /*outputOffset=*/0, output);
   EXPECT_EQ(outputValues(), (std::vector<int64_t>{20, 22}));
+}
+
+TEST_F(StreamReaderTest, readsBoundStreamsAcrossCalls) {
+  const auto firstStream = encodeChunk<int64_t>(
+      std::vector<int64_t>{10, 11, 12, 13}, EncodingType::Trivial);
+  const auto secondStream = encodeChunk<int64_t>(
+      std::vector<int64_t>{20, 21, 22, 23}, EncodingType::Trivial);
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::Int64});
+  StreamReader reader{type, pool_.get(), {}};
+  auto output = velox::BaseVector::create(velox::BIGINT(), 3, pool_.get());
+  const std::array<RowRange, 1> leadingRanges{{{0, 2}}};
+  const std::array<RowRange, 1> trailingRanges{{{3, 4}}};
+
+  const std::array<std::string_view, 1> firstStreams{firstStream};
+  reader.setStreams(firstStreams);
+  runRead(reader, leadingRanges, /*outputOffset=*/0, output);
+  runRead(reader, trailingRanges, /*outputOffset=*/2, output);
+  EXPECT_THAT(readScalars(output, 0, 3), testing::ElementsAre(10, 11, 13));
+
+  const std::array<std::string_view, 1> secondStreams{secondStream};
+  reader.setStreams(secondStreams);
+  runRead(reader, trailingRanges, /*outputOffset=*/0, output);
+  EXPECT_THAT(readScalars(output, 0, 1), testing::ElementsAre(23));
+}
+
+TEST_F(StreamReaderTest, rejectsBoundReadWithoutStreams) {
+  const auto stream = encodeChunk<int64_t>(
+      std::vector<int64_t>{10, 11, 12}, EncodingType::Trivial);
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::Int64});
+  StreamReader reader{type, pool_.get(), {}};
+  auto output = velox::BaseVector::create(velox::BIGINT(), 1, pool_.get());
+  const std::array<RowRange, 1> ranges{{{0, 1}}};
+
+  NIMBLE_ASSERT_THROW(
+      runRead(reader, ranges, /*outputOffset=*/0, output),
+      "No streams are bound");
+
+  const std::array<std::string_view, 1> streams{stream};
+  reader.setStreams(streams);
+  reader.reset();
+  NIMBLE_ASSERT_THROW(
+      runRead(reader, ranges, /*outputOffset=*/0, output),
+      "No streams are bound");
+}
+
+TEST_F(StreamReaderTest, rejectsStreamCountMismatch) {
+  const auto stream = encodeChunk<int64_t>(
+      std::vector<int64_t>{10, 11, 12}, EncodingType::Trivial);
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::Int64});
+  StreamReader reader{type, pool_.get(), {}};
+  const std::array<std::string_view, 2> streams{stream, stream};
+  auto output = velox::BaseVector::create(velox::BIGINT(), 1, pool_.get());
+  const std::array<RowRange, 1> ranges{{{0, 1}}};
+
+  NIMBLE_ASSERT_THROW(
+      reader.setStreams(streams),
+      "Stream count must match the projected schema");
+  NIMBLE_ASSERT_THROW(
+      runRead(reader, streams, ranges, /*outputOffset=*/0, output),
+      "Stream count must match the projected schema");
+}
+
+TEST_F(StreamReaderTest, readsStripesWithDifferingPresencePatterns) {
+  // More than eight children, so that the presence key spans several bytes,
+  // with one pattern per absent child and the absent children placed around
+  // the byte boundaries.
+  constexpr uint32_t kNumChildren{70};
+  std::vector<std::string> names;
+  std::vector<std::shared_ptr<const Type>> children;
+  std::vector<velox::TypePtr> outputTypes;
+  for (uint32_t child{0}; child < kNumChildren; ++child) {
+    names.emplace_back("c" + std::to_string(child));
+    children.emplace_back(
+        std::make_shared<const ScalarType>(
+            StreamDescriptor{child + 1, ScalarKind::Int64}));
+    outputTypes.emplace_back(velox::BIGINT());
+  }
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool}, names, children);
+  const auto outputType = velox::ROW(names, outputTypes);
+  StreamReader reader{type, pool_.get(), {}};
+
+  // Visits each pattern twice in a row, forward and then backward. The first
+  // visit of a pattern replaces the reader, and the second one reuses it with
+  // new data.
+  const std::vector<uint32_t> absentChildren{
+      0, 7, 8, 15, 16, 31, 32, 63, 64, 69};
+  std::vector<uint32_t> visits;
+  for (const auto absent : absentChildren) {
+    visits.insert(visits.end(), {absent, absent});
+  }
+  for (auto it = absentChildren.rbegin(); it != absentChildren.rend(); ++it) {
+    visits.insert(visits.end(), {*it, *it});
+  }
+  for (size_t visit{0}; visit < visits.size(); ++visit) {
+    const auto absent = visits[visit];
+    SCOPED_TRACE(
+        ::testing::Message() << "visit=" << visit << ", absent=" << absent);
+    std::vector<std::string> encoded;
+    encoded.reserve(kNumChildren);
+    std::vector<std::string_view> streams{std::string_view{}};
+    for (uint32_t child{0}; child < kNumChildren; ++child) {
+      if (child == absent) {
+        streams.emplace_back();
+        continue;
+      }
+      encoded.emplace_back(
+          encodeChunk<int64_t>(
+              std::vector<int64_t>{static_cast<int64_t>(child * 1'000 + visit)},
+              EncodingType::Trivial));
+      streams.emplace_back(encoded.back());
+    }
+    auto output = velox::BaseVector::create(outputType, 1, pool_.get());
+    const std::array<RowRange, 1> ranges{{{0, 1}}};
+
+    runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+    const auto* row = output->as<velox::RowVector>();
+    ASSERT_NE(row, nullptr);
+    for (uint32_t child{0}; child < kNumChildren; ++child) {
+      const auto actual = readScalars(row->childAt(child), 0, 1);
+      if (child == absent) {
+        EXPECT_THAT(actual, testing::ElementsAre(std::nullopt));
+      } else {
+        EXPECT_THAT(
+            actual,
+            testing::ElementsAre(static_cast<int64_t>(child * 1'000 + visit)));
+      }
+    }
+  }
+}
+
+TEST_F(StreamReaderTest, readsStripeAfterFailedRebind) {
+  constexpr uint32_t kNumChildren{3};
+  std::vector<std::string> names;
+  std::vector<std::shared_ptr<const Type>> children;
+  std::vector<velox::TypePtr> outputTypes;
+  for (uint32_t child{0}; child < kNumChildren; ++child) {
+    names.emplace_back("c" + std::to_string(child));
+    children.emplace_back(
+        std::make_shared<const ScalarType>(
+            StreamDescriptor{child + 1, ScalarKind::Int64}));
+    outputTypes.emplace_back(velox::BIGINT());
+  }
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool}, names, children);
+  const auto outputType = velox::ROW(names, outputTypes);
+  StreamReader reader{type, pool_.get(), {}};
+  const std::array<RowRange, 1> ranges{{{0, 1}}};
+
+  const auto encodeStripe = [&](int64_t firstValue) {
+    std::vector<std::string> encoded;
+    for (uint32_t child{0}; child < kNumChildren; ++child) {
+      encoded.emplace_back(
+          encodeChunk<int64_t>(
+              std::vector<int64_t>{firstValue + child}, EncodingType::Trivial));
+    }
+    return encoded;
+  };
+  const auto makeStreams = [](const std::vector<std::string>& encoded) {
+    std::vector<std::string_view> streams{std::string_view{}};
+    for (const auto& stream : encoded) {
+      streams.emplace_back(stream);
+    }
+    return streams;
+  };
+
+  // The first stripe builds the reader, and the next stripes with the same
+  // presence pattern rebind it. Their second child is invalid, so each rebind
+  // fails after the first child has been rebound.
+  const auto firstStripe = encodeStripe(100);
+  const auto firstStreams = makeStreams(firstStripe);
+  reader.setStreams(firstStreams);
+
+  // A truncated chunk header fails before the second child's decoder is
+  // rebound.
+  auto truncatedStripe = encodeStripe(200);
+  truncatedStripe[1] += truncatedStripe[1].substr(0, kChunkHeaderSize - 1);
+  const auto truncatedStreams = makeStreams(truncatedStripe);
+  NIMBLE_ASSERT_FILE_THROW(
+      reader.setStreams(truncatedStreams), "Truncated chunk header in stream");
+
+  // A chunk of another data type fails after the second child's decoder has
+  // bound its first chunk.
+  auto mixedTypeStripe = encodeStripe(200);
+  mixedTypeStripe[1] +=
+      encodeChunk<int32_t>(std::vector<int32_t>{0}, EncodingType::Trivial);
+  const auto mixedTypeStreams = makeStreams(mixedTypeStripe);
+  NIMBLE_ASSERT_FILE_THROW(
+      reader.setStreams(mixedTypeStreams),
+      "Encoding chunks of a stream must store the same data type");
+
+  auto output = velox::BaseVector::create(outputType, 1, pool_.get());
+  NIMBLE_ASSERT_THROW(
+      runRead(reader, ranges, /*outputOffset=*/0, output),
+      "No streams are bound");
+
+  const auto recoveredStripe = encodeStripe(300);
+  const auto recoveredStreams = makeStreams(recoveredStripe);
+  runRead(reader, recoveredStreams, ranges, /*outputOffset=*/0, output);
+
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  for (uint32_t child{0}; child < kNumChildren; ++child) {
+    EXPECT_THAT(
+        readScalars(row->childAt(child), 0, 1),
+        testing::ElementsAre(static_cast<int64_t>(300 + child)));
+  }
+}
+
+TEST_F(StreamReaderTest, readsStripeAfterFailedPatternChange) {
+  constexpr uint32_t kNumChildren{3};
+  std::vector<std::string> names;
+  std::vector<std::shared_ptr<const Type>> children;
+  std::vector<velox::TypePtr> outputTypes;
+  for (uint32_t child{0}; child < kNumChildren; ++child) {
+    names.emplace_back("c" + std::to_string(child));
+    children.emplace_back(
+        std::make_shared<const ScalarType>(
+            StreamDescriptor{child + 1, ScalarKind::Int64}));
+    outputTypes.emplace_back(velox::BIGINT());
+  }
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool}, names, children);
+  const auto outputType = velox::ROW(names, outputTypes);
+  StreamReader reader{type, pool_.get(), {}};
+  const std::array<RowRange, 1> ranges{{{0, 1}}};
+
+  const auto encodeStripe = [&](int64_t firstValue) {
+    std::vector<std::string> encoded;
+    for (uint32_t child{0}; child < kNumChildren; ++child) {
+      encoded.emplace_back(
+          encodeChunk<int64_t>(
+              std::vector<int64_t>{firstValue + child}, EncodingType::Trivial));
+    }
+    return encoded;
+  };
+  const auto makeStreams = [](const std::vector<std::string>& encoded,
+                              std::optional<uint32_t> absentChild) {
+    std::vector<std::string_view> streams{std::string_view{}};
+    for (uint32_t child{0}; child < encoded.size(); ++child) {
+      streams.emplace_back(
+          child == absentChild ? std::string_view{}
+                               : std::string_view{encoded[child]});
+    }
+    return streams;
+  };
+  const auto readAndCheck = [&](const std::vector<std::string_view>& streams,
+                                int64_t firstValue,
+                                std::optional<uint32_t> absentChild) {
+    auto output = velox::BaseVector::create(outputType, 1, pool_.get());
+    runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+    const auto* row = output->as<velox::RowVector>();
+    ASSERT_NE(row, nullptr);
+    for (uint32_t child{0}; child < kNumChildren; ++child) {
+      const auto actual = readScalars(row->childAt(child), 0, 1);
+      if (child == absentChild) {
+        EXPECT_THAT(actual, testing::ElementsAre(std::nullopt));
+      } else {
+        EXPECT_THAT(
+            actual,
+            testing::ElementsAre(static_cast<int64_t>(firstValue + child)));
+      }
+    }
+  };
+
+  // The first stripe builds the reader over all three children. The next
+  // stripes have no last child, which changes the presence pattern. Their
+  // second child is invalid, so each rebuild fails after the first child has
+  // been rebound and before the last child's decoder is dropped.
+  const auto firstStripe = encodeStripe(100);
+  readAndCheck(makeStreams(firstStripe, std::nullopt), 100, std::nullopt);
+
+  // A truncated chunk header fails before the second child's decoder is
+  // rebound.
+  auto truncatedStripe = encodeStripe(200);
+  truncatedStripe[1] += truncatedStripe[1].substr(0, kChunkHeaderSize - 1);
+  const auto truncatedStreams = makeStreams(truncatedStripe, /*absentChild=*/2);
+  NIMBLE_ASSERT_FILE_THROW(
+      reader.setStreams(truncatedStreams), "Truncated chunk header in stream");
+
+  // A chunk of another data type fails after the second child's decoder has
+  // bound its first chunk.
+  auto mixedTypeStripe = encodeStripe(200);
+  mixedTypeStripe[1] +=
+      encodeChunk<int32_t>(std::vector<int32_t>{0}, EncodingType::Trivial);
+  const auto mixedTypeStreams = makeStreams(mixedTypeStripe, /*absentChild=*/2);
+  NIMBLE_ASSERT_FILE_THROW(
+      reader.setStreams(mixedTypeStreams),
+      "Encoding chunks of a stream must store the same data type");
+
+  auto output = velox::BaseVector::create(outputType, 1, pool_.get());
+  NIMBLE_ASSERT_THROW(
+      runRead(reader, ranges, /*outputOffset=*/0, output),
+      "No streams are bound");
+
+  // A stripe with the pattern of the failed one rebuilds the reader instead of
+  // reusing the partly rebuilt one.
+  const auto sameAsFailedStripe = encodeStripe(300);
+  readAndCheck(makeStreams(sameAsFailedStripe, /*absentChild=*/2), 300, 2);
+
+  // The last child's decoder was dropped, so a stripe that has the child again
+  // creates a new decoder.
+  const auto lastStripe = encodeStripe(400);
+  readAndCheck(makeStreams(lastStripe, std::nullopt), 400, std::nullopt);
 }
 
 TEST_F(StreamReaderTest, retainsScatteredStringsAcrossStreamBindings) {
@@ -1032,6 +1598,38 @@ TEST_F(StreamReaderTest, readsSelectedArrays) {
       ::testing::ElementsAre(
           NullableArray{std::nullopt},
           NullableArray{{13}},
+          NullableArray{{14, 15}}));
+}
+
+TEST_F(StreamReaderTest, readsArraysAcrossEncodingChunks) {
+  // The lengths stream splits after row 2 and the elements stream after its
+  // fourth element. Reading row 4 needs the lengths of rows 0-3 from both
+  // chunks, and its elements cross the elements stream's chunk boundary.
+  const auto lengths = encodeNullableChunk<uint32_t>(
+                           {2, std::nullopt, 1}, EncodingType::Trivial) +
+      encodeNullableChunk<uint32_t>({0, 2}, EncodingType::Trivial);
+  const auto elements =
+      encodeChunk<int64_t>(
+          std::array<int64_t, 4>{10, 11, 12, 14}, EncodingType::Trivial) +
+      encodeChunk<int64_t>(std::array<int64_t, 1>{15}, EncodingType::Trivial);
+  const auto type = std::make_shared<const ArrayType>(
+      StreamDescriptor{0, ScalarKind::UInt32},
+      std::make_shared<const ScalarType>(
+          StreamDescriptor{1, ScalarKind::Int64}));
+  StreamReader reader{type, pool_.get(), {}};
+  const std::array<std::string_view, 2> streams{lengths, elements};
+  auto output =
+      velox::BaseVector::create(velox::ARRAY(velox::BIGINT()), 3, pool_.get());
+  const std::array<RowRange, 2> ranges{{{1, 3}, {4, 5}}};
+
+  runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+  using NullableArray = std::optional<std::vector<int64_t>>;
+  EXPECT_THAT(
+      readArrays(output, /*offset=*/0, /*count=*/3),
+      ::testing::ElementsAre(
+          NullableArray{std::nullopt},
+          NullableArray{{12}},
           NullableArray{{14, 15}}));
 }
 
@@ -1441,9 +2039,10 @@ TEST_F(StreamReaderTest, readsSelectedSlidingWindowMapsWithEmptyMaps) {
           NullableMap{MapEntries{{"d", 40}}}));
 }
 
-// Entry counting walks the rows each key was found present in, so a key that
-// no selected row carries, and a key whose value decoded as null, both have to
-// drop out of the entry layout.
+// Entry counting walks the rows each key was found present in. A key that no
+// selected row carries drops out of the entry layout, and a present key whose
+// value decoded as null keeps its entry with a null value, as in a contiguous
+// read.
 TEST_F(StreamReaderTest, readsSelectedFlatMapsWithSparseAndNullKeys) {
   std::vector<std::unique_ptr<StreamDescriptor>> inMapDescriptors;
   for (offset_size offset : {2, 4, 6}) {
@@ -1503,14 +2102,15 @@ TEST_F(StreamReaderTest, readsSelectedFlatMapsWithSparseAndNullKeys) {
 
   const auto* row = output->as<velox::RowVector>();
   ASSERT_NE(row, nullptr);
-  using MapEntries = std::vector<std::pair<std::string, int64_t>>;
+  using MapEntries =
+      std::vector<std::pair<std::string, std::optional<int64_t>>>;
   using NullableMap = std::optional<MapEntries>;
   EXPECT_THAT(
-      readMaps(row->childAt(0), /*offset=*/0, /*count=*/3),
+      readMapsWithNullValues(row->childAt(0), /*offset=*/0, /*count=*/3),
       ::testing::ElementsAre(
           NullableMap{MapEntries{{"a", 10}, {"c", 30}}},
           NullableMap{MapEntries{}},
-          NullableMap{MapEntries{{"c", 33}}}));
+          NullableMap{MapEntries{{"a", std::nullopt}, {"c", 33}}}));
 }
 
 TEST_F(StreamReaderTest, readsSelectedFlatMaps) {

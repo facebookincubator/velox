@@ -17,6 +17,7 @@
 #include "velox/dwio/common/InputStream.h"
 
 #include <folly/container/F14Map.h>
+#include <folly/stop_watch.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <cstdint>
@@ -141,12 +142,11 @@ void ReadFileInputStream::vread(
       size_t(0),
       [&](size_t acc, const auto& r) { return acc + r.length; });
   logRead(regions[0].offset, length, purpose);
-  const auto readStartTimeUs = getCurrentTimeMicro();
+  const folly::stop_watch<std::chrono::nanoseconds> readWatch;
   readFile_->preadv(regions, iobufs, fileIoContext_);
   if (stats_) {
     stats_->incRawBytesRead(length);
-    stats_->incTotalScanTimeNs(
-        (getCurrentTimeMicro() - readStartTimeUs) * 1'000);
+    stats_->incTotalScanTimeNs(readWatch.elapsed().count());
   }
 }
 

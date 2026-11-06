@@ -28,10 +28,10 @@
 #include "velox/dwio/nimble/index/IndexWriter.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
-#include "velox/dwio/nimble/velox/FieldWriter.h"
-#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
+#include "velox/dwio/nimble/writer/FieldWriter.h"
 #include "velox/dwio/nimble/writer/NimbleFileMetadata.h"
+#include "velox/dwio/nimble/writer/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/DecodedVector.h"

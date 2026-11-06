@@ -71,11 +71,11 @@
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
-#include "velox/dwio/nimble/velox/selective/ColumnReader.h"
-#include "velox/dwio/nimble/velox/selective/IntegerColumnReader.h"
-#include "velox/dwio/nimble/velox/selective/NimbleData.h"
-#include "velox/dwio/nimble/velox/selective/ReaderBase.h"
-#include "velox/dwio/nimble/velox/selective/RowSizeTracker.h"
+#include "velox/dwio/nimble/selective/ColumnReader.h"
+#include "velox/dwio/nimble/selective/IntegerColumnReader.h"
+#include "velox/dwio/nimble/selective/NimbleData.h"
+#include "velox/dwio/nimble/selective/ReaderBase.h"
+#include "velox/dwio/nimble/selective/RowSizeTracker.h"
 #include "velox/vector/FlatVector.h"
 
 #include <folly/init/Init.h>

@@ -29,7 +29,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -87,32 +87,24 @@ struct PairCoverage {
   uint64_t numFilesSeen{0};
 };
 
-/// Reader paths a written file is verified through. Nimble has two independent
-/// encoding-deserialization tables and the selective reader picks between them
-/// at runtime, so an encoding can round-trip on one path and fail on another.
-/// Adding ALP and Fsst to the writer's candidate set previously required
-/// repairing both legacy tables by hand (D114295784); covering all four here
-/// turns that class of gap into a fuzzer failure.
+/// Reader paths a written file is verified through. The batch reader and the
+/// selective reader consume encodings through different code, so an encoding
+/// can round-trip on one path and fail on another. Adding ALP and Fsst to the
+/// writer's candidate set previously required repairing the deserialization
+/// tables by hand (D114295784); covering both paths here turns that class of
+/// gap into a fuzzer failure.
 enum class ReaderPath {
-  /// nimble::BatchReader with the default legacy::EncodingFactory.
-  kLegacyFactory,
+  /// nimble::BatchReader.
+  kBatchReader,
 
-  /// nimble::BatchReader with the non-legacy EncodingFactory.
-  kDefaultFactory,
-
-  /// Selective reader, legacy::LegacyEncodingTrait visitor dispatch.
-  kSelectiveLegacyDispatch,
-
-  /// Selective reader, DefaultEncodingTrait visitor dispatch.
-  kSelectiveDefaultDispatch,
+  /// Selective reader.
+  kSelectiveReader,
 };
 
 /// Every reader path a file is checked through, in verification order.
-inline constexpr std::array<ReaderPath, 4> kAllReaderPaths = {
-    ReaderPath::kLegacyFactory,
-    ReaderPath::kDefaultFactory,
-    ReaderPath::kSelectiveLegacyDispatch,
-    ReaderPath::kSelectiveDefaultDispatch,
+inline constexpr std::array<ReaderPath, 2> kAllReaderPaths = {
+    ReaderPath::kBatchReader,
+    ReaderPath::kSelectiveReader,
 };
 
 std::string_view toString(ReaderPath readerPath);
@@ -319,6 +311,8 @@ class NimbleWriterFuzzer {
     // Counts indexed groups and stripes.
     uint64_t numStripeGroups{0};
     uint64_t numStripes{0};
+    // Counts files whose chunk stats span more than one stripe group.
+    uint64_t numMultiGroupFiles{0};
     // Counts present scalar-value streams, structural streams emitted for
     // complex types, and streams split into multiple chunks.
     uint64_t numScalarStreams{0};

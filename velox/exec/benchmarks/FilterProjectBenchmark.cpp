@@ -15,6 +15,7 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include <folly/stop_watch.h>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -254,10 +255,9 @@ class FilterProjectBenchmark : public VectorTestBase {
   }
 
   int64_t run(std::shared_ptr<const core::PlanNode> plan) {
-    auto start = getCurrentTimeMicro();
+    const folly::stop_watch<std::chrono::microseconds> watch;
     auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool_.get());
-    auto elapsedMicros = getCurrentTimeMicro() - start;
-    return elapsedMicros;
+    return watch.elapsed().count();
   }
 
   std::vector<std::unique_ptr<TestCase>> cases_;

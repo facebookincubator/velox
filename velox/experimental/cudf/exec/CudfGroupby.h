@@ -24,6 +24,10 @@
 #include <string_view>
 #include <utility>
 
+namespace facebook::velox::core {
+class QueryConfig;
+} // namespace facebook::velox::core
+
 namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
@@ -94,9 +98,23 @@ struct GroupbyAggregator {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) = 0;
 
+  // Finalizes the kIntermediate state column, which must hold exactly one
+  // already-merged state per grouping key. Does not regroup.
+  virtual std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) = 0;
+
   // Release request temporaries after aggregate() has enqueued their last use.
   virtual void releaseInput() {
     maskedValues_.reset();
+  }
+
+  // True when the state grows with the number of input rows rather than the
+  // number of groups, as array_agg's does. Such a node is not aggregated
+  // incrementally.
+  virtual bool stateGrowsWithInput() const {
+    return false;
   }
 
   virtual ~GroupbyAggregator() = default;
@@ -130,16 +148,18 @@ struct GroupbyAggregator {
   std::unique_ptr<cudf::column> maskedValues_;
 };
 
-// Factory functions for creating groupby aggregators from plan nodes.
-// 'maskChannels' carries the post-permutation mask column index per aggregate;
-// pass the raw-input mask channels for raw base/partial steps and an empty
-// vector for intermediate/final steps.
+/// Factory functions for creating groupby aggregators from plan nodes.
+/// 'maskChannels' carries the post-permutation mask column index per
+/// aggregate; pass the raw-input mask channels for raw base/partial steps and
+/// an empty vector for intermediate/final steps. 'queryConfig' supplies the
+/// session properties an aggregate's semantics depend on.
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants,
-    std::vector<std::optional<uint32_t>> const& maskChannels);
+    std::vector<std::optional<uint32_t>> const& maskChannels,
+    const core::QueryConfig& queryConfig);
 
 std::optional<std::vector<std::unique_ptr<StreamingGroupbyAggregator>>>
 toStreamingGroupbyAggregators(
@@ -199,6 +219,11 @@ class CudfGroupby : public CudfOperatorBase {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
+  // Converts the merged per-key states in 'bufferedResult_' to final output
+  // without regrouping. Keeps key columns as-is.
+  CudfVectorPtr finalizeGroupedStates(
+      std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators);
+
   CudfVectorPtr releaseAndResetBufferedResult();
 
   bool initializeStreamingGroupby(
@@ -235,7 +260,8 @@ class CudfGroupby : public CudfOperatorBase {
 
   const bool isPartialOutput_;
   const bool isSingleStep_;
-  // Incremental aggregation is disabled if companion aggregates are present.
+  // Incremental aggregation is off for companion aggregates and for an
+  // aggregate whose state grows with the input.
   bool incrementalAggregationEnabled_{true};
   bool streamingGroupbyEnabled_{false};
   const int64_t maxPartialAggregationMemoryUsage_;

@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1410" height="630" viewBox="0 0 940 420" role="img" aria-labelledby="title description">
+  <title id="title">Hybrid FlatMap two-stage projection</title>
+  <desc id="description">A client sends a map column and feature IDs. On the server, the Nimble Projector maps the requested keys to groups using the serialized schema and forwards the selected group streams as zero-copy slices. The client passes the same keys to its Nimble Deserializer, which decodes the selected groups, removes unrequested keys, and builds a Velox MapVector.</desc>
+  <defs>
+    <style>
+      text { font-family: 'Comic Sans MS', 'Segoe Print', cursive; fill: #172033; }
+      .heading { font-size: 21px; font-weight: 700; }
+      .label { font-size: 17px; font-weight: 700; }
+      .detail { font-size: 13px; }
+      .box { stroke-width: 2; }
+      .container { fill: none; stroke: #64748b; stroke-width: 2; stroke-dasharray: 8 6; }
+      .arrow { fill: none; stroke: #334155; stroke-width: 2.5; }
+    </style>
+    <filter id="sketch" x="-8%" y="-12%" width="116%" height="124%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="2" seed="7" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.4"/>
+    </filter>
+    <marker id="arrowhead" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#334155"/>
+    </marker>
+  </defs>
+
+  <rect width="940" height="420" fill="#ffffff"/>
+
+  <text x="255" y="38" text-anchor="middle" class="heading">Server</text>
+  <text x="750" y="38" text-anchor="middle" class="heading">Client</text>
+  <rect x="20" y="55" width="470" height="340" rx="14" class="container"/>
+  <rect x="580" y="55" width="340" height="340" rx="14" class="container"/>
+
+  <rect filter="url(#sketch)" x="45" y="80" width="420" height="115" rx="10" fill="#fafafa" stroke="#64748b" class="box"/>
+  <text x="255" y="104" text-anchor="middle" class="label">Hybrid FlatMap batch</text>
+  <rect filter="url(#sketch)" x="70" y="122" width="70" height="52" rx="8" fill="#d5e8d4" stroke="#82b366" class="box"/>
+  <text x="105" y="154" text-anchor="middle" class="label">G0</text>
+  <rect filter="url(#sketch)" x="155" y="122" width="70" height="52" rx="8" fill="#d5e8d4" stroke="#82b366" class="box"/>
+  <text x="190" y="154" text-anchor="middle" class="label">G1</text>
+  <text x="250" y="154" text-anchor="middle" class="label">...</text>
+  <rect filter="url(#sketch)" x="275" y="122" width="70" height="52" rx="8" fill="#d5e8d4" stroke="#82b366" class="box"/>
+  <text x="310" y="154" text-anchor="middle" class="label">GN</text>
+  <rect filter="url(#sketch)" x="360" y="122" width="88" height="52" rx="8" fill="#dae8fc" stroke="#6c8ebf" class="box"/>
+  <text x="404" y="154" text-anchor="middle" class="label">Default</text>
+
+  <rect filter="url(#sketch)" x="45" y="250" width="150" height="64" rx="8" fill="#fff2cc" stroke="#d6b656" class="box"/>
+  <text x="120" y="276" text-anchor="middle" class="label">Schema</text>
+  <text x="120" y="298" text-anchor="middle" class="detail">keys of every group</text>
+
+  <rect filter="url(#sketch)" x="245" y="245" width="220" height="74" rx="8" fill="#e1d5e7" stroke="#9673a6" class="box"/>
+  <text x="355" y="273" text-anchor="middle" class="label">Nimble Projector</text>
+  <text x="355" y="295" text-anchor="middle" class="detail">keys to groups,</text>
+  <text x="355" y="311" text-anchor="middle" class="detail">zero-copy group slices</text>
+
+  <path d="M330,195 L350,241" class="arrow" marker-end="url(#arrowhead)"/>
+  <text x="352" y="222" class="detail">selected groups</text>
+  <path d="M195,282 L241,282" class="arrow" marker-end="url(#arrowhead)"/>
+
+  <rect filter="url(#sketch)" x="610" y="82" width="280" height="62" rx="8" fill="#f8cecc" stroke="#b85450" class="box"/>
+  <text x="750" y="108" text-anchor="middle" class="label">Feature request</text>
+  <text x="750" y="130" text-anchor="middle" class="detail">map column and feature IDs</text>
+
+  <rect filter="url(#sketch)" x="610" y="232" width="280" height="74" rx="8" fill="#dae8fc" stroke="#6c8ebf" class="box"/>
+  <text x="750" y="260" text-anchor="middle" class="label">Nimble Deserializer</text>
+  <text x="750" y="282" text-anchor="middle" class="detail">decode selected groups,</text>
+  <text x="750" y="298" text-anchor="middle" class="detail">drop unrequested keys, transpose</text>
+
+  <rect filter="url(#sketch)" x="610" y="338" width="280" height="44" rx="8" fill="#d5e8d4" stroke="#82b366" class="box"/>
+  <text x="750" y="366" text-anchor="middle" class="label">Velox MapVector</text>
+
+  <path d="M610,128 L444,241" class="arrow" marker-end="url(#arrowhead)"/>
+  <text x="500" y="140" class="detail">feature IDs</text>
+  <path d="M465,290 L606,282" class="arrow" marker-end="url(#arrowhead)"/>
+  <text x="497" y="262" class="detail">streams</text>
+  <text x="497" y="278" class="detail">and schema</text>
+  <path d="M750,306 L750,334" class="arrow" marker-end="url(#arrowhead)"/>
+  <path d="M750,144 L750,228" class="arrow" marker-end="url(#arrowhead)"/>
+  <text x="758" y="192" class="detail">requested keys</text>
+</svg>

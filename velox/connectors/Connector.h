@@ -315,6 +315,13 @@ class DataSink {
   /// TODO maybe at some point we want to make it async.
   virtual void appendData(RowVectorPtr input) = 0;
 
+  /// Returns the number of table rows that 'input' changes, which the table
+  /// writer reports as its row count. A sink whose input encodes one logical
+  /// change as several rows overrides this to count the change once.
+  virtual vector_size_t numChangedRows(const RowVector& input) const {
+    return input.size();
+  }
+
   /// Called after all data has been added via possibly multiple calls to
   /// appendData() This function finishes the data procesing like sort all the
   /// added data and write them to the file writer. The finish might take long

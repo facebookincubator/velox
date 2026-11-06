@@ -311,13 +311,21 @@ char* TopNRowNumber::processRowWithinLimit<
     // row:
     // If row == top rank then top rank is unchanged.
     // If row < top rank then top rank += 1.
-    // If row > top, then rank += number of peers of top rank.
+    // If row > top, then rank = number of retained rows + 1.
     auto* topRow = topRows.top();
     auto result = comparator_.compare(decodedVectors_, index, topRow);
     if (result < 0) {
       partition.topRank += 1;
     } else if (result > 0) {
-      partition.topRank += partition.numTopRankRows();
+      // Every retained row precedes this row. Reject it before inserting an
+      // out-of-limit peer group, even when ties keep topRank below the limit.
+      if (topRows.size() >= limit_) {
+        return nullptr;
+      }
+      // Rows are discarded only when at least limit_ rows remain.
+      // Since fewer rows are retained here, none have been discarded, so
+      // topRows.size() + 1 is the exact rank.
+      partition.topRank = static_cast<int64_t>(topRows.size()) + 1;
     }
   }
   return data_->newRow();
@@ -366,13 +374,18 @@ char* TopNRowNumber::processRowExceedingLimit<
   } else {
     // The new top rank value depends on the number of peers of the top ranking
     // row. If the current row also has the same value as the new top ranking
-    // row then it has to be counted as a peer as well.
+    // row then it has to be counted as a peer as well. If the current row
+    // sorts after the new top ranking rows, it becomes the only top ranking
+    // row and every remaining row ranks before it.
     auto numNewTopRankRows = partition.numTopRankRows();
     topRow = topRows.top();
-    if (comparator_.compare(decodedVectors_, index, topRow) == 0) {
+    const auto result = comparator_.compare(decodedVectors_, index, topRow);
+    if (result == 0) {
       partition.topRank = topRows.size() - numNewTopRankRows + 1;
-    } else {
+    } else if (result < 0) {
       partition.topRank = topRows.size() - numNewTopRankRows + 2;
+    } else {
+      partition.topRank = topRows.size() + 1;
     }
   }
   return newRow;
@@ -424,6 +437,9 @@ void TopNRowNumber::processInputRow(vector_size_t index, TopRows& partition) {
   char* newRow = nullptr;
   if (partition.topRank < limit_) {
     newRow = processRowWithinLimit<TRank>(index, partition);
+    if (newRow == nullptr) {
+      return;
+    }
   } else {
     // The partition has now accumulated >= limit rows. So the new rows can be
     // rejected or replace existing rows based on the order_by values.
@@ -1154,14 +1170,21 @@ vector_size_t TopNRowNumber::TopRows::numTopRankRows() {
 bool TopNRowNumber::TopRows::isDuplicate(
     const std::vector<DecodedVector>& decodedVectors,
     vector_size_t index) {
-  const std::vector<char*, StlAllocator<char*>> partitionRowsVector =
-      PriorityQueueVector(rows);
-  for (const char* row : partitionRowsVector) {
-    if (rowComparator.compare(decodedVectors, index, row) == 0) {
-      return true;
+  const auto& partitionRowsVector = PriorityQueueVector(rows);
+  auto containsPeer = [&](auto& self, size_t rowIndex) -> bool {
+    if (rowIndex >= partitionRowsVector.size()) {
+      return false;
     }
-  }
-  return false;
+    const auto result = rowComparator.compare(
+        decodedVectors, index, partitionRowsVector[rowIndex]);
+    // Descendants cannot sort after their parent. If the input sorts after
+    // this row, the whole subtree can be skipped.
+    if (result >= 0) {
+      return result == 0;
+    }
+    return self(self, 2 * rowIndex + 1) || self(self, 2 * rowIndex + 2);
+  };
+  return containsPeer(containsPeer, 0);
 }
 
 } // namespace facebook::velox::exec

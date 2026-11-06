@@ -4,6 +4,10 @@ The UCX Exchange is a replacement for the inter-worker velox exchange that happe
 
 The velox UCX exchange implements all the necessary components to efficiently transfer cudf-vectors between tasks. At the core is a UCXX based transfer that directly copies the raw vector data from GPU memory to GPU memory.
 
+## Prerequisites
+
+The UCX exchange needs a system UCX built with CUDA support. On CentOS, `VELOX_ENABLE_CUDF=ON scripts/setup-centos-adapters.sh` installs UCX after CUDA, together with the other adapter dependencies. To install only CUDA and UCX, run `scripts/setup-centos-adapters.sh install_cuda install_ucx`.
+
 ## CMake Configuration
 
 When building for the first time, this error occurs:

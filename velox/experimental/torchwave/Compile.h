@@ -33,6 +33,10 @@
 
 namespace torch::wave {
 
+/// The macro device code names its kernel's block size by. A composite kernel
+/// defines it once per entry point; see Metadata::blockSize.
+inline constexpr std::string_view kBlockSizeMacro = "TW_BLOCK_SIZE";
+
 /// Specifies how the result of a compiled expression is delivered. If value
 /// is set, the result is written to memory as an element of the tensor
 /// identified by value. If variable is set instead, the result is kept as a
@@ -226,6 +230,18 @@ class CompileCtx {
 
   void emitBarrier();
 
+  /// Emits a __syncthreads() before code that uses the __shared__ variables
+  /// 'names' when an earlier call or loop head of the op being generated used
+  /// one of them and no block-wide barrier has been emitted since. Records
+  /// 'names' as in use.
+  void separateSharedScratch(const std::vector<std::string>& names);
+
+  /// Records that a block-wide barrier was just emitted, so no shared variable
+  /// is in use any more.
+  void noteBlockBarrier() {
+    sharedScratchInUse_.clear();
+  }
+
   /// Returns true if 'node' reads any input whose producer ran earlier in the
   /// same kernel (generatingOp_) without an intervening barrier.
   bool callNeedsBarrier(NodeCP node);
@@ -335,7 +351,7 @@ class CompileCtx {
   bool breakConcatOperandIntoOwnKernel(ValueCP operand, ValueCP concatOutput);
 
   /// The value a copy of 'concat's operand at 'occurrence' writes: a band of
-  /// the result, bound at run time by reserveConcatOutput. Creates the copy
+  /// the result, bound at run time by the concat layout. Creates the copy
   /// node that holds the source, and the value on the first grid variant to
   /// ask. Null when the result has no type to take a dtype from.
   nativert::Value* FOLLY_NULLABLE
@@ -452,7 +468,7 @@ class CompileCtx {
 
     /// A copy op of this operand's own moves it into its band. False both for
     /// an operand the group carves and for one the concat's own kernel writes
-    /// in place -- that one is bound to its band by reserveConcatOutput and is
+    /// in place -- that one is bound to its band by the concat layout and is
     /// neither a group member nor a copy.
     bool needsCopy{false};
 
@@ -708,10 +724,13 @@ class CompileCtx {
   // the first concat in graph order takes it and any later one copies.
   std::unordered_set<nativert::ValueId> carvedOperands_;
 
-  // The kernel op generated for the first concat-operand copy of each element
-  // type, so the rest are launches of that same op with their own parameters
-  // rather than another copy of the code. See emitConcatOperandCopy.
-  std::map<c10::ScalarType, KernelOperation*> concatCopyOp_;
+  // The kernel op generated for the first concat-operand copy of each pair of
+  // source and destination element types, so the rest are launches of that
+  // same op with their own parameters rather than another copy of the code.
+  // The source type is part of the key because the op reads its source with
+  // the element type it was generated for. See emitConcatOperandCopy.
+  std::map<std::pair<c10::ScalarType, c10::ScalarType>, KernelOperation*>
+      concatCopyOp_;
 
   // Why each wide-cat operand did or did not get a kernel op of its own,
   // tallied per concat result id under the timing trace. An operand left fused
@@ -740,10 +759,20 @@ class CompileCtx {
   // storage expression instead.
   std::unordered_map<size_t, std::string> elementwiseVarNames_;
 
-  // Output values of nodes placed before the last emitBarrier. A
-  // randomAccess input whose value is in this set does not need a new
-  // barrier because its producer is already separated by one.
+  // Output values of nodes placed before the last emitBarrier of the op being
+  // generated. A randomAccess input whose value is in this set does not need a
+  // new barrier because its producer is already separated by one.
   std::unordered_set<ValueCP> preBarrierValues_;
+
+  // Names of the __shared__ variables that device calls and loop heads of the
+  // op being generated have used since the last block-wide barrier. The calls
+  // of one op share these variables (size, rounded, counter, reduction temps),
+  // and a call's thread 0 rewrites them on entry while warps of the previous
+  // call may still be reading them in their loop condition.
+  std::unordered_set<std::string> sharedScratchInUse_;
+
+  // The __shared__ variable names the last makeCall passed to its function.
+  std::vector<std::string> lastCallSharedScratch_;
 
   // Maps variant subgraph copy nodes back to original graph nodes.
   std::unordered_map<NodeCP, NodeCP> variantToOriginal_;

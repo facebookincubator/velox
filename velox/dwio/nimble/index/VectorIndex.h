@@ -29,6 +29,7 @@
 #include <folly/Range.h>
 #include <folly/container/F14Map.h>
 
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
@@ -172,14 +173,51 @@ class VectorIndex {
     float score{0};
   };
 
+  /// Reports aggregate work performed by an IVF implementation, including
+  /// repeated native searches used to fill incomplete results.
+  struct IvfSearchStats {
+    /// Counts IVF partitions scanned across all queries.
+    size_t numPartitionsScanned{0};
+
+    /// Counts indexed-vector distance computations while scanning partitions.
+    /// Excludes distance computations used for coarse partition assignment.
+    size_t numDistanceComputations{0};
+
+    /// Counts updates to native TopK heaps across all queries.
+    size_t numHeapUpdates{0};
+  };
+
+  /// Reports work performed by one native search batch.
+  struct SearchStats {
+    /// Counts queries processed by the native search.
+    size_t numQueries{0};
+
+    /// Counts neighbors returned across all queries.
+    size_t numResults{0};
+
+    // TODO: Replace calling-thread CPU in both timings with CPU aggregated
+    // across FAISS workers for multi-threaded searches.
+    /// Measures coarse partition assignment for IVF searches. CPU time covers
+    /// the calling thread; wall time covers the full elapsed operation.
+    velox::CpuWallTiming partitionAssignmentTiming;
+
+    /// Measures native index search after coarse partition assignment. CPU time
+    /// covers the calling thread; wall time covers the full elapsed operation.
+    velox::CpuWallTiming searchTiming;
+
+    /// Contains IVF counters when the implementation reports them.
+    std::optional<IvfSearchStats> ivf;
+  };
+
   /// Stores batch results contiguously while preserving each query's
   /// score-ordered range.
   class SearchResults {
    public:
-    /// Constructs results from flat matches and per-query offsets.
+    /// Constructs results from flat matches, per-query offsets, and statistics.
     SearchResults(
         std::vector<SearchResult> results,
-        std::vector<size_t> resultOffsets);
+        std::vector<size_t> resultOffsets,
+        SearchStats stats);
 
     SearchResults(const SearchResults&) = delete;
     SearchResults& operator=(const SearchResults&) = delete;
@@ -198,12 +236,18 @@ class VectorIndex {
     folly::Range<const SearchResult*> results(size_t queryIndex) const&& =
         delete;
 
+    /// Returns native search statistics.
+    const SearchStats& stats() const;
+
    private:
     // Stores all matches in query order.
     std::vector<SearchResult> results_;
 
     // Locates each query's half-open range in results_.
     std::vector<size_t> resultOffsets_;
+
+    // Stores work performed by the native search.
+    SearchStats stats_;
   };
 
   /// Describes the logical vector index stored in a Nimble file.

@@ -178,6 +178,12 @@ class RowColumn {
    public:
     Stats() = default;
 
+    /// For a fixed-width column, 'fixedWidth' is the size of a cell and only
+    /// the null and non-null counts are tracked. min, max and sum bytes are
+    /// derived from them.
+    explicit Stats(int32_t fixedWidth) : fixedWidth_(fixedWidth) {}
+
+    /// Used by variable-width columns.
     void addCellSize(int32_t bytes) {
       if (UNLIKELY(nonNullCount_ == 0)) {
         minBytes_ = bytes;
@@ -190,21 +196,40 @@ class RowColumn {
       ++nonNullCount_;
     }
 
+    /// Used by fixed-width columns.
+    void addFixedWidthCell() {
+      VELOX_DCHECK_GE(fixedWidth_, 0);
+      ++nonNullCount_;
+    }
+
     void addNullCell() {
       ++nullCount_;
+    }
+
+    bool isFixedWidth() const {
+      return fixedWidth_ >= 0;
     }
 
     void removeOrUpdateCellStats(int32_t bytes, bool wasNull, bool setToNull);
 
     int32_t maxBytes() const {
+      if (isFixedWidth()) {
+        return nonNullCount_ == 0 ? 0 : fixedWidth_;
+      }
       return maxBytes_;
     }
 
     int32_t minBytes() const {
+      if (isFixedWidth()) {
+        return nonNullCount_ == 0 ? 0 : fixedWidth_;
+      }
       return minBytes_;
     }
 
     uint64_t sumBytes() const {
+      if (isFixedWidth()) {
+        return static_cast<uint64_t>(nonNullCount_) * fixedWidth_;
+      }
       return sumBytes_;
     }
 
@@ -212,7 +237,7 @@ class RowColumn {
       if (nonNullCount_ == 0) {
         return 0;
       }
-      return sumBytes_ / nonNullCount_;
+      return sumBytes() / nonNullCount_;
     }
 
     uint32_t nonNullCount() const {
@@ -239,7 +264,10 @@ class RowColumn {
     static Stats merge(const std::vector<Stats>& statsList);
 
    private:
-    // Aggregated stats for non-null rows of the column.
+    // Size of a cell for a fixed-width column, -1 otherwise.
+    int32_t fixedWidth_{-1};
+    // Aggregated stats for non-null rows of the column. Not maintained for
+    // fixed-width columns.
     int32_t minBytes_{0};
     int32_t maxBytes_{0};
     bool minMaxStatsValid_{true};
@@ -1619,6 +1647,9 @@ class RowContainer {
   // Aggregated column stats(e.g. min/max size) for non-aggregate
   // fields. Index aligns with 'rowColumns_'.
   std::vector<RowColumn::Stats> rowColumnsStats_;
+
+  // Resets 'rowColumnsStats_' to empty stats, one per column.
+  void initColumnStats();
   // Bit offset of the probed flag for a full or right outer join  payload. 0 if
   // not applicable.
   int32_t probedFlagOffset_ = 0;

@@ -661,6 +661,35 @@ TEST_F(TableEvolutionFuzzerTest, aggregationConfigQuotesIdentifiers) {
   EXPECT_TRUE(sawAggregate);
 }
 
+// The reference plan projects aggregate inputs through these expressions, and
+// the parser reads them back, so every column name has to be quoted. Unquoted,
+// "table" fails to parse and "1_ensemble_prediction" binds as the literal 1
+// aliased to "_ensemble_prediction".
+TEST_F(
+    TableEvolutionFuzzerTest,
+    aggregationBlockingProjectExpressionsQuoteIdentifiers) {
+  const auto schema = ROW(
+      {{"table", BIGINT()},
+       {"window", BIGINT()},
+       {"1_ensemble_prediction", BIGINT()}});
+  AggregationConfig aggregationConfig;
+  aggregationConfig.aggregates = {"max(\"window\")"};
+
+  const auto expressions =
+      TableEvolutionFuzzer::aggregationBlockingProjectExpressions(
+          schema, aggregationConfig);
+
+  EXPECT_THAT(
+      expressions,
+      testing::ElementsAre(
+          "\"table\"",
+          "if(\"window\" is null, cast(null as BIGINT), \"window\") as \"window\"",
+          "\"1_ensemble_prediction\""));
+  const auto plan =
+      PlanBuilder().tableScan(schema).project(expressions).planNode();
+  EXPECT_EQ(*plan->outputType(), *schema);
+}
+
 // A column is "used by aggregation" if it is a grouping key or appears in an
 // aggregate expression.
 TEST_F(TableEvolutionFuzzerTest, isColumnUsedByAggregation) {

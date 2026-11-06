@@ -22,44 +22,30 @@
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
-#include <cudf/utilities/memory_resource.hpp>
 #include <folly/Executor.h>
-#include <folly/Synchronized.h>
-#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/ScopeGuard.h>
 #include <folly/synchronization/EventCount.h>
-#include <gmock/gmock.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
-#include <algorithm>
 #include <chrono>
-#include <functional>
 #include <future>
-#include <limits>
 #include <memory>
 #include <sstream>
-#include <utility>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
-#include "velox/exec/OutputTransportRegistry.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/PortUtil.h"
-#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/experimental/ucx-exchange/tests/SinkDriverMock.h"
 #include "velox/experimental/ucx-exchange/tests/SourceDriverMock.h"
+#include "velox/experimental/ucx-exchange/tests/UcxExchangeTestBase.h"
 #include "velox/experimental/ucx-exchange/tests/UcxPartitionedOutputMock.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestData.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
-#include "velox/serializers/PrestoSerializer.h"
-#include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -142,130 +128,6 @@ struct ExchangeTestParamsPrinter {
         << (p.tableType == TableType::WIDE ? "Wide" : "Narrow");
     return oss.str();
   }
-};
-
-class UcxExchangeTestEnvironment : public testing::Environment {
- public:
-  void SetUp() override {
-    initializeExchangeState();
-  }
-
-  void TearDown() override {
-    destroyExchangeState();
-  }
-
-  static const std::shared_ptr<UcxOutputQueueManager>& queueManager() {
-    return queueManager_;
-  }
-
-  static std::string nextTaskPrefix() {
-    return "t" + std::to_string(testCounter_.fetch_add(1)) + "_";
-  }
-
-  static int splitUrlPort() {
-    return communicatorPort_ - kSplitUrlPortOffset;
-  }
-
- private:
-  static void initializeExchangeState() {
-    VLOG(0) << "setting up UCX exchange test environment";
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-
-    // UcxExchangeSource derives the UCX port as the split URL's port + 3, and
-    // remoteSplit() advertises splitUrlPort() to match, so the offset must stay
-    // below the chosen port.
-    const auto freePort = exec::test::getFreePort();
-    ASSERT_GT(freePort, kSplitUrlPortOffset);
-    ASSERT_LE(freePort, std::numeric_limits<uint16_t>::max());
-    communicatorPort_ = static_cast<uint16_t>(freePort);
-
-    queueManager_ = UcxOutputQueueManager::getInstanceRef();
-    ContinueFuture future;
-    communicator_ = facebook::velox::ucx_exchange::Communicator::initAndGet(
-        communicatorPort_, std::string(kUnusedCoordinatorUrl), &future);
-    if (communicator_) {
-      communicatorThread_ = std::make_shared<std::thread>(
-          &facebook::velox::ucx_exchange::Communicator::run,
-          communicator_.get());
-    } else {
-      ADD_FAILURE() << "Communicator initialization failed";
-    }
-    future.wait();
-  }
-
-  static void destroyExchangeState() {
-    if (communicator_ == nullptr) {
-      return;
-    }
-    communicator_->stop();
-    if (communicatorThread_ != nullptr && communicatorThread_->joinable()) {
-      communicatorThread_->join();
-    }
-    communicatorThread_.reset();
-    communicator_.reset();
-  }
-
-  // UcxExchangeSource computes the UCX port as the split URL's port + 3
-  // (UcxExchangeSource.cpp), so remoteSplit() advertises this much below the
-  // communicator's port for the round trip to land back on it.
-  static constexpr int kSplitUrlPortOffset = 3;
-
-  static constexpr auto kUnusedCoordinatorUrl =
-      std::string_view("http://localhost:12345/bla");
-
-  // Chosen once per process rather than hardcoded. The communicator opens a
-  // listener on this port without address reuse, so two runs of this binary in
-  // quick succession fail the second with "bind(0.0.0.0:21346) failed: Address
-  // already in use" while the first port is still in TIME_WAIT.
-  static uint16_t communicatorPort_;
-
-  static std::shared_ptr<UcxOutputQueueManager> queueManager_;
-  static std::shared_ptr<std::thread> communicatorThread_;
-  static std::shared_ptr<Communicator> communicator_;
-  static std::atomic<uint32_t> testCounter_;
-};
-
-[[maybe_unused]] const auto* kUcxExchangeTestEnvironment =
-    testing::AddGlobalTestEnvironment(new UcxExchangeTestEnvironment);
-
-class UcxExchangeTestBase : public testing::Test {
- protected:
-  // Generate a unique task ID prefix for this test run to avoid collisions
-  // between parametrized tests
-  std::string getUniqueTaskPrefix() {
-    return UcxExchangeTestEnvironment::nextTaskPrefix();
-  }
-
-  const std::shared_ptr<UcxOutputQueueManager>& queueManager() {
-    return UcxExchangeTestEnvironment::queueManager();
-  }
-
-  // Get the row type based on the table type.
-  facebook::velox::RowTypePtr getRowType(TableType tableType) {
-    if (tableType == TableType::WIDE) {
-      return WideTestTable::kRowType;
-    }
-    return UcxTestData::kTestRowType;
-  }
-
-  void SetUp() override {
-    VLOG(0) << "creating pool";
-    pool_ = facebook::velox::memory::memoryManager()->addLeafPool(
-        "UcxTestMemoryPool");
-  }
-
-  exec::Split remoteSplit(std::string_view taskId, int partitionId) {
-    std::string remoteUrl = fmt::format(
-        "http://127.0.0.1:{}/v1/task/{}/results/{}",
-        UcxExchangeTestEnvironment::splitUrlPort(),
-        taskId,
-        partitionId);
-    return exec::Split(
-        std::make_shared<facebook::velox::exec::RemoteConnectorSplit>(
-            remoteUrl));
-  }
-
-  std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
 };
 
 class UcxExchangeTest : public UcxExchangeTestBase,
@@ -1561,16 +1423,15 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
   }
 }
 
-// Regression test: aborting a source task while UCXX tagRecv requests are
-// in-flight must not crash.  Before the deferred-request-cleanup fix,
-// UcxExchangeSource::cleanUp() would destroy the request (and its GPU
-// buffer) while UCX was still using it, causing cudaErrorIllegalAddress in
-// ucp_mem_type_unpack.  The fix moves outstanding requests to
-// Communicator::deferredRequests_ so buffers stay alive until UCX finishes.
-TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
+// Smoke test: aborting a source task after starting a UCX exchange must not
+// crash or leave the sink driver hanging.
+TEST_F(UcxExchangeFocusedTest, sourceTaskAbortDoesNotCrashOrHang) {
   // Ensure intra-node is disabled so we exercise the UCXX path (tagRecv).
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
   config.intraNodeExchange = false;
 
   const std::string taskPrefix = getUniqueTaskPrefix();
@@ -1579,7 +1440,7 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
   const int numPartitions = 1;
   const int partitionId = 0;
   const int numDrivers = 1;
-  // Enough data to keep UCXX transfers actively in-flight when we abort.
+  // Generate data for the exchange before aborting the source.
   const int numChunks = 50;
   const int numRowsPerChunk = 100000;
 
@@ -1611,18 +1472,19 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
   sourceMock->run();
   sinkDriver->run();
 
-  // 4. Wait for UCXX transfers to be actively in-flight.
+  // 4. Allow the exchange to start before aborting.
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // 5. Abort the source task while transfers are in-flight.
-  //    This triggers UcxExchangeServer::close() which cancels tagSend,
-  //    and eventually UcxExchangeSource::cleanUp() which must defer
-  //    the request (with its GPU buffer) to Communicator::deferredRequests_.
+  // 5. Stop the mock publisher, which is not owned by the task, so it cannot
+  //    enqueue into a terminated output queue after abort.
+  sourceMock->requestStop();
+  sourceMock->joinThreads();
+
   srcTask->requestAbort();
   queueManager()->removeTask(srcTaskId);
 
   // 6. Wait for the sink driver to complete (it should detect the abort
-  //    and finish, not crash with cudaErrorIllegalAddress).
+  //    and finish without crashing).
   auto future =
       std::async(std::launch::async, [&]() { sinkDriver->joinThreads(); });
   auto status = future.wait_for(std::chrono::seconds(15));
@@ -1631,26 +1493,13 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
     sinkTask->requestAbort();
     future.wait();
     FAIL() << "Sink driver did not complete within 15s after source abort"
-           << " — possible hang in UCXX request cleanup";
+           << " — possible exchange abort hang";
   }
 
-  // 7. Join source mock threads.
-  sourceMock->joinThreads();
-
-  // 8. Allow Communicator's event loop to sweep deferred requests.
+  // 7. Allow the Communicator's event loop to run before teardown.
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-  // If we reach here without crashing, the deferred cleanup is working.
-  VLOG(0) << "deferredRequestCleanupOnTaskAbort: completed without crash";
-
-  config.intraNodeExchange = origIntraNode;
+  VLOG(0) << "sourceTaskAbortDoesNotCrashOrHang: completed without crash";
 }
-
-std::shared_ptr<UcxOutputQueueManager>
-    UcxExchangeTestEnvironment::queueManager_;
-std::shared_ptr<std::thread> UcxExchangeTestEnvironment::communicatorThread_;
-std::shared_ptr<Communicator> UcxExchangeTestEnvironment::communicator_;
-std::atomic<uint32_t> UcxExchangeTestEnvironment::testCounter_{0};
-uint16_t UcxExchangeTestEnvironment::communicatorPort_{0};
 
 } // namespace facebook::velox::ucx_exchange

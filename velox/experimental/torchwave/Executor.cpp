@@ -17,6 +17,9 @@
 #include "velox/experimental/torchwave/Executor.h"
 
 #include "velox/experimental/torchwave/AllocGroup.h"
+#include "velox/experimental/torchwave/GroupAlloc.h"
+#include "velox/experimental/torchwave/StepProgram.h"
+#include "velox/experimental/torchwave/StepSupport.h"
 
 #include <ATen/ATen.h>
 #include <c10/core/CachingDeviceAllocator.h>
@@ -32,7 +35,6 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
-#include <unordered_set>
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/Registry.h"
@@ -175,24 +177,117 @@ double tscTicksPerMicro() {
 }
 
 namespace {
+// Ticks, not microseconds: most allocator calls take under a microsecond, and
+// rounding each one down undercounted them.
 // NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
-thread_local int64_t tAllocCallUs = 0;
+thread_local int64_t tAllocCallTicks = 0;
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local SetupCounters tSetupCounters;
+// Which setup phases are open on this thread, one bit per SetupPhase, so a
+// nested phase of the same kind does not count its time twice.
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local uint32_t tOpenPhases = 0;
+
+bool setupTiming() {
+  return WaveConfig::get().printTiming ||
+      (WaveConfig::get().trace & WaveConfig::kTiming);
+}
 } // namespace
 
 int64_t threadAllocCallUs() {
-  return tAllocCallUs;
+  return static_cast<int64_t>(
+      static_cast<double>(tAllocCallTicks) / tscTicksPerMicro());
 }
 
 ScopedAllocCall::ScopedAllocCall()
-    : timing_(
-          WaveConfig::get().printTiming ||
-          (WaveConfig::get().trace & WaveConfig::kTiming)),
+    : timing_(setupTiming()),
       start_(timing_ ? folly::hardware_timestamp() : 0) {}
 
 ScopedAllocCall::~ScopedAllocCall() {
   if (timing_) {
-    tAllocCallUs += static_cast<int64_t>(
-        (folly::hardware_timestamp() - start_) / tscTicksPerMicro());
+    tAllocCallTicks +=
+        static_cast<int64_t>(folly::hardware_timestamp() - start_);
+  }
+}
+
+SetupCounters SetupCounters::operator-(const SetupCounters& other) const {
+  SetupCounters d;
+  d.reserveTicks = reserveTicks - other.reserveTicks;
+  d.reserveCalls = reserveCalls - other.reserveCalls;
+  d.sizeExprTicks = sizeExprTicks - other.sizeExprTicks;
+  d.sizeExprCalls = sizeExprCalls - other.sizeExprCalls;
+  d.tensorTicks = tensorTicks - other.tensorTicks;
+  d.tensorCalls = tensorCalls - other.tensorCalls;
+  d.viewTicks = viewTicks - other.viewTicks;
+  d.viewCalls = viewCalls - other.viewCalls;
+  d.carveTicks = carveTicks - other.carveTicks;
+  d.carveCalls = carveCalls - other.carveCalls;
+  d.frameWrites = frameWrites - other.frameWrites;
+  d.fills = fills - other.fills;
+  return d;
+}
+
+SetupCounters& SetupCounters::operator+=(const SetupCounters& other) {
+  reserveTicks += other.reserveTicks;
+  reserveCalls += other.reserveCalls;
+  sizeExprTicks += other.sizeExprTicks;
+  sizeExprCalls += other.sizeExprCalls;
+  tensorTicks += other.tensorTicks;
+  tensorCalls += other.tensorCalls;
+  viewTicks += other.viewTicks;
+  viewCalls += other.viewCalls;
+  carveTicks += other.carveTicks;
+  carveCalls += other.carveCalls;
+  frameWrites += other.frameWrites;
+  fills += other.fills;
+  return *this;
+}
+
+SetupCounters& threadSetupCounters() {
+  return tSetupCounters;
+}
+
+namespace {
+std::pair<int64_t SetupCounters::*, int64_t SetupCounters::*> phaseFields(
+    SetupPhase phase) {
+  switch (phase) {
+    case SetupPhase::kReserve:
+      return {&SetupCounters::reserveTicks, &SetupCounters::reserveCalls};
+    case SetupPhase::kSizeExpr:
+      return {&SetupCounters::sizeExprTicks, &SetupCounters::sizeExprCalls};
+    case SetupPhase::kTensor:
+      return {&SetupCounters::tensorTicks, &SetupCounters::tensorCalls};
+    case SetupPhase::kView:
+      return {&SetupCounters::viewTicks, &SetupCounters::viewCalls};
+    case SetupPhase::kCarve:
+      return {&SetupCounters::carveTicks, &SetupCounters::carveCalls};
+  }
+  return {&SetupCounters::viewTicks, &SetupCounters::viewCalls};
+}
+} // namespace
+
+ScopedSetupPhase::ScopedSetupPhase(SetupPhase phase) : phase_(phase) {
+  ++(tSetupCounters.*(phaseFields(phase).second));
+  const uint32_t bit = 1u << static_cast<uint32_t>(phase);
+  outermost_ = (tOpenPhases & bit) == 0;
+  if (outermost_) {
+    tOpenPhases |= bit;
+    if (setupTiming()) {
+      start_ = folly::hardware_timestamp();
+      allocTicksBefore_ = tAllocCallTicks;
+    }
+  }
+}
+
+ScopedSetupPhase::~ScopedSetupPhase() {
+  if (!outermost_) {
+    return;
+  }
+  tOpenPhases &= ~(1u << static_cast<uint32_t>(phase_));
+  if (start_ != 0) {
+    tSetupCounters.*(phaseFields(phase_).first) +=
+        static_cast<int64_t>(folly::hardware_timestamp() - start_) -
+        (tAllocCallTicks - allocTicksBefore_);
   }
 }
 
@@ -288,6 +383,20 @@ StepEvents& newStepEvents(ExecutionState& state, int32_t seq, int32_t stepIdx) {
   StepEvents events;
   events.sequenceNumber = seq;
   events.stepIdx = stepIdx;
+  if (WaveConfig::get().completionCounters) {
+    if (state.completionHost == nullptr) {
+      void* device = nullptr;
+      auto* host = static_cast<volatile int64_t*>(
+          facebook::velox::wave::allocateHostMapped(
+              2 * sizeof(int64_t), &device));
+      state.completionHost.reset(host, [](volatile int64_t* p) {
+        facebook::velox::wave::freeHostMapped(const_cast<int64_t*>(p));
+      });
+      state.completionDevice = device;
+    }
+    events.ticket = ++state.lastTicket;
+    events.counters = state.completionDevice;
+  }
   events.waveDone = pool->get();
   events.standaloneDone = pool->get();
   if (doEventTiming) {
@@ -296,6 +405,44 @@ StepEvents& newStepEvents(ExecutionState& state, int32_t seq, int32_t stepIdx) {
   }
   state.stepEvents.push_back(std::move(events));
   return state.stepEvents.back();
+}
+
+void recordStepDone(
+    StepEvents& events,
+    facebook::velox::wave::Stream& stream,
+    bool wave) {
+  (wave ? events.waveDone : events.standaloneDone)->record(stream);
+  (wave ? events.usesWave : events.usesTorch) = true;
+  if (events.counters != nullptr) {
+    stream.writeValue64(
+        static_cast<int64_t*>(events.counters) + (wave ? 0 : 1),
+        static_cast<uint64_t>(events.ticket));
+  }
+}
+
+bool stepDone(const ExecutionState& state, const StepEvents& events) {
+  if (events.counters != nullptr) {
+    const auto* counters = state.completionHost.get();
+    return (!events.usesWave ||
+            __atomic_load_n(&counters[0], __ATOMIC_ACQUIRE) >= events.ticket) &&
+        (!events.usesTorch ||
+         __atomic_load_n(&counters[1], __ATOMIC_ACQUIRE) >= events.ticket);
+  }
+  auto pending = [](const EventP& event) {
+    return event && event->recorded() && !event->query();
+  };
+  return !pending(events.waveDone) && !pending(events.standaloneDone);
+}
+
+void waitOnce(
+    facebook::velox::wave::Event* event,
+    facebook::velox::wave::Stream& stream,
+    facebook::velox::wave::Event*& waitedFor) {
+  if (WaveConfig::get().skipRepeatedWaits && event == waitedFor) {
+    return;
+  }
+  event->wait(stream);
+  waitedFor = event;
 }
 
 void releaseStepEvents(ExecutionState& state) {
@@ -319,8 +466,10 @@ void releaseStepEvents(ExecutionState& state) {
   give(state.timelineBase);
   state.lastWaveDone = nullptr;
   state.lastStandaloneDone = nullptr;
+  state.torchWaitedFor = nullptr;
+  state.waveWaitedFor = nullptr;
   state.syncedCursor = 0;
-  state.returnedAtStep.clear();
+  state.clearReturned();
   state.executedSteps = 0;
 }
 
@@ -513,6 +662,12 @@ void executeNode(
     LOG(ERROR) << "Error in node: " << standaloneToString(node);
     throw;
   }
+  // The kernel wrote its outputs into the frame itself.
+  for (auto* output : node->outputs()) {
+    if (output != nullptr) {
+      publishFromFrame(frame, output->id());
+    }
+  }
   // Trace requested output (produced) values after the op runs.
   if (traceState != nullptr && !traceState->empty()) {
     std::vector<nativert::ValueId> ids;
@@ -602,6 +757,9 @@ void runStandalones(
       ++state.numStandalonesRun;
       executeNode(
           actualNode, kernelIt->second, *state.frame, &state.traceState);
+    }
+    if (!metadataOnly && WaveConfig::get().serializeStandalones) {
+      syncTorchDefaultStream();
     }
     if (timing) {
       // Per-op GPU attribution needs a sync after each op, which serializes the
@@ -767,10 +925,14 @@ std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::getFrame() {
   return framePool_->get();
 }
 
+void WaveGraphExecutor::resetFrame(nativert::ExecutionFrame& frame) {
+  frame.clearNonPersistentValues();
+  ++frameGeneration_;
+}
+
 void WaveGraphExecutor::returnFrame(
     std::unique_ptr<nativert::ExecutionFrame> frame) {
-  frame->clearNonPersistentValues();
-  ++frameGeneration_;
+  resetFrame(*frame);
   framePool_->put(std::move(frame));
 }
 
@@ -846,13 +1008,22 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
   // move outputs whose graph-level default is Constant(None) -- in that case
   // the result slot stays None even though the frame has a computed tensor
   // (e.g. dynamic-shape outputs computed on device). The loop below copies
-  // these non-moved outputs from the frame into the results.
+  // these non-moved outputs from the frame into the results. The results are
+  // indexed like userOutputs(), which also holds the graph's constant outputs;
+  // the output node lists only the values, so the k-th value of userOutputs()
+  // is outputValues[k].
   auto results = frame.tryMoveUserOutputs();
   auto outputValues = graph_.outputs();
-  for (size_t i = 0; i < results.size() && i < outputValues.size(); ++i) {
-    TORCH_CHECK(i < results.size() && i < outputValues.size());
+  const auto& userOutputs = graph_.userOutputs();
+  for (size_t i = 0, k = 0;
+       i < results.size() && i < userOutputs.size() && k < outputValues.size();
+       ++i) {
+    if (!std::holds_alternative<nativert::Value*>(userOutputs[i])) {
+      continue;
+    }
+    const auto* output = outputValues.at(k++);
     if (results.at(i).isNone()) {
-      const auto& iv = frame.getIValue(outputValues.at(i)->id());
+      const auto& iv = frame.getIValue(output->id());
       if (!iv.isNone()) {
         results.at(i) = iv;
       }
@@ -863,11 +1034,8 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
   // metadata-only view (e.g. view(x, [-1]) of an already-contiguous tensor):
   // wave aliases such a view to its input and never writes the view's own
   // value, so a graph-output view stays None even though its input tensor is
-  // present. The loop above cannot reach these when userOutputs() is longer
-  // than the output-node operand list (graph_.outputs()), so recover them here
-  // directly from the flattened user-output list, materializing the view from
-  // its input.
-  const auto& userOutputs = graph_.userOutputs();
+  // present. Recover them from the flattened user-output list, materializing
+  // the view from its input.
   for (size_t i = 0; i < results.size() && i < userOutputs.size(); ++i) {
     if (!results.at(i).isNone()) {
       continue;
@@ -920,6 +1088,10 @@ void freeFrameValue(
     nativert::ValueId id,
     facebook::velox::wave::Stream* stream,
     ExecutionState* state) {
+  unpublish(id);
+  if (state != nullptr && state->tableOnlyActive) {
+    releaseOwner(*state, id);
+  }
   // A released value leaves an empty frame slot, which is indistinguishable
   // from one that was never produced. Record it so the coverage report can
   // tell the two apart.
@@ -928,9 +1100,9 @@ void freeFrameValue(
   }
   if (allocTraceEnabled()) {
     const auto& iv = frame.getIValue(id);
-    // Only a solely-owned CUDA storage is donatable: another frame slot or a
-    // view holding the same storage means the buffer does not actually become
-    // free here. Same ownership test the debugSingleOps poison uses below.
+    // Only a solely-owned CUDA storage becomes free here: another frame slot or
+    // a view holding the same storage keeps the buffer alive. Same ownership
+    // test the debugSingleOps poison uses below.
     if (iv.isTensor()) {
       const at::Tensor& t = iv.toTensor();
       if (t.defined() && t.has_storage() && t.is_cuda() && t.use_count() == 1 &&
@@ -971,130 +1143,7 @@ void freeFrameValue(
       }
     }
   }
-  // Offer the buffer to the donation pool before clearing the slot: the slot
-  // goes either way, and the pool only accepts storage nothing else references.
-  if (state != nullptr) {
-    const auto& iv = frame.getIValue(id);
-    if (iv.isTensor()) {
-      donateFreedTensor(*state, iv.toTensor());
-    }
-  }
   frame.setIValue(id, c10::IValue());
-}
-
-// Pool key: byte size in the high bits, dtype in the low bits. Buffers only
-// swap between values of the same width, which is what makes the hit path a
-// non-reallocating resize_.
-int64_t donationKey(int64_t bytes, c10::ScalarType dtype) {
-  return (bytes << 8) | static_cast<int64_t>(dtype);
-}
-
-// Donation hands a freed buffer to the next same-size request, which assumes
-// one allocation per output. Allocation groups carve many outputs out of one
-// buffer, so a group's slots are never solely-owned storages to begin with and
-// the pool would only add bookkeeping to a path built to avoid it.
-bool donationActive() {
-  return WaveConfig::get().donateBuffers && !allocGroupEnabled();
-}
-
-bool donateFreedTensor(ExecutionState& state, const at::Tensor& tensor) {
-  if (!donationActive()) {
-    return false;
-  }
-  // Sole ownership is the whole safety argument on the donor side: another
-  // frame slot or a view over the same storage means someone still reads it.
-  if (!tensor.defined() || !tensor.has_storage() || !tensor.is_cuda() ||
-      tensor.use_count() != 1 || tensor.storage().use_count() != 1) {
-    return false;
-  }
-  const auto bytes = static_cast<int64_t>(tensor.storage().nbytes());
-  if (bytes <= 0) {
-    return false;
-  }
-  const uint64_t start = folly::hardware_timestamp();
-  state.donatable[donationKey(bytes, tensor.scalar_type())].push_back(tensor);
-  state.donatableBytes += bytes;
-  state.donationUs += static_cast<int64_t>(
-      static_cast<double>(folly::hardware_timestamp() - start) /
-      tscTicksPerMicro());
-  return true;
-}
-
-at::Tensor takeDonatedTensor(
-    ExecutionState& state,
-    int64_t bytes,
-    c10::ScalarType dtype,
-    c10::IntArrayRef dims) {
-  // An empty pool is the common case on the first steps of a run; keep that
-  // path down to one branch.
-  if (!donationActive() || bytes <= 0 || state.donatable.empty()) {
-    return {};
-  }
-  const uint64_t start = folly::hardware_timestamp();
-  at::Tensor result;
-  // Keyed by byte size AND dtype so a hit is a single resize_ that cannot
-  // reallocate (same element count, same width), rather than rebuilding a
-  // tensor over the storage -- two dispatcher calls would cost more than the
-  // allocation being avoided.
-  auto it = state.donatable.find(donationKey(bytes, dtype));
-  if (it != state.donatable.end() && !it->second.empty()) {
-    result = std::move(it->second.back());
-    it->second.pop_back();
-    if (it->second.empty()) {
-      state.donatable.erase(it);
-    }
-    state.donatableBytes -= bytes;
-    if (result.sizes() != dims) {
-      result.resize_(dims);
-    }
-    ++state.donationHits;
-  } else {
-    ++state.donationMisses;
-  }
-  state.donationUs += static_cast<int64_t>(
-      static_cast<double>(folly::hardware_timestamp() - start) /
-      tscTicksPerMicro());
-  return result;
-}
-
-void evictDonatable(ExecutionState& state, int64_t limitBytes) {
-  if (state.donatableBytes <= limitBytes || state.donatable.empty()) {
-    return;
-  }
-  const uint64_t start = folly::hardware_timestamp();
-  // Shed the big buffers first: they are what the ceiling is about, and one
-  // pass is enough. Take the largest size present and drop everything at least
-  // half that big, rather than sorting the whole table on every miss.
-  while (state.donatableBytes > limitBytes && !state.donatable.empty()) {
-    int64_t largest = 0;
-    for (const auto& [key, buffers] : state.donatable) {
-      largest = std::max(largest, key >> 8);
-    }
-    const int64_t threshold = largest / 2;
-    for (auto it = state.donatable.begin(); it != state.donatable.end();) {
-      const int64_t sizeBytes = it->first >> 8;
-      if (sizeBytes < threshold) {
-        ++it;
-        continue;
-      }
-      state.donatableBytes -=
-          sizeBytes * static_cast<int64_t>(it->second.size());
-      state.donationEvictions += static_cast<int64_t>(it->second.size());
-      it = state.donatable.erase(it);
-    }
-    // A threshold of 0 would leave the table untouched and spin.
-    if (threshold == 0) {
-      break;
-    }
-  }
-  state.donationUs += static_cast<int64_t>(
-      static_cast<double>(folly::hardware_timestamp() - start) /
-      tscTicksPerMicro());
-}
-
-void clearDonationPool(ExecutionState& state) {
-  state.donatable.clear();
-  state.donatableBytes = 0;
 }
 
 // If a reference frame is loaded, compares the current contents of frame value
@@ -1120,7 +1169,7 @@ void checkValueBeforeFree(
   if (it == ref->end() || !it->second.isTensor()) {
     return;
   }
-  const auto& iv = frame.getIValue(id);
+  const auto iv = debugValue(frame, id);
   std::optional<at::Tensor> actual = iv.isTensor()
       ? std::optional<at::Tensor>(iv.toTensor())
       : scalarLikeToTensor(iv);
@@ -1286,13 +1335,10 @@ void sampleRunAhead(ExecutionState& state) {
   // Walk back from the newest step and stop at the first one the device has
   // finished: steps complete in order, so the run of incomplete ones at the end
   // is the depth. query() does not block.
-  auto inFlight = [](const EventP& event) {
-    return event && event->recorded() && !event->query();
-  };
   int32_t depth = 0;
   for (auto it = state.stepEvents.rbegin(); it != state.stepEvents.rend();
        ++it) {
-    if (!inFlight(it->waveDone) && !inFlight(it->standaloneDone)) {
+    if (stepDone(state, *it)) {
       break;
     }
     ++depth;
@@ -1464,14 +1510,11 @@ void advanceCompletedStages(ExecutionState& state) {
   // every step of the run on every launch, which is quadratic in the step
   // count -- a few thousand cudaEventQuery calls per run on the ROO graph.
   auto& frame = *state.frame;
-  auto pending = [](const EventP& event) {
-    return event && event->recorded() && !event->query();
-  };
   while (state.syncedCursor < state.stepEvents.size()) {
     // The loop condition above bounds syncedCursor.
     // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
     const auto& events = state.stepEvents[state.syncedCursor];
-    if (pending(events.waveDone) || pending(events.standaloneDone)) {
+    if (!stepDone(state, events)) {
       return;
     }
     auto* svPtr = findStepVectors(state, events.sequenceNumber, events.stepIdx);
@@ -1512,6 +1555,90 @@ void advanceCompletedStages(ExecutionState& state) {
   }
 }
 
+namespace {
+
+// Builds every node's step programs for 'state': the launches of all nodes
+// first, so the second pass knows every value a transfer can bring back.
+void bindGraph(ExecutionState& state, WaveGraph& waveGraph) {
+  if (allocGroupEnabled()) {
+    waveGraph.ensureAllocGroupPlans(
+        [&] { installGraphAllocGroupPlans(waveGraph, *state.valueTypes); });
+  }
+  folly::F14FastSet<int32_t> returned;
+  for (const auto& node : waveGraph.nodes()) {
+    if (auto* invocation = node->kernels()) {
+      invocation->bindLaunches(state, returned);
+    }
+  }
+  // The values some sizing reads the elements of get a host copy in the step
+  // that produces them, and count as returned there.
+  folly::F14FastSet<int32_t> hostIds;
+  for (const auto& steps : state.stepVectors) {
+    for (const auto& sv : steps) {
+      for (const auto& data : sv.kernels) {
+        for (const auto& desc : data.actualOutputDescs) {
+          for (auto id : hostTensorIds(desc, data.invocation->bindings())) {
+            hostIds.insert(id);
+          }
+        }
+      }
+    }
+  }
+  for (auto& steps : state.stepVectors) {
+    for (auto& sv : steps) {
+      sv.hostCopies.clear();
+      for (const auto& data : sv.kernels) {
+        for (auto id : data.actualOutputs) {
+          if (hostIds.erase(id) != 0) {
+            sv.hostCopies.push_back({.id = id});
+            returned.insert(id);
+          }
+        }
+      }
+    }
+  }
+  TORCH_CHECK(
+      hostIds.empty(),
+      "A value sizing reads the elements of has no producing kernel launch");
+  for (const auto& node : waveGraph.nodes()) {
+    if (auto* invocation = node->kernels()) {
+      invocation->bindPrograms(state, returned);
+    }
+  }
+  bindTableOnly(state, waveGraph);
+  folly::F14FastMap<int32_t, std::vector<int64_t>> producersOf;
+  for (size_t node = 0; node < state.stepVectors.size(); ++node) {
+    const auto& steps = state.stepVectors[node];
+    for (size_t step = 0; step < steps.size(); ++step) {
+      const auto key =
+          stepKey(static_cast<int32_t>(node), static_cast<int32_t>(step));
+      for (const auto& data : steps[step].kernels) {
+        for (auto id : data.returnValues) {
+          producersOf[id].push_back(key);
+        }
+      }
+      for (const auto& copy : steps[step].hostCopies) {
+        producersOf[copy.id].push_back(key);
+      }
+    }
+  }
+  for (auto& steps : state.stepVectors) {
+    for (auto& sv : steps) {
+      if (sv.program != nullptr) {
+        packStepCode(
+            *sv.program,
+            state.tableOnly,
+            *state.valueTypes,
+            producersOf,
+            sv.readIds);
+      }
+    }
+  }
+  state.bound = true;
+}
+
+} // namespace
+
 void WaveGraphExecutor::executeWave(
     nativert::ExecutionFrame& frame,
     WaveGraph& waveGraph) {
@@ -1541,10 +1668,14 @@ void WaveGraphExecutor::executeWave(
   // Verify the assumption here and fail loudly rather than produce silently
   // wrong results.
   if (WaveConfig::get().inputContiguous) {
-    for (const auto* value : graph_.values()) {
-      if (value == nullptr || value->producer() != nullptr) {
-        continue;
+    folly::call_once(producerlessOnce_, [&] {
+      for (const auto* value : graph_.values()) {
+        if (value != nullptr && value->producer() == nullptr) {
+          producerlessValues_.push_back(value);
+        }
       }
+    });
+    for (const auto* value : producerlessValues_) {
       const auto& iv = frame.getIValue(value->id());
       if (iv.isTensor()) {
         const auto& tensor = iv.toTensor();
@@ -1579,7 +1710,6 @@ void WaveGraphExecutor::executeWave(
   if (state.lastFrameGeneration != frameGeneration_) {
     for (auto& steps : state.stepVectors) {
       for (auto& sv : steps) {
-        sv.hasLaunchCache = false;
         for (auto& data : sv.kernels) {
           data.tensorsInFrame.clear();
           data.tensorOffsets.clear();
@@ -1623,6 +1753,38 @@ void WaveGraphExecutor::executeWave(
   state.traceState.traced.clear();
   state.verifiedIds.clear();
 
+  // The tensor table starts each execution empty, then takes the graph inputs
+  // and weights, which enter the frame before the interpreter runs.
+  setCurrentExecutionState(&state);
+  state.tableActive = true;
+  ++state.tableGeneration;
+  ensureTableSize(state, waveGraph.graph()->numValues());
+  state.valueTable.generation = state.tableGeneration;
+  if (state.tableRoots.empty()) {
+    for (const auto& [id, value] : waveGraph.idToValue()) {
+      auto* producer = value->producer();
+      if (producer == nullptr || producer == waveGraph.graph()->inputNode()) {
+        state.tableRoots.push_back(id);
+      }
+    }
+  }
+  for (auto id : state.tableRoots) {
+    publishFromFrame(frame, id);
+  }
+  if (!state.bound) {
+    bindGraph(state, waveGraph);
+  }
+  state.tableOnlyActive = !WaveConfig::get().debugSingleOps;
+  SCOPE_EXIT {
+    // Values never released -- nothing read them last in a node -- still hold
+    // their allocations. Every stream has been drained by now on the normal
+    // path.
+    releaseAllAllocations(state);
+    state.tableOnlyActive = false;
+    state.tableActive = false;
+    setCurrentExecutionState(nullptr);
+  };
+
   // Per-step GPU timeline events. releaseStepEvents pools them on the normal
   // path, after the final stream syncs, so none is recycled while still
   // pending. This guard is the exception path: those syncs may not have run, so
@@ -1633,8 +1795,10 @@ void WaveGraphExecutor::executeWave(
   state.timelineBase.reset();
   state.lastWaveDone = nullptr;
   state.lastStandaloneDone = nullptr;
+  state.torchWaitedFor = nullptr;
+  state.waveWaitedFor = nullptr;
   state.syncedCursor = 0;
-  state.returnedAtStep.clear();
+  state.clearReturned();
   state.executedSteps = 0;
   state.pendingReturns.clear();
   SCOPE_EXIT {
@@ -1642,8 +1806,10 @@ void WaveGraphExecutor::executeWave(
     state.timelineBase.reset();
     state.lastWaveDone = nullptr;
     state.lastStandaloneDone = nullptr;
+    state.torchWaitedFor = nullptr;
+    state.waveWaitedFor = nullptr;
     state.syncedCursor = 0;
-    state.returnedAtStep.clear();
+    state.clearReturned();
     state.executedSteps = 0;
     // Exception path only: on the normal path everything has been parsed
     // below. Dropping an entry here is safe -- the frame is abandoned with the
@@ -1682,29 +1848,9 @@ void WaveGraphExecutor::executeWave(
   state.delayedFreeBytes = 0;
   state.numMemoryStalls = 0;
   state.maxDelayedFreeSeen = 0;
-  state.numDeferredOps = 0;
-  state.numDeferredSteps = 0;
-  state.numGridRedos = 0;
   state.freeUs = 0;
-  // donatableBytes is deliberately not reset: the pool outlives the execution,
-  // so the byte accounting has to stay attached to what it actually holds.
-  state.donationHits = 0;
-  state.donationMisses = 0;
-  state.donationEvictions = 0;
-  state.donationUs = 0;
   state.freedValueIds.clear();
   state.releasedAtStep.clear();
-  // Runs after the closing stream syncs on the normal path, and on any throw.
-  // The pool is kept across executions -- the next run of this graph allocates
-  // the same shapes, so a warm pool is where the hit rate comes from -- but it
-  // is trimmed to the ceiling here so the memory it holds between runs stays
-  // bounded. Whatever survives is released when the ExecutionState dies.
-  SCOPE_EXIT {
-    const auto cap = WaveConfig::get().donationCarryBytes;
-    if (cap >= 0) {
-      evictDonatable(state, cap);
-    }
-  };
   if (WaveConfig::get().freeIntermediates) {
     for (auto& steps : state.stepVectors) {
       for (auto& sv : steps) {
@@ -1984,6 +2130,34 @@ void recordStepClockRate(ExecutionState& state, const LaunchDebugInfo& info) {
     sv.measuredUtil = static_cast<double>(totalClocks) /
         (static_cast<double>(maxClocks) * info.numBlocks);
     sv.measuredBlocks = info.numBlocks;
+    sv.measuredMaxClocks = maxClocks;
+  }
+  // A split step runs its launches one after another, so its makespan is the
+  // sum of each launch's slowest block.
+  int64_t makespan = 0;
+  int32_t covered = 0;
+  for (const auto& segment : sv.segments) {
+    int64_t segmentMax = 0;
+    for (int32_t b = segment.firstBlock;
+         b < segment.firstBlock + segment.numBlocks && b < info.numBlocks;
+         ++b) {
+      segmentMax = std::max(segmentMax, info.pinnedInfo[b].clocks);
+    }
+    makespan += segmentMax;
+    covered += segment.numBlocks;
+  }
+  if (sv.segments.size() <= 1 || covered != info.numBlocks) {
+    sv.unsplitMakespanClocks = maxClocks;
+    sv.measureUnsplit = false;
+  } else if (sv.unsplitMakespanClocks == 0) {
+    sv.measureUnsplit = true;
+  } else {
+    const double savedUs =
+        static_cast<double>(sv.unsplitMakespanClocks - makespan) *
+        kNsPerBlockClock / 1000.0;
+    if (savedUs < WaveConfig::get().launchSplitMinUs) {
+      sv.splitRejected = true;
+    }
   }
 }
 
@@ -2004,14 +2178,7 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
   threadInfo.numDrainedStarts = state.numDrainedStarts;
   threadInfo.numMemoryStalls = state.numMemoryStalls;
   threadInfo.maxDelayedFreeSeen = state.maxDelayedFreeSeen;
-  threadInfo.numDeferredOps = state.numDeferredOps;
-  threadInfo.numDeferredSteps = state.numDeferredSteps;
-  threadInfo.numGridRedos = state.numGridRedos;
   threadInfo.freeUs = state.freeUs;
-  threadInfo.donationHits = state.donationHits;
-  threadInfo.donationMisses = state.donationMisses;
-  threadInfo.donationEvictions = state.donationEvictions;
-  threadInfo.donationUs = state.donationUs;
   if (WaveConfig::get().trace & WaveConfig::kTiming) {
     computeGpuTimeline(state);
   }
@@ -2050,7 +2217,9 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
         meta.gridUs = sv.gridUs;
         meta.allocUs = sv.allocUs;
         meta.allocCallUs = sv.allocCallUs;
+        meta.setup = sv.setup;
         meta.fillUs = sv.fillUs;
+        meta.blockInfoUs = sv.blockInfoUs;
         meta.kernelUs = sv.kernelUs;
         meta.standaloneUs = sv.standaloneUs;
         meta.shortcutUs = sv.shortcutUs;
@@ -2308,11 +2477,6 @@ std::string WaveGraphExecutor::makePerfReport(
         info.numDrainedStarts,
         info.runAheadSamples);
   }
-  if (info.numGridRedos > 0) {
-    ss << fmt::format(
-        "Grid redos: {} steps changed variant and redid their setup pass\n",
-        info.numGridRedos);
-  }
   {
     // What the grouping actually bought: every group is one allocator call in
     // place of one per tensor it covers, so the saving is the difference.
@@ -2329,12 +2493,6 @@ std::string WaveGraphExecutor::makePerfReport(
           tensors,
           tensors - groups);
     }
-  }
-  if (info.numDeferredSteps > 0) {
-    ss << fmt::format(
-        "Deferred setup: {} ops over {} steps needed a second pass\n",
-        info.numDeferredOps,
-        info.numDeferredSteps);
   }
   if (info.maxDelayedFreeSeen > 0) {
     // The high-water mark is what the run-ahead adds to the peak; the stall
@@ -2370,14 +2528,24 @@ std::string WaveGraphExecutor::makePerfReport(
     double kernelUs = 0.0;
     int64_t standaloneUs = 0;
     int64_t interpUs = 0;
+    int64_t gatherUs = 0;
+    int64_t gridUs = 0;
+    int64_t fillUs = 0;
+    int64_t blockInfoUs = 0;
     int64_t allocUs = 0;
     int64_t allocCallUs = 0;
     int64_t gpuIdleUs = 0;
+    SetupCounters setup;
     for (size_t i = 0; i < info.launchMeta.size(); ++i) {
       const auto& m = info.launchMeta[i];
       interpUs += m.gatherUs + m.gridUs + m.allocUs + m.fillUs;
+      gatherUs += m.gatherUs;
+      gridUs += m.gridUs;
+      fillUs += m.fillUs;
+      blockInfoUs += m.blockInfoUs;
       allocUs += m.allocUs;
       allocCallUs += m.allocCallUs;
+      setup += m.setup;
       gpuIdleUs += m.gpuIdleUs;
       if (m.standaloneGpuUs > 0) {
         standaloneUs += m.standaloneGpuUs;
@@ -2405,6 +2573,13 @@ std::string WaveGraphExecutor::makePerfReport(
         gpuIdleUs,
         interpUs,
         info.freeUs);
+    ss << fmt::format(
+        "  interpretation by phase: gather {} us, grid {} us, allocation {} us, fill {} us (BlockInfo {} us)\n",
+        gatherUs,
+        gridUs,
+        allocUs,
+        fillUs,
+        blockInfoUs);
     // The allocation phase split in two, because the halves are fixed by
     // different things: the calls by allocating fewer and larger buffers (or a
     // bigger arena), the setup by cheaper shape arithmetic and view building.
@@ -2413,16 +2588,29 @@ std::string WaveGraphExecutor::makePerfReport(
         allocUs,
         allocCallUs,
         allocUs - allocCallUs);
-    if (info.donationHits + info.donationMisses > 0) {
-      ss << fmt::format(
-          "Buffer donation: {} hits, {} misses ({:.0f}% of kernel allocations), {} evicted, {} us in the pool\n",
-          info.donationHits,
-          info.donationMisses,
-          100.0 * static_cast<double>(info.donationHits) /
-              static_cast<double>(info.donationHits + info.donationMisses),
-          info.donationEvictions,
-          info.donationUs);
-    }
+    // What a pre-resolved tensor table would replace, by kind. Times exclude
+    // the allocator calls made inside them; sizing also runs outside the
+    // allocation phase (gather), so these do not add up to the line above.
+    const auto setupUs = [](int64_t ticks) {
+      return static_cast<int64_t>(
+          static_cast<double>(ticks) / tscTicksPerMicro());
+    };
+    ss << fmt::format(
+        "  setup by kind: reserve {} us ({} calls), size exprs {} us ({}), "
+        "tensors {} us ({}), host views {} us ({}), group carving {} us "
+        "({}); {} frame writes, {} tensor fills\n",
+        setupUs(setup.reserveTicks),
+        setup.reserveCalls,
+        setupUs(setup.sizeExprTicks),
+        setup.sizeExprCalls,
+        setupUs(setup.tensorTicks),
+        setup.tensorCalls,
+        setupUs(setup.viewTicks),
+        setup.viewCalls,
+        setupUs(setup.carveTicks),
+        setup.carveCalls,
+        setup.frameWrites,
+        setup.fills);
     if (WaveConfig::get().perOpStandaloneTiming) {
       ss << "WARNING per-op standalone timing is on: it syncs after every eager "
             "op, which serializes the streams and inflates idle.\n";

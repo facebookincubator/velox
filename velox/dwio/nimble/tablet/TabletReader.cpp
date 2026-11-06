@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <iterator>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <vector>
 
@@ -82,9 +83,7 @@ TabletReader::Options TabletReader::configureOptions(
   Options tabletOptions;
   tabletOptions.maxFooterIoBytes = options.footerSpeculativeIoSize();
   tabletOptions.preloadOptionalSections = {
-      std::string(kSchemaSection),
-      std::string(kVectorizedStatsSection),
-      std::string(kStripeStatsSection)};
+      std::string(kSchemaSection), std::string(kVectorizedStatsSection)};
   tabletOptions.loadClusterIndex = options.loadClusterIndex();
   tabletOptions.preloadIndex = options.preloadIndex();
   tabletOptions.loadChunkStats = options.loadChunkStats();
@@ -105,6 +104,8 @@ TabletReader::Options TabletReader::configureOptions(
                 formatOptions)) {
       tabletOptions.externalDictionaryResolver =
           nimbleOptions->externalDictionaryResolver;
+      tabletOptions.cacheKeyEncodingViews =
+          nimbleOptions->cacheKeyEncodingViews;
     }
   }
 
@@ -189,6 +190,12 @@ MetadataSection toMetadataSection(const T* section) {
                            : std::nullopt};
 }
 
+// Returns the section's decompressed size, or its stored size when the file
+// did not record one.
+uint64_t decompressedSize(const MetadataSection& section) {
+  return section.uncompressedSize().value_or(section.size());
+}
+
 } // namespace
 
 TabletReader::TabletReader(
@@ -207,6 +214,7 @@ TabletReader::TabletReader(
             options.ioOptions->metadataIoStats(), "metadataIoStats is null.");
         return *options.ioOptions;
       }()},
+      fileIoContext_{options.fileIoContext},
       indexOptions_{[&]() {
         // cacheIndex takes effect only when fileHandle and cache are provided.
         const bool cacheEnabled =
@@ -223,7 +231,9 @@ TabletReader::TabletReader(
             // preloadIndex requires pinIndex; auto-promote so the caller only
             // needs to flip one knob.
             .pinIndex = options.pinIndex || options.preloadIndex,
-            .preloadIndex = options.preloadIndex};
+            .preloadIndex = options.preloadIndex,
+            .cacheKeyEncodingViews = options.cacheKeyEncodingViews,
+            .fileIoContext = fileIoContext_};
       }()},
       metadataInput_{[&]() {
         MetadataInput::Options metadataOptions{
@@ -231,7 +241,8 @@ TabletReader::TabletReader(
             .ioStats = ioOptions_.metadataIoStats(),
             .maxCoalesceDistance = ioOptions_.maxCoalesceDistance(),
             .maxCoalesceBytes = ioOptions_.maxCoalesceBytes(),
-            .executor = ioOptions_.ioExecutor().get()};
+            .executor = ioOptions_.ioExecutor().get(),
+            .fileIoContext = fileIoContext_};
         // cacheMetadata takes effect only when fileHandle and cache are
         // provided.
         if (options.cacheMetadata && options.fileHandle != nullptr) {
@@ -984,7 +995,6 @@ TabletReader::StripeGroupMetadata TabletReader::cacheStripeGroupMetadata(
         stripeGroupIndex,
         [&metadata](uint32_t) { return std::move(metadata.chunkStats); });
   }
-  checkStreamChecksumsPresent(*cached.stripeGroup, stripeGroupIndex);
   return cached;
 }
 
@@ -1002,13 +1012,6 @@ uint32_t TabletReader::streamSize(
   // Mirrors streamOffset: StripeGroup::streamSize already returns 0 for an
   // out-of-range streamId, so delegate without a redundant guard here.
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
-}
-
-uint32_t TabletReader::streamChecksum(
-    const StripeIdentifier& stripe,
-    uint32_t streamId) const {
-  NIMBLE_CHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  return stripe.stripeGroup()->streamChecksum(stripe.stripeId(), streamId);
 }
 
 void TabletReader::streamLocations(
@@ -1032,6 +1035,24 @@ uint32_t TabletReader::streamCount(const StripeIdentifier& stripe) const {
   return stripe.stripeGroup()->streamCount();
 }
 
+std::vector<StripeGroupDescriptor> TabletReader::stripeGroupDescriptors(
+    std::span<const uint32_t> stripes) const {
+  const auto* stripeGroups = footerRoot(*footer_)->stripe_groups();
+  std::vector<StripeGroupDescriptor> descriptors;
+  descriptors.reserve(stripes.size());
+  for (const auto stripe : stripes) {
+    NIMBLE_CHECK_LT(stripe, stripeCount_, "Stripe is out of range.");
+    const auto groupIndex = stripeGroupIndex(stripe);
+    uint64_t metadataSize =
+        decompressedSize(toMetadataSection(stripeGroups->Get(groupIndex)));
+    if (hasChunkStats(groupIndex)) {
+      metadataSize += decompressedSize(chunkStats_->groupMetadata(groupIndex));
+    }
+    descriptors.push_back({.index = groupIndex, .metadataSize = metadataSize});
+  }
+  return descriptors;
+}
+
 StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
   NIMBLE_CHECK_LT(stripeIndex, stripeCount_, "Stripe is out of range.");
   const auto stripeGroupIndex = this->stripeGroupIndex(stripeIndex);
@@ -1048,11 +1069,9 @@ StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
   const bool allCached =
       stripeGroupCached && (!hasChunkStats || chunkStatsCached);
   if (allCached) {
-    auto cachedStripeGroup = stripeGroup(stripeGroupIndex);
-    checkStreamChecksumsPresent(*cachedStripeGroup, stripeGroupIndex);
     return StripeIdentifier{
         stripeIndex,
-        std::move(cachedStripeGroup),
+        stripeGroup(stripeGroupIndex),
         hasChunkStats ? chunkStats(stripeGroupIndex) : nullptr};
   }
 
@@ -1073,12 +1092,25 @@ std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
       stripeCount_ - stripeOffset,
       "Stripe load range exceeds the tablet");
   NIMBLE_CHECK_GT(numStripes, 0);
+  std::vector<uint32_t> stripes(numStripes);
+  std::iota(stripes.begin(), stripes.end(), stripeOffset);
+  return stripeIdentifiers(stripes);
+}
 
+std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
+    std::span<const uint32_t> stripes) const {
+  // Ascending stripes map to non-decreasing groups, so comparing with the last
+  // group seen is enough to list each group once.
   std::vector<uint32_t> groupIndices;
   std::vector<size_t> groupSlots;
-  groupSlots.reserve(numStripes);
-  for (uint32_t i{0}; i < numStripes; ++i) {
-    const auto groupIndex = stripeGroupIndex(stripeOffset + i);
+  groupSlots.reserve(stripes.size());
+  for (size_t i{0}; i < stripes.size(); ++i) {
+    NIMBLE_CHECK_LT(stripes[i], stripeCount_, "Stripe is out of range.");
+    if (i > 0) {
+      NIMBLE_CHECK_LT(
+          stripes[i - 1], stripes[i], "Stripes must be strictly ascending.");
+    }
+    const auto groupIndex = stripeGroupIndex(stripes[i]);
     if (groupIndices.empty() || groupIndices.back() != groupIndex) {
       groupIndices.push_back(groupIndex);
     }
@@ -1097,7 +1129,6 @@ std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
       if (needsChunkStats) {
         groups[i].chunkStats = chunkStats(groupIndex);
       }
-      checkStreamChecksumsPresent(*groups[i].stripeGroup, groupIndex);
     } else {
       missingGroups.push_back(groupIndex);
       missingSlots.push_back(i);
@@ -1112,32 +1143,13 @@ std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
   }
 
   std::vector<StripeIdentifier> identifiers;
-  identifiers.reserve(numStripes);
-  for (uint32_t i{0}; i < numStripes; ++i) {
+  identifiers.reserve(stripes.size());
+  for (size_t i{0}; i < stripes.size(); ++i) {
     const auto& metadata = groups[groupSlots[i]];
     identifiers.emplace_back(
-        stripeOffset + i, metadata.stripeGroup, metadata.chunkStats);
+        stripes[i], metadata.stripeGroup, metadata.chunkStats);
   }
   return identifiers;
-}
-
-void TabletReader::checkStreamChecksumsPresent(
-    const StripeGroup& stripeGroup,
-    uint32_t stripeGroupIndex) const {
-  if (!properties_.hasStreamChecksums()) {
-    // The file claims no checksum arrays, so there is nothing to enforce. A
-    // group that carries one anyway is inert: readers look for the arrays only
-    // when the properties claim them.
-    return;
-  }
-  if (stripeGroup.streamCount() == 0) {
-    // No streams, so no checksum array. Not a contradiction.
-    return;
-  }
-  NIMBLE_CHECK_FILE(
-      stripeGroup.hasStreamChecksums(),
-      "File properties claim stripe-group checksum arrays, but stripe group {} carries none.",
-      stripeGroupIndex);
 }
 
 std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
@@ -1190,7 +1202,8 @@ std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
   }
   if (!uniqueRegions.empty()) {
     std::vector<folly::IOBuf> iobufs(uniqueRegions.size());
-    file_->preadv(uniqueRegions, {iobufs.data(), iobufs.size()});
+    file_->preadv(
+        uniqueRegions, {iobufs.data(), iobufs.size()}, fileIoContext_);
     NIMBLE_DCHECK_EQ(
         iobufs.size(), uniqueRegions.size(), "Buffer size mismatch.");
     for (uint32_t i = 0; i < uniqueRegions.size(); ++i) {

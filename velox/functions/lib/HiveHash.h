@@ -15,7 +15,10 @@
  */
 #pragma once
 
+#include <bit>
+#include <cmath>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "velox/common/base/Exceptions.h"
@@ -28,12 +31,43 @@
 
 namespace facebook::velox::functions {
 
-/// Hive-compatible hash primitives, mirroring the hashCode implementation in
-/// Hive's ObjectInspectorUtils (HIVE-12025). Shared between the Hive
-/// connector's partition function and Spark's `hive_hash` scalar function so
-/// both produce bit-identical bucket assignments.
+/// Computes Hive-compatible hashes, mirroring the hashCode implementation in
+/// Hive's ObjectInspectorUtils (HIVE-12025), with optional zero normalization.
 class HiveHash {
  public:
+  /// Controls whether both floating-point signed zeros hash to zero.
+  enum class ZeroMode {
+    /// Preserves signed zero, matching Hive.
+    kPreserve,
+    /// Hashes both signs of zero as zero, matching Spark.
+    kNormalize,
+  };
+
+  /// Pools must outlive this instance.
+  HiveHash(
+      std::vector<std::unique_ptr<std::vector<uint32_t>>>& hashesPool,
+      std::vector<std::unique_ptr<SelectivityVector>>& rowsPool,
+      std::vector<std::unique_ptr<DecodedVector>>& decodedVectorsPool,
+      ZeroMode zeroMode = ZeroMode::kPreserve)
+      : decodedVectorsPool_(decodedVectorsPool),
+        rowsPool_(rowsPool),
+        hashesPool_(hashesPool),
+        zeroMode_(zeroMode) {}
+
+  /// Folds selected values into 'hashes' using Hive's recursive hashing rules.
+  /// Applies the instance's zero mode at every nesting depth.
+  /// Supports existing Hive hash primitives, arrays, maps, and rows. Nulls
+  /// contribute zero. Replaces the accumulator when 'mix' is false; otherwise
+  /// combines it as 31 * accumulator + valueHash. Requires 'hashes' to cover
+  /// 'rows.end()'. Scratch buffers below 'poolIndex' are reserved for the
+  /// caller. Concurrent evaluations must use separate pools.
+  void hash(
+      const DecodedVector& values,
+      const SelectivityVector& rows,
+      bool mix,
+      std::vector<uint32_t>& hashes,
+      size_t poolIndex = 0);
+
   /// Folds 'oneHash' into 'aggregateHash'. When 'mix' is false the aggregate is
   /// replaced (used for the first column); otherwise it is combined as
   /// 31 * aggregateHash + oneHash (Hive's field-folding rule).
@@ -70,19 +104,52 @@ class HiveHash {
   }
 
   /// Computes the Hive hash of a single non-null value of the given 'kind'.
+  /// Preserves signed zero and canonicalizes NaNs as Java does.
   /// Throws VELOX_UNSUPPORTED for kinds outside the supported primitive set.
   template <TypeKind kind>
   static uint32_t hashOne(typename TypeTraits<kind>::NativeType value);
 
   /// Folds the Hive hash of every selected row of 'values' into 'hashes',
-  /// treating nulls as hash 0. When 'mix' is false the per-row hash replaces
-  /// the accumulator (first column); otherwise it is combined via mergeHash.
-  template <TypeKind kind>
+  /// treating nulls as hash 0 and applying 'kZeroMode' to floating-point
+  /// values. When 'mix' is false the per-row hash replaces the accumulator
+  /// (first column); otherwise it is combined via mergeHash.
+  template <TypeKind kind, ZeroMode kZeroMode = ZeroMode::kPreserve>
   static void hashPrimitive(
       const DecodedVector& values,
       const SelectivityVector& rows,
       bool mix,
       std::vector<uint32_t>& hashes);
+
+ private:
+  // Hashes a type using scratch buffers starting at 'poolIndex'.
+  template <TypeKind kind>
+  void hashTyped(
+      const DecodedVector& values,
+      const SelectivityVector& rows,
+      bool mix,
+      std::vector<uint32_t>& hashes,
+      size_t poolIndex);
+
+  // Retrieves a reusable decoder whose address remains stable during recursion.
+  DecodedVector& getDecodedVector(size_t poolIndex);
+
+  // Retrieves a reusable selection for referenced container elements.
+  SelectivityVector& getRows(size_t poolIndex);
+
+  // Retrieves reusable per-element hash storage.
+  std::vector<uint32_t>& getHashes(size_t poolIndex);
+
+  // Keeps scratch objects at stable addresses as recursion grows the pools.
+  std::vector<std::unique_ptr<DecodedVector>>& decodedVectorsPool_;
+
+  // Tracks selected child positions at each recursion level.
+  std::vector<std::unique_ptr<SelectivityVector>>& rowsPool_;
+
+  // Stores intermediate child hashes at each recursion level.
+  std::vector<std::unique_ptr<std::vector<uint32_t>>>& hashesPool_;
+
+  // Controls signed-zero hashing at every nesting depth.
+  ZeroMode zeroMode_;
 };
 
 template <TypeKind kind>
@@ -115,7 +182,9 @@ inline uint32_t HiveHash::hashOne<TypeKind::INTEGER>(int32_t value) {
 
 template <>
 inline uint32_t HiveHash::hashOne<TypeKind::REAL>(float value) {
-  return static_cast<uint32_t>(*reinterpret_cast<const int32_t*>(&value));
+  // Match Hive's Float.floatToIntBits call in ObjectInspectorUtils.hashCode.
+  // https://github.com/apache/hive/blob/ba83fd7bff/serde/src/java/org/apache/hadoop/hive/serde2/objectinspector/ObjectInspectorUtils.java
+  return std::isnan(value) ? 0x7fc00000U : std::bit_cast<uint32_t>(value);
 }
 
 template <>
@@ -125,7 +194,11 @@ inline uint32_t HiveHash::hashOne<TypeKind::BIGINT>(int64_t value) {
 
 template <>
 inline uint32_t HiveHash::hashOne<TypeKind::DOUBLE>(double value) {
-  return hashInt64(*reinterpret_cast<const int64_t*>(&value));
+  // Match Hive's Double.doubleToLongBits call in ObjectInspectorUtils.hashCode.
+  // https://github.com/apache/hive/blob/ba83fd7bff/serde/src/java/org/apache/hadoop/hive/serde2/objectinspector/ObjectInspectorUtils.java
+  const auto bits = std::isnan(value) ? int64_t{0x7ff8000000000000}
+                                      : std::bit_cast<int64_t>(value);
+  return hashInt64(bits);
 }
 
 template <>
@@ -148,12 +221,27 @@ inline uint32_t HiveHash::hashOne<TypeKind::UNKNOWN>(UnknownValue /*value*/) {
   VELOX_FAIL("Unknown values cannot be non-NULL");
 }
 
-template <TypeKind kind>
+template <TypeKind kind, HiveHash::ZeroMode kZeroMode>
 inline void HiveHash::hashPrimitive(
     const DecodedVector& values,
     const SelectivityVector& rows,
     bool mix,
     std::vector<uint32_t>& hashes) {
+  auto hashRow = [&](auto row) INLINE_LAMBDA -> uint32_t {
+    if (values.isNullAt(row)) {
+      return 0;
+    }
+    const auto value =
+        values.valueAt<typename TypeTraits<kind>::NativeType>(row);
+    if constexpr (
+        (kind == TypeKind::REAL || kind == TypeKind::DOUBLE) &&
+        kZeroMode == ZeroMode::kNormalize) {
+      if (value == 0) {
+        return 0;
+      }
+    }
+    return hashOne<kind>(value);
+  };
   if (rows.isAllSelected()) {
     // The compiler seems to be a little fickle with optimizations.
     // Although rows.applyToSelected should do roughly the same thing, doing
@@ -162,19 +250,11 @@ inline void HiveHash::hashPrimitive(
     // benchmarks.
     vector_size_t numRows = rows.size();
     for (auto i = 0; i < numRows; ++i) {
-      const uint32_t hash = values.isNullAt(i)
-          ? 0
-          : hashOne<kind>(
-                values.valueAt<typename TypeTraits<kind>::NativeType>(i));
-      mergeHash(mix, hash, hashes[i]);
+      mergeHash(mix, hashRow(i), hashes[i]);
     }
   } else {
     rows.applyToSelected([&](auto row) INLINE_LAMBDA {
-      const uint32_t hash = values.isNullAt(row)
-          ? 0
-          : hashOne<kind>(
-                values.valueAt<typename TypeTraits<kind>::NativeType>(row));
-      mergeHash(mix, hash, hashes[row]);
+      mergeHash(mix, hashRow(row), hashes[row]);
     });
   }
 }

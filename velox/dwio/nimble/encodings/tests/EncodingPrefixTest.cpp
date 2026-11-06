@@ -25,6 +25,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 
 using namespace facebook;
@@ -126,6 +127,24 @@ TEST(EncodingPrefixTest, readsVarintRowCountPrefix) {
   EXPECT_EQ(
       nimble::EncodingPrefix::prefixSize(data, /*useVarint=*/true),
       data.size());
+}
+
+TEST(EncodingPrefixTest, checksSliceRange) {
+  EXPECT_NO_THROW(
+      nimble::EncodingPrefix::checkSliceRange(
+          /*rowCount=*/10, /*offset=*/3, /*length=*/7));
+  NIMBLE_ASSERT_THROW(
+      nimble::EncodingPrefix::checkSliceRange(
+          /*rowCount=*/10, /*offset=*/11, /*length=*/1),
+      "Slice starts past the last row.");
+  NIMBLE_ASSERT_THROW(
+      nimble::EncodingPrefix::checkSliceRange(
+          /*rowCount=*/10, /*offset=*/3, /*length=*/8),
+      "Slice ends past the last row.");
+  NIMBLE_ASSERT_THROW(
+      nimble::EncodingPrefix::checkSliceRange(
+          /*rowCount=*/10, /*offset=*/10, /*length=*/0),
+      "Cannot slice zero rows.");
 }
 
 TEST(EncodingPrefixTest, consumesCheckedPrefix) {
@@ -283,4 +302,17 @@ TEST(EncodingPrefixTest, factoryRejectsTruncatedTypePrefix) {
       EXPECT_EQ("Truncated encoding prefix.", error.errorMessage());
     }
   }
+}
+
+TEST(EncodingPrefixTest, factoryRejectsRemovedBitRangeSplit) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  const auto data = serializePrefix(
+      nimble::kRemovedBitRangeSplitEncodingType,
+      nimble::DataType::Uint64,
+      /*rowCount=*/1,
+      /*useVarint=*/false);
+
+  NIMBLE_ASSERT_FILE_THROW(
+      nimble::EncodingFactory{}.create(*pool, data, nullptr),
+      "BitRangeSplit encoding was removed");
 }

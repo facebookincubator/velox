@@ -17,6 +17,8 @@
 
 #include <fmt/format.h>
 #include <chrono>
+#include <optional>
+#include <utility>
 
 #include "velox/common/base/Macros.h"
 #include "velox/common/base/SuccinctPrinter.h"
@@ -110,6 +112,32 @@ class DeltaCpuWallTimer {
 
  private:
   DeltaCpuWallTimeStopWatch timer_;
+  F func_;
+};
+
+/// Like DeltaCpuWallTimer, but reads the clocks and calls the user callback
+/// only when 'enabled' is true. Reading the thread CPU clock is a system call,
+/// so a disabled timer saves it on a hot path.
+template <typename F>
+class OptionalCpuWallTimer {
+ public:
+  OptionalCpuWallTimer(bool enabled, F&& func) : func_(std::move(func)) {
+    if (enabled) {
+      timer_.emplace();
+    }
+  }
+
+  ~OptionalCpuWallTimer() {
+    if (timer_.has_value()) {
+      func_(timer_->elapsed());
+    }
+  }
+
+  OptionalCpuWallTimer(const OptionalCpuWallTimer&) = delete;
+  OptionalCpuWallTimer& operator=(const OptionalCpuWallTimer&) = delete;
+
+ private:
+  std::optional<DeltaCpuWallTimeStopWatch> timer_;
   F func_;
 };
 

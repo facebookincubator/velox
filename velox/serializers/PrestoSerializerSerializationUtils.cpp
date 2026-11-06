@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include "velox/serializers/PrestoSerializerSerializationUtils.h"
 
 #include "velox/vector/BiasVector.h"
@@ -561,7 +563,7 @@ void serializeIPPrefix(
   }
 }
 
-template <typename T, typename Conv = folly::Identity>
+template <typename T, typename Conv = std::identity>
 void copyWords(
     uint8_t* destination,
     const int32_t* indices,
@@ -574,7 +576,7 @@ void copyWords(
   }
 }
 
-template <typename T, typename Conv = folly::Identity>
+template <typename T, typename Conv = std::identity>
 void copyWordsWithRows(
     uint8_t* destination,
     const int32_t* rows,

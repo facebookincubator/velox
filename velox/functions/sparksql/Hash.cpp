@@ -16,6 +16,7 @@
 #include "velox/functions/sparksql/Hash.h"
 
 #include <folly/CPortability.h>
+#include <folly/lang/Bits.h>
 
 #include "velox/expression/DecodedArgs.h"
 #include "velox/functions/lib/Murmur3Hash32Base.h"
@@ -353,7 +354,7 @@ class Murmur3Hash final : public Murmur3Hash32Base {
     return fmix(h1, 4);
   }
 
-  static uint32_t hashInt64(int64_t input, uint32_t seed) {
+  FOLLY_ALWAYS_INLINE static uint32_t hashInt64(int64_t input, uint32_t seed) {
     return Murmur3Hash32Base::hashInt64(input, seed);
   }
 
@@ -376,7 +377,7 @@ class Murmur3Hash final : public Murmur3Hash32Base {
     const char* const end = input.data() + input.size();
     uint32_t h1 = seed;
     for (; i <= end - 4; i += 4) {
-      h1 = mixH1(h1, mixK1(*reinterpret_cast<const uint32_t*>(i)));
+      h1 = mixH1(h1, mixK1(folly::loadUnaligned<uint32_t>(i)));
     }
     for (; i != end; ++i) {
       h1 = mixH1(h1, mixK1(*i));

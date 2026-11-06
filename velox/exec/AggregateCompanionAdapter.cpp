@@ -30,6 +30,13 @@ void AggregateCompanionFunctionBase::setOffsetsInternal(
     int32_t initializedByte,
     uint8_t initializedMask,
     int32_t rowSizeOffset) {
+  Aggregate::setOffsetsInternal(
+      offset,
+      nullByte,
+      nullMask,
+      initializedByte,
+      initializedMask,
+      rowSizeOffset);
   fn_->setOffsets(
       offset,
       nullByte,
@@ -64,8 +71,9 @@ void AggregateCompanionFunctionBase::setAllocatorInternal(
   fn_->setAllocator(allocator);
 }
 
-void AggregateCompanionFunctionBase::destroy(folly::Range<char**> groups) {
-  fn_->destroy(groups);
+void AggregateCompanionFunctionBase::setConstantInputs(
+    const std::vector<VectorPtr>& constantInputs) {
+  fn_->setConstantInputs(constantInputs);
 }
 
 void AggregateCompanionFunctionBase::destroyInternal(
@@ -75,12 +83,6 @@ void AggregateCompanionFunctionBase::destroyInternal(
 
 void AggregateCompanionFunctionBase::clearInternal() {
   fn_->clear();
-}
-
-void AggregateCompanionFunctionBase::initializeNewGroups(
-    char** groups,
-    folly::Range<const vector_size_t*> indices) {
-  fn_->initializeNewGroups(groups, indices);
 }
 
 void AggregateCompanionFunctionBase::initializeNewGroupsInternal(
@@ -145,6 +147,38 @@ void AggregateCompanionAdapter::PartialFunction::extractValues(
     int32_t numGroups,
     VectorPtr* result) {
   fn_->extractAccumulators(groups, numGroups, result);
+}
+
+bool AggregateCompanionAdapter::MergeFunction::supportsToIntermediate() const {
+  return fn_->supportsFillEmptyIntermediate();
+}
+
+void AggregateCompanionAdapter::MergeFunction::toIntermediate(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args,
+    VectorPtr& result) const {
+  VELOX_CHECK_EQ(args.size(), 1);
+  if (rows.isAllSelected() && !args[0]->mayHaveNulls()) {
+    result = args[0];
+    return;
+  }
+  auto emptyRows = rows.complement();
+  // Merges ignore null inputs, so selected nulls need the empty intermediate
+  // value (e.g. 0 for count) rather than passing through null.
+  if (args[0]->mayHaveNulls()) {
+    rows.applyToSelected([&](vector_size_t row) {
+      if (args[0]->isNullAt(row)) {
+        emptyRows.setValid(row, true);
+      }
+    });
+    emptyRows.updateBounds();
+  }
+  if (!emptyRows.hasSelections()) {
+    result = args[0];
+    return;
+  }
+  result->copy(args[0].get(), rows, nullptr);
+  fn_->fillEmptyIntermediate(emptyRows, result);
 }
 
 void AggregateCompanionAdapter::MergeFunction::addRawInput(

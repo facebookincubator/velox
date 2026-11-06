@@ -356,7 +356,10 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
           cudf::make_column_from_scalar(zeroScalar, numRows + 1, stream, mr);
       auto child = makeAllNullColumn(type->childAt(0), 0, stream, mr);
       auto nullMask = cudf::create_null_mask(
-          numRows, cudf::mask_state::ALL_NULL, stream, mr);
+          numRows,
+          cudf::mask_state::ALL_NULL,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
       return cudf::make_lists_column(
           numRows,
           std::move(offsets),
@@ -373,7 +376,10 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
             makeAllNullColumn(type->childAt(i), numRows, stream, mr));
       }
       auto nullMask = cudf::create_null_mask(
-          numRows, cudf::mask_state::ALL_NULL, stream, mr);
+          numRows,
+          cudf::mask_state::ALL_NULL,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
       return cudf::make_structs_column(
           numRows,
           std::move(children),
@@ -385,11 +391,10 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
     default: {
       // Flat types (including STRING): use the scalar approach.
       auto cudfType = tryVeloxToCudfDataType(type);
-      if (!cudfType) {
-        VELOX_NYI(
-            "All-null column creation is not implemented for type {}",
-            type->toString());
-      }
+      VELOX_NYI_CHECK(
+          cudfType,
+          "All-null column creation is not implemented for type {}",
+          type->toString());
       auto nullScalar = cudf::make_default_constructed_scalar(
           *cudfType, stream, get_temp_mr());
       return cudf::make_column_from_scalar(*nullScalar, numRows, stream, mr);

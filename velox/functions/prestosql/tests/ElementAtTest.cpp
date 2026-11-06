@@ -37,6 +37,25 @@ class ElementAtTest : public FunctionBaseTest {
  protected:
   static const vector_size_t kVectorSize{1'000};
 
+  // Calls element_at on `args` directly, so a wrapped map reaches it as is
+  // instead of being peeled, and rows with a null map are not removed.
+  VectorPtr applyElementAt(std::vector<VectorPtr> args) {
+    core::QueryConfig config({});
+    auto function = exec::getVectorFunction(
+        "element_at",
+        {args[0]->type(), args[1]->type()},
+        {nullptr, args[1]->isConstantEncoding() ? args[1] : nullptr},
+        config);
+    exec::ExprSet exprSet({}, &execCtx_);
+    auto inputRows = makeRowVector({});
+    exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputRows.get());
+    SelectivityVector rows(args[0]->size());
+    VectorPtr result;
+    function->apply(
+        rows, args, args[0]->type()->asMap().valueType(), evalCtx, result);
+    return result;
+  }
+
   template <typename T>
   void testElementAt(
       const std::string& expression,
@@ -328,6 +347,92 @@ TEST_F(ElementAtTest, flatMapTest) {
                    4, 3, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
 }
 
+TEST_F(ElementAtTest, flatMapConstantKeyDictionary) {
+  auto base = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{2: 21}",
+      "{1: 12}",
+      "{1: 13, 2: 23}",
+  });
+
+  // Reversed rows, with a null added on row 0.
+  auto nulls = allocateNulls(4, pool());
+  bits::setNull(nulls->asMutable<uint64_t>(), 0);
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, 12, std::nullopt, 10}),
+      applyElementAt(
+          {BaseVector::wrapInDictionary(
+               nulls, makeIndicesInReverse(4), 4, base),
+           makeConstant<int64_t>(1, 4)}));
+}
+
+TEST_F(ElementAtTest, flatMapPerRowKeyNullMaps) {
+  // Row 3 is a null map, although its in-map bits for both keys are set.
+  auto base = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{2: 21}",
+      "{1: 12}",
+      "{1: 13, 2: 23}",
+  });
+  base->setNull(3, true);
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>(
+          {20, std::nullopt, std::nullopt, std::nullopt}),
+      applyElementAt({base, makeFlatVector<int64_t>({2, 1, 2, 1})}));
+
+  // Reversed rows, with a null added on row 0.
+  auto nulls = allocateNulls(4, pool());
+  bits::setNull(nulls->asMutable<uint64_t>(), 0);
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, 12, 21, 20}),
+      applyElementAt(
+          {BaseVector::wrapInDictionary(
+               nulls, makeIndicesInReverse(4), 4, base),
+           makeFlatVector<int64_t>({1, 1, 2, 2})}));
+}
+
+TEST_F(ElementAtTest, flatMapPerRowKeyDictionaryValues) {
+  // The values of key 1 are dictionary-encoded: rows 0 to 3 read 103 to 100.
+  auto inMap = AlignedBuffer::allocate<bool>(4, pool(), true);
+  bits::clearBit(inMap->asMutable<uint64_t>(), 2);
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      4,
+      makeFlatVector<int64_t>({1, 2}),
+      std::vector<VectorPtr>{
+          wrapInDictionary(
+              makeIndicesInReverse(4),
+              makeFlatVector<int64_t>({100, 101, 102, 103})),
+          makeFlatVector<int64_t>({20, 21, 22, 23})},
+      std::vector<BufferPtr>{inMap, nullptr});
+  test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>({103, 21, std::nullopt, 100}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector({flatMap, makeFlatVector<int64_t>({1, 2, 1, 1})})));
+}
+
+TEST_F(ElementAtTest, flatMapPerRowKeyNullKeys) {
+  // Rows with a null key are not passed to the function, which then sees only
+  // some of the rows.
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{1: 11, 2: 21}",
+      "{1: 12, 2: 22}",
+      "{1: 13, 2: 23}",
+  });
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, std::nullopt, 22, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {flatMap,
+               makeNullableFlatVector<int64_t>(
+                   {1, std::nullopt, 2, std::nullopt})})));
+}
+
 TEST_F(ElementAtTest, flatMapKeyNotInMap) {
   auto input = makeFlatMapVectorFromJson<int64_t, int32_t>({
       "{1: 10, 2: null}",
@@ -335,7 +440,9 @@ TEST_F(ElementAtTest, flatMapKeyNotInMap) {
       "{1: 30, 2: 300}",
   });
   // Row 1 does not contain key 2, but give it a non-null value for it anyway.
-  input->projectKey(int64_t{2})->asFlatVector<int32_t>()->set(1, 200);
+  input->mapValuesAt(input->getKeyChannel(int64_t{2}).value())
+      ->asFlatVector<int32_t>()
+      ->set(1, 200);
   // Key 1 is in every row, which can also be expressed with no in-map buffer.
   input->inMapsAt(input->getKeyChannel(int64_t{1}).value()) = nullptr;
 
@@ -376,6 +483,60 @@ TEST_F(ElementAtTest, flatMapKeyNotInMap) {
         makeNullableFlatVector<int32_t>({100, std::nullopt, 300}), result);
     EXPECT_EQ(result->encoding(), values->encoding());
   }
+}
+
+TEST_F(ElementAtTest, flatMapPerRowKey) {
+  auto varcharKeys = makeFlatMapVectorFromJson<std::string, std::string>({
+      R"({"a": "a0", "b": "b0"})",
+      R"({"a": "a1", "c": "c1"})",
+      R"({"b": "b2"})",
+      R"({"a": "a3", "b": "b3", "c": "c3"})",
+      R"({"a": "a4"})",
+  });
+  test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"b0", "a1", std::nullopt, "c3", std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {varcharKeys,
+               makeFlatVector<std::string>({"b", "a", "a", "c", "d"})})));
+
+  // Rows of the same key are copied together.
+  auto integerKeys = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1:10, 2:20}",
+      "{1:11, 2:21}",
+      "{1:12}",
+      "{1:13, 2:23}",
+      "{1:14, 2:24}",
+  });
+  test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>({20, 11, std::nullopt, 23, 14}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {integerKeys, makeFlatVector<int32_t>({2, 1, 2, 2, 1})})));
+
+  // Keys with custom comparison: same instant in different time zones.
+  auto timestampKeys = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(TIMESTAMP_WITH_TIME_ZONE(), BIGINT()),
+      nullptr,
+      2,
+      makeFlatVector<int64_t>(
+          {pack(1000, 0), pack(2000, 0)}, TIMESTAMP_WITH_TIME_ZONE()),
+      std::vector<VectorPtr>{
+          makeFlatVector<int64_t>({10, 11}), makeFlatVector<int64_t>({20, 21})},
+      std::vector<BufferPtr>{});
+  test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>({20, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {timestampKeys,
+               makeFlatVector<int64_t>(
+                   {pack(2000, 5), pack(3000, 0)},
+                   TIMESTAMP_WITH_TIME_ZONE())})));
 }
 
 TEST_F(ElementAtTest, flatMapTestDictionaryWrapped) {

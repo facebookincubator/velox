@@ -615,6 +615,27 @@ class IsNotNull final : public Filter {
     return true;
   }
 
+  // All non-null values pass. Avoids Filter::genericTestValues.
+  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t>) const final {
+    return xsimd::batch_bool<int64_t>(true);
+  }
+
+  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t>) const final {
+    return xsimd::batch_bool<int32_t>(true);
+  }
+
+  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t>) const final {
+    return xsimd::batch_bool<int16_t>(true);
+  }
+
+  xsimd::batch_bool<double> testValues(xsimd::batch<double>) const final {
+    return xsimd::batch_bool<double>(true);
+  }
+
+  xsimd::batch_bool<float> testValues(xsimd::batch<float>) const final {
+    return xsimd::batch_bool<float>(true);
+  }
+
   bool testInt128(const int128_t& /* unused */) const final {
     return true;
   }
@@ -970,6 +991,17 @@ class HugeintRange final : public Filter {
     }
 
     return !(min > upper_ || max < lower_);
+  }
+
+  // A narrower integral column may be read as a long decimal, which leaves the
+  // physical value as the decimal's unscaled value. Widening it to int128 is
+  // exact, so the int128 tests answer the int64 forms.
+  bool testInt64(int64_t value) const final {
+    return testInt128(value);
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final {
+    return testInt128Range(min, max, hasNull);
   }
 
   int128_t lower() const {

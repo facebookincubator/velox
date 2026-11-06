@@ -186,113 +186,101 @@ VectorPtr applyMapTyped(
       true /*flattenIfRedundant*/);
 }
 
-// Returns a flat vector with the values of the flat vector `values` and
-// `nulls` as its nulls, sharing the buffers of `values`.
-template <TypeKind kKind>
-VectorPtr
-flatWithNulls(const BaseVector& values, BufferPtr nulls, vector_size_t size) {
-  using T = typename TypeTraits<kKind>::NativeType;
-  const auto& flat = *values.asUnchecked<FlatVector<T>>();
-  return std::make_shared<FlatVector<T>>(
-      flat.pool(),
-      flat.type(),
-      std::move(nulls),
-      size,
-      flat.values(),
-      std::vector<BufferPtr>(flat.stringBuffers()));
-}
-
-// Returns the map values of the key at 'channel' of an unwrapped 'flatMap',
-// with null rows where the map does not contain the key. An in-map bit is set
-// when the row contains the key, the same convention as a null bit for a
-// non-null row, so the in-map buffer can serve as nulls.
-VectorPtr maskWithInMap(
-    const FlatMapVector& flatMap,
-    column_index_t channel,
-    vector_size_t size,
-    memory::MemoryPool* pool) {
-  const auto& values = flatMap.mapValuesAt(channel);
-  const auto* rawInMap = flatMap.rawInMapsAt(channel);
-
-  // The key is in every row: return its map values as they are.
-  if (rawInMap == nullptr) {
-    return values;
-  }
-
-  // Flat map values: share their buffers in a new flat vector with the in-map
-  // buffer as nulls (combined with their own nulls, if any).
-  if (values->isFlatEncoding()) {
-    BufferPtr nulls = flatMap.inMapsAt(channel);
-    if (values->rawNulls() != nullptr) {
-      nulls = allocateNulls(size, pool);
-      bits::andBits(
-          nulls->asMutable<uint64_t>(), values->rawNulls(), rawInMap, 0, size);
-    }
-    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-        flatWithNulls, values->typeKind(), *values, std::move(nulls), size);
-  }
-
-  // Other encodings: wrap the map values in a dictionary with the in-map buffer
-  // as nulls and identity indices.
-  BufferPtr indices = allocateIndices(size, pool);
-  auto* rawIndices = indices->asMutable<vector_size_t>();
-  std::iota(rawIndices, rawIndices + size, 0);
-  return BaseVector::wrapInDictionary(
-      flatMap.inMapsAt(channel), std::move(indices), size, values);
-}
-
-// Returns the map values of the key at 'channel' wrapped in the indices of the
-// wrapped map in 'decodedMap', with nulls for null maps and for rows whose map
-// does not contain the key.
-VectorPtr wrapWithMapIndices(
-    const SelectivityVector& rows,
-    const DecodedVector& decodedMap,
-    const FlatMapVector& flatMap,
-    column_index_t channel,
-    memory::MemoryPool* pool) {
-  const auto* rawInMap = flatMap.rawInMapsAt(channel);
-  BufferPtr indices = allocateIndices(rows.end(), pool);
-  BufferPtr nulls = allocateNulls(rows.end(), pool);
-  auto* rawIndices = indices->asMutable<vector_size_t>();
-  auto* rawNulls = nulls->asMutable<uint64_t>();
-  rows.applyToSelected([&](vector_size_t row) {
-    const auto index = decodedMap.index(row);
-    rawIndices[row] = index;
-    if (decodedMap.isNullAt(row) ||
-        (rawInMap != nullptr && !bits::isBitSet(rawInMap, index))) {
-      bits::setNull(rawNulls, row);
-    }
-  });
-  return BaseVector::wrapInDictionary(
-      std::move(nulls),
-      std::move(indices),
-      rows.end(),
-      flatMap.mapValuesAt(channel));
-}
-
-// Returns the result for a key that is the same in every row, looking it up
-// once.
+// Returns the result for a key that is the same in every row: the key's
+// values, with nulls in the rows whose map lacks it, as projected by the flat
+// map without copying.
 VectorPtr applyFlatMapConstantKey(
     const SelectivityVector& rows,
-    const DecodedVector& decodedMap,
+    DecodedVector& decodedMap,
     const FlatMapVector& flatMap,
     const VectorPtr& key,
     exec::EvalCtx& context) {
   // A key the map does not have is null in every row.
-  const auto channel = flatMap.getKeyChannel(key, 0);
-  if (!channel.has_value()) {
+  auto values = flatMap.projectKey(key, 0);
+  if (values == nullptr) {
     return BaseVector::createNullConstant(
         flatMap.valueType(), rows.end(), context.pool());
   }
 
-  // Unwrapped map: the rows of the key's map values line up with the result.
+  // Unwrapped map: the rows of the key's values line up with the result.
   if (decodedMap.isIdentityMapping()) {
-    return maskWithInMap(flatMap, channel.value(), rows.end(), context.pool());
+    return values;
   }
 
-  // Wrapped map: each row reads the key's map values through the map indices.
-  return wrapWithMapIndices(
-      rows, decodedMap, flatMap, channel.value(), context.pool());
+  // Wrapped map: the key's values take the wrapping of the map.
+  return decodedMap.wrap(std::move(values), *context.pool(), rows);
+}
+
+// A range to copy from the map values of the key at `channel`.
+struct KeyCopyRange {
+  column_index_t channel;
+  BaseVector::CopyRange range;
+};
+
+// Returns one copy range per row whose map contains its key, and nulls the
+// other rows of `result`. `isMapNullAt(row)` tells whether the map of `row` is
+// null; the caller picks it once, so the loop has no other check.
+template <typename TIsMapNullAt>
+std::vector<KeyCopyRange> collectKeyRanges(
+    const SelectivityVector& rows,
+    const DecodedVector& decodedMap,
+    const FlatMapVector& flatMap,
+    const std::vector<column_index_t>& channels,
+    const TIsMapNullAt& isMapNullAt,
+    BaseVector& result) {
+  std::vector<KeyCopyRange> keyRanges;
+  keyRanges.reserve(rows.countSelected());
+  uint64_t* rawNulls = nullptr;
+  rows.applyToSelected([&](vector_size_t row) {
+    const auto channel = channels[row];
+    const auto index = decodedMap.index(row);
+    if (channel != FlatMapVector::kNoChannel && !isMapNullAt(row) &&
+        flatMap.isInMap(channel, index)) {
+      keyRanges.push_back({channel, {index, row, 1}});
+    } else {
+      if (rawNulls == nullptr) {
+        rawNulls = result.mutableRawNulls();
+      }
+      bits::setNull(rawNulls, row);
+    }
+  });
+  return keyRanges;
+}
+
+// Copies `keyRanges` into `result`. The ranges come in row order, so the keys
+// they read from are interleaved; a counting sort first groups them by key, so
+// that each key's map values are copied from in a single call instead of once
+// per row.
+void copyGroupedByKey(
+    const FlatMapVector& flatMap,
+    const std::vector<KeyCopyRange>& keyRanges,
+    BaseVector& result) {
+  // Counting sort by key: count each key's ranges, then prefix-sum.
+  const auto numKeys = flatMap.numDistinctKeys();
+  std::vector<vector_size_t> offsets(numKeys, 0);
+  for (const auto& keyRange : keyRanges) {
+    ++offsets[keyRange.channel];
+  }
+  std::partial_sum(offsets.begin(), offsets.end(), offsets.begin());
+
+  // Place ranges back to front, so offsets[c] ends at key c's first range.
+  std::vector<BaseVector::CopyRange> grouped(keyRanges.size());
+  for (auto i = keyRanges.size(); i-- > 0;) {
+    grouped[--offsets[keyRanges[i].channel]] = keyRanges[i].range;
+  }
+
+  // Copy key c's ranges, grouped[offsets[c], offsets[c + 1]), in one call.
+  for (column_index_t channel = 0; channel < numKeys; ++channel) {
+    const vector_size_t end = channel + 1 < numKeys
+        ? offsets[channel + 1]
+        : static_cast<vector_size_t>(grouped.size());
+    if (offsets[channel] < end) {
+      result.copyRanges(
+          flatMap.mapValuesAt(channel).get(),
+          folly::Range(
+              grouped.data() + offsets[channel], grouped.data() + end));
+    }
+  }
 }
 
 // Returns the result for a key that varies per row: copies the value of each
@@ -303,31 +291,37 @@ VectorPtr applyFlatMapPerRowKey(
     const FlatMapVector& flatMap,
     const VectorPtr& keys,
     exec::EvalCtx& context) {
+  exec::LocalDecodedVector keysDecoder(context, *keys, rows);
+  const auto channels = flatMap.getKeyChannels(rows, *keysDecoder.get());
   auto result =
       BaseVector::create(flatMap.valueType(), rows.end(), context.pool());
-  rows.applyToSelected([&](vector_size_t row) {
-    const auto index = decodedMap.index(row);
-    const auto channel = flatMap.getKeyChannel(keys, row);
-    if (channel.has_value() && flatMap.isInMap(channel.value(), index)) {
-      result->copy(flatMap.mapValuesAt(channel.value()).get(), row, index, 1);
-    } else {
-      result->setNull(row, true);
-    }
-  });
+
+  // One range per row whose map contains its key; the other rows are null.
+  const auto keyRanges = decodedMap.mayHaveNulls()
+      ? collectKeyRanges(
+            rows,
+            decodedMap,
+            flatMap,
+            channels,
+            [&](vector_size_t row) { return decodedMap.isNullAt(row); },
+            *result)
+      : collectKeyRanges(
+            rows,
+            decodedMap,
+            flatMap,
+            channels,
+            [](vector_size_t) { return false; },
+            *result);
+
+  copyGroupedByKey(flatMap, keyRanges, *result);
   return result;
 }
 
-// Applies logic to vectors of FlatMapVector encoding. The implementation is
-// far simpler than the regular map encoding because FlatMapVector already
-// supports feature projection. This implementation will serve as a fast-path
-// execution for now-wrapped vectors.
-//
-// A key's map values hold an entry for every row, including rows whose map
-// does not contain the key, so the result for those rows is masked using the
-// key's in-map buffer.
+// Applies subscript to a FlatMapVector, which keeps the values of each key in
+// their own vector.
 VectorPtr applyFlatMap(
     const SelectivityVector& rows,
-    const DecodedVector& decodedMap,
+    DecodedVector& decodedMap,
     const VectorPtr& elementAt,
     exec::EvalCtx& context) {
   const auto& flatMap = *decodedMap.base()->as<FlatMapVector>();

@@ -18,7 +18,6 @@ velox_link_libraries(velox_is_null_functions velox_expression)
 
 velox_add_library(
   velox_functions_util
-  Murmur3Hash32Base.cpp
   LambdaFunctionUtil.cpp
   RowsTranslationUtil.cpp
   HEADERS
@@ -137,6 +136,6 @@ velox_add_library(velox_quantile_digest INTERFACE HEADERS QuantileDigest.h)
 
 velox_add_library(velox_setdigest INTERFACE HEADERS SetDigest.h SetDigestImpl.h)
 
-velox_add_library(velox_hive_hash INTERFACE HEADERS HiveHash.h)
+velox_add_library(velox_hive_hash HiveHash.cpp HEADERS HiveHash.h)
 
-velox_link_libraries(velox_hive_hash INTERFACE velox_vector velox_type velox_common_base)
+velox_link_libraries(velox_hive_hash velox_vector velox_type velox_common_base)

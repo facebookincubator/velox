@@ -137,6 +137,7 @@ void CompileCtx::generateIndexToOffset(
       << "    }\n"
       << "  }\n"
       << "  __syncthreads();\n";
+  noteBlockBarrier();
 }
 
 // Generates CUDA code for elementwise operations (result[i] = f(a[i], b[i],
@@ -387,10 +388,14 @@ void CompileCtx::generateElementwise(
   if (numFastPathVars < 1) {
     numFastPathVars = 1;
   }
+  std::vector<std::string> headScratch{"size"};
   for (size_t i = 0; i < numFastPathVars; ++i) {
     op.addSharedDeclaration(
         "  __shared__ uint32_t isFastPath" + std::to_string(i) + ";\n");
+    headScratch.push_back("isFastPath" + std::to_string(i));
   }
+
+  separateSharedScratch(headScratch);
 
   // Generate the head: compute size and fast path flags from tensor leaf
   // inputs only.
@@ -778,6 +783,7 @@ void CompileCtx::generateElementwise(
   }
   // Wait for all warps to finish before size in shared memory is reused.
   code_ << "  __syncthreads();\n";
+  noteBlockBarrier();
 
   // A data-dependent scan output (shapeSetOnDevice, e.g. masked_select) writes
   // its length inside the element loop, at the last element. When the input is
@@ -928,6 +934,13 @@ std::string CompileCtx::buildElementwiseCall(
     }
     first = false;
     ss << param(currentRootOutput_, op);
+  }
+  if (ew.hasOwnOutputArg) {
+    if (!first) {
+      ss << ", ";
+    }
+    first = false;
+    ss << param(node->outputs()[0], op);
   }
   if (ew.hasBlockInfo) {
     if (!first) {
@@ -1123,20 +1136,30 @@ void CompileCtx::elementwiseExprImpl(
     firstValue = false;
   };
 
-  // Forces an own-dims index calculator on every terminal tensor leaf reachable
-  // through 'v'. A fused in-place scatter (tw.slice_scatter / select_scatter /
-  // scatter / scatter_add: hasOutputArg + a valuesArg written per element)
-  // sizes its elementwise loop by 'src' (the valuesArg), not by the op's output
-  // tensor
-  // (== self, which is excluded from sizing). So a non-contiguous src leaf's
-  // per-lane read must decompose 'idx' by the leaf's OWN dims (== src's shape),
-  // not broadcast against self's (larger) shape as the default prologue would.
-  // Marking the leaf routes it to ensureIndexCalculator() so the slow-path
-  // complexIdx() uses the src's real strides.
+  // Points every terminal tensor leaf reachable through 'v' at src's shape. A
+  // fused in-place scatter (tw.slice_scatter / select_scatter / scatter /
+  // scatter_add: hasOutputArg + a valuesArg written per element) sizes its
+  // elementwise loop by 'src' (the valuesArg), not by the op's output tensor
+  // (== self, which is excluded from sizing). So a src leaf's per-lane read
+  // must decompose 'idx' by src's shape, not broadcast against self's
+  // (larger) shape as the default prologue would. When the op has an 'index'
+  // tensor, it has src's shape and the leaf broadcasts against it, which
+  // also covers a leaf of fewer elements than src. Otherwise the leaf gets
+  // an own-dims calculator (ensureIndexCalculator()), right for a leaf of
+  // src's full shape.
+  const auto* scatterIndex = node->tryGetInput("index");
+  const bool indexIsRef = scatterIndex != nullptr &&
+      scatterIndex->value != nullptr &&
+      scatterIndex->value->type().kind() == nativert::Type::Kind::Tensor;
   std::function<void(ValueCP)> forceSrcLeafOwnDims = [&](ValueCP v) {
     if (isTerminal(v)) {
       if (v->type().kind() == nativert::Type::Kind::Tensor) {
-        generatingOp_->addOwnDimsCalcOffset(op.paramOffset(v));
+        if (indexIsRef) {
+          generatingOp_->setBroadcastRef(
+              op.paramOffset(v), op.paramOffset(scatterIndex->value));
+        } else {
+          generatingOp_->addOwnDimsCalcOffset(op.paramOffset(v));
+        }
       }
       return;
     }
@@ -1204,6 +1227,10 @@ void CompileCtx::elementwiseExprImpl(
       currentRootOutput_ &&
       currentRootOutput_->type().kind() == nativert::Type::Kind::Tensor) {
     generatingOp_->addOwnDimsCalcOffset(op.paramOffset(currentRootOutput_));
+  }
+  // Likewise for an op that decomposes 'idx' by its own output's dims.
+  if (meta->elementwise && meta->elementwise->hasOwnOutputArg) {
+    generatingOp_->addOwnDimsCalcOffset(op.paramOffset(node->outputs()[0]));
   }
   if (meta->generateCall) {
     std::stringstream callSs;

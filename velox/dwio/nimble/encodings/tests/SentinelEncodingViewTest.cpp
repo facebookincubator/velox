@@ -217,7 +217,7 @@ class SentinelEncodingViewTest : public EncodingViewTest {
   }
 };
 
-TEST_F(SentinelEncodingViewTest, readsNumericTypes) {
+TEST_P(SentinelEncodingViewTest, readsNumericTypes) {
   verifyNumeric<int8_t>();
   verifyNumeric<uint8_t>();
   verifyNumeric<int16_t>();
@@ -230,18 +230,18 @@ TEST_F(SentinelEncodingViewTest, readsNumericTypes) {
   verifyNumeric<double>();
 }
 
-TEST_F(SentinelEncodingViewTest, readsBooleanAndStringValues) {
+TEST_P(SentinelEncodingViewTest, readsBooleanAndStringValues) {
   verifyReads<bool>({false, std::nullopt, false, false, std::nullopt}, true);
   verifyReads<std::string_view>(
       {"", "alpha", std::nullopt, "longer string value", std::nullopt},
       "<null>");
 }
 
-TEST_F(SentinelEncodingViewTest, readsZeroSentinel) {
+TEST_P(SentinelEncodingViewTest, readsZeroSentinel) {
   verifyReads<int64_t>({1, std::nullopt, 3, 4, std::nullopt}, 0);
 }
 
-TEST_F(SentinelEncodingViewTest, preservesFloatingPointBits) {
+TEST_P(SentinelEncodingViewTest, preservesFloatingPointBits) {
   std::vector<std::optional<float>> rows;
   const std::array<float, 4> values{
       0.0f, -0.0f, std::bit_cast<float>(uint32_t{0x7fc00001}), 2.5f};
@@ -252,7 +252,7 @@ TEST_F(SentinelEncodingViewTest, preservesFloatingPointBits) {
   verifyReads(rows, std::bit_cast<float>(uint32_t{0xffffffff}));
 }
 
-TEST_F(SentinelEncodingViewTest, validatesPayloadBounds) {
+TEST_P(SentinelEncodingViewTest, validatesPayloadBounds) {
   const std::vector<std::optional<int64_t>> rows{10, std::nullopt, 12};
   for (const bool useVarint : {false, true}) {
     SCOPED_TRACE(useVarint);
@@ -285,7 +285,7 @@ TEST_F(SentinelEncodingViewTest, validatesPayloadBounds) {
   }
 }
 
-TEST_F(SentinelEncodingViewTest, validatesStringSentinelBounds) {
+TEST_P(SentinelEncodingViewTest, validatesStringSentinelBounds) {
   const std::vector<std::optional<std::string_view>> rows{
       "alpha", std::nullopt, "beta"};
   auto encoded = encode<std::string_view>(rows, "<null>", {});
@@ -295,5 +295,65 @@ TEST_F(SentinelEncodingViewTest, validatesStringSentinelBounds) {
       createEncodingView(encoded, pool_.get()),
       "Sentinel string exceeds payload bounds");
 }
+
+TEST_P(SentinelEncodingViewTest, concurrentReads) {
+  constexpr uint32_t kNumRows{2'048};
+  constexpr uint32_t kSentinel{std::numeric_limits<uint32_t>::max()};
+  std::vector<std::optional<uint32_t>> rows(kNumRows);
+  for (uint32_t row{0}; row < kNumRows; ++row) {
+    if (row % 5 != 0 && row % 7 != 3) {
+      rows[row] = row * 3;
+    }
+  }
+  Encoding::Options options;
+  options.cacheEncodingView = cacheEncodingView();
+  const auto encoded = encode(rows, kSentinel, options);
+  const auto view = createEncodingView(encoded, pool_.get(), options);
+
+  expectConcurrent([&](int threadIndex) {
+    std::mt19937 rng{static_cast<uint32_t>(threadIndex) + 29};
+    for (auto iteration = 0; iteration < 64; ++iteration) {
+      const auto point = static_cast<uint32_t>(rng() % kNumRows);
+      if (rows[point].has_value()) {
+        uint32_t value{0};
+        view->readAt(point, &value);
+        if (value != *rows[point]) {
+          return false;
+        }
+      }
+
+      std::vector<uint32_t> indices(16);
+      for (auto& index : indices) {
+        index = static_cast<uint32_t>(rng() % kNumRows);
+      }
+      std::vector<uint32_t> output(indices.size());
+      std::vector<uint32_t> nullIndices;
+      view->read(
+          indices,
+          [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+          output.data());
+      size_t numNulls{0};
+      for (uint32_t i{0}; i < indices.size(); ++i) {
+        const auto& row = rows[indices[i]];
+        if (row.has_value()) {
+          if (output[i] != *row) {
+            return false;
+          }
+          continue;
+        }
+        if (output[i] != 0 || numNulls >= nullIndices.size() ||
+            nullIndices[numNulls++] != i) {
+          return false;
+        }
+      }
+      if (numNulls != nullIndices.size()) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(SentinelEncodingViewTest);
 
 } // namespace facebook::nimble::test

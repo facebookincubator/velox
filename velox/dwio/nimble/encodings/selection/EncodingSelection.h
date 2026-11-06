@@ -90,6 +90,8 @@ struct EncodingSelectionResult {
   /// Estimated serialized size for encodingType, when the policy computed one
   /// while selecting the encoding.
   std::optional<uint64_t> estimatedSize{};
+  /// Estimated policy cost used to select encodingType.
+  std::optional<double> estimatedCost{};
   std::function<std::unique_ptr<CompressionPolicy>()> compressionPolicyFactory =
       []() { return std::make_unique<NoCompressionPolicy>(); };
   /// Additional input required when encodingType is SharedDictionary.
@@ -169,6 +171,7 @@ class EncodingSelection {
 /// templated encoding selection policy class, at runtime.
 class EncodingSelectionPolicyBase {
  public:
+  /// Creates a non-null policy derived from EncodingSelectionPolicy<NestedT>.
   template <typename NestedT>
   std::unique_ptr<EncodingSelectionPolicyBase> create(
       EncodingType parentEncodingType,
@@ -197,6 +200,8 @@ class EncodingSelectionPolicyBase {
   /// A child encoding selection policy instance will be created for every
   /// nested stream of the parent encoding. The nested encoding identifier
   /// differentiates between the nested streams.
+  /// Returns a non-null typed policy matching nestedDataType, as required by
+  /// create<NestedT>() and the nested encoding dispatch.
   virtual std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
       EncodingType parentEncodingType,
       NestedEncodingIdentifier nestedEncodingIdentifier,
@@ -226,6 +231,17 @@ class EncodingSelectionPolicy : public EncodingSelectionPolicyBase {
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) = 0;
+
+  /// Selects an encoding for a representative sample projected to
+  /// numValues rows. Policies that cannot project candidates return
+  /// nullopt.
+  virtual std::optional<EncodingSelectionResult> select(
+      std::span<const physicalType> /* sampleValues */,
+      const Statistics<physicalType>& /* statistics */,
+      size_t /* numValues */,
+      const Encoding::Options& /* options */) {
+    return std::nullopt;
+  }
 
   /// Same as the |select()| method above, but for nullable values.
   virtual EncodingSelectionResult selectNullable(

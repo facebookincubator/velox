@@ -1939,7 +1939,9 @@ TEST_F(CachedBufferedInputTest, readGapTracking) {
         std::move(groupId),
         ioStats,
         nullptr,
-        executor_.get(),
+        // Gaps are recorded synchronously in load(). An executor would run
+        // prefetches that outlive 'input' and its file id lease.
+        nullptr,
         readerOptions);
 
     for (const auto& region : testCase.regions) {

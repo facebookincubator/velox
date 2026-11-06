@@ -160,6 +160,7 @@ std::unique_ptr<SpillerBase> AggregateSpillBenchmarkBase::makeSpiller() {
             static_cast<uint8_t>(
                 spillConfig.startPartitionBit + spillConfig.numPartitionBits)},
         sortingKeys,
+        false,
         &spillConfig,
         &spillStats_);
   } else {
