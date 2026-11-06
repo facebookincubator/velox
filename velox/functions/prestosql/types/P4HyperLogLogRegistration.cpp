@@ -155,8 +155,12 @@ void registerP4HyperLogLogType() {
   registerCustomType(
       "P4HYPERLOGLOG", std::make_unique<const P4HyperLogLogTypeFactory>());
   registerCastRules({
-      {.fromType = "HYPERLOGLOG", .toType = "P4HYPERLOGLOG"},
-      {.fromType = "P4HYPERLOGLOG", .toType = "HYPERLOGLOG"},
+      {.fromType = "P4HYPERLOGLOG",
+       .toType = "HYPERLOGLOG",
+       .implicitAllowed = true},
+      {.fromType = "HYPERLOGLOG",
+       .toType = "P4HYPERLOGLOG",
+       .implicitAllowed = false},
   });
 }
 } // namespace facebook::velox
