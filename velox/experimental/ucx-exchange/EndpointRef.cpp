@@ -72,7 +72,7 @@ void EndpointRef::closeAndDrainCommunicators() {
   // Now iterate the local copy -- no lock held, no contention.
   for (auto& weakElem : localCopy) {
     if (std::shared_ptr<CommElement> spt = weakElem.lock()) {
-      spt->close();
+      spt->onEndpointClosed();
     }
   }
   // localCopy is destroyed here, releasing all weak_ptrs.

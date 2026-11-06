@@ -165,9 +165,10 @@ bool UcxOutputQueue::initialize(
     std::shared_ptr<exec::Task> task,
     uint32_t numDestinations,
     uint32_t numDrivers,
-    core::PartitionedOutputNode::Kind kind) {
+    core::PartitionedOutputNode::Kind kind,
+    bool& outputFinished) {
   std::lock_guard<std::mutex> l(mutex_);
-  if (task_) {
+  if (task_ || terminated_) {
     // already initialized!
     return false;
   }
@@ -185,6 +186,7 @@ bool UcxOutputQueue::initialize(
     // create the destination queues inside the vector using emplace_back.
     queues_.emplace_back(std::make_unique<UcxDestinationQueue>());
   }
+  outputFinished = isFinishedLocked();
   return true;
 }
 
@@ -208,12 +210,12 @@ void UcxOutputQueue::enqueue(
     std::unique_ptr<cudf::packed_columns> data,
     vector_size_t numRows) {
   VELOX_CHECK_NOT_NULL(data);
-  VELOX_CHECK_NOT_NULL(task_);
-  VELOX_CHECK(
-      task_->isRunning(), "Task is terminated, cannot add data to output.");
   std::vector<UcxDataAvailable> dataAvailableCallbacks;
   {
     std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(
+        !terminated_ && task_ && task_->isRunning(),
+        "Task is terminated, cannot add data to output.");
     auto numBytes = data->gpu_data->size();
     auto sharedData = std::shared_ptr<cudf::packed_columns>(std::move(data));
 
@@ -255,7 +257,7 @@ void UcxOutputQueue::enqueue(
 
 bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
   std::lock_guard<std::mutex> l(mutex_);
-  if (queuedBytes_ >= maxSize_ && future) {
+  if (!terminated_ && queuedBytes_ >= maxSize_ && future) {
     VLOG(2) << "[BACKPRESSURE] task=" << (task_ ? task_->taskId() : "n/a")
             << " BLOCKED queuedBytes=" << queuedBytes_
             << " maxSize=" << maxSize_
@@ -269,9 +271,15 @@ bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
 
 void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
   UcxDestinationQueue::Data data;
+  std::shared_ptr<exec::Task> task;
   std::vector<ContinuePromise> promises;
   {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::unique_lock<std::mutex> l(mutex_);
+    if (terminated_) {
+      l.unlock();
+      notify(nullptr, 0, {});
+      return;
+    }
     // If the queue doesn't exist yet, create an empty queue to store
     // the notify callback. The queue will eventually be initialized when
     // the task is being created.
@@ -318,12 +326,15 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
     } else {
       data = UcxDestinationQueue::Data{nullptr, 0, {}, true};
     }
+    if (!data.immediate) {
+      task = task_;
+    }
   }
   // outside lock: If we have data, then return it immediately.
   if (data.immediate) {
     notify(std::move(data.data), data.numRows, std::move(data.remainingBytes));
   } else {
-    VLOG(2) << "[QUEUE] task=" << (task_ ? task_->taskId() : "n/a")
+    VLOG(2) << "[QUEUE] task=" << (task ? task->taskId() : "n/a")
             << " dest=" << destination
             << " server waiting for data (callback installed)";
   }
@@ -347,6 +358,9 @@ void UcxOutputQueue::checkIfDone(bool oneDriverFinished) {
   std::vector<UcxDataAvailable> finished;
   {
     std::lock_guard<std::mutex> l(mutex_);
+    if (terminated_) {
+      return;
+    }
     if (oneDriverFinished) {
       ++numFinished_;
     }
@@ -439,18 +453,20 @@ bool UcxOutputQueue::isFinishedLocked() {
 
 void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   using Kind = core::PartitionedOutputNode::Kind;
-  if (kind_ == Kind::kPartitioned) {
-    std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK_EQ(queues_.size(), numBuffers);
-    VELOX_CHECK(noMoreBuffers);
-    noMoreQueues_ = true;
-    return;
-  }
-
-  VELOX_CHECK_EQ(kind_, Kind::kBroadcast);
-  bool isFinished;
+  std::shared_ptr<exec::Task> task;
   {
     std::lock_guard<std::mutex> l(mutex_);
+    if (terminated_) {
+      return;
+    }
+    if (kind_ == Kind::kPartitioned) {
+      VELOX_CHECK_EQ(queues_.size(), numBuffers);
+      VELOX_CHECK(noMoreBuffers);
+      noMoreQueues_ = true;
+      return;
+    }
+
+    VELOX_CHECK_EQ(kind_, Kind::kBroadcast);
 
     if (numBuffers > queues_.size()) {
       // Add new destination queues and backfill with broadcast data.
@@ -478,16 +494,18 @@ void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
 
     noMoreQueues_ = true;
     dataToBroadcast_.clear();
-    isFinished = isFinishedLocked();
+    if (isFinishedLocked()) {
+      task = task_;
+    }
   }
 
-  if (isFinished && task_) {
-    task_->setAllOutputConsumed();
+  if (task) {
+    task->setAllOutputConsumed();
   }
 }
 
 void UcxOutputQueue::deleteResults(int destination) {
-  bool isFinished;
+  std::shared_ptr<exec::Task> task;
   UcxDataAvailable dataAvailable;
   std::vector<ContinuePromise> promises;
   {
@@ -509,7 +527,9 @@ void UcxOutputQueue::deleteResults(int destination) {
     dataAvailable = queue->getAndClearNotify();
     queue->finish();
     queues_[destination] = nullptr;
-    isFinished = isFinishedLocked();
+    if (isFinishedLocked()) {
+      task = task_;
+    }
     // update UcxOutputQueue stats
     updateStatsWithFreedLocked(bytes, packedCols, promises);
   }
@@ -521,29 +541,42 @@ void UcxOutputQueue::deleteResults(int destination) {
     promise.setValue();
   }
 
-  if (isFinished && task_) {
-    task_->setAllOutputConsumed();
+  if (task) {
+    task->setAllOutputConsumed();
   }
 }
 
 void UcxOutputQueue::terminate() {
   std::vector<UcxDataAvailable> pendingCallbacks;
   std::vector<ContinuePromise> promises;
+  std::shared_ptr<exec::Task> task;
   {
     std::lock_guard<std::mutex> l(mutex_);
+    if (terminated_) {
+      return;
+    }
     if (task_ && task_->isRunning()) {
       LOG(WARNING) << "UcxOutputQueue::terminate() called while task "
                    << task_->taskId() << " is still running";
     }
-    // Fire all pending getData callbacks with nullptr to signal end-of-stream.
-    // This handles the case where a producer task fails or is cancelled before
-    // noMoreData() is called, preventing consumers from being orphaned.
+    terminated_ = true;
+    // Discard queued data before extracting callbacks so termination cannot
+    // start another transfer. An in-flight send owns its buffer separately.
     for (auto& queue : queues_) {
       if (queue != nullptr) {
-        queue->enqueueBack(nullptr, /*numRows=*/0);
+        queue->deleteResults();
         pendingCallbacks.push_back(queue->getAndClearNotify());
+        queue.reset();
       }
     }
+    dataToBroadcast_.clear();
+    noMoreQueues_ = true;
+    atEnd_ = true;
+    updateTotalQueuedBytesMsLocked();
+    queuedBytes_ = 0;
+    queuedPackedColumns_ = 0;
+    // The last Task reference can run cleanup. Release it outside mutex_.
+    task = std::move(task_);
     // Release any outstanding producer-side promises (blocked on queue-full).
     promises = std::move(promises_);
   }
@@ -613,6 +646,11 @@ void UcxOutputQueue::updateStatsWithFreedLocked(
     int64_t bytes,
     int64_t numPackedCols,
     std::vector<ContinuePromise>& promises) {
+  // A callback may finish after terminate() has already discarded and
+  // accounted for the output that it was handed outside mutex_.
+  if (terminated_) {
+    return;
+  }
   updateTotalQueuedBytesMsLocked();
 
   queuedBytes_ -= bytes;
