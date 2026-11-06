@@ -480,6 +480,18 @@ TypedExprPtr CallTypedExpr::create(const folly::dynamic& obj, void* context) {
       std::move(type), std::move(inputs), obj["functionName"].asString());
 }
 
+TypedExprPtr FieldAccessTypedExpr::withInputsImpl(
+    std::vector<TypedExprPtr> inputs) const {
+  // A column reference has no inputs.
+  if (inputs.empty()) {
+    return std::make_shared<FieldAccessTypedExpr>(*this);
+  }
+
+  // A field access by name on an input expression.
+  return std::make_shared<FieldAccessTypedExpr>(
+      type(), std::move(inputs[0]), name_);
+}
+
 TypedExprPtr FieldAccessTypedExpr::rewriteInputNames(
     const std::unordered_map<std::string, TypedExprPtr>& mapping) const {
   if (inputs().empty()) {

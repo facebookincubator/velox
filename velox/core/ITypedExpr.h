@@ -157,6 +157,11 @@ class ITypedExpr : public ISerializable {
   virtual TypedExprPtr rewriteInputNames(
       const std::unordered_map<std::string, TypedExprPtr>& mapping) const = 0;
 
+  /// Returns a copy of this expression with 'inputs' in place of inputs().
+  /// 'inputs' must have as many expressions as inputs(), each of the type of
+  /// the input it replaces. A lambda's body is not one of its inputs.
+  TypedExprPtr withInputs(std::vector<TypedExprPtr> inputs) const;
+
   /// Part of the visitor pattern. Calls visitor.vist(*this, context) with the
   /// "right" type of the first argument.
   virtual void accept(
@@ -210,6 +215,11 @@ class ITypedExpr : public ISerializable {
   static void registerSerDe();
 
  protected:
+  // Implements withInputs(), which has checked that 'inputs' has as many
+  // expressions as inputs().
+  virtual TypedExprPtr withInputsImpl(
+      std::vector<TypedExprPtr> inputs) const = 0;
+
   // Appends this node's own textual form to 'out', recursing into inputs via
   // appendWithSharing so that sharing is preserved. The default prints the node
   // via toString() and is used by leaves and by subclasses that do not opt into
