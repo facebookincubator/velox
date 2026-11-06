@@ -99,9 +99,11 @@ class AggregationFuzzerRunner {
     auto filteredSignatures = velox::fuzzer::filterSignatures(
         signatures, options.onlyFunctions, options.skipFunctions);
     if (filteredSignatures.empty()) {
+      // Not a failure: the CI bias jobs pass every changed function in 'only',
+      // including functions on the skip list.
       LOG(ERROR)
           << "No aggregate functions left after filtering using 'only' and 'skip' lists.";
-      return 1;
+      return 0;
     }
 
     facebook::velox::parse::registerTypeResolver();
