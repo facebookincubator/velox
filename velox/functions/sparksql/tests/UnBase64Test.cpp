@@ -91,9 +91,11 @@ TEST_F(UnBase64Test, toBinaryBase64) {
   EXPECT_EQ(toBinaryBase64("TWFu\u2028"), "Man");
 
   // Input that unbase64 accepts by skipping characters is an error here.
-  const auto kError = "(BASE64) cannot be converted to BINARY";
+  VELOX_ASSERT_USER_THROW(
+      toBinaryBase64("cd@"),
+      "Malformed BASE64 input cannot be converted to BINARY: cd@");
+  const auto kError = "Malformed BASE64 input cannot be converted to BINARY";
   VELOX_ASSERT_USER_THROW(toBinaryBase64("#"), kError);
-  VELOX_ASSERT_USER_THROW(toBinaryBase64("cd@"), kError);
   VELOX_ASSERT_USER_THROW(toBinaryBase64("@@dmVsb3g="), kError);
   VELOX_ASSERT_USER_THROW(toBinaryBase64("abc?"), kError);
   // No-break spaces are not whitespace for Java, and neither is malformed

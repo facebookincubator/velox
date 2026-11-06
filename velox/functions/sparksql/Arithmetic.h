@@ -711,7 +711,7 @@ struct ToBinaryHexFunction {
   call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
     VELOX_USER_RETURN(
         !detail::decodeHex(input, result),
-        "The value '{}' (HEX) cannot be converted to BINARY because it is malformed",
+        "Malformed HEX input cannot be converted to BINARY: {}",
         std::string(input.data(), input.size()));
     return Status::OK();
   }

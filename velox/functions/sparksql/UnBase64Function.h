@@ -67,7 +67,7 @@ struct ToBinaryBase64Function : public UnBase64Function<T> {
   call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
     VELOX_USER_RETURN(
         !isValidBase64(input),
-        "The value '{}' (BASE64) cannot be converted to BINARY because it is malformed",
+        "Malformed BASE64 input cannot be converted to BINARY: {}",
         std::string(input.data(), input.size()));
     return this->decodeMime(input, result);
   }

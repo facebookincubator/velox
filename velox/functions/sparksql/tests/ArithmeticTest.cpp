@@ -545,11 +545,13 @@ TEST_F(ArithmeticTest, toBinaryHex) {
 
   // Invalid input throws where unhex returns NULL.
   VELOX_ASSERT_USER_THROW(
-      toBinaryHex("G"), "(HEX) cannot be converted to BINARY");
+      toBinaryHex("G"), "Malformed HEX input cannot be converted to BINARY: G");
   VELOX_ASSERT_USER_THROW(
-      toBinaryHex("GG"), "(HEX) cannot be converted to BINARY");
+      toBinaryHex("GG"),
+      "Malformed HEX input cannot be converted to BINARY: GG");
   VELOX_ASSERT_USER_THROW(
-      toBinaryHex("G23"), "(HEX) cannot be converted to BINARY");
+      toBinaryHex("G23"),
+      "Malformed HEX input cannot be converted to BINARY: G23");
 
   // try() turns the error into NULL.
   EXPECT_EQ(
