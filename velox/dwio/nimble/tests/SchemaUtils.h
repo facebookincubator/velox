@@ -58,7 +58,7 @@ std::shared_ptr<nimble::SlidingWindowMapTypeBuilder> slidingWindowMap(
 class FlatMapChildAdder {
  public:
   void addChild(std::string name) {
-    NIMBLE_CHECK(schemaBuilder_, "Flat map child adder is not intialized.");
+    NIMBLE_CHECK(schemaBuilder_, "Flat map child adder is not initialized.");
     typeBuilder_->addChild(name, valueFactory_(*schemaBuilder_));
   }
 
