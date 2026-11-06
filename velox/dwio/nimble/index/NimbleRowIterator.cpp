@@ -73,19 +73,8 @@ folly::IOBufFactory createIOBufFactory(velox::memory::MemoryPool& pool) {
   };
 }
 
-// Returns how many stripes a row iterator of 'options' decodes at once: the
-// stripes that its cursor prefetches and the stripe that the reader waits for.
-uint32_t maxConcurrentStripes(const NimbleIterator::Options& options) {
-  const bool prefetches = options.prefetchExecutor.get() != nullptr &&
-      options.maxPrefetchStripes > 0;
-  return prefetches ? options.maxPrefetchStripes + 1 : 1;
-}
-
-// Materializes the stripes that the cursor loads: decodes the selected rows of
-// a stripe into a vector, and decodes the rows into entries. A cursor that
-// prefetches materializes several stripes at once on the prefetch executor, so
-// each stripe decodes with a stream reader of its own, which it takes from a
-// pool and returns there when the stripe is decoded.
+// Decodes a stripe's selected rows into a vector and converts them to entries
+// on the consumer thread.
 class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
  public:
   EntryMaterializer(
@@ -93,13 +82,11 @@ class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
       velox::memory::MemoryPool* pool,
       Encoding::Options encodingOptions,
       NimbleIterator::EntryDecoder entryDecoder,
-      uint32_t maxStripeDecoders,
       bool collectTimings)
       : schema_{std::move(schema)},
         pool_{velox::checkedNotNull(pool)},
         encodingOptions_{std::move(encodingOptions)},
         entryDecoder_{std::move(entryDecoder)},
-        maxStripeDecoders_{maxStripeDecoders},
         collectTimings_{collectTimings},
         iobufFactory_{createIOBufFactory(*pool_)} {}
 
@@ -141,34 +128,17 @@ class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
     std::unique_ptr<StreamReader> streamReader;
   };
 
-  // Returns a decoder that no stripe uses. Stripes that materialize in parallel
-  // get decoders of their own.
-  std::unique_ptr<StripeDecoder> getStripeDecoder() {
-    {
-      auto decoders = stripeDecoders_.wlock();
-      if (!decoders->empty()) {
-        auto decoder = std::move(decoders->back());
-        decoders->pop_back();
-        return decoder;
-      }
+  // Returns the consumer's decoder, creating it for the first stripe.
+  StripeDecoder* ensureStripeDecoder() {
+    if (stripeDecoder_ == nullptr) {
+      auto decoder = std::make_unique<StripeDecoder>();
+      auto encodingOptions = encodingOptions_;
+      encodingOptions.bufferPool = &decoder->bufferPool;
+      decoder->streamReader = std::make_unique<StreamReader>(
+          schema_, pool_, std::move(encodingOptions));
+      stripeDecoder_ = std::move(decoder);
     }
-    auto decoder = std::make_unique<StripeDecoder>();
-    auto encodingOptions = encodingOptions_;
-    encodingOptions.bufferPool = &decoder->bufferPool;
-    decoder->streamReader = std::make_unique<StreamReader>(
-        schema_, pool_, std::move(encodingOptions));
-    return decoder;
-  }
-
-  // Unbinds the reader of 'decoder' from the streams of its stripe, which the
-  // stripe frees, and keeps the decoder for the next stripe. Destroys it
-  // instead when the pool already holds maxStripeDecoders_ decoders.
-  void releaseStripeDecoder(std::unique_ptr<StripeDecoder> decoder) {
-    decoder->streamReader->reset();
-    auto decoders = stripeDecoders_.wlock();
-    if (decoders->size() < maxStripeDecoders_) {
-      decoders->emplace_back(std::move(decoder));
-    }
+    return stripeDecoder_.get();
   }
 
   // Decodes the rows that the selection of 'stripe' holds, and drops the stripe
@@ -177,10 +147,9 @@ class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
     const auto& selection = stripe.selection;
     const auto numRows = selection.rowRange.numRows();
     NIMBLE_CHECK_GT(numRows, 0);
-    auto decoder = getStripeDecoder();
-    auto& streamReader = *decoder->streamReader;
+    auto& streamReader = *ensureStripeDecoder()->streamReader;
     SCOPE_EXIT {
-      releaseStripeDecoder(std::move(decoder));
+      streamReader.reset();
     };
     streamReader.setStreams(stripe.streams);
     if (selection.rowRange.startRow > 0) {
@@ -235,33 +204,27 @@ class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
   const std::shared_ptr<const Type> schema_;
   // Owns allocations made while decoding rows and entries.
   velox::memory::MemoryPool* const pool_;
-  // Decoding options of the file, without a scratch-buffer pool, which each
-  // stripe has of its own.
+  // Decoding options of the file, without the decoder's scratch-buffer pool.
   const Encoding::Options encodingOptions_;
   // Decodes the rows of a decoded stripe into entries.
   const NimbleIterator::EntryDecoder entryDecoder_;
-  // The most idle decoders that stripeDecoders_ keeps: one for each stripe
-  // that the iterator decodes at once.
-  const uint32_t maxStripeDecoders_;
   // Whether decoding a stripe reads the CPU and wall clocks.
   const bool collectTimings_;
   // Allocates the storage of the entries from the pool.
   folly::IOBufFactory iobufFactory_;
   // Counts the rows decoded from the selected rows of stripes.
   std::atomic_uint64_t numMaterializedRows_{0};
-  // The stripe decoders that no stripe uses, at most maxStripeDecoders_.
-  folly::Synchronized<std::vector<std::unique_ptr<StripeDecoder>>>
-      stripeDecoders_;
+  // Reuses the consumer's decoder and its scratch buffers across stripes.
+  std::unique_ptr<StripeDecoder> stripeDecoder_;
   // Track the time spent decoding stripes, and converting their rows into
   // entries.
   folly::Synchronized<velox::CpuWallTiming> decodingTiming_;
   folly::Synchronized<velox::CpuWallTiming> conversionTiming_;
 };
 
-// Serves the entries of the stripes that its cursor materializes, ahead of the
-// reader when the cursor prefetches. The base class navigates the file rows,
-// and stays at the first selected row of a stripe while this class serves the
-// entries of the stripe.
+// Serves the entries of the stripes that its cursor materializes on demand.
+// The base class navigates the file rows and stays at the first selected row
+// of a stripe while this class serves its entries.
 class NimbleRowIterator final : public NimbleIterator {
  public:
   NimbleRowIterator(
@@ -273,15 +236,11 @@ class NimbleRowIterator final : public NimbleIterator {
             projector->projectedNimbleType(),
             pool,
 
-            // TODO: Make velox::BufferPool thread-safe and pass one pool here,
-            // so that the stripes that materialize in parallel share scratch
-            // buffers instead of each decoding with a pool of its own.
             IndexScanCursor::encodingOptions(
                 *projector,
                 options.cacheEncodingView,
                 /*bufferPool=*/nullptr),
             std::move(entryDecoder),
-            maxConcurrentStripes(options),
             options.collectTimings)},
         cursor_{IndexScanCursor::create(
             std::move(projector),
@@ -396,7 +355,7 @@ class NimbleRowIterator final : public NimbleIterator {
     stripeEndRow_ = row + static_cast<uint32_t>(entries_->numRows);
   }
 
-  // Materializes the stripes of the cursor, which shares it with its prefetch.
+  // Materializes the stripes loaded by the cursor.
   // Declared before the cursor, which takes it at construction.
   const std::shared_ptr<EntryMaterializer> materializer_;
   // Shares stripe-loading state with active prefetch operations.
