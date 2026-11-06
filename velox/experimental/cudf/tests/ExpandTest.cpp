@@ -112,7 +112,7 @@ TEST_F(CudfExpandTest, complexConstantFallsBackToCpu) {
   facebook::velox::test::assertEqualVectors(expected, result);
 
   const auto operatorStats = toOperatorStats(task->taskStats());
-  EXPECT_EQ(operatorStats.count(OperatorType::kExpand), 1);
+  EXPECT_EQ(operatorStats.count(std::string(OperatorType::kExpand)), 1);
   EXPECT_EQ(operatorStats.count("CudfExpand"), 0);
 }
 
@@ -145,7 +145,7 @@ TEST_F(CudfExpandTest, intervalDayTimeConstantFallsBackToCpu) {
       .copyResults(pool(), task);
 
   const auto operatorStats = toOperatorStats(task->taskStats());
-  EXPECT_EQ(operatorStats.count(OperatorType::kExpand), 1);
+  EXPECT_EQ(operatorStats.count(std::string(OperatorType::kExpand)), 1);
   EXPECT_EQ(operatorStats.count("CudfExpand"), 0);
 }
 
