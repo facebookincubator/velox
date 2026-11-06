@@ -133,6 +133,7 @@ set(
   OrderByTest.cpp
   HashTableCacheTest.cpp
   HashTableTest.cpp
+  JoinTableBuilderTest.cpp
   RowNumberTest.cpp
   UnnestTest.cpp
   PlanNodeSerdeTest.cpp
