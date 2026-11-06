@@ -94,10 +94,12 @@ class VectorStateDeclaration : public StateDeclaration {
       std::string name,
       RowTypePtr schema,
       PlanNodePtr initialPlan = nullptr,
-      bool append = false)
+      bool append = false,
+      bool coalesceInitialBatches = false)
       : StateDeclaration{std::move(name), std::move(initialPlan)},
         schema_{std::move(schema)},
-        append_{append} {}
+        append_{append},
+        coalesceInitialBatches_{coalesceInitialBatches} {}
 
   const RowTypePtr& schema() const {
     return schema_;
@@ -110,6 +112,17 @@ class VectorStateDeclaration : public StateDeclaration {
     return append_;
   }
 
+  /// When true, the entry stores its initial plan's output in batches of about
+  /// the query's output batch size (preferred_output_batch_bytes, at most
+  /// max_output_batch_rows rows), concatenating consecutive smaller batches,
+  /// so the plans that read it see large batches whatever sizes the initial
+  /// plan's output had, such as the small batches an Exchange emits while its
+  /// first bytes arrive.  Off by default: a reading plan's drivers split the
+  /// entry by batch, so fewer batches can leave drivers idle.
+  bool coalesceInitialBatches() const {
+    return coalesceInitialBatches_;
+  }
+
   folly::dynamic serialize() const override;
 
   std::string toString() const override;
@@ -119,6 +132,9 @@ class VectorStateDeclaration : public StateDeclaration {
 
   // Whether writes to this entry append (accumulate) or replace (default).
   bool append_;
+
+  // Whether the initial value is stored in output-sized batches.
+  bool coalesceInitialBatches_;
 };
 
 /// Fluent builder for a VectorStateDeclaration -- declares a vector state entry
@@ -133,11 +149,15 @@ class VectorState {
   /// Sets the plan producing the entry's initial value (run once in Phase 1).
   VectorState& initial(PlanNodePtr initialPlan);
 
+  /// Stores the initial value in output-sized batches; see
+  /// VectorStateDeclaration::coalesceInitialBatches().
+  VectorState& coalesceInitialBatches();
+
   /// Builds the declaration.  Implicit so the builder can be passed wherever a
   /// StateDeclarationPtr is expected (e.g. fixedPoint's state list).
   operator StateDeclarationPtr() const {
     return std::make_shared<VectorStateDeclaration>(
-        name_, schema_, initialPlan_, append_);
+        name_, schema_, initialPlan_, append_, coalesceInitialBatches_);
   }
 
  private:
@@ -145,6 +165,7 @@ class VectorState {
   RowTypePtr schema_;
   bool append_;
   PlanNodePtr initialPlan_;
+  bool coalesceInitialBatches_{false};
 };
 
 /// Holds a BaseHashTable for key-value lookups or key-only membership

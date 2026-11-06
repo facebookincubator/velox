@@ -63,6 +63,64 @@ RowVectorPtr copyRowVector(
   return target;
 }
 
+// Returns 'batches' with consecutive batches concatenated, in order, into
+// batches of about the query's output batch size: preferred_output_batch_bytes
+// at their average row size, at most max_output_batch_rows rows.  A batch
+// already that large is kept as is, and none is split.  Each batch is released
+// once copied, so the rows are held about once.
+std::vector<RowVectorPtr> coalesceBatches(
+    std::vector<RowVectorPtr> batches,
+    const core::QueryConfig& queryConfig,
+    memory::MemoryPool* pool) {
+  uint64_t numRows{0};
+  uint64_t numBytes{0};
+  for (const auto& batch : batches) {
+    numRows += batch->size();
+    numBytes += batch->estimateFlatSize();
+  }
+  if (numRows == 0) {
+    return batches;
+  }
+  const uint64_t averageRowBytes = std::max<uint64_t>(numBytes / numRows, 1);
+  const uint64_t targetRows = std::clamp<uint64_t>(
+      queryConfig.preferredOutputBatchBytes() / averageRowBytes,
+      1,
+      queryConfig.maxOutputBatchRows());
+
+  std::vector<RowVectorPtr> coalesced;
+  std::vector<RowVectorPtr> pending;
+  uint64_t numPendingRows{0};
+  const auto flush = [&]() {
+    if (pending.size() == 1) {
+      coalesced.push_back(std::move(pending.front()));
+    } else if (pending.size() > 1) {
+      auto target = BaseVector::create<RowVector>(
+          pending.front()->type(), numPendingRows, pool);
+      vector_size_t offset{0};
+      for (auto& batch : pending) {
+        target->copy(batch.get(), offset, 0, batch->size());
+        offset += batch->size();
+        batch.reset();
+      }
+      coalesced.push_back(std::move(target));
+    }
+    pending.clear();
+    numPendingRows = 0;
+  };
+  for (auto& batch : batches) {
+    if (numPendingRows + batch->size() > targetRows) {
+      flush();
+    }
+    numPendingRows += batch->size();
+    pending.push_back(std::move(batch));
+    if (numPendingRows >= targetRows) {
+      flush();
+    }
+  }
+  flush();
+  return coalesced;
+}
+
 // Adds a leaf named 'name' to the pool of 'task', for memory that drivers of
 // the loop's sub-tasks allocate.  When the task's pool has a reclaimer, so does
 // the leaf: one that suspends the allocating driver while it waits for memory
@@ -692,6 +750,12 @@ folly::coro::Task<void> FixedPointLoop::initializeState(
           /*iteration=*/0,
           state_->pool().get(),
           maxDrivers_);
+      if (vector->coalesceInitialBatches()) {
+        batches = coalesceBatches(
+            std::move(batches),
+            owner_->queryCtx()->queryConfig(),
+            state_->pool().get());
+      }
       state_->setVector(vector->name(), batches);
       initializationPlans.push_back({
           .maxDrivers = maxDrivers_,

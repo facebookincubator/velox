@@ -1277,6 +1277,38 @@ TEST_F(PlanNodeSerdeTest, fixedPointSequence) {
   testSerde(plan);
 }
 
+// coalesceInitialBatches lives on the vector state declaration; dropping it
+// would silently store the initial value in the batches the initial plan
+// produced.
+TEST_F(PlanNodeSerdeTest, fixedPointCoalescedInitialBatches) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW("x", BIGINT());
+  auto seed =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})})
+          .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      core::VectorState("n", schema)
+                          .initial(seed)
+                          .coalesceInitialBatches(),
+                      PlanBuilder(idGenerator)
+                          .stateSource("n", schema)
+                          .project({"x + 1 AS x"}),
+                      core::ConvergenceConfig::withMaxIterations(9))
+                  .planNode();
+  testSerde(plan);
+
+  const auto copy = velox::ISerializable::deserialize<core::PlanNode>(
+      plan->serialize(), pool());
+  const auto* fixedPoint =
+      dynamic_cast<const core::FixedPointNode*>(copy.get());
+  ASSERT_NE(fixedPoint, nullptr);
+  const auto& vectorState = dynamic_cast<const core::VectorStateDeclaration&>(
+      *fixedPoint->stateDeclarations()[0]);
+  EXPECT_TRUE(vectorState.coalesceInitialBatches());
+}
+
 TEST_F(PlanNodeSerdeTest, fixedPointFibonacci) {
   // Shape (2): iterate Fibonacci until the latest value exceeds a bound.  A
   // replace-mode vector state read in full each iteration, with a convergence

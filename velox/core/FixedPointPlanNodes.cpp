@@ -893,7 +893,8 @@ std::shared_ptr<const StateDeclaration> StateDeclaration::deserialize(
         std::move(name),
         schema,
         std::move(initialPlan),
-        obj["append"].asBool());
+        obj["append"].asBool(),
+        obj.getDefault("coalesceInitialBatches", false).asBool());
   }
   if (type == "hashTable") {
     auto keyColumns =
@@ -908,19 +909,28 @@ folly::dynamic VectorStateDeclaration::serialize() const {
   auto obj = serializeBase("vector");
   obj["schema"] = schema_->serialize();
   obj["append"] = append_;
+  if (coalesceInitialBatches_) {
+    obj["coalesceInitialBatches"] = true;
+  }
   return obj;
 }
 
 std::string VectorStateDeclaration::toString() const {
   return fmt::format(
-      "{} (vector, {}{})",
+      "{} (vector, {}{}{})",
       name(),
       append_ ? "append" : "replace",
-      initialPlan() != nullptr ? ", initialized" : "");
+      initialPlan() != nullptr ? ", initialized" : "",
+      coalesceInitialBatches_ ? ", coalesced" : "");
 }
 
 VectorState& VectorState::initial(PlanNodePtr initialPlan) {
   initialPlan_ = std::move(initialPlan);
+  return *this;
+}
+
+VectorState& VectorState::coalesceInitialBatches() {
+  coalesceInitialBatches_ = true;
   return *this;
 }
 

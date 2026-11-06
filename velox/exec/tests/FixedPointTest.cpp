@@ -3400,6 +3400,59 @@ TEST_F(FixedPointTest, iterationMaxDriversScalesTheBody) {
   }
 }
 
+// An entry declared with coalesceInitialBatches stores its initial plan's
+// one-row batches as batches of the query's output batch size, at most
+// max_output_batch_rows rows each; an entry without it keeps them as produced.
+TEST_F(FixedPointTest, coalesceInitialBatches) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  const auto seedBatchSizes = [&](bool coalesce,
+                                  std::optional<int32_t> maxOutputBatchRows) {
+    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::VectorState seed("seed", schema);
+    seed.initial(
+        PlanBuilder(idGenerator).values(makeOneRowBatches(100)).planNode());
+    if (coalesce) {
+      seed.coalesceInitialBatches();
+    }
+    auto plan = PlanBuilder(idGenerator)
+                    .fixedPoint(
+                        std::vector<StateDeclarationPtr>{
+                            seed,
+                            core::VectorState("total", schema),
+                        },
+                        PlanBuilder(idGenerator)
+                            .stateSource("seed", schema)
+                            .singleAggregation({"key"}, {"sum(val)"})
+                            .project({"key", "a0 AS val"}),
+                        ConvergenceConfig::withMaxIterations(1),
+                        /*outputStateEntry=*/"total")
+                    .planNode();
+    AssertQueryBuilder builder(plan);
+    builder.fixedPointOptions(&localOptions());
+    if (maxOutputBatchRows.has_value()) {
+      builder.config(
+          core::QueryConfig::kMaxOutputBatchRows,
+          std::to_string(*maxOutputBatchRows));
+    }
+    auto task = builder.assertResults(makeKeyValueRow(0, 4'950));
+    std::vector<vector_size_t> sizes;
+    for (const auto& batch : task->fixedPoint()->state()->getVector("seed")) {
+      sizes.push_back(batch->size());
+    }
+    return sizes;
+  };
+
+  EXPECT_EQ(
+      seedBatchSizes(/*coalesce=*/false, std::nullopt),
+      std::vector<vector_size_t>(100, 1));
+  EXPECT_THAT(
+      seedBatchSizes(/*coalesce=*/true, std::nullopt),
+      testing::ElementsAre(100));
+  EXPECT_THAT(
+      seedBatchSizes(/*coalesce=*/true, /*maxOutputBatchRows=*/30),
+      testing::ElementsAre(30, 30, 30, 10));
+}
+
 // The plans of a chain run at the same time and share the driver budget: with
 // five drivers the producer gets three and the consumer two.  Each producer
 // driver counts the batches it read, so the counts show the split: one driver
