@@ -2100,6 +2100,45 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     });
   }
 
+  void testImportNestedDictionary() {
+    // Export writes a dictionary over a dictionary as an Arrow dictionary whose
+    // values are dictionary encoded too. Structs, arrays and maps take the
+    // types of their children from the schema.
+    auto roundTrip = [&](const VectorPtr& vector) {
+      ArrowSchema schema;
+      ArrowArray array;
+      velox::exportToArrow(vector, schema, options_);
+      velox::exportToArrow(vector, array, pool(), options_);
+
+      auto output = importFromArrow(schema, array, pool());
+      assertEqualVectors(vector, output);
+      if (isViewer()) {
+        schema.release(&schema);
+        array.release(&array);
+      }
+    };
+    auto nestedDictionary = [&]() {
+      return wrapInDictionary(
+          makeIndices({2, 0, 1}),
+          wrapInDictionary(
+              makeIndices({1, 0, 1}), makeFlatVector<int64_t>({10, 20})));
+    };
+
+    // Struct child.
+    roundTrip(makeRowVector({nestedDictionary()}));
+
+    // Array elements.
+    roundTrip(makeArrayVector({0, 1}, nestedDictionary()));
+
+    // Map values.
+    roundTrip(makeMapVector(
+        {0, 1}, makeFlatVector<int64_t>({1, 2, 3}), nestedDictionary()));
+
+    // Three levels of dictionaries.
+    roundTrip(makeRowVector(
+        {wrapInDictionary(makeIndices({1, 2, 0}), nestedDictionary())}));
+  }
+
   void testImportStringView() {
     arrow::StringViewBuilder sb(arrow::default_memory_pool());
     ASSERT_OK(sb.Append("hello world", 11));
@@ -2383,6 +2422,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionary) {
   testImportDictionary();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, nestedDictionary) {
+  testImportNestedDictionary();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionaryEncodedNullType) {
   testImportDictionaryEncodedNullType();
 }
@@ -2508,6 +2551,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, map) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionary) {
   testImportDictionary();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, nestedDictionary) {
+  testImportNestedDictionary();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionaryEncodedNullType) {
