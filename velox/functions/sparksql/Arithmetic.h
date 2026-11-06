@@ -657,6 +657,7 @@ struct WidthBucketFunction {
 };
 
 namespace detail {
+
 // Decodes the hexadecimal string 'input' into 'result'. Returns false if
 // 'input' contains a character that is not a hexadecimal digit.
 template <typename TResult>
@@ -687,6 +688,7 @@ FOLLY_ALWAYS_INLINE bool decodeHex(const StringView& input, TResult& result) {
   }
   return true;
 }
+
 } // namespace detail
 
 /// unhex(x): returns NULL if 'x' is not a valid hexadecimal string.
