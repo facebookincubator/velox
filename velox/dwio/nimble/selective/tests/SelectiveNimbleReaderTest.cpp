@@ -324,8 +324,9 @@ class SelectiveNimbleReaderTest
 
   // Writes a multi-chunk dictionary-encoded column with nulls where 'isNullAt'
   // is true, then checks dictionary-aware reads of it: projection, range
-  // filters that accept or reject nulls, filter-only reads, IS NOT NULL, and
-  // sparse row selections. Each read takes 'batchSize' rows per batch.
+  // filters that accept or reject nulls, filter-only reads, IS NOT NULL, IS
+  // NULL, and sparse row selections. Each read takes 'batchSize' rows per
+  // batch.
   template <typename T>
   void testDictionaryAwareReads(
       const std::function<bool(vector_size_t)>& isNullAt,
@@ -438,6 +439,36 @@ class SelectiveNimbleReaderTest
       validate(*input, *readers.rowReader, batchSize, [&](auto row) {
         return !values->isNullAt(row);
       });
+    }
+
+    // IS NULL rejects every dictionary entry, so only the null rows pass. The
+    // scan fast path is off here, so the read goes through the dictionary
+    // visitor instead of reading the nulls alone.
+    for (const bool filterOnly : {false, true}) {
+      SCOPED_TRACE(fmt::format("IS NULL filterOnly={}", filterOnly));
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      auto* valueSpec = scanSpec->childByName("c0");
+      valueSpec->setFilter(std::make_unique<common::IsNull>());
+      if (filterOnly) {
+        valueSpec->setProjectOut(false);
+        valueSpec->setChannel(common::ScanSpec::kNoChannel);
+        scanSpec->childByName("c1")->setChannel(0);
+      }
+      auto readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          /*preserveFlatMapsInMemory=*/false,
+          /*lazyColumnIo=*/false,
+          /*externalDictionaryResolver=*/nullptr,
+          /*dictionaryAwareReads=*/true);
+      validate(
+          *input,
+          *readers.rowReader,
+          batchSize,
+          filterOnly ? 0 : -1,
+          [&](auto row) { return values->isNullAt(row); });
     }
 
     if (isNullAt) {
