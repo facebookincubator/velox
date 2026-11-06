@@ -2533,12 +2533,29 @@ void Task::splitsFinished(
 }
 
 namespace {
+// Keeps one preload's cleanup failure from interrupting other cleanup.
+void closePreloadedSplit(const connector::ConnectorSplit& split) {
+  if (!split.dataSource) {
+    return;
+  }
+  try {
+    split.dataSource->close();
+    TestValue::adjust(
+        "facebook::velox::exec::Task::closePreloadedSplit",
+        split.dataSource.get());
+  } catch (const std::exception& error) {
+    LOG(WARNING) << "Failed to close preloaded split: " << error.what();
+  } catch (...) {
+    LOG(WARNING) << "Failed to close preloaded split: unknown exception";
+  }
+}
+
 // Closes preloads from discarded splits. Call without holding the task lock.
 template <typename Splits>
 void closePreloadedSplits(const Splits& splits) {
   for (const auto& split : splits) {
-    if (split.hasConnectorSplit() && split.connectorSplit->dataSource) {
-      split.connectorSplit->dataSource->close();
+    if (split.hasConnectorSplit()) {
+      closePreloadedSplit(*split.connectorSplit);
     }
   }
 }
@@ -3091,14 +3108,23 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
   bool removeFromOutputBufferManager{false};
   {
-    std::lock_guard<std::timed_mutex> l(mutex_);
+    std::unique_lock<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
       taskStats_.executionEndTimeMs =
           EpochTime::now<std::chrono::milliseconds>();
       executionEndWatch_.emplace();
     }
     if (!isRunningLocked()) {
-      return makeFinishFutureLocked("Task::terminate");
+      decltype(preloadingSplits_) preloadingSplitsToClose;
+      preloadingSplitsToClose.swap(preloadingSplits_);
+      auto finishFuture = makeFinishFutureLocked("Task::terminate");
+      // AsyncSource::close() does not rethrow preload errors. Its producer can
+      // acquire mutex_, so wait for it without holding the task lock.
+      l.unlock();
+      for (const auto& split : preloadingSplitsToClose) {
+        closePreloadedSplit(*split);
+      }
+      return finishFuture;
     }
     state_ = terminalState;
     VELOX_CHECK_EQ(
@@ -3277,7 +3303,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   closePreloadedSplits(abandonedSplits);
 
   for (const auto& split : preloadingSplits) {
-    split->dataSource->close();
+    closePreloadedSplit(*split);
   }
 
   for (auto& barrierPromise : barrierPromises) {
