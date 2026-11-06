@@ -952,6 +952,45 @@ TEST_P(ArrowBridgeImportTest, dictionary) {
   });
 }
 
+TEST_P(ArrowBridgeImportTest, nestedDictionary) {
+  // Export writes a dictionary over a dictionary as an Arrow dictionary whose
+  // values are dictionary encoded too. Structs, arrays and maps take the
+  // types of their children from the schema.
+  auto roundTrip = [&](const VectorPtr& vector) {
+    ArrowSchema schema;
+    ArrowArray array;
+    velox::exportToArrow(vector, schema, ArrowOptions{});
+    velox::exportToArrow(vector, array, pool(), ArrowOptions{});
+
+    auto output = importFromArrow(schema, array, pool());
+    assertEqualVectors(vector, output);
+    if (isViewer()) {
+      schema.release(&schema);
+      array.release(&array);
+    }
+  };
+  auto nestedDictionary = [&]() {
+    return wrapInDictionary(
+        makeIndices({2, 0, 1}),
+        wrapInDictionary(
+            makeIndices({1, 0, 1}), makeFlatVector<int64_t>({10, 20})));
+  };
+
+  // Struct child.
+  roundTrip(makeRowVector({nestedDictionary()}));
+
+  // Array elements.
+  roundTrip(makeArrayVector({0, 1}, nestedDictionary()));
+
+  // Map values.
+  roundTrip(makeMapVector(
+      {0, 1}, makeFlatVector<int64_t>({1, 2, 3}), nestedDictionary()));
+
+  // Three levels of dictionaries.
+  roundTrip(makeRowVector(
+      {wrapInDictionary(makeIndices({1, 2, 0}), nestedDictionary())}));
+}
+
 TEST_P(ArrowBridgeImportTest, dictionaryEncodedNullType) {
   const int32_t indices[] = {0, 0, 0, 0};
   const void* buffers[] = {nullptr, indices};
