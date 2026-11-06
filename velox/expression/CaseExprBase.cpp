@@ -16,6 +16,7 @@
 #include "velox/expression/CaseExprBase.h"
 #include "velox/expression/BooleanMix.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -25,6 +26,17 @@ size_t numClauses(const std::vector<ExprPtr>& inputs, bool hasSubject) {
   return inputs.size() - (hasSubject ? 1 : 0);
 }
 
+// Calls 'eval' with 'context' recording errors per row, like AND and OR
+// evaluate their inputs. Returns these errors, or nullptr if there are none.
+// Errors already in 'context' stay unchanged.
+template <typename TEval>
+EvalErrorsPtr
+evalCollectingErrors(EvalCtx& context, VectorPtr& result, TEval&& eval) {
+  ScopedVarSetter<EvalErrorsPtr> errorsSetter(context.errorsPtr(), nullptr);
+  ScopedVarSetter throwOnError(context.mutableThrowOnError(), false);
+  eval(result);
+  return std::move(*context.errorsPtr());
+}
 } // namespace
 
 CaseExprBase::CaseExprBase(
@@ -59,9 +71,9 @@ void CaseExprBase::evalSpecialForm(
 
   if (propagatesNulls_) {
     // Rows where any field is null return null. Set these rows to null and
-    // deselect them before evaluating the conditions, so that the conditions
-    // can't fail on these rows. Null propagation is on only if all THEN and
-    // ELSE clauses access the same vectors, so loading lazy vectors here
+    // deselect them before evaluating the subject and the conditions, so that
+    // these can't fail on these rows. Null propagation is on only if all THEN
+    // and ELSE clauses access the same vectors, so loading lazy vectors here
     // doesn't load extra vectors.
     auto& remaining = *remainingRows.get();
     for (auto* field : distinctFields_) {
@@ -77,12 +89,26 @@ void CaseExprBase::evalSpecialForm(
   }
 
   VectorPtr subjectVector;
-  if (hasSubject_) {
-    subject()->eval(rows, context, subjectVector);
+  if (hasSubject_ && remainingRows->hasSelections()) {
+    auto subjectErrors =
+        evalCollectingErrors(context, subjectVector, [&](VectorPtr& result) {
+          subject()->eval(*remainingRows, context, result);
+        });
 
-    // Rows where the subject failed don't match any case.
     if (context.errors()) {
       context.deselectErrors(*remainingRows);
+    }
+
+    // A row where the subject failed can get the THEN value of any case or the
+    // ELSE value.
+    if (subjectErrors) {
+      resolveErrors(
+          subjectErrors,
+          std::nullopt,
+          *remainingRows,
+          subjectVector,
+          context,
+          localResult);
     }
   }
 
@@ -96,13 +122,29 @@ void CaseExprBase::evalSpecialForm(
       break;
     }
 
-    evalCondition(i, *remainingRows, subjectVector, context, condition);
+    auto conditionErrors =
+        evalCollectingErrors(context, condition, [&](VectorPtr& result) {
+          evalCondition(i, *remainingRows, subjectVector, context, result);
+        });
 
     if (context.errors()) {
       context.deselectErrors(*remainingRows);
-      if (!remainingRows->hasSelections()) {
-        break;
-      }
+    }
+
+    // A row where the condition failed can get the THEN value of this case or
+    // a value of the following cases.
+    if (conditionErrors) {
+      resolveErrors(
+          conditionErrors,
+          i,
+          *remainingRows,
+          subjectVector,
+          context,
+          localResult);
+    }
+
+    if (!remainingRows->hasSelections()) {
+      break;
     }
 
     // A null condition doesn't select the THEN clause.
@@ -170,6 +212,157 @@ void CaseExprBase::evalSpecialForm(
   }
 
   context.moveOrCopyResult(localResult, rows, finalResult);
+}
+
+void CaseExprBase::resolveErrors(
+    const EvalErrorsPtr& errors,
+    std::optional<size_t> failedCase,
+    SelectivityVector& rows,
+    const VectorPtr& subject,
+    EvalCtx& context,
+    VectorPtr& result) {
+  const auto end = std::min(errors->size(), rows.end());
+  if (rows.begin() >= end) {
+    return;
+  }
+  LocalSelectivityVector errorRows(context);
+  errorRows.get(rows.end(), false);
+  bits::andBits(
+      errorRows->asMutableRange().bits(),
+      rows.asRange().bits(),
+      errors->errorFlags(),
+      rows.begin(),
+      end);
+  errorRows->updateBounds();
+  if (!errorRows->hasSelections()) {
+    return;
+  }
+  rows.deselect(*errorRows);
+
+  // Values of FUNCTION and other types that aren't comparable can't be checked
+  // for equality.
+  if (type()->isComparable()) {
+    LocalSelectivityVector agreedRows(context, *errorRows);
+    auto value = evalCommonValue(failedCase, *agreedRows, subject, context);
+    if (agreedRows->hasSelections()) {
+      context.moveOrCopyResult(value, *agreedRows, result);
+      errorRows->deselect(*agreedRows);
+      if (!errorRows->hasSelections()) {
+        return;
+      }
+    }
+  }
+
+  if (context.throwOnError()) {
+    errors->throwFirstError(*errorRows);
+  }
+  context.addErrors(*errorRows, errors, *context.errorsPtr());
+}
+
+VectorPtr CaseExprBase::evalCommonValue(
+    std::optional<size_t> failedCase,
+    SelectivityVector& rows,
+    const VectorPtr& subject,
+    EvalCtx& context) {
+  // A clause may fail on rows that can't get its value. Count such a failure
+  // as a disagreement and keep it out of 'context'.
+  ScopedVarSetter throwOnError(context.mutableThrowOnError(), false);
+  ScopedVarSetter captureErrorDetails(
+      context.mutableCaptureErrorDetails(), false);
+  ScopedThreadSkipErrorDetails skipErrorDetails(true);
+  ScopedVarSetter<EvalErrorsPtr> errorsSetter(context.errorsPtr(), nullptr);
+
+  // Evaluates the THEN clause of case 'index', or the ELSE value if 'index' is
+  // 'numCases_'.
+  auto evalValue =
+      [&](size_t index, const SelectivityVector& valueRows, VectorPtr& result) {
+        context.errorsPtr()->reset();
+        if (index < numCases_) {
+          thenClause(index)->eval(valueRows, context, result);
+        } else if (hasElseClause_) {
+          elseClause()->eval(valueRows, context, result);
+        } else {
+          result = BaseVector::createNullConstant(
+              type(), valueRows.end(), context.pool());
+        }
+      };
+
+  const auto firstCase = failedCase.value_or(0);
+  VectorPtr value;
+  evalValue(firstCase, rows, value);
+  context.deselectErrors(rows);
+  if (value == nullptr) {
+    rows.clearAll();
+  }
+
+  // Rows that can still get the values of the following cases. A row stops at
+  // the first case whose condition is true.
+  LocalSelectivityVector pendingRows(context, rows);
+  LocalSelectivityVector compareRows(context);
+  LocalSelectivityVector trueRows(context);
+  BufferPtr tempValues;
+  for (auto i = firstCase + 1; i <= numCases_ && pendingRows->hasSelections();
+       ++i) {
+    compareRows.get(*pendingRows);
+
+    // If the subject failed, a row can get any value. Otherwise, a row gets
+    // the THEN value of case 'i' if the condition is true and can get it if
+    // the condition fails.
+    if (failedCase.has_value() && i < numCases_) {
+      context.errorsPtr()->reset();
+      VectorPtr condition;
+      evalCondition(i, *pendingRows, subject, context, condition);
+      trueRows.get(*pendingRows);
+      context.deselectErrors(*trueRows);
+      compareRows->deselect(*trueRows);
+      if (trueRows->hasSelections()) {
+        const uint64_t* values;
+        switch (getFlatBool(
+            condition.get(),
+            *trueRows,
+            context,
+            &tempValues,
+            nullptr,
+            true /* mergeNullsToValues */,
+            &values,
+            nullptr)) {
+          case BooleanMix::kAllTrue:
+            break;
+          case BooleanMix::kAllNull:
+          case BooleanMix::kAllFalse:
+            trueRows->clearAll();
+            break;
+          default:
+            bits::andBits(
+                trueRows->asMutableRange().bits(),
+                values,
+                trueRows->begin(),
+                trueRows->end());
+            trueRows->updateBounds();
+        }
+        compareRows->select(*trueRows);
+        pendingRows->deselect(*trueRows);
+      }
+    }
+
+    if (!compareRows->hasSelections()) {
+      continue;
+    }
+
+    VectorPtr other;
+    evalValue(i, *compareRows, other);
+    const auto* errors = context.errors();
+    compareRows->applyToSelected([&](auto row) {
+      if (other == nullptr || (errors && errors->hasErrorAt(row)) ||
+          !value->equalValueAt(other.get(), row, row)) {
+        rows.setValid(row, false);
+        pendingRows->setValid(row, false);
+      }
+    });
+    rows.updateBounds();
+    pendingRows->updateBounds();
+  }
+  return value;
 }
 
 void CaseExprBase::computePropagatesNulls() {

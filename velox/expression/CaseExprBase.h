@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <optional>
+
 #include "velox/expression/SpecialForm.h"
 
 namespace facebook::velox::exec {
@@ -27,6 +29,14 @@ namespace facebook::velox::exec {
 /// Inputs are an optional subject, followed by the WHEN and THEN clauses of
 /// each case and an optional ELSE clause. Subclasses define how the condition
 /// of a case is computed from its WHEN clause and the subject.
+///
+/// A row where the subject or a condition fails still gets a value when all
+/// values the row can get are equal, like 'x AND false' returns false even if
+/// 'x' fails. If the condition of a case fails, the row can get the THEN value
+/// of that case or the value of the following cases. If the subject fails, the
+/// row can get the THEN value of any case or the ELSE value. NULL equals NULL.
+/// For example, 'if(1 / 0 = 5, c0, c0)' returns 'c0'. Otherwise, the error is
+/// raised.
 class CaseExprBase : public SpecialForm {
  public:
   void evalSpecialForm(
@@ -92,6 +102,29 @@ class CaseExprBase : public SpecialForm {
   }
 
   void computePropagatesNulls() override;
+
+  // Handles the rows of 'rows' where 'errors' has an error and removes them
+  // from 'rows'. 'failedCase' is the case whose condition failed, or
+  // std::nullopt if the subject failed. If all values a row can get are equal,
+  // writes the value to 'result' and drops the error. Otherwise, throws the
+  // error or, if 'context' doesn't throw on errors, adds it to 'context'.
+  void resolveErrors(
+      const EvalErrorsPtr& errors,
+      std::optional<size_t> failedCase,
+      SelectivityVector& rows,
+      const VectorPtr& subject,
+      EvalCtx& context,
+      VectorPtr& result);
+
+  // Evaluates the values that the rows of 'rows' can get after 'failedCase'
+  // failed and returns the first of these values. Removes from 'rows' the rows
+  // where these values aren't all equal. Stops evaluating a row at its first
+  // value that differs.
+  VectorPtr evalCommonValue(
+      std::optional<size_t> failedCase,
+      SelectivityVector& rows,
+      const VectorPtr& subject,
+      EvalCtx& context);
 
   // Scratch buffer reused across calls by getFlatBool.
   BufferPtr tempValues_;

@@ -86,6 +86,36 @@ void addConstMixedBenchmarks(
   }
 }
 
+// IF and SWITCH whose conditions don't fail. Uses smaller batches than the sets
+// above. The cost per batch matters most at a few hundred rows.
+void addConditionalBenchmarks(
+    ExpressionBenchmarkBuilder& builder,
+    const std::string& prefix) {
+  for (auto vectorSize : {100, 300, 1'000, 10'000}) {
+    builder
+        .addBenchmarkSet(
+            fmt::format("{}_cond_batch{}", prefix, vectorSize),
+            ROW({"a", "b", "c", "d"}, {DOUBLE(), DOUBLE(), BIGINT(), BIGINT()}))
+        .withFuzzerOptions(
+            {.vectorSize = static_cast<size_t>(vectorSize), .nullRatio = 0.0})
+        // Baseline without IF.
+        .addExpression("no_if", "a * 2.0 + b")
+        // Comparison in the condition.
+        .addExpression("if_max_double", "if(a > b, a, b)")
+        .addExpression("if_max_bigint", "if(c > d, c, d)")
+        // Arithmetic in THEN and ELSE.
+        .addExpression("if_arith", "if(a > 0.5, a * 2.0, b + 1.0)")
+        // Function call in the condition.
+        .addExpression("if_floor", "if(floor(a * 10.0) = 3.0, 1.0, 0.0)")
+        // 3 conditions.
+        .addExpression(
+            "switch_3",
+            "case when a > 0.9 then a when a > 0.5 then b "
+            "when a > 0.1 then a * b else b * 2.0 end")
+        .withIterations(1'000);
+  }
+}
+
 /// Extends ExpressionBenchmarkBuilder to allow setting query config.
 class ConfigurableBenchmarkBuilder : public ExpressionBenchmarkBuilder {
  public:
@@ -106,6 +136,7 @@ int main(int argc, char** argv) {
   addArithmeticBenchmarks(fastPathOn, "on");
   addComparisonBenchmarks(fastPathOn, "on");
   addConstMixedBenchmarks(fastPathOn, "on");
+  addConditionalBenchmarks(fastPathOn, "on");
 
   // Fast path OFF via config.
   ConfigurableBenchmarkBuilder fastPathOff;
@@ -113,6 +144,7 @@ int main(int argc, char** argv) {
   addArithmeticBenchmarks(fastPathOff, "off");
   addComparisonBenchmarks(fastPathOff, "off");
   addConstMixedBenchmarks(fastPathOff, "off");
+  addConditionalBenchmarks(fastPathOff, "off");
 
   fastPathOn.registerBenchmarks();
   fastPathOff.registerBenchmarks();
