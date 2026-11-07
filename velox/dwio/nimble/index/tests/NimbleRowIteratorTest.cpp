@@ -49,6 +49,7 @@
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/NimbleIterator.h"
+#include "velox/dwio/nimble/index/StreamReaderCache.h"
 #include "velox/dwio/nimble/index/StripeStreams.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
@@ -56,7 +57,6 @@
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/serializer/StreamReader.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/FilePropertiesGenerated.h"
@@ -234,6 +234,135 @@ TEST_P(NimbleRowIteratorTest, rowIteratorKeepsKeysAlignedAfterSkippingRows) {
   expectValue(7);
   iterator.next();
   expectKey(8);
+}
+
+TEST_P(NimbleRowIteratorTest, rowIteratorsShareStreamReaders) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  constexpr int32_t kNumRows{12};
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  NimbleIterator::Options options;
+
+  // Each StreamReader constructs its output type once. Retain the types so
+  // that rebuilding a reader cannot reuse an earlier type's address.
+  std::set<velox::TypePtr> decodedTypes;
+  const auto decodeRows = compactRowDecoder();
+  const NimbleIterator::EntryDecoder entryDecoder =
+      [&](const velox::RowVectorPtr& rows,
+          nimble::index::KeyCursor& keyCursor,
+          folly::IOBufQueue& keyStorage,
+          folly::IOBufQueue& valueStorage,
+          std::vector<std::string_view>& keys,
+          std::vector<std::string_view>& values) {
+        decodedTypes.insert(rows->type());
+        decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
+      };
+
+  const auto fileHandle = makeFileHandle();
+  velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  configureReaderOptions(
+      readerOptions,
+      /*setDataIoStats=*/true,
+      /*setMetadataIoStats=*/true,
+      /*setIndexIoStats=*/true,
+      /*cacheData=*/false,
+      /*verifyStreamChecksums=*/false);
+  ensureTabletReaderCache();
+  auto cached = tabletReaderCache_->get(
+      fileHandle.file, TabletReader::configureOptions(readerOptions));
+  const auto projection =
+      std::make_shared<const NimbleTypeProjection>(buildProjectedNimbleType(
+          cached->nimbleSchema().get(), projectedSubfields));
+  auto tablet = std::shared_ptr<TabletReader>{cached, cached->tablet().get()};
+  options.cacheEncodingView = GetParam().cacheEncodingView;
+  options.streamReaderCache =
+      std::make_shared<StreamReaderCache>(rootPool_, /*maxReaders=*/2);
+  const auto createSharedIterator = [&] {
+    return NimbleIterator::createRowIterator(
+        NimbleIndexProjector::create(
+            tablet,
+            fileHandle,
+            projection,
+            /*blockCache=*/nullptr,
+            readerOptions),
+        leafPool_.get(),
+        entryDecoder,
+        options);
+  };
+
+  const auto expectValue = [&](TestNimbleIterator& iterator, int32_t row) {
+    SCOPED_TRACE(row);
+    ASSERT_TRUE(iterator.valid());
+    const auto actual = velox::row::CompactRow::deserialize(
+        {iterator.value()}, ROW("value", INTEGER()), leafPool_.get());
+    const auto expected = vectorMaker_->rowVector(
+        {"value"}, {vectorMaker_->flatVector<int32_t>({row * 10})});
+    expectVectorRows(actual, expected);
+  };
+
+  // Two iterators that are open at once decode their stripes in turn, and each
+  // keeps a reader of the cache for its lifetime.
+  {
+    TestNimbleIterator first{createSharedIterator()};
+    TestNimbleIterator second{createSharedIterator()};
+    first.seekToFirst();
+    second.seekToFirst();
+    for (int32_t row = 0; row < kNumRows; ++row) {
+      expectValue(first, row);
+      expectValue(second, row);
+      first.next();
+      second.next();
+    }
+    EXPECT_FALSE(first.valid());
+    EXPECT_FALSE(second.valid());
+  }
+  EXPECT_THAT(decodedTypes, ::testing::SizeIs(2));
+
+  // A later iterator decodes with a reader that the earlier ones returned when
+  // they were destroyed, even with the other encoding view setting, since a
+  // reader takes the encoding options of each stripe that it binds.
+  options.cacheEncodingView = !GetParam().cacheEncodingView;
+  TestNimbleIterator third{createSharedIterator()};
+  third.seekToFirst();
+  for (int32_t row = 0; row < kNumRows; ++row) {
+    expectValue(third, row);
+    third.next();
+  }
+  EXPECT_FALSE(third.valid());
+  EXPECT_THAT(decodedTypes, ::testing::SizeIs(2));
+}
+
+TEST_P(NimbleRowIteratorTest, rowIteratorKeepsItsStreamReaderWithoutACache) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  // Each StreamReader constructs its output type once. Retain the types so
+  // that rebuilding a reader cannot reuse an earlier type's address.
+  std::set<velox::TypePtr> decodedTypes;
+  const auto decodeRows = compactRowDecoder();
+  TestNimbleIterator iterator{createEntryIterator(
+      projectedSubfields,
+      [&](const velox::RowVectorPtr& rows,
+          nimble::index::KeyCursor& keyCursor,
+          folly::IOBufQueue& keyStorage,
+          folly::IOBufQueue& valueStorage,
+          std::vector<std::string_view>& keys,
+          std::vector<std::string_view>& values) {
+        decodedTypes.insert(rows->type());
+        decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
+      },
+      /*options=*/{})};
+
+  // The options share no cache, so the iterator builds a reader for its first
+  // stripe and keeps it for the other two.
+  iterator.seekToFirst();
+  int32_t numRows{0};
+  for (; iterator.valid(); iterator.next()) {
+    ++numRows;
+  }
+  EXPECT_EQ(numRows, 12);
+  EXPECT_THAT(decodedTypes, ::testing::SizeIs(1));
 }
 
 TEST_P(NimbleRowIteratorTest, rowIteratorSkipsRowsAcrossPrefetchedStripes) {

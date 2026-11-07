@@ -169,6 +169,8 @@ add_library(
   NimbleIterator.cpp
   NimbleIterator.h
   NimbleRowIterator.cpp
+  StreamReaderCache.cpp
+  StreamReaderCache.h
 )
 target_link_libraries(
   nimble_index_iterator

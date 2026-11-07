@@ -542,9 +542,8 @@ class NimbleIndexProjector {
   // Returns decoding options backed by this projector's scratch pool.
   Encoding::Options encodingOptions(bool cacheEncodingView);
 
-  // Creates the schema-derived reader on first use by co_projectRows(), and
-  // again when 'cacheEncodingView' differs from the current reader's setting.
-  void ensureStreamReader(bool cacheEncodingView);
+  // Creates the schema-derived reader on first use by co_projectRows().
+  void ensureStreamReader();
 
   // Computes per-stripe pack ranges and returns the upper-bound byte estimate
   // used to allocate the sliced-output arena. Returns 0 when no stripe will be
@@ -660,11 +659,10 @@ class NimbleIndexProjector {
   // projector is single-threaded, matching BufferPool's ownership contract.
   velox::BufferPool encodingBufferPool_{velox::BufferPool::kDefaultCapacity};
 
-  // Decodes projected rows into Velox vectors. The serialized path does not
-  // need this reader, so it is created on the first co_projectRows() call.
+  // Decodes projected rows into Velox vectors with the encoding options of each
+  // request. The serialized path does not need this reader, so it is created
+  // on the first co_projectRows() call.
   std::unique_ptr<StreamReader> streamReader_;
-  // Options::cacheEncodingView of the call that created 'streamReader_'.
-  bool cacheEncodingView_{false};
 
   // Reused across stripes; its raw input format is fixed by the tablet. Only
   // the serialized path slices streams, so the slicer is created on the first

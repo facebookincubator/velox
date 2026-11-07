@@ -40,6 +40,7 @@ class MemoryPool;
 namespace facebook::nimble {
 
 class NimbleIndexProjector;
+class StreamReaderCache;
 
 namespace index {
 class KeyCursor;
@@ -95,6 +96,15 @@ class NimbleIterator {
     /// stripe and benefits. A point lookup reads one row and does better
     /// without them. See Encoding::Options::cacheEncodingView.
     bool cacheEncodingView{true};
+
+    /// Supplies the stream reader of the iterator, which keeps it for its
+    /// lifetime and returns it when it is destroyed, so that the iterators
+    /// that use the cache, such as the iterators of a file, share the readers.
+    /// The readers of the cache allocate from its pools, not from the pool of
+    /// the iterator. Every iterator that shares a cache must project the same
+    /// schema. When null, the iterator builds its reader and destroys it with
+    /// itself.
+    std::shared_ptr<StreamReaderCache> streamReaderCache{};
   };
 
   /// Creates an iterator over the output entries that 'entryDecoder' decodes
