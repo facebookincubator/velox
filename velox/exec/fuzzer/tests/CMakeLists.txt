@@ -12,6 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_executable(aggregation_fuzzer_base_test AggregationFuzzerBaseTest.cpp ../../tests/Main.cpp)
+add_test(aggregation_fuzzer_base_test aggregation_fuzzer_base_test)
+
+target_link_libraries(
+  aggregation_fuzzer_base_test
+  velox_aggregation_fuzzer
+  velox_simple_aggregate
+  velox_aggregates
+  velox_functions_prestosql
+  velox_vector_test_lib
+  GTest::gmock
+  GTest::gtest
+)
+
 add_executable(duck_query_runner_test DuckQueryRunnerTest.cpp)
 add_test(duck_query_runner_test duck_query_runner_test)
 
