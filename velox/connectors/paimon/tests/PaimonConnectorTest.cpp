@@ -1422,12 +1422,87 @@ TEST_F(PaimonConnectorTest, schemaEvolutionLambdaAndUnchangedArray) {
   }
 }
 
+TEST_F(PaimonConnectorTest, schemaEvolutionWithUnchangedNestedFields) {
+  const auto row = makeRowVector(
+      {"x", "y"},
+      {makeNullableFlatVector<int64_t>({10, std::nullopt, 30, 40}),
+       makeNullableFlatVector<std::string>(
+           {"first", std::nullopt, "third", "fourth"})});
+  row->setNull(2, true);
+  const std::vector<VectorPtr> nestedValues{
+      row,
+      makeArrayVector({0, 1, 1, 1}, row, {1}),
+      makeMapVector(
+          {0, 1, 1, 1},
+          makeFlatVector<std::string>({"k1", "k2", "k3", "k4"}),
+          row,
+          {1})};
+  for (const auto& nested : nestedValues) {
+    SCOPED_TRACE(nested->type()->toString());
+    const auto oldRows = makeRowVector(
+        {"old_nested", "a"}, {nested, makeFlatVector<int64_t>({1, 2, 3, 4})});
+    const auto current = makeRowVector(
+        {"b", "nested"}, {makeFlatVector<int64_t>({5, 6, 7, 8}), nested});
+    const auto type = asRowType(current->type());
+    const PaimonTableHandle::DataSchemas schemas{
+        {0, {asRowType(oldRows->type()), {11, 10}}}};
+    const auto plan = evolutionPlan(
+        evolutionTable(type, schemas), type, makePaimonColumnHandles(type));
+    common::SubfieldFilters filters;
+    filters.emplace(
+        common::Subfield("b"),
+        std::make_unique<common::BigintRange>(2, 7, false));
+    const auto table = evolutionTable(
+        type, schemas, std::move(filters), parseExpr("b % 2 = 1", type));
+    const auto filtered = evolutionPlan(
+        table,
+        ROW({{"selected_nested", nested->type()}}),
+        {{"selected_nested", makePaimonColumnHandles(type).at("nested")}});
+    const auto count = exec::test::PlanBuilder(
+                           evolutionPlan(table, ROW({}), {}),
+                           std::make_shared<core::PlanNodeIdGenerator>(1))
+                           .singleAggregation({}, {"count(1)"})
+                           .planNode();
+    common::SubfieldFilters nullFilters;
+    nullFilters.emplace(
+        common::Subfield("nested"), std::make_unique<common::IsNull>());
+    const auto nullPlan = evolutionPlan(
+        evolutionTable(type, schemas, std::move(nullFilters)),
+        ROW({{"b", BIGINT()}}),
+        {{"b", makePaimonColumnHandles(type).at("b")}});
+    const int64_t nullValue = nested->type()->isRow() ? 3 : 2;
+    const auto oldExpected =
+        makeRowVector({"b", "nested"}, {oldRows->childAt(1), nested});
+    const auto first =
+        makeRowVector({"selected_nested"}, {nested->slice(0, 1)});
+    const auto third =
+        makeRowVector({"selected_nested"}, {nested->slice(2, 1)});
+    for (const auto format : fileFormats()) {
+      SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+      const auto paths = makeFilePaths(2);
+      writeFile(paths[0]->getPath(), oldRows, format);
+      writeFile(paths[1]->getPath(), current, format);
+      const auto split = evolutionSplit(
+          format, {{paths[0]->getPath(), 0}, {paths[1]->getPath(), 17}});
+      exec::test::AssertQueryBuilder(plan).split(split).assertResults(
+          {oldExpected, current});
+      exec::test::AssertQueryBuilder(filtered).split(split).assertResults(
+          {third, first, third});
+      exec::test::AssertQueryBuilder(count).split(split).assertSingleResult(
+          int64_t{3});
+      exec::test::AssertQueryBuilder(nullPlan).split(split).assertResults(
+          makeRowVector(
+              {"b"}, {makeFlatVector<int64_t>({nullValue, nullValue + 4})}));
+    }
+  }
+}
+
 TEST_F(PaimonConnectorTest, schemaEvolutionOnlyValidatesNeededFields) {
   const auto nested = ROW({{"x", BIGINT()}});
   const auto oldRows = makeRowVector(
       {"a", "r"},
       {makeFlatVector<int64_t>({1, 2}),
-       makeRowVector({"x"}, {makeFlatVector<int64_t>({10, 20})})});
+       makeRowVector({"x"}, {makeFlatVector<int32_t>({10, 20})})});
   const auto type = ROW({{"b", BIGINT()}, {"r", nested}});
   const auto table =
       evolutionTable(type, {{0, {asRowType(oldRows->type()), {10, 11}}}});
@@ -1450,7 +1525,7 @@ TEST_F(PaimonConnectorTest, schemaEvolutionOnlyValidatesNeededFields) {
           evolutionPlan(table, type, makePaimonColumnHandles(type)))
           .split(split)
           .copyResults(pool()),
-      "Paimon nested field identity is required");
+      "Paimon type evolution is not supported");
   exec::test::waitForAllTasksToBeDeleted();
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }
