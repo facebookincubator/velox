@@ -173,7 +173,9 @@ class PeeledEncoding {
       if (wrapNulls && bits::isBitNull(wrapNulls, outerRow)) {
         return;
       }
-      vector_size_t innerRow = indices ? indices[outerRow] : constantWrapIndex_;
+      const auto innerRow = wrapEncoding_ == VectorEncoding::Simple::FLAT
+          ? outerRow
+          : (indices ? indices[outerRow] : constantWrapIndex_);
       func(outerRow, innerRow);
     });
   }
@@ -195,6 +197,13 @@ class PeeledEncoding {
       const SelectivityVector& rows,
       BaseVector& firstWrapper);
 
+  // O(vectors * rows.end()) time and space, independent of the peeled base
+  // size.
+  void flattenPeeledVectors(
+      const SelectivityVector& rows,
+      const std::vector<bool>& constantFields,
+      std::vector<VectorPtr>& peeledVectors);
+
   /// The encoding of the peel. Set after getPeeledVectors() is called. Is equal
   /// to Flat if getPeeledVectors() has not been called or peeling was not
   /// successful.
@@ -212,5 +221,8 @@ class PeeledEncoding {
 
   /// The constant index. Only valid if wrapEncoding_ = CONSTANT.
   vector_size_t constantWrapIndex_ = 0;
+
+  // Retains compacted vectors for at least the lifetime of this peel.
+  std::vector<VectorPtr> flattenedVectors_;
 };
 } // namespace facebook::velox::exec
