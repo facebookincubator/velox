@@ -166,6 +166,68 @@ TEST_F(SequenceTest, sequenceWithEntriesWithMaxElementsSize) {
       "result of sequence function must not have more than 15000 entries");
 }
 
+TEST_F(SequenceTest, sizeLimitChangesBetweenEvaluations) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 10, -2}),
+      makeFlatVector<int64_t>({4, 11, 0}),
+  });
+  auto expression =
+      compileExpression("try(sequence(c0, c1))", asRowType(input->type()));
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kMaxElementsSizeInRepeatAndSequence, "3"}});
+  assertEqualVectors(
+      makeNullableArrayVector<int64_t>(
+          {std::nullopt, {{10, 11}}, {{-2, -1, 0}}}),
+      evaluate(*expression, input));
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kMaxElementsSizeInRepeatAndSequence, "4"}});
+  assertEqualVectors(
+      makeArrayVector<int64_t>({{1, 2, 3, 4}, {10, 11}, {-2, -1, 0}}),
+      evaluate(*expression, input));
+}
+
+TEST_F(SequenceTest, invalidSizeLimitWithReusedResult) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kMaxElementsSizeInRepeatAndSequence, "invalid"}});
+  auto expression = compileExpression(
+      "try(sequence(c0, c1))", ROW({"c0", "c1"}, {BIGINT(), BIGINT()}));
+  std::vector<VectorPtr> results(1);
+  for (vector_size_t size : {1, 3}) {
+    auto input = makeRowVector({
+        makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+        makeFlatVector<int64_t>(size, [](auto row) { return row + 2; }),
+    });
+    exec::EvalCtx context(&execCtx_, expression.get(), input.get());
+    expression->eval(SelectivityVector(size), context, results);
+    ASSERT_EQ(results[0]->size(), size);
+    for (vector_size_t row = 0; row < size; ++row) {
+      EXPECT_TRUE(results[0]->isNullAt(row));
+    }
+    EXPECT_THROW(evaluate("sequence(c0, c1)", input), VeloxException);
+  }
+}
+
+TEST_F(SequenceTest, invalidSizeLimitPreservesUnselectedRows) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kMaxElementsSizeInRepeatAndSequence, "invalid"}});
+  auto arrays = makeArrayVector<int64_t>({{91}, {92}, {93}});
+  auto input = makeRowVector({
+      makeFlatVector<bool>({false, true, false}),
+      makeFlatVector<int64_t>({1, 10, -2}),
+      makeFlatVector<int64_t>({4, 13, 1}),
+      arrays,
+  });
+  for (const auto* expression :
+       {"if(c0, c3, try(sequence(c1, c2)))",
+        "case when c0 then c3 else try(sequence(c1, c2)) end"}) {
+    SCOPED_TRACE(expression);
+    assertEqualVectors(
+        makeNullableArrayVector<int64_t>({std::nullopt, {{92}}, std::nullopt}),
+        evaluate(expression, input));
+  }
+  assertEqualVectors(makeArrayVector<int64_t>({{91}, {92}, {93}}), arrays);
+}
+
 TEST_F(SequenceTest, invalidStep) {
   const auto startVector = makeFlatVector<int64_t>({1, 2});
   const auto stopVector = makeFlatVector<int64_t>({2, 5});
