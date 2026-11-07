@@ -175,7 +175,8 @@ PrefixSortLayout PrefixSortLayout::generate(
       break;
     }
     prefixOffsets.push_back(normalizedKeySize);
-    encoders.push_back({compareFlags[i].ascending, compareFlags[i].nullsFirst});
+    encoders.emplace_back(
+        compareFlags[i].ascending, compareFlags[i].nullsFirst);
     encodeSizes.push_back(encodedSize.value());
     normalizedKeyHasNullByte.push_back(columnHasNulls[i]);
     normalizedKeySize += encodedSize.value();
