@@ -115,6 +115,10 @@ __device__ __forceinline__ void sumReduce(
       }
     }
   }
+  // Consecutive accumulators in the same ungrouped aggregation reuse this
+  // scratch area, so no warp may start writing it before the first warp has
+  // finished reading it.
+  __syncthreads();
 }
 
 } // namespace facebook::velox::wave
