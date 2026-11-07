@@ -449,7 +449,9 @@ AggregationFuzzerBase::PlanWithSplits AggregationFuzzerBase::deserialize(
     }
   }
 
-  return PlanWithSplits{plan, splits};
+  const bool verifyResultExactly = obj.count("verifyResultExactly") > 0 &&
+      obj["verifyResultExactly"].asBool();
+  return PlanWithSplits{plan, splits, verifyResultExactly};
 }
 
 void AggregationFuzzerBase::printSignatureStats() {
@@ -744,6 +746,9 @@ folly::dynamic serialize(
     std::unordered_map<std::string, std::string>& filePaths) {
   folly::dynamic obj = folly::dynamic::object();
   obj["plan"] = planWithSplits.plan->serialize();
+  if (planWithSplits.verifyResultExactly) {
+    obj["verifyResultExactly"] = true;
+  }
   if (planWithSplits.splits.empty()) {
     return obj;
   }
