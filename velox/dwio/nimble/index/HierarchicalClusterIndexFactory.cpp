@@ -370,6 +370,8 @@ class NimbleHierarchicalKeyCodec final : public HierarchicalKeyCodec {
   }
 };
 
+} // namespace
+
 // Returns the codec of Nimble's key encoding, which every factory of the
 // built-in index shares.
 const std::shared_ptr<const HierarchicalKeyCodec>& nimbleKeyCodec() {
@@ -377,8 +379,6 @@ const std::shared_ptr<const HierarchicalKeyCodec>& nimbleKeyCodec() {
       std::make_shared<const NimbleHierarchicalKeyCodec>();
   return keyCodec;
 }
-
-} // namespace
 
 std::string HierarchicalKeyCodec::encodeKey(
     std::span<const uint64_t> levels,
