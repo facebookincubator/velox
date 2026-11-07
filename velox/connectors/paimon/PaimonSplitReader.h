@@ -74,7 +74,7 @@ class PaimonSplitReader : public connector::FileSplitReader {
 
   // File-order names derived from historical field IDs, not query ordinals
   // or optional field-ID attributes in a physical file.
-  RowTypePtr mapDataSchema(int64_t schemaId) const;
+  RowTypePtr makeFileReadSchema(int64_t fileSchemaId) const;
 
   // Builds a FileConnectorSplit from a PaimonDataFile.
   std::shared_ptr<connector::FileConnectorSplit> makeFileConnectorSplit(
@@ -90,7 +90,7 @@ class PaimonSplitReader : public connector::FileSplitReader {
 
   const std::shared_ptr<const PaimonConnectorSplit> paimonSplit_;
 
-  std::unordered_map<int64_t, RowTypePtr> mappedSchemas_;
+  std::unordered_map<int64_t, RowTypePtr> fileReadSchemas_;
 
   // FileConnectorSplits built from paimonSplit_->dataFiles(), one per file.
   // Used to switch the base reader between files during iteration.
