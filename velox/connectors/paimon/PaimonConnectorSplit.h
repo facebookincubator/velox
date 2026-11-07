@@ -168,8 +168,13 @@ class PaimonConnectorSplitBuilder {
         tableType_(tableType),
         fileFormat_(fileFormat) {}
 
-  PaimonConnectorSplitBuilder&
-  addFile(std::string filePath, uint64_t fileSize, int32_t level = 0);
+  PaimonConnectorSplitBuilder& addFile(PaimonDataFile file);
+
+  PaimonConnectorSplitBuilder& addFile(
+      int64_t schemaId,
+      std::string filePath,
+      uint64_t fileSize,
+      int32_t level = 0);
 
   PaimonConnectorSplitBuilder& partitionKey(
       std::string name,

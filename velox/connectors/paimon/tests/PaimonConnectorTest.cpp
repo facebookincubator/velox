@@ -317,6 +317,64 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
     return assignments;
   }
 
+  static std::shared_ptr<PaimonTableHandle> evolutionTable(
+      const RowTypePtr& type,
+      PaimonTableHandle::DataSchemas schemas,
+      common::SubfieldFilters filters = {},
+      core::TypedExprPtr remaining = nullptr,
+      std::vector<std::string> partitions = {},
+      std::vector<connector::FileColumnHandlePtr> filterColumns = {}) {
+    return std::make_shared<PaimonTableHandle>(
+        kPaimonConnectorId,
+        "paimon_table",
+        17,
+        type,
+        fieldIds(type),
+        PaimonTableType::kAppendOnly,
+        std::move(partitions),
+        std::unordered_map<std::string, std::string>{},
+        std::move(filters),
+        std::move(remaining),
+        std::move(filterColumns),
+        1.0,
+        "",
+        std::move(schemas));
+  }
+
+  static std::shared_ptr<PaimonConnectorSplit> evolutionSplit(
+      dwio::common::FileFormat format,
+      const std::vector<std::pair<std::string, int64_t>>& files,
+      const std::unordered_map<std::string, std::optional<std::string>>&
+          partitions = {}) {
+    PaimonConnectorSplitBuilder builder(
+        kPaimonConnectorId, 42, PaimonTableType::kAppendOnly, format);
+    for (const auto& [path, schemaId] : files) {
+      PaimonDataFile file(schemaId);
+      file.path = path;
+      builder.addFile(std::move(file));
+    }
+    for (const auto& [name, value] : partitions) {
+      builder.partitionKey(name, value);
+    }
+    return PaimonConnectorSplit::create(builder.build()->serialize());
+  }
+
+  core::PlanNodePtr evolutionPlan(
+      const std::shared_ptr<PaimonTableHandle>& table,
+      const RowTypePtr& output,
+      connector::ColumnHandleMap assignments) {
+    const auto plan = exec::test::PlanBuilder()
+                          .startTableScan()
+                          .connectorId(kPaimonConnectorId)
+                          .outputType(output)
+                          .tableHandle(table)
+                          .assignments(std::move(assignments))
+                          .endTableScan()
+                          .planNode();
+    return ISerializable::deserialize<core::PlanNode>(
+        plan->serialize(), pool());
+  }
+
   /// Builds a table scan plan using the Paimon connector.
   core::PlanNodePtr makePaimonScanPlan(
       const RowTypePtr& outputType,
@@ -349,7 +407,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
     PaimonConnectorSplitBuilder builder(
         kPaimonConnectorId, /*snapshotId=*/1, tableType, format);
     for (const auto& filePath : filePaths) {
-      builder.addFile(filePath, /*fileSize=*/0);
+      builder.addFile(/*schemaId=*/17, filePath, /*fileSize=*/0);
     }
     for (const auto& [key, value] : partitionKeys) {
       builder.partitionKey(key, value);
@@ -1059,6 +1117,563 @@ TEST_F(PaimonConnectorTest, dynamicFilterAndEmptyFiles) {
   }
 }
 
+TEST_F(PaimonConnectorTest, schemaEvolutionRenameReorderAndMissing) {
+  const auto oldRows = makeRowVector(
+      {"s", "a", "fresh"},
+      {makeFlatVector<std::string>({"one", "two", "one"}),
+       makeFlatVector<int64_t>({1, 2, 1}),
+       makeFlatVector<int64_t>({100, 200, 300})});
+  const auto current = makeRowVector(
+      {"b", "fresh", "s"},
+      {makeFlatVector<int64_t>({4, 5}),
+       makeFlatVector<int64_t>({40, 50}),
+       makeFlatVector<std::string>({"four", "five"})});
+  const auto intermediate = makeRowVector(
+      {"renamed_again", "s", "fresh"},
+      {makeFlatVector<int64_t>({7}),
+       makeFlatVector<std::string>({"seven"}),
+       makeFlatVector<int64_t>({70})});
+  const auto expectedIntermediate = makeRowVector(
+      {"b", "fresh", "s"},
+      {makeFlatVector<int64_t>({7}),
+       makeFlatVector<int64_t>({70}),
+       makeFlatVector<std::string>({"seven"})});
+  const auto expectedOld = makeRowVector(
+      {"b", "fresh", "s"},
+      {makeFlatVector<int64_t>({1, 2, 1}),
+       makeNullableFlatVector<int64_t>(
+           {std::nullopt, std::nullopt, std::nullopt}),
+       makeFlatVector<std::string>({"one", "two", "one"})});
+  const auto type = asRowType(current->type());
+  const auto table = evolutionTable(
+      type,
+      {{0, {asRowType(oldRows->type()), {12, 10, 99}}},
+       {8, {asRowType(intermediate->type()), {10, 12, 11}}}});
+  const auto plan = evolutionPlan(table, type, makePaimonColumnHandles(type));
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(3);
+    writeFile(paths[0]->getPath(), oldRows, format);
+    writeFile(paths[1]->getPath(), current, format);
+    writeFile(paths[2]->getPath(), intermediate, format);
+    const auto old = std::make_pair(paths[0]->getPath(), int64_t{0});
+    const auto now = std::make_pair(paths[1]->getPath(), int64_t{17});
+    const auto middle = std::make_pair(paths[2]->getPath(), int64_t{8});
+    exec::test::AssertQueryBuilder(plan)
+        .split(evolutionSplit(format, {old, middle, now, old}))
+        .assertResults(
+            {expectedOld, expectedIntermediate, current, expectedOld});
+    exec::test::AssertQueryBuilder(plan)
+        .splits(
+            {evolutionSplit(format, {now, old}), evolutionSplit(format, {old})})
+        .assertResults({current, expectedOld, expectedOld});
+  }
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionFiltersAndCount) {
+  const auto oldRows = makeRowVector(
+      {"s", "a", "fresh"},
+      {makeFlatVector<std::string>({"one", "two", "three"}),
+       makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({100, 200, 300})});
+  const auto current = makeRowVector(
+      {"b", "fresh", "s"},
+      {makeFlatVector<int64_t>({4, 6}),
+       makeFlatVector<int64_t>({40, 60}),
+       makeFlatVector<std::string>({"four", "six"})});
+  const auto type = asRowType(current->type());
+  const PaimonTableHandle::DataSchemas schemas{
+      {0, {asRowType(oldRows->type()), {12, 10, 99}}}};
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("b"),
+      std::make_unique<common::BigintRange>(2, 5, false));
+  filters.emplace(
+      common::Subfield("fresh"), std::make_unique<common::IsNull>());
+  const auto table = evolutionTable(
+      type,
+      schemas,
+      std::move(filters),
+      parseExpr("b % 2 = 0 and length(s) > 1", type));
+  const auto output = ROW({{"label", VARCHAR()}});
+  const auto plan = evolutionPlan(
+      table,
+      output,
+      {{"label",
+        std::make_shared<PaimonColumnHandle>(
+            "s",
+            12,
+            connector::FileColumnHandle::ColumnType::kRegular,
+            VARCHAR())}});
+  const auto countPlan = exec::test::PlanBuilder(
+                             evolutionPlan(table, ROW({}), {}),
+                             std::make_shared<core::PlanNodeIdGenerator>(1))
+                             .singleAggregation({}, {"count(1)"})
+                             .planNode();
+  common::SubfieldFilters present;
+  present.emplace(
+      common::Subfield("fresh"), std::make_unique<common::IsNotNull>());
+  const auto presentPlan = evolutionPlan(
+      evolutionTable(type, schemas, std::move(present)),
+      type,
+      makePaimonColumnHandles(type));
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(2);
+    writeFile(paths[0]->getPath(), oldRows, format);
+    writeFile(paths[1]->getPath(), current, format);
+    const auto split = evolutionSplit(
+        format, {{paths[0]->getPath(), 0}, {paths[1]->getPath(), 17}});
+    exec::test::AssertQueryBuilder(plan).split(split).assertResults(
+        makeRowVector({"label"}, {makeFlatVector<std::string>({"two"})}));
+    exec::test::AssertQueryBuilder(countPlan).split(split).assertSingleResult(
+        int64_t{1});
+    exec::test::AssertQueryBuilder(presentPlan)
+        .split(split)
+        .assertResults(current);
+  }
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionDynamicFiltersAndOwnership) {
+  const auto oldRows = makeRowVector(
+      {"a", "discarded"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({11, 12, 13})});
+  const auto current = makeRowVector(
+      {"b", "fresh"},
+      {makeFlatVector<int64_t>({4, 5}), makeFlatVector<int64_t>({40, 50})});
+  const auto type = asRowType(current->type());
+  const auto table =
+      evolutionTable(type, {{0, {asRowType(oldRows->type()), {10, 99}}}});
+  auto queryCtx = core::QueryCtx::create();
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context = queryContextBuilder(queryCtx.get())
+                     .sessionProperties(config.get())
+                     .build();
+  const auto expected = makeRowVector(
+      {"b", "fresh"},
+      {makeFlatVector<int64_t>({1, 3, 4, 5}),
+       makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt, 40, 50})});
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(2);
+    writeFile(paths[0]->getPath(), oldRows, format);
+    writeFile(paths[1]->getPath(), current, format);
+    const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
+    auto source = connector->createDataSource(
+        type, table, makePaimonColumnHandles(type), context.get());
+    auto other = connector->createDataSource(
+        type, table, makePaimonColumnHandles(type), context.get());
+    source->addSplit(evolutionSplit(
+        format, {{paths[0]->getPath(), 0}, {paths[1]->getPath(), 17}}));
+    other->addSplit(evolutionSplit(format, {{paths[1]->getPath(), 17}}));
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    std::vector<RowVectorPtr> held;
+    auto first = source->next(1, future);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(*first);
+    for (auto& child : (*first)->children()) {
+      child->loadedVector();
+    }
+    held.push_back(*first);
+    source->addDynamicFilter(
+        0, std::make_shared<common::BigintRange>(3, 5, false));
+    auto otherResult = other->next(100, future);
+    ASSERT_TRUE(otherResult.has_value());
+    ASSERT_TRUE(*otherResult);
+    test::assertEqualVectors(current, *otherResult);
+    while (true) {
+      auto result = source->next(1, future);
+      ASSERT_TRUE(result.has_value());
+      ASSERT_FALSE(future.valid());
+      if (!*result) {
+        break;
+      }
+      for (auto& child : (*result)->children()) {
+        child->loadedVector();
+      }
+      if ((*result)->size()) {
+        held.push_back(*result);
+      }
+    }
+    source.reset();
+    other.reset();
+    vector_size_t offset = 0;
+    for (const auto& result : held) {
+      test::assertEqualVectors(expected->slice(offset, result->size()), result);
+      offset += result->size();
+    }
+    EXPECT_EQ(offset, expected->size());
+  }
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionPartitionConstants) {
+  const auto type = ROW({{"b", BIGINT()}, {"p", VARCHAR()}});
+  const auto historical = ROW({{"p", VARCHAR()}, {"a", BIGINT()}});
+  const PaimonTableHandle::DataSchemas schemas{{0, {historical, {11, 10}}}};
+  const auto partition = std::make_shared<PaimonColumnHandle>(
+      "p",
+      11,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
+      VARCHAR());
+  auto assignments = makePaimonColumnHandles(type);
+  assignments["p"] = partition;
+  const auto plan = evolutionPlan(
+      evolutionTable(type, schemas, {}, nullptr, {"p"}), type, assignments);
+  const auto filtered = evolutionPlan(
+      evolutionTable(
+          type, schemas, {}, parseExpr("p is null", type), {"p"}, {partition}),
+      ROW({{"b", BIGINT()}}),
+      {{"b", assignments.at("b")}});
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(2);
+    writeFile(
+        paths[0]->getPath(),
+        makeRowVector(
+            {"p", "a"},
+            {makeFlatVector<std::string>({"physical", "physical"}),
+             makeFlatVector<int64_t>({1, 2})}),
+        format);
+    writeFile(
+        paths[1]->getPath(),
+        makeRowVector(
+            {"b", "p"},
+            {makeFlatVector<int64_t>({3}),
+             makeFlatVector<std::string>({"physical"})}),
+        format);
+    const auto nullSplit = evolutionSplit(
+        format, {{paths[0]->getPath(), 0}}, {{"p", std::nullopt}});
+    const auto emptySplit =
+        evolutionSplit(format, {{paths[1]->getPath(), 17}}, {{"p", ""}});
+    exec::test::AssertQueryBuilder(plan)
+        .splits({nullSplit, emptySplit})
+        .assertResults(makeRowVector(
+            {"b", "p"},
+            {makeFlatVector<int64_t>({1, 2, 3}),
+             makeNullableFlatVector<std::string>(
+                 {std::nullopt, std::nullopt, ""})}));
+    exec::test::AssertQueryBuilder(filtered)
+        .splits({nullSplit, emptySplit})
+        .assertResults(makeRowVector({"b"}, {makeFlatVector<int64_t>({1, 2})}));
+  }
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionMissingColumnsAndEmptyFiles) {
+  const auto type = ROW({{"__paimon_unmapped_0", BIGINT()}});
+  const auto oldRows = makeRowVector(
+      {"__paimon_unmapped_0"}, {makeFlatVector<int64_t>({100, 200})});
+  const auto table = evolutionTable(type, {{0, {type, {99}}}});
+  const auto plan = evolutionPlan(table, type, makePaimonColumnHandles(type));
+  const auto count = exec::test::PlanBuilder(
+                         evolutionPlan(table, ROW({}), {}),
+                         std::make_shared<core::PlanNodeIdGenerator>(1))
+                         .singleAggregation({}, {"count(1)"})
+                         .planNode();
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(2);
+    writeFile(paths[0]->getPath(), oldRows, format);
+    std::string emptyPath = paths[1]->getPath();
+#ifdef VELOX_ENABLE_PARQUET
+    if (format == dwio::common::FileFormat::PARQUET) {
+      emptyPath = velox::test::getDataFilePath(
+          "velox/dwio/parquet/tests", "examples/empty.parquet");
+    } else
+#endif
+    {
+      writeFile(
+          emptyPath,
+          makeRowVector({"__paimon_unmapped_0"}, {makeFlatVector<int64_t>({})}),
+          format);
+    }
+    const auto split = evolutionSplit(
+        format, {{emptyPath, 0}, {paths[0]->getPath(), 0}, {emptyPath, 0}});
+    exec::test::AssertQueryBuilder(plan).split(split).assertResults(
+        makeRowVector(
+            {"__paimon_unmapped_0"},
+            {makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})}));
+    exec::test::AssertQueryBuilder(count).split(split).assertSingleResult(
+        int64_t{2});
+  }
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionLambdaAndUnchangedArray) {
+  const auto oldRows = makeRowVector(
+      {"old_values", "a"},
+      {makeArrayVector<int64_t>({{1, 3}, {1}, {4, 5}}),
+       makeFlatVector<int64_t>({2, 2, 6})});
+  const auto type = ROW({{"b", BIGINT()}, {"values", ARRAY(BIGINT())}});
+  const auto table = evolutionTable(
+      type,
+      {{0, {asRowType(oldRows->type()), {11, 10}}}},
+      {},
+      parseExpr("any_match(values, x -> x > b)", type));
+  const auto plan = evolutionPlan(
+      table, ROW({{"b", BIGINT()}}), makePaimonColumnHandles(type));
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(1);
+    writeFile(paths[0]->getPath(), oldRows, format);
+    exec::test::AssertQueryBuilder(plan)
+        .split(evolutionSplit(format, {{paths[0]->getPath(), 0}}))
+        .assertResults(makeRowVector({"b"}, {makeFlatVector<int64_t>({2})}));
+  }
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionWithUnchangedNestedFields) {
+  const auto row = makeRowVector(
+      {"x", "y"},
+      {makeNullableFlatVector<int64_t>({10, std::nullopt, 30, 40}),
+       makeNullableFlatVector<std::string>(
+           {"first", std::nullopt, "third", "fourth"})});
+  row->setNull(2, true);
+  const std::vector<VectorPtr> nestedValues{
+      row,
+      makeArrayVector({0, 1, 1, 1}, row, {1}),
+      makeMapVector(
+          {0, 1, 1, 1},
+          makeFlatVector<std::string>({"k1", "k2", "k3", "k4"}),
+          row,
+          {1})};
+  for (const auto& nested : nestedValues) {
+    SCOPED_TRACE(nested->type()->toString());
+    const auto oldRows = makeRowVector(
+        {"old_nested", "a"}, {nested, makeFlatVector<int64_t>({1, 2, 3, 4})});
+    const auto current = makeRowVector(
+        {"b", "nested"}, {makeFlatVector<int64_t>({5, 6, 7, 8}), nested});
+    const auto type = asRowType(current->type());
+    const PaimonTableHandle::DataSchemas schemas{
+        {0, {asRowType(oldRows->type()), {11, 10}}}};
+    const auto plan = evolutionPlan(
+        evolutionTable(type, schemas), type, makePaimonColumnHandles(type));
+    common::SubfieldFilters filters;
+    filters.emplace(
+        common::Subfield("b"),
+        std::make_unique<common::BigintRange>(2, 7, false));
+    const auto table = evolutionTable(
+        type, schemas, std::move(filters), parseExpr("b % 2 = 1", type));
+    const auto filtered = evolutionPlan(
+        table,
+        ROW({{"selected_nested", nested->type()}}),
+        {{"selected_nested", makePaimonColumnHandles(type).at("nested")}});
+    const auto count = exec::test::PlanBuilder(
+                           evolutionPlan(table, ROW({}), {}),
+                           std::make_shared<core::PlanNodeIdGenerator>(1))
+                           .singleAggregation({}, {"count(1)"})
+                           .planNode();
+    common::SubfieldFilters nullFilters;
+    nullFilters.emplace(
+        common::Subfield("nested"), std::make_unique<common::IsNull>());
+    const auto nullPlan = evolutionPlan(
+        evolutionTable(type, schemas, std::move(nullFilters)),
+        ROW({{"b", BIGINT()}}),
+        {{"b", makePaimonColumnHandles(type).at("b")}});
+    const int64_t nullValue = nested->type()->isRow() ? 3 : 2;
+    const auto oldExpected =
+        makeRowVector({"b", "nested"}, {oldRows->childAt(1), nested});
+    const auto first =
+        makeRowVector({"selected_nested"}, {nested->slice(0, 1)});
+    const auto third =
+        makeRowVector({"selected_nested"}, {nested->slice(2, 1)});
+    for (const auto format : fileFormats()) {
+      SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+      const auto paths = makeFilePaths(2);
+      writeFile(paths[0]->getPath(), oldRows, format);
+      writeFile(paths[1]->getPath(), current, format);
+      const auto split = evolutionSplit(
+          format, {{paths[0]->getPath(), 0}, {paths[1]->getPath(), 17}});
+      exec::test::AssertQueryBuilder(plan).split(split).assertResults(
+          {oldExpected, current});
+      exec::test::AssertQueryBuilder(filtered).split(split).assertResults(
+          {third, first, third});
+      exec::test::AssertQueryBuilder(count).split(split).assertSingleResult(
+          int64_t{3});
+      exec::test::AssertQueryBuilder(nullPlan).split(split).assertResults(
+          makeRowVector(
+              {"b"}, {makeFlatVector<int64_t>({nullValue, nullValue + 4})}));
+    }
+  }
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionOnlyValidatesNeededFields) {
+  const auto nested = ROW({{"x", BIGINT()}});
+  const auto oldRows = makeRowVector(
+      {"a", "r"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeRowVector({"x"}, {makeFlatVector<int32_t>({10, 20})})});
+  const auto type = ROW({{"b", BIGINT()}, {"r", nested}});
+  const auto table =
+      evolutionTable(type, {{0, {asRowType(oldRows->type()), {10, 11}}}});
+  const auto projected = evolutionPlan(
+      table, ROW({{"b", BIGINT()}}), makePaimonColumnHandles(type));
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(1);
+    writeFile(paths[0]->getPath(), oldRows, format);
+    exec::test::AssertQueryBuilder(projected)
+        .split(evolutionSplit(format, {{paths[0]->getPath(), 0}}))
+        .assertResults(makeRowVector({"b"}, {makeFlatVector<int64_t>({1, 2})}));
+  }
+  const auto fileSystem = validationFileSystem();
+  fileSystem->openedFiles = 0;
+  const auto split = evolutionSplit(
+      dwio::common::FileFormat::DWRF, {{"paimon-table-test:/not-opened", 0}});
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(
+          evolutionPlan(table, type, makePaimonColumnHandles(type)))
+          .split(split)
+          .copyResults(pool()),
+      "Paimon type evolution is not supported");
+  exec::test::waitForAllTasksToBeDeleted();
+  EXPECT_EQ(fileSystem->openedFiles, 0);
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionRejectsMissingSchemaAndTypeChanges) {
+  const auto type = ROW({{"b", BIGINT()}});
+  const auto oldType = ROW({{"a", INTEGER()}});
+  const auto table = evolutionTable(type, {{0, {oldType, {10}}}});
+  const auto plan = evolutionPlan(table, type, makePaimonColumnHandles(type));
+  const auto fileSystem = validationFileSystem();
+  fileSystem->openedFiles = 0;
+  const auto missing = evolutionSplit(
+      dwio::common::FileFormat::DWRF, {{"paimon-table-test:/not-opened", 99}});
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(plan).split(missing).copyResults(pool()),
+      "Missing Paimon schema 99");
+  exec::test::waitForAllTasksToBeDeleted();
+  const auto widening = evolutionSplit(
+      dwio::common::FileFormat::DWRF, {{"paimon-table-test:/not-opened", 0}});
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(plan).split(widening).copyResults(pool()),
+      "Paimon type evolution is not supported");
+  exec::test::waitForAllTasksToBeDeleted();
+  EXPECT_EQ(fileSystem->openedFiles, 0);
+}
+
+TEST_F(PaimonConnectorTest, schemaReferencesValidatedBeforeFileOpen) {
+  const auto input = makeRowVector({"b"}, {makeFlatVector<int64_t>({1, 2})});
+  const auto type = asRowType(input->type());
+  const auto fileSystem = validationFileSystem();
+  auto queryCtx = core::QueryCtx::create();
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context = queryContextBuilder(queryCtx.get())
+                     .sessionProperties(config.get())
+                     .build();
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    for (const bool withHistory : {false, true}) {
+      SCOPED_TRACE(withHistory);
+      const auto paths = makeFilePaths(1);
+      writeFile(paths[0]->getPath(), input, format);
+      const auto path = "paimon-table-test:" + paths[0]->getPath();
+      PaimonTableHandle::DataSchemas schemas;
+      if (withHistory) {
+        schemas.emplace(
+            0, PaimonTableHandle::DataSchema{ROW({{"a", BIGINT()}}), {10}});
+      }
+      const auto table = evolutionTable(type, std::move(schemas));
+      auto source =
+          ConnectorRegistry::tryGet(kPaimonConnectorId)
+              ->createDataSource(
+                  type, table, makePaimonColumnHandles(type), context.get());
+      fileSystem->openedFiles = 0;
+      for (const bool unknownFirst : {false, true}) {
+        const auto split = evolutionSplit(
+            format,
+            {{path, unknownFirst ? 99 : 17}, {path, unknownFirst ? 17 : 99}});
+        VELOX_ASSERT_THROW(source->addSplit(split), "Missing Paimon schema 99");
+        EXPECT_EQ(fileSystem->openedFiles, 0);
+      }
+      // Rejected references must not change the source's scan state.
+      source->addSplit(evolutionSplit(format, {{path, 17}}));
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      auto result = source->next(100, future);
+      ASSERT_TRUE(result.has_value());
+      ASSERT_TRUE(*result);
+      test::assertEqualVectors(input, *result);
+      auto end = source->next(100, future);
+      ASSERT_TRUE(end.has_value());
+      EXPECT_EQ(*end, nullptr);
+      EXPECT_GT(fileSystem->openedFiles, 0);
+    }
+  }
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionPrimitiveTypes) {
+  const auto source = makeRowVector(
+      {"old_text", "old_flag", "old_score", "old_id", "old_number"},
+      {makeNullableFlatVector<std::string>({"alpha", "", std::nullopt}),
+       makeNullableFlatVector<bool>({true, false, std::nullopt}),
+       makeNullableFlatVector<double>({1.5, std::nullopt, 3.5}),
+       makeFlatVector<int64_t>({11, 12, 13}),
+       makeFlatVector<int32_t>({1, 2, 3})});
+  const auto expected = makeRowVector(
+      {"flag", "number", "id", "score", "text"},
+      {makeNullableFlatVector<bool>({true, false, std::nullopt}),
+       makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({11, 12, 13}),
+       makeNullableFlatVector<double>({1.5, std::nullopt, 3.5}),
+       makeNullableFlatVector<std::string>({"alpha", "", std::nullopt})});
+  const auto type = asRowType(expected->type());
+  const auto table = evolutionTable(
+      type, {{0, {asRowType(source->type()), {14, 10, 13, 12, 11}}}});
+  const auto plan = evolutionPlan(table, type, makePaimonColumnHandles(type));
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(1);
+    writeFile(paths[0]->getPath(), source, format);
+    exec::test::AssertQueryBuilder(plan)
+        .split(evolutionSplit(format, {{paths[0]->getPath(), 0}}))
+        .assertResults(expected);
+  }
+}
+
+TEST_F(PaimonConnectorTest, schemaEvolutionCancellationLimitAndMissingFile) {
+  const auto source = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(10000, [](auto row) { return row; })});
+  const auto type = ROW({{"b", BIGINT()}});
+  const auto table =
+      evolutionTable(type, {{0, {asRowType(source->type()), {10}}}});
+  const auto plan = evolutionPlan(table, type, makePaimonColumnHandles(type));
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(1);
+    writeFile(paths[0]->getPath(), source, format);
+    const auto split = evolutionSplit(format, {{paths[0]->getPath(), 0}});
+    exec::CursorParameters params;
+    params.planNode = plan;
+    params.bufferedBytes = 1024;
+    params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] = "1024";
+    auto cursor = exec::TaskCursor::create(params);
+    cursor->task()->addSplit(plan->id(), exec::Split(split));
+    cursor->task()->noMoreSplits(plan->id());
+    ASSERT_TRUE(cursor->moveNext());
+    ASSERT_TRUE(cursor->task()->isRunning());
+    cursor->task()->requestCancel().wait();
+    EXPECT_EQ(cursor->task()->state(), exec::TaskState::kCanceled);
+    EXPECT_THROW(cursor->moveNext(), folly::OperationCancelled);
+    cursor.reset();
+    exec::test::waitForAllTasksToBeDeleted();
+    const auto limit = exec::test::PlanBuilder(
+                           plan, std::make_shared<core::PlanNodeIdGenerator>(1))
+                           .limit(0, 1, false)
+                           .planNode();
+    exec::test::AssertQueryBuilder(limit).split(split).assertTypeAndNumRows(
+        type, 1);
+    exec::test::waitForAllTasksToBeDeleted();
+    VELOX_ASSERT_THROW(
+        exec::test::AssertQueryBuilder(plan)
+            .split(
+                evolutionSplit(format, {{paths[0]->getPath() + ".missing", 0}}))
+            .copyResults(pool()),
+        "No such file or directory");
+    exec::test::waitForAllTasksToBeDeleted();
+  }
+}
+
 TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
   const auto fileSystem = validationFileSystem();
   fileSystem->openedFiles = 0;
@@ -1511,10 +2126,9 @@ TEST_F(PaimonConnectorTest, columnHandlesRoundTrip) {
     for (const auto& file : files) {
       writeFile(file->getPath(), input, format);
     }
-    const auto split = makePaimonSplit(
-        {files[0]->getPath(), files[1]->getPath()},
-        PaimonTableType::kAppendOnly,
+    const auto split = evolutionSplit(
         format,
+        {{files[0]->getPath(), 23}, {files[1]->getPath(), 23}},
         {{"p", "keep"}});
     for (const auto& scan : {plan, copy}) {
       exec::test::AssertQueryBuilder(scan).split(split).assertResults(expected);
