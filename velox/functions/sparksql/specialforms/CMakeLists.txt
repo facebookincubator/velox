@@ -21,6 +21,7 @@ velox_add_library(
   GetStructField.cpp
   JavaFloatingDecimal.cpp
   MakeDecimal.cpp
+  Pmod.cpp
   SparkCastExpr.cpp
   SparkCastHooks.cpp
   HEADERS
@@ -31,6 +32,7 @@ velox_add_library(
   GetStructField.h
   JavaFloatingDecimal.h
   MakeDecimal.h
+  Pmod.h
   SparkCastExpr.h
   SparkCastHooks.h
 )
