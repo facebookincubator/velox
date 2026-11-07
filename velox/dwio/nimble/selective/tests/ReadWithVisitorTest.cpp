@@ -1629,6 +1629,9 @@ class ReadWithVisitorTest : public ::testing::Test,
         params,
         scanSpec,
         /*isRoot=*/true);
+    // Matches SelectiveNimbleReader: loading a LazyVector records row sizes,
+    // which requires the projection to be final.
+    ctx.rowSizeTracker->finalizeProjection();
     reader->setIsTopLevel();
     ctx.streams->load();
     return reader;
@@ -2196,8 +2199,14 @@ class ReadWithVisitorTest : public ::testing::Test,
     // RowSet: sequential [0 .. numRows-1]
     std::vector<vector_size_t> rowVec(numRows);
     std::iota(rowVec.begin(), rowVec.end(), 0);
-    RowSet rows(rowVec.data(), rowVec.size());
+    return readColumn(root, RowSet(rowVec.data(), rowVec.size()));
+  }
 
+  // Reads 'rows' through the root struct reader and returns its first child,
+  // read for those rows.
+  dwio::common::SelectiveColumnReader* readColumn(
+      dwio::common::SelectiveColumnReader* root,
+      const RowSet& rows) {
     // Trigger read on the root struct reader which calls read() on children.
     root->read(0, rows, nullptr);
 
@@ -2205,7 +2214,14 @@ class ReadWithVisitorTest : public ::testing::Test,
         dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root);
     EXPECT_NE(structReader, nullptr);
     EXPECT_FALSE(structReader->children().empty());
-    return structReader->children()[0];
+    auto* child = structReader->children()[0];
+    // The root leaves a projected child without a filter for lazy loading.
+    // Read it the way ColumnLoader does when the LazyVector is loaded.
+    if (!child->scanSpec()->hasFilter()) {
+      child->formatData().loadLazyInputStreams();
+      child->read(0, rows, structReader->nulls());
+    }
+    return child;
   }
 
   // Helper: get typed values from a column reader after read().
@@ -2358,7 +2374,7 @@ class ReadWithVisitorTest : public ::testing::Test,
               rowType,
               *scanSpec,
               /*scanFastPath=*/true);
-          root->read(0, RowSet(rowNumbers.data(), rowNumbers.size()), nullptr);
+          readColumn(root.get(), RowSet(rowNumbers.data(), rowNumbers.size()));
         };
 
     // Rows 1'000 through 3'000 pass the filter-only reads.
@@ -2527,9 +2543,9 @@ TEST_F(ReadWithVisitorTest, denseNoFilterWithNulls) {
 }
 
 // ===========================================================================
-// Test: AlwaysTrue filter on nullable int64 keeps the nulls in the output
-// when the encoding takes its bulk fast path. High-entropy values select
-// Trivial and sequential values select FixedBitWidth; both have a bulk path.
+// Test: AlwaysTrue filter on nullable int64 keeps the nulls in the output.
+// High-entropy values select Trivial and sequential values select
+// FixedBitWidth; both encodings support a bulk path.
 // ===========================================================================
 TEST_F(ReadWithVisitorTest, alwaysTrueFilterKeepsNulls) {
   constexpr int kRows = 40;
@@ -2558,13 +2574,129 @@ TEST_F(ReadWithVisitorTest, alwaysTrueFilterKeepsNulls) {
         std::make_unique<common::AlwaysTrue>());
 
     auto root = buildReader(*ctx, rowType, *scanSpec);
-    auto* child = readColumn(root.get(), kRows);
-    EXPECT_TRUE(child->hasNulls());
+    std::vector<vector_size_t> rowNumbers(kRows);
+    std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+    const RowSet rows(rowNumbers.data(), rowNumbers.size());
+    root->read(0, rows, nullptr);
 
     VectorPtr result = BaseVector::create(rowType, 0, pool());
-    root->getValues(root->outputRows(), &result);
+    root->getValues(rows, &result);
     velox::test::assertEqualVectors(input, result);
   }
+}
+
+// ===========================================================================
+// Test: an encoding takes its dense fast path only when the reader takes its
+// bulk path. The scan spec's filter passes nulls, so the reader skips its bulk
+// path and keeps the nulls it decoded to itself. The visitor's filter is
+// AlwaysTrue, but useFastPath() follows the reader, so the encoding falls back
+// to the per-row path, which writes the nulls the dense fast path would not.
+// ===========================================================================
+TEST_F(ReadWithVisitorTest, encodingFastPathFollowsReaderNulls) {
+  if (!process::hasAvx2()) {
+    GTEST_SKIP() << "The encoding fast path requires AVX2";
+  }
+  constexpr vector_size_t kRows = 200;
+  const auto isNullAt = nullEvery(7);
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(kRows, folly::identity, isNullAt)});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(
+          0, std::numeric_limits<int64_t>::max(), /*nullAllowed=*/true));
+  auto root = buildReader(*ctx, rowType, *scanSpec);
+  auto* structReader =
+      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
+  ASSERT_NE(structReader, nullptr);
+  auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+      dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+  ASSERT_NE(reader, nullptr);
+
+  std::vector<vector_size_t> rowVec(kRows);
+  std::iota(rowVec.begin(), rowVec.end(), 0);
+  const RowSet rows(rowVec.data(), rowVec.size());
+  reader->doPrepareRead<int64_t>(0, rows, nullptr);
+
+  const auto valueAt = [](vector_size_t row) { return row * 1'000'003L; };
+  std::vector<int64_t> nonNullValues;
+  Vector<bool> notNulls(pool(), kRows, true);
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    notNulls[row] = !isNullAt(row);
+    if (!isNullAt(row)) {
+      nonNullValues.push_back(valueAt(row));
+    }
+  }
+  Buffer buffer(*pool());
+  const auto encoded = encodeConstantTestChunk(
+      EncodingLayout{EncodingType::Trivial, {}, CompressionType::Uncompressed},
+      nonNullValues,
+      notNulls,
+      /*nullable=*/true,
+      buffer);
+  auto encoding =
+      EncodingFactory().create(*pool(), encoded, nullptr, Encoding::Options{});
+
+  common::AlwaysTrue filter;
+  dwio::common::ExtractToReader extract(reader);
+  DecoderVisitor<
+      int64_t,
+      common::AlwaysTrue,
+      dwio::common::ExtractToReader,
+      /*isDense=*/true>
+      visitor(filter, reader, rows, extract);
+  // The visitor's AlwaysTrue filter would allow the fast path; the reader's
+  // bulk-path decision rules it out.
+  ASSERT_FALSE(dwio::common::useFastPath(visitor, /*hasNulls=*/true));
+  auto params = makeReadWithVisitorParams(visitor, rows, pool());
+  dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+  ASSERT_EQ(reader->numValues(), kRows);
+  ASSERT_FALSE(reader->returnReaderNulls());
+  const auto& resultNulls = reader->resultNullsForTest();
+  ASSERT_NE(resultNulls, nullptr);
+  const auto* rawNulls = resultNulls->as<uint64_t>();
+  const auto values = getValues<int64_t>(reader);
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    SCOPED_TRACE(fmt::format("row={}", row));
+    ASSERT_EQ(bits::isBitNull(rawNulls, row), isNullAt(row));
+    if (!isNullAt(row)) {
+      EXPECT_EQ(values[row], valueAt(row));
+    }
+  }
+}
+
+// ===========================================================================
+// Test: null-passing range filter — reader nulls stay off when rows are
+// rejected, so the row-indexed read-range nulls are not returned directly
+// ===========================================================================
+TEST_F(ReadWithVisitorTest, nullPassingRangeFilterPreservesNulls) {
+  constexpr int kRows = 200;
+  const auto isNullAt = nullEvery(7);
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(kRows, folly::identity, isNullAt)});
+  auto rowType = asRowType(input->type());
+
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(0, 99, /*nullAllowed=*/true));
+
+  auto root = buildReader(*ctx, rowType, *scanSpec);
+  auto* child = readColumn(root.get(), kRows);
+
+  int expected = 0;
+  for (int row = 0; row < kRows; ++row) {
+    if (isNullAt(row) || row <= 99) {
+      ++expected;
+    }
+  }
+  EXPECT_EQ(child->numValues(), expected);
+  EXPECT_TRUE(child->hasNulls());
+  EXPECT_FALSE(child->returnReaderNulls());
 }
 
 // ===========================================================================
@@ -2774,7 +2906,7 @@ TEST_F(ReadWithVisitorTest, constantEncodingHook) {
           rowVec.push_back(row);
         }
       }
-      root->read(0, RowSet(rowVec.data(), rowVec.size()), nullptr);
+      readColumn(root.get(), RowSet(rowVec.data(), rowVec.size()));
 
       // Hooks receive each row's position in the read set.
       std::vector<vector_size_t> expectedPositions(rowVec.size());

@@ -205,6 +205,13 @@ bool ScanSpec::testNull() const {
   return true;
 }
 
+void ScanSpec::setFilter(std::shared_ptr<Filter> filter) {
+  if (filter != nullptr && filter->is(FilterKind::kAlwaysTrue)) {
+    filter = nullptr;
+  }
+  filter_ = std::move(filter);
+}
+
 void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
   VELOX_CHECK(!filterDisabled_);
   // moves the filters and filter order from 'other'.
