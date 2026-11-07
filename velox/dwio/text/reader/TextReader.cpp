@@ -143,7 +143,6 @@ TextRowReader::TextRowReader(
     : RowReader(),
       contents_{fileContents},
       schemaWithId_{TypeWithId::create(fileContents->schema)},
-      scanSpec_{opts.scanSpec()},
       selectedSchema_{nullptr},
       options_{opts},
       columnSelector_{
@@ -304,7 +303,7 @@ uint64_t TextRowReader::next(
   // Resize the row vector to the actual number of rows read.
   // Handled here for both cases: pos_ > fileLength_ and pos_ > limit_
   rowVecPtr->resize(rowsRead);
-  result = projectColumns(rowVecPtr, *scanSpec_, mutation);
+  result = projectColumns(rowVecPtr, *options_.scanSpec(), mutation);
 
   return rowsRead;
 }
@@ -752,10 +751,9 @@ T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
     return 0;
   }
 
-  // Test if s is not acceptable integer format for
-  // the warehouse, for cases accepted by stol().
+  // Reject prefixes that are not valid for Hive text integers.
   char c = str[0];
-  if (c != '-' && !std::isdigit(static_cast<unsigned char>(c))) {
+  if (c != '-' && c != '+' && !std::isdigit(static_cast<unsigned char>(c))) {
     isNull = true;
     return 0;
   }
