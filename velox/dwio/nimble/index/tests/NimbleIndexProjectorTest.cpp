@@ -398,8 +398,8 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
 
   for (const auto& stripe : stripes) {
     SCOPED_TRACE(fmt::format("stripeIndex={}", stripe.selection.stripeIndex));
-    StreamReader reader(schema, leafPool_.get(), encodingOptions);
-    reader.setStreams(stripe.streams);
+    StreamReader reader(schema, leafPool_.get());
+    reader.setStreams(stripe.streams, encodingOptions);
     velox::VectorPtr actual;
     folly::coro::blockingWait(reader.co_next(kRowsPerStripe, actual));
     const auto expected = vectorMaker_->rowVector(
@@ -623,7 +623,8 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
            int8_t{7},
            int8_t{50},
        })});
-  // The last call switches back, so the projector rebuilds its reader twice.
+  // The projector keeps one reader and decodes each call with the encoding
+  // options of the call, including a call that switches back.
   for (const bool cacheEncodingView : {false, true, false}) {
     SCOPED_TRACE(fmt::format("cacheEncodingView={}", cacheEncodingView));
     const auto result = projectRows(
