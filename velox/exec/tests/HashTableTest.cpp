@@ -25,6 +25,7 @@
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/ManualExecutor.h>
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
 #include <memory>
@@ -69,6 +70,18 @@ class HashTableTestHelper {
   void setHashMode(BaseHashTable::HashMode mode, int32_t numNew) {
     table_->setHashMode(
         mode, numNew, BaseHashTable::kNoSpillInputStartPartitionBit);
+  }
+
+  void setBuildExecutor(folly::Executor* executor) {
+    table_->buildExecutor_ = executor;
+  }
+
+  char* table() const {
+    return reinterpret_cast<char*>(table_->table_);
+  }
+
+  void clearTable(uint64_t bytes) {
+    table_->clearTable(bytes);
   }
 
  private:
@@ -601,6 +614,89 @@ class HashTableTest : public testing::TestWithParam<bool>,
   int64_t keySpacing_ = 1;
   // Base string for varchar fields when making string vector.
   std::string baseString_;
+  // Zeroes a table of four kParallelClearRangeBytes ranges with no executor,
+  // the test's executor and an executor that never runs its tasks, checks
+  // that only tables of at least two ranges use the executor, and that an
+  // executor that rejects the third range fails the clear.
+  template <bool ignoreNullKeys>
+  void testClearTable() {
+    std::vector<std::unique_ptr<VectorHasher>> keyHashers;
+    keyHashers.emplace_back(std::make_unique<VectorHasher>(BIGINT(), 0));
+    auto table = HashTable<ignoreNullKeys>::createForJoin(
+        std::move(keyHashers), {}, true, false, false, 1'000, pool());
+    auto helper = HashTableTestHelper<ignoreNullKeys>::create(table.get());
+    const uint64_t bytes = 4 * BaseHashTable::kParallelClearRangeBytes;
+    helper.allocateTables(bytes / helper.tableSlotSize());
+
+    const auto clear = [&](folly::Executor* executor) {
+      helper.setBuildExecutor(executor);
+      ::memset(helper.table(), 0xff, bytes);
+      helper.clearTable(bytes);
+    };
+    const auto isFilled = [&](uint64_t begin, uint64_t end, uint64_t value) {
+      const auto* words = reinterpret_cast<const uint64_t*>(helper.table());
+      return std::all_of(
+          words + begin / sizeof(uint64_t),
+          words + end / sizeof(uint64_t),
+          [&](auto word) { return word == value; });
+    };
+    const auto isCleared = [&]() { return isFilled(0, bytes, 0); };
+
+    clear(nullptr);
+    EXPECT_TRUE(isCleared());
+
+    clear(executor_.get());
+    EXPECT_TRUE(isCleared());
+
+    // The calling thread runs every range.
+    folly::ManualExecutor idleExecutor;
+    clear(&idleExecutor);
+    EXPECT_TRUE(isCleared());
+    idleExecutor.drain();
+
+    // A table below two ranges is cleared without the executor.
+    FailingExecutor rejectingExecutor(nullptr, 0);
+    helper.setBuildExecutor(&rejectingExecutor);
+    ::memset(helper.table(), 0xff, bytes);
+    helper.clearTable(2 * BaseHashTable::kParallelClearRangeBytes - 1);
+    EXPECT_TRUE(isFilled(
+        0, 2 * BaseHashTable::kParallelClearRangeBytes - sizeof(uint64_t), 0));
+    VELOX_ASSERT_THROW(
+        helper.clearTable(2 * BaseHashTable::kParallelClearRangeBytes),
+        "Executor rejects the task");
+
+    // The three ranges created before the failure finish before the error
+    // propagates. The fourth range is not cleared.
+    FailingExecutor failingExecutor(executor_.get(), 2);
+    VELOX_ASSERT_THROW(clear(&failingExecutor), "Executor rejects the task");
+    const auto rangeBytes = BaseHashTable::kParallelClearRangeBytes;
+    EXPECT_TRUE(isFilled(0, 3 * rangeBytes, 0));
+    EXPECT_TRUE(isFilled(3 * rangeBytes, bytes, ~0ULL));
+  }
+
+  // Passes the first 'numAccepted' tasks to 'executor', or runs them on the
+  // calling thread if 'executor' is null, then rejects every task.
+  class FailingExecutor : public folly::Executor {
+   public:
+    FailingExecutor(folly::Executor* executor, int32_t numAccepted)
+        : executor_(executor), numAccepted_(numAccepted) {}
+
+    void add(folly::Func func) override {
+      if (numAccepted_-- <= 0) {
+        VELOX_FAIL("Executor rejects the task");
+      }
+      if (executor_ == nullptr) {
+        func();
+      } else {
+        executor_->add(std::move(func));
+      }
+    }
+
+   private:
+    folly::Executor* const executor_;
+    int32_t numAccepted_;
+  };
+
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
 };
 
@@ -911,6 +1007,11 @@ TEST_P(HashTableTest, regularHashingTableSize) {
     auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
     checkTableSize(BaseHashTable::HashMode::kNormalizedKey, type);
   }
+}
+
+TEST_P(HashTableTest, clearLargeTable) {
+  testClearTable<true>();
+  testClearTable<false>();
 }
 
 TEST_P(HashTableTest, listJoinResultsSize) {

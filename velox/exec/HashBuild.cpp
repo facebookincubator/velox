@@ -1105,6 +1105,16 @@ void HashBuild::addRuntimeStats() {
   uint64_t asDistinct{0};
   auto lockedStats = stats_.wlock();
 
+  for (const auto& timing : table_->parallelJoinBuildStats().clearTimings) {
+    lockedStats->getOutputTiming.add(timing);
+    lockedStats->addRuntimeStat(
+        std::string(BaseHashTable::kParallelJoinClearWallNanos),
+        RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos));
+    lockedStats->addRuntimeStat(
+        std::string(BaseHashTable::kParallelJoinClearCpuNanos),
+        RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos));
+  }
+
   for (const auto& timing : table_->parallelJoinBuildStats().partitionTimings) {
     lockedStats->getOutputTiming.add(timing);
     lockedStats->addRuntimeStat(
