@@ -385,10 +385,28 @@ bool BigintValuesUsingBitmask::testingEquals(const Filter& other) const {
   return false;
 }
 
+bool SplitBlockBloomFilterBackend::testingEquals(
+    const BloomFilterBackend& other) const {
+  const auto* otherBackend =
+      dynamic_cast<const SplitBlockBloomFilterBackend*>(&other);
+  return otherBackend != nullptr &&
+      blocks_.size() == otherBackend->blocks_.size() &&
+      memcmp(
+          blocks_.data(),
+          otherBackend->blocks_.data(),
+          blocks_.size() * sizeof(SplitBlockBloomFilter::Block)) == 0;
+}
+
 folly::dynamic BigintValuesUsingBloomFilter::serialize() const {
+  const auto* backend =
+      dynamic_cast<const SplitBlockBloomFilterBackend*>(backend_.get());
+  VELOX_CHECK_NOT_NULL(
+      backend,
+      "Serialization is only supported for SplitBlockBloomFilterBackend");
+
   auto obj = Filter::serializeBase();
   folly::dynamic words = folly::dynamic::array;
-  for (auto& block : blocks_) {
+  for (const auto& block : backend->blocks()) {
     for (auto word : block.data) {
       words.push_back(word);
     }
@@ -415,8 +433,8 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::create(
       i = 0;
     }
   }
-  return std::unique_ptr<BigintValuesUsingBloomFilter>(
-      new BigintValuesUsingBloomFilter(nullAllowed, std::move(blocks)));
+  return std::make_unique<BigintValuesUsingBloomFilter>(
+      SplitBlockBloomFilterBackend::fromBlocks(std::move(blocks)), nullAllowed);
 }
 
 bool BigintValuesUsingBloomFilter::testingEquals(const Filter& other) const {
@@ -425,11 +443,8 @@ bool BigintValuesUsingBloomFilter::testingEquals(const Filter& other) const {
   if (!typedOther) {
     return false;
   }
-  return blocks_.size() == typedOther->blocks_.size() &&
-      memcmp(
-          blocks_.data(),
-          typedOther->blocks_.data(),
-          blocks_.size() * sizeof(SplitBlockBloomFilter::Block)) == 0;
+
+  return backend_->testingEquals(*typedOther->backend_);
 }
 
 folly::dynamic NegatedBigintValuesUsingHashTable::serialize() const {
