@@ -94,13 +94,10 @@ bool testHash(const uint32_t* words, uint32_t numBlocks, uint64_t hash) {
   return true;
 }
 
+// Expects a bitsPerKey that the builder has checked is finite and positive.
 uint32_t computeNumBlocks(uint64_t numKeys, float bitsPerKey) {
-  NIMBLE_USER_CHECK(
-      std::isfinite(bitsPerKey) && bitsPerKey > 0,
-      "Bloom filter bits per key must be finite and positive, but got: {}",
-      bitsPerKey);
   // Size in double. The same product in float reaches infinity for a
-  // bitsPerKey that still passes the check above, and converting infinity back
+  // bitsPerKey that is still finite and positive, and converting infinity back
   // to an integer is undefined. Truncating the bit count before rounding up to
   // whole blocks is what the integer arithmetic this replaced did, and keeping
   // it means an existing config still produces a filter of the same size.
@@ -116,6 +113,21 @@ uint32_t computeNumBlocks(uint64_t numKeys, float bitsPerKey) {
   return static_cast<uint32_t>(numBlocks);
 }
 
+// Allocates a zeroed buffer for 'numBlocks' blocks followed by the trailer.
+velox::BufferPtr allocateFilter(
+    uint32_t numBlocks,
+    velox::memory::MemoryPool* pool) {
+  return velox::AlignedBuffer::allocate<char>(
+      static_cast<size_t>(numBlocks) * kBlockSizeBytes +
+          BloomFilterTrailer::kSize,
+      pool,
+      /*initValue=*/0);
+}
+
+uint32_t* filterWords(const velox::BufferPtr& data) {
+  return reinterpret_cast<uint32_t*>(data->asMutable<char>());
+}
+
 uint32_t blockCountOf(std::string_view payload) {
   NIMBLE_CHECK_GT(payload.size(), 0u, "Blocked bloom filter payload is empty");
   NIMBLE_CHECK_EQ(
@@ -128,27 +140,50 @@ uint32_t blockCountOf(std::string_view payload) {
 } // namespace
 
 BlockedBloomFilterBuilder::BlockedBloomFilterBuilder(
-    uint64_t numKeys,
-    float bitsPerKey,
+    const BlockedBloomFilterConfig& config,
     velox::memory::MemoryPool* pool)
-    : numBlocks_{computeNumBlocks(numKeys, bitsPerKey)},
-      data_{velox::AlignedBuffer::allocate<char>(
-          static_cast<size_t>(numBlocks_) * kBlockSizeBytes +
-              BloomFilterTrailer::kSize,
-          pool,
-          0)} {}
+    : bitsPerKey_{[&config] {
+        // Checked here even when sizing waits for finish(), so a bad config
+        // fails when the writer is created rather than when the file closes.
+        NIMBLE_USER_CHECK(
+            std::isfinite(config.bitsPerKey) && config.bitsPerKey > 0,
+            "Bloom filter bits per key must be finite and positive, but got: {}",
+            config.bitsPerKey);
+        return config.bitsPerKey;
+      }()},
+      pool_{pool},
+      cacheHashes_{!config.numKeys.has_value()},
+      hashes_{pool} {
+  if (!cacheHashes_) {
+    numBlocks_ = computeNumBlocks(config.numKeys.value(), bitsPerKey_);
+    data_ = allocateFilter(numBlocks_, pool_);
+  }
+}
 
 void BlockedBloomFilterBuilder::insert(std::string_view key) {
   NIMBLE_CHECK(!finished_, "Cannot insert into a finished bloom filter");
-  insertHash(
-      reinterpret_cast<uint32_t*>(data_->asMutable<char>()),
-      numBlocks_,
-      hashKey(key));
+  const auto hash = hashKey(key);
+  if (!cacheHashes_) {
+    insertHash(filterWords(data_), numBlocks_, hash);
+    return;
+  }
+  if (hashes_.empty() || hashes_.back() != hash) {
+    hashes_.push_back(hash);
+  }
 }
 
 std::string_view BlockedBloomFilterBuilder::finish() {
   NIMBLE_CHECK(!finished_, "Bloom filter is already finished");
   finished_ = true;
+  if (cacheHashes_) {
+    numBlocks_ = computeNumBlocks(hashes_.size(), bitsPerKey_);
+    data_ = allocateFilter(numBlocks_, pool_);
+    auto* words = filterWords(data_);
+    for (const auto hash : hashes_) {
+      insertHash(words, numBlocks_, hash);
+    }
+    hashes_.clear();
+  }
   const auto blocksSize = static_cast<size_t>(numBlocks_) * kBlockSizeBytes;
   auto* raw = data_->asMutable<char>();
   BloomFilterTrailer::write(raw + blocksSize, BloomFilterType::kBlocked);
@@ -192,12 +227,9 @@ void BlockedBloomFilterReader::maybeContains(
 
 std::unique_ptr<BloomFilterBuilder> BlockedBloomFilterFactory::createBuilder(
     const BloomFilterConfig& config,
-    uint64_t numKeys,
     velox::memory::MemoryPool* pool) const {
-  const auto& blockedConfig =
-      checkedBloomFilterConfig<BlockedBloomFilterConfig>(config);
   return std::make_unique<BlockedBloomFilterBuilder>(
-      numKeys, blockedConfig.bitsPerKey, pool);
+      checkedBloomFilterConfig<BlockedBloomFilterConfig>(config), pool);
 }
 
 std::unique_ptr<BloomFilterReader> BlockedBloomFilterFactory::createReader(
