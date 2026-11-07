@@ -59,6 +59,7 @@ const auto& kindNames() {
       {IExpr::Kind::kAggregate, "Aggregate"},
       {IExpr::Kind::kWindow, "Window"},
       {IExpr::Kind::kPlaceholder, "Placeholder"},
+      {IExpr::Kind::kAtTimeZone, "AtTimeZone"},
   };
   return kNames;
 }
@@ -408,6 +409,72 @@ std::string CastExpr::toString() const {
           isTryCast_ ? "try_cast" : "cast",
           input()->toString(),
           type_->toString()));
+}
+
+AtTimeZoneExpr::AtTimeZoneExpr(
+    ExprPtr value,
+    ExprPtr timeZone,
+    OperandTypes operandTypes,
+    std::optional<std::string> alias)
+    : IExpr(
+          Kind::kAtTimeZone,
+          {std::move(value), std::move(timeZone)},
+          std::move(alias)),
+      operandTypes_{std::move(operandTypes)} {
+  VELOX_CHECK_NOT_NULL(operandTypes_.timestamp);
+  VELOX_CHECK_NOT_NULL(operandTypes_.timestampWithTimeZone);
+  VELOX_CHECK_NOT_NULL(operandTypes_.time);
+  VELOX_CHECK_NOT_NULL(operandTypes_.timeWithTimeZone);
+}
+
+std::string AtTimeZoneExpr::toString() const {
+  return appendAliasIfExists(
+      fmt::format(
+          "$at_time_zone({},{})",
+          inputAt(0)->toString(),
+          inputAt(1)->toString()));
+}
+
+ExprPtr AtTimeZoneExpr::replaceInputs(std::vector<ExprPtr> newInputs) const {
+  VELOX_CHECK_EQ(newInputs.size(), 2);
+  return std::make_shared<AtTimeZoneExpr>(
+      std::move(newInputs.at(0)),
+      std::move(newInputs.at(1)),
+      operandTypes_,
+      alias());
+}
+
+ExprPtr AtTimeZoneExpr::withAlias(const std::string& alias) const {
+  return std::make_shared<AtTimeZoneExpr>(
+      inputAt(0), inputAt(1), operandTypes_, alias);
+}
+
+ExprPtr AtTimeZoneExpr::dropAlias() const {
+  return std::make_shared<AtTimeZoneExpr>(
+      inputAt(0), inputAt(1), operandTypes_, std::nullopt);
+}
+
+bool AtTimeZoneExpr::operator==(const IExpr& other) const {
+  if (!other.is(Kind::kAtTimeZone)) {
+    return false;
+  }
+
+  const auto* otherAtTimeZone = other.as<AtTimeZoneExpr>();
+  return *operandTypes_.timestamp ==
+      *otherAtTimeZone->operandTypes_.timestamp &&
+      *operandTypes_.timestampWithTimeZone ==
+      *otherAtTimeZone->operandTypes_.timestampWithTimeZone &&
+      *operandTypes_.time == *otherAtTimeZone->operandTypes_.time &&
+      *operandTypes_.timeWithTimeZone ==
+      *otherAtTimeZone->operandTypes_.timeWithTimeZone &&
+      compareAliasAndInputs(other);
+}
+
+size_t AtTimeZoneExpr::localHash() const {
+  auto hash = operandTypes_.timestamp->hash();
+  hash = bits::hashMix(hash, operandTypes_.timestampWithTimeZone->hash());
+  hash = bits::hashMix(hash, operandTypes_.time->hash());
+  return bits::hashMix(hash, operandTypes_.timeWithTimeZone->hash());
 }
 
 bool ConstantExpr::operator==(const IExpr& other) const {
