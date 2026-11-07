@@ -284,8 +284,10 @@ TEST_F(PaimonConnectorSplitTest, builder) {
   ASSERT_EQ(split->dataFiles().size(), 2);
   EXPECT_EQ(split->dataFiles()[0].path, "s3://bucket/data-001.parquet");
   EXPECT_EQ(split->dataFiles()[0].size, 1024);
+  EXPECT_EQ(split->dataFiles()[0].level, 0);
   EXPECT_EQ(split->dataFiles()[1].path, "s3://bucket/data-002.parquet");
   EXPECT_EQ(split->dataFiles()[1].size, 2048);
+  EXPECT_EQ(split->dataFiles()[1].level, 1);
   EXPECT_EQ(split->tableBucketNumber(), 3);
   EXPECT_EQ(split->partitionKeys().at("dt"), "2024-01-01");
   EXPECT_EQ(split->partitionKeys().at("country"), std::nullopt);
@@ -301,6 +303,19 @@ TEST_F(PaimonConnectorSplitTest, builderDefaults) {
                    .build();
 
   ASSERT_EQ(split->dataFiles().size(), 1);
+  const auto& file = split->dataFiles()[0];
+  EXPECT_EQ(file.schemaId, 0);
+  EXPECT_EQ(file.path, "data.nimble");
+  EXPECT_EQ(file.size, 512);
+  EXPECT_EQ(file.rowCount, 0);
+  EXPECT_EQ(file.level, 0);
+  EXPECT_EQ(file.minSequenceNumber, 0);
+  EXPECT_EQ(file.maxSequenceNumber, 0);
+  EXPECT_EQ(file.deleteRowCount, 0);
+  EXPECT_EQ(file.creationTimeMs, 0);
+  EXPECT_EQ(file.type, PaimonDataFile::Type::kData);
+  EXPECT_EQ(file.source, PaimonDataFile::Source::kAppend);
+  EXPECT_FALSE(file.deletionFile.has_value());
   EXPECT_EQ(split->fileFormat(), FileFormat::NIMBLE);
   EXPECT_EQ(split->tableBucketNumber(), std::nullopt);
   EXPECT_TRUE(split->partitionKeys().empty());

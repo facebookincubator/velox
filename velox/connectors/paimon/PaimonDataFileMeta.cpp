@@ -19,7 +19,31 @@
 
 namespace facebook::velox::connector::paimon {
 
-PaimonDataFile::PaimonDataFile(int64_t schemaId) : schemaId(schemaId) {
+PaimonDataFile::PaimonDataFile(
+    int64_t schemaId,
+    std::string path,
+    uint64_t size,
+    uint64_t rowCount,
+    int32_t level,
+    int64_t minSequenceNumber,
+    int64_t maxSequenceNumber,
+    int64_t deleteRowCount,
+    int64_t creationTimeMs,
+    Type type,
+    Source source,
+    std::optional<PaimonDeletionFile> deletionFile)
+    : path(std::move(path)),
+      schemaId(schemaId),
+      size(size),
+      rowCount(rowCount),
+      level(level),
+      minSequenceNumber(minSequenceNumber),
+      maxSequenceNumber(maxSequenceNumber),
+      deleteRowCount(deleteRowCount),
+      creationTimeMs(creationTimeMs),
+      type(type),
+      source(source),
+      deletionFile(std::move(deletionFile)) {
   VELOX_USER_CHECK_GE(schemaId, 0, "Paimon file schema ID must be nonnegative");
 }
 
@@ -109,21 +133,22 @@ PaimonDataFile PaimonDataFile::create(const folly::dynamic& obj) {
   VELOX_USER_CHECK(
       schemaId != obj.items().end() && schemaId->second.isInt(),
       "Expected Paimon file schema ID");
-  PaimonDataFile file(schemaId->second.asInt());
-  file.path = obj["filePath"].asString();
-  file.size = static_cast<uint64_t>(obj["fileSize"].asInt());
-  file.rowCount = static_cast<uint64_t>(obj["rowCount"].asInt());
-  file.level = static_cast<int32_t>(obj["level"].asInt());
-  file.minSequenceNumber = obj["minSequenceNumber"].asInt();
-  file.maxSequenceNumber = obj["maxSequenceNumber"].asInt();
-  file.deleteRowCount = obj["deleteRowCount"].asInt();
-  file.creationTimeMs = obj["creationTimeMs"].asInt();
-  file.type = typeFromString(obj["fileType"].asString());
-  file.source = sourceFromString(obj["sourceType"].asString());
-  if (obj.count("deletionFile") > 0) {
-    file.deletionFile = PaimonDeletionFile::create(obj["deletionFile"]);
-  }
-  return file;
+  return PaimonDataFile(
+      schemaId->second.asInt(),
+      obj["filePath"].asString(),
+      static_cast<uint64_t>(obj["fileSize"].asInt()),
+      static_cast<uint64_t>(obj["rowCount"].asInt()),
+      static_cast<int32_t>(obj["level"].asInt()),
+      obj["minSequenceNumber"].asInt(),
+      obj["maxSequenceNumber"].asInt(),
+      obj["deleteRowCount"].asInt(),
+      obj["creationTimeMs"].asInt(),
+      typeFromString(obj["fileType"].asString()),
+      sourceFromString(obj["sourceType"].asString()),
+      obj.count("deletionFile") > 0
+          ? std::optional<PaimonDeletionFile>(
+                PaimonDeletionFile::create(obj["deletionFile"]))
+          : std::nullopt);
 }
 
 } // namespace facebook::velox::connector::paimon

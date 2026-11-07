@@ -37,8 +37,6 @@ namespace facebook::velox::connector::paimon {
 ///   - kData: regular data file (current state of records).
 ///   - kChangelog: changelog file with RowKind (+I/-U/+U/-D) for streaming.
 struct PaimonDataFile {
-  explicit PaimonDataFile(int64_t schemaId);
-
   /// Whether this file is a data file or a changelog file. Both use the
   /// same physical format — this enum distinguishes their semantic role.
   ///
@@ -78,6 +76,20 @@ struct PaimonDataFile {
     kCompact,
   };
 
+  explicit PaimonDataFile(
+      int64_t schemaId,
+      std::string path = "",
+      uint64_t size = 0,
+      uint64_t rowCount = 0,
+      int32_t level = 0,
+      int64_t minSequenceNumber = 0,
+      int64_t maxSequenceNumber = 0,
+      int64_t deleteRowCount = 0,
+      int64_t creationTimeMs = 0,
+      Type type = Type::kData,
+      Source source = Source::kAppend,
+      std::optional<PaimonDeletionFile> deletionFile = std::nullopt);
+
   /// Returns the string name of the file type (e.g., "DATA").
   static std::string typeString(Type type);
 
@@ -97,17 +109,17 @@ struct PaimonDataFile {
   const int64_t schemaId;
 
   /// Size of the file in bytes.
-  uint64_t size{0};
+  uint64_t size;
 
   /// Number of rows in this file.
-  uint64_t rowCount{0};
+  uint64_t rowCount;
 
   /// LSM-tree level of this file. Level 0 contains the newest (unflushed)
   /// data; higher levels contain progressively more compacted data. Within
   /// level 0, files CAN have overlapping keys. Within level 1+, compaction
   /// guarantees non-overlapping key ranges across files.
   /// Always 0 for append-only tables (no compaction).
-  int32_t level{0};
+  int32_t level;
 
   /// Sequence number range of records in this file. Auto-generated per-commit,
   /// monotonically increasing. For level 0 files, min == max (single commit).
@@ -116,8 +128,8 @@ struct PaimonDataFile {
   /// number wins. Per-file metadata only (not per-row); after compaction,
   /// per-row sequence attribution is lost but LSM level order makes it
   /// unnecessary.
-  int64_t minSequenceNumber{0};
-  int64_t maxSequenceNumber{0};
+  int64_t minSequenceNumber;
+  int64_t maxSequenceNumber;
 
   /// Number of rows in this file with RowKind = DELETE or UPDATE_BEFORE.
   /// row_count = addRowCount + deleteRowCount, where addRowCount is the
@@ -134,16 +146,16 @@ struct PaimonDataFile {
   /// Used to determine rawConvertible: if deleteRowCount > 0, the file
   /// contains changelog records and cannot be read raw (needs RowKind
   /// filtering during merge-on-read).
-  int64_t deleteRowCount{0};
+  int64_t deleteRowCount;
 
   /// Timestamp (epoch millis) when this file was created.
-  int64_t creationTimeMs{0};
+  int64_t creationTimeMs;
 
   /// Whether this is a data file or changelog file.
-  Type type{Type::kData};
+  Type type;
 
   /// How this file was produced (write vs compaction).
-  Source source{Source::kAppend};
+  Source source;
 
   /// Deletion file for this data file. Contains a roaring bitmap of deleted
   /// row positions. Nullopt if no rows have been deleted from this file.
