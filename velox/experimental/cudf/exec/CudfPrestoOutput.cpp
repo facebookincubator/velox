@@ -23,7 +23,6 @@
 
 #include "velox/common/compression/Compression.h"
 #include "velox/common/time/Timer.h"
-#include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/SerializedPage.h"
 #include "velox/exec/Task.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -31,10 +30,11 @@
 #include "velox/vector/VectorStream.h"
 
 #include <cudf/copying.hpp>
+#include <cudf/detail/utilities/host_vector.hpp>
+#include <cudf/detail/utilities/vector_factories.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/strings/strings_column_view.hpp>
-#include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/pinned_memory.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
@@ -46,7 +46,6 @@
 #include <folly/io/IOBuf.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstring>
 #include <limits>
 
@@ -63,9 +62,8 @@ constexpr int32_t kChecksumOffset = kHeaderSize - sizeof(int64_t);
 // A wave of pages is laid out on the device at once and copied to the host in
 // batches. Both are a number of pages, bounded in bytes.
 constexpr int64_t kPagesPerWave = 32;
-constexpr int64_t kMaxWaveBytes = 256LL << 20;
+constexpr int64_t kMaxWaveBytes = int64_t{256} << 20;
 constexpr int64_t kPagesPerHostBatch = 8;
-constexpr int64_t kMaxHostBatchBytes = 64LL << 20;
 constexpr size_t kPinnedAlignment = rmm::CUDA_ALLOCATION_ALIGNMENT;
 
 /// Size in bytes of a value of 'type' in its Presto block, 0 for the
@@ -74,18 +72,25 @@ std::optional<int32_t> flatWidth(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
     case TypeKind::TINYINT:
-      return 1;
+      return sizeof(int8_t);
     case TypeKind::SMALLINT:
-      return 2;
+      return sizeof(int16_t);
     case TypeKind::INTEGER:
+      return sizeof(int32_t);
     case TypeKind::REAL:
-      return 4;
+      return sizeof(float);
     case TypeKind::BIGINT:
-    case TypeKind::DOUBLE:
     case TypeKind::TIMESTAMP:
-      return 8;
+      return sizeof(int64_t);
+    case TypeKind::DOUBLE:
+      return sizeof(double);
     case TypeKind::HUGEINT:
-      return 16;
+      // Only a long decimal has the INT128_ARRAY layout the device writes;
+      // the UUID and IPADDRESS blocks transform their bytes.
+      if (!type->isLongDecimal()) {
+        return std::nullopt;
+      }
+      return sizeof(int128_t);
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
       return 0;
@@ -98,16 +103,7 @@ int64_t pageBytesFor(const core::QueryConfig& config) {
   const auto pageBytes = config.get<int64_t>(
       CudfConfig::kCudfPrestoOutputPageBytes,
       CudfConfig::getInstance().prestoOutputPageBytes);
-  VELOX_USER_CHECK_GT(
-      pageBytes,
-      0,
-      "{} must be positive",
-      CudfConfig::kCudfPrestoOutputPageBytes);
-  VELOX_USER_CHECK_LE(
-      pageBytes,
-      std::numeric_limits<int32_t>::max() / 2,
-      "{} must fit a Presto page",
-      CudfConfig::kCudfPrestoOutputPageBytes);
+  CudfPrestoOutput::checkPageBytes(pageBytes);
   return pageBytes;
 }
 
@@ -116,8 +112,9 @@ int64_t pageBytesFor(const core::QueryConfig& config) {
 // meanwhile, as the bufferReleaseFn of exec::PartitionedOutput does.
 struct PageRelease {
   size_t bytes;
-  rmm::host_device_async_resource_ref mr;
   std::shared_ptr<exec::Task> task;
+  std::shared_ptr<std::atomic<int64_t>> livePinnedBytes;
+  rmm::host_device_async_resource_ref mr;
 };
 
 void releasePage(void* data, void* userData) {
@@ -127,11 +124,8 @@ void releasePage(void* data, void* userData) {
   } catch (const std::exception& e) {
     LOG(ERROR) << "Failed to free a pinned Presto page: " << e.what();
   }
+  *release->livePinnedBytes -= static_cast<int64_t>(release->bytes);
   delete release;
-}
-
-int64_t nowNanos() {
-  return static_cast<int64_t>(SteadyTime::now<std::chrono::nanoseconds>());
 }
 
 template <typename T>
@@ -162,7 +156,7 @@ struct CudfPrestoOutput::Column {
   std::vector<int64_t> validBefore;
   // Strings: absolute chars offset at each page boundary (numPages + 1).
   std::vector<int64_t> charsBounds;
-  // Owned conversions: a cast or purged column, and dense value buffers.
+  // Owned conversions: a purged strings column, and dense value buffers.
   std::unique_ptr<cudf::column> owned;
   rmm::device_buffer dense;
 
@@ -195,6 +189,29 @@ struct CudfPrestoOutput::Serializer {
   }
 };
 
+// The task lists of a wave, in pinned memory: the device primitives read them
+// in stream order, and the stream synchronizations that end a wave let the
+// next wave reuse them.
+struct CudfPrestoOutput::TaskLists {
+  explicit TaskLists(cuda::stream_ref stream)
+      : copies(
+            cudf::detail::make_pinned_vector_async<detail::CopyTask>(
+                0,
+                stream)),
+        nulls(
+            cudf::detail::make_pinned_vector_async<detail::NullBytesTask>(
+                0,
+                stream)),
+        offsets(
+            cudf::detail::make_pinned_vector_async<detail::StringOffsetsTask>(
+                0,
+                stream)) {}
+
+  cudf::detail::host_vector<detail::CopyTask> copies;
+  cudf::detail::host_vector<detail::NullBytesTask> nulls;
+  cudf::detail::host_vector<detail::StringOffsetsTask> offsets;
+};
+
 CudfPrestoOutput::CudfPrestoOutput(
     int32_t operatorId,
     exec::DriverCtx* ctx,
@@ -221,12 +238,15 @@ CudfPrestoOutput::CudfPrestoOutput(
       pageBytes_(pageBytesFor(ctx->queryConfig())),
       waveBytes_(std::min(kMaxWaveBytes, kPagesPerWave * pageBytes_)),
       hostBatchBytes_(
-          std::min(kMaxHostBatchBytes, kPagesPerHostBatch * pageBytes_)),
+          std::min(
+              kPagesPerHostBatch * pageBytes_,
+              static_cast<int64_t>(ctx->queryConfig().maxOutputBufferSize()))),
       eagerFlush_(eagerFlush),
       listener_(
           bufferManager == nullptr ? nullptr : bufferManager->newListener()),
       checksumListener_(
           dynamic_cast<PrestoOutputStreamListener*>(listener_.get())),
+      livePinnedBytes_(std::make_shared<std::atomic<int64_t>>(0)),
       pinnedMr_(cudf::get_pinned_memory_resource()) {
   VELOX_CHECK_NOT_NULL(
       bufferManager, "CudfPrestoOutput requires an output buffer manager");
@@ -236,24 +256,24 @@ CudfPrestoOutput::CudfPrestoOutput(
 CudfPrestoOutput::~CudfPrestoOutput() = default;
 
 // static
-std::shared_ptr<exec::DefaultOutputBufferManager>
-CudfPrestoOutput::bufferManagerFor(
-    const core::PartitionedOutputNode& node,
-    const core::QueryCtx& queryCtx) {
-  auto entry =
-      exec::OutputTransportRegistry::tryGet(queryCtx, node.transportKind());
-  if (entry == nullptr) {
-    return nullptr;
-  }
-  return std::dynamic_pointer_cast<exec::DefaultOutputBufferManager>(
-      entry->manager);
-}
-
-// static
 bool CudfPrestoOutput::isEnabled(const core::QueryConfig& config) {
   return config.get<bool>(
       CudfConfig::kCudfPrestoOutputEnabled,
       CudfConfig::getInstance().prestoOutputEnabled);
+}
+
+// static
+void CudfPrestoOutput::checkPageBytes(int64_t pageBytes) {
+  VELOX_USER_CHECK_GT(
+      pageBytes,
+      0,
+      "{} must be positive",
+      CudfConfig::kCudfPrestoOutputPageBytes);
+  VELOX_USER_CHECK_LE(
+      pageBytes,
+      kMaxPageBytes,
+      "{} must fit a Presto page",
+      CudfConfig::kCudfPrestoOutputPageBytes);
 }
 
 // static
@@ -275,11 +295,6 @@ std::optional<std::string> CudfPrestoOutput::cpuFallbackReason(
   if (common::stringToCompressionKind(compression) !=
       common::CompressionKind::CompressionKind_NONE) {
     return fmt::format("shuffle compression {}", compression);
-  }
-  if (bufferManagerFor(node, queryCtx) == nullptr) {
-    return fmt::format(
-        "output transport {} without the default output buffer manager",
-        node.transportKind());
   }
   for (const auto& type : node.outputType()->children()) {
     if (!isTypeSupportedByCudf(type)) {
@@ -392,13 +407,10 @@ void CudfPrestoOutput::startSerializer() {
       stringOffsets.push_back(column.offsets);
       fixedBitsPerRow += 8 * sizeof(int32_t);
     } else {
-      // Bring the values to the representation cuDF uses for the Velox type,
-      // e.g. a compact DECIMAL32 reader column to DECIMAL64.
-      if (type->kind() != TypeKind::TIMESTAMP &&
-          static_cast<int32_t>(cudf::size_of(col.type())) != column.width) {
-        column.owned = cudf::cast(col, veloxToCudfDataType(type), stream, mr);
-        col = column.owned->view();
-      }
+      // The readers and conversions deliver the cuDF type of the Velox type
+      // (the scan widens its decimals in castDecimalColumnsToVeloxTypes), so
+      // the values have the width of the Presto block; TIMESTAMP ticks are 8
+      // bytes in every unit.
       VELOX_CHECK_EQ(
           static_cast<int32_t>(cudf::size_of(col.type())),
           column.width,
@@ -440,7 +452,7 @@ void CudfPrestoOutput::startSerializer() {
             "Could not convert the TIMESTAMP values of {} to milliseconds",
             outputType_->nameOf(i));
         raw = reinterpret_cast<const uint8_t*>(millis);
-      } else if (type->kind() == TypeKind::HUGEINT) {
+      } else if (type->isLongDecimal()) {
         auto* java = reinterpret_cast<__int128_t*>(converted());
         detail::decimalsToJava(
             reinterpret_cast<const __int128_t*>(raw), numValues, java, stream);
@@ -543,21 +555,41 @@ void CudfPrestoOutput::buildNextWave() {
   Wave wave;
   wave.data = rmm::device_buffer(static_cast<size_t>(total), stream, mr);
   auto* base = static_cast<uint8_t*>(wave.data.data());
+  if (tasks_ == nullptr) {
+    tasks_ = std::make_unique<TaskLists>(stream);
+  }
 
-  // Small fields are assembled on the host, copied to the device once and
-  // scattered by the batched copy together with the chars and value ranges.
-  struct BlobCopy {
-    size_t blobOffset;
-    size_t dstOffset;
-    size_t size;
+  // The device writes the string offsets, null bitmaps, chars and values of
+  // the pages. The small fields in between are written on the host once a
+  // page is there, so they are only recorded here, as runs of contiguous
+  // bytes that a device region ends.
+  const size_t numPages = last - first;
+  const size_t numColumns = serializer.columns.size();
+  auto& [copies, nullTasks, offsetTasks] = *tasks_;
+  copies.clear();
+  nullTasks.clear();
+  offsetTasks.clear();
+  // Growing a pinned list synchronizes the stream, so the lists are sized for
+  // a full wave the first time and grow only for a wave of more pages.
+  const size_t numTasks =
+      std::max<size_t>(numPages, kPagesPerWave) * numColumns;
+  copies.reserve(numTasks);
+  nullTasks.reserve(numTasks);
+  offsetTasks.reserve(numTasks);
+  auto& fieldBytes = wave.fieldBytes;
+  fieldBytes.reserve(numPages * (32 + 32 * numColumns));
+  size_t runSource = 0;
+  size_t runOffset = 0;
+  auto beginRun = [&](size_t pageOffset) {
+    runSource = fieldBytes.size();
+    runOffset = pageOffset;
   };
-  std::vector<uint8_t> blob;
-  std::vector<BlobCopy> blobCopies;
-  std::vector<detail::CopyTask> copies;
-  std::vector<detail::NullBytesTask> nullTasks;
-  std::vector<detail::StringOffsetsTask> offsetTasks;
-  const auto numColumns = static_cast<int32_t>(serializer.columns.size());
-  blob.reserve((last - first) * (32 + 32 * numColumns));
+  auto endRun = [&]() {
+    const size_t size = fieldBytes.size() - runSource;
+    if (size > 0) {
+      wave.fields.push_back({runSource, runOffset, size});
+    }
+  };
 
   size_t waveOffset = 0;
   for (size_t p = first; p < last; ++p) {
@@ -567,51 +599,49 @@ void CudfPrestoOutput::buildNextWave() {
     const int64_t pageSize = serializer.pageSizes[p];
     uint8_t* page = base + waveOffset;
     size_t pos = 0;
+    const size_t firstField = wave.fields.size();
 
-    size_t blobStart = blob.size();
-    putValue<int32_t>(blob, rows);
+    beginRun(pos);
+    putValue<int32_t>(fieldBytes, rows);
     // No compression. The codec marker and the checksum stay zero unless
-    // checksumPage() sets them on the host.
-    putValue<int8_t>(blob, 0);
-    putValue<int32_t>(blob, static_cast<int32_t>(pageSize - kHeaderSize));
-    putValue<int32_t>(blob, static_cast<int32_t>(pageSize - kHeaderSize));
-    putValue<int64_t>(blob, 0);
-    putValue<int32_t>(blob, numColumns);
-    blobCopies.push_back({blobStart, waveOffset, blob.size() - blobStart});
-    pos += blob.size() - blobStart;
+    // checksumPage() sets them.
+    putValue<int8_t>(fieldBytes, 0);
+    putValue<int32_t>(fieldBytes, static_cast<int32_t>(pageSize - kHeaderSize));
+    putValue<int32_t>(fieldBytes, static_cast<int32_t>(pageSize - kHeaderSize));
+    putValue<int64_t>(fieldBytes, 0);
+    putValue<int32_t>(fieldBytes, static_cast<int32_t>(numColumns));
+    pos += kHeaderSize + sizeof(int32_t);
 
     for (const auto& column : serializer.columns) {
       const auto& name = column.encodingName;
-      blobStart = blob.size();
-      putValue<int32_t>(blob, static_cast<int32_t>(name.size()));
-      blob.insert(blob.end(), name.begin(), name.end());
-      putValue<int32_t>(blob, rows);
-      blobCopies.push_back(
-          {blobStart, waveOffset + pos, blob.size() - blobStart});
-      pos += blob.size() - blobStart;
+      putValue<int32_t>(fieldBytes, static_cast<int32_t>(name.size()));
+      fieldBytes.insert(fieldBytes.end(), name.begin(), name.end());
+      putValue<int32_t>(fieldBytes, rows);
+      pos += sizeof(int32_t) + name.size() + sizeof(int32_t);
 
       if (column.isString()) {
+        endRun();
         offsetTasks.push_back({column.offsets, begin, rows, page + pos});
         pos += sizeof(int32_t) * static_cast<size_t>(rows);
+        beginRun(pos);
       }
 
       const int32_t nulls = column.mask != nullptr ? column.pageNulls[p] : 0;
-      blobStart = blob.size();
-      putValue<int8_t>(blob, nulls > 0 ? 1 : 0);
-      blobCopies.push_back({blobStart, waveOffset + pos, 1});
+      putValue<int8_t>(fieldBytes, nulls > 0 ? 1 : 0);
       pos += 1;
       if (nulls > 0) {
+        endRun();
         nullTasks.push_back(
             {column.mask, column.firstBit + begin, rows, page + pos});
         pos += (rows + 7) / 8;
+        beginRun(pos);
       }
 
       if (column.isString()) {
         const int64_t bytes = column.charsBounds[p + 1] - column.charsBounds[p];
-        blobStart = blob.size();
-        putValue<int32_t>(blob, static_cast<int32_t>(bytes));
-        blobCopies.push_back({blobStart, waveOffset + pos, sizeof(int32_t)});
+        putValue<int32_t>(fieldBytes, static_cast<int32_t>(bytes));
         pos += sizeof(int32_t);
+        endRun();
         if (bytes > 0) {
           copies.push_back(
               {reinterpret_cast<const uint8_t*>(column.chars) +
@@ -620,8 +650,10 @@ void CudfPrestoOutput::buildNextWave() {
                static_cast<size_t>(bytes)});
         }
         pos += bytes;
+        beginRun(pos);
       } else {
         const int64_t bytes = static_cast<int64_t>(rows - nulls) * column.width;
+        endRun();
         if (bytes > 0) {
           const uint8_t* src = column.compacted
               ? column.values + column.validBefore[p] * column.width
@@ -629,33 +661,27 @@ void CudfPrestoOutput::buildNextWave() {
           copies.push_back({src, page + pos, static_cast<size_t>(bytes)});
         }
         pos += bytes;
+        beginRun(pos);
       }
     }
+    endRun();
     VELOX_CHECK_EQ(pos, static_cast<size_t>(pageSize));
-    wave.pages.push_back({waveOffset, static_cast<size_t>(pageSize), rows});
+    wave.pages.push_back(
+        {waveOffset,
+         static_cast<size_t>(pageSize),
+         rows,
+         firstField,
+         wave.fields.size() - firstField});
     waveOffset += pageSize;
   }
 
-  rmm::device_buffer deviceBlob(blob.size(), stream, mr);
-  CUDF_CUDA_TRY(cudaMemcpyAsync(
-      deviceBlob.data(),
-      blob.data(),
-      blob.size(),
-      cudaMemcpyHostToDevice,
-      stream.get()));
-  for (const auto& blobCopy : blobCopies) {
-    copies.push_back(
-        {static_cast<const uint8_t*>(deviceBlob.data()) + blobCopy.blobOffset,
-         base + blobCopy.dstOffset,
-         blobCopy.size});
-  }
+  // The pinned task lists are read in stream order and stay as they are
+  // until the copies of the wave have synchronized the stream.
   detail::batchedDeviceCopy(copies, stream);
   detail::fillPrestoNullBytes(nullTasks, stream);
   VELOX_USER_CHECK(
       detail::fillPrestoStringOffsets(offsetTasks, stream),
       "The strings of one page exceed what Presto's int32 offsets hold");
-  // The pageable blob was staged by cudaMemcpyAsync before it returned, and
-  // 'deviceBlob' is freed in stream order after the batched copy.
 
   serializer.nextPage = last;
   wave_ = std::move(wave);
@@ -665,6 +691,7 @@ void CudfPrestoOutput::copyPagesToHost() {
   auto& wave = *wave_;
   auto stream = serializer_->stream;
   const auto* base = static_cast<const uint8_t*>(wave.data.data());
+  const size_t firstPage = wave.next;
   std::vector<HostPage> batch;
   int64_t batchBytes = 0;
   try {
@@ -679,6 +706,9 @@ void CudfPrestoOutput::copyPagesToHost() {
       page.data = pinnedMr_.allocate(stream, range.size, kPinnedAlignment);
       batch.push_back(page);
       batchBytes += range.size;
+      const int64_t live = *livePinnedBytes_ +=
+          static_cast<int64_t>(range.size);
+      peakPinnedBytes_ = std::max(peakPinnedBytes_, live);
       CUDF_CUDA_TRY(cudaMemcpyAsync(
           page.data,
           base + range.offset,
@@ -695,11 +725,28 @@ void CudfPrestoOutput::copyPagesToHost() {
     }
     throw;
   }
-  for (auto& page : batch) {
+  for (size_t i = 0; i < batch.size(); ++i) {
+    auto& page = batch[i];
+    writeHostFields(wave, wave.pages[firstPage + i], page);
     if (checksumListener_ != nullptr) {
       checksumPage(page);
     }
     ready_.push_back(page);
+  }
+}
+
+void CudfPrestoOutput::writeHostFields(
+    const Wave& wave,
+    const PageRange& range,
+    HostPage& page) {
+  auto* bytes = static_cast<uint8_t*>(page.data);
+  for (size_t f = range.firstField; f < range.firstField + range.numFields;
+       ++f) {
+    const auto& field = wave.fields[f];
+    std::memcpy(
+        bytes + field.offset,
+        wave.fieldBytes.data() + field.source,
+        field.size);
   }
 }
 
@@ -722,7 +769,8 @@ bool CudfPrestoOutput::enqueueReadyPages(
   while (!ready_.empty()) {
     HostPage page = ready_.front();
     ready_.pop_front();
-    auto* release = new PageRelease{page.size, pinnedMr_, operatorCtx_->task()};
+    auto* release = new PageRelease{
+        page.size, operatorCtx_->task(), livePinnedBytes_, pinnedMr_};
     auto iobuf = folly::IOBuf::takeOwnership(
         page.data, page.size, page.size, releasePage, release);
     auto serialized = std::make_unique<exec::PrestoSerializedPage>(
@@ -754,9 +802,8 @@ void CudfPrestoOutput::drain() {
     }
     if (wave_.has_value()) {
       if (wave_->next < wave_->pages.size()) {
-        const auto start = nowNanos();
+        NanosecondTimer timer(&copyNanos_);
         copyPagesToHost();
-        copyNanos_ += nowNanos() - start;
         continue;
       }
       // Every copy of the wave has completed: the device buffer can go.
@@ -765,9 +812,8 @@ void CudfPrestoOutput::drain() {
     }
     if (serializer_ != nullptr) {
       if (!serializer_->done()) {
-        const auto start = nowNanos();
+        NanosecondTimer timer(&layoutNanos_);
         buildNextWave();
-        layoutNanos_ += nowNanos() - start;
         continue;
       }
       serializer_.reset();
@@ -778,9 +824,8 @@ void CudfPrestoOutput::drain() {
     if (!pendingInputs_.empty() &&
         (noMoreInput_ || eagerFlush_ || pendingBytes_ >= pageBytes_ ||
          pendingRows_ >= kMaxPageRows)) {
-      const auto start = nowNanos();
+      NanosecondTimer timer(&layoutNanos_);
       startSerializer();
-      layoutNanos_ += nowNanos() - start;
       continue;
     }
     break;
@@ -797,6 +842,7 @@ void CudfPrestoOutput::drain() {
 void CudfPrestoOutput::releaseHostPage(HostPage& page) {
   if (page.data != nullptr) {
     pinnedMr_.deallocate_sync(page.data, page.size, kPinnedAlignment);
+    *livePinnedBytes_ -= static_cast<int64_t>(page.size);
     page.data = nullptr;
   }
 }
@@ -815,13 +861,19 @@ void CudfPrestoOutput::doClose() {
                 common::CompressionKind::CompressionKind_NONE)));
     lockedStats->addRuntimeStat(
         "pageLayoutNanos",
-        RuntimeCounter(layoutNanos_, RuntimeCounter::Unit::kNanos));
+        RuntimeCounter(
+            static_cast<int64_t>(layoutNanos_), RuntimeCounter::Unit::kNanos));
     lockedStats->addRuntimeStat(
         "deviceToHostNanos",
-        RuntimeCounter(copyNanos_, RuntimeCounter::Unit::kNanos));
+        RuntimeCounter(
+            static_cast<int64_t>(copyNanos_), RuntimeCounter::Unit::kNanos));
+    lockedStats->addRuntimeStat(
+        "peakPinnedPageBytes",
+        RuntimeCounter(peakPinnedBytes_, RuntimeCounter::Unit::kBytes));
   }
   if (serializer_ != nullptr) {
-    // Pending device-to-host copies must finish before their buffers go away.
+    // Pending device work must finish before its buffers and task lists go
+    // away.
     cudaStreamSynchronize(serializer_->stream.get());
   }
   for (auto& page : ready_) {
@@ -830,6 +882,7 @@ void CudfPrestoOutput::doClose() {
   ready_.clear();
   wave_.reset();
   serializer_.reset();
+  tasks_.reset();
   pendingInputs_.clear();
 }
 

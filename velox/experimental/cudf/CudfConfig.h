@@ -130,10 +130,11 @@ struct CudfConfig {
   /// query config key.
   bool prestoOutputEnabled{true};
 
-  /// Serialized bytes per Presto page built on the GPU; a page exceeds it by
-  /// less than one row. CudfPrestoOutput gathers input until it fills a page,
+  /// Serialized bytes per Presto page built on the GPU, the page cap of
+  /// PartitionedOutput by default; a page exceeds it by less than one row
+  /// plus its headers. CudfPrestoOutput gathers input until it fills a page,
   /// unless the output flushes eagerly. Also a query config key.
-  int64_t prestoOutputPageBytes{8LL << 20};
+  int64_t prestoOutputPageBytes{int64_t{1} << 20};
 
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).

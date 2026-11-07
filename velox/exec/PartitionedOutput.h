@@ -211,6 +211,12 @@ class PartitionedOutput : public Operator {
     return eagerFlush_;
   }
 
+  /// The buffer manager the pages are enqueued into, or nullptr once it is
+  /// destructed.
+  std::shared_ptr<DefaultOutputBufferManager> bufferManager() const {
+    return bufferManager_.lock();
+  }
+
   static void testingSetMinCompressionRatio(float ratio) {
     minCompressionRatio_ = ratio;
   }

@@ -1208,10 +1208,10 @@ class LocalMergeAdapter : public OperatorAdapter {
 };
 
 /// PartitionedOutputAdapter - Replaces a single-destination PartitionedOutput
-/// with CudfPrestoOutput, which serializes Presto pages from the GPU table.
-/// Declines, which keeps the CPU operator behind a CudfToVelox, for
-/// partitioned, compressed and non-Presto outputs and for output columns
-/// without a flat Presto encoding.
+/// whose input is on the GPU with CudfPrestoOutput, which serializes Presto
+/// pages from the GPU table. Declines, which keeps the CPU operator behind a
+/// CudfToVelox, for partitioned, compressed and non-Presto outputs and for
+/// output columns without a flat Presto encoding.
 class PartitionedOutputAdapter : public OperatorAdapter {
  public:
   PartitionedOutputAdapter() : OperatorAdapter("PartitionedOutput") {}
@@ -1234,7 +1234,7 @@ class PartitionedOutputAdapter : public OperatorAdapter {
     if (!reason.has_value()) {
       return true;
     }
-    // Turning the operator off is no unsupported operation.
+    // A disabled operator is not an unsupported case, so it logs no fallback.
     if (CudfPrestoOutput::isEnabled(queryCtx.queryConfig())) {
       LOG_FALLBACK(
           "PartitionedOutput {} stays on the CPU: {}", node->id(), *reason);
@@ -1243,6 +1243,12 @@ class PartitionedOutputAdapter : public OperatorAdapter {
   }
 
   bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  /// Serializing CPU batches on the GPU would only add their conversion to
+  /// the GPU and the copy of the pages back.
+  bool requiresGpuInput() const override {
     return true;
   }
 
@@ -1268,7 +1274,7 @@ class PartitionedOutputAdapter : public OperatorAdapter {
             ctx,
             node,
             output->eagerFlush(),
-            CudfPrestoOutput::bufferManagerFor(*node, *ctx->task->queryCtx())));
+            output->bufferManager()));
     return result;
   }
 

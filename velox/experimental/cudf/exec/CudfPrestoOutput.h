@@ -26,7 +26,9 @@
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <atomic>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -46,16 +48,29 @@ namespace facebook::velox::cudf_velox {
 /// pipeline when the output goes to one destination buffer (a single,
 /// broadcast or arbitrary output without partition keys) through the Presto
 /// serde without compression, and every output column has a flat Presto
-/// encoding. Input is gathered until it fills a page of
+/// encoding. An output whose input is already on the CPU keeps
+/// exec::PartitionedOutput. Input is gathered until it fills a page of
 /// cudf.presto_output_page_bytes or kMaxPageRows rows, unless the output
 /// flushes eagerly. The pages carry the CRC32 checksum when the buffer
 /// manager has a Presto output stream listener, as the pages of
 /// exec::PartitionedOutput do.
+///
+/// The pages are copied into pinned memory from cuDF's pinned memory resource
+/// in batches of at most kPagesPerHostBatch pages and max_output_buffer_size
+/// bytes, or one page when a page is larger, so a driver holds at most that
+/// much beyond the pages in the output buffer; the runtime stat
+/// peakPinnedPageBytes reports the most such bytes alive at once, the pages
+/// the consumer has not freed yet included.
 class CudfPrestoOutput : public CudfOperatorBase {
  public:
   /// Rows a page holds at most. Bounds the pages of narrow rows and of rows
   /// without columns, which bytes do not bound.
   static constexpr int64_t kMaxPageRows = 1 << 20;
+
+  /// The largest cudf.presto_output_page_bytes: a page exceeds the setting by
+  /// one row and must stay within the int32 size of a Presto page.
+  static constexpr int64_t kMaxPageBytes =
+      std::numeric_limits<int32_t>::max() / 2;
 
   CudfPrestoOutput(
       int32_t operatorId,
@@ -75,12 +90,10 @@ class CudfPrestoOutput : public CudfOperatorBase {
   /// Whether cudf.presto_output_enabled allows the operator under 'config'.
   static bool isEnabled(const core::QueryConfig& config);
 
-  /// Returns the DefaultOutputBufferManager of the output transport that
-  /// 'node' names, or nullptr when that transport is not registered or does
-  /// not use the default manager.
-  static std::shared_ptr<exec::DefaultOutputBufferManager> bufferManagerFor(
-      const core::PartitionedOutputNode& node,
-      const core::QueryCtx& queryCtx);
+  /// Throws a user error unless 'pageBytes' is a valid
+  /// cudf.presto_output_page_bytes: positive and at most kMaxPageBytes. The
+  /// startup configuration and the operator share it.
+  static void checkPageBytes(int64_t pageBytes);
 
   /// Always true: the driver checks isBlocked() before adding input, so the
   /// blocked state never accumulates input.
@@ -106,18 +119,34 @@ class CudfPrestoOutput : public CudfOperatorBase {
  private:
   struct Column;
   struct Serializer;
+  struct TaskLists;
 
   // One serialized page inside a wave buffer.
   struct PageRange {
     size_t offset;
     size_t size;
     int32_t numRows;
+    // The page's host fields: a range of Wave::fields.
+    size_t firstField;
+    size_t numFields;
+  };
+
+  // Bytes a page gets on the host once it is there: 'size' bytes of
+  // Wave::fieldBytes from 'source', at 'offset' into the page.
+  struct HostField {
+    size_t source;
+    size_t offset;
+    size_t size;
   };
 
   // A batch of pages that share one device buffer.
   struct Wave {
     rmm::device_buffer data;
     std::vector<PageRange> pages;
+    // The small fields of the pages: page headers, encoding names, position
+    // counts, has-nulls bytes and string byte counts.
+    std::vector<uint8_t> fieldBytes;
+    std::vector<HostField> fields;
     size_t next{0};
   };
 
@@ -137,6 +166,10 @@ class CudfPrestoOutput : public CudfOperatorBase {
   // Copies a batch of pages of the current wave to pinned host memory.
   void copyPagesToHost();
 
+  // Writes the host fields of 'range' into its host page.
+  void
+  writeHostFields(const Wave& wave, const PageRange& range, HostPage& page);
+
   // Sets the codec marker and the CRC32 of a host page.
   void checksumPage(HostPage& page);
 
@@ -152,9 +185,11 @@ class CudfPrestoOutput : public CudfOperatorBase {
   const RowTypePtr inputType_;
   const std::vector<column_index_t> outputChannels_;
   const int64_t pageBytes_;
-  // Device bytes laid out per wave, and bytes copied to the host between two
-  // stream synchronizations: a bounded number of pages each.
+  // Device bytes laid out per wave: a bounded number of pages.
   const int64_t waveBytes_;
+  // Bytes copied to the host between two stream synchronizations: at most
+  // kPagesPerHostBatch pages, and no more than the output buffer accepts
+  // before it blocks; a batch always holds one page.
   const int64_t hostBatchBytes_;
   // Serialize each input as it arrives instead of filling a page first.
   const bool eagerFlush_;
@@ -162,6 +197,9 @@ class CudfPrestoOutput : public CudfOperatorBase {
   // checksum; null otherwise.
   const std::unique_ptr<OutputStreamListener> listener_;
   serializer::presto::PrestoOutputStreamListener* const checksumListener_;
+  // Pinned page bytes not freed yet, shared with the release callbacks of the
+  // enqueued pages, which run on the consumer's threads.
+  const std::shared_ptr<std::atomic<int64_t>> livePinnedBytes_;
   rmm::host_device_async_resource_ref pinnedMr_;
 
   std::vector<CudfVectorPtr> pendingInputs_;
@@ -169,6 +207,8 @@ class CudfPrestoOutput : public CudfOperatorBase {
   int64_t pendingBytes_{0};
 
   std::unique_ptr<Serializer> serializer_;
+  // The task lists of the wave being laid out, reused across waves.
+  std::unique_ptr<TaskLists> tasks_;
   std::optional<Wave> wave_;
   std::deque<HostPage> ready_;
 
@@ -176,8 +216,9 @@ class CudfPrestoOutput : public CudfOperatorBase {
   ContinueFuture future_;
   bool finished_{false};
 
-  int64_t layoutNanos_{0};
-  int64_t copyNanos_{0};
+  int64_t peakPinnedBytes_{0};
+  uint64_t layoutNanos_{0};
+  uint64_t copyNanos_{0};
 };
 
 } // namespace facebook::velox::cudf_velox

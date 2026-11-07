@@ -18,15 +18,19 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfPrestoOutput.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/compression/Compression.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SerializedPage.h"
 #include "velox/exec/Task.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/serializers/PrestoHeader.h"
@@ -126,22 +130,22 @@ class CountingPinnedResource {
   std::shared_ptr<std::atomic<int64_t>> live_;
 };
 
-class PrestoOutputTest : public OperatorTestBase {
+/// The cuDF Hive fixture registers cuDF with CPU fallback disabled and the
+/// cuDF Hive connector of the scans.
+class PrestoOutputTest
+    : public cudf_velox::exec::test::CudfHiveConnectorTestBase {
  protected:
   void SetUp() override {
-    OperatorTestBase::SetUp();
     savedCpuFallback_ = cudf_velox::CudfConfig::getInstance().allowCpuFallback;
     savedTimestampUnit_ = cudf_velox::CudfConfig::getInstance().timestampUnit;
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
-    cudf_velox::registerCudf();
+    CudfHiveConnectorTestBase::SetUp();
   }
 
   void TearDown() override {
     bufferManager_->setListenerFactory(nullptr);
-    cudf_velox::unregisterCudf();
+    CudfHiveConnectorTestBase::TearDown();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = savedCpuFallback_;
     cudf_velox::CudfConfig::getInstance().timestampUnit = savedTimestampUnit_;
-    OperatorTestBase::TearDown();
   }
 
   struct Destination {
@@ -199,12 +203,14 @@ class PrestoOutputTest : public OperatorTestBase {
   /// Runs 'plan' as a task with 'numDrivers' drivers, then drains the pages
   /// of every destination and deserializes them when the node uses the Presto
   /// serde. A broadcast output gets 'numDestinations' destinations. Draining
-  /// starts after 'drainDelay_'.
+  /// starts after 'drainDelay_'. 'addSplits' adds the splits of a scan once
+  /// the task runs.
   Run execute(
       const core::PlanNodePtr& plan,
       std::unordered_map<std::string, std::string> config = {},
       int numDestinations = 1,
-      int numDrivers = 1) {
+      int numDrivers = 1,
+      const std::function<void(Task&)>& addSplits = nullptr) {
     const auto compression = common::stringToCompressionKind(
         config.count(core::QueryConfig::kShuffleCompressionKind)
             ? config.at(core::QueryConfig::kShuffleCompressionKind)
@@ -213,6 +219,9 @@ class PrestoOutputTest : public OperatorTestBase {
     run.task = makeTask(plan, std::move(config));
     const auto& taskId = run.task->taskId();
     run.task->start(numDrivers);
+    if (addSplits) {
+      addSplits(*run.task);
+    }
     const auto outputNode =
         std::dynamic_pointer_cast<const core::PartitionedOutputNode>(plan);
     if (outputNode->isBroadcast()) {
@@ -227,15 +236,15 @@ class PrestoOutputTest : public OperatorTestBase {
     const auto rowType = asRowType(plan->outputType());
     for (int destination = 0; destination < numDestinations; ++destination) {
       Destination result;
-      for (auto& iobuf : drain(*run.task, destination)) {
+      drain(*run.task, destination, [&](std::unique_ptr<folly::IOBuf> iobuf) {
         iobuf->coalesce();
         result.pageBytes.emplace_back(
             reinterpret_cast<const char*>(iobuf->data()), iobuf->length());
-        if (!isPresto) {
-          continue;
+        if (isPresto) {
+          result.pages.push_back(
+              deserialize(std::move(iobuf), rowType, options));
         }
-        result.pages.push_back(deserialize(std::move(iobuf), rowType, options));
-      }
+      });
       run.destinations.push_back(std::move(result));
     }
     EXPECT_TRUE(waitForTaskCompletion(run.task.get(), 10'000'000))
@@ -262,7 +271,7 @@ class PrestoOutputTest : public OperatorTestBase {
     const bool found = bufferManager_->getData(
         task.taskId(),
         destination,
-        kMaxBytesPerFetch,
+        maxBytesPerFetch_,
         sequence,
         [result = std::make_shared<
              folly::Promise<std::vector<std::unique_ptr<folly::IOBuf>>>>(
@@ -284,18 +293,24 @@ class PrestoOutputTest : public OperatorTestBase {
     return std::move(future).value();
   }
 
-  std::vector<std::unique_ptr<folly::IOBuf>> drain(
+  /// Fetches the pages of 'destination' up to the end marker and hands each
+  /// to 'onPage' as it arrives, so that the consumer frees a page before it
+  /// fetches further ones, as the HTTP consumer does; a fetch acknowledges
+  /// the pages of the fetch before it.
+  void drain(
       const Task& task,
-      int destination) {
-    std::vector<std::unique_ptr<folly::IOBuf>> result;
+      int destination,
+      const std::function<void(std::unique_ptr<folly::IOBuf>)>& onPage) {
+    int64_t sequence = 0;
     for (;;) {
-      auto pages = getData(task, destination, result.size());
+      auto pages = getData(task, destination, sequence);
       for (auto& page : pages) {
         if (page == nullptr) {
           bufferManager_->deleteResults(task.taskId(), destination);
-          return result;
+          return;
         }
-        result.push_back(std::move(page));
+        ++sequence;
+        onPage(std::move(page));
       }
     }
   }
@@ -325,6 +340,43 @@ class PrestoOutputTest : public OperatorTestBase {
       types.insert(type);
     }
     return types;
+  }
+
+  /// The operator types of every pipeline of 'task'.
+  std::set<std::string> allOperatorTypes(const Task& task) {
+    std::set<std::string> types;
+    for (const auto& pipeline : task.taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        types.insert(op.operatorType);
+      }
+    }
+    return types;
+  }
+
+  /// Writes 'vector' to a Parquet file with the Velox writer, which stores a
+  /// decimal of up to 9 digits as INT32 and of up to 18 digits as INT64.
+  std::shared_ptr<common::testutil::TempFilePath> writeParquet(
+      const RowVectorPtr& vector) {
+    auto filePath = common::testutil::TempFilePath::create();
+    auto fs = filesystems::getFileSystem(filePath->getPath(), {});
+    auto writeFile = fs->openFileForWrite(
+        filePath->getPath(),
+        {.shouldCreateParentDirectories = true,
+         .shouldThrowOnFileAlreadyExists = false});
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::move(writeFile), filePath->getPath());
+    auto writerPool =
+        rootPool_->addAggregateChild("PrestoOutputTest.ParquetWriter");
+    dwio::common::WriterOptions options;
+    options.memoryPool = writerPool.get();
+    auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
+    parquetOptions->enableStoreDecimalAsInteger = true;
+    options.formatSpecificOptions = std::move(parquetOptions);
+    parquet::Writer writer(
+        std::move(sink), options, writerPool, vector->rowType());
+    writer.write(vector);
+    writer.close();
+    return filePath;
   }
 
   /// All input columns projected as they are: a GPU operator that keeps the
@@ -442,14 +494,15 @@ class PrestoOutputTest : public OperatorTestBase {
   Run assertSameRowsAsCpuPath(
       const core::PlanNodePtr& plan,
       const core::PlanNodeId& outputId,
-      std::unordered_map<std::string, std::string> config = {}) {
-    auto gpu = execute(plan, config);
+      std::unordered_map<std::string, std::string> config = {},
+      const std::function<void(Task&)>& addSplits = nullptr) {
+    auto gpu = execute(plan, config, 1, 1, addSplits);
     EXPECT_EQ(
         operatorTypes(*gpu.task, outputId),
         std::set<std::string>{"CudfPrestoOutput"});
 
     config[cudf_velox::CudfConfig::kCudfPrestoOutputEnabled] = "false";
-    auto cpu = execute(plan, config);
+    auto cpu = execute(plan, config, 1, 1, addSplits);
     EXPECT_EQ(
         operatorTypes(*cpu.task, outputId),
         std::set<std::string>{"PartitionedOutput"});
@@ -485,12 +538,11 @@ class PrestoOutputTest : public OperatorTestBase {
         << "GPU page bytes differ from the CPU page bytes at" << differences;
   }
 
-  static constexpr uint64_t kMaxBytesPerFetch = 1 << 20;
-
   const std::shared_ptr<DefaultOutputBufferManager> bufferManager_{
       DefaultOutputBufferManager::getInstanceRef()};
   std::string stringBuffer_;
   std::chrono::milliseconds drainDelay_{0};
+  uint64_t maxBytesPerFetch_{1 << 20};
   bool savedCpuFallback_{true};
   cudf::type_id savedTimestampUnit_{cudf::type_id::TIMESTAMP_NANOSECONDS};
 };
@@ -832,25 +884,43 @@ TEST_F(PrestoOutputTest, multipleDrivers) {
 
 TEST_F(PrestoOutputTest, consumerBackpressure) {
   // The output buffer holds 256 KiB and the consumer starts late, so the
-  // operator blocks on the consumer and resumes as pages are fetched.
+  // operator blocks on the consumer and resumes as pages are fetched. The
+  // pinned pages alive at once stay within the output buffer plus the page
+  // that crossed its limit, one host batch, which the output buffer size caps
+  // below 8 pages here, and the pages of a fetch that are acknowledged but
+  // not freed yet.
   drainDelay_ = std::chrono::milliseconds(500);
+  constexpr int64_t kPageBytes = 64 << 10;
+  constexpr int64_t kOutputBufferBytes = 256 << 10;
+  maxBytesPerFetch_ = kPageBytes;
   std::vector<RowVectorPtr> inputs = {
       makeFlatRows(20'000, 12, true), makeFlatRows(20'000, 13, false)};
   core::PlanNodeId outputId;
-  auto plan = PlanBuilder()
-                  .values(inputs)
+  PlanBuilder builder;
+  builder.values(inputs);
+  auto plan = passThrough(builder)
                   .partitionedOutput({}, 1)
                   .capturePlanNodeId(outputId)
                   .planNode();
   auto run = execute(
       plan,
       {{cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes,
-        std::to_string(64 << 10)},
-       {core::QueryConfig::kMaxOutputBufferSize, std::to_string(256 << 10)}});
+        std::to_string(kPageBytes)},
+       {core::QueryConfig::kMaxOutputBufferSize,
+        std::to_string(kOutputBufferBytes)}});
   assertEqualVectors(concat(inputs), concat(run.pages()));
   const auto planStats = toPlanStats(run.task->taskStats());
-  const auto& stats = planStats.at(outputId).operatorStats;
-  EXPECT_GT(stats.at("CudfPrestoOutput")->blockedWallNanos, 0);
+  const auto& stats =
+      *planStats.at(outputId).operatorStats.at("CudfPrestoOutput");
+  EXPECT_GT(stats.blockedWallNanos, 0);
+  // A page exceeds kPageBytes by less than one row plus its headers.
+  constexpr int64_t kMaxPage = kPageBytes + 2'048;
+  const auto peakPinned = stats.customStats.at("peakPinnedPageBytes").sum;
+  EXPECT_GE(peakPinned, kOutputBufferBytes);
+  EXPECT_LE(
+      peakPinned,
+      kOutputBufferBytes + kMaxPage + kOutputBufferBytes +
+          static_cast<int64_t>(maxBytesPerFetch_) + kMaxPage);
 }
 
 TEST_F(PrestoOutputTest, abortWhileBlocked) {
@@ -863,10 +933,9 @@ TEST_F(PrestoOutputTest, abortWhileBlocked) {
 
   std::vector<RowVectorPtr> inputs = {
       makeFlatRows(20'000, 27, true), makeFlatRows(20'000, 28, false)};
-  auto plan = PlanBuilder()
-                  .values(inputs, false, 3)
-                  .partitionedOutput({}, 1)
-                  .planNode();
+  PlanBuilder builder;
+  builder.values(inputs, false, 3);
+  auto plan = passThrough(builder).partitionedOutput({}, 1).planNode();
   auto task = makeTask(
       plan,
       {{cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes,
@@ -892,8 +961,9 @@ TEST_F(PrestoOutputTest, abortWhileBlocked) {
 TEST_F(PrestoOutputTest, runtimeStats) {
   auto input = makeFlatRows(1'000, 14, true);
   core::PlanNodeId outputId;
-  auto plan = PlanBuilder()
-                  .values({input})
+  PlanBuilder builder;
+  builder.values({input});
+  auto plan = passThrough(builder)
                   .partitionedOutput({}, 1)
                   .capturePlanNodeId(outputId)
                   .planNode();
@@ -909,11 +979,14 @@ TEST_F(PrestoOutputTest, runtimeStats) {
       static_cast<int64_t>(common::CompressionKind::CompressionKind_NONE));
   EXPECT_GT(stats.at("pageLayoutNanos").sum, 0);
   EXPECT_GT(stats.at("deviceToHostNanos").sum, 0);
+  EXPECT_GE(
+      stats.at("peakPinnedPageBytes").sum,
+      static_cast<int64_t>(run.destinations[0].pageBytes[0].size()));
 }
 
 // Outputs the GPU serializer does not serve keep the CPU PartitionedOutput
-// behind a CudfToVelox, also with CPU fallback disabled: they are no failed
-// GPU replacement.
+// behind a CudfToVelox, also with CPU fallback disabled: they don't count as
+// failed GPU replacements.
 TEST_F(PrestoOutputTest, cpuOutputs) {
   auto input = makeFlatRows(1'000, 15, true);
   struct TestCase {
@@ -992,6 +1065,109 @@ TEST_F(PrestoOutputTest, cpuOutputs) {
       std::set<std::string>{"PartitionedOutput"});
   EXPECT_TRUE(operatorTypes(*run.task, orderById).count("CudfToVelox"));
   EXPECT_EQ(run.numRows(), 100);
+}
+
+TEST_F(PrestoOutputTest, cpuInputKeepsCpuOutput) {
+  // An output fed by a CPU operator keeps PartitionedOutput: serializing on
+  // the GPU would only add the conversion of the batches to the GPU and the
+  // copy of the pages back. Not a failed GPU replacement either, with CPU
+  // fallback disabled.
+  auto input = makeFlatRows(1'000, 16, true);
+  core::PlanNodeId outputId;
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputId)
+                  .planNode();
+  auto run = execute(plan);
+  EXPECT_EQ(
+      operatorTypes(*run.task, outputId),
+      std::set<std::string>{"PartitionedOutput"});
+  EXPECT_EQ(
+      allOperatorTypes(*run.task),
+      (std::set<std::string>{"Values", "PartitionedOutput"}));
+  assertEqualVectors(input, concat(run.pages()));
+}
+
+TEST_F(PrestoOutputTest, decimalsFromParquetScan) {
+  // cuDF reads a decimal stored as INT32 into a DECIMAL32 column; the scan
+  // widens it to the DECIMAL64 of the Velox type, which the output serializes
+  // as the CPU path does.
+  constexpr vector_size_t kRows = 1'000;
+  auto input = makeRowVector(
+      {"k", "d5", "d9", "d18", "d30"},
+      {makeFlatVector<int64_t>(kRows, folly::identity),
+       makeFlatVector<int64_t>(
+           kRows,
+           [](auto row) { return row * 7 - 3'000; },
+           nullEvery(5),
+           DECIMAL(5, 2)),
+       makeFlatVector<int64_t>(
+           kRows,
+           [](auto row) { return row * 1'001 - 300'000; },
+           nullEvery(7),
+           DECIMAL(9, 3)),
+       makeFlatVector<int64_t>(
+           kRows,
+           [](auto row) { return row * 1'000'000'007LL - 5; },
+           nullEvery(11),
+           DECIMAL(18, 4)),
+       makeFlatVector<int128_t>(
+           kRows,
+           [](auto row) {
+             return (static_cast<int128_t>(row - kRows / 2) << 70) + row;
+           },
+           nullEvery(13),
+           DECIMAL(30, 5))});
+  auto file = writeParquet(input);
+  const auto rowType = asRowType(input->type());
+  core::PlanNodeId scanId;
+  core::PlanNodeId outputId;
+  auto plan =
+      PlanBuilder()
+          .startTableScan()
+          .connectorId(cudf_velox::exec::test::kCudfHiveConnectorId)
+          .outputType(rowType)
+          .dataColumns(rowType)
+          .assignments(HiveConnectorTestBase::allRegularColumns(rowType))
+          .endTableScan()
+          .capturePlanNodeId(scanId)
+          .partitionedOutput({}, 1)
+          .capturePlanNodeId(outputId)
+          .planNode();
+  auto addSplits = [&](Task& task) {
+    task.addSplit(scanId, Split(makeCudfHiveConnectorSplit(file->getPath())));
+    task.noMoreSplits(scanId);
+  };
+  auto run = assertSameRowsAsCpuPath(plan, outputId, {}, addSplits);
+  assertEqualVectors(input, concat(run.pages()));
+}
+
+TEST_F(PrestoOutputTest, pageBytesLimits) {
+  // The query config and the startup configuration share one check: a page
+  // size above half of the int32 page size is rejected before a page is
+  // built, and the startup value stays as it was.
+  const auto tooLarge =
+      std::to_string(cudf_velox::CudfPrestoOutput::kMaxPageBytes + 1);
+  auto input = makeFlatRows(100, 17, false);
+  PlanBuilder builder;
+  builder.values({input});
+  auto plan = passThrough(builder).partitionedOutput({}, 1).planNode();
+  auto task = makeTask(
+      plan, {{cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes, tooLarge}});
+  // The operator is built as the task starts, which fails the task there.
+  VELOX_ASSERT_USER_THROW(task->start(1), "must fit a Presto page");
+  EXPECT_EQ(task->state(), TaskState::kFailed);
+
+  const auto saved =
+      cudf_velox::CudfConfig::getInstance().prestoOutputPageBytes;
+  std::unordered_map<std::string, std::string> startupConfig{
+      {cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes, tooLarge}};
+  VELOX_ASSERT_USER_THROW(
+      cudf_velox::CudfConfig::getInstance().initialize(
+          std::move(startupConfig)),
+      "must fit a Presto page");
+  EXPECT_EQ(cudf_velox::CudfConfig::getInstance().prestoOutputPageBytes, saved);
 }
 
 } // namespace
