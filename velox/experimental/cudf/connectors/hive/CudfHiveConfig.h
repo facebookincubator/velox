@@ -96,6 +96,14 @@ class CudfHiveConfig {
   static constexpr const char* kSerializeIoRequestsSession =
       "cudf.hive.serialize_io_requests";
 
+  // Whether the row groups a pushed-down filter rules out are pruned on the
+  // host from the Parquet column-chunk statistics; cuDF's statistics pass then
+  // runs only when the host test left a filter undecided.
+  static constexpr const char* kHostRowGroupPruning =
+      "cudf.hive.host-row-group-pruning";
+  static constexpr const char* kHostRowGroupPruningSession =
+      "cudf.hive.host_row_group_pruning";
+
   // Writer config options
 
   /// Whether new data can be inserted into a CudfHive file
@@ -168,6 +176,9 @@ class CudfHiveConfig {
 
   bool serializeIoRequests() const;
   bool serializeIoRequestsSession(const config::ConfigBase* session) const;
+
+  bool hostRowGroupPruning() const;
+  bool hostRowGroupPruningSession(const config::ConfigBase* session) const;
 
   bool immutableFiles() const;
 

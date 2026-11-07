@@ -66,6 +66,24 @@ using namespace facebook::velox::connector::hive;
 
 namespace {
 
+// The first byte of a row group, as cuDF's hybrid scan reader's
+// filter_row_groups_with_byte_range() finds it.
+int64_t rowGroupOffset(const cudf::io::parquet::RowGroup& rowGroup) {
+  VELOX_CHECK(
+      not rowGroup.columns.empty(),
+      "Parquet footer reports a row group with no column chunks");
+  if (rowGroup.file_offset.has_value()) {
+    return rowGroup.file_offset.value();
+  }
+  if (rowGroup.columns.front().file_offset != 0) {
+    return rowGroup.columns.front().file_offset;
+  }
+  const auto& column = rowGroup.columns.front().meta_data;
+  return column.dictionary_page_offset != 0
+      ? std::min(column.dictionary_page_offset, column.data_page_offset)
+      : column.data_page_offset;
+}
+
 // Checks whether the `path` uses an ABFS scheme
 bool isAbfsPath([[maybe_unused]] const std::string_view path) {
 #ifdef VELOX_ENABLE_ABFS
@@ -265,7 +283,7 @@ CudfSplitReader::~CudfSplitReader() {
 }
 
 void CudfSplitReader::prepareSplitInternal(
-    dwio::common::RuntimeStats& /*runtimeStats*/) {
+    dwio::common::RuntimeStats& runtimeStats) {
   // Read file metadata and cache schema information
   cacheSchemaFromMetadata();
 
@@ -275,10 +293,12 @@ void CudfSplitReader::prepareSplitInternal(
     VELOX_CHECK_NULL(
         pushdownFilter(),
         "A footer-derived row count cannot honor a pushed-down filter");
+    runtimeStats.processedStrides +=
+        static_cast<int64_t>(splitRowGroupIndices().size());
     return;
   }
 
-  createCudfReader();
+  createCudfReader(runtimeStats);
 }
 
 void CudfSplitReader::cacheSchemaFromMetadata() {
@@ -309,29 +329,24 @@ void CudfSplitReader::cacheSchemaFromMetadata() {
   }
 }
 
+std::vector<cudf::size_type> CudfSplitReader::splitRowGroupIndices() const {
+  const auto& rowGroups = fileMetaDatas_.front().row_groups;
+  std::vector<cudf::size_type> indices;
+  for (size_t i = 0; i < rowGroups.size(); ++i) {
+    const auto offset = rowGroupOffset(rowGroups[i]);
+    if (not std::cmp_less(offset, split_->start) and
+        offset - split_->start < split_->size()) {
+      indices.push_back(static_cast<cudf::size_type>(i));
+    }
+  }
+  return indices;
+}
+
 std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
     const {
-  // Note: This function implements the same logic as cuDF's hybrid scan
-  // reader's `filter_row_groups_with_byte_range()` API
-  const auto rowGroupOffset = [](const auto& rowGroup) {
-    if (rowGroup.file_offset.has_value()) {
-      return rowGroup.file_offset.value();
-    }
-    if (rowGroup.columns.front().file_offset != 0) {
-      return rowGroup.columns.front().file_offset;
-    }
-    const auto& column = rowGroup.columns.front().meta_data;
-    return column.dictionary_page_offset != 0
-        ? std::min(column.dictionary_page_offset, column.data_page_offset)
-        : column.data_page_offset;
-  };
-
   std::size_t startRow{0};
   std::size_t numRows{0};
   for (const auto& rowGroup : fileMetaDatas_.front().row_groups) {
-    VELOX_CHECK(
-        not rowGroup.columns.empty(),
-        "Parquet footer reports a row group with no column chunks");
     const auto offset = rowGroupOffset(rowGroup);
     if (std::cmp_less(offset, split_->start)) {
       startRow += rowGroup.num_rows;
@@ -522,6 +537,7 @@ void CudfSplitReader::resetSplit() {
   fileMetaDatas_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
+  hostPruning_.reset();
   emptySplit_ = false;
   fileColumnNames_.clear();
   baseReadOffset_ = 0;
@@ -784,7 +800,8 @@ CudfSplitReader::fileMetaDatas() {
   return fileMetaDatas_;
 }
 
-void CudfSplitReader::createCudfReader() {
+void CudfSplitReader::createCudfReader(
+    dwio::common::RuntimeStats& runtimeStats) {
   fileMetaDatas();
 
   // Check if we are reading all columns in order
@@ -814,6 +831,12 @@ void CudfSplitReader::createCudfReader() {
   serializeIoRequests_ =
       cudfHiveConfig_->serializeIoRequestsSession(sessionProperties);
 
+  // Decide on the host which row groups the statistics rule out while the
+  // footer is still here; the cuDF reader takes it over next.
+  hostPruning_ = pruneRowGroupsOnHost();
+  hostPruningFilters_ = nullptr;
+  hostPruningTableType_.reset();
+
   // Create a hybrid scan reader over all sources of the split
   splitReader_ = std::make_unique<CudfParquetReader>(
       std::move(fileMetaDatas_), readerOptions_);
@@ -821,7 +844,26 @@ void CudfSplitReader::createCudfReader() {
   setupPageIndexes();
 
   passState_ = std::make_unique<RowGroupPassState>();
-  passState_->passes = selectRowGroupPasses();
+  passState_->passes = selectRowGroupPasses(runtimeStats);
+}
+
+std::optional<HostRowGroupPruning> CudfSplitReader::pruneRowGroupsOnHost()
+    const {
+  if (!readerOptions_.get_filter().has_value() ||
+      hostPruningFilters_ == nullptr || hostPruningFilters_->empty() ||
+      hostPruningTableType_ == nullptr ||
+      !cudfHiveConfig_->hostRowGroupPruningSession(
+          connectorQueryCtx_->sessionProperties())) {
+    return std::nullopt;
+  }
+  // The byte-range rule of the cuDF reader, applied here so the test covers
+  // the split's row groups only.
+  return pruneRowGroupsWithStatistics(
+      fileMetaDatas_,
+      {splitRowGroupIndices()},
+      *hostPruningFilters_,
+      *hostPruningTableType_,
+      caseInsensitiveColumnNames_);
 }
 
 void CudfSplitReader::setupPageIndexes() {
@@ -839,7 +881,8 @@ void CudfSplitReader::setupPageIndexes() {
   splitReader_->setup_page_indexes(pageIndexData);
 }
 
-CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
+CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses(
+    dwio::common::RuntimeStats& runtimeStats) {
   auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
 
   // Filter row groups using row group byte ranges
@@ -849,19 +892,41 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
         rowGroupIndices, readerOptions_);
   }
 
-  // Filter row groups using column chunk statistics
+  const auto countRowGroups = [](const RowGroupIndicesBySplit& indices) {
+    return std::accumulate(
+        indices.begin(),
+        indices.end(),
+        int64_t{0},
+        [](auto sum, const auto& sourceRowGroups) {
+          return sum + static_cast<int64_t>(sourceRowGroups.size());
+        });
+  };
+  const auto numCandidateRowGroups = countRowGroups(rowGroupIndices);
+
+  // Filter row groups using column chunk statistics: the host decision made
+  // while preparing the split, then cuDF's pass over the kept row groups when
+  // the host left a filter undecided.
   if (readerOptions_.get_filter().has_value()) {
-    rowGroupIndices = splitReader_->filter_row_groups_with_stats(
-        rowGroupIndices, readerOptions_, stream_);
+    if (hostPruning_.has_value()) {
+      VELOX_CHECK_EQ(
+          hostPruning_->rowGroupIndices.size(), rowGroupIndices.size());
+      for (size_t src = 0; src < rowGroupIndices.size(); ++src) {
+        const auto& kept = hostPruning_->rowGroupIndices[src];
+        std::erase_if(rowGroupIndices[src], [&](auto rowGroup) {
+          return !std::ranges::binary_search(kept, rowGroup);
+        });
+      }
+    }
+    if ((!hostPruning_.has_value() || !hostPruning_->complete) &&
+        countRowGroups(rowGroupIndices) > 0) {
+      rowGroupIndices = splitReader_->filter_row_groups_with_stats(
+          rowGroupIndices, readerOptions_, stream_);
+    }
   }
 
-  const auto numRowGroups = std::accumulate(
-      rowGroupIndices.begin(),
-      rowGroupIndices.end(),
-      std::size_t{0},
-      [](auto sum, const auto& sourceRowGroups) {
-        return sum + sourceRowGroups.size();
-      });
+  const auto numRowGroups = countRowGroups(rowGroupIndices);
+  runtimeStats.skippedStrides += numCandidateRowGroups - numRowGroups;
+  runtimeStats.processedStrides += numRowGroups;
 
   // No row groups to read.
   if (numRowGroups == 0) {

@@ -1692,6 +1692,11 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - bool
      - false
      - Whether to serialize I/O submission batches to prevent requests from concurrent splits from interleaving.
+   * - cudf.hive.host-row-group-pruning
+     - cudf.hive.host_row_group_pruning
+     - bool
+     - true
+     - Whether the cuDF Hive data source prunes the row groups a pushed-down filter rules out on the host, from the Parquet column-chunk statistics, with ``common::testFilter`` (the CPU Parquet reader's row-group test) extended to decimals, booleans and IN lists, instead of by cuDF's statistics pass (``filter_row_groups_with_stats``), which builds a device table and runs a kernel per split. cuDF's pass still runs over the kept row groups when the host test leaves a filter undecided, for example a decimal the file stores at another scale or a column stored as another physical type than the table's. The rows read are filtered on the GPU either way. The cuDF Iceberg data source always uses cuDF's pass.
    * - parquet.reader.use-pandas-metadata
      - parquet.reader.use_pandas_metadata
      - bool

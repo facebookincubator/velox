@@ -154,6 +154,17 @@ bool CudfHiveConfig::serializeIoRequestsSession(
       config_->get<bool>(kSerializeIoRequests, false));
 }
 
+bool CudfHiveConfig::hostRowGroupPruning() const {
+  return config_->get<bool>(kHostRowGroupPruning, true);
+}
+
+bool CudfHiveConfig::hostRowGroupPruningSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kHostRowGroupPruningSession,
+      config_->get<bool>(kHostRowGroupPruning, true));
+}
+
 bool CudfHiveConfig::immutableFiles() const {
   return config_->get<bool>(kImmutableFiles, false);
 }

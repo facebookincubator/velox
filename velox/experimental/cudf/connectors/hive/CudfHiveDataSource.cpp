@@ -536,7 +536,7 @@ CudfHiveDataSource::CudfHiveDataSource(
 }
 
 std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
-  return std::make_unique<CudfSplitReader>(
+  auto reader = std::make_unique<CudfSplitReader>(
       split_,
       tableHandle_,
       readerOutputType_,
@@ -548,6 +548,10 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       subfieldFilterAst_);
+  // The host statistics test takes the subfield filters the pushed-down AST
+  // was built from, against the table type they were resolved on.
+  reader->setHostRowGroupPruning(&subfieldFilters_, getTableRowType());
+  return reader;
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -697,6 +701,9 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
       preparedSource->runtimeStats_.processedSplits;
   runtimeStats_.skippedSplitBytes +=
       preparedSource->runtimeStats_.skippedSplitBytes;
+  runtimeStats_.skippedStrides += preparedSource->runtimeStats_.skippedStrides;
+  runtimeStats_.processedStrides +=
+      preparedSource->runtimeStats_.processedStrides;
   completedBytes_ += preparedSource->completedBytes_;
   completedRows_ += preparedSource->completedRows_;
 
