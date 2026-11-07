@@ -24,6 +24,7 @@
 #include "velox/common/base/SimdUtil.h"
 
 #include <folly/Likely.h>
+#include <folly/lang/Assume.h>
 
 namespace facebook::velox {
 
@@ -49,6 +50,7 @@ class MergeStream {
   /// Returns < 0 if 'this' is < 'other, '0' if equal and > 0 otherwise.
   virtual int32_t compare(const MergeStream& /*other*/) const {
     VELOX_UNSUPPORTED();
+    folly::assume_unreachable();
   }
 };
 
