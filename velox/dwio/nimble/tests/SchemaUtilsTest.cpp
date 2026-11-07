@@ -25,6 +25,7 @@
 #include <initializer_list>
 #include <memory>
 #include <string_view>
+#include <vector>
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/common/SchemaReader.h"
@@ -466,6 +467,65 @@ TEST(SchemaUtilsTest, convertVeloxRowToNimble) {
   EXPECT_EQ(
       ScalarKind::Double,
       row.childAt(1)->asScalar().scalarDescriptor().scalarKind());
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapKeyKind) {
+  EXPECT_EQ(hybridFlatMapKeyKind(*velox::TINYINT()), ScalarKind::Int8);
+  EXPECT_EQ(hybridFlatMapKeyKind(*velox::SMALLINT()), ScalarKind::Int16);
+  EXPECT_EQ(hybridFlatMapKeyKind(*velox::INTEGER()), ScalarKind::Int32);
+  EXPECT_EQ(hybridFlatMapKeyKind(*velox::BIGINT()), ScalarKind::Int64);
+  EXPECT_EQ(hybridFlatMapKeyKind(*velox::VARCHAR()), ScalarKind::String);
+
+  // Every key kind it returns is one HybridFlatMap accepts.
+  for (const auto& keyType : std::vector<velox::TypePtr>{
+           velox::TINYINT(),
+           velox::SMALLINT(),
+           velox::INTEGER(),
+           velox::BIGINT(),
+           velox::VARCHAR()}) {
+    SCOPED_TRACE(keyType->toString());
+    EXPECT_TRUE(
+        HybridFlatMap::supportedKeyKind(hybridFlatMapKeyKind(*keyType)));
+  }
+
+  for (const auto& keyType : std::vector<velox::TypePtr>{
+           velox::BOOLEAN(),
+           velox::REAL(),
+           velox::DOUBLE(),
+           velox::VARBINARY(),
+           velox::TIMESTAMP(),
+           velox::HUGEINT(),
+           velox::ARRAY(velox::BIGINT()),
+           velox::MAP(velox::BIGINT(), velox::BIGINT()),
+           velox::ROW("a", velox::BIGINT())}) {
+    SCOPED_TRACE(keyType->toString());
+    NIMBLE_ASSERT_USER_THROW(
+        hybridFlatMapKeyKind(*keyType),
+        fmt::format(
+            "Unsupported hybrid FlatMap key type {}.", keyType->toString()));
+  }
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapKeyKindOfColumn) {
+  const auto rowType = velox::ROW({
+      {"int_map", velox::MAP(velox::INTEGER(), velox::BIGINT())},
+      {"bigint_map", velox::MAP(velox::BIGINT(), velox::BIGINT())},
+      {"varchar_map", velox::MAP(velox::VARCHAR(), velox::BIGINT())},
+      {"real_map", velox::MAP(velox::REAL(), velox::BIGINT())},
+      {"array", velox::ARRAY(velox::BIGINT())},
+  });
+  EXPECT_EQ(hybridFlatMapKeyKind(*rowType, "int_map"), ScalarKind::Int32);
+  EXPECT_EQ(hybridFlatMapKeyKind(*rowType, "bigint_map"), ScalarKind::Int64);
+  EXPECT_EQ(hybridFlatMapKeyKind(*rowType, "varchar_map"), ScalarKind::String);
+  NIMBLE_ASSERT_USER_THROW(
+      hybridFlatMapKeyKind(*rowType, "real_map"),
+      "Unsupported hybrid FlatMap key type REAL.");
+  NIMBLE_ASSERT_USER_THROW(
+      hybridFlatMapKeyKind(*rowType, "array"),
+      "Hybrid FlatMap column array must be a MAP, not ARRAY<BIGINT>.");
+  NIMBLE_ASSERT_USER_THROW(
+      hybridFlatMapKeyKind(*rowType, "missing"),
+      "Hybrid FlatMap column missing is not in the row type.");
 }
 
 // --- Round-trip tests ---

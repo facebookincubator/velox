@@ -1780,11 +1780,16 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
       const auto keyKind = mapColumn->type()->asMap().keyType()->kind();
       const auto columnKeys = hybridFlatMapColumnKeys(mapColumn);
       // Configures the first batch's keys in one group; a column whose first
-      // batch holds no keys has only Default.
-      HybridFlatMap grouping{keyKindOf(*mapColumn->type()->asMap().keyType())};
+      // batch holds no keys has only Default. Builds every group at once, so
+      // that every batch's Serializer shares them.
+      std::vector<HybridFlatMap::Group> groups;
       if (!columnKeys.orderedKeys.empty()) {
-        grouping.addGroup(0, columnKeys.orderedKeys);
+        groups.push_back({.groupId = 0, .groupKeys = columnKeys.orderedKeys});
       }
+      groups.push_back(
+          {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
+      HybridFlatMap grouping{
+          keyKindOf(*mapColumn->type()->asMap().keyType()), std::move(groups)};
       grouping.setDefaultGroupKeyPresenceMode(
           HybridFlatMap::KeyPresenceMode::kKeyList);
       keyListColumns.emplace(column, std::move(grouping));
@@ -1830,6 +1835,18 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
           pool_.get()};
       keyListSerialized.emplace_back(
           serializer.serialize(input, OrderedRanges::of(0, input->size())));
+      const auto& rootBuilder = serializer.schemaBuilder().root()->asRow();
+      for (const auto& [column, grouping] : keyListColumns) {
+        const auto& hybridMap = rootBuilder.findChild(column).asHybridFlatMap();
+
+        // Each Serializer reads grouped keys from the shared groups instead
+        // of copying them. A column whose first batch holds no keys has only
+        // Default, whose keys the writer owns.
+        if (hybridMap.groupCount() > 1) {
+          EXPECT_EQ(
+              &hybridMap.groupAt(0).groupKeys, &grouping.groups()[0].groupKeys);
+        }
+      }
       SchemaSerializer schemaSerializer;
       keyListSchemas.emplace_back(
           schemaSerializer.serialize(serializer.schemaBuilder()));

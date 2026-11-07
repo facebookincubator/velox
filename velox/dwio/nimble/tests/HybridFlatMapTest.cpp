@@ -272,6 +272,24 @@ TEST(HybridFlatMapTest, constructorRejectsRepeatedKeys) {
       "Duplicate Hybrid FlatMap key: '1'.");
 }
 
+// The first repeated key, in input order, fails before the keys and groups
+// after it are checked.
+TEST(HybridFlatMapTest, constructorRejectsRepeatedKeyBeforeLaterErrors) {
+  NIMBLE_ASSERT_USER_THROW(
+      HybridFlatMap(
+          ScalarKind::Int8,
+          config({{0, {"1"}}, {1, {"1", "300"}}, {kDefault, {}}})),
+      "Duplicate Hybrid FlatMap key: '1'.");
+  NIMBLE_ASSERT_USER_THROW(
+      HybridFlatMap(ScalarKind::Int64, config({{0, {"1", "1"}}})),
+      "Duplicate Hybrid FlatMap key: '1'.");
+  NIMBLE_ASSERT_USER_THROW(
+      HybridFlatMap(
+          ScalarKind::String,
+          config({{0, {"b", "a"}}, {1, {"b", "a"}}, {kDefault, {}}})),
+      "Duplicate Hybrid FlatMap key: 'b'.");
+}
+
 TEST(HybridFlatMapTest, constructorRejectsUnorderedGroupIds) {
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap(
@@ -407,6 +425,48 @@ TEST(HybridFlatMapTest, addGroupRejectsSchemaMetadata) {
       "Hybrid FlatMap groups can be added only to a writer configuration.");
 }
 
+// addGroup() rejects a HybridFlatMap built with every group at once, whose
+// copies share its groups, and leaves its groups and lookup unchanged.
+TEST(HybridFlatMapTest, addGroupRejectsSharedGroups) {
+  HybridFlatMap hybridMap{
+      ScalarKind::Int64, config({{0, {"1"}}, {kDefault, {}}})};
+  const HybridFlatMap copy{hybridMap};
+  const auto* groups = &hybridMap.groups();
+  NIMBLE_ASSERT_USER_THROW(
+      hybridMap.addGroup(1, {"2"}),
+      "Hybrid FlatMap built with every group at once cannot take more "
+      "groups.");
+  EXPECT_EQ(&hybridMap.groups(), groups);
+  EXPECT_EQ(&copy.groups(), groups);
+  EXPECT_EQ(hybridMap.groups(), config({{0, {"1"}}, {kDefault, {}}}));
+  EXPECT_EQ(hybridMap.findGroup("1"), size_t{0});
+  EXPECT_EQ(hybridMap.numGroupedKeys(), size_t{1});
+}
+
+// Only the constructor taking every group, which binding uses, builds the
+// lookup of findGroup().
+TEST(HybridFlatMapTest, findGroupNeedsLookup) {
+  HybridFlatMap configuration;
+  configuration.addGroup(0, {"1"});
+  EXPECT_FALSE(configuration.hasGroupLookupIndex());
+  NIMBLE_ASSERT_THROW(
+      configuration.findGroup("1"), "Hybrid FlatMap has no group lookup");
+  NIMBLE_ASSERT_THROW(
+      configuration.numGroupedKeys(), "Hybrid FlatMap has no group lookup");
+  NIMBLE_ASSERT_THROW(
+      metadata().findGroup("a"), "Hybrid FlatMap has no group lookup");
+
+  HybridFlatMap int64Configuration{ScalarKind::Int64};
+  int64Configuration.addGroup(0, {"1"});
+  EXPECT_FALSE(int64Configuration.hasGroupLookupIndex());
+  NIMBLE_ASSERT_THROW(
+      int64Configuration.findGroup("1"), "Hybrid FlatMap has no group lookup");
+
+  const HybridFlatMap bound{ScalarKind::Int64, configuration};
+  EXPECT_TRUE(bound.hasGroupLookupIndex());
+  EXPECT_EQ(bound.findGroup("1"), size_t{0});
+}
+
 // Binding a configuration built without a key kind checks it for the column's.
 TEST(HybridFlatMapTest, bindingChecksConfigurationWithoutKeyKind) {
   HybridFlatMap configuration;
@@ -446,6 +506,39 @@ TEST(HybridFlatMapTest, bindingKeepsDefaultGroupKeyPresenceMode) {
       (HybridFlatMap{ScalarKind::Int64, configuration})
           .defaultGroupKeyPresenceMode(),
       HybridFlatMap::KeyPresenceMode::kKeyList);
+}
+
+// The binding constructor builds new groups even for a configuration built with
+// every group for the column's key kind.
+TEST(HybridFlatMapTest, bindingCopiesGroupsBuiltForKeyKind) {
+  const HybridFlatMap configuration{
+      ScalarKind::Int8, config({{0, {"9", "10"}}, {kDefault, {}}})};
+  const HybridFlatMap bound{ScalarKind::Int8, configuration};
+  EXPECT_EQ(bound, configuration);
+  EXPECT_NE(&bound.groups(), &configuration.groups());
+  EXPECT_EQ(bound.findGroup("10"), size_t{0});
+}
+
+// Copies of a HybridFlatMap built with every group share its groups and
+// lookup, as copies into SerializerOptions::hybridFlatMapColumns do.
+TEST(HybridFlatMapTest, copiesShareGroupsBuiltForKeyKind) {
+  HybridFlatMap hybridMap{
+      ScalarKind::Int8, config({{0, {"9", "10"}}, {kDefault, {}}})};
+  hybridMap.setDefaultGroupKeyPresenceMode(
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  const folly::F14FastMap<std::string, HybridFlatMap> columns{
+      {"column", hybridMap}};
+  const auto& copy = columns.at("column");
+  EXPECT_TRUE(copy.hasGroupLookupIndex());
+  EXPECT_EQ(&copy.groups(), &hybridMap.groups());
+  EXPECT_EQ(copy, hybridMap);
+  EXPECT_EQ(copy.keyKind(), ScalarKind::Int8);
+  EXPECT_EQ(
+      copy.defaultGroupKeyPresenceMode(),
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  EXPECT_EQ(copy.findGroup("10"), size_t{0});
+  EXPECT_EQ(copy.findGroup("1"), std::nullopt);
+  EXPECT_EQ(copy.numGroupedKeys(), size_t{2});
 }
 
 TEST(HybridFlatMapTest, identifiesDefaultGroup) {
@@ -488,6 +581,20 @@ TEST(HybridFlatMapTest, releaseGroupsMovesGroupsOut) {
   const auto expected = hybridMap.groups();
 
   EXPECT_EQ(std::move(hybridMap).releaseGroups(), expected);
+}
+
+// A HybridFlatMap built with every group at once shares its groups with its
+// copies, so it releases a copy of them and the copies keep theirs.
+TEST(HybridFlatMapTest, releaseGroupsCopiesSharedGroups) {
+  const std::vector<HybridFlatMap::Group> groups{
+      {.groupId = 0, .groupKeys = {"1", "2"}},
+      {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+  };
+  HybridFlatMap hybridMap{ScalarKind::Int64, groups};
+  const auto copy = hybridMap;
+
+  EXPECT_EQ(std::move(hybridMap).releaseGroups(), groups);
+  EXPECT_EQ(copy.groups(), groups);
 }
 
 TEST(HybridFlatMapTest, metadataRoundTripPreservesFlattenedOrderAndBinaryKeys) {
