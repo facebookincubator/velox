@@ -71,10 +71,9 @@ PaimonSplitReader::PaimonSplitReader(
   fileSplits_.reserve(dataFiles.size());
   for (const auto& dataFile : dataFiles) {
     fileSplits_.emplace_back(makeFileConnectorSplit(dataFile));
-    if (dataFile.schemaId.has_value() &&
-        !mappedSchemas_.count(*dataFile.schemaId)) {
+    if (!mappedSchemas_.count(dataFile.schemaId)) {
       mappedSchemas_.emplace(
-          *dataFile.schemaId, mapDataSchema(*dataFile.schemaId));
+          dataFile.schemaId, mapDataSchema(dataFile.schemaId));
     }
   }
 }
@@ -137,14 +136,12 @@ RowTypePtr PaimonSplitReader::mapDataSchema(int64_t schemaId) const {
 
 void PaimonSplitReader::configureBaseReaderOptions() {
   connector::FileSplitReader::configureBaseReaderOptions();
-  const auto& id = paimonSplit_->dataFiles()[currentFileIndex_].schemaId;
-  if (id.has_value()) {
-    // Ordinals here come from the file's historical append layout. DWIO
-    // exposes the mapped names to the unchanged logical ScanSpec and filters.
-    baseReaderOpts_.setFileSchema(mappedSchemas_.at(*id));
-    baseReaderOpts_.setColumnMappingMode(
-        dwio::common::ColumnMappingMode::kPosition);
-  }
+  const auto id = paimonSplit_->dataFiles()[currentFileIndex_].schemaId;
+  // Ordinals here come from the file's historical append layout. DWIO
+  // exposes the mapped names to the unchanged logical ScanSpec and filters.
+  baseReaderOpts_.setFileSchema(mappedSchemas_.at(id));
+  baseReaderOpts_.setColumnMappingMode(
+      dwio::common::ColumnMappingMode::kPosition);
 }
 
 void PaimonSplitReader::prepareSplit(
@@ -182,20 +179,16 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
 
-    if (paimonSplit_->dataFiles()[currentFileIndex_].schemaId.has_value()) {
-      configureReaderOptions(baseReaderOpts_.randomSkip());
-      createReader();
-      // The file reader has captured its file-order mapping. Missing columns
-      // must now be resolved against the query's target schema, not that map.
-      baseReaderOpts_.setFileSchema(tableHandle_->dataColumns());
-      if (!emptySplit_) {
-        auto rowType = getAdaptedRowType();
-        if (!checkIfSplitIsEmpty(*runtimeStats_)) {
-          createRowReader(metadataFilter_, std::move(rowType), std::nullopt);
-        }
+    configureReaderOptions(baseReaderOpts_.randomSkip());
+    createReader();
+    // The file reader has captured its file-order mapping. Missing columns
+    // must now be resolved against the query's target schema, not that map.
+    baseReaderOpts_.setFileSchema(tableHandle_->dataColumns());
+    if (!emptySplit_) {
+      auto rowType = getAdaptedRowType();
+      if (!checkIfSplitIsEmpty(*runtimeStats_)) {
+        createRowReader(metadataFilter_, std::move(rowType), std::nullopt);
       }
-    } else {
-      connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     }
     if (!emptySplit_) {
       return true;
