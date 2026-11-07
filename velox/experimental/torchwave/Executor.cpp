@@ -2313,13 +2313,16 @@ void WaveGraphExecutor::adjustCosts(ExecutionState& state) {
     // The blocks of one launch are not necessarily a contiguous run: the emit
     // order follows projected latency, and a partitioned step splits an op
     // across launches.
+    const bool countWait = WaveConfig::get().costCountsBarrierWait;
     std::vector<int64_t> launchClocks(sv.kernels.size(), 0);
     for (size_t b = 0; b < debugBlocks.size() && b < sv.launchIndices.size();
          ++b) {
       const auto launchIdx = sv.launchIndices[b];
       if (launchIdx >= 0 &&
           launchIdx < static_cast<int32_t>(launchClocks.size())) {
-        launchClocks[launchIdx] += debugBlocks[b].clocks;
+        launchClocks[launchIdx] += countWait
+            ? debugBlocks[b].clocks
+            : debugBlocks[b].clocks - debugBlocks[b].barrierClocks;
       }
     }
 

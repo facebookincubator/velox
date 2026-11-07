@@ -25,11 +25,16 @@
 #include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <glog/logging.h>
+#include <gmock/gmock.h>
 #include <functional>
 #include <numeric>
 
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/StaticDims.h"
+#include "velox/experimental/torchwave/StepProgram.h"
+#include "velox/experimental/torchwave/StepSupport.h"
 #include "velox/experimental/torchwave/Utils.h"
+#include "velox/experimental/torchwave/ValueTable.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
@@ -446,8 +451,9 @@ TEST_F(ExecutorTest, viewBroadcastSizingTest) {
 
 // The ads id-matching index: clamp(add(unsqueeze(a), unsqueeze(b))) flattened
 // to the index list of a gather from cat(src, zeros). The gather becomes
-// tw.index_elt_one_default with the clamp fused in through the view and the
-// list, so the op's root is a view. Its launch has to cover the [R,C,C]
+// tw.index_elt_one_default. The flattening view moves from the index to the
+// gather's output, so the clamp is computed in the gather's loop and the
+// [R,C,C] index is never written. The launch has to cover the [R,C,C]
 // broadcast; sized by its largest input it covered the [R,C,1] side alone.
 const char* kViewBroadcastGatherGraph = R"(graph(%src, %a, %b):
 %z = torch.ops.aten.new_zeros.default(self=%src, size=[1])
@@ -465,7 +471,8 @@ const char* kViewBroadcastGatherGraph = R"(graph(%src, %a, %b):
 return(%o)
 )";
 
-TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
+std::unordered_map<std::string, torch::_export::TensorMeta>
+viewBroadcastGatherMeta() {
   std::unordered_map<std::string, torch::_export::TensorMeta> meta;
   for (const auto* name : {"src", "z", "cat", "b", "f", "g"}) {
     meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
@@ -476,6 +483,199 @@ TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
   for (const auto* name : {"u1", "u2", "s", "c"}) {
     meta[name] = makeTensorMeta(c10::ScalarType::Long, 3);
   }
+  return meta;
+}
+
+// The gather indexes by the clamp itself: the flattening view of the index
+// moves to the gather's output, so no view separates the index expression from
+// the gather that consumes it.
+TEST_F(ExecutorTest, flattenedIndexMovesToGatherOutputTest) {
+  auto graph = nativert::stringToGraph(kViewBroadcastGatherGraph);
+  graph->setTensorValuesMeta(viewBroadcastGatherMeta());
+  setGraphDevice(graph.get(), /*isCuda=*/true);
+  auto ctx = std::make_unique<ModelContext>();
+  ctx->weights = std::make_shared<nativert::Weights>(graph.get());
+  ctx->graph = std::move(graph);
+  WaveGraphExecutor exec(std::move(ctx));
+
+  std::vector<std::string> indexProducers;
+  for (const auto& node : exec.graph().nodes()) {
+    if (node.target() == "tw.index_elt_one_default") {
+      const auto* pack = node.inputs()[1].value->producer();
+      indexProducers.emplace_back(
+          pack->inputs()[0].value->producer()->target());
+    }
+  }
+  EXPECT_THAT(
+      indexProducers, testing::ElementsAre("torch.ops.aten.clamp.default"));
+}
+
+// Sizes come from an arange bound, a factory size list, a view with an
+// inferred dim and an expand of an input of unknown length. The optimizer
+// carries them through unsqueeze and broadcast; the input's own length stays
+// unknown.
+TEST_F(ExecutorTest, staticDimsTest) {
+  const char* kGraph = R"(graph(%x):
+%r = torch.ops.aten.arange.default(end=200)
+%u = torch.ops.aten.unsqueeze.default(self=%r, dim=0)
+%o = torch.ops.aten.new_ones.default(self=%x, size=[1000, 1])
+%s = torch.ops.aten.add.Tensor(self=%o, other=%u)
+%v = torch.ops.aten.view.default(self=%s, size=[-1, 40])
+%c = torch.ops.aten.unsqueeze.default(self=%x, dim=1)
+%e = torch.ops.aten.expand.default(self=%c, size=[-1, 200])
+return(%v, %e)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "r"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  for (const auto* name : {"u", "o", "s", "v", "c", "e"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  auto graph = nativert::stringToGraph(kGraph);
+  graph->setTensorValuesMeta(meta);
+  setGraphDevice(graph.get(), /*isCuda=*/true);
+  auto ctx = std::make_unique<ModelContext>();
+  ctx->weights = std::make_shared<nativert::Weights>(graph.get());
+  ctx->graph = std::move(graph);
+  WaveGraphExecutor exec(std::move(ctx));
+
+  const auto& types = exec.waveGraph()->types();
+  const auto outputs = exec.graph().outputs();
+  ASSERT_EQ(outputs.size(), 2);
+  EXPECT_EQ(staticDimsOf(types, outputs[0]), StaticDims({5000, 40}));
+  EXPECT_EQ(staticDimsOf(types, outputs[1]), StaticDims({-1, 200}));
+}
+
+// A broadcast add whose operand shapes come from view sizes reads each operand
+// at an index with literal divisors, not through its runtime descriptor, and
+// loops to a literal bound.
+TEST_F(ExecutorTest, staticLeafIndexTest) {
+  const char* kGraph = R"(graph(%x, %y):
+%a = torch.ops.aten.view.default(self=%x, size=[100, 20, 1])
+%b = torch.ops.aten.view.default(self=%y, size=[1, 1, 20])
+%s = torch.ops.aten.add.Tensor(self=%a, other=%b)
+return(%s)
+)";
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().inputContiguous = false; });
+  WaveConfig::get().inputContiguous = true;
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "y"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  for (const auto* name : {"a", "b", "s"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 3);
+  }
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  int32_t addKernels = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (kernel.has("aten.add.Tensor")) {
+          ++addKernels;
+          EXPECT_NE(kernel.code.find("[(idx / 20u)]"), std::string::npos)
+              << kernel.code;
+          EXPECT_NE(kernel.code.find("[(idx % 20u)]"), std::string::npos)
+              << kernel.code;
+          EXPECT_NE(kernel.code.find("size = 40000u;"), std::string::npos)
+              << kernel.code;
+          EXPECT_EQ(
+              kernel.code.find("complexIdx(isFastPath"), std::string::npos)
+              << kernel.code;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(addKernels, 1) << plan.describe();
+
+  auto x = at::arange(2000, at::kLong);
+  auto y = at::arange(20, at::kLong) * 10000;
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x, y}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto reference = x.view({100, 20, 1}) + y.view({1, 1, 20});
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// A launch compiled for static shapes fails before running when a tensor's
+// actual shape differs, or when a tensor read at literal indices is strided.
+TEST_F(ExecutorTest, staticShapeCheckTest) {
+  ValueEntry entry;
+  entry.kind = ValueEntry::kTensor;
+  entry.t.rank = 2;
+  entry.t.dims[0] = 1000;
+  entry.t.dims[1] = 200;
+  entry.t.strides[0] = 200;
+  entry.t.strides[1] = 1;
+  ValueTable table{.entries = &entry, .size = 1};
+  StepProgram program;
+
+  program.shapeChecks = {
+      {.valueId = 0, .dims = {1000, 200}, .contiguous = true}};
+  runShapeChecks(program, table);
+
+  program.shapeChecks = {{.valueId = 0, .dims = {1000, 40}}};
+  EXPECT_THAT(
+      [&] { runShapeChecks(program, table); },
+      testing::ThrowsMessage<c10::Error>(testing::HasSubstr(
+          "static shape its kernel was compiled for: value %0, compiled for "
+          "[1000, 40], actual [1000, 200]")));
+
+  // A band of a wider tensor: right dims, strided rows.
+  entry.t.strides[0] = 400;
+  program.shapeChecks = {
+      {.valueId = 0, .dims = {1000, 200}, .contiguous = true}};
+  EXPECT_THAT(
+      [&] { runShapeChecks(program, table); },
+      testing::ThrowsMessage<c10::Error>(testing::HasSubstr(
+          "dense layout its kernel was compiled for: value %0, dim 0 has "
+          "stride 400 instead of 200")));
+}
+
+// A sizing call folded to a constant at bind is still run with
+// --verify_static_sizes, which fails when its result differs from the
+// constant.
+TEST_F(ExecutorTest, constantSizeVerifyTest) {
+  ValueEntry entry;
+  entry.kind = ValueEntry::kTensor;
+  entry.t.rank = 1;
+  entry.t.dims[0] = 7;
+  ValueTable table{.entries = &entry, .size = 1};
+  int32_t ids[] = {0};
+  Span groups[] = {{0, 1}};
+  Shape constantShape;
+  StepProgram program;
+  program.sizes.emplace_back();
+  program.code.ids = ids;
+  program.code.spans = groups;
+  program.code.shapes = &constantShape;
+  const SizeOp size{
+      .fn =
+          +[](const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+            out[0].setLike(args.tensor(0));
+            return true;
+          },
+      .groups = {0, 1},
+      .shapes = {0, 1},
+      .source = 0,
+      .constant = true};
+
+  constantShape.setVector(7);
+  verifyConstantSize(size, program, table);
+
+  constantShape.setVector(5);
+  EXPECT_THAT(
+      [&] { verifyConstantSize(size, program, table); },
+      testing::ThrowsMessage<c10::Error>(testing::HasSubstr(
+          "Static size differs from the reserve: built-in operands %0, "
+          "size 0 shape 0, static [5], reserve [7]")));
+}
+
+TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
+  const auto meta = viewBroadcastGatherMeta();
   auto plan = compilePlanProgrammatic(
       nativert::stringToGraph(kViewBroadcastGatherGraph),
       meta,
@@ -508,6 +708,265 @@ TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
       padded.index_select(0, index.reshape({-1})).view({1000, 40000});
   EXPECT_TRUE(tensorsMatch(outputs[0], reference))
       << firstDifference(outputs[0], reference);
+}
+
+// The same gather with its offsets made by a 1-D cumsum, which builds a cg
+// variant. There a materialized clamp would be its own loop writing the
+// [R,C,C] index, read by the gather after an opBarrier.
+const char* kCumsumBroadcastGatherGraph = R"(graph(%src, %d, %b):
+%e = torch.ops.aten.cumsum.default(self=%d, dim=0)
+%a = torch.ops.aten.view.default(self=%e, size=[1000, 200])
+%z = torch.ops.aten.new_zeros.default(self=%src, size=[1])
+%l[] = prim.ListPack(l0=%src, l1=%z)
+%cat = torch.ops.aten.cat.default(tensors=%l, dim=0)
+%u1 = torch.ops.aten.unsqueeze.default(self=%a, dim=2)
+%u0 = torch.ops.aten.unsqueeze.default(self=%b, dim=0)
+%u2 = torch.ops.aten.unsqueeze.default(self=%u0, dim=0)
+%s = torch.ops.aten.add.Tensor(self=%u1, other=%u2)
+%c = torch.ops.aten.clamp.default(self=%s, min=0, max=300000)
+%f = torch.ops.aten.view.default(self=%c, size=[40000000])
+%il[] = prim.ListPack(l0=%f)
+%g = torch.ops.aten.index.Tensor(self=%cat, indices=%il)
+%o = torch.ops.aten.view.default(self=%g, size=[1000, 40000])
+return(%o)
+)";
+
+TEST_F(ExecutorTest, cumsumBroadcastGatherCgTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().isCg = std::nullopt; });
+  auto meta = viewBroadcastGatherMeta();
+  meta["d"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["e"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kCumsumBroadcastGatherGraph),
+      meta,
+      CompiledPlan::Mode::kCG);
+  int32_t gatherKernels = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (kernel.has("tw.index_elt_one_default")) {
+          ++gatherKernels;
+          EXPECT_EQ(
+              kernel.code.find("// torch.ops.aten.clamp.default("),
+              std::string::npos)
+              << kernel.code;
+          EXPECT_EQ(kernel.numBarriers, 0) << kernel.code;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(gatherKernels, 1) << plan.describe();
+
+  WaveConfig::get().isCg = true;
+  auto src = at::arange(300000, at::kLong) % 991;
+  auto d = at::arange(200000, at::kLong) % 3;
+  auto b = at::arange(200, at::kLong);
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kCumsumBroadcastGatherGraph),
+      meta,
+      {{src, d, b}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto index = at::clamp(
+      at::cumsum(d, 0).view({1000, 200}).unsqueeze(2) +
+          b.unsqueeze(0).unsqueeze(0),
+      0,
+      300000);
+  auto padded = at::cat({src, at::zeros({1}, at::kLong)});
+  auto reference =
+      padded.index_select(0, index.reshape({-1})).view({1000, 40000});
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// The ads id-matching search: eq(searchsorted(sorted, q), vals) reshaped to
+// rank 3 and masked. All shapes are fixed by the views, so the view is
+// computed through: the eq is evaluated in the masking loop at its index and
+// never written. The searchsorted picks its sorted row from the eq's shape,
+// [R, C * C], which differs from the loop's [R, C, C].
+const char* kViewFusionGraph = R"(graph(%z, %x, %y, %m):
+%q = torch.ops.aten.view.default(self=%x, size=[100, 400])
+%r = torch.ops.aten.view.default(self=%y, size=[100, 400])
+%s = torch.ops.aten.searchsorted.Tensor(sorted_sequence=%z, self=%q)
+%e = torch.ops.aten.eq.Tensor(self=%s, other=%r)
+%v = torch.ops.aten.view.default(self=%e, size=[100, 20, 20])
+%w = torch.ops.aten.view.default(self=%m, size=[1, 1, 20])
+%a = torch.ops.aten.bitwise_and.Tensor(self=%v, other=%w)
+return(%a)
+)";
+
+std::unordered_map<std::string, torch::_export::TensorMeta> viewFusionMeta() {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["z"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  for (const auto* name : {"x", "y"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  meta["m"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+  for (const auto* name : {"q", "r", "s"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  meta["e"] = makeTensorMeta(c10::ScalarType::Bool, 2);
+  for (const auto* name : {"v", "w", "a"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Bool, 3);
+  }
+  return meta;
+}
+
+TEST_F(ExecutorTest, viewFusionTest) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().fuseThroughViews = true;
+  });
+  const auto meta = viewFusionMeta();
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kViewFusionGraph),
+      meta,
+      CompiledPlan::Mode::kMultiKernel);
+  int32_t maskKernels = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (kernel.has("aten.bitwise_and.Tensor")) {
+          ++maskKernels;
+          EXPECT_TRUE(kernel.has("aten.eq.Tensor")) << plan.describe();
+          EXPECT_EQ(
+              kernel.code.find("// torch.ops.aten.eq.Tensor("),
+              std::string::npos)
+              << kernel.code;
+          EXPECT_EQ(kernel.numBarriers, 0) << kernel.code;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(maskKernels, 1) << plan.describe();
+
+  auto z = std::get<0>(at::sort(at::randint(0, 1000, {100, 50}, at::kLong), 1));
+  auto x = at::randint(-5, 1005, {40000}, at::kLong);
+  auto m = at::arange(20, at::kLong) % 3 != 0;
+  auto q = x.view({100, 400});
+  auto s = at::searchsorted(z, q);
+  // About a third of the positions match.
+  auto y = at::where(
+               at::arange(40000, at::kLong).view({100, 400}) % 3 == 0, s, s + 1)
+               .reshape({-1});
+  auto reference =
+      (s == y.view({100, 400})).view({100, 20, 20}) & m.view({1, 1, 20});
+  for (bool fuse : {true, false}) {
+    for (bool cg : {false, true}) {
+      SCOPED_TRACE(fmt::format("fuse {} cg {}", fuse, cg));
+      WaveConfig::get().fuseThroughViews = fuse;
+      WaveConfig::get().isCg = cg;
+      auto outputs = runWaveProgrammatic(
+          nativert::stringToGraph(kViewFusionGraph), meta, {{z, x, y, m}});
+      ASSERT_EQ(outputs.size(), 1);
+      EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+          << firstDifference(outputs[0], reference);
+    }
+  }
+}
+
+// any() over the trailing dims of a fused elementwise expression is evaluated
+// in the reduction's row loop, and the expression is never written. Covers
+// the ads search shape (static, a warp per row of 20), and runtime shapes
+// with rows of 300 (a warp) and 3000 (a block).
+TEST_F(ExecutorTest, rowReductionFusionTest) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().fuseRowReductions = true;
+  });
+  auto expectFused = [](const CompiledPlan& plan) {
+    int32_t anyKernels = 0;
+    for (const auto& node : plan.nodes()) {
+      for (const auto& step : node.steps) {
+        for (const auto& kernel : step.kernels) {
+          if (kernel.has("tw.any_rows")) {
+            ++anyKernels;
+            EXPECT_EQ(kernel.code.find("any_rows<"), std::string::npos)
+                << kernel.code;
+            EXPECT_EQ(kernel.numBarriers, 0) << kernel.code;
+          }
+        }
+      }
+    }
+    EXPECT_EQ(anyKernels, 1) << plan.describe();
+  };
+  auto runModes =
+      [](const char* graph,
+         const std::unordered_map<std::string, torch::_export::TensorMeta>&
+             meta,
+         const std::vector<at::Tensor>& inputs,
+         const at::Tensor& reference) {
+        for (bool fuse : {true, false}) {
+          for (bool cg : {false, true}) {
+            SCOPED_TRACE(fmt::format("fuse {} cg {}", fuse, cg));
+            WaveConfig::get().fuseRowReductions = fuse;
+            WaveConfig::get().isCg = cg;
+            auto outputs = runWaveProgrammatic(
+                nativert::stringToGraph(graph), meta, {inputs});
+            ASSERT_EQ(outputs.size(), 1);
+            EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+                << firstDifference(outputs[0], reference);
+          }
+        }
+        WaveConfig::get().fuseRowReductions = true;
+        WaveConfig::get().isCg = std::nullopt;
+      };
+
+  {
+    const std::string graph =
+        std::string(kViewFusionGraph)
+            .replace(
+                std::string(kViewFusionGraph).find("return(%a)"),
+                10,
+                "%o = torch.ops.aten.any.dim(self=%a, "
+                "dim=2)\nreturn(%o)");
+    auto meta = viewFusionMeta();
+    meta["o"] = makeTensorMeta(c10::ScalarType::Bool, 2);
+    expectFused(compilePlanProgrammatic(
+        nativert::stringToGraph(graph),
+        meta,
+        CompiledPlan::Mode::kMultiKernel));
+    auto z =
+        std::get<0>(at::sort(at::randint(0, 1000, {100, 50}, at::kLong), 1));
+    auto x = at::randint(-5, 1005, {40000}, at::kLong);
+    auto m = at::arange(20, at::kLong) % 7 == 0;
+    auto s = at::searchsorted(z, x.view({100, 400}));
+    // A match in about one row in ten.
+    auto y =
+        at::where(
+            at::arange(40000, at::kLong).view({100, 400}) % 97 == 0, s, s + 1)
+            .reshape({-1});
+    auto reference =
+        ((s == y.view({100, 400})).view({100, 20, 20}) & m.view({1, 1, 20}))
+            .any(2);
+    runModes(graph.c_str(), meta, {z, x, y, m}, reference);
+  }
+
+  const char* kRuntimeShapeGraph = R"(graph(%x, %y):
+%l = torch.ops.aten.lt.Tensor(self=%x, other=%y)
+%o = torch.ops.aten.any.dim(self=%l, dim=1)
+return(%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "y"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  meta["l"] = makeTensorMeta(c10::ScalarType::Bool, 2);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+  expectFused(compilePlanProgrammatic(
+      nativert::stringToGraph(kRuntimeShapeGraph),
+      meta,
+      CompiledPlan::Mode::kMultiKernel));
+  for (int64_t rowLen : {300, 3000}) {
+    SCOPED_TRACE(rowLen);
+    auto x = at::randint(0, 1000, {500, rowLen}, at::kLong);
+    // Rows with an odd index have no element where x < y.
+    auto y = at::where(
+        at::arange(500, at::kLong).view({500, 1}) % 2 == 1,
+        at::zeros_like(x),
+        at::randint(0, 3, {500, rowLen}, at::kLong));
+    runModes(kRuntimeShapeGraph, meta, {x, y}, at::lt(x, y).any(1));
+  }
 }
 
 // x[mask] with a boolean mask of x's own rank is masked_select. The ads
