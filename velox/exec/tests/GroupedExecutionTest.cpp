@@ -322,7 +322,7 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
   writeToFile(filePath->getPath(), vectors);
 
   struct TestData {
-    enum class Mode { kGroupedMixed = 0, kGroupedUnmixed = 1, kUngrouped = 2 };
+    enum class Mode { kGroupedMixed = 0, kGroupedUniform = 1, kUngrouped = 2 };
     Mode mode;
     core::JoinType joinType;
     bool supported;
@@ -331,8 +331,8 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
       switch (mode) {
         case Mode::kGroupedMixed:
           return "GroupedMixed";
-        case Mode::kGroupedUnmixed:
-          return "GroupedUnmixed";
+        case Mode::kGroupedUniform:
+          return "GroupedUniform";
         case Mode::kUngrouped:
           return "Ungrouped";
       }
@@ -359,17 +359,17 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
       {TestData::Mode::kGroupedMixed, core::JoinType::kLeftSemiProject, true},
       {TestData::Mode::kGroupedMixed, core::JoinType::kAnti, true},
 
-      {TestData::Mode::kGroupedUnmixed, core::JoinType::kRight, true},
-      {TestData::Mode::kGroupedUnmixed, core::JoinType::kFull, true},
-      {TestData::Mode::kGroupedUnmixed, core::JoinType::kRightSemiFilter, true},
-      {TestData::Mode::kGroupedUnmixed,
+      {TestData::Mode::kGroupedUniform, core::JoinType::kRight, true},
+      {TestData::Mode::kGroupedUniform, core::JoinType::kFull, true},
+      {TestData::Mode::kGroupedUniform, core::JoinType::kRightSemiFilter, true},
+      {TestData::Mode::kGroupedUniform,
        core::JoinType::kRightSemiProject,
        true},
-      {TestData::Mode::kGroupedUnmixed, core::JoinType::kInner, true},
-      {TestData::Mode::kGroupedUnmixed, core::JoinType::kLeft, true},
-      {TestData::Mode::kGroupedUnmixed, core::JoinType::kLeftSemiFilter, true},
-      {TestData::Mode::kGroupedUnmixed, core::JoinType::kLeftSemiProject, true},
-      {TestData::Mode::kGroupedUnmixed, core::JoinType::kAnti, true},
+      {TestData::Mode::kGroupedUniform, core::JoinType::kInner, true},
+      {TestData::Mode::kGroupedUniform, core::JoinType::kLeft, true},
+      {TestData::Mode::kGroupedUniform, core::JoinType::kLeftSemiFilter, true},
+      {TestData::Mode::kGroupedUniform, core::JoinType::kLeftSemiProject, true},
+      {TestData::Mode::kGroupedUniform, core::JoinType::kAnti, true},
 
       {TestData::Mode::kUngrouped, core::JoinType::kRight, true},
       {TestData::Mode::kUngrouped, core::JoinType::kFull, true},
@@ -430,7 +430,7 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
       planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
       planFragment.groupedExecutionLeafNodeIds.emplace(probeScanNodeId);
       planFragment.numSplitGroups = 2;
-    } else if (testData.mode == TestData::Mode::kGroupedUnmixed) {
+    } else if (testData.mode == TestData::Mode::kGroupedUniform) {
       planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
       planFragment.groupedExecutionLeafNodeIds.emplace(probeScanNodeId);
       planFragment.groupedExecutionLeafNodeIds.emplace(buildScanNodeId);
@@ -468,7 +468,7 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
         task->noMoreSplitsForGroup(probeScanNodeId, 0);
         task->noMoreSplitsForGroup(probeScanNodeId, 1);
         task->noMoreSplits(probeScanNodeId);
-      } else if (testData.mode == TestData::Mode::kGroupedUnmixed) {
+      } else if (testData.mode == TestData::Mode::kGroupedUniform) {
         task->addSplit(
             buildScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 0));
         task->addSplit(

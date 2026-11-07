@@ -98,8 +98,10 @@ class JoinFuzzer {
 
   void seed(size_t seed) {
     currentSeed_ = seed;
-    vectorFuzzer_.reSeed(seed);
     rng_.seed(currentSeed_);
+    // Use different seeds so join type and null-aware selection are
+    // independent.
+    vectorFuzzer_.reSeed(rng_());
   }
 
   void reSeed() {
@@ -367,7 +369,7 @@ RowVectorPtr JoinFuzzer::execute(
             << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
                     ? fmt::format(
                           "({})",
-                          plan.mixedGroupedExecution ? "mixed" : "unmixed")
+                          plan.mixedGroupedExecution ? "mixed" : "uniform")
                     : "")
             << " strategy["
             << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
@@ -774,14 +776,17 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   if (joinMaker.supportsTableScan()) {
     const int32_t numGroups = randInt(1, probeSource->batches().size());
+    // Null-aware joins need the full build side, including keys in other
+    // groups.
+    const int32_t numUniformModeGroups = nullAware ? 1 : numGroups;
 
     // Use ungrouped execution.
     altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
         std::nullopt, false, JoinMaker::JoinOrder::NATURAL));
 
-    // Use unmixed mode grouped execution.
+    // Use uniform mode grouped execution.
     altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-        numGroups, false, JoinMaker::JoinOrder::NATURAL));
+        numUniformModeGroups, false, JoinMaker::JoinOrder::NATURAL));
 
     // Use mixed mode grouped execution.
     if (!needRightSideJoin(joinType)) {
@@ -796,9 +801,9 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
           std::nullopt, false, JoinMaker::JoinOrder::FLIPPED));
 
-      // Use unmixed mode grouped execution.
+      // Use uniform mode grouped execution.
       altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-          numGroups, false, JoinMaker::JoinOrder::FLIPPED));
+          numUniformModeGroups, false, JoinMaker::JoinOrder::FLIPPED));
 
       // Use mixed mode grouped execution.
       if (!needRightSideJoin(flipJoinType(joinType))) {
