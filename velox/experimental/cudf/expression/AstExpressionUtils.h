@@ -40,6 +40,8 @@
 #include <cudf/unary.hpp>
 #include <cudf/utilities/traits.hpp>
 
+#include <algorithm>
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -277,6 +279,16 @@ bool isOpAndInputsSupported(
   return false;
 }
 
+// True if any node under `expr` produces a DECIMAL. Such nodes are always
+// precomputed, and their kernels fail fast on division by zero and overflow.
+bool hasDecimalSubexpr(const core::TypedExprPtr& expr) {
+  if (expr->type()->isDecimal()) {
+    return true;
+  }
+  return std::any_of(
+      expr->inputs().begin(), expr->inputs().end(), hasDecimalSubexpr);
+}
+
 // not special form, name = function, so unsupported for astpure
 // "in", "between", "isnotnull" are not special form, but supported for astpure
 // Check if the expression (name + input types) is supported in AST.
@@ -356,6 +368,17 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
     // Binary operations.  Velox parsers always lower AND/OR into binary
     // chains, so a single isOpAndInputsSupported check covers them too.
     if (binaryOps.find(name) != binaryOps.end()) {
+      // Precomputed operands are materialized over every row, so an operand
+      // after the first would also run on the rows the ones before it decide,
+      // e.g. q / d on the zero rows of `d <> 0 AND q / d > 1`. Leave such
+      // conjuncts to FunctionExpression, which narrows each operand's rows.
+      if ((name == "and" || name == "or") && len == 2 &&
+          std::any_of(
+              call->inputs().begin() + 1,
+              call->inputs().end(),
+              hasDecimalSubexpr)) {
+        return false;
+      }
       return len == 2 &&
           isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
     }
