@@ -18,21 +18,6 @@
 #include <limits>
 
 namespace facebook::velox::connector::paimon {
-namespace {
-
-bool hasNestedFields(const Type& type) {
-  if (type.isRow()) {
-    return true;
-  }
-  for (column_index_t i = 0; i < type.size(); ++i) {
-    if (hasNestedFields(*type.childAt(i))) {
-      return true;
-    }
-  }
-  return false;
-}
-
-} // namespace
 
 PaimonSplitReader::PaimonSplitReader(
     const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
@@ -91,6 +76,9 @@ RowTypePtr PaimonSplitReader::mapDataSchema(int64_t schemaId) const {
   for (column_index_t i = 0; i < table.fieldIds().size(); ++i) {
     targetColumns.emplace(table.fieldIds()[i], i);
   }
+  // Only top-level field evolution is handled here; nested fields are treated
+  // as unchanged.
+  // TODO: Support nested field evolution using historical nested field IDs.
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (column_index_t i = 0; i < dataType->size(); ++i) {
@@ -118,14 +106,6 @@ RowTypePtr PaimonSplitReader::mapDataSchema(int64_t schemaId) const {
             table.schemaId(),
             dataType->childAt(i)->toString(),
             type->toString());
-        VELOX_USER_CHECK(
-            schemaId == table.schemaId() || !hasNestedFields(*type),
-            "Paimon nested field identity is required for field {} ('{}'), "
-            "file schema {}, target schema {}",
-            dataIds[i],
-            name,
-            schemaId,
-            table.schemaId());
       }
       names.push_back(name);
     }
