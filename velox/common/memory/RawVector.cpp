@@ -16,31 +16,49 @@
 
 #include "velox/common/memory/RawVector.h"
 
+#include <algorithm>
 #include <numeric>
+
+#include <gflags/gflags.h>
+#include <glog/logging.h>
+
+DEFINE_int32(
+    velox_shared_iota_size,
+    1'000'000,
+    "Number of consecutive values that iota() serves from a process-wide "
+    "table. Larger requests are written to the caller's storage. Read once, on "
+    "the first iota() call.");
 
 namespace facebook::velox {
 
 namespace {
 
-const raw_vector<int32_t> kIotaData = [] {
-  raw_vector<int32_t> v;
-  v.resize(1'000'000);
-  v.resize(v.capacity());
-  std::iota(v.begin(), v.end(), 0);
-  return v;
-}();
+// Built on first use so that FLAGS_velox_shared_iota_size can be set at
+// startup.
+const raw_vector<int32_t>& iotaData() {
+  static const raw_vector<int32_t> data = [] {
+    raw_vector<int32_t> v;
+    v.resize(std::max(FLAGS_velox_shared_iota_size, 0));
+    v.resize(v.capacity());
+    std::iota(v.begin(), v.end(), 0);
+    LOG(INFO) << "Built shared iota table with " << v.size() << " values";
+    return v;
+  }();
+  return data;
+}
 
 } // namespace
 
 const int32_t*
 iota(int32_t size, raw_vector<int32_t>& storage, int32_t offset) {
-  if (kIotaData.size() < offset + size) {
+  const auto& data = iotaData();
+  if (data.size() < static_cast<int64_t>(offset) + size) {
     storage.resize(size);
     std::iota(storage.begin(), storage.end(), offset);
     return storage.data();
   }
 
-  return kIotaData.data() + offset;
+  return data.data() + offset;
 }
 
 } // namespace facebook::velox
