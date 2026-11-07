@@ -87,8 +87,8 @@ DictionaryVector<T>::DictionaryVector(
       dictionaryIndices->size(),
       length * sizeof(vector_size_t),
       "Malformed dictionary, index array is shorter than DictionaryVector");
-  dictionaryValues_ = dictionaryValues;
-  indices_ = dictionaryIndices;
+  dictionaryValues_ = std::move(dictionaryValues);
+  indices_ = std::move(dictionaryIndices);
   setInternalState();
 }
 
