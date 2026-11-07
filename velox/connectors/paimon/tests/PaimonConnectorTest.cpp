@@ -1546,11 +1546,11 @@ TEST_F(PaimonConnectorTest, schemaReferencesValidatedBeforeFileOpen) {
                      .build();
   for (const auto format : fileFormats()) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
-    const auto paths = makeFilePaths(1);
-    writeFile(paths[0]->getPath(), input, format);
-    const auto path = "paimon-table-test:" + paths[0]->getPath();
     for (const bool withHistory : {false, true}) {
       SCOPED_TRACE(withHistory);
+      const auto paths = makeFilePaths(1);
+      writeFile(paths[0]->getPath(), input, format);
+      const auto path = "paimon-table-test:" + paths[0]->getPath();
       PaimonTableHandle::DataSchemas schemas;
       if (withHistory) {
         schemas.emplace(
@@ -2108,10 +2108,9 @@ TEST_F(PaimonConnectorTest, columnHandlesRoundTrip) {
     for (const auto& file : files) {
       writeFile(file->getPath(), input, format);
     }
-    const auto split = makePaimonSplit(
-        {files[0]->getPath(), files[1]->getPath()},
-        PaimonTableType::kAppendOnly,
+    const auto split = evolutionSplit(
         format,
+        {{files[0]->getPath(), 23}, {files[1]->getPath(), 23}},
         {{"p", "keep"}});
     for (const auto& scan : {plan, copy}) {
       exec::test::AssertQueryBuilder(scan).split(split).assertResults(expected);
