@@ -484,10 +484,13 @@ void RPCState::completeRow(
   std::optional<PendingRow> pending;
   bool missingLease = false;
   bool capacityRetryEnabled = false;
+  bool operatorRetryRateControlEnabled = false;
   {
     std::lock_guard<std::mutex> l(mutex_);
     capacityRetryEnabled =
         capacityRetryEnabled_.load(std::memory_order_relaxed);
+    operatorRetryRateControlEnabled =
+        operatorRetryRateControlEnabled_.load(std::memory_order_relaxed);
     const auto it = pendingRows_.find(rowId);
     if (it != pendingRows_.end()) {
       pending = std::move(it->second);
@@ -497,8 +500,16 @@ void RPCState::completeRow(
     }
   }
   if (pending.has_value() && pending->lease != nullptr) {
-    const auto completion =
-        pending->lease->completeAndRelease(isHardOverload(readyRow.response));
+    const bool overloaded = isHardOverload(readyRow.response);
+    const auto outcome = !readyRow.response.hasError()
+        ? RPCRateLimiter::Outcome::kSuccess
+        : overloaded ? RPCRateLimiter::Outcome::kOverload
+                     : RPCRateLimiter::Outcome::kFailure;
+    const bool handedOff = overloaded && capacityRetryEnabled &&
+        readyRow.response.capacityRetry().has_value();
+    const auto completion = operatorRetryRateControlEnabled
+        ? pending->lease->completeAndRelease(outcome, rttNs, handedOff)
+        : pending->lease->completeAndRelease(overloaded, handedOff);
     readyRow.sharedOverloadHandled = completion.sharedOverloadHandled;
     readyRow.admissionEpoch = completion.overloadEpoch;
   }
@@ -1217,6 +1228,20 @@ RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
       .numCapacityRetryFloorRetries = numCapacityRetryFloorRetries_,
       .numOverloadedAttempts = numOverloadedAttempts_,
       .numSuccessesAfterOverload = numSuccessesAfterOverload_,
+  };
+}
+
+RPCState::TestingQueuesSnapshot RPCState::testingQueuesSnapshot() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return {
+      .readyRows = readyRows_.size(),
+      .retryRows = retryRows_.size(),
+      .retainedInputBatches = static_cast<size_t>(std::count_if(
+          inputBatches_.begin(),
+          inputBatches_.end(),
+          [](const auto& batch) { return batch.activeRowCount > 0; })),
+      .noMoreInput = noMoreInput_,
+      .closed = closed_,
   };
 }
 

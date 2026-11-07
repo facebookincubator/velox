@@ -124,6 +124,11 @@ class RPCOperator : public exec::Operator {
   /// Runtime stat names.
   static inline const std::string kRpcRequestsDispatched{
       "rpcRequestsDispatched"};
+  /// Rows passed to admitted PER_ROW dispatch calls, including operator
+  /// retries. Local-only output is excluded. Retries inside a transport are
+  /// counted separately by rpcRetriesAttempted, not as framework dispatches.
+  static inline const std::string kRpcAttemptsDispatched{
+      "rpcAttemptsDispatched"};
   static inline const std::string kRpcResponsesReceived{"rpcResponsesReceived"};
   static inline const std::string kRpcErrorCount{"rpcErrorCount"};
   static inline const std::string kRpcWaitWallNanos{"rpcWaitWallNanos"};
@@ -145,6 +150,15 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcRttMaxWallNanos{"rpcRttMaxWallNanos"};
   static inline const std::string kRpcRttCount{"rpcRttCount"};
   static inline const std::string kRpcStreamingMode{"rpcStreamingMode"};
+  /// Policy codes: WINDOW_AIMD=0, RATE_AIMD=1, CUBIC=2. Reported per driver.
+  static inline const std::string kRpcFlowControlRequestedPolicy{
+      "rpcFlowControlRequestedPolicy"};
+  /// Reports the effective sending-rate policy using the policy codes above.
+  static inline const std::string kRpcFlowControlRatePolicy{
+      "rpcFlowControlRatePolicy"};
+  /// Reports whether admission scheduling repairs are enabled (0 or 1).
+  static inline const std::string kRpcFlowControlScheduleFixes{
+      "rpcFlowControlScheduleFixes"};
   static inline const std::string kRpcErrorKindRateLimited{
       "rpcErrorKindRateLimited"};
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
@@ -176,6 +190,25 @@ class RPCOperator : public exec::Operator {
       "rpcRateLimiterMinLimitMilli"};
   static inline const std::string kRpcRateLimiterServiceHorizonNanos{
       "rpcRateLimiterServiceHorizonNanos"};
+  /// Shared controller's sending target in milli-requests per second. This is
+  /// a gauge, replicated by drivers sharing that controller, not a query sum.
+  static inline const std::string kRpcRateLimiterSendRateMilli{
+      "rpcRateLimiterSendRateMilli"};
+  /// Rate reductions over the shared controller's lifetime. Replicated by
+  /// drivers sharing that controller; not a per-query count.
+  static inline const std::string kRpcRateLimiterRateDecreasesLifetime{
+      "rpcRateLimiterRateDecreasesLifetime"};
+  /// Live queued admission waits on the shared controller. Replicated by
+  /// drivers sharing it, not a per-query sum.
+  static inline const std::string kRpcRateLimiterAdmissionWaiters{
+      "rpcRateLimiterAdmissionWaiters"};
+  /// Live flag indicating an armed admission timer on the shared controller.
+  static inline const std::string kRpcRateLimiterAdmissionTimerArmed{
+      "rpcRateLimiterAdmissionTimerArmed"};
+  /// Live delay until the shared controller's next paced permit; zero when
+  /// the deadline is already due. Replicated by drivers sharing it.
+  static inline const std::string kRpcRateLimiterNextPermitDelayNanos{
+      "rpcRateLimiterNextPermitDelayNanos"};
   /// Present, with value one per driver, when the backend's shared limiter
   /// runs another policy and this operator runs under the limiter for its own.
   static inline const std::string kRpcRateLimiterPolicyScoped{
@@ -195,6 +228,17 @@ class RPCOperator : public exec::Operator {
   /// Part of that span during which the shared limiter paced admission.
   static inline const std::string kRpcRateLimiterPacingNanos{
       "rpcRateLimiterPacingNanos"};
+  /// Attached driver time during which rate control was engaged. Like
+  /// rpcRateLimiterPacingNanos, this includes idle time and does not measure
+  /// the actual admission delay. Fractional pacing is accounted separately.
+  static inline const std::string kRpcRateLimiterRatePacingNanos{
+      "rpcRateLimiterRatePacingNanos"};
+  /// Shared-controller time with eligible demand waiting for rate admission,
+  /// over the attached span. Unlike RatePacingNanos, idle time is excluded.
+  /// Drivers sharing a controller report overlapping spans; do not sum these
+  /// values as exclusive query delay.
+  static inline const std::string kRpcRateLimiterRateWaitingNanos{
+      "rpcRateLimiterRateWaitingNanos"};
   /// The shared limiter's committed window, the one rpcRateLimiterLimitMilli
   /// shows, integrated over that span, in milli-admission-units times seconds.
   /// Recovery growth counts once the limiter commits it to the window.
@@ -225,6 +269,23 @@ class RPCOperator : public exec::Operator {
   const std::shared_ptr<RPCState>& testingState() const {
     return state_;
   }
+
+  /// Dispatch state captured by test hooks on the driver thread.
+  struct TestingDispatchSnapshot {
+    /// Next undispatched row in the current buffered input.
+    vector_size_t pendingCursor{0};
+    /// Total rows in the current buffered input.
+    vector_size_t pendingNumRows{0};
+    /// Completed rows claimed for the next output vector.
+    size_t claimedRows{0};
+    /// Whether upstream input has ended.
+    bool noMoreInput{false};
+    /// Whether execution reached its finish condition.
+    bool finished{false};
+  };
+
+  /// Called only on the driver thread, where dispatch fields are stable.
+  TestingDispatchSnapshot testingDispatchSnapshot() const;
 
  private:
   // How much of the accumulator a dispatch is willing to send.
@@ -430,6 +491,13 @@ class RPCOperator : public exec::Operator {
   RPCRateLimiter* limiter_{nullptr};
   // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
   bool capacityRetryEnabled_{false};
+  // Query-stable policy choice, independent of per-row retry ownership.
+  RPCFlowControlPolicy requestedFlowControlPolicy_{
+      RPCFlowControlPolicy::kWindowAimd};
+  // Enables admission scheduling repairs for the selected query policy.
+  bool scheduleFixesEnabled_{false};
+  // Enables completion feedback and rate pacing for eligible PER_ROW retries.
+  bool operatorRetryRateControlEnabled_{false};
 
   // Set by the first tryAcquireAdmission() call.
   bool admissionRequested_{false};
@@ -461,6 +529,8 @@ class RPCOperator : public exec::Operator {
   // stats collector thread, hence atomic. Relaxed ordering is enough: these
   // are independent counters, not a handshake.
   std::atomic<int64_t> numRequestsDispatched_{0};
+  // PER_ROW framework attempts, including readmitted retries, published live.
+  std::atomic<int64_t> numAttemptsDispatched_{0};
   // Success units the shared limiter discarded as stale; see
   // kRpcStaleSuccessUnits.
   std::atomic<int64_t> numStaleSuccessUnits_{0};
@@ -518,6 +588,9 @@ class RPCOperator : public exec::Operator {
   // Block wait time tracking for runtime stats. Started when the operator
   // parks and reset when the wait ends.
   std::optional<folly::stop_watch<std::chrono::nanoseconds>> blockWaitWatch_;
+  // Unregisters this driver's admission wait when another wake-up wins or
+  // the operator closes, without affecting other drivers on the controller.
+  std::shared_ptr<RPCRateLimiter::AdmissionWait> admissionWait_;
   bool blockWaitIsBackpressure_{false};
   uint64_t totalBlockWaitNanos_{0};
   uint64_t totalBackpressureWaitNanos_{0};

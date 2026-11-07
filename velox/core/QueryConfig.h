@@ -1556,6 +1556,21 @@ class QueryConfig {
       "cap. A positive value below the effective BATCH start window is raised "
       "to that start. The congestion max window remains the overall ceiling.")
 
+  /// Query-stable RPC flow-control selection and rollback.
+  VELOX_QUERY_CONFIG(
+      kRpcFlowControlPolicy,
+      rpcFlowControlPolicy,
+      "rpc.flow_control_policy",
+      std::string,
+      "WINDOW_AIMD",
+      "RPC flow-control policy: WINDOW_AIMD (default), RATE_AIMD, or CUBIC. "
+      "WINDOW_AIMD "
+      "retains historical admission scheduling and adaptive windows. RATE_AIMD "
+      "and CUBIC enable repaired admission scheduling; adaptive PER_ROW "
+      "functions supporting capacity retries also use the selected send-rate "
+      "recovery policy. Retry ownership is configured separately. Queries "
+      "with different resolved policies do not share controller state.")
+
   /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterAdaptiveEnabled,

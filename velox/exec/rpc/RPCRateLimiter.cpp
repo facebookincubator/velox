@@ -55,6 +55,11 @@ constexpr double kMaxProbeFloor{0.5};
 // later than the interval, so the maximum probe interval still holds.
 constexpr double kProbeJitter{0.2};
 
+// Actual-admission measurements follow the AWS SDK adaptive-retry window and
+// EWMA weight. Recovery is supplied by the selected sending-rate policy.
+constexpr double kAdmissionRateWeight{0.8};
+constexpr std::chrono::milliseconds kAdmissionRateWindow{500};
+
 constexpr int64_t kServiceHorizonEwmaWeight{8};
 constexpr double kInitialAdaptiveLimit{200.0};
 
@@ -133,6 +138,24 @@ RPCRateLimiter::AdmissionLease::~AdmissionLease() {
 
 RPCRateLimiter::AdmissionLease::Completion
 RPCRateLimiter::AdmissionLease::completeAndRelease(bool hardOverload) noexcept {
+  return completeAndRelease(hardOverload, /*handedOff=*/false);
+}
+
+RPCRateLimiter::AdmissionLease::Completion
+RPCRateLimiter::AdmissionLease::completeAndRelease(
+    bool hardOverload,
+    bool handedOff) noexcept {
+  return completeAndRelease(
+      hardOverload ? Outcome::kOverload : Outcome::kNone,
+      /*rttNs=*/0,
+      handedOff);
+}
+
+RPCRateLimiter::AdmissionLease::Completion
+RPCRateLimiter::AdmissionLease::completeAndRelease(
+    Outcome outcome,
+    int64_t rttNs,
+    bool handedOff) noexcept {
   std::shared_ptr<RPCRateLimiter> owner;
   std::vector<Token> tokens;
   try {
@@ -149,15 +172,16 @@ RPCRateLimiter::AdmissionLease::completeAndRelease(bool hardOverload) noexcept {
   }
 
   bool handled = false;
-  if (hardOverload && !tokens.empty()) {
+  if (!tokens.empty() && outcome != Outcome::kNone) {
     try {
-      handled = owner->handleOverloadForEpoch(overloadEpoch_);
+      handled = owner->recordCompletionForEpoch(
+          overloadEpoch_,
+          static_cast<int64_t>(tokens.size()),
+          outcome,
+          rttNs,
+          handedOff);
     } catch (...) {
-      try {
-        RPC_RATE_LIMITER_LOG(ERROR)
-            << "failed to apply completion-time overload feedback";
-      } catch (...) {
-      }
+      logLimiterFailure("admission lease", "completion feedback");
     }
   }
   tokens.clear();
@@ -240,6 +264,195 @@ bool RPCRateLimiter::isPacingLocked() const {
   return config_.adaptive && limitLocked() < 1.0;
 }
 
+bool RPCRateLimiter::isRatePacingLocked() const {
+  return config_.adaptive &&
+      config_.ratePolicy != RPCFlowControlPolicy::kWindowAimd &&
+      sendRatePerSecond_ > 0.0;
+}
+
+std::chrono::steady_clock::duration RPCRateLimiter::ratePacingIntervalLocked()
+    const {
+  return std::chrono::ceil<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(1.0 / sendRatePerSecond_));
+}
+
+void RPCRateLimiter::accrueRateDemandLocked(
+    std::chrono::steady_clock::time_point now) {
+  if (config_.ratePolicy == RPCFlowControlPolicy::kWindowAimd) {
+    return;
+  }
+  if (rateDemandBlocked_ && now > rateDemandUpdatedAt_) {
+    rateWaitingTime_ += now - rateDemandUpdatedAt_;
+    cubicDemandSeconds_ +=
+        std::chrono::duration<double>(now - rateDemandUpdatedAt_).count();
+  }
+  rateDemandUpdatedAt_ = now;
+}
+
+void RPCRateLimiter::setRateDemandBlockedLocked(bool blocked) {
+  if (config_.ratePolicy == RPCFlowControlPolicy::kWindowAimd) {
+    return;
+  }
+  accrueRateDemandLocked(now_());
+  rateDemandBlocked_ = blocked;
+}
+
+void RPCRateLimiter::setSendRateLocked(double requestsPerSecond) {
+  accrueLocked();
+  const double minRate = config_.maxProbeInterval.count() > 0
+      ? 1.0 / std::chrono::duration<double>(config_.maxProbeInterval).count()
+      : floorLocked(static_cast<double>(ceilingLocked())) /
+          std::chrono::duration<double>(
+              std::chrono::nanoseconds(serviceHorizonNanos_))
+              .count();
+  sendRatePerSecond_ = std::max(minRate, requestsPerSecond);
+  ++pacingGeneration_;
+  pacingTimerArmed_ = false;
+  const auto now = now_();
+  nextPacedAdmission_ = lastAdmission_.has_value()
+      ? std::max(
+            now,
+            lastAdmission_.value() +
+                (isPacingLocked()
+                     ? std::max(
+                           ratePacingIntervalLocked(), nextPacedDelayLocked())
+                     : ratePacingIntervalLocked()))
+      : now + ratePacingIntervalLocked();
+}
+
+void RPCRateLimiter::noteAdmissionLocked(
+    int64_t units,
+    std::chrono::steady_clock::time_point now) {
+  if (config_.ratePolicy == RPCFlowControlPolicy::kWindowAimd) {
+    return;
+  }
+  admittedAttempts_ += units;
+  if (!admissionWindowStart_.has_value()) {
+    admissionWindowStart_ = now;
+  }
+  admissionWindowUnits_ += units;
+  const auto elapsed = now - admissionWindowStart_.value();
+  if (elapsed >= kAdmissionRateWindow) {
+    const auto rate = static_cast<double>(admissionWindowUnits_) /
+        std::chrono::duration<double>(elapsed).count();
+    measuredAdmissionRate_ = measuredAdmissionRate_ > 0
+        ? kAdmissionRateWeight * rate +
+            (1.0 - kAdmissionRateWeight) * measuredAdmissionRate_
+        : rate;
+    ++admissionRateBucket_;
+    admissionWindowStart_ = now;
+    admissionWindowUnits_ = 0;
+  }
+}
+
+void RPCRateLimiter::updateSendRateLocked(
+    uint64_t overloadEpoch,
+    Outcome outcome,
+    std::chrono::steady_clock::time_point now) {
+  accrueRateDemandLocked(now);
+  if (outcome == Outcome::kOverload) {
+    if (isRatePacingLocked() &&
+        (overloadEpoch != overloadEpoch_ ||
+         (lastRateDecreaseBucket_.has_value() &&
+          lastRateDecreaseBucket_.value() == admissionRateBucket_))) {
+      return;
+    }
+    // A short admission burst is measured against a full bucket interval,
+    // never a tiny elapsed time. Sparse requests do not lower the exploration
+    // rate permitted by the independent concurrency guard.
+    const double exploration = static_cast<double>(capacityLocked()) /
+        std::chrono::duration<double>(
+            std::chrono::nanoseconds(serviceHorizonNanos_))
+            .count();
+    const auto observation = admissionWindowStart_.has_value()
+        ? std::max(
+              now - admissionWindowStart_.value(),
+              std::chrono::steady_clock::duration(kAdmissionRateWindow))
+        : std::chrono::steady_clock::duration(kAdmissionRateWindow);
+    const double partialAdmissionRate =
+        static_cast<double>(admissionWindowUnits_) /
+        std::chrono::duration<double>(observation).count();
+    const double priorRate = sendRatePerSecond_ > 0.0
+        ? sendRatePerSecond_
+        : std::max({exploration, measuredAdmissionRate_, partialAdmissionRate});
+    priorMaxSendRate_ = priorRate;
+    lastRateDecreaseBucket_ = admissionRateBucket_;
+    cubicDemandSeconds_ = 0.0;
+    ++overloadEpoch_;
+    ++rateDecreases_;
+    setSendRateLocked(rpcFlowControlBackoffRate(priorRate));
+    return;
+  }
+  if (outcome != Outcome::kSuccess || !isRatePacingLocked() ||
+      overloadEpoch != overloadEpoch_) {
+    return;
+  }
+  const double horizonSeconds =
+      std::chrono::duration<double>(
+          std::chrono::nanoseconds(serviceHorizonNanos_))
+          .count();
+  const double target = rpcFlowControlRecoveryRate(
+      config_.ratePolicy,
+      priorMaxSendRate_,
+      cubicDemandSeconds_,
+      horizonSeconds);
+  if (target > sendRatePerSecond_) {
+    setSendRateLocked(target);
+  }
+}
+
+bool RPCRateLimiter::recordCompletionForEpoch(
+    uint64_t overloadEpoch,
+    int64_t units,
+    Outcome outcome,
+    int64_t rttNs,
+    bool handedOff) {
+  std::vector<ContinuePromise> toNotify;
+  std::optional<PacingTimerRequest> timerRequest;
+  bool handled{false};
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (config_.ratePolicy == RPCFlowControlPolicy::kWindowAimd) {
+      if (outcome != Outcome::kOverload) {
+        return false;
+      }
+      if (overloadEpoch != overloadEpoch_) {
+        return true;
+      }
+      handled = true;
+      ++overloadEpoch_;
+      applyOverloadLocked();
+    } else {
+      if (outcome != Outcome::kNone) {
+        completionAttempts_ += units;
+      }
+      if (outcome == Outcome::kSuccess) {
+        successfulAttempts_ += units;
+        updateServiceHorizonLocked(rttNs);
+      } else if (outcome == Outcome::kOverload) {
+        overloadAttempts_ += units;
+      }
+      const auto now = now_();
+      if (outcome == Outcome::kSuccess || handedOff) {
+        updateSendRateLocked(overloadEpoch, outcome, now);
+        handled = outcome == Outcome::kOverload;
+      } else if (outcome == Outcome::kOverload) {
+        handled = true;
+        if (overloadEpoch == overloadEpoch_) {
+          ++overloadEpoch_;
+          applyOverloadLocked();
+        }
+      }
+    }
+    timerRequest = collectWakeableLocked(toNotify);
+  }
+  fulfillWaitersNoThrow(toNotify, admissionKey_);
+  if (timerRequest.has_value()) {
+    schedulePacingTimer(timerRequest.value());
+  }
+  return handled;
+}
+
 std::chrono::steady_clock::duration RPCRateLimiter::pacingIntervalLocked()
     const {
   const double window = limitLocked();
@@ -292,6 +505,9 @@ void RPCRateLimiter::accrueLocked() {
   if (isPacingLocked()) {
     pacingTime_ += elapsed;
   }
+  if (isRatePacingLocked()) {
+    ratePacingTime_ += elapsed;
+  }
   windowUnitSeconds_ +=
       limitLocked() * std::chrono::duration<double>(elapsed).count();
   lastAccrual_ = now;
@@ -308,13 +524,17 @@ void RPCRateLimiter::setLimitLocked(double limit) {
   const auto now = now_();
   limitChangedAt_ = now;
   if (isPacingLocked()) {
-    const auto delay = nextPacedDelayLocked();
+    const auto delay = isRatePacingLocked()
+        ? std::max(nextPacedDelayLocked(), ratePacingIntervalLocked())
+        : nextPacedDelayLocked();
     nextPacedAdmission_ = lastAdmission_.has_value()
         ? std::max(now, lastAdmission_.value() + delay)
         : now + delay;
   } else {
     recovering_ = false;
-    nextPacedAdmission_ = std::chrono::steady_clock::time_point{};
+    nextPacedAdmission_ = isRatePacingLocked() && lastAdmission_.has_value()
+        ? std::max(now, lastAdmission_.value() + ratePacingIntervalLocked())
+        : std::chrono::steady_clock::time_point{};
   }
 }
 
@@ -336,6 +556,12 @@ RPCRateLimiter::Config clamped(RPCRateLimiter::Config config) {
       : std::clamp(config.decreaseFactor, 0.01, 0.99);
   config.maxProbeInterval =
       std::max(config.maxProbeInterval, std::chrono::milliseconds{0});
+  if (config.ratePolicy != RPCFlowControlPolicy::kWindowAimd) {
+    config.scheduleFixes = true;
+  }
+  if (!config.adaptive) {
+    config.ratePolicy = RPCFlowControlPolicy::kWindowAimd;
+  }
   return config;
 }
 
@@ -343,7 +569,8 @@ RPCRateLimiter::Config clamped(RPCRateLimiter::Config config) {
 // in fields it ignores compare equal.
 RPCRateLimiter::Config canonicalize(const RPCRateLimiter::Config& policy) {
   auto canonical = clamped(policy);
-  if (canonical.ceiling > 0 &&
+  if (canonical.ratePolicy == RPCFlowControlPolicy::kWindowAimd &&
+      canonical.ceiling > 0 &&
       canonical.floor >= static_cast<double>(canonical.ceiling)) {
     canonical.adaptive = false;
   }
@@ -352,6 +579,7 @@ RPCRateLimiter::Config canonicalize(const RPCRateLimiter::Config& policy) {
     canonical.floor = defaults.floor;
     canonical.decreaseFactor = defaults.decreaseFactor;
     canonical.maxProbeInterval = defaults.maxProbeInterval;
+    canonical.ratePolicy = RPCFlowControlPolicy::kWindowAimd;
   }
   return canonical;
 }
@@ -389,6 +617,7 @@ bool RPCRateLimiter::initializeOrMatch(const Config& policy) {
 void RPCRateLimiter::testingReset() {
   std::lock_guard<std::mutex> l(mutex_);
   config_ = Config{};
+  ratePolicySelected_.store(false, std::memory_order_relaxed);
   initialized_ = false;
   limit_ = 0.0;
   limitChangedAt_ = std::chrono::steady_clock::time_point{};
@@ -401,6 +630,23 @@ void RPCRateLimiter::testingReset() {
   hasServiceHorizonSample_ = false;
   nextPacedAdmission_ = std::chrono::steady_clock::time_point{};
   lastAdmission_.reset();
+  sendRatePerSecond_ = 0.0;
+  priorMaxSendRate_ = 0.0;
+  lastRateDecreaseBucket_.reset();
+  cubicDemandSeconds_ = 0.0;
+  rateDemandBlocked_ = false;
+  rateDemandUpdatedAt_ = now_();
+  admissionWindowUnits_ = 0;
+  measuredAdmissionRate_ = 0.0;
+  admissionWindowStart_.reset();
+  admissionRateBucket_ = 0;
+  admittedAttempts_ = 0;
+  completionAttempts_ = 0;
+  successfulAttempts_ = 0;
+  overloadAttempts_ = 0;
+  rateDecreases_ = 0;
+  ratePacingTime_ = std::chrono::steady_clock::duration::zero();
+  rateWaitingTime_ = std::chrono::steady_clock::duration::zero();
   ++pacingGeneration_;
   ++overloadEpoch_;
   pacingTimerArmed_ = false;
@@ -411,7 +657,11 @@ void RPCRateLimiter::testingReset() {
 
 std::optional<RPCRateLimiter::PacingTimerRequest>
 RPCRateLimiter::collectWakeableLocked(std::vector<ContinuePromise>& toNotify) {
+  if (waiters_.empty()) {
+    setRateDemandBlockedLocked(false);
+  }
   if (isPacingLocked()) {
+    setRateDemandBlockedLocked(false);
     if (pending_.load() != 0 || waiters_.empty()) {
       return std::nullopt;
     }
@@ -419,17 +669,24 @@ RPCRateLimiter::collectWakeableLocked(std::vector<ContinuePromise>& toNotify) {
       return preparePacingTimerLocked();
     }
     while (!waiters_.empty()) {
-      toNotify.push_back(std::move(waiters_.front()));
+      toNotify.push_back(std::move(waiters_.front().promise));
       waiters_.pop_front();
     }
     return std::nullopt;
   }
   int64_t headroom = capacityLocked() - pending_.load();
   if (headroom <= 0) {
+    setRateDemandBlockedLocked(false);
     return std::nullopt;
   }
+  if (isRatePacingLocked() && now_() < nextPacedAdmission_) {
+    return preparePacingTimerLocked();
+  }
+  if (isRatePacingLocked()) {
+    setRateDemandBlockedLocked(false);
+  }
   while (!waiters_.empty()) {
-    toNotify.push_back(std::move(waiters_.front()));
+    toNotify.push_back(std::move(waiters_.front().promise));
     waiters_.pop_front();
   }
   return std::nullopt;
@@ -437,12 +694,14 @@ RPCRateLimiter::collectWakeableLocked(std::vector<ContinuePromise>& toNotify) {
 
 std::optional<RPCRateLimiter::PacingTimerRequest>
 RPCRateLimiter::preparePacingTimerLocked() {
-  if (pacingTimerArmed_ || !isPacingLocked() || pending_.load() != 0 ||
-      waiters_.empty()) {
+  const bool canAdmitWhenDue = isPacingLocked()
+      ? pending_.load() == 0
+      : isRatePacingLocked() && pending_.load() < capacityLocked();
+  if (pacingTimerArmed_ || !canAdmitWhenDue || waiters_.empty()) {
     return std::nullopt;
   }
   const auto now = now_();
-  if (now >= nextPacedAdmission_) {
+  if (!config_.scheduleFixes && now >= nextPacedAdmission_) {
     return std::nullopt;
   }
   const auto delay = std::max(
@@ -510,7 +769,7 @@ void RPCRateLimiter::onPacingTimerFailure(
     }
     pacingTimerArmed_ = false;
     while (!waiters_.empty()) {
-      toFail.push_back(std::move(waiters_.front()));
+      toFail.push_back(std::move(waiters_.front().promise));
       waiters_.pop_front();
     }
   } catch (...) {
@@ -526,6 +785,12 @@ void RPCRateLimiter::applyMutationLocked(
   accrueLocked();
   mutate(config_);
   config_ = clamped(config_);
+  ratePolicySelected_.store(
+      config_.ratePolicy != RPCFlowControlPolicy::kWindowAimd,
+      std::memory_order_relaxed);
+  if (config_.ratePolicy == RPCFlowControlPolicy::kWindowAimd) {
+    rateDemandBlocked_ = false;
+  }
   if (!config_.adaptive) {
     setLimitLocked(0.0);
   } else if (!wasAdaptive) {
@@ -613,7 +878,11 @@ RPCRateLimiter::Token RPCRateLimiter::acquire() {
     VELOX_CHECK(
         !isPacingLocked(),
         "Unconditional acquisition cannot bypass paced admission");
+    VELOX_CHECK(
+        !isRatePacingLocked(),
+        "Unconditional acquisition cannot bypass rate RPC pacing");
     lastAdmission_ = now_();
+    noteAdmissionLocked(1, lastAdmission_.value());
     pending = ++pending_;
     overloadEpoch = overloadEpoch_;
   }
@@ -627,10 +896,17 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
     int64_t want) {
   std::vector<Token> granted;
   if (want <= 0) {
+    if (!ratePolicySelected_.load(std::memory_order_relaxed)) {
+      return granted;
+    }
+    std::lock_guard<std::mutex> l(mutex_);
+    if (waiters_.empty()) {
+      setRateDemandBlockedLocked(false);
+    }
     return granted;
   }
 
-  std::lock_guard<std::mutex> l(mutex_);
+  std::unique_lock<std::mutex> l(mutex_);
   const auto now = now_();
   if (isPacingLocked()) {
     if (pending_.load() > 0 || now < nextPacedAdmission_) {
@@ -641,14 +917,40 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
     ++pacingGeneration_;
     pacingTimerArmed_ = false;
     lastAdmission_ = now;
+    noteAdmissionLocked(1, now);
     nextPacedAdmission_ = isPacingLocked()
-        ? now + nextPacedDelayLocked()
+        ? now +
+            (isRatePacingLocked()
+                 ? std::max(nextPacedDelayLocked(), ratePacingIntervalLocked())
+                 : nextPacedDelayLocked())
         : std::chrono::steady_clock::time_point{};
     notePeakPending(pending);
     granted.emplace_back(tokenConstructionKey_, this, overloadEpoch_);
     return granted;
   }
   const int64_t capacity = capacityLocked();
+  if (isRatePacingLocked()) {
+    if (pending_.load() >= capacity || now < nextPacedAdmission_) {
+      setRateDemandBlockedLocked(
+          pending_.load() < capacity && now < nextPacedAdmission_);
+      return granted;
+    }
+    setRateDemandBlockedLocked(!waiters_.empty());
+    const int64_t pending = ++pending_;
+    ++pacingGeneration_;
+    pacingTimerArmed_ = false;
+    lastAdmission_ = now;
+    noteAdmissionLocked(1, now);
+    nextPacedAdmission_ = now + ratePacingIntervalLocked();
+    notePeakPending(pending);
+    granted.emplace_back(tokenConstructionKey_, this, overloadEpoch_);
+    const auto timerRequest = preparePacingTimerLocked();
+    l.unlock();
+    if (timerRequest.has_value()) {
+      schedulePacingTimer(timerRequest.value());
+    }
+    return granted;
+  }
 
   // One compare-exchange for the whole grant rather than a read followed by an
   // increment, so a release racing this locked capacity decision is reflected
@@ -665,6 +967,7 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
     // rather than its own stale read.
   } while (!pending_.compare_exchange_weak(pending, pending + take));
   lastAdmission_ = now;
+  noteAdmissionLocked(take, now);
 
   // The post-exchange total, not the caller's pre-read: reporting the stale
   // value would hide exactly the overshoot this loop exists to prevent, and
@@ -684,7 +987,48 @@ int64_t RPCRateLimiter::available() const {
   if (isPacingLocked()) {
     return pending_.load() == 0 && now_() >= nextPacedAdmission_ ? 1 : 0;
   }
+  if (isRatePacingLocked()) {
+    return pending_.load() < capacityLocked() && now_() >= nextPacedAdmission_
+        ? 1
+        : 0;
+  }
   return std::max<int64_t>(0, capacityLocked() - pending_.load());
+}
+
+RPCRateLimiter::AdmissionWait::AdmissionWait(
+    std::weak_ptr<RPCRateLimiter> owner,
+    uint64_t id)
+    : owner_{std::move(owner)}, id_{id} {}
+
+RPCRateLimiter::AdmissionWait::~AdmissionWait() {
+  if (const auto owner = owner_.lock()) {
+    owner->cancelAdmissionWait(id_);
+  }
+}
+
+void RPCRateLimiter::cancelAdmissionWait(uint64_t id) noexcept {
+  std::vector<ContinuePromise> canceled;
+  try {
+    std::lock_guard<std::mutex> l(mutex_);
+    const auto position = std::find_if(
+        waiters_.begin(), waiters_.end(), [id](const auto& waiter) {
+          return waiter.id == id;
+        });
+    if (position == waiters_.end()) {
+      return;
+    }
+    canceled.push_back(std::move(position->promise));
+    waiters_.erase(position);
+    if (waiters_.empty()) {
+      setRateDemandBlockedLocked(false);
+      ++pacingGeneration_;
+      pacingTimerArmed_ = false;
+    }
+  } catch (...) {
+    logLimiterFailure(admissionKey_, "admission wait cancellation");
+    return;
+  }
+  fulfillWaitersNoThrow(canceled, admissionKey_);
 }
 
 RPCRateLimiter::Admission RPCRateLimiter::admitOrWait() {
@@ -699,8 +1043,27 @@ RPCRateLimiter::Admission RPCRateLimiter::admitOrWait() {
         result.admitted = true;
         return result;
       }
-      waiters_.emplace_back("RPCRateLimiter::admitOrWait");
-      result.wait = waiters_.back().getSemiFuture();
+      const auto id = nextAdmissionWaitId_++;
+      waiters_.push_back({id, ContinuePromise{"RPCRateLimiter::admitOrWait"}});
+      result.wait = waiters_.back().promise.getSemiFuture();
+      if (config_.adaptive &&
+          config_.ratePolicy != RPCFlowControlPolicy::kWindowAimd) {
+        result.registration =
+            std::make_shared<AdmissionWait>(weak_from_this(), id);
+      }
+      timerRequest = preparePacingTimerLocked();
+    } else if (
+        isRatePacingLocked() && pending < capacity &&
+        now_() < nextPacedAdmission_) {
+      setRateDemandBlockedLocked(true);
+      const auto id = nextAdmissionWaitId_++;
+      waiters_.push_back({id, ContinuePromise{"RPCRateLimiter::admitOrWait"}});
+      result.wait = waiters_.back().promise.getSemiFuture();
+      if (config_.adaptive &&
+          config_.ratePolicy != RPCFlowControlPolicy::kWindowAimd) {
+        result.registration =
+            std::make_shared<AdmissionWait>(weak_from_this(), id);
+      }
       timerRequest = preparePacingTimerLocked();
     } else if (pending < capacity) {
       RPC_RATE_LIMITER_VLOG(2) << "admitOrWait[" << admissionKey_
@@ -715,8 +1078,14 @@ RPCRateLimiter::Admission RPCRateLimiter::admitOrWait() {
           << "), waiter #" << waiters_.size();
       // Enrolled under the same lock that decided, so any release from here on
       // must see this waiter.
-      waiters_.emplace_back("RPCRateLimiter::admitOrWait");
-      result.wait = waiters_.back().getSemiFuture();
+      const auto id = nextAdmissionWaitId_++;
+      waiters_.push_back({id, ContinuePromise{"RPCRateLimiter::admitOrWait"}});
+      result.wait = waiters_.back().promise.getSemiFuture();
+      if (config_.adaptive &&
+          config_.ratePolicy != RPCFlowControlPolicy::kWindowAimd) {
+        result.registration =
+            std::make_shared<AdmissionWait>(weak_from_this(), id);
+      }
     }
   }
   if (timerRequest.has_value()) {
@@ -746,6 +1115,10 @@ void RPCRateLimiter::onOutcome(Outcome outcome, int64_t units, int64_t rttNs) {
 }
 
 void RPCRateLimiter::applyOverloadLocked() {
+  decreaseLimitLocked(limitLocked() * config_.decreaseFactor);
+}
+
+void RPCRateLimiter::decreaseLimitLocked(double target) {
   if (!config_.adaptive) {
     return;
   }
@@ -756,7 +1129,7 @@ void RPCRateLimiter::applyOverloadLocked() {
   const double current = limitLocked();
   const double next = std::max(
       floorLocked(static_cast<double>(ceilingLocked())),
-      current * config_.decreaseFactor);
+      std::min(current, target));
   // Reschedule even when the window is already at its floor, so the next
   // probe waits the back-off interval rather than the recovery one.
   setLimitLocked(next);
@@ -783,25 +1156,6 @@ void RPCRateLimiter::onOverload() {
   if (timerRequest.has_value()) {
     schedulePacingTimer(timerRequest.value());
   }
-}
-
-bool RPCRateLimiter::handleOverloadForEpoch(uint64_t overloadEpoch) {
-  std::vector<ContinuePromise> toNotify;
-  std::optional<PacingTimerRequest> timerRequest;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    if (overloadEpoch != overloadEpoch_) {
-      return true;
-    }
-    ++overloadEpoch_;
-    applyOverloadLocked();
-    timerRequest = collectWakeableLocked(toNotify);
-  }
-  fulfillWaitersNoThrow(toNotify, admissionKey_);
-  if (timerRequest.has_value()) {
-    schedulePacingTimer(timerRequest.value());
-  }
-  return true;
 }
 
 bool RPCRateLimiter::updateServiceHorizonLocked(int64_t rttNs) {
@@ -900,13 +1254,22 @@ bool RPCRateLimiter::onSuccessForEpoch(
     std::lock_guard<std::mutex> l(mutex_);
     if (overloadEpoch != overloadEpoch_) {
       commitGrowthLocked();
-      const bool horizonMoved = updateServiceHorizonLocked(rttNs);
+      const bool horizonMoved = updateServiceHorizonLocked(
+          config_.adaptive &&
+                  config_.ratePolicy != RPCFlowControlPolicy::kWindowAimd
+              ? 0
+              : rttNs);
       discarded = successEarnsCreditLocked();
       if (horizonMoved && isPacingLocked()) {
         setLimitLocked(limitLocked());
       }
     } else {
-      applySuccessLocked(units, rttNs);
+      applySuccessLocked(
+          units,
+          config_.adaptive &&
+                  config_.ratePolicy != RPCFlowControlPolicy::kWindowAimd
+              ? 0
+              : rttNs);
     }
     timerRequest = collectWakeableLocked(toNotify);
   }
@@ -976,6 +1339,38 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
       .clockNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
                         now.time_since_epoch())
                         .count(),
+      .sendRateMilli = config_.ratePolicy == RPCFlowControlPolicy::kWindowAimd
+          ? 0
+          : static_cast<int64_t>(std::llround(sendRatePerSecond_ * 1'000)),
+      .ratePacingNanos =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              ratePacingTime_ +
+              (isRatePacingLocked()
+                   ? sinceAccrual
+                   : std::chrono::steady_clock::duration::zero()))
+              .count(),
+      .rateWaitingNanos =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              rateWaitingTime_ +
+              (rateDemandBlocked_
+                   ? now - rateDemandUpdatedAt_
+                   : std::chrono::steady_clock::duration::zero()))
+              .count(),
+      .admittedAttempts = admittedAttempts_,
+      .completionAttempts = completionAttempts_,
+      .successfulAttempts = successfulAttempts_,
+      .overloadAttempts = overloadAttempts_,
+      .rateDecreases = rateDecreases_,
+      .admissionWaiters = static_cast<int64_t>(waiters_.size()),
+      .admissionTimerArmed = pacingTimerArmed_,
+      .nextPermitDelayNanos =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::max(
+                  nextPacedAdmission_ - now,
+                  std::chrono::steady_clock::duration::zero()))
+              .count(),
+      .ratePolicy = config_.ratePolicy,
+      .scheduleFixes = config_.scheduleFixes,
   };
 }
 
