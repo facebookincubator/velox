@@ -18,6 +18,7 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <atomic>
 #include <condition_variable>
+#include <exception>
 #include <optional>
 #include <string_view>
 #include "velox/common/testutil/TestValue.h"
@@ -31,12 +32,17 @@ constexpr std::string_view kParentSeparator{"?parent="};
 
 class LocalExchangeSourceImpl : public LocalExchangeSource {
  public:
+  // Local pages arrive from the producer's output buffers. The source does
+  // not allocate from the consumer's pool.
   LocalExchangeSourceImpl(
       const std::string& taskId,
       int destination,
-      std::shared_ptr<exec::ExchangeQueue> queue,
-      memory::MemoryPool* pool)
-      : LocalExchangeSource(taskId, destination, queue, pool) {
+      std::shared_ptr<exec::ExchangeQueue> queue)
+      : LocalExchangeSource(
+            taskId,
+            destination,
+            std::move(queue),
+            std::shared_ptr<memory::MemoryPool>{}) {
     if (const auto separator = taskId.find(kParentSeparator);
         separator != std::string::npos) {
       producerTaskId_ = taskId.substr(0, separator);
@@ -51,7 +57,7 @@ class LocalExchangeSourceImpl : public LocalExchangeSource {
   }
 
   bool shouldRequestLocked() override {
-    if (atEnd_) {
+    if (closed_ || atEnd_) {
       return false;
     }
     return !requestPending_.exchange(true);
@@ -60,134 +66,69 @@ class LocalExchangeSourceImpl : public LocalExchangeSource {
   folly::SemiFuture<Response> request(
       uint32_t maxBytes,
       std::chrono::microseconds maxWait) override {
-    ++numRequests_;
-
+    // A timeout can complete the promise before getData() returns. Serialize
+    // calls to the buffer manager so an older request cannot replace a newer
+    // request's notification. close() and the callbacks do not take this lock.
+    std::lock_guard<std::mutex> requestLock(requestMutex_);
     auto promise = VeloxPromise<Response>("LocalExchangeSource::request");
     auto future = promise.getSemiFuture();
+    // Shared by the timeout and the output buffer's notification. Only the
+    // first result for this request can remove its timeout and publish data.
+    auto active = std::make_shared<std::atomic_bool>(true);
+    int64_t requestedSequence;
+    DataAvailableCallback resultCallback;
     {
       std::lock_guard<std::mutex> l(queue_->mutex());
-      promise_ = std::move(promise);
-    }
-
-    auto buffers = DefaultOutputBufferManager::getInstanceRef();
-    VELOX_CHECK_NOT_NULL(buffers, "invalid DefaultOutputBufferManager");
-    VELOX_CHECK(requestPending_);
-    auto requestedSequence = sequence_;
-    auto self = shared_from_this();
-    // True until the request gets its result or times out.
-    auto active = std::make_shared<std::atomic_bool>(true);
-    // Since this lambda may outlive 'this', we need to capture a
-    // shared_ptr to the current object (self).
-    auto resultCallback = [self, requestedSequence, buffers, active, this](
-                              std::vector<std::unique_ptr<folly::IOBuf>> data,
-                              int64_t sequence,
-                              std::vector<int64_t> remainingBytes) {
-      *active = false;
-      {
-        std::lock_guard<std::mutex> l(mutex_);
-        // This function is called either for a result or timeout. Only the
-        // first of these calls has an effect.
-        auto iter = timeouts_.find(self);
-        if (iter == timeouts_.end()) {
-          return;
-        }
-        timeouts_.erase(iter);
+      if (closed_) {
+        promise.setValue(Response{0, false, {}});
+        return future;
       }
-
-      if (requestedSequence > sequence && !data.empty()) {
-        VLOG(2) << "Receives earlier sequence than requested: task "
-                << remoteTaskId_ << ", destination " << destination_
-                << ", requested " << sequence << ", received "
-                << requestedSequence;
-        int64_t nExtra = requestedSequence - sequence;
-        VELOX_CHECK(nExtra < data.size());
-        data.erase(data.cbegin(), data.cbegin() + nExtra);
-        sequence = requestedSequence;
-      }
-      if (data.empty()) {
-        sequence = requestedSequence;
-      }
-      std::vector<std::unique_ptr<SerializedPageBase>> pages;
-      bool atEnd = false;
-      int64_t totalBytes = 0;
-      for (auto& inputPage : data) {
-        if (!inputPage) {
-          atEnd = true;
-          // Keep looping, there could be extra end markers.
-          continue;
-        }
-        totalBytes += inputPage->length();
-        inputPage->unshare();
-        pages.push_back(
-            std::make_unique<PrestoSerializedPage>(std::move(inputPage)));
-        inputPage = nullptr;
-      }
-      numPages_ += pages.size();
-      totalBytes_ += totalBytes;
-      if (data.empty()) {
-        common::testutil::TestValue::adjust(
-            "facebook::velox::exec::test::LocalExchangeSource::timeout", this);
-      }
-
-      try {
-        common::testutil::TestValue::adjust(
-            "facebook::velox::exec::test::LocalExchangeSource", this);
-      } catch (const std::exception& e) {
-        queue_->setError(e.what());
-        checkSetRequestPromise();
-        return;
-      }
-
-      VeloxPromise<Response> requestPromise;
-      {
-        std::vector<ContinuePromise> queuePromises;
+      VELOX_CHECK(requestPending_);
+      requestedSequence = sequence_;
+      resultCallback = [weak = weak_from_this(), requestedSequence, active](
+                           std::vector<std::unique_ptr<folly::IOBuf>> data,
+                           int64_t sequence,
+                           std::vector<int64_t> remainingBytes) {
         {
-          std::lock_guard<std::mutex> l(queue_->mutex());
-          requestPending_ = false;
-          requestPromise = std::move(promise_);
-          for (auto& page : pages) {
-            queue_->enqueueLocked(std::move(page), queuePromises);
+          std::lock_guard<std::mutex> l(mutex_);
+          if (timeouts_.erase(active) == 0) {
+            return;
           }
-          if (atEnd) {
-            queue_->enqueueLocked(nullptr, queuePromises);
-            atEnd_ = true;
-          }
-          if (!data.empty()) {
-            sequence_ = sequence + pages.size();
-          }
+          *active = false;
         }
-        for (auto& promise : queuePromises) {
-          promise.setValue();
+        if (auto self = std::static_pointer_cast<LocalExchangeSourceImpl>(
+                weak.lock())) {
+          self->processResult(
+              requestedSequence,
+              std::move(data),
+              sequence,
+              std::move(remainingBytes));
         }
-      }
-      // Outside of queue mutex.
-      if (atEnd_) {
-        buffers->deleteResults(producerTaskId_, destination_);
-      }
-
-      if (!requestPromise.isFulfilled()) {
-        requestPromise.setValue(Response{totalBytes, atEnd_, remainingBytes});
-      }
-    };
-
-    if (!registerTimeout(self, resultCallback, maxWait)) {
-      // 'close()' already ran (e.g. the query was cancelled) before this
-      // request. Do not fetch: complete the request promise so the exchange
-      // client's continuation resolves and releases its reference to this
-      // source. Fetching here would re-register the source in 'timeouts_'
-      // after teardown, pinning its memory pool until the timeout fires.
-      checkSetRequestPromise();
-      return future;
+      };
+      registerTimeout(resultCallback, active, maxWait);
+      activeRequest_ = active;
+      promise_ = std::move(promise);
     }
 
     common::testutil::TestValue::adjust(
         "facebook::velox::exec::test::LocalExchangeSource::request", this);
 
+    if (!active->load()) {
+      return future;
+    }
+
+    const auto& buffers = DefaultOutputBufferManager::getInstanceRef();
+    auto activeCheck = [active]() { return active->load(); };
     if (!parentTaskId_.has_value()) {
       // A producer that does not exist yet answers nothing, and the timeout
-      // above completes the request.
+      // completes the request.
       buffers->getData(
-          producerTaskId_, destination_, maxBytes, sequence_, resultCallback);
+          producerTaskId_,
+          destination_,
+          maxBytes,
+          requestedSequence,
+          std::move(resultCallback),
+          std::move(activeCheck));
       return future;
     }
 
@@ -196,18 +137,17 @@ class LocalExchangeSourceImpl : public LocalExchangeSource {
         producerTaskId_,
         destination_,
         maxBytes,
-        sequence_,
-        resultCallback,
-        [active]() { return active->load(); });
+        requestedSequence,
+        std::move(resultCallback),
+        std::move(activeCheck));
 
-    // A close() that ran since registerTimeout() had no request to drop, and
-    // the request just held would keep this closed source alive.
-    bool closed;
+    // Remove a request registered after close() cleared the pending reads.
+    bool deleteResults;
     {
-      std::lock_guard<std::mutex> l(mutex_);
-      closed = closed_;
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      deleteResults = closed_ && !atEnd_;
     }
-    if (closed) {
+    if (deleteResults) {
       buffers->deleteResultsWhenCreated(
           *parentTaskId_, producerTaskId_, destination_);
     }
@@ -228,31 +168,36 @@ class LocalExchangeSourceImpl : public LocalExchangeSource {
     int64_t ackSequence;
     {
       std::lock_guard<std::mutex> l(queue_->mutex());
+      if (closed_) {
+        return;
+      }
       ackSequence = sequence_;
     }
     buffers->acknowledge(producerTaskId_, destination_, ackSequence);
   }
 
   void close() override {
-    checkSetRequestPromise();
-
-    {
-      // Mark closed and deregister any pending timeout under the same lock that
-      // registerTimeout() takes. Marking closed here makes a request() that
-      // races this close() (running on the exchange executor while the query is
-      // cancelled on another thread) observe the closed state and skip
-      // registering, rather than re-inserting the source into the static
-      // 'timeouts_' map after teardown -- which would pin its memory pool until
-      // the timeout fires and can outlive the MemoryManager.
-      std::lock_guard<std::mutex> l(mutex_);
-      closed_ = true;
-      timeouts_.erase(shared_from_this());
-    }
-
-    bool atEnd{false};
+    auto promise = VeloxPromise<Response>::makeEmpty();
+    std::shared_ptr<std::atomic_bool> active;
+    bool atEnd;
     {
       std::lock_guard<std::mutex> l(queue_->mutex());
+      if (closed_) {
+        return;
+      }
+      closed_ = true;
       atEnd = atEnd_;
+      requestPending_ = false;
+      promise = std::move(promise_);
+      active = std::move(activeRequest_);
+    }
+    if (active) {
+      std::lock_guard<std::mutex> l(mutex_);
+      *active = false;
+      timeouts_.erase(active);
+    }
+    if (promise.valid()) {
+      promise.setValue(Response{0, false, {}});
     }
     // At end, the results are already deleted, and the producer may be gone:
     // deleting them again would record a delete that no producer consumes.
@@ -311,26 +256,18 @@ class LocalExchangeSourceImpl : public LocalExchangeSource {
   }
 
  private:
-  using ResultCallback = std::function<void(
-      std::vector<std::unique_ptr<folly::IOBuf>> data,
-      int64_t sequence,
-      std::vector<int64_t> remainingBytes)>;
+  struct Timeout {
+    DataAvailableCallback callback;
+    std::chrono::system_clock::time_point deadline;
+  };
 
-  // Registers 'callback' to fire after 'maxWait' for this source. Returns false
-  // if the source has already been closed, in which case the caller must not
-  // fetch and must complete the request promise itself. The closed check and
-  // the insertion happen under the same lock that close() uses, so a request
-  // racing close() cannot re-insert the source into 'timeouts_' after teardown.
-  bool registerTimeout(
-      const std::shared_ptr<ExchangeSource>& self,
-      ResultCallback callback,
+  // Called with the queue mutex held so close() cannot race registration.
+  void registerTimeout(
+      DataAvailableCallback callback,
+      const std::shared_ptr<std::atomic_bool>& active,
       std::chrono::microseconds maxWait) {
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK(!stop_, "Local exchange source has stopped");
-
-    if (closed_) {
-      return false;
-    }
 
     if (timerThread_ == nullptr) {
       // The lambda references only static state, so it does not capture 'this'
@@ -339,15 +276,15 @@ class LocalExchangeSourceImpl : public LocalExchangeSource {
         std::unique_lock<std::mutex> l(mutex_);
         while (!stop_) {
           const auto now = std::chrono::system_clock::now();
-          ResultCallback callback = nullptr;
+          DataAvailableCallback callback = nullptr;
           std::optional<std::chrono::system_clock::time_point> nextDeadline;
-          for (const auto& [source, entry] : timeouts_) {
-            if (entry.second <= now) {
-              callback = entry.first;
+          for (const auto& [active, entry] : timeouts_) {
+            if (entry.deadline <= now) {
+              callback = entry.callback;
               break;
             }
-            if (!nextDeadline.has_value() || entry.second < *nextDeadline) {
-              nextDeadline = entry.second;
+            if (!nextDeadline.has_value() || entry.deadline < *nextDeadline) {
+              nextDeadline = entry.deadline;
             }
           }
           if (callback) {
@@ -370,30 +307,117 @@ class LocalExchangeSourceImpl : public LocalExchangeSource {
         atexit([]() { stop(); });
       }
     }
-    timeouts_[self] =
-        std::make_pair(callback, std::chrono::system_clock::now() + maxWait);
+    timeouts_.emplace(
+        active,
+        Timeout{
+            std::move(callback), std::chrono::system_clock::now() + maxWait});
     timerWakeup_.notify_one();
-    return true;
   }
 
-  bool checkSetRequestPromise() {
-    VeloxPromise<Response> promise{VeloxPromise<Response>::makeEmpty()};
-    {
-      std::lock_guard<std::mutex> l(queue_->mutex());
-      promise = std::move(promise_);
+  void processResult(
+      int64_t requestedSequence,
+      std::vector<std::unique_ptr<folly::IOBuf>> data,
+      int64_t sequence,
+      std::vector<int64_t> remainingBytes) {
+    if (requestedSequence > sequence && !data.empty()) {
+      VLOG(2) << "Receives earlier sequence than requested: task "
+              << remoteTaskId_ << ", destination " << destination_
+              << ", requested " << sequence << ", received "
+              << requestedSequence;
+      int64_t nExtra = requestedSequence - sequence;
+      VELOX_CHECK(nExtra < data.size());
+      data.erase(data.cbegin(), data.cbegin() + nExtra);
+      sequence = requestedSequence;
     }
-    if (promise.valid() && !promise.isFulfilled()) {
-      promise.setValue(Response{0, false, {}});
-      return true;
+    if (data.empty()) {
+      sequence = requestedSequence;
+    }
+    std::vector<std::unique_ptr<SerializedPageBase>> pages;
+    bool atEnd = false;
+    int64_t totalBytes = 0;
+    for (auto& inputPage : data) {
+      if (!inputPage) {
+        atEnd = true;
+        // Keep looping, there could be extra end markers.
+        continue;
+      }
+      totalBytes += inputPage->length();
+      inputPage->unshare();
+      pages.push_back(
+          std::make_unique<PrestoSerializedPage>(std::move(inputPage)));
+      inputPage = nullptr;
+    }
+    if (data.empty()) {
+      common::testutil::TestValue::adjust(
+          "facebook::velox::exec::test::LocalExchangeSource::timeout", this);
     }
 
-    return false;
+    try {
+      common::testutil::TestValue::adjust(
+          "facebook::velox::exec::test::LocalExchangeSource", this);
+    } catch (const std::exception& e) {
+      setRequestError(e.what(), std::current_exception());
+      return;
+    }
+
+    auto requestPromise = VeloxPromise<Response>::makeEmpty();
+    std::vector<ContinuePromise> queuePromises;
+    {
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      if (closed_) {
+        return;
+      }
+      requestPending_ = false;
+      requestPromise = std::move(promise_);
+      numPages_ += pages.size();
+      totalBytes_ += totalBytes;
+      for (auto& page : pages) {
+        queue_->enqueueLocked(std::move(page), queuePromises);
+      }
+      if (atEnd) {
+        queue_->enqueueLocked(nullptr, queuePromises);
+        atEnd_ = true;
+      }
+      if (!data.empty()) {
+        sequence_ = sequence + pages.size();
+      }
+    }
+    for (auto& promise : queuePromises) {
+      promise.setValue();
+    }
+    if (atEnd) {
+      DefaultOutputBufferManager::getInstanceRef()->deleteResults(
+          producerTaskId_, destination_);
+    }
+
+    if (requestPromise.valid()) {
+      requestPromise.setValue(
+          Response{totalBytes, atEnd, std::move(remainingBytes)});
+    }
+  }
+
+  void setRequestError(const std::string& error, std::exception_ptr exception) {
+    auto requestPromise = VeloxPromise<Response>::makeEmpty();
+    std::vector<ContinuePromise> queuePromises;
+    {
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      if (closed_) {
+        return;
+      }
+      requestPromise = std::move(promise_);
+      queuePromises = queue_->setErrorLocked(error);
+    }
+    for (auto& promise : queuePromises) {
+      promise.setValue();
+    }
+    if (requestPromise.valid()) {
+      requestPromise.setException(
+          folly::exception_wrapper(std::move(exception)));
+    }
   }
 
   static inline std::mutex mutex_;
-  static inline folly::F14FastMap<
-      std::shared_ptr<ExchangeSource>,
-      std::pair<ResultCallback, std::chrono::system_clock::time_point>>
+  static inline folly::F14FastMap<std::shared_ptr<std::atomic_bool>, Timeout>
       timeouts_;
   static inline std::unique_ptr<std::thread> timerThread_;
   // Wakes the timer thread, which waits until the earliest deadline in
@@ -405,10 +429,10 @@ class LocalExchangeSourceImpl : public LocalExchangeSource {
   // Records the total number of pages fetched from sources.
   std::atomic<int64_t> numPages_{0};
   std::atomic<uint64_t> totalBytes_{0};
+  std::mutex requestMutex_;
+  // Guarded by the queue mutex.
   VeloxPromise<Response> promise_{VeloxPromise<Response>::makeEmpty()};
-  int32_t numRequests_{0};
-  // Set by close(), guarded by the static 'mutex_'. Once set, request() will
-  // not register a new timeout for this source.
+  std::shared_ptr<std::atomic_bool> activeRequest_;
   bool closed_{false};
   // The task whose output buffer this source reads.
   std::string producerTaskId_;
@@ -429,10 +453,10 @@ std::unique_ptr<ExchangeSource> createLocalExchangeSource(
     const std::string& taskId,
     int destination,
     std::shared_ptr<ExchangeQueue> queue,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* /*pool*/) {
   if (strncmp(taskId.c_str(), "local://", 8) == 0) {
     return std::make_unique<LocalExchangeSourceImpl>(
-        taskId, destination, std::move(queue), pool);
+        taskId, destination, std::move(queue));
   } else if (strncmp(taskId.c_str(), "bad://", 6) == 0) {
     throw std::runtime_error("Testing error");
   }

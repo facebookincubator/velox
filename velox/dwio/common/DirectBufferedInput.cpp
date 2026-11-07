@@ -228,12 +228,19 @@ void DirectBufferedInput::readRegions(
     for (auto i = 0; i < coalescedLoads_.size(); ++i) {
       auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
-        AsyncLoadHolder loadHolder{
-            .load = load, .pool = pool_->shared_from_this()};
-        executor_->add([asyncLoad = std::move(loadHolder)]() {
-          VELOX_CHECK_NOT_NULL(asyncLoad.load);
-          asyncLoad.load->loadOrFuture(nullptr);
-        });
+        executor_->add(
+            [weakPool = pool_->weak_from_this(),
+             weakLoad = std::weak_ptr<cache::CoalescedLoad>(load)]() {
+              // Keep the pool alive until the load and its buffers are
+              // released.
+              auto pool = weakPool.lock();
+              if (!pool) {
+                return;
+              }
+              if (auto load = weakLoad.lock()) {
+                load->loadOrFuture(nullptr);
+              }
+            });
       }
     }
   }

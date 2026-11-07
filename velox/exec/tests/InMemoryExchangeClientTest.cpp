@@ -15,6 +15,7 @@
  */
 #include "velox/exec/InMemoryExchangeClient.h"
 #include <folly/ScopeGuard.h>
+#include <folly/executors/ManualExecutor.h>
 #include <gtest/gtest.h>
 #include <atomic>
 #include <thread>
@@ -194,6 +195,90 @@ TEST_P(InMemoryExchangeClientTest, nonVeloxCreateExchangeSourceException) {
       "Task ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.");
 
   client->close();
+}
+
+TEST_P(InMemoryExchangeClientTest, queuedResponseDoesNotRetainPool) {
+  class PendingSource : public ExchangeSource {
+   public:
+    PendingSource(
+        const std::string& taskId,
+        int destination,
+        std::shared_ptr<ExchangeQueue> queue,
+        memory::MemoryPool* pool,
+        bool fail)
+        : ExchangeSource(taskId, destination, std::move(queue), pool),
+          fail_(fail) {}
+
+    bool shouldRequestLocked() override {
+      return true;
+    }
+
+    folly::SemiFuture<Response> request(
+        uint32_t /*maxBytes*/,
+        std::chrono::microseconds /*maxWait*/) override {
+      return promise_.getSemiFuture();
+    }
+
+    folly::SemiFuture<Response> requestDataSizes(
+        std::chrono::microseconds maxWait) override {
+      return request(0, maxWait);
+    }
+
+    folly::F14FastMap<std::string, int64_t> stats() const override {
+      return {};
+    }
+
+    void close() override {
+      if (fail_) {
+        promise_.setException(std::runtime_error("Late exchange error"));
+      } else {
+        promise_.setValue(Response{0, false, {}});
+      }
+    }
+
+   private:
+    const bool fail_;
+    folly::Promise<Response> promise_;
+  };
+
+  for (const bool fail : {false, true}) {
+    SCOPED_TRACE(fail);
+    folly::ManualExecutor executor;
+    std::weak_ptr<ExchangeSource> source;
+    ExchangeSource::registerFactory(
+        [&source, fail](
+            const auto& taskId, auto destination, auto queue, auto* pool) {
+          auto pending = std::make_shared<PendingSource>(
+              taskId, destination, std::move(queue), pool, fail);
+          source = pending;
+          return pending;
+        });
+    SCOPE_EXIT {
+      ExchangeSource::factories().pop_back();
+    };
+
+    auto root = memory::memoryManager()->addRootPool();
+    auto exchangePool = root->addLeafChild("exchange");
+    std::weak_ptr<memory::MemoryPool> weakRoot = root;
+    std::weak_ptr<memory::MemoryPool> weakPool = exchangePool;
+    auto client = std::make_shared<InMemoryExchangeClient>(
+        "consumer", 0, 1 << 20, 1, 0, exchangePool.get(), &executor);
+    std::weak_ptr<InMemoryExchangeClient> weakClient = client;
+    client->addRemoteTaskId("pending://producer");
+    ASSERT_FALSE(source.expired());
+
+    // close() completes the pending request and queues its handler. Leave
+    // the executor idle until after the client and pool owners are released.
+    client->close();
+    EXPECT_TRUE(source.expired());
+    client.reset();
+    exchangePool.reset();
+    root.reset();
+    EXPECT_TRUE(weakClient.expired());
+    EXPECT_TRUE(weakPool.expired());
+    EXPECT_TRUE(weakRoot.expired());
+    EXPECT_GT(executor.drain(), 0);
+  }
 }
 
 TEST_P(InMemoryExchangeClientTest, stats) {
@@ -1176,10 +1261,10 @@ TEST_P(InMemoryExchangeClientTest, hasNoMoreSourcesApi) {
   EXPECT_TRUE(queue->hasNoMoreSources());
 }
 
-// A source that closes after its request starts, but before the request is
-// held for a producer that does not exist yet, ends up holding no request: one
-// would keep the closed source alive.
+// Closing from inside a request must drop its timeout before it can register
+// for producer data, and leave only a weak response handler on the executor.
 DEBUG_ONLY_TEST_P(InMemoryExchangeClientTest, requestRacingClose) {
+  folly::ManualExecutor executor;
   auto client = std::make_shared<InMemoryExchangeClient>(
       "local://request-racing-close",
       0,
@@ -1187,30 +1272,56 @@ DEBUG_ONLY_TEST_P(InMemoryExchangeClientTest, requestRacingClose) {
       1,
       kDefaultMinExchangeOutputBatchBytes,
       pool(),
-      executor());
+      &executor);
 
+  bool requested{false};
   std::weak_ptr<ExchangeSource> source;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::test::LocalExchangeSource::request",
       std::function<void(ExchangeSource*)>([&](ExchangeSource* requesting) {
-        source = requesting->shared_from_this();
+        requested = true;
+        source = requesting->weak_from_this();
         client->close();
       }));
   client->addRemoteTaskId("local://request-racing-close-producer");
-  client->noMoreRemoteTasks();
-  bool atEnd;
-  ContinueFuture future;
-  client->next(1, 1, &atEnd, &future);
-  // The hook ran, and the client still holds the source.
-  ASSERT_FALSE(source.expired());
-  client.reset();
+  ASSERT_TRUE(requested);
+  EXPECT_TRUE(source.expired());
+  EXPECT_GT(executor.drain(), 0);
+}
 
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(10);
-  while (!source.expired() && std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+DEBUG_ONLY_TEST_P(InMemoryExchangeClientTest, localResponseRacingClose) {
+  const std::string taskId = "local://response-racing-close";
+  auto producer = makeTask(taskId);
+  bufferManager_->initializeTask(
+      producer, core::PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+  SCOPE_EXIT {
+    producer->requestCancel();
+    bufferManager_->removeTask(taskId);
+  };
+
+  auto queue = std::make_shared<ExchangeQueue>(1, 0);
+  std::shared_ptr<ExchangeSource> source =
+      test::createLocalExchangeSource(taskId, 0, queue, pool());
+  {
+    std::lock_guard<std::mutex> l(queue->mutex());
+    queue->addSourceLocked();
+    ASSERT_TRUE(source->shouldRequestLocked());
   }
-  ASSERT_TRUE(source.expired());
+  auto future = source->request(1 << 20, std::chrono::hours(1));
+
+  bool received{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::test::LocalExchangeSource",
+      std::function<void(ExchangeSource*)>([&](ExchangeSource* responding) {
+        received = true;
+        responding->close();
+      }));
+  enqueue(taskId, 0, makeRowVector({makeFlatVector<int32_t>({1, 2, 3})}));
+  ASSERT_TRUE(received);
+  ASSERT_TRUE(future.isReady());
+  EXPECT_EQ(0, std::move(future).get().bytes);
+  EXPECT_TRUE(queue->empty());
+  EXPECT_EQ(0, queue->receivedPages());
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

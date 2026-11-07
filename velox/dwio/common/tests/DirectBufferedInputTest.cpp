@@ -18,6 +18,7 @@
 
 #include <fmt/core.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/ManualExecutor.h>
 #include <folly/synchronization/Baton.h>
 #include <gtest/gtest.h>
 #include <thread>
@@ -203,6 +204,42 @@ TEST_F(DirectBufferedInputTest, reset) {
     stream4.reset();
     ASSERT_EQ(pool_->usedBytes(), 0);
   }
+}
+
+TEST_F(DirectBufferedInputTest, queuedPrefetchDoesNotRetainPool) {
+  folly::ManualExecutor executor;
+  auto root = memoryManager()->addRootPool();
+  auto leaf = root->addLeafChild("prefetch");
+  std::weak_ptr<MemoryPool> weakRoot = root;
+  std::weak_ptr<MemoryPool> weakLeaf = leaf;
+  std::weak_ptr<CoalescedLoad> weakLoad;
+  {
+    auto readFile = std::make_shared<InMemoryReadFile>(std::string(4096, 'a'));
+    io::ReaderOptions options(leaf.get());
+    options.setDataIoStats(dataIoStats_);
+    options.setMetadataIoStats(metadataIoStats_);
+    DirectBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        StringIdLease(fileIds(), "testFile"),
+        tracker_,
+        StringIdLease(fileIds(), "testGroup"),
+        dataIoStats_,
+        nullptr,
+        &executor,
+        options);
+    auto stream = input.enqueue(common::Region{0, 4096}, nullptr);
+    input.load(LogType::TEST);
+    ASSERT_EQ(1, input.testingCoalescedLoads().size());
+    weakLoad = input.testingCoalescedLoads().front();
+  }
+
+  leaf.reset();
+  root.reset();
+  EXPECT_TRUE(weakLoad.expired());
+  EXPECT_TRUE(weakLeaf.expired());
+  EXPECT_TRUE(weakRoot.expired());
+  EXPECT_EQ(1, executor.drain());
 }
 
 TEST_F(DirectBufferedInputTest, readAfterReset) {
