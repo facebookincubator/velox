@@ -33,6 +33,7 @@ add_library(
   CudfMarkDistinct.cpp
   CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
+  CudfPlanNodeTranslator.cpp
   CudfReduce.cpp
   CudfTopN.cpp
   CudfTopNRowNumber.cpp
