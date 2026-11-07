@@ -46,6 +46,15 @@ class CompileState {
   exec::Driver& driver_;
 };
 
+/// Runtime-stat names written onto every operator the cuDF driver adapter
+/// leaves on the CPU. Exactly one of the two is set, with value 1. They ride
+/// the normal operator-stats path, so a coordinator can read per query which
+/// operators stayed on the CPU and whether that was configured
+/// (CudfConfig::allowedCpuOperators) or a gap.
+inline constexpr std::string_view kCudfCpuFallbackStat = "cudfCpuFallback";
+inline constexpr std::string_view kCudfCpuAllowlistedStat =
+    "cudfCpuAllowlisted";
+
 /// Registers adapter to add cuDF operators to Drivers.
 void registerCudf();
 void unregisterCudf();
