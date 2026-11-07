@@ -75,9 +75,14 @@ uint64_t toCapacity(const std::string& from, CapacityUnit to) {
     VELOX_USER_FAIL("Invalid capacity string '{}'", from);
   }
 
-  return value *
+  const double capacity = value *
       (toBytesPerCapacityUnit(valueOfCapacityUnit(unit)) /
        toBytesPerCapacityUnit(to));
+  // 2^64 is the first value outside the uint64_t range.
+  constexpr double kCapacityLimit = 0x1p64;
+  VELOX_USER_CHECK_LT(
+      capacity, kCapacityLimit, "Capacity out of range: {}", from);
+  return static_cast<uint64_t>(capacity);
 }
 
 std::chrono::duration<double> toDuration(const std::string& str) {
