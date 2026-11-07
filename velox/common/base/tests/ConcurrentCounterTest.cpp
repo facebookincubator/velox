@@ -16,6 +16,7 @@
 
 #include "velox/common/base/ConcurrentCounter.h"
 
+#include <barrier>
 #include <fmt/format.h>
 #include <folly/Random.h>
 #include <folly/system/HardwareConcurrency.h>
@@ -112,5 +113,36 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     ConcurrentCounterTestSuite,
     ConcurrentCounterTest,
     testing::ValuesIn({false, true}));
+
+// Threads that are alive at the same time must not all land on one shard. Some
+// standard libraries (e.g. libc++) hash a thread id to its raw, aligned value,
+// so selecting a shard from the low bits alone collapses to a single shard.
+TEST(ConcurrentCounterShardTest, threadsSpreadAcrossShards) {
+  constexpr size_t kNumThreads = 64;
+  ConcurrentCounter<int64_t> counter(kNumThreads);
+
+  // Keep every thread alive until all have updated, so no thread id is reused.
+  std::barrier allUpdated(kNumThreads);
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (size_t i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&]() {
+      counter.update(1);
+      allUpdated.arrive_and_wait();
+    });
+  }
+  for (auto& th : threads) {
+    th.join();
+  }
+
+  ASSERT_EQ(counter.read(), static_cast<int64_t>(kNumThreads));
+  size_t occupiedShards{0};
+  for (size_t i = 0; i < kNumThreads; ++i) {
+    if (counter.testingRead(i) != 0) {
+      ++occupiedShards;
+    }
+  }
+  ASSERT_GT(occupiedShards, kNumThreads / 4);
+}
 
 } // namespace facebook::velox::common::test
