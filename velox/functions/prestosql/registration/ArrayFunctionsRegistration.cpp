@@ -111,6 +111,22 @@ inline void registerArrayFrequencyFunctions(
 }
 
 template <typename T>
+inline void registerArrayLeastFrequentFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerFunction<
+      ParameterBinder<ArrayLeastFrequentFunction, T>,
+      Array<T>,
+      Array<T>>({prefix + "array_least_frequent"}, true, defaultOwner);
+
+  registerFunction<
+      ParameterBinder<ArrayLeastFrequentFunction, T>,
+      Array<T>,
+      Array<T>,
+      int64_t>({prefix + "array_least_frequent"}, true, defaultOwner);
+}
+
+template <typename T>
 inline void registerArrayNormalizeFunctions(
     const std::string& prefix,
     std::string_view defaultOwner) {
@@ -426,6 +442,18 @@ void registerArrayFunctions(
   registerArrayFrequencyFunctions<Timestamp>(prefix, defaultOwner);
   registerArrayFrequencyFunctions<Date>(prefix, defaultOwner);
   registerArrayFrequencyFunctions<Varchar>(prefix, defaultOwner);
+
+  registerArrayLeastFrequentFunctions<bool>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<int8_t>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<int16_t>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<int32_t>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<int64_t>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<int128_t>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<float>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<double>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<Timestamp>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<Date>(prefix, defaultOwner);
+  registerArrayLeastFrequentFunctions<Varchar>(prefix, defaultOwner);
 
   registerArrayNormalizeFunctions<int8_t>(prefix, defaultOwner);
   registerArrayNormalizeFunctions<int16_t>(prefix, defaultOwner);
