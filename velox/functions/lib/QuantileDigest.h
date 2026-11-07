@@ -494,7 +494,7 @@ int32_t QuantileDigest<T, Allocator>::calculateHeight(int32_t nodeCount) {
   if constexpr (std::is_same_v<U, int64_t>) {
     height = static_cast<int32_t>(64 - count_leading_zeros(min_ ^ max_) + 1);
     VELOX_CHECK(
-        height >= 64 || static_cast<int64_t>(nodeCount) <= (1L << height) - 1L,
+        height >= 63 || static_cast<int64_t>(nodeCount) <= (1L << height) - 1L,
         "Too many nodes in deserialized tree. Possible corruption");
   } else {
     height =
