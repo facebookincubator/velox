@@ -320,29 +320,6 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
     ASSERT_EQ(n, task->numFinishedDrivers());
   }
 
-  void writeCompactDecimalParquet(
-      const std::shared_ptr<TempFilePath>& filePath,
-      const RowVectorPtr& vector) {
-    auto fs = filesystems::getFileSystem(filePath->getPath(), {});
-    auto writeFile = fs->openFileForWrite(
-        filePath->getPath(),
-        {.shouldCreateParentDirectories = true,
-         .shouldThrowOnFileAlreadyExists = false});
-    auto sink = std::make_unique<dwio::common::WriteFileSink>(
-        std::move(writeFile), filePath->getPath());
-    auto writerPool =
-        rootPool_->addAggregateChild("TableScanTest.ParquetWriter");
-    dwio::common::WriterOptions options;
-    options.memoryPool = writerPool.get();
-    auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
-    parquetOptions->enableStoreDecimalAsInteger = true;
-    options.formatSpecificOptions = std::move(parquetOptions);
-    parquet::Writer writer(
-        std::move(sink), options, writerPool, vector->rowType());
-    writer.write(vector);
-    writer.close();
-  }
-
   void assertDecimalScanRoundTrip(
       const RowVectorPtr& vector,
       const RowTypePtr& rowType) {
@@ -784,8 +761,263 @@ TEST_F(TableScanTest, filterPrunesAllRowGroups) {
   EXPECT_EQ(planStats.at(plan->id()).outputRows, 0);
 }
 
+// Host-side row-group pruning and cuDF's statistics pass keep the same row
+// groups, so a scan returns the same rows and reports the same skippedStrides
+// with the session property on and off: for filters that prune every row
+// group, none or some, on integers, strings and decimals of both widths,
+// including an IN list over long decimals.
+TEST_F(TableScanTest, hostRowGroupPruning) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  const auto rowType =
+      ROW({"c0", "c1", "c2", "c3"},
+          {BIGINT(), VARCHAR(), DECIMAL(12, 2), DECIMAL(20, 2)});
+  // One row group per vector; two files.
+  std::vector<RowVectorPtr> vectors;
+  for (int group = 0; group < 3; ++group) {
+    const int64_t base = 3 * group + 1;
+    vectors.push_back(makeRowVector(
+        rowType->names(),
+        {makeFlatVector<int64_t>({base, base + 1, base + 2}),
+         makeFlatVector<std::string>(
+             {std::string(1, 'a' + 3 * group),
+              std::string(1, 'b' + 3 * group),
+              std::string(1, 'c' + 3 * group)}),
+         makeFlatVector<int64_t>(
+             {100 * base, 100 * (base + 1), 100 * (base + 2)}, DECIMAL(12, 2)),
+         makeFlatVector<int128_t>(
+             {100 * base, 100 * (base + 1), 100 * (base + 2)},
+             DECIMAL(20, 2))}));
+  }
+  const auto filePaths = makeFilePaths(2);
+  for (const auto& filePath : filePaths) {
+    writeToFile(filePath->getPath(), vectors);
+  }
+  std::vector<RowVectorPtr> allVectors = vectors;
+  allVectors.insert(allVectors.end(), vectors.begin(), vectors.end());
+  createDuckDbTable(allVectors);
+
+  struct TestCase {
+    std::string name;
+    common::SubfieldFilters filters;
+    std::string duckDbFilter;
+    int64_t expectedSkippedStrides;
+  };
+  std::vector<TestCase> testCases;
+  testCases.push_back(
+      {"below every row group",
+       SubfieldFiltersBuilder()
+           .add(
+               "c0", std::make_unique<common::BigintRange>(1'000, 1'000, false))
+           .build(),
+       "c0 BETWEEN 1000 AND 1000",
+       6});
+  testCases.push_back(
+      {"overlapping every row group",
+       SubfieldFiltersBuilder()
+           .add("c0", std::make_unique<common::BigintRange>(0, 100, false))
+           .build(),
+       "c0 BETWEEN 0 AND 100",
+       0});
+  testCases.push_back(
+      {"second row group only",
+       SubfieldFiltersBuilder()
+           .add("c0", std::make_unique<common::BigintRange>(4, 6, false))
+           .build(),
+       "c0 BETWEEN 4 AND 6",
+       4});
+  testCases.push_back(
+      {"string range",
+       SubfieldFiltersBuilder()
+           .add(
+               "c1",
+               std::make_unique<common::BytesRange>(
+                   "d", false, false, "f", false, false, false))
+           .build(),
+       "c1 BETWEEN 'd' AND 'f'",
+       4});
+  testCases.push_back(
+      {"short decimal range",
+       SubfieldFiltersBuilder()
+           .add("c2", std::make_unique<common::BigintRange>(400, 600, false))
+           .build(),
+       "c2 BETWEEN 4.00 AND 6.00",
+       4});
+  testCases.push_back(
+      {"long decimal range",
+       SubfieldFiltersBuilder()
+           .add(
+               "c3",
+               std::make_unique<common::HugeintRange>(
+                   int128_t{400}, int128_t{600}, false))
+           .build(),
+       "c3 BETWEEN 4.00 AND 6.00",
+       4});
+  testCases.push_back(
+      {"long decimal IN list",
+       SubfieldFiltersBuilder()
+           .add(
+               "c3",
+               common::createHugeintValues(
+                   {int128_t{200}, int128_t{800}}, false))
+           .build(),
+       "c3 IN (2.00, 8.00)",
+       2});
+
+  for (const auto& testCase : testCases) {
+    for (const auto* hostPruning : {"true", "false"}) {
+      SCOPED_TRACE(
+          fmt::format("{}, host pruning {}", testCase.name, hostPruning));
+      common::SubfieldFilters filters;
+      for (const auto& [subfield, filter] : testCase.filters) {
+        filters.emplace(subfield.clone(), filter->clone());
+      }
+      auto plan = PlanBuilder()
+                      .startTableScan()
+                      .outputType(rowType)
+                      .tableHandle(makeTableHandle(
+                          "parquet_table", rowType, std::move(filters)))
+                      .assignments(
+                          facebook::velox::exec::test::HiveConnectorTestBase::
+                              allRegularColumns(rowType))
+                      .endTableScan()
+                      .planNode();
+      auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                      .plan(plan)
+                      .splits(makeCudfHiveConnectorSplits(filePaths))
+                      .connectorSessionProperty(
+                          kCudfHiveConnectorId,
+                          CudfHiveConfig::kHostRowGroupPruningSession,
+                          hostPruning)
+                      .assertResults(
+                          "SELECT c0, c1, c2, c3 FROM tmp WHERE " +
+                          testCase.duckDbFilter);
+      EXPECT_EQ(
+          getTableScanRuntimeStat(task, "skippedStrides"),
+          testCase.expectedSkippedStrides);
+      EXPECT_EQ(
+          getTableScanRuntimeStat(task, "processedStrides"),
+          6 - testCase.expectedSkippedStrides);
+    }
+  }
+}
+
+// A decimal the file stores at a smaller scale than the table is left to
+// cuDF's statistics pass, which prunes it whether the host test runs or not.
+TEST_F(TableScanTest, hostRowGroupPruningLeavesSplitScaleToCudf) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  const auto rowType = ROW({"c0"}, {DECIMAL(12, 4)});
+  // One row group per file, stored as DECIMAL(9, 2).
+  auto filePaths = makeFilePaths(3);
+  std::vector<RowVectorPtr> duckDbVectors;
+  for (int group = 0; group < 3; ++group) {
+    const int64_t base = 3 * group + 1;
+    writeCompactDecimalParquet(
+        filePaths[group],
+        makeRowVector(
+            {"c0"},
+            {makeFlatVector<int64_t>(
+                {100 * base, 100 * (base + 1), 100 * (base + 2)},
+                DECIMAL(9, 2))}));
+    duckDbVectors.push_back(makeRowVector(
+        {"c0"},
+        {makeFlatVector<int64_t>(
+            {10'000 * base, 10'000 * (base + 1), 10'000 * (base + 2)},
+            DECIMAL(12, 4))}));
+  }
+  createDuckDbTable(duckDbVectors);
+
+  for (const auto* hostPruning : {"true", "false"}) {
+    SCOPED_TRACE(fmt::format("host pruning {}", hostPruning));
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .outputType(rowType)
+                    .tableHandle(makeTableHandle(
+                        "parquet_table",
+                        rowType,
+                        SubfieldFiltersBuilder()
+                            .add(
+                                "c0",
+                                std::make_unique<common::BigintRange>(
+                                    40'000, 60'000, false))
+                            .build()))
+                    .assignments(
+                        facebook::velox::exec::test::HiveConnectorTestBase::
+                            allRegularColumns(rowType))
+                    .endTableScan()
+                    .planNode();
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .plan(plan)
+            .splits(makeCudfHiveConnectorSplits(filePaths))
+            .connectorSessionProperty(
+                kCudfHiveConnectorId,
+                CudfHiveConfig::kHostRowGroupPruningSession,
+                hostPruning)
+            .assertResults(
+                "SELECT c0 FROM tmp WHERE c0 BETWEEN 4.0000 AND 6.0000");
+    EXPECT_EQ(getTableScanRuntimeStat(task, "skippedStrides"), 2);
+    EXPECT_EQ(getTableScanRuntimeStat(task, "processedStrides"), 1);
+  }
+}
+
+// Each byte-range split of a file tests its own row groups only, so the
+// strides reported over all splits add up to the file's row groups.
+TEST_F(TableScanTest, hostRowGroupPruningPerSplit) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  const auto rowType = ROW({"c0"}, {BIGINT()});
+  // Six row groups of three ascending values each.
+  std::vector<RowVectorPtr> vectors;
+  for (int group = 0; group < 6; ++group) {
+    const int64_t base = 3 * group + 1;
+    vectors.push_back(makeRowVector(
+        {"c0"}, {makeFlatVector<int64_t>({base, base + 1, base + 2})}));
+  }
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+  const uint64_t fileSize = fs::file_size(filePath->getPath());
+  const uint64_t third = fileSize / 3;
+
+  for (const auto* hostPruning : {"true", "false"}) {
+    SCOPED_TRACE(fmt::format("host pruning {}", hostPruning));
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .outputType(rowType)
+            .tableHandle(makeTableHandle(
+                "parquet_table",
+                rowType,
+                SubfieldFiltersBuilder()
+                    .add(
+                        "c0",
+                        std::make_unique<common::BigintRange>(7, 12, false))
+                    .build()))
+            .assignments(
+                facebook::velox::exec::test::HiveConnectorTestBase::
+                    allRegularColumns(rowType))
+            .endTableScan()
+            .planNode();
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .plan(plan)
+            .splits(
+                {makeCudfHiveConnectorSplit(filePath->getPath(), 0, third),
+                 makeCudfHiveConnectorSplit(filePath->getPath(), third, third),
+                 makeCudfHiveConnectorSplit(
+                     filePath->getPath(), 2 * third, fileSize - 2 * third)})
+            .connectorSessionProperty(
+                kCudfHiveConnectorId,
+                CudfHiveConfig::kHostRowGroupPruningSession,
+                hostPruning)
+            .assertResults("SELECT c0 FROM tmp WHERE c0 BETWEEN 7 AND 12");
+    EXPECT_EQ(getTableScanRuntimeStat(task, "skippedStrides"), 4);
+    EXPECT_EQ(getTableScanRuntimeStat(task, "processedStrides"), 2);
+  }
+}
+
 // Table schemas use lowercase names while the file keeps mixed-case names. The
 // filter-only column must still be read so the pushed-down filter can find it.
+
 TEST_F(TableScanTest, mixedCaseFileColumnNames) {
   auto vector = makeRowVector(
       {"Filter_Col", "Value_Col"},

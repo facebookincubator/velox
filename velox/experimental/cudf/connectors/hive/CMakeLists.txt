@@ -21,6 +21,7 @@ add_library(
   CudfHiveDataSink.cpp
   CudfHiveDataSource.cpp
   CudfHiveTableHandle.cpp
+  CudfRowGroupPruning.cpp
   CudfSplitReader.cpp
   CudfSplitReaderByteFetch.cpp
 )

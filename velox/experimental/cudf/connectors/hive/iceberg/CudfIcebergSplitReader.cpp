@@ -225,7 +225,7 @@ void CudfIcebergSplitReader::prepareSplitInternal(
   }
 
   if (not noColumnsToRead_) {
-    createCudfReader();
+    createCudfReader(runtimeStats);
   }
 }
 

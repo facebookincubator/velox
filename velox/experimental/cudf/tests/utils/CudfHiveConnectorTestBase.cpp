@@ -28,6 +28,7 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
@@ -216,6 +217,40 @@ void CudfHiveConnectorTestBase::writeToFile(
           .metadata(tableInputMetadata)
           .build();
   cudf::io::write_parquet(options, stream);
+}
+
+void CudfHiveConnectorTestBase::writeCompactDecimalParquet(
+    const std::shared_ptr<TempFilePath>& filePath,
+    const RowVectorPtr& vector) {
+  writeCompactDecimalParquet(filePath, std::vector<RowVectorPtr>{vector});
+}
+
+void CudfHiveConnectorTestBase::writeCompactDecimalParquet(
+    const std::shared_ptr<TempFilePath>& filePath,
+    const std::vector<RowVectorPtr>& vectors) {
+  VELOX_CHECK(!vectors.empty());
+  auto fs = filesystems::getFileSystem(filePath->getPath(), {});
+  auto writeFile = fs->openFileForWrite(
+      filePath->getPath(),
+      {.shouldCreateParentDirectories = true,
+       .shouldThrowOnFileAlreadyExists = false});
+  auto sink = std::make_unique<dwio::common::WriteFileSink>(
+      std::move(writeFile), filePath->getPath());
+  auto writerPool =
+      rootPool_->addAggregateChild("CudfHiveConnectorTestBase.ParquetWriter");
+  dwio::common::WriterOptions options;
+  options.memoryPool = writerPool.get();
+  auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
+  parquetOptions->enableStoreDecimalAsInteger = true;
+  options.formatSpecificOptions = std::move(parquetOptions);
+  parquet::Writer writer(
+      std::move(sink), options, writerPool, vectors.front()->rowType());
+  for (const auto& vector : vectors) {
+    writer.write(vector);
+    // A row group boundary before the next vector.
+    writer.flush();
+  }
+  writer.close();
 }
 
 std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
