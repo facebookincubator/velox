@@ -212,8 +212,8 @@ class DwrfRowReader : public StrideIndexProvider,
 
   std::shared_ptr<BitSet> projectedNodes_;
 
-  const uint64_t* stridesToSkip_;
-  int stridesToSkipSize_;
+  const uint64_t* stridesToSkip_{nullptr};
+  int stridesToSkipSize_{0};
   // Record of strides to skip in each visited stripe. Used for diagnostics.
   std::unordered_map<uint32_t, std::vector<uint64_t>> stripeStridesToSkip_;
   // Number of skipped strides.
@@ -224,7 +224,7 @@ class DwrfRowReader : public StrideIndexProvider,
 
   dwio::common::UnitLoaderStats unitLoadStats_;
 
-  // Set to true after clearing filter caches, i.e. adding a dynamic filter.
+  // Set to true after seeking or clearing filter caches.
   // Causes filters to be re-evaluated against stride stats on next stride
   // instead of next stripe.
   bool recomputeStridesToSkip_{false};
