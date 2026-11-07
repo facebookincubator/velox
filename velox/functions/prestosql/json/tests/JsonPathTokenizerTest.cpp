@@ -263,6 +263,8 @@ TEST(JsonPathTokenizerTest, validPaths) {
       TokenList{
           {"a*a", Selector::KEY},
       });
+  assertValidPath(R"($[""])", TokenList{{"", Selector::KEY}});
+  assertValidPath(R"($[''])", TokenList{{"", Selector::KEY}});
   assertValidPath(
       "$.foo[*]",
       TokenList{
