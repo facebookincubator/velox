@@ -58,18 +58,12 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       "Paimon same-schema append reader requires rawConvertible=true; "
       "merge-on-read and data-evolution column merging are not implemented yet");
   for (const auto& file : paimonSplit->dataFiles()) {
-    if (file.schemaId.has_value()) {
-      VELOX_USER_CHECK(
-          *file.schemaId == paimonTableHandle_->schemaId() ||
-              paimonTableHandle_->dataSchemas().count(*file.schemaId),
-          "Missing Paimon schema {} for file '{}'",
-          *file.schemaId,
-          file.path);
-    } else {
-      VELOX_USER_CHECK(
-          paimonTableHandle_->dataSchemas().empty(),
-          "Paimon schema evolution requires a schema ID for every file");
-    }
+    VELOX_USER_CHECK(
+        file.schemaId == paimonTableHandle_->schemaId() ||
+            paimonTableHandle_->dataSchemas().count(file.schemaId),
+        "Missing Paimon schema {} for file '{}'",
+        file.schemaId,
+        file.path);
     VELOX_USER_CHECK(
         !file.deletionFile,
         "Paimon reader does not support deletion vectors; "

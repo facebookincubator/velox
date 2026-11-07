@@ -19,6 +19,10 @@
 
 namespace facebook::velox::connector::paimon {
 
+PaimonDataFile::PaimonDataFile(int64_t schemaId) : schemaId(schemaId) {
+  VELOX_USER_CHECK_GE(schemaId, 0, "Paimon file schema ID must be nonnegative");
+}
+
 // static
 std::string PaimonDataFile::typeString(Type type) {
   switch (type) {
@@ -92,11 +96,7 @@ folly::dynamic PaimonDataFile::serialize() const {
   obj["creationTimeMs"] = creationTimeMs;
   obj["fileType"] = typeString(type);
   obj["sourceType"] = sourceString(source);
-  if (schemaId.has_value()) {
-    VELOX_USER_CHECK_GE(
-        *schemaId, 0, "Paimon file schema ID must be nonnegative");
-    obj["schemaId"] = *schemaId;
-  }
+  obj["schemaId"] = schemaId;
   if (deletionFile.has_value()) {
     obj["deletionFile"] = deletionFile->serialize();
   }
@@ -105,7 +105,11 @@ folly::dynamic PaimonDataFile::serialize() const {
 
 // static
 PaimonDataFile PaimonDataFile::create(const folly::dynamic& obj) {
-  PaimonDataFile file;
+  const auto schemaId = obj.find("schemaId");
+  VELOX_USER_CHECK(
+      schemaId != obj.items().end() && schemaId->second.isInt(),
+      "Expected Paimon file schema ID");
+  PaimonDataFile file(schemaId->second.asInt());
   file.path = obj["filePath"].asString();
   file.size = static_cast<uint64_t>(obj["fileSize"].asInt());
   file.rowCount = static_cast<uint64_t>(obj["rowCount"].asInt());
@@ -116,12 +120,6 @@ PaimonDataFile PaimonDataFile::create(const folly::dynamic& obj) {
   file.creationTimeMs = obj["creationTimeMs"].asInt();
   file.type = typeFromString(obj["fileType"].asString());
   file.source = sourceFromString(obj["sourceType"].asString());
-  if (auto it = obj.find("schemaId"); it != obj.items().end()) {
-    VELOX_USER_CHECK(it->second.isInt(), "Expected Paimon file schema ID");
-    file.schemaId = it->second.asInt();
-    VELOX_USER_CHECK_GE(
-        *file.schemaId, 0, "Paimon file schema ID must be nonnegative");
-  }
   if (obj.count("deletionFile") > 0) {
     file.deletionFile = PaimonDeletionFile::create(obj["deletionFile"]);
   }

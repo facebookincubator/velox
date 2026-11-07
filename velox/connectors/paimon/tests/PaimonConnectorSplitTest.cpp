@@ -37,13 +37,13 @@ class PaimonConnectorSplitTest : public testing::Test {
 };
 
 TEST_F(PaimonConnectorSplitTest, basic) {
-  PaimonDataFile file0;
+  PaimonDataFile file0(0);
   file0.path = "s3://bucket/table/dt=2024-01-01/bucket-0/data-001.orc";
   file0.size = 1024;
   file0.rowCount = 100;
   file0.level = 0;
 
-  PaimonDataFile file1;
+  PaimonDataFile file1(1);
   file1.path = "s3://bucket/table/dt=2024-01-01/bucket-0/data-002.orc";
   file1.size = 2048;
   file1.rowCount = 200;
@@ -76,9 +76,8 @@ TEST_F(PaimonConnectorSplitTest, basic) {
 }
 
 TEST_F(PaimonConnectorSplitTest, builderPreservesFileSchemaIdentity) {
-  PaimonDataFile file;
+  PaimonDataFile file(0);
   file.path = "data.nimble";
-  file.schemaId = 0;
   file.size = 1024;
   file.rowCount = 9;
   file.source = PaimonDataFile::Source::kCompact;
@@ -86,25 +85,26 @@ TEST_F(PaimonConnectorSplitTest, builderPreservesFileSchemaIdentity) {
     return PaimonConnectorSplitBuilder(
         kConnectorId, 7, PaimonTableType::kAppendOnly, FileFormat::NIMBLE);
   };
-  const auto split = builder().addFile(file).build();
+  const auto split =
+      builder().addFile(file).addFile(17, "current.nimble", 2048).build();
   const auto copy = PaimonConnectorSplit::create(split->serialize());
+  ASSERT_EQ(copy->dataFiles().size(), 2);
   EXPECT_EQ(copy->dataFiles()[0].schemaId, 0);
   EXPECT_EQ(copy->dataFiles()[0].size, 1024);
   EXPECT_EQ(copy->dataFiles()[0].rowCount, 9);
   EXPECT_EQ(copy->dataFiles()[0].source, PaimonDataFile::Source::kCompact);
-  VELOX_ASSERT_THROW(
-      builder().addFile(file).addFile("legacy.nimble", 1).build(),
-      "cannot mix files with and without schema IDs");
-  VELOX_ASSERT_THROW(
-      builder().addFile("legacy.nimble", 1).addFile(file).build(),
-      "cannot mix files with and without schema IDs");
-  file.schemaId = -1;
-  VELOX_ASSERT_THROW(
-      builder().addFile(file).build(), "schema ID must be nonnegative");
+  EXPECT_EQ(copy->dataFiles()[1].schemaId, 17);
+  EXPECT_EQ(copy->dataFiles()[1].size, 2048);
+  for (int i = 0; i < 2; ++i) {
+    auto wire = split->serialize();
+    wire["dataFiles"][i].erase("schemaId");
+    VELOX_ASSERT_THROW(
+        PaimonConnectorSplit::create(wire), "Expected Paimon file schema ID");
+  }
 }
 
 TEST_F(PaimonConnectorSplitTest, nimbleFormat) {
-  PaimonDataFile file0;
+  PaimonDataFile file0(0);
   file0.path = "s3://bucket/table/data-001.nimble";
   file0.size = 4096;
   file0.rowCount = 100;
@@ -125,7 +125,7 @@ TEST_F(PaimonConnectorSplitTest, nimbleFormat) {
 }
 
 TEST_F(PaimonConnectorSplitTest, parquetFormat) {
-  PaimonDataFile file0;
+  PaimonDataFile file0(0);
   file0.path = "s3://bucket/table/data-001.parquet";
   file0.size = 4096;
   file0.rowCount = 100;
@@ -159,7 +159,7 @@ TEST_F(PaimonConnectorSplitTest, emptyFilesThrows) {
 }
 
 TEST_F(PaimonConnectorSplitTest, rawConvertibleWithDeleteRowCountThrows) {
-  PaimonDataFile file;
+  PaimonDataFile file(0);
   file.path = "data-001.orc";
   file.size = 1024;
   file.rowCount = 100;
@@ -181,7 +181,7 @@ TEST_F(PaimonConnectorSplitTest, rawConvertibleWithDeleteRowCountThrows) {
 }
 
 TEST_F(PaimonConnectorSplitTest, notRawConvertibleWithDeleteRowCount) {
-  PaimonDataFile file;
+  PaimonDataFile file(0);
   file.path = "data-001.orc";
   file.size = 1024;
   file.rowCount = 100;
@@ -204,18 +204,18 @@ TEST_F(PaimonConnectorSplitTest, notRawConvertibleWithDeleteRowCount) {
 }
 
 TEST_F(PaimonConnectorSplitTest, toStringOutput) {
-  PaimonDataFile f0;
+  PaimonDataFile f0(0);
   f0.path = "data-001.orc";
   f0.size = 1024;
   f0.rowCount = 100;
 
-  PaimonDataFile f1;
+  PaimonDataFile f1(0);
   f1.path = "data-002.orc";
   f1.size = 2048;
   f1.rowCount = 200;
   f1.level = 1;
 
-  PaimonDataFile f2;
+  PaimonDataFile f2(0);
   f2.path = "data-003.orc";
   f2.size = 512;
   f2.rowCount = 50;
@@ -244,7 +244,7 @@ TEST_F(PaimonConnectorSplitTest, toStringOutput) {
 }
 
 TEST_F(PaimonConnectorSplitTest, nullPartitionValue) {
-  PaimonDataFile file0;
+  PaimonDataFile file0(0);
   file0.path = "data-001.orc";
   file0.size = 1024;
   file0.rowCount = 100;
@@ -270,8 +270,8 @@ TEST_F(PaimonConnectorSplitTest, builder) {
                    /*snapshotId=*/5,
                    PaimonTableType::kPrimaryKey,
                    FileFormat::PARQUET)
-                   .addFile("s3://bucket/data-001.parquet", 1024, 0)
-                   .addFile("s3://bucket/data-002.parquet", 2048, 1)
+                   .addFile(0, "s3://bucket/data-001.parquet", 1024, 0)
+                   .addFile(1, "s3://bucket/data-002.parquet", 2048, 1)
                    .partitionKey("dt", "2024-01-01")
                    .partitionKey("country", std::nullopt)
                    .tableBucketNumber(3)
@@ -297,7 +297,7 @@ TEST_F(PaimonConnectorSplitTest, builderDefaults) {
                    /*snapshotId=*/1,
                    PaimonTableType::kAppendOnly,
                    FileFormat::NIMBLE)
-                   .addFile("data.nimble", 512)
+                   .addFile(0, "data.nimble", 512)
                    .build();
 
   ASSERT_EQ(split->dataFiles().size(), 1);
@@ -307,7 +307,7 @@ TEST_F(PaimonConnectorSplitTest, builderDefaults) {
 }
 
 TEST_F(PaimonConnectorSplitTest, serializeRoundTrip) {
-  PaimonDataFile meta;
+  PaimonDataFile meta(0);
   meta.path = "s3://bucket/data-001.parquet";
   meta.size = 4096;
   meta.rowCount = 1000;

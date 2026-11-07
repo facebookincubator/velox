@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sstream>
+#include <type_traits>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -27,27 +28,32 @@ using namespace facebook::velox::connector::paimon;
 using namespace facebook::velox;
 
 TEST(PaimonDataFileTest, fileSchemaIdentity) {
-  PaimonDataFile file;
-  file.path = "data.nimble";
-  EXPECT_EQ(file.serialize().count("schemaId"), 0);
-  EXPECT_FALSE(PaimonDataFile::create(file.serialize()).schemaId.has_value());
+  static_assert(!std::is_default_constructible_v<PaimonDataFile>);
   for (const auto id : {int64_t{0}, int64_t{1} << 40}) {
-    file.schemaId = id;
+    PaimonDataFile file(id);
+    file.path = "data.nimble";
+    EXPECT_EQ(file.serialize()["schemaId"].asInt(), id);
     EXPECT_EQ(PaimonDataFile::create(file.serialize()).schemaId, id);
   }
-  auto obj = file.serialize();
+  auto obj = PaimonDataFile(0).serialize();
   for (const auto& invalid :
-       {folly::dynamic(-1), folly::dynamic(nullptr), folly::dynamic("1")}) {
+       {folly::dynamic(-1),
+        folly::dynamic(nullptr),
+        folly::dynamic("1"),
+        folly::dynamic(1.0),
+        folly::dynamic(true)}) {
     obj["schemaId"] = invalid;
     EXPECT_THROW(PaimonDataFile::create(obj), VeloxUserError);
   }
-  file.schemaId = -1;
+  obj.erase("schemaId");
   VELOX_ASSERT_THROW(
-      file.serialize(), "Paimon file schema ID must be nonnegative");
+      PaimonDataFile::create(obj), "Expected Paimon file schema ID");
+  VELOX_ASSERT_THROW(
+      PaimonDataFile(-1), "Paimon file schema ID must be nonnegative");
 }
 
 TEST(PaimonDataFileTest, serializeRoundTrip) {
-  PaimonDataFile file;
+  PaimonDataFile file(0);
   file.path = "data.parquet";
   file.size = 4096;
   file.rowCount = 500;
@@ -81,7 +87,7 @@ TEST(PaimonDataFileTest, serializeRoundTrip) {
 }
 
 TEST(PaimonDataFileTest, serializeNoDeletionFile) {
-  PaimonDataFile file;
+  PaimonDataFile file(0);
   file.path = "data.orc";
   file.size = 1024;
 
@@ -94,7 +100,7 @@ TEST(PaimonDataFileTest, serializeNoDeletionFile) {
 }
 
 TEST(PaimonDataFileTest, serializeDefaultValues) {
-  PaimonDataFile file;
+  PaimonDataFile file(0);
   file.path = "data.orc";
 
   auto serialized = file.serialize();
@@ -114,7 +120,7 @@ TEST(PaimonDataFileTest, serializeDefaultValues) {
 }
 
 TEST(PaimonDataFileTest, toString) {
-  PaimonDataFile file;
+  PaimonDataFile file(0);
   file.path = "data.orc";
   file.size = 1024;
   file.rowCount = 100;
@@ -131,7 +137,7 @@ TEST(PaimonDataFileTest, toString) {
 }
 
 TEST(PaimonDataFileTest, toStringChangelog) {
-  PaimonDataFile file;
+  PaimonDataFile file(0);
   file.path = "changelog.orc";
   file.size = 2048;
   file.rowCount = 200;
@@ -148,7 +154,7 @@ TEST(PaimonDataFileTest, toStringChangelog) {
 }
 
 TEST(PaimonDataFileTest, defaultValues) {
-  PaimonDataFile file;
+  PaimonDataFile file(0);
   EXPECT_TRUE(file.path.empty());
   EXPECT_EQ(file.size, 0);
   EXPECT_EQ(file.rowCount, 0);
