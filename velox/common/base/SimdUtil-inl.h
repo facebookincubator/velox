@@ -1108,23 +1108,20 @@ uint8_t gather8BitsImpl(
     xsimd::batch<int32_t, A> vindex,
     int32_t numIndices,
     const xsimd::avx2&) {
-  // Computes 8 byte addresses, and 8 bit masks.  The low bits of the
-  // row select the bit mask, the rest of the bits are the byte
-  // offset.  There is an AND which will be zero if the bit is not set.
-  // This is finally converted to a mask with a negated SIMD
-  // comparison with 0.
+  // Gathers the aligned 32-bit word that holds each bit and tests the bit with
+  // a mask. The AND is zero if the bit is not set, and a negated SIMD
+  // comparison with 0 turns that into the result mask.
   //
-  // A plain local, not a function-local static: a static's initialization
-  // guard is checked on every call, and it keeps this function from inlining
-  // into gatherBits(), which calls it once per 8 bits.
-  const xsimd::batch<int32_t, A> byteBits = {1, 2, 4, 8, 16, 32, 64, 128};
-  auto maskV = detail::Permute<int32_t, A>::apply(byteBits, vindex & 7, A{});
+  // An aligned word that holds a byte of 'bits' lies on that byte's page, so
+  // the gather stays in mapped memory when 'bits' has no trailing padding, as
+  // a buffer that wraps external memory can.
+  auto maskV = xsimd::batch<int32_t, A>::broadcast(1) << (vindex & 31);
   auto zero = xsimd::batch<int32_t, A>::broadcast(0);
-  auto data = detail::Gather<int32_t, int32_t, A>::template maskApply<1>(
+  auto data = detail::Gather<int32_t, int32_t, A>::template maskApply<4>(
       zero,
       leadingMask<int32_t>(numIndices, A{}),
       reinterpret_cast<const int32_t*>(bits),
-      vindex >> 3,
+      vindex >> 5,
       A{});
   return allSetBitMask<int32_t>(A{}) ^ toBitMask((data & maskV) == zero, A{});
 }
