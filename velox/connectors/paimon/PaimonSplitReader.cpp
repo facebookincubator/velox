@@ -56,21 +56,21 @@ PaimonSplitReader::PaimonSplitReader(
   fileSplits_.reserve(dataFiles.size());
   for (const auto& dataFile : dataFiles) {
     fileSplits_.emplace_back(makeFileConnectorSplit(dataFile));
-    if (!mappedSchemas_.count(dataFile.schemaId)) {
-      mappedSchemas_.emplace(
-          dataFile.schemaId, mapDataSchema(dataFile.schemaId));
+    if (!fileReadSchemas_.count(dataFile.schemaId)) {
+      fileReadSchemas_.emplace(
+          dataFile.schemaId, makeFileReadSchema(dataFile.schemaId));
     }
   }
 }
 
-RowTypePtr PaimonSplitReader::mapDataSchema(int64_t schemaId) const {
+RowTypePtr PaimonSplitReader::makeFileReadSchema(int64_t fileSchemaId) const {
   const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
-  const auto& dataType = schemaId == table.schemaId()
+  const auto& dataType = fileSchemaId == table.schemaId()
       ? table.rowType()
-      : table.dataSchemas().at(schemaId).rowType;
-  const auto& dataIds = schemaId == table.schemaId()
+      : table.dataSchemas().at(fileSchemaId).rowType;
+  const auto& dataIds = fileSchemaId == table.schemaId()
       ? table.fieldIds()
-      : table.dataSchemas().at(schemaId).fieldIds;
+      : table.dataSchemas().at(fileSchemaId).fieldIds;
 
   std::unordered_map<int32_t, column_index_t> targetColumns;
   for (column_index_t i = 0; i < table.fieldIds().size(); ++i) {
@@ -102,7 +102,7 @@ RowTypePtr PaimonSplitReader::mapDataSchema(int64_t schemaId) const {
             "file schema {}, target schema {}: {} to {}",
             dataIds[i],
             name,
-            schemaId,
+            fileSchemaId,
             table.schemaId(),
             dataType->childAt(i)->toString(),
             type->toString());
@@ -119,7 +119,7 @@ void PaimonSplitReader::configureBaseReaderOptions() {
   const auto id = paimonSplit_->dataFiles()[currentFileIndex_].schemaId;
   // Ordinals here come from the file's historical append layout. DWIO
   // exposes the mapped names to the unchanged logical ScanSpec and filters.
-  baseReaderOpts_.setFileSchema(mappedSchemas_.at(id));
+  baseReaderOpts_.setFileSchema(fileReadSchemas_.at(id));
   baseReaderOpts_.setColumnMappingMode(
       dwio::common::ColumnMappingMode::kPosition);
 }
