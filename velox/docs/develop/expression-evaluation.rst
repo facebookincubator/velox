@@ -59,6 +59,10 @@ if
 	which do not pass the condition. When the else clause is specified, its
 	return type must be the same as the return type of the then clause.
 
+	If the condition generates an error for a row on which the then and else
+	clauses return the same value, the error is suppressed. Two nulls are
+	considered the same value.
+
 switch
 	SWITCH expression represents a generalization of the IF expression. It takes
 	one or more (condition, then clause) pairs and an optional else clause.
@@ -403,7 +407,9 @@ Special forms support flat-no-nulls fast path in some cases, but not all.
 * AND / OR support flat-no-nulls fast path if all sub-expressions support
   flat-no-nulls fast path.
 * IF and SWITCH support flat-no-nulls fast path if else clause if specified and
-  all sub-expressions support flat-no-nulls fast path.
+  all sub-expressions support flat-no-nulls fast path. The conditions take the
+  regular path, because they are evaluated with EvalCtx::throwOnError set to
+  false.
 * COALESCE supports flat-no-nulls fast path if all sub-expressions support
   flat-no-nulls fast path.
 * CAST doesn't support flat-no-nulls fast path.
@@ -412,8 +418,8 @@ Special forms support flat-no-nulls fast path in some cases, but not all.
 It is possible for some sub-expressions to take the fast path while others
 go through the regular path.
 
-Error Handling in AND, OR, TRY
-``````````````````````````````
+Error Handling in AND, OR, IF, SWITCH, CASE, TRY
+````````````````````````````````````````````````
 
 When evaluating AND expression, If some input generates an error for a row on
 which another input returns false, the error is suppressed.
@@ -424,12 +430,21 @@ which another input returns true, the error is suppressed.
 The error suppression logic in the AND and OR expressions is designed to deliver
 consistent results regardless of the order of the conjuncts.
 
+When evaluating IF, SWITCH and simple CASE expressions, if a condition generates
+an error for a row, the error is suppressed when the row gets the same value
+whether the condition is true or not. Two nulls are considered the same value.
+Inside TRY, these rows also get the value. For example, both
+``if(1 / 0 = 5, c0, c0)`` and ``try(if(1 / 0 = 5, c0, c0))`` return ``c0``.
+
+Presto Java and Spark may raise these errors. Inside TRY, Presto Java may
+return null for these rows.
+
 TRY expression handles the exceptions by setting the result to null in the
-corresponding rows. Error handling in AND, OR and TRY expressions relies on all
-expressions and vector functions to properly support EvalCtx::throwOnError
-flag. When set to false, the expression and vector functions should not throw
-exceptions if a row’s data is invalid, but record the error by calling
-EvalCtx::setError(row, exception).
+corresponding rows. Error handling in AND, OR, IF, SWITCH, CASE and TRY
+expressions relies on all expressions and vector functions to properly support
+EvalCtx::throwOnError flag. When set to false, the expression and vector
+functions should not throw exceptions if a row’s data is invalid, but record
+the error by calling EvalCtx::setError(row, exception).
 
 Adaptive Conjunct Reordering in AND and OR
 ``````````````````````````````````````````
