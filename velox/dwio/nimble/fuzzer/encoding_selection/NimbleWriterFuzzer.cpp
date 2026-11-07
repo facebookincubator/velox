@@ -30,6 +30,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <folly/Random.h>
+#include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <folly/hash/Hash.h>
 #include <glog/logging.h>
@@ -263,10 +264,20 @@ CompressionType randomCompressionType(FuzzerGenerator& rng) {
       kCompressionTypes.size(), rng)];
 }
 
+// Names the drawn writer settings that chunk-stats coverage is keyed by.
+struct DrawnWriterSettings {
+  std::string_view flushRegime{"default"};
+  std::string_view metadataFlushThreshold{"default"};
+};
+
 // Applies the layout and experimental knobs the fuzzer is meant to cover. Kept
 // separate from encoding selection so a failure can be attributed to either the
-// requested encoding or the surrounding configuration.
-void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
+// requested encoding or the surrounding configuration. Returns the names of the
+// drawn settings that coverage reports by.
+DrawnWriterSettings randomizeWriterOptions(
+    WriterOptions& options,
+    FuzzerGenerator& rng) {
+  DrawnWriterSettings drawn;
   options.compressionOptions.compressionType = randomCompressionType(rng);
   // Accept ratio in [0.5, 1.0]. A low floor keeps compression from being
   // rejected so often that the compressed paths go unexercised.
@@ -301,6 +312,7 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
   if (folly::Random::oneIn(4, rng)) {
     options.metadataFlushThreshold = uint32_t{1}
         << folly::Random::rand32(13, rng);
+    drawn.metadataFlushThreshold = "lowered";
   }
 
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
@@ -320,6 +332,7 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
   // because VeloxWriter rebuilds the policy on every write().
   switch (folly::Random::rand32(3, rng)) {
     case 1:
+      drawn.flushRegime = "chunkPerBatch";
       options.flushPolicyFactory = []() {
         return std::make_unique<LambdaFlushPolicy>(
             [](const StripeProgress&) { return false; },
@@ -327,6 +340,7 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
       };
       break;
     case 2: {
+      drawn.flushRegime = "random";
       auto policyRng =
           std::make_shared<std::mt19937_64>(folly::Random::rand64(rng));
       options.flushPolicyFactory = [policyRng]() {
@@ -341,6 +355,7 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
       break;
     }
     default: {
+      drawn.flushRegime = "stripeRawSize";
       // A threshold small enough that the fuzzer's modest batches actually
       // cross it, so this regime produces multi-stripe files.
       const uint64_t stripeRawSize = uint64_t{1}
@@ -351,6 +366,30 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
       break;
     }
   }
+  return drawn;
+}
+
+// Splits each batch into 'numWritesPerBatch' contiguous slices of about equal
+// size, keeping row order.
+std::vector<VectorPtr> splitBatches(
+    const std::vector<VectorPtr>& batches,
+    uint32_t numWritesPerBatch) {
+  if (numWritesPerBatch == 1) {
+    return batches;
+  }
+  std::vector<VectorPtr> writes;
+  for (const auto& batch : batches) {
+    const auto sliceSize = std::max<velox::vector_size_t>(
+        1,
+        static_cast<velox::vector_size_t>(
+            velox::bits::divRoundUp(batch->size(), numWritesPerBatch)));
+    for (velox::vector_size_t offset = 0; offset < batch->size();
+         offset += sliceSize) {
+      writes.push_back(
+          batch->slice(offset, std::min(sliceSize, batch->size() - offset)));
+    }
+  }
+  return writes;
 }
 
 uint64_t totalRows(const std::vector<VectorPtr>& batches) {
@@ -368,42 +407,67 @@ struct PhysicalStreamRoles {
   folly::F14FastSet<uint32_t> nullStreams;
   // Streams that directly store scalar column values.
   folly::F14FastSet<uint32_t> scalarStreams;
+  // Names every stream's kind for coverage, e.g. Int64 or Array.lengths.
+  folly::F14FastMap<uint32_t, std::string> kinds;
 };
 
 // Collects the physical stream roles represented by a serialized schema.
 void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
   switch (type.kind()) {
-    case Kind::Scalar:
-      roles.scalarStreams.insert(type.asScalar().scalarDescriptor().offset());
+    case Kind::Scalar: {
+      const auto& descriptor = type.asScalar().scalarDescriptor();
+      roles.scalarStreams.insert(descriptor.offset());
+      roles.kinds.emplace(
+          descriptor.offset(), toString(descriptor.scalarKind()));
       return;
+    }
     case Kind::TimestampMicroNano: {
       const auto& timestamp = type.asTimestampMicroNano();
       roles.scalarStreams.insert(timestamp.microsDescriptor().offset());
       roles.scalarStreams.insert(timestamp.nanosDescriptor().offset());
+      roles.kinds.emplace(
+          timestamp.microsDescriptor().offset(), "Timestamp.micros");
+      roles.kinds.emplace(
+          timestamp.nanosDescriptor().offset(), "Timestamp.nanos");
       return;
     }
     case Kind::Row: {
       const auto& row = type.asRow();
       roles.nullStreams.insert(row.nullsDescriptor().offset());
+      roles.kinds.emplace(row.nullsDescriptor().offset(), "Row.nulls");
       for (size_t i = 0; i < row.childrenCount(); ++i) {
         collectPhysicalStreamRoles(*row.childAt(i), roles);
       }
       return;
     }
-    case Kind::Array:
-      collectPhysicalStreamRoles(*type.asArray().elements(), roles);
+    case Kind::Array: {
+      const auto& array = type.asArray();
+      roles.kinds.emplace(array.lengthsDescriptor().offset(), "Array.lengths");
+      collectPhysicalStreamRoles(*array.elements(), roles);
       return;
-    case Kind::ArrayWithOffsets:
-      collectPhysicalStreamRoles(*type.asArrayWithOffsets().elements(), roles);
+    }
+    case Kind::ArrayWithOffsets: {
+      const auto& array = type.asArrayWithOffsets();
+      roles.kinds.emplace(
+          array.offsetsDescriptor().offset(), "ArrayWithOffsets.offsets");
+      roles.kinds.emplace(
+          array.lengthsDescriptor().offset(), "ArrayWithOffsets.lengths");
+      collectPhysicalStreamRoles(*array.elements(), roles);
       return;
+    }
     case Kind::Map: {
       const auto& map = type.asMap();
+      roles.kinds.emplace(map.lengthsDescriptor().offset(), "Map.lengths");
       collectPhysicalStreamRoles(*map.keys(), roles);
       collectPhysicalStreamRoles(*map.values(), roles);
       return;
     }
     case Kind::SlidingWindowMap: {
       const auto& map = type.asSlidingWindowMap();
+      roles.kinds.emplace(
+          map.offsetsDescriptor().offset(), "SlidingWindowMap.offsets");
+      roles.kinds.emplace(
+          map.lengthsDescriptor().offset(), "SlidingWindowMap.lengths");
       collectPhysicalStreamRoles(*map.keys(), roles);
       collectPhysicalStreamRoles(*map.values(), roles);
       return;
@@ -411,7 +475,10 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
     case Kind::FlatMap: {
       const auto& flatMap = type.asFlatMap();
       roles.nullStreams.insert(flatMap.nullsDescriptor().offset());
+      roles.kinds.emplace(flatMap.nullsDescriptor().offset(), "FlatMap.nulls");
       for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
+        roles.kinds.emplace(
+            flatMap.inMapDescriptorAt(i).offset(), "FlatMap.inMap");
         collectPhysicalStreamRoles(*flatMap.childAt(i), roles);
       }
       return;
@@ -421,6 +488,39 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
           "Nimble writer fuzzer does not support hybrid FlatMap.");
   }
   NIMBLE_UNREACHABLE("Unsupported schema kind: {}.", type.kind());
+}
+
+// Largest stripe- or chunk-count bucket; it also holds every larger count.
+constexpr uint32_t kMaxCountBucket{16};
+
+// Buckets 'count' by its power-of-two floor so coverage maps stay short however
+// many stripes or chunks a file has.
+uint32_t countBucket(uint64_t count) {
+  return static_cast<uint32_t>(
+      std::min<uint64_t>(std::bit_floor(count), kMaxCountBucket));
+}
+
+// Chunk header bytes: the payload size as a little-endian uint32, then one
+// compression-type byte.
+constexpr uint32_t kParsedChunkHeaderSize{5};
+static_assert(kParsedChunkHeaderSize == kChunkHeaderSize);
+
+// Fields of a chunk header.
+struct ParsedChunkHeader {
+  uint32_t payloadSize;
+  uint8_t compressionType;
+};
+
+// Parses a chunk header byte by byte rather than through readChunkHeader, so
+// a layout change made on both the write and read side still fails here.
+ParsedChunkHeader parseChunkHeader(std::string_view header) {
+  NIMBLE_CHECK_EQ(header.size(), kParsedChunkHeaderSize);
+  const auto* bytes = reinterpret_cast<const uint8_t*>(header.data());
+  return {
+      .payloadSize = uint32_t{bytes[0]} | uint32_t{bytes[1]} << 8 |
+          uint32_t{bytes[2]} << 16 | uint32_t{bytes[3]} << 24,
+      .compressionType = bytes[4],
+  };
 }
 
 /// Materializes a nullable encoding and counts null entries in the bitmap.
@@ -510,9 +610,22 @@ ChunkStatValue toChunkStatValue(T value) {
   }
 }
 
+// Why a chunk has no min/max. The writer omits them in exactly these cases.
+enum class MissingBoundsReason {
+  kAllNull,
+  kNaN,
+  kLongString,
+};
+
+// Min/max of a decoded chunk. 'missingReason' is set exactly when 'bounds' is
+// empty.
+struct DecodedChunkBounds {
+  std::optional<std::pair<ChunkStatValue, ChunkStatValue>> bounds{};
+  std::optional<MissingBoundsReason> missingReason{};
+};
+
 template <typename T>
-std::optional<std::pair<ChunkStatValue, ChunkStatValue>>
-materializedChunkBounds(
+DecodedChunkBounds materializedChunkBounds(
     Encoding& encoding,
     velox::memory::MemoryPool* pool,
     uint32_t maxStringStatSize) {
@@ -530,7 +643,7 @@ materializedChunkBounds(
     encoding.materialize(rowCount, values.data());
   }
   if (numNonNulls == 0) {
-    return std::nullopt;
+    return {.missingReason = MissingBoundsReason::kAllNull};
   }
 
   std::optional<T> min;
@@ -545,7 +658,7 @@ materializedChunkBounds(
     const auto value = values[row];
     if constexpr (std::is_floating_point_v<T>) {
       if (std::isnan(value)) {
-        return std::nullopt;
+        return {.missingReason = MissingBoundsReason::kNaN};
       }
     }
     min = min.has_value() ? std::min(*min, value) : value;
@@ -555,16 +668,19 @@ materializedChunkBounds(
   NIMBLE_CHECK(max.has_value());
   if constexpr (std::is_same_v<T, std::string_view>) {
     if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
-      return std::nullopt;
+      return {.missingReason = MissingBoundsReason::kLongString};
     }
   }
-  return std::pair{
-      toChunkStatValue(*min),
-      toChunkStatValue(*max),
+  return {
+      .bounds =
+          std::pair{
+              toChunkStatValue(*min),
+              toChunkStatValue(*max),
+          },
   };
 }
 
-std::optional<std::pair<ChunkStatValue, ChunkStatValue>> decodedChunkBounds(
+DecodedChunkBounds decodedChunkBounds(
     Encoding& encoding,
     velox::memory::MemoryPool* pool,
     uint32_t maxStringStatSize) {
@@ -1230,8 +1346,14 @@ std::string NimbleWriterFuzzer::writeFile(
     uint64_t iterationSeed) {
   FuzzerGenerator rng(iterationSeed);
   WriterOptions writerOptions;
+  DrawnWriterSettings drawnSettings;
+  uint32_t numWritesPerBatch{1};
   if (options_.randomizeWriterConfig) {
-    randomizeWriterOptions(writerOptions, rng);
+    drawnSettings = randomizeWriterOptions(writerOptions, rng);
+    // The writer consults the flush policy once per write, so splitting each
+    // batch into several writes is what lets a file have more stripes than
+    // batches.
+    numWritesPerBatch = uint32_t{1} << folly::Random::rand32(4, rng);
   }
 
   // Build the policy through the config-string parser rather than constructing
@@ -1271,8 +1393,16 @@ std::string NimbleWriterFuzzer::writeFile(
   const VectorizedFileStats::Options statsOptions{
       .stringStatsLengthLimit = writerOptions.vectorizedStatsStringLengthLimit};
   auto file = test::createNimbleFile(
-      rootPool_, batches, std::move(writerOptions), /*flushAfterWrite=*/false);
-  verifyChunkStatsMetadata(file, chunkStatsEnabled, maxChunkStringStatSize);
+      rootPool_,
+      splitBatches(batches, numWritesPerBatch),
+      std::move(writerOptions),
+      /*flushAfterWrite=*/false);
+  verifyChunkStatsMetadata(
+      file,
+      chunkStatsEnabled,
+      maxChunkStringStatSize,
+      drawnSettings.flushRegime,
+      drawnSettings.metadataFlushThreshold);
   auto schema =
       std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type());
   verifyColumnStatistics(file, schema, batches, statsOptions);
@@ -1283,7 +1413,9 @@ std::string NimbleWriterFuzzer::writeFile(
 void NimbleWriterFuzzer::verifyChunkStatsMetadata(
     const std::string& file,
     bool chunkStatsEnabled,
-    uint32_t maxStringStatSize) {
+    uint32_t maxStringStatSize,
+    std::string_view flushRegime,
+    std::string_view metadataFlushThreshold) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
   auto tablet = TabletReader::create(
       readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
@@ -1311,8 +1443,12 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
   }
 
   folly::F14FastSet<uint32_t> stripeGroups;
+  // Unlike 'stripeGroups', also counts the groups of unindexed files.
+  folly::F14FastSet<uint32_t> stripeGroupIndices;
   for (uint32_t stripe = 0; stripe < tablet->stripeCount(); ++stripe) {
     const auto stripeIdentifier = tablet->stripeIdentifier(stripe);
+    NIMBLE_CHECK_NOT_NULL(stripeIdentifier.stripeGroup());
+    stripeGroupIndices.insert(stripeIdentifier.stripeGroup()->index());
     const auto& chunkStats = stripeIdentifier.chunkStats();
     if (!chunkStatsEnabled) {
       NIMBLE_CHECK_NULL(
@@ -1358,11 +1494,24 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
       }
       NIMBLE_CHECK_NOT_NULL(stream);
       ++chunkStatsCoverage_.numV2IndexedStreams;
-      if (roles.scalarStreams.contains(streamId)) {
+      const bool isScalarStream = roles.scalarStreams.contains(streamId);
+      if (isScalarStream) {
         ++chunkStatsCoverage_.numScalarStreams;
       } else {
         ++chunkStatsCoverage_.numStructuralStreams;
       }
+      const auto kind = roles.kinds.find(streamId);
+      NIMBLE_CHECK(
+          kind != roles.kinds.end(),
+          "Stream {} in stripe {} has no schema node (seed {}).",
+          streamId,
+          stripe,
+          options_.seed);
+      auto& streamKinds = isScalarStream
+          ? chunkStatsCoverage_.scalarStreamKinds
+          : chunkStatsCoverage_.complexStreamKinds;
+      auto& kindCoverage = streamKinds[kind->second];
+      ++kindCoverage.numStreams;
 
       InMemoryChunkedStream chunkedStream{*leafPool_, std::move(stream)};
       Buffer stringBuffer{*leafPool_};
@@ -1375,15 +1524,16 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
       std::optional<uint32_t> previousChunkIndex;
       while (chunkedStream.hasNext()) {
         NIMBLE_CHECK_LE(
-            kChunkHeaderSize,
+            kParsedChunkHeaderSize,
             rawStream.size() - offset,
             "Truncated chunk header in stripe {}, stream {} (seed {}).",
             stripe,
             streamId,
             options_.seed);
-        const char* cursor = rawStream.data() + offset;
-        const auto header = readChunkHeader(cursor);
-        const uint64_t chunkSize = uint64_t{kChunkHeaderSize} + header.length;
+        const auto header =
+            parseChunkHeader(rawStream.substr(offset, kParsedChunkHeaderSize));
+        const uint64_t chunkSize =
+            uint64_t{kParsedChunkHeaderSize} + header.payloadSize;
         NIMBLE_CHECK_LE(
             chunkSize,
             rawStream.size() - offset,
@@ -1391,9 +1541,35 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
             stripe,
             streamId,
             options_.seed);
+        NIMBLE_CHECK_LE(
+            header.compressionType,
+            static_cast<uint8_t>(CompressionType::OpenZL),
+            "Unknown chunk compression type in stripe {}, stream {} (seed {}).",
+            stripe,
+            streamId,
+            options_.seed);
+        const bool isCompressedChunk = header.compressionType !=
+            static_cast<uint8_t>(CompressionType::Uncompressed);
 
+        // An uncompressed chunk's payload is the encoding itself, so the chunk
+        // reader must return exactly the bytes located above. Decoding those
+        // bytes ties the stats checks below to this walk, not the reader's.
+        const auto payload = rawStream.substr(
+            offset + kParsedChunkHeaderSize, header.payloadSize);
+        const auto readerChunk = chunkedStream.nextChunk();
+        if (!isCompressedChunk) {
+          NIMBLE_CHECK(
+              readerChunk == payload,
+              "Chunk reader returned other bytes than the chunk at offset {} in stripe {}, stream {} (seed {}).",
+              offset,
+              stripe,
+              streamId,
+              options_.seed);
+        }
         auto encoding = EncodingFactory().create(
-            *leafPool_, chunkedStream.nextChunk(), stringBufferFactory);
+            *leafPool_,
+            isCompressedChunk ? readerChunk : payload,
+            stringBufferFactory);
         NIMBLE_CHECK_NOT_NULL(encoding);
         const auto rowCount = encoding->rowCount();
         NIMBLE_CHECK_GT(rowCount, 0);
@@ -1402,8 +1578,9 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
         const auto nullCount = decodedNullCount(
             *encoding, roles.nullStreams.contains(streamId), leafPool_.get());
         encoding->reset();
-        const auto bounds =
+        const auto decodedBounds =
             decodedChunkBounds(*encoding, leafPool_.get(), maxStringStatSize);
+        const auto& bounds = decodedBounds.bounds;
 
         const auto first = streamIndex->lookupChunk(rowOffset);
         const auto last =
@@ -1437,19 +1614,42 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
           NIMBLE_CHECK(*indexedMin == bounds->first);
           NIMBLE_CHECK(*indexedMax == bounds->second);
           ++chunkStatsCoverage_.numV2BoundedChunks;
+          ++kindCoverage.numBoundedChunks;
+          if (bounds->first == bounds->second) {
+            ++kindCoverage.numSingleValueChunks;
+          }
+        } else {
+          NIMBLE_CHECK(decodedBounds.missingReason.has_value());
+          switch (*decodedBounds.missingReason) {
+            case MissingBoundsReason::kAllNull:
+              ++kindCoverage.numAllNullUnboundedChunks;
+              break;
+            case MissingBoundsReason::kNaN:
+              ++kindCoverage.numNaNUnboundedChunks;
+              break;
+            case MissingBoundsReason::kLongString:
+              ++kindCoverage.numLongStringUnboundedChunks;
+              break;
+          }
         }
 
+        ++kindCoverage.numChunks;
+        kindCoverage.numRows += rowCount;
+        kindCoverage.numNulls += nullCount;
         if (nullCount == 0) {
           ++chunkStatsCoverage_.numZeroNullChunks;
+          ++kindCoverage.numZeroNullChunks;
         } else if (nullCount == rowCount) {
           ++chunkStatsCoverage_.numFullyNullChunks;
+          ++kindCoverage.numFullyNullChunks;
         } else {
           ++chunkStatsCoverage_.numPartiallyNullChunks;
+          ++kindCoverage.numPartiallyNullChunks;
         }
-        if (header.compressionType == CompressionType::Uncompressed) {
-          ++chunkStatsCoverage_.numUncompressedChunks;
-        } else {
+        if (isCompressedChunk) {
           ++chunkStatsCoverage_.numCompressedChunks;
+        } else {
+          ++chunkStatsCoverage_.numUncompressedChunks;
         }
         if (numChunks == 0) {
           ++chunkStatsCoverage_.numFirstChunks;
@@ -1470,8 +1670,10 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
       NIMBLE_CHECK_EQ(streamIndex->rowCount(), rowOffset);
       const auto [beginChunk, endChunk] = streamIndex->chunkRange();
       NIMBLE_CHECK_EQ(endChunk - beginChunk, numChunks);
+      ++chunkStatsCoverage_.streamsByChunks[countBucket(numChunks)];
       if (numChunks > 1) {
         ++chunkStatsCoverage_.numMultiChunkStreams;
+        ++kindCoverage.numMultiChunkStreams;
       }
     }
   }
@@ -1479,6 +1681,13 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
   if (stripeGroups.size() > 1) {
     ++chunkStatsCoverage_.numMultiGroupFiles;
   }
+  auto& filesByStripes =
+      chunkStatsCoverage_.filesByStripes[std::string{flushRegime}];
+  ++filesByStripes[countBucket(tablet->stripeCount())];
+  auto& filesByStripeGroups =
+      chunkStatsCoverage_
+          .filesByStripeGroups[std::string{metadataFlushThreshold}];
+  ++filesByStripeGroups[countBucket(stripeGroupIndices.size())];
 }
 
 namespace {
@@ -2338,8 +2547,10 @@ void NimbleWriterFuzzer::run() {
   fuzzerOptions.vectorSize = options_.batchSize;
   fuzzerOptions.nullRatio = 0.2 * folly::Random::randDouble01(rng);
   // NaN and infinity are off by default and are exactly the values the
-  // floating-point encodings are most likely to mishandle.
-  fuzzerOptions.dataSpec = {/*includeNaN=*/true, /*includeInfinity=*/true};
+  // floating-point encodings are most likely to mishandle. A third of
+  // iterations leave NaN out, because a chunk holding one gets no min/max.
+  fuzzerOptions.dataSpec = {/*includeNaN=*/!folly::Random::oneIn(3, rng),
+                            /*includeInfinity=*/true};
   // Flat-map writers reject duplicate keys; normalization is what guarantees
   // the fuzzed maps are writable.
   fuzzerOptions.normalizeMapKeys = true;
@@ -2358,6 +2569,12 @@ void NimbleWriterFuzzer::run() {
   // keep seeing adversarial input.
   const bool shapeForEncodings = !folly::Random::oneIn(3, rng);
   const auto columnShapes = drawColumnShapes(schema, rng);
+  // kNullBatches nulls only odd batches, so a single batch stays as fuzzed.
+  const bool writesNullBatches = shapeForEncodings && options_.numBatches > 1 &&
+      std::find(
+          columnShapes.begin(),
+          columnShapes.end(),
+          ColumnShape::kNullBatches) != columnShapes.end();
   // Seeded from the type minimum so a non-decreasing column spans the widest
   // range its type allows before saturating.
   std::vector<int64_t> monotonicCursors(
@@ -2394,6 +2611,7 @@ void NimbleWriterFuzzer::run() {
           << " unfiltered rounds, followed by missing-encoding repair through "
           << toString(readerPath) << ", seed " << options_.seed;
 
+  const auto numFullyNullChunksBefore = chunkStatsCoverage_.numFullyNullChunks;
   std::set<EncodingType> observedEncodings;
   for (uint32_t round = 0; round < kNumUnfilteredRounds; ++round) {
     const auto roundSeed = folly::hash::hash_combine(
@@ -2436,6 +2654,13 @@ void NimbleWriterFuzzer::run() {
         static_cast<std::underlying_type_t<EncodingType>>(encodingType));
     const auto file = writeFile(batches, encodingType, roundSeed);
     verifyReaderPaths(file, schema, batches, encodingType, readerPaths);
+  }
+
+  if (writesNullBatches) {
+    ++chunkStatsCoverage_.numNullBatchIterations;
+    if (chunkStatsCoverage_.numFullyNullChunks > numFullyNullChunksBefore) {
+      ++chunkStatsCoverage_.numNullBatchIterationsWithFullyNullChunk;
+    }
   }
 }
 
@@ -2565,27 +2790,201 @@ void NimbleWriterFuzzer::logCoverage() const {
   }
 }
 
+namespace {
+
+// Formats count buckets as "1=4,2-3=7,16+=1", or "none" when empty.
+std::string formatCountBuckets(const std::map<uint32_t, uint64_t>& buckets) {
+  if (buckets.empty()) {
+    return "none";
+  }
+  std::vector<std::string> entries;
+  entries.reserve(buckets.size());
+  for (const auto& [bucket, count] : buckets) {
+    std::string name;
+    if (bucket >= kMaxCountBucket) {
+      name = fmt::format("{}+", kMaxCountBucket);
+    } else if (bucket <= 1) {
+      name = fmt::format("{}", bucket);
+    } else {
+      name = fmt::format("{}-{}", bucket, 2 * bucket - 1);
+    }
+    entries.push_back(fmt::format("{}={}", name, count));
+  }
+  return fmt::format("{}", fmt::join(entries, ","));
+}
+
+// Formats one indented line per key, each with its count buckets.
+std::string formatKeyedCountBuckets(
+    const std::map<std::string, std::map<uint32_t, uint64_t>>& bucketsByKey) {
+  if (bucketsByKey.empty()) {
+    return "    none";
+  }
+  std::vector<std::string> lines;
+  lines.reserve(bucketsByKey.size());
+  for (const auto& [key, buckets] : bucketsByKey) {
+    lines.push_back(
+        fmt::format("    {}: {}", key, formatCountBuckets(buckets)));
+  }
+  return fmt::format("{}", fmt::join(lines, "\n"));
+}
+
+using StreamKindCoverage = ChunkStatsVerificationCoverage::StreamKindCoverage;
+
+// Formats "name(a=1,b=2)", dropping zero counts, or "name(none)" when every
+// count is zero.
+std::string formatNonZeroCounts(
+    std::string_view name,
+    std::initializer_list<std::pair<std::string_view, uint64_t>> counts) {
+  std::vector<std::string> entries;
+  for (const auto& [countName, count] : counts) {
+    if (count > 0) {
+      entries.push_back(fmt::format("{}={}", countName, count));
+    }
+  }
+  return entries.empty() ? fmt::format("{}(none)", name)
+                         : fmt::format("{}({})", name, fmt::join(entries, ","));
+}
+
+// Formats the scalar stream kinds, then the complex ones, one line per kind.
+template <typename FormatKind>
+std::string formatStreamKinds(
+    const ChunkStatsVerificationCoverage& coverage,
+    const FormatKind& formatKind) {
+  std::vector<std::string> lines;
+  const auto addGroup =
+      [&](std::string_view groupName,
+          const std::map<std::string, StreamKindCoverage>& streamKinds) {
+        lines.push_back(fmt::format("    {}:", groupName));
+        if (streamKinds.empty()) {
+          lines.emplace_back("      none");
+        }
+        for (const auto& [kind, kindCoverage] : streamKinds) {
+          lines.push_back(
+              fmt::format("      {:<16} {}", kind, formatKind(kindCoverage)));
+        }
+      };
+  addGroup("scalarTypes", coverage.scalarStreamKinds);
+  addGroup("complexTypes", coverage.complexStreamKinds);
+  return fmt::format("{}", fmt::join(lines, "\n"));
+}
+
+// Sums one counter over every stream kind.
+uint64_t sumStreamKinds(
+    const ChunkStatsVerificationCoverage& coverage,
+    uint64_t StreamKindCoverage::* counter) {
+  uint64_t sum{0};
+  for (const auto* streamKinds :
+       {&coverage.scalarStreamKinds, &coverage.complexStreamKinds}) {
+    for (const auto& [kind, kindCoverage] : *streamKinds) {
+      sum += kindCoverage.*counter;
+    }
+  }
+  return sum;
+}
+
+// Formats the chunks lacking min/max for one reason, then the stream kinds it
+// hit, such as "867 (Double=677,Float=190)".
+std::string formatMissingBounds(
+    const ChunkStatsVerificationCoverage& coverage,
+    uint64_t StreamKindCoverage::* numChunks) {
+  std::vector<std::string> kinds;
+  for (const auto* streamKinds :
+       {&coverage.scalarStreamKinds, &coverage.complexStreamKinds}) {
+    for (const auto& [kind, kindCoverage] : *streamKinds) {
+      if (kindCoverage.*numChunks > 0) {
+        kinds.push_back(fmt::format("{}={}", kind, kindCoverage.*numChunks));
+      }
+    }
+  }
+  const auto total = sumStreamKinds(coverage, numChunks);
+  return kinds.empty() ? fmt::format("{}", total)
+                       : fmt::format("{} ({})", total, fmt::join(kinds, ","));
+}
+
+} // namespace
+
 void NimbleWriterFuzzer::logChunkStatsCoverage() const {
+  const auto& coverage = chunkStatsCoverage_;
+  // A leading newline starts each block on its own line, after the log prefix.
   LOG(WARNING) << fmt::format(
-      "Chunk-index coverage: files(v2={},unindexed={},multiGroup={}) groups={} stripes={} streams(scalar={},structural={},multiChunk={},v2Indexed={}) chunks(first={},middle={},final={},v2Bounded={},zeroNull={},partialNull={},fullNull={},compressed={},uncompressed={})",
-      chunkStatsCoverage_.numV2IndexedFiles,
-      chunkStatsCoverage_.numUnindexedFiles,
-      chunkStatsCoverage_.numMultiGroupFiles,
-      chunkStatsCoverage_.numStripeGroups,
-      chunkStatsCoverage_.numStripes,
-      chunkStatsCoverage_.numScalarStreams,
-      chunkStatsCoverage_.numStructuralStreams,
-      chunkStatsCoverage_.numMultiChunkStreams,
-      chunkStatsCoverage_.numV2IndexedStreams,
-      chunkStatsCoverage_.numFirstChunks,
-      chunkStatsCoverage_.numMiddleChunks,
-      chunkStatsCoverage_.numFinalChunks,
-      chunkStatsCoverage_.numV2BoundedChunks,
-      chunkStatsCoverage_.numZeroNullChunks,
-      chunkStatsCoverage_.numPartiallyNullChunks,
-      chunkStatsCoverage_.numFullyNullChunks,
-      chunkStatsCoverage_.numCompressedChunks,
-      chunkStatsCoverage_.numUncompressedChunks);
+      "\nChunk coverage:\n"
+      "  files: v2Indexed={} unindexed={}\n"
+      "  stripesPerFile, by flush regime:\n{}\n"
+      "  stripeGroupsPerFile, by metadataFlushThreshold:\n{}\n"
+      "  streams: v2Indexed={} scalar={} structural={} multiChunk={}\n"
+      "  chunksPerStream: {}\n"
+      "  chunks: first={} middle={} final={} compressed={} uncompressed={}\n"
+      "  nullBatchIterations: {} (with a fully-null chunk: {})\n"
+      "  streamKinds:\n{}",
+      coverage.numV2IndexedFiles,
+      coverage.numUnindexedFiles,
+      formatKeyedCountBuckets(coverage.filesByStripes),
+      formatKeyedCountBuckets(coverage.filesByStripeGroups),
+      coverage.numV2IndexedStreams,
+      coverage.numScalarStreams,
+      coverage.numStructuralStreams,
+      coverage.numMultiChunkStreams,
+      formatCountBuckets(coverage.streamsByChunks),
+      coverage.numFirstChunks,
+      coverage.numMiddleChunks,
+      coverage.numFinalChunks,
+      coverage.numCompressedChunks,
+      coverage.numUncompressedChunks,
+      coverage.numNullBatchIterations,
+      coverage.numNullBatchIterationsWithFullyNullChunk,
+      formatStreamKinds(coverage, [](const StreamKindCoverage& kindCoverage) {
+        const double nullRate = kindCoverage.numRows == 0
+            ? 0.0
+            : 100.0 * kindCoverage.numNulls / kindCoverage.numRows;
+        return fmt::format(
+            "streams={} multiChunk={} chunks={} rows={} nulls={} nullRate={:.1f}%",
+            kindCoverage.numStreams,
+            kindCoverage.numMultiChunkStreams,
+            kindCoverage.numChunks,
+            kindCoverage.numRows,
+            kindCoverage.numNulls,
+            nullRate);
+      }));
+  LOG(WARNING) << fmt::format(
+      "\nChunk stats coverage:\n"
+      "  stripeGroups: multiGroupFiles={} indexedGroups={} indexedStripes={}\n"
+      "  nullCounts: zero={} partial={} full={}\n"
+      "  minMax: bounded={} singleValue={}\n"
+      "    missing because every row is null: {}\n"
+      "    missing because a value is NaN: {}\n"
+      "    missing because a string is over maxChunkStringStatSize: {}\n"
+      "  streamKinds:\n{}",
+      coverage.numMultiGroupFiles,
+      coverage.numStripeGroups,
+      coverage.numStripes,
+      coverage.numZeroNullChunks,
+      coverage.numPartiallyNullChunks,
+      coverage.numFullyNullChunks,
+      coverage.numV2BoundedChunks,
+      sumStreamKinds(coverage, &StreamKindCoverage::numSingleValueChunks),
+      formatMissingBounds(
+          coverage, &StreamKindCoverage::numAllNullUnboundedChunks),
+      formatMissingBounds(coverage, &StreamKindCoverage::numNaNUnboundedChunks),
+      formatMissingBounds(
+          coverage, &StreamKindCoverage::numLongStringUnboundedChunks),
+      formatStreamKinds(coverage, [](const StreamKindCoverage& kindCoverage) {
+        return fmt::format(
+            "chunks={} {} {}",
+            kindCoverage.numChunks,
+            formatNonZeroCounts(
+                "nullCounts",
+                {{"zero", kindCoverage.numZeroNullChunks},
+                 {"partial", kindCoverage.numPartiallyNullChunks},
+                 {"full", kindCoverage.numFullyNullChunks}}),
+            formatNonZeroCounts(
+                "minMax",
+                {{"bounded", kindCoverage.numBoundedChunks},
+                 {"singleValue", kindCoverage.numSingleValueChunks},
+                 {"missingAllNull", kindCoverage.numAllNullUnboundedChunks},
+                 {"missingNaN", kindCoverage.numNaNUnboundedChunks},
+                 {"missingLongString",
+                  kindCoverage.numLongStringUnboundedChunks}}));
+      }));
 }
 
 std::vector<std::string_view> NimbleWriterFuzzer::uncoveredChunkStatsShapes()

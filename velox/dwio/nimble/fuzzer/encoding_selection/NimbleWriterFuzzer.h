@@ -87,6 +87,101 @@ struct PairCoverage {
   uint64_t numFilesSeen{0};
 };
 
+/// Counts the physical stream and metadata shapes validated during the run.
+struct ChunkStatsVerificationCoverage {
+  /// Breaks the validated streams and chunks down by physical stream kind: a
+  /// scalar kind such as Int64 for value streams, or a structural stream such
+  /// as Array.lengths or Row.nulls.
+  struct StreamKindCoverage {
+    /// Counts V2-indexed streams and those split into multiple chunks.
+    uint64_t numStreams{0};
+    uint64_t numMultiChunkStreams{0};
+
+    /// Counts chunks, their rows and their decoded nulls.
+    uint64_t numChunks{0};
+    uint64_t numRows{0};
+    uint64_t numNulls{0};
+
+    /// Counts decoded null distributions.
+    uint64_t numZeroNullChunks{0};
+    uint64_t numPartiallyNullChunks{0};
+    uint64_t numFullyNullChunks{0};
+
+    /// Counts chunks carrying min/max bounds, and those whose min equals
+    /// their max.
+    uint64_t numBoundedChunks{0};
+    uint64_t numSingleValueChunks{0};
+
+    /// Counts chunks without min/max, by why the writer omitted them: every
+    /// row is null, a value is NaN, or the min or max string is longer than
+    /// maxChunkStringStatSize.
+    uint64_t numAllNullUnboundedChunks{0};
+    uint64_t numNaNUnboundedChunks{0};
+    uint64_t numLongStringUnboundedChunks{0};
+  };
+
+  /// Counts files whose V2 chunk stats were enabled or disabled.
+  uint64_t numV2IndexedFiles{0};
+  uint64_t numUnindexedFiles{0};
+
+  /// Counts V2 indexes and chunks carrying min/max bounds.
+  uint64_t numV2IndexedStreams{0};
+  uint64_t numV2BoundedChunks{0};
+
+  /// Counts indexed groups and stripes.
+  uint64_t numStripeGroups{0};
+  uint64_t numStripes{0};
+
+  /// Counts files whose chunk stats span more than one stripe group.
+  uint64_t numMultiGroupFiles{0};
+
+  /// Counts present scalar-value streams, structural streams emitted for
+  /// complex types, and streams split into multiple chunks.
+  uint64_t numScalarStreams{0};
+  uint64_t numStructuralStreams{0};
+  uint64_t numMultiChunkStreams{0};
+
+  /// Counts chunk positions within their streams.
+  uint64_t numFirstChunks{0};
+  uint64_t numMiddleChunks{0};
+  uint64_t numFinalChunks{0};
+
+  /// Counts decoded null distributions.
+  uint64_t numZeroNullChunks{0};
+  uint64_t numPartiallyNullChunks{0};
+  uint64_t numFullyNullChunks{0};
+
+  /// Counts physical chunk-wrapper compression states.
+  uint64_t numCompressedChunks{0};
+  uint64_t numUncompressedChunks{0};
+
+  /// Counts every written file by its stripe count, keyed first by the flush
+  /// regime drawn for it. Count keys here and below are power-of-two floors
+  /// capped at 16: key 4 counts files with 4 to 7 stripes, and key 16 those
+  /// with 16 or more.
+  std::map<std::string, std::map<uint32_t, uint64_t>> filesByStripes;
+
+  /// Counts every written file by its stripe-group count, keyed first by
+  /// whether its metadataFlushThreshold was lowered.
+  std::map<std::string, std::map<uint32_t, uint64_t>> filesByStripeGroups;
+
+  /// Counts V2-indexed streams by their chunk count within one stripe.
+  std::map<uint32_t, uint64_t> streamsByChunks;
+
+  /// Validated streams and chunks per kind of scalar-value stream, such as
+  /// Int64 or Timestamp.micros.
+  std::map<std::string, StreamKindCoverage> scalarStreamKinds;
+
+  /// Validated streams and chunks per kind of structural stream that a complex
+  /// type emits, such as Array.lengths or Row.nulls.
+  std::map<std::string, StreamKindCoverage> complexStreamKinds;
+
+  /// Counts iterations that nulled every other batch of some column, and how
+  /// many of them produced a fully-null chunk.
+  uint64_t numNullBatchIterations{0};
+  uint64_t numNullBatchIterationsWithFullyNullChunk{0};
+};
+
 /// Reader paths a written file is verified through. The batch reader and the
 /// selective reader consume encodings through different code, so an encoding
 /// can round-trip on one path and fail on another. Adding ALP and Fsst to the
@@ -260,6 +355,12 @@ class NimbleWriterFuzzer {
     return numUnfilteredFilesWritten_;
   }
 
+  /// Physical chunk and metadata shapes validated, accumulated across every
+  /// run().
+  const ChunkStatsVerificationCoverage& chunkStatsCoverage() const {
+    return chunkStatsCoverage_;
+  }
+
   /// Logs the coverage tally with never-applied encodings first, so a candidate
   /// that exercises nothing is the first thing visible in a CI log.
   void logCoverage() const;
@@ -270,7 +371,8 @@ class NimbleWriterFuzzer {
   /// as covered.
   void logPairCoverage() const;
 
-  /// Logs the physical chunk and metadata shapes validated by the run.
+  /// Logs two blocks: the chunk layouts validated by the run, then the values
+  /// their chunk stats recorded.
   void logChunkStatsCoverage() const;
 
   /// Candidate encodings that were never applied to a single chunk, either
@@ -300,37 +402,6 @@ class NimbleWriterFuzzer {
   std::vector<std::string_view> uncoveredChunkStatsShapes() const;
 
  private:
-  // Counts physical stream and metadata shapes validated during the run.
-  struct ChunkStatsVerificationCoverage {
-    // Counts files whose V2 chunk stats were enabled or disabled.
-    uint64_t numV2IndexedFiles{0};
-    uint64_t numUnindexedFiles{0};
-    // Counts V2 indexes and chunks carrying min/max bounds.
-    uint64_t numV2IndexedStreams{0};
-    uint64_t numV2BoundedChunks{0};
-    // Counts indexed groups and stripes.
-    uint64_t numStripeGroups{0};
-    uint64_t numStripes{0};
-    // Counts files whose chunk stats span more than one stripe group.
-    uint64_t numMultiGroupFiles{0};
-    // Counts present scalar-value streams, structural streams emitted for
-    // complex types, and streams split into multiple chunks.
-    uint64_t numScalarStreams{0};
-    uint64_t numStructuralStreams{0};
-    uint64_t numMultiChunkStreams{0};
-    // Counts chunk positions within their streams.
-    uint64_t numFirstChunks{0};
-    uint64_t numMiddleChunks{0};
-    uint64_t numFinalChunks{0};
-    // Counts decoded null distributions.
-    uint64_t numZeroNullChunks{0};
-    uint64_t numPartiallyNullChunks{0};
-    uint64_t numFullyNullChunks{0};
-    // Counts physical chunk-wrapper compression states.
-    uint64_t numCompressedChunks{0};
-    uint64_t numUncompressedChunks{0};
-  };
-
   // Writes 'batches', returning the file bytes. When 'encodingType' is set,
   // that is the only candidate offered to the random policy; otherwise the
   // policy chooses from its full default set. The write type is taken from
@@ -342,10 +413,14 @@ class NimbleWriterFuzzer {
 
   // Validates the chunk-stats section against independently parsed and decoded
   // physical chunks, and records which metadata shapes were exercised.
+  // 'flushRegime' and 'metadataFlushThreshold' name the writer settings drawn
+  // for the file, which key its stripe and stripe-group counts.
   void verifyChunkStatsMetadata(
       const std::string& file,
       bool chunkStatsEnabled,
-      uint32_t maxStringStatSize);
+      uint32_t maxStringStatSize,
+      std::string_view flushRegime,
+      std::string_view metadataFlushThreshold);
 
   // Verifies file-level column statistics (value count, null count, min, max)
   // against the data that was actually written.
