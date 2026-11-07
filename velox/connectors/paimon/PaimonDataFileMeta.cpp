@@ -92,6 +92,11 @@ folly::dynamic PaimonDataFile::serialize() const {
   obj["creationTimeMs"] = creationTimeMs;
   obj["fileType"] = typeString(type);
   obj["sourceType"] = sourceString(source);
+  if (schemaId.has_value()) {
+    VELOX_USER_CHECK_GE(
+        *schemaId, 0, "Paimon file schema ID must be nonnegative");
+    obj["schemaId"] = *schemaId;
+  }
   if (deletionFile.has_value()) {
     obj["deletionFile"] = deletionFile->serialize();
   }
@@ -111,6 +116,12 @@ PaimonDataFile PaimonDataFile::create(const folly::dynamic& obj) {
   file.creationTimeMs = obj["creationTimeMs"].asInt();
   file.type = typeFromString(obj["fileType"].asString());
   file.source = sourceFromString(obj["sourceType"].asString());
+  if (auto it = obj.find("schemaId"); it != obj.items().end()) {
+    VELOX_USER_CHECK(it->second.isInt(), "Expected Paimon file schema ID");
+    file.schemaId = it->second.asInt();
+    VELOX_USER_CHECK_GE(
+        *file.schemaId, 0, "Paimon file schema ID must be nonnegative");
+  }
   if (obj.count("deletionFile") > 0) {
     file.deletionFile = PaimonDeletionFile::create(obj["deletionFile"]);
   }

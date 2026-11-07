@@ -75,6 +75,34 @@ TEST_F(PaimonConnectorSplitTest, basic) {
   EXPECT_EQ(split->partitionKeys().at("dt"), "2024-01-01");
 }
 
+TEST_F(PaimonConnectorSplitTest, builderPreservesFileSchemaIdentity) {
+  PaimonDataFile file;
+  file.path = "data.nimble";
+  file.schemaId = 0;
+  file.size = 1024;
+  file.rowCount = 9;
+  file.source = PaimonDataFile::Source::kCompact;
+  auto builder = [&] {
+    return PaimonConnectorSplitBuilder(
+        kConnectorId, 7, PaimonTableType::kAppendOnly, FileFormat::NIMBLE);
+  };
+  const auto split = builder().addFile(file).build();
+  const auto copy = PaimonConnectorSplit::create(split->serialize());
+  EXPECT_EQ(copy->dataFiles()[0].schemaId, 0);
+  EXPECT_EQ(copy->dataFiles()[0].size, 1024);
+  EXPECT_EQ(copy->dataFiles()[0].rowCount, 9);
+  EXPECT_EQ(copy->dataFiles()[0].source, PaimonDataFile::Source::kCompact);
+  VELOX_ASSERT_THROW(
+      builder().addFile(file).addFile("legacy.nimble", 1).build(),
+      "cannot mix files with and without schema IDs");
+  VELOX_ASSERT_THROW(
+      builder().addFile("legacy.nimble", 1).addFile(file).build(),
+      "cannot mix files with and without schema IDs");
+  file.schemaId = -1;
+  VELOX_ASSERT_THROW(
+      builder().addFile(file).build(), "schema ID must be nonnegative");
+}
+
 TEST_F(PaimonConnectorSplitTest, nimbleFormat) {
   PaimonDataFile file0;
   file0.path = "s3://bucket/table/data-001.nimble";

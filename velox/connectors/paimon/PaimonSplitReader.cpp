@@ -16,8 +16,24 @@
 #include "velox/connectors/paimon/PaimonSplitReader.h"
 
 #include <limits>
+#include <unordered_set>
 
 namespace facebook::velox::connector::paimon {
+namespace {
+
+bool hasNestedFields(const Type& type) {
+  if (type.isRow()) {
+    return true;
+  }
+  for (column_index_t i = 0; i < type.size(); ++i) {
+    if (hasNestedFields(*type.childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
 
 PaimonSplitReader::PaimonSplitReader(
     const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
@@ -56,6 +72,84 @@ PaimonSplitReader::PaimonSplitReader(
   fileSplits_.reserve(dataFiles.size());
   for (const auto& dataFile : dataFiles) {
     fileSplits_.emplace_back(makeFileConnectorSplit(dataFile));
+    if (dataFile.schemaId.has_value() &&
+        !mappedSchemas_.count(*dataFile.schemaId)) {
+      mappedSchemas_.emplace(
+          *dataFile.schemaId, mapDataSchema(*dataFile.schemaId));
+    }
+  }
+}
+
+RowTypePtr PaimonSplitReader::mapDataSchema(int64_t schemaId) const {
+  const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
+  const auto& dataType = schemaId == table.schemaId()
+      ? table.rowType()
+      : table.dataSchemas().at(schemaId).rowType;
+  const auto& dataIds = schemaId == table.schemaId()
+      ? table.fieldIds()
+      : table.dataSchemas().at(schemaId).fieldIds;
+
+  std::unordered_map<int32_t, column_index_t> targetColumns;
+  for (column_index_t i = 0; i < table.fieldIds().size(); ++i) {
+    targetColumns.emplace(table.fieldIds()[i], i);
+  }
+  const std::unordered_set<std::string> partitions(
+      table.partitionKeys().begin(), table.partitionKeys().end());
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  for (column_index_t i = 0; i < dataType->size(); ++i) {
+    if (partitions.count(dataType->nameOf(i))) {
+      continue;
+    }
+    const auto target = targetColumns.find(dataIds[i]);
+    if (target == targetColumns.end()) {
+      // A dropped file column must not shadow a new field with the same name.
+      auto name = fmt::format("__paimon_unmapped_{}", i);
+      while (table.rowType()->containsChild(name) ||
+             dataType->containsChild(name)) {
+        name.push_back('_');
+      }
+      names.push_back(std::move(name));
+    } else {
+      const auto& name = table.rowType()->nameOf(target->second);
+      if (const auto* spec = scanSpec_->childByName(name); spec &&
+          spec->columnType() == common::ScanSpec::ColumnType::kRegular) {
+        const auto& type = table.rowType()->childAt(target->second);
+        VELOX_USER_CHECK(
+            *type == *dataType->childAt(i),
+            "Paimon type evolution is not supported for field {} ('{}'), "
+            "file schema {}, target schema {}: {} to {}",
+            dataIds[i],
+            name,
+            schemaId,
+            table.schemaId(),
+            dataType->childAt(i)->toString(),
+            type->toString());
+        VELOX_USER_CHECK(
+            schemaId == table.schemaId() || !hasNestedFields(*type),
+            "Paimon nested field identity is required for field {} ('{}'), "
+            "file schema {}, target schema {}",
+            dataIds[i],
+            name,
+            schemaId,
+            table.schemaId());
+      }
+      names.push_back(name);
+    }
+    types.push_back(dataType->childAt(i));
+  }
+  return ROW(std::move(names), std::move(types));
+}
+
+void PaimonSplitReader::configureBaseReaderOptions() {
+  connector::FileSplitReader::configureBaseReaderOptions();
+  const auto& id = paimonSplit_->dataFiles()[currentFileIndex_].schemaId;
+  if (id.has_value()) {
+    // Ordinals here come from the file's historical append layout. DWIO
+    // exposes the mapped names to the unchanged logical ScanSpec and filters.
+    baseReaderOpts_.setFileSchema(mappedSchemas_.at(*id));
+    baseReaderOpts_.setColumnMappingMode(
+        dwio::common::ColumnMappingMode::kPosition);
   }
 }
 
@@ -94,8 +188,21 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
 
-    // TODO: Add historical-schema adaptation using per-file schema metadata.
-    connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
+    if (paimonSplit_->dataFiles()[currentFileIndex_].schemaId.has_value()) {
+      configureReaderOptions(baseReaderOpts_.randomSkip());
+      createReader();
+      // The file reader has captured its file-order mapping. Missing columns
+      // must now be resolved against the query's target schema, not that map.
+      baseReaderOpts_.setFileSchema(tableHandle_->dataColumns());
+      if (!emptySplit_) {
+        auto rowType = getAdaptedRowType();
+        if (!checkIfSplitIsEmpty(*runtimeStats_)) {
+          createRowReader(metadataFilter_, std::move(rowType), std::nullopt);
+        }
+      }
+    } else {
+      connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
+    }
     if (!emptySplit_) {
       return true;
     }
