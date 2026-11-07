@@ -30,5 +30,6 @@ inline constexpr const char* kNullIf = "nullif";
 inline constexpr const char* kCase = "case";
 inline constexpr const char* kIn = "in";
 inline constexpr const char* kNot = "not";
+inline constexpr const char* kAtTimeZone = "$at_time_zone";
 
 } // namespace facebook::velox::expression
