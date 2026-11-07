@@ -85,6 +85,16 @@ void SpillerBase::spill(const RowContainerIterator* startRowIter) {
   checkEmptySpillRuns();
 }
 
+bool SpillerBase::rowHasNullKey(const char* row) const {
+  const auto numKeys = container_->keyTypes().size();
+  for (size_t i = 0; i < numKeys; ++i) {
+    if (RowContainer::isNullAt(row, container_->columnAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
   checkEmptySpillRuns();
 
@@ -122,8 +132,14 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
       for (auto i = 0; i < numRows; ++i) {
         // TODO: consider to cache the hash bits in row container so we only
         // need to calculate them once.
+        uint64_t hash = hashes[i];
+        if (FOLLY_UNLIKELY(
+                scatterNullKeyRows_ && !isSinglePartition &&
+                rowHasNullKey(rows[i]))) {
+          hash = folly::hasher<uint64_t>()(nullScatterSeq_++);
+        }
         const auto partitionNum =
-            isSinglePartition ? 0 : bits_.partition(hashes[i]);
+            isSinglePartition ? 0 : bits_.partition(hash);
         VELOX_DCHECK_GE(partitionNum, 0);
         // TODO: Fully integrate nested spill id into spiller partitioning,
         // replacing integer based partitioning.
