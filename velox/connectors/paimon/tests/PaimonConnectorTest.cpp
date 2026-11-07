@@ -1129,6 +1129,16 @@ TEST_F(PaimonConnectorTest, schemaEvolutionRenameReorderAndMissing) {
       {makeFlatVector<int64_t>({4, 5}),
        makeFlatVector<int64_t>({40, 50}),
        makeFlatVector<std::string>({"four", "five"})});
+  const auto intermediate = makeRowVector(
+      {"renamed_again", "s", "fresh"},
+      {makeFlatVector<int64_t>({7}),
+       makeFlatVector<std::string>({"seven"}),
+       makeFlatVector<int64_t>({70})});
+  const auto expectedIntermediate = makeRowVector(
+      {"b", "fresh", "s"},
+      {makeFlatVector<int64_t>({7}),
+       makeFlatVector<int64_t>({70}),
+       makeFlatVector<std::string>({"seven"})});
   const auto expectedOld = makeRowVector(
       {"b", "fresh", "s"},
       {makeFlatVector<int64_t>({1, 2, 1}),
@@ -1136,19 +1146,24 @@ TEST_F(PaimonConnectorTest, schemaEvolutionRenameReorderAndMissing) {
            {std::nullopt, std::nullopt, std::nullopt}),
        makeFlatVector<std::string>({"one", "two", "one"})});
   const auto type = asRowType(current->type());
-  const auto table =
-      evolutionTable(type, {{0, {asRowType(oldRows->type()), {12, 10, 99}}}});
+  const auto table = evolutionTable(
+      type,
+      {{0, {asRowType(oldRows->type()), {12, 10, 99}}},
+       {8, {asRowType(intermediate->type()), {10, 12, 11}}}});
   const auto plan = evolutionPlan(table, type, makePaimonColumnHandles(type));
   for (const auto format : fileFormats()) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
-    const auto paths = makeFilePaths(2);
+    const auto paths = makeFilePaths(3);
     writeFile(paths[0]->getPath(), oldRows, format);
     writeFile(paths[1]->getPath(), current, format);
+    writeFile(paths[2]->getPath(), intermediate, format);
     const auto old = std::make_pair(paths[0]->getPath(), int64_t{0});
     const auto now = std::make_pair(paths[1]->getPath(), int64_t{17});
+    const auto middle = std::make_pair(paths[2]->getPath(), int64_t{8});
     exec::test::AssertQueryBuilder(plan)
-        .split(evolutionSplit(format, {old, now, old}))
-        .assertResults({expectedOld, current, expectedOld});
+        .split(evolutionSplit(format, {old, middle, now, old}))
+        .assertResults(
+            {expectedOld, expectedIntermediate, current, expectedOld});
     exec::test::AssertQueryBuilder(plan)
         .splits(
             {evolutionSplit(format, {now, old}), evolutionSplit(format, {old})})
@@ -1317,11 +1332,17 @@ TEST_F(PaimonConnectorTest, schemaEvolutionPartitionConstants) {
     const auto paths = makeFilePaths(2);
     writeFile(
         paths[0]->getPath(),
-        makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2})}),
+        makeRowVector(
+            {"p", "a"},
+            {makeFlatVector<std::string>({"physical", "physical"}),
+             makeFlatVector<int64_t>({1, 2})}),
         format);
     writeFile(
         paths[1]->getPath(),
-        makeRowVector({"b"}, {makeFlatVector<int64_t>({3})}),
+        makeRowVector(
+            {"b", "p"},
+            {makeFlatVector<int64_t>({3}),
+             makeFlatVector<std::string>({"physical"})}),
         format);
     const auto nullSplit = evolutionSplit(
         format, {{paths[0]->getPath(), 0}}, {{"p", std::nullopt}});
