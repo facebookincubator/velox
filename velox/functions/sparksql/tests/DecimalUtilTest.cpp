@@ -15,7 +15,11 @@
  */
 
 #include "velox/functions/sparksql/DecimalUtil.h"
+
+// velox::DecimalUtil used to arrive transitively through the header above,
+// which no longer includes type/DecimalUtil.h.
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
