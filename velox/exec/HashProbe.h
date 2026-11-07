@@ -464,8 +464,6 @@ class HashProbe : public Operator {
   // Channel of probe keys in 'input_'.
   std::vector<column_index_t> keyChannels_;
 
-  folly::F14FastSet<column_index_t> dynamicFiltersProducedOnChannels_;
-
   // Build-side Bloom filter bypass configuration, state, and metrics.
   const int32_t bypassBloomFilterMinRows_;
   const int32_t bypassBloomFilterMinPct_;
