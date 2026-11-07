@@ -14,6 +14,23 @@
 add_subdirectory(utils)
 
 add_executable(
+  security_audit_test
+  SecurityAuditTest.cpp
+)
+
+add_test(
+  NAME security_audit_test
+  COMMAND security_audit_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(
+  security_audit_test
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_executable(
   aggregate_companion_functions_test
   AggregateCompanionAdapterTest.cpp
   AggregateCompanionSignaturesTest.cpp
