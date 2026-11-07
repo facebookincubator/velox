@@ -233,6 +233,19 @@ node **FOO**.
   :width: 600
   :align: center
 
+When constant folding is enabled, the compiler also simplifies IF, SWITCH and
+simple CASE expressions. It removes the trailing (condition, then clause) pairs
+whose then clause is the same expression as the else clause. These pairs
+return the else value whether their conditions are true or not. Their
+conditions are not evaluated, so their errors are not raised. For example,
+**if(c0 > 10, c1, c1)** becomes **c1**.
+
+Pairs whose values can't be compared, such as lambdas, are kept. In
+**CASE x WHEN ...**, a WHEN value whose type differs from the type of **x** can
+change the type in which **x** is compared. For example, **WHEN 0.5** makes a
+BIGINT **x** compare as DOUBLE. Only the pairs after the last such WHEN value
+are removed.
+
 Expression Metadata
 ```````````````````
 
