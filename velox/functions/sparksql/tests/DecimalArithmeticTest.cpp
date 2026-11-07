@@ -19,11 +19,13 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
+using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
@@ -1245,6 +1247,137 @@ TEST_F(DecimalArithmeticTest, checkedMultiply) {
       HugeInt::parse("-10000000000000000000"),
       HugeInt::parse("-10000000000000000000"),
       "Decimal overflow in multiply");
+}
+
+TEST_F(DecimalArithmeticTest, divideAnsi) {
+  // With ANSI mode enabled, a zero divisor and an overflow are errors instead
+  // of nulls. try() still turns them into nulls.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+  const auto divide =
+      [&](const TypePtr& tType, const TypePtr& uType, auto t, auto u) {
+        return checkedDecimalArithmetic("divide", tType, uType, t, u);
+      };
+
+  // Normal cases for all input type combinations.
+  // DECIMAL(17,3) / DECIMAL(17,3) -> DECIMAL(38,21): 500/1000 = 0.5.
+  EXPECT_EQ(
+      divide(
+          DECIMAL(17, 3),
+          DECIMAL(17, 3),
+          std::optional<int64_t>(500),
+          std::optional<int64_t>(1000)),
+      HugeInt::parse("500000000000000000000"));
+  // DECIMAL(20,2) / DECIMAL(20,2) -> DECIMAL(38,18): 2500/500 = 5.
+  EXPECT_EQ(
+      divide(
+          DECIMAL(20, 2),
+          DECIMAL(20, 2),
+          std::optional<int128_t>(2500),
+          std::optional<int128_t>(500)),
+      HugeInt::parse("5" + std::string(18, '0')));
+  // DECIMAL(17,3) / DECIMAL(20,2) -> DECIMAL(38,22).
+  EXPECT_EQ(
+      divide(
+          DECIMAL(17, 3),
+          DECIMAL(20, 2),
+          std::optional<int64_t>(500),
+          std::optional<int128_t>(1000)),
+      HugeInt::parse("500000000000000000000"));
+  // DECIMAL(20,2) / DECIMAL(17,3) -> DECIMAL(38,17).
+  EXPECT_EQ(
+      divide(
+          DECIMAL(20, 2),
+          DECIMAL(17, 3),
+          std::optional<int128_t>(500),
+          std::optional<int64_t>(1000)),
+      HugeInt::parse("500000000000000000"));
+  // Negative operands.
+  EXPECT_EQ(
+      divide(
+          DECIMAL(17, 3),
+          DECIMAL(17, 3),
+          std::optional<int64_t>(-500),
+          std::optional<int64_t>(1000)),
+      HugeInt::parse("-500000000000000000000"));
+  EXPECT_EQ(
+      divide(
+          DECIMAL(17, 3),
+          DECIMAL(17, 3),
+          std::optional<int64_t>(-500),
+          std::optional<int64_t>(-1000)),
+      HugeInt::parse("500000000000000000000"));
+  // A zero dividend is not an error.
+  EXPECT_EQ(
+      divide(
+          DECIMAL(17, 3),
+          DECIMAL(17, 3),
+          std::optional<int64_t>(0),
+          std::optional<int64_t>(1000)),
+      0);
+  // NULL input returns NULL, even with a zero divisor.
+  EXPECT_EQ(
+      divide(
+          DECIMAL(17, 3),
+          DECIMAL(17, 3),
+          std::optional<int64_t>(),
+          std::optional<int64_t>(0)),
+      std::nullopt);
+  EXPECT_EQ(
+      divide(
+          DECIMAL(17, 3),
+          DECIMAL(17, 3),
+          std::optional<int64_t>(500),
+          std::optional<int64_t>()),
+      std::nullopt);
+
+  // Division by zero throws for all type combinations.
+  assertErrorForCheckedDecimalArithmetic<int64_t, int64_t>(
+      "divide", DECIMAL(17, 3), DECIMAL(17, 3), 500, 0, "Division by zero");
+  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+      "divide", DECIMAL(20, 2), DECIMAL(20, 2), 500, 0, "Division by zero");
+  assertErrorForCheckedDecimalArithmetic<int64_t, int128_t>(
+      "divide", DECIMAL(17, 3), DECIMAL(20, 2), 500, 0, "Division by zero");
+  assertErrorForCheckedDecimalArithmetic<int128_t, int64_t>(
+      "divide", DECIMAL(20, 2), DECIMAL(17, 3), 500, 0, "Division by zero");
+
+  // Overflow throws. DECIMAL(38,0) / DECIMAL(38,6) -> DECIMAL(38,6): the
+  // quotient needs more than 38 digits.
+  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+      "divide",
+      DECIMAL(38, 0),
+      DECIMAL(38, 6),
+      HugeInt::parse("99999999999999999999999999999999999999"),
+      1,
+      "Decimal overflow in divide");
+  // DECIMAL(38,0) / DECIMAL(2,1) -> DECIMAL(38,2): dividing the maximum by 0.1
+  // needs 39 integral digits.
+  assertErrorForCheckedDecimalArithmetic<int128_t, int64_t>(
+      "divide",
+      DECIMAL(38, 0),
+      DECIMAL(2, 1),
+      HugeInt::parse("99999999999999999999999999999999999999"),
+      1,
+      "Decimal overflow in divide");
+
+  // With ANSI mode disabled, the same inputs return NULL.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+  EXPECT_EQ(
+      divide(
+          DECIMAL(17, 3),
+          DECIMAL(17, 3),
+          std::optional<int64_t>(500),
+          std::optional<int64_t>(0)),
+      std::nullopt);
+  EXPECT_EQ(
+      divide(
+          DECIMAL(38, 0),
+          DECIMAL(2, 1),
+          std::optional<int128_t>(
+              HugeInt::parse("99999999999999999999999999999999999999")),
+          std::optional<int64_t>(1)),
+      std::nullopt);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

@@ -184,6 +184,17 @@ Arithmetic Functions
         SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
         SELECT CAST(99999999999999999999999999999999999 as DECIMAL(38, 1)) div CAST(0.001 as DECIMAL(7, 4)); -- 687399551400672280 // Result is truncated to int64_t.
 
+.. spark:function:: divide(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of dividing ``x`` by ``y``. The result type is determined
+    by the precision and scale computation rules described above.
+    Returns NULL when the result overflows or ``y`` is zero, or throws an error
+    when Spark ANSI mode is enabled (``spark.ansi_enabled``).
+    Corresponds to Spark's operator ``/``. ::
+
+        SELECT CAST(1.0 as DECIMAL(3, 1)) / CAST(2.0 as DECIMAL(3, 1)); -- 0.500000
+        SELECT CAST(1.0 as DECIMAL(3, 1)) / CAST(0.0 as DECIMAL(3, 1)); -- NULL, or error in ANSI mode
+
 .. spark:function:: multiply(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
 
     Returns the result of multiplying ``x`` and ``y``. The result type is determined
