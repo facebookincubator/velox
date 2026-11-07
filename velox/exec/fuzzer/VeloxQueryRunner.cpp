@@ -170,7 +170,7 @@ std::optional<std::string> VeloxQueryRunner::toSql(
     const core::PlanNodePtr& /*plan*/) {
   // We don't need to convert to SQL for VeloxQueryRunner
   // as we're sending the serialized plan directly
-  VELOX_FAIL("VeloxQueryRunner does not support SQL conversion");
+  return std::nullopt;
 }
 
 bool VeloxQueryRunner::isConstantExprSupported(
@@ -229,7 +229,8 @@ VeloxQueryRunner::execute(const core::PlanNodePtr& plan) {
             deserializeBatches(*response.results(), pool_.get())),
         ReferenceQueryErrorCode::kSuccess);
   } else {
-    LOG(INFO) << "Reference eval failed.";
+    LOG(INFO) << "Reference eval failed: "
+              << response.errorMessage().value_or("");
     return std::make_pair(
         std::nullopt, ReferenceQueryErrorCode::kReferenceQueryFail);
   }
