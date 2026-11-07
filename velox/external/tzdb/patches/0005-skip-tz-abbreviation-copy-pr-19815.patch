@@ -1,0 +1,203 @@
+diff --git a/velox/external/tzdb/time_zone.cpp b/velox/external/tzdb/time_zone.cpp
+--- a/velox/external/tzdb/time_zone.cpp
++++ b/velox/external/tzdb/time_zone.cpp
+@@ -971,6 +971,13 @@
+ sys_info
+ time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
+ {
++    return load_sys_info(i, true);
++}
++
++sys_info
++time_zone::load_sys_info(std::vector<date::transition>::const_iterator i,
++                         bool __with_abbreviation) const
++{
+     using namespace std::chrono;
+     const auto& transitions = __impl_->transitions();
+     assert(!transitions.empty());
+@@ -982,7 +989,9 @@
+                                       date::sys_seconds(date::sys_days(date::year::max()/date::December/31));
+     r.offset = i[-1].info->offset;
+     r.save = i[-1].info->is_dst ? minutes{1} : minutes{0};
+-    r.abbrev = i[-1].info->abbrev;
++    if (__with_abbreviation) {
++        r.abbrev = i[-1].info->abbrev;
++    }
+     return r;
+ }
+ 
+@@ -1179,6 +1188,12 @@
+ }
+ 
+ [[nodiscard]] sys_info time_zone::__get_info(date::sys_seconds __time) const {
++  return __get_info(__time, true);
++}
++
++[[nodiscard]] sys_info time_zone::__get_info(
++    date::sys_seconds __time,
++    bool __with_abbreviation) const {
+   const auto& transitions = __impl_->transitions();
+   auto iter = upper_bound(transitions.begin(), transitions.end(), __time,
+                                      [](const date::sys_seconds& x, const date::transition& t)
+@@ -1193,7 +1208,7 @@
+                                       date::sys_seconds(date::sys_days(date::year::max()/date::December/31)),
+       iter[0].info->offset,
+       iter[0].info->is_dst ? std::chrono::minutes{1} : std::chrono::minutes{0},
+-      iter[0].info->abbrev
++      __with_abbreviation ? iter[0].info->abbrev : std::string{}
+     };
+   }
+ 
+@@ -1239,12 +1254,13 @@
+       continuation.__stdoff + (*currentRule)->__save.__time,
+       std::chrono::duration_cast<std::chrono::minutes>(
+                   (*currentRule)->__save.__time),
+-      __format(
++      __with_abbreviation ? __format(
+                   continuation, (*currentRule)->__letters, (*currentRule)->__save.__time)
++                          : std::string{}
+     };
+   }
+ 
+-  return load_sys_info(iter);
++  return load_sys_info(iter, __with_abbreviation);
+ }
+ 
+ // Is the "__local_time" present in "__first" and "__second". If so the
+@@ -1299,6 +1315,12 @@
+ 
+ [[nodiscard]] local_info time_zone::__get_info(
+     date::local_seconds __local_time) const {
++  return __get_info(__local_time, true);
++}
++
++[[nodiscard]] local_info time_zone::__get_info(
++    date::local_seconds __local_time,
++    bool __with_abbreviation) const {
+   std::chrono::seconds __local_seconds = __local_time.time_since_epoch();
+ 
+   /* An example of a typical year with a DST switch displayed in local time.
+@@ -1330,7 +1352,7 @@
+   // information available. Assume the offset between system time and local time
+   // is 0s. This gives an initial estimate.
+   date::sys_seconds __guess{__local_seconds};
+-  sys_info __info = __get_info(__guess);
++  sys_info __info = __get_info(__guess, __with_abbreviation);
+ 
+   // At this point the offset can be used to determine an estimate for the local
+   // time. Before doing that, determine the offset and validate whether the
+@@ -1381,18 +1403,20 @@
+   if (__sys_time < __info.begin)
+     // Case 1 before __info
+     return facebook::velox::tzdb::__get_info(
+-        __local_time, __get_info(__info.begin - 1s), __info);
++        __local_time,
++        __get_info(__info.begin - 1s, __with_abbreviation),
++        __info);
+ 
+   if (__sys_time >= __info.end)
+     // Case 3 after __info
+     return facebook::velox::tzdb::__get_info(
+-        __local_time, __info, __get_info(__info.end));
++        __local_time, __info, __get_info(__info.end, __with_abbreviation));
+ 
+   // Case 2 in __info
+   if (__info.begin != date::sys_days(date::year::min()/date::January/1)) {
+     // Case 2.1 Not at the beginning, when not ambiguous the result should test
+     // case 2.3.
+-    sys_info __prev = __get_info(__info.begin - 1s);
++    sys_info __prev = __get_info(__info.begin - 1s, __with_abbreviation);
+     if (__is_ambiguous(__local_time, __prev, __info))
+       return {local_info::ambiguous, __prev, __info};
+   }
+@@ -1403,7 +1427,7 @@
+ 
+   // This tests case 2.2 or case 2.3.
+   return facebook::velox::tzdb::__get_info(
+-      __local_time, __info, __get_info(__info.end));
++      __local_time, __info, __get_info(__info.end, __with_abbreviation));
+ }
+ 
+ } // namespace facebook::velox::tzdb
+diff --git a/velox/external/tzdb/time_zone.h b/velox/external/tzdb/time_zone.h
+--- a/velox/external/tzdb/time_zone.h
++++ b/velox/external/tzdb/time_zone.h
+@@ -62,12 +62,22 @@
+         std::chrono::time_point_cast<std::chrono::seconds>(__time));
+   }
+ 
++  // Numeric conversions do not need time zone abbreviations. Leave them empty
++  // to avoid copying shared strings, while preserving get_info() for formatting
++  // and exception messages.
++  template <class _Duration>
++  [[nodiscard]] local_info get_info_for_conversion(
++      const date::local_time<_Duration>& __time) const {
++    return __get_info(
++        std::chrono::time_point_cast<std::chrono::seconds>(__time), false);
++  }
++
+   // We don't apply nodiscard here since this function throws on many inputs,
+   // so it could be used as a validation.
+   template <class _Duration>
+   date::sys_time<std::common_type_t<_Duration, std::chrono::seconds>> to_sys(
+       const date::local_time<_Duration>& __time) const {
+-    local_info __info = get_info(__time);
++    local_info __info = get_info_for_conversion(__time);
+     switch (__info.result) {
+       case local_info::unique:
+         return date::sys_time<
+@@ -75,10 +85,10 @@
+             __time.time_since_epoch() - __info.first.offset};
+ 
+       case local_info::nonexistent:
+-        __throw_nonexistent_local_time(__time, __info);
++        __throw_nonexistent_local_time(__time, get_info(__time));
+ 
+       case local_info::ambiguous:
+-        __throw_ambiguous_local_time(__time, __info);
++        __throw_ambiguous_local_time(__time, get_info(__time));
+     }
+ 
+     // TODO TZDB The Standard does not specify anything in these cases.
+@@ -98,7 +108,7 @@
+   [[nodiscard]] date::sys_time<
+       std::common_type_t<_Duration, std::chrono::seconds>>
+   to_sys(const date::local_time<_Duration>& __time, choose __z) const {
+-    local_info __info = get_info(__time);
++    local_info __info = get_info_for_conversion(__time);
+     switch (__info.result) {
+       case local_info::unique:
+       case local_info::nonexistent: // first and second are the same
+@@ -141,7 +151,8 @@
+   to_local(const date::sys_time<_Duration>& __time) const {
+     using _Dp = std::common_type_t<_Duration, std::chrono::seconds>;
+ 
+-    sys_info __info = get_info(__time);
++    sys_info __info = __get_info(
++        std::chrono::time_point_cast<std::chrono::seconds>(__time), false);
+ 
+     if (__info.offset < std::chrono::seconds{0} &&
+         __time.time_since_epoch() < _Dp::min() - __info.offset) {
+@@ -164,6 +175,9 @@
+ 
+  private:
+   [[nodiscard]] sys_info load_sys_info(std::vector<date::transition>::const_iterator i) const;
++  [[nodiscard]] sys_info load_sys_info(
++      std::vector<date::transition>::const_iterator i,
++      bool __with_abbreviation) const;
+ 
+   [[nodiscard]] std::string_view __name() const noexcept;
+ 
+@@ -171,6 +185,12 @@
+   [[nodiscard]] sys_info __get_info_to_populate_transition(date::sys_seconds __time) const;
+   [[nodiscard]] sys_info __get_info(date::sys_seconds __time) const;
+   [[nodiscard]] local_info __get_info(date::local_seconds __time) const;
++  [[nodiscard]] sys_info __get_info(
++      date::sys_seconds __time,
++      bool __with_abbreviation) const;
++  [[nodiscard]] local_info __get_info(
++      date::local_seconds __time,
++      bool __with_abbreviation) const;
+ 
+   std::unique_ptr<__impl> __impl_;
+ };

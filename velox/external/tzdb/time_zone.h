@@ -62,12 +62,22 @@ class time_zone {
         std::chrono::time_point_cast<std::chrono::seconds>(__time));
   }
 
+  // Numeric conversions do not need time zone abbreviations. Leave them empty
+  // to avoid copying shared strings, while preserving get_info() for formatting
+  // and exception messages.
+  template <class _Duration>
+  [[nodiscard]] local_info get_info_for_conversion(
+      const date::local_time<_Duration>& __time) const {
+    return __get_info(
+        std::chrono::time_point_cast<std::chrono::seconds>(__time), false);
+  }
+
   // We don't apply nodiscard here since this function throws on many inputs,
   // so it could be used as a validation.
   template <class _Duration>
   date::sys_time<std::common_type_t<_Duration, std::chrono::seconds>> to_sys(
       const date::local_time<_Duration>& __time) const {
-    local_info __info = get_info(__time);
+    local_info __info = get_info_for_conversion(__time);
     switch (__info.result) {
       case local_info::unique:
         return date::sys_time<
@@ -75,10 +85,10 @@ class time_zone {
             __time.time_since_epoch() - __info.first.offset};
 
       case local_info::nonexistent:
-        __throw_nonexistent_local_time(__time, __info);
+        __throw_nonexistent_local_time(__time, get_info(__time));
 
       case local_info::ambiguous:
-        __throw_ambiguous_local_time(__time, __info);
+        __throw_ambiguous_local_time(__time, get_info(__time));
     }
 
     // TODO TZDB The Standard does not specify anything in these cases.
@@ -98,7 +108,7 @@ class time_zone {
   [[nodiscard]] date::sys_time<
       std::common_type_t<_Duration, std::chrono::seconds>>
   to_sys(const date::local_time<_Duration>& __time, choose __z) const {
-    local_info __info = get_info(__time);
+    local_info __info = get_info_for_conversion(__time);
     switch (__info.result) {
       case local_info::unique:
       case local_info::nonexistent: // first and second are the same
@@ -141,7 +151,8 @@ class time_zone {
   to_local(const date::sys_time<_Duration>& __time) const {
     using _Dp = std::common_type_t<_Duration, std::chrono::seconds>;
 
-    sys_info __info = get_info(__time);
+    sys_info __info = __get_info(
+        std::chrono::time_point_cast<std::chrono::seconds>(__time), false);
 
     if (__info.offset < std::chrono::seconds{0} &&
         __time.time_since_epoch() < _Dp::min() - __info.offset) {
@@ -164,6 +175,9 @@ class time_zone {
 
  private:
   [[nodiscard]] sys_info load_sys_info(std::vector<date::transition>::const_iterator i) const;
+  [[nodiscard]] sys_info load_sys_info(
+      std::vector<date::transition>::const_iterator i,
+      bool __with_abbreviation) const;
 
   [[nodiscard]] std::string_view __name() const noexcept;
 
@@ -171,6 +185,12 @@ class time_zone {
   [[nodiscard]] sys_info __get_info_to_populate_transition(date::sys_seconds __time) const;
   [[nodiscard]] sys_info __get_info(date::sys_seconds __time) const;
   [[nodiscard]] local_info __get_info(date::local_seconds __time) const;
+  [[nodiscard]] sys_info __get_info(
+      date::sys_seconds __time,
+      bool __with_abbreviation) const;
+  [[nodiscard]] local_info __get_info(
+      date::local_seconds __time,
+      bool __with_abbreviation) const;
 
   std::unique_ptr<__impl> __impl_;
 };
