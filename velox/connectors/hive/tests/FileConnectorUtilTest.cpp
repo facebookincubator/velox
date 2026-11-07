@@ -375,7 +375,9 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
   // Session flags enabled => RowReaderOptions flags true.
   {
     auto holder = makeConnectorQueryCtx(
-        {{connector::FileConfig::kNimblePreserveDictionaryEncodingSession,
+        {{connector::FileConfig::kNimbleFsstDecodeRepeatedPayloadsSession,
+          "true"},
+         {connector::FileConfig::kNimblePreserveDictionaryEncodingSession,
           "true"},
          {connector::FileConfig::kNimbleDictionaryAwareReadsSession, "true"}});
     dwio::common::RowReaderOptions rowReaderOptions;
@@ -390,6 +392,8 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
         /*ioExecutor=*/nullptr,
         rowReaderOptions);
 
+    EXPECT_TRUE(rowReaderOptions.nimbleFsstDecodeRepeatedPayloads());
+    EXPECT_FALSE(rowReaderOptions.nimbleScanFastPath());
     EXPECT_TRUE(rowReaderOptions.nimblePreserveDictionaryEncoding());
     EXPECT_TRUE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
@@ -409,6 +413,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
         /*ioExecutor=*/nullptr,
         rowReaderOptions);
 
+    EXPECT_FALSE(rowReaderOptions.nimbleFsstDecodeRepeatedPayloads());
     EXPECT_FALSE(rowReaderOptions.nimblePreserveDictionaryEncoding());
     EXPECT_FALSE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
