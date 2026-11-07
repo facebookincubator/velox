@@ -36,6 +36,68 @@ Velox-cuDF builds are included in Velox CI as part of the [adapters build](https
 
 Velox-cuDF provides several configuration properties to control GPU execution behavior, memory management, and debugging. These configurations are available when compiled with cuDF support and can be set via Velox's configuration system. For a complete list of cuDF-specific configuration properties and their descriptions, see the [Cudf-specific Configuration section](https://facebookincubator.github.io/velox/configs.html#cudf-specific-configuration-experimental) in the Velox configuration documentation.
 
+## Limitations and compatibility
+
+### Spark numeric casts and decimal comparisons
+
+`registerSparkFunctions` enables `spark_legacy_cast` for Boolean, integral,
+REAL, and DOUBLE conversions, numeric-to-DECIMAL casts, and DECIMAL-to-DECIMAL
+rescaling. Floating-point-to-integral casts truncate toward zero, map NaN to
+zero, and saturate before narrowing to smaller integer types. Decimal casts
+round HALF_UP and return NULL on precision overflow. Floating-point-to-decimal
+conversion uses the Java 8/11/17 decimal representation, matching Spark 3.5 on
+JDK 17; REAL inputs are first promoted to DOUBLE. Newer Java decimal-rendering
+semantics are not implemented by this path.
+
+Floating-point-to-decimal conversion uses a guarded fast path when conservative
+rounding bounds agree, and otherwise falls back to exact decimal digit
+generation. The fast path requires scale at most 18 and scaled magnitude below
+2^52. Direct binary scaling and rounding is not equivalent: `37.175` cast to
+`DECIMAL(15, 2)` must produce `37.18`, and `1e38` cast to `DECIMAL(38, 0)` must
+overflow to NULL. The guard preserves these rounding and validity decisions;
+this remains the default conversion policy.
+
+For conversion experiments, set `cudf.numeric_float_to_decimal_enabled=true`
+in `CudfConfig::initialize` before constructing expressions. This selects a
+separate numeric kernel for REAL/DOUBLE-to-DECIMAL casts. It scales the binary
+significand and applies type-specific rounding without Java decimal digit
+reconstruction or an exact fallback. Other casts keep their existing behavior.
+The setting defaults to false and is captured when each cast function is
+constructed; changing it does not change existing functions.
+
+Numeric conversion is intentionally not Spark-exact. For example, REAL `0.1f`
+cast to `DECIMAL(18,18)` produces `0.100000001490116119` instead of Spark's
+`0.100000001490116120`. DOUBLE bits `0xc235b5bae25aebd0` cast to
+`DECIMAL(15,4)` produce `-93243236954.9212` instead of `-93243236954.9211`.
+DOUBLE `1e38` cast to `DECIMAL(38,0)` produces the non-NULL unscaled value
+`99999999999999990000000000000000000000`, whereas Spark returns NULL.
+Differences are not restricted to one unscaled unit for all precisions and
+magnitudes. Decimal rounding can also change whether a result overflows the
+requested precision, affecting NULLs, filters, equality, and aggregates.
+Input NULLs remain NULL; nonfinite values and storage overflow return NULL.
+The unsigned result is checked against decimal precision before narrowing.
+
+The numeric policy is experimental. Compare it with the default policy in the
+same operator, report value and NULL-mask differences separately, and measure
+complete conversion calls before claiming a speedup. External integrations
+must forward the setting explicitly; merely setting a Spark property does not
+establish that the numeric kernel was selected.
+
+Floating-point-to-decimal and floating-point-to-integral calls with foldable
+constant inputs are rejected before GPU planning: the CPU expression optimizer
+currently uses different rounding or overflow behavior for these casts.
+Constant-encoded input columns are supported.
+
+String, date/time, complex-type, DECIMAL-to-non-DECIMAL, and `spark_ansi_cast`
+conversions remain unsupported by this path. Unsupported conversions are
+rejected during GPU validation; CPU fallback is used only when enabled.
+
+The `decimal_equalto`, `decimal_notequalto`, `decimal_lessthan`,
+`decimal_lessthanorequal`, `decimal_greaterthan`, and
+`decimal_greaterthanorequal` names support nullable decimal operands. Scale
+alignment must fit the common decimal storage width; combinations that could
+overflow during alignment are rejected during validation.
+
 ### Testing Velox with cuDF
 
 Tests with Velox-cuDF can only be run on GPU-enabled hardware. The Velox-cuDF tests in [experimental/cudf/tests](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/tests) include several types of tests:

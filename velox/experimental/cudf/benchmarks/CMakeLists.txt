@@ -47,3 +47,14 @@ target_link_libraries(
   Folly::folly
   Folly::follybenchmark
 )
+
+if(VELOX_ENABLE_SPARK_FUNCTIONS)
+  add_executable(velox_cudf_cast_benchmark CudfCastBenchmark.cpp)
+  target_link_libraries(
+    velox_cudf_cast_benchmark
+    velox_cudf_exec
+    velox_functions_spark
+    Folly::folly
+    Folly::follybenchmark
+  )
+endif()
