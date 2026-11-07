@@ -82,6 +82,19 @@ struct RuntimeMetric {
   std::string toString() const;
 };
 
+/// Process-global set of runtime metrics aggregated per operator.
+class OperatorAggregatedMetrics {
+ public:
+  /// Adds a metric name in addition to the built-in names. Throws if present.
+  static void add(std::string name);
+
+  /// Removes a dynamically added metric name. Throws if absent.
+  static void remove(const std::string& name);
+
+  /// Returns true if 'name' is built in or dynamically added.
+  static bool contains(const std::string& name);
+};
+
 /// Simple interface to implement writing of runtime stats to Velox Operator
 /// stats.
 /// Inherit a concrete class from this to implement your writing.
