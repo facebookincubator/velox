@@ -18,6 +18,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
@@ -2281,13 +2282,10 @@ TEST_F(CudfIcebergReadTest, remainingFilterCastFromVarchar) {
   };
 
   auto rowType = ROW({{"c0", VARCHAR()}, {"c1", BIGINT()}});
-  auto dataFile = TempFilePath::create();
-  writeToFile(
-      dataFile->getPath(),
-      makeRowVector(
-          {"c0", "c1"},
-          {makeFlatVector<std::string>({"1.5", "x", "inf"}),
-           makeFlatVector<int64_t>({1, 2, 3})}));
+  const auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<std::string>({"1.5", "x", "inf"}),
+       makeFlatVector<int64_t>({1, 2, 3})});
 
   auto testFilter =
       [&](const std::string& filter,
@@ -2305,18 +2303,29 @@ TEST_F(CudfIcebergReadTest, remainingFilterCastFromVarchar) {
                         .endTableScan()
                         .planNode();
 
+        // A file no earlier scan read, since only a read from storage reports
+        // kDwioStorageReadBytes.
+        const auto dataFile = TempFilePath::create();
+        writeToFile(dataFile->getPath(), data);
+
         auto task = AssertQueryBuilder(plan)
                         .config(CudfConfig::kCudfEnabled, true)
                         .configs(sessionConfig)
                         .splits(makeIcebergSplits(dataFile->getPath()))
                         .assertResults(expected);
 
-        // A scan on the GPU data source returns its output through
-        // CudfToVelox.
+        // The adapter adds a CudfToVelox operator after a GPU scan, and only
+        // the cuDF data source reports kDwioStorageReadBytes, so the two show
+        // that the adapter and the connector agree.
+        const auto planStats = toPlanStats(task->taskStats());
+        const auto& scanStats = planStats.at(plan->id());
         EXPECT_EQ(
-            toPlanStats(task->taskStats())
-                    .at(plan->id())
-                    .operatorStats.count("CudfToVelox") > 0,
+            scanStats.operatorStats.count("CudfToVelox") > 0, expectCudfScan);
+        EXPECT_EQ(
+            scanStats.customStats.count(
+                std::string(
+                    cudf_velox::connector::hive::CudfHiveDataSource::
+                        kDwioStorageReadBytes)) > 0,
             expectCudfScan);
       };
 

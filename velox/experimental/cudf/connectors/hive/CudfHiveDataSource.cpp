@@ -329,15 +329,69 @@ ScanFilters splitAndFoldFilters(
   return filters;
 }
 
+// Returns why the data source cannot scan with 'filters' on the GPU, or
+// std::nullopt if it can. isSupported() and the constructor share it, so that
+// the connectors pick this data source only for a scan the constructor
+// accepts.
+std::optional<std::string> unsupportedFiltersReason(
+    const ScanFilters& filters,
+    core::QueryCtx* remainingFilterQueryCtx) {
+  // The cuDF data source does not sample rows.
+  if (filters.sampleRate < 1) {
+    return fmt::format("Sampling is not supported: {}", filters.sampleRate);
+  }
+  for (const auto& [subfield, filter] : filters.subfieldFilters) {
+    if (!canCreateAstFromSubfieldFilter(subfield, *filter)) {
+      return fmt::format(
+          "Subfield filter is not supported by the cuDF AST: {} {}",
+          subfield.toString(),
+          filter->toString());
+    }
+  }
+  if (filters.needsSessionQueryConfig) {
+    return fmt::format(
+        "Remaining filter that depends on a session setting is not supported: {}",
+        filters.remainingFilter->toString());
+  }
+  if (!filters.remainingFilter) {
+    return std::nullopt;
+  }
+  // The filter is evaluated over the columns read for it, so a filter that
+  // reads none has no rows to be evaluated over. A filter that folds to a
+  // constant needs no evaluation.
+  if (!filters.remainingFilter->isConstantKind() &&
+      referencedInputFields(filters.remainingFilter).empty()) {
+    return fmt::format(
+        "Remaining filter that references no column is not supported: {}",
+        filters.remainingFilter->toString());
+  }
+  // The filter is already folded, so pass no pool to skip folding again.
+  if (!canExprRunOnGpu(
+          filters.remainingFilter, remainingFilterQueryCtx, /*pool=*/nullptr)) {
+    return fmt::format(
+        "Remaining filter is not supported by cuDF: {}",
+        filters.remainingFilter->toString());
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 bool CudfHiveDataSource::isSupported(
     const ConnectorTableHandlePtr& tableHandle,
     const ConnectorQueryCtx& connectorQueryCtx) {
+  return !unsupportedReason(tableHandle, connectorQueryCtx).has_value();
+}
+
+std::optional<std::string> CudfHiveDataSource::unsupportedReason(
+    const ConnectorTableHandlePtr& tableHandle,
+    const ConnectorQueryCtx& connectorQueryCtx) {
   auto hiveTableHandle =
       std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
   if (!hiveTableHandle) {
-    return false;
+    return fmt::format(
+        "Table handle that is not a Hive table handle is not supported: {}",
+        tableHandle->toString());
   }
 
   const auto queryCtx = makeRemainingFilterQueryCtx(connectorQueryCtx);
@@ -346,24 +400,7 @@ bool CudfHiveDataSource::isSupported(
       connectorQueryCtx.expressionEvaluator(),
       queryCtx.get(),
       connectorQueryCtx.memoryPool());
-  // The cuDF data source does not sample rows.
-  if (filters.sampleRate < 1) {
-    return false;
-  }
-  for (const auto& [subfield, filter] : filters.subfieldFilters) {
-    if (!canCreateAstFromSubfieldFilter(subfield, *filter)) {
-      return false;
-    }
-  }
-  if (filters.needsSessionQueryConfig) {
-    return false;
-  }
-  if (!filters.remainingFilter) {
-    return true;
-  }
-  // The filter is already folded, so pass no pool to skip folding again.
-  return canExprRunOnGpu(
-      filters.remainingFilter, queryCtx.get(), /*pool=*/nullptr);
+  return unsupportedFiltersReason(filters, queryCtx.get());
 }
 
 CudfHiveDataSource::CudfHiveDataSource(
@@ -484,10 +521,12 @@ CudfHiveDataSource::CudfHiveDataSource(
   optimizeQueryCtx_ = makeRemainingFilterQueryCtx(*connectorQueryCtx);
   auto filters = splitAndFoldFilters(
       *tableHandle_, expressionEvaluator_, optimizeQueryCtx_.get(), pool_);
+  const auto reason =
+      unsupportedFiltersReason(filters, optimizeQueryCtx_.get());
   VELOX_CHECK(
-      !filters.needsSessionQueryConfig,
-      "Remaining filter that depends on a session setting must run on the CPU data source: {}",
-      tableHandle_->remainingFilter()->toString());
+      !reason.has_value(),
+      "Table scan must run on the CPU data source: {}",
+      *reason);
   subfieldFilters_ = std::move(filters.subfieldFilters);
 
   // A filter on a partition key decides for the whole split, so it is tested
@@ -529,12 +568,6 @@ CudfHiveDataSource::CudfHiveDataSource(
     // they reference. Read-column order does not affect results: the data
     // source projects its output to the requested output type.
     const auto filterFields = referencedInputFields(optimizedRemainingFilter_);
-    // The filter is evaluated over the columns read for it, so a filter that
-    // reads none has no rows to be evaluated over.
-    VELOX_USER_CHECK(
-        !filterFields.empty(),
-        "Remaining filter that references no column is not supported: {}",
-        optimizedRemainingFilter_->toString());
     for (const auto& name : filterFields) {
       // A partition key is materialized before the filter runs.
       if (const auto* partitionKey = partitionKeyHandle(name)) {
