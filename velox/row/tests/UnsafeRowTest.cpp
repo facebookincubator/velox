@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <folly/Random.h>
@@ -148,6 +149,32 @@ TEST_F(UnsafeRowTest, fixedWidthMapPadding) {
   const auto* map =
       reinterpret_cast<const uint64_t*>(buffer->as<char>() + mapOffset);
   EXPECT_EQ(map[0], 24);
+}
+
+TEST_F(UnsafeRowTest, nullArrayValues) {
+  const auto arrays = makeArrayVector<int64_t>({{7, 591, 9}});
+  arrays->elements()->setNull(1, true);
+  const auto maps = makeMapVector({0}, makeFlatVector<int64_t>({42}), arrays);
+  const auto data = makeRowVector({maps});
+  UnsafeRowFast serializer(data);
+  auto buffer =
+      AlignedBuffer::allocate<char>(serializer.rowSize(0), pool_.get(), 0);
+  ASSERT_EQ(
+      serializer.serialize(0, buffer->asMutable<char>()),
+      serializer.rowSize(0));
+
+  const auto mapOffset = buffer->as<uint64_t>()[1] >> 32;
+  const auto* map =
+      reinterpret_cast<const uint64_t*>(buffer->as<char>() + mapOffset);
+  const auto* valueArray = reinterpret_cast<const uint64_t*>(
+      reinterpret_cast<const char*>(map) + sizeof(uint64_t) + map[0]);
+  const auto* nestedArray = reinterpret_cast<const uint64_t*>(
+      reinterpret_cast<const char*>(valueArray) + (valueArray[2] >> 32));
+  ASSERT_EQ(nestedArray[0], 3);
+  ASSERT_EQ(nestedArray[1], 2);
+  const auto* values = reinterpret_cast<const int64_t*>(nestedArray + 2);
+  EXPECT_THAT(
+      std::vector<int64_t>(values, values + 3), testing::ElementsAre(7, 0, 9));
 }
 
 TEST_F(UnsafeRowTest, fuzz) {
