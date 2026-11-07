@@ -36,6 +36,12 @@ class ExpressionBenchmarkSet {
       const std::string& name,
       const std::string& expression);
 
+  /// Adds an already typed expression. Use it when the SQL parser cannot
+  /// produce the expression, e.g. a cast to or from TIMESTAMP_UTC.
+  ExpressionBenchmarkSet& addExpression(
+      const std::string& name,
+      const core::TypedExprPtr& expression);
+
   ExpressionBenchmarkSet& addExpressions(
       const std::vector<std::pair<std::string, std::string>>& expressions);
 
