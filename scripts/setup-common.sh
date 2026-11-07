@@ -167,7 +167,7 @@ function install_boost {
 function install_protobuf {
   install_abseil
 
-  wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v"${PROTOBUF_VERSION}"/protobuf-all-"${PROTOBUF_VERSION}".tar.gz protobuf
+  wget_and_untar https://github.com/protocolbuffers/protobuf/archive/refs/tags/v"${PROTOBUF_VERSION}".tar.gz protobuf
   cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package
 }
 
@@ -199,18 +199,6 @@ function install_abseil {
   fi
   VELOX_ABSEIL_INSTALLED=1
   wget_and_untar https://github.com/abseil/abseil-cpp/archive/refs/tags/"${ABSEIL_VERSION}".tar.gz abseil-cpp
-  local OS
-  OS=$(uname)
-  if [[ $OS == "Darwin" ]]; then
-    ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
-    (
-      cd "${DEPENDENCY_DIR}/abseil-cpp" || exit 1
-      PATCH_FILE="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch"
-      # Skip applying the patch if it is already applied.
-      git apply --reverse --check "$PATCH_FILE" 2>/dev/null ||
-        git apply "$PATCH_FILE"
-    )
-  fi
   cmake_install_dir abseil-cpp \
     -DABSL_BUILD_TESTING=OFF \
     -DCMAKE_CXX_STANDARD=17 \
@@ -428,11 +416,47 @@ function install_gcs_sdk_cpp {
   cmake_install_dir json \
     -DJSON_BuildTests=OFF
 
+  # libcurl -- google-cloud-cpp 3.11.0's REST transport requires >= 8.7.1,
+  # which is newer than the libcurl that ships with CentOS 9 and some
+  # manylinux images. Build from source so CMake's find_package(CURL) in
+  # google-cloud-cpp resolves against our INSTALL_PREFIX.
+  local CURL_VERSION_UNDERSCORE
+  CURL_VERSION_UNDERSCORE=$(echo "${CURL_VERSION}" | tr '.' '_')
+  wget_and_untar \
+    "https://github.com/curl/curl/releases/download/curl-${CURL_VERSION_UNDERSCORE}/curl-${CURL_VERSION}.tar.gz" curl
+  cmake_install_dir curl \
+    -DCURL_USE_OPENSSL=ON \
+    -DBUILD_TESTING=OFF \
+    -DBUILD_CURL_EXE=OFF \
+    -DCURL_DISABLE_LDAP=ON \
+    -DCURL_DISABLE_LDAPS=ON
+
+  # opentelemetry-cpp is a hard dependency of google-cloud-cpp 3.x's common
+  # library. The ENABLE "-feature" exclusion only drops service-level targets;
+  # google/cloud/internal/opentelemetry*.cc is unconditionally compiled into
+  # google_cloud_cpp_common and includes <opentelemetry/*> headers. See
+  # google-cloud-cpp doc/packaging.md for the recommended cmake flags below.
+  wget_and_untar https://github.com/open-telemetry/opentelemetry-cpp/archive/refs/tags/v"${OPENTELEMETRY_CPP_VERSION}".tar.gz opentelemetry-cpp
+  cmake_install_dir opentelemetry-cpp \
+    -DCMAKE_CXX_STANDARD=17 \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DWITH_EXAMPLES=OFF \
+    -DWITH_STL=CXX17 \
+    -DBUILD_TESTING=OFF \
+    -DOPENTELEMETRY_INSTALL=ON \
+    -DOPENTELEMETRY_ABI_VERSION_NO=2
+
   # google-cloud-cpp
+  # google_cloud_cpp_enable_deps() unconditionally pulls in opentelemetry,
+  # monitoring, and trace service libraries alongside the user-requested
+  # features. We only need storage for the GCS adapter, so subtract those
+  # service libs via the "-feature" syntax. The opentelemetry integration
+  # inside google_cloud_cpp_common still links against the opentelemetry-cpp
+  # install above.
   wget_and_untar https://github.com/googleapis/google-cloud-cpp/archive/refs/tags/v"${GOOGLE_CLOUD_CPP_VERSION}".tar.gz google-cloud-cpp
   cmake_install_dir google-cloud-cpp \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
-    -DGOOGLE_CLOUD_CPP_ENABLE=storage
+    -DGOOGLE_CLOUD_CPP_ENABLE=storage,-opentelemetry,-monitoring,-trace
 }
 
 function install_azure_storage_sdk_cpp {

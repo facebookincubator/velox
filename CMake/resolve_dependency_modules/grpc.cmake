@@ -16,10 +16,10 @@ include_guard(GLOBAL)
 velox_set_source(absl)
 velox_resolve_dependency(absl CONFIG REQUIRED)
 
-set(VELOX_GRPC_BUILD_VERSION 1.48.1)
+set(VELOX_GRPC_BUILD_VERSION 1.83.0)
 set(
   VELOX_GRPC_BUILD_SHA256_CHECKSUM
-  320366665d19027cda87b2368c03939006a37e0388bfd1091c8d2a96fbc93bd8
+  90d453393a9d41215df546103b10b33b9566df79cdf6f49dc67f6c4d044d090d
 )
 string(
   CONCAT
@@ -38,6 +38,13 @@ FetchContent_Declare(
   URL_HASH ${VELOX_GRPC_BUILD_SHA256_CHECKSUM}
   OVERRIDE_FIND_PACKAGE
   EXCLUDE_FROM_ALL
+  # Mark gRPC's include dirs as SYSTEM so -Werror=deprecated-declarations
+  # in Velox builds does not fire on the warnings gRPC 1.83's own headers
+  # emit (grpcpp/security/tls_credentials_options.h still references
+  # IdentityKeyCertPair / set_certificate_provider, which it marks as
+  # deprecated). The SYSTEM path (find_package via imported target)
+  # already does this; keep BUNDLED consistent.
+  SYSTEM
 )
 
 # We need to specify CACHE explicitly even when we have
