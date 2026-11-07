@@ -18,8 +18,10 @@
 
 #include <boost/multiprecision/cpp_int.hpp>
 
-#include "velox/type/DecimalUtil.h"
-#include "velox/type/Type.h"
+#include "folly/CPortability.h"
+
+#include "velox/common/base/BitUtil.h"
+#include "velox/type/DecimalArithmetic.h"
 
 namespace facebook::velox::functions::sparksql {
 using int256_t = boost::multiprecision::int256_t;
@@ -29,15 +31,16 @@ class DecimalUtil {
  public:
   /// Scale adjustment implementation is based on Hive's one, which is itself
   /// inspired to SQLServer's one. In particular, when a result precision is
-  /// greater than {LongDecimalType::kMaxPrecision}, the corresponding scale is
-  /// reduced to prevent the integral part of a result from being truncated.
+  /// greater than {DecimalArithmetic::kMaxLongPrecision}, the corresponding
+  /// scale is reduced to prevent the integral part of a result from being
+  /// truncated.
   ///
   /// This method is used only when
   /// `spark.sql.decimalOperations.allowPrecisionLoss` is set to true.
   inline static std::pair<uint8_t, uint8_t> adjustPrecisionScale(
       uint8_t rPrecision,
       uint8_t rScale) {
-    if (rPrecision <= LongDecimalType::kMaxPrecision) {
+    if (rPrecision <= DecimalArithmetic::kMaxLongPrecision) {
       return {rPrecision, rScale};
     } else {
       int32_t minScale = std::min(static_cast<int32_t>(rScale), 6);
@@ -115,9 +118,9 @@ class DecimalUtil {
     };
 
     const int32_t aLeadingZeros = minLeadingZerosAfterRescale(
-        bits::countLeadingZeros(velox::DecimalUtil::absValue<A>(a)), aRescale);
+        bits::countLeadingZeros(DecimalArithmetic::absValue<A>(a)), aRescale);
     const int32_t bLeadingZeros = minLeadingZerosAfterRescale(
-        bits::countLeadingZeros(velox::DecimalUtil::absValue<B>(b)), bRescale);
+        bits::countLeadingZeros(DecimalArithmetic::absValue<B>(b)), bRescale);
     return std::min(aLeadingZeros, bLeadingZeros);
   }
 
@@ -158,7 +161,7 @@ class DecimalUtil {
       // Fast-path. The dividend fits in 128-bit after scaling too.
       overflow = __builtin_mul_overflow(
           unsignedDividendRescaled,
-          R(velox::DecimalUtil::kPowersOfTen[aRescale]),
+          R(DecimalArithmetic::powerOfTen(aRescale)),
           &unsignedDividendRescaled);
       VELOX_DCHECK(!overflow);
       R quotient = unsignedDividendRescaled / unsignedDivisor;
@@ -231,8 +234,8 @@ class DecimalUtil {
       uint8_t rPrecision,
       uint8_t rScale) {
     return {
-        std::min(rPrecision, DecimalType<TypeKind::HUGEINT>::kMaxPrecision),
-        std::min(rScale, DecimalType<TypeKind::HUGEINT>::kMaxPrecision)};
+        std::min(rPrecision, DecimalArithmetic::kMaxLongPrecision),
+        std::min(rScale, DecimalArithmetic::kMaxLongPrecision)};
   }
 
   /// Returns 10^scale as int256_t. The input scale should be in range
@@ -260,16 +263,18 @@ class DecimalUtil {
 
   template <typename A>
   inline static int32_t maxBitsRequiredAfterScaling(A num, uint8_t aRescale) {
-    auto valueAbs = velox::DecimalUtil::absValue<A>(num);
+    auto valueAbs = DecimalArithmetic::absValue<A>(num);
     int32_t numOccupied = sizeof(A) * 8 - bits::countLeadingZeros(valueAbs);
     return numOccupied + kMaxBitsRequiredIncreaseAfterScaling[aRescale];
   }
 
-  static constexpr int32_t kMaxLargeScale = 2 * LongDecimalType::kMaxPrecision;
+  static constexpr int32_t kMaxLargeScale =
+      2 * DecimalArithmetic::kMaxLongPrecision;
 
   // Pre-compute the powers of ten for large scales. The maximum scale is
-  // 2 * LongDecimalType::kMaxPrecision, which is 76. The
-  // DecimalUtil::kPowersOfTen array is not large enough to hold these values.
+  // 2 * DecimalArithmetic::kMaxLongPrecision, which is 76. The
+  // DecimalArithmetic::kPowersOfTen array is not large enough to hold these
+  // values.
   static constexpr std::array<int256_t, kMaxLargeScale + 1>
       kLargeScalePowersOfTen =
           ([]() -> std::array<int256_t, kMaxLargeScale + 1> {
