@@ -163,8 +163,8 @@ class VectorIndexTrainAggregate {
 
     void writeFinalResult(exec::out_type<OutputType>& out) {
       const auto& finalSettings = groupSettings();
-      group.sortById();
-      const auto embeddings = group.embeddings();
+      const auto contents = group.gatherSortedById();
+      const auto embeddings = contents.embeddings();
       const auto dimension = embeddings.dimension();
       const auto centroids = FaissLocalVectorIndex::trainCentroids(
           finalSettings.metric, finalSettings.numClusters, embeddings);
