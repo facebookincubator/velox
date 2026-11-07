@@ -205,6 +205,18 @@ class PartitionedOutput : public Operator {
 
   void close() override;
 
+  /// Whether each input is serialized and flushed as it arrives: set by the
+  /// planner under a small partial limit or by partitioned_output_eager_flush.
+  bool eagerFlush() const {
+    return eagerFlush_;
+  }
+
+  /// The buffer manager the pages are enqueued into, or nullptr once it is
+  /// destructed.
+  std::shared_ptr<DefaultOutputBufferManager> bufferManager() const {
+    return bufferManager_.lock();
+  }
+
   static void testingSetMinCompressionRatio(float ratio) {
     minCompressionRatio_ = ratio;
   }
