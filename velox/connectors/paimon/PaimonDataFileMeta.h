@@ -91,6 +91,10 @@ struct PaimonDataFile {
   /// Path to the file (ORC, Parquet, etc.).
   std::string path;
 
+  /// Schema used to write this file. Absent only for the legacy same-schema
+  /// input contract; never inferred from the query's target schema.
+  std::optional<int64_t> schemaId;
+
   /// Size of the file in bytes.
   uint64_t size{0};
 

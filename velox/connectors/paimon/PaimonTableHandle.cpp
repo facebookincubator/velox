@@ -64,7 +64,8 @@ PaimonTableHandle::PaimonTableHandle(
     core::TypedExprPtr remainingFilter,
     std::vector<connector::FileColumnHandlePtr> filterColumnHandles,
     double sampleRate,
-    std::string dbName)
+    std::string dbName,
+    DataSchemas dataSchemas)
     : connector::FileTableHandle(
           std::move(connectorId),
           std::move(tableName),
@@ -77,6 +78,7 @@ PaimonTableHandle::PaimonTableHandle(
       schemaId_(schemaId),
       rowType_(std::move(rowType)),
       fieldIds_(std::move(fieldIds)),
+      dataSchemas_(std::move(dataSchemas)),
       tableType_(tableType),
       partitionKeys_(std::move(partitionKeys)),
       options_(std::move(options)),
@@ -90,6 +92,24 @@ PaimonTableHandle::PaimonTableHandle(
   for (auto id : fieldIds_) {
     VELOX_USER_CHECK_GE(id, 0, "Paimon field ID must be nonnegative");
     VELOX_USER_CHECK(ids.insert(id).second, "Duplicate Paimon field ID {}", id);
+  }
+  for (const auto& [id, schema] : dataSchemas_) {
+    VELOX_USER_CHECK_GE(id, 0, "Paimon schema ID must be nonnegative");
+    VELOX_USER_CHECK_NE(id, schemaId_, "Duplicate Paimon target schema ID");
+    VELOX_USER_CHECK_NOT_NULL(
+        schema.rowType, "Missing Paimon data schema row type");
+    VELOX_USER_CHECK_EQ(
+        schema.fieldIds.size(),
+        schema.rowType->size(),
+        "Paimon data schema field IDs must be aligned to columns");
+    std::unordered_set<int32_t> dataIds;
+    for (auto fieldId : schema.fieldIds) {
+      VELOX_USER_CHECK_GE(fieldId, 0, "Paimon field ID must be nonnegative");
+      VELOX_USER_CHECK(
+          dataIds.insert(fieldId).second,
+          "Duplicate Paimon data schema field ID {}",
+          fieldId);
+    }
   }
   VELOX_USER_CHECK(
       std::isfinite(sampleRate) && sampleRate > 0 && sampleRate <= 1,
@@ -125,6 +145,18 @@ folly::dynamic PaimonTableHandle::serialize() const {
 
   folly::dynamic obj = serializeFileFields("PaimonTableHandle");
   obj["version"] = kSerdeVersion;
+  if (!dataSchemas_.empty()) {
+    // Old workers must reject scans needing historical identity rather than
+    // silently interpret the files using the current column names.
+    obj["version"] = kSchemaEvolutionSerdeVersion;
+    obj["dataSchemas"] = folly::dynamic::array;
+    for (const auto& [id, schema] : dataSchemas_) {
+      obj["dataSchemas"].push_back(
+          folly::dynamic::object("schemaId", id)(
+              "rowType", schema.rowType->serialize())(
+              "fieldIds", ISerializable::serialize(schema.fieldIds)));
+    }
+  }
   obj["schemaId"] = schemaId_;
   obj["rowType"] = rowType_->serialize();
   obj["fieldIds"] = ISerializable::serialize(fieldIds_);
@@ -141,8 +173,34 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
     const folly::dynamic& obj,
     void* context) {
   VELOX_USER_CHECK(
-      obj.at("version").isInt() && obj.at("version").asInt() == kSerdeVersion,
+      obj.at("version").isInt() &&
+          ((obj.at("version").asInt() == kSerdeVersion &&
+            !obj.count("dataSchemas")) ||
+           (obj.at("version").asInt() == kSchemaEvolutionSerdeVersion &&
+            obj.count("dataSchemas"))),
       "Unsupported Paimon table handle wire version");
+
+  DataSchemas dataSchemas;
+  if (obj.count("dataSchemas")) {
+    VELOX_USER_CHECK(
+        obj.at("dataSchemas").isArray(), "Expected Paimon data schema array");
+    for (const auto& schema : obj.at("dataSchemas")) {
+      const auto id =
+          ISerializable::deserialize<int64_t>(schema.at("schemaId"));
+      VELOX_USER_CHECK(
+          dataSchemas
+              .emplace(
+                  id,
+                  DataSchema{
+                      ISerializable::deserialize<RowType>(
+                          schema.at("rowType"), context),
+                      ISerializable::deserialize<std::vector<int32_t>>(
+                          schema.at("fieldIds"))})
+              .second,
+          "Duplicate Paimon data schema ID {}",
+          id);
+    }
+  }
 
   std::string connectorId;
   std::string tableName;
@@ -196,7 +254,8 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
       std::move(remainingFilter),
       std::move(filterColumns),
       sampleRate,
-      std::move(dbName));
+      std::move(dbName),
+      std::move(dataSchemas));
 }
 
 void PaimonTableHandle::registerSerDe() {
