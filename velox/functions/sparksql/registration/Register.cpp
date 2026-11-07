@@ -24,6 +24,7 @@ extern void registerArrayFunctions(const std::string& prefix);
 extern void registerBinaryFunctions(const std::string& prefix);
 extern void registerBitwiseFunctions(const std::string& prefix);
 extern void registerCompareFunctions(const std::string& prefix);
+extern void registerCsvFunctions(const std::string& prefix);
 extern void registerDatetimeFunctions(const std::string& prefix);
 extern void registerJsonFunctions(const std::string& prefix);
 extern void registerMapFunctions(const std::string& prefix);
@@ -40,6 +41,7 @@ void registerFunctions(const std::string& prefix) {
   registerBinaryFunctions(prefix);
   registerBitwiseFunctions(prefix);
   registerCompareFunctions(prefix);
+  registerCsvFunctions(prefix);
   registerDatetimeFunctions(prefix);
   registerJsonFunctions(prefix);
   registerMapFunctions(prefix);

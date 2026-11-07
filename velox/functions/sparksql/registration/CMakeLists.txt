@@ -19,6 +19,7 @@ velox_add_library(
   RegisterBinary.cpp
   RegisterBitwise.cpp
   RegisterComparison.cpp
+  RegisterCsv.cpp
   RegisterDatetime.cpp
   RegisterJson.cpp
   RegisterMap.cpp
