@@ -34,6 +34,7 @@ extern void registerSize(const std::string& prefix);
 extern void registerSpecialFormGeneralFunctions(const std::string& prefix);
 extern void registerStringFunctions(const std::string& prefix);
 extern void registerUrlFunctions(const std::string& prefix);
+extern void registerXmlFunctions(const std::string& prefix);
 
 void registerFunctions(const std::string& prefix) {
   registerArrayFunctions(prefix);
@@ -50,6 +51,7 @@ void registerFunctions(const std::string& prefix) {
   registerSpecialFormGeneralFunctions(prefix);
   registerStringFunctions(prefix);
   registerUrlFunctions(prefix);
+  registerXmlFunctions(prefix);
 }
 
 std::vector<std::string> listFunctionNames() {

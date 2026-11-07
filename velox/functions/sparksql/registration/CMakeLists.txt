@@ -28,6 +28,7 @@ velox_add_library(
   RegisterSpecialForm.cpp
   RegisterString.cpp
   RegisterUrl.cpp
+  RegisterXml.cpp
   HEADERS
   Register.h
 )
