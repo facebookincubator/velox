@@ -303,6 +303,13 @@ TEST_F(ExprOptimizerTest, unchanged) {
   inputs.push_back(
       std::make_shared<core::NullIfTypedExpr>(
           makeTypedExpr("a", type), makeTypedExpr("b", type), BIGINT()));
+  const auto row = std::make_shared<core::ConcatTypedExpr>(
+      std::vector<std::string>{"x", "y"},
+      std::vector<core::TypedExprPtr>{
+          makeTypedExpr("a", type), makeTypedExpr("b", type)});
+  inputs.push_back(row);
+  inputs.push_back(
+      std::make_shared<core::DereferenceTypedExpr>(BIGINT(), row, 0));
 
   const auto queryCtx = core::QueryCtx::create();
   for (const auto& input : inputs) {
@@ -412,6 +419,46 @@ TEST_F(ExprOptimizerTest, castExpr) {
       "cast((a = (5 / 1) * abs(-3)) as BOOLEAN) and cast((b = concat('hello', 'world')) as BOOLEAN)",
       "a = 15 and b = 'helloworld'",
       ROW({"a", "b"}, {BIGINT(), VARCHAR()}));
+}
+
+// Inputs of row constructions and field accesses are optimized.
+TEST_F(ExprOptimizerTest, dereferenceAndConcat) {
+  const auto type = ROW("a", BIGINT());
+  const auto onePlusOne = makeTypedExpr("1 + 1", type);
+  const auto two = makeTypedExpr("2", type);
+  const auto a = makeTypedExpr("a", type);
+  auto makeRow = [](const core::TypedExprPtr& x, const core::TypedExprPtr& y) {
+    return std::make_shared<core::ConcatTypedExpr>(
+        std::vector<std::string>{"x", "y"},
+        std::vector<core::TypedExprPtr>{x, y});
+  };
+  auto makeField = [](const core::TypedExprPtr& row) {
+    return std::make_shared<core::DereferenceTypedExpr>(INTEGER(), row, 0);
+  };
+  auto makeFieldByName = [](const core::TypedExprPtr& row) {
+    return std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), row, "x");
+  };
+
+  // A row construction with a foldable input.
+  testExpression(makeRow(onePlusOne, a), makeRow(two, a), type);
+
+  // A field access on that row.
+  testExpression(
+      makeField(makeRow(onePlusOne, a)), makeField(makeRow(two, a)), type);
+
+  // A field access by name on that row.
+  testExpression(
+      makeFieldByName(makeRow(onePlusOne, a)),
+      makeFieldByName(makeRow(two, a)),
+      type);
+
+  // A field access on an all-constant row folds to the field's value.
+  testExpression(
+      makeField(makeRow(onePlusOne, makeTypedExpr("3", type))), two, type);
+  testExpression(
+      makeFieldByName(makeRow(onePlusOne, makeTypedExpr("3", type))),
+      two,
+      type);
 }
 
 /// Test to validate `makeFailExpr` returns an expression that replaces all
