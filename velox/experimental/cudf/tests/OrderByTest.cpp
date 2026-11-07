@@ -432,9 +432,7 @@ TEST_F(OrderByTest, outputBatchRows) {
         {{core::QueryConfig::kPreferredOutputBatchBytes,
           std::to_string(testData.preferredOutBatchBytes)},
          {core::QueryConfig::kMaxOutputBatchRows,
-          std::to_string(testData.maxOutBatchRows)},
-         {facebook::velox::cudf_velox::CudfToVelox::kPassthroughMode,
-          "false"}});
+          std::to_string(testData.maxOutBatchRows)}});
     CursorParameters params;
     params.planNode = plan;
     params.queryCtx = queryCtx;
@@ -448,6 +446,37 @@ TEST_F(OrderByTest, outputBatchRows) {
             .operatorStats.at("CudfToVelox")
             ->outputVectors);
   }
+}
+
+/// With passthrough mode enabled, CudfToVelox emits each GPU batch as one Velox
+/// batch regardless of the output batch size limits.
+TEST_F(OrderByTest, passthroughModeKeepsGpuBatch) {
+  auto rowVector = makeRowVector({makeFlatVector<int64_t>(
+      1000, [](vector_size_t row) { return 1000 - row; })});
+  createDuckDbTable({rowVector});
+
+  core::PlanNodeId orderById;
+  auto plan = PlanBuilder()
+                  .values({rowVector})
+                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                  .capturePlanNodeId(orderById)
+                  .planNode();
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kMaxOutputBatchRows, "10"},
+       {facebook::velox::cudf_velox::CudfToVelox::kPassthroughMode, "true"}});
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = queryCtx;
+  auto task = assertQueryOrdered(
+      params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
+
+  EXPECT_EQ(
+      1,
+      toPlanStats(task->taskStats())
+          .at(orderById)
+          .operatorStats.at("CudfToVelox")
+          ->outputVectors);
 }
 
 } // namespace
