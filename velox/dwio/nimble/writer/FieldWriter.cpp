@@ -17,9 +17,9 @@
 
 #include <algorithm>
 #include <cstring>
-#include <numeric>
 #include <type_traits>
 
+#include <folly/container/F14Set.h>
 #include <folly/system/HardwareConcurrency.h>
 #include "velox/common/base/CompareFlags.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -2115,10 +2115,25 @@ class HybridFlatMapFieldWriter : public FieldWriter {
                     .defaultGroupKeyPresenceMode())),
         valueType_{type->childAt(1)},
         nodeId_{type->id()},
+        hybridMap_{[&] {
+          const auto& hybridFlatMap =
+              configuredHybridFlatMap(context, type->id());
+          if (!hybridFlatMap.hasGroupLookupIndex()) {
+            return HybridFlatMap{
+                NimbleTypeTraits<K>::scalarKind, hybridFlatMap};
+          }
+          // A HybridFlatMap built with every group has every key checked for
+          // its key kind, and its copies share its groups and lookup index.
+          NIMBLE_USER_CHECK_EQ(
+              *hybridFlatMap.keyKind(),
+              NimbleTypeTraits<K>::scalarKind,
+              "Hybrid FlatMap configuration is for keys of another type.");
+          return hybridFlatMap;
+        }()},
+        hybridTypeBuilder_{typeBuilder_->asHybridFlatMap()},
         nullsStream_{context_.createNullsStreamData(
             typeBuilder_->asHybridFlatMap().nullsDescriptor(),
-            type->id())},
-        hybridTypeBuilder_{typeBuilder_->asHybridFlatMap()} {
+            type->id())} {
     initStatisticsCollectors(*type);
     initGroups();
   }
@@ -2207,30 +2222,26 @@ class HybridFlatMapFieldWriter : public FieldWriter {
   // Materializes the fixed group topology and its physical stream descriptors.
   // reset() retains only this immutable grouping state.
   void initGroups() {
-    // Binds the configuration to this column's keys; HybridFlatMap checks it
-    // for them.
-    const HybridFlatMap hybridMap{
-        NimbleTypeTraits<K>::scalarKind,
-        configuredHybridFlatMap(context_, nodeId_)};
+    const auto& hybridGroups = hybridMap_.groups();
     auto& hybridTypeBuilder = typeBuilder_->asHybridFlatMap();
+    const bool useDefaultKeyList =
+        hybridTypeBuilder.useKeyPresentList(HybridFlatMap::kDefaultGroupId);
 
-    groups_.reserve(hybridMap.groups().size());
-    const auto configuredGroupKeyCount = std::accumulate(
-        hybridMap.groups().begin(),
-        hybridMap.groups().end(),
-        size_t{0},
-        [](size_t count, const auto& group) {
-          return count + group.groupKeys.size();
-        });
-    groupByKey_.reserve(configuredGroupKeyCount);
+    groups_.reserve(hybridGroups.size());
 
     // Each group owns a complete value subtree; the schema node carries its
-    // key-presence and in-map descriptors.
-    const auto addGroup = [&](uint32_t groupId,
-                              std::vector<std::string> groupKeys) {
+    // key-presence and in-map descriptors. When Default lists each batch's
+    // keys, the schema reads the grouped keys from hybridMap_ instead of
+    // copying them.
+    const auto addGroup = [&](size_t groupIndex) {
+      const auto& group = hybridGroups[groupIndex];
+      const auto groupId = group.groupId;
       auto valueWriter = FieldWriter::create(context_, valueType_);
-      const auto descriptors = hybridTypeBuilder.addGroup(
-          groupId, std::move(groupKeys), valueWriter->typeBuilder());
+      const auto descriptors = useDefaultKeyList
+          ? hybridTypeBuilder.addGroup(
+                hybridMap_, groupIndex, valueWriter->typeBuilder())
+          : hybridTypeBuilder.addGroup(
+                groupId, group.groupKeys, valueWriter->typeBuilder());
       // The reader consumes each group's key-presence and in-map metadata
       // atomically. Streams are created in offset order, key presence first.
       ContentStreamData<bool>* keyPresenceBitmap{nullptr};
@@ -2256,21 +2267,13 @@ class HybridFlatMapFieldWriter : public FieldWriter {
           std::move(valueWriter));
     };
 
-    // Build the writer-lifetime lookup for configured keys. With a bitmap,
-    // Default keys join this lookup when first observed and retain that schema
-    // ordinal; when Default lists its keys, every other key belongs to it.
-    for (const auto& configuredGroup : hybridMap.groups()) {
-      const auto groupIndex = groups_.size();
-      const bool isDefault =
-          configuredGroup.groupId == HybridFlatMap::kDefaultGroupId;
-      addGroup(configuredGroup.groupId, configuredGroup.groupKeys);
-      if (isDefault) {
+    // Groups are added in hybridMap_'s order, so its group indexes are groups_
+    // indexes, and hybridMap_ finds the group of each grouped key.
+    for (size_t groupIndex = 0; groupIndex < hybridGroups.size();
+         ++groupIndex) {
+      addGroup(groupIndex);
+      if (HybridFlatMap::isDefaultGroup(hybridGroups[groupIndex].groupId)) {
         defaultGroupIndex_ = groupIndex;
-        continue;
-      }
-      for (const auto& key : configuredGroup.groupKeys) {
-        const bool uniqueKey = groupByKey_.emplace(key, groupIndex).second;
-        NIMBLE_CHECK(uniqueKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
       }
     }
 
@@ -2292,13 +2295,13 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     if (!inserted) {
       return batch->second;
     }
-    auto group = groupByKey_.find(key);
-    if (group == groupByKey_.end()) {
+    auto groupIndex = hybridMap_.findGroup(key);
+    if (!groupIndex.has_value()) {
       NIMBLE_CHECK(
           defaultGroupIndex_.has_value(),
           "Hybrid FlatMap Default group is not initialized.");
-      // groupByKey_ holds every configured key, so a listed Default key never
-      // belongs to a configured group. Readers rely on this.
+      // hybridMap_ holds every grouped key, so a Default key never belongs to
+      // an explicit group. Readers rely on this.
       if (hybridTypeBuilder_.useKeyPresentList(
               HybridFlatMap::kDefaultGroupId)) {
         batch->second.groupIndex = *defaultGroupIndex_;
@@ -2306,11 +2309,14 @@ class HybridFlatMapFieldWriter : public FieldWriter {
         batch->second.inMap.resize(nonNullCount, false);
         return batch->second;
       }
-      typeBuilder_->asHybridFlatMap().appendDefaultGroupKey(key);
-      group = groupByKey_.emplace(key, *defaultGroupIndex_).first;
+      // With a bitmap, Default keys join the schema when first observed and
+      // retain that schema ordinal.
+      if (defaultKeySet_.insert(key).second) {
+        typeBuilder_->asHybridFlatMap().appendDefaultGroupKey(key);
+      }
+      groupIndex = *defaultGroupIndex_;
     }
-    const auto groupIndex = group->second;
-    batch->second.groupIndex = groupIndex;
+    batch->second.groupIndex = *groupIndex;
     batch->second.inMap.resize(nonNullCount, false);
     return batch->second;
   }
@@ -2436,7 +2442,7 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     // row ordinals back to positions in the original batch.
     const auto nonNullCount = static_cast<uint32_t>(nonNullRows.size());
     folly::F14FastMap<std::string, KeyBatch> batches;
-    batches.reserve(groupByKey_.size());
+    batches.reserve(hybridMap_.numGroupedKeys() + defaultKeySet_.size());
     uint32_t numDefaultGroupKeys{0};
     uint64_t totalKeyCount{0};
     uint64_t totalKeyStringSize{0};
@@ -2534,11 +2540,18 @@ class HybridFlatMapFieldWriter : public FieldWriter {
 
   const std::shared_ptr<const velox::dwio::common::TypeWithId>& valueType_;
   const uint32_t nodeId_;
+  // The column's Hybrid FlatMap for its key type, whose group lookup index
+  // finds the group of each grouped key: a copy of the one in the writer
+  // options when that one was built with every group, which shares its groups
+  // and lookup index; otherwise one the binding constructor builds, which
+  // builds its own.
+  const HybridFlatMap hybridMap_;
+  const HybridFlatMapTypeBuilder& hybridTypeBuilder_;
   NullsStreamData& nullsStream_;
   std::vector<Group> groups_;
-  folly::F14FastMap<std::string, size_t> groupByKey_;
+  // With a bitmap, the Default keys this writer appended to its schema.
+  folly::F14FastSet<std::string> defaultKeySet_;
   std::optional<size_t> defaultGroupIndex_;
-  const HybridFlatMapTypeBuilder& hybridTypeBuilder_;
   SharedStatisticsCollector* statisticsCollector_{nullptr};
   SharedStatisticsCollector* keyStatisticsCollector_{nullptr};
   bool written_{false};
@@ -2603,41 +2616,35 @@ std::unique_ptr<FieldWriter> createHybridFlatMapFieldWriter(
       velox::TypeKind::MAP,
       "Unexpected hybrid FlatMap field type.");
   NIMBLE_DCHECK_EQ(type->size(), 2, "Invalid hybrid FlatMap field type.");
-  const auto kind = type->childAt(0)->type()->kind();
-  switch (kind) {
-    case velox::TypeKind::TINYINT:
+  const auto keyKind = hybridFlatMapKeyKind(*type->childAt(0)->type());
+  switch (keyKind) {
+    case ScalarKind::Int8:
       return createTypedHybridFlatMapFieldWriter<velox::TypeKind::TINYINT>(
           context, type);
-    case velox::TypeKind::SMALLINT:
+    case ScalarKind::Int16:
       return createTypedHybridFlatMapFieldWriter<velox::TypeKind::SMALLINT>(
           context, type);
-    case velox::TypeKind::INTEGER:
+    case ScalarKind::Int32:
       return createTypedHybridFlatMapFieldWriter<velox::TypeKind::INTEGER>(
           context, type);
-    case velox::TypeKind::BIGINT:
+    case ScalarKind::Int64:
       return createTypedHybridFlatMapFieldWriter<velox::TypeKind::BIGINT>(
           context, type);
-    case velox::TypeKind::VARCHAR:
+    case ScalarKind::String:
       return createTypedHybridFlatMapFieldWriter<velox::TypeKind::VARCHAR>(
           context, type);
-    case velox::TypeKind::BOOLEAN:
-    case velox::TypeKind::VARBINARY:
-    case velox::TypeKind::REAL:
-    case velox::TypeKind::DOUBLE:
-    case velox::TypeKind::TIMESTAMP:
-    case velox::TypeKind::HUGEINT:
-    case velox::TypeKind::ARRAY:
-    case velox::TypeKind::MAP:
-    case velox::TypeKind::ROW:
-    case velox::TypeKind::UNKNOWN:
-    case velox::TypeKind::FUNCTION:
-    case velox::TypeKind::OPAQUE:
-    case velox::TypeKind::INVALID:
-      NIMBLE_UNSUPPORTED(
-          "Unsupported hybrid FlatMap key type {}.",
-          type->childAt(0)->type()->toString());
+    case ScalarKind::UInt8:
+    case ScalarKind::UInt16:
+    case ScalarKind::UInt32:
+    case ScalarKind::UInt64:
+    case ScalarKind::Float:
+    case ScalarKind::Double:
+    case ScalarKind::Bool:
+    case ScalarKind::Binary:
+    case ScalarKind::Undefined:
+      break;
   }
-  NIMBLE_UNREACHABLE("Unknown hybrid FlatMap key type: {}.", kind);
+  NIMBLE_UNREACHABLE("Unexpected hybrid FlatMap key kind: {}.", keyKind);
 }
 
 template <velox::TypeKind K>

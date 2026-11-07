@@ -26,6 +26,7 @@
 #include "velox/dwio/common/TypeWithId.h"
 
 #include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaTypes.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -36,6 +37,22 @@ class TypeBuilder;
 velox::TypePtr convertToVeloxType(const Type& type);
 
 std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type);
+
+/// Returns the key kind of a Hybrid FlatMap for a MAP column whose keys are of
+/// `keyType`, one that HybridFlatMap::supportedKeyKind() accepts. Throws
+/// NimbleUserError when Hybrid FlatMap does not support keys of that type. The
+/// writer picks a column's Hybrid FlatMap writer by this kind, so callers that
+/// build a HybridFlatMap for the column use it to match the writer.
+///
+/// Example: BIGINT keys give ScalarKind::Int64; VARBINARY keys throw.
+ScalarKind hybridFlatMapKeyKind(const velox::Type& keyType);
+
+/// Returns the Hybrid FlatMap key kind of MAP column `columnName` of
+/// `rowType`. Throws NimbleUserError when `rowType` has no such column, the
+/// column is not a MAP, or Hybrid FlatMap does not support its key type.
+ScalarKind hybridFlatMapKeyKind(
+    const velox::RowType& rowType,
+    std::string_view columnName);
 
 /// Returns descriptor offsets in dense projected-stream order.
 /// FlatMap value streams precede their corresponding in-map stream.
