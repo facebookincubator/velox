@@ -349,9 +349,8 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
     PaimonConnectorSplitBuilder builder(
         kPaimonConnectorId, 42, PaimonTableType::kAppendOnly, format);
     for (const auto& [path, schemaId] : files) {
-      PaimonDataFile file;
+      PaimonDataFile file(schemaId);
       file.path = path;
-      file.schemaId = schemaId;
       builder.addFile(std::move(file));
     }
     for (const auto& [name, value] : partitions) {
@@ -408,7 +407,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
     PaimonConnectorSplitBuilder builder(
         kPaimonConnectorId, /*snapshotId=*/1, tableType, format);
     for (const auto& filePath : filePaths) {
-      builder.addFile(filePath, /*fileSize=*/0);
+      builder.addFile(/*schemaId=*/17, filePath, /*fileSize=*/0);
     }
     for (const auto& [key, value] : partitionKeys) {
       builder.partitionKey(key, value);
@@ -1475,13 +1474,57 @@ TEST_F(PaimonConnectorTest, schemaEvolutionRejectsMissingSchemaAndTypeChanges) {
       exec::test::AssertQueryBuilder(plan).split(widening).copyResults(pool()),
       "Paimon type evolution is not supported");
   exec::test::waitForAllTasksToBeDeleted();
-  VELOX_ASSERT_THROW(
-      exec::test::AssertQueryBuilder(plan)
-          .split(makePaimonSplit({"paimon-table-test:/not-opened"}))
-          .copyResults(pool()),
-      "schema evolution requires a schema ID for every file");
-  exec::test::waitForAllTasksToBeDeleted();
   EXPECT_EQ(fileSystem->openedFiles, 0);
+}
+
+TEST_F(PaimonConnectorTest, schemaReferencesValidatedBeforeFileOpen) {
+  const auto input = makeRowVector({"b"}, {makeFlatVector<int64_t>({1, 2})});
+  const auto type = asRowType(input->type());
+  const auto fileSystem = validationFileSystem();
+  auto queryCtx = core::QueryCtx::create();
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context = queryContextBuilder(queryCtx.get())
+                     .sessionProperties(config.get())
+                     .build();
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(1);
+    writeFile(paths[0]->getPath(), input, format);
+    const auto path = "paimon-table-test:" + paths[0]->getPath();
+    for (const bool withHistory : {false, true}) {
+      SCOPED_TRACE(withHistory);
+      PaimonTableHandle::DataSchemas schemas;
+      if (withHistory) {
+        schemas.emplace(
+            0, PaimonTableHandle::DataSchema{ROW({{"a", BIGINT()}}), {10}});
+      }
+      const auto table = evolutionTable(type, std::move(schemas));
+      auto source =
+          ConnectorRegistry::tryGet(kPaimonConnectorId)
+              ->createDataSource(
+                  type, table, makePaimonColumnHandles(type), context.get());
+      fileSystem->openedFiles = 0;
+      for (const bool unknownFirst : {false, true}) {
+        const auto split = evolutionSplit(
+            format,
+            {{path, unknownFirst ? 99 : 17}, {path, unknownFirst ? 17 : 99}});
+        VELOX_ASSERT_THROW(source->addSplit(split), "Missing Paimon schema 99");
+        EXPECT_EQ(fileSystem->openedFiles, 0);
+      }
+      // Rejected references must not change the source's scan state.
+      source->addSplit(evolutionSplit(format, {{path, 17}}));
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      auto result = source->next(100, future);
+      ASSERT_TRUE(result.has_value());
+      ASSERT_TRUE(*result);
+      test::assertEqualVectors(input, *result);
+      auto end = source->next(100, future);
+      ASSERT_TRUE(end.has_value());
+      EXPECT_EQ(*end, nullptr);
+      EXPECT_GT(fileSystem->openedFiles, 0);
+    }
+  }
 }
 
 TEST_F(PaimonConnectorTest, schemaEvolutionPrimitiveTypes) {

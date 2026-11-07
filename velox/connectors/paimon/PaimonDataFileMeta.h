@@ -37,6 +37,8 @@ namespace facebook::velox::connector::paimon {
 ///   - kData: regular data file (current state of records).
 ///   - kChangelog: changelog file with RowKind (+I/-U/+U/-D) for streaming.
 struct PaimonDataFile {
+  explicit PaimonDataFile(int64_t schemaId);
+
   /// Whether this file is a data file or a changelog file. Both use the
   /// same physical format — this enum distinguishes their semantic role.
   ///
@@ -91,9 +93,8 @@ struct PaimonDataFile {
   /// Path to the file (ORC, Parquet, etc.).
   std::string path;
 
-  /// Schema used to write this file. Absent only for the legacy same-schema
-  /// input contract; never inferred from the query's target schema.
-  std::optional<int64_t> schemaId;
+  /// Schema used to write this file, supplied from its Paimon metadata.
+  const int64_t schemaId;
 
   /// Size of the file in bytes.
   uint64_t size{0};
