@@ -237,6 +237,87 @@ TEST_F(DateTimeFunctionsTest, atTimezoneSignatures) {
   EXPECT_EQ(0, getFunctionSignatures().count("at_timezone_convert"));
 }
 
+TEST_F(DateTimeFunctionsTest, atTimezoneSpecialFormTypes) {
+  functions::prestosql::registerDateTimeFunctions(
+      "legacy_",
+      /*defaultOwner=*/{},
+      /*ignoreTimeZoneLabel=*/false);
+  functions::prestosql::registerDateTimeFunctions(
+      "session_",
+      /*defaultOwner=*/{},
+      /*ignoreTimeZoneLabel=*/true);
+
+  // The result type is the return type of 'at_timezone' registered under the
+  // same prefix.
+  VELOX_EXPECT_EQ_TYPES(
+      resolveCallableSpecialForm(
+          "legacy_$at_time_zone", {TIMESTAMP(), VARCHAR()}),
+      TIMESTAMP_WITH_TIME_ZONE());
+  VELOX_EXPECT_EQ_TYPES(
+      resolveCallableSpecialForm(
+          "session_$at_time_zone", {TIMESTAMP(), VARCHAR()}),
+      TIMESTAMP());
+  VELOX_EXPECT_EQ_TYPES(
+      resolveCallableSpecialForm(
+          "session_$at_time_zone", {TIMESTAMP_WITH_TIME_ZONE(), VARCHAR()}),
+      TIMESTAMP());
+  VELOX_EXPECT_EQ_TYPES(
+      resolveCallableSpecialForm(
+          "session_$at_time_zone", {TIME_WITH_TIME_ZONE(), VARCHAR()}),
+      TIME_WITH_TIME_ZONE());
+
+  // TIME is accepted only as a coercion to TIME WITH TIME ZONE.
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialForm("$at_time_zone", {TIME(), VARCHAR()}),
+      "AT TIME ZONE requires a time or timestamp value, but got: TIME");
+  std::vector<TypePtr> coercions;
+  VELOX_EXPECT_EQ_TYPES(
+      resolveCallableSpecialFormWithCoercions(
+          "$at_time_zone",
+          {TIME(), VARCHAR()},
+          coercions,
+          TypeCoercer::defaults()),
+      TIME_WITH_TIME_ZONE());
+  EXPECT_THAT(coercions, testing::ElementsAre(TIME_WITH_TIME_ZONE(), nullptr));
+
+  // DATE is rejected even when coercions are allowed.
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialForm("$at_time_zone", {DATE(), VARCHAR()}),
+      "AT TIME ZONE requires a time or timestamp value, but got: DATE");
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialFormWithCoercions(
+          "$at_time_zone",
+          {DATE(), VARCHAR()},
+          coercions,
+          TypeCoercer::defaults()),
+      "AT TIME ZONE requires a time or timestamp value, but got: DATE");
+  for (const auto& valueType :
+       std::vector<TypePtr>{TIMESTAMP_UTC(), TIME_MICRO_UTC()}) {
+    SCOPED_TRACE(valueType->toString());
+    VELOX_ASSERT_THROW(
+        resolveCallableSpecialFormWithCoercions(
+            "$at_time_zone",
+            {valueType, VARCHAR()},
+            coercions,
+            TypeCoercer::defaults()),
+        "AT TIME ZONE requires a time or timestamp value, but got: " +
+            valueType->toString());
+  }
+
+  // The time zone follows the signatures and coercions of 'at_timezone'.
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialForm("$at_time_zone", {TIMESTAMP(), BIGINT()}),
+      "AT TIME ZONE requires a VARCHAR time zone, but got: BIGINT");
+  VELOX_EXPECT_EQ_TYPES(
+      resolveCallableSpecialFormWithCoercions(
+          "$at_time_zone",
+          {TIMESTAMP(), UNKNOWN()},
+          coercions,
+          TypeCoercer::defaults()),
+      TIMESTAMP_WITH_TIME_ZONE());
+  EXPECT_THAT(coercions, testing::ElementsAre(nullptr, VARCHAR()));
+}
+
 TEST_F(DateTimeFunctionsTest, dayOfXxxSignatures) {
   for (const auto& name : {"day", "day_of_month"}) {
     SCOPED_TRACE(name);
@@ -7048,6 +7129,49 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
       std::nullopt);
 
   EXPECT_EQ(at_timezone(std::nullopt, "Pacific/Fiji"), std::nullopt);
+}
+
+TEST_F(DateTimeFunctionsTest, atTimezoneSpecialForm) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {pack(1500101514, tz::getTimeZoneID("Asia/Kathmandu")), std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  auto atTimeZone = std::make_shared<core::CallTypedExpr>(
+      TIMESTAMP_WITH_TIME_ZONE(),
+      "$at_time_zone",
+      std::make_shared<core::FieldAccessTypedExpr>(
+          TIMESTAMP_WITH_TIME_ZONE(), "c0"),
+      std::make_shared<core::ConstantTypedExpr>(
+          VARCHAR(), Variant("America/Boise")));
+  assertEqualVectors(
+      makeNullableFlatVector<int64_t>(
+          {pack(1500101514, tz::getTimeZoneID("America/Boise")), std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      evaluate(atTimeZone, data));
+
+  // The form evaluates the 'at_timezone' registered under its prefix, which
+  // returns TIMESTAMP in session mode.
+  functions::prestosql::registerDateTimeFunctions(
+      "session_",
+      /*defaultOwner=*/{},
+      /*ignoreTimeZoneLabel=*/true);
+  const auto winterInstant = parseTimestamp("2024-01-01 08:00:00").toMillis();
+  auto sessionData = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(winterInstant, tz::getTimeZoneID("UTC"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  auto sessionAtTimeZone = std::make_shared<core::CallTypedExpr>(
+      TIMESTAMP(),
+      "session_$at_time_zone",
+      std::make_shared<core::FieldAccessTypedExpr>(
+          TIMESTAMP_WITH_TIME_ZONE(), "c0"),
+      std::make_shared<core::ConstantTypedExpr>(
+          VARCHAR(), Variant("America/Los_Angeles")));
+  assertEqualVectors(
+      makeFlatVector<Timestamp>({parseTimestamp("2024-01-01 00:00:00")}),
+      evaluate(sessionAtTimeZone, sessionData));
 }
 
 TEST_F(DateTimeFunctionsTest, atTimezoneFromTimestampWithTimezone) {
