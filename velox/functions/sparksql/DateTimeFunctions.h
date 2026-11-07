@@ -315,7 +315,7 @@ struct FromUnixtimeFunction {
       const arg_type<int64_t>* /*unixtime*/,
       const arg_type<Varchar>* format) {
     legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
     if (format != nullptr) {
       auto formatter = detail::initializeFormatter(
           std::string_view(*format), legacyFormatter_);
@@ -576,7 +576,7 @@ struct DateTruncFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*format*/,
       const arg_type<Timestamp>* /*timestamp*/) {
-    timeZone_ = getTimeZoneFromConfig(config);
+    timeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -1113,7 +1113,7 @@ struct TimestampDiffFunction {
     VELOX_USER_CHECK_NOT_NULL(unitString);
     unit_ = fromDateTimeUnitString(
         *unitString, /*throwIfInvalid=*/true, /*allowMicro=*/true);
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1160,7 +1160,7 @@ struct TimestampAddFunction {
       // timezone adjustment.
       sessionTimeZone_ = nullptr;
     } else {
-      sessionTimeZone_ = getTimeZoneFromConfig(config);
+      sessionTimeZone_ = config.timeZoneToAdjustTo();
     }
   }
 
@@ -1189,7 +1189,7 @@ struct MonthsBetweenFunction {
       const arg_type<Timestamp>* /*timestamp1*/,
       const arg_type<Timestamp>* /*timestamp2*/,
       const arg_type<bool>* /*roundOff*/) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1245,7 +1245,7 @@ struct DateFormatFunction {
       const arg_type<Timestamp>* /*timestamp*/,
       const arg_type<Varchar>* formatString) {
     legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
     if (formatString != nullptr) {
       auto formatter = detail::initializeFormatter(
           std::string_view(*formatString), legacyFormatter_);

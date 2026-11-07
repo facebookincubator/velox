@@ -34,16 +34,6 @@ const tz::TimeZone* getSessionTimeZone(const core::QueryConfig& config) {
   return getSessionTimeZone(config.sessionTimezone());
 }
 
-const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
-  if (config.adjustTimestampToTimezone()) {
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      return tz::locateZone(sessionTzName);
-    }
-  }
-  return nullptr;
-}
-
 std::optional<DateTimeUnit> fromDateTimeUnitString(
     StringView unitString,
     bool throwIfInvalid,

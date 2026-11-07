@@ -370,7 +370,7 @@ properties and using it when processing inputs.
         const std::vector<TypePtr>& inputTypes,
         const core::QueryConfig& config,
         const arg_type<Timestamp>* /*timestamp*/) {
-      timeZone_ = getTimeZoneFromConfig(config);
+      timeZone_ = config.timeZoneToAdjustTo();
     }
 
     FOLLY_ALWAYS_INLINE bool call(
@@ -402,7 +402,7 @@ individual rows.
         const core::QueryConfig& config,
         const arg_type<Varchar>* unitString,
         const arg_type<Timestamp>* /*timestamp*/) {
-      timeZone_ = getTimeZoneFromConfig(config);
+      timeZone_ = config.timeZoneToAdjustTo();
       if (unitString != nullptr) {
         unit_ = fromDateTimeUnitString(*unitString);
       }
