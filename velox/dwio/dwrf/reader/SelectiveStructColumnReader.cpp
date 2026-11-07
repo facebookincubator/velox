@@ -87,7 +87,8 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
         FlatMapContext{
             .sequence = encodingKey.sequence(),
             .inMapDecoder = nullptr,
-            .keySelectionCallback = nullptr});
+            .keySelectionCallback =
+                params.flatMapContext().keySelectionCallback});
     addChild(
         SelectiveDwrfReader::build(
             columnReaderOptions,
