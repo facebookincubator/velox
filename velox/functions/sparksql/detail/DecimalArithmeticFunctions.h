@@ -17,6 +17,7 @@
 
 #include "velox/functions/Macros.h"
 #include "velox/functions/sparksql/DecimalUtil.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql::detail {
 
@@ -668,6 +669,71 @@ struct CheckedDecimalIntegralDivideFunction : DecimalIntegralDivideBase {
         !computeQuotient(out, a, b), "Overflow in integral divide");
     return Status::OK();
   }
+};
+
+/// Spark decimal remainder. Rescales both operands to the result scale,
+/// max(aScale, bScale), and takes the integer remainder, whose sign follows
+/// the dividend. On a zero divisor, returns false (a null), or throws when ANSI
+/// mode is enabled.
+///
+/// The result always fits in the result type: its magnitude is below that of
+/// both rescaled operands, and the result precision covers the one with fewer
+/// integral digits. allowPrecisionLoss does not matter, because the result
+/// precision never exceeds 38.
+template <typename TExec>
+struct DecimalRemainderFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      A* /*a*/,
+      B* /*b*/) {
+    const auto aScale = getDecimalPrecisionScale(*inputTypes[0]).second;
+    const auto bScale = getDecimalPrecisionScale(*inputTypes[1]).second;
+    aRescale_ = std::max<int8_t>(0, bScale - aScale);
+    bRescale_ = std::max<int8_t>(0, aScale - bScale);
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename R, typename A, typename B>
+  bool call(R& out, const A& a, const B& b) {
+    if (UNLIKELY(b == 0)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Division by zero");
+      }
+      return false;
+    }
+    // Stay in int128 unless rescaling an operand overflows it.
+    int128_t aScaled;
+    int128_t bScaled;
+    if (LIKELY(
+            !__builtin_mul_overflow(
+                static_cast<int128_t>(a),
+                velox::DecimalUtil::kPowersOfTen[aRescale_],
+                &aScaled) &&
+            !__builtin_mul_overflow(
+                static_cast<int128_t>(b),
+                velox::DecimalUtil::kPowersOfTen[bRescale_],
+                &bScaled))) {
+      out = static_cast<R>(aScaled % bScaled);
+      return true;
+    }
+    int256_t aLarge = a;
+    aLarge *= DecimalUtil::getPowersOfTen(aRescale_);
+    int256_t bLarge = b;
+    bLarge *= DecimalUtil::getPowersOfTen(bRescale_);
+    bool overflow = false;
+    out = DecimalUtil::convert<R>(aLarge % bLarge, overflow);
+    VELOX_DCHECK(!overflow);
+    return true;
+  }
+
+ private:
+  uint8_t aRescale_;
+  uint8_t bRescale_;
+  bool ansiEnabled_;
 };
 
 } // namespace facebook::velox::functions::sparksql::detail
