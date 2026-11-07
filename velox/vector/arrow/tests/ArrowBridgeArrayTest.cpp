@@ -869,6 +869,86 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   EXPECT_EQ(nullptr, arrowArray.private_data);
 }
 
+// Child values at rows where a parent struct is null are undefined, e.g. bytes
+// left over from an earlier use of the buffer. Export must not convert them.
+TEST_F(ArrowBridgeArrayExportTest, rowVectorNullableTimestamp) {
+  // Fills 'garbageRows' with bytes that do not convert to milli, micro or
+  // nanoseconds.
+  auto makeTimestamps = [&](const std::vector<vector_size_t>& garbageRows) {
+    auto vector = vectorMaker_.flatVector<Timestamp>(
+        {Timestamp(1, 0),
+         Timestamp(2, 0),
+         Timestamp(3, 0),
+         Timestamp(4, 0),
+         Timestamp(5, 0)});
+    for (auto row : garbageRows) {
+      std::memset(&vector->mutableRawValues()[row], 0x71, sizeof(Timestamp));
+    }
+    return vector;
+  };
+
+  auto withNulls = makeTimestamps({1, 3});
+  withNulls->setNull(4, true);
+  withNulls->setNullCount(1);
+  auto nested = vectorMaker_.rowVector({makeTimestamps({1, 3, 4})});
+  nested->setNull(4, true);
+  nested->setNullCount(1);
+  auto vector = vectorMaker_.rowVector({
+      makeTimestamps({1, 3}),
+      withNulls,
+      nested,
+      BaseVector::wrapInDictionary(
+          nullptr,
+          makeBuffer<vector_size_t>({0, 1, 2, 3, 4}),
+          5,
+          makeTimestamps({1, 3})),
+  });
+  vector->setNull(1, true);
+  vector->setNull(3, true);
+  vector->setNullCount(2);
+
+  options_.flattenDictionary = true;
+  for (const auto& unitAndScale :
+       std::vector<std::pair<TimestampUnit, int64_t>>{
+           {TimestampUnit::kSecond, 1},
+           {TimestampUnit::kMilli, 1'000},
+           {TimestampUnit::kMicro, 1'000'000},
+           {TimestampUnit::kNano, 1'000'000'000}}) {
+    const auto scale = unitAndScale.second;
+    SCOPED_TRACE(std::to_string(scale));
+    options_.timestampUnit = unitAndScale.first;
+    auto array = toArrow(vector, options_, pool_.get());
+    ASSERT_OK(array->ValidateFull());
+    const auto& structArray = static_cast<const arrow::StructArray&>(*array);
+    EXPECT_EQ(2, structArray.null_count());
+    EXPECT_TRUE(structArray.IsNull(1));
+    EXPECT_TRUE(structArray.IsNull(3));
+
+    auto validate = [&](const std::shared_ptr<arrow::Array>& child,
+                        bool nullAt4) {
+      const auto& timestamps =
+          static_cast<const arrow::TimestampArray&>(*child);
+      EXPECT_EQ(1 * scale, timestamps.Value(0));
+      EXPECT_EQ(3 * scale, timestamps.Value(2));
+      if (nullAt4) {
+        EXPECT_TRUE(timestamps.IsNull(4));
+      } else {
+        EXPECT_EQ(5 * scale, timestamps.Value(4));
+      }
+    };
+    validate(structArray.field(0), false);
+    validate(structArray.field(1), true);
+    const auto& nestedArray =
+        static_cast<const arrow::StructArray&>(*structArray.field(2));
+    EXPECT_TRUE(nestedArray.IsNull(4));
+    const auto& nestedTimestamps =
+        static_cast<const arrow::TimestampArray&>(*nestedArray.field(0));
+    EXPECT_EQ(1 * scale, nestedTimestamps.Value(0));
+    EXPECT_EQ(3 * scale, nestedTimestamps.Value(2));
+    validate(structArray.field(3), false);
+  }
+}
+
 template <typename T>
 using TArrayContainer =
     std::vector<std::optional<std::vector<std::optional<T>>>>;
