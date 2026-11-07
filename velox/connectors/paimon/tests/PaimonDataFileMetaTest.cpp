@@ -27,6 +27,39 @@
 using namespace facebook::velox::connector::paimon;
 using namespace facebook::velox;
 
+TEST(PaimonDataFileTest, constructWithAllFields) {
+  const PaimonDataFile file(
+      /*schemaId=*/17,
+      "data.parquet",
+      /*size=*/4096,
+      /*rowCount=*/500,
+      /*level=*/2,
+      /*minSequenceNumber=*/5,
+      /*maxSequenceNumber=*/15,
+      /*deleteRowCount=*/3,
+      /*creationTimeMs=*/1700000000,
+      PaimonDataFile::Type::kChangelog,
+      PaimonDataFile::Source::kCompact,
+      PaimonDeletionFile{"del.bin", 8, 64, 2});
+
+  EXPECT_EQ(file.schemaId, 17);
+  EXPECT_EQ(file.path, "data.parquet");
+  EXPECT_EQ(file.size, 4096);
+  EXPECT_EQ(file.rowCount, 500);
+  EXPECT_EQ(file.level, 2);
+  EXPECT_EQ(file.minSequenceNumber, 5);
+  EXPECT_EQ(file.maxSequenceNumber, 15);
+  EXPECT_EQ(file.deleteRowCount, 3);
+  EXPECT_EQ(file.creationTimeMs, 1700000000);
+  EXPECT_EQ(file.type, PaimonDataFile::Type::kChangelog);
+  EXPECT_EQ(file.source, PaimonDataFile::Source::kCompact);
+  ASSERT_TRUE(file.deletionFile.has_value());
+  EXPECT_EQ(file.deletionFile->path, "del.bin");
+  EXPECT_EQ(file.deletionFile->offset, 8);
+  EXPECT_EQ(file.deletionFile->length, 64);
+  EXPECT_EQ(file.deletionFile->cardinality, 2);
+}
+
 TEST(PaimonDataFileTest, fileSchemaIdentity) {
   static_assert(!std::is_default_constructible_v<PaimonDataFile>);
   for (const auto id : {int64_t{0}, int64_t{1} << 40}) {
