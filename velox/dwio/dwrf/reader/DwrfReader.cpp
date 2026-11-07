@@ -332,7 +332,9 @@ DwrfRowReader::DwrfRowReader(
         *getReader().schema(), *columnSelector_, createExceptionContext);
   } else {
     projectedNodes_ = std::make_shared<BitSet>(0);
-    makeProjectedNodes(*getReader().schemaWithId(), *projectedNodes_);
+    const auto projectedType = dwio::common::TypeWithId::create(
+        getReader().schema(), *options_.scanSpec());
+    makeProjectedNodes(*projectedType, *projectedNodes_);
   }
 
   // Keep this before 'getUnitLoader()': it copies 'columnReaderOptions_' into
