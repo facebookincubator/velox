@@ -594,11 +594,12 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
   VELOX_CHECK_LT(writerIndex, writerInfo_.size());
 
   // Take the writer options provided by the user as a starting point, or
-  // allocate a new one.
-  auto options = insertTableHandle_->writerOptions();
-  if (!options) {
-    options = writerFactory_->createWriterOptions();
-  }
+  // allocate a new one. The user-provided object lives on the plan node and is
+  // shared by every data sink in the query, so clone it before applying this
+  // writer's values.
+  const auto& sharedOptions = insertTableHandle_->writerOptions();
+  auto options = sharedOptions ? sharedOptions->clone()
+                               : writerFactory_->createWriterOptions();
 
   const auto* connectorSessionProperties =
       connectorQueryCtx_->sessionProperties();
