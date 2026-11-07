@@ -344,7 +344,15 @@ addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
         if (!vector->valueVector()) {
           T value = constVector->valueAt(0);
           return std::make_shared<ConstantVector<T>>(
-              pool, size, false, vector->type(), std::move(value));
+              pool,
+              size,
+              false,
+              vector->type(),
+              std::move(value),
+              SimpleVectorStats<T>{},
+              std::nullopt,
+              std::nullopt,
+              constVector->getStringBuffer());
         }
       }
 
