@@ -16,7 +16,6 @@
 #include "velox/connectors/paimon/PaimonSplitReader.h"
 
 #include <limits>
-#include <unordered_set>
 
 namespace facebook::velox::connector::paimon {
 namespace {
@@ -93,14 +92,9 @@ RowTypePtr PaimonSplitReader::mapDataSchema(int64_t schemaId) const {
   for (column_index_t i = 0; i < table.fieldIds().size(); ++i) {
     targetColumns.emplace(table.fieldIds()[i], i);
   }
-  const std::unordered_set<std::string> partitions(
-      table.partitionKeys().begin(), table.partitionKeys().end());
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (column_index_t i = 0; i < dataType->size(); ++i) {
-    if (partitions.count(dataType->nameOf(i))) {
-      continue;
-    }
     const auto target = targetColumns.find(dataIds[i]);
     if (target == targetColumns.end()) {
       // A dropped file column must not shadow a new field with the same name.
