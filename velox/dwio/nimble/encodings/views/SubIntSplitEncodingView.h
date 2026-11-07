@@ -17,7 +17,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -25,6 +27,46 @@
 #include <folly/ScopeGuard.h>
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
+#include "velox/dwio/nimble/encodings/views/TrivialEncodingView.h"
+
+/// Implements the read view for SubIntSplit, whose serialized payload contains
+/// metadata for contiguous, non-overlapping bit sections followed by one
+/// independently encoded child stream per section. Construction validates that
+/// the sections cover the physical integer exactly once, creates each child
+/// view, folds constant children into a cached value, and identifies a child
+/// that can decode directly into the caller's physical output buffer.
+///
+/// Serialized payload
+/// +--------+-------------+-------------------------------+
+/// | header | descriptors | encoded section child streams |
+/// +--------+-------------+-------------------------------+
+///              |                         |
+///              v                         v
+///       validate full bit         create child views
+///            coverage                    |
+///                                        v
+///                          +-------------+--------------+
+///                          | Constant: cache bits once  |
+///                          | Direct: decode into output |
+///                          | Other: decode then merge   |
+///                          +-------------+--------------+
+///                                        |
+///                    +-------------------+-------------------+
+///                    v                   v                   v
+///              scalar read       contiguous batch     projected batch
+///              merge each        direct + generic     ordered fusion or
+///              child             section merges       generic merges
+///                    +-------------------+-------------------+
+///                                        |
+///                                        v
+///                         complete physical value -> T
+///
+/// Every read reconstructs values by masking, shifting, and OR-ing section
+/// values into their physical positions. Contiguous reads reuse typed scratch
+/// buffers for non-direct children. Projected reads additionally access
+/// Trivial children in place and fuse an ordered direct-plus-Trivial layout
+/// into one output traversal. Layouts outside these cases use the same generic
+/// child-decoding and merge path.
 
 namespace facebook::nimble {
 
@@ -82,12 +124,25 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
       const auto width = serialized.bitEnd - serialized.bitStart + 1;
       const auto storageBytes = sectionStorageBytes(width);
       NIMBLE_CHECK_EQ(view->dataType(), sectionDataType(storageBytes));
-      sections_.push_back({
+      Section section{
           .bitStart = serialized.bitStart,
           .mask = width == 64 ? ~uint64_t{0} : (uint64_t{1} << width) - 1,
           .storageBytes = storageBytes,
           .view = std::move(view),
-      });
+      };
+      // Constant children produce the same positioned bits for every row.
+      // Fold them now and omit them from all scalar and batch read loops.
+      if (section.view->encodingType() == EncodingType::Constant &&
+          this->rowCount_ > 0) {
+        constantValue_ = mergeConstantSection(section, constantValue_);
+      } else {
+        sections_.push_back(std::move(section));
+        // A physical-width child can write directly into the caller's output;
+        // narrower children still require typed scratch storage.
+        if (storageBytes == sizeof(physicalType)) {
+          directSectionIndex_ = sections_.size() - 1;
+        }
+      }
       position += serialized.encodedSize;
     }
     NIMBLE_CHECK_EQ(position, data.data() + data.size());
@@ -129,6 +184,37 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
     }
   }
 
+  /// Reads a constant child once and folds its positioned bits into value.
+  static physicalType mergeConstantSection(
+      const Section& section,
+      physicalType value) {
+    switch (section.storageBytes) {
+      case 1: {
+        uint8_t sectionValue{0};
+        section.view->readAt(0, &sectionValue);
+        return mergeValue(value, sectionValue, section);
+      }
+      case 2: {
+        uint16_t sectionValue{0};
+        section.view->readAt(0, &sectionValue);
+        return mergeValue(value, sectionValue, section);
+      }
+      case 4: {
+        uint32_t sectionValue{0};
+        section.view->readAt(0, &sectionValue);
+        return mergeValue(value, sectionValue, section);
+      }
+      case 8: {
+        uint64_t sectionValue{0};
+        section.view->readAt(0, &sectionValue);
+        return mergeValue(value, sectionValue, section);
+      }
+      default:
+        NIMBLE_UNREACHABLE(
+            "Invalid SubIntSplit storage width: {}", section.storageBytes);
+    }
+  }
+
   template <typename SectionType>
   static physicalType mergeValue(
       physicalType value,
@@ -158,10 +244,20 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
   }
 
   template <typename SectionType>
+  /// Merges sparse values directly for trivial children, avoiding a temporary
+  /// vector and a second traversal.
   void mergeSectionAt(
       const Section& section,
       std::span<const uint32_t> indices,
       physicalType* output) const {
+    if (section.view->encodingType() == EncodingType::Trivial) {
+      const auto* view = static_cast<const TrivialEncodingView<SectionType>*>(
+          section.view.get());
+      for (size_t i{0}; i < indices.size(); ++i) {
+        output[i] = mergeValue(output[i], view->readAt(indices[i]), section);
+      }
+      return;
+    }
     auto values = this->template getVectorBuffer<SectionType>();
     SCOPE_EXIT {
       this->releaseVectorBuffer(values);
@@ -173,9 +269,68 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
     }
   }
 
+  template <typename SectionType>
+  /// Fuses the direct and trivial child merges into one output traversal.
+  static void mergeDirectAndTrivialSectionAt(
+      const Section& directSection,
+      const Section& trivialSection,
+      std::span<const uint32_t> indices,
+      physicalType constantValue,
+      physicalType* output) {
+    const auto* view = static_cast<const TrivialEncodingView<SectionType>*>(
+        trivialSection.view.get());
+    for (size_t i{0}; i < indices.size(); ++i) {
+      output[i] = mergeValue(
+          mergeValue(constantValue, output[i], directSection),
+          view->readAt(indices[i]),
+          trivialSection);
+    }
+  }
+
+  /// Uses the fused ordered-read path when the layout and batch amortize its
+  /// setup; returns false when the generic path should handle the read.
+  bool tryMergeDirectAndTrivialSectionAt(
+      size_t directSectionIndex,
+      std::span<const uint32_t> indices,
+      physicalType* output) const {
+    if (sections_.size() != 2 || indices.size() < 16 ||
+        !std::is_sorted(indices.begin(), indices.end())) {
+      return false;
+    }
+    const auto trivialSectionIndex = 1 - directSectionIndex;
+    const auto& trivialSection = sections_[trivialSectionIndex];
+    if (trivialSection.view->encodingType() != EncodingType::Trivial) {
+      return false;
+    }
+
+    const auto& directSection = sections_[directSectionIndex];
+    switch (trivialSection.storageBytes) {
+      case 1:
+        mergeDirectAndTrivialSectionAt<uint8_t>(
+            directSection, trivialSection, indices, constantValue_, output);
+        return true;
+      case 2:
+        mergeDirectAndTrivialSectionAt<uint16_t>(
+            directSection, trivialSection, indices, constantValue_, output);
+        return true;
+      case 4:
+        mergeDirectAndTrivialSectionAt<uint32_t>(
+            directSection, trivialSection, indices, constantValue_, output);
+        return true;
+      case 8:
+        mergeDirectAndTrivialSectionAt<uint64_t>(
+            directSection, trivialSection, indices, constantValue_, output);
+        return true;
+      default:
+        NIMBLE_UNREACHABLE(
+            "Invalid SubIntSplit storage width: {}",
+            trivialSection.storageBytes);
+    }
+  }
+
   physicalType readPhysicalAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);
-    physicalType value{0};
+    physicalType value{constantValue_};
     for (const auto& section : sections_) {
       switch (section.storageBytes) {
         case 1: {
@@ -217,8 +372,29 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
       const final {
     this->checkReadRange(offset, length);
-    std::fill(output, output + length, physicalType{0});
-    for (const auto& section : sections_) {
+    // Seed output through the widest child when available. This avoids a
+    // zero-fill, scratch allocation, and copy for that section.
+    if (directSectionIndex_.has_value()) {
+      const auto& section = sections_[*directSectionIndex_];
+      section.view->read(offset, length, output);
+      if (directSectionNeedsMerge(section)) {
+        for (uint32_t i{0}; i < length; ++i) {
+          output[i] = mergeValue(constantValue_, output[i], section);
+        }
+      }
+    } else {
+      // With no direct child, constants are the only bits known before the
+      // remaining sections are decoded and merged.
+      std::fill(output, output + length, constantValue_);
+    }
+    // Merge every non-direct child exactly once; the direct child already
+    // occupies output and folded constants no longer appear in sections_.
+    for (size_t sectionIndex{0}; sectionIndex < sections_.size();
+         ++sectionIndex) {
+      if (directSectionIndex_ == sectionIndex) {
+        continue;
+      }
+      const auto& section = sections_[sectionIndex];
       switch (section.storageBytes) {
         case 1:
           mergeSection<uint8_t>(section, offset, length, output);
@@ -241,8 +417,32 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
 
   void readPhysicalAt(std::span<const uint32_t> indices, physicalType* output)
       const final {
-    std::fill(output, output + indices.size(), physicalType{0});
-    for (const auto& section : sections_) {
+    // Projected reads use the same direct-output seed as contiguous reads, but
+    // may additionally fuse an ordered Trivial child into that traversal.
+    if (directSectionIndex_.has_value()) {
+      const auto directSectionIndex = *directSectionIndex_;
+      const auto& section = sections_[directSectionIndex];
+      section.view->readAt(indices, output);
+      if (directSectionNeedsMerge(section)) {
+        if (tryMergeDirectAndTrivialSectionAt(
+                directSectionIndex, indices, output)) {
+          return;
+        }
+        for (size_t i{0}; i < indices.size(); ++i) {
+          output[i] = mergeValue(constantValue_, output[i], section);
+        }
+      }
+    } else {
+      std::fill(output, output + indices.size(), constantValue_);
+    }
+    // The fused helper returns early after consuming both live sections;
+    // otherwise this loop handles every non-direct section generically.
+    for (size_t sectionIndex{0}; sectionIndex < sections_.size();
+         ++sectionIndex) {
+      if (directSectionIndex_ == sectionIndex) {
+        continue;
+      }
+      const auto& section = sections_[sectionIndex];
       switch (section.storageBytes) {
         case 1:
           mergeSectionAt<uint8_t>(section, indices, output);
@@ -263,8 +463,20 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
     }
   }
 
+  /// Returns whether direct decoding still needs bit placement or constants.
+  bool directSectionNeedsMerge(const Section& section) const {
+    return section.bitStart != 0 ||
+        section.mask != std::numeric_limits<physicalType>::max() ||
+        constantValue_ != 0;
+  }
+
   // Sections collectively cover every physical bit exactly once.
   std::vector<Section> sections_;
+  // Positioned bits shared by every row after Constant children are folded.
+  physicalType constantValue_{0};
+  // Live child whose storage width matches physicalType and can decode into
+  // the caller-provided output buffer without a typed scratch vector.
+  std::optional<size_t> directSectionIndex_;
 };
 
 } // namespace facebook::nimble
