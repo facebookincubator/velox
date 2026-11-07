@@ -4285,6 +4285,42 @@ TEST_P(MemoryPoolTest, overuseUnderArbitration) {
   ASSERT_EQ(child->reservedBytes(), 0);
 }
 
+TEST_P(MemoryPoolTest, arbitrationDoesNotExemptAnotherResource) {
+  constexpr int64_t kCapacity = 64 * MB;
+  MemoryManager::Options options;
+  options.allocatorCapacity = kCapacity;
+  options.arbitratorCapacity = kCapacity;
+  options.arbitratorKind = "SHARED";
+  options.extraArbitratorConfigs = {
+      {std::string(SharedArbitrator::ExtraConfig::kMemoryPoolInitialCapacity),
+       "8MB"}};
+  setupMemory(options);
+  auto& manager = *getMemoryManager();
+  auto cpu = manager.addRootPool("cpu", kCapacity);
+  auto cpuLeaf = cpu->addLeafChild("cpu-leaf");
+  MemoryArbitrator::Config deviceConfig{
+      .kind = "SHARED", .capacity = kCapacity};
+  auto deviceArbitrator = MemoryArbitrator::create(deviceConfig);
+  auto device = manager.addCustomRootPool(
+      "device", manager.allocator(), deviceArbitrator.get(), kCapacity);
+  auto deviceLeaf = device->addLeafChild("device-leaf");
+  const auto requestsBefore = manager.arbitrator()->stats().numRequests;
+  {
+    ScopedMemoryArbitrationContext context(device.get());
+    // Existing admitted capacity remains usable, but GPU reclamation must
+    // neither overcommit CPU capacity nor recursively start CPU arbitration.
+    EXPECT_TRUE(cpuLeaf->maybeReserve(MB));
+    const auto reserved = cpu->reservedBytes();
+    EXPECT_FALSE(cpuLeaf->maybeReserve(2 * kCapacity));
+    EXPECT_EQ(cpu->reservedBytes(), reserved);
+    EXPECT_EQ(manager.arbitrator()->stats().numRequests, requestsBefore);
+    // Preserve the existing same-resource spill workspace exemption.
+    EXPECT_TRUE(deviceLeaf->maybeReserve(2 * kCapacity));
+  }
+  cpuLeaf->release();
+  deviceLeaf->release();
+}
+
 TEST_P(MemoryPoolTest, shrinkWithReservationAboveCapacity) {
   constexpr int64_t kMaxSize = 128 * MB;
   MemoryManager::Options options;

@@ -225,7 +225,7 @@ std::shared_ptr<CustomMemoryResource> makeCxlResource() {
       "cxl",
       std::make_shared<MallocAllocator>(allocatorOptions),
       MemoryArbitrator::create({}),
-      []() { return MemoryReclaimer::create(0); });
+      [](const ReclaimerContext&) { return MemoryReclaimer::create(0); });
 }
 
 // Materializes the CXL custom pool through the registered resource and

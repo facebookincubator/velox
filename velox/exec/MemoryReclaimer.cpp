@@ -30,6 +30,10 @@ std::unique_ptr<memory::MemoryReclaimer> MemoryReclaimer::create(
 }
 
 void MemoryReclaimer::enterArbitration() {
+  suspendDriverForMemoryArbitration();
+}
+
+void suspendDriverForMemoryArbitration() {
   DriverThreadContext* driverThreadCtx = driverThreadContext();
   if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
     // Skips the driver suspension handling if this memory arbitration
@@ -46,6 +50,10 @@ void MemoryReclaimer::enterArbitration() {
 }
 
 void MemoryReclaimer::leaveArbitration() noexcept {
+  resumeDriverAfterMemoryArbitration();
+}
+
+void resumeDriverAfterMemoryArbitration() noexcept {
   DriverThreadContext* driverThreadCtx = driverThreadContext();
   if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
     // Skips the driver suspension handling if this memory arbitration

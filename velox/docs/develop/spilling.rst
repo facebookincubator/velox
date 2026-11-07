@@ -607,7 +607,7 @@ the reclaim policy:
 
 The CXL pool is registered like any other custom resource on the
 *CustomMemoryResourceRegistry*. The resource carries the reclaimer factory
-the caller uses to materialize per-query reclaimers for pools tagged
+the caller uses to materialize reclaimers for pools tagged
 ``"cxl"``:
 
 .. code-block:: c++
@@ -615,7 +615,7 @@ the caller uses to materialize per-query reclaimers for pools tagged
       "cxl",
       std::make_shared<CxlAllocator>(...),
       MemoryArbitrator::create(...),
-      []() { return std::make_unique<CxlReclaimer>(); },
+      [](const memory::ReclaimerContext&) { return std::make_unique<CxlReclaimer>(); },
       cxlCapacityBytes);
   memory::CustomMemoryResourceRegistry::global().insert(
       cxlResource->tag(), cxlResource);
