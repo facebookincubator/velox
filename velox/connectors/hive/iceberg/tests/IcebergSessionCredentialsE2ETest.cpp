@@ -407,6 +407,80 @@ TEST_F(
   assertCredentialOnOpenAndReads();
 }
 
+// A delete file's own fileReadOps reach its open and every read from it. On a
+// shared key the reader's value, here the session credential, wins.
+TEST_F(IcebergSessionCredentialsE2ETest, deleteFileReadOpsAddKeys) {
+  const auto dataFile = writeRowPositionDataFile();
+  const auto assertDeleteFileReadOps = [&](IcebergDeleteFile deleteFile) {
+    recordingFileSystem()->clear();
+    deleteFile.fileReadOps = {
+        {"delete_file_key", "delete_file_value"},
+        {kCredentialKey, "delete_file_credential"},
+    };
+    assertScanDeletesOddRows(dataFile->getPath(), deleteFile);
+
+    EXPECT_EQ(
+        recordingFileSystem()->readOpValue("delete_file_key"),
+        std::optional<std::string>("delete_file_value"));
+    EXPECT_THAT(
+        recordingFileSystem()->readContextValues("delete_file_key"),
+        testing::AllOf(
+            testing::Not(testing::IsEmpty()),
+            testing::Each(std::string("delete_file_value"))));
+    assertCredentialOnOpenAndReads();
+  };
+
+  {
+    const auto deleteFile = common::testutil::TempFilePath::create();
+    writeToFile(
+        deleteFile->getPath(),
+        {makeRowVector(
+            {"file_path", "pos"},
+            {makeFlatVector<std::string>(
+                 {dataFile->getPath(), dataFile->getPath()}),
+             makeFlatVector<int64_t>({1, 3})})});
+    assertDeleteFileReadOps(IcebergDeleteFile(
+        FileContent::kPositionalDeletes,
+        RecordingFileSystem::scheme() + deleteFile->getPath(),
+        fileFormat_,
+        /*recordCount=*/2,
+        getFileSize(deleteFile->getPath())));
+  }
+
+  {
+    const auto deleteFile = common::testutil::TempFilePath::create();
+    writeToFile(
+        deleteFile->getPath(),
+        {makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 3})})});
+    assertDeleteFileReadOps(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        RecordingFileSystem::scheme() + deleteFile->getPath(),
+        fileFormat_,
+        /*recordCount=*/2,
+        getFileSize(deleteFile->getPath()),
+        // Field ID 1 is 'c0'.
+        /*equalityFieldIds=*/{1}));
+  }
+
+  {
+    const auto [puffinDir, dvFile] =
+        writeDeletionVector(dataFile->getPath(), {1, 3});
+    assertDeleteFileReadOps(IcebergDeleteFile(
+        dvFile.content,
+        RecordingFileSystem::scheme() + dvFile.filePath,
+        dvFile.fileFormat,
+        dvFile.recordCount,
+        dvFile.fileSizeInBytes,
+        /*equalityFieldIds=*/{},
+        /*lowerBounds=*/{},
+        /*upperBounds=*/{},
+        dvFile.dataSequenceNumber,
+        dvFile.contentOffset,
+        dvFile.contentLength,
+        dvFile.referencedDataFile));
+  }
+}
+
 // Without the session property set, nothing is forwarded (no-op path).
 TEST_F(IcebergSessionCredentialsE2ETest, noSessionCredentialForwardsNothing) {
   const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
