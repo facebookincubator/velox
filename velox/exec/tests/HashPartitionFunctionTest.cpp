@@ -16,6 +16,7 @@
 
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/Spill.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook;
@@ -134,6 +135,56 @@ TEST_F(HashPartitionFunctionTest, function) {
     functionWithBits2.partition(*vector, partitionsWithBits2);
     EXPECT_EQ(partitionsWithBits1, partitionsWithBits2);
     EXPECT_EQ(4, functionWithBits2.numPartitions());
+  }
+}
+
+TEST_F(HashPartitionFunctionTest, integerSpillPartitions) {
+  auto keys = makeFlatVector<int32_t>(
+      10'000, [](auto row) { return row - 5'000; }, nullEvery(13));
+  const HashBitRange firstLevelBits{48, 51};
+  const HashBitRange secondLevelBits{51, 54};
+  SpillPartitionIdSet leafIds;
+  for (uint32_t parent = 0; parent < 8; ++parent) {
+    for (uint32_t child = 0; child < 8; ++child) {
+      leafIds.emplace(SpillPartitionId(parent), child);
+    }
+  }
+  const SpillPartitionIdLookup lookup(leafIds, 48, 3);
+
+  for (const auto& key : std::vector<VectorPtr>{keys, makeRowVector({keys})}) {
+    SCOPED_TRACE(key->type()->toString());
+    auto input = makeRowVector({key});
+    HashPartitionFunction regular(firstLevelBits, input->rowType(), {0});
+    HashPartitionFunction firstLevel(
+        firstLevelBits, input->rowType(), {0}, {}, true);
+    HashPartitionFunction secondLevel(
+        secondLevelBits, input->rowType(), {0}, {}, true);
+    SpillPartitionFunction probe(lookup, input->rowType(), {0});
+    std::vector<uint32_t> regularPartitions;
+    std::vector<uint32_t> firstLevelPartitions;
+    std::vector<uint32_t> secondLevelPartitions;
+    std::vector<SpillPartitionId> probePartitions;
+    regular.partition(*input, regularPartitions);
+    firstLevel.partition(*input, firstLevelPartitions);
+    secondLevel.partition(*input, secondLevelPartitions);
+    probe.partition(*input, probePartitions);
+
+    for (vector_size_t row = 0; row < input->size(); ++row) {
+      const auto rawHash = key->hashValueAt(row);
+      const auto mixedHash = folly::hash::twang_mix64(rawHash);
+      EXPECT_EQ(regularPartitions[row], firstLevelBits.partition(rawHash));
+      EXPECT_EQ(firstLevelPartitions[row], firstLevelBits.partition(mixedHash));
+      EXPECT_EQ(
+          secondLevelPartitions[row], secondLevelBits.partition(mixedHash));
+      EXPECT_EQ(
+          probePartitions[row],
+          SpillPartitionId(
+              SpillPartitionId(firstLevelPartitions[row]),
+              secondLevelPartitions[row]));
+    }
+    const SpillPartitionIdSet actualIds(
+        probePartitions.begin(), probePartitions.end());
+    EXPECT_EQ(actualIds, leafIds);
   }
 }
 

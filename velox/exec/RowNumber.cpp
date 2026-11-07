@@ -460,7 +460,11 @@ void RowNumber::setupInputSpiller(
   }
 
   spillHashFunction_ = std::make_unique<HashPartitionFunction>(
-      inputSpiller_->hashBits(), inputType_, keyChannels);
+      inputSpiller_->hashBits(),
+      inputType_,
+      keyChannels,
+      std::vector<VectorPtr>{},
+      true);
 }
 
 void RowNumber::spill() {
