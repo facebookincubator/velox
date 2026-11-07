@@ -51,11 +51,13 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     /// The plans that end with the '_extract', '_merge_extract' and '_merge'
     /// companions.
     kAll,
-    /// Only the plans that end with the '_merge' companion, which compare
-    /// partial states. For functions whose '_extract' and '_merge_extract'
-    /// companions cannot resolve their result type from the intermediate type
-    /// alone, such as Spark's decimal avg.
-    kMergeOnly,
+    /// The plans that end with the '_merge' companion, and the plans that run
+    /// the '_merge_extract' companion in a single aggregation step. For
+    /// functions whose result type cannot be resolved from the intermediate
+    /// type alone, such as Spark's decimal avg: their '_extract' companion is
+    /// not registered, and a partial '_merge_extract' step has no way to get
+    /// the result type. The single step gets it from the original aggregate.
+    kMergeAndSingleMergeExtract,
   };
 
   /// Runs an aggregation through the plans that AggregationTestBase generates
@@ -172,9 +174,9 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     // Adds the input and the pre-aggregation nodes to 'builder'.
     void addSource(exec::test::PlanBuilder& builder) const;
 
-    // Returns the argument types of each aggregate, as the aggregation over the
-    // input resolves them.
-    std::vector<std::vector<TypePtr>> aggregateArgTypes() const;
+    // Returns the aggregates as the aggregation over the input resolves them,
+    // with their argument and result types.
+    std::vector<core::AggregationNode::Aggregate> resolveAggregates() const;
 
     AggregationTestBase& test_;
     std::vector<RowVectorPtr> inputs_;
@@ -270,13 +272,16 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       bool streaming);
 
   // Runs the companion plans that end with the merge_extract companion and
-  // checks their results with 'assertResults'.
+  // checks their results with 'assertResults'. Runs the merge_extract
+  // companion in partial, intermediate and final steps when
+  // 'singleStepOnly' is false, and only in a single step otherwise.
   void testCompanionMergeExtract(
       const CompanionPlanInputs& inputs,
       const std::vector<std::string>& postAggregationProjections,
       const std::function<std::shared_ptr<exec::Task>(
           exec::test::AssertQueryBuilder&)>& assertResults,
-      const std::unordered_map<std::string, std::string>& config);
+      const std::unordered_map<std::string, std::string>& config,
+      bool singleStepOnly);
 
   // Runs the companion plans that end with the merge companion: partial merges
   // with and without abandoning partial aggregation, which compare partial
