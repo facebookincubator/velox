@@ -18,7 +18,32 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <thread>
+
 namespace facebook::velox::filesystems {
+namespace {
+
+bool isPortReady(int64_t port) {
+  const int socketFd = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (socketFd < 0) {
+    return false;
+  }
+
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_port = htons(static_cast<uint16_t>(port));
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  const bool ready =
+      ::connect(
+          socketFd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) ==
+      0;
+  ::close(socketFd);
+  return ready;
+}
+
+} // namespace
 
 std::string AzuriteServer::URI() const {
   return fmt::format(
@@ -50,15 +75,23 @@ void AzuriteServer::start() {
   try {
     serverProcess_ = std::make_unique<boost::process::child>(
         env_, exePath_, commandOptions_);
-    serverProcess_->wait_for(std::chrono::duration<int, std::milli>(5000));
-    VELOX_CHECK_EQ(
-        serverProcess_->exit_code(),
-        383,
-        "AzuriteServer process exited, code: ",
-        serverProcess_->exit_code());
   } catch (const std::exception& e) {
     VELOX_FAIL("Failed to launch Azurite server: {}", e.what());
   }
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (!serverProcess_->running()) {
+      VELOX_FAIL(
+          "AzuriteServer process exited, code: {}",
+          serverProcess_->exit_code());
+    }
+    if (isPortReady(port_)) {
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  VELOX_FAIL("Timed out waiting for AzuriteServer to listen on port {}", port_);
 }
 
 void AzuriteServer::stop() {
