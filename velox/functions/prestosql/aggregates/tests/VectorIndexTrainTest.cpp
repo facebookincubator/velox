@@ -128,6 +128,35 @@ TEST_F(VectorIndexTrainTest, clusters) {
       testTrain(reversed, /*numClusters=*/2, /*groupBy=*/false, verify));
 }
 
+// A group of more embeddings than one 64KB chunk of the aggregate's state
+// holds gives the same codec whatever the order of its rows.
+TEST_F(VectorIndexTrainTest, manyEmbeddings) {
+  constexpr int32_t kSize{20'000};
+  // Embedding i points near (1, 0) for even i and near (0, 1) for odd i.
+  const auto makeData = [&](bool reverse) {
+    const auto rowAt = [&](auto row) {
+      return reverse ? kSize - 1 - row : row;
+    };
+    return makeRowVector({
+        makeArrayVector<float>(
+            kSize,
+            [](auto) { return 2; },
+            [&](auto index) {
+              const auto i = rowAt(index / 2);
+              const float small = 0.001f * (i % 7);
+              return (index % 2 == 0) == (i % 2 == 0) ? 1.0f : small;
+            }),
+        makeFlatVector<int64_t>(kSize, rowAt),
+    });
+  };
+  const auto verify = [&](const auto&, const auto& clusters) {
+    EXPECT_EQ(2, clusters.size());
+  };
+  EXPECT_EQ(
+      testTrain(makeData(false), /*numClusters=*/2, /*groupBy=*/false, verify),
+      testTrain(makeData(true), /*numClusters=*/2, /*groupBy=*/false, verify));
+}
+
 TEST_F(VectorIndexTrainTest, fewerEmbeddingsThanClusters) {
   // A group of 2 embeddings gets 2 clusters, one at each.
   auto data = makeRowVector({

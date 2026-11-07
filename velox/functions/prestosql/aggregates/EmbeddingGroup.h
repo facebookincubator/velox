@@ -27,17 +27,20 @@ namespace facebook::velox::aggregate::prestosql {
 
 /// The embeddings of an aggregation group and their ids, as the vector index
 /// aggregates accumulate them: checked, normalized for the group's metric and
-/// stored one after another.
+/// stored in chunks of about 64KB. A growing group never moves its embeddings,
+/// and over-allocates by at most one chunk.
 ///
 ///   EmbeddingGroup group(allocator);
 ///   group.add(embedding, id, VectorIndexMetric::kCosine);
-///   FaissLocalVectorIndex::build(..., group.embeddings(), group.ids(), ...);
+///   const auto contents = group.gather();
+///   FaissLocalVectorIndex::build(
+///       ..., contents.embeddings(), contents.ids, ...);
 ///
 /// Invariants:
 /// - Every embedding has dimension() values, and dimension() is positive once
 ///   there is one.
 /// - No value is NaN or infinite.
-/// - ids() has an id per embedding, in the same order.
+/// - There is an id per embedding, in the same order.
 class EmbeddingGroup {
  public:
   explicit EmbeddingGroup(HashStringAllocator* allocator);
@@ -63,28 +66,49 @@ class EmbeddingGroup {
       exec::out_type<Array<int64_t>>& ids,
       exec::out_type<Array<float>>& embeddings) const;
 
-  /// Puts the embeddings in the order of their ids, in place. Embeddings with
-  /// equal ids keep their order.
-  void sortById();
+  /// The ids and embeddings of a group, each in contiguous memory.
+  struct Contents {
+    std::vector<int64_t, StlAllocator<int64_t>> ids;
+    std::vector<float, StlAllocator<float>> values;
+    int32_t dimension;
 
-  std::span<const int64_t> ids() const {
-    return ids_;
-  }
+    common::vectorindex::Embeddings embeddings() const {
+      return common::vectorindex::Embeddings(values, dimension);
+    }
+  };
 
-  /// The embeddings. Requires at least one.
-  common::vectorindex::Embeddings embeddings() const {
-    return common::vectorindex::Embeddings(values_, dimension_);
-  }
+  /// Returns a copy of the ids and embeddings, in the order they were added.
+  /// Requires at least one embedding.
+  Contents gather() const;
+
+  /// Like gather(), but in the order of the ids. Embeddings with equal ids keep
+  /// their order.
+  Contents gatherSortedById() const;
 
  private:
   void setDimension(int64_t size);
 
+  // Returns room for one more embedding at the end of the last chunk, adding a
+  // chunk when it is full.
+  std::span<float> appendEmbedding();
+
+  // Returns the embedding at 'index', in the order they were added.
+  std::span<const float> embeddingAt(int64_t index) const;
+
+  HashStringAllocator* const allocator_;
   // The length of every embedding; 0 until the first one arrives.
   int32_t dimension_{0};
-  // An id per embedding, in the order of 'values_'.
+  // The embeddings a chunk holds; set with the dimension.
+  int32_t embeddingsPerChunk_{0};
+  // An id per embedding, in the order they were added.
   std::vector<int64_t, StlAllocator<int64_t>> ids_;
-  // The embeddings, normalized for the group's metric, one after another.
-  std::vector<float, StlAllocator<float>> values_;
+  // The embeddings, normalized for the group's metric, in the order they were
+  // added. Each chunk has capacity for embeddingsPerChunk_ embeddings, and
+  // all but the last are full.
+  std::vector<
+      std::vector<float, StlAllocator<float>>,
+      StlAllocator<std::vector<float, StlAllocator<float>>>>
+      chunks_;
 };
 
 } // namespace facebook::velox::aggregate::prestosql
