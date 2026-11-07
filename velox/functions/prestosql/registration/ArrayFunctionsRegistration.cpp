@@ -353,6 +353,8 @@ void registerArrayFunctions(
   registerArrayTopNFunction<Date>(prefix, defaultOwner);
   registerArrayTopNFunction<Varbinary>(prefix, defaultOwner);
   registerArrayTopNFunction<Orderable<T1>>(prefix, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_array_top_n, prefix + "array_top_n", defaultOwner);
 
   registerArrayRemoveNullFunctions<int8_t>(prefix, defaultOwner);
   registerArrayRemoveNullFunctions<int16_t>(prefix, defaultOwner);
