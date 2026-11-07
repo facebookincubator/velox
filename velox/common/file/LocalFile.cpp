@@ -206,6 +206,19 @@ void LocalReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
   bytesRead_ += length;
   auto bytesRead = ::pread(fd_, pos, length, offset);
   const int savedErrno = errno;
+
+  // A direct-I/O read may run past the end of the file, and then returns only
+  // the bytes before the end. Such a short read is accepted only when:
+  // - The file uses direct I/O. Only a direct-I/O read is widened to the
+  //   alignment, so a buffered read must return every byte it asked for.
+  // - pread() did not fail. A negative count is an error, such as EINVAL.
+  // - The read reached the end of the file as of its open. A read that stops
+  //   before that is missing bytes, as when the file shrank after its open.
+  if (directIo_ && bytesRead >= 0 &&
+      offset + static_cast<uint64_t>(bytesRead) >=
+          static_cast<uint64_t>(size_)) {
+    return;
+  }
   VELOX_CHECK_EQ(
       bytesRead,
       length,
