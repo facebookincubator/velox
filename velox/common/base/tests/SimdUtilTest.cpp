@@ -171,12 +171,36 @@ TEST_F(SimdUtilTest, gather32) {
   EXPECT_EQ((1 << (kBatchSize - 2)) - 1, bits);
 }
 
-TEST_F(SimdUtilTest, gather64) {
+TEST_F(SimdUtilTest, gather64idx32) {
   int32_t indices4[4] = {3, 2, 1, 0};
   int64_t data[4] = {44, 55, 66, 77};
   constexpr int kBatchSize = xsimd::batch<int64_t>::size;
   const int32_t* indices = indices4 + (4 - kBatchSize);
   const int32_t* indicesMask = indices4 + (4 - kBatchSize);
+  auto result = simd::gather(data, indices);
+  for (auto i = 0; i < kBatchSize; ++i) {
+    EXPECT_EQ(result.get(i), data[indices[i]]);
+  }
+  auto resultMask = simd::maskGather(
+      xsimd::batch<int64_t>::broadcast(-1),
+      simd::leadingMask<int64_t>(kBatchSize - 1),
+      data,
+      indicesMask);
+  for (auto i = 0; i < kBatchSize - 1; ++i) {
+    EXPECT_EQ(resultMask.get(i), data[indices[i]]);
+  }
+  EXPECT_EQ(resultMask.get(kBatchSize - 1), -1);
+  auto bits = simd::toBitMask(result == resultMask);
+  // Low kBatchSize - 1 lanes are the same.
+  EXPECT_EQ((1 << (kBatchSize - 1)) - 1, bits);
+}
+
+TEST_F(SimdUtilTest, gather64idx64) {
+  int64_t indices4[4] = {3, 2, 1, 0};
+  int64_t data[4] = {44, 55, 66, 77};
+  constexpr int kBatchSize = xsimd::batch<int64_t>::size;
+  const int64_t* indices = indices4 + (4 - kBatchSize);
+  const int64_t* indicesMask = indices4 + (4 - kBatchSize);
   auto result = simd::gather(data, indices);
   for (auto i = 0; i < kBatchSize; ++i) {
     EXPECT_EQ(result.get(i), data[indices[i]]);
