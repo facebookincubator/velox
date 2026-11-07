@@ -24,15 +24,18 @@
 #include "arrow/ipc/api.h"
 #include "arrow/result.h"
 #include "arrow/status.h"
+#include "grpc++/support/channel_arguments.h" // @manual
 #include "grpc/grpc.h" // @manual
 #include "velox/common/base/Fs.h"
 #include "velox/common/testutil/TempFilePath.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/PrestoSql.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunnerToSqlPlanNodeVisitor.h"
 #include "velox/functions/sparksql/fuzzer/spark/connect/base.pb.h"
 #include "velox/functions/sparksql/fuzzer/spark/connect/relations.pb.h"
@@ -80,7 +83,50 @@ void writeToFile(
   writer->close();
 }
 
+// Returns the Spark session configs that set ANSI mode and the session
+// timezone to the ones in the Velox 'queryConfigs'.
+std::vector<std::pair<std::string, std::string>> toSparkSessionConfigs(
+    const std::unordered_map<std::string, std::string>& queryConfigs) {
+  const core::QueryConfig queryConfig{queryConfigs};
+  // Velox uses UTC if the session timezone is not set.
+  std::string sessionTimezone = queryConfig.sessionTimezone();
+  if (sessionTimezone.empty()) {
+    sessionTimezone = "UTC";
+  }
+  return {
+      {"spark.sql.ansi.enabled",
+       SparkQueryConfig{queryConfig}.ansiEnabled() ? "true" : "false"},
+      {"spark.sql.session.timeZone", sessionTimezone},
+  };
+}
+
+// Spark Connect may send result batches larger than the 4 MiB gRPC default
+// receive limit. Use 128 MiB, the limit of Spark Connect clients.
+std::shared_ptr<grpc::Channel> createChannel(
+    const std::string& coordinatorUri) {
+  grpc::ChannelArguments args;
+  args.SetMaxReceiveMessageSize(128 << 20);
+  return grpc::CreateCustomChannel(
+      coordinatorUri, grpc::InsecureChannelCredentials(), args);
+}
+
 } // namespace
+
+SparkQueryRunner::SparkQueryRunner(
+    memory::MemoryPool* pool,
+    const std::string& coordinatorUri,
+    const std::string& userId,
+    const std::string& userName,
+    const std::unordered_map<std::string, std::string>& queryConfigs)
+    : ReferenceQueryRunner(pool),
+      userId_(userId),
+      userName_(userName),
+      sessionId_(generateUUID()),
+      sessionConfigs_(toSparkSessionConfigs(queryConfigs)),
+      stub_(SparkConnectService::NewStub(createChannel(coordinatorUri))) {
+  pool_ = aggregatePool()->addLeafChild("leaf");
+  copyPool_ = aggregatePool()->addLeafChild("copy");
+}
 
 const std::vector<TypePtr>& SparkQueryRunner::supportedScalarTypes() const {
   static const std::vector<TypePtr> kScalarTypes{
@@ -101,8 +147,12 @@ const std::vector<TypePtr>& SparkQueryRunner::supportedScalarTypes() const {
 
 const std::unordered_map<std::string, DataSpec>&
 SparkQueryRunner::aggregationFunctionDataSpecs() const {
+  // With infinite inputs, covar_samp returns NaN or infinity depending on the
+  // order of input rows, so its results are not comparable across plans.
   static const std::unordered_map<std::string, DataSpec>
-      kAggregationFunctionDataSpecs{};
+      kAggregationFunctionDataSpecs{
+          {"covar_samp", DataSpec{true, false}},
+      };
 
   return kAggregationFunctionDataSpecs;
 }
@@ -185,6 +235,8 @@ SparkQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
 
 std::vector<RowVectorPtr> SparkQueryRunner::execute(
     const std::string& content) {
+  setSessionConfigs();
+
   auto sql = ArenaCreate<SQL>(&arena_);
   sql->set_query(content);
 
@@ -219,6 +271,27 @@ std::vector<RowVectorPtr> SparkQueryRunner::execute(
     }
   }
   return results;
+}
+
+void SparkQueryRunner::setSessionConfigs() {
+  ConfigRequest request;
+  request.set_session_id(sessionId_);
+  request.mutable_user_context()->set_user_id(userId_);
+  request.mutable_user_context()->set_user_name(userName_);
+  auto* setOperation = request.mutable_operation()->mutable_set();
+  for (const auto& [key, value] : sessionConfigs_) {
+    auto* pair = setOperation->add_pairs();
+    pair->set_key(key);
+    pair->set_value(value);
+  }
+
+  grpc::ClientContext clientContext;
+  ConfigResponse response;
+  const grpc::Status status = stub_->Config(&clientContext, request, &response);
+  VELOX_CHECK(
+      status.ok(),
+      "Failed to set Spark session configs: {}",
+      status.error_message());
 }
 
 std::string SparkQueryRunner::generateUUID() {

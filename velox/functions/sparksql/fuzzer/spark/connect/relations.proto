@@ -23,6 +23,8 @@ import "google/protobuf/any.proto";
 import "velox/functions/sparksql/fuzzer/spark/connect/expressions.proto";
 import "velox/functions/sparksql/fuzzer/spark/connect/types.proto";
 import "velox/functions/sparksql/fuzzer/spark/connect/catalog.proto";
+import "velox/functions/sparksql/fuzzer/spark/connect/common.proto";
+import "velox/functions/sparksql/fuzzer/spark/connect/ml_common.proto";
 
 option java_multiple_files = true;
 option java_package = "org.apache.spark.connect.proto";
@@ -71,8 +73,17 @@ message Relation {
     HtmlString html_string = 35;
     CachedLocalRelation cached_local_relation = 36;
     CachedRemoteRelation cached_remote_relation = 37;
-    CommonInlineUserDefinedTableFunction
-        common_inline_user_defined_table_function = 38;
+    CommonInlineUserDefinedTableFunction common_inline_user_defined_table_function = 38;
+    AsOfJoin as_of_join = 39;
+    CommonInlineUserDefinedDataSource common_inline_user_defined_data_source = 40;
+    WithRelations with_relations = 41;
+    Transpose transpose = 42;
+    UnresolvedTableValuedFunction unresolved_table_valued_function = 43;
+    LateralJoin lateral_join = 44;
+    ChunkedCachedLocalRelation chunked_cached_local_relation = 45;
+    RelationChanges relation_changes = 46;
+    NearestByJoin nearest_by_join = 47;
+    Zip zip = 48;
 
     // NA functions
     NAFill fill_na = 90;
@@ -92,11 +103,65 @@ message Relation {
     // Catalog API (experimental / unstable)
     Catalog catalog = 200;
 
-    // This field is used to mark extensions to the protocol. When plugins
-    // generate arbitrary relations they can add them here. During the planning
-    // the correct resolution is done.
+    // ML relation
+    MlRelation ml_relation = 300;
+
+    // This field is used to mark extensions to the protocol. When plugins generate arbitrary
+    // relations they can add them here. During the planning the correct resolution is done.
     google.protobuf.Any extension = 998;
     Unknown unknown = 999;
+  }
+}
+
+// Relation to represent ML world
+message MlRelation {
+  oneof ml_type {
+    Transform transform = 1;
+    Fetch fetch = 2;
+  }
+  // (Optional) the dataset for restoring the model summary
+  optional Relation model_summary_dataset = 3;
+
+  // Relation to represent transform(input) of the operator
+  // which could be a cached model or a new transformer
+  message Transform {
+    oneof operator {
+      // Object reference
+      ObjectRef obj_ref = 1;
+      // Could be an ML transformer like VectorAssembler
+      MlOperator transformer = 2;
+    }
+    // the input dataframe
+    Relation input = 3;
+    // the operator specific parameters
+    MlParams params = 4;
+  }
+}
+
+// Message for fetching attribute from object on the server side.
+// Fetch can be represented as a Relation or a ML command
+// Command: model.coefficients, model.summary.weightedPrecision which
+// returns the final literal result
+// Relation: model.summary.roc which returns a DataFrame (Relation)
+message Fetch {
+  // (Required) reference to the object on the server side
+  ObjectRef obj_ref = 1;
+  // (Required) the calling method chains
+  repeated Method methods = 2;
+
+  // Represents a method with inclusion of method name and its arguments
+  message Method {
+    // (Required) the method name
+    string method = 1;
+    // (Optional) the arguments of the method
+    repeated Args args = 2;
+
+    message Args {
+      oneof args_type {
+        Expression.Literal param = 1;
+        Relation input = 2;
+      }
+    }
   }
 }
 
@@ -106,10 +171,13 @@ message Unknown {}
 // Common metadata of all relations.
 message RelationCommon {
   // (Required) Shared relation metadata.
-  string source_info = 1;
+  string source_info = 1 [deprecated=true];
 
   // (Optional) A per-client globally unique id for a given connect plan.
   optional int64 plan_id = 2;
+
+  // (Optional) Keep the information of the origin for this expression such as stacktrace.
+  Origin origin = 3;
 }
 
 // Relation that uses a SQL query to generate the output.
@@ -118,15 +186,39 @@ message SQL {
   string query = 1;
 
   // (Optional) A map of parameter names to literal expressions.
-  map<string, Expression.Literal> args = 2;
+  map<string, Expression.Literal> args = 2 [deprecated=true];
 
-  // (Optional) A sequence of literal expressions for positional parameters in
-  // the SQL query text.
-  repeated Expression.Literal pos_args = 3;
+  // (Optional) A sequence of literal expressions for positional parameters in the SQL query text.
+  repeated Expression.Literal pos_args = 3 [deprecated=true];
+
+  // (Optional) A map of parameter names to expressions.
+  // It cannot coexist with `pos_arguments`.
+  map<string, Expression> named_arguments = 4;
+
+  // (Optional) A sequence of expressions for positional parameters in the SQL query text.
+  // It cannot coexist with `named_arguments`.
+  repeated Expression pos_arguments = 5;
 }
 
-// Relation that reads from a file / table or other data source. Does not have
-// additional inputs.
+// Relation of type [[WithRelations]].
+//
+// This relation contains a root plan, and one or more references that are used by the root plan.
+// There are two ways of referencing a relation, by name (through a subquery alias), or by plan_id
+// (using RelationCommon.plan_id).
+//
+// This relation can be used to implement CTEs, describe DAGs, or to reduce tree depth.
+message WithRelations {
+  // (Required) Plan at the root of the query tree. This plan is expected to contain one or more
+  // references. Those references get expanded later on by the engine.
+  Relation root = 1;
+
+  // (Required) Plans referenced by the root plan. Relations in this list are also allowed to
+  // contain references to other relations in this list, as long they do not form cycles.
+  repeated Relation references = 2;
+}
+
+// Relation that reads from a file / table or other data source. Does not have additional
+// inputs.
 message Read {
   oneof read_type {
     NamedTable named_table = 1;
@@ -145,11 +237,9 @@ message Read {
   }
 
   message DataSource {
-    // (Optional) Supported formats include: parquet, orc, text, json, parquet,
-    // csv, avro.
+    // (Optional) Supported formats include: parquet, orc, text, json, parquet, csv, avro.
     //
-    // If not set, the value from SQL conf 'spark.sql.sources.default' will be
-    // used.
+    // If not set, the value from SQL conf 'spark.sql.sources.default' will be used.
     optional string format = 1;
 
     // (Optional) If not set, Spark will infer the schema.
@@ -158,8 +248,8 @@ message Read {
     optional string schema = 2;
 
     // Options for the data source. The context of this map varies based on the
-    // data source format. This options could be empty for valid data source
-    // format. The map key is case insensitive.
+    // data source format. This options could be empty for valid data source format.
+    // The map key is case insensitive.
     map<string, string> options = 3;
 
     // (Optional) A list of path for file-system backed data sources.
@@ -169,7 +259,31 @@ message Read {
     //
     // This is only supported by the JDBC data source.
     repeated string predicates = 5;
+
+    // (Optional) A user-provided name for the streaming source.
+    // This name is used in checkpoint metadata and enables stable checkpoint locations
+    // for source evolution.
+    optional string source_name = 6;
   }
+}
+
+// Reads Change Data Capture (CDC) changes for a named table.
+//
+// This corresponds to the `DataFrameReader.changes()` or `DataStreamReader.changes()` API.
+// CDC-specific options (startingVersion, endingVersion, startingTimestamp, endingTimestamp,
+// deduplicationMode, computeUpdates, etc.) are passed in the options map.
+message RelationChanges {
+  // (Required) Unparsed identifier for the table.
+  string unparsed_identifier = 1;
+
+  // Options for the CDC query. The map key is case insensitive.
+  // Supported keys include: startingVersion, endingVersion, startingTimestamp,
+  // endingTimestamp, deduplicationMode, computeUpdates, startingBoundInclusive,
+  // endingBoundInclusive.
+  map<string, string> options = 2;
+
+  // (Optional) Indicates if this is a streaming CDC read.
+  bool is_streaming = 3;
 }
 
 // Projection of a bag of expressions for a given input relation.
@@ -186,8 +300,8 @@ message Project {
   repeated Expression expressions = 3;
 }
 
-// Relation that applies a boolean expression `condition` on each row of `input`
-// to produce the output result.
+// Relation that applies a boolean expression `condition` on each row of `input` to produce
+// the output result.
 message Filter {
   // (Required) Input relation for a Filter.
   Relation input = 1;
@@ -206,8 +320,7 @@ message Join {
   // (Required) Right input relation for a Join.
   Relation right = 2;
 
-  // (Optional) The join condition. Could be unset when `using_columns` is
-  // utilized.
+  // (Optional) The join condition. Could be unset when `using_columns` is utilized.
   //
   // This field does not co-exist with using_columns.
   Expression join_condition = 3;
@@ -215,9 +328,9 @@ message Join {
   // (Required) The join type.
   JoinType join_type = 4;
 
-  // Optional. using_columns provides a list of columns that should present on
-  // both sides of the join inputs that this Join will join on. For example A
-  // JOIN B USING col_name is equivalent to A JOIN B on A.col_name = B.col_name.
+  // Optional. using_columns provides a list of columns that should present on both sides of
+  // the join inputs that this Join will join on. For example A JOIN B USING col_name is
+  // equivalent to A JOIN B on A.col_name = B.col_name.
   //
   // This field does not co-exist with join_condition.
   repeated string using_columns = 5;
@@ -279,8 +392,7 @@ message SetOperation {
   }
 }
 
-// Relation of type [[Limit]] that is used to `limit` rows from the input
-// relation.
+// Relation of type [[Limit]] that is used to `limit` rows from the input relation.
 message Limit {
   // (Required) Input relation for a Limit.
   Relation input = 1;
@@ -289,8 +401,8 @@ message Limit {
   int32 limit = 2;
 }
 
-// Relation of type [[Offset]] that is used to read rows staring from the
-// `offset` on the input relation.
+// Relation of type [[Offset]] that is used to read rows staring from the `offset` on
+// the input relation.
 message Offset {
   // (Required) Input relation for an Offset.
   Relation input = 1;
@@ -299,8 +411,7 @@ message Offset {
   int32 offset = 2;
 }
 
-// Relation of type [[Tail]] that is used to fetch `limit` rows from the last of
-// the input relation.
+// Relation of type [[Tail]] that is used to fetch `limit` rows from the last of the input relation.
 message Tail {
   // (Required) Input relation for an Tail.
   Relation input = 1;
@@ -320,13 +431,14 @@ message Aggregate {
   // (Required) Expressions for grouping keys
   repeated Expression grouping_expressions = 3;
 
-  // (Required) List of values that will be translated to columns in the output
-  // DataFrame.
+  // (Required) List of values that will be translated to columns in the output DataFrame.
   repeated Expression aggregate_expressions = 4;
 
-  // (Optional) Pivots a column of the current `DataFrame` and performs the
-  // specified aggregation.
+  // (Optional) Pivots a column of the current `DataFrame` and performs the specified aggregation.
   Pivot pivot = 5;
+
+  // (Optional) List of values that will be translated to columns in the output DataFrame.
+  repeated GroupingSets grouping_sets = 6;
 
   enum GroupType {
     GROUP_TYPE_UNSPECIFIED = 0;
@@ -334,18 +446,23 @@ message Aggregate {
     GROUP_TYPE_ROLLUP = 2;
     GROUP_TYPE_CUBE = 3;
     GROUP_TYPE_PIVOT = 4;
+    GROUP_TYPE_GROUPING_SETS = 5;
   }
 
   message Pivot {
     // (Required) The column to pivot
     Expression col = 1;
 
-    // (Optional) List of values that will be translated to columns in the
-    // output DataFrame.
+    // (Optional) List of values that will be translated to columns in the output DataFrame.
     //
-    // Note that if it is empty, the server side will immediately trigger a job
-    // to collect the distinct values of the column.
+    // Note that if it is empty, the server side will immediately trigger a job to collect
+    // the distinct values of the column.
     repeated Expression.Literal values = 2;
+  }
+
+  message GroupingSets {
+    // (Required) Individual grouping set
+    repeated Expression grouping_set = 1;
   }
 }
 
@@ -361,6 +478,7 @@ message Sort {
   optional bool is_global = 3;
 }
 
+
 // Drop specified columns.
 message Drop {
   // (Required) The input relation.
@@ -373,8 +491,9 @@ message Drop {
   repeated string column_names = 3;
 }
 
-// Relation of type [[Deduplicate]] which have duplicate rows removed, could
-// consider either only the subset of columns or all the columns.
+
+// Relation of type [[Deduplicate]] which have duplicate rows removed, could consider either only
+// the subset of columns or all the columns.
 message Deduplicate {
   // (Required) Input relation for a Deduplicate.
   Relation input = 1;
@@ -395,31 +514,43 @@ message Deduplicate {
 
 // A relation that does not need to be qualified by name.
 message LocalRelation {
-  // (Optional) Local collection data serialized into Arrow IPC streaming format
-  // which contains the schema of the data.
+  // (Optional) Local collection data serialized into Arrow IPC streaming format which contains
+  // the schema of the data.
   optional bytes data = 1;
 
   // (Optional) The schema of local data.
   // It should be either a DDL-formatted type string or a JSON string.
   //
-  // The server side will update the column names and data types according to
-  // this schema. If the 'data' is not provided, then this schema will be
-  // required.
+  // The server side will update the column names and data types according to this schema.
+  // If the 'data' is not provided, then this schema will be required.
   optional string schema = 2;
 }
 
 // A local relation that has been cached already.
+// CachedLocalRelation doesn't support LocalRelations of size over 2GB.
 message CachedLocalRelation {
-  // `userId` and `sessionId` fields are deleted since the server must always
-  // use the active session/user rather than arbitrary values provided by the
-  // client. It is never valid to access a local relation from a different
-  // session/user.
+  // `userId` and `sessionId` fields are deleted since the server must always use the active
+  // session/user rather than arbitrary values provided by the client. It is never valid to access
+  // a local relation from a different session/user.
   reserved 1, 2;
   reserved "userId", "sessionId";
 
-  // (Required) A sha-256 hash of the serialized local relation in proto, see
-  // LocalRelation.
+  // (Required) A sha-256 hash of the serialized local relation in proto, see LocalRelation.
   string hash = 3;
+}
+
+// A local relation that has been cached already.
+message ChunkedCachedLocalRelation {
+  // (Required) A list of sha-256 hashes for representing LocalRelation.data.
+  // Data is serialized in Arrow IPC streaming format, each batch is cached on the server as
+  // a separate artifact. Each hash represents one batch stored on the server.
+  // Hashes are hex-encoded strings (e.g., "a3b2c1d4...").
+  repeated string dataHashes = 1;
+
+  // (Optional) A sha-256 hash of the serialized LocalRelation.schema.
+  // Scala clients always provide the schema, Python clients can omit it.
+  // Hash is a hex-encoded string (e.g., "a3b2c1d4...").
+  optional string schemaHash = 2;
 }
 
 // Represents a remote relation that has been cached on server.
@@ -442,13 +573,14 @@ message Sample {
   // (Optional) Whether to sample with replacement.
   optional bool with_replacement = 4;
 
-  // (Optional) The random seed.
+  // (Required) The random seed.
+  // This field is required to avoid generating mutable dataframes (see SPARK-48184 for details),
+  // however, still keep it 'optional' here for backward compatibility.
   optional int64 seed = 5;
 
-  // (Required) Explicitly sort the underlying plan to make the ordering
-  // deterministic or cache it. This flag is true when invoking
-  // `dataframe.randomSplit` to randomly splits DataFrame with the provided
-  // weights. Otherwise, it is false.
+  // (Required) Explicitly sort the underlying plan to make the ordering deterministic or cache it.
+  // This flag is true when invoking `dataframe.randomSplit` to randomly splits DataFrame with the
+  // provided weights. Otherwise, it is false.
   bool deterministic_order = 6;
 }
 
@@ -463,9 +595,8 @@ message Range {
   // (Required)
   int64 step = 3;
 
-  // Optional. Default value is assigned by 1) SQL conf
-  // "spark.sql.leafNodeDefaultParallelism" if it is set, or 2) spark default
-  // parallelism.
+  // Optional. Default value is assigned by 1) SQL conf "spark.sql.leafNodeDefaultParallelism" if
+  // it is set, or 2) spark default parallelism.
   optional int32 num_partitions = 4;
 }
 
@@ -506,8 +637,7 @@ message ShowString {
   // `truncate` characters and all cells will be aligned right.
   int32 truncate = 3;
 
-  // (Required) If set to true, prints output rows vertically (one line per
-  // column value).
+  // (Required) If set to true, prints output rows vertically (one line per column value).
   bool vertical = 4;
 }
 
@@ -544,15 +674,14 @@ message StatSummary {
   //  count_distinct
   //  approx_count_distinct
   //
-  // If no statistics are given, this function computes 'count', 'mean',
-  // 'stddev', 'min', 'approximate quartiles' (percentiles at 25%, 50%, and
-  // 75%), and 'max'.
+  // If no statistics are given, this function computes 'count', 'mean', 'stddev', 'min',
+  // 'approximate quartiles' (percentiles at 25%, 50%, and 75%), and 'max'.
   repeated string statistics = 2;
 }
 
-// Computes basic statistics for numeric and string columns, including count,
-// mean, stddev, min, and max. If no columns are given, this function computes
-// statistics for all numerical or string columns.
+// Computes basic statistics for numeric and string columns, including count, mean, stddev, min,
+// and max. If no columns are given, this function computes statistics for all numerical or
+// string columns.
 message StatDescribe {
   // (Required) The input relation.
   Relation input = 1;
@@ -561,9 +690,9 @@ message StatDescribe {
   repeated string cols = 2;
 }
 
-// Computes a pair-wise frequency table of the given columns. Also known as a
-// contingency table. It will invoke 'Dataset.stat.crosstab' (same as
-// 'StatFunctions.crossTabulate') to compute the results.
+// Computes a pair-wise frequency table of the given columns. Also known as a contingency table.
+// It will invoke 'Dataset.stat.crosstab' (same as 'StatFunctions.crossTabulate')
+// to compute the results.
 message StatCrosstab {
   // (Required) The input relation.
   Relation input = 1;
@@ -580,8 +709,7 @@ message StatCrosstab {
 }
 
 // Calculate the sample covariance of two numerical columns of a DataFrame.
-// It will invoke 'Dataset.stat.cov' (same as 'StatFunctions.calculateCov') to
-// compute the results.
+// It will invoke 'Dataset.stat.cov' (same as 'StatFunctions.calculateCov') to compute the results.
 message StatCov {
   // (Required) The input relation.
   Relation input = 1;
@@ -593,10 +721,9 @@ message StatCov {
   string col2 = 3;
 }
 
-// Calculates the correlation of two columns of a DataFrame. Currently only
-// supports the Pearson Correlation Coefficient. It will invoke
-// 'Dataset.stat.corr' (same as 'StatFunctions.pearsonCorrelation') to compute
-// the results.
+// Calculates the correlation of two columns of a DataFrame. Currently only supports the Pearson
+// Correlation Coefficient. It will invoke 'Dataset.stat.corr' (same as
+// 'StatFunctions.pearsonCorrelation') to compute the results.
 message StatCorr {
   // (Required) The input relation.
   Relation input = 1;
@@ -614,8 +741,8 @@ message StatCorr {
 }
 
 // Calculates the approximate quantiles of numerical columns of a DataFrame.
-// It will invoke 'Dataset.stat.approxQuantile' (same as
-// 'StatFunctions.approxQuantile') to compute the results.
+// It will invoke 'Dataset.stat.approxQuantile' (same as 'StatFunctions.approxQuantile')
+// to compute the results.
 message StatApproxQuantile {
   // (Required) The input relation.
   Relation input = 1;
@@ -629,12 +756,10 @@ message StatApproxQuantile {
   // For example 0 is the minimum, 0.5 is the median, 1 is the maximum.
   repeated double probabilities = 3;
 
-  // (Required) The relative target precision to achieve (greater than or equal
-  // to 0).
+  // (Required) The relative target precision to achieve (greater than or equal to 0).
   //
-  // If set to zero, the exact quantiles are computed, which could be very
-  // expensive. Note that values greater than 1 are accepted but give the same
-  // result as 1.
+  // If set to zero, the exact quantiles are computed, which could be very expensive.
+  // Note that values greater than 1 are accepted but give the same result as 1.
   double relative_error = 4;
 }
 
@@ -653,6 +778,7 @@ message StatFreqItems {
   optional double support = 3;
 }
 
+
 // Returns a stratified sample without replacement based on the fraction
 // given on each stratum.
 // It will invoke 'Dataset.stat.freqItems' (same as 'StatFunctions.freqItems')
@@ -669,7 +795,9 @@ message StatSampleBy {
   // If a stratum is not specified, we treat its fraction as zero.
   repeated Fraction fractions = 3;
 
-  // (Optional) The random seed.
+  // (Required) The random seed.
+  // This field is required to avoid generating mutable dataframes (see SPARK-48184 for details),
+  // however, still keep it 'optional' here for backward compatibility.
   optional int64 seed = 5;
 
   message Fraction {
@@ -681,15 +809,15 @@ message StatSampleBy {
   }
 }
 
+
 // Replaces null values.
-// It will invoke 'Dataset.na.fill' (same as 'DataFrameNaFunctions.fill') to
-// compute the results. Following 3 parameter combinations are supported:
+// It will invoke 'Dataset.na.fill' (same as 'DataFrameNaFunctions.fill') to compute the results.
+// Following 3 parameter combinations are supported:
 //  1, 'values' only contains 1 item, 'cols' is empty:
 //    replaces null values in all type-compatible columns.
 //  2, 'values' only contains 1 item, 'cols' is not empty:
 //    replaces null values in specified columns.
-//  3, 'values' contains more than 1 items, then 'cols' is required to have the
-//  same length:
+//  3, 'values' contains more than 1 items, then 'cols' is required to have the same length:
 //    replaces each specified column with corresponding value.
 message NAFill {
   // (Required) The input relation.
@@ -705,9 +833,9 @@ message NAFill {
   repeated Expression.Literal values = 3;
 }
 
+
 // Drop rows containing null values.
-// It will invoke 'Dataset.na.drop' (same as 'DataFrameNaFunctions.drop') to
-// compute the results.
+// It will invoke 'Dataset.na.drop' (same as 'DataFrameNaFunctions.drop') to compute the results.
 message NADrop {
   // (Required) The input relation.
   Relation input = 1;
@@ -717,17 +845,17 @@ message NADrop {
   // When it is empty, all the columns in the input relation will be considered.
   repeated string cols = 2;
 
-  // (Optional) The minimum number of non-null and non-NaN values required to
-  // keep.
+  // (Optional) The minimum number of non-null and non-NaN values required to keep.
   //
-  // When not set, it is equivalent to the number of considered columns, which
-  // means a row will be kept only if all columns are non-null.
+  // When not set, it is equivalent to the number of considered columns, which means
+  // a row will be kept only if all columns are non-null.
   //
   // 'how' options ('all', 'any') can be easily converted to this field:
   //   - 'all' -> set 'min_non_nulls' 1;
   //   - 'any' -> keep 'min_non_nulls' unset;
   optional int32 min_non_nulls = 3;
 }
+
 
 // Replaces old values with the corresponding values.
 // It will invoke 'Dataset.na.replace' (same as 'DataFrameNaFunctions.replace')
@@ -738,8 +866,7 @@ message NAReplace {
 
   // (Optional) List of column names to consider.
   //
-  // When it is empty, all the type-compatible columns in the input relation
-  // will be considered.
+  // When it is empty, all the type-compatible columns in the input relation will be considered.
   repeated string cols = 2;
 
   // (Optional) The value replacement mapping.
@@ -758,6 +885,7 @@ message NAReplace {
   }
 }
 
+
 // Rename columns on the input relation by the same length of names.
 message ToDF {
   // (Required) The input relation of RenameColumnsBySameLengthNames.
@@ -770,18 +898,30 @@ message ToDF {
   repeated string column_names = 2;
 }
 
+
 // Rename columns on the input relation by a map with name to name mapping.
 message WithColumnsRenamed {
   // (Required) The input relation.
   Relation input = 1;
 
-  // (Required)
+
+  // (Optional)
   //
   // Renaming column names of input relation from A to B where A is the map key
   // and B is the map value. This is a no-op if schema doesn't contain any A. It
   // does not require that all input relation column names to present as keys.
   // duplicated B are not allowed.
-  map<string, string> rename_columns_map = 2;
+  map<string, string> rename_columns_map = 2 [deprecated=true];
+
+  repeated Rename renames = 3;
+
+  message Rename {
+    // (Required) The existing column name.
+    string col_name = 1;
+
+    // (Required) The new column name.
+    string new_col_name = 2;
+  }
 }
 
 // Adding columns or replacing the existing columns that have the same names.
@@ -791,10 +931,9 @@ message WithColumns {
 
   // (Required)
   //
-  // Given a column name, apply the corresponding expression on the column. If
-  // column name exists in the input relation, then replace the column. If the
-  // column name does not exist in the input relation, then adds it as a new
-  // column.
+  // Given a column name, apply the corresponding expression on the column. If column
+  // name exists in the input relation, then replace the column. If the column name
+  // does not exist in the input relation, then adds it as a new column.
   //
   // Only one name part is expected from each Expression.Alias.
   //
@@ -803,6 +942,7 @@ message WithColumns {
 }
 
 message WithWatermark {
+
   // (Required) The input relation
   Relation input = 1;
 
@@ -813,27 +953,23 @@ message WithWatermark {
   string delay_threshold = 3;
 }
 
-// Specify a hint over a relation. Hint should have a name and optional
-// parameters.
+// Specify a hint over a relation. Hint should have a name and optional parameters.
 message Hint {
   // (Required) The input relation.
   Relation input = 1;
 
   // (Required) Hint name.
   //
-  // Supported Join hints include BROADCAST, MERGE, SHUFFLE_HASH,
-  // SHUFFLE_REPLICATE_NL.
+  // Supported Join hints include BROADCAST, MERGE, SHUFFLE_HASH, SHUFFLE_REPLICATE_NL.
   //
-  // Supported partitioning hints include COALESCE, REPARTITION,
-  // REPARTITION_BY_RANGE.
+  // Supported partitioning hints include COALESCE, REPARTITION, REPARTITION_BY_RANGE.
   string name = 2;
 
   // (Optional) Hint parameters.
   repeated Expression parameters = 3;
 }
 
-// Unpivot a DataFrame from wide format to long format, optionally leaving
-// identifier columns set.
+// Unpivot a DataFrame from wide format to long format, optionally leaving identifier columns set.
 message Unpivot {
   // (Required) The input relation.
   Relation input = 1;
@@ -853,6 +989,26 @@ message Unpivot {
   message Values {
     repeated Expression values = 1;
   }
+}
+
+// Transpose a DataFrame, switching rows to columns.
+// Transforms the DataFrame such that the values in the specified index column
+// become the new columns of the DataFrame.
+message Transpose {
+  // (Required) The input relation.
+  Relation input = 1;
+
+  // (Optional) A list of columns that will be treated as the indices.
+  // Only single column is supported now.
+  repeated Expression index_columns = 2;
+}
+
+message UnresolvedTableValuedFunction {
+  // (Required) name (or unparsed name for user defined function) for the unresolved function.
+  string function_name = 1;
+
+  // (Optional) Function arguments. Empty arguments are allowed.
+  repeated Expression arguments = 2;
 }
 
 message ToSchema {
@@ -877,8 +1033,7 @@ message RepartitionByExpression {
 }
 
 message MapPartitions {
-  // (Required) Input relation for a mapPartitions-equivalent API: mapInPandas,
-  // mapInArrow.
+  // (Required) Input relation for a mapPartitions-equivalent API: mapInPandas, mapInArrow.
   Relation input = 1;
 
   // (Required) Input user-defined function.
@@ -886,6 +1041,9 @@ message MapPartitions {
 
   // (Optional) Whether to use barrier mode execution or not.
   optional bool is_barrier = 3;
+
+  // (Optional) ResourceProfile id used for the stage level scheduling.
+  optional int32 profile_id = 4;
 }
 
 message GroupMap {
@@ -898,16 +1056,14 @@ message GroupMap {
   // (Required) Input user-defined function.
   CommonInlineUserDefinedFunction func = 3;
 
-  // (Optional) Expressions for sorting. Only used by Scala Sorted Group Map
-  // API.
+  // (Optional) Expressions for sorting. Only used by Scala Sorted Group Map API.
   repeated Expression sorting_expressions = 4;
 
   // Below fields are only used by (Flat)MapGroupsWithState
   // (Optional) Input relation for initial State.
   Relation initial_input = 5;
 
-  // (Optional) Expressions for grouping keys of the initial state input
-  // relation.
+  // (Optional) Expressions for grouping keys of the initial state input relation.
   repeated Expression initial_grouping_expressions = 6;
 
   // (Optional) True if MapGroupsWithState, false if FlatMapGroupsWithState.
@@ -916,9 +1072,28 @@ message GroupMap {
   // (Optional) The output mode of the function.
   optional string output_mode = 8;
 
-  // (Optional) Timeout configuration for groups that do not receive data for a
-  // while.
+  // (Optional) Timeout configuration for groups that do not receive data for a while.
   optional string timeout_conf = 9;
+
+  // (Optional) The schema for the grouped state.
+  optional DataType state_schema = 10;
+
+  // Below fields are used by TransformWithState and TransformWithStateInPandas
+  // (Optional) TransformWithState related parameters.
+  optional TransformWithStateInfo transform_with_state_info = 11;
+}
+
+// Additional input parameters used for TransformWithState operator.
+message TransformWithStateInfo {
+  // (Required) Time mode string for transformWithState.
+  string time_mode = 1;
+
+  // (Optional) Event time column name.
+  optional string event_time_column_name = 2;
+
+  // (Optional) Schema for the output DataFrame.
+  // Only required used for TransformWithStateInPandas.
+  optional DataType output_schema = 3;
 }
 
 message CoGroupMap {
@@ -937,12 +1112,10 @@ message CoGroupMap {
   // (Required) Input user-defined function.
   CommonInlineUserDefinedFunction func = 5;
 
-  // (Optional) Expressions for sorting. Only used by Scala Sorted CoGroup Map
-  // API.
+  // (Optional) Expressions for sorting. Only used by Scala Sorted CoGroup Map API.
   repeated Expression input_sorting_expressions = 6;
 
-  // (Optional) Expressions for sorting. Only used by Scala Sorted CoGroup Map
-  // API.
+  // (Optional) Expressions for sorting. Only used by Scala Sorted CoGroup Map API.
   repeated Expression other_sorting_expressions = 7;
 }
 
@@ -965,8 +1138,7 @@ message ApplyInPandasWithState {
   // (Required) The output mode of the function.
   string output_mode = 6;
 
-  // (Required) Timeout configuration for groups that do not receive data for a
-  // while.
+  // (Required) Timeout configuration for groups that do not receive data for a while.
   string timeout_conf = 7;
 }
 
@@ -1000,6 +1172,24 @@ message PythonUDTF {
   string python_ver = 4;
 }
 
+message CommonInlineUserDefinedDataSource {
+  // (Required) Name of the data source.
+  string name = 1;
+
+  // (Required) The data source type.
+  oneof data_source {
+    PythonDataSource python_data_source = 2;
+  }
+}
+
+message PythonDataSource {
+  // (Required) The encoded commands of the Python data source.
+  bytes command = 1;
+
+  // (Required) Python version being used in the client.
+  string python_ver = 2;
+}
+
 // Collect arbitrary (named) metrics from a dataset.
 message CollectMetrics {
   // (Required) The input relation.
@@ -1013,21 +1203,120 @@ message CollectMetrics {
 }
 
 message Parse {
-  // (Required) Input relation to Parse. The input is expected to have single
-  // text column.
+  // (Required) Input relation to Parse. The input is expected to have single text column.
   Relation input = 1;
   // (Required) The expected format of the text.
   ParseFormat format = 2;
 
-  // (Optional) DataType representing the schema. If not set, Spark will infer
-  // the schema.
+  // (Optional) DataType representing the schema. If not set, Spark will infer the schema.
   optional DataType schema = 3;
 
-  // Options for the csv/json parser. The map key is case insensitive.
+  // Options for the csv/json/xml parser. The map key is case insensitive.
   map<string, string> options = 4;
   enum ParseFormat {
     PARSE_FORMAT_UNSPECIFIED = 0;
     PARSE_FORMAT_CSV = 1;
     PARSE_FORMAT_JSON = 2;
+    PARSE_FORMAT_XML = 3;
   }
+}
+
+// Relation of type [[AsOfJoin]].
+//
+// `left` and `right` must be present.
+message AsOfJoin {
+  // (Required) Left input relation for a Join.
+  Relation left = 1;
+
+  // (Required) Right input relation for a Join.
+  Relation right = 2;
+
+  // (Required) Field to join on in left DataFrame
+  Expression left_as_of = 3;
+
+  // (Required) Field to join on in right DataFrame
+  Expression right_as_of = 4;
+
+  // (Optional) The join condition. Could be unset when `using_columns` is utilized.
+  //
+  // This field does not co-exist with using_columns.
+  Expression join_expr = 5;
+
+  // Optional. using_columns provides a list of columns that should present on both sides of
+  // the join inputs that this Join will join on. For example A JOIN B USING col_name is
+  // equivalent to A JOIN B on A.col_name = B.col_name.
+  //
+  // This field does not co-exist with join_condition.
+  repeated string using_columns = 6;
+
+  // (Required) The join type.
+  string join_type = 7;
+
+  // (Optional) The asof tolerance within this range.
+  Expression tolerance = 8;
+
+  // (Required) Whether allow matching with the same value or not.
+  bool allow_exact_matches = 9;
+
+  // (Required) Whether to search for prior, subsequent, or closest matches.
+  string direction = 10;
+}
+
+// Relation of type [[LateralJoin]].
+//
+// `left` and `right` must be present.
+message LateralJoin {
+  // (Required) Left input relation for a Join.
+  Relation left = 1;
+
+  // (Required) Right input relation for a Join.
+  Relation right = 2;
+
+  // (Optional) The join condition.
+  Expression join_condition = 3;
+
+  // (Required) The join type.
+  Join.JoinType join_type = 4;
+}
+
+// Relation of type [[NearestByJoin]].
+//
+// For each row on the left side, returns up to `num_results` rows from the right side ranked
+// by `ranking_expression`.
+message NearestByJoin {
+  // (Required) Left (query) input relation.
+  Relation left = 1;
+
+  // (Required) Right (base) input relation.
+  Relation right = 2;
+
+  // (Required) Scalar expression used to rank candidate rows on the right side.
+  Expression ranking_expression = 3;
+
+  // (Required) Maximum number of matches per left row. Must be between 1 and 100000.
+  int32 num_results = 4;
+
+  // The following three fields use `string` (not typed enums) for parity with `AsOfJoin`,
+  // which models analogous fields the same way. Validation happens server-side at planning time.
+
+  // (Required) The join type. Must be one of: "inner", "leftouter".
+  string join_type = 5;
+
+  // (Required) Search algorithm contract. Must be one of: "approx", "exact".
+  string mode = 6;
+
+  // (Required) Ranking direction. Must be one of: "distance", "similarity".
+  string direction = 7;
+}
+
+// Relation of type [[Zip]].
+//
+// Combines the columns of two DataFrames side-by-side. Both DataFrames must produce the same
+// canonicalized plan after stripping outer Project chains.
+message Zip {
+  // (Required) Left input relation.
+  Relation left = 1;
+
+  // (Required) Right input relation.
+  Relation right = 2;
 }

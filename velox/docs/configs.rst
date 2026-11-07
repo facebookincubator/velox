@@ -1536,6 +1536,13 @@ Spark-specific Configuration
        Corresponds to Spark 4.0's ``spark.sql.legacy.codingErrorAction``.
        Set to true to match Spark 3.x's replacement behavior for the supported charsets.
        Additional JDK charset names and aliases remain unsupported in either mode.
+   * - spark.legacy_corr_covar_samp_nan
+     - bool
+     - false
+     - If true, Spark :spark:func:`corr` and :spark:func:`covar_samp` follow Spark 4.2 and earlier for NaN and infinite
+       inputs: ``corr`` returns NaN when one input has zero variance and the other contains NaN or infinity, and
+       ``covar_samp`` returns NaN when the covariance is infinite. If false, they follow Spark 4.3 and later: ``corr``
+       returns NULL when either input has zero variance, and ``covar_samp`` returns an infinite covariance as is.
    * - spark.legacy_date_formatter
      - bool
      - false

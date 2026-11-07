@@ -146,12 +146,16 @@ General Aggregate Functions
 .. spark:function:: corr(x, y) -> double
 
     Returns Pearson coefficient of correlation between a set of number pairs. When the count of pairs is
-    greater than or equal to 2, a non-null output will be generated.
+    greater than or equal to 2, a non-null output will be generated unless ``x`` or ``y`` has zero variance,
+    in which case NULL is returned. If :doc:`spark.legacy_corr_covar_samp_nan <../../configs>` is true,
+    NaN is returned instead when one of them has zero variance and the other contains NaN or infinity.
 
 .. spark:function:: covar_samp(x, y) -> double
 
     Returns the sample covariance of a set of number pairs. When the count of pairs is
-    greater than or equal to 2, a non-null output will be generated.
+    greater than or equal to 2, a non-null output will be generated. If
+    :doc:`spark.legacy_corr_covar_samp_nan <../../configs>` is true, NaN is returned when the
+    covariance is infinite.
 
 .. spark:function:: first(x) -> x
 

@@ -973,9 +973,23 @@ jobs:
         with:
           name: fuzzer-scripts
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: velox
+          persist-credentials: false
+
+      - name: Install Spark 4.3.0
+        run: |
+          curl -sSfL https://archive.apache.org/dist/spark/spark-4.3.0/spark-4.3.0-bin-hadoop3.tgz | tar -xz -C /opt
+          SPARK_HOME=/opt/spark-4.3.0-bin-hadoop3
+          for f in spark-defaults.conf spark-env.sh workers; do
+            cp velox/scripts/ci/spark/conf/$f.example $SPARK_HOME/conf/$f
+          done
+          echo "SPARK_HOME=$SPARK_HOME" >> "$GITHUB_ENV"
+
       - name: Run Spark Aggregate Fuzzer
         run: |
-          bash /opt/start-spark.sh
+          bash velox/scripts/ci/spark/start-spark.sh
           # Sleep for 120 seconds to allow Spark server to start.
           sleep 120
           export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH

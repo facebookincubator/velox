@@ -111,7 +111,7 @@ Which contains the following NOTICE file:
 ----
 
 This product includes software from the The Spark project.
-* https://github.com/apache/spark/tree/v3.5.1/connector/connect/common/src/main/protobuf/spark/connect
+* https://github.com/apache/spark/tree/v4.3.0/sql/connect/common/src/main/protobuf/spark/connect
 Which contain the following NOTICE file:
 ----
   Apache Spark

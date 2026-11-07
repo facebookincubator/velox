@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunner.h"
 #include "velox/functions/sparksql/registration/Register.h"
@@ -49,6 +50,21 @@ class SparkQueryRunnerTest : public ::testing::Test,
     velox::functions::aggregate::sparksql::registerAggregateFunctions("");
     velox::parse::registerTypeResolver();
   }
+
+  // Verifies 'queryRunner' runs queries with the Spark session config 'key'
+  // set to 'value'.
+  void assertSessionConfig(
+      fuzzer::SparkQueryRunner& queryRunner,
+      const std::string& key,
+      const std::string& value) {
+    // 'SET <key>' returns the key and its value.
+    exec::test::assertEqualResults(
+        {makeRowVector({
+            makeFlatVector<std::string>({key}),
+            makeFlatVector<std::string>({value}),
+        })},
+        queryRunner.execute(fmt::format("SET {}", key)));
+  }
 };
 
 // This test requires a Spark coordinator running at localhost, so disable it
@@ -56,7 +72,11 @@ class SparkQueryRunnerTest : public ::testing::Test,
 TEST_F(SparkQueryRunnerTest, DISABLED_basic) {
   auto aggregatePool = rootPool_->addAggregateChild("basic");
   auto queryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
-      aggregatePool.get(), "localhost:15002", "test", "basic");
+      aggregatePool.get(),
+      "localhost:15002",
+      "test",
+      "basic",
+      std::unordered_map<std::string, std::string>{});
 
   auto input = makeRowVector({
       makeConstant<int64_t>(1, 25),
@@ -96,7 +116,11 @@ TEST_F(SparkQueryRunnerTest, DISABLED_basic) {
 TEST_F(SparkQueryRunnerTest, DISABLED_decimal) {
   auto aggregatePool = rootPool_->addAggregateChild("decimal");
   auto queryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
-      aggregatePool.get(), "localhost:15002", "test", "decimal");
+      aggregatePool.get(),
+      "localhost:15002",
+      "test",
+      "decimal",
+      std::unordered_map<std::string, std::string>{});
   auto input = makeRowVector({
       makeConstant<int128_t>(123456789, 25, DECIMAL(34, 2)),
   });
@@ -123,7 +147,11 @@ TEST_F(SparkQueryRunnerTest, DISABLED_fuzzer) {
 
   auto aggregatePool = rootPool_->addAggregateChild("fuzzer");
   auto queryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
-      aggregatePool.get(), "localhost:15002", "test", "fuzzer");
+      aggregatePool.get(),
+      "localhost:15002",
+      "test",
+      "fuzzer",
+      std::unordered_map<std::string, std::string>{});
   auto sql = queryRunner->toSql(plan);
   ASSERT_TRUE(sql.has_value());
 
@@ -132,10 +160,49 @@ TEST_F(SparkQueryRunnerTest, DISABLED_fuzzer) {
   exec::test::assertEqualResults(sparkResults.first.value(), {veloxResults});
 }
 
+// This test requires a Spark coordinator running at localhost, so disable it
+// by default.
+TEST_F(SparkQueryRunnerTest, DISABLED_sessionConfigs) {
+  // Velox defaults: ANSI mode disabled and UTC session timezone.
+  auto aggregatePool = rootPool_->addAggregateChild("sessionConfigs");
+  auto queryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
+      aggregatePool.get(),
+      "localhost:15002",
+      "test",
+      "sessionConfigs",
+      std::unordered_map<std::string, std::string>{});
+  assertSessionConfig(*queryRunner, "spark.sql.ansi.enabled", "false");
+  assertSessionConfig(*queryRunner, "spark.sql.session.timeZone", "UTC");
+
+  // Runners with different configs share one Spark server.
+  auto ansiPool = rootPool_->addAggregateChild("sessionConfigsAnsi");
+  auto ansiQueryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
+      ansiPool.get(),
+      "localhost:15002",
+      "test",
+      "sessionConfigsAnsi",
+      std::unordered_map<std::string, std::string>{
+          {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+          {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+      });
+  assertSessionConfig(*ansiQueryRunner, "spark.sql.ansi.enabled", "true");
+  assertSessionConfig(
+      *ansiQueryRunner, "spark.sql.session.timeZone", "America/Los_Angeles");
+
+  // The configs are set before each query, so a config changed by one query
+  // does not affect the next one.
+  queryRunner->execute("SET spark.sql.ansi.enabled=true");
+  assertSessionConfig(*queryRunner, "spark.sql.ansi.enabled", "false");
+}
+
 TEST_F(SparkQueryRunnerTest, toSql) {
   auto aggregatePool = rootPool_->addAggregateChild("toSql");
   auto queryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
-      aggregatePool.get(), "unused", "unused", "unused");
+      aggregatePool.get(),
+      "unused",
+      "unused",
+      "unused",
+      std::unordered_map<std::string, std::string>{});
 
   auto dataType = ROW({"c0", "c1", "c2"}, {DOUBLE(), DOUBLE(), BOOLEAN()});
   auto plan = exec::test::PlanBuilder()

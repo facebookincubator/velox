@@ -105,7 +105,7 @@ services:
     image: ghcr.io/facebookincubator/velox-dev:spark-server
     build:
       args:
-        - SPARK_VERSION=3.5.1
+        - SPARK_VERSION=4.3.0
       dockerfile: scripts/docker/java.dockerfile
       target: spark-server
 
