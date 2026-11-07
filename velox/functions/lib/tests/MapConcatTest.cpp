@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/functions/lib/MapConcat.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -75,6 +76,23 @@ class MapConcatTest : public FunctionBaseTest {
     result.insert(a.begin(), a.end());
     return result;
   }
+
+  // Checks that the expression gives a flat map, possibly wrapped to add nulls,
+  // equal to 'expected' over the flat map inputs, and the same maps over the
+  // same inputs as MapVectors.
+  void testFlatMap(
+      const std::string& expression,
+      const std::vector<VectorPtr>& flatMapInputs,
+      const std::vector<VectorPtr>& mapInputs,
+      const VectorPtr& expected) {
+    auto result = evaluate(expression, makeRowVector(flatMapInputs));
+    ASSERT_EQ(
+        result->wrappedVector()->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    result->validate();
+    test::assertEqualVectors(expected, result);
+    test::assertEqualVectors(
+        evaluate(expression, makeRowVector(mapInputs)), result);
+  }
 };
 
 TEST_F(MapConcatTest, basic) {
@@ -97,6 +115,52 @@ TEST_F(MapConcatTest, basic) {
   result =
       evaluate<MapVector>("map_concat(c1, c0)", makeRowVector({aMap, bMap}));
   test::assertEqualVectors(expectedMap, result);
+}
+
+TEST_F(MapConcatTest, flatMaps) {
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "null",
+      "{1:null, 3:33}",
+      "{}",
+  });
+  auto other = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{2:99, 7:70}",
+      "{7:71}",
+      "{1:12}",
+      "null",
+  });
+
+  testFlatMap(
+      "map_concat(c0, c1)",
+      {flatMap, other},
+      {flatMap->toMapVector(), other->toMapVector()},
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:99, 7:70}",
+          "null",
+          "{1:12, 3:33}",
+          "null",
+      }));
+  testFlatMap(
+      "map_concat(c1, c0)",
+      {flatMap, other},
+      {flatMap->toMapVector(), other->toMapVector()},
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:20, 7:70}",
+          "null",
+          "{1:null, 3:33}",
+          "null",
+      }));
+  testFlatMap(
+      "map_concat_empty_nulls(c0, c1)",
+      {flatMap, other},
+      {flatMap->toMapVector(), other->toMapVector()},
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:99, 7:70}",
+          "{7:71}",
+          "{1:12, 3:33}",
+          "{}",
+      }));
 }
 
 TEST_F(MapConcatTest, nullKeys) {
@@ -226,6 +290,55 @@ TEST_F(MapConcatTest, duplicateKeys) {
   test::assertEqualVectors(aMap, result);
 }
 
+TEST_F(MapConcatTest, flatMapWithMap) {
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "{3:30}",
+  });
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{4:40}",
+      "{3:31}",
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate("map_concat(c0, c1)", makeRowVector({flatMap, map})),
+      "Wrong type cast expected");
+  VELOX_ASSERT_THROW(
+      evaluate("map_concat(c1, c0)", makeRowVector({flatMap, map})),
+      "Wrong type cast expected");
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "map_concat(c0, map(array[7], array[70]))", makeRowVector({flatMap})),
+      "Wrong type cast expected");
+}
+
+TEST_F(MapConcatTest, flatMapDuplicateKeys) {
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "{3:30}",
+  });
+  auto other = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{4:40}",
+      "{3:31}",
+  });
+
+  testFlatMap(
+      "map_concat(c0, c1)",
+      {flatMap, other},
+      {flatMap->toMapVector(), other->toMapVector()},
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:20, 4:40}",
+          "{3:31}",
+      }));
+
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"},
+  });
+  VELOX_ASSERT_USER_THROW(
+      evaluate("map_concat(c0, c1)", makeRowVector({flatMap, other})),
+      "Duplicate map key 3 was found.");
+}
+
 TEST_F(MapConcatTest, partiallyPopulated) {
   vector_size_t size = 1'000;
 
@@ -292,4 +405,18 @@ TEST_F(MapConcatTest, unknownType) {
   auto result = evaluate(
       "map_concat(c0, c1)", makeRowVector({emptyMapVector, emptyMapVector}));
   test::assertEqualVectors(expectedMap, result);
+}
+
+TEST_F(MapConcatTest, flatMapUnknownType) {
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(UNKNOWN(), UNKNOWN()),
+      nullptr,
+      1,
+      BaseVector::create(UNKNOWN(), 0, pool()),
+      std::vector<VectorPtr>{},
+      std::vector<BufferPtr>{});
+  VELOX_ASSERT_THROW(
+      evaluate("map_concat(c0, c0)", makeRowVector({flatMap})),
+      "Wrong type cast expected");
 }

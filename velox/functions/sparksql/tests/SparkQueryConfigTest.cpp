@@ -58,12 +58,22 @@ TEST(SparkQueryConfigTest, roundTrip) {
     EXPECT_FALSE(
         SparkQueryConfig{queryConfig}.decimalToFloatHighPrecisionCastEnabled());
   }
+
+  {
+    core::QueryConfig queryConfig({
+        {SparkQueryConfig::qualify(
+             SparkQueryConfig::kGenerateConstantMapsAsFlatMaps),
+         "true"},
+    });
+    EXPECT_TRUE(SparkQueryConfig{queryConfig}.generateConstantMapsAsFlatMaps());
+  }
 }
 
 TEST(SparkQueryConfigTest, defaultValues) {
   core::QueryConfig queryConfig({});
   EXPECT_FALSE(
       SparkQueryConfig{queryConfig}.decimalToFloatHighPrecisionCastEnabled());
+  EXPECT_FALSE(SparkQueryConfig{queryConfig}.generateConstantMapsAsFlatMaps());
 }
 
 // Verifies SparkConfigProvider::normalize rejects out-of-range partition_id.
