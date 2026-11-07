@@ -2032,8 +2032,18 @@ uint64_t MapColumnWriter::write(
     auto begin = offsets[pos];
     auto end = begin + lengths[pos];
     if (end > begin) {
-      VELOX_CHECK_LE(end, mapSlice->mapKeys()->size());
-      VELOX_CHECK_LE(end, mapSlice->mapValues()->size());
+      VELOX_CHECK_LE(
+          end,
+          mapSlice->mapKeys()->size(),
+          "Map row exceeds keys at node {} column {}",
+          id_,
+          type_.fullName());
+      VELOX_CHECK_LE(
+          end,
+          mapSlice->mapValues()->size(),
+          "Map row exceeds values at node {} column {}",
+          id_,
+          type_.fullName());
       childRanges.add(begin, end);
     }
     nonNullLengths.unsafeAppend(end - begin);
