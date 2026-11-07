@@ -595,9 +595,17 @@ struct DateTruncFunction {
     const auto unit = unitOption.value();
     if (unit == DateTimeUnit::kMinute && timeZone_ != nullptr) {
       const int64_t localSeconds = getSeconds(timestamp, timeZone_);
-      const int64_t secondsDelta =
-          localSeconds - truncateEpochTime({localSeconds, 0}, unit).seconds;
+      const int64_t truncatedLocal =
+          truncateEpochTime({localSeconds, 0}, unit).seconds;
+      const int64_t secondsDelta = localSeconds - truncatedLocal;
       result = Timestamp(timestamp.getSeconds() - secondsDelta, 0);
+      if (getSeconds(result, timeZone_) != truncatedLocal) {
+        result = Timestamp(
+            timeZone_->correct_nonexistent_time(std::chrono::seconds(truncatedLocal))
+                .count(),
+            0);
+        result.toGMT(*timeZone_);
+      }
     } else {
       result = truncateTimestamp(timestamp, unit, timeZone_);
     }
