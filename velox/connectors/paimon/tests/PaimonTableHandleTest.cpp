@@ -196,6 +196,64 @@ TEST_F(PaimonTableHandleTest, defaultValues) {
   }
 }
 
+TEST_F(PaimonTableHandleTest, historicalSchemas) {
+  const auto oldType =
+      ROW({{"p", VARCHAR()}, {"old_id", BIGINT()}, {"dropped", DOUBLE()}});
+  const auto make = [&](PaimonTableHandle::DataSchemas schemas) {
+    return PaimonTableHandle(
+        "test-paimon",
+        "orders",
+        17,
+        rowType(),
+        {7, 8, 20},
+        PaimonTableType::kAppendOnly,
+        {"p"},
+        {},
+        {},
+        nullptr,
+        {},
+        1.0,
+        "",
+        std::move(schemas));
+  };
+  const auto original = make({{0, {oldType, {8, 7, 30}}}});
+  const auto obj = original.serialize();
+  EXPECT_EQ(obj["version"], PaimonTableHandle::kSchemaEvolutionSerdeVersion);
+  const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
+  ASSERT_EQ(copy->dataSchemas().size(), 1);
+  EXPECT_EQ(*copy->dataSchemas().at(0).rowType, *oldType);
+  EXPECT_EQ(
+      copy->dataSchemas().at(0).fieldIds, (std::vector<int32_t>{8, 7, 30}));
+  EXPECT_EQ(*copy->rowType(), *original.rowType());
+  EXPECT_EQ(copy->fieldIds(), original.fieldIds());
+  EXPECT_EQ(make({}).serialize()["version"], 1);
+  EXPECT_EQ(make({}).serialize().count("dataSchemas"), 0);
+
+  auto invalid = obj;
+  invalid["version"] = 1;
+  VELOX_ASSERT_THROW(
+      PaimonTableHandle::create(invalid, nullptr),
+      "Unsupported Paimon table handle wire version");
+  invalid = obj;
+  invalid["dataSchemas"].push_back(obj["dataSchemas"][0]);
+  VELOX_ASSERT_THROW(
+      PaimonTableHandle::create(invalid, nullptr),
+      "Duplicate Paimon data schema ID");
+  invalid = obj;
+  invalid["dataSchemas"][0]["fieldIds"][0] = int64_t{1} << 40;
+  EXPECT_THROW(PaimonTableHandle::create(invalid, nullptr), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      make({{17, {oldType, {8, 7, 30}}}}), "Duplicate Paimon target schema ID");
+  VELOX_ASSERT_THROW(
+      make({{-1, {oldType, {8, 7, 30}}}}), "schema ID must be nonnegative");
+  VELOX_ASSERT_THROW(
+      make({{0, {nullptr, {}}}}), "Missing Paimon data schema row type");
+  VELOX_ASSERT_THROW(make({{0, {oldType, {8}}}}), "field IDs must be aligned");
+  VELOX_ASSERT_THROW(
+      make({{0, {oldType, {8, 8, 30}}}}),
+      "Duplicate Paimon data schema field ID");
+}
+
 TEST_F(PaimonTableHandleTest, commonFieldsMatchHive) {
   HiveColumnHandle::registerSerDe();
   HiveTableHandle::registerSerDe();

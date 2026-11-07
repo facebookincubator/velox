@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <unordered_map>
+
 #include "velox/connectors/common/FileTableHandle.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
 
@@ -26,6 +28,16 @@ namespace facebook::velox::connector::paimon {
 class PaimonTableHandle final : public connector::FileTableHandle {
  public:
   static constexpr int32_t kSerdeVersion = 1;
+  static constexpr int32_t kSchemaEvolutionSerdeVersion = 2;
+
+  /// Caller-resolved historical table fields, in their declared order,
+  /// including partition columns. Only top-level identities are represented.
+  /// Ordinary append files store the non-partition columns in this order.
+  struct DataSchema {
+    RowTypePtr rowType;
+    std::vector<int32_t> fieldIds;
+  };
+  using DataSchemas = std::unordered_map<int64_t, DataSchema>;
 
   /// rowType includes partition columns; fieldIds follow its column order.
   /// options are resolved by the caller.
@@ -42,7 +54,8 @@ class PaimonTableHandle final : public connector::FileTableHandle {
       core::TypedExprPtr remainingFilter = nullptr,
       std::vector<connector::FileColumnHandlePtr> filterColumnHandles = {},
       double sampleRate = 1.0,
-      std::string dbName = "");
+      std::string dbName = "",
+      DataSchemas dataSchemas = {});
 
   /// Identifier of the fixed table schema, distinct from a snapshot ID.
   int64_t schemaId() const {
@@ -58,6 +71,12 @@ class PaimonTableHandle final : public connector::FileTableHandle {
   /// IDs identify fields independently of their names and positions.
   const std::vector<int32_t>& fieldIds() const {
     return fieldIds_;
+  }
+
+  /// Historical definitions required by the files, excluding schemaId(),
+  /// whose definition is already held in rowType() and fieldIds().
+  const DataSchemas& dataSchemas() const {
+    return dataSchemas_;
   }
 
   PaimonTableType tableType() const {
@@ -90,6 +109,7 @@ class PaimonTableHandle final : public connector::FileTableHandle {
   const int64_t schemaId_;
   const RowTypePtr rowType_;
   const std::vector<int32_t> fieldIds_;
+  const DataSchemas dataSchemas_;
   const PaimonTableType tableType_;
   const std::vector<std::string> partitionKeys_;
   const std::unordered_map<std::string, std::string> options_;

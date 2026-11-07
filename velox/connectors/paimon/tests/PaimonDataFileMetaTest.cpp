@@ -26,6 +26,26 @@
 using namespace facebook::velox::connector::paimon;
 using namespace facebook::velox;
 
+TEST(PaimonDataFileTest, fileSchemaIdentity) {
+  PaimonDataFile file;
+  file.path = "data.nimble";
+  EXPECT_EQ(file.serialize().count("schemaId"), 0);
+  EXPECT_FALSE(PaimonDataFile::create(file.serialize()).schemaId.has_value());
+  for (const auto id : {int64_t{0}, int64_t{1} << 40}) {
+    file.schemaId = id;
+    EXPECT_EQ(PaimonDataFile::create(file.serialize()).schemaId, id);
+  }
+  auto obj = file.serialize();
+  for (const auto& invalid :
+       {folly::dynamic(-1), folly::dynamic(nullptr), folly::dynamic("1")}) {
+    obj["schemaId"] = invalid;
+    EXPECT_THROW(PaimonDataFile::create(obj), VeloxUserError);
+  }
+  file.schemaId = -1;
+  VELOX_ASSERT_THROW(
+      file.serialize(), "Paimon file schema ID must be nonnegative");
+}
+
 TEST(PaimonDataFileTest, serializeRoundTrip) {
   PaimonDataFile file;
   file.path = "data.parquet";

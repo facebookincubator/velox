@@ -62,6 +62,18 @@ PaimonConnectorSplit::PaimonConnectorSplit(
   VELOX_CHECK(
       !dataFiles_.empty(), "PaimonConnectorSplit requires non-empty dataFiles");
 
+  const bool hasSchemaId = dataFiles_.front().schemaId.has_value();
+  for (const auto& file : dataFiles_) {
+    VELOX_USER_CHECK_EQ(
+        file.schemaId.has_value(),
+        hasSchemaId,
+        "Paimon split cannot mix files with and without schema IDs");
+    if (file.schemaId.has_value()) {
+      VELOX_USER_CHECK_GE(
+          *file.schemaId, 0, "Paimon file schema ID must be nonnegative");
+    }
+  }
+
   if (rawConvertible_) {
     for (const auto& file : dataFiles_) {
       VELOX_CHECK_EQ(
@@ -167,6 +179,12 @@ void PaimonConnectorSplit::registerSerDe() {
 }
 
 // --- Builder ---
+
+PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
+    PaimonDataFile file) {
+  dataFiles_.push_back(std::move(file));
+  return *this;
+}
 
 PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
     std::string filePath,
