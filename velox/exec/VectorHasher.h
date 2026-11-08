@@ -773,8 +773,8 @@ inline uint64_t VectorHasher::valueId(bool value) {
 }
 template <>
 inline uint64_t VectorHasher::valueId(Timestamp value) {
-  if (FOLLY_UNLIKELY(
-          value.getNanos() % Timestamp::kNanosecondsInMillisecond != 0)) {
+  if (value.getNanos() % Timestamp::kNanosecondsInMillisecond != 0)
+      [[unlikely]] {
     // The timestamp is in nanosecond or microsecond precision. The values are
     // not mappable to milliseconds without precision loss.
     setRangeOverflow();

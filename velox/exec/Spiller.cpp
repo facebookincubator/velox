@@ -371,7 +371,7 @@ void SpillerBase::finalizeSpill() {
 
 SpillerBase::SpillRun& SpillerBase::createOrGetSpillRun(
     const SpillPartitionId& id) {
-  if (FOLLY_UNLIKELY(!spillRuns_.contains(id))) {
+  if (!spillRuns_.contains(id)) [[unlikely]] {
     spillRuns_.emplace(id, SpillRun(*memory::spillMemoryPool()));
   }
   return spillRuns_.at(id);
@@ -421,7 +421,7 @@ void NoRowContainerSpiller::spill(
     const SpillPartitionId& partitionId,
     const RowVectorPtr& spillVector) {
   VELOX_CHECK(!finalized_);
-  if (FOLLY_UNLIKELY(spillVector == nullptr)) {
+  if (spillVector == nullptr) [[unlikely]] {
     return;
   }
   if (!state_.isPartitionSpilled(partitionId)) {
