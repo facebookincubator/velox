@@ -1064,7 +1064,7 @@ void NimbleIndexProjector::verifyStreamChecksum(
   const auto expected = encoding::readUint32(checksumPos);
   data = data.substr(0, streamSize);
   const auto computed = streamChecksum_->computeChecksum32(data);
-  if (FOLLY_LIKELY(computed == expected)) {
+  if (computed == expected) [[likely]] {
     return;
   }
 

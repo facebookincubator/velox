@@ -196,7 +196,7 @@ void SparseBoolEncoding::readWithVisitor(
         while (nextIndex_ < row_) {
           nextIndex_ = indices_.nextValue();
         }
-        if (FOLLY_UNLIKELY(nextIndex_ == row_++)) {
+        if (nextIndex_ == row_++) [[unlikely]] {
           nextIndex_ = indices_.nextValue();
           return sparseValue_;
         }
