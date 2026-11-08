@@ -132,7 +132,7 @@ MemoryAllocator::SizeMix MemoryAllocator::allocationSize(
     if (neededPages <= 0) {
       break;
     }
-    if (FOLLY_UNLIKELY(numClassPages == maxNumClassPages)) {
+    if (numClassPages == maxNumClassPages) [[unlikely]] {
       ++sizeIndex;
     }
   }
@@ -155,7 +155,7 @@ bool MemoryAllocator::isAlignmentValid(
 void MemoryAllocator::alignmentCheck(
     uint64_t allocateBytes,
     uint16_t alignmentBytes) {
-  if (FOLLY_UNLIKELY(!isAlignmentValid(allocateBytes, alignmentBytes))) {
+  if (!isAlignmentValid(allocateBytes, alignmentBytes)) [[unlikely]] {
     VELOX_FAIL(
         "Alignment check failed, allocateBytes {}, alignmentBytes {}",
         allocateBytes,

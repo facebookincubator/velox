@@ -91,7 +91,7 @@ class GeometrySerializer {
   static void serializeEnvelope(
       geos::geom::Envelope& envelope,
       StringWriter& stringWriter) {
-    if (FOLLY_UNLIKELY(envelope.isNull())) {
+    if (envelope.isNull()) [[unlikely]] {
       serializeEnvelope(
           std::numeric_limits<double>::quiet_NaN(),
           std::numeric_limits<double>::quiet_NaN(),
