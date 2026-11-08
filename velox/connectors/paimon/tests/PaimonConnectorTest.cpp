@@ -349,9 +349,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
     PaimonConnectorSplitBuilder builder(
         kPaimonConnectorId, 42, PaimonTableType::kAppendOnly, format);
     for (const auto& [path, schemaId] : files) {
-      PaimonDataFile file(schemaId);
-      file.path = path;
-      builder.addFile(std::move(file));
+      builder.addFile(PaimonDataFile(schemaId, path));
     }
     for (const auto& [name, value] : partitions) {
       builder.partitionKey(name, value);

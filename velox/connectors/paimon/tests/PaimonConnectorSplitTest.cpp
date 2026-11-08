@@ -37,17 +37,19 @@ class PaimonConnectorSplitTest : public testing::Test {
 };
 
 TEST_F(PaimonConnectorSplitTest, basic) {
-  PaimonDataFile file0(0);
-  file0.path = "s3://bucket/table/dt=2024-01-01/bucket-0/data-001.orc";
-  file0.size = 1024;
-  file0.rowCount = 100;
-  file0.level = 0;
+  const PaimonDataFile file0(
+      /*schemaId=*/0,
+      "s3://bucket/table/dt=2024-01-01/bucket-0/data-001.orc",
+      /*size=*/1024,
+      /*rowCount=*/100,
+      /*level=*/0);
 
-  PaimonDataFile file1(1);
-  file1.path = "s3://bucket/table/dt=2024-01-01/bucket-0/data-002.orc";
-  file1.size = 2048;
-  file1.rowCount = 200;
-  file1.level = 1;
+  const PaimonDataFile file1(
+      /*schemaId=*/1,
+      "s3://bucket/table/dt=2024-01-01/bucket-0/data-002.orc",
+      /*size=*/2048,
+      /*rowCount=*/200,
+      /*level=*/1);
 
   std::vector<PaimonDataFile> files{file0, file1};
   PartitionKeys partitionKeys{{"dt", "2024-01-01"}};
@@ -76,11 +78,18 @@ TEST_F(PaimonConnectorSplitTest, basic) {
 }
 
 TEST_F(PaimonConnectorSplitTest, builderPreservesFileSchemaIdentity) {
-  PaimonDataFile file(0);
-  file.path = "data.nimble";
-  file.size = 1024;
-  file.rowCount = 9;
-  file.source = PaimonDataFile::Source::kCompact;
+  const PaimonDataFile file(
+      /*schemaId=*/0,
+      "data.nimble",
+      /*size=*/1024,
+      /*rowCount=*/9,
+      /*level=*/0,
+      /*minSequenceNumber=*/0,
+      /*maxSequenceNumber=*/0,
+      /*deleteRowCount=*/0,
+      /*creationTimeMs=*/0,
+      PaimonDataFile::Type::kData,
+      PaimonDataFile::Source::kCompact);
   auto builder = [&] {
     return PaimonConnectorSplitBuilder(
         kConnectorId, 7, PaimonTableType::kAppendOnly, FileFormat::NIMBLE);
@@ -104,10 +113,11 @@ TEST_F(PaimonConnectorSplitTest, builderPreservesFileSchemaIdentity) {
 }
 
 TEST_F(PaimonConnectorSplitTest, nimbleFormat) {
-  PaimonDataFile file0(0);
-  file0.path = "s3://bucket/table/data-001.nimble";
-  file0.size = 4096;
-  file0.rowCount = 100;
+  const PaimonDataFile file0(
+      /*schemaId=*/0,
+      "s3://bucket/table/data-001.nimble",
+      /*size=*/4096,
+      /*rowCount=*/100);
   std::vector<PaimonDataFile> files{file0};
 
   auto split = std::make_shared<PaimonConnectorSplit>(
@@ -125,10 +135,11 @@ TEST_F(PaimonConnectorSplitTest, nimbleFormat) {
 }
 
 TEST_F(PaimonConnectorSplitTest, parquetFormat) {
-  PaimonDataFile file0(0);
-  file0.path = "s3://bucket/table/data-001.parquet";
-  file0.size = 4096;
-  file0.rowCount = 100;
+  const PaimonDataFile file0(
+      /*schemaId=*/0,
+      "s3://bucket/table/data-001.parquet",
+      /*size=*/4096,
+      /*rowCount=*/100);
   std::vector<PaimonDataFile> files{file0};
 
   auto split = std::make_shared<PaimonConnectorSplit>(
@@ -159,12 +170,15 @@ TEST_F(PaimonConnectorSplitTest, emptyFilesThrows) {
 }
 
 TEST_F(PaimonConnectorSplitTest, rawConvertibleWithDeleteRowCountThrows) {
-  PaimonDataFile file(0);
-  file.path = "data-001.orc";
-  file.size = 1024;
-  file.rowCount = 100;
-  file.level = 1;
-  file.deleteRowCount = 5;
+  const PaimonDataFile file(
+      /*schemaId=*/0,
+      "data-001.orc",
+      /*size=*/1024,
+      /*rowCount=*/100,
+      /*level=*/1,
+      /*minSequenceNumber=*/0,
+      /*maxSequenceNumber=*/0,
+      /*deleteRowCount=*/5);
 
   std::vector<PaimonDataFile> files{file};
   VELOX_ASSERT_THROW(
@@ -181,12 +195,15 @@ TEST_F(PaimonConnectorSplitTest, rawConvertibleWithDeleteRowCountThrows) {
 }
 
 TEST_F(PaimonConnectorSplitTest, notRawConvertibleWithDeleteRowCount) {
-  PaimonDataFile file(0);
-  file.path = "data-001.orc";
-  file.size = 1024;
-  file.rowCount = 100;
-  file.level = 1;
-  file.deleteRowCount = 5;
+  const PaimonDataFile file(
+      /*schemaId=*/0,
+      "data-001.orc",
+      /*size=*/1024,
+      /*rowCount=*/100,
+      /*level=*/1,
+      /*minSequenceNumber=*/0,
+      /*maxSequenceNumber=*/0,
+      /*deleteRowCount=*/5);
 
   std::vector<PaimonDataFile> files{file};
   auto split = std::make_shared<PaimonConnectorSplit>(
@@ -204,22 +221,22 @@ TEST_F(PaimonConnectorSplitTest, notRawConvertibleWithDeleteRowCount) {
 }
 
 TEST_F(PaimonConnectorSplitTest, toStringOutput) {
-  PaimonDataFile f0(0);
-  f0.path = "data-001.orc";
-  f0.size = 1024;
-  f0.rowCount = 100;
+  const PaimonDataFile f0(
+      /*schemaId=*/0, "data-001.orc", /*size=*/1024, /*rowCount=*/100);
 
-  PaimonDataFile f1(0);
-  f1.path = "data-002.orc";
-  f1.size = 2048;
-  f1.rowCount = 200;
-  f1.level = 1;
+  const PaimonDataFile f1(
+      /*schemaId=*/0,
+      "data-002.orc",
+      /*size=*/2048,
+      /*rowCount=*/200,
+      /*level=*/1);
 
-  PaimonDataFile f2(0);
-  f2.path = "data-003.orc";
-  f2.size = 512;
-  f2.rowCount = 50;
-  f2.level = 2;
+  const PaimonDataFile f2(
+      /*schemaId=*/0,
+      "data-003.orc",
+      /*size=*/512,
+      /*rowCount=*/50,
+      /*level=*/2);
 
   std::vector<PaimonDataFile> files{f0, f1, f2};
 
@@ -244,10 +261,8 @@ TEST_F(PaimonConnectorSplitTest, toStringOutput) {
 }
 
 TEST_F(PaimonConnectorSplitTest, nullPartitionValue) {
-  PaimonDataFile file0(0);
-  file0.path = "data-001.orc";
-  file0.size = 1024;
-  file0.rowCount = 100;
+  const PaimonDataFile file0(
+      /*schemaId=*/0, "data-001.orc", /*size=*/1024, /*rowCount=*/100);
   std::vector<PaimonDataFile> files{file0};
   PartitionKeys partitionKeys{{"country", std::nullopt}};
 
@@ -322,18 +337,19 @@ TEST_F(PaimonConnectorSplitTest, builderDefaults) {
 }
 
 TEST_F(PaimonConnectorSplitTest, serializeRoundTrip) {
-  PaimonDataFile meta(0);
-  meta.path = "s3://bucket/data-001.parquet";
-  meta.size = 4096;
-  meta.rowCount = 1000;
-  meta.level = 2;
-  meta.minSequenceNumber = 10;
-  meta.maxSequenceNumber = 20;
-  meta.deleteRowCount = 5;
-  meta.creationTimeMs = 1700000000;
-  meta.source = PaimonDataFile::Source::kCompact;
-  meta.deletionFile =
-      PaimonDeletionFile{"s3://bucket/deletion-001.bin", 0, 128, 5};
+  const PaimonDataFile meta(
+      /*schemaId=*/0,
+      "s3://bucket/data-001.parquet",
+      /*size=*/4096,
+      /*rowCount=*/1000,
+      /*level=*/2,
+      /*minSequenceNumber=*/10,
+      /*maxSequenceNumber=*/20,
+      /*deleteRowCount=*/5,
+      /*creationTimeMs=*/1700000000,
+      PaimonDataFile::Type::kData,
+      PaimonDataFile::Source::kCompact,
+      PaimonDeletionFile{"s3://bucket/deletion-001.bin", 0, 128, 5});
 
   std::vector<PaimonDataFile> files{meta};
   PartitionKeys partitionKeys{{"dt", "2024-01-01"}, {"country", std::nullopt}};

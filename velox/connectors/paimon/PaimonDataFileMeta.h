@@ -28,7 +28,7 @@
 
 namespace facebook::velox::connector::paimon {
 
-/// Represents a single Paimon file (data or changelog) within a split.
+/// Immutable metadata for a Paimon data or changelog file within a split.
 /// Mirrors Apache Paimon's DataFileMeta structure.
 ///
 /// Both data files and changelog files use the same physical file format
@@ -103,23 +103,23 @@ struct PaimonDataFile {
   static Source sourceFromString(const std::string& str);
 
   /// Path to the file (ORC, Parquet, etc.).
-  std::string path;
+  const std::string path;
 
   /// Schema used to write this file, supplied from its Paimon metadata.
   const int64_t schemaId;
 
   /// Size of the file in bytes.
-  uint64_t size;
+  const uint64_t size;
 
   /// Number of rows in this file.
-  uint64_t rowCount;
+  const uint64_t rowCount;
 
   /// LSM-tree level of this file. Level 0 contains the newest (unflushed)
   /// data; higher levels contain progressively more compacted data. Within
   /// level 0, files CAN have overlapping keys. Within level 1+, compaction
   /// guarantees non-overlapping key ranges across files.
   /// Always 0 for append-only tables (no compaction).
-  int32_t level;
+  const int32_t level;
 
   /// Sequence number range of records in this file. Auto-generated per-commit,
   /// monotonically increasing. For level 0 files, min == max (single commit).
@@ -128,8 +128,8 @@ struct PaimonDataFile {
   /// number wins. Per-file metadata only (not per-row); after compaction,
   /// per-row sequence attribution is lost but LSM level order makes it
   /// unnecessary.
-  int64_t minSequenceNumber;
-  int64_t maxSequenceNumber;
+  const int64_t minSequenceNumber;
+  const int64_t maxSequenceNumber;
 
   /// Number of rows in this file with RowKind = DELETE or UPDATE_BEFORE.
   /// row_count = addRowCount + deleteRowCount, where addRowCount is the
@@ -146,16 +146,16 @@ struct PaimonDataFile {
   /// Used to determine rawConvertible: if deleteRowCount > 0, the file
   /// contains changelog records and cannot be read raw (needs RowKind
   /// filtering during merge-on-read).
-  int64_t deleteRowCount;
+  const int64_t deleteRowCount;
 
   /// Timestamp (epoch millis) when this file was created.
-  int64_t creationTimeMs;
+  const int64_t creationTimeMs;
 
   /// Whether this is a data file or changelog file.
-  Type type;
+  const Type type;
 
   /// How this file was produced (write vs compaction).
-  Source source;
+  const Source source;
 
   /// Deletion file for this data file. Contains a roaring bitmap of deleted
   /// row positions. Nullopt if no rows have been deleted from this file.
@@ -164,7 +164,7 @@ struct PaimonDataFile {
   /// deletionFile marks positional deletes, while deleteRowCount counts
   /// RowKind-based changelog records.
   /// See PaimonDeletionFile for details.
-  std::optional<PaimonDeletionFile> deletionFile;
+  const std::optional<PaimonDeletionFile> deletionFile;
 
   std::string toString() const;
   folly::dynamic serialize() const;

@@ -27,6 +27,19 @@
 using namespace facebook::velox::connector::paimon;
 using namespace facebook::velox;
 
+static_assert(std::is_const_v<decltype(PaimonDataFile::path)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::schemaId)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::size)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::rowCount)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::level)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::minSequenceNumber)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::maxSequenceNumber)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::deleteRowCount)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::creationTimeMs)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::type)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::source)>);
+static_assert(std::is_const_v<decltype(PaimonDataFile::deletionFile)>);
+
 TEST(PaimonDataFileTest, constructWithAllFields) {
   const PaimonDataFile file(
       /*schemaId=*/17,
@@ -63,8 +76,7 @@ TEST(PaimonDataFileTest, constructWithAllFields) {
 TEST(PaimonDataFileTest, fileSchemaIdentity) {
   static_assert(!std::is_default_constructible_v<PaimonDataFile>);
   for (const auto id : {int64_t{0}, int64_t{1} << 40}) {
-    PaimonDataFile file(id);
-    file.path = "data.nimble";
+    const PaimonDataFile file(id, "data.nimble");
     EXPECT_EQ(file.serialize()["schemaId"].asInt(), id);
     EXPECT_EQ(PaimonDataFile::create(file.serialize()).schemaId, id);
   }
@@ -86,18 +98,19 @@ TEST(PaimonDataFileTest, fileSchemaIdentity) {
 }
 
 TEST(PaimonDataFileTest, serializeRoundTrip) {
-  PaimonDataFile file(0);
-  file.path = "data.parquet";
-  file.size = 4096;
-  file.rowCount = 500;
-  file.level = 1;
-  file.minSequenceNumber = 5;
-  file.maxSequenceNumber = 15;
-  file.deleteRowCount = 3;
-  file.creationTimeMs = 1700000000;
-  file.type = PaimonDataFile::Type::kChangelog;
-  file.source = PaimonDataFile::Source::kCompact;
-  file.deletionFile = PaimonDeletionFile{"del.bin", 0, 64, 2};
+  const PaimonDataFile file(
+      /*schemaId=*/0,
+      "data.parquet",
+      /*size=*/4096,
+      /*rowCount=*/500,
+      /*level=*/1,
+      /*minSequenceNumber=*/5,
+      /*maxSequenceNumber=*/15,
+      /*deleteRowCount=*/3,
+      /*creationTimeMs=*/1700000000,
+      PaimonDataFile::Type::kChangelog,
+      PaimonDataFile::Source::kCompact,
+      PaimonDeletionFile{"del.bin", 0, 64, 2});
 
   auto serialized = file.serialize();
   auto deserialized = PaimonDataFile::create(serialized);
@@ -120,9 +133,7 @@ TEST(PaimonDataFileTest, serializeRoundTrip) {
 }
 
 TEST(PaimonDataFileTest, serializeNoDeletionFile) {
-  PaimonDataFile file(0);
-  file.path = "data.orc";
-  file.size = 1024;
+  const PaimonDataFile file(0, "data.orc", 1024);
 
   auto serialized = file.serialize();
   auto deserialized = PaimonDataFile::create(serialized);
@@ -133,8 +144,7 @@ TEST(PaimonDataFileTest, serializeNoDeletionFile) {
 }
 
 TEST(PaimonDataFileTest, serializeDefaultValues) {
-  PaimonDataFile file(0);
-  file.path = "data.orc";
+  const PaimonDataFile file(0, "data.orc");
 
   auto serialized = file.serialize();
   auto deserialized = PaimonDataFile::create(serialized);
@@ -153,11 +163,8 @@ TEST(PaimonDataFileTest, serializeDefaultValues) {
 }
 
 TEST(PaimonDataFileTest, toString) {
-  PaimonDataFile file(0);
-  file.path = "data.orc";
-  file.size = 1024;
-  file.rowCount = 100;
-  file.level = 0;
+  const PaimonDataFile file(
+      /*schemaId=*/0, "data.orc", /*size=*/1024, /*rowCount=*/100, /*level=*/0);
 
   auto str = file.toString();
   EXPECT_THAT(str, testing::HasSubstr("data.orc"));
@@ -170,14 +177,19 @@ TEST(PaimonDataFileTest, toString) {
 }
 
 TEST(PaimonDataFileTest, toStringChangelog) {
-  PaimonDataFile file(0);
-  file.path = "changelog.orc";
-  file.size = 2048;
-  file.rowCount = 200;
-  file.level = 1;
-  file.type = PaimonDataFile::Type::kChangelog;
-  file.source = PaimonDataFile::Source::kCompact;
-  file.deletionFile = PaimonDeletionFile{"del.bin", 0, 64, 2};
+  const PaimonDataFile file(
+      /*schemaId=*/0,
+      "changelog.orc",
+      /*size=*/2048,
+      /*rowCount=*/200,
+      /*level=*/1,
+      /*minSequenceNumber=*/0,
+      /*maxSequenceNumber=*/0,
+      /*deleteRowCount=*/0,
+      /*creationTimeMs=*/0,
+      PaimonDataFile::Type::kChangelog,
+      PaimonDataFile::Source::kCompact,
+      PaimonDeletionFile{"del.bin", 0, 64, 2});
 
   auto str = file.toString();
   EXPECT_THAT(str, testing::HasSubstr("type=CHANGELOG"));
