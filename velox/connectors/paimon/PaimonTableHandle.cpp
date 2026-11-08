@@ -65,7 +65,7 @@ PaimonTableHandle::PaimonTableHandle(
     std::vector<connector::FileColumnHandlePtr> filterColumnHandles,
     double sampleRate,
     std::string dbName,
-    DataSchemas dataSchemas)
+    TableSchemas tableSchemas)
     : connector::FileTableHandle(
           std::move(connectorId),
           std::move(tableName),
@@ -78,7 +78,7 @@ PaimonTableHandle::PaimonTableHandle(
       schemaId_(schemaId),
       rowType_(std::move(rowType)),
       fieldIds_(std::move(fieldIds)),
-      dataSchemas_(std::move(dataSchemas)),
+      tableSchemas_(std::move(tableSchemas)),
       tableType_(tableType),
       partitionKeys_(std::move(partitionKeys)),
       options_(std::move(options)),
@@ -93,7 +93,7 @@ PaimonTableHandle::PaimonTableHandle(
     VELOX_USER_CHECK_GE(id, 0, "Paimon field ID must be nonnegative");
     VELOX_USER_CHECK(ids.insert(id).second, "Duplicate Paimon field ID {}", id);
   }
-  for (const auto& [id, schema] : dataSchemas_) {
+  for (const auto& [id, schema] : tableSchemas_) {
     VELOX_USER_CHECK_GE(id, 0, "Paimon schema ID must be nonnegative");
     VELOX_USER_CHECK_NE(id, schemaId_, "Duplicate Paimon target schema ID");
     VELOX_USER_CHECK_NOT_NULL(
@@ -145,12 +145,12 @@ folly::dynamic PaimonTableHandle::serialize() const {
 
   folly::dynamic obj = serializeFileFields("PaimonTableHandle");
   obj["version"] = kSerdeVersion;
-  if (!dataSchemas_.empty()) {
+  if (!tableSchemas_.empty()) {
     // Old workers must reject scans needing historical identity rather than
     // silently interpret the files using the current column names.
     obj["version"] = kSchemaEvolutionSerdeVersion;
     obj["dataSchemas"] = folly::dynamic::array;
-    for (const auto& [id, schema] : dataSchemas_) {
+    for (const auto& [id, schema] : tableSchemas_) {
       obj["dataSchemas"].push_back(
           folly::dynamic::object("schemaId", id)(
               "rowType", schema.rowType->serialize())(
@@ -180,7 +180,7 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
             obj.count("dataSchemas"))),
       "Unsupported Paimon table handle wire version");
 
-  DataSchemas dataSchemas;
+  TableSchemas tableSchemas;
   if (obj.count("dataSchemas")) {
     VELOX_USER_CHECK(
         obj.at("dataSchemas").isArray(), "Expected Paimon data schema array");
@@ -188,10 +188,10 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
       const auto id =
           ISerializable::deserialize<int64_t>(schema.at("schemaId"));
       VELOX_USER_CHECK(
-          dataSchemas
+          tableSchemas
               .emplace(
                   id,
-                  DataSchema{
+                  TableSchema{
                       ISerializable::deserialize<RowType>(
                           schema.at("rowType"), context),
                       ISerializable::deserialize<std::vector<int32_t>>(
@@ -255,7 +255,7 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
       std::move(filterColumns),
       sampleRate,
       std::move(dbName),
-      std::move(dataSchemas));
+      std::move(tableSchemas));
 }
 
 void PaimonTableHandle::registerSerDe() {

@@ -34,11 +34,11 @@ class PaimonTableHandle final : public connector::FileTableHandle {
   /// including partition columns. Only top-level identities are represented.
   /// Ordinary append files retain this column order. Partition values used
   /// by the query still come from the split, not their physical copies.
-  struct DataSchema {
+  struct TableSchema {
     RowTypePtr rowType;
     std::vector<int32_t> fieldIds;
   };
-  using DataSchemas = std::unordered_map<int64_t, DataSchema>;
+  using TableSchemas = std::unordered_map<int64_t, TableSchema>;
 
   /// rowType includes partition columns; fieldIds follow its column order.
   /// options are resolved by the caller.
@@ -56,7 +56,7 @@ class PaimonTableHandle final : public connector::FileTableHandle {
       std::vector<connector::FileColumnHandlePtr> filterColumnHandles = {},
       double sampleRate = 1.0,
       std::string dbName = "",
-      DataSchemas dataSchemas = {});
+      TableSchemas tableSchemas = {});
 
   /// Identifier of the fixed table schema, distinct from a snapshot ID.
   int64_t schemaId() const {
@@ -76,8 +76,8 @@ class PaimonTableHandle final : public connector::FileTableHandle {
 
   /// Historical definitions required by the files, excluding schemaId(),
   /// whose definition is already held in rowType() and fieldIds().
-  const DataSchemas& dataSchemas() const {
-    return dataSchemas_;
+  const TableSchemas& tableSchemas() const {
+    return tableSchemas_;
   }
 
   PaimonTableType tableType() const {
@@ -110,7 +110,7 @@ class PaimonTableHandle final : public connector::FileTableHandle {
   const int64_t schemaId_;
   const RowTypePtr rowType_;
   const std::vector<int32_t> fieldIds_;
-  const DataSchemas dataSchemas_;
+  const TableSchemas tableSchemas_;
   const PaimonTableType tableType_;
   const std::vector<std::string> partitionKeys_;
   const std::unordered_map<std::string, std::string> options_;

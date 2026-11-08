@@ -319,7 +319,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
 
   static std::shared_ptr<PaimonTableHandle> evolutionTable(
       const RowTypePtr& type,
-      PaimonTableHandle::DataSchemas schemas,
+      PaimonTableHandle::TableSchemas schemas,
       common::SubfieldFilters filters = {},
       core::TypedExprPtr remaining = nullptr,
       std::vector<std::string> partitions = {},
@@ -1180,7 +1180,7 @@ TEST_F(PaimonConnectorTest, schemaEvolutionFiltersAndCount) {
        makeFlatVector<int64_t>({40, 60}),
        makeFlatVector<std::string>({"four", "six"})});
   const auto type = asRowType(current->type());
-  const PaimonTableHandle::DataSchemas schemas{
+  const PaimonTableHandle::TableSchemas schemas{
       {0, {asRowType(oldRows->type()), {12, 10, 99}}}};
   common::SubfieldFilters filters;
   filters.emplace(
@@ -1309,7 +1309,7 @@ TEST_F(PaimonConnectorTest, schemaEvolutionDynamicFiltersAndOwnership) {
 TEST_F(PaimonConnectorTest, schemaEvolutionPartitionConstants) {
   const auto type = ROW({{"b", BIGINT()}, {"p", VARCHAR()}});
   const auto historical = ROW({{"p", VARCHAR()}, {"a", BIGINT()}});
-  const PaimonTableHandle::DataSchemas schemas{{0, {historical, {11, 10}}}};
+  const PaimonTableHandle::TableSchemas schemas{{0, {historical, {11, 10}}}};
   const auto partition = std::make_shared<PaimonColumnHandle>(
       "p",
       11,
@@ -1442,7 +1442,7 @@ TEST_F(PaimonConnectorTest, schemaEvolutionWithUnchangedNestedFields) {
     const auto current = makeRowVector(
         {"b", "nested"}, {makeFlatVector<int64_t>({5, 6, 7, 8}), nested});
     const auto type = asRowType(current->type());
-    const PaimonTableHandle::DataSchemas schemas{
+    const PaimonTableHandle::TableSchemas schemas{
         {0, {asRowType(oldRows->type()), {11, 10}}}};
     const auto plan = evolutionPlan(
         evolutionTable(type, schemas), type, makePaimonColumnHandles(type));
@@ -1567,10 +1567,10 @@ TEST_F(PaimonConnectorTest, schemaReferencesValidatedBeforeFileOpen) {
       const auto paths = makeFilePaths(1);
       writeFile(paths[0]->getPath(), input, format);
       const auto path = "paimon-table-test:" + paths[0]->getPath();
-      PaimonTableHandle::DataSchemas schemas;
+      PaimonTableHandle::TableSchemas schemas;
       if (withHistory) {
         schemas.emplace(
-            0, PaimonTableHandle::DataSchema{ROW({{"a", BIGINT()}}), {10}});
+            0, PaimonTableHandle::TableSchema{ROW({{"a", BIGINT()}}), {10}});
       }
       const auto table = evolutionTable(type, std::move(schemas));
       auto source =

@@ -199,7 +199,7 @@ TEST_F(PaimonTableHandleTest, defaultValues) {
 TEST_F(PaimonTableHandleTest, historicalSchemas) {
   const auto oldType =
       ROW({{"p", VARCHAR()}, {"old_id", BIGINT()}, {"dropped", DOUBLE()}});
-  const auto make = [&](PaimonTableHandle::DataSchemas schemas) {
+  const auto make = [&](PaimonTableHandle::TableSchemas schemas) {
     return PaimonTableHandle(
         "test-paimon",
         "orders",
@@ -220,10 +220,10 @@ TEST_F(PaimonTableHandleTest, historicalSchemas) {
   const auto obj = original.serialize();
   EXPECT_EQ(obj["version"], PaimonTableHandle::kSchemaEvolutionSerdeVersion);
   const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
-  ASSERT_EQ(copy->dataSchemas().size(), 1);
-  EXPECT_EQ(*copy->dataSchemas().at(0).rowType, *oldType);
+  ASSERT_EQ(copy->tableSchemas().size(), 1);
+  EXPECT_EQ(*copy->tableSchemas().at(0).rowType, *oldType);
   EXPECT_EQ(
-      copy->dataSchemas().at(0).fieldIds, (std::vector<int32_t>{8, 7, 30}));
+      copy->tableSchemas().at(0).fieldIds, (std::vector<int32_t>{8, 7, 30}));
   EXPECT_EQ(*copy->rowType(), *original.rowType());
   EXPECT_EQ(copy->fieldIds(), original.fieldIds());
   EXPECT_EQ(make({}).serialize()["version"], 1);
