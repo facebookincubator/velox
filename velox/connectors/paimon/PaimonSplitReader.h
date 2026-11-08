@@ -72,6 +72,10 @@ class PaimonSplitReader : public connector::FileSplitReader {
  private:
   void configureBaseReaderOptions() override;
 
+  std::vector<TypePtr> adaptColumns(
+      const RowTypePtr& fileType,
+      const RowTypePtr& tableSchema) const override;
+
   // File-order names derived from historical field IDs, not query ordinals
   // or optional field-ID attributes in a physical file.
   RowTypePtr makeFileReadSchema(int64_t fileSchemaId) const;

@@ -1168,6 +1168,52 @@ TEST_F(PaimonConnectorTest, schemaEvolutionRenameReorderAndMissing) {
   }
 }
 
+TEST_F(PaimonConnectorTest, schemaEvolutionProjectionAliases) {
+  const auto oldRows = makeRowVector(
+      {"fresh", "a", "s"},
+      {makeFlatVector<int64_t>({100, 200}),
+       makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<std::string>({"one", "two"})});
+  const auto current = makeRowVector(
+      {"b", "s", "fresh"},
+      {makeFlatVector<int64_t>({3}),
+       makeFlatVector<std::string>({"three"}),
+       makeFlatVector<int64_t>({30})});
+  const auto type = asRowType(current->type());
+  const auto table =
+      evolutionTable(type, {{0, {asRowType(oldRows->type()), {99, 10, 11}}}});
+  const auto columns = makePaimonColumnHandles(type);
+  const auto output =
+      ROW({{"label", VARCHAR()}, {"id", BIGINT()}, {"added", BIGINT()}});
+  const auto plan = evolutionPlan(
+      table,
+      output,
+      {{"label", columns.at("s")},
+       {"id", columns.at("b")},
+       {"added", columns.at("fresh")}});
+  const auto expectedOld = makeRowVector(
+      {"label", "id", "added"},
+      {oldRows->childAt(2),
+       oldRows->childAt(1),
+       makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})});
+  const auto expectedCurrent = makeRowVector(
+      {"label", "id", "added"},
+      {current->childAt(1), current->childAt(0), current->childAt(2)});
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(2);
+    writeFile(paths[0]->getPath(), oldRows, format);
+    writeFile(paths[1]->getPath(), current, format);
+    exec::test::AssertQueryBuilder(plan)
+        .split(evolutionSplit(
+            format,
+            {{paths[0]->getPath(), 0},
+             {paths[1]->getPath(), 17},
+             {paths[0]->getPath(), 0}}))
+        .assertResults({expectedOld, expectedCurrent, expectedOld});
+  }
+}
+
 TEST_F(PaimonConnectorTest, schemaEvolutionFiltersAndCount) {
   const auto oldRows = makeRowVector(
       {"s", "a", "fresh"},
