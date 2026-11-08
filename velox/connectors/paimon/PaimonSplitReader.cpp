@@ -67,10 +67,10 @@ RowTypePtr PaimonSplitReader::makeFileReadSchema(int64_t fileSchemaId) const {
   const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
   const auto& dataType = fileSchemaId == table.schemaId()
       ? table.rowType()
-      : table.dataSchemas().at(fileSchemaId).rowType;
+      : table.tableSchemas().at(fileSchemaId).rowType;
   const auto& dataIds = fileSchemaId == table.schemaId()
       ? table.fieldIds()
-      : table.dataSchemas().at(fileSchemaId).fieldIds;
+      : table.tableSchemas().at(fileSchemaId).fieldIds;
 
   std::unordered_map<int32_t, column_index_t> targetColumns;
   for (column_index_t i = 0; i < table.fieldIds().size(); ++i) {

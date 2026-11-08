@@ -63,7 +63,7 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   for (const auto& file : paimonSplit->dataFiles()) {
     VELOX_USER_CHECK(
         file.schemaId == paimonTableHandle_->schemaId() ||
-            paimonTableHandle_->dataSchemas().count(file.schemaId),
+            paimonTableHandle_->tableSchemas().count(file.schemaId),
         "Missing Paimon schema {} for file '{}'",
         file.schemaId,
         file.path);
