@@ -43,6 +43,7 @@
 
 #include <limits>
 #include <sstream>
+#include <utility>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -100,6 +101,23 @@ class CudfWindowTest : public testing::Test,
     VELOX_ASSERT_THROW(
         AssertQueryBuilder(plan).copyResults(pool()),
         "Replacement with cuDF operator failed");
+  }
+
+  void assertCpuWindowFallback(
+      const core::PlanNodePtr& plan,
+      const RowVectorPtr& expected) {
+    auto task =
+        AssertQueryBuilder(plan)
+            .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, "true")
+            .assertResults(expected);
+    bool hasCpuWindow = false;
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& operatorStats : pipeline.operatorStats) {
+        EXPECT_NE(operatorStats.operatorType, "CudfWindow");
+        hasCpuWindow |= operatorStats.operatorType == "Window";
+      }
+    }
+    EXPECT_TRUE(hasCpuWindow);
   }
 };
 
@@ -586,9 +604,12 @@ TEST_F(CudfWindowTest, rankWithNestedKeysGating) {
        {{1, 10}, {2, 20}},
        {{2, 20}},
        {}});
-  const std::vector<VectorPtr> nestedKeys = {
-      arrayKey, mapKey, makeRowVector({arrayKey}), makeRowVector({mapKey})};
-  for (const auto& nestedKey : nestedKeys) {
+  const std::vector<std::pair<VectorPtr, bool>> nestedKeys = {
+      {arrayKey, false},
+      {mapKey, true},
+      {makeRowVector({arrayKey}), false},
+      {makeRowVector({mapKey}), true}};
+  for (const auto& [nestedKey, containsMap] : nestedKeys) {
     SCOPED_TRACE(nestedKey->type()->toString());
     auto data = makeRowVector(
         {"p", "ord", "nested_key"},
@@ -600,7 +621,7 @@ TEST_F(CudfWindowTest, rankWithNestedKeysGating) {
     for (const auto& partition : {"", "partition by p"}) {
       for (const auto& ordering : {"nested_key", "nested_key, ord"}) {
         for (const auto& function : {"row_number", "rank", "dense_rank"}) {
-          if (std::string(partition).empty() &&
+          if (!containsMap && std::string(partition).empty() &&
               std::string(ordering) == "nested_key" &&
               std::string(function) != "rank") {
             continue;
@@ -610,7 +631,8 @@ TEST_F(CudfWindowTest, rankWithNestedKeysGating) {
           SCOPED_TRACE(expression);
           assertWindowRejected(
               PlanBuilder().values({data}).window({expression}).planNode(),
-              "ARRAY or MAP");
+              containsMap ? "ORDER BY key nested_key contains MAP type"
+                          : "ARRAY or MAP");
         }
       }
     }
@@ -644,6 +666,83 @@ TEST_F(CudfWindowTest, rankWithNestedKeysGating) {
     EXPECT_TRUE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason))
         << reason;
     assertCpuAndGpuResults(plan);
+  }
+}
+
+TEST_F(CudfWindowTest, mapSortKeysFallback) {
+  // Maps with the same entries in different storage orders are peers.
+  auto mapKey = makeMapVector<int64_t, int64_t>(
+      {{{1, 10}, {2, 20}}, {{2, 20}, {1, 10}}, {{1, 10}, {2, 30}}});
+  const std::vector<VectorPtr> keys = {
+      mapKey, makeRowVector({mapKey}), makeArrayVector({0, 1, 2}, mapKey)};
+  for (const auto& key : keys) {
+    SCOPED_TRACE(key->type()->toString());
+    auto data = makeRowVector(
+        {"p", "ord", "map_key", "v"},
+        {
+            makeFlatVector<int32_t>({1, 1, 1}),
+            makeFlatVector<int32_t>({0, 0, 0}),
+            key,
+            makeFlatVector<int64_t>({10, 20, 30}),
+        });
+    const auto expectedReason = fmt::format(
+        "ORDER BY key map_key contains MAP type {}", key->type()->toString());
+    for (const auto& partition : {"", "partition by p"}) {
+      for (const auto& ordering : {"map_key", "ord, map_key"}) {
+        const auto window = fmt::format("{} order by {}", partition, ordering);
+        SCOPED_TRACE(window);
+        for (const auto& function :
+             {"row_number()",
+              "rank()",
+              "dense_rank()",
+              "lag(v)",
+              "lead(v)",
+              "first_value(v)",
+              "last_value(v)",
+              "sum(v)",
+              "min(v)",
+              "max(v)",
+              "count(v)",
+              "avg(v)"}) {
+          SCOPED_TRACE(function);
+          auto plan =
+              PlanBuilder()
+                  .values({data})
+                  .window({fmt::format("{} over ({})", function, window)})
+                  .planNode();
+          auto windowNode =
+              std::dynamic_pointer_cast<const core::WindowNode>(plan);
+          ASSERT_NE(windowNode, nullptr);
+          std::string reason;
+          EXPECT_FALSE(
+              cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason));
+          EXPECT_EQ(reason, expectedReason);
+        }
+
+        auto plan = PlanBuilder()
+                        .values({data})
+                        .window({
+                            fmt::format("dense_rank() over ({}) as r", window),
+                            fmt::format(
+                                "sum(v) over ({} range between unbounded "
+                                "preceding and current row) as s",
+                                window),
+                        })
+                        .planNode();
+        assertWindowRejected(plan, expectedReason);
+        auto expected = makeRowVector(
+            {"p", "ord", "map_key", "v", "r", "s"},
+            {
+                data->childAt(0),
+                data->childAt(1),
+                key,
+                data->childAt(3),
+                makeFlatVector<int64_t>({1, 1, 2}),
+                makeFlatVector<int64_t>({30, 30, 60}),
+            });
+        assertCpuWindowFallback(plan, expected);
+      }
+    }
   }
 }
 
@@ -2232,6 +2331,51 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
       "avg(d) over (order by ord rows between unbounded preceding "
       "and unbounded following) as a");
   assertFallback(decimalData, "avg(d) over () as a");
+
+  for (int64_t sign : {1, -1}) {
+    SCOPED_TRACE(fmt::format("interval sign={}", sign));
+    auto intervalData = makeRowVector(
+        {"p", "ord", "v"},
+        {
+            makeFlatVector<int32_t>({1, 1, 1}),
+            makeFlatVector<int32_t>({1, 2, 3}),
+            makeNullableFlatVector<int64_t>(
+                {sign, 2 * sign, std::nullopt}, INTERVAL_DAY_TIME()),
+        });
+    // Interval AVG rounds half milliseconds away from zero and ignores nulls.
+    auto expected = makeRowVector(
+        {"p", "ord", "v", "a"},
+        {
+            intervalData->childAt(0),
+            intervalData->childAt(1),
+            intervalData->childAt(2),
+            makeFlatVector<int64_t>(
+                {2 * sign, 2 * sign, 2 * sign}, INTERVAL_DAY_TIME()),
+        });
+    for (const auto& partition : {"", "partition by p"}) {
+      for (
+          const auto& ordering :
+          {"",
+           "order by ord rows between unbounded preceding and unbounded following",
+           "order by ord range between unbounded preceding and unbounded following"}) {
+        const auto expression =
+            fmt::format("avg(v) over ({} {}) as a", partition, ordering);
+        SCOPED_TRACE(expression);
+        auto plan = PlanBuilder()
+                        .values({intervalData})
+                        .window({expression})
+                        .planNode();
+        assertWindowRejected(
+            plan,
+            "avg does not support input type INTERVAL DAY TO SECOND on cuDF");
+        assertCpuWindowFallback(plan, expected);
+      }
+    }
+    assertFallback(
+        intervalData,
+        "avg(v) over (order by ord rows between unbounded preceding "
+        "and current row) as a");
+  }
 
   auto arrayData = makeRowVector(
       {"ord", "v"},

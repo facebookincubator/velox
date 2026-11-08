@@ -272,9 +272,8 @@ std::unique_ptr<cudf::column> computeFullPartitionAverage(
       results[0].results[1]->view(),
       stream,
       mr);
-  // repeat() borrows the mean and count columns from results. Wait for its
-  // GPU reads to finish before results goes out of scope.
-  stream.sync();
+  // RMM deallocates results' buffers on this stream after repeat() finishes
+  // reading the mean and count columns.
   return std::move(result->release()[0]);
 }
 
@@ -284,6 +283,18 @@ bool containsCustomComparison(const TypePtr& type) {
   }
   for (uint32_t i = 0; i < type->size(); ++i) {
     if (containsCustomComparison(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool containsMap(const TypePtr& type) {
+  if (type->isMap()) {
+    return true;
+  }
+  for (uint32_t i = 0; i < type->size(); ++i) {
+    if (containsMap(type->childAt(i))) {
       return true;
     }
   }
@@ -486,6 +497,17 @@ bool CudfWindow::canRunOnGPU(
       }
       return false;
     }
+    // Velox compares maps independently of entry order, while cuDF compares
+    // their list representation in entry order.
+    if (containsMap(key->type())) {
+      if (reason) {
+        *reason = fmt::format(
+            "ORDER BY key {} contains MAP type {}",
+            key->name(),
+            key->type()->toString());
+      }
+      return false;
+    }
   }
 
   const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
@@ -621,15 +643,16 @@ bool CudfWindow::canRunOnGPU(
 
       const bool unsupportedRealSum =
           baseName == "sum" && argumentType->isReal();
-      const bool unsupportedDecimalAverage =
-          baseName == "avg" && argumentType->isDecimal();
+      // The final integer cast truncates interval means, while Velox rounds
+      // them.
+      const bool unsupportedAverage = baseName == "avg" &&
+          (argumentType->isDecimal() || argumentType->isIntervalDayTime());
       const bool unsupportedNestedMinMax =
           (baseName == "min" || baseName == "max") &&
           (argumentType->isArray() || argumentType->isMap() ||
            argumentType->isRow());
 
-      if (unsupportedRealSum || unsupportedDecimalAverage ||
-          unsupportedNestedMinMax) {
+      if (unsupportedRealSum || unsupportedAverage || unsupportedNestedMinMax) {
         if (reason) {
           *reason = fmt::format(
               "{} does not support input type {} on cuDF",
