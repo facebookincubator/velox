@@ -220,14 +220,13 @@ class FileSplitReader {
       std::shared_ptr<common::MetadataFilter> metadataFilter,
       RowTypePtr rowType);
 
- private:
   /// Different table formats may have different metadata columns.
   /// This function will be used to update the scanSpec for these columns.
+  /// Subclasses may reuse it with their logical schema for missing columns.
   virtual std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const;
 
- protected:
   const FileTableHandlePtr tableHandle_;
   const std::unordered_map<std::string, FileColumnHandlePtr>* const
       partitionKeys_;

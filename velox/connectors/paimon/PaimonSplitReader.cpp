@@ -18,6 +18,56 @@
 #include <limits>
 
 namespace facebook::velox::connector::paimon {
+namespace {
+
+// Indexed by target-table column; nullopt means its field ID is absent from
+// the file's historical schema. No physical-file ID attributes are involved.
+std::vector<std::optional<column_index_t>> mapTableColumnsToFile(
+    const std::vector<int32_t>& tableFieldIds,
+    const std::vector<int32_t>& fileFieldIds) {
+  std::unordered_map<int32_t, column_index_t> fileColumns;
+  for (column_index_t i = 0; i < fileFieldIds.size(); ++i) {
+    fileColumns.emplace(fileFieldIds[i], i);
+  }
+
+  std::vector<std::optional<column_index_t>> mapping(tableFieldIds.size());
+  for (column_index_t i = 0; i < tableFieldIds.size(); ++i) {
+    if (const auto it = fileColumns.find(tableFieldIds[i]);
+        it != fileColumns.end()) {
+      mapping[i] = it->second;
+    }
+  }
+  return mapping;
+}
+
+// Adapt the ID-based binding to DWIO's positional rename + name-based scan
+// interface. Retain every physical position without exposing unmatched names.
+RowTypePtr makeReaderSchema(
+    const RowTypePtr& fileType,
+    const RowTypePtr& tableType,
+    const std::vector<std::optional<column_index_t>>& tableToFileColumns) {
+  auto names = fileType->names();
+  std::vector<bool> matched(fileType->size(), false);
+  for (column_index_t i = 0; i < tableToFileColumns.size(); ++i) {
+    if (const auto fileColumn = tableToFileColumns[i]) {
+      names[*fileColumn] = tableType->nameOf(i);
+      matched[*fileColumn] = true;
+    }
+  }
+  for (column_index_t i = 0; i < names.size(); ++i) {
+    if (matched[i]) {
+      continue;
+    }
+    auto name = fmt::format("__paimon_unmapped_{}", i);
+    while (tableType->containsChild(name) || fileType->containsChild(name)) {
+      name.push_back('_');
+    }
+    names[i] = std::move(name);
+  }
+  return ROW(std::move(names), std::vector<TypePtr>(fileType->children()));
+}
+
+} // namespace
 
 PaimonSplitReader::PaimonSplitReader(
     const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
@@ -65,53 +115,40 @@ PaimonSplitReader::PaimonSplitReader(
 
 RowTypePtr PaimonSplitReader::makeFileReadSchema(int64_t fileSchemaId) const {
   const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
-  const auto& dataType = fileSchemaId == table.schemaId()
+  const auto& fileType = fileSchemaId == table.schemaId()
       ? table.rowType()
       : table.tableSchemas().at(fileSchemaId).rowType;
-  const auto& dataIds = fileSchemaId == table.schemaId()
+  const auto& fileFieldIds = fileSchemaId == table.schemaId()
       ? table.fieldIds()
       : table.tableSchemas().at(fileSchemaId).fieldIds;
+  const auto tableToFileColumns =
+      mapTableColumnsToFile(table.fieldIds(), fileFieldIds);
 
-  std::unordered_map<int32_t, column_index_t> targetColumns;
-  for (column_index_t i = 0; i < table.fieldIds().size(); ++i) {
-    targetColumns.emplace(table.fieldIds()[i], i);
-  }
   // Only top-level field evolution is handled here; nested fields are treated
   // as unchanged.
   // TODO: Support nested field evolution using historical nested field IDs.
-  std::vector<std::string> names;
-  std::vector<TypePtr> types;
-  for (column_index_t i = 0; i < dataType->size(); ++i) {
-    const auto target = targetColumns.find(dataIds[i]);
-    if (target == targetColumns.end()) {
-      // A dropped file column must not shadow a new field with the same name.
-      auto name = fmt::format("__paimon_unmapped_{}", i);
-      while (table.rowType()->containsChild(name) ||
-             dataType->containsChild(name)) {
-        name.push_back('_');
-      }
-      names.push_back(std::move(name));
-    } else {
-      const auto& name = table.rowType()->nameOf(target->second);
-      if (const auto* spec = scanSpec_->childByName(name); spec &&
-          spec->columnType() == common::ScanSpec::ColumnType::kRegular) {
-        const auto& type = table.rowType()->childAt(target->second);
-        VELOX_USER_CHECK(
-            *type == *dataType->childAt(i),
-            "Paimon type evolution is not supported for field {} ('{}'), "
-            "file schema {}, target schema {}: {} to {}",
-            dataIds[i],
-            name,
-            fileSchemaId,
-            table.schemaId(),
-            dataType->childAt(i)->toString(),
-            type->toString());
-      }
-      names.push_back(name);
+  for (column_index_t i = 0; i < tableToFileColumns.size(); ++i) {
+    const auto fileColumn = tableToFileColumns[i];
+    if (!fileColumn) {
+      continue;
     }
-    types.push_back(dataType->childAt(i));
+    const auto& name = table.rowType()->nameOf(i);
+    if (const auto* spec = scanSpec_->childByName(name);
+        spec && spec->columnType() == common::ScanSpec::ColumnType::kRegular) {
+      const auto& type = table.rowType()->childAt(i);
+      VELOX_USER_CHECK(
+          *type == *fileType->childAt(*fileColumn),
+          "Paimon type evolution is not supported for field {} ('{}'), "
+          "file schema {}, target schema {}: {} to {}",
+          table.fieldIds()[i],
+          name,
+          fileSchemaId,
+          table.schemaId(),
+          fileType->childAt(*fileColumn)->toString(),
+          type->toString());
+    }
   }
-  return ROW(std::move(names), std::move(types));
+  return makeReaderSchema(fileType, table.rowType(), tableToFileColumns);
 }
 
 void PaimonSplitReader::configureBaseReaderOptions() {
@@ -122,6 +159,13 @@ void PaimonSplitReader::configureBaseReaderOptions() {
   baseReaderOpts_.setFileSchema(fileReadSchemas_.at(id));
   baseReaderOpts_.setColumnMappingMode(
       dwio::common::ColumnMappingMode::kPosition);
+}
+
+std::vector<TypePtr> PaimonSplitReader::adaptColumns(
+    const RowTypePtr& fileType,
+    const RowTypePtr& /*tableSchema*/) const {
+  return connector::FileSplitReader::adaptColumns(
+      fileType, tableHandle_->dataColumns());
 }
 
 void PaimonSplitReader::prepareSplit(
@@ -160,16 +204,7 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     fileSplit_ = fileSplits_[currentFileIndex_];
 
     configureReaderOptions(baseReaderOpts_.randomSkip());
-    createReader();
-    // The file reader has captured its file-order mapping. Missing columns
-    // must now be resolved against the query's target schema, not that map.
-    baseReaderOpts_.setFileSchema(tableHandle_->dataColumns());
-    if (!emptySplit_) {
-      auto rowType = getAdaptedRowType();
-      if (!checkIfSplitIsEmpty(*runtimeStats_)) {
-        createRowReader(metadataFilter_, std::move(rowType), std::nullopt);
-      }
-    }
+    connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     if (!emptySplit_) {
       return true;
     }
