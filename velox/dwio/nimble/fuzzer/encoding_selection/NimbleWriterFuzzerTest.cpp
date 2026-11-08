@@ -159,6 +159,52 @@ TEST(NimbleWriterFuzzerTest, chunkStatsCoverageBreakdownsAddUp) {
       coverage.numNullBatchIterations);
 }
 
+TEST(NimbleWriterFuzzerTest, pointLookupsMatchInput) {
+  auto rootPool = velox::memory::memoryManager()->addRootPool(
+      "pointLookupsMatchInput", velox::memory::kMaxMemory);
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.batchSize = 64;
+  options.numBatches = 4;
+  NimbleWriterFuzzer fuzzer(options, *rootPool);
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    fuzzer.run();
+    fuzzer.reSeed();
+  }
+
+  const auto& coverage = fuzzer.pointLookupCoverage();
+  uint64_t numLookups{0};
+  for (const auto& [numColumns, counts] : coverage.byNumColumns) {
+    EXPECT_GE(numColumns, 1U);
+    EXPECT_LE(numColumns, 3U);
+    EXPECT_LE(counts.numLookupsWithChunkSkips, counts.numLookups);
+    numLookups += counts.numLookups;
+  }
+  EXPECT_GT(numLookups, 0U);
+  EXPECT_LE(numLookups, fuzzer.numUnfilteredFilesWritten());
+  EXPECT_GT(coverage.byNumColumns.rbegin()->first, 1U);
+
+  for (const auto& [type, byKind] : coverage.byType) {
+    for (const auto& [kind, counts] : byKind) {
+      EXPECT_LE(counts.numLookupsWithChunkSkips, counts.numLookups)
+          << type << " " << kind;
+    }
+  }
+
+  uint64_t numBucketedLookups{0};
+  for (const auto& [anchoring, buckets] : coverage.lookupsByMatchedRows) {
+    for (const auto& [bucket, count] : buckets) {
+      numBucketedLookups += count;
+    }
+  }
+  EXPECT_EQ(numBucketedLookups, numLookups);
+
+  // Anchored lookups return whole blocks of consecutive rows.
+  const auto anchored = coverage.lookupsByMatchedRows.find("anchored");
+  ASSERT_NE(anchored, coverage.lookupsByMatchedRows.end());
+  EXPECT_GT(anchored->second.rbegin()->first, 1U);
+}
+
 TEST(NimbleWriterFuzzerTest, run) {
   runNimbleWriterFuzzer();
 }

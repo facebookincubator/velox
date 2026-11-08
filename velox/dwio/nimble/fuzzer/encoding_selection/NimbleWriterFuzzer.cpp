@@ -63,6 +63,7 @@
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
+#include "velox/type/Filter.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::nimble::fuzzer {
@@ -493,11 +494,14 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
 // Largest stripe- or chunk-count bucket; it also holds every larger count.
 constexpr uint32_t kMaxCountBucket{16};
 
-// Buckets 'count' by its power-of-two floor so coverage maps stay short however
-// many stripes or chunks a file has.
-uint32_t countBucket(uint64_t count) {
+// Largest bucket of rows a point lookup returns; a default file holds 600 rows.
+constexpr uint32_t kMaxMatchedRowsBucket{1'024};
+
+// Buckets 'count' by its power-of-two floor, capped at 'maxBucket', so coverage
+// maps stay short however many stripes, chunks or rows there are.
+uint32_t countBucket(uint64_t count, uint32_t maxBucket) {
   return static_cast<uint32_t>(
-      std::min<uint64_t>(std::bit_floor(count), kMaxCountBucket));
+      std::min<uint64_t>(std::bit_floor(count), maxBucket));
 }
 
 // Chunk header bytes: the payload size as a little-endian uint32, then one
@@ -1670,7 +1674,8 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
       NIMBLE_CHECK_EQ(streamIndex->rowCount(), rowOffset);
       const auto [beginChunk, endChunk] = streamIndex->chunkRange();
       NIMBLE_CHECK_EQ(endChunk - beginChunk, numChunks);
-      ++chunkStatsCoverage_.streamsByChunks[countBucket(numChunks)];
+      ++chunkStatsCoverage_
+            .streamsByChunks[countBucket(numChunks, kMaxCountBucket)];
       if (numChunks > 1) {
         ++chunkStatsCoverage_.numMultiChunkStreams;
         ++kindCoverage.numMultiChunkStreams;
@@ -1683,11 +1688,12 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
   }
   auto& filesByStripes =
       chunkStatsCoverage_.filesByStripes[std::string{flushRegime}];
-  ++filesByStripes[countBucket(tablet->stripeCount())];
+  ++filesByStripes[countBucket(tablet->stripeCount(), kMaxCountBucket)];
   auto& filesByStripeGroups =
       chunkStatsCoverage_
           .filesByStripeGroups[std::string{metadataFlushThreshold}];
-  ++filesByStripeGroups[countBucket(stripeGroupIndices.size())];
+  ++filesByStripeGroups[countBucket(
+      stripeGroupIndices.size(), kMaxCountBucket)];
 }
 
 namespace {
@@ -2255,6 +2261,627 @@ void NimbleWriterFuzzer::readAndVerify(
       toString(readerPath));
 }
 
+namespace {
+
+// Whether point lookups can filter a top-level column of this kind.
+bool isPointLookupKind(velox::TypeKind kind) {
+  switch (kind) {
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
+    case velox::TypeKind::TIMESTAMP:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Returns an integer value of any width as int64_t.
+int64_t integerValueAt(
+    const velox::BaseVector& vector,
+    velox::vector_size_t row) {
+  switch (vector.typeKind()) {
+    case velox::TypeKind::TINYINT:
+      return vector.as<velox::SimpleVector<int8_t>>()->valueAt(row);
+    case velox::TypeKind::SMALLINT:
+      return vector.as<velox::SimpleVector<int16_t>>()->valueAt(row);
+    case velox::TypeKind::INTEGER:
+      return vector.as<velox::SimpleVector<int32_t>>()->valueAt(row);
+    case velox::TypeKind::BIGINT:
+      return vector.as<velox::SimpleVector<int64_t>>()->valueAt(row);
+    default:
+      NIMBLE_UNREACHABLE("Not an integer column: {}.", vector.typeKind());
+  }
+}
+
+// A point-lookup filter, with the filter kind coverage reports it under. A null
+// 'filter' means no filter could reject rows while accepting every anchor row.
+struct PointLookupFilter {
+  std::unique_ptr<velox::common::Filter> filter;
+  std::string_view kind;
+};
+
+// A point-lookup filter on one top-level column.
+struct ColumnFilter {
+  velox::column_index_t column;
+  PointLookupFilter lookup;
+};
+
+// Comparisons a lookup filter makes. Every bound is a value from the input.
+enum class LookupShape {
+  kEqual,
+  kIn,
+  kAtMost,
+  kAtLeast,
+  kBetween,
+};
+
+// An input row: the batch index, then the row within the batch.
+using RowPosition = std::pair<size_t, velox::vector_size_t>;
+
+// Sizes of the blocks of consecutive rows an anchored lookup must return. A
+// default file holds 600 rows, so the largest block is a sixth of it.
+constexpr std::array<size_t, 3> kAnchorBlockSizes{1, 10, 100};
+
+// Input rows a lookup draws its filter values from.
+struct LookupRows {
+  // Every input row, in file order.
+  std::vector<RowPosition> all;
+
+  // One to three blocks of consecutive rows that every filter of an anchored
+  // lookup accepts, so the lookup returns them. Empty for unanchored lookups,
+  // which draw values from random rows and often match nothing.
+  std::vector<RowPosition> anchors;
+};
+
+// Draws the rows of one lookup. Three in four lookups are anchored.
+LookupRows drawLookupRows(
+    const std::vector<VectorPtr>& batches,
+    FuzzerGenerator& rng) {
+  LookupRows rows;
+  for (size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
+    for (velox::vector_size_t row = 0; row < batches[batchIndex]->size();
+         ++row) {
+      rows.all.emplace_back(batchIndex, row);
+    }
+  }
+  if (rows.all.empty() || folly::Random::oneIn(4, rng)) {
+    return rows;
+  }
+  const auto numBlocks = 1 + folly::Random::rand32(3, rng);
+  for (uint32_t block = 0; block < numBlocks; ++block) {
+    const auto blockSize = std::min(
+        kAnchorBlockSizes[folly::Random::rand32(kAnchorBlockSizes.size(), rng)],
+        rows.all.size());
+    const auto start = static_cast<std::ptrdiff_t>(
+        folly::Random::rand64(rows.all.size() - blockSize + 1, rng));
+    rows.anchors.insert(
+        rows.anchors.end(),
+        rows.all.begin() + start,
+        rows.all.begin() + start + static_cast<std::ptrdiff_t>(blockSize));
+  }
+  return rows;
+}
+
+// Returns the value at 'row' of 'vector' as T, reading any integer width as
+// int64_t and strings as std::string.
+template <typename T>
+T valueAt(const velox::BaseVector& vector, velox::vector_size_t row) {
+  if constexpr (std::is_same_v<T, int64_t>) {
+    return integerValueAt(vector, row);
+  } else if constexpr (std::is_same_v<T, std::string>) {
+    return std::string{
+        vector.as<velox::SimpleVector<velox::StringView>>()->valueAt(row)};
+  } else {
+    return vector.as<velox::SimpleVector<T>>()->valueAt(row);
+  }
+}
+
+// Values a filter on one column is built from.
+template <typename T>
+struct LookupValues {
+  // Distinct non-null, non-NaN values, sorted.
+  std::vector<T> values{};
+
+  // Whether the values came from anchor rows. Anchored filters keep their
+  // bounds inclusive and accept null when an anchor row is null. An anchor row
+  // holding NaN may not match.
+  bool anchored{false};
+
+  // Whether a row the values came from is null.
+  bool hasNull{false};
+
+  // Whether the filter must accept null.
+  bool nullAllowed() const {
+    return anchored && hasNull;
+  }
+};
+
+// Collects the values of column 'column' at 'rows', stopping after
+// 'maxValues' non-null, non-NaN rows.
+template <typename T>
+LookupValues<T> collectValues(
+    const std::vector<VectorPtr>& batches,
+    velox::column_index_t column,
+    const std::vector<RowPosition>& rows,
+    size_t maxValues,
+    bool anchored) {
+  LookupValues<T> result{.anchored = anchored};
+  for (const auto& [batchIndex, row] : rows) {
+    if (result.values.size() >= maxValues) {
+      break;
+    }
+    const auto& vector =
+        *batches[batchIndex]->asUnchecked<velox::RowVector>()->childAt(column);
+    if (vector.isNullAt(row)) {
+      result.hasNull = true;
+      continue;
+    }
+    auto value = valueAt<T>(vector, row);
+    if constexpr (std::is_floating_point_v<T>) {
+      if (std::isnan(value)) {
+        continue;
+      }
+    }
+    result.values.push_back(std::move(value));
+  }
+  std::sort(result.values.begin(), result.values.end());
+  result.values.erase(
+      std::unique(result.values.begin(), result.values.end()),
+      result.values.end());
+  return result;
+}
+
+// Draws the values of a filter on column 'column': every anchor row of an
+// anchored lookup, otherwise up to 'count' random rows.
+template <typename T>
+LookupValues<T> drawValues(
+    const std::vector<VectorPtr>& batches,
+    velox::column_index_t column,
+    const LookupRows& rows,
+    uint32_t count,
+    FuzzerGenerator& rng) {
+  if (!rows.anchors.empty()) {
+    return collectValues<T>(
+        batches,
+        column,
+        rows.anchors,
+        rows.anchors.size(),
+        /*anchored=*/true);
+  }
+  std::vector<RowPosition> randomRows;
+  for (uint32_t attempt = 0; attempt < 4 * count; ++attempt) {
+    randomRows.push_back(rows.all[folly::Random::rand64(rows.all.size(), rng)]);
+  }
+  return collectValues<T>(
+      batches, column, randomRows, count, /*anchored=*/false);
+}
+
+// Builds a range filter on floating-point values. Unanchored bounds are
+// randomly inclusive or exclusive. Equal bounds stay inclusive so the range is
+// not empty by construction.
+template <typename T>
+PointLookupFilter makeFloatingPointFilter(
+    const LookupValues<T>& values,
+    LookupShape shape,
+    FuzzerGenerator& rng) {
+  const T lower = values.values.front();
+  const T upper = values.values.back();
+  const bool exclusiveAllowed = !values.anchored && lower != upper;
+  const bool lowerExclusive = exclusiveAllowed && folly::Random::oneIn(2, rng);
+  const bool upperExclusive = exclusiveAllowed && folly::Random::oneIn(2, rng);
+  switch (shape) {
+    case LookupShape::kEqual:
+    case LookupShape::kIn:
+      if (!values.anchored || lower == upper) {
+        return {
+            std::make_unique<velox::common::FloatingPointRange<T>>(
+                lower,
+                /*lowerUnbounded=*/false,
+                /*lowerExclusive=*/false,
+                lower,
+                /*upperUnbounded=*/false,
+                /*upperExclusive=*/false,
+                values.nullAllowed()),
+            "equal"};
+      }
+      // Floating point has no IN filter, so a range covers the anchor values.
+      [[fallthrough]];
+    case LookupShape::kBetween:
+      return {
+          std::make_unique<velox::common::FloatingPointRange<T>>(
+              lower,
+              /*lowerUnbounded=*/false,
+              lowerExclusive,
+              upper,
+              /*upperUnbounded=*/false,
+              upperExclusive,
+              values.nullAllowed()),
+          "between"};
+    case LookupShape::kAtMost:
+      return {
+          std::make_unique<velox::common::FloatingPointRange<T>>(
+              upper,
+              /*lowerUnbounded=*/true,
+              /*lowerExclusive=*/false,
+              upper,
+              /*upperUnbounded=*/false,
+              upperExclusive,
+              values.nullAllowed()),
+          "atMost"};
+    case LookupShape::kAtLeast:
+      return {
+          std::make_unique<velox::common::FloatingPointRange<T>>(
+              lower,
+              /*lowerUnbounded=*/false,
+              lowerExclusive,
+              lower,
+              /*upperUnbounded=*/true,
+              /*upperExclusive=*/false,
+              values.nullAllowed()),
+          "atLeast"};
+  }
+  NIMBLE_UNREACHABLE("Unknown lookup shape.");
+}
+
+// Builds a filter on column 'column' whose bounds are drawn from the input:
+// equality, IN, at most, at least or between, as the column type allows.
+// Anchored filters accept every anchor row. Falls back to IS NULL when the
+// drawn rows hold no usable value.
+PointLookupFilter makeLookupFilter(
+    const std::vector<VectorPtr>& batches,
+    velox::column_index_t column,
+    velox::TypeKind kind,
+    const LookupRows& rows,
+    FuzzerGenerator& rng) {
+  const auto shape = static_cast<LookupShape>(folly::Random::rand32(5, rng));
+  const uint32_t numValues = shape == LookupShape::kIn ? 3 : 2;
+  const auto isNull = [] {
+    return PointLookupFilter{
+        std::make_unique<velox::common::IsNull>(), "isNull"};
+  };
+  switch (kind) {
+    case velox::TypeKind::BOOLEAN: {
+      const auto values =
+          drawValues<bool>(batches, column, rows, /*count=*/1, rng);
+      if (values.values.empty()) {
+        return isNull();
+      }
+      if (values.values.size() > 1) {
+        // Anchor rows hold both values, so only a null check can filter.
+        if (values.hasNull) {
+          return {nullptr, ""};
+        }
+        return {std::make_unique<velox::common::IsNotNull>(), "isNotNull"};
+      }
+      return {
+          std::make_unique<velox::common::BoolValue>(
+              values.values.front(), values.nullAllowed()),
+          "equal"};
+    }
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT: {
+      const auto values =
+          drawValues<int64_t>(batches, column, rows, numValues, rng);
+      if (values.values.empty()) {
+        return isNull();
+      }
+      const auto& sorted = values.values;
+      const auto range = [&](int64_t lower, int64_t upper) {
+        return std::make_unique<velox::common::BigintRange>(
+            lower, upper, values.nullAllowed());
+      };
+      switch (shape) {
+        case LookupShape::kEqual:
+          if (!values.anchored) {
+            return {range(sorted.front(), sorted.front()), "equal"};
+          }
+          [[fallthrough]];
+        case LookupShape::kIn:
+          return {
+              velox::common::createBigintValues(sorted, values.nullAllowed()),
+              sorted.size() == 1 ? "equal" : "in"};
+        case LookupShape::kAtMost:
+          return {
+              range(std::numeric_limits<int64_t>::min(), sorted.back()),
+              "atMost"};
+        case LookupShape::kAtLeast:
+          return {
+              range(sorted.front(), std::numeric_limits<int64_t>::max()),
+              "atLeast"};
+        case LookupShape::kBetween:
+          return {range(sorted.front(), sorted.back()), "between"};
+      }
+      NIMBLE_UNREACHABLE("Unknown lookup shape.");
+    }
+    case velox::TypeKind::REAL: {
+      const auto values =
+          drawValues<float>(batches, column, rows, numValues, rng);
+      return values.values.empty()
+          ? isNull()
+          : makeFloatingPointFilter(values, shape, rng);
+    }
+    case velox::TypeKind::DOUBLE: {
+      const auto values =
+          drawValues<double>(batches, column, rows, numValues, rng);
+      return values.values.empty()
+          ? isNull()
+          : makeFloatingPointFilter(values, shape, rng);
+    }
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY: {
+      const auto values =
+          drawValues<std::string>(batches, column, rows, numValues, rng);
+      if (values.values.empty()) {
+        return isNull();
+      }
+      if (shape == LookupShape::kEqual || shape == LookupShape::kIn) {
+        auto accepted = shape == LookupShape::kEqual && !values.anchored
+            ? std::vector<std::string>{values.values.front()}
+            : values.values;
+        const auto acceptedKind = accepted.size() > 1 ? "in" : "equal";
+        return {
+            std::make_unique<velox::common::BytesValues>(
+                std::move(accepted), values.nullAllowed()),
+            acceptedKind};
+      }
+      const auto& lower = values.values.front();
+      const auto& upper = values.values.back();
+      const bool exclusiveAllowed = !values.anchored && lower != upper;
+      const bool lowerExclusive =
+          exclusiveAllowed && folly::Random::oneIn(2, rng);
+      const bool upperExclusive =
+          exclusiveAllowed && folly::Random::oneIn(2, rng);
+      const bool lowerUnbounded = shape == LookupShape::kAtMost;
+      const bool upperUnbounded = shape == LookupShape::kAtLeast;
+      return {
+          std::make_unique<velox::common::BytesRange>(
+              lower,
+              lowerUnbounded,
+              !lowerUnbounded && lowerExclusive,
+              upper,
+              upperUnbounded,
+              !upperUnbounded && upperExclusive,
+              values.nullAllowed()),
+          lowerUnbounded       ? "atMost"
+              : upperUnbounded ? "atLeast"
+                               : "between"};
+    }
+    case velox::TypeKind::TIMESTAMP: {
+      const auto values =
+          drawValues<velox::Timestamp>(batches, column, rows, numValues, rng);
+      if (values.values.empty()) {
+        return isNull();
+      }
+      const auto& sorted = values.values;
+      const auto range = [&](velox::Timestamp lower, velox::Timestamp upper) {
+        return std::make_unique<velox::common::TimestampRange>(
+            lower, upper, values.nullAllowed());
+      };
+      switch (shape) {
+        case LookupShape::kEqual:
+        case LookupShape::kIn:
+          if (!values.anchored || sorted.size() == 1) {
+            return {range(sorted.front(), sorted.front()), "equal"};
+          }
+          // Timestamps have no IN filter, so a range covers the anchor values.
+          [[fallthrough]];
+        case LookupShape::kBetween:
+          return {range(sorted.front(), sorted.back()), "between"};
+        case LookupShape::kAtMost:
+          return {range(velox::Timestamp::min(), sorted.back()), "atMost"};
+        case LookupShape::kAtLeast:
+          return {range(sorted.front(), velox::Timestamp::max()), "atLeast"};
+      }
+      NIMBLE_UNREACHABLE("Unknown lookup shape.");
+    }
+    default:
+      NIMBLE_UNREACHABLE("Point lookups do not filter this kind: {}.", kind);
+  }
+}
+
+// Whether 'filter' accepts row 'row' of 'column'. Applies the same Filter the
+// reader gets, so NaN and signed zero compare the same way on both sides.
+bool filterAccepts(
+    const velox::common::Filter& filter,
+    const velox::BaseVector& column,
+    velox::vector_size_t row) {
+  if (column.isNullAt(row)) {
+    return filter.testNull();
+  }
+  switch (column.typeKind()) {
+    case velox::TypeKind::BOOLEAN:
+      return filter.testBool(
+          column.as<velox::SimpleVector<bool>>()->valueAt(row));
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
+      return filter.testInt64(integerValueAt(column, row));
+    case velox::TypeKind::REAL:
+      return filter.testFloat(
+          column.as<velox::SimpleVector<float>>()->valueAt(row));
+    case velox::TypeKind::DOUBLE:
+      return filter.testDouble(
+          column.as<velox::SimpleVector<double>>()->valueAt(row));
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY: {
+      const auto value =
+          column.as<velox::SimpleVector<velox::StringView>>()->valueAt(row);
+      return filter.testBytes(value.data(), value.size());
+    }
+    case velox::TypeKind::TIMESTAMP:
+      return filter.testTimestamp(
+          column.as<velox::SimpleVector<velox::Timestamp>>()->valueAt(row));
+    default:
+      NIMBLE_UNREACHABLE(
+          "Point lookups do not filter this kind: {}.", column.typeKind());
+  }
+}
+
+// Draws filters on one to three distinct top-level scalar columns. Unanchored
+// lookups use IS NOT NULL on a column in one of eight draws. Returns no filters
+// when the schema has no such column.
+std::vector<ColumnFilter> drawColumnFilters(
+    const RowTypePtr& schema,
+    const std::vector<VectorPtr>& batches,
+    const LookupRows& rows,
+    FuzzerGenerator& rng) {
+  std::vector<velox::column_index_t> candidateColumns;
+  for (velox::column_index_t column = 0; column < schema->size(); ++column) {
+    if (isPointLookupKind(schema->childAt(column)->kind())) {
+      candidateColumns.push_back(column);
+    }
+  }
+  if (candidateColumns.empty()) {
+    return {};
+  }
+  std::shuffle(candidateColumns.begin(), candidateColumns.end(), rng);
+  const auto numColumns = 1 +
+      folly::Random::rand32(std::min<uint32_t>(3, candidateColumns.size()),
+                            rng);
+
+  std::vector<ColumnFilter> filters;
+  for (uint32_t i = 0; i < numColumns; ++i) {
+    const auto column = candidateColumns[i];
+    auto lookup = rows.anchors.empty() && folly::Random::oneIn(8, rng)
+        ? PointLookupFilter{std::make_unique<velox::common::IsNotNull>(), "isNotNull"}
+        : makeLookupFilter(
+              batches, column, schema->childAt(column)->kind(), rows, rng);
+    if (lookup.filter != nullptr) {
+      filters.push_back({column, std::move(lookup)});
+    }
+  }
+  return filters;
+}
+
+// Formats the filters of a lookup as "c0: <filter>; c3: <filter>".
+std::string describeFilters(
+    const RowTypePtr& schema,
+    const std::vector<ColumnFilter>& filters) {
+  std::vector<std::string> descriptions;
+  descriptions.reserve(filters.size());
+  for (const auto& [column, lookup] : filters) {
+    descriptions.push_back(
+        fmt::format(
+            "{}: {}", schema->nameOf(column), lookup.filter->toString()));
+  }
+  return fmt::format("{}", fmt::join(descriptions, "; "));
+}
+
+} // namespace
+
+void NimbleWriterFuzzer::verifyPointLookup(
+    const std::string& file,
+    const RowTypePtr& schema,
+    const std::vector<VectorPtr>& batches,
+    uint64_t lookupSeed) {
+  constexpr uint64_t kReadSize{97};
+  FuzzerGenerator rng(lookupSeed);
+
+  const auto rows = drawLookupRows(batches, rng);
+  const auto filters = drawColumnFilters(schema, batches, rows, rng);
+  if (filters.empty()) {
+    return;
+  }
+  const auto description = describeFilters(schema, filters);
+
+  std::vector<RowPosition> expectedRows;
+  for (const auto& [batchIndex, row] : rows.all) {
+    const auto& batch = *batches[batchIndex]->asUnchecked<velox::RowVector>();
+    const bool accepted =
+        std::all_of(filters.begin(), filters.end(), [&](const auto& filter) {
+          return filterAccepts(
+              *filter.lookup.filter, *batch.childAt(filter.column), row);
+        });
+    if (accepted) {
+      expectedRows.emplace_back(batchIndex, row);
+    }
+  }
+
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*schema);
+  for (const auto& [column, lookup] : filters) {
+    scanSpec->childByName(schema->nameOf(column))
+        ->setFilter(lookup.filter->clone());
+  }
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  velox::dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
+  readerOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
+  readerOptions.setScanSpec(scanSpec);
+  auto reader = velox::dwio::common::getReaderFactory(
+                    velox::dwio::common::FileFormat::NIMBLE)
+                    ->createReader(
+                        std::make_unique<velox::dwio::common::BufferedInput>(
+                            readFile, *leafPool_),
+                        readerOptions);
+  velox::dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(scanSpec);
+  rowOptions.setRequestedType(schema);
+  auto rowReader = reader->createRowReader(rowOptions);
+
+  size_t numRowsRead{0};
+  auto result = velox::BaseVector::create(schema, 0, leafPool_.get());
+  while (rowReader->next(kReadSize, result) > 0) {
+    result->loadedVector();
+    for (velox::vector_size_t row = 0; row < result->size(); ++row) {
+      NIMBLE_CHECK_LT(
+          numRowsRead,
+          expectedRows.size(),
+          "Point lookup returned too many rows (seed {}): {}",
+          options_.seed,
+          description);
+      const auto [batchIndex, batchRow] = expectedRows[numRowsRead];
+      if (!batches[batchIndex]->equalValueAt(result.get(), batchRow, row)) {
+        NIMBLE_FAIL(
+            "Point lookup mismatch (seed {}, batch {}, row {}). Expected: {} Actual: {} Filters: {}",
+            options_.seed,
+            batchIndex,
+            batchRow,
+            batches[batchIndex]->toString(batchRow),
+            result->toString(row),
+            description);
+      }
+      ++numRowsRead;
+    }
+  }
+  NIMBLE_CHECK_EQ(
+      numRowsRead,
+      expectedRows.size(),
+      "Point lookup returned too few rows (seed {}): {}",
+      options_.seed,
+      description);
+
+  velox::dwio::common::RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+  const auto record = [&](PointLookupCoverage::LookupCounts& counts) {
+    ++counts.numLookups;
+    counts.numMatchedRows += numRowsRead;
+    if (stats.chunkSkippedRows > 0) {
+      ++counts.numLookupsWithChunkSkips;
+      counts.numChunkSkippedRows += stats.chunkSkippedRows;
+    }
+  };
+  record(pointLookupCoverage_.byNumColumns[filters.size()]);
+  for (const auto& [column, lookup] : filters) {
+    record(pointLookupCoverage_.byType[schema->childAt(column)->toString()]
+                                      [std::string{lookup.kind}]);
+  }
+  ++pointLookupCoverage_
+        .lookupsByMatchedRows[rows.anchors.empty() ? "unanchored" : "anchored"]
+                             [countBucket(numRowsRead, kMaxMatchedRowsBucket)];
+}
+
 std::set<EncodingType> NimbleWriterFuzzer::recordUnfilteredCoverage(
     const std::string& file) {
   const auto& candidates = unfilteredCandidateEncodings();
@@ -2625,6 +3252,11 @@ void NimbleWriterFuzzer::run() {
         batches,
         fmt::format("unfiltered random selection round {}", round),
         readerPath);
+    verifyPointLookup(
+        file,
+        schema,
+        batches,
+        folly::hash::hash_combine(roundSeed, std::string_view{"lookup"}));
   }
 
   std::vector<EncodingType> missingEncodings;
@@ -2792,8 +3424,11 @@ void NimbleWriterFuzzer::logCoverage() const {
 
 namespace {
 
-// Formats count buckets as "1=4,2-3=7,16+=1", or "none" when empty.
-std::string formatCountBuckets(const std::map<uint32_t, uint64_t>& buckets) {
+// Formats count buckets as "1=4,2-3=7,16+=1" for 'maxBucket' 16, or "none"
+// when empty.
+std::string formatCountBuckets(
+    const std::map<uint32_t, uint64_t>& buckets,
+    uint32_t maxBucket) {
   if (buckets.empty()) {
     return "none";
   }
@@ -2801,8 +3436,8 @@ std::string formatCountBuckets(const std::map<uint32_t, uint64_t>& buckets) {
   entries.reserve(buckets.size());
   for (const auto& [bucket, count] : buckets) {
     std::string name;
-    if (bucket >= kMaxCountBucket) {
-      name = fmt::format("{}+", kMaxCountBucket);
+    if (bucket >= maxBucket) {
+      name = fmt::format("{}+", maxBucket);
     } else if (bucket <= 1) {
       name = fmt::format("{}", bucket);
     } else {
@@ -2815,7 +3450,8 @@ std::string formatCountBuckets(const std::map<uint32_t, uint64_t>& buckets) {
 
 // Formats one indented line per key, each with its count buckets.
 std::string formatKeyedCountBuckets(
-    const std::map<std::string, std::map<uint32_t, uint64_t>>& bucketsByKey) {
+    const std::map<std::string, std::map<uint32_t, uint64_t>>& bucketsByKey,
+    uint32_t maxBucket) {
   if (bucketsByKey.empty()) {
     return "    none";
   }
@@ -2823,7 +3459,7 @@ std::string formatKeyedCountBuckets(
   lines.reserve(bucketsByKey.size());
   for (const auto& [key, buckets] : bucketsByKey) {
     lines.push_back(
-        fmt::format("    {}: {}", key, formatCountBuckets(buckets)));
+        fmt::format("    {}: {}", key, formatCountBuckets(buckets, maxBucket)));
   }
   return fmt::format("{}", fmt::join(lines, "\n"));
 }
@@ -2918,13 +3554,13 @@ void NimbleWriterFuzzer::logChunkStatsCoverage() const {
       "  streamKinds:\n{}",
       coverage.numV2IndexedFiles,
       coverage.numUnindexedFiles,
-      formatKeyedCountBuckets(coverage.filesByStripes),
-      formatKeyedCountBuckets(coverage.filesByStripeGroups),
+      formatKeyedCountBuckets(coverage.filesByStripes, kMaxCountBucket),
+      formatKeyedCountBuckets(coverage.filesByStripeGroups, kMaxCountBucket),
       coverage.numV2IndexedStreams,
       coverage.numScalarStreams,
       coverage.numStructuralStreams,
       coverage.numMultiChunkStreams,
-      formatCountBuckets(coverage.streamsByChunks),
+      formatCountBuckets(coverage.streamsByChunks, kMaxCountBucket),
       coverage.numFirstChunks,
       coverage.numMiddleChunks,
       coverage.numFinalChunks,
@@ -2985,6 +3621,43 @@ void NimbleWriterFuzzer::logChunkStatsCoverage() const {
                  {"missingLongString",
                   kindCoverage.numLongStringUnboundedChunks}}));
       }));
+}
+
+void NimbleWriterFuzzer::logPointLookupCoverage() const {
+  const auto formatCounts =
+      [](std::string_view name,
+         const PointLookupCoverage::LookupCounts& counts) {
+        return formatNonZeroCounts(
+            name,
+            {{"lookups", counts.numLookups},
+             {"withChunkSkips", counts.numLookupsWithChunkSkips},
+             {"matchedRows", counts.numMatchedRows},
+             {"chunkSkippedRows", counts.numChunkSkippedRows}});
+      };
+  std::vector<std::string> byNumColumns;
+  for (const auto& [numColumns, counts] : pointLookupCoverage_.byNumColumns) {
+    byNumColumns.push_back(formatCounts(std::to_string(numColumns), counts));
+  }
+  std::vector<std::string> typeLines;
+  for (const auto& [type, byKind] : pointLookupCoverage_.byType) {
+    std::vector<std::string> kinds;
+    for (const auto& [kind, counts] : byKind) {
+      kinds.push_back(formatCounts(kind, counts));
+    }
+    typeLines.push_back(
+        fmt::format("    {:<12} {}", type, fmt::join(kinds, " ")));
+  }
+  LOG(WARNING) << fmt::format(
+      "\nPoint lookup coverage:\n"
+      "  columnsPerLookup: {}\n"
+      "  matchedRowsPerLookup:\n{}\n"
+      "  filtersByType:\n{}",
+      byNumColumns.empty() ? std::string{"none"}
+                           : fmt::format("{}", fmt::join(byNumColumns, " ")),
+      formatKeyedCountBuckets(
+          pointLookupCoverage_.lookupsByMatchedRows, kMaxMatchedRowsBucket),
+      typeLines.empty() ? std::string{"    none"}
+                        : fmt::format("{}", fmt::join(typeLines, "\n")));
 }
 
 std::vector<std::string_view> NimbleWriterFuzzer::uncoveredChunkStatsShapes()
