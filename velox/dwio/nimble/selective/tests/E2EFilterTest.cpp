@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/Portability.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include <utility>
@@ -160,6 +161,14 @@ class E2EFilterTest
   void setUpRowReaderOptions(
       dwio::common::RowReaderOptions& opts,
       const std::shared_ptr<dwio::common::ScanSpec>& spec) override {
+    // Struct columns written as flat maps are read back as structs.
+    for (const auto& [name, _] : flatMapColumns_) {
+      auto* childSpec = spec->childByName(name);
+      if (childSpec != nullptr && rowType_->findChild(name)->isRow()) {
+        childSpec->setFlatMapAsStruct(true);
+      }
+    }
+
     opts.setScanSpec(spec);
     opts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
     opts.setIndexEnabled(indexEnabled());
@@ -1904,14 +1913,19 @@ TEST_P(E2EFilterTest, filterStruct) {
       kNumCombinations);
 }
 
-// Enable once the writer support struct as flat map.
-TEST_P(E2EFilterTest, DISABLED_flatMapAsStruct) {
+// Struct columns are written as flat maps keyed by field name and read back as
+// structs.
+TEST_P(E2EFilterTest, flatMapAsStruct) {
   constexpr auto kColumns =
       "long_val:bigint,"
       "long_vals:struct<v1:bigint,v2:bigint,v3:bigint>,"
       "struct_vals:struct<nested1:struct<v1:bigint, v2:float>,nested2:struct<v1:bigint, v2:float>>";
   flatMapColumns_ = {{"long_vals", {}}, {"struct_vals", {}}};
-  testWithTypes(kColumns, [] {}, false, {"long_val"}, 10);
+  int numCombinations = 10;
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
+  testWithTypes(kColumns, [] {}, false, {"long_val"}, numCombinations);
 }
 
 TEST_P(E2EFilterTest, flatMapScalar) {
@@ -1925,11 +1939,9 @@ TEST_P(E2EFilterTest, flatMapScalar) {
     dataSetBuilder_->makeMapStringValues(common::Subfield("string_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
   testWithTypes(
       kColumns, customize, false, {"long_val", "long_vals"}, numCombinations);
 }
@@ -1944,11 +1956,9 @@ TEST_P(E2EFilterTest, flatMapComplexNoRecursiveNulls) {
     dataSetBuilder_->makeUniformMapKeys(common::Subfield("struct_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
 #if !defined(NDEBUG)
   numCombinations = 1;
 #endif
@@ -1971,11 +1981,9 @@ TEST_P(E2EFilterTest, flatMapComplex) {
     dataSetBuilder_->makeUniformMapKeys(common::Subfield("struct_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
 #if !defined(NDEBUG)
   numCombinations = 1;
 #endif

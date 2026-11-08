@@ -1193,6 +1193,14 @@ Parquet Options (prefix ``hive.parquet.``)
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.
        Session: ``hive.parquet.writer.enable_page_index``.
+   * - ``writer.size-statistics-level``
+     - string
+     - PAGE_AND_COLUMN_CHUNK
+     - Controls Parquet size statistics written by the Arrow bridge. ``NONE`` disables size
+       statistics; ``COLUMN_CHUNK`` writes only column-chunk statistics; and
+       ``PAGE_AND_COLUMN_CHUNK`` writes both column-chunk and page-level statistics. Page-level
+       statistics require ``writer.enable-page-index`` to be enabled.
+       Session: ``hive.parquet.writer.size_statistics_level``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1521,6 +1529,13 @@ Spark-specific Configuration
      - integer
      -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.legacy_coding_error_action
+     - bool
+     - false
+     - If true, the Spark ``encode`` function replaces unmappable characters instead of reporting an error.
+       Corresponds to Spark 4.0's ``spark.sql.legacy.codingErrorAction``.
+       Set to true to match Spark 3.x's replacement behavior for the supported charsets.
+       Additional JDK charset names and aliases remain unsupported in either mode.
    * - spark.legacy_date_formatter
      - bool
      - false

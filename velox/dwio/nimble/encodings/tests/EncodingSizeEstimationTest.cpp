@@ -23,7 +23,7 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 
@@ -140,12 +141,13 @@ class EncodingSizeEstimationTest : public ::testing::Test {
     data.push_back(std::numeric_limits<T>::max());
 
     const auto values = std::span<const T>{data.data(), data.size()};
-    const auto estimated = BlockBitPackingEncoding<T>::estimateSize(values);
+    const auto estimated =
+        deprecated::BlockBitPackingEncoding<T>::estimateSize(values);
     ASSERT_TRUE(estimated.has_value());
 
     nimble::Buffer buffer{*pool_};
-    auto encoded =
-        nimble::test::Encoder<nimble::BlockBitPackingEncoding<T>>::encode(
+    auto encoded = nimble::test::
+        Encoder<nimble::deprecated::BlockBitPackingEncoding<T>>::encode(
             buffer, nimble::Vector<T>(pool_.get(), data.begin(), data.end()));
 
     // estimateSize() estimates the per-block metadata as Trivial sub-encodings,
@@ -746,7 +748,7 @@ TEST_F(EncodingSizeEstimationTest, encodingEstimateHelpersReturnSizes) {
       0u);
   EXPECT_GT(VarintEncoding<uint32_t>::estimateSize(numericStats), 0u);
   EXPECT_GT(
-      BlockBitPackingEncoding<uint32_t>::estimateSize(
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(
           std::span<const uint32_t>{numericData.data(), numericData.size()}),
       0u);
   EXPECT_GT(
@@ -1011,11 +1013,12 @@ TEST_F(
   data.push_back(std::numeric_limits<uint32_t>::min());
   data.push_back(std::numeric_limits<uint32_t>::max());
 
-  const auto spanEstimate = BlockBitPackingEncoding<uint32_t>::estimateSize(
-      std::span<const uint32_t>{data.data(), data.size()});
+  const auto spanEstimate =
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(
+          std::span<const uint32_t>{data.data(), data.size()});
   auto stats = Statistics<uint32_t>::create(data);
   const auto statsEstimate =
-      BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
 
   ASSERT_TRUE(spanEstimate.has_value());
   ASSERT_TRUE(statsEstimate.has_value());
@@ -1037,7 +1040,8 @@ TEST_F(
   }
 
   auto stats = Statistics<uint32_t>::create(data);
-  const auto estimate = BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
+  const auto estimate =
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
   ASSERT_TRUE(estimate.has_value());
 
   // Block 1 should fall back to raw: 1024 * 4 = 4096 bytes.
@@ -1064,9 +1068,10 @@ TEST_F(EncodingSizeEstimationTest, customBlockSizeAffectsEstimate) {
   auto stats = Statistics<uint32_t>::create(data);
 
   const auto defaultBlockEstimate =
-      BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
   const auto smallBlockEstimate =
-      BlockBitPackingEncoding<uint32_t>::estimateSize(stats, /*blockSize=*/512);
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(
+          stats, /*blockSize=*/512);
   ASSERT_TRUE(defaultBlockEstimate.has_value());
   ASSERT_TRUE(smallBlockEstimate.has_value());
 
@@ -1084,7 +1089,7 @@ TEST_F(EncodingSizeEstimationTest, customBlockSizeAffectsEstimate) {
   // Calling with the original block size again should return the same result
   // (verifies cache invalidation round-trips correctly).
   const auto defaultBlockEstimateAgain =
-      BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
   ASSERT_TRUE(defaultBlockEstimateAgain.has_value());
   EXPECT_EQ(defaultBlockEstimate.value(), defaultBlockEstimateAgain.value());
 }
@@ -1102,10 +1107,12 @@ TEST_F(
       data.push_back(static_cast<T>(i % 200));
     }
 
-    const auto spanEstimate = BlockBitPackingEncoding<T>::estimateSize(
-        std::span<const T>{data.data(), data.size()});
+    const auto spanEstimate =
+        deprecated::BlockBitPackingEncoding<T>::estimateSize(
+            std::span<const T>{data.data(), data.size()});
     auto stats = Statistics<T>::create(data);
-    const auto statsEstimate = BlockBitPackingEncoding<T>::estimateSize(stats);
+    const auto statsEstimate =
+        deprecated::BlockBitPackingEncoding<T>::estimateSize(stats);
 
     ASSERT_TRUE(spanEstimate.has_value());
     ASSERT_TRUE(statsEstimate.has_value());
@@ -1125,7 +1132,8 @@ TEST_F(EncodingSizeEstimationTest, blockBitPackingConstantData) {
   std::vector<uint32_t> data(2048, 42);
 
   auto stats = Statistics<uint32_t>::create(data);
-  const auto estimate = BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
+  const auto estimate =
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
   ASSERT_TRUE(estimate.has_value());
 
   const auto rawSize = 2048 * sizeof(uint32_t);
@@ -1144,9 +1152,10 @@ TEST_F(EncodingSizeEstimationTest, blockBitPackingPartialLastBlock) {
 
   auto stats = Statistics<uint32_t>::create(data);
   const auto statsEstimate =
-      BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
-  const auto spanEstimate = BlockBitPackingEncoding<uint32_t>::estimateSize(
-      std::span<const uint32_t>{data.data(), data.size()});
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
+  const auto spanEstimate =
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(
+          std::span<const uint32_t>{data.data(), data.size()});
 
   ASSERT_TRUE(statsEstimate.has_value());
   ASSERT_TRUE(spanEstimate.has_value());
@@ -1160,9 +1169,10 @@ TEST_F(EncodingSizeEstimationTest, blockBitPackingSingleValue) {
 
   auto stats = Statistics<uint32_t>::create(data);
   const auto statsEstimate =
-      BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
-  const auto spanEstimate = BlockBitPackingEncoding<uint32_t>::estimateSize(
-      std::span<const uint32_t>{data.data(), data.size()});
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
+  const auto spanEstimate =
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(
+          std::span<const uint32_t>{data.data(), data.size()});
 
   ASSERT_TRUE(statsEstimate.has_value());
   ASSERT_TRUE(spanEstimate.has_value());
@@ -1189,7 +1199,7 @@ TEST_F(
 
   // Verify it matches the direct call with default block size.
   const auto directEstimate =
-      BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(stats);
   ASSERT_TRUE(directEstimate.has_value());
   EXPECT_EQ(estimate.value(), directEstimate.value());
 
@@ -1204,6 +1214,37 @@ TEST_F(
 
 TEST_F(
     EncodingSizeEstimationTest,
+    blockBitPackingV2EstimateViaEncodingSizeEstimation) {
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+
+  std::vector<uint32_t> data;
+  data.reserve(2048);
+  for (uint32_t i = 0; i < 2048; ++i) {
+    data.push_back(i % 100);
+  }
+  auto stats = Statistics<uint32_t>::create(data);
+
+  const auto estimate = Est::estimateSize(
+      EncodingType::BlockBitPackingV2, 2048, stats, defaultOptions_);
+  ASSERT_TRUE(estimate.has_value());
+  EXPECT_EQ(
+      estimate.value(),
+      BlockBitPackingV2Encoding<uint32_t>::estimateSize(stats).value());
+
+  Encoding::Options options;
+  options.blockBitPackingBlockSize = 512;
+  const auto estimateSmallBlock =
+      Est::estimateSize(EncodingType::BlockBitPackingV2, 2048, stats, options);
+  ASSERT_TRUE(estimateSmallBlock.has_value());
+  EXPECT_EQ(
+      estimateSmallBlock.value(),
+      BlockBitPackingV2Encoding<uint32_t>::estimateSize(
+          stats, /*blockSize=*/512)
+          .value());
+}
+
+TEST_F(
+    EncodingSizeEstimationTest,
     blockBitPackingEstimateSkippedWhenBlockCountExceedsIndexLimit) {
   // BlockBitPacking indexes its blocks with a uint16_t, so encode() rejects a
   // stream with more than kMaxBlockCount blocks. estimateSize() must return
@@ -1212,7 +1253,7 @@ TEST_F(
   // so the boundary is reachable without a huge stream.
   constexpr uint16_t kBlockSize = 1;
   constexpr uint32_t kMaxBlocks =
-      BlockBitPackingEncoding<uint32_t>::kMaxBlockCount;
+      deprecated::BlockBitPackingEncoding<uint32_t>::kMaxBlockCount;
 
   auto makeData = [](uint32_t rowCount) {
     std::vector<uint32_t> data(rowCount);
@@ -1226,11 +1267,12 @@ TEST_F(
   const auto atLimit = makeData(kMaxBlocks);
   const auto atLimitStats = Statistics<uint32_t>::create(atLimit);
   EXPECT_TRUE(
-      BlockBitPackingEncoding<uint32_t>::estimateSize(
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(
           std::span<const uint32_t>{atLimit.data(), atLimit.size()}, kBlockSize)
           .has_value());
   EXPECT_TRUE(
-      BlockBitPackingEncoding<uint32_t>::estimateSize(atLimitStats, kBlockSize)
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(
+          atLimitStats, kBlockSize)
           .has_value());
 
   // One block past the limit overflows the index: both overloads and the
@@ -1238,12 +1280,12 @@ TEST_F(
   const auto overLimit = makeData(kMaxBlocks + 1);
   const auto overLimitStats = Statistics<uint32_t>::create(overLimit);
   EXPECT_FALSE(
-      BlockBitPackingEncoding<uint32_t>::estimateSize(
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(
           std::span<const uint32_t>{overLimit.data(), overLimit.size()},
           kBlockSize)
           .has_value());
   EXPECT_FALSE(
-      BlockBitPackingEncoding<uint32_t>::estimateSize(
+      deprecated::BlockBitPackingEncoding<uint32_t>::estimateSize(
           overLimitStats, kBlockSize)
           .has_value());
 

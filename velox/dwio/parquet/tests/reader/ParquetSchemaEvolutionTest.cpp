@@ -233,12 +233,13 @@ TEST_F(ParquetSchemaEvolutionTest, schemaMatchWithComplexTypes) {
     const auto expected = makeRowVector(
         plan->outputType()->names(),
         {nullInteger, nullBigint, nullInteger, nullBigint, nullInteger});
-    const auto result =
-        AssertQueryBuilder(plan)
-            .connectorSessionProperty(
-                kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
-            .split(makeSplit(filePath))
-            .copyResults(pool());
+    const auto result = AssertQueryBuilder(plan)
+                            .connectorSessionProperty(
+                                kHiveConnectorId,
+                                connector::FileConfig::kUseColumnNamesSession,
+                                "true")
+                            .split(makeSplit(filePath))
+                            .copyResults(pool());
     assertEqualVectors(expected, result);
   }
 }
@@ -286,12 +287,13 @@ TEST_F(ParquetSchemaEvolutionTest, schemaMatch) {
     // missing requested column.
     const auto expected = makeRowVector(
         rowType->names(), {dataFileVectors->childAt(1), nullVector});
-    const auto result =
-        AssertQueryBuilder(plan)
-            .connectorSessionProperty(
-                kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
-            .split(makeSplit(filePath))
-            .copyResults(pool());
+    const auto result = AssertQueryBuilder(plan)
+                            .connectorSessionProperty(
+                                kHiveConnectorId,
+                                connector::FileConfig::kUseColumnNamesSession,
+                                "true")
+                            .split(makeSplit(filePath))
+                            .copyResults(pool());
     assertEqualVectors(expected, result);
   }
 
@@ -355,12 +357,13 @@ TEST_F(ParquetSchemaEvolutionTest, schemaMatch) {
     // missing and returns null.
     const auto expected =
         makeRowVector(plan->outputType()->names(), {nullVector});
-    const auto result =
-        AssertQueryBuilder(plan)
-            .connectorSessionProperty(
-                kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
-            .split(makeSplit(filePath))
-            .copyResults(pool());
+    const auto result = AssertQueryBuilder(plan)
+                            .connectorSessionProperty(
+                                kHiveConnectorId,
+                                connector::FileConfig::kUseColumnNamesSession,
+                                "true")
+                            .split(makeSplit(filePath))
+                            .copyResults(pool());
     assertEqualVectors(expected, result);
   }
 }

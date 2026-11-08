@@ -100,6 +100,39 @@ TEST(TypeTest, integer) {
   testTypeSerde(int0);
 }
 
+// Checks that the flags cached by the type constructors agree with TypeTraits
+// for every kind that has a type.
+TEST(TypeTest, kindTraits) {
+  auto check = [](const TypePtr& type, bool isFixedWidth, bool isPrimitive) {
+    SCOPED_TRACE(type->toString());
+    EXPECT_EQ(type->isFixedWidth(), isFixedWidth);
+    EXPECT_EQ(type->isPrimitiveType(), isPrimitive);
+  };
+#define VELOX_CHECK_KIND_TRAITS(KIND, TYPE)     \
+  check(                                        \
+      TYPE,                                     \
+      TypeTraits<TypeKind::KIND>::isFixedWidth, \
+      TypeTraits<TypeKind::KIND>::isPrimitiveType)
+  VELOX_CHECK_KIND_TRAITS(BOOLEAN, BOOLEAN());
+  VELOX_CHECK_KIND_TRAITS(TINYINT, TINYINT());
+  VELOX_CHECK_KIND_TRAITS(SMALLINT, SMALLINT());
+  VELOX_CHECK_KIND_TRAITS(INTEGER, INTEGER());
+  VELOX_CHECK_KIND_TRAITS(BIGINT, BIGINT());
+  VELOX_CHECK_KIND_TRAITS(REAL, REAL());
+  VELOX_CHECK_KIND_TRAITS(DOUBLE, DOUBLE());
+  VELOX_CHECK_KIND_TRAITS(VARCHAR, VARCHAR());
+  VELOX_CHECK_KIND_TRAITS(VARBINARY, VARBINARY());
+  VELOX_CHECK_KIND_TRAITS(TIMESTAMP, TIMESTAMP());
+  VELOX_CHECK_KIND_TRAITS(HUGEINT, HUGEINT());
+  VELOX_CHECK_KIND_TRAITS(ARRAY, ARRAY(BIGINT()));
+  VELOX_CHECK_KIND_TRAITS(MAP, MAP(BIGINT(), BIGINT()));
+  VELOX_CHECK_KIND_TRAITS(ROW, ROW("a", BIGINT()));
+  VELOX_CHECK_KIND_TRAITS(UNKNOWN, UNKNOWN());
+  VELOX_CHECK_KIND_TRAITS(FUNCTION, FUNCTION({BIGINT()}, BIGINT()));
+  VELOX_CHECK_KIND_TRAITS(OPAQUE, OpaqueType::create<int>());
+#undef VELOX_CHECK_KIND_TRAITS
+}
+
 TEST(TypeTest, hugeint) {
   ASSERT_EQ(getType("HUGEINT", {}), HUGEINT());
 }
@@ -1298,6 +1331,38 @@ TEST(TypeTest, unionWith) {
       childRowType1->unionWith(childRowType2)->equivalent(*resultRowType));
   ASSERT_TRUE(
       childRowType1->unionWith(childRowType1)->equivalent(*resultRowType2));
+
+  const auto rowType = ROW({"a", "b"}, {TINYINT(), VARCHAR()});
+
+  ASSERT_EQ(
+      *rowType->unionWith({"c", "d"}, {BIGINT(), DOUBLE()}),
+      *ROW(
+          {{"a", TINYINT()},
+           {"b", VARCHAR()},
+           {"c", BIGINT()},
+           {"d", DOUBLE()}}));
+  VELOX_ASSERT_THROW(
+      rowType->unionWith({"c", "d"}, std::vector<TypePtr>{BIGINT()}),
+      "Mismatch names/types sizes");
+
+  const auto sameTypeResult = ROW(
+      {{"a", TINYINT()}, {"b", VARCHAR()}, {"c", BOOLEAN()}, {"d", BOOLEAN()}});
+  ASSERT_EQ(*rowType->unionWith({"c", "d"}, BOOLEAN()), *sameTypeResult);
+  ASSERT_EQ(
+      *rowType->unionWith(std::vector<std::string>{"c", "d"}, BOOLEAN()),
+      *sameTypeResult);
+
+  ASSERT_EQ(
+      *rowType->unionWith(std::string_view{"c"}, BIGINT()),
+      *ROW({{"a", TINYINT()}, {"b", VARCHAR()}, {"c", BIGINT()}}));
+
+  ASSERT_EQ(
+      *rowType->unionWith({{"c", BIGINT()}, {"d", DOUBLE()}}),
+      *ROW(
+          {{"a", TINYINT()},
+           {"b", VARCHAR()},
+           {"c", BIGINT()},
+           {"d", DOUBLE()}}));
 }
 
 TEST(TypeTest, orderableComparable) {

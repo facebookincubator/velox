@@ -167,8 +167,7 @@ TEST(NimbleTypeProjectionTest, buildsScalarProjection) {
   EXPECT_EQ(projectedRow.nameAt(0), "value");
   EXPECT_EQ(projectedRow.childAt(0)->kind(), Kind::Scalar);
   EXPECT_EQ(projection.streamOffsets, std::vector<uint32_t>({2, 1}));
-  EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams, std::vector<bool>({true, false}));
+  EXPECT_EQ(projection.barrierStreams, std::vector<bool>({true, false}));
 }
 
 TEST(NimbleTypeProjectionTest, buildsFlatMapProjectionWithMissingKey) {
@@ -202,7 +201,7 @@ TEST(NimbleTypeProjectionTest, buildsFlatMapProjectionWithMissingKey) {
       projection.streamOffsets,
       std::vector<uint32_t>({1, 0, 2, 3, UINT32_MAX, UINT32_MAX}));
   EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams,
+      projection.barrierStreams,
       std::vector<bool>({true, true, false, false, false, false}));
 }
 
@@ -571,6 +570,67 @@ TEST_P(NimbleIndexProjectorTest, projectsFlatRowsWithEncodingViews) {
   EXPECT_EQ(responseOffsets, std::vector<vector_size_t>({0, 1, 2, 2}));
   EXPECT_EQ(responseSizes, std::vector<vector_size_t>({1, 1, 0, 1}));
   EXPECT_EQ(projector->stats().numProjectedRows, 3);
+}
+
+TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
+  auto rowType =
+      ROW({"key", "value", "nullable_value"}, {BIGINT(), INTEGER(), TINYINT()});
+
+  constexpr int kRowsPerBatch{100};
+  std::vector<RowVectorPtr> batches;
+  for (int batchIndex{0}; batchIndex < 2; ++batchIndex) {
+    std::vector<int64_t> keys(kRowsPerBatch);
+    std::vector<int32_t> values(kRowsPerBatch);
+    std::vector<std::optional<int8_t>> nullableValues(kRowsPerBatch);
+    for (int row{0}; row < kRowsPerBatch; ++row) {
+      const auto sourceRow = batchIndex * kRowsPerBatch + row;
+      keys[row] = sourceRow;
+      values[row] = sourceRow * 10;
+      nullableValues[row] = sourceRow == 5
+          ? std::nullopt
+          : std::optional<int8_t>{static_cast<int8_t>(sourceRow % 100)};
+    }
+    batches.push_back(vectorMaker_->rowVector(
+        {"key", "value", "nullable_value"},
+        {vectorMaker_->flatVector<int64_t>(keys),
+         vectorMaker_->flatVector<int32_t>(values),
+         vectorMaker_->flatVectorNullable<int8_t>(nullableValues)}));
+  }
+  writeData(
+      batches,
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  subfields.emplace_back("nullable_value");
+  auto projector = createProjector(subfields);
+
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makeRangeLookup(rowType, {"key"}, 3, 8),
+      makePointLookup(rowType, {"key"}, 150),
+  };
+  const auto expected = vectorMaker_->rowVector(
+      {"value", "nullable_value"},
+      {vectorMaker_->flatVector<int32_t>({30, 40, 50, 60, 70, 1'500}),
+       vectorMaker_->flatVectorNullable<int8_t>({
+           int8_t{3},
+           int8_t{4},
+           std::nullopt,
+           int8_t{6},
+           int8_t{7},
+           int8_t{50},
+       })});
+  // The last call switches back, so the projector rebuilds its reader twice.
+  for (const bool cacheEncodingView : {false, true, false}) {
+    SCOPED_TRACE(fmt::format("cacheEncodingView={}", cacheEncodingView));
+    const auto result = projectRows(
+        *projector, request, {.cacheEncodingView = cacheEncodingView});
+    ASSERT_NE(result.values, nullptr);
+    velox::test::assertEqualVectors(expected, result.values);
+  }
 }
 
 TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedData) {
@@ -2827,6 +2887,117 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullFlatMapsDeserialize) {
     EXPECT_EQ(
         projector->stats().numSlicedStripes > 0, maxOverfetchRowsRatio == 0.0);
   }
+}
+
+TEST_P(NimbleIndexProjectorTest, projectedDedupStreamsDeserialize) {
+  // A column in dictionaryArrayColumns stores its arrays as ArrayWithOffsets,
+  // and one in deduplicatedMapColumns stores its maps as SlidingWindowMap.
+  // Both keep one copy of a run of equal values: a per-row offsets stream
+  // points into the lengths of the distinct values. Every value below repeats
+  // in the next row, and features holds such arrays under its flat-map keys.
+  auto batch = vectorMaker_->rowVector(
+      {"key", "tags", "scores", "features"},
+      {
+          vectorMaker_->flatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7}),
+          vectorMaker_->arrayVector<int64_t>(
+              {{1, 2}, {1, 2}, {3}, {3}, {}, {}, {4, 5, 6}, {4, 5, 6}}),
+          vectorMaker_->mapVector<int32_t, float>({
+              {{1, 0.5f}},
+              {{1, 0.5f}},
+              {{2, 1.5f}, {3, 2.5f}},
+              {{2, 1.5f}, {3, 2.5f}},
+              {},
+              {},
+              {{4, 3.5f}},
+              {{4, 3.5f}},
+          }),
+          vectorMaker_->mapVector(
+              {0, 2, 4, 6, 8, 10, 12, 14},
+              vectorMaker_->flatVector<int32_t>(
+                  {1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2}),
+              vectorMaker_->arrayVector<int64_t>({
+                  {10, 11},
+                  {20},
+                  {10, 11},
+                  {20},
+                  {12},
+                  {20},
+                  {12},
+                  {20},
+                  {12},
+                  {21, 22},
+                  {12},
+                  {21, 22},
+                  {13},
+                  {23},
+                  {13},
+                  {23},
+              })),
+      });
+  WriterOptions options;
+  options.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  options.dictionaryArrayColumns = {"tags", "features"};
+  options.deduplicatedMapColumns = {"scores"};
+  options.flatMapColumns.emplace("features", std::set<std::string>{});
+  // Ends a stripe after every two-row batch. Each stripe numbers its distinct
+  // values from 0, so the lookup below reads two stripes whose offsets must
+  // not be mixed up.
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*shouldFlush=*/[](const StripeProgress&) { return true; });
+  };
+  std::vector<RowVectorPtr> batches;
+  for (vector_size_t row = 0; row < batch->size(); row += 2) {
+    batches.push_back(
+        std::dynamic_pointer_cast<RowVector>(batch->slice(row, 2)));
+  }
+  writeBatches(batches, std::move(options));
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("tags");
+  subfields.emplace_back("scores");
+  subfields.emplace_back("features[1]");
+  subfields.emplace_back("features[2]");
+  auto projector = createProjector(subfields);
+  const auto& projectedRow = projector->projectedNimbleType()->asRow();
+  ASSERT_EQ(projectedRow.childAt(0)->kind(), Kind::ArrayWithOffsets);
+  ASSERT_EQ(projectedRow.childAt(1)->kind(), Kind::SlidingWindowMap);
+  ASSERT_EQ(
+      projectedRow.childAt(2)->asFlatMap().childAt(0)->kind(),
+      Kind::ArrayWithOffsets);
+
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makeRangeLookup(ROW({"key"}, {BIGINT()}), {"key"}, 2, 6)};
+  // The stream slicer cannot slice these kinds, so every slice holds a whole
+  // stripe and its header selects the requested rows.
+  NimbleIndexProjector::Options projectOptions;
+  projectOptions.maxOverfetchRowsRatio = 1.0;
+  const auto result = projector->projectStreams(request, projectOptions);
+  ASSERT_EQ(result.responses.size(), 1);
+  const auto& slices = result.responses[0].slices;
+  ASSERT_EQ(slices.size(), 2);
+  std::vector<folly::IOBuf> owned;
+  std::vector<std::string_view> serializedBatches;
+  owned.reserve(slices.size());
+  for (const auto& slice : slices) {
+    // The projector asks for each stripe to be decoded on its own.
+    EXPECT_TRUE(readEmbeddedTabletChunkHeader(slice).requiredBarrier);
+    owned.push_back(coalesceChunkSlice(slice));
+    serializedBatches.emplace_back(
+        reinterpret_cast<const char*>(owned.back().data()),
+        owned.back().length());
+  }
+
+  const auto expected = vectorMaker_->rowVector(
+      {"tags", "scores", "features"},
+      {
+          batch->childAt(1)->slice(2, 4),
+          batch->childAt(2)->slice(2, 4),
+          batch->childAt(3)->slice(2, 4),
+      });
+  expectVectorRows(
+      deserializeProjectedBatches(*projector, serializedBatches), expected);
 }
 
 TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {

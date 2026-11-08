@@ -242,9 +242,21 @@ class PlanBuilder {
   /// Uses the hive connector by default. Specify outputType, tableHandle, and
   /// assignments for other connectors. If these three are specified, all other
   /// builder arguments will be ignored.
+  ///
+  /// To produce scan nodes backed by a different connector, subclass
+  /// TableScanBuilder and override the two factory methods:
+  ///   - buildConnectorColumnHandle() — returns the ColumnHandle for each
+  ///   output
+  ///     column when no explicit assignments are provided.
+  ///   - buildConnectorTableHandle() — returns the ConnectorTableHandle after
+  ///     all filter parsing and alias resolution has been performed by build().
+  /// All shared logic in build() (filter parsing, alias resolution,
+  /// filtersAsNode handling) is inherited without duplication.
   class TableScanBuilder {
    public:
     TableScanBuilder(PlanBuilder& builder) : planBuilder_(builder) {}
+
+    virtual ~TableScanBuilder() = default;
 
     /// @param tableName The name of the table to scan.
     TableScanBuilder& tableName(std::string tableName) {
@@ -371,9 +383,58 @@ class PlanBuilder {
       return planBuilder_;
     }
 
+   protected:
+    /// Read-only accessors for subclasses that override the connector
+    /// factory methods below.
+    const std::string& tableName() const {
+      return tableName_;
+    }
+
+    const std::string& connectorId() const {
+      return connectorId_;
+    }
+
+    double sampleRate() const {
+      return sampleRate_;
+    }
+
+    const RowTypePtr& dataColumns() const {
+      return dataColumns_;
+    }
+
+    const std::vector<std::string>& indexColumns() const {
+      return indexColumns_;
+    }
+
+    const std::vector<int32_t>& dataColumnFieldIds() const {
+      return dataColumnFieldIds_;
+    }
+
+    const std::vector<connector::hive::HiveColumnHandlePtr>&
+    filterColumnHandles() const {
+      return filterColumnHandles_;
+    }
+
+    const connector::ColumnHandleMap& assignments() const {
+      return assignments_;
+    }
+
    private:
     /// Build the plan node TableScanNode.
     core::PlanNodePtr build(core::PlanNodeId id);
+
+    /// Factory called by build() to create the connector table handle from
+    /// already-parsed filter state.
+    virtual connector::ConnectorTableHandlePtr buildConnectorTableHandle(
+        common::SubfieldFilters subfieldFilters,
+        const core::TypedExprPtr& remainingFilter);
+
+    /// Factory called by build() to create a column handle for one output
+    /// column when no explicit assignments were provided.
+    virtual connector::ColumnHandlePtr buildConnectorColumnHandle(
+        const std::string& name,
+        const TypePtr& type,
+        uint32_t outputIndex);
 
     PlanBuilder& planBuilder_;
     std::string tableName_{"hive_table"};
@@ -400,7 +461,7 @@ class PlanBuilder {
   };
 
   /// Start a TableScanBuilder using the specified connector.
-  TableScanBuilder& startTableScan(
+  virtual TableScanBuilder& startTableScan(
       std::string connectorId = std::string(kHiveDefaultConnectorId)) {
     tableScanBuilder_.reset(new TableScanBuilder(*this));
     tableScanBuilder_->connectorId(std::move(connectorId));
@@ -1230,7 +1291,8 @@ class PlanBuilder {
   ///
   /// @param stateDeclarations Persistent state entries surviving across
   /// iterations.
-  /// @param plans Per-iteration plans, run sequentially as sub-tasks.
+  /// @param plans Per-iteration plans, a chain joined by shuffle (see
+  /// core::FixedPointNode).
   /// @param convergenceConfig Convergence checking + iteration bound.
   /// @param outputStateEntry The mutable vector state entry whose final
   /// contents are emitted and into which each iteration's last plan output is
@@ -1240,6 +1302,15 @@ class PlanBuilder {
   PlanBuilder& fixedPoint(
       std::vector<core::StateDeclarationPtr> stateDeclarations,
       std::vector<core::PlanNodePtr> plans,
+      core::ConvergenceConfig convergenceConfig,
+      std::string outputStateEntry,
+      bool outputOnWorkerZero = false);
+
+  /// Add a FixedPointNode whose body is 'body' (see
+  /// core::FixedPointNode::body()).  Otherwise as above.
+  PlanBuilder& fixedPoint(
+      std::vector<core::StateDeclarationPtr> stateDeclarations,
+      core::MultiStagePlan body,
       core::ConvergenceConfig convergenceConfig,
       std::string outputStateEntry,
       bool outputOnWorkerZero = false);
@@ -1510,6 +1581,8 @@ class PlanBuilder {
   /// @param searchOptions Settings that override the ones recorded in the
   /// indexes.
   /// @param metric The metric the indexes were built for.
+  /// @param format The format of the indexes: its name in the query's
+  /// common::vectorindex::LocalVectorIndexFormats registry.
   PlanBuilder& vectorSearchJoin(
       const std::vector<std::string>& leftKeys,
       const std::vector<std::string>& rightKeys,
@@ -1523,7 +1596,8 @@ class PlanBuilder {
       core::JoinType joinType = core::JoinType::kInner,
       std::vector<std::pair<std::string, std::string>> searchOptions = {},
       common::vectorindex::VectorIndexMetric metric =
-          common::vectorindex::VectorIndexMetric::kCosine);
+          common::vectorindex::VectorIndexMetric::kCosine,
+      std::string format = "faiss");
 
   static core::IndexLookupConditionPtr parseIndexJoinCondition(
       const std::string& joinCondition,

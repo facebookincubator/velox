@@ -170,10 +170,14 @@ bool isCredentialConfigKey(std::string_view key) {
   // fbcode/datainfra/presto/py/client_lib.py, which is the coordinator-side
   // allowlist of extra-credential names forwarded to workers, and with the
   // reads in velox/exec/rpc/facebook/functions/FbLlmInference.cpp,
-  // FbEmbedding.cpp and velox/exec/rpc/facebook/MetaGenBatchRPCClient.cpp. The
+  // FbEmbedding.cpp and velox/exec/rpc/facebook/MetaGenBatchTransport.cpp. The
   // Python list cannot be imported here and those C++ call sites live under
   // facebook/, which this open-sourced file must not depend on.
-  static constexpr std::array<std::string_view, 3> kCredentialConfigKeys{
+  //
+  // On the plan path nothing else is consulted, so this list must name every
+  // function option that carries a credential.
+  static constexpr std::array<std::string_view, 4> kCredentialConfigKeys{
+      "cat_token",
       "crypto_auth_tokens_metagen",
       "metagen_key",
       "model_api_key",

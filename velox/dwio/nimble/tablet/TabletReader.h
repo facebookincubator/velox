@@ -83,6 +83,11 @@ class NimbleReaderOptions : public velox::dwio::common::FormatSpecificOptions {
   /// Whether key chunk readers cache their encoding views. See
   /// TabletReader::Options::cacheKeyEncodingViews.
   bool cacheKeyEncodingViews{false};
+
+  /// When true, kStreamMajor stripe groups share one EncodingView among streams
+  /// whose offsets or sizes arrays reference the same encoded payload, which
+  /// files written with experimentalStripeGroupMetadataDeduplication contain.
+  bool stripeGroupEncodingViewDeduplicationEnabled{false};
 };
 
 namespace test {
@@ -199,6 +204,14 @@ class TabletReader {
     /// independently of cacheMetadata.
     bool pinMetadata{false};
 
+    /// If true, kStreamMajor stripe groups build one EncodingView per distinct
+    /// encoded offsets or sizes payload instead of one per stream, so streams
+    /// whose arrays TabletWriter deduplicated share a view. Reduces resident
+    /// stripe-group metadata for files written with stripe-group metadata
+    /// deduplication. Set from
+    /// NimbleReaderOptions::stripeGroupEncodingViewDeduplicationEnabled.
+    bool stripeGroupEncodingViewDeduplicationEnabled{false};
+
     /// If true, caches file metadata and index metadata in the async data
     /// cache. Takes effect only when fileHandle and cache are provided.
     bool cacheMetadata{false};
@@ -240,6 +253,9 @@ class TabletReader {
     /// Resolves External shared integer dictionaries referenced by this file.
     std::shared_ptr<const ExternalDictionaryResolver>
         externalDictionaryResolver;
+
+    /// The stats and pool inside this context must outlive this tablet.
+    velox::FileIoContext fileIoContext;
   };
 
   /// Compute checksum from the beginning of the file all the way to footer
@@ -467,6 +483,13 @@ class TabletReader {
       std::span<const uint32_t> streamIds,
       std::span<StreamMetadata> locations) const;
 
+  /// Returns the location of `streamId` in `stripe`, absent when the stream has
+  /// no data there or `streamId >= streamCount(stripe)`. One lookup, unlike
+  /// streamOffset() plus streamSize().
+  StreamMetadata streamLocation(
+      const StripeIdentifier& stripe,
+      uint32_t streamId) const;
+
   /// Returns the schema's leaf-stream count at the time `stripe`'s stripe
   /// group was written. May be less than the final schema's node count.
   uint32_t streamCount(const StripeIdentifier& stripe) const;
@@ -687,9 +710,12 @@ class TabletReader {
   const std::string clusterIndexName_;
   const bool loadChunkStats_;
   const bool loadDenseIndexes_;
+  // Copied from Options::stripeGroupEncodingViewDeduplicationEnabled.
+  const bool stripeGroupEncodingViewDeduplicationEnabled_;
   // IO options copied from Options.ioOptions (required, with non-null
   // metadataIoStats).
   const velox::io::ReaderOptions ioOptions_;
+  const velox::FileIoContext fileIoContext_;
   // IO config for index creation — indexes create their own MetadataInput
   // with index-specific IO stats.
   const index::IndexLookup::Options indexOptions_;

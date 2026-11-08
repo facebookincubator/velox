@@ -16,8 +16,12 @@
 
 #include "velox/dwio/nimble/encodings/tests/EncodingViewTestUtils.h"
 
+#include <span>
+#include <vector>
+
 #include <gtest/gtest.h>
 
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 
 using namespace facebook;
@@ -47,6 +51,23 @@ TEST_P(VarintEncodingViewTest, readsAcrossManyValues) {
   expectReads<nimble::VarintEncoding<uint32_t>>(
       randomNarrowUnsigned<uint32_t>(/*seed=*/41),
       randomizedPositions(/*seed=*/42));
+}
+
+TEST_P(VarintEncodingViewTest, readAtRejectsOutOfRangeIndex) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
+  const auto serialized =
+      nimble::test::Encoder<nimble::VarintEncoding<uint32_t>>::encode(
+          *buffer_,
+          makeVector<uint32_t>({10, 300, 70'000}),
+          nimble::CompressionType::Uncompressed,
+          options);
+  auto view = nimble::createEncodingView(serialized, pool_.get(), options);
+  const std::vector<uint32_t> indices{2, 3};
+  std::vector<uint32_t> output(indices.size());
+  NIMBLE_ASSERT_THROW(
+      view->readAt(std::span<const uint32_t>{indices}, output.data()),
+      "Read index out of range");
 }
 
 TEST_P(VarintEncodingViewTest, concurrent) {

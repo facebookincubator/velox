@@ -26,6 +26,12 @@ namespace {
 // nanosecond precision, we use this serde option to ensure the serializer
 // preserves precision.
 static const bool kDefaultUseLosslessTimestamp = true;
+
+// The Presto serializer can't write a page of 2GB or more. The writer packs
+// rows into pages of at most the write buffer size by their serialized size
+// estimates, so half of that keeps room for what a page adds to the estimates.
+constexpr uint64_t kMaxWriteBufferSize =
+    std::numeric_limits<int32_t>::max() / 2;
 } // namespace
 
 SpillWriter::SpillWriter(
@@ -42,7 +48,7 @@ SpillWriter::SpillWriter(
     : serializer::SerializedPageFileWriter(
           pathPrefix,
           targetFileSize,
-          writeBufferSize,
+          std::min(writeBufferSize, kMaxWriteBufferSize),
           fileCreateConfig,
           std::make_unique<
               serializer::presto::PrestoVectorSerde::PrestoOptions>(

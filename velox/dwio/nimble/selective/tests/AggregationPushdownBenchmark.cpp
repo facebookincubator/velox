@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -216,7 +217,7 @@ class AggregationPushdownBenchmark : public velox::test::VectorTestBase {
     auto input = makeRowVector(
         {"value", "row_id"},
         {makeFlatVector<int64_t>(config.numRows, valueAt),
-         makeFlatVector<int64_t>(config.numRows, folly::identity)});
+         makeFlatVector<int64_t>(config.numRows, std::identity{})});
     // Dictionary indices are 32-bit; 'value' is 64-bit.
     auto layout = makeLayout(config.encodingType, /*numBits=*/64);
     if (config.layout == Layout::kDictionary) {

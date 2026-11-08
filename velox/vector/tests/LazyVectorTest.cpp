@@ -444,6 +444,33 @@ TEST_F(LazyVectorTest, lazyRowVectorWithLazyChildrenPartiallyLoaded) {
   assertEqualVectors(child, lazyInnerRowVector);
 }
 
+TEST_F(LazyVectorTest, constantOverRowWithLazyChild) {
+  for (const vector_size_t index : {1, 2}) {
+    SCOPED_TRACE(index);
+    auto row = makeRowVector(
+        {makeLazyFlatVector<int64_t>(3, [](auto row) { return 100 + row; })});
+    row->setNull(1, true);
+    auto constant = BaseVector::wrapInConstant(8, index, row);
+    if (index == 2) {
+      EXPECT_TRUE(isLazyNotLoaded(*constant));
+    }
+    EXPECT_EQ(constant->loadedVector(), constant.get());
+    ASSERT_NO_THROW(constant->mayHaveNulls());
+    EXPECT_EQ(constant->mayHaveNulls(), index == 1);
+    EXPECT_EQ(constant->isNullAt(0), index == 1);
+    if (index == 2) {
+      EXPECT_EQ(constant->valueVector().get(), row.get());
+    }
+
+    auto expectedRow =
+        makeRowVector({makeFlatVector<int64_t>({100, 101, 102})});
+    expectedRow->setNull(1, true);
+    assertEqualVectors(
+        BaseVector::wrapInConstant(8, index, expectedRow), constant);
+    EXPECT_EQ(constant->loadedVector(), constant.get());
+  }
+}
+
 TEST_F(LazyVectorTest, lazyInConstant) {
   // Wrap Lazy vector in a Constant, load some indices and verify that the
   // results.

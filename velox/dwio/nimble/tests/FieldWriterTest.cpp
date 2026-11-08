@@ -402,6 +402,45 @@ TEST_F(FieldWriterTest, listsDefaultKeysInFirstSeenOrderPerBatch) {
           std::vector<int64_t>{80}}));
 }
 
+// When Default lists its keys, a writer finds each grouped key's group by its
+// position in the HybridFlatMap, which need not equal its group ID.
+TEST_F(FieldWriterTest, findsGroupsByPositionWhenDefaultListsKeys) {
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(
+          velox::MAP(velox::INTEGER(), velox::BIGINT()));
+  HybridFlatMap hybridMap{
+      ScalarKind::Int32,
+      {
+          {.groupId = 2, .groupKeys = {"1"}},
+          {.groupId = 5, .groupKeys = {"3"}},
+          {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+      }};
+  hybridMap.setDefaultGroupKeyPresenceMode(
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  FieldWriterContext context{*pool_};
+  context.addHybridFlatMapNode(typeWithId->id(), hybridMap);
+  auto writer = FieldWriter::create(context, typeWithId);
+  const auto input =
+      vectorMaker_->mapVector<int32_t, int64_t>({{{1, 10}, {3, 30}, {9, 90}}});
+  writer->write(input, OrderedRanges::of(0, input->size()));
+
+  const auto schema =
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+  // Returns the group ID and values of the group at schema position `index`.
+  const auto readGroup = [&](size_t index) {
+    const auto& group = schema->asHybridFlatMap().groupAt(index);
+    const auto* values = findStream(
+        context, group.valueType->asScalar().scalarDescriptor().offset());
+    NIMBLE_CHECK_NOT_NULL(values);
+    return std::pair{group.groupId, readStream<int64_t>(*values)};
+  };
+  EXPECT_EQ(readGroup(0), (std::pair{uint32_t{2}, std::vector<int64_t>{10}}));
+  EXPECT_EQ(readGroup(1), (std::pair{uint32_t{5}, std::vector<int64_t>{30}}));
+  EXPECT_EQ(
+      readGroup(2),
+      (std::pair{HybridFlatMap::kDefaultGroupId, std::vector<int64_t>{90}}));
+}
+
 TEST_F(FieldWriterTest, rejectsEmptyConfiguredKey) {
   // The configuration rejects it when it is built.
   NIMBLE_ASSERT_USER_THROW(
@@ -511,6 +550,60 @@ TEST_F(FieldWriterTest, checksConfigurationWithoutKeyKindForColumnKeys) {
   NIMBLE_ASSERT_USER_THROW(
       FieldWriter::create(integerContext, integerColumn),
       "Hybrid FlatMap key '3000000000' cannot be parsed as");
+}
+
+// A writer whose Default lists its keys reads the grouped keys of a
+// HybridFlatMap built with every group for its column's key type from the
+// shared groups instead of copying them. With a bitmap, it binds the
+// HybridFlatMap and copies its keys into its schema, which also holds its
+// Default keys. A HybridFlatMap built group by group has no lookup to share, so
+// the writer binds it.
+TEST_F(FieldWriterTest, sharesGroupedKeysWhenDefaultListsKeys) {
+  auto hybridFlatMap = makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}});
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> column =
+      velox::dwio::common::TypeWithId::create(
+          velox::MAP(velox::BIGINT(), velox::BIGINT()));
+  {
+    SCOPED_TRACE("key list");
+    hybridFlatMap.setDefaultGroupKeyPresenceMode(
+        HybridFlatMap::KeyPresenceMode::kKeyList);
+    FieldWriterContext context{*pool_};
+    context.addHybridFlatMapNode(column->id(), hybridFlatMap);
+    const auto writer = FieldWriter::create(context, column);
+    EXPECT_EQ(
+        &writer->typeBuilder()->asHybridFlatMap().groupAt(0).groupKeys,
+        &hybridFlatMap.groups()[0].groupKeys);
+  }
+  {
+    SCOPED_TRACE("bitmap");
+    hybridFlatMap.setDefaultGroupKeyPresenceMode(
+        HybridFlatMap::KeyPresenceMode::kBitmap);
+    FieldWriterContext context{*pool_};
+    context.addHybridFlatMapNode(column->id(), hybridFlatMap);
+    const auto writer = FieldWriter::create(context, column);
+    EXPECT_NE(
+        &writer->typeBuilder()->asHybridFlatMap().groupAt(0).groupKeys,
+        &hybridFlatMap.groups()[0].groupKeys);
+    EXPECT_EQ(
+        writer->typeBuilder()->asHybridFlatMap().groupAt(0).groupKeys,
+        hybridFlatMap.groups()[0].groupKeys);
+  }
+  {
+    SCOPED_TRACE("key list, built group by group");
+    HybridFlatMap groupByGroup{ScalarKind::Int64};
+    groupByGroup.addGroup(0, {"1", "2"});
+    groupByGroup.setDefaultGroupKeyPresenceMode(
+        HybridFlatMap::KeyPresenceMode::kKeyList);
+    FieldWriterContext context{*pool_};
+    context.addHybridFlatMapNode(column->id(), groupByGroup);
+    const auto writer = FieldWriter::create(context, column);
+    EXPECT_NE(
+        &writer->typeBuilder()->asHybridFlatMap().groupAt(0).groupKeys,
+        &groupByGroup.groups()[0].groupKeys);
+    EXPECT_EQ(
+        writer->typeBuilder()->asHybridFlatMap().groupAt(0).groupKeys,
+        groupByGroup.groups()[0].groupKeys);
+  }
 }
 
 TEST_F(FieldWriterTest, hybridFlatMapOwnsLongStringKeys) {

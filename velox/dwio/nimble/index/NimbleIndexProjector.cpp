@@ -265,15 +265,6 @@ NimbleIndexProjector::NimbleIndexProjector(
       numStripes_{tablet_->stripeCount()},
       projection_{std::move(projection)},
       hasProjectedHybridFlatMaps_{hasProjectedHybridFlatMaps(*projection_)},
-      streamSlicer_{std::make_unique<serde::StreamSlicer>(
-          projection_->nimbleType,
-          pool_,
-          serde::StreamSlicer::Options{
-              .streamVersion = SerializationVersion::kTablet,
-              .streamHasChunkHeader = true,
-              .streamsUseVarintRowCount =
-                  tablet_->properties().compactRowCountEncoding(),
-          })},
       dataInput_{std::move(dataInput)} {
   NIMBLE_CHECK_NOT_NULL(
       clusterIndex_, "NimbleIndexProjector requires a tablet with an index");
@@ -300,8 +291,8 @@ NimbleIndexProjector::NimbleIndexProjector(
 
   NIMBLE_CHECK_EQ(
       projection_->streamOffsets.size(),
-      projection_->rowOrFlatMapNullStreams.size(),
-      "Projected stream offsets and Row/FlatMap null stream mask must align");
+      projection_->barrierStreams.size(),
+      "Projected stream offsets and barrier stream mask must align");
 }
 
 NimbleIndexProjector::~NimbleIndexProjector() = default;
@@ -344,7 +335,7 @@ folly::coro::Task<NimbleIndexProjector::RowProjectionResult>
 NimbleIndexProjector::co_projectRows(
     const Request& request,
     const Options& options) {
-  ensureStreamReader();
+  ensureStreamReader(options.cacheEncodingView);
   SCOPE_EXIT {
     clearRequest();
   };
@@ -559,19 +550,23 @@ NimbleIndexProjector::loadStripeStreams(
   return result;
 }
 
-Encoding::Options NimbleIndexProjector::encodingOptions() {
+Encoding::Options NimbleIndexProjector::encodingOptions(
+    bool cacheEncodingView) {
   Encoding::Options options;
   options.useVarintRowCount = tablet_->properties().compactRowCountEncoding();
   options.bufferPool = &encodingBufferPool_;
+  options.cacheEncodingView = cacheEncodingView;
   return options;
 }
 
-void NimbleIndexProjector::ensureStreamReader() {
-  if (streamReader_ != nullptr) {
+void NimbleIndexProjector::ensureStreamReader(bool cacheEncodingView) {
+  if (streamReader_ != nullptr && cacheEncodingView_ == cacheEncodingView) {
     return;
   }
+  // The reader fixes its encoding options when it is created.
   streamReader_ = std::make_unique<StreamReader>(
-      projection_->nimbleType, pool_, encodingOptions());
+      projection_->nimbleType, pool_, encodingOptions(cacheEncodingView));
+  cacheEncodingView_ = cacheEncodingView;
 }
 
 void NimbleIndexProjector::setResumeKey(
@@ -1198,6 +1193,21 @@ NimbleIndexProjector::processStripeStreams() {
   return result;
 }
 
+serde::StreamSlicer& NimbleIndexProjector::streamSlicer() {
+  if (streamSlicer_ == nullptr) {
+    streamSlicer_ = std::make_unique<serde::StreamSlicer>(
+        projection_->nimbleType,
+        pool_,
+        serde::StreamSlicer::Options{
+            .streamVersion = SerializationVersion::kTablet,
+            .streamHasChunkHeader = true,
+            .streamsUseVarintRowCount =
+                tablet_->properties().compactRowCountEncoding(),
+        });
+  }
+  return *streamSlicer_;
+}
+
 void NimbleIndexProjector::validateProjection() const {
   NIMBLE_CHECK_EQ(
       projection_->nimbleType->kind(),
@@ -1286,7 +1296,7 @@ NimbleIndexProjector::StripeStreams NimbleIndexProjector::locateStripeStreams(
     }
     ++streams.numStreams;
     streams.projectedBytes += stream.size;
-    if (projection_->rowOrFlatMapNullStreams[i]) {
+    if (projection_->barrierStreams[i]) {
       // A present barrier-sensitive stream also requires isolated decoding.
       streams.requiredBarrier = true;
     }
@@ -1595,7 +1605,7 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
       packRange.numRows(), 0, "Partial stripe range must not be empty");
   const auto& loadedStreams =
       collectStripeStreamViews(stripeOffset, /*resolveCanonicalStreams=*/false);
-  auto sliced = streamSlicer_->slice(
+  auto sliced = streamSlicer().slice(
       loadedStreams.streams,
       packRange.startRow,
       packRange.numRows(),
