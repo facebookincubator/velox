@@ -616,7 +616,7 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
       // Implementation below is close to String.of(double) of Java. For
       // example, for some rare cases the result differs in precision by
       // the least significant bit.
-      if (FOLLY_UNLIKELY(std::isinf(val) || std::isnan(val))) {
+      if (std::isinf(val) || std::isnan(val)) [[unlikely]] {
         return folly::to<std::string>(val);
       }
       if ((val > -10'000'000 && val <= -0.001) ||

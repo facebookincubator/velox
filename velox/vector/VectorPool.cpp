@@ -58,7 +58,7 @@ VectorPtr VectorPool::get(const TypePtr& type, vector_size_t size) {
 }
 
 bool VectorPool::release(VectorPtr& vector) {
-  if (FOLLY_UNLIKELY(vector == nullptr)) {
+  if (vector == nullptr) [[unlikely]] {
     return false;
   }
   if (vector.use_count() != 1 || vector->size() > kMaxRecycleSize) {
@@ -75,7 +75,7 @@ bool VectorPool::release(VectorPtr& vector) {
 size_t VectorPool::release(std::vector<VectorPtr>& vectors) {
   size_t numReleased = 0;
   for (auto& vector : vectors) {
-    if (FOLLY_LIKELY(vector != nullptr)) {
+    if (vector != nullptr) [[likely]] {
       if (release(vector)) {
         ++numReleased;
       }
