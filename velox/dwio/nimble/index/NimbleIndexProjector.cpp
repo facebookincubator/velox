@@ -335,7 +335,7 @@ folly::coro::Task<NimbleIndexProjector::RowProjectionResult>
 NimbleIndexProjector::co_projectRows(
     const Request& request,
     const Options& options) {
-  ensureStreamReader(options.cacheEncodingView);
+  ensureStreamReader();
   SCOPE_EXIT {
     clearRequest();
   };
@@ -372,6 +372,7 @@ NimbleIndexProjector::co_projectRows(
   ScopedVector<velox::vector_size_t> stripeOutputRows{
       ctx_.numRequests, pool_, &encodingBufferPool_};
   std::fill(stripeOutputRows.begin(), stripeOutputRows.end(), 0);
+  const auto decodingOptions = encodingOptions(options.cacheEncodingView);
   for (size_t stripeOffset{0}; stripeOffset < ctx_.plan.stripeIndices.size();
        ++stripeOffset) {
     updateStats([numRows = ctx_.plan.numRows[stripeOffset]](Stats& stats) {
@@ -385,7 +386,7 @@ NimbleIndexProjector::co_projectRows(
                               stripeOffset,
                               /*resolveCanonicalStreams=*/false)
                               .streams;
-    streamReader_->setStreams(streams);
+    streamReader_->setStreams(streams, decodingOptions);
     // Release the views before the stripe's streams go away.
     SCOPE_EXIT {
       streamReader_->reset();
@@ -559,14 +560,12 @@ Encoding::Options NimbleIndexProjector::encodingOptions(
   return options;
 }
 
-void NimbleIndexProjector::ensureStreamReader(bool cacheEncodingView) {
-  if (streamReader_ != nullptr && cacheEncodingView_ == cacheEncodingView) {
+void NimbleIndexProjector::ensureStreamReader() {
+  if (streamReader_ != nullptr) {
     return;
   }
-  // The reader fixes its encoding options when it is created.
-  streamReader_ = std::make_unique<StreamReader>(
-      projection_->nimbleType, pool_, encodingOptions(cacheEncodingView));
-  cacheEncodingView_ = cacheEncodingView;
+  streamReader_ =
+      std::make_unique<StreamReader>(projection_->nimbleType, pool_);
 }
 
 void NimbleIndexProjector::setResumeKey(

@@ -42,6 +42,7 @@
 #include "velox/dwio/nimble/index/IndexScanCursor.h"
 #include "velox/dwio/nimble/index/KeyCursor.h"
 #include "velox/dwio/nimble/index/NimbleIndexProjector.h"
+#include "velox/dwio/nimble/index/StreamReaderCache.h"
 #include "velox/dwio/nimble/serializer/StreamReader.h"
 
 namespace facebook::nimble {
@@ -74,28 +75,42 @@ folly::IOBufFactory createIOBufFactory(velox::memory::MemoryPool& pool) {
 }
 
 // Decodes a stripe's selected rows into a vector and converts them to entries
-// on the consumer thread.
-class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
+// on the consumer thread. The materializer keeps one stream reader for its
+// lifetime and returns it to the stream reader cache of the options when it is
+// destroyed, so that the iterators that share the cache, such as those of a
+// file, reuse the readers. Without a cache, it builds its reader on the pool of
+// the iterator and destroys it with itself.
+class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
  public:
-  EntryMaterializer(
+  // Decodes the stripes with a stream reader of 'schema' from
+  // 'streamReaderCache', or with one that it builds when the cache is null or
+  // has no idle reader.
+  StripeMaterializer(
       std::shared_ptr<const Type> schema,
       velox::memory::MemoryPool* pool,
       Encoding::Options encodingOptions,
       NimbleIterator::EntryDecoder entryDecoder,
+      std::shared_ptr<StreamReaderCache> streamReaderCache,
       bool collectTimings)
       : schema_{std::move(schema)},
         pool_{velox::checkedNotNull(pool)},
         encodingOptions_{std::move(encodingOptions)},
         entryDecoder_{std::move(entryDecoder)},
+        streamReaderCache_{std::move(streamReaderCache)},
         collectTimings_{collectTimings},
         iobufFactory_{createIOBufFactory(*pool_)} {}
 
-  EntryMaterializer(const EntryMaterializer&) = delete;
-  EntryMaterializer& operator=(const EntryMaterializer&) = delete;
-  EntryMaterializer(EntryMaterializer&&) = delete;
-  EntryMaterializer& operator=(EntryMaterializer&&) = delete;
+  StripeMaterializer(const StripeMaterializer&) = delete;
+  StripeMaterializer& operator=(const StripeMaterializer&) = delete;
+  StripeMaterializer(StripeMaterializer&&) = delete;
+  StripeMaterializer& operator=(StripeMaterializer&&) = delete;
 
-  ~EntryMaterializer() override = default;
+  // Returns the reader to the cache, for later iterators.
+  ~StripeMaterializer() override {
+    if (streamReaderCache_ != nullptr && cachedStreamReader_ != nullptr) {
+      streamReaderCache_->release(std::move(cachedStreamReader_));
+    }
+  }
 
   folly::coro::Task<std::unique_ptr<Entries>> materialize(
       ProjectedStripe stripe,
@@ -118,27 +133,41 @@ class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
   }
 
  private:
-  // Decodes one stripe at a time: a stream reader with the pool of the scratch
-  // buffers of its encoding views. A decoder keeps the setup of its reader from
-  // stripe to stripe, and rebinds its stream decoders to the chunks of the next
-  // stripe.
-  struct StripeDecoder {
-    // Declared before the reader, which returns buffers to it.
-    velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
-    std::unique_ptr<StreamReader> streamReader;
-  };
-
-  // Returns the consumer's decoder, creating it for the first stripe.
-  StripeDecoder* ensureStripeDecoder() {
-    if (stripeDecoder_ == nullptr) {
-      auto decoder = std::make_unique<StripeDecoder>();
-      auto encodingOptions = encodingOptions_;
-      encodingOptions.bufferPool = &decoder->bufferPool;
-      decoder->streamReader = std::make_unique<StreamReader>(
-          schema_, pool_, std::move(encodingOptions));
-      stripeDecoder_ = std::move(decoder);
+  // Binds the streams of 'stripe' to the stream reader of the materializer,
+  // with the decoding options of the file and the scratch-buffer pool of the
+  // reader, so that the reader recycles its scratch buffers in that pool. The
+  // first stripe gets the reader, and the later stripes reuse it. Sets
+  // streamReader_ to the reader.
+  void ensureStripeReader(const ProjectedStripe& stripe) {
+    if (cachedStreamReader_ == nullptr) {
+      cachedStreamReader_ = getStreamReader();
+      streamReader_ = cachedStreamReader_->streamReader.get();
     }
-    return stripeDecoder_.get();
+    auto options = encodingOptions_;
+    options.bufferPool = &cachedStreamReader_->bufferPool;
+    streamReader_->setStreams(stripe.streams, options);
+  }
+
+  // Returns an idle stream reader of the cache, or a new one when the cache is
+  // null or has none. A new reader for the cache allocates from a leaf pool of
+  // its own, so that it does not wait on the readers of other iterators.
+  // Without a cache, the reader allocates from the pool of the iterator.
+  std::unique_ptr<StreamReaderCache::Entry> getStreamReader() const {
+    if (streamReaderCache_ == nullptr) {
+      return makeStreamReader(pool_->shared_from_this());
+    }
+    if (auto entry = streamReaderCache_->get()) {
+      return entry;
+    }
+    return makeStreamReader(streamReaderCache_->addReaderPool());
+  }
+
+  // Returns a new stream reader of the schema that allocates from 'pool'.
+  std::unique_ptr<StreamReaderCache::Entry> makeStreamReader(
+      std::shared_ptr<velox::memory::MemoryPool> pool) const {
+    auto streamReader = std::make_unique<StreamReader>(schema_, pool.get());
+    return std::make_unique<StreamReaderCache::Entry>(
+        std::move(pool), std::move(streamReader));
   }
 
   // Decodes the rows that the selection of 'stripe' holds, and drops the stripe
@@ -147,13 +176,15 @@ class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
     const auto& selection = stripe.selection;
     const auto numRows = selection.rowRange.numRows();
     NIMBLE_CHECK_GT(numRows, 0);
-    auto& streamReader = *ensureStripeDecoder()->streamReader;
+    ensureStripeReader(stripe);
+
+    // Unbinds the reader from the streams of the stripe, which the stripe
+    // frees, and keeps it for the next stripe.
     SCOPE_EXIT {
-      streamReader.reset();
+      streamReader_->reset();
     };
-    streamReader.setStreams(stripe.streams);
     if (selection.rowRange.startRow > 0) {
-      co_await streamReader.co_skip(selection.rowRange.startRow);
+      co_await streamReader_->co_skip(selection.rowRange.startRow);
     }
 
     // Times the decoding of the stripe.
@@ -162,7 +193,7 @@ class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
           decodingTiming_.wlock()->add(timing);
         }};
     velox::VectorPtr rows;
-    co_await streamReader.co_next(numRows, rows);
+    co_await streamReader_->co_next(numRows, rows);
     NIMBLE_CHECK_NOT_NULL(rows);
     NIMBLE_CHECK_EQ(rows->size(), numRows);
     numMaterializedRows_.fetch_add(numRows, std::memory_order_relaxed);
@@ -202,20 +233,31 @@ class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
 
   // The projected schema of the stripes.
   const std::shared_ptr<const Type> schema_;
-  // Owns allocations made while decoding rows and entries.
+  // Owns the storage of the entries, and the stream reader when the
+  // materializer has no cache.
   velox::memory::MemoryPool* const pool_;
-  // Decoding options of the file, without the decoder's scratch-buffer pool.
+  // Decoding options of the file, which each stripe binds the stream reader
+  // with, together with the scratch-buffer pool of the entry of the reader.
   const Encoding::Options encodingOptions_;
   // Decodes the rows of a decoded stripe into entries.
   const NimbleIterator::EntryDecoder entryDecoder_;
+  // Supplies the stream reader and takes it back when the materializer is
+  // destroyed, so that the iterators that share the cache reuse the readers.
+  // Null when the options have none.
+  const std::shared_ptr<StreamReaderCache> streamReaderCache_;
   // Whether decoding a stripe reads the CPU and wall clocks.
   const bool collectTimings_;
   // Allocates the storage of the entries from the pool.
   folly::IOBufFactory iobufFactory_;
   // Counts the rows decoded from the selected rows of stripes.
   std::atomic_uint64_t numMaterializedRows_{0};
-  // Reuses the consumer's decoder and its scratch buffers across stripes.
-  std::unique_ptr<StripeDecoder> stripeDecoder_;
+  // The stream reader that decodes the stripes, with the pool that it
+  // allocates from and the pool of its scratch buffers. The materializer gets
+  // it for the first stripe and keeps it until it is destroyed.
+  std::unique_ptr<StreamReaderCache::Entry> cachedStreamReader_;
+  // The reader of 'cachedStreamReader_', not null after the first
+  // ensureStripeReader().
+  StreamReader* streamReader_{nullptr};
   // Track the time spent decoding stripes, and converting their rows into
   // entries.
   folly::Synchronized<velox::CpuWallTiming> decodingTiming_;
@@ -232,7 +274,7 @@ class NimbleRowIterator final : public NimbleIterator {
       velox::memory::MemoryPool* pool,
       NimbleIterator::EntryDecoder entryDecoder,
       const NimbleIterator::Options& options)
-      : materializer_{std::make_shared<EntryMaterializer>(
+      : materializer_{std::make_shared<StripeMaterializer>(
             projector->projectedNimbleType(),
             pool,
 
@@ -241,6 +283,7 @@ class NimbleRowIterator final : public NimbleIterator {
                 options.cacheEncodingView,
                 /*bufferPool=*/nullptr),
             std::move(entryDecoder),
+            options.streamReaderCache,
             options.collectTimings)},
         cursor_{IndexScanCursor::create(
             std::move(projector),
@@ -357,7 +400,7 @@ class NimbleRowIterator final : public NimbleIterator {
 
   // Materializes the stripes loaded by the cursor.
   // Declared before the cursor, which takes it at construction.
-  const std::shared_ptr<EntryMaterializer> materializer_;
+  const std::shared_ptr<StripeMaterializer> materializer_;
   // Shares stripe-loading state with active prefetch operations.
   const std::shared_ptr<IndexScanCursor> cursor_;
   // The stripe loads when a read needs it, which reads do from const methods.
