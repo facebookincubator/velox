@@ -269,7 +269,11 @@ class ConcatWs : public exec::VectorFunction {
           continue;
         }
 
-        if (j >= constantStrings.size()) {
+        // Arguments merged into the preceding constant entry have no entry of
+        // their own.
+        if (j >= constantStrings.size() ||
+            static_cast<column_index_t>(itArgs - args.begin()) !=
+                argMapping[j]) {
           continue;
         }
 

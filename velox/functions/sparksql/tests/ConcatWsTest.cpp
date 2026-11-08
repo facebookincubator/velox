@@ -255,6 +255,38 @@ TEST_F(ConcatWsTest, mixedStringAndArrayArgs) {
   velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(ConcatWsTest, mergedConstantsKeepArgumentOrder) {
+  auto data = makeRowVector({
+      makeFlatVector<StringView>({"z", "w"}),
+      makeArrayVector<StringView>({{"x", "y"}, {"u"}}),
+  });
+
+  auto test = [&](const std::string& expression,
+                  const std::vector<std::string>& expected) {
+    SCOPED_TRACE(expression);
+    velox::test::assertEqualVectors(
+        makeFlatVector<std::string>(expected),
+        evaluate<SimpleVector<StringView>>(expression, data));
+  };
+
+  // Merged constants before an array and a column.
+  test("concat_ws(',', 'a', 'b', c1, c0)", {"a,b,x,y,z", "a,b,u,w"});
+  // Merged constants before a column and an array.
+  test("concat_ws(',', 'a', 'b', c0, c1)", {"a,b,z,x,y", "a,b,w,u"});
+  // Merged constants between and after columns and arrays.
+  test(
+      "concat_ws(',', 'a', 'b', 'c', c0, 'd', 'e', c1, 'f', 'g')",
+      {"a,b,c,z,d,e,x,y,f,g", "a,b,c,w,d,e,u,f,g"});
+  // Merged constants followed by a single constant, which a column separates.
+  test("concat_ws(',', c0, 'a', 'b', c1, 'c')", {"z,a,b,x,y,c", "w,a,b,u,c"});
+  // A NULL constant ends the merged group and is skipped.
+  test(
+      "concat_ws(',', 'a', 'b', NULL::VARCHAR, 'c', 'd', c1, c0)",
+      {"a,b,c,d,x,y,z", "a,b,c,d,u,w"});
+  // Only constants.
+  test("concat_ws(',', 'a', 'b', 'c')", {"a,b,c", "a,b,c"});
+}
+
 TEST_F(ConcatWsTest, nonConstantSeparator) {
   auto separatorVector = makeNullableFlatVector<StringView>(
       {"##", "--", "~~", "**", std::nullopt});
