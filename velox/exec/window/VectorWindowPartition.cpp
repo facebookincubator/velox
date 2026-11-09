@@ -177,18 +177,20 @@ void VectorWindowPartition::extractColumn(
   }
 }
 
-void VectorWindowPartition::extractNulls(
+vector_size_t VectorWindowPartition::extractNulls(
     int32_t columnIndex,
     vector_size_t partitionOffset,
     vector_size_t numRows,
     const BufferPtr& nullsBuffer) const {
   VELOX_CHECK_GE(partitionOffset, startRow_);
   if (numRows == 0) {
-    return;
+    return 0;
   }
 
+  VELOX_CHECK_GE(nullsBuffer->size(), bits::nbytes(numRows));
   auto* rawNulls = nullsBuffer->asMutable<uint64_t>();
-  bits::fillBits(rawNulls, 0, numRows, false);
+  bits::fillBits(rawNulls, 0, numRows, bits::kNotNull);
+  vector_size_t numNulls = 0;
 
   auto [rangeIndex, localRow] = findRange(partitionOffset - startRow_);
   vector_size_t processedRows = 0;
@@ -200,7 +202,8 @@ void VectorWindowPartition::extractNulls(
 
     for (auto i = 0; i < numRowsToProcess; ++i) {
       if (input->isNullAt(localRow + i)) {
-        bits::setBit(rawNulls, processedRows + i, true);
+        bits::setNull(rawNulls, processedRows + i);
+        ++numNulls;
       }
     }
 
@@ -210,6 +213,7 @@ void VectorWindowPartition::extractNulls(
       localRow = ranges_[rangeIndex].startRow;
     }
   }
+  return numNulls;
 }
 
 class VectorWindowPartition::VectorAccessor {

@@ -500,38 +500,53 @@ TEST_F(PlanNodeToStringTest, nestedLoopJoin) {
 }
 
 TEST_F(PlanNodeToStringTest, vectorSearchJoin) {
-  auto plan =
-      PlanBuilder()
-          .values({makeRowVector(
-              {"t0", "t1"},
-              {
-                  makeFlatVector<int64_t>({1}),
-                  makeArrayVector<float>({{1, 0}}),
-              })})
-          .vectorSearchJoin(
-              {"t0"},
-              {"u0"},
-              PlanBuilder()
-                  .values({makeRowVector(
-                      {"u0", "u1"},
-                      {
-                          makeFlatVector<int64_t>({1}),
-                          makeFlatVector<std::string>({"a"}, VARBINARY()),
-                      })})
-                  .planNode(),
-              "t1",
-              "u1",
-              /*k=*/10,
-              {"t0", "id", "score"},
-              "id",
-              "score",
-              core::JoinType::kLeft,
-              {{"ivf.nprobe", "4"}})
-          .planNode();
+  const auto queries = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int64_t>({1}),
+          makeArrayVector<float>({{1, 0}}),
+      });
+  const auto indexes = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeFlatVector<int64_t>({1}),
+          makeFlatVector<std::string>({"a"}, VARBINARY()),
+      });
 
+  auto plan = PlanBuilder()
+                  .values({queries})
+                  .vectorSearchJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder().values({indexes}).planNode(),
+                      "t1",
+                      "u1",
+                      /*k=*/10,
+                      {"t0", "id", "score"},
+                      "id",
+                      "score",
+                      core::JoinType::kLeft,
+                      {{"ivf.nprobe", "4"}})
+                  .planNode();
   ASSERT_EQ("-- VectorSearchJoin[1]\n", plan->toString());
   ASSERT_EQ(
       "-- VectorSearchJoin[1][LEFT t0=u0, t1 nearest in u1 (faiss, cosine), k: 10, ivf.nprobe: 4] -> t0:BIGINT, id:BIGINT, score:REAL\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values({indexes})
+             .vectorSearchJoin(
+                 {"u0"},
+                 {"t0"},
+                 PlanBuilder().values({queries}).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/10,
+                 {"t0", "id"},
+                 "id")
+             .planNode();
+  ASSERT_EQ(
+      "-- VectorSearchJoin[1][INNER u0=t0, t1 nearest in u1 (faiss, cosine), k: 10, index: PROBE] -> t0:BIGINT, id:BIGINT\n",
       plan->toString(true, false));
 }
 

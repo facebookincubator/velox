@@ -16,6 +16,8 @@
 
 #include <gmock/gmock.h>
 
+#include <set>
+
 #include <faiss/IndexHNSW.h>
 #include <faiss/IndexIDMap.h>
 #include <faiss/IndexIVF.h>
@@ -149,6 +151,31 @@ TEST_F(VectorIndexBuildTest, groupBy) {
         }
         return task;
       });
+}
+
+// A group of more embeddings than one 64KB chunk of the aggregate's state
+// holds gets every embedding with its id. Embedding i is (1, i), with id 10i.
+TEST_F(VectorIndexBuildTest, manyEmbeddings) {
+  constexpr int32_t kSize{20'000};
+  auto embeddings = makeArrayVector<float>(
+      kSize,
+      [](auto) { return 2; },
+      [](auto index) { return index % 2 == 0 ? 1.0f : float(index / 2); });
+  auto ids = makeFlatVector<int64_t>(kSize, [](auto row) { return row * 10; });
+
+  testBuild(embeddings, ids, "flat", kNoOptions, [&](const auto& index) {
+    ASSERT_EQ(kSize, index.ntotal);
+    const auto& idMap = as<faiss::IndexIDMap>(index);
+    std::set<int64_t> seen;
+    std::vector<float> embedding(2);
+    for (int64_t i = 0; i < kSize; ++i) {
+      const auto row = idMap.id_map[i] / 10;
+      seen.insert(row);
+      idMap.index->reconstruct(i, embedding.data());
+      ASSERT_NEAR(embedding[1] / embedding[0], row, 1e-5 * (row + 1));
+    }
+    EXPECT_EQ(kSize, seen.size());
+  });
 }
 
 TEST_F(VectorIndexBuildTest, nullRows) {

@@ -38,9 +38,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
-#include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/common/SchemaSerialization.h"
-#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
@@ -56,11 +54,9 @@
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/serializer/StreamReader.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/FilePropertiesGenerated.h"
-#include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
@@ -72,7 +68,6 @@
 #include "folly/FileUtil.h"
 #include "folly/Random.h"
 #include "velox/common/caching/AsyncDataCache.h"
-#include "velox/common/caching/FileIds.h"
 #include "velox/common/file/IoUringReader.h"
 #include "velox/common/file/LocalFile.h"
 #include "velox/common/io/IoStatistics.h"
@@ -234,6 +229,42 @@ TEST_P(NimbleRowIteratorTest, rowIteratorKeepsKeysAlignedAfterSkippingRows) {
   expectValue(7);
   iterator.next();
   expectKey(8);
+}
+
+TEST_P(NimbleRowIteratorTest, rowIteratorKeepsItsStreamReader) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  // Each StreamReader constructs its output type once. Retain the types so
+  // that rebuilding a reader cannot reuse an earlier type's address.
+  std::set<velox::TypePtr> decodedTypes;
+  const auto decodeRows = compactRowDecoder();
+  TestNimbleIterator iterator{createEntryIterator(
+      projectedSubfields,
+      [&](const velox::RowVectorPtr& rows,
+          nimble::index::KeyCursor& keyCursor,
+          folly::IOBufQueue& keyStorage,
+          folly::IOBufQueue& valueStorage,
+          std::vector<std::string_view>& keys,
+          std::vector<std::string_view>& values) {
+        decodedTypes.insert(rows->type());
+        decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
+      },
+      /*options=*/{})};
+
+  // The iterator builds a reader for its first stripe and keeps it for the
+  // other stripes and for later seeks.
+  for (int seek = 0; seek < 2; ++seek) {
+    SCOPED_TRACE(seek);
+    iterator.seekToFirst();
+    int32_t numRows{0};
+    for (; iterator.valid(); iterator.next()) {
+      ++numRows;
+    }
+    EXPECT_EQ(numRows, 12);
+  }
+  EXPECT_THAT(decodedTypes, ::testing::SizeIs(1));
 }
 
 TEST_P(NimbleRowIteratorTest, rowIteratorSkipsRowsAcrossPrefetchedStripes) {

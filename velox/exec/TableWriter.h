@@ -69,7 +69,7 @@ class TableWriter : public Operator {
     // 'connectorPool_'.
     stats.memoryStats = MemoryStats::memStatsFromPool(connectorPool_);
 
-    if (FOLLY_LIKELY(dataSink_ != nullptr)) {
+    if (dataSink_ != nullptr) [[likely]] {
       const auto connectorStats = dataSink_->runtimeStats();
       for (const auto& [name, counter] : connectorStats) {
         stats.runtimeStats[name] = RuntimeMetric(counter.value, counter.unit);

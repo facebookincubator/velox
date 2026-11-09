@@ -257,14 +257,15 @@ class VectorIndexBuildAggregate {
 
     void writeFinalResult(exec::out_type<OutputType>& out) {
       const auto& finalSettings = groupSettings();
-      const auto embeddings = group.embeddings();
+      const auto contents = group.gather();
+      const auto embeddings = contents.embeddings();
       out.reserve(embeddings.size() * embeddings.dimension() * sizeof(float));
       FaissLocalVectorIndex::build(
           finalSettings.indexKind,
           finalSettings.metric,
           finalSettings.options,
           embeddings,
-          group.ids(),
+          contents.ids,
           [&](std::string_view chunk) { out.append(chunk); });
     }
 

@@ -447,7 +447,37 @@ void FaissLocalVectorIndex::search(
   VELOX_CHECK_EQ(ids.size(), queries.size() * k);
   VELOX_CHECK_EQ(scores.size(), queries.size() * k);
   SingleThreadedFaiss singleThreaded;
-  index_->search(queries.size(), queries.data(), k, scores.data(), ids.data());
+  const auto* ivf = dynamic_cast<const faiss::IndexIVF*>(index_.get());
+  if (ivf == nullptr) {
+    index_->search(
+        queries.size(), queries.data(), k, scores.data(), ids.data());
+    return;
+  }
+  // IndexIVF::search adds its statistics to a process-wide global without
+  // synchronization, so concurrent searches race on it.
+  // IndexIVF::search_preassigned takes the caller's statistics instead.
+  // TODO: Call IndexIVF::search once it can take the caller's statistics.
+  const auto numProbes = static_cast<faiss::idx_t>(ivf->nprobe);
+  std::vector<faiss::idx_t> lists(queries.size() * numProbes);
+  std::vector<float> listScores(queries.size() * numProbes);
+  ivf->quantizer->search(
+      queries.size(),
+      queries.data(),
+      numProbes,
+      listScores.data(),
+      lists.data());
+  faiss::IndexIVFStats stats;
+  ivf->search_preassigned(
+      queries.size(),
+      queries.data(),
+      k,
+      lists.data(),
+      listScores.data(),
+      scores.data(),
+      ids.data(),
+      /*store_pairs=*/false,
+      /*params=*/nullptr,
+      &stats);
 }
 
 namespace {

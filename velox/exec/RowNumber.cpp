@@ -40,15 +40,24 @@ RowNumber::RowNumber(
   const auto numKeys = keys.size();
 
   if (numKeys > 0) {
-    table_ = std::make_unique<HashTable<false>>(
-        createVectorHashers(inputType, keys),
-        std::vector<Accumulator>{},
-        std::vector<TypePtr>{BIGINT()},
-        false, // allowDuplicates
-        false, // isJoinBuild
-        false, // hasProbedFlag
-        false, // hasCountFlag
-        0, // minTableSizeForParallelJoinBuild
+    // The number of rows of each partition so far.
+    Accumulator numRowsAccumulator{
+        /*isFixedSize=*/true,
+        sizeof(int64_t),
+        /*usesExternalMemory=*/false,
+        alignof(int64_t),
+        BIGINT(),
+        [this](folly::Range<char**> partitions, VectorPtr& result) {
+          auto* counts = result->asFlatVector<int64_t>();
+          counts->resize(partitions.size());
+          for (auto i = 0; i < partitions.size(); ++i) {
+            counts->set(i, numRows(partitions[i]));
+          }
+        },
+        [](auto) {}};
+    table_ = HashTable<false>::createForAggregation(
+        VectorHasher::createForKeys(inputType, keys),
+        std::vector<Accumulator>{std::move(numRowsAccumulator)},
         pool());
     lookup_ = std::make_unique<HashLookup>(table_->hashers(), pool());
 
@@ -199,9 +208,7 @@ void RowNumber::ensureInputFits(const RowVectorPtr& input) {
   }
 
   auto* rows = table_->rows();
-  auto [freeRows, outOfLineFreeBytes] = rows->freeSpace();
-  const auto outOfLineBytes =
-      rows->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const auto outOfLineBytes = rows->usedVariableWidthBytes();
   const auto outOfLineBytesPerRow = outOfLineBytes / numDistinct;
 
   // Test-only spill path.
@@ -217,14 +224,13 @@ void RowNumber::ensureInputFits(const RowVectorPtr& input) {
   const auto availableReservationBytes = pool()->availableReservation();
   const auto tableIncrementBytes = table_->hashTableSizeIncrease(input->size());
   const auto incrementBytes =
-      rows->sizeIncrement(input->size(), outOfLineBytesPerRow * input->size()) +
+      rows->maxGrowthBytes(
+          input->size(), outOfLineBytesPerRow * input->size()) +
       tableIncrementBytes;
 
   // First to check if we have sufficient minimal memory reservation.
   if (availableReservationBytes >= minReservationBytes) {
-    if ((tableIncrementBytes == 0) && (freeRows > input->size()) &&
-        (outOfLineBytes == 0 ||
-         outOfLineFreeBytes >= outOfLineBytesPerRow * input->size())) {
+    if (incrementBytes == 0) {
       // Enough free rows for input rows and enough variable length free space.
       return;
     }
@@ -419,6 +425,7 @@ SpillPartitionIdSet RowNumber::spillHashTable() {
   VELOX_CHECK_NOT_NULL(table_);
 
   auto columnTypes = table_->rows()->columnTypes();
+  columnTypes.push_back(BIGINT());
   auto tableType = ROW(std::move(columnTypes));
   const auto& spillConfig = spillConfig_.value();
 

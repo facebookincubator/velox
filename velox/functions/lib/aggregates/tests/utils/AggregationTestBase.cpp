@@ -29,6 +29,7 @@
 #include "velox/exec/AggregateCompanionSignatures.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/exec/Spill.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/SignatureBinder.h"
@@ -1538,13 +1539,9 @@ VectorPtr AggregationTestBase::testStreaming(
 
 namespace {
 
-constexpr int kRowSizeOffset = 8;
-constexpr int kOffset = kRowSizeOffset + 8;
-
 std::unique_ptr<exec::Aggregate> createAggregateFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& inputTypes,
-    HashStringAllocator& allocator,
     const std::unordered_map<std::string, std::string>& config,
     const std::vector<VectorPtr>& rawInputs = {}) {
   auto finalType = exec::resolveResultType(functionName, inputTypes);
@@ -1559,17 +1556,32 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
       constantInputs[i] = rawInputs[i];
     }
   }
-  auto func = exec::Aggregate::create(
+  return exec::Aggregate::create(
       functionName,
       core::AggregationNode::Step::kSingle,
       inputTypes,
       finalType,
       queryConfig,
       constantInputs);
-  func->setAllocator(&allocator);
-  func->setOffsets(kOffset, 0, 1, 0, 2, kRowSizeOffset);
+}
 
-  return func;
+// Makes a container for the groups of 'func' and points 'func' at it. The
+// container destroys the accumulators of its rows when it goes away, so it
+// must not outlive 'func'.
+std::unique_ptr<exec::RowContainer> makeGroupRows(
+    exec::Aggregate& func,
+    const TypePtr& intermediateType,
+    memory::MemoryPool* pool) {
+  auto rows = std::make_unique<exec::RowContainer>(
+      /*keyTypes=*/std::vector<TypePtr>{},
+      std::vector<exec::Accumulator>{
+          exec::Accumulator{&func, intermediateType}},
+      /*dependentTypes=*/std::vector<TypePtr>{},
+      pool,
+      exec::RowContainer::Options{});
+  func.setAllocator(&rows->stringAllocator());
+  func.setOffsets(rows->columnAt(0), rows->rowSizeOffset());
+  return rows;
 }
 
 // Copies every source row twice. Each even row has one non-grouping column
@@ -1728,7 +1740,6 @@ void AggregationTestBase::testIncrementalAggregation(
     const auto& functionName = aggregateExpr->name();
     auto input = extractArgColumns(aggregateExpr, data, pool());
 
-    HashStringAllocator allocator(pool());
     std::vector<core::LambdaTypedExprPtr> lambdas;
     for (const auto& arg : aggregate.call->inputs()) {
       if (auto lambda =
@@ -1738,28 +1749,26 @@ void AggregationTestBase::testIncrementalAggregation(
     }
     auto queryCtxConfig = config;
     auto func = createAggregateFunction(
-        functionName, aggregate.rawInputTypes, allocator, config, input);
+        functionName, aggregate.rawInputTypes, config, input);
+    auto intermediateType =
+        exec::resolveIntermediateType(functionName, aggregate.rawInputTypes);
     auto queryCtx =
         core::QueryCtx::create(nullptr, core::QueryConfig{queryCtxConfig});
 
     std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
     if (!lambdas.empty()) {
       expressionEvaluator = std::make_shared<exec::SimpleExpressionEvaluator>(
-          queryCtx.get(), allocator.pool());
+          queryCtx.get(), pool());
       func->setLambdaExpressions(lambdas, expressionEvaluator);
     }
 
-    std::vector<char> group(kOffset + func->accumulatorFixedWidthSize());
-    std::vector<char*> groups(inputSize, group.data());
+    auto groupRows = makeGroupRows(*func, intermediateType, pool());
+    char* group = groupRows->newRow();
+    std::vector<char*> groups(inputSize, group);
     std::vector<vector_size_t> indices(1, 0);
     func->initializeNewGroups(groups.data(), indices);
     func->addSingleGroupRawInput(
-        group.data(), SelectivityVector(inputSize), input, false);
-
-    auto finalType =
-        exec::resolveResultType(functionName, aggregate.rawInputTypes);
-    auto intermediateType =
-        exec::resolveIntermediateType(functionName, aggregate.rawInputTypes);
+        group, SelectivityVector(inputSize), input, false);
 
     // Extract intermediate result from the same accumulator twice and expect
     // results to be the same.
@@ -1775,11 +1784,6 @@ void AggregationTestBase::testIncrementalAggregation(
     auto result2 = BaseVector::create(func->resultType(), 1, pool());
     func->extractValues(groups.data(), 1, &result1);
     func->extractValues(groups.data(), 1, &result2);
-
-    // Destroy accumulators to avoid memory leak.
-    if (func->accumulatorUsesExternalMemory()) {
-      func->destroy(folly::Range(groups.data(), 1));
-    }
 
     velox::test::assertEqualVectors(result1, result2);
   }
@@ -1800,40 +1804,39 @@ VectorPtr AggregationTestBase::testStreaming(
       rawInputTypes.begin(),
       [](const VectorPtr& vec) { return vec->type(); });
 
-  HashStringAllocator allocator(pool());
-  auto func = createAggregateFunction(
-      functionName, rawInputTypes, allocator, config, rawInput1);
-  int maxRowCount = std::max(rawInput1Size, rawInput2Size);
-  std::vector<char> group(kOffset + func->accumulatorFixedWidthSize());
-  std::vector<char*> groups(maxRowCount, group.data());
-  std::vector<vector_size_t> indices(maxRowCount, 0);
-  func->initializeNewGroups(groups.data(), indices);
-  if (testGlobal) {
-    func->addSingleGroupRawInput(
-        group.data(), SelectivityVector(rawInput1Size), rawInput1, false);
-  } else {
-    func->addRawInput(
-        groups.data(), SelectivityVector(rawInput1Size), rawInput1, false);
-  }
-
-  auto finalType = exec::resolveResultType(functionName, rawInputTypes);
   auto intermediateType =
       exec::resolveIntermediateType(functionName, rawInputTypes);
+  int maxRowCount = std::max(rawInput1Size, rawInput2Size);
+  std::vector<vector_size_t> indices(maxRowCount, 0);
 
   auto intermediate = BaseVector::create(intermediateType, 1, pool());
-  func->extractAccumulators(groups.data(), 1, &intermediate);
-  // Destroy accumulators to avoid memory leak.
-  if (func->accumulatorUsesExternalMemory()) {
-    func->destroy(folly::Range(groups.data(), 1));
+  {
+    auto func =
+        createAggregateFunction(functionName, rawInputTypes, config, rawInput1);
+    auto groupRows = makeGroupRows(*func, intermediateType, pool());
+    char* group = groupRows->newRow();
+    std::vector<char*> groups(maxRowCount, group);
+    func->initializeNewGroups(groups.data(), indices);
+    if (testGlobal) {
+      func->addSingleGroupRawInput(
+          group, SelectivityVector(rawInput1Size), rawInput1, false);
+    } else {
+      func->addRawInput(
+          groups.data(), SelectivityVector(rawInput1Size), rawInput1, false);
+    }
+    func->extractAccumulators(groups.data(), 1, &intermediate);
   }
 
   // Create a new function picking up the intermediate result.
-  auto func2 = createAggregateFunction(
-      functionName, rawInputTypes, allocator, config, rawInput1);
+  auto func2 =
+      createAggregateFunction(functionName, rawInputTypes, config, rawInput1);
+  auto groupRows = makeGroupRows(*func2, intermediateType, pool());
+  char* group = groupRows->newRow();
+  std::vector<char*> groups(maxRowCount, group);
   func2->initializeNewGroups(groups.data(), indices);
   if (testGlobal) {
     func2->addSingleGroupIntermediateResults(
-        group.data(), SelectivityVector(1), {intermediate}, false);
+        group, SelectivityVector(1), {intermediate}, false);
   } else {
     func2->addIntermediateResults(
         groups.data(), SelectivityVector(1), {intermediate}, false);
@@ -1841,18 +1844,13 @@ VectorPtr AggregationTestBase::testStreaming(
   // Add more raw input.
   if (testGlobal) {
     func2->addSingleGroupRawInput(
-        group.data(), SelectivityVector(rawInput2Size), rawInput2, false);
+        group, SelectivityVector(rawInput2Size), rawInput2, false);
   } else {
     func2->addRawInput(
         groups.data(), SelectivityVector(rawInput2Size), rawInput2, false);
   }
   auto result = BaseVector::create(func2->resultType(), 1, pool());
   func2->extractValues(groups.data(), 1, &result);
-  // Destroy accumulators to avoid memory leak.
-  if (func2->accumulatorUsesExternalMemory()) {
-    func2->destroy(folly::Range(groups.data(), 1));
-  }
-
   return result;
 }
 
@@ -2062,29 +2060,17 @@ uint32_t aggregateAndReadRowSize(
       queryConfig,
       /*constantInputs=*/{});
 
-  HashStringAllocator stringAllocator{pool};
-  fn->setAllocator(&stringAllocator);
-
-  const int32_t rowSizeOffset = bits::nbytes(1);
-  int32_t offset = rowSizeOffset + sizeof(uint32_t);
-  offset = bits::roundUp(offset, fn->accumulatorAlignmentSize());
-  fn->setOffsets(
-      offset,
-      exec::RowContainer::nullByte(0),
-      exec::RowContainer::nullMask(0),
-      exec::RowContainer::initializedByte(0),
-      exec::RowContainer::initializedMask(0),
-      rowSizeOffset);
+  auto groupRows = makeGroupRows(*fn, valueType, pool);
 
   const auto size = values->size();
-  std::vector<char> group(offset + fn->accumulatorFixedWidthSize());
-  std::vector<char*> groups(size, group.data());
+  char* group = groupRows->newRow();
+  std::vector<char*> groups(size, group);
   std::vector<vector_size_t> indices{0};
   fn->initializeNewGroups(groups.data(), indices);
 
   SelectivityVector rows{size};
   fn->addRawInput(groups.data(), rows, {values, comparisons}, false);
 
-  return *reinterpret_cast<uint32_t*>(group.data() + rowSizeOffset);
+  return groupRows->rowSize(group) - groupRows->fixedRowSize();
 }
 } // namespace facebook::velox::functions::aggregate::test

@@ -357,6 +357,21 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
       std::vector<std::string> groupKeys,
       std::shared_ptr<TypeBuilder> valueType);
 
+  /// Registers group `groupIndex` of `bound` and its complete value subtree,
+  /// as the overload above registers a group. `bound` is a HybridFlatMap
+  /// bound to this builder's key kind (it has the lookup of
+  /// HybridFlatMap::findGroup()). The builder keeps a copy of `bound`, which
+  /// shares its groups, and reads the group's keys from it instead of copying
+  /// them. A builder adds either every group of one bound HybridFlatMap, in
+  /// its order, or every group through the overload above. This builder's
+  /// Default must list its keys per batch
+  /// (HybridFlatMap::KeyPresenceMode::kKeyList), as `bound`'s does, so the
+  /// schema holds only the bound groups' keys.
+  GroupDescriptor addGroup(
+      const HybridFlatMap& bound,
+      size_t groupIndex,
+      std::shared_ptr<TypeBuilder> valueType);
+
   /// Appends a newly observed key to the Default group's first-seen catalog.
   /// Fails when `key` is empty or already belongs to any group, or when
   /// batches list their Default keys.
@@ -375,7 +390,11 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
  private:
   struct StoredGroup {
     uint32_t groupId;
+    // Keys of a group added with listed keys and of the Default group.
     std::vector<std::string> groupKeys;
+    // Keys of an explicit group added from a bound HybridFlatMap, owned by
+    // boundMap_; null otherwise.
+    const std::vector<std::string>* boundGroupKeys;
     std::unique_ptr<StreamDescriptorBuilder> keyPresenceDescriptor;
     std::unique_ptr<StreamDescriptorBuilder> inMapDescriptor;
     std::shared_ptr<const TypeBuilder> valueType;
@@ -387,6 +406,14 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
       HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
       bool requiresDefaultGroup);
 
+  // Stores a checked group and allocates its key-presence and in-map streams,
+  // in that order.
+  GroupDescriptor storeGroup(
+      uint32_t groupId,
+      std::vector<std::string> groupKeys,
+      const std::vector<std::string>* boundGroupKeys,
+      std::shared_ptr<TypeBuilder> valueType);
+
   const ScalarKind keyScalarKind_;
   const bool requiresDefaultGroup_;
   const HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode_;
@@ -394,9 +421,14 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   std::vector<StoredGroup> groups_;
   // Zero-based schema position of the reserved Default group.
   std::optional<size_t> defaultGroupIndex_{};
-  // Keys of every group, so that each new key is checked for duplicates with
-  // one insert.
+  // Keys of groups added with listed keys and appended Default keys, so that
+  // each new key is checked for duplicates with one insert. Bound groups add
+  // none: their HybridFlatMap checked its keys, and their Default lists its
+  // keys per batch.
   folly::F14FastSet<std::string> keys_;
+  // The HybridFlatMap every group came from when added from a bound
+  // HybridFlatMap.
+  std::optional<HybridFlatMap> boundMap_;
 
   friend class SchemaBuilder;
 };
