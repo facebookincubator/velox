@@ -88,6 +88,12 @@ class VectorSearchJoinTest : public OperatorTestBase {
     return bytes;
   }
 
+  // The join that preserves the query rows: left with the indexes on the
+  // build side, right with them on the probe side.
+  static core::JoinType outerJoinType(bool indexOnProbe) {
+    return indexOnProbe ? core::JoinType::kRight : core::JoinType::kLeft;
+  }
+
   // Probe rows (t0, ds, embedding) and codec rows (c_ds, codec).
   core::PlanNodePtr makeCodecPlan(
       const RowVectorPtr& probe,
@@ -157,6 +163,47 @@ class VectorSearchJoinTest : public OperatorTestBase {
     });
   }
 
+  // Joins index rows (i_cluster_id, local_index, ...) and query rows (t0,
+  // cluster_id, embedding) on the cluster, with the id of each embedding found
+  // as 'id'. With 'indexOnProbe', the index rows are on the probe side. With
+  // 'parallelProbe' or 'parallelBuild', each driver of that side reads all its
+  // rows.
+  static core::PlanNodePtr makeLocalIndexPlan(
+      const RowVectorPtr& indexes,
+      const RowVectorPtr& queries,
+      bool indexOnProbe,
+      core::JoinType joinType,
+      int64_t k,
+      const std::vector<std::string>& outputLayout,
+      bool parallelProbe,
+      bool parallelBuild,
+      bool byCluster) {
+    std::vector<std::string> leftKeys;
+    std::vector<std::string> rightKeys;
+    if (byCluster) {
+      leftKeys = {indexOnProbe ? "i_cluster_id" : "cluster_id"};
+      rightKeys = {indexOnProbe ? "cluster_id" : "i_cluster_id"};
+    }
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({indexOnProbe ? indexes : queries}, parallelProbe)
+        .vectorSearchJoin(
+            leftKeys,
+            rightKeys,
+            PlanBuilder(planNodeIdGenerator)
+                .values({indexOnProbe ? queries : indexes}, parallelBuild)
+                .planNode(),
+            "embedding",
+            "local_index",
+            k,
+            outputLayout,
+            "id",
+            /*score=*/std::nullopt,
+            joinType,
+            {{std::string(LocalVectorIndexOptions::kNprobe), "1"}})
+        .planNode();
+  }
+
   // The context of the test's queries, which read the "faiss" format.
   std::shared_ptr<core::QueryCtx> queryCtx_;
 };
@@ -205,6 +252,83 @@ TEST_F(VectorSearchJoinTest, noKeys) {
       makeFlatVector<int64_t>({0, 1}),
       makeFlatVector<int64_t>({0, 1}),
   }));
+
+  // Every query searches every local index, on either side of the join. The
+  // last query has a null embedding.
+  auto indexes = makeRowVector(
+      {"i_cluster_id", "local_index"},
+      {
+          makeFlatVector<int64_t>({7, 8}),
+          makeFlatVector<std::string>(
+              {build({1, 0}, {10}), build({0, 1}, {20})}, VARBINARY()),
+      });
+  auto queries = makeRowVector(
+      {"t0", "cluster_id", "embedding"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2}),
+          makeFlatVector<int64_t>({7, 8, 9}),
+          makeNullableArrayVector<float>({{{1, 0}}, {{0, 1}}, std::nullopt}),
+      });
+  // Repeats each embedding found 'numCopies' times, and for an outer join, the
+  // query that finds none 'numNullCopies' times.
+  const auto makeResults = [&](int32_t numCopies, int32_t numNullCopies) {
+    std::vector<std::optional<int64_t>> ids;
+    std::vector<int64_t> rows;
+    for (const int64_t row : {0, 1}) {
+      for (const int64_t id : {10, 20}) {
+        for (int32_t i = 0; i < numCopies; ++i) {
+          ids.emplace_back(id);
+          rows.push_back(row);
+        }
+      }
+    }
+    for (int32_t i = 0; i < numNullCopies; ++i) {
+      ids.emplace_back(std::nullopt);
+      rows.push_back(2);
+    }
+    return makeRowVector({
+        makeNullableFlatVector<int64_t>(ids),
+        makeFlatVector<int64_t>(rows),
+    });
+  };
+
+  for (const bool indexOnProbe : {false, true}) {
+    for (const bool isOuterJoin : {false, true}) {
+      const auto joinType =
+          isOuterJoin ? outerJoinType(indexOnProbe) : core::JoinType::kInner;
+      SCOPED_TRACE(
+          fmt::format(
+              "{} join, index on {}",
+              core::JoinTypeName::toName(joinType),
+              indexOnProbe ? "probe" : "build"));
+      const auto makePlan = [&](bool parallelBuild) {
+        return makeLocalIndexPlan(
+            indexes,
+            queries,
+            indexOnProbe,
+            joinType,
+            /*k=*/1,
+            {"id", "t0"},
+            /*parallelProbe=*/false,
+            parallelBuild,
+            /*byCluster=*/false);
+      };
+
+      queryBuilder(makePlan(false))
+          .assertResults(makeResults(1, isOuterJoin ? 1 : 0));
+      // Each search takes one query and the matches are listed one at a time.
+      queryBuilder(makePlan(false))
+          .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+          .assertResults(makeResults(1, isOuterJoin ? 1 : 0));
+      // Each of 3 build drivers reads all build rows. Repeated query rows on
+      // the build side repeat the query that finds nothing too.
+      const int32_t numNullCopies = isOuterJoin ? (indexOnProbe ? 3 : 1) : 0;
+      queryBuilder(makePlan(true))
+          .maxDrivers(3)
+          .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+          .assertResults(makeResults(3, numNullCopies));
+    }
+  }
 }
 
 TEST_F(VectorSearchJoinTest, probeEncodings) {
@@ -231,6 +355,25 @@ TEST_F(VectorSearchJoinTest, probeEncodings) {
           makeFlatVector<int64_t>({1, 1}),
           wrapInDictionary(
               makeIndices({1, 0}), makeArrayVector<float>({{1, 0}, {0, 1}})),
+      });
+  queryBuilder(makeCodecPlan(probe, makeCodecs()))
+      .assertResults(makeRowVector({
+          makeFlatVector<int64_t>({0, 0, 1, 1}),
+          makeFlatVector<int64_t>({2, 1, 0, 1}),
+          makeFlatVector<float>({1, 0.8, 1, 0.6}),
+      }));
+
+  // The same embeddings with a dictionary over the elements.
+  probe = makeRowVector(
+      {"t0", "ds", "embedding"},
+      {
+          makeFlatVector<int64_t>({0, 1}),
+          makeFlatVector<int64_t>({1, 1}),
+          makeArrayVector(
+              {0, 2},
+              wrapInDictionary(
+                  makeIndices({2, 3, 0, 1}),
+                  makeFlatVector<float>({1, 0, 0, 1}))),
       });
   queryBuilder(makeCodecPlan(probe, makeCodecs()))
       .assertResults(makeRowVector({
@@ -294,51 +437,150 @@ TEST_F(VectorSearchJoinTest, emptyBuild) {
       }));
 }
 
+// The index rows give the same results on either side of the join.
 TEST_F(VectorSearchJoinTest, localIndexes) {
-  // Cluster 7 has two local indexes, cluster 8 one. Each search finds up to k
+  // Cluster 7 has two local indexes, cluster 8 one, and cluster 9 one with a
+  // null index. The last row has a null cluster. Each search finds up to k
   // entries in each local index of the cluster.
   auto indexes = makeRowVector(
       {"i_cluster_id", "local_index", "group_id"},
       {
-          makeFlatVector<int64_t>({7, 7, 8}),
-          makeFlatVector<std::string>(
+          makeNullableFlatVector<int64_t>({7, 7, 8, 9, std::nullopt}),
+          makeNullableFlatVector<std::string>(
               {build({1, 0, 0, 1}, {10, 20}),
                build({0.6, 0.8}, {30}),
-               build({1, 0}, {40})},
+               build({1, 0}, {40}),
+               std::nullopt,
+               build({1, 0}, {50})},
               VARBINARY()),
-          makeFlatVector<int64_t>({0, 1, 0}),
+          makeFlatVector<int64_t>({0, 1, 0, 0, 0}),
       });
-  auto probe = makeRowVector(
+  // Rows 0 and 4 search cluster 7. Row 2 has a null embedding and row 3 a null
+  // cluster.
+  auto queries = makeRowVector(
       {"t0", "cluster_id", "embedding"},
       {
-          makeFlatVector<int64_t>({0, 1}),
-          makeFlatVector<int64_t>({7, 8}),
-          makeArrayVector<float>({{1, 0}, {0, 1}}),
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeNullableFlatVector<int64_t>({7, 8, 9, std::nullopt, 7}),
+          makeNullableArrayVector<float>(
+              {{{1, 0}}, {{0, 1}}, std::nullopt, {{1, 0}}, {{0, 1}}}),
       });
+  const auto innerResults = makeRowVector({
+      makeFlatVector<int64_t>({10, 20, 30, 40, 20, 10, 30}),
+      makeFlatVector<int64_t>({0, 0, 0, 1, 4, 4, 4}),
+      makeFlatVector<int64_t>({0, 0, 1, 0, 0, 0, 1}),
+  });
+  // An outer join also outputs the queries that find nothing.
+  const auto outerResults = makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {10, 20, 30, 40, 20, 10, 30, std::nullopt, std::nullopt}),
+      makeFlatVector<int64_t>({0, 0, 0, 1, 4, 4, 4, 2, 3}),
+      makeNullableFlatVector<int64_t>(
+          {0, 0, 1, 0, 0, 0, 1, std::nullopt, std::nullopt}),
+  });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probe})
-          .vectorSearchJoin(
-              {"cluster_id"},
-              {"i_cluster_id"},
-              PlanBuilder(planNodeIdGenerator).values({indexes}).planNode(),
-              "embedding",
-              "local_index",
-              /*k=*/2,
-              {"id", "t0", "group_id"},
-              "id",
-              /*score=*/std::nullopt,
-              core::JoinType::kInner,
-              {{std::string(LocalVectorIndexOptions::kNprobe), "1"}})
-          .planNode();
+  for (const bool indexOnProbe : {false, true}) {
+    for (const bool isOuterJoin : {false, true}) {
+      const auto joinType =
+          isOuterJoin ? outerJoinType(indexOnProbe) : core::JoinType::kInner;
+      // A k larger than every index finds all of its entries.
+      for (const int64_t k :
+           {int64_t{2}, std::numeric_limits<int64_t>::max()}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "{} join, index on {}, k: {}",
+                core::JoinTypeName::toName(joinType),
+                indexOnProbe ? "probe" : "build",
+                k));
+        const auto plan = makeLocalIndexPlan(
+            indexes,
+            queries,
+            indexOnProbe,
+            joinType,
+            k,
+            {"id", "t0", "group_id"},
+            /*parallelProbe=*/false,
+            /*parallelBuild=*/false,
+            /*byCluster=*/true);
+        const auto& expected = isOuterJoin ? outerResults : innerResults;
 
-  queryBuilder(plan).assertResults(makeRowVector({
-      makeFlatVector<int64_t>({10, 20, 30, 40}),
-      makeFlatVector<int64_t>({0, 0, 0, 1}),
-      makeFlatVector<int64_t>({0, 0, 1, 0}),
-  }));
+        queryBuilder(plan).assertResults(expected);
+        // Each search takes one query, so an index is searched in several
+        // steps, and the results fill several output batches.
+        queryBuilder(plan)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+            .assertResults(expected);
+      }
+    }
+  }
+}
+
+// Several drivers on either side give the same results: the build drivers'
+// tables are merged, and with the query rows on the build side, a right join
+// outputs a query row that no probe driver finds embeddings for once.
+TEST_F(VectorSearchJoinTest, drivers) {
+  auto indexes = makeRowVector(
+      {"i_cluster_id", "local_index"},
+      {
+          makeFlatVector<int64_t>({7, 8}),
+          makeFlatVector<std::string>(
+              {build({1, 0}, {10}), build({0, 1}, {20})}, VARBINARY()),
+      });
+  // Row 2 searches a cluster with no index and row 3 has a null embedding.
+  auto queries = makeRowVector(
+      {"t0", "cluster_id", "embedding"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+          makeFlatVector<int64_t>({7, 8, 9, 7}),
+          makeNullableArrayVector<float>(
+              {{{1, 0}}, {{0, 1}}, {{1, 0}}, std::nullopt}),
+      });
+  // Each of 3 drivers of one side reads all its rows. Repeated query rows
+  // repeat every result; repeated index rows repeat only the embeddings found.
+  const auto repeatedQueries = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3}),
+      makeNullableFlatVector<int64_t>(
+          {10,
+           10,
+           10,
+           20,
+           20,
+           20,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt}),
+  });
+  const auto repeatedIndexes = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 0, 1, 1, 1, 2, 3}),
+      makeNullableFlatVector<int64_t>(
+          {10, 10, 10, 20, 20, 20, std::nullopt, std::nullopt}),
+  });
+
+  for (const bool indexOnProbe : {false, true}) {
+    for (const bool parallelProbe : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "index on {}, parallel {}",
+              indexOnProbe ? "probe" : "build",
+              parallelProbe ? "probe" : "build"));
+      const auto plan = makeLocalIndexPlan(
+          indexes,
+          queries,
+          indexOnProbe,
+          outerJoinType(indexOnProbe),
+          /*k=*/1,
+          {"t0", "id"},
+          parallelProbe,
+          /*parallelBuild=*/!parallelProbe,
+          /*byCluster=*/true);
+      const bool queriesRepeated = indexOnProbe != parallelProbe;
+      queryBuilder(plan).maxDrivers(3).assertResults(
+          queriesRepeated ? repeatedQueries : repeatedIndexes);
+    }
+  }
 }
 
 // A search reads its indexes with the format it names, among the query's
@@ -432,6 +674,29 @@ TEST_F(VectorSearchJoinTest, errors) {
       queryBuilder(makeCodecPlan(probe, makeCodecs())).copyResults(pool()),
       "Query embedding length must match the vector index's");
 
+  // A query that matches no index is checked too: partition 3 has no codec.
+  probe = makeRowVector(
+      {"t0", "ds", "embedding"},
+      {
+          makeFlatVector<int64_t>({0}),
+          makeFlatVector<int64_t>({3}),
+          makeArrayVector<float>({{1, 0, 0}}),
+      });
+  VELOX_ASSERT_THROW(
+      queryBuilder(makeCodecPlan(probe, makeCodecs())).copyResults(pool()),
+      "Query embedding length must match the vector index's");
+
+  probe = makeRowVector(
+      {"t0", "ds", "embedding"},
+      {
+          makeFlatVector<int64_t>({0, 1}),
+          makeFlatVector<int64_t>({1, 3}),
+          makeArrayVector<float>({{1, 0}, {1, 0, 0}}),
+      });
+  VELOX_ASSERT_THROW(
+      queryBuilder(makeCodecPlan(probe, makeCodecs())).copyResults(pool()),
+      "Query embeddings must have the same length");
+
   probe = makeRowVector(
       {"t0", "ds", "embedding"},
       {
@@ -444,6 +709,39 @@ TEST_F(VectorSearchJoinTest, errors) {
   VELOX_ASSERT_THROW(
       queryBuilder(makeCodecPlan(probe, makeCodecs())).copyResults(pool()),
       "Query embedding must not contain nulls");
+
+  // A null element under a dictionary.
+  const auto nullUnderDictionary = makeRowVector(
+      {"t0", "ds", "embedding"},
+      {
+          makeFlatVector<int64_t>({0}),
+          makeFlatVector<int64_t>({1}),
+          makeArrayVector(
+              {0},
+              wrapInDictionary(
+                  makeIndices({0, 1}),
+                  makeNullableFlatVector<float>({1, std::nullopt}))),
+      });
+  VELOX_ASSERT_THROW(
+      queryBuilder(makeCodecPlan(nullUnderDictionary, makeCodecs()))
+          .copyResults(pool()),
+      "Query embedding must not contain nulls");
+
+  for (const float value :
+       {std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity()}) {
+    const auto nonFinite = makeRowVector(
+        {"t0", "ds", "embedding"},
+        {
+            makeFlatVector<int64_t>({0}),
+            makeFlatVector<int64_t>({1}),
+            makeArrayVector<float>({{1, value}}),
+        });
+    VELOX_ASSERT_THROW(
+        queryBuilder(makeCodecPlan(nonFinite, makeCodecs()))
+            .copyResults(pool()),
+        "Query embedding must not contain NaN or infinity");
+  }
 
   auto codecs = makeRowVector(
       {"c_ds", "codec"},
@@ -466,6 +764,45 @@ TEST_F(VectorSearchJoinTest, errors) {
   VELOX_ASSERT_THROW(
       queryBuilder(makeCodecPlan(probe, {codecs})).copyResults(pool()),
       "Vector search join indexes must have the same dimension");
+
+  // With the query rows on the build side, they must all have the same length.
+  const auto makeIndexOnProbePlan = [&](const RowVectorPtr& queries) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({codecs})
+        .vectorSearchJoin(
+            {"c_ds"},
+            {"ds"},
+            PlanBuilder(planNodeIdGenerator).values({queries}).planNode(),
+            "embedding",
+            "codec",
+            /*k=*/1,
+            {"t0", "cluster_id"},
+            "cluster_id")
+        .planNode();
+  };
+  VELOX_ASSERT_THROW(
+      queryBuilder(makeIndexOnProbePlan(makeRowVector(
+                       {"t0", "ds", "embedding"},
+                       {
+                           makeFlatVector<int64_t>({0, 1}),
+                           makeFlatVector<int64_t>({1, 2}),
+                           makeArrayVector<float>({{1, 0}, {1, 0, 0}}),
+                       })))
+          .copyResults(pool()),
+      "Query embeddings must have the same length");
+
+  // A query of another length than an index it matches fails.
+  VELOX_ASSERT_THROW(
+      queryBuilder(makeIndexOnProbePlan(makeRowVector(
+                       {"t0", "ds", "embedding"},
+                       {
+                           makeFlatVector<int64_t>({0}),
+                           makeFlatVector<int64_t>({1}),
+                           makeArrayVector<float>({{1, 0, 0}}),
+                       })))
+          .copyResults(pool()),
+      "Query embedding length must match the vector index's");
 }
 
 TEST_F(VectorSearchJoinTest, planValidation) {
@@ -485,8 +822,8 @@ TEST_F(VectorSearchJoinTest, planValidation) {
 
   struct Case {
     std::vector<std::string> leftKeys;
-    std::string probeEmbedding;
-    std::string buildIndex;
+    std::string embedding;
+    std::string index;
     int64_t k;
     std::vector<std::string> outputLayout;
     core::JoinType joinType;
@@ -500,6 +837,13 @@ TEST_F(VectorSearchJoinTest, planValidation) {
        {"t0", "cluster_id"},
        core::JoinType::kFull,
        "The join type is not supported by vector search join: FULL"},
+      {{"t0"},
+       "embedding",
+       "codec",
+       1,
+       {"t0", "cluster_id"},
+       core::JoinType::kRight,
+       "Vector search join may not preserve the index side: RIGHT"},
       {{},
        "embedding",
        "codec",
@@ -513,14 +857,14 @@ TEST_F(VectorSearchJoinTest, planValidation) {
        1,
        {"t0", "cluster_id"},
        core::JoinType::kInner,
-       "Probe embedding must be ARRAY(REAL)"},
+       "Embedding must be ARRAY(REAL)"},
       {{"t0"},
        "embedding",
        "c0",
        1,
        {"t0", "cluster_id"},
        core::JoinType::kInner,
-       "Build index must be VARBINARY"},
+       "Index must be VARBINARY"},
       {{"t0"},
        "embedding",
        "codec",
@@ -534,7 +878,7 @@ TEST_F(VectorSearchJoinTest, planValidation) {
        1,
        {"t0", "codec", "cluster_id"},
        core::JoinType::kInner,
-       "Vector search join output may not include the build index"},
+       "Vector search join output may not include the index"},
   };
   for (const auto& testCase : cases) {
     SCOPED_TRACE(testCase.error);
@@ -546,8 +890,8 @@ TEST_F(VectorSearchJoinTest, planValidation) {
                 testCase.leftKeys,
                 {"c0"},
                 PlanBuilder(planNodeIdGenerator).values({codecs}).planNode(),
-                testCase.probeEmbedding,
-                testCase.buildIndex,
+                testCase.embedding,
+                testCase.index,
                 testCase.k,
                 testCase.outputLayout,
                 "cluster_id",

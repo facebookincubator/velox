@@ -107,7 +107,18 @@ class LocalVectorIndexFormat {
 };
 
 /// The local vector index formats of a query, by name.
-using LocalVectorIndexFormats =
-    ScopedRegistry<std::string, LocalVectorIndexFormat>;
+class LocalVectorIndexFormats
+    : public ScopedRegistry<std::string, LocalVectorIndexFormat> {
+ public:
+  using ScopedRegistry::ScopedRegistry;
+
+  /// Returns a reader of local indexes in the format named 'format'. Throws a
+  /// user error if no such format is registered. See
+  /// LocalVectorIndexFormat::makeReader for 'metric' and 'searchOptions'.
+  std::unique_ptr<LocalVectorIndexReader> makeReader(
+      const std::string& format,
+      VectorIndexMetric metric,
+      const LocalVectorIndex::SearchOptions& searchOptions) const;
+};
 
 } // namespace facebook::velox::common::vectorindex

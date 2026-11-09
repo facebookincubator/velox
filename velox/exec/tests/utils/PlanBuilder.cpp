@@ -2067,8 +2067,8 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
     const std::vector<std::string>& leftKeys,
     const std::vector<std::string>& rightKeys,
     const core::PlanNodePtr& right,
-    const std::string& probeEmbedding,
-    const std::string& buildIndex,
+    const std::string& embedding,
+    const std::string& index,
     int64_t k,
     const std::vector<std::string>& outputLayout,
     const std::optional<std::string>& id,
@@ -2092,13 +2092,16 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
     }
   }
 
+  const bool indexOnProbe = !buildType->containsChild(index);
   planNode_ = std::make_shared<core::VectorSearchJoinNode>(
       nextPlanNodeId(),
       joinType,
       fields(probeType, leftKeys),
       fields(buildType, rightKeys),
-      field(probeType, probeEmbedding),
-      field(buildType, buildIndex),
+      indexOnProbe ? core::VectorSearchJoinNode::IndexSide::kProbe
+                   : core::VectorSearchJoinNode::IndexSide::kBuild,
+      field(indexOnProbe ? buildType : probeType, embedding),
+      field(indexOnProbe ? probeType : buildType, index),
       std::move(format),
       metric,
       k,
