@@ -30,64 +30,13 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-// Binds each of the column's buffers, including its children's, to 'stream'
-// for deallocation. Returns the column's total size in bytes and the
-// reassembled column.
-//
-// cudf::column has no API to get its size without estimation and device to
-// host copies, so the column is disassembled to measure its buffers. See
-// https://github.com/rapidsai/cudf/issues/18462.
-std::pair<uint64_t, std::unique_ptr<cudf::column>> bindAndMeasureColumn(
-    std::unique_ptr<cudf::column> column,
-    cuda::stream_ref stream) {
-  // Store column metadata (type, null count, and size) before releasing it,
-  // as the release() operation transfers ownership of the underlying buffers
-  // and invalidates access to these properties.
-  auto type = column->type();
-  auto nullCount = column->null_count();
-  auto size = column->size();
-
-  auto contents = column->release();
-  auto bytes = contents.data->size() + contents.null_mask->size();
-  contents.data->set_stream(stream);
-  contents.null_mask->set_stream(stream);
-
-  std::vector<std::unique_ptr<cudf::column>> children;
-  for (auto& child : contents.children) {
-    auto [childBytes, childColumn] =
-        bindAndMeasureColumn(std::move(child), stream);
-    bytes += childBytes;
-    children.push_back(std::move(childColumn));
-  }
-
-  // Reassemble the column with the original metadata.
-  auto reconstitutedColumn = std::make_unique<cudf::column>(
-      type,
-      size,
-      std::move(*contents.data),
-      std::move(*contents.null_mask),
-      nullCount,
-      std::move(children));
-
-  return std::make_pair(bytes, std::move(reconstitutedColumn));
-}
-
-// Binds every buffer in 'table' to 'stream' for deallocation. Returns the
-// table's total size in bytes and the reassembled table.
-std::pair<uint64_t, std::unique_ptr<cudf::table>> bindAndMeasureTable(
-    std::unique_ptr<cudf::table>&& table,
-    cuda::stream_ref stream) {
+// Rebinds every buffer in 'table' to 'stream' for deallocation.
+void rebindTable(std::unique_ptr<cudf::table>& table, cuda::stream_ref stream) {
   auto columns = table->release();
-  std::vector<std::unique_ptr<cudf::column>> columnsOut;
-  uint64_t totalBytes = 0;
-
   for (auto& column : columns) {
-    auto [bytes, columnOut] = bindAndMeasureColumn(std::move(column), stream);
-    totalBytes += bytes;
-    columnsOut.push_back(std::move(columnOut));
+    column = cudf::rebind_stream(std::move(*column), stream);
   }
-  return std::make_pair(
-      totalBytes, std::make_unique<cudf::table>(std::move(columnsOut)));
+  table = std::make_unique<cudf::table>(std::move(columns));
 }
 
 void logDefaultStreamIfNeeded(
@@ -127,9 +76,8 @@ CudfVector::CudfVector(
       stream_{stream} {
   logDefaultStreamIfNeeded(stream_, "CudfVector(table)");
   auto& tablePtr = std::get<std::unique_ptr<cudf::table>>(tableStorage_);
-  auto [bytes, tableOut] = bindAndMeasureTable(std::move(tablePtr), stream_);
-  flatSize_ = bytes;
-  tablePtr = std::move(tableOut);
+  rebindTable(tablePtr, stream_);
+  flatSize_ = tablePtr->alloc_size();
   tabView_ = tablePtr->view();
 }
 
@@ -197,12 +145,7 @@ bool CudfVector::rebindStream(cuda::stream_ref stream) {
       return true;
     }
 
-    auto columns = (*tablePtr)->release();
-    for (auto& column : columns) {
-      column = cudf::rebind_stream(std::move(*column), stream);
-    }
-
-    *tablePtr = std::make_unique<cudf::table>(std::move(columns));
+    rebindTable(*tablePtr, stream);
     tabView_ = (*tablePtr)->view();
     stream_ = stream;
     return true;
