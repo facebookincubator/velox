@@ -354,6 +354,12 @@ class NimbleIndexProjector {
   /// values. Enabled by default.
   void setTimingEnabled(bool enabled);
 
+  /// Turns the verification of stream checksums on or off for the next
+  /// requests, as ReaderOptions::verifyStreamChecksums() does at creation. A
+  /// file whose stream trailers carry no checksum stays unverified. Must not
+  /// be called while a request loads stripes.
+  void setVerifyStreamChecksums(bool verifyStreamChecksums);
+
  private:
   // Applies a synchronous counter or timing update under the TSan guard.
   template <typename Update>
@@ -643,8 +649,9 @@ class NimbleIndexProjector {
 
   std::unique_ptr<DataInput> dataInput_;
   // Verifies a stream read from storage against the checksum in its stream
-  // trailer. Built only when ReaderOptions::verifyStreamChecksums() is set and
-  // the file's stream trailers carry a checksum, so null means this projector
+  // trailer. Built only when ReaderOptions::verifyStreamChecksums() or
+  // setVerifyStreamChecksums() turns verification on and the file's stream
+  // trailers carry a checksum, so null means this projector
   // does not verify. Stateful, so it relies on this class being
   // single-threaded.
   std::unique_ptr<Checksum> streamChecksum_;

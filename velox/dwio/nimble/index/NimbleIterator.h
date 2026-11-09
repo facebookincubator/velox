@@ -40,7 +40,6 @@ class MemoryPool;
 namespace facebook::nimble {
 
 class NimbleIndexProjector;
-class StreamReaderCache;
 
 namespace index {
 class KeyCursor;
@@ -96,15 +95,6 @@ class NimbleIterator {
     /// stripe and benefits. A point lookup reads one row and does better
     /// without them. See Encoding::Options::cacheEncodingView.
     bool cacheEncodingView{true};
-
-    /// Supplies the stream reader of the iterator, which keeps it for its
-    /// lifetime and returns it when it is destroyed, so that the iterators
-    /// that use the cache, such as the iterators of a file, share the readers.
-    /// The readers of the cache allocate from its pools, not from the pool of
-    /// the iterator. Every iterator that shares a cache must project the same
-    /// schema. When null, the iterator builds its reader and destroys it with
-    /// itself.
-    std::shared_ptr<StreamReaderCache> streamReaderCache{};
   };
 
   /// Creates an iterator over the output entries that 'entryDecoder' decodes
@@ -179,6 +169,12 @@ class NimbleIterator {
   /// Cancels pending prefetch and invalidates the current scan. Blocks until
   /// the prefetch stops.
   virtual void reset() = 0;
+
+  /// Turns the verification of stream checksums on or off for the next seeks,
+  /// as ReaderOptions::verifyStreamChecksums() of the projector does at
+  /// creation, so that a caller that keeps an iterator between lookups reads
+  /// each lookup with its own setting. Must be called after reset().
+  virtual void setVerifyStreamChecksums(bool verifyStreamChecksums) = 0;
 
   /// Returns whether the iterator is positioned on a selected row.
   bool valid() const {
