@@ -64,144 +64,6 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <li><p>ArrowStreamNode</p></li>
 </ul>
 <p>Here is a list of supported plan nodes and corresponding operators.</p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Plan Node</p></th>
-<th class="head"><p>Operator(s)</p></th>
-<th class="head"><p>Leaf Node / Source Operator</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>TableScanNode</p></td>
-<td><p>TableScan</p></td>
-<td><p>Y</p></td>
-</tr>
-<tr class="row-odd"><td><p>ArrowStreamNode</p></td>
-<td><p>ArrowStream</p></td>
-<td><p>Y</p></td>
-</tr>
-<tr class="row-even"><td><p>FilterNode</p></td>
-<td><p>FilterProject</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>ProjectNode</p></td>
-<td><p>FilterProject</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>AggregationNode</p></td>
-<td><p>HashAggregation or StreamingAggregation</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>GroupIdNode</p></td>
-<td><p>GroupId</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>MarkDistinctNode</p></td>
-<td><p>MarkDistinct</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>MarkSortedNode</p></td>
-<td><p>MarkSorted</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>HashJoinNode</p></td>
-<td><p>HashProbe and HashBuild</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>MergeJoinNode</p></td>
-<td><p>MergeJoin</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>NestedLoopJoinNode</p></td>
-<td><p>NestedLoopJoinProbe and NestedLoopJoinBuild</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>OrderByNode</p></td>
-<td><p>OrderBy</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>TopNNode</p></td>
-<td><p>TopN</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>LimitNode</p></td>
-<td><p>Limit</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>UnnestNode</p></td>
-<td><p>Unnest</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>TableWriteNode</p></td>
-<td><p>TableWrite</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>TableWriteMergeNode</p></td>
-<td><p>TableWriteMerge</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>PartitionedOutputNode</p></td>
-<td><p>PartitionedOutput</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>ExchangeNode</p></td>
-<td><p>Exchange</p></td>
-<td><p>Y</p></td>
-</tr>
-<tr class="row-odd"><td><p>ExpandNode</p></td>
-<td><p>Expand</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>MergeExchangeNode</p></td>
-<td><p>MergeExchange</p></td>
-<td><p>Y</p></td>
-</tr>
-<tr class="row-odd"><td><p>ValuesNode</p></td>
-<td><p>Values</p></td>
-<td><p>Y</p></td>
-</tr>
-<tr class="row-even"><td><p>LocalMergeNode</p></td>
-<td><p>LocalMerge</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>LocalPartitionNode</p></td>
-<td><p>LocalPartition and LocalExchange</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>EnforceSingleRowNode</p></td>
-<td><p>EnforceSingleRow</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>EnforceDistinctNode</p></td>
-<td><p>EnforceDistinct or StreamingEnforceDistinct</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>AssignUniqueIdNode</p></td>
-<td><p>AssignUniqueId</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>WindowNode</p></td>
-<td><p>Window</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>RowNumberNode</p></td>
-<td><p>RowNumber</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>TopNRowNumberNode</p></td>
-<td><p>TopNRowNumber</p></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>MixedUnionNode</p></td>
-<td><p>MixedUnion</p></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>RPCNode</p></td>
-<td><p>RPC</p></td>
-<td></td>
-</tr>
-</tbody>
-</table>
 <section id="plan-nodes">
 <h2>Plan Nodes<a class="headerlink" href="#plan-nodes" title="Link to this heading">¶</a></h2>
 <section id="tablescannode">
@@ -722,6 +584,84 @@ thread of execution.</p>
 </tr>
 <tr class="row-even"><td><p>outputType</p></td>
 <td><p>A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="vectorsearchjoinnode">
+<h3>VectorSearchJoinNode<a class="headerlink" href="#vectorsearchjoinnode" title="Link to this heading">¶</a></h3>
+<p>VectorSearchJoinNode joins rows with query embeddings to the nearest entries of
+local vector indexes (see <a class="reference internal" href="../functions/presto/vectorindex.html"><span class="doc">Vector Index Functions</span></a>). One side of the
+join has the index rows, each with a packed local index; the other side has the
+query rows, each with an embedding. The equality conditions on the keys match
+each query row to index rows, as in a hash join; with no keys, every query row
+matches every index row. Within each match, the query embedding, normalized for
+the metric, is searched in the index for its k nearest embeddings. Each
+embedding found gives an output row with the columns of the query row and the
+index row, the embedding’s id and its score, where larger is nearer.</p>
+<p>Rows with a null key, query rows with a null embedding and index rows with a
+null index match nothing. An outer join, left with the query rows on the left
+or right with the query rows on the right, outputs a query row that finds no
+embeddings once, with nulls for the index row’s columns, the id and the score.
+A join may not preserve the index rows.
+All query embeddings must have the same length, equal to the dimension of every
+index, and no embedding may have a null, NaN or infinite element; a violation
+is a user error.</p>
+<p>The right side is loaded into memory and the left side streams. With the
+indexes on the right, each batch of query rows is searched in the indexes it
+matches. With the indexes on the left, each streaming index is decoded once per
+batch and searched with the query rows it matches. The output does not preserve
+the order of the left side. Available when Velox is built with FAISS
+(<code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_FAISS</span></code>).</p>
+<table class="docutils align-left">
+<colgroup>
+<col style="width: 25.0%" />
+<col style="width: 75.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>joinType</p></td>
+<td><p>Join type: inner; left, if the index rows are on the right; or right, if the index rows are on the left.</p></td>
+</tr>
+<tr class="row-odd"><td><p>leftKeys</p></td>
+<td><p>Columns from the left hand side input that are part of the equality condition. May be empty.</p></td>
+</tr>
+<tr class="row-even"><td><p>rightKeys</p></td>
+<td><p>Columns from the right hand side input that are part of the equality condition. The number and order of the rightKeys must match the number and order of the leftKeys.</p></td>
+</tr>
+<tr class="row-odd"><td><p>indexSide</p></td>
+<td><p>The side with the index rows: PROBE, the left, or BUILD, the right. The other side has the query rows.</p></td>
+</tr>
+<tr class="row-even"><td><p>embedding</p></td>
+<td><p>Column of the query side, of type ARRAY(REAL), with the query embedding.</p></td>
+</tr>
+<tr class="row-odd"><td><p>index</p></td>
+<td><p>Column of the index side, of type VARBINARY, with the packed local index. May not appear in the output.</p></td>
+</tr>
+<tr class="row-even"><td><p>format</p></td>
+<td><p>The format of the local indexes: its name in the query’s registry of local vector index formats.</p></td>
+</tr>
+<tr class="row-odd"><td><p>metric</p></td>
+<td><p>The metric the indexes were built for.</p></td>
+</tr>
+<tr class="row-even"><td><p>k</p></td>
+<td><p>The number of embeddings to find in each matching index, at least 1. At most the size of the index are found.</p></td>
+</tr>
+<tr class="row-odd"><td><p>searchOptions</p></td>
+<td><p>Optional search settings that override the ones recorded in the indexes. Their keys and values are the format’s.</p></td>
+</tr>
+<tr class="row-even"><td><p>idName</p></td>
+<td><p>Optional name of the output column, of type BIGINT, with the id of each embedding found.</p></td>
+</tr>
+<tr class="row-odd"><td><p>scoreName</p></td>
+<td><p>Optional name of the output column, of type REAL, with the score of each embedding found.</p></td>
+</tr>
+<tr class="row-even"><td><p>outputType</p></td>
+<td><p>A list of output columns: columns of the left and right inputs, and the id and score columns, in any order.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1525,6 +1465,7 @@ times.</p>
 <li><a class="reference internal" href="#groupidnode">GroupIdNode</a></li>
 <li><a class="reference internal" href="#hashjoinnode-and-mergejoinnode">HashJoinNode and MergeJoinNode</a></li>
 <li><a class="reference internal" href="#nestedloopjoinnode">NestedLoopJoinNode</a></li>
+<li><a class="reference internal" href="#vectorsearchjoinnode">VectorSearchJoinNode</a></li>
 <li><a class="reference internal" href="#orderbynode">OrderByNode</a></li>
 <li><a class="reference internal" href="#topnnode">TopNNode</a></li>
 <li><a class="reference internal" href="#limitnode">LimitNode</a></li>
