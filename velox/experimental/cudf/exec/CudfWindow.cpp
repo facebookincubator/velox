@@ -524,10 +524,10 @@ bool CudfWindow::canRunOnGPU(
       return false;
     }
 
-    // Keep the existing restriction on multi-column list-containing keys.
-    // For a single key, grouped rank scans and ungrouped rank() reject lists.
-    // Ungrouped row_number() uses a sequence, and ungrouped dense_rank()
-    // supports lists, so preserve those single-key paths.
+    // MAPs are already rejected above. Ranking with ARRAY sort keys is limited
+    // to row_number() and dense_rank() with one key and no PARTITION BY.
+    // row_number() uses a sequence, and dense_rank() can handle ARRAYs.
+    // The same rules apply to ARRAYs nested in ROWs.
     const bool isRankFunction = baseName == "row_number" ||
         baseName == "rank" || baseName == "dense_rank";
     if (isRankFunction &&
@@ -536,7 +536,7 @@ bool CudfWindow::canRunOnGPU(
       for (const auto& key : windowNode.sortingKeys()) {
         if (containsListOrMap(key->type())) {
           if (reason) {
-            *reason = "Ranking with ARRAY or MAP sort keys is not supported";
+            *reason = "Ranking with ARRAY sort keys is not supported";
           }
           return false;
         }

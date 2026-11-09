@@ -632,7 +632,7 @@ TEST_F(CudfWindowTest, rankWithNestedKeysGating) {
           assertWindowRejected(
               PlanBuilder().values({data}).window({expression}).planNode(),
               containsMap ? "ORDER BY key nested_key contains MAP type"
-                          : "ARRAY or MAP");
+                          : "ARRAY sort keys");
         }
       }
     }
