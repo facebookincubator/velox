@@ -241,6 +241,19 @@ class AssertQueryBuilder {
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();
 
+  // Runs the plan and returns the number of result rows without collecting
+  // them.
+  std::pair<std::unique_ptr<TaskCursor>, uint64_t> countCursor();
+
+  // Applies the configured session properties and connector session properties
+  // to 'params_', creating a QueryCtx if one was not supplied. Must be called
+  // before running the plan.
+  void prepareQueryCtx();
+
+  // Returns a callback that feeds the configured splits to the task. Consumes
+  // 'splits_', so the returned callback must be used for a single run.
+  std::function<ContinueFuture(exec::TaskCursor*)> makeAddSplits();
+
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(
         folly::available_concurrency());

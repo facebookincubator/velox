@@ -210,6 +210,22 @@ readCursorAsync(
         },
     uint64_t maxWaitMicros = 5'000'000);
 
+/// Runs the query and returns the number of result rows. Counts each batch as
+/// it arrives instead of collecting the results, so peak memory stays
+/// proportional to a single batch rather than to the whole result set. Use
+/// instead of 'readCursorAsync' when the caller needs only the row count.
+std::pair<std::unique_ptr<TaskCursor>, uint64_t> countResults(
+    const CursorParameters& params,
+    std::function<ContinueFuture(TaskCursor*)> addSplits =
+        [](TaskCursor* taskCursor) {
+          if (taskCursor->noMoreSplits()) {
+            return ContinueFuture::makeEmpty();
+          }
+          taskCursor->setNoMoreSplits();
+          return ContinueFuture::makeEmpty();
+        },
+    uint64_t maxWaitMicros = 5'000'000);
+
 /// The Task can return results before the Driver is finished executing.
 /// Wait upto maxWaitMicros for the Task to finish as 'expectedState' before
 /// returning to ensure it's stable e.g. the Driver isn't updating it anymore.
