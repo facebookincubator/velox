@@ -144,7 +144,7 @@ jobs:
           git config --global user.name "velox"
 
       - name: Push Documentation
-        if: ${{ github.event_name == 'push' && github.repository == 'facebookincubator/velox'}}
+        if: ${{ github.event_name == 'push' && !github.event.repository.fork }}
         run: |
           git checkout gh-pages
           cp -R velox/docs/_build/html/* docs
