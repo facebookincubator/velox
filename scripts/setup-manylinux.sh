@@ -35,6 +35,9 @@ CXXFLAGS=$(get_cxx_flags) # Used by boost.
 export CXXFLAGS
 export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 USE_CLANG="${USE_CLANG:-false}"
+# The Clang that USE_CLANG builds with.
+CLANG_CC=/usr/bin/clang-15
+CLANG_CXX=/usr/bin/clang++-15
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 
@@ -135,8 +138,8 @@ function install_velox_deps {
 (
   if [[ $# -ne 0 ]]; then
     if [[ ${USE_CLANG} != "false" ]]; then
-      export CC=/usr/bin/clang-15
-      export CXX=/usr/bin/clang++-15
+      export CC=${CLANG_CC}
+      export CXX=${CLANG_CXX}
     else
       # Activate gcc12; enable errors on unset variables afterwards.
       source /opt/rh/gcc-toolset-12/enable || exit 1
@@ -155,8 +158,8 @@ function install_velox_deps {
       echo "Skipping installation of build dependencies since INSTALL_PREREQUISITES is not set"
     fi
     if [[ ${USE_CLANG} != "false" ]]; then
-      export CC=/usr/bin/clang-15
-      export CXX=/usr/bin/clang++-15
+      export CC=${CLANG_CC}
+      export CXX=${CLANG_CXX}
     else
       # Activate gcc12; enable errors on unset variables afterwards.
       source /opt/rh/gcc-toolset-12/enable || exit 1
@@ -166,8 +169,8 @@ function install_velox_deps {
     echo "All dependencies for Velox installed!"
     if [[ ${USE_CLANG} != "false" ]]; then
       echo "To use clang for the Velox build set the CC and CXX environment variables in your session."
-      echo "  export CC=/usr/bin/clang-15"
-      echo "  export CXX=/usr/bin/clang++-15"
+      echo "  export CC=${CLANG_CC}"
+      echo "  export CXX=${CLANG_CXX}"
     fi
     dnf clean all
   fi

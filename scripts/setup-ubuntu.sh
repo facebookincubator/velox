@@ -34,6 +34,9 @@ source "$SCRIPT_DIR"/setup-common.sh
 
 SUDO="${SUDO:-"sudo --preserve-env"}"
 USE_CLANG="${USE_CLANG:-false}"
+# The Clang that USE_CLANG builds with.
+CLANG_CC=/usr/bin/clang-15
+CLANG_CXX=/usr/bin/clang++-15
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 VERSION=$(cat /etc/os-release | grep VERSION_ID)
@@ -273,8 +276,8 @@ function install_apt_deps {
 
 (
   if [[ ${USE_CLANG} != "false" ]]; then
-    export CC=/usr/bin/clang-15
-    export CXX=/usr/bin/clang++-15
+    export CC=${CLANG_CC}
+    export CXX=${CLANG_CXX}
   fi
   if [[ $# -ne 0 ]]; then
     for cmd in "$@"; do
@@ -292,8 +295,8 @@ function install_apt_deps {
     echo "All dependencies for Velox installed!"
     if [[ ${USE_CLANG} != "false" ]]; then
       echo "To use clang for the Velox build set the CC and CXX environment variables in your session."
-      echo "  export CC=/usr/bin/clang-15"
-      echo "  export CXX=/usr/bin/clang++-15"
+      echo "  export CC=${CLANG_CC}"
+      echo "  export CXX=${CLANG_CXX}"
     fi
     if [[ ${VERSION} =~ "20.04" && ${USE_CLANG} == "false" ]]; then
       echo "To build Velox gcc-11/g++11 is required. Set the CC and CXX environment variables in your session."

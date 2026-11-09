@@ -36,6 +36,10 @@ export CXXFLAGS
 export COMPILER_FLAGS=${CXXFLAGS}
 SUDO="${SUDO:-""}"
 USE_CLANG="${USE_CLANG:-false}"
+# The Clang that USE_CLANG builds with: the system Clang, whose OpenMP runtime
+# vector search (FAISS) needs.
+CLANG_CC=/usr/bin/clang
+CLANG_CXX=/usr/bin/clang++
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-"$INSTALL_PREFIX"/bin}"
@@ -44,8 +48,13 @@ function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
 }
 
-function install_clang15 {
-  dnf_install clang15 gcc-toolset-13-libatomic-devel
+# Installs the system Clang with its OpenMP runtime. libomp-devel puts omp.h in
+# the header directory of the Clang of the same version, so it is pinned to the
+# installed Clang.
+function install_clang_with_openmp {
+  dnf_install clang
+  dnf_install "libomp-devel-$(rpm -q --queryformat '%{VERSION}' clang)" \
+    gcc-toolset-13-libatomic-devel
 }
 
 # Install packages required for build.
@@ -64,7 +73,7 @@ function install_build_prerequisites {
   uv_install --force cmake@4.3.2
 
   if [[ ${USE_CLANG} != "false" ]]; then
-    install_clang15
+    install_clang_with_openmp
   fi
 }
 
@@ -137,8 +146,8 @@ function install_velox_deps {
 (
   if [[ $# -ne 0 ]]; then
     if [[ ${USE_CLANG} != "false" ]]; then
-      export CC=/usr/bin/clang-15
-      export CXX=/usr/bin/clang++-15
+      export CC=${CLANG_CC}
+      export CXX=${CLANG_CXX}
     else
       # Activate gcc12; enable errors on unset variables afterwards.
       source /opt/rh/gcc-toolset-12/enable || exit 1
@@ -157,8 +166,8 @@ function install_velox_deps {
       echo "Skipping installation of build dependencies since INSTALL_PREREQUISITES is not set"
     fi
     if [[ ${USE_CLANG} != "false" ]]; then
-      export CC=/usr/bin/clang-15
-      export CXX=/usr/bin/clang++-15
+      export CC=${CLANG_CC}
+      export CXX=${CLANG_CXX}
     else
       # Activate gcc12; enable errors on unset variables afterwards.
       source /opt/rh/gcc-toolset-12/enable || exit 1
@@ -168,8 +177,8 @@ function install_velox_deps {
     echo "All dependencies for Velox installed!"
     if [[ ${USE_CLANG} != "false" ]]; then
       echo "To use clang for the Velox build set the CC and CXX environment variables in your session."
-      echo "  export CC=/usr/bin/clang-15"
-      echo "  export CXX=/usr/bin/clang++-15"
+      echo "  export CC=${CLANG_CC}"
+      echo "  export CXX=${CLANG_CXX}"
     fi
     dnf clean all
   fi
