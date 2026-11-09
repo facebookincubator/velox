@@ -50,8 +50,12 @@ class GpuVectorIndex {
   static int64_t maxSelection();
 
   /// Searches an IVF index. Host pointers are copied to and from the device.
-  /// Only nprobe and sel are read from 'params'. Returns true when the search
-  /// ran on the device.
+  /// Only nprobe is read from 'params'. Returns false, without using the
+  /// device, when 'params.sel' is set: the classic FAISS GPU kernels ignore
+  /// a row filter. Also returns false when the device search fails, including
+  /// an allocation failure, so the caller can search the CPU index. Temporary
+  /// device memory from the failed attempt belongs to FAISS and is released
+  /// as that attempt unwinds.
   bool search(
       faiss::idx_t numQueries,
       const float* queryVectors,

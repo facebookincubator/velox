@@ -2467,7 +2467,8 @@ TEST_F(VectorIndexTest, gpuSearchAppliesRowSelection) {
     };
     const auto cpuResults = search(/*useGpu=*/false);
     const auto gpuResults = search(/*useGpu=*/true);
-    ASSERT_TRUE(gpuResults.stats().usedGpu);
+    // A row filter stays on the CPU. The classic FAISS GPU kernels ignore it.
+    EXPECT_FALSE(gpuResults.stats().usedGpu);
     const auto results = gpuResults.results(0);
     ASSERT_EQ(results.size(), kNumNeighbors);
     for (const auto& result : results) {
@@ -2479,6 +2480,28 @@ TEST_F(VectorIndexTest, gpuSearchAppliesRowSelection) {
       }
     }
     EXPECT_EQ(rowIdOverlap(results, cpuResults.results(0)), 1.0);
+  }
+
+  // The query is row 0, so an unfiltered search returns that row first. The
+  // bitmap excludes it and keeps every other row eligible.
+  std::vector<float> queryAtRow0(
+      data.begin(), data.begin() + static_cast<std::ptrdiff_t>(kDimensions));
+  std::vector<uint8_t> excludeNearest(velox::bits::nbytes(kNumVectors), 0xff);
+  excludeNearest[0] &= static_cast<uint8_t>(~1U);
+  const auto excluded = reader->search({
+      .numQueries = 1,
+      .queryVectors = std::move(queryAtRow0),
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+          std::numeric_limits<uint32_t>::max()),
+      .rowSelection =
+          VectorIndex::SearchConfig::RowSelection::fromBitmap(excludeNearest),
+      .useGpu = true,
+  });
+  EXPECT_FALSE(excluded.stats().usedGpu);
+  ASSERT_EQ(excluded.results(0).size(), kNumNeighbors);
+  for (const auto& result : excluded.results(0)) {
+    EXPECT_NE(result.rowId, 0);
   }
 }
 

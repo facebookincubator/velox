@@ -168,7 +168,9 @@ class VectorIndex {
     /// Requests a GPU search. The first search copies a device index and later
     /// searches reuse it. IVF-Flat, IVF-SQ8 and IVF-PQ use FAISS GPU kernels.
     /// Falls back to CPU search when GPU support is not built, no device is
-    /// visible, FAISS rejects the index, or the IVF search sets maxCodes.
+    /// visible, FAISS rejects the index, a row filter is set, the IVF search
+    /// sets maxCodes, or the device search itself fails. A failed search
+    /// discards that attempt and the CPU index answers the query.
     /// HNSW and RaBitQ stay on the CPU.
     /// SearchStats::usedGpu reports which path ran.
     bool useGpu{false};

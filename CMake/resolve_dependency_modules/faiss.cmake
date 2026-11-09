@@ -39,13 +39,15 @@ endif()
 
 velox_resolve_dependency_url(FAISS)
 
+# SYSTEM would mark the downloaded headers as system headers. The compiler
+# then searches an older Faiss already installed under INSTALL_PREFIX before
+# this tree, and the two versions cannot be mixed.
 FetchContent_Declare(
   faiss
   URL ${VELOX_FAISS_SOURCE_URL}
   URL_HASH ${VELOX_FAISS_BUILD_SHA256_CHECKSUM}
   BINARY_DIR
   ${FETCHCONTENT_BASE_DIR}/faiss-build
-  SYSTEM
   EXCLUDE_FROM_ALL
 )
 
@@ -68,6 +70,16 @@ block()
   # Make FAISS available
   FetchContent_MakeAvailable(faiss)
   add_library(FAISS::faiss ALIAS faiss)
+  # Ahead of any Faiss headers inherited from the directory include path.
+  if(faiss_SOURCE_DIR)
+    target_include_directories(faiss BEFORE PUBLIC "${faiss_SOURCE_DIR}")
+  endif()
   unset(BUILD_TESTING CACHE)
   unset(BUILD_SHARED_LIBS CACHE)
 endblock()
+
+# Ahead of an older Faiss already installed under INSTALL_PREFIX, for every
+# target compiled after this dependency is resolved.
+if(faiss_SOURCE_DIR)
+  include_directories(BEFORE "${faiss_SOURCE_DIR}")
+endif()

@@ -21,12 +21,15 @@
 #include <utility>
 #include <vector>
 
-#include <faiss/gpu/GpuCloner.h>
-#include <faiss/gpu/GpuClonerOptions.h>
+#include <faiss/IndexIVFFlat.h>
+#include <faiss/IndexIVFPQ.h>
+#include <faiss/IndexScalarQuantizer.h>
+#include <faiss/gpu/GpuIndexIVFFlat.h>
+#include <faiss/gpu/GpuIndexIVFPQ.h>
+#include <faiss/gpu/GpuIndexIVFScalarQuantizer.h>
 #include <faiss/gpu/StandardGpuResources.h>
 #include <faiss/gpu/impl/IndexUtils.h>
 #include <faiss/gpu/utils/DeviceUtils.h>
-#include <faiss/impl/FaissException.h>
 #include <glog/logging.h>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -82,6 +85,57 @@ bool GpuVectorIndex::supports(VectorIndexType indexType) {
       "Unsupported vector index type: {}", static_cast<int>(indexType));
 }
 
+// Builds an empty GPU index and then copies into it. The unique_ptr owns the
+// index before copyFrom runs, so a failure while copying destroys the
+// incomplete device index.
+std::unique_ptr<faiss::Index> cloneToDevice(
+    faiss::gpu::StandardGpuResources& resources,
+    int deviceId,
+    const faiss::Index& cpuIndex) {
+  if (const auto* flat = dynamic_cast<const faiss::IndexIVFFlat*>(&cpuIndex)) {
+    faiss::gpu::GpuIndexIVFFlatConfig config;
+    config.device = deviceId;
+    config.use_cuvs = false;
+    auto gpuIndex = std::make_unique<faiss::gpu::GpuIndexIVFFlat>(
+        &resources, flat->d, flat->nlist, flat->metric_type, config);
+    gpuIndex->copyFrom(flat);
+    return gpuIndex;
+  }
+  if (const auto* scalarQuantizer =
+          dynamic_cast<const faiss::IndexIVFScalarQuantizer*>(&cpuIndex)) {
+    faiss::gpu::GpuIndexIVFScalarQuantizerConfig config;
+    config.device = deviceId;
+    config.use_cuvs = false;
+    auto gpuIndex = std::make_unique<faiss::gpu::GpuIndexIVFScalarQuantizer>(
+        &resources,
+        scalarQuantizer->d,
+        scalarQuantizer->nlist,
+        scalarQuantizer->sq.qtype,
+        scalarQuantizer->metric_type,
+        scalarQuantizer->by_residual,
+        config);
+    gpuIndex->copyFrom(scalarQuantizer);
+    return gpuIndex;
+  }
+  if (const auto* productQuantizer =
+          dynamic_cast<const faiss::IndexIVFPQ*>(&cpuIndex)) {
+    faiss::gpu::GpuIndexIVFPQConfig config;
+    config.device = deviceId;
+    config.use_cuvs = false;
+    auto gpuIndex = std::make_unique<faiss::gpu::GpuIndexIVFPQ>(
+        &resources,
+        productQuantizer->d,
+        productQuantizer->nlist,
+        productQuantizer->pq.M,
+        productQuantizer->pq.nbits,
+        productQuantizer->metric_type,
+        config);
+    gpuIndex->copyFrom(productQuantizer);
+    return gpuIndex;
+  }
+  NIMBLE_FAIL("Index type has no GPU implementation");
+}
+
 std::shared_ptr<const GpuVectorIndex> GpuVectorIndex::create(
     const faiss::Index& cpuIndex,
     VectorIndexType indexType) {
@@ -90,10 +144,7 @@ std::shared_ptr<const GpuVectorIndex> GpuVectorIndex::create(
   try {
     const std::lock_guard<std::mutex> lock{device.mutex};
     faiss::gpu::DeviceScope scope(device.id);
-    faiss::gpu::GpuClonerOptions options;
-    options.use_cuvs = false;
-    std::unique_ptr<faiss::Index> gpuIndex{faiss::gpu::index_cpu_to_gpu(
-        &device.resources, device.id, &cpuIndex, &options)};
+    auto gpuIndex = cloneToDevice(device.resources, device.id, cpuIndex);
     return std::shared_ptr<const GpuVectorIndex>(
         new GpuVectorIndex(device, std::move(gpuIndex)));
   } catch (const std::exception& error) {
@@ -126,17 +177,23 @@ bool GpuVectorIndex::search(
     float* scores,
     faiss::idx_t* labels,
     const faiss::SearchParametersIVF& params) const {
+  // The classic FAISS GPU kernels ignore a row selector and would return
+  // rows the caller excluded. Leave this batch on the CPU.
+  if (params.sel != nullptr) {
+    return false;
+  }
   // Pass a fresh object so CPU-only fields such as quantizer_params do not
   // reach FAISS GPU, which rejects unknown parameter types.
   faiss::SearchParametersIVF gpuParams;
   gpuParams.nprobe = params.nprobe;
-  gpuParams.sel = params.sel;
   const std::lock_guard<std::mutex> lock{device_.mutex};
   try {
     index_->search(
         numQueries, queryVectors, maxNumNeighbors, scores, labels, &gpuParams);
-  } catch (const faiss::FaissException& error) {
-    NIMBLE_FAIL("FAISS GPU search failed: {}", error.what());
+  } catch (const std::exception& error) {
+    LOG(WARNING) << "Vector search stays on CPU; GPU search failed: "
+                 << error.what();
+    return false;
   }
   return true;
 }

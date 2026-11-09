@@ -438,6 +438,12 @@ const VectorIndex::IvfSearchOptions* gpuIvfSearchOptions(
   const auto* ivfOptions =
       velox::checkedPointerCast<const VectorIndex::IvfSearchOptions>(
           config.searchOptions.get());
+  // The classic FAISS GPU kernels ignore a row filter. A filtered batch stays
+  // on the CPU, which applies the bitmap or range.
+  if (config.rowSelection.bitmap().has_value() ||
+      config.rowSelection.range().has_value()) {
+    return nullptr;
+  }
   // FAISS GPU rejects max_codes. A zero probe count falls through to the CPU
   // path, which reports the error.
   const auto numProbes =
