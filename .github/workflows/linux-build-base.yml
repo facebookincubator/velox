@@ -1090,10 +1090,36 @@ jobs:
         run: |
           ccache -sz
 
+      # Protobuf's arena poisons and unpoisons memory through inline helpers
+      # that are only active when the including code is built with ASan. The
+      # image's libprotobuf is built with GCC and no ASan, while Velox is built
+      # with clang and ASan, so arena blocks poisoned by Velox's copy of the
+      # helpers are handed back out by libprotobuf's uninstrumented copy without
+      # being unpoisoned. Rebuild Protobuf with the same compiler and ASan so
+      # both sides agree.
+      - name: Rebuild Protobuf with ASan
+        env:
+          CC: clang
+          CXX: clang++
+          EXTRA_PKG_CXXFLAGS: " -fsanitize=address -fno-omit-frame-pointer"
+          CFLAGS: "-fsanitize=address -fno-omit-frame-pointer"
+          LDFLAGS: "-fsanitize=address"
+          ASAN_OPTIONS: detect_leaks=0
+          # Abseil from the image is reused as is; only Protobuf is rebuilt.
+          VELOX_ABSEIL_INSTALLED: "1"
+        run: |
+          mkdir -p /tmp/protobuf-asan
+          cd /tmp/protobuf-asan
+          bash "${GITHUB_WORKSPACE}/scripts/setup-centos9.sh" install_protobuf
+          cd /
+          rm -rf /tmp/protobuf-asan
+
       - name: Make Asan/Ubsan Build (debug plus -O1)
         id: build
         env:
           MAKEFLAGS: NUM_THREADS=24 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=14
+          # protoc is ASan-instrumented after the step above.
+          ASAN_OPTIONS: detect_leaks=0
         run: |
           # VELOX_ENABLE_REMOTE_FUNCTIONS is turned off due producing a SEGV if the shared library is used.
           # Revist once PR 16019 lands that removes thrift.
@@ -1144,17 +1170,6 @@ jobs:
         env:
           LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
           LSAN_OPTIONS: detect_leaks=0
-          # Protobuf 22+ (we pin 35.1) annotates its arena-backed
-          # RepeatedField via its own ASan hooks. When libprotobuf is
-          # built without -fsanitize=address but Velox is, ASan's
-          # std-container-overflow instrumentation sees the arena
-          # memory as still-poisoned and flags Protobuf's
-          # GrowNoAnnotate memcpy as a container-overflow false
-          # positive. The ASan docs recommend disabling container
-          # overflow detection in this configuration; see the hint
-          # in the ASan report and
-          # https://github.com/google/sanitizers/wiki/AddressSanitizerContainerOverflow
-          ASAN_OPTIONS: detect_container_overflow=0
         working-directory: _build/debug
         run: |
           source /setup-classpath.sh
