@@ -69,6 +69,13 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
 }
 } // namespace
 
+PlanBuilder PlanBuilder::newPlan() const {
+  PlanBuilder builder(planNodeIdGenerator_, pool_);
+  builder.options_ = options_;
+  builder.filtersAsNode_ = filtersAsNode_;
+  return builder;
+}
+
 PlanBuilder& PlanBuilder::tableScan(
     const RowTypePtr& outputType,
     const std::vector<std::string>& subfieldFilters,
@@ -336,12 +343,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
     if (!hasAssignments) {
       assignments_.insert(
-          {name,
-           std::make_shared<HiveColumnHandle>(
-               hiveColumnName,
-               FileColumnHandle::ColumnType::kRegular,
-               type,
-               type)});
+          {name, buildConnectorColumnHandle(hiveColumnName, type, i)});
     }
   }
 
@@ -383,18 +385,8 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   }
 
   if (!tableHandle_) {
-    tableHandle_ = std::make_shared<HiveTableHandle>(
-        connectorId_,
-        tableName_,
-        std::move(subfieldFiltersMap_),
-        remainingFilterExpr,
-        dataColumns_,
-        indexColumns_,
-        /*tableParameters=*/std::unordered_map<std::string, std::string>{},
-        filterColumnHandles_,
-        sampleRate_,
-        /*dbName=*/"",
-        dataColumnFieldIds_);
+    tableHandle_ = buildConnectorTableHandle(
+        std::move(subfieldFiltersMap_), remainingFilterExpr);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);
@@ -405,6 +397,33 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         std::make_shared<core::FilterNode>(filterId, filterNodeExpr, result);
   }
   return result;
+}
+
+connector::ColumnHandlePtr
+PlanBuilder::TableScanBuilder::buildConnectorColumnHandle(
+    const std::string& name,
+    const TypePtr& type,
+    uint32_t /*outputIndex*/) {
+  return std::make_shared<HiveColumnHandle>(
+      name, connector::FileColumnHandle::ColumnType::kRegular, type, type);
+}
+
+connector::ConnectorTableHandlePtr
+PlanBuilder::TableScanBuilder::buildConnectorTableHandle(
+    common::SubfieldFilters subfieldFilters,
+    const core::TypedExprPtr& remainingFilter) {
+  return std::make_shared<HiveTableHandle>(
+      connectorId_,
+      tableName_,
+      std::move(subfieldFilters),
+      remainingFilter,
+      dataColumns_,
+      indexColumns_,
+      /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+      filterColumnHandles_,
+      sampleRate_,
+      /*dbName=*/"",
+      dataColumnFieldIds_);
 }
 
 core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
@@ -431,8 +450,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
           std::make_shared<connector::hive::HiveColumnHandle>(
               column,
               isPartitionKey
-                  ? connector::hive::FileColumnHandle::ColumnType::kPartitionKey
-                  : connector::hive::FileColumnHandle::ColumnType::kRegular,
+                  ? connector::FileColumnHandle::ColumnType::kPartitionKey
+                  : connector::FileColumnHandle::ColumnType::kRegular,
               targetColumns->childAt(i),
               targetColumns->childAt(i)));
     }
@@ -1406,6 +1425,24 @@ PlanBuilder& PlanBuilder::fixedPoint(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    core::MultiStagePlan body,
+    core::ConvergenceConfig convergenceConfig,
+    std::string outputStateEntry,
+    bool outputOnWorkerZero) {
+  VELOX_CHECK_NULL(
+      planNode_, "FixedPoint is a leaf node and cannot have an input");
+  planNode_ = std::make_shared<core::FixedPointNode>(
+      nextPlanNodeId(),
+      std::move(stateDeclarations),
+      std::move(body),
+      std::move(convergenceConfig),
+      std::move(outputStateEntry),
+      outputOnWorkerZero);
+  return *this;
+}
+
 namespace {
 // Resolves the implicit output state entry: the name of the last
 // VectorStateDeclaration in 'declarations'.  Used when fixedPoint() is called
@@ -2023,6 +2060,54 @@ PlanBuilder& PlanBuilder::spatialJoin(
       right,
       outputType);
   VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::vectorSearchJoin(
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const core::PlanNodePtr& right,
+    const std::string& probeEmbedding,
+    const std::string& buildIndex,
+    int64_t k,
+    const std::vector<std::string>& outputLayout,
+    const std::optional<std::string>& id,
+    const std::optional<std::string>& score,
+    core::JoinType joinType,
+    std::vector<std::pair<std::string, std::string>> searchOptions,
+    common::vectorindex::VectorIndexMetric metric,
+    std::string format) {
+  VELOX_CHECK_NOT_NULL(planNode_, "VectorSearchJoin cannot be the source node");
+  const auto& probeType = planNode_->outputType();
+  const auto& buildType = right->outputType();
+  const auto inputType = concat(probeType, buildType);
+  std::vector<TypePtr> types;
+  for (const auto& name : outputLayout) {
+    if (name == id) {
+      types.push_back(BIGINT());
+    } else if (name == score) {
+      types.push_back(REAL());
+    } else {
+      types.push_back(inputType->findChild(name));
+    }
+  }
+
+  planNode_ = std::make_shared<core::VectorSearchJoinNode>(
+      nextPlanNodeId(),
+      joinType,
+      fields(probeType, leftKeys),
+      fields(buildType, rightKeys),
+      field(probeType, probeEmbedding),
+      field(buildType, buildIndex),
+      std::move(format),
+      metric,
+      k,
+      std::move(searchOptions),
+      id,
+      score,
+      std::move(planNode_),
+      right,
+      ROW(outputLayout, std::move(types)));
   return *this;
 }
 

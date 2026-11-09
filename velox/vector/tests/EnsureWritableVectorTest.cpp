@@ -843,8 +843,7 @@ TEST_F(EnsureWritableVectorTest, flatMap) {
   test::assertEqualVectors(shallowCopy, flatMap);
 
   auto oddRows = selectOddRows(size);
-  SelectivityVector evenRows(size);
-  evenRows.deselect(oddRows);
+  auto evenRows = oddRows.complement();
 
   // Copy the odd rows from otherFlatMap into shallowCopy. We want to make sure
   // ensure writable will detect and copy on write the buffers as expected.

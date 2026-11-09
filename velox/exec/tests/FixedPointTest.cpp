@@ -16,6 +16,7 @@
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/QueuedImmediateExecutor.h>
 #include <folly/futures/SharedPromise.h>
 #include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
@@ -48,6 +49,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/exec/tests/utils/LocalFixedPoint.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 #include "velox/type/Filter.h"
@@ -62,6 +64,7 @@ using core::PlanNodePtr;
 using core::StateDeclarationPtr;
 using core::VectorStateDeclaration;
 using exec::test::AssertQueryBuilder;
+using exec::test::LocalFixedPoint;
 using exec::test::PlanBuilder;
 
 // Appends the rows of 'result' to 'rows' as (col0, col1) BIGINT pairs.
@@ -189,62 +192,9 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return node->as<FixedPointNode>()->numWorkers();
   }
 
-  // Runs the iteration loops, kept off the query executor the sub-tasks'
-  // drivers run on.  One thread serves every loop, nested or peer: a loop
-  // suspends while its sub-tasks run.
-  static folly::Executor* orchestrationExecutor() {
-    static const auto kExecutor =
-        std::make_shared<folly::CPUThreadPoolExecutor>(1);
-    return kExecutor.get();
-  }
-
-  // Formats 'nesting', one "/{planNodeId}.{iteration}" per step.
-  static std::string nestingSuffix(
-      const std::vector<FixedPointOptions::NestingStep>& nesting) {
-    std::string suffix;
-    for (const auto& step : nesting) {
-      suffix += fmt::format("/{}.{}", step.planNodeId, step.iteration);
-    }
-    return suffix;
-  }
-
-  // Returns the in-process "local://" task id of the producer 'planNodeId' of
-  // the loop at 'address' in 'iteration'.  LocalExchangeSource reads a task by
-  // its id, so the same string names the producer and the split reading it.
-  static std::string producerId(
-      const FixedPointOptions::LoopAddress& address,
-      int32_t iteration,
-      const std::string& planNodeId) {
-    return fmt::format(
-        "local://{}{}.it{}.{}",
-        address.worker,
-        nestingSuffix(address.nesting),
-        iteration,
-        planNodeId);
-  }
-
-  // FixedPointOptions naming sub-tasks in the in-process "local://" scheme.  A
-  // FixedPointLoop provides no defaults, so the application (here the test)
-  // supplies them.
+  // FixedPointOptions naming sub-tasks in the in-process "local://" scheme.
   static const FixedPointOptions& localOptions() {
-    static const FixedPointOptions kOptions = [] {
-      FixedPointOptions options;
-      options.orchestrationExecutor = orchestrationExecutor();
-      options.producerTaskId = producerId;
-      options.producerSplit = [](const FixedPointOptions::LoopAddress& peer,
-                                 int32_t iteration,
-                                 const std::string& planNodeId)
-          -> std::shared_ptr<connector::ConnectorSplit> {
-        return std::make_shared<exec::RemoteConnectorSplit>(
-            producerId(peer, iteration, planNodeId));
-      };
-      options.subTaskId = [](const std::string& workerTaskId, int64_t counter) {
-        return fmt::format("{}.sub{}", workerTaskId, counter);
-      };
-      return options;
-    }();
-
-    return kOptions;
+    return LocalFixedPoint::options();
   }
 
   // A publishVerdict hook that drops the verdict.
@@ -548,14 +498,14 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // from its splits.  N is taken from the plan's first shuffle.  The
   // coordinator (this method) names the workers with a FixedPointSplit on
   // each task; every worker reads every worker, including itself.  If
-  // 'upstreamPlan' is set,
-  // the coordinator also launches an upstream producer task and adds a remote
-  // split for it to each worker's initial-plan Exchange, so the worker's
-  // initial plan receives its shard via shuffle.  If 'initSplitsFor' is set,
-  // the coordinator assigns worker d the source splits it returns (e.g. a
-  // TableScan's file split) — its initial plan reads its shard from them.
-  // Workers run concurrently (each on its own thread) and rendezvous through
-  // the shuffle.  Returns each worker's shard rows and iteration count.
+  // 'upstreamPlan' is set, the coordinator also launches an upstream producer
+  // task and adds a remote split for it to each worker's initial-plan
+  // Exchange, so the worker's initial plan receives its shard via shuffle.  If
+  // 'initSplitsFor' is set, the coordinator assigns worker d the source splits
+  // it returns (e.g. a TableScan's file split) — its initial plan reads its
+  // shard from them.  Workers run concurrently (each on its own thread) and
+  // rendezvous through the shuffle.  Returns each worker's shard rows and
+  // iteration count.
   //
   // 'workers' overrides the worker count the plan implies, for a loop that no
   // body shuffle gives a width.  'baseOptions' replaces localOptions().
@@ -568,26 +518,59 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
       std::optional<int32_t> workers = std::nullopt,
       const FixedPointOptions& baseOptions = localOptions()) {
     const int32_t numWorkers = workers.value_or(numWorkersOf(plan));
-    const auto fixedPointNodeId = plan->id();
     auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
 
     // Upstream producer task feeding the workers' initial plans.  Its
     // partitioned output is read (by partition = worker destination) by each
-    // worker's initial-plan Exchange.
+    // worker's initial-plan Exchange.  The coordinator names the upstream task
+    // (the operator cannot); workers learn it from the remote splits added
+    // below.  "local://" routes it to the in-process exchange source.
     exec::TaskPtr upstream;
     if (upstreamPlan != nullptr) {
-      // The coordinator names the upstream task (the operator cannot); workers
-      // learn it from the remote splits added below.  "local://" routes it to
-      // the in-process exchange source.
       upstream = startUpstreamTask(*upstreamPlan, queryCtx);
     }
 
-    // The coordinator owns sub-task addressing (the fixed point provides no
-    // defaults): localOptions() supplies the producer ids and internal sub-task
-    // ids in the in-process scheme.
+    const auto options = withVerdictHooks(baseOptions);
+
+    std::vector<Worker> workerList;
+    workerList.reserve(numWorkers);
+    const auto serializedPlan = plan->serialize();
+    for (int32_t d = 0; d < numWorkers; ++d) {
+      workerList.push_back(
+          makeWorker(serializedPlan, d, mode, queryCtx, options));
+    }
+    startWorkers(plan, workerList, mode, upstream, initSplitsFor);
+    auto perWorker = readWorkers(workerList);
+
+    // All workers have finished Phase 1, so the upstream's partitions are
+    // drained; let it complete and surface any error.
+    if (upstream != nullptr) {
+      auto future = upstream->taskCompletionFuture();
+      std::move(future).wait();
+      if (auto error = upstream->error()) {
+        std::rethrow_exception(error);
+      }
+    }
+
+    std::vector<WorkerRun> results;
+    results.reserve(numWorkers);
+    for (int32_t d = 0; d < numWorkers; ++d) {
+      auto* fixedPoint = workerList[d].task->fixedPoint();
+      VELOX_CHECK_NOT_NULL(fixedPoint, "Worker task has no FixedPointLoop");
+      results.push_back(
+          {std::move(perWorker[d]),
+           fixedPoint->iterations(),
+           fixedPoint->executionStats()});
+    }
+    return results;
+  }
+
+  // Returns 'baseOptions' with verdict hooks, where it has none, that carry
+  // each loop's verdict from worker 0 to its peers, keyed by worker 0's
+  // address.
+  static FixedPointOptions withVerdictHooks(
+      const FixedPointOptions& baseOptions) {
     auto options = baseOptions;
-    // Carries each loop's verdict from worker 0 to its peers, keyed by worker
-    // 0's address.
     auto verdicts = std::make_shared<folly::Synchronized<
         folly::F14NodeMap<std::string, folly::SharedPromise<bool>>>>();
     auto verdictKey = [](const FixedPointOptions::LoopAddress& workerZero,
@@ -595,7 +578,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
       return fmt::format(
           "{}{}#{}",
           workerZero.worker,
-          nestingSuffix(workerZero.nesting),
+          LocalFixedPoint::nestingSuffix(workerZero.nesting),
           iteration);
     };
     if (!options.publishVerdict) {
@@ -618,136 +601,227 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
                 .getSemiFuture();
           };
     }
+    return options;
+  }
 
-    // Each worker collects its shard rows into perWorker[d].
-    std::vector<std::vector<std::pair<int64_t, int64_t>>> perWorker(numWorkers);
+  // One worker of runWorkers(): its task, and the cursor that reads its rows.
+  struct Worker {
+    exec::TaskPtr task;
+    std::unique_ptr<exec::TaskCursor> reader;
+  };
 
-    std::vector<std::unique_ptr<exec::TaskCursor>> cursors;
-    cursors.reserve(numWorkers);
-    const auto serializedPlan = plan->serialize();
-    for (int32_t d = 0; d < numWorkers; ++d) {
-      auto node =
-          ISerializable::deserialize<core::PlanNode>(serializedPlan, pool());
-      cursors.push_back(
-          TaskCursor::create({
-              .planNode = std::move(node),
-              .destination = d,
-              .queryCtx = mode == exec::Task::ExecutionMode::kParallel
-                  ? queryCtx
-                  : nullptr,
-              .copyResult = true,
-              .serialExecution = mode == exec::Task::ExecutionMode::kSerial,
-              .fixedPointOptions = &options,
-          }));
+  // Creates worker 'destination' from its copy of the plan. A parallel worker
+  // ends in a PartitionedOutput, as a distributed worker does, and a cursor
+  // over an Exchange reads its rows. A serial loop has no peer reads, so a
+  // cursor drives the worker itself. Each worker's task has its own unique id,
+  // its destination, as tasks of one stage do in a distributed query.
+  Worker makeWorker(
+      const folly::dynamic& serializedPlan,
+      int32_t destination,
+      exec::Task::ExecutionMode mode,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      const FixedPointOptions& options) {
+    auto node =
+        ISerializable::deserialize<core::PlanNode>(serializedPlan, pool());
+    if (mode == exec::Task::ExecutionMode::kSerial) {
+      auto reader = TaskCursor::create({
+          .planNode = std::move(node),
+          .destination = destination,
+          .copyResult = true,
+          .serialExecution = true,
+          .taskUniqueId = destination,
+          .fixedPointOptions = &options,
+      });
+      auto task = reader->task();
+      return {std::move(task), std::move(reader)};
+    }
+    const auto outputType = node->outputType();
+    core::PlanFragment fragment{core::PartitionedOutputNode::single(
+        "worker-output", outputType, "Presto", std::move(node))};
+    fragment.taskUniqueId = destination;
+    auto task = exec::Task::create(
+        workerTaskId(queryCtx->queryId(), destination),
+        std::move(fragment),
+        destination,
+        queryCtx,
+        exec::Task::ExecutionMode::kParallel,
+        exec::Consumer{},
+        /*memoryArbitrationPriority=*/0,
+        /*spillDiskOpts=*/std::nullopt,
+        /*onError=*/nullptr,
+        &options);
+    core::PlanNodeId exchangeId;
+    auto reader = TaskCursor::create({
+        .planNode = PlanBuilder()
+                        .exchange(outputType, "Presto")
+                        .capturePlanNodeId(exchangeId)
+                        .planNode(),
+        .queryCtx = queryCtx,
+        .copyResult = true,
+    });
+    reader->task()->addSplit(exchangeId, remoteSplit(task));
+    reader->task()->noMoreSplits(exchangeId);
+    return {std::move(task), std::move(reader)};
+  }
+
+  // Returns the task id of parallel worker 'destination' of query 'queryId'.
+  static std::string workerTaskId(
+      std::string_view queryId,
+      int32_t destination) {
+    return fmt::format("local://fixedpoint-{}-worker-{}", queryId, destination);
+  }
+
+  // Returns whether 'worker', a loop's name for a worker, names parallel
+  // worker 'destination'. The FixedPointSplit names each worker by its
+  // workerTaskId().
+  static bool isWorker(std::string_view worker, int32_t destination) {
+    return worker.ends_with(fmt::format("-worker-{}", destination));
+  }
+
+  // Gives each worker its initial-plan splits and the FixedPointSplit naming
+  // the workers, by their task ids, and starts the parallel workers.
+  // 'initSplitsFor(d)' splits are worker d's initial-plan source splits (e.g.
+  // a TableScan file split), forwarded verbatim; an initial-plan Exchange gets
+  // a remote split naming 'upstream'.
+  //
+  // In parallel mode the workers are named once every loop has initialized,
+  // as they may be by an application that names them after starting the
+  // tasks: the first iteration must wait for them.
+  void startWorkers(
+      const core::PlanNodePtr& plan,
+      const std::vector<Worker>& workerList,
+      exec::Task::ExecutionMode mode,
+      const exec::TaskPtr& upstream,
+      const std::function<std::vector<std::pair<core::PlanNodeId, exec::Split>>(
+          int32_t)>& initSplitsFor) {
+    const bool parallel = mode == exec::Task::ExecutionMode::kParallel;
+    const auto* fixedPoint = plan->as<FixedPointNode>();
+    if (!fixedPoint->requiresSplits()) {
+      if (parallel) {
+        for (const auto& worker : workerList) {
+          worker.task->start(/*maxDrivers=*/1);
+        }
+      }
+      return;
     }
 
-    // The application names the workers with one FixedPointSplit on each
-    // worker's FixedPointNode, here by their task ids.  'initSplitsFor(d)'
-    // splits are worker
-    // d's initial-plan source splits (e.g. a TableScan file split), forwarded
-    // verbatim; an initial-plan Exchange gets a remote split naming the
-    // upstream task.
-    //
-    // In parallel mode the workers are named once every loop has initialized,
-    // as they may be by an application that names them after starting the
-    // tasks: the first iteration must wait for them.
-    if (plan->as<FixedPointNode>()->requiresSplits()) {
-      for (int32_t d = 0; d < numWorkers; ++d) {
-        if (upstream != nullptr) {
-          const auto exchangeId = initialExchangeId(plan);
-          cursors[d]->task()->addSplit(exchangeId, remoteSplit(upstream));
-          cursors[d]->task()->noMoreSplits(exchangeId);
-        }
-        if (initSplitsFor != nullptr) {
-          // Addressed to the node that reads them, not to the fixed point:
-          // that is how a fixed point with several scanned initial plans keeps
-          // each one's splits apart.
-          for (auto& [sourceId, split] : initSplitsFor(d)) {
-            cursors[d]->task()->addSplit(sourceId, std::move(split));
-            cursors[d]->task()->noMoreSplits(sourceId);
-          }
-        }
+    for (int32_t d = 0; d < static_cast<int32_t>(workerList.size()); ++d) {
+      const auto& task = workerList[d].task;
+      if (upstream != nullptr) {
+        const auto exchangeId = initialExchangeId(plan);
+        task->addSplit(exchangeId, remoteSplit(upstream));
+        task->noMoreSplits(exchangeId);
       }
-      if (mode == exec::Task::ExecutionMode::kParallel) {
-        for (auto& cursor : cursors) {
-          cursor->start();
+      if (initSplitsFor != nullptr) {
+        // Addressed to the node that reads them, not to the fixed point: that
+        // is how a fixed point with several scanned initial plans keeps each
+        // one's splits apart.
+        for (auto& [sourceId, split] : initSplitsFor(d)) {
+          task->addSplit(sourceId, std::move(split));
+          task->noMoreSplits(sourceId);
         }
-        // A loop nested in an initial plan needs the workers to initialize.
-        const auto& declarations =
-            plan->as<FixedPointNode>()->stateDeclarations();
-        const bool nestsInInitialPlan = std::any_of(
-            declarations.begin(), declarations.end(), [](const auto& state) {
-              return state->initialPlan() != nullptr &&
-                  core::PlanNode::findFirstNode<FixedPointNode>(
-                      state->initialPlan().get()) != nullptr;
-            });
-        if (!nestsInInitialPlan) {
-          for (auto& cursor : cursors) {
-            waitForInitialization(*cursor->task());
-          }
-        }
-      }
-      std::vector<std::string> workers;
-      for (const auto& cursor : cursors) {
-        workers.push_back(cursor->task()->taskId());
-      }
-      for (const auto& cursor : cursors) {
-        cursor->task()->addSplit(fixedPointNodeId, workersSplit(workers));
-        cursor->task()->noMoreSplits(fixedPointNodeId);
       }
     }
 
-    // Drive each cursor on its own thread so peer workers can rendezvous
-    // through the shuffle in both serial and parallel execution.  As a
-    // coordinator does, the first failure fails the run and aborts every
-    // worker, so none waits on the failed one.
-    folly::Synchronized<std::exception_ptr> firstError;
-    std::vector<std::thread> threads;
-    threads.reserve(numWorkers);
-    for (int32_t d = 0; d < numWorkers; ++d) {
-      threads.emplace_back([&, d]() {
-        try {
-          perWorker[d] = readRows(*cursors[d]);
-        } catch (...) {
-          firstError.withWLock([](auto& error) {
-            if (error == nullptr) {
-              error = std::current_exception();
+    if (parallel) {
+      for (const auto& worker : workerList) {
+        worker.task->start(/*maxDrivers=*/1);
+      }
+      // A loop nested in an initial plan needs the workers to initialize.
+      const auto& declarations = fixedPoint->stateDeclarations();
+      const bool nestsInInitialPlan = std::any_of(
+          declarations.begin(), declarations.end(), [](const auto& state) {
+            return state->initialPlan() != nullptr &&
+                core::PlanNode::findFirstNode<FixedPointNode>(
+                    state->initialPlan().get()) != nullptr;
+          });
+      if (!nestsInInitialPlan) {
+        for (const auto& worker : workerList) {
+          waitForInitialization(*worker.task);
+        }
+      }
+    }
+
+    std::vector<std::string> workerIds;
+    workerIds.reserve(workerList.size());
+    for (const auto& worker : workerList) {
+      workerIds.push_back(worker.task->taskId());
+    }
+
+    for (const auto& worker : workerList) {
+      worker.task->addSplit(plan->id(), workersSplit(workerIds));
+      worker.task->noMoreSplits(plan->id());
+    }
+  }
+
+  // Reads each worker's rows on its own thread so peer workers can rendezvous
+  // through the shuffle in both serial and parallel execution.  As a
+  // coordinator does, the first failure, of a worker or of a read, fails the
+  // run and aborts every worker, so none waits on the failed one.  Workers
+  // still running after a minute fail the run too, so a hang fails the test.
+  static std::vector<std::vector<std::pair<int64_t, int64_t>>> readWorkers(
+      const std::vector<Worker>& workerList) {
+    struct Failure {
+      folly::Synchronized<std::exception_ptr> firstError;
+      std::vector<exec::TaskPtr> tasks;
+
+      void fail(std::exception_ptr error) {
+        firstError.withWLock([&](auto& first) {
+          if (first == nullptr) {
+            first = std::move(error);
+          }
+        });
+        for (const auto& task : tasks) {
+          task->requestAbort();
+        }
+      }
+    };
+    // Shared with the completion callbacks, which can outlive this call.
+    auto failure = std::make_shared<Failure>();
+    for (const auto& worker : workerList) {
+      failure->tasks.push_back(worker.task);
+      failure->tasks.push_back(worker.reader->task());
+    }
+    for (const auto& worker : workerList) {
+      worker.task->taskCompletionFuture()
+          .via(&folly::QueuedImmediateExecutor::instance())
+          .thenValue([failure, task = worker.task](auto&&) {
+            if (auto error = task->error()) {
+              failure->fail(error);
             }
           });
-          for (auto& cursor : cursors) {
-            cursor->task()->requestAbort();
-          }
+    }
+
+    std::vector<std::vector<std::pair<int64_t, int64_t>>> perWorker(
+        workerList.size());
+    std::atomic<size_t> numRunning{workerList.size()};
+    folly::Baton<> finished;
+    std::vector<std::thread> threads;
+    threads.reserve(workerList.size());
+    for (size_t d = 0; d < workerList.size(); ++d) {
+      threads.emplace_back([&, d]() {
+        try {
+          perWorker[d] = readRows(*workerList[d].reader);
+        } catch (...) {
+          failure->fail(std::current_exception());
+        }
+        if (--numRunning == 0) {
+          finished.post();
         }
       });
+    }
+    if (!finished.try_wait_for(std::chrono::minutes(1))) {
+      failure->fail(
+          std::make_exception_ptr(
+              std::runtime_error("Workers did not finish within a minute")));
     }
     for (auto& thread : threads) {
       thread.join();
     }
-    if (auto error = *firstError.rlock()) {
+    if (auto error = *failure->firstError.rlock()) {
       std::rethrow_exception(error);
     }
-
-    // All workers have finished Phase 1, so the upstream's partitions are
-    // drained; let it complete and surface any error.
-    if (upstream != nullptr) {
-      auto future = upstream->taskCompletionFuture();
-      std::move(future).wait();
-      if (auto error = upstream->error()) {
-        std::rethrow_exception(error);
-      }
-    }
-
-    std::vector<WorkerRun> results;
-    results.reserve(numWorkers);
-    for (int32_t d = 0; d < numWorkers; ++d) {
-      auto* fixedPoint = cursors[d]->task()->fixedPoint();
-      VELOX_CHECK_NOT_NULL(fixedPoint, "Worker task has no FixedPointLoop");
-      results.push_back(
-          {std::move(perWorker[d]),
-           fixedPoint->iterations(),
-           fixedPoint->executionStats()});
-    }
-    return results;
+    return perWorker;
   }
 
   // Waits until the loop of 'task' has run its initial plans, or fails after
@@ -929,7 +1003,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // numWorkers * numPlans sub-task drivers live at once (producers stay up
   // while peers' consumers drain them), so this must comfortably exceed that.
   // The run() loops that block on these sub-tasks run on a separate executor
-  // (see orchestrationExecutor()).
+  // (see LocalFixedPoint::orchestrationExecutor()).
   std::shared_ptr<folly::CPUThreadPoolExecutor> cpuExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(16)};
 
@@ -1823,6 +1897,201 @@ TEST_F(FixedPointTest, shuffleThenBroadcast) {
       testing::UnorderedElementsAreArray(expected));
 }
 
+// A kFixed stage narrower than the loop: worker 2 runs the first and last
+// stages but not the middle one, which runs on workers 0 and 1.  The middle
+// stage reads all three workers, and the last stage reads the two that run
+// the middle one.  Every worker starts with the same row per key, the middle
+// stage sums each key over the workers, and the last stage holds key k on
+// worker k.
+TEST_F(FixedPointTest, fixedStageOnSomeWorkers) {
+  constexpr int32_t kNumWorkers{3};
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("values", schema)
+                   .partitionedOutput({"key"}, 2)
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(schema, "Presto")
+                   .singleAggregation({"key"}, {"sum(val) AS val"})
+                   .partitionedOutput(
+                       {"key"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       std::make_shared<ModuloPartitionFunctionSpec>())
+                   .planNode(),
+               PlanBuilder(idGenerator).exchange(schema, "Presto").planNode()},
+              ConvergenceConfig::withMaxIterations(1),
+              /*outputStateEntry=*/"values")
+          .planNode();
+  ASSERT_EQ(
+      plan->as<FixedPointNode>()->body().stage(2).type,
+      core::StageType::kFixed);
+  ASSERT_EQ(plan->as<FixedPointNode>()->body().stage(2).numRemotePartitions, 2);
+
+  auto start = makeRowVector(
+      {"key", "val"},
+      {makeFlatVector<int64_t>({0, 1, 2}), makeFlatVector<int64_t>({1, 1, 1})});
+  const auto runs = runOnWorkers(plan, {start, start, start});
+
+  ASSERT_EQ(runs.size(), kNumWorkers);
+  for (int32_t worker = 0; worker < kNumWorkers; ++worker) {
+    SCOPED_TRACE(fmt::format("worker {}", worker));
+    EXPECT_THAT(
+        runs[worker].rows,
+        testing::ElementsAre(std::pair<int64_t, int64_t>{worker, 3}));
+    std::vector<size_t> bodyPlans;
+    for (const auto& planStats : runs[worker].stats.iterations[0].body.plans) {
+      bodyPlans.push_back(planStats.planIndex);
+    }
+    if (worker < 2) {
+      EXPECT_THAT(bodyPlans, testing::UnorderedElementsAre(0, 1, 2));
+    } else {
+      EXPECT_THAT(bodyPlans, testing::UnorderedElementsAre(0, 2));
+    }
+  }
+}
+
+// An AssignUniqueId in a loop body takes its ids from the worker's task, so
+// they do not repeat across stages, iterations or workers.  Each iteration,
+// both stages number every row of the last iteration's delta: the first
+// writes its id as the key, the second as the value.
+TEST_F(FixedPointTest, assignUniqueIdInBody) {
+  constexpr int32_t kNumWorkers{2};
+  constexpr int32_t kNumIterations{3};
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {core::VectorState("rows", schema, /*append=*/true)
+                   .initial(
+                       PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("rows", schema, /*delta=*/true)
+                   .assignUniqueId("id")
+                   .project({"id AS key", "val"})
+                   .partitionedOutput({"key"}, kNumWorkers)
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(schema, "Presto")
+                   .assignUniqueId("id")
+                   .project({"key", "id AS val"})
+                   .planNode()},
+              ConvergenceConfig::withMaxIterations(kNumIterations),
+              /*outputStateEntry=*/"rows")
+          .planNode();
+
+  // Each worker starts with one row, so each iteration numbers two rows in
+  // each stage.
+  constexpr int64_t kSeed{-1};
+  std::vector<int64_t> ids;
+  for (const auto& run : runOnWorkers(
+           plan,
+           {makeKeyValueRow(kSeed, kSeed), makeKeyValueRow(kSeed, kSeed)})) {
+    for (const auto& [key, val] : run.rows) {
+      if (val != kSeed) {
+        ids.push_back(key);
+        ids.push_back(val);
+      }
+    }
+  }
+  ASSERT_THAT(ids, testing::SizeIs(2 * kNumWorkers * kNumIterations));
+  EXPECT_EQ(std::set<int64_t>(ids.begin(), ids.end()).size(), ids.size());
+}
+
+// A step that needs a global value: each key takes its neighbor's value through
+// a shuffle by key, plus the total over every worker.  Every worker reduces its
+// part, worker 0 alone combines the parts, and broadcasts the total to the
+// root, which reads both shuffles -- the general form of PageRank's dangling
+// total.
+TEST_F(FixedPointTest, bodyFragments) {
+  constexpr int32_t kNumWorkers{2};
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Sends each key's value to its neighbor's owner.
+  auto neighbors = PlanBuilder(idGenerator)
+                       .stateSource("values", schema)
+                       .project({"(key + 1) % 2 AS key", "val"})
+                       .partitionedOutput(
+                           {"key"},
+                           kNumWorkers,
+                           /*replicateNullsAndAny=*/false,
+                           std::make_shared<ModuloPartitionFunctionSpec>())
+                       .planNode();
+  // Gathers each worker's partial total to worker 0.
+  auto partialTotals = PlanBuilder(idGenerator)
+                           .stateSource("values", schema)
+                           .singleAggregation({}, {"sum(val) AS total"})
+                           .partitionedOutput({}, 1)
+                           .planNode();
+  core::PlanNodeId partialsExchange;
+  auto total = PlanBuilder(idGenerator)
+                   .exchange(ROW("total", BIGINT()), "Presto")
+                   .capturePlanNodeId(partialsExchange)
+                   .singleAggregation({}, {"sum(total) AS total"})
+                   .partitionedOutputBroadcast()
+                   .planNode();
+  core::PlanNodeId neighborsExchange;
+  core::PlanNodeId totalExchange;
+  auto newValues = PlanBuilder(idGenerator)
+                       .exchange(schema, "Presto")
+                       .capturePlanNodeId(neighborsExchange)
+                       .nestedLoopJoin(
+                           PlanBuilder(idGenerator)
+                               .exchange(ROW("total", BIGINT()), "Presto")
+                               .capturePlanNodeId(totalExchange)
+                               .planNode(),
+                           {"key", "val", "total"})
+                       .project({"key", "val + total AS val"})
+                       .planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              core::MultiStagePlan({
+                  {.id = 1, .plan = neighbors},
+                  {.id = 2, .plan = partialTotals},
+                  {.id = 3,
+                   .type = core::StageType::kSingle,
+                   .plan = total,
+                   .inputs = {{partialsExchange, 2}}},
+                  {.id = 4,
+                   .type = core::StageType::kFixed,
+                   .numRemotePartitions = kNumWorkers,
+                   .plan = newValues,
+                   .inputs = {{neighborsExchange, 1}, {totalExchange, 3}}},
+              }),
+              sumVerdict(idGenerator, schema, "sum(val)", "total >= 81"),
+              /*outputStateEntry=*/"values")
+          .planNode();
+
+  // Each key becomes its neighbor's value plus the total, so the total triples
+  // every iteration: 1 + 2 = 3 -> 5 + 4 = 9 -> 13 + 14 = 27 -> 41 + 40 = 81,
+  // converging after exactly three iterations.
+  std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
+      {0, 41, 3},
+      {1, 40, 3},
+  };
+  EXPECT_THAT(
+      withIterations(
+          runOnWorkers(plan, {makeKeyValueRow(0, 1), makeKeyValueRow(1, 2)})),
+      testing::UnorderedElementsAreArray(expected));
+}
+
 // A convergence criterion that shuffles.  The body here needs no exchange, so
 // each worker's shard stays private and the two workers hold different values;
 // the criterion is a global sum, which neither can evaluate alone.  This is the
@@ -1873,6 +2142,154 @@ TEST_F(FixedPointTest, convergenceShuffle) {
     EXPECT_GE(
         iteration.convergence->totalNanos,
         iteration.convergence->verdictWaitNanos);
+  }
+}
+
+// A verdict plan can finish before it reads every worker's rows: here a limit
+// ends it after worker 0's row, before worker 1 creates the producer it would
+// read next. Worker 1's producer does not wait for that reader, so the loop
+// finishes. Worker 1 creates its producer only once worker 0 has published the
+// verdict.
+TEST_F(FixedPointTest, verdictEndsBeforePeerProducer) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  core::PlanNodeId gatherId;
+
+  PlanBuilder builder;
+  auto plan = builder
+                  .fixedPoint(
+                      std::make_shared<VectorStateDeclaration>(
+                          "values",
+                          schema,
+                          builder.newPlan().tableScan(schema).planNode()),
+                      builder.newPlan()
+                          .stateSource("values", schema)
+                          .project({"key", "val + 1 AS val"}),
+                      ConvergenceConfig::globalVerdict(
+                          {
+                              builder.newPlan()
+                                  .stateSource("values", schema)
+                                  .partitionedOutput({}, 1)
+                                  .capturePlanNodeId(gatherId)
+                                  .planNode(),
+                          },
+                          builder.newPlan()
+                              .exchange(schema, "Presto")
+                              .limit(0, 1, false)
+                              .project({"true AS converged"})
+                              .planNode(),
+                          /*maxIterations=*/10),
+                      /*outputStateEntry=*/"values")
+                  .planNode();
+
+  auto options = withVerdictHooks(localOptions());
+
+  // Worker 1 waits on the loop's thread, so worker 0 needs a thread of its
+  // own.
+  folly::CPUThreadPoolExecutor orchestrationExecutor(2);
+  options.orchestrationExecutor = &orchestrationExecutor;
+
+  auto published = std::make_shared<folly::Baton<>>();
+  options.publishVerdict = [published,
+                            basePublishVerdict = options.publishVerdict](
+                               const FixedPointOptions::LoopAddress& workerZero,
+                               int32_t iteration,
+                               bool converged) {
+    basePublishVerdict(workerZero, iteration, converged);
+    published->post();
+  };
+
+  auto baseProducerTaskId = options.producerTaskId;
+  options.producerTaskId =
+      [published, producerTaskId = baseProducerTaskId, gatherId](
+          const FixedPointOptions::LoopAddress& self,
+          int32_t iteration,
+          const std::string& planNodeId) {
+        if (planNodeId == gatherId && isWorker(self.worker, 1)) {
+          EXPECT_TRUE(published->try_wait_for(std::chrono::seconds(10)));
+        }
+        return producerTaskId(self, iteration, planNodeId);
+      };
+
+  std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
+      {0, 1, 1},
+      {1, 11, 1},
+  };
+  EXPECT_THAT(
+      withIterations(runOnWorkers(
+          plan, {makeKeyValueRow(0, 0), makeKeyValueRow(1, 10)}, options)),
+      testing::UnorderedElementsAreArray(expected));
+}
+
+// A verdict that combines two statistics gathered by separate fragments: a sum
+// and a count of every worker's values.  Worker 0 alone reads both gathers and
+// shares its verdict.
+TEST_F(FixedPointTest, convergenceFragments) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto totals = PlanBuilder(idGenerator)
+                    .stateSource("values", schema)
+                    .singleAggregation({}, {"sum(val) AS total"})
+                    .partitionedOutput({}, 1)
+                    .planNode();
+  auto counts = PlanBuilder(idGenerator)
+                    .stateSource("values", schema)
+                    .singleAggregation({}, {"count(1) AS n"})
+                    .partitionedOutput({}, 1)
+                    .planNode();
+  core::PlanNodeId totalsExchange;
+  core::PlanNodeId countsExchange;
+  auto verdict = PlanBuilder(idGenerator)
+                     .exchange(ROW("total", BIGINT()), "Presto")
+                     .capturePlanNodeId(totalsExchange)
+                     .singleAggregation({}, {"sum(total) AS total"})
+                     .nestedLoopJoin(
+                         PlanBuilder(idGenerator)
+                             .exchange(ROW("n", BIGINT()), "Presto")
+                             .capturePlanNodeId(countsExchange)
+                             .singleAggregation({}, {"sum(n) AS n"})
+                             .planNode(),
+                         {"total", "n"})
+                     .project({"total >= 8 * n AS converged"})
+                     .planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode()),
+              PlanBuilder(idGenerator)
+                  .stateSource("values", schema)
+                  .project({"key", "val + 1 AS val"}),
+              ConvergenceConfig::converging(
+                  core::MultiStagePlan({
+                      {.id = 1, .plan = totals},
+                      {.id = 2, .plan = counts},
+                      {.id = 3,
+                       .type = core::StageType::kSingle,
+                       .plan = verdict,
+                       .inputs = {{totalsExchange, 1}, {countsExchange, 2}}},
+                  }),
+                  /*maxIterations=*/100),
+              /*outputStateEntry=*/"values")
+          .planNode();
+  // Values move 0,10 -> 1,11 -> 2,12 -> 3,13, so the mean of the two reaches 8
+  // on the third iteration.  A count of one worker's rows alone would stop the
+  // loop on the first.
+  std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
+      {0, 3, 3},
+      {1, 13, 3},
+  };
+  const auto runs =
+      runOnWorkers(plan, {makeKeyValueRow(0, 0), makeKeyValueRow(1, 10)});
+  EXPECT_THAT(
+      withIterations(runs), testing::UnorderedElementsAreArray(expected));
+
+  // Only worker 1 waits for the verdict.
+  for (const auto& iteration : runs[0].stats.iterations) {
+    EXPECT_EQ(0, iteration.convergence->verdictWaitNanos);
   }
 }
 
@@ -1984,7 +2401,8 @@ TEST_F(FixedPointTest, nestedShuffleInVerdict) {
                       .project({"a0 >= val"})
                       .planNode(),
                   /*maxIterations=*/100)),
-      "a fixed point nested in a verdict plan runs on worker 0 alone");
+      "a fixed point nested in convergence plan 1 runs on the 1 worker(s) "
+      "that run it, so it cannot shuffle across 2");
 }
 
 // Both chains shuffle: the body re-partitions each iteration and the
@@ -3576,9 +3994,10 @@ TEST_F(FixedPointTest, executionStatsRecordDrivers) {
 // its nesting, before the outer iteration that ran it.
 TEST_F(FixedPointTest, onIterationStatsFromNestedLoop) {
   const auto plan = nestedCountingNode();
-  const auto& innerId = core::PlanNode::findFirstNode<FixedPointNode>(
-                            plan->as<FixedPointNode>()->plans().front().get())
-                            ->id();
+  const auto& innerId =
+      core::PlanNode::findFirstNode<FixedPointNode>(
+          plan->as<FixedPointNode>()->body().stages().front().plan.get())
+          ->id();
   for (auto mode :
        {exec::Task::ExecutionMode::kSerial,
         exec::Task::ExecutionMode::kParallel}) {
@@ -3596,7 +4015,7 @@ TEST_F(FixedPointTest, onIterationStatsFromNestedLoop) {
           fmt::format(
               "{}{}#{}{}",
               report.nesting.empty() ? "outer" : "inner",
-              nestingSuffix(report.nesting),
+              LocalFixedPoint::nestingSuffix(report.nesting),
               report.stats.iteration,
               report.stats.converged ? " converged" : ""));
     }
@@ -3757,7 +4176,8 @@ void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
 DEBUG_ONLY_TEST_F(FixedPointTest, loopStartsAfterDrivers) {
   std::atomic_int32_t count{0};
   InterceptingExecutor executor(
-      orchestrationExecutor(), [&](folly::Func func, folly::Executor& wrapped) {
+      LocalFixedPoint::orchestrationExecutor(),
+      [&](folly::Func func, folly::Executor& wrapped) {
         ++count;
         wrapped.add(std::move(func));
       });
@@ -3968,7 +4388,8 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
 // before its second read, and the Limit takes its row only then.  A sub-task
 // completes once its output pipeline finishes, so the sub-task, its loop and
 // the loop's task finish while the StateSource still holds the batches.  The
-// StateSource frees them when released, after the loop's task is deleted.
+// StateSource frees them when released, after the loop's task is destroyed.
+// The loop's task reports its deletion only once the sub-task is deleted too.
 DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -3991,6 +4412,7 @@ DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
   struct StateReader {
     folly::Baton<> held;
     folly::Baton<> released;
+    folly::Baton<> loopTaskDestroyed;
     std::atomic_int32_t numReads{0};
   };
   // Shared with the injection callbacks, which can outlive this test.
@@ -4013,6 +4435,13 @@ DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
           waitFor(reader->held);
         }
       }));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::~Task",
+      std::function<void(exec::Task*)>([reader](exec::Task* task) {
+        if (task->fixedPoint() != nullptr) {
+          reader->loopTaskDestroyed.post();
+        }
+      }));
 
   // Without this query context, the cursor runs the query on an executor of
   // its own and joins it before returning, which releases the StateSource.
@@ -4021,11 +4450,15 @@ DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
                   .maxDrivers(1)
                   .fixedPointOptions(&localOptions())
                   .assertResults(makeKeyValueRow(0, 0));
+  auto deletedWhileHeld = task->taskDeletionFuture();
   auto deleted = task->taskDeletionFuture();
   task.reset();
-  const bool isDeleted = std::move(deleted).wait(std::chrono::seconds(10));
+  EXPECT_TRUE(reader->loopTaskDestroyed.try_wait_for(std::chrono::seconds(10)));
+  EXPECT_FALSE(
+      std::move(deletedWhileHeld).wait(std::chrono::milliseconds(100)));
+
   reader->released.post();
-  EXPECT_TRUE(isDeleted);
+  EXPECT_TRUE(std::move(deleted).wait(std::chrono::seconds(10)));
 }
 
 // Drivers of the sub-tasks allocate from pools of the loop's task: the state's
@@ -4152,7 +4585,7 @@ TEST_F(FixedPointTest, abortReleasesTask) {
     std::atomic<exec::Task*> abortedTask{nullptr};
     std::atomic_size_t numTasksAtAbort{0};
     InterceptingExecutor executor(
-        orchestrationExecutor(),
+        LocalFixedPoint::orchestrationExecutor(),
         [&](folly::Func func, folly::Executor& wrapped) {
           if (auto* task = abortedTask.exchange(nullptr)) {
             task->requestAbort().wait();
@@ -4440,6 +4873,40 @@ TEST_F(FixedPointTest, fixedPointSplit) {
             .copyResults(pool()),
         "Worker destination out of range of the workers the FixedPointSplit "
         "names");
+  }
+  {
+    SCOPED_TRACE("Worker 0 alone writing every worker's state");
+    // The body gathers before its last plan, so only worker 0 writes state,
+    // and the loop runs as exactly one worker.
+    auto gathering =
+        PlanBuilder(idGenerator)
+            .fixedPoint(
+                std::vector<StateDeclarationPtr>{
+                    core::VectorState("values", schema)
+                        .initial(PlanBuilder(idGenerator)
+                                     .values({makeKeyValueRow(0, 1)})
+                                     .planNode())},
+                std::vector<core::PlanNodePtr>{
+                    PlanBuilder(idGenerator)
+                        .stateSource("values", schema)
+                        .partitionedOutput({}, 1)
+                        .planNode(),
+                    PlanBuilder(idGenerator)
+                        .exchange(schema, "Presto")
+                        .planNode()},
+                ConvergenceConfig::withMaxIterations(1),
+                /*outputStateEntry=*/"values")
+            .planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(gathering)
+            .fixedPointOptions(&options)
+            .beforeTaskStart([&](exec::Task& task) {
+              task.addSplit(
+                  gathering->id(), workersSplit({task.taskId(), "peer"}));
+              task.noMoreSplits(gathering->id());
+            })
+            .copyResults(pool()),
+        "Wrong number of workers in FixedPointSplit");
   }
 }
 
@@ -5397,11 +5864,11 @@ TEST_F(FixedPointTest, validatesPlanStructure) {
                  .project({"id", "val"})
                  .planNode(),
              PlanBuilder(idGen).exchange(schema, "Presto").planNode()}),
-        "must end with a PartitionedOutput");
+        "Expected PartitionedOutputNode at root of producer stage: 1");
   }
 
-  // A non-first plan must start with Exchange: here plan 1 starts with a
-  // StateSource instead of receiving plan 0's shuffle.
+  // A non-first plan reads its predecessor's shuffle: here plan 1 reads a
+  // StateSource instead of plan 0's shuffle.
   {
     VELOX_ASSERT_THROW(
         makeNode(
@@ -5413,7 +5880,8 @@ TEST_F(FixedPointTest, validatesPlanStructure) {
                  .stateSource("s", schema)
                  .project({"id", "val"})
                  .planNode()}),
-        "must start with an Exchange");
+        "every chained plan after the first must read exactly one shuffle, "
+        "the link to its predecessor");
   }
 }
 
@@ -5433,7 +5901,7 @@ TEST_F(FixedPointTest, errorWhenMaxIterationReachedRequiresPlan) {
           .fixedPoint(
               {std::make_shared<VectorStateDeclaration>("s", schema)},
               std::move(plans),
-              ConvergenceConfig{.plans = {}, .maxIterations = 10},
+              ConvergenceConfig{.maxIterations = 10},
               /*outputStateEntry=*/"s")
           .planNode(),
       "errorWhenMaxIterationReached requires a convergence criterion");
@@ -5450,11 +5918,14 @@ TEST_F(FixedPointTest, whenDeltaEmptyRejectsConvergencePlan) {
                                            .project({"id", "val"})
                                            .planNode()};
   auto convergence = ConvergenceConfig::whenDeltaEmpty(10);
-  convergence.plans = {PlanBuilder(idGen)
-                           .stateSource("s", schema)
-                           .singleAggregation({}, {"count(1)"})
-                           .project({"a0 = 0 AS converged"})
-                           .planNode()};
+  convergence.plan = ConvergenceConfig::converging(
+                         PlanBuilder(idGen)
+                             .stateSource("s", schema)
+                             .singleAggregation({}, {"count(1)"})
+                             .project({"a0 = 0 AS converged"})
+                             .planNode(),
+                         10)
+                         .plan;
   VELOX_ASSERT_THROW(
       PlanBuilder(idGen)
           .fixedPoint(

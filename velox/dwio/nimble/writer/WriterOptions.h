@@ -33,6 +33,7 @@
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
+#include "velox/dwio/nimble/writer/WriterDefaultMetadata.h"
 
 #include <memory>
 #include <optional>
@@ -44,10 +45,6 @@
 #include "velox/type/Type.h"
 
 namespace facebook::nimble {
-
-namespace detail {
-std::unordered_map<std::string, std::string> defaultMetadata();
-} // namespace detail
 
 /// Options used by Velox writer that affect the output file format.
 /// NOTE: The object could be large when encodingOverrides are supplied. It's
@@ -110,7 +107,7 @@ struct WriterOptions {
   /// Skip writing chunk stats for a stripe group if the average number
   /// of chunks per stream is below this threshold. 0 disables chunk stats
   /// skipping.
-  float chunkStatsMinAvgChunks{2};
+  float chunkStatsMinAvgChunks{0};
 
   /// Maximum string or binary value length retained in per-chunk bounds.
   uint32_t maxChunkStringStatSize{

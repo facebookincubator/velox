@@ -565,6 +565,7 @@ struct VectorIndexDirectory::InputState {
             .maxCacheEntrySize = sourceOptions.maxCacheEntrySize,
             .pinIndex = sourceOptions.pinIndex,
             .preloadIndex = sourceOptions.preloadIndex,
+            .fileIoContext = sourceOptions.fileIoContext,
         } {
     NIMBLE_CHECK_NOT_NULL(options.file);
   }

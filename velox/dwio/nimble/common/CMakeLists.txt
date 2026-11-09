@@ -60,6 +60,7 @@ target_link_libraries(
   nimble_velox_schema_fb
   nimble_common
   Folly::folly
+  fmt::fmt
 )
 
 add_library(nimble_velox_nimble_config NimbleConfig.cpp NimbleConfig.h)

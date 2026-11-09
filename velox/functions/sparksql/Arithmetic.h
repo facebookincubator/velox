@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <bit>
 #include <bitset>
 #include <cmath>
 #include <limits>
@@ -26,8 +27,75 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/type/DecimalArithmetic.h"
 
 namespace facebook::velox::functions::sparksql {
+
+/// Rounds integral values using HALF_UP and the session's overflow policy.
+/// Unlike Spark's JVM evaluator, extreme negative scales return zero without
+/// constructing large powers of ten, and nonnegative scales return the input.
+/// Spark can throw at INTEGER scale extremes, with interpreted and generated
+/// execution differing. Scale columns are a native extension; Spark requires a
+/// foldable scale. Integrations must guard offload to preserve Spark behavior.
+template <typename TExec>
+struct IntegralRoundFunction {
+  template <typename T>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const T* value) {
+    initialize(inputTypes, config, value, nullptr);
+  }
+
+  template <typename T>
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*value*/,
+      const int32_t* /*scale*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status
+  call(T& result, const T& value, const int32_t scale = 0) {
+    if (scale >= 0) {
+      result = value;
+      return Status::OK();
+    }
+    const auto digitsToDrop = -static_cast<int64_t>(scale);
+    if (digitsToDrop > std::numeric_limits<T>::digits10 + 1) {
+      result = 0;
+      return Status::OK();
+    }
+
+    // The divisor is at most 10^19, so division and rounding fit in int128_t.
+    const auto divisor = DecimalArithmetic::kPowersOfTen[digitsToDrop];
+    int128_t rounded;
+    DecimalArithmetic::divideWithRoundUp<int128_t, T, int128_t>(
+        rounded, value, divisor, false, 0, 0);
+    rounded *= divisor;
+    if (ansiEnabled_ &&
+        (rounded < std::numeric_limits<T>::min() ||
+         rounded > std::numeric_limits<T>::max())) {
+      if (threadSkipErrorDetails()) {
+        return Status::UserError();
+      }
+      return Status::UserError(
+          "Arithmetic overflow: round({}, {})",
+          static_cast<int64_t>(value),
+          scale);
+    }
+
+    // Unsigned conversion followed by bit_cast gives Java's two's-complement
+    // narrowing without signed overflow.
+    result = std::bit_cast<T>(static_cast<std::make_unsigned_t<T>>(rounded));
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_{false};
+};
 
 // The abs implementation is used for primitive types except for decimal type.
 template <typename TExec>
@@ -244,30 +312,82 @@ inline int64_t safeDoubleToInt64(const int64_t& arg) {
   return arg;
 }
 
+namespace detail {
+
+// Converts the rounded double 'value' to BIGINT like Spark's ceil and floor
+// on DOUBLE input: NaN maps to 0 and a value outside the BIGINT range
+// saturates to the BIGINT limits, or is an error when Spark ANSI mode is
+// enabled. 'functionName' names the function in the error message. A double
+// outside the BIGINT range is already an integer, so 'value' equals the input
+// of the function whenever the error is raised.
+FOLLY_ALWAYS_INLINE Status doubleToInt64(
+    const char* functionName,
+    const double value,
+    const bool ansiEnabled,
+    int64_t& result) {
+  if (ansiEnabled && !std::isnan(value) &&
+      (value >= kMinDoubleAboveInt64Max ||
+       value < static_cast<double>(std::numeric_limits<int64_t>::min()))) {
+    if (threadSkipErrorDetails()) {
+      return Status::UserError();
+    }
+    return Status::UserError(
+        "Arithmetic overflow: {}({})", functionName, value);
+  }
+  result = safeDoubleToInt64(value);
+  return Status::OK();
+}
+
+} // namespace detail
+
 template <typename T>
 struct CeilFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const TInput value) {
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*value*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(int64_t& result, const TInput value) {
     if constexpr (std::is_integral_v<TInput>) {
       result = value;
+      return Status::OK();
     } else {
-      result = safeDoubleToInt64(std::ceil(value));
+      return detail::doubleToInt64(
+          "ceil", std::ceil(value), ansiEnabled_, result);
     }
-    return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
 struct FloorFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const TInput value) {
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*value*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(int64_t& result, const TInput value) {
     if constexpr (std::is_integral_v<TInput>) {
       result = value;
+      return Status::OK();
     } else {
-      result = safeDoubleToInt64(std::floor(value));
+      return detail::doubleToInt64(
+          "floor", std::floor(value), ansiEnabled_, result);
     }
-    return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
@@ -455,6 +575,24 @@ struct IsNanFunction {
       call(result, *a);
     } else {
       result = false;
+    }
+  }
+};
+
+/// Spark's NormalizeNaNAndZero, which the optimizer inserts before operations
+/// that compare floating-point values by their bits, e.g. join and grouping
+/// keys and array set operations. Maps -0.0 to 0.0 and every NaN to the
+/// canonical NaN, so values that are equal in Spark have the same bits.
+template <typename T>
+struct NormalizeNaNAndZeroFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput value) {
+    if (std::isnan(value)) {
+      result = std::numeric_limits<TInput>::quiet_NaN();
+    } else if (value == TInput(0)) {
+      result = TInput(0);
+    } else {
+      result = value;
     }
   }
 };
@@ -664,6 +802,50 @@ struct CheckedMultiplyFunction {
       result = a * b;
     }
     return Status::OK();
+  }
+};
+
+/// Returns NULL on integral overflow. Corresponds to Spark's try_add. Errors
+/// from the arguments are not turned into NULL, which try(checked_add(...))
+/// would do.
+template <typename TExec>
+struct TryAddFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      return !__builtin_add_overflow(a, b, &result);
+    } else {
+      result = a + b;
+      return true;
+    }
+  }
+};
+
+/// Returns NULL on integral overflow. Corresponds to Spark's try_subtract.
+template <typename TExec>
+struct TrySubtractFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      return !__builtin_sub_overflow(a, b, &result);
+    } else {
+      result = a - b;
+      return true;
+    }
+  }
+};
+
+/// Returns NULL on integral overflow. Corresponds to Spark's try_multiply.
+template <typename TExec>
+struct TryMultiplyFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      return !__builtin_mul_overflow(a, b, &result);
+    } else {
+      result = a * b;
+      return true;
+    }
   }
 };
 

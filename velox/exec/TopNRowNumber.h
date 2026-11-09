@@ -182,8 +182,9 @@ class TopNRowNumber : public Operator {
   // Decodes and potentially loads input if lazy vector.
   void prepareInput(RowVectorPtr& input);
 
-  // Handles input row when the partition has not yet accumulated 'limit' rows.
-  // Returns a pointer to the row to add to the partition accumulator.
+  // Handles an input row while the partition's highest rank is below the limit.
+  // Returns a pointer to the row to add to the partition accumulator, or
+  // nullptr if the row's rank exceeds the limit.
   template <core::TopNRowNumberNode::RankFunction TRank>
   char* processRowWithinLimit(vector_size_t index, TopRows& partition);
 
@@ -356,7 +357,7 @@ class TopNRowNumber : public Operator {
   // Vector of pointers to individual rows in the RowContainer for the current
   // output block.
   std::vector<char*> outputRows_;
-  // Number of partitions to fetch from a HashTable in a single listAllRows
+  // Number of partitions to fetch from a HashTable in a single listRows
   // call.
   static const size_t kPartitionBatchSize = 100;
 

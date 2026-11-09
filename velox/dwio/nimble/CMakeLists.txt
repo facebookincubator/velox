@@ -39,7 +39,7 @@ endif()
 
 # Nimble's OSS build has no access to the Meta-internal compressor. This is read
 # by widely included headers (compression/CompressionPolicy.h,
-# encodings/legacy/EncodingSelectionPolicy.h), so every translation unit that
+# encodings/selection/EncodingSelectionPolicy.h), so every translation unit that
 # sees those headers must agree on it.
 add_compile_definitions(
   DISABLE_META_INTERNAL_COMPRESSOR=1

@@ -22,6 +22,7 @@
 #include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaTypes.h"
 
 // SchemaBuilder is used to construct a tablet compatible schema.
@@ -316,7 +317,9 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
  public:
   /// References key-presence and row-presence streams for one physical group.
   struct GroupDescriptor {
-    /// Marks which schema-ordered group keys occur in the physical batch.
+    /// Marks which schema-ordered group keys occur in the physical batch. A
+    /// Default group with HybridFlatMap::KeyPresenceMode::kKeyList instead
+    /// lists them, typed by the map key kind.
     const StreamDescriptorBuilder& keyPresenceDescriptor;
     /// Stores key-major row-presence bits for the observed keys.
     const StreamDescriptorBuilder& inMapDescriptor;
@@ -337,18 +340,41 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   /// Returns the logical scalar type used by map keys.
   ScalarKind keyScalarKind() const;
 
+  /// Returns how batches record their Default keys.
+  HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode() const;
+
+  /// Returns whether group `groupId` lists its keys in its key-presence
+  /// stream. See HybridFlatMap::hasKeyPresenceList().
+  bool useKeyPresentList(uint32_t groupId) const;
+
   /// Registers one physical group and its complete value subtree. Configured
   /// group keys must be non-empty and strictly ascending. Default keys are kept
-  /// in the given first-seen order. The group ID and every key must be unique
-  /// across all groups.
+  /// in the given first-seen order, and must be empty with
+  /// HybridFlatMap::KeyPresenceMode::kKeyList. The group ID and every key must
+  /// be unique across all groups.
   GroupDescriptor addGroup(
       uint32_t groupId,
       std::vector<std::string> groupKeys,
       std::shared_ptr<TypeBuilder> valueType);
 
+  /// Registers group `groupIndex` of `bound` and its complete value subtree,
+  /// as the overload above registers a group. `bound` is a HybridFlatMap
+  /// bound to this builder's key kind (it has the lookup of
+  /// HybridFlatMap::findGroup()). The builder keeps a copy of `bound`, which
+  /// shares its groups, and reads the group's keys from it instead of copying
+  /// them. A builder adds either every group of one bound HybridFlatMap, in
+  /// its order, or every group through the overload above. This builder's
+  /// Default must list its keys per batch
+  /// (HybridFlatMap::KeyPresenceMode::kKeyList), as `bound`'s does, so the
+  /// schema holds only the bound groups' keys.
+  GroupDescriptor addGroup(
+      const HybridFlatMap& bound,
+      size_t groupIndex,
+      std::shared_ptr<TypeBuilder> valueType);
+
   /// Appends a newly observed key to the Default group's first-seen catalog.
-  /// Fails when `key` is empty or already belongs to any group. Configured
-  /// groups are binary searched and Default keys are checked in a hash set.
+  /// Fails when `key` is empty or already belongs to any group, or when
+  /// batches list their Default keys.
   void appendDefaultGroupKey(std::string key);
 
   /// Returns the number of physical groups present in this schema.
@@ -364,7 +390,11 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
  private:
   struct StoredGroup {
     uint32_t groupId;
+    // Keys of a group added with listed keys and of the Default group.
     std::vector<std::string> groupKeys;
+    // Keys of an explicit group added from a bound HybridFlatMap, owned by
+    // boundMap_; null otherwise.
+    const std::vector<std::string>* boundGroupKeys;
     std::unique_ptr<StreamDescriptorBuilder> keyPresenceDescriptor;
     std::unique_ptr<StreamDescriptorBuilder> inMapDescriptor;
     std::shared_ptr<const TypeBuilder> valueType;
@@ -373,20 +403,32 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   HybridFlatMapTypeBuilder(
       SchemaBuilder& schemaBuilder,
       ScalarKind keyScalarKind,
+      HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
       bool requiresDefaultGroup);
 
-  // Returns whether any group holds `key`. Binary searches configured groups
-  // and checks the Default keys in defaultGroupKeys_.
-  bool containsKey(std::string_view key) const;
+  // Stores a checked group and allocates its key-presence and in-map streams,
+  // in that order.
+  GroupDescriptor storeGroup(
+      uint32_t groupId,
+      std::vector<std::string> groupKeys,
+      const std::vector<std::string>* boundGroupKeys,
+      std::shared_ptr<TypeBuilder> valueType);
 
   const ScalarKind keyScalarKind_;
   const bool requiresDefaultGroup_;
+  const HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode_;
   StreamDescriptorBuilder nullsDescriptor_;
   std::vector<StoredGroup> groups_;
   // Zero-based schema position of the reserved Default group.
   std::optional<size_t> defaultGroupIndex_{};
-  // Keys of the Default group's catalog, for containsKey().
-  folly::F14FastSet<std::string> defaultGroupKeys_;
+  // Keys of groups added with listed keys and appended Default keys, so that
+  // each new key is checked for duplicates with one insert. Bound groups add
+  // none: their HybridFlatMap checked its keys, and their Default lists its
+  // keys per batch.
+  folly::F14FastSet<std::string> keys_;
+  // The HybridFlatMap every group came from when added from a bound
+  // HybridFlatMap.
+  std::optional<HybridFlatMap> boundMap_;
 
   friend class SchemaBuilder;
 };
@@ -446,8 +488,10 @@ class SchemaBuilder {
   /// value subtree, following FlatMap's child-type model. A complete schema
   /// requires the reserved Default group, which may be its only group. A
   /// projection may omit Default but keeps at least one group.
+  /// `defaultGroupKeyPresenceMode` selects how batches record Default keys.
   std::shared_ptr<HybridFlatMapTypeBuilder> createHybridFlatMapTypeBuilder(
       ScalarKind keyScalarKind,
+      HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
       bool projection = false);
 
   // Retrieves all the nodes CURRENTLY known to the schema builder.

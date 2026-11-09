@@ -615,6 +615,27 @@ class IsNotNull final : public Filter {
     return true;
   }
 
+  // All non-null values pass. Avoids Filter::genericTestValues.
+  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t>) const final {
+    return xsimd::batch_bool<int64_t>(true);
+  }
+
+  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t>) const final {
+    return xsimd::batch_bool<int32_t>(true);
+  }
+
+  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t>) const final {
+    return xsimd::batch_bool<int16_t>(true);
+  }
+
+  xsimd::batch_bool<double> testValues(xsimd::batch<double>) const final {
+    return xsimd::batch_bool<double>(true);
+  }
+
+  xsimd::batch_bool<float> testValues(xsimd::batch<float>) const final {
+    return xsimd::batch_bool<float>(true);
+  }
+
   bool testInt128(const int128_t& /* unused */) const final {
     return true;
   }

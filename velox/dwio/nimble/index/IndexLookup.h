@@ -31,6 +31,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/file/File.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/index/KeyComparator.h"
@@ -42,7 +43,6 @@ class MetadataInput;
 } // namespace facebook::nimble
 
 namespace facebook::velox {
-class ReadFile;
 struct FileHandle;
 namespace cache {
 class AsyncDataCache;
@@ -109,10 +109,19 @@ class IndexLookup {
     /// first lookup.
     bool preloadIndex{false};
 
+    /// If true, key chunk readers build their encoding views with
+    /// Encoding::Options::cacheEncodingView, trading memory for faster repeated
+    /// seeks into chunks that stay resident. Only hierarchical key chunks read
+    /// through encoding views.
+    bool cacheKeyEncodingViews{false};
+
     /// Order of the encoded keys of a cluster index, or null for bytewise
     /// order. The cluster index factory sets it from
     /// ClusterIndexFactory::keyComparator(), which owns the comparator.
     const KeyComparator* keyComparator{nullptr};
+
+    /// The stats and pool inside this context must outlive this index.
+    velox::FileIoContext fileIoContext{};
 
     /// Validates options consistency.
     void validate() const;

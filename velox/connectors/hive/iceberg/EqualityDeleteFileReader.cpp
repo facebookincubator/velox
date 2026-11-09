@@ -17,8 +17,8 @@
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 
 #include "velox/common/base/BitUtil.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -144,11 +144,12 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStats& runtimeStats,
-    const std::string& connectorId)
+    const std::string& connectorId,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps)
     : equalityColumnNames_(equalityColumnNames),
       equalityColumnTypes_(equalityColumnTypes),
       pool_(connectorQueryCtx->memoryPool()) {
@@ -203,7 +204,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   // TODO: Use separate IoStatistics for data and metadata.
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
-  configureReaderOptions(
+  connector::configureReaderOptions(
       fileConfig,
       connectorQueryCtx,
       deleteFileSchema,
@@ -214,20 +215,24 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   const FileHandleKey fileHandleKey{
       .filename = deleteFile.filePath,
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
-  auto deleteFileHandleCachePtr = fileHandleFactory->generate(fileHandleKey);
-  auto deleteFileInput = BufferedInputBuilder::getInstance()->create(
+  FileProperties fileProperties;
+  fileProperties.fileReadOps = fileReadOps;
+  auto deleteFileHandleCachePtr =
+      fileHandleFactory->generate(fileHandleKey, &fileProperties);
+  auto deleteFileInput = connector::BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
       ioStatistics,
       ioStats,
-      executor);
+      executor,
+      fileReadOps);
 
   auto deleteReader =
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
-  if (!testFilters(
+  if (!connector::testFilters(
           scanSpec.get(),
           deleteReader.get(),
           deleteSplit->filePath,
@@ -240,7 +245,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   }
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  configureRowReaderOptions(
+  connector::configureRowReaderOptions(
       {},
       scanSpec,
       nullptr,

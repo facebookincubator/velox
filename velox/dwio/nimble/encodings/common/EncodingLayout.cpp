@@ -21,7 +21,6 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
@@ -186,6 +185,7 @@ EncodingLayout EncodingLayoutCapture::capture(
   if (encodingType == EncodingType::FixedBitWidth ||
       encodingType == EncodingType::Trivial ||
       encodingType == EncodingType::BlockBitPacking ||
+      encodingType == EncodingType::BlockBitPackingV2 ||
       encodingType == EncodingType::FOR || encodingType == EncodingType::Fsst) {
     compressionType =
         encoding::peek<uint8_t, CompressionType>(encoding.data() + prefixSize);
@@ -210,19 +210,6 @@ EncodingLayout EncodingLayoutCapture::capture(
       // stream, and the layout tree describes how data is encoded, not how a
       // slice was deferred. Reported as childless.
       break;
-    case EncodingType::BitRangeSplit: {
-      using Base = detail::BitRangeSplitEncodingBase;
-      Base::captureLayout(
-          encoding,
-          options,
-          [&](NestedEncodingIdentifier /* sectionIndex */,
-              const Base::Section& section) {
-            const char* position = section.data;
-            captureChild(children, position, section.dataBytes, options);
-          },
-          encodingConfig);
-      break;
-    }
     case EncodingType::SubIntSplit: {
       const auto dataType = EncodingPrefix::dataType(encoding);
       const auto physicalBits = detail::dataTypeSize(dataType) * 8;
@@ -300,15 +287,15 @@ EncodingLayout EncodingLayoutCapture::capture(
       break;
     }
     case EncodingType::PartitionedEliasFano: {
-      // PartitionedEliasFano nests three directories: partition offsets,
-      // partition bases and partition group offsets. The group streams that
-      // follow are always EliasFano and carry no selectable layout.
+      // PartitionedEliasFano nests two directories: partition offsets and
+      // partition bases. The group streams that follow are always EliasFano
+      // and carry no selectable layout.
       auto body = encoding.substr(prefixSize);
       encoding::readVarint32(body); // numPartitions
       encoding::readVarint32(body); // numGroups
 
-      children.reserve(3);
-      for (uint32_t child = 0; child < 3; ++child) {
+      children.reserve(2);
+      for (uint32_t child = 0; child < 2; ++child) {
         const auto bytes = encoding::readLengthPrefixedBytes(body);
         const char* pos = bytes.data();
         captureChild(
@@ -316,9 +303,11 @@ EncodingLayout EncodingLayoutCapture::capture(
       }
       break;
     }
-    case EncodingType::BlockBitPacking: {
-      // BlockBitPacking nests three per-block metadata sub-streams: baselines,
-      // bit widths, and data offsets.
+    case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2: {
+      // Both BlockBitPacking versions nest three per-block metadata
+      // sub-streams right after numBlocks: baselines, bit widths, and data
+      // offsets.
       const char* pos = encoding.data() + prefixSize;
       encoding::readChar(pos); // compressionType
       varint::readVarint32(&pos); // blockSize

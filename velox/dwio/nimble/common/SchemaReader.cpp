@@ -29,8 +29,9 @@ struct NamedType {
   std::optional<std::string> name;
 };
 
-void validateHybridFlatMapGroups(
-    const std::vector<HybridFlatMapType::Group>& groups);
+void validateAndIndexHybridFlatMapGroups(
+    const std::vector<HybridFlatMapType::Group>& groups,
+    folly::F14FastMap<std::string_view, size_t>& groupIndices);
 
 } // namespace
 
@@ -346,25 +347,26 @@ HybridFlatMapType::HybridFlatMapType(
     StreamDescriptor nullsDescriptor,
     ScalarKind keyScalarKind,
     std::vector<Group> groups,
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
     std::vector<std::pair<std::string, std::string>> attributes)
     : Type(Kind::HybridFlatMap, std::move(attributes)),
       nullsDescriptor_{std::move(nullsDescriptor)},
       keyScalarKind_{keyScalarKind},
+      defaultGroupKeyPresenceMode_{defaultGroupKeyPresenceMode},
       groups_{std::move(groups)} {
   NIMBLE_CHECK(
       HybridFlatMap::supportedKeyKind(keyScalarKind_),
       "Hybrid FlatMap key kind is unsupported: {}.",
       keyScalarKind_);
-  validateHybridFlatMapGroups(groups_);
-  size_t numKeys{0};
+  validateAndIndexHybridFlatMapGroups(groups_, groupIndices_);
   for (const auto& group : groups_) {
-    numKeys += group.groupKeys.size();
-  }
-  groupIndices_.reserve(numKeys);
-  for (size_t i = 0; i < groups_.size(); ++i) {
-    for (const auto& key : groups_[i].groupKeys) {
-      groupIndices_.emplace(key, i);
-    }
+    detail::checkHybridFlatMapDefaultKeys(
+        defaultGroupKeyPresenceMode_, group.groupId, group.groupKeys);
+    NIMBLE_CHECK_EQ(
+        group.keyPresenceDescriptor.scalarKind(),
+        useKeyPresentList(group.groupId) ? keyScalarKind_ : ScalarKind::Bool,
+        "Hybrid FlatMap key-presence stream must be boolean, or use the map "
+        "key kind for a Default group that lists its keys.");
   }
 }
 
@@ -374,6 +376,16 @@ const StreamDescriptor& HybridFlatMapType::nullsDescriptor() const {
 
 ScalarKind HybridFlatMapType::keyScalarKind() const {
   return keyScalarKind_;
+}
+
+HybridFlatMap::KeyPresenceMode HybridFlatMapType::defaultGroupKeyPresenceMode()
+    const {
+  return defaultGroupKeyPresenceMode_;
+}
+
+bool HybridFlatMapType::useKeyPresentList(uint32_t groupId) const {
+  return HybridFlatMap::hasKeyPresenceList(
+      defaultGroupKeyPresenceMode_, groupId);
 }
 
 size_t HybridFlatMapType::groupCount() const {
@@ -386,13 +398,29 @@ const HybridFlatMapType::Group& HybridFlatMapType::groupAt(size_t index) const {
 }
 
 const HybridFlatMapType::Group& HybridFlatMapType::defaultGroup() const {
-  const auto iterator =
-      std::find_if(groups_.begin(), groups_.end(), [](const auto& group) {
-        return HybridFlatMap::isDefaultGroup(group.groupId);
-      });
-  NIMBLE_CHECK(
-      iterator != groups_.end(), "Hybrid FlatMap Default group is missing.");
-  return *iterator;
+  const auto index = defaultGroupIndex();
+  NIMBLE_CHECK(index.has_value(), "Hybrid FlatMap Default group is missing.");
+  return groups_[*index];
+}
+
+std::optional<size_t> HybridFlatMapType::defaultGroupIndex() const {
+  // Group IDs ascend and Default has the largest ID, so it can only be last.
+  // The constructor requires at least one group.
+  if (HybridFlatMap::isDefaultGroup(groups_.back().groupId)) {
+    return groups_.size() - 1;
+  }
+  return std::nullopt;
+}
+
+std::optional<size_t> HybridFlatMapType::findProjectionGroup(
+    std::string_view key) const {
+  auto groupIndex = findGroup(key);
+  if (!groupIndex.has_value() &&
+      defaultGroupKeyPresenceMode_ ==
+          HybridFlatMap::KeyPresenceMode::kKeyList) {
+    groupIndex = defaultGroupIndex();
+  }
+  return groupIndex;
 }
 
 std::optional<size_t> HybridFlatMapType::findGroup(std::string_view key) const {
@@ -431,15 +459,20 @@ const std::shared_ptr<const Type>& ArrayWithOffsetsType::elements() const {
 
 namespace {
 
-void validateHybridFlatMapGroups(
-    const std::vector<HybridFlatMapType::Group>& groups) {
+// Validates `groups`, filling `groupIndices` from their keys, and checks that
+// every group has the same logical value type. The views in `groupIndices`
+// refer to keys owned by `groups`.
+void validateAndIndexHybridFlatMapGroups(
+    const std::vector<HybridFlatMapType::Group>& groups,
+    folly::F14FastMap<std::string_view, size_t>& groupIndices) {
   detail::validateHybridFlatMapGroups(
       groups.size(),
       /*hasDefault=*/false,
       [&groups](size_t index) { return groups[index].groupId; },
       [&groups](size_t index) -> const auto& {
         return groups[index].groupKeys;
-      });
+      },
+      groupIndices);
   const auto& expectedValueType = *groups.front().valueType;
   for (size_t i = 1; i < groups.size(); ++i) {
     const bool hasSameLogicalType =
@@ -575,21 +608,24 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           .name = node.name()};
     }
     case Kind::HybridFlatMap: {
-      const auto metadata = HybridFlatMap::extractAttribute(attributes);
+      auto metadata = HybridFlatMap::extractAttribute(attributes);
       NIMBLE_CHECK_EQ(
           node.childrenCount(),
           metadata.groups().size(),
           "Hybrid FlatMap group metadata must match its child count.");
+      const auto defaultGroupKeyPresenceMode =
+          metadata.defaultGroupKeyPresenceMode();
+      auto groupsMetadata = std::move(metadata).releaseGroups();
       std::vector<HybridFlatMapType::Group> groups;
-      groups.reserve(metadata.groups().size());
-      for (const auto& groupMetadata : metadata.groups()) {
+      groups.reserve(groupsMetadata.size());
+      for (auto& groupMetadata : groupsMetadata) {
         NIMBLE_CHECK_LT(
             index + 2, nodes.size(), "Incomplete Hybrid FlatMap group.");
         const auto& keyPresenceNode = nodes[index++];
-        NIMBLE_CHECK(
-            keyPresenceNode.kind() == Kind::Scalar &&
-                keyPresenceNode.scalarKind() == ScalarKind::Bool,
-            "Hybrid FlatMap key-presence stream must be boolean.");
+        NIMBLE_CHECK_EQ(
+            keyPresenceNode.kind(),
+            Kind::Scalar,
+            "Hybrid FlatMap key-presence stream must be scalar.");
         const auto& inMapNode = nodes[index++];
         NIMBLE_CHECK(
             inMapNode.kind() == Kind::Scalar &&
@@ -602,7 +638,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
         groups.push_back(
             HybridFlatMapType::Group{
                 .groupId = groupMetadata.groupId,
-                .groupKeys = groupMetadata.groupKeys,
+                .groupKeys = std::move(groupMetadata.groupKeys),
                 .keyPresenceDescriptor =
                     StreamDescriptor{
                         keyPresenceNode.offset(), keyPresenceNode.scalarKind()},
@@ -617,6 +653,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
               StreamDescriptor{offset, ScalarKind::Bool},
               node.scalarKind(),
               std::move(groups),
+              defaultGroupKeyPresenceMode,
               std::move(attributes)),
           .name = node.name()};
     }

@@ -78,6 +78,7 @@ velox_add_library(
   CountAggregate.h
   CountIfAggregate.h
   CovarianceAggregates.h
+  EmbeddingGroup.h
   EntropyAggregates.h
   GeometricMeanAggregate.h
   GeometryAggregate.h
@@ -116,7 +117,9 @@ velox_add_library(
   SumDataSizeForStatsAggregate.h
   TDigestAccumulator.h
   VarianceAggregates.h
-  VectorIndexPackAggregate.h
+  VectorCountAggregate.h
+  VectorIndexBuildAggregate.h
+  VectorIndexTrainAggregate.h
   VectorSumAggregate.h
 )
 
@@ -136,7 +139,14 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_FAISS)
-  velox_sources(velox_aggregates PRIVATE VectorIndexPackAggregate.cpp)
+  velox_sources(
+    velox_aggregates
+    PRIVATE
+      EmbeddingGroup.cpp
+      VectorCountAggregate.cpp
+      VectorIndexBuildAggregate.cpp
+      VectorIndexTrainAggregate.cpp
+  )
   velox_link_libraries(velox_aggregates velox_vector_index)
   velox_compile_definitions(velox_aggregates PRIVATE VELOX_ENABLE_FAISS)
 endif()

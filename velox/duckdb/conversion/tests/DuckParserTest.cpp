@@ -438,6 +438,29 @@ TEST(DuckParserTest, cast) {
       parseExpr("cast(c0 as struct(a bigint, b real, c varchar))")->toString());
 }
 
+// A cast of a parameter is a placeholder of the cast's type.
+TEST(DuckParserTest, placeholder) {
+  auto expr = parseExpr("a + ?2::BIGINT");
+  EXPECT_EQ("plus(\"a\",?2)", expr->toString());
+  const auto* placeholder = expr->inputs()[1]->as<core::PlaceholderExpr>();
+  ASSERT_NE(placeholder, nullptr);
+  EXPECT_EQ(2, placeholder->position());
+  EXPECT_EQ(*BIGINT(), *placeholder->type());
+
+  EXPECT_EQ("?1 AS x", parseExpr("cast(?1 as varchar) AS x")->toString());
+  EXPECT_EQ("?3", parseExpr("$3::BIGINT")->toString());
+
+  VELOX_ASSERT_THROW(
+      parseExpr("a + ?1"),
+      "A placeholder needs a type, such as ?1::BIGINT: ?1");
+
+  // The cast declares the type of the bound value and converts nothing, so
+  // TRY_CAST has no failure to turn into NULL.
+  VELOX_ASSERT_THROW(
+      parseExpr("try_cast(?1 as bigint)"),
+      "TRY_CAST of a placeholder is not supported: ?1");
+}
+
 TEST(DuckParserTest, castToJson) {
   registerJsonType();
   EXPECT_EQ("cast(\"c0\" as JSON)", parseExpr("cast(c0 as json)")->toString());
@@ -890,6 +913,58 @@ TEST(DuckParserTest, arrayLiteral) {
     auto expr = parseExpr("[a, 1, 2]");
     EXPECT_TRUE(expr->is(core::IExpr::Kind::kCall));
     EXPECT_EQ("list_value(\"a\",1,2)", expr->toString());
+  }
+}
+
+TEST(DuckParserTest, mapLiteral) {
+  {
+    auto expr = parseExpr("map(array['a', 'b'], array[1, 2])");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), MAP(VARCHAR(), BIGINT()));
+    EXPECT_EQ("{a => 1, b => 2}", expr->toString());
+  }
+
+  // DuckDB's map literal parses as map(keys, values).
+  {
+    auto expr = parseExpr("MAP {1: 42.001, 5: -32.1}");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), MAP(BIGINT(), DOUBLE()));
+    EXPECT_EQ("{1 => 42.001, 5 => -32.1}", expr->toString());
+  }
+
+  // Empty map.
+  for (const auto* sql : {"map()", "map(array[], array[])"}) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), MAP(UNKNOWN(), UNKNOWN()));
+  }
+
+  // A cast gives an empty map its type.
+  {
+    auto expr = parseExpr("map()::map(varchar, bigint)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), MAP(VARCHAR(), BIGINT()));
+  }
+
+  // Non-constant argument stays a function call.
+  {
+    auto expr = parseExpr("map(array[a], array[1])");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kCall));
+  }
+
+  // Invalid input stays a function call, which reports the error.
+  for (const auto* sql :
+       {"map(array['a', 'a'], array[1, 2])",
+        "map(array['a'], array[1, 2])",
+        "map(array[null], array[1])",
+        "map(array[array[1, null]], array[1])"}) {
+    SCOPED_TRACE(sql);
+    EXPECT_TRUE(parseExpr(sql)->is(core::IExpr::Kind::kCall));
   }
 }
 

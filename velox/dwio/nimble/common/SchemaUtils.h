@@ -26,6 +26,7 @@
 #include "velox/dwio/common/TypeWithId.h"
 
 #include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaTypes.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -36,6 +37,22 @@ class TypeBuilder;
 velox::TypePtr convertToVeloxType(const Type& type);
 
 std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type);
+
+/// Returns the key kind of a Hybrid FlatMap for a MAP column whose keys are of
+/// `keyType`, one that HybridFlatMap::supportedKeyKind() accepts. Throws
+/// NimbleUserError when Hybrid FlatMap does not support keys of that type. The
+/// writer picks a column's Hybrid FlatMap writer by this kind, so callers that
+/// build a HybridFlatMap for the column use it to match the writer.
+///
+/// Example: BIGINT keys give ScalarKind::Int64; VARBINARY keys throw.
+ScalarKind hybridFlatMapKeyKind(const velox::Type& keyType);
+
+/// Returns the Hybrid FlatMap key kind of MAP column `columnName` of
+/// `rowType`. Throws NimbleUserError when `rowType` has no such column, the
+/// column is not a MAP, or Hybrid FlatMap does not support its key type.
+ScalarKind hybridFlatMapKeyKind(
+    const velox::RowType& rowType,
+    std::string_view columnName);
 
 /// Returns descriptor offsets in dense projected-stream order.
 /// FlatMap value streams precede their corresponding in-map stream.
@@ -57,7 +74,9 @@ const TypeBuilder& resolveValueStreamSubfield(
 /// Encoding types for top-level columns extracted from a nimble file schema.
 /// Records which columns use encoding-specific types (ArrayWithOffsets,
 /// SlidingWindowMap, FlatMap), enabling the Serializer
-/// to produce output consistent with the file's encoding.
+/// to produce output consistent with the file's encoding. A FlatMap column
+/// that is also in dictionaryArrayColumns or deduplicatedMapColumns holds
+/// ArrayWithOffsets or SlidingWindowMap values under every key.
 struct ColumnEncodings {
   folly::F14FastSet<std::string> dictionaryArrayColumns;
   folly::F14FastSet<std::string> deduplicatedMapColumns;
@@ -101,17 +120,22 @@ struct NimbleTypeProjection {
   std::shared_ptr<const Type> nimbleType;
   std::vector<uint32_t> streamOffsets;
   /// Marks streams whose presence requires retaining the input decode barrier.
-  /// This includes Row/FlatMap null streams and Hybrid FlatMap group key
-  /// streams.
-  std::vector<bool> rowOrFlatMapNullStreams;
+  /// This includes Row/FlatMap null streams, Hybrid FlatMap group key streams,
+  /// and the offsets and lengths streams of ArrayWithOffsets and
+  /// SlidingWindowMap, whose offsets index the distinct values of their own
+  /// stripe.
+  std::vector<bool> barrierStreams;
 };
 
 /// Builds a projected Nimble schema and its source-stream mapping. A projected
 /// Hybrid FlatMap contains only selected physical groups and compacts their
 /// descriptors into the response-local stream namespace. A requested key in no
-/// group selects no group; a column with no selected group holds a keyless
-/// Default group whose streams map to no source stream, so non-null rows decode
-/// as empty maps and null rows stay null.
+/// group selects no group, unless batches list their Default keys
+/// (HybridFlatMap::KeyPresenceMode::kKeyList): then a key in no configured
+/// group selects the whole Default group and callers filter its keys. A column
+/// with no selected group holds a keyless Default group whose streams map to no
+/// source stream, so non-null rows decode as empty maps and null rows stay
+/// null.
 NimbleTypeProjection buildProjectedNimbleType(
     const Type* type,
     const std::vector<velox::common::Subfield>& projectedSubfields);
