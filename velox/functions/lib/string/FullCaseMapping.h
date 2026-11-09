@@ -19,7 +19,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <string_view>
+
+#include "folly/CPortability.h"
 
 namespace facebook::velox::functions::stringCore {
 
@@ -33,190 +34,159 @@ enum class CaseMapping {
   kFullTitle,
 };
 
-/// How a code point maps under Unicode full case mapping, where the mapping
-/// is not the one-to-one result of utf8proc_toupper. Strings are UTF-8.
+/// The uppercase and titlecase forms of one code point. Unused trailing slots
+/// are 0.
 struct FullCaseMapping {
   int32_t codePoint;
-  std::string_view upper;
-  std::string_view title;
+  std::array<int32_t, 3> upper;
+  std::array<int32_t, 3> title;
 };
 
-/// Sorted by code point. Generated from the output of Spark 4.0 (ICU 76.1) for
-/// upper() and initcap(), keeping only the code points where the result differs
-/// from one-to-one mapping.
-inline constexpr std::array<FullCaseMapping, 160> kFullCaseMappings{{
-    {0x00DF, "\x53\x53", "\x53\x73"},
-    {0x0149, "\xCA\xBC\x4E", "\xCA\xBC\x4E"},
-    {0x01C4, "\xC7\x84", "\xC7\x85"},
-    {0x01C5, "\xC7\x84", "\xC7\x85"},
-    {0x01C6, "\xC7\x84", "\xC7\x85"},
-    {0x01C7, "\xC7\x87", "\xC7\x88"},
-    {0x01C8, "\xC7\x87", "\xC7\x88"},
-    {0x01C9, "\xC7\x87", "\xC7\x88"},
-    {0x01CA, "\xC7\x8A", "\xC7\x8B"},
-    {0x01CB, "\xC7\x8A", "\xC7\x8B"},
-    {0x01CC, "\xC7\x8A", "\xC7\x8B"},
-    {0x01F0, "\x4A\xCC\x8C", "\x4A\xCC\x8C"},
-    {0x01F1, "\xC7\xB1", "\xC7\xB2"},
-    {0x01F2, "\xC7\xB1", "\xC7\xB2"},
-    {0x01F3, "\xC7\xB1", "\xC7\xB2"},
-    {0x0390, "\xCE\x99\xCC\x88\xCC\x81", "\xCE\x99\xCC\x88\xCC\x81"},
-    {0x03B0, "\xCE\xA5\xCC\x88\xCC\x81", "\xCE\xA5\xCC\x88\xCC\x81"},
-    {0x0587, "\xD4\xB5\xD5\x92", "\xD4\xB5\xD6\x82"},
-    {0x10D0, "\xE1\xB2\x90", "\xE1\x83\x90"},
-    {0x10D1, "\xE1\xB2\x91", "\xE1\x83\x91"},
-    {0x10D2, "\xE1\xB2\x92", "\xE1\x83\x92"},
-    {0x10D3, "\xE1\xB2\x93", "\xE1\x83\x93"},
-    {0x10D4, "\xE1\xB2\x94", "\xE1\x83\x94"},
-    {0x10D5, "\xE1\xB2\x95", "\xE1\x83\x95"},
-    {0x10D6, "\xE1\xB2\x96", "\xE1\x83\x96"},
-    {0x10D7, "\xE1\xB2\x97", "\xE1\x83\x97"},
-    {0x10D8, "\xE1\xB2\x98", "\xE1\x83\x98"},
-    {0x10D9, "\xE1\xB2\x99", "\xE1\x83\x99"},
-    {0x10DA, "\xE1\xB2\x9A", "\xE1\x83\x9A"},
-    {0x10DB, "\xE1\xB2\x9B", "\xE1\x83\x9B"},
-    {0x10DC, "\xE1\xB2\x9C", "\xE1\x83\x9C"},
-    {0x10DD, "\xE1\xB2\x9D", "\xE1\x83\x9D"},
-    {0x10DE, "\xE1\xB2\x9E", "\xE1\x83\x9E"},
-    {0x10DF, "\xE1\xB2\x9F", "\xE1\x83\x9F"},
-    {0x10E0, "\xE1\xB2\xA0", "\xE1\x83\xA0"},
-    {0x10E1, "\xE1\xB2\xA1", "\xE1\x83\xA1"},
-    {0x10E2, "\xE1\xB2\xA2", "\xE1\x83\xA2"},
-    {0x10E3, "\xE1\xB2\xA3", "\xE1\x83\xA3"},
-    {0x10E4, "\xE1\xB2\xA4", "\xE1\x83\xA4"},
-    {0x10E5, "\xE1\xB2\xA5", "\xE1\x83\xA5"},
-    {0x10E6, "\xE1\xB2\xA6", "\xE1\x83\xA6"},
-    {0x10E7, "\xE1\xB2\xA7", "\xE1\x83\xA7"},
-    {0x10E8, "\xE1\xB2\xA8", "\xE1\x83\xA8"},
-    {0x10E9, "\xE1\xB2\xA9", "\xE1\x83\xA9"},
-    {0x10EA, "\xE1\xB2\xAA", "\xE1\x83\xAA"},
-    {0x10EB, "\xE1\xB2\xAB", "\xE1\x83\xAB"},
-    {0x10EC, "\xE1\xB2\xAC", "\xE1\x83\xAC"},
-    {0x10ED, "\xE1\xB2\xAD", "\xE1\x83\xAD"},
-    {0x10EE, "\xE1\xB2\xAE", "\xE1\x83\xAE"},
-    {0x10EF, "\xE1\xB2\xAF", "\xE1\x83\xAF"},
-    {0x10F0, "\xE1\xB2\xB0", "\xE1\x83\xB0"},
-    {0x10F1, "\xE1\xB2\xB1", "\xE1\x83\xB1"},
-    {0x10F2, "\xE1\xB2\xB2", "\xE1\x83\xB2"},
-    {0x10F3, "\xE1\xB2\xB3", "\xE1\x83\xB3"},
-    {0x10F4, "\xE1\xB2\xB4", "\xE1\x83\xB4"},
-    {0x10F5, "\xE1\xB2\xB5", "\xE1\x83\xB5"},
-    {0x10F6, "\xE1\xB2\xB6", "\xE1\x83\xB6"},
-    {0x10F7, "\xE1\xB2\xB7", "\xE1\x83\xB7"},
-    {0x10F8, "\xE1\xB2\xB8", "\xE1\x83\xB8"},
-    {0x10F9, "\xE1\xB2\xB9", "\xE1\x83\xB9"},
-    {0x10FA, "\xE1\xB2\xBA", "\xE1\x83\xBA"},
-    {0x10FD, "\xE1\xB2\xBD", "\xE1\x83\xBD"},
-    {0x10FE, "\xE1\xB2\xBE", "\xE1\x83\xBE"},
-    {0x10FF, "\xE1\xB2\xBF", "\xE1\x83\xBF"},
-    {0x1E96, "\x48\xCC\xB1", "\x48\xCC\xB1"},
-    {0x1E97, "\x54\xCC\x88", "\x54\xCC\x88"},
-    {0x1E98, "\x57\xCC\x8A", "\x57\xCC\x8A"},
-    {0x1E99, "\x59\xCC\x8A", "\x59\xCC\x8A"},
-    {0x1E9A, "\x41\xCA\xBE", "\x41\xCA\xBE"},
-    {0x1F50, "\xCE\xA5\xCC\x93", "\xCE\xA5\xCC\x93"},
-    {0x1F52, "\xCE\xA5\xCC\x93\xCC\x80", "\xCE\xA5\xCC\x93\xCC\x80"},
-    {0x1F54, "\xCE\xA5\xCC\x93\xCC\x81", "\xCE\xA5\xCC\x93\xCC\x81"},
-    {0x1F56, "\xCE\xA5\xCC\x93\xCD\x82", "\xCE\xA5\xCC\x93\xCD\x82"},
-    {0x1F80, "\xE1\xBC\x88\xCE\x99", "\xE1\xBE\x88"},
-    {0x1F81, "\xE1\xBC\x89\xCE\x99", "\xE1\xBE\x89"},
-    {0x1F82, "\xE1\xBC\x8A\xCE\x99", "\xE1\xBE\x8A"},
-    {0x1F83, "\xE1\xBC\x8B\xCE\x99", "\xE1\xBE\x8B"},
-    {0x1F84, "\xE1\xBC\x8C\xCE\x99", "\xE1\xBE\x8C"},
-    {0x1F85, "\xE1\xBC\x8D\xCE\x99", "\xE1\xBE\x8D"},
-    {0x1F86, "\xE1\xBC\x8E\xCE\x99", "\xE1\xBE\x8E"},
-    {0x1F87, "\xE1\xBC\x8F\xCE\x99", "\xE1\xBE\x8F"},
-    {0x1F88, "\xE1\xBC\x88\xCE\x99", "\xE1\xBE\x88"},
-    {0x1F89, "\xE1\xBC\x89\xCE\x99", "\xE1\xBE\x89"},
-    {0x1F8A, "\xE1\xBC\x8A\xCE\x99", "\xE1\xBE\x8A"},
-    {0x1F8B, "\xE1\xBC\x8B\xCE\x99", "\xE1\xBE\x8B"},
-    {0x1F8C, "\xE1\xBC\x8C\xCE\x99", "\xE1\xBE\x8C"},
-    {0x1F8D, "\xE1\xBC\x8D\xCE\x99", "\xE1\xBE\x8D"},
-    {0x1F8E, "\xE1\xBC\x8E\xCE\x99", "\xE1\xBE\x8E"},
-    {0x1F8F, "\xE1\xBC\x8F\xCE\x99", "\xE1\xBE\x8F"},
-    {0x1F90, "\xE1\xBC\xA8\xCE\x99", "\xE1\xBE\x98"},
-    {0x1F91, "\xE1\xBC\xA9\xCE\x99", "\xE1\xBE\x99"},
-    {0x1F92, "\xE1\xBC\xAA\xCE\x99", "\xE1\xBE\x9A"},
-    {0x1F93, "\xE1\xBC\xAB\xCE\x99", "\xE1\xBE\x9B"},
-    {0x1F94, "\xE1\xBC\xAC\xCE\x99", "\xE1\xBE\x9C"},
-    {0x1F95, "\xE1\xBC\xAD\xCE\x99", "\xE1\xBE\x9D"},
-    {0x1F96, "\xE1\xBC\xAE\xCE\x99", "\xE1\xBE\x9E"},
-    {0x1F97, "\xE1\xBC\xAF\xCE\x99", "\xE1\xBE\x9F"},
-    {0x1F98, "\xE1\xBC\xA8\xCE\x99", "\xE1\xBE\x98"},
-    {0x1F99, "\xE1\xBC\xA9\xCE\x99", "\xE1\xBE\x99"},
-    {0x1F9A, "\xE1\xBC\xAA\xCE\x99", "\xE1\xBE\x9A"},
-    {0x1F9B, "\xE1\xBC\xAB\xCE\x99", "\xE1\xBE\x9B"},
-    {0x1F9C, "\xE1\xBC\xAC\xCE\x99", "\xE1\xBE\x9C"},
-    {0x1F9D, "\xE1\xBC\xAD\xCE\x99", "\xE1\xBE\x9D"},
-    {0x1F9E, "\xE1\xBC\xAE\xCE\x99", "\xE1\xBE\x9E"},
-    {0x1F9F, "\xE1\xBC\xAF\xCE\x99", "\xE1\xBE\x9F"},
-    {0x1FA0, "\xE1\xBD\xA8\xCE\x99", "\xE1\xBE\xA8"},
-    {0x1FA1, "\xE1\xBD\xA9\xCE\x99", "\xE1\xBE\xA9"},
-    {0x1FA2, "\xE1\xBD\xAA\xCE\x99", "\xE1\xBE\xAA"},
-    {0x1FA3, "\xE1\xBD\xAB\xCE\x99", "\xE1\xBE\xAB"},
-    {0x1FA4, "\xE1\xBD\xAC\xCE\x99", "\xE1\xBE\xAC"},
-    {0x1FA5, "\xE1\xBD\xAD\xCE\x99", "\xE1\xBE\xAD"},
-    {0x1FA6, "\xE1\xBD\xAE\xCE\x99", "\xE1\xBE\xAE"},
-    {0x1FA7, "\xE1\xBD\xAF\xCE\x99", "\xE1\xBE\xAF"},
-    {0x1FA8, "\xE1\xBD\xA8\xCE\x99", "\xE1\xBE\xA8"},
-    {0x1FA9, "\xE1\xBD\xA9\xCE\x99", "\xE1\xBE\xA9"},
-    {0x1FAA, "\xE1\xBD\xAA\xCE\x99", "\xE1\xBE\xAA"},
-    {0x1FAB, "\xE1\xBD\xAB\xCE\x99", "\xE1\xBE\xAB"},
-    {0x1FAC, "\xE1\xBD\xAC\xCE\x99", "\xE1\xBE\xAC"},
-    {0x1FAD, "\xE1\xBD\xAD\xCE\x99", "\xE1\xBE\xAD"},
-    {0x1FAE, "\xE1\xBD\xAE\xCE\x99", "\xE1\xBE\xAE"},
-    {0x1FAF, "\xE1\xBD\xAF\xCE\x99", "\xE1\xBE\xAF"},
-    {0x1FB2, "\xE1\xBE\xBA\xCE\x99", "\xE1\xBE\xBA\xCD\x85"},
-    {0x1FB3, "\xCE\x91\xCE\x99", "\xE1\xBE\xBC"},
-    {0x1FB4, "\xCE\x86\xCE\x99", "\xCE\x86\xCD\x85"},
-    {0x1FB6, "\xCE\x91\xCD\x82", "\xCE\x91\xCD\x82"},
-    {0x1FB7, "\xCE\x91\xCD\x82\xCE\x99", "\xCE\x91\xCD\x82\xCD\x85"},
-    {0x1FBC, "\xCE\x91\xCE\x99", "\xE1\xBE\xBC"},
-    {0x1FC2, "\xE1\xBF\x8A\xCE\x99", "\xE1\xBF\x8A\xCD\x85"},
-    {0x1FC3, "\xCE\x97\xCE\x99", "\xE1\xBF\x8C"},
-    {0x1FC4, "\xCE\x89\xCE\x99", "\xCE\x89\xCD\x85"},
-    {0x1FC6, "\xCE\x97\xCD\x82", "\xCE\x97\xCD\x82"},
-    {0x1FC7, "\xCE\x97\xCD\x82\xCE\x99", "\xCE\x97\xCD\x82\xCD\x85"},
-    {0x1FCC, "\xCE\x97\xCE\x99", "\xE1\xBF\x8C"},
-    {0x1FD2, "\xCE\x99\xCC\x88\xCC\x80", "\xCE\x99\xCC\x88\xCC\x80"},
-    {0x1FD3, "\xCE\x99\xCC\x88\xCC\x81", "\xCE\x99\xCC\x88\xCC\x81"},
-    {0x1FD6, "\xCE\x99\xCD\x82", "\xCE\x99\xCD\x82"},
-    {0x1FD7, "\xCE\x99\xCC\x88\xCD\x82", "\xCE\x99\xCC\x88\xCD\x82"},
-    {0x1FE2, "\xCE\xA5\xCC\x88\xCC\x80", "\xCE\xA5\xCC\x88\xCC\x80"},
-    {0x1FE3, "\xCE\xA5\xCC\x88\xCC\x81", "\xCE\xA5\xCC\x88\xCC\x81"},
-    {0x1FE4, "\xCE\xA1\xCC\x93", "\xCE\xA1\xCC\x93"},
-    {0x1FE6, "\xCE\xA5\xCD\x82", "\xCE\xA5\xCD\x82"},
-    {0x1FE7, "\xCE\xA5\xCC\x88\xCD\x82", "\xCE\xA5\xCC\x88\xCD\x82"},
-    {0x1FF2, "\xE1\xBF\xBA\xCE\x99", "\xE1\xBF\xBA\xCD\x85"},
-    {0x1FF3, "\xCE\xA9\xCE\x99", "\xE1\xBF\xBC"},
-    {0x1FF4, "\xCE\x8F\xCE\x99", "\xCE\x8F\xCD\x85"},
-    {0x1FF6, "\xCE\xA9\xCD\x82", "\xCE\xA9\xCD\x82"},
-    {0x1FF7, "\xCE\xA9\xCD\x82\xCE\x99", "\xCE\xA9\xCD\x82\xCD\x85"},
-    {0x1FFC, "\xCE\xA9\xCE\x99", "\xE1\xBF\xBC"},
-    {0xFB00, "\x46\x46", "\x46\x66"},
-    {0xFB01, "\x46\x49", "\x46\x69"},
-    {0xFB02, "\x46\x4C", "\x46\x6C"},
-    {0xFB03, "\x46\x46\x49", "\x46\x66\x69"},
-    {0xFB04, "\x46\x46\x4C", "\x46\x66\x6C"},
-    {0xFB05, "\x53\x54", "\x53\x74"},
-    {0xFB06, "\x53\x54", "\x53\x74"},
-    {0xFB13, "\xD5\x84\xD5\x86", "\xD5\x84\xD5\xB6"},
-    {0xFB14, "\xD5\x84\xD4\xB5", "\xD5\x84\xD5\xA5"},
-    {0xFB15, "\xD5\x84\xD4\xBB", "\xD5\x84\xD5\xAB"},
-    {0xFB16, "\xD5\x8E\xD5\x86", "\xD5\x8E\xD5\xB6"},
-    {0xFB17, "\xD5\x84\xD4\xBD", "\xD5\x84\xD5\xAD"},
+/// Code points whose full uppercase or titlecase form, as Spark produces it,
+/// differs from the one-to-one result of utf8proc_toupper. Most come from the
+/// unconditional entries of Unicode's SpecialCasing.txt, and the rest are the
+/// titlecase forms of the Latin digraphs. Sorted by code point.
+inline constexpr std::array<FullCaseMapping, 114> kFullCaseMappings{{
+    {0x00DF, {0x0053, 0x0053}, {0x0053, 0x0073}}, // ß
+    {0x0149, {0x02BC, 0x004E}, {0x02BC, 0x004E}}, // ŉ
+    {0x01C4, {0x01C4}, {0x01C5}}, // Ǆ
+    {0x01C5, {0x01C4}, {0x01C5}}, // ǅ
+    {0x01C6, {0x01C4}, {0x01C5}}, // ǆ
+    {0x01C7, {0x01C7}, {0x01C8}}, // Ǉ
+    {0x01C8, {0x01C7}, {0x01C8}}, // ǈ
+    {0x01C9, {0x01C7}, {0x01C8}}, // ǉ
+    {0x01CA, {0x01CA}, {0x01CB}}, // Ǌ
+    {0x01CB, {0x01CA}, {0x01CB}}, // ǋ
+    {0x01CC, {0x01CA}, {0x01CB}}, // ǌ
+    {0x01F0, {0x004A, 0x030C}, {0x004A, 0x030C}}, // ǰ
+    {0x01F1, {0x01F1}, {0x01F2}}, // Ǳ
+    {0x01F2, {0x01F1}, {0x01F2}}, // ǲ
+    {0x01F3, {0x01F1}, {0x01F2}}, // ǳ
+    {0x0390, {0x0399, 0x0308, 0x0301}, {0x0399, 0x0308, 0x0301}}, // ΐ
+    {0x03B0, {0x03A5, 0x0308, 0x0301}, {0x03A5, 0x0308, 0x0301}}, // ΰ
+    {0x0587, {0x0535, 0x0552}, {0x0535, 0x0582}}, // և
+    {0x1E96, {0x0048, 0x0331}, {0x0048, 0x0331}}, // ẖ
+    {0x1E97, {0x0054, 0x0308}, {0x0054, 0x0308}}, // ẗ
+    {0x1E98, {0x0057, 0x030A}, {0x0057, 0x030A}}, // ẘ
+    {0x1E99, {0x0059, 0x030A}, {0x0059, 0x030A}}, // ẙ
+    {0x1E9A, {0x0041, 0x02BE}, {0x0041, 0x02BE}}, // ẚ
+    {0x1F50, {0x03A5, 0x0313}, {0x03A5, 0x0313}}, // ὐ
+    {0x1F52, {0x03A5, 0x0313, 0x0300}, {0x03A5, 0x0313, 0x0300}}, // ὒ
+    {0x1F54, {0x03A5, 0x0313, 0x0301}, {0x03A5, 0x0313, 0x0301}}, // ὔ
+    {0x1F56, {0x03A5, 0x0313, 0x0342}, {0x03A5, 0x0313, 0x0342}}, // ὖ
+    {0x1F80, {0x1F08, 0x0399}, {0x1F88}}, // ᾀ
+    {0x1F81, {0x1F09, 0x0399}, {0x1F89}}, // ᾁ
+    {0x1F82, {0x1F0A, 0x0399}, {0x1F8A}}, // ᾂ
+    {0x1F83, {0x1F0B, 0x0399}, {0x1F8B}}, // ᾃ
+    {0x1F84, {0x1F0C, 0x0399}, {0x1F8C}}, // ᾄ
+    {0x1F85, {0x1F0D, 0x0399}, {0x1F8D}}, // ᾅ
+    {0x1F86, {0x1F0E, 0x0399}, {0x1F8E}}, // ᾆ
+    {0x1F87, {0x1F0F, 0x0399}, {0x1F8F}}, // ᾇ
+    {0x1F88, {0x1F08, 0x0399}, {0x1F88}}, // ᾈ
+    {0x1F89, {0x1F09, 0x0399}, {0x1F89}}, // ᾉ
+    {0x1F8A, {0x1F0A, 0x0399}, {0x1F8A}}, // ᾊ
+    {0x1F8B, {0x1F0B, 0x0399}, {0x1F8B}}, // ᾋ
+    {0x1F8C, {0x1F0C, 0x0399}, {0x1F8C}}, // ᾌ
+    {0x1F8D, {0x1F0D, 0x0399}, {0x1F8D}}, // ᾍ
+    {0x1F8E, {0x1F0E, 0x0399}, {0x1F8E}}, // ᾎ
+    {0x1F8F, {0x1F0F, 0x0399}, {0x1F8F}}, // ᾏ
+    {0x1F90, {0x1F28, 0x0399}, {0x1F98}}, // ᾐ
+    {0x1F91, {0x1F29, 0x0399}, {0x1F99}}, // ᾑ
+    {0x1F92, {0x1F2A, 0x0399}, {0x1F9A}}, // ᾒ
+    {0x1F93, {0x1F2B, 0x0399}, {0x1F9B}}, // ᾓ
+    {0x1F94, {0x1F2C, 0x0399}, {0x1F9C}}, // ᾔ
+    {0x1F95, {0x1F2D, 0x0399}, {0x1F9D}}, // ᾕ
+    {0x1F96, {0x1F2E, 0x0399}, {0x1F9E}}, // ᾖ
+    {0x1F97, {0x1F2F, 0x0399}, {0x1F9F}}, // ᾗ
+    {0x1F98, {0x1F28, 0x0399}, {0x1F98}}, // ᾘ
+    {0x1F99, {0x1F29, 0x0399}, {0x1F99}}, // ᾙ
+    {0x1F9A, {0x1F2A, 0x0399}, {0x1F9A}}, // ᾚ
+    {0x1F9B, {0x1F2B, 0x0399}, {0x1F9B}}, // ᾛ
+    {0x1F9C, {0x1F2C, 0x0399}, {0x1F9C}}, // ᾜ
+    {0x1F9D, {0x1F2D, 0x0399}, {0x1F9D}}, // ᾝ
+    {0x1F9E, {0x1F2E, 0x0399}, {0x1F9E}}, // ᾞ
+    {0x1F9F, {0x1F2F, 0x0399}, {0x1F9F}}, // ᾟ
+    {0x1FA0, {0x1F68, 0x0399}, {0x1FA8}}, // ᾠ
+    {0x1FA1, {0x1F69, 0x0399}, {0x1FA9}}, // ᾡ
+    {0x1FA2, {0x1F6A, 0x0399}, {0x1FAA}}, // ᾢ
+    {0x1FA3, {0x1F6B, 0x0399}, {0x1FAB}}, // ᾣ
+    {0x1FA4, {0x1F6C, 0x0399}, {0x1FAC}}, // ᾤ
+    {0x1FA5, {0x1F6D, 0x0399}, {0x1FAD}}, // ᾥ
+    {0x1FA6, {0x1F6E, 0x0399}, {0x1FAE}}, // ᾦ
+    {0x1FA7, {0x1F6F, 0x0399}, {0x1FAF}}, // ᾧ
+    {0x1FA8, {0x1F68, 0x0399}, {0x1FA8}}, // ᾨ
+    {0x1FA9, {0x1F69, 0x0399}, {0x1FA9}}, // ᾩ
+    {0x1FAA, {0x1F6A, 0x0399}, {0x1FAA}}, // ᾪ
+    {0x1FAB, {0x1F6B, 0x0399}, {0x1FAB}}, // ᾫ
+    {0x1FAC, {0x1F6C, 0x0399}, {0x1FAC}}, // ᾬ
+    {0x1FAD, {0x1F6D, 0x0399}, {0x1FAD}}, // ᾭ
+    {0x1FAE, {0x1F6E, 0x0399}, {0x1FAE}}, // ᾮ
+    {0x1FAF, {0x1F6F, 0x0399}, {0x1FAF}}, // ᾯ
+    {0x1FB2, {0x1FBA, 0x0399}, {0x1FBA, 0x0345}}, // ᾲ
+    {0x1FB3, {0x0391, 0x0399}, {0x1FBC}}, // ᾳ
+    {0x1FB4, {0x0386, 0x0399}, {0x0386, 0x0345}}, // ᾴ
+    {0x1FB6, {0x0391, 0x0342}, {0x0391, 0x0342}}, // ᾶ
+    {0x1FB7, {0x0391, 0x0342, 0x0399}, {0x0391, 0x0342, 0x0345}}, // ᾷ
+    {0x1FBC, {0x0391, 0x0399}, {0x1FBC}}, // ᾼ
+    {0x1FC2, {0x1FCA, 0x0399}, {0x1FCA, 0x0345}}, // ῂ
+    {0x1FC3, {0x0397, 0x0399}, {0x1FCC}}, // ῃ
+    {0x1FC4, {0x0389, 0x0399}, {0x0389, 0x0345}}, // ῄ
+    {0x1FC6, {0x0397, 0x0342}, {0x0397, 0x0342}}, // ῆ
+    {0x1FC7, {0x0397, 0x0342, 0x0399}, {0x0397, 0x0342, 0x0345}}, // ῇ
+    {0x1FCC, {0x0397, 0x0399}, {0x1FCC}}, // ῌ
+    {0x1FD2, {0x0399, 0x0308, 0x0300}, {0x0399, 0x0308, 0x0300}}, // ῒ
+    {0x1FD3, {0x0399, 0x0308, 0x0301}, {0x0399, 0x0308, 0x0301}}, // ΐ
+    {0x1FD6, {0x0399, 0x0342}, {0x0399, 0x0342}}, // ῖ
+    {0x1FD7, {0x0399, 0x0308, 0x0342}, {0x0399, 0x0308, 0x0342}}, // ῗ
+    {0x1FE2, {0x03A5, 0x0308, 0x0300}, {0x03A5, 0x0308, 0x0300}}, // ῢ
+    {0x1FE3, {0x03A5, 0x0308, 0x0301}, {0x03A5, 0x0308, 0x0301}}, // ΰ
+    {0x1FE4, {0x03A1, 0x0313}, {0x03A1, 0x0313}}, // ῤ
+    {0x1FE6, {0x03A5, 0x0342}, {0x03A5, 0x0342}}, // ῦ
+    {0x1FE7, {0x03A5, 0x0308, 0x0342}, {0x03A5, 0x0308, 0x0342}}, // ῧ
+    {0x1FF2, {0x1FFA, 0x0399}, {0x1FFA, 0x0345}}, // ῲ
+    {0x1FF3, {0x03A9, 0x0399}, {0x1FFC}}, // ῳ
+    {0x1FF4, {0x038F, 0x0399}, {0x038F, 0x0345}}, // ῴ
+    {0x1FF6, {0x03A9, 0x0342}, {0x03A9, 0x0342}}, // ῶ
+    {0x1FF7, {0x03A9, 0x0342, 0x0399}, {0x03A9, 0x0342, 0x0345}}, // ῷ
+    {0x1FFC, {0x03A9, 0x0399}, {0x1FFC}}, // ῼ
+    {0xFB00, {0x0046, 0x0046}, {0x0046, 0x0066}}, // ﬀ
+    {0xFB01, {0x0046, 0x0049}, {0x0046, 0x0069}}, // ﬁ
+    {0xFB02, {0x0046, 0x004C}, {0x0046, 0x006C}}, // ﬂ
+    {0xFB03, {0x0046, 0x0046, 0x0049}, {0x0046, 0x0066, 0x0069}}, // ﬃ
+    {0xFB04, {0x0046, 0x0046, 0x004C}, {0x0046, 0x0066, 0x006C}}, // ﬄ
+    {0xFB05, {0x0053, 0x0054}, {0x0053, 0x0074}}, // ﬅ
+    {0xFB06, {0x0053, 0x0054}, {0x0053, 0x0074}}, // ﬆ
+    {0xFB13, {0x0544, 0x0546}, {0x0544, 0x0576}}, // ﬓ
+    {0xFB14, {0x0544, 0x0535}, {0x0544, 0x0565}}, // ﬔ
+    {0xFB15, {0x0544, 0x053B}, {0x0544, 0x056B}}, // ﬕ
+    {0xFB16, {0x054E, 0x0546}, {0x054E, 0x0576}}, // ﬖ
+    {0xFB17, {0x0544, 0x053D}, {0x0544, 0x056D}}, // ﬗ
 }};
+
+static_assert(
+    std::is_sorted(
+        kFullCaseMappings.begin(),
+        kFullCaseMappings.end(),
+        [](const auto& left, const auto& right) {
+          return left.codePoint < right.codePoint;
+        }),
+    "kFullCaseMappings must be sorted by code point");
 
 /// Returns the full case mapping of `codePoint`, or nullptr if the one-to-one
 /// mapping is already correct.
-inline const FullCaseMapping* findFullCaseMapping(int32_t codePoint) {
-  const auto* end = kFullCaseMappings.data() + kFullCaseMappings.size();
+FOLLY_ALWAYS_INLINE const FullCaseMapping* findFullCaseMapping(
+    int32_t codePoint) {
   const auto* it = std::lower_bound(
-      kFullCaseMappings.data(),
-      end,
+      kFullCaseMappings.begin(),
+      kFullCaseMappings.end(),
       codePoint,
-      [](const auto& entry, int32_t cp) { return entry.codePoint < cp; });
-  return it != end && it->codePoint == codePoint ? it : nullptr;
+      [](const FullCaseMapping& entry, int32_t value) {
+        return entry.codePoint < value;
+      });
+  if (it != kFullCaseMappings.end() && it->codePoint == codePoint) {
+    return it;
+  }
+  return nullptr;
 }
 
 } // namespace facebook::velox::functions::stringCore

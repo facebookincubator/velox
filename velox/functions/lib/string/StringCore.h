@@ -152,12 +152,19 @@ FOLLY_ALWAYS_INLINE size_t upperUnicode(
 
     if constexpr (mapping != CaseMapping::kSimple) {
       if (const auto* full = findFullCaseMapping(nextCodePoint)) {
-        const std::string_view mapped =
+        const auto& mapped =
             mapping == CaseMapping::kFullUpper ? full->upper : full->title;
-        assert(
-            outputIdx + mapped.size() <= outputLength && "access out of bound");
-        std::memcpy(&output[outputIdx], mapped.data(), mapped.size());
-        outputIdx += mapped.size();
+        for (const int32_t codePoint : mapped) {
+          if (codePoint == 0) {
+            break;
+          }
+          assert(
+              outputIdx + utf8proc_codepoint_length(codePoint) <=
+                  outputLength &&
+              "access out of bound");
+          outputIdx += utf8proc_encode_char(
+              codePoint, reinterpret_cast<unsigned char*>(&output[outputIdx]));
+        }
         continue;
       }
     }
