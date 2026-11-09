@@ -454,11 +454,56 @@ TEST_F(EncodingViewDecoderTest, rebindReplacesChunkAndRewindsCursor) {
   ASSERT_EQ(output, (std::array<int64_t, 2>{10, 11}));
   ASSERT_EQ(decoder->remainingRows(), 2);
 
-  decoder->rebind(std::array<std::string_view, 1>{second});
+  decoder->rebind(
+      std::array<std::string_view, 1>{second}, /*bufferPool=*/nullptr);
 
   EXPECT_EQ(decoder->remainingRows(), 3);
   decoder->next(2, output.data(), getOutputNulls, stringBuffers);
   EXPECT_EQ(output, (std::array<int64_t, 2>{20, 21}));
+}
+
+TEST_F(EncodingViewDecoderTest, rebindRecyclesScratchInTheNewBufferPool) {
+  const auto first = encodeNullable<int64_t>({10, std::nullopt, 12});
+  const auto second = encodeNullable<int64_t>({20, 21, std::nullopt});
+  velox::BufferPool firstPool{velox::BufferPool::kDefaultCapacity};
+  velox::BufferPool secondPool{velox::BufferPool::kDefaultCapacity};
+  EncodingViewDecoder decoder{
+      std::array<std::string_view, 1>{first},
+      pool_.get(),
+      &firstPool,
+      [this](std::string_view encoded) {
+        return createEncodingView(encoded, pool_.get());
+      }};
+  std::array<int64_t, 5> output{};
+  std::array<uint64_t, 1> outputNulls{};
+  std::array<uint64_t, 1> scatterBits{};
+  velox::bits::setBit(scatterBits.data(), 1);
+  velox::bits::setBit(scatterBits.data(), 3);
+  velox::bits::setBit(scatterBits.data(), 4);
+  const velox::bits::Bitmap scatterBitmap{scatterBits.data(), output.size()};
+  std::vector<velox::BufferPtr> stringBuffers;
+  // Scatters the 3 rows of the bound chunk into 5 output positions, which
+  // decodes them into scratch buffers first.
+  const auto scatterNext = [&]() {
+    decoder.next(
+        3,
+        output.data(),
+        [&outputNulls]() { return outputNulls.data(); },
+        stringBuffers,
+        &scatterBitmap);
+  };
+
+  scatterNext();
+  const auto numScratchBuffers = firstPool.size();
+  ASSERT_GT(numScratchBuffers, 0);
+  ASSERT_EQ(secondPool.size(), 0);
+
+  // The reads of the new chunks take their scratch buffers from the pool of
+  // the new binding, not from the pool that the decoder was built with.
+  decoder.rebind(std::array<std::string_view, 1>{second}, &secondPool);
+  scatterNext();
+  EXPECT_EQ(secondPool.size(), numScratchBuffers);
+  EXPECT_EQ(firstPool.size(), numScratchBuffers);
 }
 
 TEST_F(EncodingViewDecoderTest, releaseDropsViewsUntilRebound) {
@@ -475,7 +520,8 @@ TEST_F(EncodingViewDecoderTest, releaseDropsViewsUntilRebound) {
   decoder.release();
   EXPECT_THAT(isExpired(views), ::testing::ElementsAre(true, true));
 
-  decoder.rebind(std::array<std::string_view, 1>{second});
+  decoder.rebind(
+      std::array<std::string_view, 1>{second}, /*bufferPool=*/nullptr);
   EXPECT_THAT(isExpired(views), ::testing::ElementsAre(true, true, false));
   EXPECT_EQ(decoder.remainingRows(), 2);
 }
@@ -493,11 +539,14 @@ TEST_F(EncodingViewDecoderTest, failedRebindReleasesViews) {
 
   // The last chunk fails after the views of the earlier chunks are created.
   NIMBLE_ASSERT_FILE_THROW(
-      decoder.rebind(std::array<std::string_view, 3>{first, second, otherType}),
+      decoder.rebind(
+          std::array<std::string_view, 3>{first, second, otherType},
+          /*bufferPool=*/nullptr),
       "Encoding chunks of a stream must store the same data type");
   EXPECT_THAT(isExpired(views), ::testing::ElementsAre(true, true, true, true));
 
-  decoder.rebind(std::array<std::string_view, 1>{second});
+  decoder.rebind(
+      std::array<std::string_view, 1>{second}, /*bufferPool=*/nullptr);
   EXPECT_EQ(decoder.remainingRows(), 2);
 }
 
@@ -515,8 +564,10 @@ TEST_F(EncodingViewDecoderTest, rebindUsesConstructorFactory) {
       }};
   ASSERT_EQ(numViews, 1);
 
-  decoder.rebind(std::array<std::string_view, 2>{second, first});
-  decoder.rebind(std::array<std::string_view, 1>{first});
+  decoder.rebind(
+      std::array<std::string_view, 2>{second, first}, /*bufferPool=*/nullptr);
+  decoder.rebind(
+      std::array<std::string_view, 1>{first}, /*bufferPool=*/nullptr);
 
   EXPECT_EQ(numViews, 4);
 }
@@ -762,7 +813,9 @@ TEST_F(EncodingViewDecoderTest, rebindChangesChunkCount) {
   auto decoder = makeDecoder(single);
   std::vector<velox::BufferPtr> stringBuffers;
 
-  decoder->rebind(std::array<std::string_view, 3>{first, second, third});
+  decoder->rebind(
+      std::array<std::string_view, 3>{first, second, third},
+      /*bufferPool=*/nullptr);
   {
     const std::array<RowRange, 1> ranges{{{1, 4}}};
     std::array<int64_t, 3> output{};
@@ -776,7 +829,8 @@ TEST_F(EncodingViewDecoderTest, rebindChangesChunkCount) {
     EXPECT_EQ(decoder->remainingRows(), 2);
   }
 
-  decoder->rebind(std::array<std::string_view, 1>{single});
+  decoder->rebind(
+      std::array<std::string_view, 1>{single}, /*bufferPool=*/nullptr);
   {
     const std::array<RowRange, 1> ranges{{{0, 2}}};
     std::array<int64_t, 2> output{};

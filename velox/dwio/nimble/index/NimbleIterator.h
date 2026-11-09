@@ -170,6 +170,12 @@ class NimbleIterator {
   /// the prefetch stops.
   virtual void reset() = 0;
 
+  /// Turns the verification of stream checksums on or off for the next seeks,
+  /// as ReaderOptions::verifyStreamChecksums() of the projector does at
+  /// creation, so that a caller that keeps an iterator between lookups reads
+  /// each lookup with its own setting. Must be called after reset().
+  virtual void setVerifyStreamChecksums(bool verifyStreamChecksums) = 0;
+
   /// Returns whether the iterator is positioned on a selected row.
   bool valid() const {
     return hasCurrentRow();

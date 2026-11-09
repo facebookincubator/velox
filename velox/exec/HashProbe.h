@@ -227,12 +227,6 @@ class HashProbe : public Operator {
       vector_size_t numRows,
       bool filterPropagateNulls);
 
-  // Prepares the hashers for probing with null keys.
-  // Initializes `nullKeyProbeHashers_` if empty, ensuring it has exactly one
-  // hasher. If the table's hash mode is `kHash`, creates and decodes a null
-  // input vector.
-  void prepareNullKeyProbeHashers();
-
   // Combine the selected probe-side rows with all or null-join-key (depending
   // on the iterator) build side rows and evaluate the filter.  Mark probe rows
   // that pass the filter in 'filterPassedRows'. Used in null-aware join
@@ -397,14 +391,6 @@ class HashProbe : public Operator {
   std::optional<uint64_t> estimatedRowSize(
       const std::vector<vector_size_t>& varColumnsStats,
       uint64_t totalFixedColumnsBytes);
-
-  // Returns the aggregated column stats at 'columnIndex' of 'table_'. Returns
-  // nullopt if the column stats is not available.
-  //
-  // NOTE: The column stats is collected by default for hash join table but it
-  // could be invalidated in case of spilling. But we should never expect usage
-  // of an invalidated table as we always spill the entire table.
-  std::optional<RowColumn::Stats> columnStats(int32_t columnIndex) const;
 
   // TODO: Define batch size as bytes based on RowContainer row sizes.
   const vector_size_t outputBatchSize_;
@@ -784,12 +770,6 @@ class HashProbe : public Operator {
 
   // The spilled probe partitions remaining to restore.
   SpillPartitionSet inputSpillPartitionSet_;
-
-  // VectorHashers used for listing rows with null keys.
-  std::vector<std::unique_ptr<VectorHasher>> nullKeyProbeHashers_;
-
-  // Input vector used for listing rows with null keys.
-  VectorPtr nullKeyProbeInput_;
 
   // The index of the row container in the current hash table that this hash
   // probe oprator is processing to output build-side rows.

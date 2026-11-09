@@ -15,6 +15,8 @@
  */
 
 #include <folly/Conv.h>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -352,6 +354,46 @@ class FsstQueryTest : public HiveConnectorTestBase,
     }
   }
 };
+
+// Exports verified physical files and original rows for the local Presto SQL
+// harness. The environment variable keeps this opt-in fixture out of CI runs.
+TEST_P(FsstQueryTest, exportPrestoFixtures) {
+  const auto* exportDir = std::getenv("FSST_PRESTO_EXPORT_DIR");
+  if (exportDir == nullptr) {
+    GTEST_SKIP();
+  }
+  const auto batches = makeInput(false);
+  const auto file = writeInput(batches);
+  ASSERT_FALSE(HasFailure());
+  const auto layout = folly::to<std::string>(static_cast<int>(GetParam()));
+  const auto dir = std::filesystem::path(exportDir) / layout;
+  std::filesystem::create_directories(dir);
+  std::filesystem::copy_file(
+      file->getPath(),
+      dir / "data.nimble",
+      std::filesystem::copy_options::overwrite_existing);
+  std::ofstream rows(dir / "original.tsv");
+  constexpr std::string_view hex = "0123456789abcdef";
+  for (const auto& batch : batches) {
+    const auto* ids = batch->childAt(0)->as<FlatVector<int64_t>>();
+    const auto* strings = batch->childAt(1)->as<FlatVector<StringView>>();
+    const auto* gates = batch->childAt(2)->as<FlatVector<int64_t>>();
+    for (vector_size_t row = 0; row < batch->size(); ++row) {
+      rows << ids->valueAt(row) << '\t';
+      if (strings->isNullAt(row)) {
+        rows << "NULL";
+      } else {
+        const auto value = strings->valueAt(row);
+        for (const unsigned char byte : value) {
+          rows << hex[byte >> 4] << hex[byte & 15];
+        }
+      }
+      rows << '\t' << gates->valueAt(row) << '\n';
+    }
+  }
+  rows.close();
+  ASSERT_TRUE(rows.good());
+}
 
 TEST_P(FsstQueryTest, queryOperators) {
   checkQueries(
