@@ -37,7 +37,18 @@ class InitcapTest : public SparkFunctionBaseTest {
         {"добро-пожаловать.тест", "Добро-пожаловать.тест"},
         {"çalışkan öğrenci@üniversite.tr", "Çalışkan Öğrenci@üniversite.tr"},
         {"emoji😊test🚀case", "Emoji😊test🚀case"},
-        {"тест@пример.рф", "Тест@пример.рф"}};
+        {"тест@пример.рф", "Тест@пример.рф"},
+        {"\u00DF", "Ss"},
+        {"stra\u00DFe", "Stra\u00DFe"},
+        {"\uFB01", "Fi"},
+        {"\uFB03", "Ffi"},
+        {"\u0149", "\u02BCN"},
+        {"\u01F0", "J\u030C"},
+        {"\u0587", "\u0535\u0582"},
+        {"\u01C6", "\u01C5"},
+        {"\u1FB3", "\u1FBC"},
+        {"\u10D0\u10D1", "\u10D0\u10D1"},
+        {"\u00DF \uFB01", "Ss Fi"}};
   }
 
   static std::vector<std::tuple<std::string, std::string>>
@@ -112,24 +123,6 @@ TEST_F(InitcapTest, initcap) {
   // Test with spaces other than whitespace
   EXPECT_EQ(initcap("YQ\tY"), "Yq\ty");
   EXPECT_EQ(initcap("YQ\nY"), "Yq\ny");
-}
-
-TEST_F(InitcapTest, fullCaseMapping) {
-  const auto initcap = [&](const std::optional<std::string>& str) {
-    return evaluateOnce<std::string>("initcap(c0)", str);
-  };
-  EXPECT_EQ(initcap("\u00DF"), "Ss");
-  EXPECT_EQ(initcap("stra\u00DFe"), "Stra\u00DFe");
-  EXPECT_EQ(initcap("\uFB01"), "Fi");
-  EXPECT_EQ(initcap("\uFB03"), "Ffi");
-  EXPECT_EQ(initcap("\uFB00"), "Ff");
-  EXPECT_EQ(initcap("\uFB06"), "St");
-  EXPECT_EQ(initcap("\u0149"), "\u02BCN");
-  EXPECT_EQ(initcap("\u01F0"), "J\u030C");
-  EXPECT_EQ(initcap("\u0587"), "\u0535\u0582");
-  EXPECT_EQ(initcap("\u01C6"), "\u01C5");
-  // Only the first letter of a word uses the title case mapping.
-  EXPECT_EQ(initcap("\u00DF \uFB01"), "Ss Fi");
 }
 
 } // namespace

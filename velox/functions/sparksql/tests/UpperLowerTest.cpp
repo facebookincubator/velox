@@ -30,21 +30,6 @@ class UpperLowerTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(UpperLowerTest, upperFullCaseMapping) {
-  EXPECT_EQ("SS", upper("\u00DF"));
-  EXPECT_EQ("STRASSE", upper("stra\u00DFe"));
-  EXPECT_EQ("FI", upper("\uFB01"));
-  EXPECT_EQ("FFI", upper("\uFB03"));
-  EXPECT_EQ("FF", upper("\uFB00"));
-  EXPECT_EQ("ST", upper("\uFB06"));
-  EXPECT_EQ("\u02BCN", upper("\u0149"));
-  EXPECT_EQ("J\u030C", upper("\u01F0"));
-  EXPECT_EQ("\u0399\u0308\u0301", upper("\u0390"));
-  EXPECT_EQ("\u0535\u0552", upper("\u0587"));
-  // Characters with a one-to-one mapping are unchanged by this path.
-  EXPECT_EQ("\u00C9A", upper("\u00E9a"));
-}
-
 TEST_F(UpperLowerTest, lowerAscii) {
   EXPECT_EQ("abcdefg", lower("ABCDEFG"));
   EXPECT_EQ("abcdefg", lower("abcdefg"));
@@ -157,6 +142,28 @@ TEST_F(UpperLowerTest, upperUnicode) {
   EXPECT_EQ("\u1E86", upper("\u1E87"));
   EXPECT_EQ("\u1E8A", upper("\u1E8B"));
   EXPECT_EQ("\u1E8E", upper("\u1E8F"));
+  EXPECT_EQ("SS", upper("\u00DF"));
+  EXPECT_EQ("STRASSE", upper("stra\u00DFe"));
+  EXPECT_EQ("FI", upper("\uFB01"));
+  EXPECT_EQ("FFI", upper("\uFB03"));
+  EXPECT_EQ("FF", upper("\uFB00"));
+  EXPECT_EQ("ST", upper("\uFB06"));
+  EXPECT_EQ("\u02BCN", upper("\u0149"));
+  EXPECT_EQ("J\u030C", upper("\u01F0"));
+  EXPECT_EQ("\u0399\u0308\u0301", upper("\u0390"));
+  EXPECT_EQ("\u0535\u0552", upper("\u0587"));
+  EXPECT_EQ("\u00C9A", upper("\u00E9a"));
+  EXPECT_EQ("\u0391\u0399", upper("\u1FB3"));
+  EXPECT_EQ("\u1C90", upper("\u10D0"));
+
+  // Every character expands to three, so the output is 3 times the input.
+  std::string input;
+  std::string expected;
+  for (int i = 0; i < 100; ++i) {
+    input += "\u0390";
+    expected += "\u0399\u0308\u0301";
+  }
+  EXPECT_EQ(expected, upper(input));
 }
 
 TEST_F(UpperLowerTest, upperGreek) {

@@ -30,7 +30,8 @@ enum class CaseMapping {
   kSimple,
   /// Unicode full uppercase mapping, where one code point can become several.
   kFullUpper,
-  /// Unicode full titlecase mapping, used for the first letter of a word.
+  /// Unicode full titlecase mapping, used for the first letter of a word. Uses
+  /// utf8proc_totitle for code points that map to a single code point.
   kFullTitle,
 };
 
@@ -42,26 +43,14 @@ struct FullCaseMapping {
   std::array<int32_t, 3> title;
 };
 
-/// Code points whose full uppercase or titlecase form, as Spark produces it,
-/// differs from the one-to-one result of utf8proc_toupper. Most come from the
-/// unconditional entries of Unicode's SpecialCasing.txt, and the rest are the
-/// titlecase forms of the Latin digraphs. Sorted by code point.
-inline constexpr std::array<FullCaseMapping, 114> kFullCaseMappings{{
+/// Code points whose Unicode full uppercase or titlecase mapping has more than
+/// one code point, from the unconditional entries of SpecialCasing.txt. Every
+/// other code point maps to the single code point that utf8proc_toupper or
+/// utf8proc_totitle returns. Sorted by code point.
+inline constexpr std::array<FullCaseMapping, 102> kFullCaseMappings{{
     {0x00DF, {0x0053, 0x0053}, {0x0053, 0x0073}}, // ß
     {0x0149, {0x02BC, 0x004E}, {0x02BC, 0x004E}}, // ŉ
-    {0x01C4, {0x01C4}, {0x01C5}}, // Ǆ
-    {0x01C5, {0x01C4}, {0x01C5}}, // ǅ
-    {0x01C6, {0x01C4}, {0x01C5}}, // ǆ
-    {0x01C7, {0x01C7}, {0x01C8}}, // Ǉ
-    {0x01C8, {0x01C7}, {0x01C8}}, // ǈ
-    {0x01C9, {0x01C7}, {0x01C8}}, // ǉ
-    {0x01CA, {0x01CA}, {0x01CB}}, // Ǌ
-    {0x01CB, {0x01CA}, {0x01CB}}, // ǋ
-    {0x01CC, {0x01CA}, {0x01CB}}, // ǌ
     {0x01F0, {0x004A, 0x030C}, {0x004A, 0x030C}}, // ǰ
-    {0x01F1, {0x01F1}, {0x01F2}}, // Ǳ
-    {0x01F2, {0x01F1}, {0x01F2}}, // ǲ
-    {0x01F3, {0x01F1}, {0x01F2}}, // ǳ
     {0x0390, {0x0399, 0x0308, 0x0301}, {0x0399, 0x0308, 0x0301}}, // ΐ
     {0x03B0, {0x03A5, 0x0308, 0x0301}, {0x03A5, 0x0308, 0x0301}}, // ΰ
     {0x0587, {0x0535, 0x0552}, {0x0535, 0x0582}}, // և
@@ -176,6 +165,11 @@ static_assert(
 /// mapping is already correct.
 FOLLY_ALWAYS_INLINE const FullCaseMapping* findFullCaseMapping(
     int32_t codePoint) {
+  // Most text, including all of CJK, falls outside the table's range.
+  if (codePoint < kFullCaseMappings.front().codePoint ||
+      codePoint > kFullCaseMappings.back().codePoint) {
+    return nullptr;
+  }
   const auto* it = std::lower_bound(
       kFullCaseMappings.begin(),
       kFullCaseMappings.end(),

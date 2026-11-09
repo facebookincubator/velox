@@ -126,8 +126,11 @@ lowerAscii(char* output, const char* input, size_t length) {
 /// Perform upper for utf8 string input, output should be pre-allocated and
 /// large enough for the results. outputLength refers to the number of bytes
 /// available in the output buffer, and inputLength is the number of bytes in
-/// the input string
-template <CaseMapping mapping = CaseMapping::kSimple>
+/// the input string.
+/// @tparam mapping kSimple maps each code point to one code point. kFullUpper
+/// and kFullTitle apply Unicode full case mapping, where one code point can
+/// become up to three, so the output can be up to 3 times the input's size.
+template <CaseMapping mapping>
 FOLLY_ALWAYS_INLINE size_t upperUnicode(
     char* output,
     size_t outputLength,
@@ -169,7 +172,9 @@ FOLLY_ALWAYS_INLINE size_t upperUnicode(
       }
     }
 
-    auto upperCodePoint = utf8proc_toupper(nextCodePoint);
+    auto upperCodePoint = mapping == CaseMapping::kFullTitle
+        ? utf8proc_totitle(nextCodePoint)
+        : utf8proc_toupper(nextCodePoint);
 
     assert(
         (outputIdx + utf8proc_codepoint_length(upperCodePoint)) <
