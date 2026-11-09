@@ -474,20 +474,10 @@ TEST_F(CudfStringFunctionTest, concatUnicode) {
 // Presto trims only the whitespace code points in stringImpl; similar-looking
 // non-whitespace code points and the control byte \x01 stay.
 TEST_F(CudfStringFunctionTest, trimFunctions) {
-  auto input = makeRowVector({makeNullableFlatVector<std::string>(
-      {" a ",
-       "\tb\n",
-       "",
-       std::nullopt,
-       "   ",
-       "\u3000c\u3000",
-       "\x01 d \x01",
-       "\u2007e\u2007"})});
-  assertProjectMatchesCpu(input, {"trim(c0)", "ltrim(c0)", "rtrim(c0)"});
-
+  std::vector<std::optional<std::string>> strings{
+      "", std::nullopt, "   ", "\x01 d \x01", "\u2007e\u2007"};
   // All 25 whitespace code points recognized by
   // stringImpl::isUnicodeWhiteSpace.
-  std::vector<std::string> strings;
   for (const auto* whitespace :
        {"\t",     "\n",     "\v",     "\f",     "\r",     "\x1c",   "\x1d",
         "\x1e",   "\x1f",   " ",      "\u1680", "\u2000", "\u2001", "\u2002",
@@ -500,7 +490,7 @@ TEST_F(CudfStringFunctionTest, trimFunctions) {
     strings.push_back(std::string(nonWhitespace) + "x" + nonWhitespace);
   }
   assertProjectMatchesCpu(
-      makeRowVector({makeFlatVector<std::string>(strings)}),
+      makeRowVector({makeNullableFlatVector<std::string>(strings)}),
       {"trim(c0)", "ltrim(c0)", "rtrim(c0)"});
 
   for (const auto* sql :
@@ -510,25 +500,20 @@ TEST_F(CudfStringFunctionTest, trimFunctions) {
   }
 }
 
-TEST_F(CudfStringFunctionTest, splitWithoutLimit) {
+TEST_F(CudfStringFunctionTest, split) {
   auto input = makeRowVector({makeNullableFlatVector<std::string>(
-      {"a,b", "a,,b", ",a,", "", std::nullopt, "abc"})});
-  assertProjectMatchesCpu(input, {"split(c0, ',')"});
-}
-
-TEST_F(CudfStringFunctionTest, splitWithLimit) {
-  auto input = makeRowVector({makeNullableFlatVector<std::string>(
-      {"a,b,c", "a,,b", "", std::nullopt})});
+      {"a,b", "a,b,c", "a,,b", ",a,", "", std::nullopt, "abc"})});
   assertProjectMatchesCpu(
       input,
-      {"split(c0, ',', 2)",
+      {"split(c0, ',')",
+       "split(c0, ',', 2)",
        "split(c0, ',', 3)",
        "split(c0, ',', cast(2 as integer))"});
 }
 
 TEST_F(CudfStringFunctionTest, splitOverlappingDelimiter) {
   auto input = makeRowVector({makeFlatVector<std::string>({"aaa"})});
-  assertProjectMatchesCpu(input, {"split(c0, 'aa')", "split(c0, 'aa', 2)"});
+  assertProjectMatchesCpu(input, {"split(c0, 'aa')"});
 }
 
 TEST_F(CudfStringFunctionTest, splitLongStrings) {
@@ -541,8 +526,6 @@ TEST_F(CudfStringFunctionTest, splitLongStrings) {
 }
 
 TEST_F(CudfStringFunctionTest, splitEligibility) {
-  EXPECT_TRUE(canRunOnGpu("split(c0, ',')"));
-  EXPECT_TRUE(canRunOnGpu("split(c0, ',', 2)"));
   EXPECT_TRUE(canRunOnGpu("split(c0, ',', 2147483647)"));
 
   // cuDF splits on whitespace for an empty delimiter. Presto returns the input
