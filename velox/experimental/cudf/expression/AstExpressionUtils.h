@@ -383,8 +383,6 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
     // Cast operations: only BIGINT and DOUBLE supported in pure AST. The AST
     // has no 32-bit cast, and CAST_TO_INT64 for INTEGER would leave a BIGINT
     // operand where an INTEGER one is expected.
-    // Compare types, not kinds: DECIMAL and INTERVAL share the BIGINT kind
-    // but are not plain integers.
     const auto& outputType = *expr->type();
     if (outputType.equivalent(*BIGINT())) {
       return isOpAndInputsSupported(Op::CAST_TO_INT64, inputCudfDataTypes);
