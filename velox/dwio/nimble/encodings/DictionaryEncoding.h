@@ -693,15 +693,15 @@ void DictionaryEncoding<T>::readWithVisitor(
       dictionaryHook.processTrailingNulls();
       visitor.setRowIndex(dictionaryVisitor.rowIndex());
       if constexpr (std::is_same_v<T, int16_t>) {
-        fuzzer::updateSmallintDictionaryAwareReads();
+        fuzzer::updateSmallintDictionaryAwareReads(visitor.filter());
       } else if constexpr (std::is_same_v<T, int32_t>) {
-        fuzzer::updateIntegerDictionaryAwareReads();
+        fuzzer::updateIntegerDictionaryAwareReads(visitor.filter());
       } else if constexpr (std::is_same_v<T, int64_t>) {
-        fuzzer::updateBigintDictionaryAwareReads();
+        fuzzer::updateBigintDictionaryAwareReads(visitor.filter());
       } else if constexpr (std::is_same_v<T, float>) {
-        fuzzer::updateRealDictionaryAwareReads();
+        fuzzer::updateRealDictionaryAwareReads(visitor.filter());
       } else if constexpr (std::is_same_v<T, double>) {
-        fuzzer::updateDoubleDictionaryAwareReads();
+        fuzzer::updateDoubleDictionaryAwareReads(visitor.filter());
       }
       return;
     }
