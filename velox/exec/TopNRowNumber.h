@@ -291,6 +291,10 @@ class TopNRowNumber : public Operator {
 
   const bool generateRowNumber_;
 
+  // Whether this is a partial step, which may pass its input through when it
+  // filters too few rows.
+  const bool partial_;
+
   const size_t numPartitionKeys_;
   const size_t numSortingKeys_;
 

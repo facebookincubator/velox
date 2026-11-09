@@ -2738,24 +2738,28 @@ PlanBuilder& PlanBuilder::topNRank(
     const std::vector<std::string>& sortingKeys,
     int32_t limit,
     bool generateRowNumber) {
-  VELOX_CHECK_NOT_NULL(planNode_, "TopNRowNumber cannot be the source node");
-  auto [sortingFields, sortingOrders] =
-      parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
-  std::optional<std::string> rowNumberColumnName;
-  if (generateRowNumber) {
-    rowNumberColumnName = "row_number";
-  }
-  planNode_ = std::make_shared<core::TopNRowNumberNode>(
-      nextPlanNodeId(),
-      core::TopNRowNumberNode::rankFunctionFromName(function),
-      fields(partitionKeys),
-      sortingFields,
-      sortingOrders,
-      rowNumberColumnName,
+  return addTopNRowNumber(
+      function,
+      partitionKeys,
+      sortingKeys,
       limit,
-      planNode_);
-  VELOX_CHECK(!planNode_->supportsBarrier());
-  return *this;
+      generateRowNumber ? std::optional<std::string>("row_number")
+                        : std::nullopt,
+      /*partial=*/false);
+}
+
+PlanBuilder& PlanBuilder::topNRankPartial(
+    std::string_view function,
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit) {
+  return addTopNRowNumber(
+      function,
+      partitionKeys,
+      sortingKeys,
+      limit,
+      /*rowNumberColumnName=*/std::nullopt,
+      /*partial=*/true);
 }
 
 PlanBuilder& PlanBuilder::topNRowNumber(
@@ -2765,6 +2769,37 @@ PlanBuilder& PlanBuilder::topNRowNumber(
     bool generateRowNumber) {
   return topNRank(
       "row_number", partitionKeys, sortingKeys, limit, generateRowNumber);
+}
+
+PlanBuilder& PlanBuilder::topNRowNumberPartial(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit) {
+  return topNRankPartial("row_number", partitionKeys, sortingKeys, limit);
+}
+
+PlanBuilder& PlanBuilder::addTopNRowNumber(
+    std::string_view function,
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    const std::optional<std::string>& rowNumberColumnName,
+    bool partial) {
+  VELOX_CHECK_NOT_NULL(planNode_, "TopNRowNumber cannot be the source node");
+  auto [sortingFields, sortingOrders] =
+      parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
+  planNode_ = std::make_shared<core::TopNRowNumberNode>(
+      nextPlanNodeId(),
+      core::TopNRowNumberNode::rankFunctionFromName(function),
+      fields(partitionKeys),
+      sortingFields,
+      sortingOrders,
+      rowNumberColumnName,
+      limit,
+      partial,
+      planNode_);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
 }
 
 PlanBuilder& PlanBuilder::markDistinct(

@@ -6397,10 +6397,15 @@ class TopNRowNumberNode : public PlanNode {
   /// @param sortingOrders Sorting orders, one per sorting key.
   /// @param rowNumberColumnName Optional name of the column containing row
   /// numbers or rank or dense_rank. If not specified, the output doesn't
-  /// include 'row_number' column. This is used when computing partial results.
-  /// @param limit Per-partition limit. The number of
-  /// rows produced by this node will not exceed this value for any given
-  /// partition. Extra rows will be dropped.
+  /// include that column.
+  /// @param limit Per-partition limit. Unless 'partial', the number of rows
+  /// produced by this node will not exceed this value for any given partition.
+  /// Extra rows will be dropped.
+  /// @param partial True for a step that runs on part of each partition's rows
+  /// before a final step that sees them all. A partial step may stop
+  /// filtering and pass its input through, leaving the limit to the final
+  /// step, so it must not have 'rowNumberColumnName'. Any other step applies
+  /// the limit exactly.
   TopNRowNumberNode(
       PlanNodeId id,
       RankFunction function,
@@ -6409,7 +6414,31 @@ class TopNRowNumberNode : public PlanNode {
       std::vector<SortOrder> sortingOrders,
       const std::optional<std::string>& rowNumberColumnName,
       int32_t limit,
+      bool partial,
       PlanNodePtr source);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Legacy constructor: a node without 'rowNumberColumnName' is partial.
+  TopNRowNumberNode(
+      PlanNodeId id,
+      RankFunction function,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      const std::optional<std::string>& rowNumberColumnName,
+      int32_t limit,
+      PlanNodePtr source)
+      : TopNRowNumberNode(
+            std::move(id),
+            function,
+            std::move(partitionKeys),
+            std::move(sortingKeys),
+            std::move(sortingOrders),
+            rowNumberColumnName,
+            limit,
+            /*partial=*/!rowNumberColumnName.has_value(),
+            std::move(source)) {}
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   class Builder {
    public:
@@ -6424,6 +6453,7 @@ class TopNRowNumberNode : public PlanNode {
           ? std::make_optional(other.outputType()->names().back())
           : std::nullopt;
       limit_ = other.limit();
+      isPartial_ = other.isPartial();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
       function_ = other.rankFunction();
@@ -6465,6 +6495,11 @@ class TopNRowNumberNode : public PlanNode {
       return *this;
     }
 
+    Builder& isPartial(bool isPartial) {
+      isPartial_ = isPartial;
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -6486,6 +6521,8 @@ class TopNRowNumberNode : public PlanNode {
       VELOX_USER_CHECK(
           limit_.has_value(), "TopNRowNumberNode limit is not set");
       VELOX_USER_CHECK(
+          isPartial_.has_value(), "TopNRowNumberNode isPartial is not set");
+      VELOX_USER_CHECK(
           source_.has_value(), "TopNRowNumberNode source is not set");
 
       return std::make_shared<TopNRowNumberNode>(
@@ -6496,6 +6533,7 @@ class TopNRowNumberNode : public PlanNode {
           sortingOrders_.value(),
           rowNumberColumnName_.value(),
           limit_.value(),
+          isPartial_.value(),
           source_.value());
     }
 
@@ -6507,6 +6545,7 @@ class TopNRowNumberNode : public PlanNode {
     std::optional<std::vector<SortOrder>> sortingOrders_;
     std::optional<std::optional<std::string>> rowNumberColumnName_;
     std::optional<int32_t> limit_;
+    std::optional<bool> isPartial_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -6553,6 +6592,10 @@ class TopNRowNumberNode : public PlanNode {
     return outputType_->size() > sources_[0]->outputType()->size();
   }
 
+  bool isPartial() const {
+    return partial_;
+  }
+
   std::string_view name() const override {
     return "TopNRowNumber";
   }
@@ -6572,6 +6615,8 @@ class TopNRowNumberNode : public PlanNode {
   const std::vector<SortOrder> sortingOrders_;
 
   const int32_t limit_;
+
+  const bool partial_;
 
   const std::vector<PlanNodePtr> sources_;
 

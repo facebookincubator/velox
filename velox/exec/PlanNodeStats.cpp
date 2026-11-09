@@ -278,6 +278,16 @@ std::unordered_map<core::PlanNodeId, PlanNodeStats> toPlanStats(
   return planStats;
 }
 
+const RuntimeMetric& PlanNodeStats::customStat(std::string_view name) const {
+  auto it = customStats.find(std::string(name));
+  VELOX_CHECK(it != customStats.end(), "Custom stat not found: {}", name);
+  return it->second;
+}
+
+bool PlanNodeStats::hasCustomStat(std::string_view name) const {
+  return customStats.contains(std::string(name));
+}
+
 // static
 PlanNodeStats PlanNodeStats::extract(
     const TaskStats& taskStats,

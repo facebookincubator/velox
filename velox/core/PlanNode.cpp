@@ -2987,6 +2987,7 @@ TopNRowNumberNode::TopNRowNumberNode(
     std::vector<SortOrder> sortingOrders,
     const std::optional<std::string>& rowNumberColumnName,
     int32_t limit,
+    bool partial,
     PlanNodePtr source)
     : PlanNode(std::move(id)),
       function_(function),
@@ -2994,6 +2995,7 @@ TopNRowNumberNode::TopNRowNumberNode(
       sortingKeys_{std::move(sortingKeys)},
       sortingOrders_{std::move(sortingOrders)},
       limit_{limit},
+      partial_{partial},
       sources_{std::move(source)},
       outputType_{getOptionalRowNumberOutputType(
           sources_[0]->outputType(),
@@ -3009,6 +3011,11 @@ TopNRowNumberNode::TopNRowNumberNode(
       "Number of sorting keys must be greater than zero");
 
   VELOX_USER_CHECK_GT(limit, 0, "Limit must be greater than zero");
+
+  VELOX_USER_CHECK(
+      !partial_ || !rowNumberColumnName.has_value(),
+      "Partial TopNRowNumber must not have a row number column: {}",
+      rowNumberColumnName.value_or(""));
 
   std::unordered_set<std::string> keyNames;
   for (const auto& key : partitionKeys_) {
@@ -3040,6 +3047,10 @@ void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
   stream << ") ";
 
   stream << "limit " << limit_;
+
+  if (partial_) {
+    stream << " partial";
+  }
 }
 
 folly::dynamic TopNRowNumberNode::serialize() const {
@@ -3052,6 +3063,7 @@ folly::dynamic TopNRowNumberNode::serialize() const {
     obj["rowNumberColumnName"] = outputType_->names().back();
   }
   obj["limit"] = limit_;
+  obj["partial"] = partial_;
   return obj;
 }
 
@@ -3077,6 +3089,11 @@ PlanNodePtr TopNRowNumberNode::create(
     rowNumberColumnName = obj["rowNumberColumnName"].asString();
   }
 
+  // Plans serialized before 'partial' existed mark a partial step by leaving
+  // out the row number column.
+  const bool partial = obj.count("partial") ? obj["partial"].asBool()
+                                            : !rowNumberColumnName.has_value();
+
   return std::make_shared<TopNRowNumberNode>(
       deserializePlanNodeId(obj),
       function,
@@ -3085,6 +3102,7 @@ PlanNodePtr TopNRowNumberNode::create(
       sortingOrders,
       rowNumberColumnName,
       obj["limit"].asInt(),
+      partial,
       source);
 }
 

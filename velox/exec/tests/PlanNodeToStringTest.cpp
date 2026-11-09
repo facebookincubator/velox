@@ -1051,13 +1051,13 @@ void topNRankPlanNodeToStringTest(std::string_view function) {
   auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
   auto plan = PlanBuilder()
                   .tableScan(rowType)
-                  .topNRank(function, {}, {"a DESC"}, 10, false)
+                  .topNRankPartial(function, {}, {"a DESC"}, 10)
                   .planNode();
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
       fmt::format(
-          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10 partial] -> a:BIGINT, b:VARCHAR\n",
           function),
       plan->toString(true, false));
 
@@ -1075,13 +1075,25 @@ void topNRankPlanNodeToStringTest(std::string_view function) {
 
   plan = PlanBuilder()
              .tableScan(rowType)
-             .topNRank(function, {"a"}, {"b"}, 10, false)
+             .topNRank(function, {}, {"a DESC"}, 10, false)
              .planNode();
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
       fmt::format(
-          "-- TopNRowNumber[1][{} partition by (a) order by (b ASC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          function),
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .tableScan(rowType)
+             .topNRankPartial(function, {"a"}, {"b"}, 10)
+             .planNode();
+
+  ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
+  ASSERT_EQ(
+      fmt::format(
+          "-- TopNRowNumber[1][{} partition by (a) order by (b ASC NULLS LAST) limit 10 partial] -> a:BIGINT, b:VARCHAR\n",
           function),
       plan->toString(true, false));
 }
