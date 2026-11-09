@@ -187,7 +187,7 @@ std::vector<std::unique_ptr<VectorHasher>> createProbeHashers(
   for (const auto& key : node.probeKeys()) {
     keyChannels.push_back(probeType->getChildIdx(key));
   }
-  return createVectorHashers(probeType, keyChannels);
+  return VectorHasher::createForKeys(probeType, keyChannels);
 }
 
 // Inner-joins the probe input against a HashTable persistent state entry built
@@ -259,8 +259,8 @@ class StateHashJoinOperator : public exec::Operator {
     const auto numMatches = table_->listJoinResults(
         iterator_,
         /*includeMisses=*/false,
-        folly::Range(indexBuffer_.data(), maxRows),
-        folly::Range(rowBuffer_.data(), maxRows),
+        std::span(indexBuffer_.data(), maxRows),
+        std::span(rowBuffer_.data(), maxRows),
         /*maxBytes=*/1 << 20);
     if (numMatches == 0) {
       // This probe batch is exhausted; the next call takes the next input.
@@ -320,9 +320,7 @@ class StateHashJoinOperator : public exec::Operator {
       auto result =
           BaseVector::create(buildType->childAt(column), numOutput, pool());
       table_->extractColumn(
-          folly::Range<char* const*>(rowBuffer_.data(), numOutput),
-          column,
-          result);
+          RowSpan(rowBuffer_.data(), numOutput), column, result);
       children.push_back(std::move(result));
     }
     return std::make_shared<RowVector>(
