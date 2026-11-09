@@ -549,8 +549,16 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       ioStats_,
       subfieldFilterAst_);
   // The host statistics test takes the subfield filters the pushed-down AST
-  // was built from, against the table type they were resolved on.
-  reader->setHostRowGroupPruning(&subfieldFilters_, getTableRowType());
+  // was built from, prepared for the first split that is going to be opened.
+  if (!subfieldFilters_.empty() && !remainingFilterRejectsAllRows_ &&
+      cudfHiveConfig_->hostRowGroupPruningSession(
+          connectorQueryCtx_->sessionProperties())) {
+    if (!hostRowGroupPruningFilters_.has_value()) {
+      hostRowGroupPruningFilters_ =
+          prepareRowGroupPruningFilters(subfieldFilters_, *getTableRowType());
+    }
+    reader->setHostRowGroupPruning(&*hostRowGroupPruningFilters_);
+  }
   return reader;
 }
 
@@ -646,6 +654,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     cudfSplitReader_->setPushdownFilter(&filter);
   }
   cudfSplitReader_->prepareSplit(runtimeStats_);
+  cudfStatsTestedStrides_ += cudfSplitReader_->statsTestedStrides();
 
   // An ignored missing file leaves nothing to read.
   if (cudfSplitReader_->emptySplit()) {
@@ -704,6 +713,7 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
   runtimeStats_.skippedStrides += preparedSource->runtimeStats_.skippedStrides;
   runtimeStats_.processedStrides +=
       preparedSource->runtimeStats_.processedStrides;
+  cudfStatsTestedStrides_ += preparedSource->cudfStatsTestedStrides_;
   completedBytes_ += preparedSource->completedBytes_;
   completedRows_ += preparedSource->completedRows_;
 
@@ -880,6 +890,10 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 std::unordered_map<std::string, RuntimeMetric>
 CudfHiveDataSource::getRuntimeStats() {
   auto result = runtimeStats_.toRuntimeMetricMap();
+  if (cudfStatsTestedStrides_ > 0) {
+    result.emplace(
+        kCudfStatsTestedStrides, RuntimeMetric(cudfStatsTestedStrides_));
+  }
   io::addIoStatsToRuntimeStats(*ioStatistics_, "", result);
   if (const auto it = result.find(std::string(io::kStorageReadBytes));
       it != result.end()) {

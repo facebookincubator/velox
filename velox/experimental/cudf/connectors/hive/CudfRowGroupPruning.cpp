@@ -25,6 +25,7 @@
 #include "velox/type/Timestamp.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -178,36 +179,19 @@ std::optional<Timestamp> toTimestamp(
 
 // Builds the column statistics common::testFilter() tests for this chunk, as
 // the CPU Parquet reader builds them (buildColumnStatisticsFromThrift in
-// velox/dwio/parquet/reader/Metadata.cpp) except that booleans get the true
-// count their bounds imply. Returns nullptr for a column stored in a form the
-// test does not cover.
+// velox/dwio/parquet/reader/Metadata.cpp), except that they report
+// 'totalRows' values and no null: nullsDecide() settles the nulls before the
+// bounds are tested. Returns nullptr for a column stored in a form the test
+// does not cover; decimals, floating points and booleans have their own tests.
 std::unique_ptr<dwio::common::ColumnStatistics> buildStatistics(
     const pq::SchemaElement& element,
     const pq::ColumnChunkMetaData& chunk,
     const Type& type,
-    std::optional<uint64_t> valueCount,
-    std::optional<bool> hasNull) {
+    uint64_t totalRows) {
   const auto& stats = chunk.statistics;
+  const std::optional<uint64_t> valueCount = totalRows;
+  const std::optional<bool> hasNull = false;
   switch (type.kind()) {
-    case TypeKind::BOOLEAN: {
-      if (chunk.type != pq::Type::BOOLEAN) {
-        return nullptr;
-      }
-      // A row group whose bounds are both false holds no true value, and one
-      // whose bounds are both true no false value.
-      const auto min = load<uint8_t>(minBytes(stats, true));
-      const auto max = load<uint8_t>(maxBytes(stats, true));
-      std::optional<uint64_t> trueCount;
-      if (valueCount.has_value()) {
-        if (max.has_value() && *max == 0) {
-          trueCount = 0;
-        } else if (min.has_value() && *min != 0) {
-          trueCount = valueCount;
-        }
-      }
-      return std::make_unique<dwio::common::BooleanColumnStatistics>(
-          valueCount, hasNull, std::nullopt, std::nullopt, trueCount);
-    }
     case TypeKind::TINYINT:
     case TypeKind::SMALLINT:
     case TypeKind::INTEGER:
@@ -223,30 +207,6 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildStatistics(
           std::nullopt,
           loadInteger(minBytes(stats, true)),
           loadInteger(maxBytes(stats, true)),
-          std::nullopt);
-    case TypeKind::REAL:
-      if (chunk.type != pq::Type::FLOAT) {
-        return nullptr;
-      }
-      return std::make_unique<dwio::common::DoubleColumnStatistics>(
-          valueCount,
-          hasNull,
-          std::nullopt,
-          std::nullopt,
-          load<float>(minBytes(stats, true)),
-          load<float>(maxBytes(stats, true)),
-          std::nullopt);
-    case TypeKind::DOUBLE:
-      if (chunk.type != pq::Type::DOUBLE) {
-        return nullptr;
-      }
-      return std::make_unique<dwio::common::DoubleColumnStatistics>(
-          valueCount,
-          hasNull,
-          std::nullopt,
-          std::nullopt,
-          load<double>(minBytes(stats, true)),
-          load<double>(maxBytes(stats, true)),
           std::nullopt);
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
@@ -284,13 +244,14 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildStatistics(
 }
 
 // The null handling of common::testFilter(): the decision when the null count
-// settles it, else nullopt with 'mayHaveNull' set for the value test.
+// settles it, else nullopt. Nulls are then absent or fail the filter, so the
+// bounds are tested without a null flag; a range test would hand one to the
+// children of an OR, whose own null flags cuDF's AST ignores.
 std::optional<bool> nullsDecide(
     const common::Filter& filter,
     std::optional<uint64_t> valueCount,
-    uint64_t totalRows,
-    bool& mayHaveNull) {
-  mayHaveNull = true;
+    uint64_t totalRows) {
+  bool mayHaveNull = true;
   if (valueCount.has_value()) {
     if (*valueCount == 0) {
       return filter.testNull();
@@ -347,12 +308,6 @@ shortDecimalBounds(const DecimalBounds& bounds) {
 // (2, 8) keeps a row group of 4..6, and HugeintValuesUsingHashTable has no
 // range test; cuDF's statistics pass tests each value, and so does
 // testInListFilter() with these.
-struct InListValues {
-  std::vector<int64_t> int64s;
-  std::vector<int128_t> int128s;
-  std::vector<std::string> strings;
-};
-
 std::optional<InListValues> inListValues(const common::Filter& filter) {
   InListValues values;
   switch (filter.kind()) {
@@ -414,6 +369,32 @@ bool hasInt64RangeTest(common::FilterKind kind) {
   }
 }
 
+// Whether 'kind' implements the range test common::testFilter() calls for a
+// column of 'typeKind'. Another filter, such as an OR of ranges on an integer
+// column, throws there, while cuDF's AST takes it.
+bool hasRangeTest(common::FilterKind kind, TypeKind typeKind) {
+  switch (typeKind) {
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+      return hasInt64RangeTest(kind);
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+      return kind == common::FilterKind::kAlwaysFalse ||
+          kind == common::FilterKind::kBytesRange ||
+          kind == common::FilterKind::kNegatedBytesRange ||
+          kind == common::FilterKind::kNegatedBytesValues ||
+          kind == common::FilterKind::kMultiRange;
+    case TypeKind::TIMESTAMP:
+      return kind == common::FilterKind::kAlwaysFalse ||
+          kind == common::FilterKind::kTimestampRange ||
+          kind == common::FilterKind::kMultiRange;
+    default:
+      return false;
+  }
+}
+
 // Of the filters a long decimal column carries, only the range implements
 // testInt128Range().
 bool hasInt128RangeTest(common::FilterKind kind) {
@@ -421,14 +402,170 @@ bool hasInt128RangeTest(common::FilterKind kind) {
       kind == common::FilterKind::kHugeintRange;
 }
 
-// A top-level subfield filter and the table column it applies to.
-struct ColumnFilter {
-  std::string name;
-  TypePtr type;
-  const common::Filter* filter;
-  // Set for the IN lists testInListFilter() decides.
-  std::optional<InListValues> inList;
+using ColumnFilter = HostRowGroupPruningFilters::Column;
+
+// Whether an OR of filters holds an IN list, which the OR's range test answers
+// from the span of the list's values while cuDF's pass tests each value.
+bool hasInListInOr(const common::Filter& filter) {
+  if (filter.kind() != common::FilterKind::kMultiRange) {
+    return false;
+  }
+  for (const auto& child :
+       static_cast<const common::MultiRange&>(filter).filters()) {
+    if (child->kind() == common::FilterKind::kBytesValues ||
+        hasInListInOr(*child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Bounds of a REAL or DOUBLE chunk; a float widens exactly.
+struct FloatingPointBounds {
+  std::optional<double> min;
+  std::optional<double> max;
 };
+
+// Returns nullopt when the column is stored as another physical type or a
+// bound is a NaN, which some writers emit and cuDF's pass compares like any
+// other value.
+std::optional<FloatingPointBounds> floatingPointBounds(
+    const pq::ColumnChunkMetaData& chunk,
+    TypeKind kind) {
+  const auto& stats = chunk.statistics;
+  FloatingPointBounds bounds;
+  if (kind == TypeKind::REAL) {
+    if (chunk.type != pq::Type::FLOAT) {
+      return std::nullopt;
+    }
+    const auto widen = [](std::optional<float> value) {
+      return value ? std::optional<double>(*value) : std::nullopt;
+    };
+    bounds = {
+        widen(load<float>(minBytes(stats, true))),
+        widen(load<float>(maxBytes(stats, true)))};
+  } else {
+    if (chunk.type != pq::Type::DOUBLE) {
+      return std::nullopt;
+    }
+    bounds = {
+        load<double>(minBytes(stats, true)),
+        load<double>(maxBytes(stats, true))};
+  }
+  if ((bounds.min.has_value() && std::isnan(*bounds.min)) ||
+      (bounds.max.has_value() && std::isnan(*bounds.max))) {
+    return std::nullopt;
+  }
+  return bounds;
+}
+
+// Whether a value of the chunk can pass 'range', as cuDF's pass tests it:
+// col > v as vmax > v, col >= v as vmax >= v, col < v as vmin < v and
+// col <= v as vmin <= v. FloatingPointRange::testDoubleRange() tests the
+// inclusive bounds only.
+template <typename T>
+bool rangeMayPass(
+    const common::FloatingPointRange<T>& range,
+    const FloatingPointBounds& bounds) {
+  if (!range.lowerUnbounded() && bounds.max.has_value()) {
+    const auto lower = range.lower();
+    if (*bounds.max < lower ||
+        (range.lowerExclusive() && *bounds.max == lower)) {
+      return false;
+    }
+  }
+  if (!range.upperUnbounded() && bounds.min.has_value()) {
+    const auto upper = range.upper();
+    if (*bounds.min > upper ||
+        (range.upperExclusive() && *bounds.min == upper)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Whether a value of the chunk can pass a REAL or DOUBLE filter: a range, or
+// an OR of ranges whose IS NULL leaves pass no value, as cuDF's AST holds them.
+// nullopt for another filter kind.
+std::optional<bool> floatingPointMayPass(
+    const common::Filter& filter,
+    const FloatingPointBounds& bounds) {
+  switch (filter.kind()) {
+    case common::FilterKind::kDoubleRange:
+      return rangeMayPass(
+          static_cast<const common::DoubleRange&>(filter), bounds);
+    case common::FilterKind::kFloatRange:
+      return rangeMayPass(
+          static_cast<const common::FloatRange&>(filter), bounds);
+    case common::FilterKind::kMultiRange:
+      for (const auto& child :
+           static_cast<const common::MultiRange&>(filter).filters()) {
+        if (child->kind() == common::FilterKind::kIsNull) {
+          continue;
+        }
+        const auto childMayPass = floatingPointMayPass(*child, bounds);
+        if (!childMayPass.has_value()) {
+          return std::nullopt;
+        }
+        if (*childMayPass) {
+          return true;
+        }
+      }
+      return false;
+    default:
+      return std::nullopt;
+  }
+}
+
+// Tests a REAL or DOUBLE filter against the chunk's bounds, in place of
+// common::testFilter(), whose range test ignores exclusive bounds. Returns
+// nullopt when the column is stored as another physical type, a bound is a
+// NaN or the filter is not a range or an OR of ranges.
+std::optional<bool> testFloatingPointFilter(
+    const ColumnFilter& columnFilter,
+    const pq::ColumnChunkMetaData& chunk,
+    std::optional<uint64_t> valueCount,
+    uint64_t totalRows) {
+  const auto& filter = *columnFilter.filter;
+  if (const auto decision = nullsDecide(filter, valueCount, totalRows)) {
+    return decision;
+  }
+  const auto bounds = floatingPointBounds(chunk, columnFilter.type->kind());
+  if (!bounds.has_value()) {
+    return std::nullopt;
+  }
+  return floatingPointMayPass(filter, *bounds);
+}
+
+// Tests a BOOLEAN filter against the chunk's bounds: a row group whose maximum
+// is false holds no true value, and one whose minimum is true no false value.
+// common::testFilter() needs the true and false counts, which take a null
+// count the footer may lack, so this repeats its null handling and compares
+// the bounds as cuDF's pass does. Returns nullopt when the column is stored as
+// another physical type or the filter is not a value test.
+std::optional<bool> testBooleanFilter(
+    const ColumnFilter& columnFilter,
+    const pq::ColumnChunkMetaData& chunk,
+    std::optional<uint64_t> valueCount,
+    uint64_t totalRows) {
+  const auto& filter = *columnFilter.filter;
+  if (chunk.type != pq::Type::BOOLEAN ||
+      filter.kind() != common::FilterKind::kBoolValue) {
+    return std::nullopt;
+  }
+  if (const auto decision = nullsDecide(filter, valueCount, totalRows)) {
+    return decision;
+  }
+  const auto min = load<uint8_t>(minBytes(chunk.statistics, true));
+  const auto max = load<uint8_t>(maxBytes(chunk.statistics, true));
+  if (max.has_value() && *max == 0) {
+    return filter.testBool(false);
+  }
+  if (min.has_value() && *min != 0) {
+    return filter.testBool(true);
+  }
+  return true;
+}
 
 // Tests a decimal filter against the chunk's bounds. common::testFilter() has
 // no value test for decimals because the CPU reader's metadata does not decode
@@ -453,9 +590,7 @@ std::optional<bool> testDecimalFilter(
     return std::nullopt;
   }
 
-  bool mayHaveNull = true;
-  if (const auto decision =
-          nullsDecide(filter, valueCount, totalRows, mayHaveNull)) {
+  if (const auto decision = nullsDecide(filter, valueCount, totalRows)) {
     return decision;
   }
   const auto bounds = decimalBounds(chunk);
@@ -473,12 +608,12 @@ std::optional<bool> testDecimalFilter(
     return filter.testInt64Range(
         narrowed->first.value_or(std::numeric_limits<int64_t>::min()),
         narrowed->second.value_or(std::numeric_limits<int64_t>::max()),
-        mayHaveNull);
+        false);
   }
   return filter.testInt128Range(
       bounds->min.value_or(DecimalArithmetic::kLongDecimalMin),
       bounds->max.value_or(DecimalArithmetic::kLongDecimalMax),
-      mayHaveNull);
+      false);
 }
 
 // Tests an IN list value by value against the chunk's bounds. Returns nullopt
@@ -493,9 +628,7 @@ std::optional<bool> testInListFilter(
   const auto& type = *columnFilter.type;
   const auto& values = *columnFilter.inList;
   const auto& stats = chunk.statistics;
-  bool mayHaveNull = true;
-  if (const auto decision =
-          nullsDecide(filter, valueCount, totalRows, mayHaveNull)) {
+  if (const auto decision = nullsDecide(filter, valueCount, totalRows)) {
     return decision;
   }
   if (type.isDecimal()) {
@@ -575,6 +708,16 @@ std::optional<bool> testRowGroup(
         valueCount, hasNull, std::nullopt, std::nullopt);
     return common::testFilter(filter, &nullStats, totalRows, columnFilter.type);
   }
+  // A chunk with only one of its bounds, which no common writer emits, is
+  // left to cuDF's pass, whatever the type: common::testFilter() fills the
+  // missing side with a limit of its own, which does not always decide as
+  // cuDF's unknown bound does.
+  const bool allowDeprecated = chunk.type != pq::Type::BYTE_ARRAY &&
+      chunk.type != pq::Type::FIXED_LEN_BYTE_ARRAY;
+  if (minBytes(stats, allowDeprecated).has_value() !=
+      maxBytes(stats, allowDeprecated).has_value()) {
+    return std::nullopt;
+  }
   if (columnFilter.inList.has_value()) {
     return testInListFilter(
         columnFilter, element, chunk, valueCount, totalRows);
@@ -583,10 +726,27 @@ std::optional<bool> testRowGroup(
     return testDecimalFilter(
         columnFilter, element, chunk, valueCount, totalRows);
   }
+  switch (columnFilter.type->kind()) {
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+      return testFloatingPointFilter(
+          columnFilter, chunk, valueCount, totalRows);
+    case TypeKind::BOOLEAN:
+      return testBooleanFilter(columnFilter, chunk, valueCount, totalRows);
+    default:
+      break;
+  }
+  if (!hasRangeTest(kind, columnFilter.type->kind()) ||
+      hasInListInOr(*filter)) {
+    return std::nullopt;
+  }
   const auto columnStats =
-      buildStatistics(element, chunk, *columnFilter.type, valueCount, hasNull);
+      buildStatistics(element, chunk, *columnFilter.type, totalRows);
   if (columnStats == nullptr) {
     return std::nullopt;
+  }
+  if (const auto decision = nullsDecide(*filter, valueCount, totalRows)) {
+    return decision;
   }
   // testFilter() has no VARBINARY case; its string test compares bytes, which
   // is the VARBINARY order too.
@@ -646,20 +806,10 @@ FileColumn findFileColumn(
 
 } // namespace
 
-HostRowGroupPruning pruneRowGroupsWithStatistics(
-    const std::vector<pq::FileMetaData>& files,
-    const std::vector<std::vector<cudf::size_type>>& rowGroupIndices,
+HostRowGroupPruningFilters prepareRowGroupPruningFilters(
     const common::SubfieldFilters& filters,
-    const RowType& tableType,
-    bool caseInsensitiveColumnNames) {
-  VELOX_CHECK_EQ(
-      files.size(),
-      rowGroupIndices.size(),
-      "Row group indices must come one list per file");
-  HostRowGroupPruning result;
-  result.rowGroupIndices = rowGroupIndices;
-
-  std::vector<ColumnFilter> columnFilters;
+    const RowType& tableType) {
+  HostRowGroupPruningFilters prepared;
   for (const auto& [subfield, filter] : filters) {
     if (filter == nullptr ||
         filter->kind() == common::FilterKind::kAlwaysTrue) {
@@ -675,7 +825,7 @@ HostRowGroupPruning pruneRowGroupsWithStatistics(
         : std::nullopt;
     if (!childIdx.has_value()) {
       // Not a top-level column of the table: left to cuDF.
-      result.complete = false;
+      prepared.complete = false;
       continue;
     }
     const auto& type = tableType.childAt(*childIdx);
@@ -684,9 +834,25 @@ HostRowGroupPruning pruneRowGroupsWithStatistics(
     if (!type->isPrimitiveType()) {
       continue;
     }
-    columnFilters.push_back(
+    prepared.columns.push_back(
         {field->name(), type, filter.get(), inListValues(*filter)});
   }
+  return prepared;
+}
+
+HostRowGroupPruning pruneRowGroupsWithStatistics(
+    const std::vector<pq::FileMetaData>& files,
+    const std::vector<std::vector<cudf::size_type>>& rowGroupIndices,
+    const HostRowGroupPruningFilters& filters,
+    bool caseInsensitiveColumnNames) {
+  VELOX_CHECK_EQ(
+      files.size(),
+      rowGroupIndices.size(),
+      "Row group indices must come one list per file");
+  HostRowGroupPruning result;
+  result.rowGroupIndices = rowGroupIndices;
+  result.complete = filters.complete;
+  const auto& columnFilters = filters.columns;
   if (columnFilters.empty()) {
     return result;
   }
@@ -709,7 +875,8 @@ HostRowGroupPruning pruneRowGroupsWithStatistics(
           "Row group index {} out of range",
           rowGroupIdx);
       const auto& rowGroup = file.row_groups[rowGroupIdx];
-      bool keep = true;
+      // An empty row group holds no row to pass.
+      bool keep = rowGroup.num_rows > 0;
       for (size_t i = 0; i < columnFilters.size() && keep; ++i) {
         const auto& fileColumn = fileColumns[i];
         // A column the file lacks has no statistics to test; neither path

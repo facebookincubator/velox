@@ -367,9 +367,11 @@ void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   stream_ = cudfGlobalStreamPool().get_stream();
   fileMetaDatas();
   if (emptySplit_) {
+    hostPruningFilters_ = nullptr;
     return;
   }
   prepareSplitInternal(runtimeStats);
+  hostPruningFilters_ = nullptr;
 
   // Update runtime stats.
   if (isSplitSkipped()) {
@@ -537,7 +539,9 @@ void CudfSplitReader::resetSplit() {
   fileMetaDatas_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
+  hostPruningFilters_ = nullptr;
   hostPruning_.reset();
+  statsTestedStrides_ = 0;
   emptySplit_ = false;
   fileColumnNames_.clear();
   baseReadOffset_ = 0;
@@ -834,8 +838,6 @@ void CudfSplitReader::createCudfReader(
   // Decide on the host which row groups the statistics rule out while the
   // footer is still here; the cuDF reader takes it over next.
   hostPruning_ = pruneRowGroupsOnHost();
-  hostPruningFilters_ = nullptr;
-  hostPruningTableType_.reset();
 
   // Create a hybrid scan reader over all sources of the split
   splitReader_ = std::make_unique<CudfParquetReader>(
@@ -850,10 +852,7 @@ void CudfSplitReader::createCudfReader(
 std::optional<HostRowGroupPruning> CudfSplitReader::pruneRowGroupsOnHost()
     const {
   if (!readerOptions_.get_filter().has_value() ||
-      hostPruningFilters_ == nullptr || hostPruningFilters_->empty() ||
-      hostPruningTableType_ == nullptr ||
-      !cudfHiveConfig_->hostRowGroupPruningSession(
-          connectorQueryCtx_->sessionProperties())) {
+      hostPruningFilters_ == nullptr) {
     return std::nullopt;
   }
   // The byte-range rule of the cuDF reader, applied here so the test covers
@@ -862,7 +861,6 @@ std::optional<HostRowGroupPruning> CudfSplitReader::pruneRowGroupsOnHost()
       fileMetaDatas_,
       {splitRowGroupIndices()},
       *hostPruningFilters_,
-      *hostPruningTableType_,
       caseInsensitiveColumnNames_);
 }
 
@@ -903,10 +901,20 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses(
   };
   const auto numCandidateRowGroups = countRowGroups(rowGroupIndices);
 
-  // Filter row groups using column chunk statistics: the host decision made
-  // while preparing the split, then cuDF's pass over the kept row groups when
-  // the host left a filter undecided.
+  // Filter row groups using column chunk statistics: cuDF's pass unless the
+  // host decision made while preparing the split settles every row group,
+  // then that decision. cuDF's pass takes the split's row groups, as without
+  // the host test, not those the host kept: it tells from the first one
+  // whether the file has statistics at all.
   if (readerOptions_.get_filter().has_value()) {
+    const bool hostDecided = hostPruning_.has_value() &&
+        (hostPruning_->complete ||
+         countRowGroups(hostPruning_->rowGroupIndices) == 0);
+    if (!hostDecided && countRowGroups(rowGroupIndices) > 0) {
+      statsTestedStrides_ = countRowGroups(rowGroupIndices);
+      rowGroupIndices = splitReader_->filter_row_groups_with_stats(
+          rowGroupIndices, readerOptions_, stream_);
+    }
     if (hostPruning_.has_value()) {
       VELOX_CHECK_EQ(
           hostPruning_->rowGroupIndices.size(), rowGroupIndices.size());
@@ -916,11 +924,6 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses(
           return !std::ranges::binary_search(kept, rowGroup);
         });
       }
-    }
-    if ((!hostPruning_.has_value() || !hostPruning_->complete) &&
-        countRowGroups(rowGroupIndices) > 0) {
-      rowGroupIndices = splitReader_->filter_row_groups_with_stats(
-          rowGroupIndices, readerOptions_, stream_);
     }
   }
 

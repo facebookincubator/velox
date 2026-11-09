@@ -95,17 +95,19 @@ class CudfSplitReader : public NvtxHelper {
   /// while the split is being read.
   void setPushdownFilter(const cudf::ast::expression* filter);
 
-  /// Sets the subfield filters the pushed-down filter was built from and the
-  /// table type they refer to. With cudf.hive.host-row-group-pruning, the row
-  /// groups their statistics rule out are pruned on the host while the split
-  /// is prepared, and cuDF's statistics pass runs over the kept row groups
-  /// only when a filter was left undecided. The filters must remain alive
-  /// until prepareSplit() returns.
-  void setHostRowGroupPruning(
-      const common::SubfieldFilters* filters,
-      RowTypePtr tableType) {
+  /// Sets the subfield filters the pushed-down filter was built from, prepared
+  /// by prepareRowGroupPruningFilters(). The row groups their statistics rule
+  /// out are then pruned on the host while the split is prepared, and cuDF's
+  /// statistics pass runs only when a filter was left undecided. The filters
+  /// must remain alive until prepareSplit() returns.
+  void setHostRowGroupPruning(const HostRowGroupPruningFilters* filters) {
     hostPruningFilters_ = filters;
-    hostPruningTableType_ = std::move(tableType);
+  }
+
+  /// Returns the number of row groups of the current split cuDF's statistics
+  /// pass tested: 0 when the host decided them all or none was left.
+  int64_t statsTestedStrides() const {
+    return statsTestedStrides_;
   }
 
   /// Opens the cuDF reader and sets up its options. Returns early without
@@ -281,9 +283,9 @@ class CudfSplitReader : public NvtxHelper {
   RowGroupPasses selectRowGroupPasses(dwio::common::RuntimeStats& runtimeStats);
 
   // Return the host statistics decision for the split's row groups, or
-  // nullopt when the host test is off, no filter is pushed down or no
-  // subfield filters were set. Reads the footer, so it runs before the footer
-  // moves into the cuDF reader.
+  // nullopt when no filter is pushed down or no prepared filters were set.
+  // Reads the footer, so it runs before the footer moves into the cuDF
+  // reader.
   std::optional<HostRowGroupPruning> pruneRowGroupsOnHost() const;
 
   // Wait for the column chunks of the current pass, fetching them first if
@@ -315,11 +317,12 @@ class CudfSplitReader : public NvtxHelper {
   cudf::ast::expression const* pushdownFilterExpr_;
   bool hasSplitSpecificPushdownFilter_{false};
   // Read while the split is prepared, then dropped.
-  const common::SubfieldFilters* hostPruningFilters_{nullptr};
-  RowTypePtr hostPruningTableType_;
+  const HostRowGroupPruningFilters* hostPruningFilters_{nullptr};
   // Host statistics decision for the current split; unset when cuDF's
   // statistics pass decides alone.
   std::optional<HostRowGroupPruning> hostPruning_;
+  // Row groups cuDF's statistics pass tested for the current split.
+  int64_t statsTestedStrides_{0};
   // Set when an ignored missing data file leaves nothing to read.
   bool emptySplit_{false};
 

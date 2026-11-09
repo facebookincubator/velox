@@ -24,6 +24,8 @@
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_metadata.hpp>
 
+#include <cstring>
+#include <limits>
 #include <numeric>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -69,8 +71,7 @@ class CudfRowGroupPruningTest : public exec::test::CudfHiveConnectorTestBase {
     return pruneRowGroupsWithStatistics(
         files,
         allRowGroups(files),
-        filters,
-        *tableType,
+        prepareRowGroupPruningFilters(filters, *tableType),
         caseInsensitiveColumnNames);
   }
 
@@ -110,6 +111,20 @@ class CudfRowGroupPruningTest : public exec::test::CudfHiveConnectorTestBase {
     EXPECT_EQ(
         cudfKeptRowGroups(path, filters, rowType, decimalTypes),
         static_cast<cudf::size_type>(expected.size()));
+  }
+
+  // Checks that the host keeps exactly 'expected' of the file's row groups
+  // and decides every filter, for footers the test patched, which no file
+  // holds for cuDF to read.
+  static void expectDecided(
+      const Footers& files,
+      const common::SubfieldFilters& filters,
+      const RowTypePtr& tableType,
+      const Indices& expected) {
+    const auto result = prune(files, filters, tableType);
+    ASSERT_EQ(result.rowGroupIndices.size(), 1);
+    EXPECT_EQ(result.rowGroupIndices.front(), expected);
+    EXPECT_TRUE(result.complete);
   }
 
   // Checks that the host keeps every row group and leaves the decision to
@@ -152,6 +167,30 @@ class CudfRowGroupPruningTest : public exec::test::CudfHiveConnectorTestBase {
         min, false, false, max, false, false, false);
   }
 
+  // The DOUBLE or REAL ranges > or >= 'lower' and < or <= 'upper'.
+  template <typename T>
+  static std::unique_ptr<common::Filter> above(T lower, bool exclusive) {
+    return std::make_unique<common::FloatingPointRange<T>>(
+        lower, false, exclusive, T{}, true, false, false);
+  }
+
+  template <typename T>
+  static std::unique_ptr<common::Filter> below(T upper, bool exclusive) {
+    return std::make_unique<common::FloatingPointRange<T>>(
+        T{}, true, false, upper, false, exclusive, false);
+  }
+
+  static std::unique_ptr<common::Filter> anyOf(
+      std::unique_ptr<common::Filter> first,
+      std::unique_ptr<common::Filter> second,
+      bool nullAllowed = false) {
+    std::vector<std::unique_ptr<common::Filter>> filters;
+    filters.push_back(std::move(first));
+    filters.push_back(std::move(second));
+    return std::make_unique<common::MultiRange>(
+        std::move(filters), nullAllowed);
+  }
+
   // Three row groups of three ascending values, 1..9, in the column of 'type'
   // built by 'makeColumn(firstValue)'.
   template <typename MakeColumn>
@@ -174,6 +213,36 @@ class CudfRowGroupPruningTest : public exec::test::CudfHiveConnectorTestBase {
            static_cast<T>(first + 2)},
           type);
     });
+  }
+
+  // The file of writeAscending() for DOUBLE and REAL.
+  template <typename T>
+  std::string writeAscendingFloatingPoints() {
+    return writeAscending([&](int64_t first) {
+      return makeFlatVector<T>(
+          {static_cast<T>(first),
+           static_cast<T>(first + 1),
+           static_cast<T>(first + 2)});
+    });
+  }
+
+  // The file of writeAscending() for VARCHAR and VARBINARY: "a".."i".
+  std::string writeAscendingStrings(const TypePtr& type = VARCHAR()) {
+    return writeAscending([&](int64_t first) {
+      return makeFlatVector<std::string>(
+          {std::string(1, 'a' + first - 1),
+           std::string(1, 'a' + first),
+           std::string(1, 'a' + first + 1)},
+          type);
+    });
+  }
+
+  // Applies 'patch' to the statistics of every chunk of the single column.
+  template <typename Patch>
+  static void patchStatistics(Footers& files, Patch patch) {
+    for (auto& rowGroup : files.front().row_groups) {
+      patch(rowGroup.columns.front().meta_data.statistics);
+    }
   }
 
   std::vector<std::shared_ptr<TempFilePath>> tempFiles_;
@@ -238,12 +307,7 @@ TEST_F(CudfRowGroupPruningTest, integerInLists) {
 
 TEST_F(CudfRowGroupPruningTest, stringFilters) {
   const auto rowType = ROW({"c0"}, {VARCHAR()});
-  const auto path = writeAscending([&](int64_t first) {
-    return makeFlatVector<std::string>(
-        {std::string(1, 'a' + first - 1),
-         std::string(1, 'a' + first),
-         std::string(1, 'a' + first + 1)});
-  });
+  const auto path = writeAscendingStrings();
   expectPruned(path, filters("c0", bytesRange("d", "f")), rowType, {1});
   expectPruned(path, filters("c0", bytesRange("x", "z")), rowType, {});
   expectPruned(
@@ -255,45 +319,175 @@ TEST_F(CudfRowGroupPruningTest, stringFilters) {
       rowType,
       {0, 2});
   // VARBINARY compares bytes like VARCHAR.
-  const auto binaryType = ROW({"c0"}, {VARBINARY()});
-  const auto binaryPath = writeAscending([&](int64_t first) {
-    return makeFlatVector<std::string>(
-        {std::string(1, 'a' + first - 1),
-         std::string(1, 'a' + first),
-         std::string(1, 'a' + first + 1)},
-        VARBINARY());
-  });
   expectPruned(
-      binaryPath, filters("c0", bytesRange("d", "f")), binaryType, {1});
+      writeAscendingStrings(VARBINARY()),
+      filters("c0", bytesRange("d", "f")),
+      ROW({"c0"}, {VARBINARY()}),
+      {1});
 }
 
+// Exclusive bounds prune the row group whose bound equals the literal, as
+// cuDF's pass does, and an OR of ranges keeps the union.
 TEST_F(CudfRowGroupPruningTest, floatingPointRanges) {
+  const auto doubleType = ROW({"c0"}, {DOUBLE()});
+  const auto doublePath = writeAscendingFloatingPoints<double>();
   expectPruned(
-      writeAscending([&](int64_t first) {
-        return makeFlatVector<double>(
-            {static_cast<double>(first),
-             static_cast<double>(first + 1),
-             static_cast<double>(first + 2)});
-      }),
+      doublePath,
       filters(
           "c0",
           std::make_unique<common::DoubleRange>(
               4.0, false, false, 6.0, false, false, false)),
-      ROW({"c0"}, {DOUBLE()}),
+      doubleType,
       {1});
+  expectPruned(doublePath, filters("c0", above(3.0, true)), doubleType, {1, 2});
   expectPruned(
-      writeAscending([&](int64_t first) {
-        return makeFlatVector<float>(
-            {static_cast<float>(first),
-             static_cast<float>(first + 1),
-             static_cast<float>(first + 2)});
-      }),
+      doublePath, filters("c0", above(3.0, false)), doubleType, {0, 1, 2});
+  expectPruned(doublePath, filters("c0", below(7.0, true)), doubleType, {0, 1});
+  expectPruned(
+      doublePath, filters("c0", below(7.0, false)), doubleType, {0, 1, 2});
+  expectPruned(
+      doublePath,
+      filters(
+          "c0",
+          std::make_unique<common::DoubleRange>(
+              6.0, false, true, 7.0, false, true, false)),
+      doubleType,
+      {});
+  expectPruned(
+      doublePath,
+      filters("c0", anyOf(below(2.0, true), above(8.0, true))),
+      doubleType,
+      {0, 2});
+  expectPruned(
+      doublePath,
+      filters("c0", anyOf(below(1.0, true), above(9.0, true))),
+      doubleType,
+      {});
+  // c0 <> 5.0 prunes only a row group of 5.0 alone.
+  const auto constantPath = write(
+      {makeRowVector({"c0"}, {makeFlatVector<double>({1.0, 1.0, 1.0})}),
+       makeRowVector({"c0"}, {makeFlatVector<double>({5.0, 5.0, 5.0})}),
+       makeRowVector({"c0"}, {makeFlatVector<double>({9.0, 9.0, 9.0})})});
+  expectPruned(
+      constantPath,
+      filters("c0", anyOf(below(5.0, true), above(5.0, true))),
+      doubleType,
+      {0, 2});
+
+  const auto floatType = ROW({"c0"}, {REAL()});
+  const auto floatPath = writeAscendingFloatingPoints<float>();
+  expectPruned(
+      floatPath,
       filters(
           "c0",
           std::make_unique<common::FloatRange>(
               4.0f, false, false, 6.0f, false, false, false)),
-      ROW({"c0"}, {REAL()}),
+      floatType,
       {1});
+  expectPruned(floatPath, filters("c0", above(3.0f, true)), floatType, {1, 2});
+  expectPruned(floatPath, filters("c0", below(7.0f, true)), floatType, {0, 1});
+}
+
+// Nulls decide a floating-point filter as they do the others.
+TEST_F(CudfRowGroupPruningTest, floatingPointNulls) {
+  const auto rowType = ROW({"c0"}, {DOUBLE()});
+  const auto path = write(
+      {makeRowVector(
+           {"c0"},
+           {makeNullableFlatVector<double>(
+               {std::nullopt, std::nullopt, std::nullopt})}),
+       makeRowVector(
+           {"c0"}, {makeNullableFlatVector<double>({4.0, std::nullopt, 6.0})}),
+       makeRowVector({"c0"}, {makeFlatVector<double>({7.0, 8.0, 9.0})})});
+  expectPruned(path, filters("c0", above(3.0, true)), rowType, {1, 2});
+  // A filter that accepts nulls: c0 > 100.0 OR c0 IS NULL as a range, and
+  // c0 < 2.0 OR c0 > 100.0 OR c0 IS NULL as an OR of ranges, with the IS NULL
+  // as the OR's flag or as one of its filters.
+  expectPruned(
+      path,
+      filters(
+          "c0",
+          std::make_unique<common::DoubleRange>(
+              100.0, false, true, 0.0, true, false, true)),
+      rowType,
+      {0, 1});
+  expectPruned(
+      path,
+      filters("c0", anyOf(below(2.0, true), above(100.0, true), true)),
+      rowType,
+      {0, 1});
+  expectPruned(
+      path,
+      filters(
+          "c0",
+          anyOf(std::make_unique<common::IsNull>(), above(100.0, true), true)),
+      rowType,
+      {0, 1});
+}
+
+// A chunk with only one of its bounds is left to cuDF's pass, whatever the
+// type. The writer here records both, so the footers are patched.
+TEST_F(CudfRowGroupPruningTest, oneSidedBounds) {
+  const auto dropMax = [](pq::Statistics& stats) {
+    stats.max_value.reset();
+    stats.max.reset();
+  };
+  const auto dropMin = [](pq::Statistics& stats) {
+    stats.min_value.reset();
+    stats.min.reset();
+  };
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+
+  // Values from 1 up: none is below 0, and infinity may be among them.
+  const auto doubleType = ROW({"c0"}, {DOUBLE()});
+  const auto doublePath = writeAscendingFloatingPoints<double>();
+  auto files = readFooters(doublePath);
+  patchStatistics(files, dropMax);
+  expectLeftToCudf(files, filters("c0", below(0.0, true)), doubleType);
+  expectLeftToCudf(
+      files,
+      filters(
+          "c0",
+          std::make_unique<common::DoubleRange>(
+              kInf, false, false, kInf, false, false, false)),
+      doubleType);
+  files = readFooters(doublePath);
+  patchStatistics(files, dropMin);
+  expectLeftToCudf(files, filters("c0", above(100.0, true)), doubleType);
+
+  files = readFooters(writeAscendingFloatingPoints<float>());
+  patchStatistics(files, dropMax);
+  expectLeftToCudf(
+      files, filters("c0", below(0.0f, true)), ROW({"c0"}, {REAL()}));
+
+  files = readFooters(writeAscendingIntegers<int64_t>());
+  patchStatistics(files, dropMax);
+  expectLeftToCudf(
+      files, filters("c0", bigintRange(-10, 0)), ROW({"c0"}, {BIGINT()}));
+
+  files = readFooters(writeAscendingStrings());
+  patchStatistics(files, dropMax);
+  expectLeftToCudf(
+      files, filters("c0", bytesRange("x", "z")), ROW({"c0"}, {VARCHAR()}));
+}
+
+// Some writers put a NaN into a floating-point bound; such a chunk is left to
+// cuDF's pass too.
+TEST_F(CudfRowGroupPruningTest, nanBound) {
+  const auto doubleType = ROW({"c0"}, {DOUBLE()});
+  const auto path = writeAscendingFloatingPoints<double>();
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  std::vector<uint8_t> nanBytes(sizeof(double));
+  std::memcpy(nanBytes.data(), &kNaN, sizeof(double));
+
+  auto files = readFooters(path);
+  patchStatistics(
+      files, [&](pq::Statistics& stats) { stats.max_value = nanBytes; });
+  expectLeftToCudf(files, filters("c0", below(0.0, true)), doubleType);
+  files = readFooters(path);
+  patchStatistics(
+      files, [&](pq::Statistics& stats) { stats.min_value = nanBytes; });
+  expectLeftToCudf(files, filters("c0", above(100.0, true)), doubleType);
 }
 
 // A row group of only false values cannot hold true, and the other way round.
@@ -310,6 +504,21 @@ TEST_F(CudfRowGroupPruningTest, booleanValues) {
       {1, 2});
   expectPruned(
       path,
+      filters("c0", std::make_unique<common::BoolValue>(false, false)),
+      rowType,
+      {0, 1});
+
+  // The bounds decide without a null count too.
+  auto files = readFooters(path);
+  patchStatistics(
+      files, [](pq::Statistics& stats) { stats.null_count.reset(); });
+  expectDecided(
+      files,
+      filters("c0", std::make_unique<common::BoolValue>(true, false)),
+      rowType,
+      {1, 2});
+  expectDecided(
+      files,
       filters("c0", std::make_unique<common::BoolValue>(false, false)),
       rowType,
       {0, 1});
@@ -450,6 +659,25 @@ TEST_F(CudfRowGroupPruningTest, nulls) {
       rowType,
       {0, 1});
   expectPruned(path, filters("c0", bigintRange(100, 200)), rowType, {});
+  // The ranges of an OR may allow nulls the OR itself rejects. cuDF's AST
+  // ignores their flags, so the row group holding a null is not kept for them,
+  // on an integer or a short decimal column.
+  const auto outside = [](int64_t below, int64_t above) {
+    std::vector<std::unique_ptr<common::BigintRange>> ranges;
+    ranges.push_back(std::make_unique<common::BigintRange>(0, below, true));
+    ranges.push_back(
+        std::make_unique<common::BigintRange>(above, 10 * above, true));
+    return std::make_unique<common::BigintMultiRange>(std::move(ranges), false);
+  };
+  expectPruned(path, filters("c0", outside(3, 10)), rowType, {});
+  expectPruned(
+      write({makeRowVector(
+          {"c0"},
+          {makeNullableFlatVector<int64_t>(
+              {400, std::nullopt, 600}, DECIMAL(12, 2))})}),
+      filters("c0", outside(300, 1'000)),
+      ROW({"c0"}, {DECIMAL(12, 2)}),
+      {});
   // A column without nulls: IS NULL rules out every row group, IS NOT NULL
   // none.
   const auto noNullsPath = writeAscendingIntegers<int64_t>();
@@ -463,6 +691,12 @@ TEST_F(CudfRowGroupPruningTest, nulls) {
       filters("c0", std::make_unique<common::IsNotNull>()),
       rowType,
       {0, 1, 2});
+
+  // An empty row group holds no row, null or not.
+  auto files = readFooters(noNullsPath);
+  files.front().row_groups[1].num_rows = 0;
+  expectDecided(
+      files, filters("c0", std::make_unique<common::IsNull>()), rowType, {});
 }
 
 // Filters on two columns prune the union of what each rules out.
@@ -550,6 +784,23 @@ TEST_F(CudfRowGroupPruningTest, leftToCudf) {
   expectLeftToCudf(files, unmatched, ROW({"c0"}, {DOUBLE()}));
   expectLeftToCudf(files, unmatched, ROW({"c0"}, {VARCHAR()}));
 
+  // An OR of ranges on an integer column, which has no range test.
+  expectLeftToCudf(
+      readFooters(path),
+      filters("c0", anyOf(bigintRange(100, 200), bigintRange(300, 400))),
+      rowType);
+
+  // An IN list inside an OR, whose range test answers from the list's span.
+  expectLeftToCudf(
+      readFooters(writeAscendingStrings()),
+      filters(
+          "c0",
+          anyOf(
+              std::make_unique<common::BytesValues>(
+                  std::vector<std::string>{"b", "h"}, false),
+              bytesRange("x", "z"))),
+      ROW({"c0"}, {VARCHAR()}));
+
   // An INT64 column without a timestamp unit, and an INT96 timestamp.
   files = readFooters(path);
   const auto timestampFilter = filters(
@@ -589,6 +840,15 @@ TEST_F(CudfRowGroupPruningTest, leftToCudf) {
     stats.max_value.reset();
   }
   expectLeftToCudf(files, decimalFilter, decimalType);
+  // ... or with the maximum alone in the deprecated field, which cuDF's pass
+  // reads and the host does not.
+  files = readFooters(decimalPath);
+  for (auto& rowGroup : files.front().row_groups) {
+    auto& stats = rowGroup.columns.front().meta_data.statistics;
+    stats.max = std::move(stats.max_value);
+    stats.max_value.reset();
+  }
+  expectLeftToCudf(files, decimalFilter, decimalType);
 
   // A decided filter still prunes beside one left to cuDF.
   files = readFooters(decimalPath);
@@ -596,11 +856,12 @@ TEST_F(CudfRowGroupPruningTest, leftToCudf) {
   const auto result = pruneRowGroupsWithStatistics(
       files,
       allRowGroups(files),
-      SubfieldFiltersBuilder()
-          .add("c0", decimalFilter.begin()->second->clone())
-          .add("c1", bigintRange(4, 6))
-          .build(),
-      *decimalType,
+      prepareRowGroupPruningFilters(
+          SubfieldFiltersBuilder()
+              .add("c0", decimalFilter.begin()->second->clone())
+              .add("c1", bigintRange(4, 6))
+              .build(),
+          *decimalType),
       false);
   EXPECT_EQ(result.rowGroupIndices.front(), Indices{1});
   EXPECT_FALSE(result.complete);
@@ -630,8 +891,8 @@ TEST_F(CudfRowGroupPruningTest, severalSources) {
   const auto result = pruneRowGroupsWithStatistics(
       files,
       {Indices{0, 2}, Indices{1, 2}},
-      filters("c0", bigintRange(5, 8)),
-      *ROW({"c0"}, {BIGINT()}),
+      prepareRowGroupPruningFilters(
+          filters("c0", bigintRange(5, 8)), *ROW({"c0"}, {BIGINT()})),
       false);
   EXPECT_EQ(
       result.rowGroupIndices,
