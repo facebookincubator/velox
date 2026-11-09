@@ -27,28 +27,56 @@ struct LanceConnectorSplit : public connector::ConnectorSplit {
   const std::string datasetPath;
   /// Fragment IDs to scan. Empty means scan all fragments.
   const std::vector<uint64_t> fragmentIds;
+  /// Index segment UUIDs (canonical 8-4-4-4-12 hex form) for an INDEXED split.
+  /// When non-empty, the scanner probes only these index segments' deltas;
+  /// rows outside the segments are excluded. Mutually exclusive with
+  /// fragmentIds.
+  const std::vector<std::string> segmentUuids;
+  /// When true, the scanner brute-forces KNN over the split's fragments with
+  /// the index disabled (FLAT split). Only valid for vector search splits.
+  const bool flatSearch{false};
 
   /// Create a split that scans all fragments.
   explicit LanceConnectorSplit(
       const std::string& connectorId,
       const std::string& datasetPath)
-      : ConnectorSplit(connectorId), datasetPath(datasetPath) {}
+      : LanceConnectorSplit(connectorId, datasetPath, {}, {}, false) {}
 
   /// Create a split that scans specific fragments.
   LanceConnectorSplit(
       const std::string& connectorId,
       const std::string& datasetPath,
       std::vector<uint64_t> fragmentIds)
+      : LanceConnectorSplit(
+            connectorId,
+            datasetPath,
+            std::move(fragmentIds),
+            {},
+            false) {}
+
+  /// Create a split with full control over fragment IDs, index segment UUIDs,
+  /// and flat-search mode.
+  LanceConnectorSplit(
+      const std::string& connectorId,
+      const std::string& datasetPath,
+      std::vector<uint64_t> fragmentIds,
+      std::vector<std::string> segmentUuids,
+      bool flatSearch)
       : ConnectorSplit(connectorId),
         datasetPath(datasetPath),
-        fragmentIds(std::move(fragmentIds)) {}
+        fragmentIds(std::move(fragmentIds)),
+        segmentUuids(std::move(segmentUuids)),
+        flatSearch(flatSearch) {}
 
   std::string toString() const override {
     return fmt::format(
-        "[LanceConnectorSplit: connectorId {}, path {}, fragments {}]",
+        "[LanceConnectorSplit: connectorId {}, path {}, fragments {}, "
+        "segmentUuids {}, flatSearch {}]",
         connectorId,
         datasetPath,
-        fragmentIds.size());
+        fragmentIds.size(),
+        segmentUuids.size(),
+        flatSearch);
   }
 };
 
