@@ -19,9 +19,11 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/vectorindex/FaissLocalVectorIndex.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -38,10 +40,10 @@ using common::vectorindex::LocalVectorIndexReader;
 using common::vectorindex::VectorIndexKind;
 using common::vectorindex::VectorIndexMetric;
 
-class VectorSearchJoinTest : public OperatorTestBase {
+class VectorSearchJoinTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
-    OperatorTestBase::SetUp();
+    HiveConnectorTestBase::SetUp();
     auto formats = std::make_shared<LocalVectorIndexFormats>();
     formats->insert(
         std::string(FaissLocalVectorIndex::kFormat),
@@ -52,7 +54,7 @@ class VectorSearchJoinTest : public OperatorTestBase {
 
   void TearDown() override {
     queryCtx_.reset();
-    OperatorTestBase::TearDown();
+    HiveConnectorTestBase::TearDown();
   }
 
   // Returns a builder that runs 'plan' with the query's local vector index
@@ -103,13 +105,13 @@ class VectorSearchJoinTest : public OperatorTestBase {
           "t0",
           "cluster_id",
           "score"}) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    return PlanBuilder(planNodeIdGenerator)
-        .values({probe})
+    PlanBuilder builder;
+    builder.values({probe});
+    return builder
         .vectorSearchJoin(
             {"ds"},
             {"c_ds"},
-            PlanBuilder(planNodeIdGenerator).values(codecs).planNode(),
+            builder.newPlan().values(codecs).planNode(),
             "embedding",
             "codec",
             /*k=*/2,
@@ -163,6 +165,31 @@ class VectorSearchJoinTest : public OperatorTestBase {
     });
   }
 
+  // Adds to 'probeSide' a join with 'build' on 'leftKeys' and 'rightKeys', with
+  // the id of each embedding found as 'id'. The side with the 'local_index'
+  // column has the index rows, the other the 'embedding' column.
+  static PlanBuilder& addLocalIndexJoin(
+      PlanBuilder& probeSide,
+      const core::PlanNodePtr& build,
+      const std::vector<std::string>& leftKeys,
+      const std::vector<std::string>& rightKeys,
+      core::JoinType joinType,
+      int64_t k,
+      const std::vector<std::string>& outputLayout) {
+    return probeSide.vectorSearchJoin(
+        leftKeys,
+        rightKeys,
+        build,
+        "embedding",
+        "local_index",
+        k,
+        outputLayout,
+        "id",
+        /*score=*/std::nullopt,
+        joinType,
+        {{std::string(LocalVectorIndexOptions::kNprobe), "1"}});
+  }
+
   // Joins index rows (i_cluster_id, local_index, ...) and query rows (t0,
   // cluster_id, embedding) on the cluster, with the id of each embedding found
   // as 'id'. With 'indexOnProbe', the index rows are on the probe side. With
@@ -184,23 +211,18 @@ class VectorSearchJoinTest : public OperatorTestBase {
       leftKeys = {indexOnProbe ? "i_cluster_id" : "cluster_id"};
       rightKeys = {indexOnProbe ? "cluster_id" : "i_cluster_id"};
     }
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    return PlanBuilder(planNodeIdGenerator)
-        .values({indexOnProbe ? indexes : queries}, parallelProbe)
-        .vectorSearchJoin(
-            leftKeys,
-            rightKeys,
-            PlanBuilder(planNodeIdGenerator)
-                .values({indexOnProbe ? queries : indexes}, parallelBuild)
-                .planNode(),
-            "embedding",
-            "local_index",
-            k,
-            outputLayout,
-            "id",
-            /*score=*/std::nullopt,
-            joinType,
-            {{std::string(LocalVectorIndexOptions::kNprobe), "1"}})
+    PlanBuilder builder;
+    builder.values({indexOnProbe ? indexes : queries}, parallelProbe);
+    return addLocalIndexJoin(
+               builder,
+               builder.newPlan()
+                   .values({indexOnProbe ? queries : indexes}, parallelBuild)
+                   .planNode(),
+               leftKeys,
+               rightKeys,
+               joinType,
+               k,
+               outputLayout)
         .planNode();
   }
 
@@ -218,7 +240,7 @@ TEST_F(VectorSearchJoinTest, driversAndBatches) {
   // several output batches.
   queryBuilder(makeCodecPlan(makeCodecProbe(), makeCodecs()))
       .maxDrivers(4)
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
       .assertResults(makeCodecResults());
 }
 
@@ -233,20 +255,19 @@ TEST_F(VectorSearchJoinTest, noKeys) {
       {"codec"},
       {makeFlatVector<std::string>({pack({1, 0, 0, 1})}, VARBINARY())});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probe})
-          .vectorSearchJoin(
-              /*leftKeys=*/{},
-              /*rightKeys=*/{},
-              PlanBuilder(planNodeIdGenerator).values({codecs}).planNode(),
-              "embedding",
-              "codec",
-              /*k=*/1,
-              {"t0", "cluster_id"},
-              "cluster_id")
-          .planNode();
+  PlanBuilder builder;
+  builder.values({probe});
+  auto plan = builder
+                  .vectorSearchJoin(
+                      /*leftKeys=*/{},
+                      /*rightKeys=*/{},
+                      builder.newPlan().values({codecs}).planNode(),
+                      "embedding",
+                      "codec",
+                      /*k=*/1,
+                      {"t0", "cluster_id"},
+                      "cluster_id")
+                  .planNode();
 
   queryBuilder(plan).assertResults(makeRowVector({
       makeFlatVector<int64_t>({0, 1}),
@@ -318,14 +339,14 @@ TEST_F(VectorSearchJoinTest, noKeys) {
           .assertResults(makeResults(1, isOuterJoin ? 1 : 0));
       // Each search takes one query and the matches are listed one at a time.
       queryBuilder(makePlan(false))
-          .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
           .assertResults(makeResults(1, isOuterJoin ? 1 : 0));
       // Each of 3 build drivers reads all build rows. Repeated query rows on
       // the build side repeat the query that finds nothing too.
       const int32_t numNullCopies = isOuterJoin ? (indexOnProbe ? 3 : 1) : 0;
       queryBuilder(makePlan(true))
           .maxDrivers(3)
-          .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
           .assertResults(makeResults(3, numNullCopies));
     }
   }
@@ -508,7 +529,7 @@ TEST_F(VectorSearchJoinTest, localIndexes) {
         // Each search takes one query, so an index is searched in several
         // steps, and the results fill several output batches.
         queryBuilder(plan)
-            .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+            .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
             .assertResults(expected);
       }
     }
@@ -583,6 +604,176 @@ TEST_F(VectorSearchJoinTest, drivers) {
   }
 }
 
+// A join that drops the probe rows matching nothing pushes a filter on each
+// key into the scan of the probe side, and reads no probe rows if no build row
+// can match. A left join outputs the probe rows that match nothing, so it
+// reads them all.
+TEST_F(VectorSearchJoinTest, dynamicFilters) {
+  // The keys are a partition and a cluster. In partition "a", cluster 7 has two
+  // local indexes, cluster 8 one, and cluster 9 one with a null index. Row 4
+  // has a null cluster. Row 5 is cluster 8 of partition "b", which no query
+  // searches.
+  auto indexes = makeRowVector(
+      {"i_ds", "i_cluster_id", "local_index", "group_id"},
+      {
+          makeFlatVector<std::string>({"a", "a", "a", "a", "a", "b"}),
+          makeNullableFlatVector<int64_t>({7, 7, 8, 9, std::nullopt, 8}),
+          makeNullableFlatVector<std::string>(
+              {build({1, 0, 0, 1}, {10, 20}),
+               build({0.6, 0.8}, {30}),
+               build({1, 0}, {40}),
+               std::nullopt,
+               build({1, 0}, {50}),
+               build({1, 0}, {60})},
+              VARBINARY()),
+          makeFlatVector<int64_t>({0, 1, 0, 0, 0, 0}),
+      });
+  // Row 2 has a null embedding and row 3 a null cluster. Row 4 searches
+  // partition "c", which has no local indexes.
+  auto queries = makeRowVector(
+      {"t0", "ds", "cluster_id", "embedding"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<std::string>({"a", "a", "a", "a", "c"}),
+          makeNullableFlatVector<int64_t>({7, 8, 9, std::nullopt, 7}),
+          makeNullableArrayVector<float>(
+              {{{1, 0}}, {{0, 1}}, std::nullopt, {{1, 0}}, {{1, 0}}}),
+      });
+  const auto innerResults = makeRowVector({
+      makeFlatVector<int64_t>({10, 20, 30, 40}),
+      makeFlatVector<int64_t>({0, 0, 0, 1}),
+      makeFlatVector<int64_t>({0, 0, 1, 0}),
+  });
+  const auto outerResults = makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {10, 20, 30, 40, std::nullopt, std::nullopt, std::nullopt}),
+      makeFlatVector<int64_t>({0, 0, 0, 1, 2, 3, 4}),
+      makeNullableFlatVector<int64_t>(
+          {0, 0, 1, 0, std::nullopt, std::nullopt, std::nullopt}),
+  });
+
+  // Runs the join of 'probe', read by a table scan, with 'build' on up to 4
+  // drivers, checks that it returns 'expected', or no rows if null, and returns
+  // the stats of the scan.
+  const auto runJoin = [&](const RowVectorPtr& probe,
+                           const RowVectorPtr& build,
+                           core::JoinType joinType,
+                           const RowVectorPtr& expected) {
+    const bool indexOnProbe = probe->rowType()->containsChild("i_ds");
+    const std::vector<std::string> indexKeys{"i_ds", "i_cluster_id"};
+    const std::vector<std::string> queryKeys{"ds", "cluster_id"};
+    const auto file = TempFilePath::create();
+    writeToFile(file->getPath(), probe);
+    core::PlanNodeId scanId;
+    PlanBuilder builder;
+    builder.tableScan(probe->rowType()).capturePlanNodeId(scanId);
+    const auto plan = addLocalIndexJoin(
+                          builder,
+                          builder.newPlan().values({build}).planNode(),
+                          indexOnProbe ? indexKeys : queryKeys,
+                          indexOnProbe ? queryKeys : indexKeys,
+                          joinType,
+                          /*k=*/2,
+                          {"id", "t0", "group_id"})
+                          .planNode();
+    auto query = queryBuilder(plan);
+    query.split(scanId, makeHiveConnectorSplit(file->getPath()))
+        .maxDrivers(4)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, 1);
+    const auto task = expected != nullptr ? query.assertResults(expected)
+                                          : query.assertEmptyResults();
+    return PlanNodeStats::extract(task->taskStats(), scanId);
+  };
+
+  // Clusters 7 and 8 of partition "a" have both index and query rows.
+  {
+    auto scanStats =
+        runJoin(indexes, queries, core::JoinType::kInner, innerResults);
+    EXPECT_EQ(scanStats.outputRows, 3);
+    EXPECT_FALSE(scanStats.dynamicFilterStats.empty());
+  }
+
+  {
+    auto scanStats =
+        runJoin(indexes, queries, core::JoinType::kRight, outerResults);
+    EXPECT_EQ(scanStats.outputRows, 3);
+    EXPECT_FALSE(scanStats.dynamicFilterStats.empty());
+  }
+
+  {
+    auto scanStats =
+        runJoin(queries, indexes, core::JoinType::kInner, innerResults);
+    EXPECT_EQ(scanStats.outputRows, 2);
+    EXPECT_FALSE(scanStats.dynamicFilterStats.empty());
+  }
+
+  {
+    auto scanStats =
+        runJoin(queries, indexes, core::JoinType::kLeft, outerResults);
+    EXPECT_EQ(scanStats.outputRows, 5);
+    EXPECT_TRUE(scanStats.dynamicFilterStats.empty());
+  }
+
+  const auto slice =
+      [](const RowVectorPtr& rows, vector_size_t offset, vector_size_t length) {
+        return std::static_pointer_cast<RowVector>(rows->slice(offset, length));
+      };
+
+  // A DOUBLE key has no value ids, so the table hashes the keys without
+  // collecting their values and the join pushes no filter.
+  {
+    auto scanStats = runJoin(
+        makeRowVector(
+            {"t0", "ds", "cluster_id", "embedding"},
+            {
+                makeFlatVector<int64_t>({0}),
+                makeFlatVector<double>({1.5}),
+                makeFlatVector<int64_t>({7}),
+                makeArrayVector<float>({{1, 0}}),
+            }),
+        makeRowVector(
+            {"i_ds", "i_cluster_id", "local_index", "group_id"},
+            {
+                makeFlatVector<double>({1.5}),
+                makeFlatVector<int64_t>({7}),
+                makeFlatVector<std::string>({build({1, 0}, {10})}, VARBINARY()),
+                makeFlatVector<int64_t>({0}),
+            }),
+        core::JoinType::kInner,
+        slice(innerResults, 0, 1));
+    EXPECT_EQ(scanStats.outputRows, 1);
+    EXPECT_TRUE(scanStats.dynamicFilterStats.empty());
+  }
+
+  // No build row can match. Query rows 2 and 3 have a null embedding or a null
+  // cluster, and index rows 3 and 4 a null index or a null cluster.
+  const auto unmatchableQueries = slice(queries, 2, 2);
+  {
+    auto scanStats =
+        runJoin(indexes, unmatchableQueries, core::JoinType::kInner, nullptr);
+    EXPECT_EQ(scanStats.outputRows, 0);
+    EXPECT_TRUE(scanStats.dynamicFilterStats.empty());
+  }
+
+  {
+    auto scanStats = runJoin(
+        indexes,
+        unmatchableQueries,
+        core::JoinType::kRight,
+        slice(outerResults, 4, 2));
+    EXPECT_EQ(scanStats.outputRows, 0);
+    EXPECT_TRUE(scanStats.dynamicFilterStats.empty());
+  }
+
+  {
+    const auto unmatchableIndexes = slice(indexes, 3, 2);
+    auto scanStats =
+        runJoin(queries, unmatchableIndexes, core::JoinType::kInner, nullptr);
+    EXPECT_EQ(scanStats.outputRows, 0);
+    EXPECT_TRUE(scanStats.dynamicFilterStats.empty());
+  }
+}
+
 // A search reads its indexes with the format it names, among the query's
 // formats. The format checks the search's settings before reading any index. A
 // format the query does not have fails.
@@ -625,13 +816,13 @@ TEST_F(VectorSearchJoinTest, format) {
 
   const auto makePlan = [&](const std::string& format,
                             LocalVectorIndex::SearchOptions searchOptions) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    return PlanBuilder(planNodeIdGenerator)
-        .values({makeCodecProbe()})
+    PlanBuilder builder;
+    builder.values({makeCodecProbe()});
+    return builder
         .vectorSearchJoin(
             {"ds"},
             {"c_ds"},
-            PlanBuilder(planNodeIdGenerator).values(makeCodecs()).planNode(),
+            builder.newPlan().values(makeCodecs()).planNode(),
             "embedding",
             "codec",
             /*k=*/2,
@@ -767,13 +958,13 @@ TEST_F(VectorSearchJoinTest, errors) {
 
   // With the query rows on the build side, they must all have the same length.
   const auto makeIndexOnProbePlan = [&](const RowVectorPtr& queries) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    return PlanBuilder(planNodeIdGenerator)
-        .values({codecs})
+    PlanBuilder builder;
+    builder.values({codecs});
+    return builder
         .vectorSearchJoin(
             {"c_ds"},
             {"ds"},
-            PlanBuilder(planNodeIdGenerator).values({queries}).planNode(),
+            builder.newPlan().values({queries}).planNode(),
             "embedding",
             "codec",
             /*k=*/1,
@@ -882,52 +1073,54 @@ TEST_F(VectorSearchJoinTest, planValidation) {
   };
   for (const auto& testCase : cases) {
     SCOPED_TRACE(testCase.error);
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
+    builder.values({probe});
     VELOX_ASSERT_THROW(
-        PlanBuilder(planNodeIdGenerator)
-            .values({probe})
-            .vectorSearchJoin(
-                testCase.leftKeys,
-                {"c0"},
-                PlanBuilder(planNodeIdGenerator).values({codecs}).planNode(),
-                testCase.embedding,
-                testCase.index,
-                testCase.k,
-                testCase.outputLayout,
-                "cluster_id",
-                /*score=*/std::nullopt,
-                testCase.joinType),
+        builder.vectorSearchJoin(
+            testCase.leftKeys,
+            {"c0"},
+            builder.newPlan().values({codecs}).planNode(),
+            testCase.embedding,
+            testCase.index,
+            testCase.k,
+            testCase.outputLayout,
+            "cluster_id",
+            /*score=*/std::nullopt,
+            testCase.joinType),
         testCase.error);
   }
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  VELOX_ASSERT_THROW(
-      PlanBuilder(planNodeIdGenerator)
-          .values({probe})
-          .vectorSearchJoin(
-              {"t0"},
-              {"c0"},
-              PlanBuilder(planNodeIdGenerator).values({codecs}).planNode(),
-              "embedding",
-              "codec",
-              /*k=*/1,
-              {"t0"},
-              /*id=*/"t0"),
-      "Vector search join id or score name is also a left side column: t0");
+  {
+    PlanBuilder builder;
+    builder.values({probe});
+    VELOX_ASSERT_THROW(
+        builder.vectorSearchJoin(
+            {"t0"},
+            {"c0"},
+            builder.newPlan().values({codecs}).planNode(),
+            "embedding",
+            "codec",
+            /*k=*/1,
+            {"t0"},
+            /*id=*/"t0"),
+        "Vector search join id or score name is also a left side column: t0");
+  }
 
-  VELOX_ASSERT_THROW(
-      PlanBuilder(planNodeIdGenerator)
-          .values({probe})
-          .vectorSearchJoin(
-              {"t0"},
-              {"c0"},
-              PlanBuilder(planNodeIdGenerator).values({codecs}).planNode(),
-              "embedding",
-              "codec",
-              /*k=*/1,
-              {"t0"},
-              /*id=*/"cluster_id"),
-      "Vector search join id or score is not an output column: cluster_id");
+  {
+    PlanBuilder builder;
+    builder.values({probe});
+    VELOX_ASSERT_THROW(
+        builder.vectorSearchJoin(
+            {"t0"},
+            {"c0"},
+            builder.newPlan().values({codecs}).planNode(),
+            "embedding",
+            "codec",
+            /*k=*/1,
+            {"t0"},
+            /*id=*/"cluster_id"),
+        "Vector search join id or score is not an output column: cluster_id");
+  }
 }
 
 } // namespace

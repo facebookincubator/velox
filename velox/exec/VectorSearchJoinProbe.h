@@ -27,7 +27,10 @@ namespace facebook::velox::exec {
 /// build side's table, lists the build rows each probe row matches, searches
 /// local indexes with queries, and makes the output a batch at a time. A query
 /// is a query row's embedding, normalized for the metric. A search looks up the
-/// queries of some query rows in one local index.
+/// queries of some query rows in one local index. A join that drops the probe
+/// rows matching nothing, all but a left join, pushes filters on the keys, when
+/// the table has their values, into the probe side, and reads no probe rows if
+/// no build row can match.
 ///
 /// VectorSearchJoinQueryProbe probes index rows with streaming query rows, and
 /// VectorSearchJoinIndexProbe probes query rows with streaming index rows.
@@ -147,7 +150,13 @@ class BaseVectorSearchJoinProbe : public Operator {
   // Returns the output batch and starts a new one.
   RowVectorPtr makeOutput();
 
+  // Pushes a filter on each key, passing the keys of the build rows, into the
+  // operators upstream that accept one, such as a table scan.
+  void pushdownDynamicFilters();
+
   const int64_t k_;
+  // Whether a probe row that matches nothing is output: true for a left join.
+  const bool preservesProbeRows_;
   // Hash the keys of the input, at their channels, for the lookup.
   std::vector<std::unique_ptr<VectorHasher>> hashers_;
   // For each probe column of the output, its channel in the input; for each
