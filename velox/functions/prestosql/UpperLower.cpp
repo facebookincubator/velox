@@ -21,11 +21,13 @@ namespace facebook::velox::functions {
 using PrestoUpperFunction = UpperLowerTemplateFunction<
     /*isLower=*/false,
     /*turkishCasing=*/false,
-    /*greekFinalSigma=*/false>;
+    /*greekFinalSigma=*/false,
+    /*fullCaseMapping=*/false>;
 using PrestoLowerFunction = UpperLowerTemplateFunction<
     /*isLower=*/true,
     /*turkishCasing=*/false,
-    /*greekFinalSigma=*/false>;
+    /*greekFinalSigma=*/false,
+    /*fullCaseMapping=*/false>;
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_upper,

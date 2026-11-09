@@ -22,6 +22,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/external/utf8proc/utf8procImpl.h"
+#include "velox/functions/lib/string/FullCaseMapping.h"
 #include "velox/functions/lib/string/GreekFinalSigma.h"
 
 #if (ENABLE_VECTORIZATION > 0) && !defined(_DEBUG) && !defined(DEBUG)
@@ -126,6 +127,7 @@ lowerAscii(char* output, const char* input, size_t length) {
 /// large enough for the results. outputLength refers to the number of bytes
 /// available in the output buffer, and inputLength is the number of bytes in
 /// the input string
+template <CaseMapping mapping = CaseMapping::kSimple>
 FOLLY_ALWAYS_INLINE size_t upperUnicode(
     char* output,
     size_t outputLength,
@@ -147,6 +149,18 @@ FOLLY_ALWAYS_INLINE size_t upperUnicode(
       return outputIdx;
     }
     inputIdx += size;
+
+    if constexpr (mapping != CaseMapping::kSimple) {
+      if (const auto* full = findFullCaseMapping(nextCodePoint)) {
+        const std::string_view mapped =
+            mapping == CaseMapping::kFullUpper ? full->upper : full->title;
+        assert(
+            outputIdx + mapped.size() <= outputLength && "access out of bound");
+        std::memcpy(&output[outputIdx], mapped.data(), mapped.size());
+        outputIdx += mapped.size();
+        continue;
+      }
+    }
 
     auto upperCodePoint = utf8proc_toupper(nextCodePoint);
 

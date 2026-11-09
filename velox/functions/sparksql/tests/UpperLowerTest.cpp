@@ -30,6 +30,21 @@ class UpperLowerTest : public SparkFunctionBaseTest {
   }
 };
 
+TEST_F(UpperLowerTest, upperFullCaseMapping) {
+  EXPECT_EQ("SS", upper("\u00DF"));
+  EXPECT_EQ("STRASSE", upper("stra\u00DFe"));
+  EXPECT_EQ("FI", upper("\uFB01"));
+  EXPECT_EQ("FFI", upper("\uFB03"));
+  EXPECT_EQ("FF", upper("\uFB00"));
+  EXPECT_EQ("ST", upper("\uFB06"));
+  EXPECT_EQ("\u02BCN", upper("\u0149"));
+  EXPECT_EQ("J\u030C", upper("\u01F0"));
+  EXPECT_EQ("\u0399\u0308\u0301", upper("\u0390"));
+  EXPECT_EQ("\u0535\u0552", upper("\u0587"));
+  // Characters with a one-to-one mapping are unchanged by this path.
+  EXPECT_EQ("\u00C9A", upper("\u00E9a"));
+}
+
 TEST_F(UpperLowerTest, lowerAscii) {
   EXPECT_EQ("abcdefg", lower("ABCDEFG"));
   EXPECT_EQ("abcdefg", lower("abcdefg"));
