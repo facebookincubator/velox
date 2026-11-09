@@ -186,6 +186,43 @@ TEST_F(TextReaderTest, basic) {
   ASSERT_EQ(rowReader->next(10, result), 0);
 }
 
+TEST_F(TextReaderTest, rowReaderOwnsScanSpec) {
+  const auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
+  const auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/",
+      "examples/simple_types_compressed_file.gz");
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(path);
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileSchema(type);
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+
+  // Allocate options on the heap to expose dangling references under ASan.
+  auto rowReaderOptions = std::make_unique<dwio::common::RowReaderOptions>();
+  setScanSpec(*type, *rowReaderOptions);
+  auto rowReader = reader->createRowReader(*rowReaderOptions);
+  rowReaderOptions.reset();
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(1, result), 1);
+  ASSERT_EQ(*result->type(), *type);
+  const auto expected = makeRowVector({
+      makeFlatVector<std::string>({"FOO"}),
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<double>({1.123}),
+      makeFlatVector<bool>({true}),
+  });
+  EXPECT_TRUE(result->equalValueAt(expected.get(), 0, 0));
+}
+
 TEST_F(TextReaderTest, headerAndCustomNullString) {
   tzset();
   const auto tzOffsetPST = 28'800;
