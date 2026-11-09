@@ -278,6 +278,16 @@ std::unordered_map<core::PlanNodeId, PlanNodeStats> toPlanStats(
   return planStats;
 }
 
+// static
+PlanNodeStats PlanNodeStats::extract(
+    const TaskStats& taskStats,
+    const core::PlanNodeId& planNodeId) {
+  auto planStats = toPlanStats(taskStats);
+  auto it = planStats.find(planNodeId);
+  VELOX_CHECK(it != planStats.end(), "Plan node has no stats: {}", planNodeId);
+  return std::move(it->second);
+}
+
 folly::dynamic toPlanStatsJson(const facebook::velox::exec::TaskStats& stats) {
   folly::dynamic jsonStats = folly::dynamic::array;
   auto planStats = facebook::velox::exec::toPlanStats(stats);

@@ -614,7 +614,9 @@ is a user error.
 The right side is loaded into memory and the left side streams. With the
 indexes on the right, each batch of query rows is searched in the indexes it
 matches. With the indexes on the left, each streaming index is decoded once per
-batch and searched with the query rows it matches. The output does not preserve
+batch and searched with the query rows it matches. A join other than left
+pushes filters on the keys of the right side into the left side's table scan,
+and reads no left rows if no right row can match. The output does not preserve
 the order of the left side. Available when Velox is built with FAISS
 (``VELOX_ENABLE_FAISS``).
 

@@ -52,6 +52,7 @@ BaseVectorSearchJoinProbe::BaseVectorSearchJoinProbe(
       matchProbeRows_{pool()},
       matchBuildRows_{pool()},
       k_{joinNode->k()},
+      preservesProbeRows_{joinNode->joinType() == core::JoinType::kLeft},
       buildRows_{pool()} {
   const auto& probeType = joinNode->probeType();
   const auto& buildType = joinNode->buildType();
@@ -124,7 +125,31 @@ BlockingReason BaseVectorSearchJoinProbe::isBlocked(ContinueFuture* future) {
     setResultRows(table_->rows().front(), table_->numKeys());
   }
   setTable();
+  if (!preservesProbeRows_) {
+    if (table_->rows().empty()) {
+      // No probe row matches, so none is needed.
+      noMoreInput();
+    } else if (
+        table_->hashTable() != nullptr &&
+        table_->hashTable()->hashMode() != BaseHashTable::HashMode::kHash) {
+      // Outside kHash mode, the hashers have seen the keys of all build rows.
+      pushdownDynamicFilters();
+    }
+  }
   return BlockingReason::kNotBlocked;
+}
+
+void BaseVectorSearchJoinProbe::pushdownDynamicFilters() {
+  std::vector<column_index_t> keyChannels;
+  keyChannels.reserve(hashers_.size());
+  for (const auto& hasher : hashers_) {
+    keyChannels.push_back(hasher->channel());
+  }
+  const auto& hashers = table_->hashTable()->hashers();
+  operatorCtx_->driverCtx()->driver->pushdownFilters(
+      this, keyChannels, [&](column_index_t key) {
+        return hashers[key]->getFilter(/*nullAllowed=*/false);
+      });
 }
 
 bool BaseVectorSearchJoinProbe::lookup(SelectivityVector& rows) {

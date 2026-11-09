@@ -163,6 +163,12 @@ struct PlanNodeStats {
   /// operator types, e.g. LocalPartition + LocalExchange).
   const PlanNodeStats& operatorStatsFor(std::string_view operatorType) const;
 
+  /// Extracts the stats of plan node 'planNodeId' from 'taskStats'. The node
+  /// must have stats.
+  static PlanNodeStats extract(
+      const TaskStats& taskStats,
+      const core::PlanNodeId& planNodeId);
+
  private:
   void addTotals(const OperatorStats& stats, bool gateByBoundary);
 };
