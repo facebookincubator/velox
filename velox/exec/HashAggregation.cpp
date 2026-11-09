@@ -75,7 +75,8 @@ void HashAggregation::initialize() {
   setupGroupingKeyChannelProjections(
       groupingKeyInputChannels, groupingKeyOutputChannels);
 
-  auto hashers = createVectorHashers(inputType, groupingKeyInputChannels);
+  auto hashers =
+      VectorHasher::createForKeys(inputType, groupingKeyInputChannels);
   const auto numHashers = hashers.size();
 
   std::vector<column_index_t> preGroupedChannels;

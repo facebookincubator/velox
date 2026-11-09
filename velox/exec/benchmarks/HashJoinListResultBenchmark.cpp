@@ -352,7 +352,6 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     }
     rows.applyToSelected([&](auto rowIndex) {
       char* newRow = rowContainer->newRow();
-      *reinterpret_cast<char**>(newRow + rowContainer->nextOffset()) = nullptr;
       for (auto i = 0; i < numKeys; ++i) {
         rowContainer->store(hashers[i]->decodedVector(), rowIndex, newRow, i);
       }
@@ -376,11 +375,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       auto table = HashTable<true>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          true,
-          false,
-          false, // hasCountFlag
-          1'000,
-          tablePools[i].get());
+          tablePools[i].get(),
+          {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1'000});
 
       copyVectorsToTable(batches[i], table.get());
       if (i == 0) {
@@ -473,7 +469,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
               resultsIter,
               false,
               mapping,
-              folly::Range(outputTableRows.data(), outputTableRows.size()),
+              std::span(outputTableRows.data(), outputTableRows.size()),
               std::numeric_limits<uint64_t>::max());
         }
       }
@@ -501,13 +497,13 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
         resultIter,
         false,
         mapping,
-        folly::Range(outputTableRows.data(), outputTableRows.size()),
+        std::span(outputTableRows.data(), outputTableRows.size()),
         std::numeric_limits<uint64_t>::max());
     uint64_t eraseClocks{0};
     {
       ClockTimer timer(eraseClocks);
       topTable_->rows()->eraseRows(
-          folly::Range<char**>(outputTableRows.data(), num));
+          std::span<char*>(outputTableRows.data(), num));
     }
     eraseTime_ = eraseClocks;
   }

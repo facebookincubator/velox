@@ -3833,6 +3833,12 @@ DEBUG_ONLY_TEST_P(HashJoinTest, minSpillableMemoryReservation) {
         .planNode(plan)
         .injectSpill(false)
         .spillDirectory(tempDirectory->getPath())
+        .config(
+            core::QueryConfig::kMinSpillableReservationPct,
+            std::to_string(minSpillableReservationPct))
+        .config(
+            core::QueryConfig::kSpillableReservationGrowthPct,
+            std::to_string(minSpillableReservationPct))
         .referenceQuery(
             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
         .run();
