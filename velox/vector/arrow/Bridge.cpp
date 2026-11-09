@@ -1183,14 +1183,25 @@ void exportRows(
   }
 }
 
+// Returns true if the rows of 'vec' are back to back and within its
+// 'numElements' elements, so that its offsets can be exported as they are.
+// Null rows must pass too: their offsets and sizes are undefined.
 template <typename Vector>
-bool isCompact(const Vector& vec) {
-  for (vector_size_t i = 1; i < vec.size(); ++i) {
-    if (vec.offsetAt(i - 1) + vec.sizeAt(i - 1) != vec.offsetAt(i)) {
+bool isCompact(const Vector& vec, vector_size_t numElements) {
+  if (vec.size() == 0) {
+    return true;
+  }
+  int64_t end = vec.offsetAt(0);
+  if (end < 0) {
+    return false;
+  }
+  for (vector_size_t i = 0; i < vec.size(); ++i) {
+    if (vec.offsetAt(i) != end || vec.sizeAt(i) < 0) {
       return false;
     }
+    end += vec.sizeAt(i);
   }
-  return true;
+  return end <= numElements;
 }
 
 template <typename Vector>
@@ -1207,7 +1218,8 @@ void exportOffsets(
       checkedPlus<size_t>(out.length, 1), pool);
   auto rawOffsets = offsets->asMutable<vector_size_t>();
 
-  if (!rows.changed() && isCompact(vec)) {
+  // 'childRows' still selects every element, so its count is their number.
+  if (!rows.changed() && isCompact(vec, childRows.count())) {
     vector_size_t rowCount = rows.count();
     memcpy(rawOffsets, vec.rawOffsets(), sizeof(vector_size_t) * rowCount);
     rawOffsets[rowCount] = rowCount == 0
