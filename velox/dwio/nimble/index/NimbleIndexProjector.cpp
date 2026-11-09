@@ -105,6 +105,17 @@ void NimbleIndexProjector::setTimingEnabled(bool enabled) {
   timingEnabled_ = enabled;
 }
 
+void NimbleIndexProjector::setVerifyStreamChecksums(
+    bool verifyStreamChecksums) {
+  if (verifyStreamChecksums == (streamChecksum_ != nullptr)) {
+    return;
+  }
+  streamChecksum_.reset();
+  streamTrailerSize_ = 0;
+  streamTrailerChecksumOffset_ = 0;
+  initStreamChecksum(verifyStreamChecksums);
+}
+
 NimbleIndexProjector::Stats NimbleIndexProjector::stats() const {
   velox::tsan_lock_guard<std::mutex> lock(statsLock_);
   return stats_;

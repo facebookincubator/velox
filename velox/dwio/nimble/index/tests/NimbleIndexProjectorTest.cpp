@@ -23,6 +23,7 @@
 #include <future>
 #include <limits>
 #include <numeric>
+#include <random>
 #include <string_view>
 #include <vector>
 
@@ -7556,6 +7557,129 @@ TEST_P(
       vectorMaker_->rowVector(
           {"value"}, {vectorMaker_->flatVector<int32_t>({500})}),
       values[0]);
+}
+
+// One projector turns verification on and off between requests, as a cached
+// iterator does for lookups with different verify_checksums.
+TEST_P(
+    NimbleIndexProjectorChecksumTest,
+    setVerifyStreamChecksumsTogglesVerification) {
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, 200);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  // The trailers are corrupt and the streams intact, so a verifying request
+  // fails and an unverified one reads the value.
+  ASSERT_NO_FATAL_FAILURE(corruptStreamTrailers());
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  const auto expectUnverified = [&](NimbleIndexProjector& projector) {
+    const auto values = projectValues(projector, request);
+    ASSERT_EQ(values.size(), 1);
+    velox::test::assertEqualVectors(
+        vectorMaker_->rowVector(
+            {"value"}, {vectorMaker_->flatVector<int32_t>({500})}),
+        values[0]);
+  };
+
+  auto projector = createProjector(subfields);
+  expectUnverified(*projector);
+  projector->setVerifyStreamChecksums(true);
+  NIMBLE_ASSERT_THROW(
+      project(*projector, request, {}), "Stream checksum mismatch");
+  projector->setVerifyStreamChecksums(false);
+  expectUnverified(*projector);
+
+  auto verifyingProjector = createVerifyingProjector(subfields);
+  verifyingProjector->setVerifyStreamChecksums(false);
+  expectUnverified(*verifyingProjector);
+  verifyingProjector->setVerifyStreamChecksums(true);
+  NIMBLE_ASSERT_THROW(
+      project(*verifyingProjector, request, {}), "Stream checksum mismatch");
+}
+
+// Toggles verification at random between point lookups and range scans on one
+// projector: each request verifies exactly when the setting before it says so.
+TEST_P(
+    NimbleIndexProjectorChecksumTest,
+    randomVerifyStreamChecksumsTogglesWithLookupsAndScans) {
+  constexpr int kNumRows{200};
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, kNumRows);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  // The trailers are corrupt and the streams intact, so a verifying request
+  // fails and an unverified one reads the values.
+  ASSERT_NO_FATAL_FAILURE(corruptStreamTrailers());
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  auto projector = createProjector(subfields);
+  constexpr uint32_t kSeed{20'261'108};
+  std::mt19937 random{kSeed};
+  for (int iteration = 0; iteration < 100; ++iteration) {
+    const bool verify = random() % 2 == 0;
+    const bool scan = random() % 2 == 0;
+    // A scan reads 5 rows. Its upper key falls between two keys, so the scan
+    // reads the same rows whether the bound is inclusive or exclusive.
+    const int firstRow = static_cast<int>(random() % (kNumRows - 5));
+    const int numRows = scan ? 5 : 1;
+    SCOPED_TRACE(
+        fmt::format(
+            "seed {}, iteration {}, verify {}, scan {}, firstRow {}",
+            kSeed,
+            iteration,
+            verify,
+            scan,
+            firstRow));
+    projector->setVerifyStreamChecksums(verify);
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {
+        scan ? makeRangeLookup(
+                   rowType,
+                   {"key"},
+                   firstRow * 10,
+                   (firstRow + numRows - 1) * 10 + 5)
+             : makePointLookup(rowType, {"key"}, firstRow * 10)};
+    if (verify) {
+      NIMBLE_ASSERT_THROW(
+          project(*projector, request, {}), "Stream checksum mismatch");
+      continue;
+    }
+    std::vector<int32_t> expected(numRows);
+    for (int row = 0; row < numRows; ++row) {
+      expected[row] = (firstRow + row) * 100;
+    }
+    const auto values = projectValues(*projector, request);
+    ASSERT_EQ(values.size(), 1);
+    velox::test::assertEqualVectors(
+        vectorMaker_->rowVector(
+            {"value"}, {vectorMaker_->flatVector<int32_t>(expected)}),
+        values[0]);
+  }
 }
 
 // A trailer this reader cannot find a checksum in, such as one a newer writer
