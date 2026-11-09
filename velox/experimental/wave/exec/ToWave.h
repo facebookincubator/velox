@@ -1123,7 +1123,7 @@ class CompileState {
       const exec::ExprSet& exprSet,
       int32_t begin,
       int32_t end,
-      const std::vector<exec::IdentityProjection>* resultProjections,
+      const std::vector<IdentityProjection>* resultProjections,
       const RowTypePtr& outputType);
 
   void tryFilter(const exec::Expr& expr, const RowTypePtr& outputType);
