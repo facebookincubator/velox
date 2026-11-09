@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "folly/futures/Barrier.h"
+#include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
 
 #include "gmock/gmock-matchers.h"
@@ -40,6 +41,7 @@
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
+DECLARE_bool(velox_memory_arbitration_queue_timeout_enabled);
 
 using namespace ::testing;
 using namespace facebook::velox::common::testutil;
@@ -1895,6 +1897,87 @@ TEST_F(ArbitrationParticipantTest, arbitrationOperationWait) {
   ASSERT_EQ(scopedParticipant->stats().numRequests, 4);
 }
 
+TEST_F(ArbitrationParticipantTest, arbitrationOperationWaitTimeout) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_memory_arbitration_queue_timeout_enabled = true;
+  auto task = createTask(kMemoryCapacity);
+  const auto config = arbitrationConfig(0, 0, 0.0, 0, 0.0);
+  auto participant = ArbitrationParticipant::create(10, task->pool(), &config);
+  auto scopedParticipant = participant->lock().value();
+  const int requestBytes = 1 << 20;
+  ArbitrationOperation runningOp(
+      participant->lock().value(), requestBytes, 1'000'000'000'000UL);
+  runningOp.start();
+
+  ArbitrationOperation waitingOp(
+      participant->lock().value(), requestBytes, 500'000'000UL);
+  folly::Baton<> waitDone;
+  std::string waitError;
+  std::thread waitThread([&]() {
+    try {
+      waitingOp.start();
+    } catch (const VeloxRuntimeError& e) {
+      EXPECT_EQ(e.errorCode(), error_code::kMemArbitrationTimeout);
+      waitError = e.message();
+    }
+    waitDone.post();
+  });
+
+  // The wait ends while 'runningOp' still runs. 'runningOp' finishes either way
+  // so that a wait without a timeout ends too.
+  const bool waitEndedFirst = waitDone.try_wait_for(std::chrono::seconds(10));
+  ASSERT_TRUE(scopedParticipant->hasRunningOp());
+  const auto numWaitingOps = scopedParticipant->numWaitingOps();
+  runningOp.finish();
+  waitThread.join();
+  if (waitingOp.state() == ArbitrationOperation::State::kRunning) {
+    waitingOp.finish();
+  }
+  ASSERT_TRUE(waitEndedFirst);
+  ASSERT_EQ(numWaitingOps, 0);
+  ASSERT_THAT(
+      waitError,
+      testing::HasSubstr(
+          "Memory arbitration timed out on memory pool while waiting for the running arbitration"));
+  ASSERT_EQ(waitingOp.state(), ArbitrationOperation::State::kWaiting);
+  ASSERT_FALSE(scopedParticipant->hasRunningOp());
+  ASSERT_EQ(scopedParticipant->numWaitingOps(), 0);
+}
+
+DEBUG_ONLY_TEST_F(
+    ArbitrationParticipantTest,
+    arbitrationOperationWaitTimeoutRace) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_memory_arbitration_queue_timeout_enabled = true;
+  auto task = createTask(kMemoryCapacity);
+  const auto config = arbitrationConfig(0, 0, 0.0, 0, 0.0);
+  auto participant = ArbitrationParticipant::create(10, task->pool(), &config);
+  auto scopedParticipant = participant->lock().value();
+  const int requestBytes = 1 << 20;
+  ArbitrationOperation runningOp(
+      participant->lock().value(), requestBytes, 1'000'000'000'000UL);
+  runningOp.start();
+
+  // Finishes 'runningOp' after the wait of 'waitingOp' has timed out, which
+  // hands the participant to 'waitingOp' before it can leave the queue.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::ArbitrationParticipant::startArbitration",
+      std::function<void(const ArbitrationParticipant*)>(
+          [&](const ArbitrationParticipant* /*unused*/) {
+            runningOp.finish();
+          }));
+  ArbitrationOperation waitingOp(
+      participant->lock().value(), requestBytes, 100'000'000UL);
+  waitingOp.start();
+  ASSERT_EQ(runningOp.state(), ArbitrationOperation::State::kFinished);
+  ASSERT_EQ(waitingOp.state(), ArbitrationOperation::State::kRunning);
+  ASSERT_TRUE(waitingOp.hasTimeout());
+  ASSERT_TRUE(scopedParticipant->hasRunningOp());
+  ASSERT_EQ(scopedParticipant->numWaitingOps(), 0);
+  waitingOp.finish();
+  ASSERT_FALSE(scopedParticipant->hasRunningOp());
+}
+
 TEST_F(ArbitrationParticipantTest, arbitrationOperationFuzzerTest) {
   const int numThreads = 10;
   const int numOpsPerThread = 100;
@@ -1921,6 +2004,55 @@ TEST_F(ArbitrationParticipantTest, arbitrationOperationFuzzerTest) {
     thread.join();
   }
 
+  ASSERT_EQ(participant->stats().numRequests, numThreads * numOpsPerThread);
+}
+
+TEST_F(ArbitrationParticipantTest, arbitrationOperationWaitTimeoutFuzzerTest) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_memory_arbitration_queue_timeout_enabled = true;
+  const int numThreads = 10;
+  const int numOpsPerThread = 100;
+  auto task = createTask(kMemoryCapacity);
+  const auto config = arbitrationConfig(0, 0, 0.0, 0, 0.0);
+  auto participant = ArbitrationParticipant::create(10, task->pool(), &config);
+
+  std::atomic_int numFinishedOps{0};
+  std::atomic_int numTimedOutOps{0};
+  std::vector<std::thread> arbitrationThreads;
+  arbitrationThreads.reserve(numThreads);
+  for (int i = 0; i < numThreads; ++i) {
+    arbitrationThreads.emplace_back([&, i]() {
+      folly::Random::DefaultGenerator rng;
+      rng.seed(i);
+      for (int j = 0; j < numOpsPerThread; ++j) {
+        const auto numExecutionTimeUs = folly::Random::rand32(0, 1'000, rng);
+        const uint64_t timeoutNs = folly::Random::rand32(1, 2'000'000, rng);
+        ArbitrationOperation op(
+            participant->lock().value(), 1 << 20, timeoutNs);
+        try {
+          op.start();
+        } catch (const VeloxRuntimeError& e) {
+          EXPECT_EQ(e.errorCode(), error_code::kMemArbitrationTimeout);
+          ++numTimedOutOps;
+          continue;
+        }
+        // NOLINTNEXTLINE(facebook-hte-BadCall-sleep_for)
+        std::this_thread::sleep_for(
+            std::chrono::microseconds(numExecutionTimeUs));
+        op.finish();
+        ++numFinishedOps;
+      }
+    });
+  }
+  for (auto& thread : arbitrationThreads) {
+    thread.join();
+  }
+
+  ASSERT_GT(numFinishedOps, 0);
+  ASSERT_GT(numTimedOutOps, 0);
+  ASSERT_EQ(numFinishedOps + numTimedOutOps, numThreads * numOpsPerThread);
+  ASSERT_FALSE(participant->hasRunningOp());
+  ASSERT_EQ(participant->numWaitingOps(), 0);
   ASSERT_EQ(participant->stats().numRequests, numThreads * numOpsPerThread);
 }
 

@@ -45,6 +45,9 @@
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
+DECLARE_bool(velox_close_drivers_off_arbitration_thread);
+DECLARE_int64(velox_driver_max_arbitration_wait_ms);
+
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
 
@@ -2737,6 +2740,62 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, raceBetweenTaskPauseAndTerminate) {
   taskThread_.join();
 }
 
+DEBUG_ONLY_TEST_F(TaskPauseTest, resumeUnderArbitrationClosesDriversOffThread) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_close_drivers_off_arbitration_thread = true;
+  std::atomic_bool closedUnderArbitration{true};
+  std::atomic<std::thread::id> closeThreadId;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::closeDriversByTask",
+      std::function<void(Task*)>([&](Task* /*unused*/) {
+        closedUnderArbitration = memory::underMemoryArbitration();
+        closeThreadId = std::this_thread::get_id();
+      }));
+  testPause();
+  task_->requestAbort().wait();
+  auto allDriversClosed = task_->allDriversClosedFuture();
+  {
+    const memory::ScopedMemoryArbitrationContext arbitrationCtx{};
+    Task::resume(task_->shared_from_this());
+  }
+
+  const bool driversClosed =
+      std::move(allDriversClosed).wait(std::chrono::seconds(10));
+  taskThread_.join();
+  ASSERT_TRUE(driversClosed);
+  ASSERT_FALSE(closedUnderArbitration);
+  ASSERT_NE(closeThreadId.load(), std::this_thread::get_id());
+  ASSERT_EQ(task_->numFinishedDrivers(), 1);
+}
+
+DEBUG_ONLY_TEST_F(TaskPauseTest, resumeUnderArbitrationClosesDriversInline) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_close_drivers_off_arbitration_thread = false;
+  std::atomic_bool closedUnderArbitration{false};
+  std::atomic<std::thread::id> closeThreadId;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::closeDriversByTask",
+      std::function<void(Task*)>([&](Task* /*unused*/) {
+        closedUnderArbitration = memory::underMemoryArbitration();
+        closeThreadId = std::this_thread::get_id();
+      }));
+  testPause();
+  task_->requestAbort().wait();
+  auto allDriversClosed = task_->allDriversClosedFuture();
+  bool driversClosed{false};
+  {
+    const memory::ScopedMemoryArbitrationContext arbitrationCtx{};
+    Task::resume(task_->shared_from_this());
+    driversClosed = allDriversClosed.isReady();
+  }
+  taskThread_.join();
+
+  ASSERT_TRUE(driversClosed);
+  ASSERT_TRUE(closedUnderArbitration);
+  ASSERT_EQ(closeThreadId.load(), std::this_thread::get_id());
+  ASSERT_EQ(task_->numFinishedDrivers(), 1);
+}
+
 DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
   // Test for trivial wait on Task::pauseRequested future.
   testPause();
@@ -3657,6 +3716,83 @@ DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {
   Task::resume(task);
   ASSERT_TRUE(waitForTaskAborted(task.get()));
   task.reset();
+  waitForAllTasksToBeDeleted();
+}
+
+namespace {
+// Reports reclaimable memory and blocks in reclaim() until 'reclaimRelease' is
+// posted, which keeps the query that owns the memory pool under memory
+// arbitration.
+class BlockingMemoryReclaimer : public memory::MemoryReclaimer {
+ public:
+  BlockingMemoryReclaimer(
+      folly::Baton<>& reclaimStarted,
+      folly::Baton<>& reclaimRelease)
+      : memory::MemoryReclaimer(0),
+        reclaimStarted_(reclaimStarted),
+        reclaimRelease_(reclaimRelease) {}
+
+  bool reclaimableBytes(
+      const memory::MemoryPool& /*pool*/,
+      uint64_t& reclaimableBytes) const override {
+    reclaimableBytes = 1;
+    return true;
+  }
+
+  uint64_t reclaim(
+      memory::MemoryPool* /*pool*/,
+      uint64_t /*targetBytes*/,
+      uint64_t /*maxWaitMs*/,
+      memory::MemoryReclaimer::Stats& /*stats*/) override {
+    reclaimStarted_.post();
+    reclaimRelease_.wait();
+    return 0;
+  }
+
+ private:
+  folly::Baton<>& reclaimStarted_;
+  folly::Baton<>& reclaimRelease_;
+};
+} // namespace
+
+TEST_F(TaskTest, driverWaitForArbitrationIsBounded) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_driver_max_arbitration_wait_ms = 500;
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  folly::Baton<> reclaimStarted;
+  folly::Baton<> reclaimRelease;
+  auto blockerPool = queryCtx->pool()->addLeafChild(
+      "blocker",
+      true,
+      std::make_unique<BlockingMemoryReclaimer>(
+          reclaimStarted, reclaimRelease));
+  std::thread arbitrationThread([&]() {
+    memory::MemoryReclaimer::Stats stats;
+    queryCtx->pool()->reclaim(1, 0, stats);
+  });
+  reclaimStarted.wait();
+  EXPECT_TRUE(queryCtx->testingUnderArbitration());
+
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  folly::Baton<> queryDone;
+  std::thread queryThread([&]() {
+    AssertQueryBuilder(PlanBuilder().values({data}).planNode())
+        .queryCtx(queryCtx)
+        .assertResults(data);
+    queryDone.post();
+  });
+
+  // The query's drivers stop waiting for the arbitration after the limit and
+  // finish while it still runs. The arbitration ends either way so that a wait
+  // without a limit ends too.
+  const bool queryDoneUnderArbitration =
+      queryDone.try_wait_for(std::chrono::seconds(30));
+  const bool underArbitration = queryCtx->testingUnderArbitration();
+  reclaimRelease.post();
+  arbitrationThread.join();
+  queryThread.join();
+  ASSERT_TRUE(queryDoneUnderArbitration);
+  ASSERT_TRUE(underArbitration);
   waitForAllTasksToBeDeleted();
 }
 

@@ -410,7 +410,13 @@ SharedArbitrator::~SharedArbitrator() {
 void SharedArbitrator::startArbitration(ArbitrationOperation* op) {
   updateArbitrationRequestStats();
   ++numRunning_;
-  op->start();
+  try {
+    op->start();
+  } catch (const std::exception&) {
+    --numRunning_;
+    updateArbitrationFailureStats();
+    throw;
+  }
 }
 
 void SharedArbitrator::finishArbitration(ArbitrationOperation* op) {

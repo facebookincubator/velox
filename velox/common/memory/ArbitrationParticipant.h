@@ -19,11 +19,14 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 
 #include <folly/stop_watch.h>
+#include <gflags/gflags.h>
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/Memory.h"
+
+DECLARE_bool(velox_memory_arbitration_queue_timeout_enabled);
 
 namespace facebook::velox::memory {
 
@@ -250,7 +253,9 @@ class ArbitrationParticipant
   /// Invoked to start arbitration operation 'op'. The operation needs to wait
   /// for the prior arbitration operations to finish first before executing to
   /// ensure the serialized execution of arbitration operations from the same
-  /// query memory pool.
+  /// query memory pool. If 'velox_memory_arbitration_queue_timeout_enabled' is
+  /// set, throws a memory arbitration timeout error when 'op' times out before
+  /// its turn comes.
   void startArbitration(ArbitrationOperation* op);
 
   /// Invoked by a finished arbitration operation 'op' to kick off the next

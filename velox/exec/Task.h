@@ -17,6 +17,7 @@
 
 #include <folly/container/IntrusiveList.h>
 #include <folly/stop_watch.h>
+#include <gflags/gflags.h>
 
 #include "velox/common/base/SkewedPartitionBalancer.h"
 #include "velox/core/PlanFragment.h"
@@ -31,6 +32,8 @@
 #include "velox/exec/TaskStructs.h"
 #include "velox/exec/trace/TraceCtx.h"
 #include "velox/vector/ComplexVector.h"
+
+DECLARE_bool(velox_close_drivers_off_arbitration_thread);
 
 namespace facebook::velox::exec {
 
@@ -296,7 +299,11 @@ class Task : public std::enable_shared_from_this<Task> {
   RowVectorPtr next(ContinueFuture* future = nullptr);
 
   /// Resumes execution of 'self' after a successful pause. All 'drivers_' must
-  /// be off-thread and there must be no 'exception_'
+  /// be off-thread and there must be no 'exception_'. If 'self' has terminated,
+  /// closes its off-thread drivers instead. If
+  /// 'velox_close_drivers_off_arbitration_thread' is set and the caller is
+  /// under memory arbitration, they are closed on the query executor, possibly
+  /// after this returns.
   static void resume(std::shared_ptr<Task> self);
 
   /// Sets the (so far) max split sequence id, so all splits with sequence id
@@ -1234,6 +1241,13 @@ class Task : public std::enable_shared_from_this<Task> {
   // one at a time with Driver::closeByTask(). Clears each driver's slot as soon
   // as that driver has closed, so taskStats() stops reading its operators.
   void closeDriversByTask(const std::vector<std::shared_ptr<Driver>>& drivers);
+
+  // Closes 'drivers', which resume() has terminated off thread. If
+  // 'velox_close_drivers_off_arbitration_thread' is set and the calling thread
+  // is under memory arbitration, closes them on the query executor instead, so
+  // the arbitration does not wait for the close.
+  void closeTerminatedDrivers(
+      const std::vector<std::shared_ptr<Driver>>& drivers);
 
   // Returns true if Task is in kRunning state, but all output drivers finished
   // processing and all output has been consumed. In other words, returns true

@@ -115,6 +115,31 @@ DEFINE_bool(
 
 DEFINE_bool(velox_memory_use_hugepages, true, "Use explicit huge pages");
 
+// Used in velox/common/memory/ArbitrationParticipant.cpp
+DEFINE_bool(
+    velox_memory_arbitration_queue_timeout_enabled,
+    false,
+    "If true, a memory arbitration request that waits for a running "
+    "arbitration of the same query fails with a timeout error once its max "
+    "arbitration time has passed. If false, it waits until the running "
+    "arbitration finishes.");
+
+// Used in velox/exec/Task.cpp
+DEFINE_bool(
+    velox_close_drivers_off_arbitration_thread,
+    false,
+    "If true, when memory arbitration resumes a terminated task, the task's "
+    "remaining drivers are closed on the query executor instead of on the "
+    "arbitration thread.");
+
+// Used in velox/exec/Driver.cpp
+DEFINE_int64(
+    velox_driver_max_arbitration_wait_ms,
+    0,
+    "Max time in milliseconds that a driver waits off thread for a running "
+    "memory arbitration of its query, counted from the start of that "
+    "arbitration. 0 means no limit.");
+
 DEFINE_int32(
     cache_prefetch_min_pct,
     80,

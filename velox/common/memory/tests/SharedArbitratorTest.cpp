@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <re2/re2.h>
 #include <deque>
 
+#include <folly/OperationCancelled.h>
+#include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <functional>
 #include <optional>
@@ -43,6 +46,8 @@
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
+DECLARE_bool(velox_memory_arbitration_queue_timeout_enabled);
+DECLARE_bool(velox_close_drivers_off_arbitration_thread);
 
 using namespace ::testing;
 using namespace facebook::velox::common::testutil;
@@ -80,6 +85,8 @@ using ReclaimInjectionCallback = std::function<bool(
     memory::MemoryPool* pool,
     uint64_t targetByte,
     MemoryReclaimer::Stats& stats)>;
+// Invoked by the operator's close() after it has freed its allocations.
+using CloseCallback = std::function<void(Operator* op)>;
 
 // Custom operator for the custom factory.
 class FakeMemoryOperator : public Operator {
@@ -90,11 +97,13 @@ class FakeMemoryOperator : public Operator {
       core::PlanNodePtr node,
       bool canReclaim,
       AllocationCallback allocationCb,
-      ReclaimInjectionCallback reclaimCb)
+      ReclaimInjectionCallback reclaimCb,
+      CloseCallback closeCb)
       : Operator(ctx, node->outputType(), id, node->id(), "FakeMemoryNode"),
         canReclaim_(canReclaim),
         allocationCb_(std::move(allocationCb)),
-        reclaimCb_(std::move(reclaimCb)) {}
+        reclaimCb_(std::move(reclaimCb)),
+        closeCb_(std::move(closeCb)) {}
 
   ~FakeMemoryOperator() override {
     clear();
@@ -134,6 +143,9 @@ class FakeMemoryOperator : public Operator {
 
   void close() override {
     clear();
+    if (closeCb_ != nullptr) {
+      closeCb_(this);
+    }
     Operator::close();
   }
 
@@ -176,6 +188,7 @@ class FakeMemoryOperator : public Operator {
   const bool canReclaim_;
   const AllocationCallback allocationCb_;
   const ReclaimInjectionCallback reclaimCb_{nullptr};
+  const CloseCallback closeCb_{nullptr};
 
   std::atomic<size_t> totalBytes_{0};
   std::vector<TestAllocation> allocations_;
@@ -192,7 +205,13 @@ class FakeMemoryOperatorFactory : public Operator::PlanNodeTranslator {
       const core::PlanNodePtr& node) override {
     if (std::dynamic_pointer_cast<const FakeMemoryNode>(node)) {
       return std::make_unique<FakeMemoryOperator>(
-          ctx, id, node, canReclaim_, allocationCallback_, reclaimCallback_);
+          ctx,
+          id,
+          node,
+          canReclaim_,
+          allocationCallback_,
+          reclaimCallback_,
+          closeCallback_);
     }
     return nullptr;
   }
@@ -220,10 +239,15 @@ class FakeMemoryOperatorFactory : public Operator::PlanNodeTranslator {
     reclaimCallback_ = std::move(reclaimCb);
   }
 
+  void setCloseCallback(CloseCallback closeCb) {
+    closeCallback_ = std::move(closeCb);
+  }
+
  private:
   bool canReclaim_{true};
   AllocationCallback allocationCallback_{nullptr};
   ReclaimInjectionCallback reclaimCallback_{nullptr};
+  CloseCallback closeCallback_{nullptr};
   uint32_t maxDrivers_{1};
 };
 
@@ -990,6 +1014,154 @@ DEBUG_ONLY_TEST_P(
   fakeAllocation.free();
   task.reset();
   waitForAllTasksToBeDeleted();
+}
+
+// A task terminates while a memory arbitration reclaims from it, either by a
+// cancel or by a failed reclaim. Its operator's close waits for another thread
+// that allocates from the same query memory pool, which needs memory
+// arbitration. The close must run after the arbitration, not inside it.
+DEBUG_ONLY_TEST_P(
+    SharedArbitrationTestWithParallelExecutionModeOnly,
+    closeTaskTerminatedDuringReclaim) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_close_drivers_off_arbitration_thread = true;
+  // Bounds the wait of a close inside the arbitration so that a regression
+  // fails instead of hanging.
+  FLAGS_velox_memory_arbitration_queue_timeout_enabled = true;
+  fuzzerOpts_.vectorSize = 32;
+  fuzzerOpts_.stringLength = 32;
+  const int numVectors = 10;
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(numVectors);
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(makeRowVector(rowType_, fuzzerOpts_));
+  }
+  SCOPE_EXIT {
+    fakeOperatorFactory_->setAllocationCallback(nullptr);
+    fakeOperatorFactory_->setReclaimCallback(nullptr);
+    fakeOperatorFactory_->setCloseCallback(nullptr);
+  };
+
+  for (const bool reclaimFails : {false, true}) {
+    SCOPED_TRACE(fmt::format("reclaimFails: {}", reclaimFails));
+    memoryManager_ = createMemoryManager(
+        kMemoryCapacity,
+        /*memoryPoolInitCapacity=*/0,
+        /*maxReclaimWaitMs=*/5'000);
+    arbitrator_ = static_cast<SharedArbitrator*>(memoryManager_->arbitrator());
+    std::shared_ptr<core::QueryCtx> queryCtx =
+        newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
+    auto fakeLeafPool = queryCtx->pool()->addLeafChild("fakeLeaf");
+    TestAllocation fakeAllocation{
+        fakeLeafPool.get(),
+        fakeLeafPool->allocate(kMemoryCapacity / 2),
+        kMemoryCapacity / 2};
+
+    std::atomic<Task*> task{nullptr};
+    std::atomic_bool operatorAllocated{false};
+    folly::EventCount operatorAllocationWait;
+    fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
+      if (operatorAllocated.exchange(true)) {
+        return TestAllocation{};
+      }
+      task = op->operatorCtx()->task().get();
+      TestAllocation allocation{op->pool(), op->pool()->allocate(MB), MB};
+      operatorAllocationWait.notifyAll();
+      return allocation;
+    });
+    const std::string reclaimError{"Injected reclaim failure"};
+    fakeOperatorFactory_->setReclaimCallback(
+        [&](MemoryPool* /*pool*/,
+            uint64_t /*targetBytes*/,
+            MemoryReclaimer::Stats& /*stats*/) {
+          if (reclaimFails) {
+            VELOX_FAIL(reclaimError);
+          }
+          task.load()->requestCancel();
+          return false;
+        });
+    std::atomic_bool closeChecked{false};
+    std::atomic_bool closedUnderArbitration{true};
+    std::atomic_bool allocationTimedOut{true};
+    fakeOperatorFactory_->setCloseCallback([&](Operator* op) {
+      if (closeChecked.exchange(true)) {
+        return;
+      }
+      closedUnderArbitration = underMemoryArbitration();
+      // Needs more than the free capacity of the query memory pool, so the
+      // allocation waits for the arbitration of that pool.
+      auto* queryPool = op->pool()->root();
+      const int64_t allocationBytes =
+          std::max<int64_t>(
+              queryPool->capacity() - queryPool->reservedBytes(), 0) +
+          8 * MB;
+      std::thread allocationThread([&, pool = op->pool()]() {
+        try {
+          void* buffer = pool->allocate(allocationBytes);
+          pool->free(buffer, allocationBytes);
+          allocationTimedOut = false;
+        } catch (const VeloxRuntimeError& e) {
+          allocationTimedOut =
+              e.errorCode() == error_code::kMemArbitrationTimeout;
+        }
+      });
+      allocationThread.join();
+    });
+    // Keeps the query running until the test triggers the arbitration.
+    std::atomic_bool arbitrationTriggered{false};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Values::getOutput",
+        std::function<void(const exec::Values*)>(
+            [&](const exec::Values* /*unused*/) {
+              if (!arbitrationTriggered) {
+                // NOLINTNEXTLINE(facebook-hte-BadCall-sleep_for)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+              }
+            }));
+
+    std::thread queryThread([&]() {
+      try {
+        newQueryBuilder()
+            .queryCtx(queryCtx)
+            .plan(
+                PlanBuilder()
+                    .values(vectors, false, 1'000)
+                    .addNode(
+                        [](const std::string& id, core::PlanNodePtr input) {
+                          return std::make_shared<FakeMemoryNode>(id, input);
+                        })
+                    .planNode())
+            .copyResults(pool());
+        ADD_FAILURE() << "The query must fail";
+      } catch (const folly::OperationCancelled&) {
+        EXPECT_FALSE(reclaimFails);
+      } catch (const VeloxException& e) {
+        EXPECT_TRUE(reclaimFails);
+        EXPECT_THAT(e.message(), testing::HasSubstr(reclaimError));
+      }
+    });
+
+    operatorAllocationWait.await([&]() { return operatorAllocated.load(); });
+    // Exceeds the query's max capacity, so the arbitration reclaims from the
+    // query's task.
+    try {
+      fakeLeafPool->allocate(kMemoryCapacity * 2 / 3);
+      ADD_FAILURE() << "The allocation must fail";
+    } catch (const VeloxRuntimeError& e) {
+      EXPECT_EQ(
+          e.errorCode(),
+          reclaimFails ? error_code::kMemAborted.c_str()
+                       : error_code::kMemCapExceeded.c_str());
+    }
+    arbitrationTriggered = true;
+    queryThread.join();
+    fakeAllocation.free();
+    waitForAllTasksToBeDeleted();
+
+    ASSERT_TRUE(closeChecked);
+    ASSERT_FALSE(closedUnderArbitration);
+    ASSERT_FALSE(allocationTimedOut);
+  }
 }
 
 DEBUG_ONLY_TEST_P(

@@ -1555,7 +1555,7 @@ void Task::resume(std::shared_ptr<Task> self) {
   SCOPE_EXIT {
     // Get the stats and free the resources of Drivers that were not on
     // thread.
-    self->closeDriversByTask(offThreadDrivers);
+    self->closeTerminatedDrivers(offThreadDrivers);
     // Fulfill resume futures.
     for (auto& promise : resumePromises) {
       promise.setValue();
@@ -2722,9 +2722,35 @@ bool Task::allDriversClosedLocked() const {
           drivers_, [](const auto& driver) { return driver != nullptr; });
 }
 
+void Task::closeTerminatedDrivers(
+    const std::vector<std::shared_ptr<Driver>>& drivers) {
+  if (drivers.empty()) {
+    return;
+  }
+  // An operator close can wait for threads that allocate from this query's
+  // memory pool. Under memory arbitration those allocations wait for the
+  // running arbitration, so closing the drivers here would wait for itself.
+  auto* executor = queryCtx_->executor();
+  if (FLAGS_velox_close_drivers_off_arbitration_thread &&
+      memory::underMemoryArbitration() && executor != nullptr) {
+    try {
+      executor->add([self = shared_from_this(), drivers]() {
+        self->closeDriversByTask(drivers);
+      });
+      return;
+    } catch (const std::exception& e) {
+      LOG(WARNING) << "Closing the drivers of task " << taskId_
+                   << " inline after failing to schedule their close: "
+                   << e.what();
+    }
+  }
+  closeDriversByTask(drivers);
+}
+
 void Task::closeDriversByTask(
     const std::vector<std::shared_ptr<Driver>>& drivers) {
   for (const auto& driver : drivers) {
+    TestValue::adjust("facebook::velox::exec::Task::closeDriversByTask", this);
     driver->closeByTask();
     EventCompletionNotifier allDriversClosedNotifier;
     {

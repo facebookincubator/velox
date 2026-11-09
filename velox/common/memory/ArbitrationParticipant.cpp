@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/ArbitrationParticipant.h"
+#include <algorithm>
 #include <mutex>
 
 #include "velox/common/base/Exceptions.h"
@@ -231,9 +232,36 @@ void ArbitrationParticipant::startArbitration(ArbitrationOperation* op) {
     }
   }
 
-  if (waitPromise.valid()) {
-    waitPromise.wait();
+  if (!waitPromise.valid()) {
+    return;
   }
+  if (!FLAGS_velox_memory_arbitration_queue_timeout_enabled) {
+    waitPromise.wait();
+    return;
+  }
+  if (std::move(waitPromise)
+          .wait(std::chrono::microseconds(op->timeoutNs() / 1'000))) {
+    return;
+  }
+  TestValue::adjust(
+      "facebook::velox::memory::ArbitrationParticipant::startArbitration",
+      this);
+  {
+    std::lock_guard<std::mutex> l(stateLock_);
+    const auto it = std::ranges::find(waitOps_, op, &WaitOp::op);
+    if (it == waitOps_.end()) {
+      // finishArbitration() made 'op' the running operation as its wait timed
+      // out. 'op' runs and fails its own timeout check.
+      VELOX_CHECK_EQ(static_cast<void*>(runningOp_), static_cast<void*>(op));
+      return;
+    }
+    waitOps_.erase(it);
+  }
+  VELOX_MEM_ARBITRATION_TIMEOUT(
+      fmt::format(
+          "Memory arbitration timed out on memory pool while waiting for the running arbitration: {} after waiting {}",
+          name(),
+          succinctNanos(op->executionTimeNs())));
 }
 
 void ArbitrationParticipant::finishArbitration(ArbitrationOperation* op) {

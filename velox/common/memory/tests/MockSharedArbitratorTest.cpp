@@ -21,6 +21,7 @@
 #include <re2/re2.h>
 #include <deque>
 #include <vector>
+#include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -36,6 +37,7 @@
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
+DECLARE_bool(velox_memory_arbitration_queue_timeout_enabled);
 
 using namespace ::testing;
 using namespace facebook::velox::common::testutil;
@@ -3380,6 +3382,76 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, localArbitrationQueueTimeout) {
 
   // Nothing needs to reclaim as the arbitration has timed out.
   ASSERT_EQ(task->capacity(), 0);
+}
+
+DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, queuedLocalArbitrationTimeout) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_memory_arbitration_queue_timeout_enabled = true;
+  const int64_t memoryCapacity = 256 * MB;
+  setupMemory(
+      {.memoryCapacity = memoryCapacity,
+       .memoryReclaimThreadsHwMultiplier = 1.0,
+       .arbitrationTimeoutNs = 1'000'000'000UL});
+  std::shared_ptr<MockTask> task = addTask(memoryCapacity);
+  auto* runOp = task->addMemoryOp(true);
+  auto* waitOp = task->addMemoryOp(true);
+
+  std::atomic_bool blockArbitration{true};
+  std::atomic_bool arbitrationBlocked{false};
+  folly::EventCount arbitrationBlockedWait;
+  std::atomic_bool arbitrationResumed{false};
+  folly::EventCount arbitrationResumeWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::SharedArbitrator::growCapacity",
+      std::function<void(const SharedArbitrator*)>(
+          ([&](const SharedArbitrator* /*unused*/) {
+            if (!blockArbitration.exchange(false)) {
+              return;
+            }
+            arbitrationBlocked = true;
+            arbitrationBlockedWait.notifyAll();
+            arbitrationResumeWait.await(
+                [&]() { return arbitrationResumed.load(); });
+          })));
+
+  std::thread runThread([&]() {
+    // The blocked arbitration also outlives its own max arbitration time.
+    VELOX_ASSERT_THROW(
+        runOp->allocate(memoryCapacity / 2),
+        "Memory arbitration timed out on memory pool");
+  });
+  arbitrationBlockedWait.await([&]() { return arbitrationBlocked.load(); });
+
+  folly::Baton<> waitDone;
+  std::string waitError;
+  std::thread waitThread([&]() {
+    try {
+      waitOp->allocate(memoryCapacity / 4);
+    } catch (const VeloxRuntimeError& e) {
+      EXPECT_EQ(e.errorCode(), error_code::kMemArbitrationTimeout);
+      waitError = e.message();
+    }
+    waitDone.post();
+  });
+
+  // The queued request fails while the arbitration ahead of it is blocked. The
+  // blocked arbitration resumes either way so that the test cannot hang.
+  const bool waitEndedFirst = waitDone.try_wait_for(std::chrono::seconds(30));
+  const auto statsWhileBlocked = arbitrator_->stats();
+  arbitrationResumed = true;
+  arbitrationResumeWait.notifyAll();
+  runThread.join();
+  waitThread.join();
+
+  ASSERT_TRUE(waitEndedFirst);
+  ASSERT_THAT(
+      waitError,
+      testing::HasSubstr(
+          "Memory arbitration timed out on memory pool while waiting for the running arbitration"));
+  ASSERT_EQ(statsWhileBlocked.numRunning, 1);
+  ASSERT_EQ(statsWhileBlocked.numFailures, 1);
+  ASSERT_EQ(arbitrator_->stats().numRunning, 0);
+  ASSERT_EQ(arbitrator_->stats().numFailures, 2);
 }
 
 TEST_F(MockSharedArbitrationTest, minReclaimBytes) {

@@ -15,9 +15,12 @@
  */
 
 #include "velox/core/QueryCtx.h"
+#include <optional>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SpillConfig.h"
+#include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/time/Timer.h"
 
 namespace facebook::velox::core {
 
@@ -234,10 +237,31 @@ uint64_t QueryCtx::MemoryReclaimer::reclaim(
   return memory::MemoryReclaimer::reclaim(pool, targetBytes, maxWaitMs, stats);
 }
 
-bool QueryCtx::checkUnderArbitration(ContinueFuture* future) {
+bool QueryCtx::checkUnderArbitration(
+    ContinueFuture* future,
+    uint64_t maxWaitMs) {
   VELOX_CHECK_NOT_NULL(future);
   if (!underArbitration_) {
     return false;
+  }
+  // The drivers that stopped waiting call this on every step until the
+  // arbitration ends, so they find out without taking 'mutex_'.
+  if (maxWaitMs != 0) {
+    // Read before the clock: a later arbitration can start meanwhile.
+    const uint64_t arbitrationStartTimeMs = arbitrationStartTimeMs_;
+    const uint64_t arbitrationTimeMs =
+        SteadyTime::now<std::chrono::milliseconds>() - arbitrationStartTimeMs;
+    if (arbitrationTimeMs >= maxWaitMs) {
+      // A plain read first, so that every driver step after the first log
+      // only reads the flag.
+      if (!arbitrationWaitLimitLogged_.load(std::memory_order_relaxed) &&
+          !arbitrationWaitLimitLogged_.exchange(true)) {
+        LOG(WARNING) << "Drivers of query " << queryId_
+                     << " stop waiting for its memory arbitration after "
+                     << succinctMillis(arbitrationTimeMs);
+      }
+      return false;
+    }
   }
 
   std::lock_guard<std::mutex> l(mutex_);
@@ -246,8 +270,28 @@ bool QueryCtx::checkUnderArbitration(ContinueFuture* future) {
     VELOX_CHECK(arbitrationPromises_.empty());
     return false;
   }
+  std::optional<std::chrono::milliseconds> remainingWait;
+  if (maxWaitMs != 0) {
+    const uint64_t arbitrationTimeMs =
+        SteadyTime::now<std::chrono::milliseconds>() - arbitrationStartTimeMs_;
+    if (arbitrationTimeMs >= maxWaitMs) {
+      return false;
+    }
+    remainingWait = std::chrono::milliseconds(maxWaitMs - arbitrationTimeMs);
+  }
   arbitrationPromises_.emplace_back("QueryCtx::waitArbitration");
-  *future = arbitrationPromises_.back().getSemiFuture();
+  auto waitFuture = arbitrationPromises_.back().getSemiFuture();
+  if (!remainingWait.has_value()) {
+    *future = std::move(waitFuture);
+    return true;
+  }
+  // A timeout resumes the driver like a finished arbitration does. A future
+  // that completes with an error would fail the driver's task instead.
+  *future = std::move(waitFuture)
+                .within(remainingWait.value())
+                .deferError(
+                    folly::tag_t<folly::FutureTimeout>{},
+                    [](const folly::FutureTimeout&) {});
   return true;
 }
 
@@ -255,6 +299,10 @@ void QueryCtx::startArbitration() {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(!underArbitration_);
   VELOX_CHECK(arbitrationPromises_.empty());
+  // Before 'underArbitration_', which checkUnderArbitration() reads first
+  // without the lock.
+  arbitrationStartTimeMs_ = SteadyTime::now<std::chrono::milliseconds>();
+  arbitrationWaitLimitLogged_ = false;
   underArbitration_ = true;
 }
 

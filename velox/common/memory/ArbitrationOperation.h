@@ -57,7 +57,9 @@ class ArbitrationOperation {
   /// Invoked to start arbitration execution on the arbitration participant. The
   /// latter ensures the serialized execution of arbitration operations from the
   /// same query with one at a time. So this method blocks until all the prior
-  /// arbitration operations finish.
+  /// arbitration operations finish. With
+  /// 'velox_memory_arbitration_queue_timeout_enabled', it throws a memory
+  /// arbitration timeout error instead if this operation times out first.
   void start();
 
   /// Invoked to finish arbitration execution on the arbitration participant. It

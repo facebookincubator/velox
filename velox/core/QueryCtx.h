@@ -385,8 +385,11 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   /// Checks if the associated query is under memory arbitration or not. The
   /// function returns true if it is and set future which is fulfilled when the
-  /// memory arbitration finishes.
-  bool checkUnderArbitration(ContinueFuture* future);
+  /// memory arbitration finishes. If 'maxWaitMs' is not zero, the future is
+  /// also fulfilled once the running arbitration has lasted 'maxWaitMs', and
+  /// the function returns false after that until the next arbitration starts.
+  /// 'future' is set only when the function returns true.
+  bool checkUnderArbitration(ContinueFuture* future, uint64_t maxWaitMs);
 
   /// Updates the aggregated spill bytes of this query, and throws if exceeds
   /// the max spill bytes limit.
@@ -585,6 +588,12 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   // Indicates if this query is under memory arbitration or not.
   std::atomic_bool underArbitration_{false};
   std::vector<ContinuePromise> arbitrationPromises_;
+  // Steady clock time in milliseconds when the running memory arbitration
+  // started. Set under 'mutex_', read with or without it.
+  std::atomic<uint64_t> arbitrationStartTimeMs_{0};
+  // True once the running memory arbitration has logged that drivers stopped
+  // waiting for it.
+  std::atomic_bool arbitrationWaitLimitLogged_{false};
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   const CredentialKeys credentialKeys_;
   // Callbacks invoked before destruction to clean up external resources.

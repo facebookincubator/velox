@@ -18,6 +18,8 @@
 #include <atomic>
 #include <thread>
 
+#include <folly/synchronization/Baton.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 
@@ -111,6 +113,108 @@ TEST_F(QueryCtxTest, withSysRootPool) {
   uint64_t reclaimableBytes{0};
   ASSERT_FALSE(
       queryPool->reclaimer()->reclaimableBytes(*queryPool, reclaimableBytes));
+}
+
+namespace {
+// Reports reclaimable memory and blocks in reclaim() until 'reclaimRelease' is
+// posted, which keeps the query that owns the memory pool under memory
+// arbitration.
+class BlockingMemoryReclaimer : public memory::MemoryReclaimer {
+ public:
+  BlockingMemoryReclaimer(
+      folly::Baton<>& reclaimStarted,
+      folly::Baton<>& reclaimRelease)
+      : memory::MemoryReclaimer(0),
+        reclaimStarted_(reclaimStarted),
+        reclaimRelease_(reclaimRelease) {}
+
+  bool reclaimableBytes(
+      const memory::MemoryPool& /*pool*/,
+      uint64_t& reclaimableBytes) const override {
+    reclaimableBytes = 1;
+    return true;
+  }
+
+  uint64_t reclaim(
+      memory::MemoryPool* /*pool*/,
+      uint64_t /*targetBytes*/,
+      uint64_t /*maxWaitMs*/,
+      memory::MemoryReclaimer::Stats& /*stats*/) override {
+    reclaimStarted_.post();
+    reclaimRelease_.wait();
+    return 0;
+  }
+
+ private:
+  folly::Baton<>& reclaimStarted_;
+  folly::Baton<>& reclaimRelease_;
+};
+} // namespace
+
+TEST_F(QueryCtxTest, arbitrationWaitLimit) {
+  auto queryCtx = QueryCtx::create();
+  folly::Baton<> reclaimStarted;
+  folly::Baton<> reclaimRelease;
+  auto blockerPool = queryCtx->pool()->addLeafChild(
+      "blocker",
+      true,
+      std::make_unique<BlockingMemoryReclaimer>(
+          reclaimStarted, reclaimRelease));
+  const auto startArbitration = [&]() {
+    return std::thread([&]() {
+      memory::MemoryReclaimer::Stats stats;
+      queryCtx->pool()->reclaim(1, 0, stats);
+    });
+  };
+
+  auto arbitrationThread = startArbitration();
+  reclaimStarted.wait();
+  ContinueFuture unlimitedWait = ContinueFuture::makeEmpty();
+  const bool unlimitedWaitUnderArbitration =
+      queryCtx->checkUnderArbitration(&unlimitedWait, 0);
+  ContinueFuture limitedWait = ContinueFuture::makeEmpty();
+  const bool limitedWaitUnderArbitration =
+      queryCtx->checkUnderArbitration(&limitedWait, 500);
+
+  // The limited wait ends with a value while the arbitration still runs. Once
+  // the arbitration has lasted the limit, callers stop waiting for it. The
+  // arbitration ends either way so that the test cannot hang.
+  bool limitedWaitHasValue{false};
+  if (limitedWaitUnderArbitration) {
+    try {
+      limitedWaitHasValue =
+          std::move(limitedWait).getTry(std::chrono::seconds(30)).hasValue();
+    } catch (const folly::FutureTimeout&) {
+    }
+  }
+  const bool unlimitedWaitDone = unlimitedWait.isReady();
+  ContinueFuture lateWait = ContinueFuture::makeEmpty();
+  const bool lateWaitUnderArbitration =
+      queryCtx->checkUnderArbitration(&lateWait, 1);
+  reclaimRelease.post();
+  arbitrationThread.join();
+  ASSERT_TRUE(unlimitedWaitUnderArbitration);
+  ASSERT_TRUE(limitedWaitUnderArbitration);
+  ASSERT_TRUE(limitedWaitHasValue);
+  ASSERT_FALSE(unlimitedWaitDone);
+  ASSERT_FALSE(lateWaitUnderArbitration);
+  ASSERT_FALSE(lateWait.valid());
+  ASSERT_TRUE(unlimitedWait.isReady());
+  ASSERT_FALSE(queryCtx->testingUnderArbitration());
+
+  // The limit counts from the start of each arbitration: the first one has
+  // lasted more than 400ms, the second one has just started.
+  reclaimStarted.reset();
+  reclaimRelease.reset();
+  arbitrationThread = startArbitration();
+  reclaimStarted.wait();
+  ContinueFuture nextWait = ContinueFuture::makeEmpty();
+  const bool nextWaitUnderArbitration =
+      queryCtx->checkUnderArbitration(&nextWait, 400);
+  reclaimRelease.post();
+  arbitrationThread.join();
+  ASSERT_TRUE(nextWaitUnderArbitration);
+  ASSERT_TRUE(std::move(nextWait).wait(std::chrono::seconds(30)));
 }
 
 // Registry overrides follow a derived QueryCtx, and destination-only entries

@@ -25,6 +25,7 @@
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
 #include <folly/stop_watch.h>
+#include <gflags/gflags.h>
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Portability.h"
@@ -34,6 +35,8 @@
 #include "velox/exec/BlockingReason.h"
 #include "velox/exec/PartitionedOutputFactory.h"
 #include "velox/exec/trace/TraceCtx.h"
+
+DECLARE_int64(velox_driver_max_arbitration_wait_ms);
 
 namespace facebook::velox::exec {
 
@@ -442,9 +445,12 @@ class Driver : public std::enable_shared_from_this<Driver> {
     return enableOperatorBatchSizeStats_;
   }
 
-  /// Checks if the associated query is under memory arbitration or not. The
-  /// function returns true if it is and set future which is fulfilled when the
-  /// memory arbitration finishes.
+  /// Checks if the driver has to wait for a memory arbitration of the
+  /// associated query. Returns true and sets 'future', which is fulfilled when
+  /// the arbitration finishes, or when it has lasted
+  /// 'velox_driver_max_arbitration_wait_ms' if that flag is positive. Returns
+  /// false if no arbitration is running, or if the running one has lasted that
+  /// long.
   bool checkUnderArbitration(ContinueFuture* future);
 
   /// Accumulates blocked time for driver-level lifecycle tracking.

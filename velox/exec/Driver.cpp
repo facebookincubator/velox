@@ -516,7 +516,8 @@ bool Driver::shouldYield() const {
 }
 
 bool Driver::checkUnderArbitration(ContinueFuture* future) {
-  return task()->queryCtx()->checkUnderArbitration(future);
+  return task()->queryCtx()->checkUnderArbitration(
+      future, std::max<int64_t>(0, FLAGS_velox_driver_max_arbitration_wait_ms));
 }
 
 namespace {
@@ -637,7 +638,9 @@ StopReason Driver::runInternal(
           // until it finishes. Instead of blocking the driver thread to wait
           // for the current running arbitration, it is more efficient
           // system-wide to let driver go off thread for the other queries which
-          // have free memory capacity to run during the time.
+          // have free memory capacity to run during the time. A non-zero
+          // 'velox_driver_max_arbitration_wait_ms' bounds the wait so that a
+          // stuck arbitration does not stop the query's drivers forever.
           blockingReason_ = BlockingReason::kWaitForArbitration;
           return blockDriver(self, i, std::move(future), blockingState, guard);
         }
