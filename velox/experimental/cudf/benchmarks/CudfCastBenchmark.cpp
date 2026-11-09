@@ -354,13 +354,15 @@ class CastBenchmark {
   }
 
   unsigned run(int mode, int iterations) {
+    folly::BenchmarkSuspender suspender;
     if (mode == 0) {
-      // Match ExpressionBenchmarkBuilder's CPU buffer reuse and flattening.
-      // EvalCtx/SelectivityVector construction stays outside the timer; the
-      // first output allocation, prepareForReuse and final destruction stay in.
       std::vector<VectorPtr> results(1);
       for (int i = 0; i < iterations; ++i) {
+        suspender.dismiss();
         cpu_->eval(rows_, *evalCtx_, results);
+        suspender.rehire();
+
+        // Reuse CPU output buffers, keeping flattening and preparation untimed.
         BaseVector::flattenVector(results[0]);
         folly::doNotOptimizeAway(results[0]);
         results[0]->prepareForReuse();
@@ -368,11 +370,14 @@ class CastBenchmark {
     } else {
       for (int i = 0; i < iterations; ++i) {
         {
+          suspender.dismiss();
           auto result = gpu_[mode - 1]->eval(views_, stream_, mr_);
+          // Wait for evaluation to finish before stopping the timer.
+          stream_.sync();
+          suspender.rehire();
           folly::doNotOptimizeAway(result);
         }
-        // Includes materialized output allocation, destruction and completion
-        // of asynchronous frees. No input/output transfer is inside this loop.
+        // Destroy the output and finish asynchronous frees outside the timer.
         stream_.sync();
       }
     }
@@ -511,8 +516,9 @@ void runBenchmarks() {
     std::cout << fmt::format("{:02x}", static_cast<unsigned char>(byte));
   }
   std::cout
-      << "\nTIMING unit=per_conversion_call; GPU includes output allocation/destruction and stream synchronization; "
-         "CPU reuses result buffers within each sample; transfers/construction/validation excluded\n";
+      << "\nTIMING unit=per_eval_call; GPU includes evaluation completion synchronization; "
+         "allocations inside eval included; CPU reuses result buffers within each sample; "
+         "flattening/buffer preparation/output destruction/input-output transfers/construction/validation excluded\n";
   std::vector<std::shared_ptr<CastBenchmark>> benchmarks;
   for (const auto& spec : castCases()) {
     for (const auto size : {1000, 65536, 1048576}) {

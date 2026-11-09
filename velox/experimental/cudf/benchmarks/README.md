@@ -17,6 +17,9 @@ cuDF GPU operator replacements.
 
 ## Build
 
+Use Release builds for Velox and Folly when collecting timings. If Folly reports
+`Benchmark running in DEBUG mode`, rebuild Folly in Release mode as well.
+
 ```bash
 # GPU binaries (requires CUDA)
 CUDA_ARCHITECTURES="native" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_BENCHMARKS=ON" make cudf
@@ -31,67 +34,63 @@ ninja velox_tpch_benchmark velox_tpcds_benchmark
 
 ## Cast Expression Benchmark
 
-`velox_cudf_cast_benchmark` compares native CPU Spark expressions with the
-production cuDF expression evaluator in exact and experimental numeric modes.
-It constructs a separate typed `spark_legacy_cast` evaluator for each GPU mode
-and disables CPU fallback. It does not change the default conversion mode.
+`velox_cudf_cast_benchmark` compares CPU `spark_legacy_cast` evaluation with
+`gpu_exact` (the default GPU mode, including its guarded fast path and exact
+fallback) and `gpu_numeric` (the experimental numeric conversion). GPU inputs
+are device-resident and CPU fallback is disabled.
 
-Configure with the cuDF benchmark settings above and
-`-DVELOX_ENABLE_SPARK_FUNCTIONS=ON` (the default). From the repository root,
-build and run:
+Use the [build instructions](#build) with `VELOX_ENABLE_SPARK_FUNCTIONS=ON`
+(the default), then build the `velox_cudf_cast_benchmark` target. Run from the
+repository root:
 
 ```bash
-cmake --build _build/release --parallel 8 --target velox_cudf_cast_benchmark
-
-export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=1
 benchmark=_build/release/velox/experimental/cudf/benchmarks/velox_cudf_cast_benchmark
-
-# Validate all inputs and both GPU modes before collecting timings.
 "$benchmark" --cast_validate_only
-
-# Five independent processes; each callback performs 100 conversion calls.
-mkdir -p /tmp/cudf-cast-results
-for run in 1 2 3 4 5; do
-  "$benchmark" --cast_warmups=3 --cast_iterations=100 \
-    --bm_min_iters=1 --bm_max_iters=2 --bm_max_trials=1 \
-    --bm_json_verbose="/tmp/cudf-cast-results/run-$run.json" \
-    > "/tmp/cudf-cast-results/run-$run.log" 2>&1
-done
+"$benchmark" --cast_case_filter='double_common_to_DECIMAL(15, 2)'
 ```
 
-The cases cover supported numeric casts from the CPU benchmarks, decimal
-rescaling, and REAL/DOUBLE to short and long decimals. Each uses 1,000, 65,536,
-and 1,048,576 rows, with either no input NULLs or 20% NULLs. Inputs repeat
-deterministic common values or rounding, nonfinite, and precision-overflow
-fixtures. Java 17 decimal expectations use
-`BigDecimal.valueOf((double) input).setScale(scale, HALF_UP)` followed by a
-precision check. Explicit fixture expectations distinguish known CPU and numeric
-mode differences from unexpected value or NULL-mask differences, which fail the
-run. Validation prints difference counts and example input bits and outputs.
+Cases cover numeric casts, decimal rescaling, and REAL/DOUBLE-to-DECIMAL casts
+at 1,000, 65,536, and 1,048,576 rows, with 0% or 20% input NULLs. Common inputs
+repeat small values; boundary fixtures exercise rounding, nonfinite values,
+and precision overflow. Validation checks values and NULLs separately. Decimal
+fixtures use Java 17 expectations and explicitly check known CPU and numeric-mode
+differences. See [Limitations and compatibility](../README.md#limitations-and-compatibility)
+for the GPU conversion modes.
 
-Folly reports elapsed time **per conversion call**, with units shown in its
-output. Input generation, expression construction, input/output column transfers,
-and validation are outside the timer. GPU calls include output allocation,
-destruction, and stream synchronization. Production validity work, including
-internal scalar/metadata transfers, remains timed. CPU calls include flattening and
-`prepareForReuse`, reuse output buffers within each sample, and include the
-sample's initial output allocation and final destruction. Each engine receives
-untimed warmups. These are expression timings, not kernel-only measurements or
-whole-query speedups.
+Times are per `eval` call. GPU timing includes synchronization to wait for the
+result; allocations and validity checks performed inside `eval` remain timed.
+Input/output column transfers, setup, validation, CPU flattening and buffer
+preparation, and output destruction are excluded. CPU results reuse buffers
+between calls. These measurements cover expression evaluation on resident inputs.
 
-Use `--cast_case_filter=double_rounding_and_nonfinite_rows1000_null0` to select
-one input configuration, or Folly's `--bm_regex` to filter timed engine entries.
-The case filter also limits validation; `--bm_regex` does not. The program prints
-the CUDA device UUID and PCI address. A separate Nsight Systems run can confirm
-the production `castKernel` exact and numeric specializations without adding
-profiler overhead to timing runs:
+`--cast_case_filter` selects inputs for both validation and timing; `--bm_regex`
+filters only timed entries. `--cast_warmups` defaults to 3 untimed calls per
+engine and case; `--cast_iterations` defaults to 100 calls per timed sample.
 
-```bash
-nsys profile --trace=cuda --sample=none --cpuctxsw=none \
-  --output=/tmp/cudf-cast-proof "$benchmark" --cast_validate_only \
-  --cast_case_filter=double_rounding_and_nonfinite_rows1000_null0
-```
+### Results
+
+Measured on 2026-11-09 with an NVIDIA L40S, cuDF 26.12, CUDA 12.9, and GCC
+14.2. Velox and Folly were built in Release mode. Values are median microseconds
+per evaluation across five separate processes, using `--cast_warmups=3`,
+`--cast_iterations=20`, `--bm_max_trials=5`, and `--bm_max_secs=1`. Each process
+reports its best Folly trial.
+
+These cases cast to `DECIMAL(15,2)` without input NULLs. The common fixture
+repeats seven values from -0.375 to 0.375 in steps of 0.125. Both GPU modes
+match the reference outputs for these inputs.
+
+| Input | Rows | Exact (µs) | Numeric (µs) | Exact / numeric |
+|-------|------|------------|--------------|-----------------|
+| REAL | 1,000 | 34.34 | 27.29 | 1.26x |
+| REAL | 65,536 | 72.97 | 30.68 | 2.38x |
+| REAL | 1,048,576 | 633.97 | 45.53 | 13.92x |
+| DOUBLE | 1,000 | 34.48 | 27.47 | 1.26x |
+| DOUBLE | 65,536 | 72.71 | 30.68 | 2.37x |
+| DOUBLE | 1,048,576 | 634.20 | 45.34 | 13.99x |
+
+All 150 input configurations passed validation against their expected outputs.
+Boundary fixtures still reproduce the documented numeric-mode value and NULL
+differences; the timing advantage does not remove those compatibility limits.
 
 ---
 
