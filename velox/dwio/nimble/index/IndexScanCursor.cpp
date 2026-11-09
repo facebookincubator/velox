@@ -354,6 +354,13 @@ void IndexScanCursor::reset() {
   stripeOffset_ = 0;
 }
 
+void IndexScanCursor::setVerifyStreamChecksums(bool verifyStreamChecksums) {
+  NIMBLE_CHECK(
+      stripeSelections_.empty(),
+      "Stream checksum verification must not change during a scan");
+  projector_->setVerifyStreamChecksums(verifyStreamChecksums);
+}
+
 void IndexScanCursor::setStripeSelections(
     std::vector<StripeSelection> selections) {
   NIMBLE_CHECK(

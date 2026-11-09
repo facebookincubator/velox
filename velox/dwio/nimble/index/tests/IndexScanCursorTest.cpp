@@ -307,6 +307,25 @@ TEST_P(IndexScanCursorTest, clearsMissesAndSupportsReseek) {
   EXPECT_EQ(cursor->stats().numOutputRows, 9);
 }
 
+TEST_P(IndexScanCursorTest, rejectsChecksumVerificationChangeDuringAScan) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  auto cursor = makeCursor();
+  cursor->setVerifyStreamChecksums(true);
+  EXPECT_EQ(cursor->seekToFirst(), std::optional<RowRange>(RowRange{0, 12}));
+  NIMBLE_ASSERT_THROW(
+      cursor->setVerifyStreamChecksums(false),
+      "Stream checksum verification must not change during a scan");
+
+  // The scan goes on, and the setting changes after reset().
+  EXPECT_EQ(
+      nextStripe(*cursor, 0).selection.selectedRowRange(), RowRange(0, 4));
+  cursor->reset();
+  cursor->setVerifyStreamChecksums(false);
+  EXPECT_EQ(cursor->seekToFirst(), std::optional<RowRange>(RowRange{0, 12}));
+  EXPECT_EQ(
+      nextStripe(*cursor, 0).selection.selectedRowRange(), RowRange(0, 4));
+}
+
 TEST_P(IndexScanCursorTest, zeroStripeLimitKeepsLoadsOnDemand) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);

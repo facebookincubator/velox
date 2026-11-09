@@ -17,6 +17,7 @@
 
 #include <concepts>
 
+#include "velox/common/base/Portability.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/expression/VectorWriters.h"
@@ -744,6 +745,10 @@ class SimpleAggregateAdapter : public Aggregate {
 
   // Process rows with the accumulated readers. Use Is to access the original
   // input types to create OptionalAccessor.
+  //
+  // The per-row lambdas are force-inlined. The compiler often runs out of
+  // inlining budget and leaves a call per input row. Intermediate results are
+  // left to the compiler to keep the code size down.
   template <std::size_t... Is, typename... TReader>
   void addRawInputWithReadersImpl(
       char** groups,
@@ -755,7 +760,7 @@ class SimpleAggregateAdapter : public Aggregate {
         "Reader count must match InputType size");
 
     if constexpr (aggregate_default_null_behavior_) {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         // If any input is null, we ignore the whole row. For variadic
         // arguments, this includes nulls within the variadic elements.
         if (!(isInputNonNull<Is>(readers, row) && ...)) {
@@ -770,7 +775,7 @@ class SimpleAggregateAdapter : public Aggregate {
         clearNull(groups[row]);
       });
     } else {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         std::optional<RowSizeTracker<char, uint32_t>> tracker;
         if constexpr (!accumulator_is_fixed_size_) {
           tracker.emplace(groups[row][rowSizeOffset_], *allocator_);
@@ -806,7 +811,8 @@ class SimpleAggregateAdapter : public Aggregate {
   }
 
   // Process rows for a single group with the accumulated readers. Use Is to
-  // access the original input types to create OptionalAccessor.
+  // access the original input types to create OptionalAccessor. The per-row
+  // lambdas are force-inlined as in addRawInputWithReadersImpl.
   template <std::size_t... Is, typename... TReader>
   void addSingleGroupRawInputWithReadersImpl(
       char* group,
@@ -820,7 +826,7 @@ class SimpleAggregateAdapter : public Aggregate {
     auto accumulator = value<typename FUNC::AccumulatorType>(group);
 
     if constexpr (aggregate_default_null_behavior_) {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         // If any input is null, we ignore the whole row. For variadic
         // arguments, this includes nulls within the variadic elements.
         if (!(isInputNonNull<Is>(readers, row) && ...)) {
@@ -834,7 +840,7 @@ class SimpleAggregateAdapter : public Aggregate {
         clearNull(group);
       });
     } else {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         std::optional<RowSizeTracker<char, uint32_t>> tracker;
         if constexpr (!accumulator_is_fixed_size_) {
           tracker.emplace(group[rowSizeOffset_], *allocator_);

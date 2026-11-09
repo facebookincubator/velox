@@ -19,7 +19,6 @@
 #include <folly/coro/FutureUtil.h>
 #include <folly/executors/InlineExecutor.h>
 #include <folly/futures/Future.h>
-#include <folly/lang/Bits.h>
 #include <folly/stop_watch.h>
 
 #include <folly/ScopeGuard.h>
@@ -741,11 +740,10 @@ std::unique_ptr<BaseHashTable> createHashTable(
   return exec::HashTable<true>::createForJoin(
       std::move(hashers),
       dependentTypes,
-      /*allowDuplicates=*/true,
-      /*hasProbedFlag=*/false,
-      /*hasCountFlag=*/false,
-      queryConfig.minTableRowsForParallelJoinBuild(),
-      pool);
+      pool,
+      {.allowDuplicates = true,
+       .minTableSizeForParallelJoinBuild =
+           queryConfig.minTableRowsForParallelJoinBuild()});
 }
 
 // Adds 'batch' to 'table' as HashBuild::addInput does for an inner join.  Rows
@@ -769,15 +767,8 @@ void addToHashTable(const RowVector& batch, BaseHashTable& table) {
     dependents.emplace_back(*batch.childAt(column)->loadedVector(), activeRows);
   }
   auto* rows = table.rows();
-  // With allowDuplicates the container chains same-key rows through a
-  // next-link, which must start null on each new row.
-  const auto nextOffset = rows->nextOffset();
   activeRows.applyToSelected([&](vector_size_t row) {
     char* newRow = rows->newRow();
-    if (nextOffset > 0) {
-      folly::storeUnaligned<char*>(
-          newRow + nextOffset, static_cast<char*>(nullptr));
-    }
     for (auto i = 0; i < numKeys; ++i) {
       rows->store(hashers[i]->decodedVector(), row, newRow, i);
     }

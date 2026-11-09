@@ -65,6 +65,12 @@ SpillerBase::SpillerBase(
           memory::spillMemoryPool(),
           spillStats,
           spillConfig->fileCreateConfig) {
+  if (container_ != nullptr) {
+    VELOX_CHECK_EQ(
+        container_->rawDependentSize(),
+        0,
+        "A row container with a raw dependent cannot be spilled");
+  }
   TestValue::adjust("facebook::velox::exec::SpillerBase", this);
 }
 
@@ -103,7 +109,7 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
     for (;;) {
       // TODO: Reuse 'RowContainer::rowPointers_'.
       const auto numRows =
-          container_->listRows(iterator, rows.size(), rows.data());
+          container_->listRows(iterator, std::span(rows.data(), rows.size()));
       if (numRows == 0) {
         lastRun = true;
         break;
@@ -113,9 +119,7 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
       auto rowSet = folly::Range<char**>(rows.data(), numRows);
 
       if (!isSinglePartition) {
-        for (auto i = 0; i < container_->keyTypes().size(); ++i) {
-          container_->hash(i, rowSet, i > 0, hashes.data());
-        }
+        container_->hashKeys(rowSet, hashes);
       }
 
       // Put each in its run.

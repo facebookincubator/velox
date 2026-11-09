@@ -776,7 +776,10 @@ VectorPtr deserializeFixedWidth(
   for (auto i = 0; i < numRows; ++i) {
     const bool isNull = bits::isBitNull(rawNulls, i);
     readFixedWidthValue<T>(
-        isNull, data[i].data() + offsets[i], flatVector.get(), i);
+        isNull,
+        isNull ? nullptr : data[i].data() + offsets[i],
+        flatVector.get(),
+        i);
   }
 
   return flatVector;
@@ -1177,10 +1180,11 @@ RowVectorPtr deserializeRows(
     fieldNulls.emplace_back(allocateNulls(numRows, pool));
     auto* rawFieldNulls = fieldNulls.back()->asMutable<uint8_t>();
     for (auto row = 0; row < numRows; ++row) {
-      auto* serializedNulls = readNulls(data[row].data() + offsets[row]);
+      // Callers provide one offset per input row.
       const auto isNull =
           (rawNulls != nullptr && bits::isBitNull(rawNulls, row)) ||
-          bits::isBitSet(serializedNulls, i);
+          // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+          bits::isBitSet(readNulls(data[row].data() + offsets[row]), i);
       bits::setBit(rawFieldNulls, row, !isNull);
     }
   }
@@ -1221,10 +1225,19 @@ RowVectorPtr CompactRow::deserialize(
     const std::vector<std::string_view>& data,
     const RowTypePtr& rowType,
     memory::MemoryPool* pool) {
+  return deserialize(data, nullptr, rowType, pool);
+}
+
+// static
+RowVectorPtr CompactRow::deserialize(
+    const std::vector<std::string_view>& data,
+    const BufferPtr& nulls,
+    const RowTypePtr& rowType,
+    memory::MemoryPool* pool) {
   const auto numRows = data.size();
   std::vector<size_t> offsets(numRows, 0);
 
-  return deserializeRows(rowType, data, nullptr, offsets, pool);
+  return deserializeRows(rowType, data, nulls, offsets, pool);
 }
 
 } // namespace facebook::velox::row

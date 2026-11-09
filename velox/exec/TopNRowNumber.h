@@ -357,7 +357,7 @@ class TopNRowNumber : public Operator {
   // Vector of pointers to individual rows in the RowContainer for the current
   // output block.
   std::vector<char*> outputRows_;
-  // Number of partitions to fetch from a HashTable in a single listAllRows
+  // Number of partitions to fetch from a HashTable in a single listRows
   // call.
   static const size_t kPartitionBatchSize = 100;
 

@@ -434,6 +434,54 @@ std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type) {
   return SchemaReader::getSchema(builder.schemaNodes());
 }
 
+ScalarKind hybridFlatMapKeyKind(const velox::Type& keyType) {
+  switch (keyType.kind()) {
+    case velox::TypeKind::TINYINT:
+      return ScalarKind::Int8;
+    case velox::TypeKind::SMALLINT:
+      return ScalarKind::Int16;
+    case velox::TypeKind::INTEGER:
+      return ScalarKind::Int32;
+    case velox::TypeKind::BIGINT:
+      return ScalarKind::Int64;
+    case velox::TypeKind::VARCHAR:
+      return ScalarKind::String;
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::VARBINARY:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::TIMESTAMP:
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::ARRAY:
+    case velox::TypeKind::MAP:
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
+      NIMBLE_UNSUPPORTED(
+          "Unsupported hybrid FlatMap key type {}.", keyType.toString());
+  }
+  NIMBLE_UNREACHABLE("Unknown type kind: {}.", keyType.kind());
+}
+
+ScalarKind hybridFlatMapKeyKind(
+    const velox::RowType& rowType,
+    std::string_view columnName) {
+  const auto columnIndex = rowType.getChildIdxIfExists(columnName);
+  NIMBLE_USER_CHECK(
+      columnIndex.has_value(),
+      "Hybrid FlatMap column {} is not in the row type.",
+      columnName);
+  const auto& columnType = rowType.childAt(*columnIndex);
+  NIMBLE_USER_CHECK(
+      columnType->kind() == velox::TypeKind::MAP,
+      "Hybrid FlatMap column {} must be a MAP, not {}.",
+      columnName,
+      columnType->toString());
+  return hybridFlatMapKeyKind(*columnType->childAt(0));
+}
+
 //
 // buildProjectedNimbleType and its helpers.
 //

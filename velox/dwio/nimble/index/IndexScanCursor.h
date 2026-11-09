@@ -134,6 +134,10 @@ class IndexScanCursor final {
   /// prefetch stops.
   void reset();
 
+  /// Turns the verification of stream checksums on or off for the next scans.
+  /// Must be called without an active scan, such as after reset().
+  void setVerifyStreamChecksums(bool verifyStreamChecksums);
+
   /// Loads the next selected stripe, or waits for its prefetched streams, then
   /// materializes it on the caller. Its selected rows start at the
   /// iterator's file-level 'row', and the call returns its entries. The

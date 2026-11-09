@@ -182,6 +182,34 @@ struct ChunkStatsVerificationCoverage {
   uint64_t numNullBatchIterationsWithFullyNullChunk{0};
 };
 
+/// Counts point lookups: selective reads of a whole file with filters on one to
+/// three top-level columns, checked against the input.
+struct PointLookupCoverage {
+  /// Tallies a group of lookups.
+  struct LookupCounts {
+    /// Counts lookups, and those where chunk stats let the reader skip rows.
+    uint64_t numLookups{0};
+    uint64_t numLookupsWithChunkSkips{0};
+
+    /// Counts rows the lookups returned, and rows chunk stats skipped.
+    uint64_t numMatchedRows{0};
+    uint64_t numChunkSkippedRows{0};
+  };
+
+  /// Keyed by the number of filtered columns.
+  std::map<uint32_t, LookupCounts> byNumColumns;
+
+  /// Keyed by column type, such as BIGINT, then by filter kind: equal, in,
+  /// atMost, atLeast, between, isNull or isNotNull. A lookup counts once under
+  /// each of its filters.
+  std::map<std::string, std::map<std::string, LookupCounts>> byType;
+
+  /// Keyed by "anchored" or "unanchored", then by the power-of-two floor of the
+  /// rows a lookup returned, capped at 1,024. Anchored lookups filter so that
+  /// blocks of consecutive input rows match.
+  std::map<std::string, std::map<uint32_t, uint64_t>> lookupsByMatchedRows;
+};
+
 /// Reader paths a written file is verified through. The batch reader and the
 /// selective reader consume encodings through different code, so an encoding
 /// can round-trip on one path and fail on another. Adding ALP and Fsst to the
@@ -361,6 +389,11 @@ class NimbleWriterFuzzer {
     return chunkStatsCoverage_;
   }
 
+  /// Point lookups run, accumulated across every run().
+  const PointLookupCoverage& pointLookupCoverage() const {
+    return pointLookupCoverage_;
+  }
+
   /// Logs the coverage tally with never-applied encodings first, so a candidate
   /// that exercises nothing is the first thing visible in a CI log.
   void logCoverage() const;
@@ -374,6 +407,10 @@ class NimbleWriterFuzzer {
   /// Logs two blocks: the chunk layouts validated by the run, then the values
   /// their chunk stats recorded.
   void logChunkStatsCoverage() const;
+
+  /// Logs the point lookups run, by filtered columns, rows returned, and column
+  /// type and filter kind.
+  void logPointLookupCoverage() const;
 
   /// Candidate encodings that were never applied to a single chunk, either
   /// because no iteration drew a schema they accept or because every stream
@@ -445,6 +482,20 @@ class NimbleWriterFuzzer {
       std::string_view selectionContext,
       ReaderPath readerPath);
 
+  // Reads 'file' through the selective reader with filters on one to three
+  // random top-level scalar columns, drawn from 'lookupSeed': equality, IN, a
+  // range or a null check, with bounds taken from the input. Most lookups are
+  // anchored on blocks of consecutive rows that every filter accepts, so they
+  // return many rows. Checks the returned rows against the input rows all
+  // filters accept. Chunk stats let the reader skip chunks that cannot match,
+  // and each skip seeks with the chunk index, so a wrong stat, merged skip
+  // range or lookup returns the wrong rows.
+  void verifyPointLookup(
+      const std::string& file,
+      const velox::RowTypePtr& schema,
+      const std::vector<velox::VectorPtr>& batches,
+      uint64_t lookupSeed);
+
   // Records the encodings an unfiltered random-policy file actually used and
   // returns the candidate encodings observed in that file.
   std::set<EncodingType> recordUnfilteredCoverage(const std::string& file);
@@ -469,6 +520,7 @@ class NimbleWriterFuzzer {
   std::map<EncodingPair, PairCoverage> pairCoverage_;
   uint64_t numUnfilteredFilesWritten_{0};
   ChunkStatsVerificationCoverage chunkStatsCoverage_;
+  PointLookupCoverage pointLookupCoverage_;
   // DataTypes some stream actually carried. Bounds what unappliedPairs() may
   // demand, and is deliberately observed rather than derived from the schema:
   // the writer emits Uint32 length streams, Bool null streams and the Uint16

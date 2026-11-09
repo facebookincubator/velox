@@ -293,7 +293,7 @@ class NthValueFunction : public exec::WindowFunction {
     auto frameEnd = frameEnds[i];
     T nonNullCount = 0;
     for (auto j = frameStart; j <= frameEnd; j++) {
-      if (!bits::isBitSet(rawNulls, j - leastFrame)) {
+      if (!bits::isBitNull(rawNulls, j - leastFrame)) {
         ++nonNullCount;
         if (nonNullCount == offset) {
           rowNumbers_[i] = j;

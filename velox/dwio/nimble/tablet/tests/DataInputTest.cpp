@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <cstring>
 #include <random>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -47,14 +48,48 @@ struct OptionParams {
   }
 };
 
+// Reads like a page-aligned direct-I/O file on Linux. Rejects unaligned
+// offsets, lengths, or buffers. A read past the end of the file returns only
+// the bytes before the end, and leaves junk in the rest of its buffer.
 class DirectIoInMemoryReadFile : public velox::InMemoryReadFile {
  public:
   using velox::InMemoryReadFile::InMemoryReadFile;
+  using velox::InMemoryReadFile::preadv;
+
+  uint64_t preadv(
+      folly::Range<const velox::common::Region*> regions,
+      folly::Range<const folly::Range<char*>*> buffers,
+      const velox::FileIoContext& context = {}) const override {
+    uint64_t bytesRead{0};
+    for (size_t i = 0; i < regions.size(); ++i) {
+      const auto& region = regions[i];
+      NIMBLE_CHECK_EQ(region.offset % kAlignment, 0, "Unaligned read offset");
+      NIMBLE_CHECK_EQ(region.length % kAlignment, 0, "Unaligned read length");
+      NIMBLE_CHECK_EQ(
+          reinterpret_cast<uintptr_t>(buffers[i].data()) % kAlignment,
+          0,
+          "Unaligned read buffer");
+      const auto bytesBeforeFileEnd =
+          std::min(region.length, size() - std::min(region.offset, size()));
+      pread(region.offset, bytesBeforeFileEnd, buffers[i].data(), context);
+      std::memset(
+          buffers[i].data() + bytesBeforeFileEnd,
+          kJunk,
+          region.length - bytesBeforeFileEnd);
+      bytesRead += bytesBeforeFileEnd;
+    }
+    return bytesRead;
+  }
 
   bool directIo(uint64_t& alignment) const override {
-    alignment = velox::memory::AllocationTraits::kPageSize;
+    alignment = kAlignment;
     return true;
   }
+
+ private:
+  static constexpr uint64_t kAlignment =
+      velox::memory::AllocationTraits::kPageSize;
+  static constexpr char kJunk{'\xCC'};
 };
 
 class FailingPreadvInMemoryReadFile : public velox::InMemoryReadFile {
@@ -966,6 +1001,153 @@ TEST_F(DataInputTest, alignment) {
     EXPECT_EQ(stats->rawOverreadBytes(), testData.expectedOverread);
     EXPECT_EQ(stats->read().count(), 1);
   }
+}
+
+TEST_F(DataInputTest, alignmentAtEndOfFile) {
+  // The file ends 1'808 bytes into its third page. A read reaching that page
+  // reads the whole page, so it runs past the end of the file.
+  constexpr uint64_t kPageSize = velox::memory::AllocationTraits::kPageSize;
+  constexpr uint64_t kLastPageBytes = 1'808;
+  std::string data(2 * kPageSize + kLastPageBytes, '\0');
+  for (size_t i = 0; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  DirectIoInMemoryReadFile file(data);
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+
+  struct TestParam {
+    bool cached;
+
+    // Each region is its own group.
+    std::vector<DataInput::Region> regions;
+    uint64_t expectedReads;
+
+    std::string debugString() const {
+      std::string regionsString;
+      for (const auto& region : regions) {
+        regionsString += fmt::format(
+            "[{}, {})", region.offset, region.offset + region.length);
+      }
+      return fmt::format(
+          "cached={}, regions={}, expectedReads={}",
+          cached,
+          regionsString,
+          expectedReads);
+    }
+  };
+
+  std::vector<TestParam> testSettings = {
+      // Ends before the end of the file, in the last page.
+      {false, {{9'000, 500}}, 1},
+      {true, {{9'000, 500}}, 1},
+
+      // Ends at the end of the file.
+      {false, {{9'500, 500}}, 1},
+      {true, {{9'500, 500}}, 1},
+
+      // Two reads of the last page, one per group.
+      {false, {{8'300, 100}, {9'000, 100}}, 2},
+      {true, {{8'300, 100}, {9'000, 100}}, 2},
+  };
+
+  for (size_t caseIndex = 0; caseIndex < testSettings.size(); ++caseIndex) {
+    const auto& testData = testSettings[caseIndex];
+    SCOPED_TRACE(testData.debugString());
+    auto stats = std::make_shared<velox::io::IoStatistics>();
+
+    // A file id per case, so no case hits another case's cache entries.
+    velox::StringIdLease fileId{
+        velox::fileIds(),
+        fmt::format("DataInputTest.alignmentAtEndOfFile.{}", caseIndex)};
+    std::unique_ptr<DataInput> input;
+    if (testData.cached) {
+      input = std::make_unique<CachedDataInput>(
+          &file,
+          CachedDataInput::Options{
+              .pool = pool_.get(),
+              .cache = getBlockCache(cache.get()),
+              .fileId = fileId.id(),
+              .ioStats = stats,
+          });
+    } else {
+      auto options = makeOptions(/*maxCoalesceDistance=*/0);
+      options.ioStats = stats;
+      input = std::make_unique<DirectDataInput>(&file, options);
+    }
+
+    std::vector<uint32_t> indices;
+    for (const auto& region : testData.regions) {
+      input->startGroup(region);
+      indices.push_back(input->enqueue(region));
+    }
+    auto handle = input->load();
+
+    for (size_t i = 0; i < indices.size(); ++i) {
+      const auto& region = testData.regions[i];
+      EXPECT_EQ(
+          refData(input->bufferRef(indices[i])),
+          data.substr(region.offset, region.length));
+    }
+    EXPECT_EQ(stats->read().count(), testData.expectedReads);
+    EXPECT_EQ(stats->read().sum(), testData.expectedReads * kPageSize);
+  }
+  cache->shutdown();
+}
+
+TEST_F(DataInputTest, regionPastEndOfFile) {
+  const std::string data(10'000, 'x');
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "DataInputTest.regionPastEndOfFile"};
+
+  const auto load =
+      [&](velox::ReadFile& file, DataInput::Region region, bool cached) {
+        std::unique_ptr<DataInput> input;
+        if (cached) {
+          input = std::make_unique<CachedDataInput>(
+              &file,
+              CachedDataInput::Options{
+                  .pool = pool_.get(),
+                  .cache = getBlockCache(cache.get()),
+                  .fileId = fileId.id(),
+                  .ioStats = ioStats_,
+              });
+        } else {
+          input = std::make_unique<DirectDataInput>(&file, makeOptions());
+        }
+        input->startGroup(region);
+        input->enqueue(region);
+        input->load();
+      };
+
+  DirectIoInMemoryReadFile directIoFile(data);
+  auto bufferedFile = createFile(data);
+  {
+    NIMBLE_ASSERT_FILE_THROW(
+        load(directIoFile, {9'900, 200}, /*cached=*/false),
+        "Read region extends past the end of the file");
+  }
+  {
+    NIMBLE_ASSERT_FILE_THROW(
+        load(*bufferedFile, {9'900, 200}, /*cached=*/false),
+        "Read region extends past the end of the file");
+  }
+  {
+    NIMBLE_ASSERT_FILE_THROW(
+        load(directIoFile, {9'900, 200}, /*cached=*/true),
+        "Read region extends past the end of the file");
+
+    // A leaked unfilled entry would block this load forever.
+    load(directIoFile, {9'900, 100}, /*cached=*/true);
+  }
+  {
+    NIMBLE_ASSERT_FILE_THROW(
+        load(directIoFile, {10'100, 100}, /*cached=*/false),
+        "Read region starts past the end of the file");
+  }
+  cache->shutdown();
 }
 
 TEST_F(DataInputTest, intraGroupCoalescing) {
