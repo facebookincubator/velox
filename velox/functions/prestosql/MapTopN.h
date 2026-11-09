@@ -36,13 +36,13 @@ struct MapTopNFunction {
       if (l->second.has_value() && r->second.has_value()) {
         auto comp = l->second.value().compare(r->second.value(), flags);
 
-        if (FOLLY_UNLIKELY(comp == 0)) {
+        if (comp == 0) [[unlikely]] {
           return l->first.compare(r->first, flags) > 0;
         }
 
         return comp > 0;
-      } else if (FOLLY_UNLIKELY(
-                     !l->second.has_value() && !r->second.has_value())) {
+      } else if (!l->second.has_value() && !r->second.has_value())
+          [[unlikely]] {
         return l->first.compare(r->first, flags) > 0;
       }
 
