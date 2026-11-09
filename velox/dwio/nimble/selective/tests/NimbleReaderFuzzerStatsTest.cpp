@@ -16,10 +16,12 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <map>
 
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/nimble/selective/NimbleReaderFuzzerStats.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::nimble::fuzzer::test {
 
@@ -36,14 +38,15 @@ TEST(NimbleReaderFuzzerStatsTest, updates) {
   velox::ConcurrentRuntimeStatWriter writer;
   velox::RuntimeStatWriterScopeGuard guard(&writer);
 
+  const velox::common::AlwaysTrue noFilter;
   updateStringDictionaryEncodingPreserved();
   updateStringDictionaryEncodingAbandoned();
-  updateSmallintDictionaryAwareReads();
-  updateIntegerDictionaryAwareReads();
-  updateIntegerDictionaryAwareReads();
-  updateBigintDictionaryAwareReads();
-  updateRealDictionaryAwareReads();
-  updateDoubleDictionaryAwareReads();
+  updateSmallintDictionaryAwareReads(noFilter);
+  updateIntegerDictionaryAwareReads(noFilter);
+  updateIntegerDictionaryAwareReads(noFilter);
+  updateBigintDictionaryAwareReads(noFilter);
+  updateRealDictionaryAwareReads(noFilter);
+  updateDoubleDictionaryAwareReads(noFilter);
 
   const auto stats = writer.runtimeStats();
 #ifdef NIMBLE_READER_FUZZER_STATS_ENABLED
@@ -56,6 +59,40 @@ TEST(NimbleReaderFuzzerStatsTest, updates) {
   EXPECT_EQ(stats.at(std::string(kDoubleDictionaryAwareReads)).sum, 1);
 #else
   EXPECT_THAT(stats, testing::IsEmpty());
+#endif
+}
+
+TEST(NimbleReaderFuzzerStatsTest, dictionaryAwareReadsByFilterKind) {
+  EXPECT_EQ(
+      dictionaryAwareReadsByFilterKind(
+          kIntegerDictionaryAwareReads, "BigintRange"),
+      "nimbleIntegerDictionaryAwareReads.BigintRange");
+
+  velox::ConcurrentRuntimeStatWriter writer;
+  velox::RuntimeStatWriterScopeGuard guard(&writer);
+
+  updateIntegerDictionaryAwareReads(velox::common::AlwaysTrue());
+  updateIntegerDictionaryAwareReads(
+      velox::common::BigintRange(0, 10, /*nullAllowed=*/false));
+  updateIntegerDictionaryAwareReads(
+      velox::common::BigintRange(5, 20, /*nullAllowed=*/true));
+  updateDoubleDictionaryAwareReads(velox::common::IsNotNull());
+
+  std::map<std::string, int64_t> sums;
+  for (const auto& [name, metric] : writer.runtimeStats()) {
+    sums.emplace(name, metric.sum);
+  }
+#ifdef NIMBLE_READER_FUZZER_STATS_ENABLED
+  EXPECT_THAT(
+      sums,
+      testing::ElementsAre(
+          testing::Pair("nimbleDoubleDictionaryAwareReads", 1),
+          testing::Pair("nimbleDoubleDictionaryAwareReads.IsNotNull", 1),
+          testing::Pair("nimbleIntegerDictionaryAwareReads", 3),
+          testing::Pair("nimbleIntegerDictionaryAwareReads.AlwaysTrue", 1),
+          testing::Pair("nimbleIntegerDictionaryAwareReads.BigintRange", 2)));
+#else
+  EXPECT_THAT(sums, testing::IsEmpty());
 #endif
 }
 
