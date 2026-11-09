@@ -171,7 +171,7 @@ TEST_F(VectorSearchJoinTest, driversAndBatches) {
   // several output batches.
   queryBuilder(makeCodecPlan(makeCodecProbe(), makeCodecs()))
       .maxDrivers(4)
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "1")
       .assertResults(makeCodecResults());
 }
 

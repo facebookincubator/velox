@@ -103,6 +103,8 @@ TableScan::TableScan(
       maxSplitPreloadPerDriver_(
           driverCtx_->queryConfig().maxSplitPreloadPerDriver()),
       maxReadBatchSize_(driverCtx_->queryConfig().maxOutputBatchRows()),
+      preferredOutputBatchBytes_(
+          driverCtx_->queryConfig().preferredOutputBatchBytes()),
       connectorPool_(driverCtx_->task->addConnectorPoolLocked(
           planNodeId(),
           driverCtx_->pipelineId,
@@ -564,7 +566,8 @@ int32_t TableScan::calculateBatchSize(int64_t currentEstimatedRowSize) {
   // (readBatchSize_ default).
 
   if (estimatedRowSize != connector::DataSource::kUnknownRowSize) {
-    readBatchSize_ = outputBatchRows(estimatedRowSize);
+    readBatchSize_ = outputBatchRows(
+        estimatedRowSize, preferredOutputBatchBytes_, maxReadBatchSize_);
   }
 
   int32_t batchSize = readBatchSize_;

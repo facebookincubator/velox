@@ -284,6 +284,8 @@ class HashBuild final : public Operator {
   // not.
   const bool needProbedFlagSpill_;
 
+  const bool mixedGroupedModeHashJoinSpillEnabled_;
+
   // Indicates whether drop duplicate rows. Rows containing duplicate keys
   // can be removed for left semi and anti join.
   const bool dropDuplicates_;

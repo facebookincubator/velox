@@ -148,6 +148,9 @@ HashProbe::HashProbe(
       nullAware_{joinNode_->isNullAware()},
       nullAsValue_{joinNode_->isNullAsValue()},
       probeType_(joinNode_->sources()[0]->outputType()),
+      mixedGroupedModeHashJoinSpillEnabled_(
+          spillConfig_.has_value() && driverCtx->task->isGroupedExecution() &&
+          driverCtx->queryConfig().mixedGroupedModeHashJoinSpillEnabled()),
       canOutputBuildRowsInParallel_(
           driverCtx->queryConfig().parallelOutputJoinBuildRowsEnabled() &&
           !canSpill()),
@@ -1128,9 +1131,7 @@ bool HashProbe::canSpill() const {
     return false;
   }
   if (operatorCtx_->task()->hasMixedExecutionGroupJoin(joinNode_.get())) {
-    return operatorCtx_->driverCtx()
-               ->queryConfig()
-               .mixedGroupedModeHashJoinSpillEnabled() &&
+    return mixedGroupedModeHashJoinSpillEnabled_ &&
         operatorCtx_->task()->concurrentSplitGroups() == 1;
   }
   return true;

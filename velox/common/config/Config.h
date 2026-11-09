@@ -160,6 +160,8 @@ class ConfigBase : public IConfig {
   }
 
  protected:
+  // Subclasses must only modify configs_ when mutable_ is true and while
+  // holding mutex_ exclusively. Immutable lookups can run without the lock.
   mutable std::shared_mutex mutex_;
   std::unordered_map<std::string, std::string> configs_;
 

@@ -208,6 +208,7 @@ class StateHashJoinOperator : public exec::Operator {
             OperatorType::kFixedPointStateHashJoin),
         stateName_{node->stateName()},
         probeType_{node->sources()[0]->outputType()},
+        outputBatchSize_{outputBatchRows()},
         hashers_{createProbeHashers(*node)} {
     entry_ = stateOf(driverCtx, stateName_, /*hashTable=*/true)
                  ->getHashTable(stateName_);
@@ -253,14 +254,13 @@ class StateHashJoinOperator : public exec::Operator {
     // One output vector per call, sized by the configured batch: a high-fanout
     // probe matches arbitrarily more rows than it has, so draining every match
     // into a single vector would ignore preferredOutputBatchRows entirely.
-    const vector_size_t maxRows = outputBatchRows();
-    indexBuffer_.resize(maxRows);
-    rowBuffer_.resize(maxRows);
+    indexBuffer_.resize(outputBatchSize_);
+    rowBuffer_.resize(outputBatchSize_);
     const auto numMatches = table_->listJoinResults(
         iterator_,
         /*includeMisses=*/false,
-        folly::Range(indexBuffer_.data(), maxRows),
-        folly::Range(rowBuffer_.data(), maxRows),
+        folly::Range(indexBuffer_.data(), outputBatchSize_),
+        folly::Range(rowBuffer_.data(), outputBatchSize_),
         /*maxBytes=*/1 << 20);
     if (numMatches == 0) {
       // This probe batch is exhausted; the next call takes the next input.
@@ -331,6 +331,7 @@ class StateHashJoinOperator : public exec::Operator {
 
   const std::string stateName_;
   const RowTypePtr probeType_;
+  const vector_size_t outputBatchSize_;
 
   // Hashers over the probe keys, borrowed by 'lookup_'.
   const std::vector<std::unique_ptr<VectorHasher>> hashers_;

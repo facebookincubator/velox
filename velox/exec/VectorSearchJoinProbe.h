@@ -83,6 +83,11 @@ class VectorSearchJoinProbe : public Operator {
   const bool isLeftJoin_;
   const common::vectorindex::VectorIndexMetric metric_;
   const int64_t k_;
+
+  // Limits used to size output batches from the current input's row estimate.
+  const uint64_t preferredOutputBatchBytes_;
+  const vector_size_t maxOutputBatchRows_;
+
   std::vector<column_index_t> keyChannels_;
   column_index_t embeddingChannel_;
   // For each probe and build column of the output, its channel in the input

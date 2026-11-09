@@ -48,6 +48,20 @@ TEST_F(QueryConfigTest, setConfig) {
   EXPECT_EQ(config.requestDataSizesMaxWaitSec(), 12);
 }
 
+TEST_F(QueryConfigTest, accessorsReadUnderlyingConfig) {
+  auto backingConfig = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {QueryConfig::kPreferredOutputBatchBytes, "1024"}},
+      true);
+  QueryConfig config{QueryConfig::ConfigTag{}, backingConfig};
+  EXPECT_EQ(config.preferredOutputBatchBytes(), 1024);
+
+  backingConfig->set(QueryConfig::kPreferredOutputBatchBytes, "2048");
+  EXPECT_EQ(config.preferredOutputBatchBytes(), 2048);
+  EXPECT_EQ(
+      config.get<uint64_t>(QueryConfig::kPreferredOutputBatchBytes), 2048);
+}
+
 TEST_F(QueryConfigTest, invalidConfig) {
   std::unordered_map<std::string, std::string> configData(
       {{QueryConfig::kSessionTimezone, "invalid"}});

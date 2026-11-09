@@ -1472,8 +1472,9 @@ TEST_F(WindowTest, prePartitionedSortBuild) {
           .capturePlanNodeId(windowId)
           .planNode();
 
+  // This sort-based build sizes output by rows, so the byte limit is unused.
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "invalid")
       .config(
           core::QueryConfig::kWindowNumSubPartitions,
           std::to_string(numSubPartitions))

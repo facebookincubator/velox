@@ -167,7 +167,7 @@ void ColumnStatsCollector::noMoreInput() {
   if (!noMoreInput_) {
     noMoreInput_ = true;
     if (groupingSet_) {
-      groupingSet_->noMoreInput();
+      groupingSet_->noMoreInput(/*preferredOutputBatchBytes=*/0);
     }
   }
 }

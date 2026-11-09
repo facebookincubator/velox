@@ -337,6 +337,8 @@ void Driver::init(
   operators_ = std::move(operators);
   curOperatorId_ = operators_.size() - 1;
   trackOperatorCpuUsage_ = ctx_->queryConfig().operatorTrackCpuUsage();
+  validateOutputFromOperators_ =
+      ctx_->queryConfig().validateOutputFromOperators();
 }
 
 void Driver::initializeOperators() {
@@ -1435,7 +1437,7 @@ void Driver::validateOperatorOutputResult(
       "Operator::getOutput() must return nullptr or a non-empty vector: {}",
       op.operatorType());
 
-  if (ctx_->queryConfig().validateOutputFromOperators()) {
+  if (validateOutputFromOperators_) {
     try {
       result->validate({});
     } catch (const std::exception& e) {
