@@ -77,6 +77,11 @@ class LanceDataSource : public DataSource {
   // Releases the active scanner and dataset handles.
   void closeScannerAndDataset();
 
+  // Configures the active scanner to run the k-NN query described by
+  // vectorSearch_. Must be called after the scanner is created and before
+  // iteration begins.
+  void configureVectorSearch();
+
   RowTypePtr outputType_;
   // Names of columns to project from the Lance dataset, in output order.
   std::vector<std::string> columnNames_;
@@ -87,6 +92,8 @@ class LanceDataSource : public DataSource {
   std::vector<std::pair<std::string, std::string>> storageOptions_;
   // Predicate pushed to the Lance scanner. Empty means no filter.
   std::string filter_;
+  // k-NN search parameters from the table handle; std::nullopt = plain scan.
+  std::optional<LanceVectorSearchParams> vectorSearch_;
 
   // Open Lance dataset; empty when no split is active. Note the leading "::":
   // this namespace is also named "lance" and would otherwise shadow the

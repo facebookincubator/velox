@@ -16,11 +16,34 @@
 
 #include "velox/connectors/lance/LanceConnector.h"
 
+#include <array>
+
 #include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::connector::lance {
 
 namespace {
+
+// Name of the distance column Lance appends to every batch of a nearest
+// scan. It is synthesized by the scan, not stored in the dataset, so it must
+// never be part of the projection handed to lance_scanner_new.
+constexpr const char* kDistanceColumnName = "_distance";
+
+// Maps the metric names the coordinator produces (see the Java
+// LanceVectorSearch constants) to lance-c metric types. Hamming exists in
+// lance-c but is never produced by the coordinator, so it is rejected too.
+LanceMetricType toLanceMetric(const std::string& metric) {
+  if (metric == "l2") {
+    return LANCE_METRIC_L2;
+  }
+  if (metric == "cosine") {
+    return LANCE_METRIC_COSINE;
+  }
+  if (metric == "dot") {
+    return LANCE_METRIC_DOT;
+  }
+  VELOX_USER_FAIL("Unsupported Lance vector distance metric: {}", metric);
+}
 
 // Runs a lance-c call and rethrows any ::lance::Error as a Velox error.
 // lance-c reports failures through a thread-local error slot whose message
@@ -38,6 +61,53 @@ auto callLance(const char* context, Func&& func) -> decltype(func()) {
         static_cast<int>(error.code),
         error.what());
   }
+}
+
+// Converts a hex digit character to its numeric value (0-15), or -1 if the
+// character is not a valid hex digit.
+int hexDigit(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return c - 'a' + 10;
+  }
+  if (c >= 'A' && c <= 'F') {
+    return c - 'A' + 10;
+  }
+  return -1;
+}
+
+// Parses canonical UUID strings (8-4-4-4-12 hex form, e.g.
+// "550e8400-e29b-41d4-a716-446655440000") into 16-byte arrays suitable for
+// lance-c Scanner::index_segments.
+std::vector<std::array<uint8_t, 16>> parseSegmentUuids(
+    const std::vector<std::string>& uuidStrings) {
+  std::vector<std::array<uint8_t, 16>> result;
+  result.reserve(uuidStrings.size());
+  for (const auto& s : uuidStrings) {
+    VELOX_USER_CHECK(
+        s.size() == 36, "UUID must be 36 characters (8-4-4-4-12): {}", s);
+    VELOX_USER_CHECK(
+        s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-',
+        "UUID must have dashes at positions 8, 13, 18, 23: {}",
+        s);
+    std::array<uint8_t, 16> uuid{};
+    size_t byteIdx = 0;
+    for (size_t i = 0; i < 36; ++i) {
+      if (s[i] == '-') {
+        continue;
+      }
+      const int hi = hexDigit(s[i]);
+      VELOX_USER_CHECK(hi >= 0, "Non-hex character in UUID: {}", s);
+      ++i;
+      const int lo = hexDigit(s[i]);
+      VELOX_USER_CHECK(lo >= 0, "Non-hex character in UUID: {}", s);
+      uuid[byteIdx++] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    result.push_back(uuid);
+  }
+  return result;
 }
 
 } // namespace
@@ -89,6 +159,7 @@ LanceDataSource::LanceDataSource(
   // addSplit().
   datasetVersion_ = lanceTableHandle->datasetVersion();
   filter_ = lanceTableHandle->filter();
+  vectorSearch_ = lanceTableHandle->vectorSearch();
 
   const auto& storageOptions = lanceTableHandle->storageOptions();
   storageOptions_.reserve(storageOptions.size());
@@ -126,6 +197,33 @@ void LanceDataSource::closeScannerAndDataset() {
   dataset_.reset();
 }
 
+void LanceDataSource::configureVectorSearch() {
+  const auto& search = vectorSearch_.value();
+  // Resolve the metric first so an unsupported name fails before any
+  // scanner state is touched.
+  const LanceMetricType metric = toLanceMetric(search.metric);
+  callLance("Failed to configure Lance vector search", [&] {
+    scanner_->nearest(
+        search.column,
+        search.queryVector.data(),
+        search.queryVector.size(),
+        search.k);
+    scanner_->metric(metric);
+    // Prefer the pre-built vector index when one exists; Lance falls back
+    // to a flat search otherwise. Mirrors the Java setUseIndex(true).
+    scanner_->use_index(true);
+    if (search.nprobes.has_value()) {
+      scanner_->nprobes(search.nprobes.value());
+    }
+    if (search.ef.has_value()) {
+      scanner_->ef(search.ef.value());
+    }
+    if (search.refineFactor.has_value()) {
+      scanner_->refine_factor(search.refineFactor.value());
+    }
+  });
+}
+
 void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_CHECK(
       splitProcessed_,
@@ -151,19 +249,25 @@ void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       });
 
   // Build the NULL-terminated column projection array. Lance returns columns
-  // in the order requested here, which projectOutputColumns() verifies.
+  // in the order requested here, which projectOutputColumns() verifies. The
+  // _distance column is synthesized by a nearest scan rather than stored, so
+  // it is never requested; if nothing else is selected, pass no projection
+  // (Lance then returns all columns) rather than an empty one.
   std::vector<const char*> columnPointers;
   columnPointers.reserve(columnNames_.size() + 1);
   for (const auto& column : columnNames_) {
-    columnPointers.push_back(column.c_str());
+    if (column != kDistanceColumnName) {
+      columnPointers.push_back(column.c_str());
+    }
   }
+  const bool hasProjection = !columnPointers.empty();
   columnPointers.push_back(nullptr);
 
   // lance.hpp's Dataset::scan() cannot express column projection, so create
   // the scanner through the C entry point and adopt it into the RAII wrapper.
   auto* rawScanner = lance_scanner_new(
       dataset_->c_handle(),
-      columnPointers.data(),
+      hasProjection ? columnPointers.data() : nullptr,
       filter_.empty() ? nullptr : filter_.c_str());
   if (rawScanner == nullptr) {
     // A rejected predicate is the most likely cause, so name it here.
@@ -181,11 +285,61 @@ void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
   scanner_.emplace(rawScanner);
 
-  // If the split specifies fragment IDs, restrict the scan.
-  if (!lanceSplit->fragmentIds.empty()) {
+  // Route by split type. INDEXED splits (segmentUuids non-empty) configure
+  // index_segments after nearest; FLAT splits (flatSearch=true) disable the
+  // index after configureVectorSearch; plain fragment-scoped splits keep the
+  // existing prefilter path.
+  if (!lanceSplit->segmentUuids.empty()) {
+    // INDEXED split: search only these index segments. Lance filters the
+    // loaded index deltas to the requested UUIDs at plan time, so this split
+    // probes exactly the specified segments' indexes; rows outside the
+    // segments are excluded (the coordinator emits a separate flat split for
+    // them).
+    VELOX_USER_CHECK(
+        vectorSearch_.has_value(),
+        "segmentUuids is only valid for a vector search split");
+    VELOX_USER_CHECK(
+        lanceSplit->fragmentIds.empty(),
+        "A split must not set both segmentUuids and fragmentIds");
+    VELOX_USER_CHECK(
+        !lanceSplit->flatSearch,
+        "A split must not set both segmentUuids and flatSearch");
+  } else if (!lanceSplit->fragmentIds.empty()) {
+    // Fragment-scoped scan. Both the standard fragment path and the
+    // flat-search path need prefilter enabled: Rust's nearest() rejects a
+    // fragment scan unless prefilter is on (scanner.rs:1432-1436), and the
+    // fragment subset becomes a pre-ranking row mask that restricts results
+    // to rows within the split's fragments.
     callLance("Failed to set fragment IDs", [&] {
       scanner_->fragment_ids(lanceSplit->fragmentIds);
+      if (vectorSearch_.has_value()) {
+        scanner_->prefilter(true);
+      }
     });
+  }
+
+  if (vectorSearch_.has_value()) {
+    configureVectorSearch();
+  }
+
+  // INDEXED: set index_segments after configureVectorSearch because lance-c
+  // validates that nearest was configured before accepting index_segments.
+  if (!lanceSplit->segmentUuids.empty()) {
+    auto uuids = parseSegmentUuids(lanceSplit->segmentUuids);
+    callLance("Failed to set index segments", [&] {
+      scanner_->index_segments(uuids);
+    });
+  }
+
+  // FLAT split: brute-force KNN over the split's fragments (rows not covered
+  // by any index segment). The index is disabled so Lance does not pointlessly
+  // probe it. Must come after configureVectorSearch to override the
+  // use_index(true) it sets by default.
+  if (lanceSplit->flatSearch) {
+    VELOX_USER_CHECK(
+        vectorSearch_.has_value(),
+        "flatSearch is only valid for a vector search split");
+    callLance("Failed to disable index", [&] { scanner_->use_index(false); });
   }
 
   splitProcessed_ = false;

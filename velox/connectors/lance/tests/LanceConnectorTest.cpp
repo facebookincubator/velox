@@ -16,13 +16,17 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <filesystem>
 #include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/lance/LanceConnector.h"
 #include "velox/connectors/lance/LanceConnectorSplit.h"
 #include "velox/connectors/lance/LanceTableHandle.h"
@@ -64,6 +68,14 @@ class LanceConnectorTest : public OperatorTestBase {
         "velox/connectors/lance/tests", "data/test_table1.lance");
   }
 
+  // Returns the path to the vectors.lance dataset: 20 rows, id int64 0..19,
+  // vec = FixedSizeList<float,4> [i, 0, 0, 0], tag = 'even'/'odd'. No vector
+  // index, so Lance flat-searches and results are exact.
+  static std::string getVectorDatasetPath() {
+    return test::getDataFilePath(
+        "velox/connectors/lance/tests", "data/vectors.lance");
+  }
+
   // Build a TableScan plan node for the Lance connector.
   // tableName is the logical table name; the physical dataset path is provided
   // separately via the split. datasetVersion 0 reads the latest version and an
@@ -89,6 +101,33 @@ class LanceConnectorTest : public OperatorTestBase {
                 datasetVersion,
                 std::move(storageOptions),
                 filter))
+        .assignments(std::move(assignments))
+        .endTableScan()
+        .planNode();
+  }
+
+  // Build a TableScan plan node for a Lance vector search (nearest query).
+  // The physical dataset path is provided separately via the split.
+  core::PlanNodePtr makeVectorSearchPlan(
+      const RowTypePtr& outputType,
+      const LanceVectorSearchParams& params,
+      const std::string& filter = "") {
+    connector::ColumnHandleMap assignments;
+    for (const auto& name : outputType->names()) {
+      assignments[name] = std::make_shared<LanceColumnHandle>(name);
+    }
+    return PlanBuilder()
+        .startTableScan()
+        .connectorId(kLanceConnectorId)
+        .outputType(outputType)
+        .tableHandle(
+            std::make_shared<LanceTableHandle>(
+                kLanceConnectorId,
+                "vectors",
+                /*datasetVersion=*/0,
+                std::unordered_map<std::string, std::string>{},
+                filter,
+                params))
         .assignments(std::move(assignments))
         .endTableScan()
         .planNode();
@@ -432,6 +471,58 @@ TEST_F(LanceConnectorTest, filterPushdownUnknownColumnFails) {
       "Failed to create scanner");
 }
 
+TEST_F(LanceConnectorTest, tableHandleVectorSearch) {
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 3;
+  params.metric = "l2";
+  params.nprobes = 10;
+  auto handle = std::make_shared<LanceTableHandle>(
+      kLanceConnectorId,
+      "vectors",
+      /*datasetVersion=*/0,
+      std::unordered_map<std::string, std::string>{},
+      /*filter=*/"",
+      params);
+  ASSERT_TRUE(handle->vectorSearch().has_value());
+  const auto& vs = handle->vectorSearch().value();
+  ASSERT_EQ(vs.column, "vec");
+  ASSERT_THAT(vs.queryVector, testing::ElementsAre(0.3f, 0.0f, 0.0f, 0.0f));
+  ASSERT_EQ(vs.k, 3);
+  ASSERT_EQ(vs.metric, "l2");
+  ASSERT_EQ(vs.nprobes, std::optional<uint32_t>(10));
+  ASSERT_EQ(vs.ef, std::nullopt);
+  ASSERT_EQ(vs.refineFactor, std::nullopt);
+}
+
+TEST_F(LanceConnectorTest, tableHandleWithoutVectorSearch) {
+  auto handle =
+      std::make_shared<LanceTableHandle>(kLanceConnectorId, "test_table");
+  ASSERT_FALSE(handle->vectorSearch().has_value());
+}
+
+// toString must summarize the search (the full query vector may be thousands
+// of floats) and must not change the existing no-search rendering.
+TEST_F(LanceConnectorTest, tableHandleToStringWithVectorSearch) {
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 3;
+  params.metric = "l2";
+  auto handle = std::make_shared<LanceTableHandle>(
+      kLanceConnectorId,
+      "vectors",
+      /*datasetVersion=*/0,
+      std::unordered_map<std::string, std::string>{},
+      /*filter=*/"",
+      params);
+  ASSERT_EQ(
+      handle->toString(),
+      "LanceTableHandle [table: vectors, version: latest, storageOptions: 0, "
+      "filter: <none>, vectorSearch: {column: vec, dim: 4, k: 3, metric: l2}]");
+}
+
 // Verifies that createDataSink throws NYI.
 TEST_F(LanceConnectorTest, dataSinkNotSupported) {
   LanceConnectorFactory factory;
@@ -449,4 +540,436 @@ TEST_F(LanceConnectorTest, dataSinkNotSupported) {
       VeloxRuntimeError);
 
   connector::unregisterConnector("lance-sink-test");
+}
+
+// k-NN over the 20-row fixture: exactly k rows, nearest ids first, and the
+// synthesized _distance column carries the squared-L2 distances.
+TEST_F(LanceConnectorTest, vectorSearchNearestL2) {
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 3;
+  params.metric = "l2";
+
+  auto outputType = ROW({"id", "_distance"}, {BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+
+  auto result = AssertQueryBuilder(plan)
+                    .split(makeSplit(getVectorDatasetPath()))
+                    .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto idVector = result->childAt(0)->asFlatVector<int64_t>();
+  auto distanceVector = result->childAt(1)->asFlatVector<float>();
+  ASSERT_NE(idVector, nullptr);
+  ASSERT_NE(distanceVector, nullptr);
+
+  // Lance returns nearest-first: id 0 (0.3^2), id 1 (0.7^2), id 2 (1.7^2).
+  EXPECT_EQ(idVector->valueAt(0), 0);
+  EXPECT_EQ(idVector->valueAt(1), 1);
+  EXPECT_EQ(idVector->valueAt(2), 2);
+  EXPECT_NEAR(distanceVector->valueAt(0), 0.09f, 1e-4);
+  EXPECT_NEAR(distanceVector->valueAt(1), 0.49f, 1e-4);
+  EXPECT_NEAR(distanceVector->valueAt(2), 2.89f, 1e-4);
+}
+
+// Fragment-scoped k-NN: restrict the nearest scan to a single fragment via
+// prefilter and verify the result contains only that fragment's rows.
+// The vectors.lance fixture has 2 fragments; the test discovers which row IDs
+// belong to the first fragment, computes the expected top-k from those rows,
+// and asserts the fragment-restricted vector search returns exactly that.
+TEST_F(LanceConnectorTest, vectorSearchFragmentScoped) {
+  // Discover the fragment IDs in the vectors.lance fixture.
+  auto dataset = ::lance::Dataset::open(getVectorDatasetPath());
+  auto allFragmentIds = dataset.fragment_ids();
+  ASSERT_GE(allFragmentIds.size(), 2u);
+
+  // Pick the first fragment and discover which row IDs it contains by running
+  // a plain (non-vector) scan restricted to that single fragment.
+  const uint64_t targetFragment = allFragmentIds[0];
+  auto scalarType = ROW({"id"}, {BIGINT()});
+  auto scalarPlan = makeTableScanPlan(scalarType, "vectors");
+  auto scalarSplit = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId,
+      getVectorDatasetPath(),
+      std::vector<uint64_t>{targetFragment});
+  auto scalarResult =
+      AssertQueryBuilder(scalarPlan).split(scalarSplit).copyResults(pool());
+  ASSERT_GT(scalarResult->size(), 0);
+
+  // Collect the row IDs belonging to the target fragment.
+  auto scalarIdVec = scalarResult->childAt(0)->asFlatVector<int64_t>();
+  std::vector<int64_t> fragmentRowIds;
+  fragmentRowIds.reserve(scalarResult->size());
+  for (vector_size_t i = 0; i < scalarResult->size(); ++i) {
+    fragmentRowIds.push_back(scalarIdVec->valueAt(i));
+  }
+
+  // Sort by L2 distance to the query vector [0.3, 0, 0, 0].
+  // vec = [id, 0, 0, 0], so squared-L2 distance = (id - 0.3)^2.
+  std::sort(
+      fragmentRowIds.begin(), fragmentRowIds.end(), [](int64_t a, int64_t b) {
+        double da = (a - 0.3) * (a - 0.3);
+        double db = (b - 0.3) * (b - 0.3);
+        return da < db;
+      });
+
+  const uint32_t k = 3;
+  const auto expectedCount =
+      std::min(static_cast<size_t>(k), fragmentRowIds.size());
+
+  // Run a fragment-scoped vector search: k-NN restricted to the target
+  // fragment. With the prefilter path, Lance uses the fragment subset as a
+  // pre-ranking row mask and returns the exact top-k within those rows.
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = k;
+  params.metric = "l2";
+
+  auto outputType = ROW({"id", "_distance"}, {BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+  auto split = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId,
+      getVectorDatasetPath(),
+      std::vector<uint64_t>{targetFragment});
+  auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
+
+  ASSERT_EQ(static_cast<size_t>(result->size()), expectedCount);
+  auto idVector = result->childAt(0)->asFlatVector<int64_t>();
+  auto distanceVector = result->childAt(1)->asFlatVector<float>();
+  ASSERT_NE(idVector, nullptr);
+  ASSERT_NE(distanceVector, nullptr);
+
+  // Build a set of the target fragment's row IDs for membership checks.
+  std::set<int64_t> fragmentIdSet(fragmentRowIds.begin(), fragmentRowIds.end());
+
+  // Every returned row must belong to the target fragment, ids must match
+  // the expected nearest order, and distances must be non-decreasing.
+  for (size_t i = 0; i < expectedCount; ++i) {
+    EXPECT_TRUE(fragmentIdSet.count(idVector->valueAt(i)))
+        << "id " << idVector->valueAt(i) << " does not belong to fragment "
+        << targetFragment;
+    EXPECT_EQ(idVector->valueAt(i), fragmentRowIds[i]);
+    if (i > 0) {
+      EXPECT_LE(distanceVector->valueAt(i - 1), distanceVector->valueAt(i));
+    }
+  }
+}
+
+// dot metric negates the dot product, so the largest vectors are nearest:
+// verifies the metric override actually reaches the Lance scanner.
+TEST_F(LanceConnectorTest, vectorSearchNearestDotFlipsOrder) {
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 3;
+  params.metric = "dot";
+
+  auto outputType = ROW({"id", "_distance"}, {BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+
+  auto result = AssertQueryBuilder(plan)
+                    .split(makeSplit(getVectorDatasetPath()))
+                    .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto idVector = result->childAt(0)->asFlatVector<int64_t>();
+  auto distanceVector = result->childAt(1)->asFlatVector<float>();
+  EXPECT_EQ(idVector->valueAt(0), 19);
+  EXPECT_EQ(idVector->valueAt(1), 18);
+  EXPECT_EQ(idVector->valueAt(2), 17);
+  EXPECT_NEAR(distanceVector->valueAt(0), -5.7f, 1e-4);
+}
+
+// A split listing every fragment ID with prefilter enabled must produce
+// the same results as a whole-dataset scan: the fragment mask covers all
+// rows, so the top-k is identical.
+TEST_F(LanceConnectorTest, vectorSearchAllFragmentsMatchesGlobal) {
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 3;
+  params.metric = "l2";
+
+  auto outputType = ROW({"id", "_distance"}, {BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+
+  // Discover the fragment ids so the split lists them explicitly.
+  auto dataset = ::lance::Dataset::open(getVectorDatasetPath());
+  auto fragmentIds = dataset.fragment_ids();
+  ASSERT_FALSE(fragmentIds.empty());
+
+  auto split = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId, getVectorDatasetPath(), fragmentIds);
+  auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto idVector = result->childAt(0)->asFlatVector<int64_t>();
+  EXPECT_EQ(idVector->valueAt(0), 0);
+  EXPECT_EQ(idVector->valueAt(1), 1);
+  EXPECT_EQ(idVector->valueAt(2), 2);
+}
+
+// Projecting non-vector data columns alongside _distance works; the vec
+// column itself need not be selected.
+TEST_F(LanceConnectorTest, vectorSearchProjectsDataColumns) {
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 2;
+  params.metric = "l2";
+
+  auto outputType =
+      ROW({"tag", "id", "_distance"}, {VARCHAR(), BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+
+  auto result = AssertQueryBuilder(plan)
+                    .split(makeSplit(getVectorDatasetPath()))
+                    .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 2);
+  auto tagVector = result->childAt(0)->asFlatVector<StringView>();
+  auto idVector = result->childAt(1)->asFlatVector<int64_t>();
+  EXPECT_EQ(idVector->valueAt(0), 0);
+  EXPECT_EQ(tagVector->valueAt(0), "even");
+  EXPECT_EQ(idVector->valueAt(1), 1);
+  EXPECT_EQ(tagVector->valueAt(1), "odd");
+}
+
+TEST_F(LanceConnectorTest, vectorSearchUnknownMetricFails) {
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 3;
+  params.metric = "hamming";
+
+  auto outputType = ROW({"id", "_distance"}, {BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .split(makeSplit(getVectorDatasetPath()))
+          .copyResults(pool()),
+      "Unsupported Lance vector distance metric: hamming");
+}
+
+namespace {
+
+// Formats a 16-byte UUID as the canonical 8-4-4-4-12 lowercase hex string,
+// the form LanceConnector's parseSegmentUuids expects.
+std::string formatUuid(const std::array<uint8_t, 16>& bytes) {
+  static const char* kHexDigits = "0123456789abcdef";
+  std::string out;
+  out.reserve(36);
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    if (i == 4 || i == 6 || i == 8 || i == 10) {
+      out.push_back('-');
+    }
+    out.push_back(kHexDigits[bytes[i] >> 4]);
+    out.push_back(kHexDigits[bytes[i] & 0x0f]);
+  }
+  return out;
+}
+
+// Copies the vectors.lance fixture into tempDir and builds a single-partition
+// IVF_FLAT L2 index named "vec_idx" on the vec column. One partition on the
+// 20-row fixture keeps the index exhaustive, so indexed results are exact.
+// Returns the copied dataset's path.
+std::string makeIndexedVectorsDataset(
+    const std::string& sourcePath,
+    const std::string& tempDir) {
+  const auto datasetPath = tempDir + "/vectors_indexed.lance";
+  std::filesystem::copy(
+      sourcePath, datasetPath, std::filesystem::copy_options::recursive);
+
+  auto dataset = ::lance::Dataset::open(datasetPath);
+  LanceVectorIndexParams indexParams{};
+  indexParams.index_type = LANCE_INDEX_IVF_FLAT;
+  indexParams.metric = LANCE_METRIC_L2;
+  indexParams.num_partitions = 1;
+  dataset.create_vector_index("vec", indexParams, "vec_idx");
+  return datasetPath;
+}
+
+} // namespace
+
+// INDEXED split: a split carrying the index's segment UUIDs must return the
+// same top-k as a whole-dataset nearest scan, because together the segments
+// cover every row of the freshly indexed fixture copy.
+TEST_F(LanceConnectorTest, vectorSearchIndexSegmentScoped) {
+  auto tempDir = common::testutil::TempDirectoryPath::create();
+  const auto datasetPath =
+      makeIndexedVectorsDataset(getVectorDatasetPath(), tempDir->getPath());
+
+  // Reopen the dataset to pick up the index commit, then fetch the segment
+  // UUIDs the coordinator would route by.
+  auto dataset = ::lance::Dataset::open(datasetPath);
+  auto segments = dataset.index_segments("vec_idx");
+  ASSERT_FALSE(segments.empty());
+  std::vector<std::string> segmentUuids;
+  segmentUuids.reserve(segments.size());
+  for (const auto& segment : segments) {
+    segmentUuids.push_back(formatUuid(segment));
+  }
+
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 3;
+  params.metric = "l2";
+
+  auto outputType = ROW({"id", "_distance"}, {BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+
+  auto split = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId,
+      datasetPath,
+      std::vector<uint64_t>{},
+      segmentUuids,
+      /*flatSearch=*/false);
+  auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
+
+  // The single segment covers all 20 rows, so the segment-scoped search is
+  // exhaustive: same nearest-first result as vectorSearchNearestL2.
+  ASSERT_EQ(result->size(), 3);
+  auto idVector = result->childAt(0)->asFlatVector<int64_t>();
+  auto distanceVector = result->childAt(1)->asFlatVector<float>();
+  ASSERT_NE(idVector, nullptr);
+  ASSERT_NE(distanceVector, nullptr);
+  EXPECT_EQ(idVector->valueAt(0), 0);
+  EXPECT_EQ(idVector->valueAt(1), 1);
+  EXPECT_EQ(idVector->valueAt(2), 2);
+  EXPECT_NEAR(distanceVector->valueAt(0), 0.09f, 1e-4);
+  EXPECT_NEAR(distanceVector->valueAt(1), 0.49f, 1e-4);
+  EXPECT_NEAR(distanceVector->valueAt(2), 2.89f, 1e-4);
+}
+
+// FLAT split: fragmentIds plus flatSearch=true brute-forces k-NN over just
+// those fragments with the index disabled. On the unindexed fixture this must
+// match the fragment-scoped prefilter result exactly.
+TEST_F(LanceConnectorTest, vectorSearchFlatSplit) {
+  auto dataset = ::lance::Dataset::open(getVectorDatasetPath());
+  auto allFragmentIds = dataset.fragment_ids();
+  ASSERT_GE(allFragmentIds.size(), 2u);
+
+  // Discover the first fragment's row IDs with a plain fragment-scoped scan.
+  const uint64_t targetFragment = allFragmentIds[0];
+  auto scalarPlan = makeTableScanPlan(ROW({"id"}, {BIGINT()}), "vectors");
+  auto scalarSplit = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId,
+      getVectorDatasetPath(),
+      std::vector<uint64_t>{targetFragment});
+  auto scalarResult =
+      AssertQueryBuilder(scalarPlan).split(scalarSplit).copyResults(pool());
+  ASSERT_GT(scalarResult->size(), 0);
+
+  auto scalarIdVec = scalarResult->childAt(0)->asFlatVector<int64_t>();
+  std::vector<int64_t> fragmentRowIds;
+  fragmentRowIds.reserve(scalarResult->size());
+  for (vector_size_t i = 0; i < scalarResult->size(); ++i) {
+    fragmentRowIds.push_back(scalarIdVec->valueAt(i));
+  }
+
+  // vec = [id, 0, 0, 0], so squared-L2 distance to [0.3, 0, 0, 0] is
+  // (id - 0.3)^2; sort to get the expected nearest order.
+  std::sort(
+      fragmentRowIds.begin(), fragmentRowIds.end(), [](int64_t a, int64_t b) {
+        return (a - 0.3) * (a - 0.3) < (b - 0.3) * (b - 0.3);
+      });
+
+  const uint32_t k = 3;
+  const auto expectedCount =
+      std::min(static_cast<size_t>(k), fragmentRowIds.size());
+
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = k;
+  params.metric = "l2";
+
+  auto outputType = ROW({"id", "_distance"}, {BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+  auto split = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId,
+      getVectorDatasetPath(),
+      std::vector<uint64_t>{targetFragment},
+      std::vector<std::string>{},
+      /*flatSearch=*/true);
+  auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
+
+  ASSERT_EQ(static_cast<size_t>(result->size()), expectedCount);
+  auto idVector = result->childAt(0)->asFlatVector<int64_t>();
+  auto distanceVector = result->childAt(1)->asFlatVector<float>();
+  ASSERT_NE(idVector, nullptr);
+  ASSERT_NE(distanceVector, nullptr);
+  for (size_t i = 0; i < expectedCount; ++i) {
+    EXPECT_EQ(idVector->valueAt(i), fragmentRowIds[i]);
+    if (i > 0) {
+      EXPECT_LE(distanceVector->valueAt(i - 1), distanceVector->valueAt(i));
+    }
+  }
+}
+
+// A segment UUID that is not in canonical 8-4-4-4-12 form must be rejected
+// by the connector's parser before anything reaches Lance.
+TEST_F(LanceConnectorTest, vectorSearchSegmentUuidMalformed) {
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 3;
+  params.metric = "l2";
+
+  auto outputType = ROW({"id", "_distance"}, {BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+
+  auto wrongLength = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId,
+      getVectorDatasetPath(),
+      std::vector<uint64_t>{},
+      std::vector<std::string>{"not-a-uuid"},
+      /*flatSearch=*/false);
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).split(wrongLength).copyResults(pool()),
+      "UUID must be 36 characters");
+
+  auto nonHex = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId,
+      getVectorDatasetPath(),
+      std::vector<uint64_t>{},
+      std::vector<std::string>{"zz0e8400-e29b-41d4-a716-446655440000"},
+      /*flatSearch=*/false);
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).split(nonHex).copyResults(pool()),
+      "Non-hex character in UUID");
+}
+
+// A well-formed UUID that does not name any index segment of the dataset must
+// surface a Lance error rather than silently returning rows.
+TEST_F(LanceConnectorTest, vectorSearchSegmentUuidUnknown) {
+  auto tempDir = common::testutil::TempDirectoryPath::create();
+  const auto datasetPath =
+      makeIndexedVectorsDataset(getVectorDatasetPath(), tempDir->getPath());
+
+  LanceVectorSearchParams params;
+  params.column = "vec";
+  params.queryVector = {0.3f, 0.0f, 0.0f, 0.0f};
+  params.k = 3;
+  params.metric = "l2";
+
+  auto outputType = ROW({"id", "_distance"}, {BIGINT(), REAL()});
+  auto plan = makeVectorSearchPlan(outputType, params);
+
+  auto split = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId,
+      datasetPath,
+      std::vector<uint64_t>{},
+      std::vector<std::string>{"00000000-0000-0000-0000-000000000000"},
+      /*flatSearch=*/false);
+
+  // The all-zero UUID parses fine but matches no segment; Lance rejects it.
+  // Match the callLance prefix rather than Lance's exact wording, which is
+  // not part of the connector's contract.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).split(split).copyResults(pool()), "lance error");
 }

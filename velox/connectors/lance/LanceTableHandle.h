@@ -16,12 +16,37 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "velox/connectors/Connector.h"
 
 namespace facebook::velox::connector::lance {
+
+/// Parameters of an approximate-nearest-neighbor (k-NN) search pushed down
+/// to the Lance scanner. Produced on the coordinator by the vector_search
+/// table function and carried here so LanceDataSource can configure the
+/// scanner's nearest query. Lance appends a float32 `_distance` column
+/// (smaller is always nearer, for every metric) to each batch of a nearest
+/// scan.
+struct LanceVectorSearchParams {
+  /// Vector column to search (FixedSizeList<float> in the dataset schema).
+  std::string column;
+  /// The query vector; its size is the vector dimension.
+  std::vector<float> queryVector;
+  /// Number of nearest neighbors to return.
+  uint32_t k{0};
+  /// Distance metric: "l2", "cosine" or "dot".
+  std::string metric;
+  /// IVF partitions to probe; unset uses the Lance default.
+  std::optional<uint32_t> nprobes;
+  /// HNSW search list size; unset uses the Lance default.
+  std::optional<uint32_t> ef;
+  /// Re-rank factor over raw index results; unset disables refinement.
+  std::optional<uint32_t> refineFactor;
+};
 
 /// Represents a handle to a Lance dataset for table scan operations.
 ///
@@ -42,17 +67,22 @@ class LanceTableHandle : public ConnectorTableHandle {
   /// means no filter. Lance evaluates this predicate in full, so the planner
   /// must push only predicates Lance can express and keep the rest above the
   /// scan.
+  /// @param vectorSearch Optional k-NN search to run instead of a plain
+  /// scan. When set, the scan returns the k nearest rows to the query
+  /// vector plus a `_distance` column.
   LanceTableHandle(
       const std::string& connectorId,
       const std::string& tableName,
       uint64_t datasetVersion = 0,
       std::unordered_map<std::string, std::string> storageOptions = {},
-      const std::string& filter = "")
+      const std::string& filter = "",
+      std::optional<LanceVectorSearchParams> vectorSearch = std::nullopt)
       : ConnectorTableHandle(connectorId),
         tableName_(tableName),
         datasetVersion_(datasetVersion),
         storageOptions_(std::move(storageOptions)),
-        filter_(filter) {}
+        filter_(filter),
+        vectorSearch_(std::move(vectorSearch)) {}
 
   const std::string& name() const override {
     return tableName_;
@@ -76,15 +106,30 @@ class LanceTableHandle : public ConnectorTableHandle {
     return filter_;
   }
 
+  /// Returns the k-NN search to run, or std::nullopt for a plain scan.
+  const std::optional<LanceVectorSearchParams>& vectorSearch() const {
+    return vectorSearch_;
+  }
+
   /// Renders the handle for logging. Reports only the number of storage
   /// options, never their values, because they can hold credentials.
   std::string toString() const override {
+    std::string vectorSearchText;
+    if (vectorSearch_.has_value()) {
+      vectorSearchText = fmt::format(
+          ", vectorSearch: {{column: {}, dim: {}, k: {}, metric: {}}}",
+          vectorSearch_->column,
+          vectorSearch_->queryVector.size(),
+          vectorSearch_->k,
+          vectorSearch_->metric);
+    }
     return fmt::format(
-        "LanceTableHandle [table: {}, version: {}, storageOptions: {}, filter: {}]",
+        "LanceTableHandle [table: {}, version: {}, storageOptions: {}, filter: {}{}]",
         tableName_,
         datasetVersion_ == 0 ? "latest" : std::to_string(datasetVersion_),
         storageOptions_.size(),
-        filter_.empty() ? "<none>" : filter_);
+        filter_.empty() ? "<none>" : filter_,
+        vectorSearchText);
   }
 
  private:
@@ -92,6 +137,7 @@ class LanceTableHandle : public ConnectorTableHandle {
   const uint64_t datasetVersion_;
   const std::unordered_map<std::string, std::string> storageOptions_;
   const std::string filter_;
+  const std::optional<LanceVectorSearchParams> vectorSearch_;
 };
 
 } // namespace facebook::velox::connector::lance
