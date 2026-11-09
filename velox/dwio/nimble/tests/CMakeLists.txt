@@ -68,6 +68,7 @@ target_link_libraries(
 add_executable(
   nimble_velox_tests
   BufferGrowthPolicyTest.cpp
+  BufferPolicyTest.cpp
   ChunkedStreamTest.cpp
   DecodedVectorManagerTest.cpp
   EncodingLayoutTreeTest.cpp

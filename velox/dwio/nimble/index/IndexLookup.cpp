@@ -60,6 +60,7 @@ std::shared_ptr<MetadataInput> createIndexMetadataInput(
       .fileHandle = options.fileHandle,
       .cache = options.cache,
       .maxCacheEntrySize = options.maxCacheEntrySize,
+      .fileIoContext = options.fileIoContext,
   };
   return MetadataInput::create(options.file.get(), metadataOptions);
 }
@@ -79,7 +80,8 @@ std::shared_ptr<velox::dwio::common::BufferedInput> createIndexDataInput(
         std::move(indexIoStats),
         nullptr,
         nullptr,
-        *options.ioOptions);
+        *options.ioOptions,
+        options.fileIoContext.fileOpts);
   }
   return std::make_shared<velox::dwio::common::DirectBufferedInput>(
       std::move(readFile),
@@ -90,7 +92,8 @@ std::shared_ptr<velox::dwio::common::BufferedInput> createIndexDataInput(
       std::move(indexIoStats),
       nullptr,
       nullptr,
-      *options.ioOptions);
+      *options.ioOptions,
+      options.fileIoContext.fileOpts);
 }
 
 std::string toString(IndexType indexType) {

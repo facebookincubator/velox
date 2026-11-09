@@ -27,7 +27,7 @@
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
@@ -891,50 +891,27 @@ TEST_F(ChunkedDecoderDataTest, loadNextChunkReleasesPreviousChunk) {
   }
 }
 
-TEST_F(ChunkedDecoderDataTest, sharedDictionaryRequiresNonLegacyDispatch) {
+TEST_F(ChunkedDecoderDataTest, sharedDictionaryDecodesIndices) {
   const std::vector<int32_t> alphabet{10, 20, 30, 40};
   const std::vector<uint32_t> indices{2, 0, 3, 1, 2};
   const std::vector<int32_t> expected{30, 10, 40, 20, 30};
   const auto streamData = encodeSharedDictionaryChunkedStream(indices);
-  auto makeAlphabetLoader = [&] {
-    auto sharedDictionaryAlphabet =
-        test::createSharedDictionaryAlphabet<int32_t>(
-            alphabet, /*candidateEncodings=*/{}, pool_.get());
-    return [sharedDictionaryAlphabet] { return sharedDictionaryAlphabet; };
-  };
+  auto sharedDictionaryAlphabet = test::createSharedDictionaryAlphabet<int32_t>(
+      alphabet, /*candidateEncodings=*/{}, pool_.get());
 
-  {
-    ChunkedDecoder decoder(
-        std::make_unique<dwio::common::SeekableArrayInputStream>(
-            streamData.data(), streamData.size()),
-        /*streamIndex=*/nullptr,
-        /*decodeValuesWithNulls=*/false,
-        &encodingFactory(),
-        pool_.get(),
-        /*stringDecoderZeroCopy=*/false,
-        /*decodingStats=*/nullptr,
-        makeAlphabetLoader());
-    NIMBLE_ASSERT_THROW(
-        decoder.ensureLoaded(),
-        "Shared dictionary encoding requires non-legacy encoding dispatch");
-  }
-
-  {
-    ChunkedDecoder decoder(
-        std::make_unique<dwio::common::SeekableArrayInputStream>(
-            streamData.data(), streamData.size()),
-        /*streamIndex=*/nullptr,
-        /*decodeValuesWithNulls=*/false,
-        &encodingFactory(),
-        pool_.get(),
-        /*stringDecoderZeroCopy=*/true,
-        /*decodingStats=*/nullptr,
-        makeAlphabetLoader());
-    std::vector<int32_t> result(indices.size());
-    decoder.nextIndices(
-        result.data(), static_cast<int64_t>(result.size()), nullptr);
-    EXPECT_EQ(result, expected);
-  }
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      /*streamIndex=*/nullptr,
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get(),
+      /*decodingStats=*/nullptr,
+      [sharedDictionaryAlphabet] { return sharedDictionaryAlphabet; });
+  std::vector<int32_t> result(indices.size());
+  decoder.nextIndices(
+      result.data(), static_cast<int64_t>(result.size()), nullptr);
+  EXPECT_EQ(result, expected);
 }
 
 TEST_P(ChunkedDecoderDataTest, skipMultipleChunks) {
@@ -1551,7 +1528,6 @@ TEST_P(ChunkedDecoderDataTest, scanFastPathPropagation) {
       /*decodeValuesWithNulls=*/false,
       &encodingFactory(),
       pool_.get(),
-      /*stringDecoderZeroCopy=*/false,
       /*decodingStats=*/nullptr,
       /*dictionaryAlphabetLoader=*/nullptr,
       /*dictionaryAwareReads=*/false,
@@ -1575,7 +1551,6 @@ TEST_P(ChunkedDecoderDataTest, scanFastPathWithNullable) {
       /*decodeValuesWithNulls=*/false,
       &encodingFactory(),
       pool_.get(),
-      /*stringDecoderZeroCopy=*/false,
       /*decodingStats=*/nullptr,
       /*dictionaryAlphabetLoader=*/nullptr,
       /*dictionaryAwareReads=*/false,
@@ -1650,7 +1625,6 @@ TEST_F(ChunkedDecoderDataTest, skipWithIndexOpensChunkOnRead) {
           /*decodeValuesWithNulls=*/false,
           &encodingFactory(),
           pool_.get(),
-          /*stringDecoderZeroCopy=*/false,
           &stats);
       uint32_t row{0};
       for (const auto& step : testCase.steps) {
@@ -1723,6 +1697,35 @@ TEST_F(ChunkedDecoderDataTest, skipWithIndexToStreamEndDropsLazyChunkSeek) {
   decoder.ensureLoaded();
   EXPECT_EQ(decoder.currentEncoding(), nullptr);
   EXPECT_EQ(decoder.remainingValues(), 0);
+}
+
+// A skip to the end of the stream frees the open chunk with its buffers, as a
+// skip into a later chunk does.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexToStreamEndReleasesChunk) {
+  constexpr uint32_t kRowsPerChunk = 128 << 10;
+  constexpr uint64_t kChunkBytes = kRowsPerChunk * sizeof(uint32_t);
+  const auto [streamData, chunkInfos] = encodeChunkedStream<uint32_t>(
+      {std::vector<uint32_t>(kRowsPerChunk, 42),
+       std::vector<uint32_t>(kRowsPerChunk, 7)},
+      CompressionType::Zstd);
+  // The chunks must be compressed, so that an open chunk holds a decompressed
+  // buffer.
+  ASSERT_LT(streamData.size(), kChunkBytes);
+
+  auto decoderPool = rootPool_->addLeafChild("decoder");
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      createTestStreamIndexInternal(chunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      decoderPool.get());
+  decoder.ensureLoaded();
+  ASSERT_GE(decoderPool->usedBytes(), kChunkBytes);
+
+  decoder.skip(2 * kRowsPerChunk);
+  EXPECT_EQ(decoder.currentEncoding(), nullptr);
+  EXPECT_LT(decoderPool->usedBytes(), kChunkBytes);
 }
 
 // A read whose rows are all null in 'incomingNulls' reads no values, so the
@@ -1804,12 +1807,7 @@ TEST_P(ChunkedDecoderDataTest, ensureLoadedAndAccessors) {
   auto input = std::make_unique<velox::dwio::common::SeekableArrayInputStream>(
       streamData.data(), streamData.size());
   ChunkedDecoder decoder(
-      std::move(input),
-      streamIndex,
-      false,
-      &encodingFactory(),
-      pool_.get(),
-      true);
+      std::move(input), streamIndex, false, &encodingFactory(), pool_.get());
 
   EXPECT_EQ(decoder.currentEncoding(), nullptr);
   EXPECT_EQ(decoder.remainingValues(), 0);
@@ -2023,8 +2021,7 @@ class ChunkedDecoderDictTest : public ChunkedDecoderTest {
         /*streamIndex=*/nullptr,
         /*decodeValuesWithNulls=*/false,
         &encodingFactory(),
-        &pool(),
-        /*stringDecoderZeroCopy=*/true);
+        &pool());
   }
 };
 

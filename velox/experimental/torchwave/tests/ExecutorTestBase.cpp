@@ -215,6 +215,10 @@ DEFINE_bool(
     false,
     "Check step completion through host-mapped counters the streams write, instead of cudaEventQuery");
 DEFINE_bool(
+    verify_repeats,
+    false,
+    "Check the outputs of every timed repeat against the expected values, not only the first run's");
+DEFINE_bool(
     skip_repeated_waits,
     true,
     "Skip a stream wait on a completion event the stream already waited on");
@@ -222,14 +226,6 @@ DEFINE_int64(
     max_delayed_free,
     1LL << 30,
     "Ceiling in bytes on freeable memory sitting in already-issued but incomplete steps; exceeding it drains both streams before the next allocation. 0 disables");
-DEFINE_bool(
-    donate_buffers,
-    false,
-    "Hold a released wave-kernel buffer and hand it to a later wave kernel needing exactly the same byte size, instead of returning it to the caching allocator");
-DEFINE_int64(
-    donation_carry_bytes,
-    64LL << 20,
-    "Bytes of donatable buffers carried between executions; the pool is trimmed to this at the end of each run");
 DEFINE_bool(
     duplicate_metadata,
     false,
@@ -287,18 +283,6 @@ DEFINE_bool(
     mk_select,
     false,
     "In cg mode, expand tw.masked_select_jagged into its multi-kernel stages so the output list is sized to the exact selected count instead of the mask length");
-DEFINE_bool(
-    enable_alloc_group,
-    true,
-    "Allocate the outputs that share a lifetime out of one buffer instead of one allocator call each. Cooperative grid only, where the step boundaries a lifetime is expressed in are fixed before the first execution");
-DEFINE_bool(
-    enable_concat_alloc_group,
-    true,
-    "Give a fused cat/stack of more than two operands an allocation group of its own: the result is allocated at the step that produces the operands and each operand writes straight into the region it occupies, so the concat copies nothing");
-DEFINE_bool(
-    enable_lifetime_alloc_group,
-    true,
-    "With --enable_alloc_group, also group the outputs that merely share a lifetime. Off leaves only the concat groups, which isolates what the concat grouping costs and saves on its own");
 DEFINE_bool(
     order_blocks_by_cost,
     false,
@@ -866,8 +850,6 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
   WaveConfig::get().configPerOp = FLAGS_config_per_op;
   WaveConfig::get().deferSizeOutputs = FLAGS_defer_size_outputs;
-  WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
-  WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
   WaveConfig::get().cseCompute = FLAGS_cse_compute;
   WaveConfig::get().cseViews = FLAGS_cse_views;
@@ -877,10 +859,6 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
   WaveConfig::get().preferBlocksPerSm = parsePreferPerSm(FLAGS_prefer_per_sm);
   WaveConfig::get().mkSelect = FLAGS_mk_select;
-  WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
-  WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;
-  WaveConfig::get().enableLifetimeAllocGroup =
-      FLAGS_enable_lifetime_alloc_group;
   WaveConfig::get().orderBlocksByCost = FLAGS_order_blocks_by_cost;
   WaveConfig::get().partitionLaunches = FLAGS_partition_launches;
   WaveConfig::get().maxLaunchWaves = FLAGS_max_launch_waves;
@@ -1299,15 +1277,12 @@ AllocGroupStats ExecutorTestBase::allocGroupStats(
   auto& config = WaveConfig::get();
   const auto savedCg = config.isCg;
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  auto restore = folly::makeGuard([&, savedCg, savedFree, savedGroup] {
+  auto restore = folly::makeGuard([&, savedCg, savedFree] {
     config.isCg = savedCg;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
   });
   config.isCg = cg;
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
 
   WaveGraphExecutor waveExec(fixture->makeModelContext());
   auto* wave = waveExec.waveGraph();
@@ -1423,10 +1398,16 @@ void ExecutorTestBase::runTestWithFixture(
 
       syncBeforeTiming();
       auto start = Clock::now();
-      waveExec.executeWithPrefilledFrame(*pooledFrame);
+      auto repeatOutputs = waveExec.executeWithPrefilledFrame(*pooledFrame);
       auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                     Clock::now() - start)
                     .count();
+      if (FLAGS_verify_repeats) {
+        verifyOutputs(
+            outputsToHost(repeatOutputs, "wave repeat"),
+            expected,
+            "wave repeat");
+      }
       waveTimes[i] = us;
       waveMin = std::min(waveMin, us);
       waveMax = std::max(waveMax, us);

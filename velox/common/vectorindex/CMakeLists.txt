@@ -12,17 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The vector search join plan node, which builds without FAISS, holds and
-# validates these settings.
+# The vector search join plan node, which builds without FAISS, holds the
+# metric.
 velox_add_library(
   velox_vector_index_settings
   LocalVectorIndexOptions.cpp
   VectorIndexMetric.cpp
-  VectorIndexType.cpp
+  VectorIndexKind.cpp
   HEADERS
   LocalVectorIndexOptions.h
   VectorIndexMetric.h
-  VectorIndexType.h
+  VectorIndexKind.h
 )
 
 velox_link_libraries(
@@ -34,15 +34,14 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_FAISS)
-  find_package(OpenMP REQUIRED)
-
   velox_add_library(
     velox_vector_index
     Embeddings.cpp
-    LocalVectorIndex.cpp
+    FaissLocalVectorIndex.cpp
     HEADERS
     CallbackWriter.h
     Embeddings.h
+    FaissLocalVectorIndex.h
     LocalVectorIndex.h
     SingleThreadedFaiss.h
   )

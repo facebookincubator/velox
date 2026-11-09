@@ -112,7 +112,7 @@ if(VELOX_ENABLE_FAISS)
   add_executable(
     velox_aggregates_VectorIndexTest
     VectorIndexBuildTest.cpp
-    VectorIndexPackTest.cpp
+    VectorIndexTrainTest.cpp
     Main.cpp
   )
   add_test(
@@ -125,5 +125,6 @@ if(VELOX_ENABLE_FAISS)
     ${VELOX_AGGREGATES_TEST_DEPS}
     velox_vector_index
     FAISS::faiss
+    GTest::gmock
   )
 endif()

@@ -166,6 +166,9 @@ are summarized below.
 - Put runtime information (names, values, types) at the **end** of error messages, after the static description.
   - ❌ `VELOX_USER_FAIL("Column '{}' is ambiguous", name);`
   - ✅ `VELOX_USER_FAIL("Column is ambiguous: {}", name);`
+- Name the mistake in an error message, or the requirement it broke with "must"; a sentence describing only the correct state reads as documentation.
+  - ❌ `VELOX_USER_FAIL("A placeholder's type is declared with CAST, not TRY_CAST: {}", name);`
+  - ✅ `VELOX_USER_FAIL("TRY_CAST of a placeholder is not supported: {}", name);`
 - Pass a value whose type has an `fmt::formatter`, such as `TypeKind`, to a formatted message or `fmt::format` as is, not converted to a string first.
   - ❌ `VELOX_FAIL("Unsupported type: {}", TypeKindName::toName(kind));`
   - ✅ `VELOX_FAIL("Unsupported type: {}", kind);`
@@ -179,9 +182,8 @@ are summarized below.
 - Use uniform initialization: `size_t size{0}` over `size_t size = 0`.
 - Declare variables in the smallest scope, as close to usage as possible.
 - Use digit separators (`'`) for numeric literals with 4 or more digits: `10'000`, not `10000`.
-- Use trailing commas in multi-line initializer lists, enum definitions, and
-  function-call argument lists that span multiple lines. This produces cleaner
-  diffs when items are added or reordered.
+- Use trailing commas in multi-line initializer lists and enum definitions.
+  This produces cleaner diffs when items are added or reordered.
 
 ### Types
 

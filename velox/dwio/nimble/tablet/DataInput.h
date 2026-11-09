@@ -220,10 +220,7 @@ class DirectDataInput : public DataInput {
   std::pair<char*, Handle> allocateBuffer(uint64_t bytes);
 
   // Executes all physical IO groups through ReadFile's positioned vector API.
-  void executeIoGroups(
-      std::vector<IoGroup>& ioGroups,
-      char* buffer,
-      uint64_t bufferSize);
+  void executeIoGroups(std::vector<IoGroup>& ioGroups, char* buffer);
 
   // File to read from.
   velox::ReadFile* const file_;

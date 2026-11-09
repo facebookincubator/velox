@@ -185,7 +185,7 @@ class Projector {
       const std::vector<uint32_t>& selectedStreamIndices,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
@@ -200,7 +200,7 @@ class Projector {
       const std::vector<uint32_t>& selectedStreamIndices,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
@@ -214,7 +214,7 @@ class Projector {
       const std::vector<uint32_t>& selectedStreamIndices,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
@@ -228,7 +228,7 @@ class Projector {
       const std::vector<StreamMapping>& sortedStreamMappings,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 

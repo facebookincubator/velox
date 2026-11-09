@@ -27,6 +27,7 @@
 #include <folly/hash/Hash.h>
 #include <re2/re2.h>
 
+#include <functional>
 #include <sstream>
 #include <typeindex>
 
@@ -347,6 +348,7 @@ void Type::registerSerDe() {
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
   registry.Register("TimestampUtcType", TimestampUtcType::deserialize);
+  registry.Register("VectorIndexType", VectorIndexType::deserialize);
   registry.Register("TimeType", TimeTypeFactory::deserialize);
 }
 
@@ -391,7 +393,7 @@ folly::dynamic ArrayType::serialize() const {
 
   folly::dynamic children = folly::dynamic::array;
   children.push_back(child_->serialize());
-  obj["cTypes"] = children;
+  obj["cTypes"] = std::move(children);
 
   return obj;
 }
@@ -435,7 +437,7 @@ folly::dynamic MapType::serialize() const {
   folly::dynamic children = folly::dynamic::array;
   children.push_back(keyType()->serialize());
   children.push_back(valueType()->serialize());
-  obj["cTypes"] = children;
+  obj["cTypes"] = std::move(children);
 
   return obj;
 }
@@ -680,14 +682,74 @@ void RowType::printChildren(std::stringstream& ss, std::string_view delimiter)
   }
 }
 
-RowTypePtr RowType::unionWith(const RowTypePtr& other) const {
+namespace {
+// Returns 'row' followed by 'numFields' fields that 'addFields' appends to the
+// names and types vectors.
+template <typename AddFields>
+RowTypePtr concat(const RowType& row, size_t numFields, AddFields addFields) {
   std::vector<std::string> names;
+  names.reserve(row.size() + numFields);
+  names.insert(names.end(), row.names().begin(), row.names().end());
+
   std::vector<TypePtr> types;
-  copy(names_.begin(), names_.end(), back_inserter(names));
-  copy(other->names_.begin(), other->names_.end(), back_inserter(names));
-  copy(children_.begin(), children_.end(), back_inserter(types));
-  copy(other->children_.begin(), other->children_.end(), back_inserter(types));
+  types.reserve(row.size() + numFields);
+  types.insert(types.end(), row.children().begin(), row.children().end());
+
+  addFields(names, types);
   return ROW(std::move(names), std::move(types));
+}
+
+template <typename Names>
+RowTypePtr
+concatSameType(const RowType& row, const Names& names, const TypePtr& type) {
+  return concat(row, names.size(), [&](auto& newNames, auto& newTypes) {
+    newNames.insert(newNames.end(), names.begin(), names.end());
+    newTypes.insert(newTypes.end(), names.size(), type);
+  });
+}
+} // namespace
+
+RowTypePtr RowType::unionWith(const RowTypePtr& other) const {
+  return unionWith(other->names_, other->children_);
+}
+
+RowTypePtr RowType::unionWith(
+    const std::vector<std::string>& names,
+    const std::vector<TypePtr>& types) const {
+  return concat(*this, names.size(), [&](auto& newNames, auto& newTypes) {
+    newNames.insert(newNames.end(), names.begin(), names.end());
+    newTypes.insert(newTypes.end(), types.begin(), types.end());
+  });
+}
+
+RowTypePtr RowType::unionWith(
+    const std::vector<std::string>& names,
+    const TypePtr& type) const {
+  return concatSameType(*this, names, type);
+}
+
+RowTypePtr RowType::unionWith(
+    std::initializer_list<std::string_view> names,
+    const TypePtr& type) const {
+  return concatSameType(*this, names, type);
+}
+
+RowTypePtr RowType::unionWith(
+    std::initializer_list<std::pair<std::string_view, TypePtr>> pairs) const {
+  return concat(*this, pairs.size(), [&](auto& newNames, auto& newTypes) {
+    for (const auto& [name, type] : pairs) {
+      newNames.emplace_back(name);
+      newTypes.push_back(type);
+    }
+  });
+}
+
+RowTypePtr RowType::unionWith(std::string_view name, const TypePtr& type)
+    const {
+  return concat(*this, 1, [&](auto& newNames, auto& newTypes) {
+    newNames.emplace_back(name);
+    newTypes.push_back(type);
+  });
 }
 
 std::string RowType::toString() const {
@@ -1109,6 +1171,10 @@ TypePtr TIMESTAMP_UTC() {
   return TimestampUtcType::get();
 }
 
+TypePtr VECTOR_INDEX() {
+  return VectorIndexType::get();
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -1425,7 +1491,7 @@ int32_t DateType::toDays(std::string_view in) const {
 
 int32_t DateType::toDays(const char* in, size_t len) const {
   return util::fromDateString(in, len, util::ParseMode::kPrestoCast)
-      .thenOrThrow(folly::identity, [&](const Status& status) {
+      .thenOrThrow(std::identity{}, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
 }
@@ -1453,6 +1519,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"TIME", TIME()},
       {"TIME MICRO UTC", TIME_MICRO_UTC()},
       {"UNKNOWN", UNKNOWN()},
+      {"VECTOR_INDEX", VECTOR_INDEX()},
   };
   return kTypes;
 }
@@ -1631,6 +1698,13 @@ const auto& typeParameterKindNames() {
 
 VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
 
+folly::dynamic VectorIndexType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "VectorIndexType";
+  obj["type"] = name();
+  return obj;
+}
+
 folly::dynamic TimestampUtcType::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "TimestampUtcType";
@@ -1711,7 +1785,7 @@ StringView TimeMilliPrecisionType::valueToString(
 
 int64_t TimeMilliPrecisionType::valueToTime(const StringView& timeStr) const {
   return util::fromTimeString(timeStr).thenOrThrow(
-      folly::identity,
+      std::identity{},
       [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
 }
 

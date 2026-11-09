@@ -181,6 +181,13 @@ class NimbleIndexProjector {
     /// read error in any of them fails the projection. Pinned metadata keeps
     /// them in memory for the reader's lifetime.
     uint64_t maxStripeGroupMetadataBytesPerLoad{0};
+    /// Makes co_projectRows() build the lookup structures of each encoding
+    /// view when it binds a stripe's streams, which pays off when a projection
+    /// reads many rows of each stripe. When unset, each read derives only what
+    /// it needs, which suits point lookups. Both settings return the same rows.
+    /// Changing it between calls rebuilds the projector's StreamReader. See
+    /// Encoding::Options::cacheEncodingView.
+    bool cacheEncodingView{false};
   };
 
   /// Request for a batch of index lookups.
@@ -346,6 +353,12 @@ class NimbleIndexProjector {
   /// spends about 3 us on these reads. Disabled timings keep their current
   /// values. Enabled by default.
   void setTimingEnabled(bool enabled);
+
+  /// Turns the verification of stream checksums on or off for the next
+  /// requests, as ReaderOptions::verifyStreamChecksums() does at creation. A
+  /// file whose stream trailers carry no checksum stays unverified. Must not
+  /// be called while a request loads stripes.
+  void setVerifyStreamChecksums(bool verifyStreamChecksums);
 
  private:
   // Applies a synchronous counter or timing update under the TSan guard.
@@ -521,6 +534,9 @@ class NimbleIndexProjector {
   // Validates the projected row schema.
   void validateProjection() const;
 
+  // Returns the stream slicer, which the first call creates.
+  serde::StreamSlicer& streamSlicer();
+
   // Builds streamChecksum_ and the stream trailer members when
   // `verifyStreamChecksums` is set and the file's stream trailers carry a
   // checksum.
@@ -530,7 +546,7 @@ class NimbleIndexProjector {
   void loadStripes(const Request& request, const Options& options);
 
   // Returns decoding options backed by this projector's scratch pool.
-  Encoding::Options encodingOptions();
+  Encoding::Options encodingOptions(bool cacheEncodingView);
 
   // Creates the schema-derived reader on first use by co_projectRows().
   void ensureStreamReader();
@@ -630,13 +646,12 @@ class NimbleIndexProjector {
   // True when every emitted slice must preserve a native HFM batch boundary,
   // even if the selected group has no physical stream in a stripe.
   const bool hasProjectedHybridFlatMaps_{false};
-  // Reused across stripes; its raw input format is fixed by the tablet.
-  const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
   std::unique_ptr<DataInput> dataInput_;
   // Verifies a stream read from storage against the checksum in its stream
-  // trailer. Built only when ReaderOptions::verifyStreamChecksums() is set and
-  // the file's stream trailers carry a checksum, so null means this projector
+  // trailer. Built only when ReaderOptions::verifyStreamChecksums() or
+  // setVerifyStreamChecksums() turns verification on and the file's stream
+  // trailers carry a checksum, so null means this projector
   // does not verify. Stateful, so it relies on this class being
   // single-threaded.
   std::unique_ptr<Checksum> streamChecksum_;
@@ -651,9 +666,15 @@ class NimbleIndexProjector {
   // projector is single-threaded, matching BufferPool's ownership contract.
   velox::BufferPool encodingBufferPool_{velox::BufferPool::kDefaultCapacity};
 
-  // Decodes projected rows into Velox vectors. The serialized path does not
-  // need this reader, so it is created on the first co_projectRows() call.
+  // Decodes projected rows into Velox vectors with the encoding options of each
+  // request. The serialized path does not need this reader, so it is created
+  // on the first co_projectRows() call.
   std::unique_ptr<StreamReader> streamReader_;
+
+  // Reused across stripes; its raw input format is fixed by the tablet. Only
+  // the serialized path slices streams, so the slicer is created on the first
+  // slice and a projector that decodes rows never builds it.
+  std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
   // One range tagged with the tablet stripe it falls in, before grouping.
   // Sorting a vector of these on (tabletStripeIndex, range.requestIndex) is

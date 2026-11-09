@@ -319,6 +319,138 @@ TEST(SchemaBuilderTest, hybridFlatMapTracksDefaultGroupKeys) {
       (std::vector<std::string>{"observed", "b", "a"}));
 }
 
+// Groups added from a bound HybridFlatMap read their keys from the builder's
+// copy of it instead of copying them.
+TEST(SchemaBuilderTest, hybridFlatMapReadsBoundGroupKeys) {
+  HybridFlatMap bound{
+      ScalarKind::String,
+      {{.groupId = 7, .groupKeys = {"grouped"}},
+       {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}}};
+  bound.setDefaultGroupKeyPresenceMode(
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  SchemaBuilder builder;
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::String, HybridFlatMap::KeyPresenceMode::kKeyList);
+  hybridMap->addGroup(
+      bound,
+      /*groupIndex=*/0,
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      bound,
+      /*groupIndex=*/1,
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+
+  EXPECT_EQ(hybridMap->groupAt(0).groupId, uint32_t{7});
+  EXPECT_EQ(&hybridMap->groupAt(0).groupKeys, &bound.groups()[0].groupKeys);
+  EXPECT_TRUE(hybridMap->groupAt(1).groupKeys.empty());
+  NIMBLE_ASSERT_THROW(
+      hybridMap->addGroup(
+          8, {"listed"}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
+      "Hybrid FlatMap groups cannot mix bound and listed keys.");
+}
+
+// A builder whose Default lists its keys adds the groups of one HybridFlatMap
+// bound to its key kind and Default key presence mode, in order, and no listed
+// groups with them.
+TEST(SchemaBuilderTest, hybridFlatMapRejectsInvalidBoundGroups) {
+  constexpr auto kBitmap = HybridFlatMap::KeyPresenceMode::kBitmap;
+  constexpr auto kKeyList = HybridFlatMap::KeyPresenceMode::kKeyList;
+  HybridFlatMap configuration;
+  configuration.addGroup(7, {"grouped"});
+  const HybridFlatMap bitmapBound{ScalarKind::String, configuration};
+  configuration.setDefaultGroupKeyPresenceMode(kKeyList);
+  const HybridFlatMap bound{ScalarKind::String, configuration};
+  {
+    SCOPED_TRACE("bound groups after listed ones");
+    SchemaBuilder builder;
+    auto hybridMap =
+        builder.createHybridFlatMapTypeBuilder(ScalarKind::String, kKeyList);
+    hybridMap->addGroup(
+        8, {"listed"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    NIMBLE_ASSERT_THROW(
+        hybridMap->addGroup(
+            bound,
+            /*groupIndex=*/0,
+            builder.createScalarTypeBuilder(ScalarKind::Int64)),
+        "Hybrid FlatMap groups cannot mix bound and listed keys.");
+  }
+
+  // Adds group `groupIndex` of `hybridFlatMap` to a new builder for keys of
+  // `keyKind` whose Default records keys in `mode`, after groups [0, numAdded)
+  // of `bound`, and expects `error`.
+  const auto expectRejected = [&](ScalarKind keyKind,
+                                  HybridFlatMap::KeyPresenceMode mode,
+                                  size_t numAdded,
+                                  const HybridFlatMap& hybridFlatMap,
+                                  size_t groupIndex,
+                                  std::string_view error) {
+    SCOPED_TRACE(error);
+    SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(keyKind, mode);
+    for (size_t i = 0; i < numAdded; ++i) {
+      hybridMap->addGroup(
+          bound, i, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    }
+    NIMBLE_ASSERT_THROW(
+        hybridMap->addGroup(
+            hybridFlatMap,
+            groupIndex,
+            builder.createScalarTypeBuilder(ScalarKind::Int64)),
+        error);
+  };
+  const HybridFlatMap otherBound{ScalarKind::String, configuration};
+  expectRejected(
+      ScalarKind::String,
+      kBitmap,
+      /*numAdded=*/0,
+      bitmapBound,
+      /*groupIndex=*/0,
+      "Bound Hybrid FlatMap groups must have a Default group that lists its "
+      "keys.");
+  expectRejected(
+      ScalarKind::String,
+      kKeyList,
+      /*numAdded=*/0,
+      configuration,
+      /*groupIndex=*/0,
+      "Hybrid FlatMap groups must come from a bound HybridFlatMap.");
+  expectRejected(
+      ScalarKind::Int64,
+      kKeyList,
+      /*numAdded=*/0,
+      bound,
+      /*groupIndex=*/0,
+      "Bound Hybrid FlatMap is for keys of another type.");
+  expectRejected(
+      ScalarKind::String,
+      kKeyList,
+      /*numAdded=*/0,
+      bitmapBound,
+      /*groupIndex=*/0,
+      "Bound Hybrid FlatMap has another Default key presence mode.");
+  expectRejected(
+      ScalarKind::String,
+      kKeyList,
+      /*numAdded=*/1,
+      otherBound,
+      /*groupIndex=*/1,
+      "Hybrid FlatMap groups must all come from one bound HybridFlatMap");
+  expectRejected(
+      ScalarKind::String,
+      kKeyList,
+      /*numAdded=*/0,
+      bound,
+      /*groupIndex=*/1,
+      "Hybrid FlatMap bound groups must be added in order.");
+  expectRejected(
+      ScalarKind::String,
+      kKeyList,
+      /*numAdded=*/2,
+      bound,
+      /*groupIndex=*/2,
+      "Hybrid FlatMap bound group index is out of range.");
+}
+
 TEST(SchemaBuilderTest, hybridFlatMapRejectsDuplicateDefaultKeysAfterGrowth) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(

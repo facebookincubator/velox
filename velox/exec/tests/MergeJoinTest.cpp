@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -364,7 +366,7 @@ class MergeJoinTest : public HiveConnectorTestBase {
     createDuckDbTable("t", leftInput);
     createDuckDbTable("u", rightInput);
 
-    testJoins(leftInput, rightInput, folly::identity);
+    testJoins(leftInput, rightInput, std::identity{});
     testJoins(
         leftInput,
         rightInput,
@@ -736,6 +738,70 @@ TEST_F(MergeJoinTest, leftAndRightJoinFilter) {
               "SELECT t_c0, t_c1, u_c1 FROM u RIGHT JOIN t ON t_c0 = u_c0 AND {}",
               filter));
     }
+  }
+}
+
+TEST_F(MergeJoinTest, outerJoinRejectedRowsAtOutputBoundary) {
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {makeFlatVector<int32_t>({10, 10}), makeFlatVector<int32_t>({0, 1})});
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {makeFlatVector<int32_t>({10, 10, 10, 10, 10, 10}),
+       makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5})});
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  for (auto rightJoin : {false, true}) {
+    auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(ids)
+            .values({rightJoin ? right : left})
+            .mergeJoin(
+                {rightJoin ? "u_c0" : "t_c0"},
+                {rightJoin ? "t_c0" : "u_c0"},
+                PlanBuilder(ids).values({rightJoin ? left : right}).planNode(),
+                "u_c1 > t_c1 + 10",
+                {"t_c0", "t_c1", "u_c1"},
+                rightJoin ? core::JoinType::kRight : core::JoinType::kLeft)
+            .planNode();
+    for (auto batchSize : {3, 4}) {
+      assertQuery(
+          makeCursorParameters(plan, batchSize),
+          "SELECT t_c0, t_c1, u_c1 FROM t LEFT JOIN u "
+          "ON t_c0 = u_c0 AND u_c1 > t_c1 + 10");
+    }
+  }
+}
+
+TEST_F(MergeJoinTest, fullOuterJoinRejectedRowsAtOutputBoundary) {
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {makeFlatVector<int32_t>({10}), makeFlatVector<int32_t>({0})});
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {makeFlatVector<int32_t>({10, 10, 10, 10, 10, 10}),
+       makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5})});
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(ids)
+                  .values({left})
+                  .mergeJoin(
+                      {"t_c0"},
+                      {"u_c0"},
+                      PlanBuilder(ids).values({right}).planNode(),
+                      "u_c1 > t_c1 + 10",
+                      {"t_c0", "t_c1", "u_c0", "u_c1"},
+                      core::JoinType::kFull)
+                  .planNode();
+  for (auto batchSize : {3, 4, 6}) {
+    SCOPED_TRACE(fmt::format("batchSize: {}", batchSize));
+    assertQuery(
+        makeCursorParameters(plan, batchSize),
+        "SELECT t_c0, t_c1, u_c0, u_c1 FROM t FULL OUTER JOIN u "
+        "ON t_c0 = u_c0 AND u_c1 > t_c1 + 10");
   }
 }
 
@@ -1695,9 +1761,9 @@ TEST_F(MergeJoinTest, streamLeftSideInstallmentBoundaries) {
   }
 }
 
-// The config only applies to unfiltered inner and left joins. Everywhere else
-// it has to be inert rather than merely harmless: these shapes revisit the left
-// group, so releasing a batch would drop rows still needed.
+// The config only applies to inner joins and unfiltered left joins. Everywhere
+// else it has to be inert rather than merely harmless: these shapes revisit the
+// left group, so releasing a batch would drop rows still needed.
 TEST_F(MergeJoinTest, streamLeftSideInertWhereUnsupported) {
   // One key spanning four left batches, so streaming would have plenty to
   // release if it wrongly engaged.
@@ -1723,12 +1789,10 @@ TEST_F(MergeJoinTest, streamLeftSideInertWhereUnsupported) {
     std::string filter;
     std::string duckDbSql;
   } testCases[] = {
-      // The filter rejects most of the group, so it has to be applied across a
-      // group that spans batches rather than being a no-op.
-      {"filtered inner join",
-       core::JoinType::kInner,
-       "t1 < 5",
-       "SELECT t0, t1, u1 FROM t, u WHERE t0 = u0 AND t1 < 5"},
+      {"filtered left join",
+       core::JoinType::kLeft,
+       "t1 >= 0",
+       "SELECT t0, t1, u1 FROM t LEFT JOIN u ON t0 = u0 AND t1 >= 0"},
       {"right join",
        core::JoinType::kRight,
        "",
@@ -1760,6 +1824,91 @@ TEST_F(MergeJoinTest, streamLeftSideInertWhereUnsupported) {
     const auto runtimeStats =
         toPlanStats(task->taskStats()).at(mergeJoinNodeId).customStats;
     ASSERT_EQ(runtimeStats.at("streamedLeftBatches").sum, 0);
+  }
+}
+
+TEST_F(MergeJoinTest, streamLeftSideWithFilter) {
+  std::vector<RowVectorPtr> leftInput;
+  constexpr int32_t kBatches = 16;
+  constexpr int32_t kRows = 8;
+  leftInput.reserve(kBatches);
+  for (int32_t batch = 0; batch < kBatches; ++batch) {
+    leftInput.push_back(makeRowVector(
+        {"t0", "t1", "t2"},
+        {makeFlatVector<int32_t>(kRows, [](auto) { return 1; }),
+         makeFlatVector<int32_t>(
+             kRows, [batch](auto row) { return batch * kRows + row; }),
+         makeFlatVector<int32_t>(
+             kRows,
+             [batch](auto row) { return (batch * kRows + row) % 5; },
+             [batch](auto row) { return (batch * kRows + row) % 7 == 0; })}));
+  }
+  leftInput.push_back(makeRowVector(
+      {"t0", "t1", "t2"},
+      {makeFlatVector<int32_t>({2, 3, 4}),
+       makeFlatVector<int32_t>({128, 129, 130}),
+       makeNullableFlatVector<int32_t>({2, std::nullopt, 4})}));
+  std::vector<RowVectorPtr> rightInput{
+      makeRowVector(
+          {"u0", "u1", "u2"},
+          {makeFlatVector<int32_t>({1, 1, 1, 1}),
+           makeFlatVector<int32_t>({0, 1, 2, 3}),
+           makeNullableFlatVector<int32_t>({-1, 0, 3, std::nullopt})}),
+      makeRowVector(
+          {"u0", "u1", "u2"},
+          {makeFlatVector<int32_t>({1, 2, 2, 5}),
+           makeFlatVector<int32_t>({4, 5, 6, 7}),
+           makeNullableFlatVector<int32_t>({2, 0, 5, std::nullopt})})};
+  createDuckDbTable("t", leftInput);
+  createDuckDbTable("u", rightInput);
+
+  for (const auto* filter :
+       {"coalesce(t2, CAST(0 AS INTEGER)) >= 0",
+        "coalesce(t2, CAST(0 AS INTEGER)) < 0",
+        "t2 < u2",
+        "t1 < u1",
+        "CAST(NULL AS BOOLEAN)"}) {
+    for (const auto* streamLeft : {"false", "true"}) {
+      for (const auto* outputBatchRows : {"3", "17"}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "filter={} streamLeft={} outputBatchRows={}",
+                filter,
+                streamLeft,
+                outputBatchRows));
+        core::PlanNodeId joinId;
+        auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+        auto plan = PlanBuilder(ids)
+                        .values(leftInput)
+                        .mergeJoin(
+                            {"t0"},
+                            {"u0"},
+                            PlanBuilder(ids).values(rightInput).planNode(),
+                            filter,
+                            {"t1", "u1"})
+                        .capturePlanNodeId(joinId)
+                        .planNode();
+        auto task =
+            AssertQueryBuilder(plan, duckDbQueryRunner_)
+                .config(core::QueryConfig::kMergeJoinStreamLeftSide, streamLeft)
+                .config(
+                    core::QueryConfig::kPreferredOutputBatchRows,
+                    outputBatchRows)
+                .assertResults(
+                    fmt::format(
+                        "SELECT t1, u1 FROM t JOIN u ON t0 = u0 AND ({})",
+                        filter));
+        const auto streamedBatches = toPlanStats(task->taskStats())
+                                         .at(joinId)
+                                         .customStats.at("streamedLeftBatches")
+                                         .sum;
+        if (streamLeft == std::string_view("true")) {
+          ASSERT_GT(streamedBatches, 0);
+        } else {
+          ASSERT_EQ(streamedBatches, 0);
+        }
+      }
+    }
   }
 }
 

@@ -20,7 +20,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
@@ -47,6 +47,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingTypeDispatch.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
@@ -194,7 +195,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       }
     }
     case EncodingType::BlockBitPacking: {
-      RETURN_ENCODING_BY_NUMERIC_TYPE(BlockBitPackingEncoding, dataType);
+      RETURN_ENCODING_BY_NUMERIC_TYPE(
+          deprecated::BlockBitPackingEncoding, dataType);
+    }
+    case EncodingType::BlockBitPackingV2: {
+      RETURN_ENCODING_BY_NUMERIC_TYPE(BlockBitPackingV2Encoding, dataType);
     }
     case EncodingType::PFOR: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(PFOREncoding, dataType);
@@ -240,6 +245,26 @@ std::string_view EncodingFactory::slice(
     Buffer& buffer,
     const Encoding::Options& options) {
   return EncodingSliceFactory::slice(encoded, offset, length, buffer, options);
+}
+
+std::string_view EncodingFactory::slice(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    int64_t valueDelta,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  ScopedEncodingBuffer scopedBuffer{
+      &buffer.getMemoryPool(), options.encodingBufferPool};
+  const auto sliced =
+      slice(encoded, offset, length, scopedBuffer.get(), options);
+  const auto dataType = EncodingPrefix::dataType(encoded);
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE_OR(
+      dataType,
+      T,
+      SliceEncoding<T>::wrap(
+          sliced, /*offset=*/0, length, buffer, valueDelta, options),
+      NIMBLE_FAIL("A value delta requires an integer stream: {}", dataType));
 }
 
 template <typename T>
@@ -479,11 +504,19 @@ std::string_view EncodingFactory::encode(
     }
     case EncodingType::BlockBitPacking: {
       if constexpr (isNumericType<physicalType>()) {
-        return BlockBitPackingEncoding<T>::encode(
+        return deprecated::BlockBitPackingEncoding<T>::encode(
             selection, castedValues, buffer, options);
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
+    }
+    case EncodingType::BlockBitPackingV2: {
+      if constexpr (isNumericType<physicalType>()) {
+        return BlockBitPackingV2Encoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "BlockBitPackingV2 encoding should not be selected for non-numeric data types.");
     }
     case EncodingType::PFOR: {
       if constexpr (isIntegralType<physicalType>()) {

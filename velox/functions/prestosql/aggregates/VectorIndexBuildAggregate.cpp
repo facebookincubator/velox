@@ -16,28 +16,24 @@
 
 #include "velox/functions/prestosql/aggregates/VectorIndexBuildAggregate.h"
 
-#include <cmath>
-#include <limits>
-
-#include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/prestosql/aggregates/EmbeddingGroup.h"
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
 namespace {
 
-using common::vectorindex::EmbeddingNormalizer;
-using common::vectorindex::Embeddings;
-using common::vectorindex::LocalVectorIndex;
+using common::vectorindex::FaissLocalVectorIndex;
 using common::vectorindex::LocalVectorIndexOptions;
+using common::vectorindex::VectorIndexKind;
+using common::vectorindex::VectorIndexKindName;
+using common::vectorindex::VectorIndexKindValue;
 using common::vectorindex::VectorIndexMetric;
 using common::vectorindex::VectorIndexMetricName;
 using common::vectorindex::VectorIndexMetricValue;
-using common::vectorindex::VectorIndexType;
-using common::vectorindex::VectorIndexTypeName;
-using common::vectorindex::VectorIndexTypeValue;
 
 // Reads an option at 'position' in an intermediate settings array. Positions
 // past the end of the array are unset.
@@ -56,7 +52,7 @@ std::optional<int32_t> readOption(
 // unset.
 struct Settings {
   // Positions in the array.
-  static constexpr int32_t kIndexType = 0;
+  static constexpr int32_t kIndexKind = 0;
   static constexpr int32_t kMetric = 1;
   static constexpr int32_t kNlist = 2;
   static constexpr int32_t kNprobe = 3;
@@ -67,7 +63,7 @@ struct Settings {
   // The size of the array before any option.
   static constexpr int32_t kMinSize = 2;
 
-  VectorIndexType indexType;
+  VectorIndexKind indexKind;
   VectorIndexMetric metric;
   LocalVectorIndexOptions options;
 
@@ -86,13 +82,13 @@ struct Settings {
         kSize,
         "Too many entries in intermediate vector index settings");
     VELOX_USER_CHECK(
-        array[kIndexType].has_value(),
+        array[kIndexKind].has_value(),
         "Intermediate vector index settings must include the index type");
     VELOX_USER_CHECK(
         array[kMetric].has_value(),
         "Intermediate vector index settings must include the metric");
     Settings settings{
-        .indexType = VectorIndexTypeValue::fromValue(array[kIndexType].value()),
+        .indexKind = VectorIndexKindValue::fromValue(array[kIndexKind].value()),
         .metric = VectorIndexMetricValue::fromValue(array[kMetric].value()),
         .options =
             {
@@ -103,12 +99,12 @@ struct Settings {
                 .efSearch = readOption(array, kEfSearch),
             },
     };
-    settings.options.validate(settings.indexType);
+    settings.options.validate(settings.indexKind);
     return settings;
   }
 
   void write(exec::out_type<Array<int32_t>>& array) const {
-    array.add_item() = VectorIndexTypeValue::toValue(indexType);
+    array.add_item() = VectorIndexKindValue::toValue(indexKind);
     array.add_item() = VectorIndexMetricValue::toValue(metric);
     for (const auto& option :
          {options.nlist,
@@ -146,7 +142,7 @@ class VectorIndexBuildAggregate {
   static constexpr int32_t kIds = 1;
   static constexpr int32_t kEmbeddings = 2;
 
-  using OutputType = Varbinary;
+  using OutputType = VectorIndex;
 
   static constexpr bool is_reducing_ = false;
 
@@ -165,10 +161,10 @@ class VectorIndexBuildAggregate {
 
     const auto indexTypeName =
         indexType->as<ConstantVector<StringView>>()->valueAt(0);
-    const auto parsedIndexType =
-        VectorIndexTypeName::tryToVectorIndexType(indexTypeName);
+    const auto parsedIndexKind =
+        VectorIndexKindName::tryToVectorIndexKind(indexTypeName);
     VELOX_USER_CHECK(
-        parsedIndexType.has_value(),
+        parsedIndexKind.has_value(),
         "Unsupported vector index type: {}",
         indexTypeName);
     const auto metricName =
@@ -198,26 +194,21 @@ class VectorIndexBuildAggregate {
     }
 
     constantSettings_ = Settings{
-        .indexType = *parsedIndexType,
+        .indexKind = *parsedIndexKind,
         .metric = *parsedMetric,
         .options =
-            LocalVectorIndexOptions::parse(*parsedIndexType, optionPairs),
+            LocalVectorIndexOptions::parse(*parsedIndexKind, optionPairs),
     };
   }
 
   struct AccumulatorType {
-    // The length of every embedding; 0 until the first one arrives.
-    int32_t dimension{0};
-    std::vector<int64_t, StlAllocator<int64_t>> ids;
-    // The embeddings, normalized for the metric, one after another, in the
-    // order 'ids' lists them.
-    std::vector<float, StlAllocator<float>> embeddings;
+    EmbeddingGroup group;
     // The group's settings: from the constant arguments for raw input, and
     // from the intermediate results otherwise.
     std::optional<Settings> settings;
     // The function object shared by all groups, which holds the settings from
     // the constant arguments.
-    VectorIndexBuildAggregate* fn;
+    VectorIndexBuildAggregate* function;
 
     static constexpr bool is_fixed_size_ = false;
     static constexpr bool use_external_memory_ = true;
@@ -226,10 +217,8 @@ class VectorIndexBuildAggregate {
 
     explicit AccumulatorType(
         HashStringAllocator* allocator,
-        VectorIndexBuildAggregate* fn)
-        : ids{StlAllocator<int64_t>(allocator)},
-          embeddings{StlAllocator<float>(allocator)},
-          fn{fn} {}
+        VectorIndexBuildAggregate* function)
+        : group{allocator}, function{function} {}
 
     void addInput(
         HashStringAllocator* /*allocator*/,
@@ -239,16 +228,9 @@ class VectorIndexBuildAggregate {
         exec::arg_type<Varchar> /*metric*/,
         exec::arg_type<Map<Varchar, Varchar>> /*options*/) {
       if (!settings.has_value()) {
-        settings = fn->constantSettings();
+        settings = function->constantSettings();
       }
-      setDimension(embedding.size());
-      for (auto value : embedding) {
-        VELOX_USER_CHECK(value.has_value(), "Embedding must not contain nulls");
-        addValue(value.value());
-      }
-      EmbeddingNormalizer::normalize(
-          groupSettings().metric, std::span(embeddings).last(dimension));
-      ids.push_back(id);
+      group.add(embedding, id, groupSettings().metric);
     }
 
     void combine(
@@ -264,56 +246,26 @@ class VectorIndexBuildAggregate {
           other.at<kEmbeddings>().has_value(),
           "Intermediate vector index result must include the embeddings");
       mergeSettings(Settings::read(*other.at<kSettings>()));
-
-      const auto& otherIds = *other.at<kIds>();
-      const auto& otherEmbeddings = *other.at<kEmbeddings>();
-      VELOX_USER_CHECK_GT(
-          otherIds.size(),
-          0,
-          "Intermediate vector index result must include an embedding");
-      VELOX_USER_CHECK_EQ(
-          otherEmbeddings.size() % otherIds.size(),
-          0,
-          "Intermediate vector index result must have the same number of values per embedding");
-      setDimension(otherEmbeddings.size() / otherIds.size());
-      for (auto id : otherIds) {
-        VELOX_USER_CHECK(
-            id.has_value(), "Intermediate vector index ids must not be null");
-        ids.push_back(id.value());
-      }
-      for (auto value : otherEmbeddings) {
-        VELOX_USER_CHECK(
-            value.has_value(),
-            "Intermediate vector index embeddings must not contain nulls");
-        addValue(value.value());
-      }
+      group.addIntermediate(*other.at<kIds>(), *other.at<kEmbeddings>());
     }
 
     void writeIntermediateResult(exec::out_type<IntermediateType>& out) {
-      VELOX_USER_CHECK_LE(
-          embeddings.size(),
-          std::numeric_limits<vector_size_t>::max(),
-          "Too many embedding values in a vector index group");
       groupSettings().write(out.get_writer_at<kSettings>());
-      auto& idsWriter = out.get_writer_at<kIds>();
-      for (auto id : ids) {
-        idsWriter.add_item() = id;
-      }
-      auto& embeddingsWriter = out.get_writer_at<kEmbeddings>();
-      for (auto value : embeddings) {
-        embeddingsWriter.add_item() = value;
-      }
+      group.writeIntermediate(
+          out.get_writer_at<kIds>(), out.get_writer_at<kEmbeddings>());
     }
 
     void writeFinalResult(exec::out_type<OutputType>& out) {
       const auto& finalSettings = groupSettings();
-      out.reserve(embeddings.size() * sizeof(float));
-      LocalVectorIndex::build(
-          finalSettings.indexType,
+      const auto contents = group.gather();
+      const auto embeddings = contents.embeddings();
+      out.reserve(embeddings.size() * embeddings.dimension() * sizeof(float));
+      FaissLocalVectorIndex::build(
+          finalSettings.indexKind,
           finalSettings.metric,
           finalSettings.options,
-          Embeddings(embeddings, dimension),
-          ids,
+          embeddings,
+          contents.ids,
           [&](std::string_view chunk) { out.append(chunk); });
     }
 
@@ -333,22 +285,6 @@ class VectorIndexBuildAggregate {
       VELOX_USER_CHECK(
           other == *settings,
           "Intermediate vector index results of a group must have the same settings");
-    }
-
-    void setDimension(int64_t size) {
-      VELOX_USER_CHECK_GT(size, 0, "Embedding must not be empty");
-      if (dimension == 0) {
-        dimension = size;
-        return;
-      }
-      VELOX_USER_CHECK_EQ(
-          size, dimension, "All embeddings must have the same length");
-    }
-
-    void addValue(float value) {
-      VELOX_USER_CHECK(
-          std::isfinite(value), "Embedding must not contain NaN or infinity");
-      embeddings.push_back(value);
     }
   };
 
@@ -370,7 +306,7 @@ void registerVectorIndexBuildAggregate(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
-          .returnType("varbinary")
+          .returnType("vector_index")
           .intermediateType("row(array(integer),array(bigint),array(real))")
           .argumentType("array(real)")
           .argumentType("bigint")

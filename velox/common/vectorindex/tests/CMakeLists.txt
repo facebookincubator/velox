@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_vector_index_test LocalVectorIndexTest.cpp)
+add_executable(velox_vector_index_test FaissLocalVectorIndexTest.cpp)
 add_test(velox_vector_index_test velox_vector_index_test)
 target_link_libraries(
   velox_vector_index_test

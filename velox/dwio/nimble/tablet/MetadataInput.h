@@ -51,6 +51,10 @@ class MetadataInput {
  public:
   struct Options {
     velox::memory::MemoryPool* pool;
+
+    /// Receives the IO counters. rawBytesRead counts each section that load()
+    /// returns at its size in the file. It counts sections served from a cache
+    /// too, as velox counts every byte a reader touches.
     std::shared_ptr<velox::io::IoStatistics> ioStats;
     int32_t maxCoalesceDistance{
         velox::io::ReaderOptions::kDefaultCoalesceDistance};
@@ -61,6 +65,7 @@ class MetadataInput {
     velox::cache::AsyncDataCache* cache{nullptr};
     /// When set, metadata entries above this size in bytes bypass the cache.
     std::optional<uint32_t> maxCacheEntrySize{};
+    velox::FileIoContext fileIoContext{};
   };
 
   static std::unique_ptr<MetadataInput> create(
@@ -81,8 +86,9 @@ class MetadataInput {
       std::span<const MetadataSection> sections) = 0;
 
   /// Tries to find cached metadata at the given offset. Returns a
-  /// MetadataBuffer holding a cache pin if found, nullptr otherwise.
-  /// DirectMetadataInput always returns nullptr.
+  /// MetadataBuffer holding a cache pin if found, nullptr otherwise. Counts
+  /// the found bytes as raw bytes read. DirectMetadataInput always returns
+  /// nullptr.
   virtual std::unique_ptr<MetadataBuffer> findCachedMetadata(uint64_t offset);
 
   /// Raw tracked read for bootstrap IO (e.g. speculative footer read)
@@ -192,6 +198,7 @@ class MetadataInput {
   const int64_t maxCoalesceBytes_;
   folly::Executor* const executor_;
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
+  const velox::FileIoContext fileIoContext_;
 };
 
 /// Direct metadata loading with IO coalescing, no caching.

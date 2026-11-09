@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <exception>
 #include <fstream>
+#include <functional>
 #include <stdexcept>
 #include <vector>
 #include "glog/logging.h"
@@ -4257,7 +4258,7 @@ TEST_P(ParameterizedExprTest, mapKeysAndValues) {
       MAP(BIGINT(), BIGINT()),
       makeNulls(vectorSize, nullEvery(3)),
       vectorSize,
-      makeIndices(vectorSize, folly::identity),
+      makeIndices(vectorSize, std::identity{}),
       makeIndices(vectorSize, [](auto /* row */) { return 1; }),
       makeFlatIdentityVector<int64_t>(vectorSize),
       makeFlatVector<int64_t>(vectorSize, [](auto i) { return 10 * i; }));

@@ -50,6 +50,7 @@ bool canAggregationBeEvaluatedByCudf(
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -125,6 +126,34 @@ class CudfAggregationSelectionTest : public ::testing::Test,
     return std::dynamic_pointer_cast<const core::AggregationNode>(plan);
   }
 
+  // One aggregate over c1, grouped by 'groupingKeys' (c0 for the groupby
+  // path, none for the reduce path), with the boolean column c2 as its FILTER
+  // mask.
+  std::shared_ptr<const core::AggregationNode> createMaskedAggregationNode(
+      const std::string& aggregate,
+      const std::vector<std::string>& groupingKeys = {"c0"}) {
+    auto plan = PlanBuilder()
+                    .values({makeRowVector({
+                        makeFlatVector<int64_t>({1, 2, 3}),
+                        makeFlatVector<int64_t>({10, 20, 30}),
+                        makeFlatVector<bool>({true, false, true}),
+                    })})
+                    .aggregation(
+                        groupingKeys,
+                        {aggregate},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        false)
+                    .planNode();
+    auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+    auto aggregates = node->aggregates();
+    aggregates[0].mask =
+        std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
+    return core::AggregationNode::Builder(*node)
+        .aggregates(std::move(aggregates))
+        .build();
+  }
+
   std::shared_ptr<memory::MemoryPool> pool_;
   std::shared_ptr<core::QueryCtx> queryCtx_;
   std::unique_ptr<core::ExecCtx> execCtx_;
@@ -144,6 +173,15 @@ TEST_F(CudfAggregationSelectionTest, supportedAggregationFunctions) {
 TEST_F(CudfAggregationSelectionTest, stddevSampSupported) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"stddev_samp(c1)", "stddev_samp(c5)"});
+
+  ASSERT_TRUE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+}
+
+// array_agg is supported for any element type cuDF can hold in a list.
+TEST_F(CudfAggregationSelectionTest, arrayAggSupported) {
+  auto aggregationNode =
+      createAggregationNode({"c0"}, {"array_agg(c1)", "array_agg(c6)"});
 
   ASSERT_TRUE(
       canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
@@ -217,6 +255,47 @@ TEST_F(CudfAggregationSelectionTest, globalAggregationUnsupported) {
 
   ASSERT_FALSE(
       canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+}
+
+// array_agg has no reduce implementation, so its global form stays on the CPU.
+TEST_F(CudfAggregationSelectionTest, globalArrayAggUnsupported) {
+  auto aggregationNode = createAggregationNode({}, {"array_agg(c1)"});
+
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+}
+
+// array_agg over a constant stays on the CPU, like every aggregate but count
+// over constants alone.
+TEST_F(CudfAggregationSelectionTest, arrayAggConstantArgumentUnsupported) {
+  auto aggregationNode = createAggregationNode({"c0"}, {"array_agg(1)"});
+
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+}
+
+// array_agg over an element type cuDF cannot hold, a MAP or a type with a
+// custom comparison, stays on the CPU.
+TEST_F(CudfAggregationSelectionTest, arrayAggUnsupportedElementTypes) {
+  auto data = makeRowVector(
+      {"k", "m", "tz"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeMapVectorFromJson<int64_t, int64_t>({"{1: 10}", "{2: 20}"}),
+          makeFlatVector<int64_t>(
+              {pack(0, 0), pack(1, 0)}, TIMESTAMP_WITH_TIME_ZONE()),
+      });
+  for (const auto* aggregate : {"array_agg(m)", "array_agg(tz)"}) {
+    SCOPED_TRACE(aggregate);
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .singleAggregation({"k"}, {aggregate})
+                    .planNode();
+    auto aggregationNode =
+        std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+    ASSERT_FALSE(
+        canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+  }
 }
 
 // Test complex groupby clause with expressions
@@ -686,50 +765,107 @@ TEST_F(CudfAggregationSelectionTest, distinctAggregationsRejected) {
       canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
-// Masked sum is supported at raw-input steps.
-TEST_F(CudfAggregationSelectionTest, maskedSumAccepted) {
-  auto plan = PlanBuilder()
-                  .values({makeRowVector({
-                      makeFlatVector<int64_t>({1, 2, 3}),
-                      makeFlatVector<int64_t>({10, 20, 30}),
-                      makeFlatVector<bool>({true, false, true}),
-                  })})
-                  .aggregation(
-                      {"c0"},
-                      {"sum(c1)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
-  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
-  auto aggs = node->aggregates();
-  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
-  auto masked =
-      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
-  ASSERT_TRUE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
+// An aggregate with ORDER BY stays on the CPU when its result depends on the
+// input order, which Velox records per function, and is accepted otherwise,
+// as the CPU skips that sort as well. The grouped and the global validation
+// share the rule.
+TEST_F(CudfAggregationSelectionTest, orderByAggregations) {
+  for (const auto* sorted :
+       {"array_agg(c1 ORDER BY c2)", "stddev_samp(c1 ORDER BY c2)"}) {
+    SCOPED_TRACE(sorted);
+    auto aggregationNode = createAggregationNode({"c0"}, {sorted});
+    ASSERT_FALSE(
+        canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+  }
+  auto unordered = createAggregationNode({"c0"}, {"min(c1 ORDER BY c2)"});
+  ASSERT_TRUE(canBeEvaluatedByCudf(*unordered, queryCtx_.get(), pool_.get()));
+
+  auto globalSorted =
+      createAggregationNode({}, {"approx_distinct(c1 ORDER BY c2)"});
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*globalSorted, queryCtx_.get(), pool_.get()));
+  auto globalPlain = createAggregationNode({}, {"approx_distinct(c1)"});
+  ASSERT_TRUE(canBeEvaluatedByCudf(*globalPlain, queryCtx_.get(), pool_.get()));
+  auto globalUnordered = createAggregationNode({}, {"sum(c1 ORDER BY c2)"});
+  ASSERT_TRUE(
+      canBeEvaluatedByCudf(*globalUnordered, queryCtx_.get(), pool_.get()));
 }
 
-// Masked avg falls back to CPU (excluded in this PR).
-TEST_F(CudfAggregationSelectionTest, maskedAvgRejected) {
-  auto plan = PlanBuilder()
-                  .values({makeRowVector({
-                      makeFlatVector<int64_t>({1, 2, 3}),
-                      makeFlatVector<int64_t>({10, 20, 30}),
-                      makeFlatVector<bool>({true, false, true}),
-                  })})
-                  .aggregation(
-                      {"c0"},
-                      {"avg(c1)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
-  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
-  auto aggs = node->aggregates();
-  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
-  auto masked =
-      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
-  ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
+// Which aggregates accept a FILTER mask on each path. stddev has an
+// aggregator on the groupby path alone and approx_distinct on the reduce path
+// alone, and each is mask-capable there alone: an aggregator added later for
+// the other path accepts no mask until its registration declares one.
+// array_agg collects every row or every non-null row of a group and cannot
+// honor a mask (see GroupbyArrayAggAggregator).
+TEST_F(CudfAggregationSelectionTest, maskedAggregatesByPath) {
+  struct Case {
+    std::string aggregate;
+    bool groupby;
+    bool reduce;
+  };
+  const std::vector<Case> cases = {
+      {"sum(c1)", true, true},
+      {"count(c1)", true, true},
+      {"min(c1)", true, true},
+      {"max(c1)", true, true},
+      {"avg(c1)", true, true},
+      {"stddev_samp(c1)", true, false},
+      {"stddev(c1)", true, false},
+      {"approx_distinct(c1)", false, true},
+      {"array_agg(c1)", false, false},
+  };
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.aggregate);
+    EXPECT_EQ(
+        canBeEvaluatedByCudf(
+            *createMaskedAggregationNode(testCase.aggregate, {"c0"}),
+            queryCtx_.get(),
+            pool_.get()),
+        testCase.groupby);
+    EXPECT_EQ(
+        canBeEvaluatedByCudf(
+            *createMaskedAggregationNode(testCase.aggregate, {}),
+            queryCtx_.get(),
+            pool_.get()),
+        testCase.reduce);
+  }
+}
+
+// A function that honors a mask on one path does not do so on the other until
+// an aggregator there declares it: with only a signature added for the other
+// path, the unmasked aggregate is accepted and the masked one is not.
+TEST_F(CudfAggregationSelectionTest, maskSupportNotInheritedAcrossPaths) {
+  appendReduceAggregationFunctionForStep(
+      "stddev_samp",
+      core::AggregationNode::Step::kSingle,
+      exec::FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("bigint")
+          .build());
+  ASSERT_TRUE(canBeEvaluatedByCudf(
+      *createAggregationNode({}, {"stddev_samp(c1)"}),
+      queryCtx_.get(),
+      pool_.get()));
+  EXPECT_FALSE(canBeEvaluatedByCudf(
+      *createMaskedAggregationNode("stddev_samp(c1)", {}),
+      queryCtx_.get(),
+      pool_.get()));
+
+  appendGroupbyAggregationFunctionForStep(
+      "approx_distinct",
+      core::AggregationNode::Step::kSingle,
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build());
+  ASSERT_TRUE(canBeEvaluatedByCudf(
+      *createAggregationNode({"c0"}, {"approx_distinct(c1)"}),
+      queryCtx_.get(),
+      pool_.get()));
+  EXPECT_FALSE(canBeEvaluatedByCudf(
+      *createMaskedAggregationNode("approx_distinct(c1)", {"c0"}),
+      queryCtx_.get(),
+      pool_.get()));
 }
 
 // A non-boolean mask falls back to CPU.
@@ -752,81 +888,6 @@ TEST_F(CudfAggregationSelectionTest, maskedNonBooleanRejected) {
   auto masked =
       core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
   ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
-}
-
-// Masked approx_distinct falls back: it is reduce-only and ignores the mask,
-// so the allowlist gate (sum/count/min/max only) must reject it.
-TEST_F(CudfAggregationSelectionTest, maskedApproxDistinctRejected) {
-  auto plan = PlanBuilder()
-                  .values({makeRowVector({
-                      makeFlatVector<int64_t>({1, 2, 3}),
-                      makeFlatVector<int64_t>({10, 20, 30}),
-                      makeFlatVector<bool>({true, false, true}),
-                  })})
-                  .aggregation(
-                      {},
-                      {"approx_distinct(c1)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
-  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
-  // Unmasked approx_distinct is supported on the cuDF reduce path.
-  ASSERT_TRUE(canBeEvaluatedByCudf(*node, queryCtx_.get(), pool_.get()));
-  auto aggs = node->aggregates();
-  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
-  auto masked =
-      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
-  ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
-}
-
-// Test return type validation
-// DISABLED: This test demonstrates expected failure modes when return type
-// matching is enabled.
-TEST_F(
-    CudfAggregationSelectionTest,
-    DISABLED_returnTypeMismatchShouldBeRejected) {
-  // These should be rejected because the return type doesn't match the
-  // registered signature
-
-  // sum(integer) should return BIGINT, not VARCHAR
-  auto sumWrongReturnExpr = std::make_shared<core::CallTypedExpr>(
-      VARCHAR(), // Wrong return type - should be BIGINT
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c2")},
-      "sum");
-
-  // avg(integer) should return DOUBLE, not INTEGER
-  auto avgWrongReturnExpr = std::make_shared<core::CallTypedExpr>(
-      INTEGER(), // Wrong return type - should be DOUBLE
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c2")},
-      "avg");
-
-  // count(integer) should return BIGINT, not INTEGER
-  auto countWrongReturnExpr = std::make_shared<core::CallTypedExpr>(
-      INTEGER(), // Wrong return type - should be BIGINT
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c2")},
-      "count");
-
-  // min(integer) should return INTEGER, not VARCHAR
-  auto minWrongReturnExpr = std::make_shared<core::CallTypedExpr>(
-      VARCHAR(), // Wrong return type - should be INTEGER (min preserves input
-                 // type)
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c2")},
-      "min");
-
-  // Without return type validation, these would incorrectly pass
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*sumWrongReturnExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*avgWrongReturnExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*countWrongReturnExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*minWrongReturnExpr, queryCtx_.get()));
 }
 
 } // namespace

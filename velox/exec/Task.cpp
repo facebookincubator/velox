@@ -469,10 +469,16 @@ std::shared_ptr<Task> Task::create(
       memoryArbitrationPriority,
       std::move(onError),
       nested != nullptr ? nested->state : std::weak_ptr<PersistentState>{},
-      nested != nullptr ? nested->statePool : nullptr));
+      nested != nullptr ? nested->statePool : nullptr,
+      nested != nullptr ? nested->ownerDeletionLatch : nullptr,
+      nested != nullptr ? nested->uniqueRowIdPool : nullptr));
   if (fixedPoint != nullptr) {
     task->fixedPoint_ = std::make_unique<FixedPointLoop>(
-        task.get(), *fixedPoint, fixedPointOptions, nested);
+        task.get(),
+        task->deletionLatch_,
+        *fixedPoint,
+        fixedPointOptions,
+        nested);
   }
   task->init(std::move(spillDiskOpts));
   task->addToTaskList();
@@ -489,7 +495,9 @@ Task::Task(
     int32_t memoryArbitrationPriority,
     std::function<void(std::exception_ptr)> onError,
     std::weak_ptr<PersistentState> fixedPointState,
-    std::shared_ptr<memory::MemoryPool> fixedPointStatePool)
+    std::shared_ptr<memory::MemoryPool> fixedPointStatePool,
+    std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch,
+    std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool)
     : uuid_{makeUuid()},
       taskId_(taskId),
       destination_(destination),
@@ -500,9 +508,15 @@ Task::Task(
       firstNodeNotSupportingBarrier_(
           planFragment_.firstNodeNotSupportingBarrier()),
       traceCtx_(maybeMakeTraceCtx()),
+      uniqueRowIdPool_(
+          uniqueRowIdPool != nullptr
+              ? std::move(uniqueRowIdPool)
+              : std::make_shared<std::atomic_int64_t>(0)),
       consumerSupplier_(std::move(consumerSupplier)),
       fixedPointState_(std::move(fixedPointState)),
       fixedPointStatePool_(std::move(fixedPointStatePool)),
+      deletionLatch_(
+          std::make_shared<TaskDeletionLatch>(std::move(ownerDeletionLatch))),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)) {
   ++numCreatedTasks_;
@@ -581,9 +595,14 @@ Task::~Task() {
   CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
 
-  // Ful-fill the task deletion promises at the end.
-  auto taskDeletionPromises = std::move(taskDeletionPromises_);
-  for (auto& promise : taskDeletionPromises) {
+  // Hand the deletion promises to the latch, which runs them now or, if a
+  // fixed-point sub-task of this task is still alive, once the last one goes.
+  deletionLatch_->promises = std::move(taskDeletionPromises_);
+  deletionLatch_.reset();
+}
+
+TaskDeletionLatch::~TaskDeletionLatch() {
+  for (auto& promise : promises) {
     promise.setValue();
   }
 }

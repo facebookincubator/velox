@@ -124,6 +124,42 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
     CudfHiveConnectorTestBase::TearDownTestCase();
   }
 
+  // Writes 'data' to 'filePath' and returns a cuDF Hive scan of it with
+  // 'remainingFilter'.
+  core::PlanNodePtr makeRemainingFilterPlan(
+      const RowVectorPtr& data,
+      const std::string& remainingFilter,
+      const std::shared_ptr<TempFilePath>& filePath) {
+    writeToFile(filePath->getPath(), data);
+    const auto rowType = asRowType(data->type());
+    return PlanBuilder(pool_.get())
+        .startTableScan()
+        .connectorId(kCudfHiveConnectorId)
+        .outputType(rowType)
+        .dataColumns(rowType)
+        .assignments(
+            facebook::velox::exec::test::HiveConnectorTestBase::
+                allRegularColumns(rowType))
+        .remainingFilter(remainingFilter)
+        .endTableScan()
+        .planNode();
+  }
+
+  // Expects the scan of 'data' with 'remainingFilter' to fail as unsupported
+  // with 'message'.
+  void assertRemainingFilterUnsupported(
+      const RowVectorPtr& data,
+      const std::string& remainingFilter,
+      const std::string& message) {
+    const auto filePath = TempFilePath::create();
+    auto plan = makeRemainingFilterPlan(data, remainingFilter, filePath);
+    VELOX_ASSERT_UNSUPPORTED_THROW(
+        AssertQueryBuilder(plan)
+            .splits(makeCudfHiveConnectorSplits({filePath}))
+            .copyResults(pool_.get()),
+        message);
+  }
+
   std::vector<RowVectorPtr> makeVectors(
       int32_t count,
       int32_t rowsPerVector,
@@ -1133,7 +1169,7 @@ TEST_F(TableScanTest, partitionedTable) {
     const auto utcTimestamp =
         util::fromTimestampString(
             StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
-            .thenOrThrow(folly::identity, [&](const Status& status) {
+            .thenOrThrow(std::identity{}, [&](const Status& status) {
               VELOX_USER_FAIL("{}", status.message());
             });
     auto localTimestamp = utcTimestamp;
@@ -1665,11 +1701,55 @@ TEST_F(TableScanTest, filterPushdown) {
       "SELECT count(*) FROM tmp");
 }
 
-// Disable this test and the one below for now, pending a CUDF fix.
-// simoneves 2/25/26
-// @TODO simoneves/mattgara re-enable once fixed.
+// Presto pushes an equality on a column into the scan and re-creates the
+// column above it as a constant projection. When the scan reads no other
+// column, that projection sits over a zero-column input and still runs on the
+// GPU, filled to the row count of each batch.
+TEST_F(TableScanTest, constantProjectionOverZeroColumnScan) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<std::string>({"a", "b", "a", "c", "a"})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
 
-TEST_F(TableScanTest, DISABLED_decimalFilterPushdown) {
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c1",
+              std::make_unique<common::BytesValues>(
+                  std::vector<std::string>{"a"}, false))
+          .build();
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(ROW({}, {}))
+                  .tableHandle(makeTableHandle(
+                      "parquet_table", rowType, std::move(subfieldFilters)))
+                  .endTableScan()
+                  .project({"'a' AS c1"})
+                  .singleAggregation({"c1"}, {"count(1)"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .split(makeCudfHiveSplit(filePath->getPath()))
+                    .copyResults(pool_.get(), task);
+  assertEqualResults(
+      {makeRowVector(
+          {makeFlatVector<std::string>({"a"}), makeFlatVector<int64_t>({3})})},
+      {result});
+
+  bool cudfFilterProjectUsed = false;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      cudfFilterProjectUsed |= op.operatorType == "CudfFilterProject";
+    }
+  }
+  EXPECT_TRUE(cudfFilterProjectUsed);
+}
+
+TEST_F(TableScanTest, decimalFilterPushdown) {
   auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
 
   auto vector = makeRowVector(
@@ -1730,7 +1810,7 @@ TEST_F(TableScanTest, DISABLED_decimalFilterPushdown) {
       "CAST('7.00' AS DECIMAL(20, 2)))");
 }
 
-TEST_F(TableScanTest, DISABLED_decimalStatsFilterIoPruning) {
+TEST_F(TableScanTest, decimalStatsFilterIoPruning) {
   auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
   auto vec0 = makeRowVector(
       {"c0", "c1"},
@@ -2462,29 +2542,50 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
 // The data source cannot apply the session's cast settings, so it rejects a
 // remaining filter that casts from VARCHAR.
 TEST_F(TableScanTest, remainingFilterCastFromVarchar) {
-  auto rowType = ROW({"c0"}, {VARCHAR()});
-  auto filePath = TempFilePath::create();
-  writeToFile(
-      filePath->getPath(),
-      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}));
-
-  auto plan = PlanBuilder(pool_.get())
-                  .startTableScan()
-                  .connectorId(kCudfHiveConnectorId)
-                  .outputType(rowType)
-                  .dataColumns(rowType)
-                  .assignments(
-                      facebook::velox::exec::test::HiveConnectorTestBase::
-                          allRegularColumns(rowType))
-                  .remainingFilter("try_cast(c0 as double) > 1.0")
-                  .endTableScan()
-                  .planNode();
-
-  VELOX_ASSERT_UNSUPPORTED_THROW(
-      AssertQueryBuilder(plan)
-          .splits(makeCudfHiveConnectorSplits({filePath}))
-          .copyResults(pool_.get()),
+  assertRemainingFilterUnsupported(
+      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}),
+      "try_cast(c0 as double) > 1.0",
       "Remaining filter with a cast from VARCHAR is not supported");
+}
+
+// The data source cannot apply the session's legacy_cast or time zone to the
+// text of a TIMESTAMP, so it rejects a remaining filter that casts one to
+// VARCHAR, a constant included: a constant beside a column becomes a pushed
+// down filter through the session's evaluator, but one anywhere else, here
+// under an OR, would be folded by the data source without legacy_cast and the
+// cast lost.
+TEST_F(TableScanTest, remainingFilterCastTimestampToVarchar) {
+  const auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(0, 0), Timestamp(1'767'314'700, 0)}),
+       makeFlatVector<std::string>({"1970-01-01 00:00:00.000", "x"})});
+  for (
+      const auto* filter :
+      {"cast(c0 as varchar) like '2026-%'",
+       "c1 = cast(TIMESTAMP '1970-01-01 00:00:00' as varchar) or c0 is null"}) {
+    SCOPED_TRACE(filter);
+    assertRemainingFilterUnsupported(
+        data,
+        filter,
+        "Remaining filter with a cast from TIMESTAMP to VARCHAR is not "
+        "supported");
+  }
+}
+
+// The text of a DATE depends on no session setting, so a remaining filter that
+// casts one to VARCHAR runs on the data source.
+TEST_F(TableScanTest, remainingFilterCastDateToVarchar) {
+  const auto day = DATE()->toDays("2026-01-02");
+  const auto filePath = TempFilePath::create();
+  auto plan = makeRemainingFilterPlan(
+      makeRowVector({"c0"}, {makeFlatVector<int32_t>({day, 0}, DATE())}),
+      "cast(c0 as varchar) like '2026-%'",
+      filePath);
+  AssertQueryBuilder(plan)
+      .splits(makeCudfHiveConnectorSplits({filePath}))
+      .assertResults(
+          makeRowVector({"c0"}, {makeFlatVector<int32_t>({day}, DATE())}));
 }
 
 TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
