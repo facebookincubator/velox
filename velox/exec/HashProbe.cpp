@@ -1984,7 +1984,8 @@ bool HashProbe::allProbeGroupFinished() const {
   VELOX_CHECK(
       operatorCtx_->task()->hasMixedExecutionGroupJoin(joinNode_.get()));
   VELOX_CHECK_EQ(operatorCtx_->task()->concurrentSplitGroups(), 1);
-  return operatorCtx_->task()->allSplitsConsumed(joinNode_.get());
+  // Finishing early can leave splits unread in this or earlier probe groups.
+  return operatorCtx_->task()->isLastSplitGroup(splitGroupId());
 }
 
 void HashProbe::checkRunning() const {

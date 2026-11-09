@@ -250,27 +250,18 @@ TEST_P(HashJoinBridgeTest, withoutSpill) {
     }
     ASSERT_TRUE(helper.buildResult().has_value());
 
-    // Verify builders wait for the probe side when a hash table was built,
-    // but can finish immediately when a null-aware anti join build key is
-    // null.
+    // Verify builder will wait for probe side finish signal even if there is no
+    // spill input.
     auto inputOr = joinBridge->spillInputOrFuture(&futures[0]);
-    if (hasNullKeys) {
-      ASSERT_TRUE(inputOr.has_value());
-      ASSERT_FALSE(inputOr->spillPartition);
-      ASSERT_FALSE(futures[0].valid());
-    } else {
-      ASSERT_FALSE(inputOr.has_value());
-      ASSERT_TRUE(futures[0].valid());
-    }
+    ASSERT_FALSE(inputOr.has_value());
+    ASSERT_TRUE(futures[0].valid());
 
     // Probe side completion.
     ASSERT_FALSE(joinBridge->testingHasMoreSpilledPartitions());
     joinBridge->probeFinished();
     ASSERT_FALSE(helper.buildResult().has_value());
 
-    if (!hasNullKeys) {
-      futures[0].wait();
-    }
+    futures[0].wait();
 
     futures = createEmptyFutures(1);
     inputOr = joinBridge->spillInputOrFuture(&futures[0]);
@@ -352,14 +343,13 @@ TEST_P(HashJoinBridgeTest, withSpill) {
         }
         hasMoreSpill = numSpilledPartitions > numRestoredPartitions;
       }
-      const bool antiJoinHasNullKeys = !hasMoreSpill && testData.endWithNull;
 
       // Get built table from probe side.
       for (int32_t i = 0; i < numProbers_; ++i) {
         probeFutures[i].wait();
         auto tableOr = joinBridge->tableOrFuture(&probeFutures[i]);
         ASSERT_TRUE(tableOr.has_value());
-        if (antiJoinHasNullKeys) {
+        if (!hasMoreSpill && testData.endWithNull) {
           ASSERT_TRUE(tableOr.value().hasNullKeys);
           ASSERT_TRUE(tableOr.value().table == nullptr);
         } else {
@@ -371,13 +361,8 @@ TEST_P(HashJoinBridgeTest, withSpill) {
 
       // Wait for probe to complete from build side.
       for (int32_t i = 0; i < numBuilders_; ++i) {
-        auto inputOr = joinBridge->spillInputOrFuture(&buildFutures[i]);
-        if (antiJoinHasNullKeys) {
-          ASSERT_TRUE(inputOr.has_value());
-          ASSERT_FALSE(inputOr->spillPartition);
-        } else {
-          ASSERT_FALSE(inputOr.has_value());
-        }
+        ASSERT_FALSE(
+            joinBridge->spillInputOrFuture(&buildFutures[i]).has_value());
       }
 
       if (spillByProber) {

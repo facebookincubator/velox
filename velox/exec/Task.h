@@ -252,6 +252,11 @@ class Task : public std::enable_shared_from_this<Task> {
   /// more splits are expected.
   bool allSplitsConsumed(const core::PlanNode* planNode) const;
 
+  /// Returns true if no more split groups can arrive and every received group
+  /// other than 'splitGroupId' has finished, including groups that left splits
+  /// unread when finishing early.
+  bool isLastSplitGroup(int32_t splitGroupId) const;
+
   /// Starts executing the plan fragment specified in the constructor. If leaf
   /// nodes require splits (e.g. TableScan, Exchange, etc.), these splits can be
   /// added before or after calling start().

@@ -381,15 +381,6 @@ std::optional<HashJoinBridge::SpillInput> HashJoinBridge::spillInputOrFuture(
   VELOX_DCHECK(
       !restoringSpillPartitionId_.has_value() || !buildResult_.has_value());
 
-  // A null-aware anti join with null keys on the build side has no hash table
-  // or spill input to restore. Let build operators finish without waiting for
-  // the probe side, while keeping the null-key result available to all probe
-  // groups.
-  if (buildResult_.has_value() && buildResult_->hasNullKeys &&
-      buildResult_->table == nullptr && buildResult_->waveTable == nullptr) {
-    return HashJoinBridge::SpillInput{};
-  }
-
   // If 'buildResult_' is set, then the probe side is under processing. The
   // build shall just wait.
   if (buildResult_.has_value()) {

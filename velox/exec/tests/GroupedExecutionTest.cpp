@@ -78,6 +78,72 @@ class GroupedExecutionTest : public virtual HiveConnectorTestBase {
     ASSERT_EQ(n, task->numFinishedDrivers());
   }
 
+  // Runs a join with grouped probe input, a shared build, and spill enabled.
+  void assertMixedGroupedJoin(
+      const std::vector<RowVectorPtr>& probeVectors,
+      const std::vector<RowVectorPtr>& buildVectors,
+      core::JoinType joinType,
+      bool nullAware,
+      const std::vector<std::string>& outputColumns,
+      uint32_t numGroups,
+      bool triggerSpill,
+      bool finishEarlyOnEmptyBuild,
+      const std::string& expectedSql) {
+    auto probeFile = TempFilePath::create();
+    writeToFile(probeFile->getPath(), probeVectors);
+    auto buildFile = TempFilePath::create();
+    writeToFile(buildFile->getPath(), buildVectors);
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId buildScanId;
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(probeVectors.front()->rowType())
+                    .capturePlanNodeId(probeScanId)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .tableScan(buildVectors.front()->rowType())
+                            .capturePlanNodeId(buildScanId)
+                            .planNode(),
+                        "",
+                        outputColumns,
+                        joinType,
+                        nullAware)
+                    .planNode();
+
+    std::vector<RowVectorPtr> totalProbeVectors;
+    std::vector<Split> probeSplits;
+    for (uint32_t i = 0; i < numGroups; ++i) {
+      totalProbeVectors.insert(
+          totalProbeVectors.end(), probeVectors.begin(), probeVectors.end());
+      probeSplits.push_back(makeHiveSplitWithGroup(probeFile->getPath(), i));
+    }
+    createDuckDbTable("t", totalProbeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    TestScopedSpillInjection scopedSpillInjection(triggerSpill ? 100 : 0);
+    auto spillDirectory = TempDirectoryPath::create();
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .plan(plan)
+        .maxDrivers(1)
+        .spillDirectory(spillDirectory->getPath())
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kJoinSpillEnabled, true)
+        .config(core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, true)
+        .config(
+            core::QueryConfig::kHashProbeFinishEarlyOnEmptyBuild,
+            finishEarlyOnEmptyBuild)
+        .splits(probeScanId, std::move(probeSplits))
+        .split(buildScanId, makeHiveSplit(buildFile->getPath()))
+        .executionStrategy(core::ExecutionStrategy::kGrouped)
+        .groupedExecutionLeafNodeIds({probeScanId})
+        .numSplitGroups(numGroups)
+        .numConcurrentSplitGroups(1)
+        .assertResults(expectedSql);
+  }
+
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
           {BIGINT(),
@@ -505,113 +571,63 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
 }
 
 TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecutionWithSpill) {
-  const uint64_t numGroups = 3;
-  auto probeVectors = makeVectors(12, 20);
-  auto probePath = TempFilePath::create();
-  writeToFile(probePath->getPath(), probeVectors);
-
-  auto buildVectors = makeVectors(4, 20);
-  auto buildPath = TempFilePath::create();
-  writeToFile(buildPath->getPath(), buildVectors);
-
-  std::vector<RowVectorPtr> totalProbeVectors;
-  for (int i = 0; i < numGroups; ++i) {
-    totalProbeVectors.insert(
-        totalProbeVectors.end(), probeVectors.begin(), probeVectors.end());
-  }
-  createDuckDbTable("t", totalProbeVectors);
-  createDuckDbTable("u", buildVectors);
+  auto probeVectors = makeVectors(12, 20, ROW({"t0", "t1"}, BIGINT()));
+  auto buildVectors = makeVectors(4, 20, ROW({"u0", "u1"}, BIGINT()));
 
   for (const bool triggerSpill : {false, true}) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId probeScanNodeId;
-    core::PlanNodeId buildScanNodeId;
-
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(rowType_)
-                    .capturePlanNodeId(probeScanNodeId)
-                    .project({"c0 as t0", "c1 as t1"})
-                    .hashJoin(
-                        {"t0"},
-                        {"u0"},
-                        PlanBuilder(planNodeIdGenerator)
-                            .tableScan(rowType_)
-                            .capturePlanNodeId(buildScanNodeId)
-                            .project({"c0 as u0", "c1 as u1"})
-                            .planNode(),
-                        "",
-                        {"t1", "u1"},
-                        core::JoinType::kInner)
-                    .planNode();
-
-    std::vector<Split> probeSplits;
-    for (int i = 0; i < numGroups; ++i) {
-      probeSplits.push_back(makeHiveSplitWithGroup(probePath->getPath(), i));
-    }
-
-    TestScopedSpillInjection scopedSpillInjection(triggerSpill ? 100 : 0);
-    const auto spillDirectory = TempDirectoryPath::create();
-    AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
-    queryBuilder.plan(plan)
-        .spillDirectory(spillDirectory->getPath())
-        .config(core::QueryConfig::kSpillEnabled, true)
-        .config(core::QueryConfig::kJoinSpillEnabled, true)
-        .config(core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, true)
-        .splits(probeScanNodeId, std::move(probeSplits))
-        .splits(buildScanNodeId, {makeHiveSplit(buildPath->getPath())})
-        .executionStrategy(core::ExecutionStrategy::kGrouped)
-        .groupedExecutionLeafNodeIds({probeScanNodeId})
-        .numSplitGroups(numGroups)
-        .numConcurrentSplitGroups(1)
-        .assertResults("SELECT t.c1, u.c1 FROM t, u WHERE t.c0 = u.c0");
+    assertMixedGroupedJoin(
+        probeVectors,
+        buildVectors,
+        core::JoinType::kInner,
+        /*nullAware=*/false,
+        {"t1", "u1"},
+        /*numGroups=*/3,
+        triggerSpill,
+        /*finishEarlyOnEmptyBuild=*/false,
+        "SELECT t.t1, u.u1 FROM t, u WHERE t.t0 = u.u0");
   }
 }
 
-// Covers null-aware anti join with mixed grouped execution and spill enabled.
-TEST_F(
-    GroupedExecutionTest,
-    nullAwareAntiJoinWithMixedGroupedExecutionAndSpill) {
-  const auto probeType = ROW("t0", BIGINT());
-  const auto buildType = ROW("u0", BIGINT());
+TEST_F(GroupedExecutionTest, mixedGroupedNullAwareAntiJoin) {
+  auto probe = makeNamedRowVector({{"t0", makeFlatVector<int64_t>({1})}});
+  auto build = makeNamedRowVector(
+      {{"u0", makeNullableFlatVector<int64_t>({std::nullopt})}});
 
-  auto probeFile =
-      writeToFile(makeRowVector({"t0"}, {makeFlatVector<int64_t>({1})}));
-  auto buildFile = writeToFile(
-      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({std::nullopt})}));
+  for (uint32_t numGroups : {1, 3}) {
+    SCOPED_TRACE(numGroups);
+    assertMixedGroupedJoin(
+        {probe},
+        {build},
+        core::JoinType::kAnti,
+        /*nullAware=*/true,
+        {"t0"},
+        numGroups,
+        /*triggerSpill=*/false,
+        /*finishEarlyOnEmptyBuild=*/false,
+        "SELECT t0 FROM t WHERE t0 NOT IN (SELECT u0 FROM u)");
+  }
+}
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId probeScanId;
-  core::PlanNodeId buildScanId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(probeType)
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"t0"},
-                      {"u0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(buildType)
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "",
-                      {"t0"},
-                      core::JoinType::kAnti,
-                      /*nullAware=*/true)
-                  .planNode();
+TEST_F(GroupedExecutionTest, mixedGroupedEmptyBuild) {
+  auto probe = makeNamedRowVector({{"t0", makeFlatVector<int64_t>({1})}});
+  auto build = makeNamedRowVector({{"u0", makeFlatVector<int64_t>({})}});
 
-  auto spillDirectory = TempDirectoryPath::create();
-  AssertQueryBuilder(plan)
-      .maxDrivers(1)
-      .spillDirectory(spillDirectory->getPath())
-      .config(core::QueryConfig::kSpillEnabled, true)
-      .config(core::QueryConfig::kJoinSpillEnabled, true)
-      .config(core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, true)
-      .split(probeScanId, makeHiveSplitWithGroup(probeFile->getPath(), 0))
-      .split(buildScanId, makeHiveSplit(buildFile->getPath()))
-      .executionStrategy(core::ExecutionStrategy::kGrouped)
-      .groupedExecutionLeafNodeIds({probeScanId})
-      .numSplitGroups(1)
-      .numConcurrentSplitGroups(1)
-      .assertEmptyResults();
+  for (uint32_t numGroups : {1, 3}) {
+    for (bool finishEarly : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("numGroups {}, finishEarly {}", numGroups, finishEarly));
+      assertMixedGroupedJoin(
+          {probe},
+          {build},
+          core::JoinType::kInner,
+          /*nullAware=*/false,
+          {"t0"},
+          numGroups,
+          /*triggerSpill=*/false,
+          finishEarly,
+          "SELECT t0 FROM t, u WHERE t0 = u0");
+    }
+  }
 }
 
 DEBUG_ONLY_TEST_F(

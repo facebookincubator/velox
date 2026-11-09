@@ -2651,6 +2651,15 @@ bool Task::allSplitsConsumed(const core::PlanNode* planNode) const {
   return allSplitsConsumedHelper(planNode);
 }
 
+bool Task::isLastSplitGroup(int32_t splitGroupId) const {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  return allNodesReceivedNoMoreSplitsMessageLocked() &&
+      std::ranges::all_of(seenSplitGroups_, [&](auto groupId) {
+           return groupId == splitGroupId ||
+               taskStats_.completedSplitGroups.contains(groupId);
+         });
+}
+
 bool Task::isRunning() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
   return isRunningLocked();
