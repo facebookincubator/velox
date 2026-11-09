@@ -28,6 +28,8 @@ BUILD_GEOS="${BUILD_GEOS:-true}"
 BUILD_S2GEOMETRY="${BUILD_S2GEOMETRY:-true}"
 BUILD_FAISS="${BUILD_FAISS:-true}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
+# lance-c is only needed for VELOX_ENABLE_LANCE_CONNECTOR=ON.
+BUILD_LANCE="${BUILD_LANCE:-false}"
 EXTRA_ARROW_OPTIONS=${EXTRA_ARROW_OPTIONS:-""}
 EXTRA_ARROW_PATCH=${EXTRA_ARROW_PATCH:-""}
 SIMDJSON_SKIPUTF8VALIDATION=${SIMDJSON_SKIPUTF8VALIDATION:-"OFF"}
@@ -347,6 +349,51 @@ function install_faiss {
       -DFAISS_ENABLE_REMOTE=OFF \
       -DFAISS_ENABLE_GPU_TESTS=OFF \
       -DFAISS_ENABLE_BENCHMARKS=OFF
+  fi
+}
+
+# lance-c, the C/C++ binding for the Lance format, used by the Lance
+# connector. Installs the prebuilt release, which ships headers, libraries and
+# a CMake package config, so that find_package(LanceC) resolves under the
+# install prefix. On Linux this uses the "-debian12" build, whose glibc floor is
+# 2.35; the plain "-unknown-linux-gnu" build needs glibc 2.38 or newer.
+function install_lance_c {
+  if [[ $BUILD_LANCE != "true" ]]; then
+    return 0
+  fi
+
+  local target
+  case "$(uname -s)" in
+  # Release archives use Rust target triples, which call arm64 "aarch64".
+  Darwin) target="${MACHINE/arm64/aarch64}-apple-darwin" ;;
+  Linux) target="${MACHINE}-unknown-linux-gnu-debian12" ;;
+  *)
+    echo "Unsupported platform for lance-c: $(uname -s)" >&2
+    return 1
+    ;;
+  esac
+
+  local archive="lance-c-${LANCE_C_VERSION}-${target}.tar.xz"
+  local url="https://github.com/lance-format/lance-c/releases/download/${LANCE_C_VERSION}"
+  local prefix="${INSTALL_PREFIX:-/usr/local}"
+
+  if [[ -f "${prefix}/lib/cmake/LanceC/LanceCConfig.cmake" ]]; then
+    echo "lance-c is already installed at ${prefix}, skipping."
+    return 0
+  fi
+
+  (
+    cd "${DEPENDENCY_DIR}" || exit 1
+    wget "${WGET_OPTS[@]}" -O "${archive}" "${url}/${archive}"
+    wget "${WGET_OPTS[@]}" -O "${archive}.sha256" "${url}/${archive}.sha256"
+    shasum -a 256 -c "${archive}.sha256"
+    ${SUDO} mkdir -p "${prefix}"
+    ${SUDO} tar -xf "${archive}" -C "${prefix}"
+  )
+
+  if [[ ! -f "${prefix}/lib/cmake/LanceC/LanceCConfig.cmake" ]]; then
+    echo "lance-c install at ${prefix} is missing its CMake package config" >&2
+    return 1
   fi
 }
 
