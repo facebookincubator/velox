@@ -242,50 +242,11 @@
   margin-bottom: 1.5rem;
 }
 
-/* Horizontal scroll container */
-.logoScroller {
-  overflow-x: auto;
-  white-space: nowrap;
-  padding: 1rem 0;
-  scrollbar-width: none; /* Firefox */
-}
-
-.logoScroller::-webkit-scrollbar {
-  display: none; /* Chrome/Safari */
-}
-
-.logoTrack {
-  display: inline-flex;
-  gap: 2rem;
-  align-items: center;
-}
-
-.logoTrack img {
-  height: 40px;
-  width: auto;
-  flex-shrink: 0;
-  transition: transform 0.3s ease;
-}
-
-.logoTrack img:hover {
-  transform: scale(1.05);
-}
-
-.usingSection {
-  padding: 4rem 0;
-  background-color: var(--velox-home-section-alt-bg);
-}
-
-.usingSection h2 {
-  text-align: left;
-  font-size: 1.8rem;
-  margin-bottom: 1.5rem;
-}
-
 .logoScroller {
   overflow: hidden;
   position: relative;
   width: 100%;
+  padding: 1rem 0;
 }
 
 .logoTrack {
