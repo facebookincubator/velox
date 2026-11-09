@@ -29,21 +29,26 @@
 namespace facebook::velox::nimble {
 
 // Table serde param > session property > connector config > default.
-// emplace preserves existing serde params (table-level), and getWithFallback
-// checks session before connector config.
+// emplace preserves existing table-level serde params.
 void NimbleWriterOptions::processConfigs(
     const velox::config::ConfigBase& connectorConfig,
     const velox::config::ConfigBase& session) {
   using NimbleConfig = facebook::nimble::Config;
 
-  auto value = session.getWithFallback<std::string>(
-      NimbleConfig::kNimbleWriteTargetRawStripeSize, connectorConfig);
+  const auto parseCapacity = [](const std::string& key,
+                                const std::string& value) {
+    return config::toCapacity(value, config::CapacityUnit::BYTE, key);
+  };
+  const auto* sessionKey = NimbleConfig::kNimbleWriteTargetRawStripeSize;
+  auto value = session.get<uint64_t>(sessionKey, parseCapacity);
+  if (!value.has_value()) {
+    value = connectorConfig.get<uint64_t>(
+        config::ConfigBase::toConfigKey(sessionKey), parseCapacity);
+  }
 
   if (value.has_value()) {
     serdeParameters.emplace(
-        NimbleConfig::RAW_STRIPE_SIZE.key,
-        std::to_string(
-            config::toCapacity(value.value(), config::CapacityUnit::BYTE)));
+        NimbleConfig::RAW_STRIPE_SIZE.key, std::to_string(*value));
   }
 
   // [BufferedWriteFile control] Honor a user-set Spark conf for the buffered

@@ -84,11 +84,14 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
 
 int32_t FileConfig::maxCoalescedDistanceBytes(
     const config::ConfigBase* session) const {
-  const auto distance = config::toCapacity(
-      session->get<std::string>(
-          kMaxCoalescedDistanceSession,
-          config_->get<std::string>(kMaxCoalescedDistance, "512kB")),
-      config::CapacityUnit::BYTE);
+  const auto value = session->get<std::string>(kMaxCoalescedDistanceSession);
+  const auto distance = value.has_value()
+      ? config::toCapacity(
+            *value, config::CapacityUnit::BYTE, kMaxCoalescedDistanceSession)
+      : config::toCapacity(
+            config_->get<std::string>(kMaxCoalescedDistance, "512kB"),
+            config::CapacityUnit::BYTE,
+            kMaxCoalescedDistance);
   VELOX_USER_CHECK_LE(
       distance,
       std::numeric_limits<int32_t>::max(),
