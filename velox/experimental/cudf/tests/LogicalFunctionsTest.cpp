@@ -57,7 +57,7 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     cudf_velox::registerCudfExpressionEvaluator(
         cudf_velox::kAstEvaluatorName,
         /*priority=*/0,
-        [](const core::TypedExprPtr& expr) {
+        [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
           return cudf_velox::ASTExpression::canEvaluate(expr);
         },
         [](const core::TypedExprPtr& expr,
@@ -72,7 +72,7 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     cudf_velox::registerCudfExpressionEvaluator(
         cudf_velox::kJitEvaluatorName,
         /*priority=*/0,
-        [](const core::TypedExprPtr& expr) {
+        [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
           return cudf_velox::JitExpression::canEvaluate(expr);
         },
         [](const core::TypedExprPtr& expr,
