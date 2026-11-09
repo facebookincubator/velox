@@ -38,6 +38,7 @@ if(VELOX_ENABLE_FAISS)
     velox_vector_index
     Embeddings.cpp
     FaissLocalVectorIndex.cpp
+    LocalVectorIndex.cpp
     HEADERS
     CallbackWriter.h
     Embeddings.h

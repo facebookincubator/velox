@@ -3877,13 +3877,28 @@ PlanNodePtr SpatialJoinNode::create(const folly::dynamic& obj, void* context) {
       outputType);
 }
 
+namespace {
+const auto& indexSideNames() {
+  static const folly::
+      F14FastMap<VectorSearchJoinNode::IndexSide, std::string_view>
+          kNames = {
+              {VectorSearchJoinNode::IndexSide::kProbe, "PROBE"},
+              {VectorSearchJoinNode::IndexSide::kBuild, "BUILD"},
+          };
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(VectorSearchJoinNode, IndexSide, indexSideNames)
+
 VectorSearchJoinNode::VectorSearchJoinNode(
     const PlanNodeId& id,
     JoinType joinType,
     std::vector<FieldAccessTypedExprPtr> leftKeys,
     std::vector<FieldAccessTypedExprPtr> rightKeys,
-    FieldAccessTypedExprPtr probeEmbedding,
-    FieldAccessTypedExprPtr buildIndex,
+    IndexSide indexSide,
+    FieldAccessTypedExprPtr embedding,
+    FieldAccessTypedExprPtr index,
     std::string format,
     common::vectorindex::VectorIndexMetric metric,
     int64_t k,
@@ -3897,8 +3912,9 @@ VectorSearchJoinNode::VectorSearchJoinNode(
       joinType_(joinType),
       leftKeys_(std::move(leftKeys)),
       rightKeys_(std::move(rightKeys)),
-      probeEmbedding_(std::move(probeEmbedding)),
-      buildIndex_(std::move(buildIndex)),
+      indexSide_(indexSide),
+      embedding_(std::move(embedding)),
+      index_(std::move(index)),
       format_(std::move(format)),
       metric_(metric),
       k_(k),
@@ -3908,29 +3924,39 @@ VectorSearchJoinNode::VectorSearchJoinNode(
       sources_({std::move(left), std::move(right)}),
       outputType_(std::move(outputType)) {
   VELOX_USER_CHECK(
-      joinType_ == JoinType::kInner || joinType_ == JoinType::kLeft,
+      joinType_ == JoinType::kInner || joinType_ == JoinType::kLeft ||
+          joinType_ == JoinType::kRight,
       "The join type is not supported by vector search join: {}",
+      JoinTypeName::toName(joinType_));
+  VELOX_USER_CHECK(
+      joinType_ !=
+          (indexSide_ == IndexSide::kBuild ? JoinType::kRight
+                                           : JoinType::kLeft),
+      "Vector search join may not preserve the index side: {}",
       JoinTypeName::toName(joinType_));
   const auto& leftType = sources_[0]->outputType();
   const auto& rightType = sources_[1]->outputType();
   checkJoinKeys(leftKeys_, rightKeys_, leftType, rightType);
 
+  const bool indexOnProbe = indexSide_ == IndexSide::kProbe;
+  const auto& queryType = indexOnProbe ? rightType : leftType;
+  const auto& indexType = indexOnProbe ? leftType : rightType;
   VELOX_USER_CHECK(
-      leftType->containsChild(probeEmbedding_->name()),
-      "Probe embedding not found in left side output: {}",
-      probeEmbedding_->name());
+      queryType->containsChild(embedding_->name()),
+      "Embedding not found in the output of the side without the index: {}",
+      embedding_->name());
   VELOX_USER_CHECK(
-      probeEmbedding_->type()->equivalent(*ARRAY(REAL())),
-      "Probe embedding must be ARRAY(REAL): {}",
-      probeEmbedding_->type()->toString());
+      embedding_->type()->equivalent(*ARRAY(REAL())),
+      "Embedding must be ARRAY(REAL): {}",
+      embedding_->type()->toString());
   VELOX_USER_CHECK(
-      rightType->containsChild(buildIndex_->name()),
-      "Build index not found in right side output: {}",
-      buildIndex_->name());
+      indexType->containsChild(index_->name()),
+      "Index not found in the output of the index side: {}",
+      index_->name());
   VELOX_USER_CHECK(
-      buildIndex_->type()->isVarbinary(),
-      "Build index must be VARBINARY: {}",
-      buildIndex_->type()->toString());
+      index_->type()->isVarbinary(),
+      "Index must be VARBINARY: {}",
+      index_->type()->toString());
 
   VELOX_USER_CHECK(
       !format_.empty(), "Vector search join requires a vector index format");
@@ -3958,8 +3984,8 @@ VectorSearchJoinNode::VectorSearchJoinNode(
     } else {
       VELOX_USER_CHECK_NE(
           name,
-          buildIndex_->name(),
-          "Vector search join output may not include the build index");
+          index_->name(),
+          "Vector search join output may not include the index");
       sourceNames.push_back(name);
       sourceTypes.push_back(type);
     }
@@ -3995,8 +4021,11 @@ void VectorSearchJoinNode::addDetails(std::stringstream& stream) const {
   if (!leftKeys_.empty()) {
     stream << ", ";
   }
-  stream << probeEmbedding_->name() << " nearest in " << buildIndex_->name()
-         << " (" << format_ << ", " << metric_ << "), k: " << k_;
+  stream << embedding_->name() << " nearest in " << index_->name() << " ("
+         << format_ << ", " << metric_ << "), k: " << k_;
+  if (indexSide_ == IndexSide::kProbe) {
+    stream << ", index: " << toName(indexSide_);
+  }
   for (const auto& [key, value] : searchOptions_) {
     stream << ", " << key << ": " << value;
   }
@@ -4007,8 +4036,9 @@ folly::dynamic VectorSearchJoinNode::serialize() const {
   obj["joinType"] = JoinTypeName::toName(joinType_);
   obj["leftKeys"] = ISerializable::serialize(leftKeys_);
   obj["rightKeys"] = ISerializable::serialize(rightKeys_);
-  obj["probeEmbedding"] = probeEmbedding_->serialize();
-  obj["buildIndex"] = buildIndex_->serialize();
+  obj["indexSide"] = toName(indexSide_);
+  obj["embedding"] = embedding_->serialize();
+  obj["index"] = index_->serialize();
   obj["format"] = format_;
   obj["metric"] = common::vectorindex::VectorIndexMetricName::toName(metric_);
   obj["k"] = k_;
@@ -4047,8 +4077,9 @@ PlanNodePtr VectorSearchJoinNode::create(
       JoinTypeName::toJoinType(obj["joinType"].asString()),
       deserializeFields(obj["leftKeys"], context),
       deserializeFields(obj["rightKeys"], context),
-      deserializeField(obj["probeEmbedding"]),
-      deserializeField(obj["buildIndex"]),
+      toIndexSide(obj["indexSide"].asString()),
+      deserializeField(obj["embedding"]),
+      deserializeField(obj["index"]),
       obj["format"].asString(),
       common::vectorindex::VectorIndexMetricName::toVectorIndexMetric(
           obj["metric"].asString()),

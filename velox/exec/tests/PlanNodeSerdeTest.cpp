@@ -650,6 +650,21 @@ TEST_F(PlanNodeSerdeTest, vectorSearchJoin) {
                  {{"ivf.nprobe", "4"}})
              .planNode();
   testSerde(plan);
+
+  // The index on the left.
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({build})
+             .vectorSearchJoin(
+                 {"u0"},
+                 {"t0"},
+                 PlanBuilder(planNodeIdGenerator).values({probe}).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/2,
+                 {"cluster_id", "t0", "u2"},
+                 "cluster_id")
+             .planNode();
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, hashJoin) {
