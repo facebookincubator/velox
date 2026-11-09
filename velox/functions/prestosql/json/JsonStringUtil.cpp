@@ -55,18 +55,6 @@ std::array<int8_t, 128> getAsciiEscapes() {
 }
 static const std::array<int8_t, 128> asciiEscapes = getAsciiEscapes();
 
-FOLLY_ALWAYS_INLINE void encodeAscii(int8_t value, char*& out) {
-  int8_t escapeCode = asciiEscapes[value];
-  if (escapeCode == 0) {
-    *out++ = char(value);
-  } else if (escapeCode > 0) {
-    *out++ = '\\';
-    *out++ = char(escapeCode);
-  } else {
-    writeUtf16Escape(value, out);
-  }
-}
-
 std::array<int8_t, 128> getEncodedAsciiSizes() {
   std::array<int8_t, 128> sizes;
   for (int c = 0; c < 128; c++) {
@@ -84,6 +72,18 @@ std::array<int8_t, 128> getEncodedAsciiSizes() {
 static const std::array<int8_t, 128> encodedAsciiSizes = getEncodedAsciiSizes();
 
 } // namespace
+
+void encodeAscii(int8_t value, char*& out) {
+  int8_t escapeCode = asciiEscapes[value];
+  if (escapeCode == 0) {
+    *out++ = char(value);
+  } else if (escapeCode > 0) {
+    *out++ = '\\';
+    *out++ = char(escapeCode);
+  } else {
+    writeUtf16Escape(value, out);
+  }
+}
 
 void testingEncodeUtf16Hex(char32_t codePoint, char*& out) {
   encodeUtf16Hex(codePoint, out);
