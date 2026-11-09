@@ -30,7 +30,7 @@ namespace facebook::velox::connector {
 std::unique_ptr<ConnectorQueryCtx> ConnectorQueryCtx::Builder::build() {
   VELOX_CHECK(!built_, "ConnectorQueryCtx::Builder can only build once");
   built_ = true;
-  return std::unique_ptr<ConnectorQueryCtx>(new ConnectorQueryCtx(
+  std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx(new ConnectorQueryCtx(
       operatorPool_,
       connectorPool_,
       sessionProperties_,
@@ -47,6 +47,8 @@ std::unique_ptr<ConnectorQueryCtx> ConnectorQueryCtx::Builder::build() {
       std::move(cancellationToken_),
       std::move(tokenProvider_),
       std::move(customPools_)));
+  connectorQueryCtx->queryConfig_ = queryConfig_;
+  return connectorQueryCtx;
 }
 
 ConnectorQueryCtx::ConnectorQueryCtx(

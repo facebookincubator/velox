@@ -631,6 +631,12 @@ class ConnectorQueryCtx {
       return *this;
     }
 
+    /// Sets the query config that the context returns from queryConfig().
+    Builder& queryConfig(const core::QueryConfig* queryConfig) {
+      queryConfig_ = queryConfig;
+      return *this;
+    }
+
     Builder& cancellationToken(folly::CancellationToken cancellationToken) {
       cancellationToken_ = std::move(cancellationToken);
       return *this;
@@ -668,6 +674,7 @@ class ConnectorQueryCtx {
     int driverId_{0};
     std::string sessionTimezone_;
     bool adjustTimestampToTimezone_{false};
+    const core::QueryConfig* queryConfig_{nullptr};
     folly::CancellationToken cancellationToken_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::unordered_map<std::string, memory::MemoryPool*> customPools_;
@@ -791,16 +798,14 @@ class ConnectorQueryCtx {
 
   /// Returns the session's query config, or nullptr when the context was
   /// built without one. A connector that compiles expressions itself, rather
-  /// than through expressionEvaluator(), reads it for constant folding and for
-  /// the settings a simple function's initialize() resolves. Owned by the
-  /// QueryCtx of the task that built this context, which outlives every data
-  /// source and data sink created from it.
+  /// than through expressionEvaluator(), reads from it the settings a simple
+  /// function's initialize() resolves. Constant folding with
+  /// expression::optimize() still needs a core::QueryCtx, which the connector
+  /// can build from this config. Owned by the QueryCtx of the task that built
+  /// this context, which outlives every data source and data sink created from
+  /// it.
   const core::QueryConfig* queryConfig() const {
     return queryConfig_;
-  }
-
-  void setQueryConfig(const core::QueryConfig* queryConfig) {
-    queryConfig_ = queryConfig;
   }
 
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {

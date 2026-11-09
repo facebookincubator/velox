@@ -80,13 +80,13 @@ OperatorCtx::createConnectorQueryCtx(
           .sessionTimezone(driverCtx_->queryConfig().sessionTimezone())
           .adjustTimestampToTimezone(
               driverCtx_->queryConfig().adjustTimestampToTimezone())
+          .queryConfig(&driverCtx_->queryConfig())
           .cancellationToken(task->getCancellationToken())
           .tokenProvider(task->queryCtx()->fsTokenProvider())
           .customPools(customPools_)
           .build();
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
-  connectorQueryCtx->setQueryConfig(&driverCtx_->queryConfig());
   connectorQueryCtx->setRowSizeTrackingMode(
       driverCtx_->queryConfig().rowSizeTrackingMode());
   return connectorQueryCtx;
