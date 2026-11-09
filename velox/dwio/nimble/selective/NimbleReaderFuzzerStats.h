@@ -15,7 +15,12 @@
  */
 #pragma once
 
+#include <string>
 #include <string_view>
+
+namespace facebook::velox::common {
+class Filter;
+} // namespace facebook::velox::common
 
 namespace facebook::nimble::fuzzer {
 
@@ -35,25 +40,41 @@ inline constexpr std::string_view kRealDictionaryAwareReads =
 inline constexpr std::string_view kDoubleDictionaryAwareReads =
     "nimbleDoubleDictionaryAwareReads";
 
+/// Returns the stat that counts the reads in 'typeStat' that applied a filter
+/// of 'filterKind'. Each completed fused dictionary read adds one to its type's
+/// stat, such as kIntegerDictionaryAwareReads, and one to this stat for the
+/// kind of its filter, such as "nimbleIntegerDictionaryAwareReads.BigintRange".
+/// A read without a filter counts under "AlwaysTrue".
+inline std::string dictionaryAwareReadsByFilterKind(
+    std::string_view typeStat,
+    std::string_view filterKind) {
+  return std::string(typeStat) + "." + std::string(filterKind);
+}
+
 #ifdef NIMBLE_READER_FUZZER_STATS_ENABLED
 
 void updateStringDictionaryEncodingPreserved();
 void updateStringDictionaryEncodingAbandoned();
-void updateSmallintDictionaryAwareReads();
-void updateIntegerDictionaryAwareReads();
-void updateBigintDictionaryAwareReads();
-void updateRealDictionaryAwareReads();
-void updateDoubleDictionaryAwareReads();
+void updateSmallintDictionaryAwareReads(const velox::common::Filter& filter);
+void updateIntegerDictionaryAwareReads(const velox::common::Filter& filter);
+void updateBigintDictionaryAwareReads(const velox::common::Filter& filter);
+void updateRealDictionaryAwareReads(const velox::common::Filter& filter);
+void updateDoubleDictionaryAwareReads(const velox::common::Filter& filter);
 
 #else
 
 static inline void updateStringDictionaryEncodingPreserved() {}
 static inline void updateStringDictionaryEncodingAbandoned() {}
-static inline void updateSmallintDictionaryAwareReads() {}
-static inline void updateIntegerDictionaryAwareReads() {}
-static inline void updateBigintDictionaryAwareReads() {}
-static inline void updateRealDictionaryAwareReads() {}
-static inline void updateDoubleDictionaryAwareReads() {}
+static inline void updateSmallintDictionaryAwareReads(
+    const velox::common::Filter& /*filter*/) {}
+static inline void updateIntegerDictionaryAwareReads(
+    const velox::common::Filter& /*filter*/) {}
+static inline void updateBigintDictionaryAwareReads(
+    const velox::common::Filter& /*filter*/) {}
+static inline void updateRealDictionaryAwareReads(
+    const velox::common::Filter& /*filter*/) {}
+static inline void updateDoubleDictionaryAwareReads(
+    const velox::common::Filter& /*filter*/) {}
 
 #endif
 
