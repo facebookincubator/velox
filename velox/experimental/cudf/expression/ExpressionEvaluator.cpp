@@ -61,7 +61,6 @@
 #include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/replace.hpp>
-#include <cudf/strings/split/split.hpp>
 #include <cudf/strings/string_view.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/strings/strip.hpp>
@@ -429,81 +428,6 @@ void checkAllTrue(
   auto* result = static_cast<cudf::scalar_type_t<bool>*>(allTrue.get());
   VELOX_USER_CHECK(
       result->is_valid(stream) && result->value(stream), "{}", userMessage);
-}
-
-class SplitFunction : public CudfFunction {
- public:
-  SplitFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
-    VELOX_CHECK(
-        expr->inputs()[1]->isConstantKind(),
-        "split delimiter must be a constant");
-    delimiter_ = constantToString(expr->inputs()[1], pool);
-
-    if (expr->inputs().size() < 3) {
-      return;
-    }
-    VELOX_CHECK(
-        expr->inputs()[2]->isConstantKind(), "split limit must be a constant");
-    maxSplitCount_ = std::stoll(constantToString(expr->inputs()[2], pool));
-
-    // Presto specifies maxSplitCount as the maximum size of the returned array
-    // while cuDF understands the parameter as how many splits can it perform.
-    maxSplitCount_ -= 1;
-  }
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
-      cuda::stream_ref stream,
-      rmm::device_async_resource_ref mr) const override {
-    auto inputCol = asView(inputColumns[0]);
-    cudf::string_scalar delimiterScalar(delimiter_, true, stream, mr);
-    return cudf::strings::split_record(
-        inputCol, delimiterScalar, maxSplitCount_, stream, mr);
-  };
-
- private:
-  std::string delimiter_;
-  // cuDF reads -1 as no limit.
-  cudf::size_type maxSplitCount_{-1};
-};
-
-void registerSplitFunction(
-    const std::string& name,
-    const std::vector<exec::FunctionSignaturePtr>& signatures) {
-  registerCudfFunction(
-      name,
-      [](const std::string&,
-         const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
-        return std::make_shared<SplitFunction>(expr, pool);
-      },
-      signatures,
-      /*overwrite=*/true,
-      [](const core::TypedExprPtr& expr) {
-        // cuDF splits on whitespace runs for an empty delimiter, where Presto
-        // splits between characters.
-        const auto delimiter = constantVarcharValue(expr->inputs()[1]);
-        if (!delimiter.has_value() || delimiter->empty()) {
-          return false;
-        }
-        if (expr->inputs().size() < 3) {
-          return true;
-        }
-        // Presto returns the input for a limit of 1 and raises for one below,
-        // where cuDF splits without a limit, and cudf::size_type is int32.
-        const auto* limitExpr =
-            expr->inputs()[2]->asUnchecked<core::ConstantTypedExpr>();
-        const auto limit = limitExpr->hasValueVector()
-            ? limitExpr->valueVector()->variantAt(0)
-            : limitExpr->value();
-        if (limit.isNull()) {
-          return false;
-        }
-        const int64_t value = limit.kind() == TypeKind::INTEGER
-            ? limit.value<TypeKind::INTEGER>()
-            : limit.value<TypeKind::BIGINT>();
-        return value >= 2 && value <= std::numeric_limits<int32_t>::max();
-      });
 }
 
 // Lists the characters the Presto cast hooks skip around a floating-point
@@ -2682,24 +2606,6 @@ std::shared_ptr<CudfFunction> createCudfFunction(
 
 bool registerBuiltinFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
-
-  registerSplitFunction(
-      prefix + "split",
-      {FunctionSignatureBuilder()
-           .returnType("array(varchar)")
-           .argumentType("varchar")
-           .constantArgumentType("varchar")
-           .constantArgumentType("integer")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("array(varchar)")
-           .argumentType("varchar")
-           .constantArgumentType("varchar")
-           // cuDF expects cudf::size_type (int32) but we may get bigint from
-           // presto. SplitFunction hacks around this by converting to string
-           // and back
-           .constantArgumentType("bigint")
-           .build()});
 
   registerCudfFunction(
       prefix + "cardinality",

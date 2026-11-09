@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/expression/prestosql/ArrayJoinFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
+#include "velox/experimental/cudf/expression/prestosql/SplitFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/UnixtimeFunctions.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -231,14 +232,33 @@ void registerPrestoFunctions(const std::string& prefix) {
              .build()});
   }
 
-  // Presto only: Spark's two-argument split takes a regular expression.
-  registerSplitFunction(
+  // Presto only: Spark's split takes a regular expression.
+  registerCudfFunction(
       prefix + "split",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::SplitFunction>(expr, pool);
+      },
       {FunctionSignatureBuilder()
            .returnType("array(varchar)")
            .argumentType("varchar")
            .constantArgumentType("varchar")
-           .build()});
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("array(varchar)")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("array(varchar)")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .constantArgumentType("bigint")
+           .build()},
+      true,
+      prestosql::SplitFunction::canEvaluate);
 
   registerCudfFunction(
       prefix + "plus",
