@@ -3260,11 +3260,11 @@ TEST_P(TabletTest, stripeGroupViewsKeepTheirValues) {
       std::make_shared<velox::InMemoryReadFile>(file), pool_.get());
   ASSERT_EQ(layout.stripeGroups.size(), 1);
   const auto loadSection = [&](const nimble::MetadataSection& section) {
-    return std::make_unique<nimble::MetadataBuffer>(
+    return std::make_unique<nimble::MetadataBuffer>(nimble::toPinnedBuffer(
         nimble::MetadataBuffer::decompress(
             std::string_view{file}.substr(section.offset(), section.size()),
             section.compressionType(),
-            pool_.get()));
+            pool_.get())));
   };
   const auto stripes = loadSection(layout.stripes);
   auto stripeGroup = loadSection(layout.stripeGroups[0]);

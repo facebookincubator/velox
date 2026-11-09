@@ -58,10 +58,11 @@ std::unique_ptr<MetadataBuffer> tryExtractFromBuffer(
       bufOffset + section.size(),
       footerBuf.size(),
       "Metadata section exceeds speculative read buffer");
-  return std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
-      footerBuf.substr(bufOffset, section.size()),
-      section.compressionType(),
-      pool));
+  return std::make_unique<MetadataBuffer>(toPinnedBuffer(
+      MetadataBuffer::decompress(
+          footerBuf.substr(bufOffset, section.size()),
+          section.compressionType(),
+          pool)));
 }
 
 // Ensures the buffer has at least the requested capacity.
@@ -401,11 +402,12 @@ void TabletReader::loadFooter(
 
     const uint64_t footerBufOffset =
         footerIoSize - Postscript::kSize - ps_.footerSize();
-    footer_ = std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
-        std::string_view{
-            footerBuf->as<char>() + footerBufOffset, ps_.footerSize()},
-        ps_.footerCompressionType(),
-        pool_));
+    footer_ = std::make_unique<MetadataBuffer>(toPinnedBuffer(
+        MetadataBuffer::decompress(
+            std::string_view{
+                footerBuf->as<char>() + footerBufOffset, ps_.footerSize()},
+            ps_.footerCompressionType(),
+            pool_)));
   } else {
     // Adaptive mode: read PS first, then footer.
     ensureBuffer(footerBuf, Postscript::kSize, pool_);
@@ -422,8 +424,9 @@ void TabletReader::loadFooter(
     ensureBuffer(footerBuf, ps_.footerSize(), pool_);
     metadataInput_->readRaw(
         footerOffset, ps_.footerSize(), footerBuf->asMutable<char>());
-    footer_ = std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
-        std::move(footerBuf), ps_.footerCompressionType(), pool_));
+    footer_ = std::make_unique<MetadataBuffer>(toPinnedBuffer(
+        MetadataBuffer::decompress(
+            std::move(footerBuf), ps_.footerCompressionType(), pool_)));
   }
 }
 
@@ -1320,8 +1323,8 @@ std::optional<Section> TabletReader::loadOptionalSection(
     }
   }
   if (it->second.size() == 0) {
-    return Section{
-        MetadataBuffer{velox::AlignedBuffer::allocate<char>(0, pool_)}};
+    return Section{MetadataBuffer{
+        toPinnedBuffer(velox::AlignedBuffer::allocate<char>(0, pool_))}};
   }
   return Section{std::move(*readMetadata(it->second))};
 }

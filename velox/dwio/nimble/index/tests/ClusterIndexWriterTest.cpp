@@ -1275,11 +1275,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
   ASSERT_EQ(metadata.size(), 2);
 
   const auto makeRootSection = [&]() {
-    return Section{MetadataBuffer(
+    return Section{MetadataBuffer(toPinnedBuffer(
         MetadataBuffer::decompress(
             toBufferPtr(metadata.at(metadata.size() - 1), pool_.get()),
             CompressionType::Uncompressed,
-            pool_.get()))};
+            pool_.get())))};
   };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1547,11 +1547,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
   writer->flush(writeData, createMetadata);
   ASSERT_TRUE(writer->close(writeData, createMetadata).has_value());
   const auto makeRootSection = [&]() {
-    return Section{MetadataBuffer(
+    return Section{MetadataBuffer(toPinnedBuffer(
         MetadataBuffer::decompress(
             toBufferPtr(metadata.back(), pool_.get()),
             CompressionType::Uncompressed,
-            pool_.get()))};
+            pool_.get())))};
   };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1819,11 +1819,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
   ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
   const auto index = factory.createReader(
-      Section{MetadataBuffer(
+      Section{MetadataBuffer(toPinnedBuffer(
           MetadataBuffer::decompress(
               toBufferPtr(metadata.back(), pool_.get()),
               CompressionType::Uncompressed,
-              pool_.get()))},
+              pool_.get())))},
       pool_.get(),
       IndexLookup::Options{.file = file, .ioOptions = &ioOptions});
   ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 2);
@@ -1950,11 +1950,11 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   ASSERT_EQ(partitionMetadata.size(), 2);
 
   // Load ClusterIndex from serialized data and verify layout.
-  Section rootSection{MetadataBuffer(
+  Section rootSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
           toBufferPtr(rootIndexData, pool_.get()),
           CompressionType::Uncompressed,
-          pool_.get()))};
+          pool_.get())))};
   auto metadataFile =
       std::make_shared<velox::InMemoryReadFile>(partitionMetadata[0]);
   auto ioStats = std::make_shared<velox::io::IoStatistics>();

@@ -352,11 +352,11 @@ ClusterIndexTestBase::createChunkOnlyTestClusterIndex(
 std::unique_ptr<ClusterIndex> ClusterIndexTestBase::createClusterIndex(
     const IndexBuffers& indexBuffers,
     velox::ReadFile* keyStreamFile) {
-  Section indexSection{MetadataBuffer(
+  Section indexSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
           toBufferPtr(indexBuffers.rootIndex, pool_.get()),
           CompressionType::Uncompressed,
-          pool_.get()))};
+          pool_.get())))};
 
   metadataFile_ =
       std::make_shared<velox::InMemoryReadFile>(indexBuffers.indexPartitions);
@@ -400,15 +400,15 @@ std::shared_ptr<ChunkStatsGroup> ClusterIndexTestBase::createChunkStats(
     offset += indexBuffers.chunkStatsGroupSizes[g];
   }
 
-  auto chunkStatsBuffer =
-      std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
+  auto chunkStatsBuffer = std::make_unique<MetadataBuffer>(toPinnedBuffer(
+      MetadataBuffer::decompress(
           toBufferPtr(
               std::string_view(
                   indexBuffers.chunkStatsGroups.data() + offset,
                   indexBuffers.chunkStatsGroupSizes[stripeGroupIndex]),
               pool_.get()),
           CompressionType::Uncompressed,
-          pool_.get()));
+          pool_.get())));
 
   return ChunkStatsGroup::create(
       ChunkStatsVersion::kV1,
