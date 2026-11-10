@@ -16,6 +16,7 @@
 
 #include "velox/common/base/XxHashInline.h"
 
+#include <folly/ScopeGuard.h>
 #include <gmock/gmock.h>
 
 #include <functional>
@@ -23,6 +24,8 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/expression/ConstantExpr.h"
+#include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/external/tzdb/zoned_time.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -235,6 +238,121 @@ TEST_F(DateTimeFunctionsTest, atTimezoneSignatures) {
       testing::UnorderedElementsAreArray(sessionSignatures));
 
   EXPECT_EQ(0, getFunctionSignatures().count("at_timezone_convert"));
+}
+
+TEST_F(DateTimeFunctionsTest, atTimezoneSpecialFormTypes) {
+  EXPECT_FALSE(exec::isFunctionCallToSpecialFormRegistered("$at_time_zone"));
+
+  auto child = std::make_shared<exec::ConstantExpr>(
+      vectorMaker_.constantVector<int32_t>({0}));
+  for (const auto numInputs : {0, 1, 3}) {
+    SCOPED_TRACE(numInputs);
+    VELOX_ASSERT_THROW(
+        exec::constructSpecialForm(
+            "at_timezone",
+            TIMESTAMP_WITH_TIME_ZONE(),
+            std::vector<exec::ExprPtr>(numInputs, child),
+            false,
+            queryCtx_->queryConfig()),
+        "AT TIME ZONE must have exactly two inputs");
+  }
+
+  // The result type follows the scalar's registered timestamp mode.
+  {
+    SCOPE_EXIT {
+      removeFunction("at_timezone");
+      functions::prestosql::registerDateTimeFunctions(
+          "", /*defaultOwner=*/{}, /*ignoreTimeZoneLabel=*/false);
+    };
+    for (const auto& [ignoreTimeZoneLabel, timestampResultType] :
+         std::vector<std::pair<bool, TypePtr>>{
+             {false, TIMESTAMP_WITH_TIME_ZONE()},
+             {true, TIMESTAMP()},
+         }) {
+      SCOPED_TRACE(ignoreTimeZoneLabel);
+      removeFunction("at_timezone");
+      functions::prestosql::registerDateTimeFunctions(
+          "", /*defaultOwner=*/{}, ignoreTimeZoneLabel);
+
+      VELOX_EXPECT_EQ_TYPES(
+          resolveCallableSpecialForm("at_timezone", {TIMESTAMP(), VARCHAR()}),
+          timestampResultType);
+      VELOX_EXPECT_EQ_TYPES(
+          resolveCallableSpecialForm(
+              "at_timezone", {TIMESTAMP_WITH_TIME_ZONE(), VARCHAR()}),
+          timestampResultType);
+      VELOX_EXPECT_EQ_TYPES(
+          resolveCallableSpecialForm(
+              "at_timezone", {TIME_WITH_TIME_ZONE(), VARCHAR()}),
+          TIME_WITH_TIME_ZONE());
+    }
+  }
+
+  // TIME is accepted only as a coercion to TIME WITH TIME ZONE.
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialForm("at_timezone", {TIME(), VARCHAR()}),
+      "AT TIME ZONE requires TIME to be coerced to TIME WITH TIME ZONE");
+  std::vector<TypePtr> coercions;
+  VELOX_EXPECT_EQ_TYPES(
+      resolveCallableSpecialFormWithCoercions(
+          "at_timezone",
+          {TIME(), VARCHAR()},
+          coercions,
+          TypeCoercer::defaults()),
+      TIME_WITH_TIME_ZONE());
+  EXPECT_THAT(coercions, testing::ElementsAre(TIME_WITH_TIME_ZONE(), nullptr));
+
+  // DATE is rejected even when coercions are allowed.
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialForm("at_timezone", {DATE(), VARCHAR()}),
+      "AT TIME ZONE requires a time or timestamp value, but got: DATE");
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialFormWithCoercions(
+          "at_timezone",
+          {DATE(), VARCHAR()},
+          coercions,
+          TypeCoercer::defaults()),
+      "AT TIME ZONE requires a time or timestamp value, but got: DATE");
+  for (const auto& valueType :
+       std::vector<TypePtr>{TIMESTAMP_UTC(), TIME_MICRO_UTC()}) {
+    SCOPED_TRACE(valueType->toString());
+    VELOX_ASSERT_THROW(
+        resolveCallableSpecialFormWithCoercions(
+            "at_timezone",
+            {valueType, VARCHAR()},
+            coercions,
+            TypeCoercer::defaults()),
+        "AT TIME ZONE requires a time or timestamp value, but got: " +
+            valueType->toString());
+  }
+
+  // Only an UNKNOWN time zone may be coerced to VARCHAR.
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialForm("at_timezone", {TIMESTAMP(), BIGINT()}),
+      "AT TIME ZONE requires a VARCHAR time zone, but got: BIGINT");
+  VELOX_EXPECT_EQ_TYPES(
+      resolveCallableSpecialFormWithCoercions(
+          "at_timezone",
+          {TIMESTAMP(), UNKNOWN()},
+          coercions,
+          TypeCoercer::defaults()),
+      TIMESTAMP_WITH_TIME_ZONE());
+  EXPECT_THAT(coercions, testing::ElementsAre(nullptr, VARCHAR()));
+
+  const TypeCoercer permissiveCoercer({{BIGINT(), VARCHAR(), 1}});
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialFormWithCoercions(
+          "at_timezone", {TIMESTAMP(), BIGINT()}, coercions, permissiveCoercer),
+      "AT TIME ZONE requires a VARCHAR time zone, but got: BIGINT");
+  VELOX_ASSERT_THROW(
+      resolveCallableSpecialForm("at_timezone", {TIMESTAMP(), UNKNOWN()}),
+      "AT TIME ZONE requires a VARCHAR time zone, but got: UNKNOWN");
+  VELOX_EXPECT_EQ_TYPES(
+      resolveCallableSpecialFormWithCoercions(
+          "at_timezone", {TIME(), UNKNOWN()}, coercions, permissiveCoercer),
+      TIME_WITH_TIME_ZONE());
+  EXPECT_THAT(
+      coercions, testing::ElementsAre(TIME_WITH_TIME_ZONE(), VARCHAR()));
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfXxxSignatures) {
@@ -7048,6 +7166,25 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
       std::nullopt);
 
   EXPECT_EQ(at_timezone(std::nullopt, "Pacific/Fiji"), std::nullopt);
+
+  {
+    SCOPED_TRACE("constant time zone");
+    auto pack = [](const auto& value, std::string_view zoneName) {
+      return facebook::velox::pack(value, tz::getTimeZoneID(zoneName));
+    };
+    auto data = makeRowVector({
+        makeNullableFlatVector<int64_t>(
+            {pack(1'500'101'514, "Asia/Kathmandu"), std::nullopt},
+            TIMESTAMP_WITH_TIME_ZONE()),
+    });
+    auto result = evaluate<SimpleVector<int64_t>>(
+        "at_timezone(c0, 'America/Boise')", data);
+    ASSERT_EQ(result->size(), 2);
+    ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()));
+    ASSERT_FALSE(result->isNullAt(0));
+    EXPECT_EQ(result->valueAt(0), pack(1'500'101'514, "America/Boise"));
+    EXPECT_TRUE(result->isNullAt(1));
+  }
 }
 
 TEST_F(DateTimeFunctionsTest, atTimezoneFromTimestampWithTimezone) {
@@ -7065,7 +7202,7 @@ TEST_F(DateTimeFunctionsTest, atTimezoneFromTimestampWithTimezone) {
   };
 
   // 2024-01-01 08:00 UTC is 2024-01-01 00:00 in Los Angeles (PST, -08:00).
-  const auto winterInstant = parseTimestamp("2024-01-01 08:00:00").toMillis();
+  const auto winterInstant = parseTimestamp("2024-01-01 08:00:00");
   EXPECT_EQ(
       toTimestamp(
           pack(winterInstant, tz::getTimeZoneID("UTC")), "America/Los_Angeles"),
