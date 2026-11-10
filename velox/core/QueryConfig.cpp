@@ -234,6 +234,9 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kStreamingAggregationMinOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kStreamingAggregationEagerFlush);
 
+    // Vector index training.
+    VELOX_REGISTER_QUERY_CONFIG(kVectorIndexTrainThreads);
+
     // Exchange optimization.
     VELOX_REGISTER_QUERY_CONFIG(kSkipRequestDataSizeWithSingleSourceEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kExchangeLazyFetchingEnabled);

@@ -59,14 +59,14 @@ class VectorSearchTest : public HiveConnectorTestBase {
         {"embedding", makeArrayVector(embeddings)},
     });
     PlanBuilder plan(pool());
-    auto codecs =
-        run(plan.newPlan()
-                .values({points})
-                .singleAggregation(
-                    {"ds"},
-                    {"vector_index_train(embedding, id, 3, 'cosine') AS codec"})
-                .rowNumber({})
-                .project({"codec", "ds", "row_number AS codec_id"}));
+    auto codecs = run(plan.newPlan()
+                          .values({points})
+                          .singleAggregation(
+                              {"ds"},
+                              {"vector_index_train(embedding, id, 3, 'cosine', "
+                               "map()::map(varchar, varchar)) AS codec"})
+                          .rowNumber({})
+                          .project({"codec", "ds", "row_number AS codec_id"}));
 
     auto indexes =
         run(plan.values({points})
