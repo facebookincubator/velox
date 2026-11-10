@@ -105,6 +105,10 @@ std::optional<bool> ConstantTypedExpr::toBool() const {
   return std::nullopt;
 }
 
+Variant ConstantTypedExpr::toVariant() const {
+  return valueVector_ ? valueVector_->variantAt(0) : value_;
+}
+
 void ConstantTypedExpr::accept(
     const ITypedExprVisitor& visitor,
     ITypedExprVisitorContext& context) const {

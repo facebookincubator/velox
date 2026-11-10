@@ -16,56 +16,163 @@
 
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunnerToSqlPlanNodeVisitor.h"
 
+#include <cmath>
+#include <iomanip>
 #include <optional>
 
 #include <folly/String.h>
 
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
-#include "velox/functions/prestosql/types/PrestoTypes.h"
 #include "velox/type/Timestamp.h"
-#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::functions::sparksql::fuzzer {
 namespace {
 
+std::optional<std::string> toSparkTypeSql(const TypePtr& type) {
+  if (type->isDecimal()) {
+    const auto [precision, scale] = getDecimalPrecisionScale(*type);
+    return fmt::format("DECIMAL({}, {})", precision, scale);
+  }
+  if (type->isDate()) {
+    return "DATE";
+  }
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+      return "BOOLEAN";
+    case TypeKind::TINYINT:
+      return "TINYINT";
+    case TypeKind::SMALLINT:
+      return "SMALLINT";
+    case TypeKind::INTEGER:
+      return "INT";
+    case TypeKind::BIGINT:
+      return "BIGINT";
+    case TypeKind::REAL:
+      return "FLOAT";
+    case TypeKind::DOUBLE:
+      return "DOUBLE";
+    case TypeKind::VARCHAR:
+      return "STRING";
+    case TypeKind::VARBINARY:
+      return "BINARY";
+    case TypeKind::TIMESTAMP:
+      return "TIMESTAMP";
+    case TypeKind::ARRAY:
+    case TypeKind::MAP:
+    case TypeKind::ROW: {
+      std::vector<std::string> children;
+      for (auto i = 0; i < type->size(); ++i) {
+        const auto child = toSparkTypeSql(type->childAt(i));
+        if (!child) {
+          return std::nullopt;
+        }
+        if (type->isRow()) {
+          std::stringstream name;
+          name << std::quoted(type->asRow().nameOf(i), '`', '`');
+          children.push_back(fmt::format("{}: {}", name.str(), *child));
+        } else {
+          children.push_back(*child);
+        }
+      }
+      const auto name = type->isArray() ? "ARRAY"
+          : type->isMap()               ? "MAP"
+                                        : "STRUCT";
+      return fmt::format("{}<{}>", name, folly::join(", ", children));
+    }
+    default:
+      return std::nullopt;
+  }
+}
+
 std::optional<std::string> toSparkConstantSql(
     const core::ConstantTypedExpr& constant) {
   const auto& type = constant.type();
-  if (!type->isPrimitiveType()) {
+  const auto typeSql = toSparkTypeSql(type);
+  if (!typeSql) {
     return std::nullopt;
   }
-  const auto typeSql = type->isVarchar() ? "STRING"
-      : type->isVarbinary()              ? "BINARY"
-                                         : PrestoTypes::toSql(type);
-  if (constant.isNull()) {
-    return fmt::format("cast(null as {})", typeSql);
+  const auto value = constant.toVariant();
+  if (value.isNull()) {
+    return fmt::format("cast(null as {})", *typeSql);
   }
   if (type->isTimestamp()) {
-    const auto value = constant.hasValueVector()
-        ? constant.valueVector()->as<SimpleVector<Timestamp>>()->valueAt(0)
-        : constant.value().value<TypeKind::TIMESTAMP>();
-    // Spark stores UTC epoch microseconds and cannot preserve finer precision.
-    if (value.getNanos() % 1'000 != 0 || value < Timestamp::minMicros() ||
-        value > Timestamp::maxMicros()) {
-      return std::nullopt;
-    }
-    return fmt::format("timestamp_micros({})", value.toMicros());
+    const auto timestamp = value.value<TypeKind::TIMESTAMP>();
+    // The Spark fuzzer generates timestamps representable in microseconds.
+    VELOX_CHECK_EQ(timestamp.getNanos() % 1'000, 0);
+    VELOX_CHECK_GE(timestamp, Timestamp::minMicros());
+    VELOX_CHECK_LE(timestamp, Timestamp::maxMicros());
+    return fmt::format("timestamp_micros({})", timestamp.toMicros());
   }
   if (type->isVarchar() || type->isVarbinary()) {
-    const auto value = constant.hasValueVector()
-        ? constant.valueVector()
-              ->as<SimpleVector<StringView>>()
-              ->valueAt(0)
-              .getString()
-        : type->isVarbinary() ? constant.value().value<TypeKind::VARBINARY>()
-                              : constant.value().value<TypeKind::VARCHAR>();
+    const auto& bytes = type->isVarbinary() ? value.value<TypeKind::VARBINARY>()
+                                            : value.value<TypeKind::VARCHAR>();
     // Avoid dependence on Spark's string-literal escape configuration.
-    const auto binary = fmt::format("X'{}'", folly::hexlify(value));
+    const auto binary = fmt::format("X'{}'", folly::hexlify(bytes));
     return type->isVarbinary() ? binary
                                : fmt::format("cast({} as STRING)", binary);
   }
-  // Spark does not support Presto's numeric TYPE 'value' literal syntax.
-  return fmt::format("cast('{}' as {})", constant.toString(), typeSql);
+  if (type->isArray() || type->isMap() || type->isRow()) {
+    std::vector<std::string> elements;
+    const auto append = [&](const TypePtr& childType, const Variant& child) {
+      const auto sql =
+          toSparkConstantSql(core::ConstantTypedExpr(childType, child));
+      if (!sql) {
+        return false;
+      }
+      elements.push_back(*sql);
+      return true;
+    };
+    if (type->isArray()) {
+      for (const auto& element : value.array()) {
+        if (!append(type->childAt(0), element)) {
+          return std::nullopt;
+        }
+      }
+    } else if (type->isMap()) {
+      for (const auto& [key, element] : value.map()) {
+        if (!append(type->childAt(0), key) ||
+            !append(type->childAt(1), element)) {
+          return std::nullopt;
+        }
+      }
+    } else {
+      const auto& fields = value.row();
+      for (auto i = 0; i < fields.size(); ++i) {
+        if (!append(type->childAt(i), fields[i])) {
+          return std::nullopt;
+        }
+      }
+    }
+    const auto name = type->isArray() ? "array"
+        : type->isMap()               ? "map"
+                                      : "struct";
+    return fmt::format(
+        "cast({}({}) as {})", name, folly::join(", ", elements), *typeSql);
+  }
+  const auto literal = value.toStringAsVector(type);
+  if (type->isDate()) {
+    return fmt::format("DATE '{}'", literal);
+  }
+  if (type->isDecimal()) {
+    return fmt::format("cast({}BD as {})", literal, *typeSql);
+  }
+  if (type->isReal() || type->isDouble()) {
+    const double number =
+        type->isReal() ? value.value<float>() : value.value<double>();
+    if (!std::isfinite(number)) {
+      const auto special = std::isnan(number) ? "NaN"
+          : number < 0                        ? "-Infinity"
+                                              : "Infinity";
+      return fmt::format("cast('{}' as {})", special, *typeSql);
+    }
+  }
+  const auto suffix = type->isTinyint() ? "Y"
+      : type->isSmallint()              ? "S"
+      : type->isBigint()                ? "L"
+      : type->isReal()                  ? "F"
+      : type->isDouble()                ? "D"
+                                        : "";
+  return literal + suffix;
 }
 
 std::optional<std::string> toSparkAggregateCallSql(
@@ -122,6 +229,12 @@ void SparkQueryRunnerToSqlPlanNodeVisitor::visit(
     for (auto i = 0; i < aggregates.size(); ++i) {
       exec::test::appendComma(i, sql);
       const auto& aggregate = aggregates[i];
+      // Native bloom filters use a different binary format and hash scheme.
+      // Compare equivalent native plans, not their serialized bytes to Spark.
+      if (aggregate.call->name() == "bloom_filter_agg") {
+        visitorContext.sql = std::nullopt;
+        return;
+      }
       VELOX_CHECK(
           aggregate.sortingKeys.empty(),
           "Sort key is not supported in Spark's aggregation. You may need to disable 'enable_sorted_aggregations' when running the fuzzer test.");

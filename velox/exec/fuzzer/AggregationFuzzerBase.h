@@ -219,9 +219,9 @@ class AggregationFuzzerBase {
       const std::optional<CallableSignature>& signature,
       const std::vector<std::string>& groupingKeys);
 
-  // Selects one value per constant argument and repeats it in every input
-  // batch. Returns named bindings for __complex_constant expressions, or null
-  // if the signature has no constant arguments.
+  // Selects one value per constant argument and removes its input column.
+  // Returns named bindings for __complex_constant expressions, or null if the
+  // signature has no constant arguments.
   RowVectorPtr generateConstantInputs(
       const CallableSignature& signature,
       std::vector<RowVectorPtr>& input);
