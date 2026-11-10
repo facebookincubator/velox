@@ -71,8 +71,13 @@ block()
   FetchContent_MakeAvailable(faiss)
   add_library(FAISS::faiss ALIAS faiss)
   # Ahead of any Faiss headers inherited from the directory include path.
+  # faiss_gpu_objs is created inside FetchContent, before the directory
+  # include below, so its GPU sources still search an installed Faiss first.
   if(faiss_SOURCE_DIR)
     target_include_directories(faiss BEFORE PUBLIC "${faiss_SOURCE_DIR}")
+    if(TARGET faiss_gpu_objs)
+      target_include_directories(faiss_gpu_objs BEFORE PRIVATE "${faiss_SOURCE_DIR}")
+    endif()
   endif()
   unset(BUILD_TESTING CACHE)
   unset(BUILD_SHARED_LIBS CACHE)
