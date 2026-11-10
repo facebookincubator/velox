@@ -110,6 +110,18 @@ class MemorySource : public cudf::io::datasource {
     }
     return bytes;
   }
+  size_t device_read(
+      size_t offset,
+      size_t bytes,
+      uint8_t* dst,
+      cuda::stream_ref stream) override {
+    std::vector<uint8_t> host(bytes);
+    bytes = host_read(offset, bytes, host.data());
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        dst, host.data(), bytes, cudaMemcpyHostToDevice, stream.get()));
+    stream.sync();
+    return bytes;
+  }
 
  private:
   std::shared_ptr<ReadState> state_;
@@ -470,6 +482,26 @@ TEST_F(CachingDataSourceTest, asyncCapacityFailureUsesUncachedFallback) {
       stats_->stats().at("cudfKvikioCacheBypassBytes").sum, read_->data.size());
   EXPECT_EQ(fromDevice(dst, read_->data.size()), read_->data);
   EXPECT_EQ(cache_->refreshStats().numEntries, 0);
+}
+
+// A cached piece larger than a pinned buffer (16 MiB) is copied to the GPU in
+// chunks.
+TEST_F(CachingDataSourceTest, cachedPieceIsCopiedInChunks) {
+  // An allocator serves one cache. The fixture's allocator serves 'cache_'.
+  memory::MallocAllocator allocator(memory::MemoryAllocator::Options{
+      .capacity = 64 << 20, .reservationByteLimit = 0});
+  auto cache = cache::AsyncDataCache::create(&allocator);
+  constexpr size_t kBytes = 2 * (16 << 20) + 5;
+  fillPattern(kBytes);
+  auto input = maybeCacheKvikioDataSource(
+      std::make_unique<MemorySource>(read_), path_, cache.get(), true, stats_);
+  rmm::cuda_stream stream;
+  rmm::device_buffer destination(
+      kBytes, stream, cudf::get_current_device_resource_ref());
+  auto* dst = static_cast<uint8_t*>(destination.data());
+  EXPECT_EQ(input->device_read(0, kBytes, dst, stream), kBytes);
+  EXPECT_EQ(fromDevice(dst, kBytes), read_->data);
+  EXPECT_EQ(stats_->stats().at("cudfKvikioCacheMissBytes").sum, kBytes);
 }
 
 // A piece that cannot fit in the cache leaves the cached entries in place.

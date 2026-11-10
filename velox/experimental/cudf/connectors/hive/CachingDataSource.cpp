@@ -50,6 +50,22 @@
 // host_read_async, device_read and device_read_async) from Velox's async data
 // cache, and does remote reads through KvikIO for the bytes it lacks.
 //
+// Terms used in this file:
+//   - Range: the bytes one read asks for, given as a file offset and a size.
+//   - Entry: one item in the async data cache. It holds consecutive bytes of
+//     the file. Its key is (file, offset of its first byte).
+//   - Piece: the part of a range that one entry serves. It is the start of
+//     the entry: the whole entry, or less when the range ends first. A piece
+//     the cache cannot hold is read without an entry.
+//   - Block: one area of memory that holds an entry's bytes. An entry this
+//     datasource creates is one block. An entry made by Velox's own file
+//     readers can be split into several blocks, at separate memory addresses.
+//   - Pin: a handle to an entry. The cache does not evict an entry while a pin
+//     on it exists. Not related to pinned buffers.
+//   - Pinned buffer: page-locked host memory, which the GPU can copy from
+//     directly. Copies to the GPU go through one. Not related to pins.
+//   - Remote read: a read from S3 through KvikIO.
+//
 // The requested byte range is served piece by piece, starting at its offset.
 // Each piece comes from one async data cache entry, looked up by (file, offset
 // of the piece):
@@ -64,11 +80,13 @@
 //     the bytes from this piece's offset to the end of the range, without the
 //     async data cache.
 //
-// Device reads copy each piece from host memory into a pinned buffer, then to
-// the GPU. device_read_async() uses two thread pools: a fill thread brings the
-// range into the async data cache, waiting for its remote reads, then a copy
-// thread copies it to the GPU. The returned future is ready once the bytes are
-// in GPU memory.
+// Device reads copy each cached piece to the GPU through pinned buffers, 16 MiB
+// at a time. For bytes read without the async data cache, KvikIO downloads
+// them into its own pinned buffers, then copies them to the GPU.
+// device_read_async() uses two thread pools: a fill thread brings the range
+// into the async data cache, waiting for its remote reads, then a copy thread
+// copies it to the GPU. The returned future is ready once the bytes are in GPU
+// memory.
 
 namespace facebook::velox::cudf_velox::connector::hive {
 namespace {
@@ -76,6 +94,10 @@ namespace {
 // AsyncDataCache stores entry sizes in an int32_t. Larger pieces are read
 // without the cache.
 constexpr size_t kMaxCacheEntryBytes = std::numeric_limits<int32_t>::max();
+
+// Size of each pinned buffer. A cached piece is copied to the GPU this many
+// bytes at a time. 16 MiB is also KvikIO's default bounce buffer size.
+constexpr size_t kPinnedBufferBytes = 16 << 20;
 
 // Threads that put ranges in the cache. A fill thread waits while KvikIO reads
 // a miss. The thread count equals KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS
@@ -142,8 +164,8 @@ void waitForStream(cuda::stream_ref stream, int device) {
 class PinnedBuffer;
 
 // Pinned host memory used as a bounce buffer for copies from the async data
-// cache to the GPU, shared by all threads. Bytes read without the async data
-// cache use it too. get() lends a buffer, and the buffer puts its memory back
+// cache to the GPU, shared by all threads. Every buffer holds
+// kPinnedBufferBytes. get() lends a buffer, and the buffer puts its memory back
 // into the pool when it is destroyed. No thread keeps the memory, so nothing
 // is lost when folly retires an idle thread.
 //
@@ -156,10 +178,10 @@ class PinnedBufferPool {
     return *pool;
   }
 
-  // Lends a buffer of at least 'bytes' bytes for copies to 'device', which
-  // must be the current device. Waits until the last copy out of its memory
-  // has finished, so the caller can write to it.
-  PinnedBuffer get(int device, size_t bytes);
+  // Lends a buffer for copies to 'device', which must be the current device.
+  // Waits until the last copy out of its memory has finished, so the caller
+  // can write to it.
+  PinnedBuffer get(int device);
 
   // Frees the memory in the pool, after its last copies finish. Memory that
   // is lent out at the time is put back later and freed by the next call.
@@ -171,7 +193,6 @@ class PinnedBufferPool {
   struct Memory {
     int device{-1};
     uint8_t* data{nullptr};
-    size_t size{0};
     cudaEvent_t lastCopy{nullptr};
   };
 
@@ -218,7 +239,7 @@ class PinnedBuffer {
   PinnedBufferPool::Memory memory_;
 };
 
-PinnedBuffer PinnedBufferPool::get(int device, size_t bytes) {
+PinnedBuffer PinnedBufferPool::get(int device) {
   Memory memory;
   memory.device = device;
   {
@@ -236,14 +257,9 @@ PinnedBuffer PinnedBufferPool::get(int device, size_t bytes) {
     }
     // The memory may still be in use by its last copy to the GPU.
     CUDF_CUDA_TRY(cudaEventSynchronize(memory.lastCopy));
-    if (memory.size < bytes) {
-      if (memory.data != nullptr) {
-        allocator_.deallocate_sync(memory.data, memory.size);
-        memory.data = nullptr;
-        memory.size = 0;
-      }
-      memory.data = static_cast<uint8_t*>(allocator_.allocate_sync(bytes));
-      memory.size = bytes;
+    if (memory.data == nullptr) {
+      memory.data =
+          static_cast<uint8_t*>(allocator_.allocate_sync(kPinnedBufferBytes));
     }
   } catch (...) {
     // Keep what is left of the memory for later use.
@@ -270,7 +286,7 @@ void PinnedBufferPool::freeAll() {
         CUDF_CUDA_TRY(cudaEventDestroy(memory.lastCopy));
       }
       if (memory.data != nullptr) {
-        allocator_.deallocate_sync(memory.data, memory.size);
+        allocator_.deallocate_sync(memory.data, kPinnedBufferBytes);
       }
     }
   }
@@ -583,47 +599,53 @@ class Reader {
     return true;
   }
 
+  // Copies the first 'bytes' bytes of a cached piece to 'dst' in host memory.
   static void
   copyFromEntry(const cache::CachePin& pin, size_t bytes, uint8_t* dst) {
-    auto* entry = pin.checkedEntry();
-    if (entry->hasContiguousData()) {
-      std::memcpy(dst, entry->contiguousData(), bytes);
-      return;
-    }
-    // Entries made by other readers may be split into several blocks.
-    for (const auto& block : entry->dataRanges(bytes)) {
+    // Loops over the entry's blocks. An entry this datasource creates has one
+    // block. An entry made by Velox's own file readers can have several.
+    for (const auto& block : pin.checkedEntry()->dataRanges(bytes)) {
       std::memcpy(dst, block.data(), block.size());
       dst += block.size();
     }
   }
 
-  // Queues the GPU copy of 'bytes' bytes of a cached piece, through a pinned
-  // buffer from the shared pool.
+  // Queues the GPU copy of the first 'bytes' bytes of a cached piece, through
+  // pinned buffers from the shared pool.
   static void copyCachedPieceToGpu(
       cache::CachePin pin,
       size_t bytes,
       uint8_t* dst,
       const DeviceRead& read) {
-    auto buffer = PinnedBufferPool::instance().get(read.device, bytes);
-    copyFromEntry(pin, bytes, buffer.data());
-    // The bytes are in the pinned buffer. The cache may evict the entry.
-    pin.clear();
-    buffer.copyToGpu(bytes, dst, read.stream);
+    // Loops over the entry's blocks. An entry this datasource creates has one
+    // block. An entry made by Velox's own file readers can have several.
+    for (const auto& block : pin.checkedEntry()->dataRanges(bytes)) {
+      // Copies the block kPinnedBufferBytes at a time, the size of a pinned
+      // buffer.
+      for (size_t copied = 0; copied < block.size();
+           copied += kPinnedBufferBytes) {
+        const auto bytesToCopy =
+            std::min(kPinnedBufferBytes, block.size() - copied);
+        auto buffer = PinnedBufferPool::instance().get(read.device);
+        std::memcpy(buffer.data(), block.data() + copied, bytesToCopy);
+        buffer.copyToGpu(bytesToCopy, dst, read.stream);
+        dst += bytesToCopy;
+      }
+    }
   }
 
-  // Reads 'bytes' bytes at 'offset' from KvikIO, without the cache, and queues
-  // their GPU copy through a pinned buffer from the shared pool. Returns the
-  // number of bytes read.
+  // Reads 'bytes' bytes at 'offset' through KvikIO into GPU memory, without the
+  // cache. KvikIO downloads them into its own pinned buffers, then copies them
+  // to the GPU. cuDF's device_read() first waits for the copies already queued
+  // on 'read.stream'. Returns the number of bytes read.
   size_t copyUncachedToGpu(
       size_t offset,
       size_t bytes,
       uint8_t* dst,
       const DeviceRead& read) {
-    auto buffer = PinnedBufferPool::instance().get(read.device, bytes);
     const auto bytesRead =
-        kvikioSource_->host_read(offset, bytes, buffer.data());
+        kvikioSource_->device_read(offset, bytes, dst, read.stream);
     countBytes("cudfKvikioCacheBypassBytes", bytesRead);
-    buffer.copyToGpu(bytesRead, dst, read.stream);
     return bytesRead;
   }
 
