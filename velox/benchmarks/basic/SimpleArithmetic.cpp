@@ -176,8 +176,8 @@ class SimpleArithmeticBenchmark
     run(expression, kIterationsLarge, largeRowVector_);
   }
 
-  void runRound(const std::string& expression) {
-    run(expression, kIterationsLarge, roundRowVector_);
+  void runRound(const std::string& expression, size_t iterations) {
+    run(expression, iterations, roundRowVector_);
   }
 
   // Runs `expression` `times` thousand times.
@@ -188,7 +188,7 @@ class SimpleArithmeticBenchmark
     suspender.dismiss();
 
     size_t count = 0;
-    for (auto i = 0; i < times; i++) {
+    for (size_t i = 0; i < times; ++i) {
       count += evaluate(exprSet, input)->size();
     }
     return count;
@@ -374,8 +374,8 @@ BENCHMARK(plusCheckedLarge) {
 
 BENCHMARK_DRAW_LINE();
 
-void roundBenchmark(const std::string& expression) {
-  benchmark->runRound(expression);
+void roundBenchmark(unsigned int iterations, const std::string& expression) {
+  benchmark->runRound(expression, iterations);
 }
 
 // Literal scales use the cached factor; flat scale columns compute it per row.
