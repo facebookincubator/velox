@@ -43,9 +43,6 @@
 namespace facebook::velox::cudf_velox {
 
 std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type) {
-  if (type->providesCustomComparison()) {
-    return std::nullopt;
-  }
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return cudf::data_type{cudf::type_id::BOOL8};

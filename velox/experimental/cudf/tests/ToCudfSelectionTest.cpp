@@ -952,6 +952,33 @@ TEST_F(ToCudfSelectionTest, complexGroupingKeyExpressionsFallsBack) {
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
 }
 
+// A TIMESTAMP WITH TIME ZONE column that a FilterProject only carries keeps
+// the operator on the GPU; nothing compares its values.
+TEST_F(ToCudfSelectionTest, customComparisonColumnPassesThroughOnGpu) {
+  auto input = makeRowVector(
+      {"k", "tz"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>(
+           {pack(0, 0), pack(1'000, 1'825), pack(2'000, 0)},
+           TIMESTAMP_WITH_TIME_ZONE())});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .filter("k > 1")
+                  .project({"k + 10 AS k10", "tz"})
+                  .planNode();
+  auto expected = makeRowVector(
+      {"k10", "tz"},
+      {makeFlatVector<int64_t>({12, 13}),
+       makeFlatVector<int64_t>(
+           {pack(1'000, 1'825), pack(2'000, 0)}, TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto task = AssertQueryBuilder(plan)
+                  .config("cudf.enabled", true)
+                  .assertResults(expected);
+  EXPECT_TRUE(wasCudfFilterProjectUsed(task));
+  EXPECT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
 // Aggregates and window functions that order a TIMESTAMP WITH TIME ZONE
 // argument must stay on the CPU, since cuDF would reduce the packed bits where
 // Velox keeps the first encoding seen; count ignores the value and keeps
