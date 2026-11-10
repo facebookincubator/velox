@@ -79,6 +79,44 @@ TEST_F(CudfRowNumberTest, partitionedWithNullKeys) {
       PlanBuilder().values({batch1, batch2}).rowNumber({"p"}).planNode());
 }
 
+TEST_F(CudfRowNumberTest, mixedGroupSizesAcrossBatches) {
+  auto batch1 = makeRowVector(
+      {"p", "v"},
+      {makeNullableFlatVector<int32_t>(
+           {30, 10, 30, std::nullopt, 10, 30, std::nullopt}),
+       makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6})});
+  // New groups sort between old groups. Unequal sizes and prior counts must
+  // align with group starts, including the null-key group's COUNT_ALL.
+  auto batch2 = makeRowVector(
+      {"p", "v"},
+      {makeNullableFlatVector<int32_t>(
+           {20, 30, std::nullopt, 20, 10, 20, 40, 30, 20, std::nullopt}),
+       makeFlatVector<int64_t>({7, 8, 9, 10, 11, 12, 13, 14, 15, 16})});
+  // Only seen groups: update counts without rebuilding the state keys/join.
+  auto batch3 = makeRowVector(
+      {"p", "v"},
+      {makeNullableFlatVector<int32_t>({40, 10, 20, 40, 30, std::nullopt}),
+       makeFlatVector<int64_t>({17, 18, 19, 20, 21, 22})});
+  assertGpuMatchesCpu(
+      PlanBuilder()
+          .values({batch1, batch2, batch3})
+          .rowNumber({"p"})
+          .planNode());
+}
+
+TEST_F(CudfRowNumberTest, singlePartitionAcrossBatches) {
+  auto singleton = makeRowVector(
+      {"p", "v"}, {makeFlatVector<int32_t>({7}), makeFlatVector<int64_t>({0})});
+  auto batch = makeRowVector(
+      {"p", "v"},
+      {makeFlatVector<int32_t>({7, 7, 7}), makeFlatVector<int64_t>({1, 2, 3})});
+  assertGpuMatchesCpu(
+      PlanBuilder()
+          .values({singleton, batch, singleton})
+          .rowNumber({"p"})
+          .planNode());
+}
+
 TEST_F(CudfRowNumberTest, multipleKeysWithVarchar) {
   auto batch1 = makeRowVector(
       {"s", "k", "v"},

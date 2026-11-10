@@ -27,12 +27,11 @@
 #include <cudf/filling.hpp>
 #include <cudf/groupby.hpp>
 #include <cudf/join/join.hpp>
+#include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
-#include <cudf/rolling.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/sorting.hpp>
 #include <cudf/stream_compaction.hpp>
-#include <cudf/unary.hpp>
 
 #include <algorithm>
 
@@ -95,97 +94,109 @@ std::unique_ptr<cudf::column> CudfRowNumber::computePartitionedRowNumbers(
   const std::vector<cudf::null_order> nullOrder(
       numKeys, cudf::null_order::BEFORE);
 
-  // Number the rows of each partition locally in a stable key order, so equal
-  // keys keep their arrival order.
+  // Stable sorting keeps each partition's rows in arrival order.
   auto order =
       cudf::stable_sorted_order(keys, columnOrder, nullOrder, stream, tempMr);
-  auto sortedKeys = cudf::gather(
-      keys,
-      order->view(),
-      cudf::out_of_bounds_policy::DONT_CHECK,
-      stream,
-      cudf::memory_resources{tempMr, tempMr});
-  // row_number ignores the values, so any fixed-width column will do.
-  auto rowNumberAgg =
-      cudf::make_row_number_aggregation<cudf::rolling_aggregation>();
-  auto localRowNumbers = cudf::grouped_rolling_window(
-      sortedKeys->view(),
-      order->view(),
-      cudf::window_bounds::unbounded(),
-      cudf::window_bounds::get(0),
-      1,
-      *rowNumberAgg,
-      stream,
-      tempMr);
-
-  // Add the counts of the partitions seen in earlier batches.
-  const std::vector<cuda::stream_ref> stateStreams = stateJoin_
-      ? std::vector<cuda::stream_ref>{*keysStream_, *countsStream_}
-      : std::vector<cuda::stream_ref>{};
-  std::unique_ptr<rmm::device_uvector<cudf::size_type>> stateIndices;
-  std::unique_ptr<cudf::column> sortedRowNumbers;
-  if (stateJoin_) {
-    cudf::detail::join_streams(stateStreams, stream);
-    stateIndices = stateJoin_->left_join(sortedKeys->view(), stream, tempMr);
-    auto priorCounts = cudf::gather(
-        cudf::table_view{{stateCounts_->view()}},
-        cudf::column_view{
-            cudf::device_span<cudf::size_type const>{*stateIndices}},
-        cudf::out_of_bounds_policy::NULLIFY,
-        cudf::negative_index_policy::NOT_ALLOWED,
+  std::unique_ptr<cudf::table> groupKeys;
+  std::unique_ptr<cudf::column> groupSizes;
+  {
+    auto sortedKeys = cudf::gather(
+        keys,
+        order->view(),
+        cudf::out_of_bounds_policy::DONT_CHECK,
         stream,
         cudf::memory_resources{tempMr, tempMr});
-    cudf::numeric_scalar<int64_t> zero(0, true, stream, tempMr);
-    auto priorCountsOrZero = cudf::replace_nulls(
-        priorCounts->get_column(0).view(), zero, stream, tempMr);
-    priorCounts.reset();
-    sortedRowNumbers = cudf::binary_operation(
-        localRowNumbers->view(),
-        priorCountsOrZero->view(),
-        cudf::binary_operator::ADD,
-        cudf::data_type{cudf::type_id::INT64},
-        stream,
-        tempMr);
-  } else {
-    sortedRowNumbers = cudf::cast(
-        localRowNumbers->view(),
-        cudf::data_type{cudf::type_id::INT64},
-        stream,
-        tempMr);
-  }
-  localRowNumbers.reset();
-
-  // The last row number of each partition is its new count. Its state index
-  // is the same for every row of the partition.
-  std::vector<std::unique_ptr<cudf::column>> groupColumns;
-  std::unique_ptr<cudf::column> groupStateIndices;
-  {
     cudf::groupby::groupby groups(
         sortedKeys->view(),
         cudf::null_policy::INCLUDE,
         cudf::sorted::YES,
         columnOrder,
         nullOrder);
-    std::vector<cudf::groupby::aggregation_request> requests(
-        stateIndices ? 2 : 1);
-    requests[0].values = sortedRowNumbers->view();
+    std::vector<cudf::groupby::aggregation_request> requests(1);
+    requests[0].values = sortedKeys->get_column(0).view();
     requests[0].aggregations.push_back(
-        cudf::make_max_aggregation<cudf::groupby_aggregation>());
-    if (stateIndices) {
-      requests[1].values = cudf::column_view{
-          cudf::device_span<cudf::size_type const>{*stateIndices}};
-      requests[1].aggregations.push_back(
-          cudf::make_max_aggregation<cudf::groupby_aggregation>());
-    }
-    auto [groupKeys, results] = groups.aggregate(requests, stream, tempMr);
-    groupColumns = groupKeys->release();
-    groupColumns.push_back(std::move(results[0].results[0]));
-    if (stateIndices) {
-      groupStateIndices = std::move(results[1].results[0]);
-    }
+        cudf::make_count_aggregation<cudf::groupby_aggregation>(
+            cudf::null_policy::INCLUDE));
+    // Sort aggregation returns keys and counts in consecutive group order.
+    auto [uniqueKeys, results] = groups.aggregate(requests, stream, tempMr);
+    groupKeys = std::move(uniqueKeys);
+    groupSizes = std::move(results[0].results[0]);
   }
-  sortedKeys.reset();
-  stateIndices.reset();
+
+  const std::vector<cuda::stream_ref> stateStreams = stateJoin_
+      ? std::vector<cuda::stream_ref>{*keysStream_, *countsStream_}
+      : std::vector<cuda::stream_ref>{};
+  std::unique_ptr<rmm::device_uvector<cudf::size_type>> groupStateIndices;
+  std::unique_ptr<cudf::column> sortedRowNumbers;
+  std::vector<std::unique_ptr<cudf::column>> groupColumns;
+  {
+    auto sum = cudf::make_sum_aggregation<cudf::scan_aggregation>();
+    // COUNT_ALL and its prefix sums fit in size_type: their total is N.
+    auto groupStarts = cudf::scan(
+        groupSizes->view(),
+        *sum,
+        cudf::scan_type::EXCLUSIVE,
+        cudf::null_policy::EXCLUDE,
+        stream,
+        tempMr);
+    cudf::numeric_scalar<int64_t> zero(0, true, stream, tempMr);
+    std::unique_ptr<cudf::column> priorCounts;
+    if (stateJoin_) {
+      cudf::detail::join_streams(stateStreams, stream);
+      groupStateIndices =
+          stateJoin_->left_join(groupKeys->view(), stream, tempMr);
+      auto gatheredCounts = cudf::gather(
+          cudf::table_view{{stateCounts_->view()}},
+          cudf::column_view{
+              cudf::device_span<cudf::size_type const>{*groupStateIndices}},
+          cudf::out_of_bounds_policy::NULLIFY,
+          cudf::negative_index_policy::NOT_ALLOWED,
+          stream,
+          cudf::memory_resources{tempMr, tempMr});
+      priorCounts = cudf::replace_nulls(
+          gatheredCounts->get_column(0).view(), zero, stream, tempMr);
+    } else {
+      priorCounts =
+          cudf::sequence(groupSizes->size(), zero, zero, stream, tempMr);
+    }
+    groupColumns = groupKeys->release();
+    groupKeys.reset();
+    const cudf::data_type int64Type{cudf::type_id::INT64};
+    groupColumns.push_back(cudf::binary_operation(
+        priorCounts->view(),
+        groupSizes->view(),
+        cudf::binary_operator::ADD,
+        int64Type,
+        stream,
+        tempMr));
+    // Mixed INT64/INT32 operations promote before arithmetic. Adjustments
+    // can be negative when a group's start exceeds its prior count.
+    auto adjustment = cudf::binary_operation(
+        priorCounts->view(),
+        groupStarts->view(),
+        cudf::binary_operator::SUB,
+        int64Type,
+        stream,
+        tempMr);
+    priorCounts.reset();
+    groupStarts.reset();
+    auto repeatedAdjustment = cudf::repeat(
+        cudf::table_view{{adjustment->view()}},
+        groupSizes->view(),
+        stream,
+        tempMr);
+    adjustment.reset();
+    groupSizes.reset();
+    cudf::numeric_scalar<cudf::size_type> positionOne(1, true, stream, tempMr);
+    auto positions = cudf::sequence(keys.num_rows(), positionOne, stream, tempMr);
+    sortedRowNumbers = cudf::binary_operation(
+        positions->view(),
+        repeatedAdjustment->get_column(0).view(),
+        cudf::binary_operator::ADD,
+        int64Type,
+        stream,
+        tempMr);
+  }
 
   // Restore the arrival order. The row numbers are only output when they are
   // generated and there is no limit; otherwise they are a temporary.
@@ -205,18 +216,19 @@ std::unique_ptr<cudf::column> CudfRowNumber::computePartitionedRowNumbers(
   auto groups = std::make_unique<cudf::table>(std::move(groupColumns));
   std::unique_ptr<cudf::table> matchedGroups;
   if (groupStateIndices) {
+    const cudf::column_view indices{
+        cudf::device_span<cudf::size_type const>{*groupStateIndices}};
     cudf::numeric_scalar<cudf::size_type> noMatch(
         cudf::JoinNoMatch, true, stream, tempMr);
     auto matched = cudf::binary_operation(
-        groupStateIndices->view(),
+        indices,
         noMatch,
         cudf::binary_operator::NOT_EQUAL,
         cudf::data_type{cudf::type_id::BOOL8},
         stream,
         tempMr);
     matchedGroups = cudf::apply_retention_mask(
-        cudf::table_view{
-            {groups->get_column(numKeys).view(), groupStateIndices->view()}},
+        cudf::table_view{{groups->get_column(numKeys).view(), indices}},
         matched->view(),
         stream,
         tempMr);
@@ -224,6 +236,7 @@ std::unique_ptr<cudf::column> CudfRowNumber::computePartitionedRowNumbers(
         groups->view(), matched->view(), stream, tempMr);
   }
 
+  groupStateIndices.reset();
   auto newColumns = groups->release();
   auto newCounts = std::move(newColumns.back());
   newColumns.pop_back();
