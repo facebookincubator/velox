@@ -62,6 +62,23 @@ class TextReaderTest : public testing::Test,
     options.setScanSpec(spec);
   }
 
+  std::unique_ptr<dwio::common::Reader> createReader(
+      const RowTypePtr& type,
+      const std::string& fileName) {
+    auto factory =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+    auto path =
+        velox::test::getDataFilePath("velox/dwio/text/tests/reader/", fileName);
+    auto readFile = std::make_shared<LocalReadFile>(path);
+    dwio::common::ReaderOptions readerOptions(pool());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    readerOptions.setFileSchema(type);
+    auto input =
+        std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+    return factory->createReader(std::move(input), readerOptions);
+  }
+
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
@@ -129,21 +146,8 @@ TEST_F(TextReaderTest, basic) {
        {"col_int", INTEGER()},
        {"col_float", DOUBLE()},
        {"col_bool", BOOLEAN()}});
-  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-
-  auto path = velox::test::getDataFilePath(
-      "velox/dwio/text/tests/reader/",
-      "examples/simple_types_compressed_file.gz");
-  auto readFile = std::make_shared<LocalReadFile>(path);
-
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(type);
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = factory->createReader(std::move(input), readerOptions);
+  const std::string fileName = "examples/simple_types_compressed_file.gz";
+  auto reader = createReader(type, fileName);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*type, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -163,8 +167,7 @@ TEST_F(TextReaderTest, basic) {
   }
   ASSERT_EQ(rowReader->next(10, result), 0);
 
-  input = std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  reader = factory->createReader(std::move(input), readerOptions);
+  reader = createReader(type, fileName);
   rowReader = reader->createRowReader(rowReaderOptions);
   // Try reading 2, 3, 4, 5 rows at a time.
   ASSERT_EQ(rowReader->next(2, result), 2);
@@ -192,18 +195,7 @@ TEST_F(TextReaderTest, rowReaderOwnsScanSpec) {
        {"col_int", INTEGER()},
        {"col_float", DOUBLE()},
        {"col_bool", BOOLEAN()}});
-  const auto path = velox::test::getDataFilePath(
-      "velox/dwio/text/tests/reader/",
-      "examples/simple_types_compressed_file.gz");
-  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(path);
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(type);
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = factory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(type, "examples/simple_types_compressed_file.gz");
 
   // Allocate options on the heap to expose dangling references under ASan.
   auto rowReaderOptions = std::make_unique<dwio::common::RowReaderOptions>();
