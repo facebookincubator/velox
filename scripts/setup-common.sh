@@ -19,7 +19,7 @@ SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-helper-functions.sh
 source "$SCRIPT_DIR"/setup-versions.sh
 
-VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"}        #Build folly and gflags shared for use in libvelox.so.
+VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"}        #Build folly, gflags and protobuf shared for use in libvelox.so.
 VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
 VELOX_OPENZL_CMAKE_PATCH=${VELOX_OPENZL_CMAKE_PATCH:-""}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
@@ -167,7 +167,10 @@ function install_protobuf {
   install_abseil
 
   wget_and_untar https://github.com/protocolbuffers/protobuf/archive/refs/tags/v"${PROTOBUF_VERSION}".tar.gz protobuf
-  cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package
+  # A static libprotobuf would be linked into both libvelox.so and each
+  # executable, giving the process two copies of Protobuf's arena runtime.
+  cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package \
+    -Dprotobuf_BUILD_SHARED_LIBS="${VELOX_BUILD_SHARED}"
 }
 
 function install_grpc {
