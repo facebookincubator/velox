@@ -71,6 +71,7 @@ velox_add_library(
   DateTimeUnit.h
   DateTimeUnitArithmetic.h
   FilterFunctionBase.h
+  IntegralRounding.h
   JsonUtil.h
   KllSketch-inl.h
   KllSketch.h

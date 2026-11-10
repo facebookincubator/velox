@@ -84,6 +84,14 @@ Mathematical Functions
     inputs return zero when an extreme negative scale exceeds their meaningful
     digit range.
 
+    Extreme integral scales are not fully compatible with Spark 4.1.
+    For BIGINT input ``25`` and scale ``-2147483648``, Velox returns zero
+    whereas Spark's interpreted and generated evaluators throw. At scale
+    ``2147483647``, Velox and Spark's generated evaluator return ``25``,
+    but Spark's interpreted evaluator throws. Integrations requiring exact
+    Spark behavior must validate these cases and fall back to Spark.
+    Velox does not reproduce JVM BigDecimal/BigInteger scale and resource limits.
+
     Floating-point values are scaled by a power of ten, rounded using
     ``std::nearbyint``, and scaled back. This uses Velox's default
     round-to-nearest floating-point environment. Because it operates directly

@@ -16,64 +16,21 @@
 
 #include "velox/functions/sparksql/BRound.h"
 
-#include <bit>
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <type_traits>
 #include <vector>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/IntegralRounding.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/prestosql/ArithmeticImpl.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
-#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
-
-template <typename T>
-FOLLY_ALWAYS_INLINE T wrapToSigned(int128_t value) {
-  static_assert(std::is_integral_v<T> && std::is_signed_v<T>);
-  return std::bit_cast<T>(static_cast<std::make_unsigned_t<T>>(value));
-}
-
-template <typename T>
-FOLLY_ALWAYS_INLINE Status
-broundIntegral(T value, int32_t scale, bool ansiEnabled, T& result) {
-  static_assert(
-      std::is_integral_v<T> && std::is_signed_v<T> && !std::is_same_v<T, bool>);
-
-  if (scale >= 0 || value == 0) {
-    result = value;
-    return Status::OK();
-  }
-
-  const int64_t roundingDigitCount = -static_cast<int64_t>(scale);
-  if (roundingDigitCount > std::numeric_limits<T>::digits10 + 1) {
-    result = 0;
-    return Status::OK();
-  }
-
-  const int128_t divisor = DecimalUtil::kPowersOfTen[roundingDigitCount];
-  const int128_t rounded = DecimalUtil::divideWithRoundHalfEven(
-                               static_cast<int128_t>(value), divisor) *
-      divisor;
-  if (ansiEnabled &&
-      (rounded < std::numeric_limits<T>::min() ||
-       rounded > std::numeric_limits<T>::max())) {
-    return threadSkipErrorDetails()
-        ? Status::UserError()
-        : Status::UserError(
-              "Arithmetic overflow in bround({}, {})",
-              static_cast<int64_t>(value),
-              scale);
-  }
-
-  result = wrapToSigned<T>(rounded);
-  return Status::OK();
-}
 
 template <typename T>
 Status
@@ -89,7 +46,9 @@ broundFloatingPointImpl(T value, int32_t scale, double factor, T& result) {
     return Status::OK();
   }
 
-  if (scale >= 0) {
+  if (scale == 0) {
+    result = std::nearbyint(value);
+  } else if (scale > 0) {
     // Preserve the input when the power-of-ten scale is not representable.
     // Native scale-round-unscale cannot define a reliable HALF_EVEN result
     // without a finite factor.
@@ -102,7 +61,8 @@ broundFloatingPointImpl(T value, int32_t scale, double factor, T& result) {
       result = value;
       return Status::OK();
     }
-    result = static_cast<T>(std::nearbyint(scaled) / factor);
+    result = static_cast<T>(functions::detail::roundWithPositiveScale<true>(
+        static_cast<double>(value), scale, factor));
   } else {
     if (!std::isfinite(factor)) {
       result = 0;
@@ -159,7 +119,13 @@ struct BRoundFunction {
       return broundFloatingPointImpl(
           value, scale, floatingPointFactor_, result);
     } else {
-      return broundIntegral(value, scale, ansiEnabled_, result);
+      return functions::detail::roundIntegral(
+          result,
+          value,
+          scale,
+          ansiEnabled_,
+          DecimalArithmetic::divideWithRoundHalfEven,
+          "Arithmetic overflow in bround({}, {})");
     }
   }
 
