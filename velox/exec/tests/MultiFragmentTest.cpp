@@ -2281,7 +2281,7 @@ TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
         << leafTask->taskId();
 
     EXPECT_TRUE(hasStat(
-        toPlanStats(task->taskStats()).at(testNodeId),
+        PlanNodeStats::extract(task->taskStats(), testNodeId),
         "testCustomExchangeStat"));
 
     auto planStats = toPlanStats(leafTask->taskStats());

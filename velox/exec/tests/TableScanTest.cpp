@@ -4316,9 +4316,9 @@ TEST_F(TableScanTest, remainingFilterSkippedStrides) {
                   .planNode();
   auto task =
       assertQuery(plan, filePaths, "SELECT * FROM tmp WHERE c0 = 0 or c1 = 2");
-  auto skippedStrides = toPlanStats(task->taskStats())
-                            .at(tableScanNodeId)
-                            .customStats.at("skippedStrides");
+  auto skippedStrides =
+      PlanNodeStats::extract(task->taskStats(), tableScanNodeId)
+          .customStats.at("skippedStrides");
   EXPECT_EQ(skippedStrides.count, 1);
   EXPECT_EQ(skippedStrides.sum, 1);
 }
@@ -6168,7 +6168,8 @@ TEST_F(TableScanTest, DISABLED_memoryArbitrationWithSlowTableScan) {
         spillDirectory->getPath(),
         "SELECT c5, max(c0), max(c1), max(c2), max(c3), max(c4) FROM tmp group by c5");
     EXPECT_EQ(6400, loadedToValueHook(task, 1));
-    EXPECT_GT(toPlanStats(task->taskStats()).at(aggNodeId).spilledBytes, 0);
+    EXPECT_GT(
+        PlanNodeStats::extract(task->taskStats(), aggNodeId).spilledBytes, 0);
   });
 
   readWait.await([&]() { return !readWaitFlag.load(); });
@@ -6882,8 +6883,7 @@ TEST_F(TableScanTest, dynamicFilterWithReadRangeColumn) {
           .assertResults(expected);
 
   EXPECT_EQ(
-      toPlanStats(task->taskStats())
-          .at(joinId)
+      PlanNodeStats::extract(task->taskStats(), joinId)
           .customStats.at("dynamicFiltersProduced")
           .sum,
       1);

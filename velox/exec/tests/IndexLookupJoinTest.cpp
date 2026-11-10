@@ -2838,7 +2838,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithInnerJoin) {
     const auto task = queryBuilder.assertResults(
         "SELECT t.c4, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(joinNodeId_).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), joinNodeId_).outputVectors,
         testData.numExpectedOutputBatch);
   }
 }
@@ -3069,7 +3069,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
     const auto task = queryBuilder.assertResults(
         "SELECT t.c4, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(joinNodeId_).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), joinNodeId_).outputVectors,
         testData.numExpectedOutputBatch);
     const auto probeScanId = probeScanNodeId_;
     auto planWithMatchColumn = makeLookupPlan(
@@ -3213,7 +3213,7 @@ TEST_P(IndexLookupJoinTest, splitOutputNodeOverride) {
     const auto task = queryBuilder.assertResults(
         "SELECT t.c4, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(joinNodeId).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), joinNodeId).outputVectors,
         expectedNumOutputVectors);
   }
 }

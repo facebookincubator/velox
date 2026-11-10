@@ -1089,20 +1089,21 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterOnlyColumnIsNotRead) {
                         .endTableScan()
                         .planNode();
 
-  const auto readBytes = [&](const std::unordered_set<int32_t>&
-                                 enforcedFieldIds) {
-    auto splits = makeIcebergSplits(dataFile->getPath());
-    for (auto& split : splits) {
-      std::dynamic_pointer_cast<HiveIcebergSplit>(split)
-          ->partitionEnforcedFieldIds = enforcedFieldIds;
-    }
-    std::shared_ptr<exec::Task> task;
-    const auto result =
-        exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(
-            pool(), task);
-    EXPECT_EQ(result->size(), kNumRows);
-    return exec::toPlanStats(task->taskStats()).at(plan->id()).rawInputBytes;
-  };
+  const auto readBytes =
+      [&](const std::unordered_set<int32_t>& enforcedFieldIds) {
+        auto splits = makeIcebergSplits(dataFile->getPath());
+        for (auto& split : splits) {
+          std::dynamic_pointer_cast<HiveIcebergSplit>(split)
+              ->partitionEnforcedFieldIds = enforcedFieldIds;
+        }
+        std::shared_ptr<exec::Task> task;
+        const auto result =
+            exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(
+                pool(), task);
+        EXPECT_EQ(result->size(), kNumRows);
+        return exec::PlanNodeStats::extract(task->taskStats(), plan->id())
+            .rawInputBytes;
+      };
 
   const auto enforcedBytes = readBytes({1});
   const auto filteredBytes = readBytes({});
