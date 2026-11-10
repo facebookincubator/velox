@@ -626,7 +626,14 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   }
 
   const auto mappingMode = options_.columnMappingMode();
+  const bool hasFieldIdNameMapping =
+      mappingMode == dwio::common::ColumnMappingMode::kFieldId &&
+      options_.fieldIdColumnNameMapping().has_value();
   auto name = schemaElementNameOrFieldId(schemaElement, mappingMode);
+  if (hasFieldIdNameMapping && parentSchemaIdx == 0 && curSchemaIdx != 0) {
+    name = dwio::common::Reader::fieldIdMappedColumnName(
+        name, curSchemaIdx, options_);
+  }
   if (isFileColumnNamesReadAsLowerCase()) {
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
@@ -686,6 +693,10 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       ++schemaIdx;
       auto childName =
           schemaElementNameOrFieldId(schema[schemaIdx], mappingMode);
+      if (hasFieldIdNameMapping && curSchemaIdx == 0) {
+        childName = dwio::common::Reader::fieldIdMappedColumnName(
+            childName, schemaIdx, options_);
+      }
       if (isFileColumnNamesReadAsLowerCase()) {
         childName = functions::stringImpl::utf8StrToLowerCopy(childName);
       }
@@ -714,7 +725,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       }
 
       if (requestedRowType) {
-        if (mappingMode == dwio::common::ColumnMappingMode::kName) {
+        if (mappingMode == dwio::common::ColumnMappingMode::kName ||
+            hasFieldIdNameMapping) {
           auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
           if (fileTypeIdx.has_value()) {
             childRequestedType = requestedRowType->childAt(*fileTypeIdx);

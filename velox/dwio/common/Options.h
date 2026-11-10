@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Set.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -144,6 +145,11 @@ enum class ColumnMappingMode {
   /// Physical nodes without an "iceberg.id" attribute do not match any positive
   /// requested field id and are surfaced as missing (the connector materializes
   /// them as null or the table format's default value).
+  ///
+  /// A caller that resolves field IDs from external schema metadata can instead
+  /// supply ReaderOptions::fieldIdColumnNameMapping(). This explicitly maps
+  /// physical top-level column names to requested names without consulting
+  /// file-embedded IDs or assuming column order. Nested fields are unchanged.
   kFieldId,
 };
 
@@ -802,6 +808,20 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// Supplies top-level column bindings already resolved by field ID. Keys are
+  /// original file column names and values are names in fileSchema(). Consumed
+  /// only in kFieldId mode, instead of file-embedded ID attributes. An empty
+  /// map means no file columns match; an absent map retains existing ID
+  /// resolution. Unmapped columns must not bind by name or position. Nested
+  /// fields are unchanged. The reader resolves names against each file's actual
+  /// schema. Requires a non-null fileSchema() containing every requested column
+  /// name.
+  ReaderOptions& setFieldIdColumnNameMapping(
+      std::unordered_map<std::string, std::string> mapping) {
+    fieldIdColumnNameMapping_ = std::move(mapping);
+    return *this;
+  }
+
   ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
@@ -851,6 +871,11 @@ class ReaderOptions : public io::ReaderOptions {
   /// columnMappingMode() == kFieldId.
   const std::string& fieldIdAttributeKey() const {
     return fieldIdAttributeKey_;
+  }
+
+  const std::optional<std::unordered_map<std::string, std::string>>&
+  fieldIdColumnNameMapping() const {
+    return fieldIdColumnNameMapping_;
   }
 
   SerDeOptions& serDeOptions() {
@@ -1073,6 +1098,8 @@ class ReaderOptions : public io::ReaderOptions {
   RowTypePtr fileSchema_;
   std::vector<ParquetFieldId> fieldIds_;
   std::string fieldIdAttributeKey_;
+  std::optional<std::unordered_map<std::string, std::string>>
+      fieldIdColumnNameMapping_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;

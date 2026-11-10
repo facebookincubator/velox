@@ -277,7 +277,12 @@ class NimbleReader : public dwio::common::Reader {
       }
       const auto& fileSchemaType = tmpReader.schema();
       const auto& fieldIdAttributeKey = options_.fieldIdAttributeKey();
-      if (fileSchemaType != nullptr && !options_.fieldIds().empty() &&
+      if (options_.fieldIdColumnNameMapping().has_value()) {
+        tableNamedSchema_ = updateColumnNamesFromFieldIdMapping(
+            asRowType(tmpReader.type()), options_);
+        options_.setFileSchema(asRowType(tmpReader.type()));
+      } else if (
+          fileSchemaType != nullptr && !options_.fieldIds().empty() &&
           !fieldIdAttributeKey.empty()) {
         auto resolution = resolveSchema(
             options_.fileSchema(),
