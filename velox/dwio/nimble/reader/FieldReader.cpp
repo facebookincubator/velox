@@ -392,6 +392,33 @@ void validateCopyRanges(
     velox::vector_size_t /*outputSize*/) {}
 #endif
 
+// Returns the nulls of 'output' for a read to write, or null when the read has
+// no null rows and 'output' has no nulls. An output without nulls has no null
+// rows, so such a read leaves it without them instead of allocating them only
+// to mark its rows not null.
+uint64_t* maybeMutableRawNulls(velox::BaseVector& output, bool hasNulls) {
+  if (!hasNulls && output.rawNulls() == nullptr) {
+    return nullptr;
+  }
+  return output.mutableRawNulls();
+}
+
+// Marks the rows of 'outputRanges' not null in 'rawNulls', unless it is null.
+void setNotNull(
+    uint64_t* rawNulls,
+    std::span<const velox::BaseVector::CopyRange> outputRanges) {
+  if (rawNulls == nullptr) {
+    return;
+  }
+  for (const auto& range : outputRanges) {
+    velox::bits::fillBits(
+        rawNulls,
+        range.targetIndex,
+        range.targetIndex + range.count,
+        velox::bits::kNotNull);
+  }
+}
+
 // Validates the selected ranges against 'output' and returns it as 'T', ready
 // for a scattered write. The caller owns 'output' and picks where each range
 // lands, so the vector is never re-initialized here; resizing to the row count
@@ -898,17 +925,13 @@ class ScalarFieldReader final
       NIMBLE_CHECK_NOT_NULL(nulls);
       nullBits = nulls->as<uint64_t>();
     }
-    auto* rawOutputNulls = output->mutableRawNulls();
+    auto* rawOutputNulls = maybeMutableRawNulls(*output, nullBits != nullptr);
 
     if constexpr (std::is_same_v<TRequested, bool>) {
       auto* outputValues = vector->template mutableRawValues<uint64_t>();
       if (nullBits == nullptr) {
+        setNotNull(rawOutputNulls, outputRanges);
         for (const auto& range : outputRanges) {
-          velox::bits::fillBits(
-              rawOutputNulls,
-              range.targetIndex,
-              range.targetIndex + range.count,
-              velox::bits::kNotNull);
           for (velox::vector_size_t i{0}; i < range.count; ++i) {
             velox::bits::setBit(
                 outputValues,
@@ -936,12 +959,8 @@ class ScalarFieldReader final
     } else {
       auto* outputValues = vector->mutableRawValues();
       if (nullBits == nullptr) {
+        setNotNull(rawOutputNulls, outputRanges);
         for (const auto& range : outputRanges) {
-          velox::bits::fillBits(
-              rawOutputNulls,
-              range.targetIndex,
-              range.targetIndex + range.count,
-              velox::bits::kNotNull);
           if constexpr (std::is_same_v<TRequested, TData>) {
             std::copy_n(
                 values + range.sourceIndex,
@@ -1242,16 +1261,12 @@ class StringFieldReader final : public FieldReader {
     for (const auto& stringBuffer : stringBuffers) {
       vector->addStringBuffer(stringBuffer);
     }
-    auto* rawOutputNulls = output->mutableRawNulls();
+    auto* rawOutputNulls = maybeMutableRawNulls(*output, nullBits != nullptr);
     auto* outputValues = vector->mutableRawValues();
 
     if (nullBits == nullptr) {
+      setNotNull(rawOutputNulls, outputRanges);
       for (const auto& range : outputRanges) {
-        velox::bits::fillBits(
-            rawOutputNulls,
-            range.targetIndex,
-            range.targetIndex + range.count,
-            velox::bits::kNotNull);
         for (velox::vector_size_t i{0}; i < range.count; ++i) {
           const auto& value = values[range.sourceIndex + i];
           outputValues[range.targetIndex + i] = velox::StringView{
@@ -1484,7 +1499,8 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
           "Timestamp nanosecond streams must not contain nulls");
     }
 
-    auto* rawOutputNulls = output->mutableRawNulls();
+    auto* rawOutputNulls =
+        maybeMutableRawNulls(*output, rawMicrosNulls != nullptr);
     auto* rawValues = vector->mutableRawValues();
     uint32_t selectedNanosRow{0};
     for (size_t rangeIndex{0}; rangeIndex < sourceRanges.size(); ++rangeIndex) {
@@ -1503,11 +1519,7 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
         }
       };
       if (rawMicrosNulls == nullptr) {
-        velox::bits::fillBits(
-            rawOutputNulls,
-            outputRange.targetIndex,
-            outputRange.targetIndex + outputRange.count,
-            velox::bits::kNotNull);
+        setNotNull(rawOutputNulls, std::span{&outputRange, 1});
         convertRows(sourceRange.startRow, sourceRange.endRow);
         continue;
       }
@@ -3812,14 +3824,8 @@ class RowFieldReader final : public FieldReader {
       prepareNullableRead(
           sourceRanges, outputRanges, vector->mutableRawNulls());
     } else {
-      auto* rawOutputNulls = output->mutableRawNulls();
-      for (const auto& range : outputRanges) {
-        velox::bits::fillBits(
-            rawOutputNulls,
-            range.targetIndex,
-            range.targetIndex + range.count,
-            velox::bits::kNotNull);
-      }
+      setNotNull(
+          maybeMutableRawNulls(*output, /*hasNulls=*/false), outputRanges);
     }
     return vector;
   }
@@ -4301,16 +4307,10 @@ class FlatMapFieldReaderBase : public FieldReader {
     NIMBLE_CHECK(!sourceRanges.empty(), "Source ranges must not be empty");
     NIMBLE_CHECK_EQ(sourceRanges.size(), outputRanges.size());
     output->resetDataDependentFlags(nullptr);
-    auto* rawOutputNulls = output->mutableRawNulls();
 
     if constexpr (!hasNull) {
-      for (const auto& range : outputRanges) {
-        velox::bits::fillBits(
-            rawOutputNulls,
-            range.targetIndex,
-            range.targetIndex + range.count,
-            velox::bits::kNotNull);
-      }
+      setNotNull(
+          maybeMutableRawNulls(*output, /*hasNulls=*/false), outputRanges);
       parentSourceRanges_.assign(sourceRanges.begin(), sourceRanges.end());
       parentOutputRanges_.assign(outputRanges.begin(), outputRanges.end());
       return;
@@ -4334,7 +4334,7 @@ class FlatMapFieldReaderBase : public FieldReader {
         sourceRanges,
         outputRanges,
         this->boolBuffer_.data(),
-        rawOutputNulls,
+        output->mutableRawNulls(),
         parentSourceRanges_,
         parentOutputRanges_);
   }
