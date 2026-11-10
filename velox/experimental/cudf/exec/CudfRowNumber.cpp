@@ -305,6 +305,8 @@ RowVectorPtr CudfRowNumber::doGetOutput() {
     if (numOutput < numRows) {
       auto slice = cudf::slice(tableView, {0, numOutput}, stream)[0];
       columns = cudf::table(slice, stream, outputMr).release();
+      VELOX_CHECK(cudfInput->rebindStream(stream));
+      cudfInput.reset();
     } else {
       columns = cudfInput->release()->release();
     }
