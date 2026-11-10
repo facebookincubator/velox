@@ -76,11 +76,17 @@ class PaimonSplitReader : public connector::FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  // Matches the file schema to the fixed query schema by field ID to build
-  // a schema for the DWIO reader. Preserves file column order and types,
-  // while exposing matched columns under query-schema names.
-  // Missing query columns are materialized as null by column adaptation.
-  RowTypePtr makeFileReadSchema(int64_t fileSchemaId) const;
+  struct FileReadSchema {
+    // Query column names with historical types for fields present in the file's
+    // schema. This is a request schema, not the file's physical column layout.
+    RowTypePtr rowType;
+    // Historical column name to query column name, resolved by field ID.
+    std::unordered_map<std::string, std::string> columnNameMapping;
+  };
+
+  // Resolves identities before opening files. DWIO uses the name mapping to
+  // bind each file's actual columns, independently of their physical order.
+  FileReadSchema makeFileReadSchema(int64_t fileSchemaId) const;
 
   // Builds a FileConnectorSplit from a PaimonDataFile.
   std::shared_ptr<connector::FileConnectorSplit> makeFileConnectorSplit(
@@ -96,9 +102,9 @@ class PaimonSplitReader : public connector::FileSplitReader {
 
   const std::shared_ptr<const PaimonConnectorSplit> paimonSplit_;
 
-  // Maps each file schema ID to its DWIO reader schema, derived using
-  // the fixed query schema.
-  std::unordered_map<int64_t, RowTypePtr> fileReadSchemas_;
+  // Reuses request schemas and identity bindings by schema ID, not physical
+  // column positions. Each reader binds names against its own file metadata.
+  std::unordered_map<int64_t, FileReadSchema> fileReadSchemas_;
 
   // FileConnectorSplits built from paimonSplit_->dataFiles(), one per file.
   // Used to switch the base reader between files during iteration.

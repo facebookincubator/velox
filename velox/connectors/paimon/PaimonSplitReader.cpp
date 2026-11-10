@@ -40,33 +40,6 @@ std::vector<std::optional<column_index_t>> mapTableColumnsToFile(
   return mapping;
 }
 
-// Adapt the ID-based binding to DWIO's positional rename + name-based scan
-// interface. Retain every physical position without exposing unmatched names.
-RowTypePtr makeReaderSchema(
-    const RowTypePtr& fileType,
-    const RowTypePtr& tableType,
-    const std::vector<std::optional<column_index_t>>& tableToFileColumns) {
-  auto names = fileType->names();
-  std::vector<bool> matched(fileType->size(), false);
-  for (column_index_t i = 0; i < tableToFileColumns.size(); ++i) {
-    if (const auto fileColumn = tableToFileColumns[i]) {
-      names[*fileColumn] = tableType->nameOf(i);
-      matched[*fileColumn] = true;
-    }
-  }
-  for (column_index_t i = 0; i < names.size(); ++i) {
-    if (matched[i]) {
-      continue;
-    }
-    auto name = fmt::format("__paimon_unmapped_{}", i);
-    while (tableType->containsChild(name) || fileType->containsChild(name)) {
-      name.push_back('_');
-    }
-    names[i] = std::move(name);
-  }
-  return ROW(std::move(names), std::vector<TypePtr>(fileType->children()));
-}
-
 } // namespace
 
 PaimonSplitReader::PaimonSplitReader(
@@ -113,7 +86,8 @@ PaimonSplitReader::PaimonSplitReader(
   }
 }
 
-RowTypePtr PaimonSplitReader::makeFileReadSchema(int64_t fileSchemaId) const {
+PaimonSplitReader::FileReadSchema PaimonSplitReader::makeFileReadSchema(
+    int64_t fileSchemaId) const {
   const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
   const auto& fileType = fileSchemaId == table.schemaId()
       ? table.rowType()
@@ -123,6 +97,8 @@ RowTypePtr PaimonSplitReader::makeFileReadSchema(int64_t fileSchemaId) const {
       : table.tableSchemas().at(fileSchemaId).fieldIds;
   const auto tableToFileColumns =
       mapTableColumnsToFile(table.fieldIds(), fileFieldIds);
+  std::vector<TypePtr> types = table.rowType()->children();
+  std::unordered_map<std::string, std::string> columnNames;
 
   // Only top-level field evolution is handled here; nested fields are treated
   // as unchanged.
@@ -133,6 +109,8 @@ RowTypePtr PaimonSplitReader::makeFileReadSchema(int64_t fileSchemaId) const {
       continue;
     }
     const auto& name = table.rowType()->nameOf(i);
+    columnNames.emplace(fileType->nameOf(*fileColumn), name);
+    types[i] = fileType->childAt(*fileColumn);
     if (const auto* spec = scanSpec_->childByName(name);
         spec && spec->columnType() == common::ScanSpec::ColumnType::kRegular) {
       const auto& type = table.rowType()->childAt(i);
@@ -148,17 +126,18 @@ RowTypePtr PaimonSplitReader::makeFileReadSchema(int64_t fileSchemaId) const {
           type->toString());
     }
   }
-  return makeReaderSchema(fileType, table.rowType(), tableToFileColumns);
+  return {
+      ROW(table.rowType()->names(), std::move(types)), std::move(columnNames)};
 }
 
 void PaimonSplitReader::configureBaseReaderOptions() {
   connector::FileSplitReader::configureBaseReaderOptions();
   const auto id = paimonSplit_->dataFiles()[currentFileIndex_].schemaId;
-  // Ordinals here come from the file's historical append layout. DWIO
-  // exposes the mapped names to the unchanged logical ScanSpec and filters.
-  baseReaderOpts_.setFileSchema(fileReadSchemas_.at(id));
+  const auto& schema = fileReadSchemas_.at(id);
+  baseReaderOpts_.setFileSchema(schema.rowType);
+  baseReaderOpts_.setFieldIdColumnNameMapping(schema.columnNameMapping);
   baseReaderOpts_.setColumnMappingMode(
-      dwio::common::ColumnMappingMode::kPosition);
+      dwio::common::ColumnMappingMode::kFieldId);
 }
 
 std::vector<TypePtr> PaimonSplitReader::adaptColumns(

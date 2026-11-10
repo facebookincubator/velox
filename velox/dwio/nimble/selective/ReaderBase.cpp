@@ -88,6 +88,12 @@ std::shared_ptr<const facebook::nimble::Type> loadSchema(
 TypePtr getFileSchema(
     const dwio::common::ReaderOptions& options,
     const TypePtr& fileSchema) {
+  if (options.columnMappingMode() ==
+          dwio::common::ColumnMappingMode::kFieldId &&
+      options.fieldIdColumnNameMapping().has_value()) {
+    return dwio::common::Reader::updateColumnNamesFromFieldIdMapping(
+        asRowType(fileSchema), options);
+  }
   if (options.columnMappingMode() == dwio::common::ColumnMappingMode::kName ||
       !options.fileSchema()) {
     return fileSchema;

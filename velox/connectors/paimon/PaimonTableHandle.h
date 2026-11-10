@@ -31,8 +31,8 @@ class PaimonTableHandle final : public connector::FileTableHandle {
 
   /// Caller-resolved historical table fields, in their declared order,
   /// including partition columns. Only top-level identities are represented.
-  /// Ordinary append files retain this column order. Partition values used
-  /// by the query still come from the split, not their physical copies.
+  /// This order aligns names and field IDs, not physical file columns.
+  /// Partition values come from the split, not their physical copies.
   struct TableSchema {
     RowTypePtr rowType;
     std::vector<int32_t> fieldIds;
