@@ -59,7 +59,7 @@ TEST(OptionsTests, commonReaderOptions) {
 TEST(OptionsTests, fieldIdColumnNameMapping) {
   facebook::velox::memory::MemoryManager::testingSetInstance({});
   auto pool = facebook::velox::memory::memoryManager()->addRootPool();
-  ReaderOptions options(pool.get());
+  facebook::velox::dwio::common::ReaderOptions options(pool.get());
   EXPECT_FALSE(options.fieldIdColumnNameMapping().has_value());
   options.setColumnMappingMode(ColumnMappingMode::kFieldId);
   options.setFieldIdColumnNameMapping({{"old_name", "new_name"}});
