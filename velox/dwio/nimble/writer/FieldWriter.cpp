@@ -2120,14 +2120,23 @@ class HybridFlatMapFieldWriter : public FieldWriter {
         hybridMap_{[&] {
           const auto& hybridFlatMap =
               configuredHybridFlatMap(context, type->id());
-          // Only schema metadata (HybridFlatMap::fromSchema()) has no key kind.
-          // A writer configuration has every key checked for its key kind, and
-          // its copies share its groups and lookup.
+
+          // The writer appends the Default keys it sees, so it needs a Default
+          // group that lists none, as every writer configuration has. A
+          // schema's groups may leave Default out or list its recorded keys.
+          // A configuration must come from the writer constructor, the only
+          // one that checks keys are canonical. This guard checks only the
+          // Default group and the key kind. Copies share the groups and the
+          // key index.
+          const auto& defaultGroup = hybridFlatMap.groups().back();
           NIMBLE_USER_CHECK(
-              hybridFlatMap.keyKind().has_value(),
-              "Hybrid FlatMap configuration must be built for a key type.");
+              HybridFlatMap::isDefaultGroup(defaultGroup.groupId),
+              "Hybrid FlatMap configuration must have a Default group.");
+          NIMBLE_USER_CHECK(
+              defaultGroup.groupKeys.empty(),
+              "Hybrid FlatMap configuration cannot list Default keys.");
           NIMBLE_USER_CHECK_EQ(
-              *hybridFlatMap.keyKind(),
+              hybridFlatMap.keyKind(),
               NimbleTypeTraits<K>::scalarKind,
               "Hybrid FlatMap configuration is for keys of another type.");
           return hybridFlatMap;
