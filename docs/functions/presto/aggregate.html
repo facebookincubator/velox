@@ -1277,7 +1277,7 @@ default. Defaults to 64.</p></li>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="vector_index_train">
-<span class="sig-name descname"><span class="pre">vector_index_train</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">embedding</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_clusters</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metric</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">vector_index</span></span></span><a class="headerlink" href="#vector_index_train" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">vector_index_train</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">embedding</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_clusters</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metric</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">options</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">vector_index</span></span></span><a class="headerlink" href="#vector_index_train" title="Link to this definition">¶</a></dt>
 <dd><p>Clusters the embeddings with k-means and returns the codec of the
 clusters: a <code class="docutils literal notranslate"><span class="pre">'flat'</span></code> local index over the centroids, as
 <a class="reference internal" href="#vector_index_build" title="vector_index_build"><code class="xref py py-func docutils literal notranslate"><span class="pre">vector_index_build()</span></code></a> writes it, with clusters numbered from 0.</p>
@@ -1292,12 +1292,24 @@ embeddings gets one cluster per embedding.</p></li>
 which the k-means is spherical: embeddings and centroids are normalized
 to length 1, and an embedding goes to the centroid with the largest dot
 product.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">options</span></code> (MAP(VARCHAR, VARCHAR)): a constant map of training settings,
+possibly empty. Supported keys:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">train.maxFlatClusters</span></code>: the most clusters trained in one level,
+1,000 by default. More clusters train in two levels: about
+sqrt(<code class="docutils literal notranslate"><span class="pre">num_clusters</span></code>) coarse clusters, then within each a share of
+<code class="docutils literal notranslate"><span class="pre">num_clusters</span></code> in proportion to its embeddings, which cuts the work
+by about sqrt(<code class="docutils literal notranslate"><span class="pre">num_clusters</span></code>) / 2.</p></li>
+</ul>
+</li>
 </ul>
 <p>Rows with a null <code class="docutils literal notranslate"><span class="pre">embedding</span></code> or <code class="docutils literal notranslate"><span class="pre">id</span></code> are ignored. The k-means runs over
-all of the group’s embeddings, on FAISS’s threads, so a large group is
-best sampled first.</p>
+all of the group’s embeddings, so a large group is best sampled first. It
+runs on the number of threads in the <code class="docutils literal notranslate"><span class="pre">vector_index_train_threads</span></code> session
+property, 1 by default.</p>
 <p>Example:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ds</span><span class="p">,</span> <span class="n">vector_index_train</span><span class="p">(</span><span class="n">embedding</span><span class="p">,</span> <span class="nb">id</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="s1">'cosine'</span><span class="p">)</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ds</span><span class="p">,</span> <span class="n">vector_index_train</span><span class="p">(</span><span class="n">embedding</span><span class="p">,</span> <span class="nb">id</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="s1">'cosine'</span><span class="p">,</span>
+    <span class="nb">map</span><span class="p">(</span><span class="n">array</span><span class="p">[</span><span class="s1">'train.maxFlatClusters'</span><span class="p">],</span> <span class="n">array</span><span class="p">[</span><span class="s1">'500'</span><span class="p">]))</span>
 <span class="n">FROM</span> <span class="n">items</span>
 <span class="n">GROUP</span> <span class="n">BY</span> <span class="n">ds</span><span class="p">;</span>
 </pre></div>

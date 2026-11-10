@@ -849,6 +849,13 @@ before resorting to spilling.</p></td>
 to produce a batch of size specified by this. If set to 0, then
 Operator::outputBatchRows will be used as the min output batch rows.</p></td>
 </tr>
+<tr class="row-even"><td><p>vector_index_train_threads</p></td>
+<td><p>integer</p></td>
+<td><p>1</p></td>
+<td><p>Number of threads <a class="reference internal" href="functions/presto/aggregate.html#vector_index_train" title="vector_index_train"><code class="xref py py-func docutils literal notranslate"><span class="pre">vector_index_train()</span></code></a> trains a codec on, for both
+OpenMP and MKL. Positive. Training runs on its driver’s thread with the
+default; more threads compete with the other drivers on the host.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
