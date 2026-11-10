@@ -472,6 +472,20 @@ TEST_F(CachingDataSourceTest, asyncCapacityFailureUsesUncachedFallback) {
   EXPECT_EQ(cache_->refreshStats().numEntries, 0);
 }
 
+// A piece that cannot fit in the cache leaves the cached entries in place.
+TEST_F(CachingDataSourceTest, pieceThatCannotFitKeepsCachedEntries) {
+  fillPattern(6 << 20);
+  auto input = source();
+  input->host_read(0, 1 << 20);
+  // The 16 MiB pool: 12 MiB outside the cache, 1 MiB cached, 3 MiB free. A
+  // 5 MiB piece cannot fit.
+  auto* outsideCache = allocator_->allocateBytes(12 << 20);
+  input->host_read(1 << 20, 5 << 20);
+  StringIdLease file(fileIds(), path_);
+  EXPECT_TRUE(cache_->find({file.id(), 0}, nullptr).has_value());
+  allocator_->freeBytes(outsideCache, 12 << 20);
+}
+
 TEST_F(CachingDataSourceTest, missesHitsAndSynchronousOverloads) {
   fillPattern(128 << 10);
   auto input = source();

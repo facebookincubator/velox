@@ -423,6 +423,42 @@ class Reader {
     return std::min<size_t>(wanted, entrySize);
   }
 
+  // Whether a new entry of 'size' bytes can fit in the memory pool after the
+  // cache drops every entry that no read is using right now (idle). The cache
+  // shares the pool with queries and others:
+  //
+  //   |<--------------------------- capacity --------------------------->|
+  //   |<------------------- usedBytes ------------------->|
+  //   |<-- outsideCacheBytes -->|<------ cacheBytes ----->|<--- free --->|
+  //   |                         |<- in use ->|<-- idle -->|              |
+  //
+  // An entry being filled or read is in use and cannot be dropped. When a new
+  // entry is larger than 'idle + free', Velox drops the idle entries, then
+  // fails anyway. Velox has no counter for the bytes in use. This check
+  // therefore counts all of 'cacheBytes' as droppable, and lets through some
+  // entries that cannot fit.
+  //
+  // The pool can also round an entry under 1 MiB up, for example from 5 pages
+  // to 8. The extra pages count as outside the cache, and the check can then
+  // turn away an entry that would fit.
+  bool fitsInCache(size_t size) const {
+    const auto* allocator = cache_->allocator();
+    const uint64_t usedBytes = allocator->totalUsedBytes();
+    const uint64_t cacheBytes =
+        memory::AllocationTraits::pageBytes(cache_->cachedPages());
+    // 'usedBytes' and 'cacheBytes' are separate counts, and 'cacheBytes' can be
+    // the larger one:
+    //   - A 2500-byte entry adds 2500 to 'usedBytes', but 4096 (one whole
+    //     4 KiB page) to 'cacheBytes'.
+    //   - When Velox drops entries, it can free their memory, which lowers
+    //     'usedBytes', before it lowers 'cacheBytes'. A check in between still
+    //     sees those entries in 'cacheBytes'.
+    // In that case, count nothing as outside the cache.
+    const uint64_t outsideCacheBytes =
+        usedBytes > cacheBytes ? usedBytes - cacheBytes : 0;
+    return size + outsideCacheBytes <= allocator->capacity();
+  }
+
   // Finds the cache entry at 'offset', or creates an empty one. Returns:
   //   - a shared pin: the entry is filled and ready to read;
   //   - an exclusive pin: a new, empty entry that the caller must fill;
@@ -443,6 +479,9 @@ class Reader {
       pin = std::move(found.value());
     } else {
       // Cache miss.
+      if (!fitsInCache(size)) {
+        return {};
+      }
       try {
         pin = cache_->findOrCreate(
             key, size, /*contiguous=*/true, otherReaderFill);
