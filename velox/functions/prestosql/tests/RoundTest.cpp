@@ -129,7 +129,21 @@ TEST_F(RoundTest, roundWithDecimal) {
 // including where the factor overflows to infinity or underflows to zero.
 TEST_F(RoundTest, roundWithConstantDecimals) {
   const std::vector<int32_t> allDigits = {
-      0, 1, 2, 4, 10, -1, -3, 309, 400, -324, -400};
+      0,
+      1,
+      2,
+      4,
+      10,
+      -1,
+      -3,
+      308,
+      309,
+      323,
+      324,
+      400,
+      -324,
+      -400,
+      std::numeric_limits<int32_t>::max()};
   auto check = [&](const auto& values) {
     using T = typename std::decay_t<decltype(values)>::value_type;
     for (const auto digits : allDigits) {
@@ -150,6 +164,11 @@ TEST_F(RoundTest, roundWithConstantDecimals) {
           1.5,
           2.675,
           -2.675,
+          6e-310,
+          -6e-310,
+          std::numeric_limits<double>::denorm_min(),
+          -std::numeric_limits<double>::denorm_min(),
+          std::numeric_limits<double>::min(),
           123456.789,
           17592186044415.0,
           17592186044416.0,
@@ -165,6 +184,8 @@ TEST_F(RoundTest, roundWithConstantDecimals) {
           1.5f,
           2.675f,
           -2.675f,
+          std::numeric_limits<float>::denorm_min(),
+          -std::numeric_limits<float>::denorm_min(),
           123456.789f,
           1e30f,
           std::numeric_limits<float>::max(),
@@ -183,25 +204,54 @@ TEST_F(RoundTest, roundWithConstantDecimals) {
 }
 
 TEST_F(RoundTest, roundWithDecimalPrecisionBoundary) {
+  // These regressions lose precision in the scale/round/unscale path.
   runRoundWithDecimalTest<double>(
       {{17'592'186'044'415.75, 10, 17'592'186'044'415.75},
        {-17'592'186'044'415.75, 10, -17'592'186'044'415.75},
        {17'592'186'044'415.5, 20, 17'592'186'044'415.5},
-       {-17'592'186'044'415.5, 20, -17'592'186'044'415.5},
-       {0.75, 23, 0.75},
+       {-17'592'186'044'415.5, 20, -17'592'186'044'415.5}});
+  // Guard boundaries: an exact decimal and neighbors of a power of two, where
+  // the spacing toward zero is narrower than the spacing away from zero.
+  runRoundWithDecimalTest<double>(
+      {{0.75, 23, 0.75},
        {-0.75, 23, -0.75},
        {std::nextafter(0.5, 0.0), 16, 0.4999999999999999},
        {std::nextafter(-0.5, 0.0), 16, -0.4999999999999999},
        {std::nextafter(0.5, 1.0), 16, std::nextafter(0.5, 1.0)},
        {std::nextafter(-0.5, -1.0), 16, std::nextafter(-0.5, -1.0)}});
   runRoundWithDecimalTest<float>(
-      {{100'000.125f, 2, 100'000.13f},
+      {// Spacing 1/128 is smaller than the decimal quantum 1/100: round.
+       {100'000.125f, 2, 100'000.13f},
        {-100'000.125f, 2, -100'000.13f},
+       // Spacing 1/64 exceeds 1/100: preserve the input.
        {200'000.125f, 2, 200'000.125f},
        {-200'000.125f, 2, -200'000.125f},
+       // The requested precision exceeds even subnormal FLOAT precision.
        {std::numeric_limits<float>::denorm_min(),
         46,
         std::numeric_limits<float>::denorm_min()}});
+}
+
+TEST_F(RoundTest, roundWithOverflowingFactorDoesNotUsePrecisionGuard) {
+  // Factor-overflow handling is outside this precision fix. In particular,
+  // spacing * infinity must not incorrectly preserve tiny inputs: rounding
+  // 6e-310 to scale 309 should change it, but currently returns NaN.
+  auto input = makeRowVector(
+      {makeFlatVector<double>(
+           {1.5,
+            -1.5,
+            6e-310,
+            -6e-310,
+            std::numeric_limits<double>::denorm_min()}),
+       makeFlatVector<int32_t>(5, [](auto) { return 309; })});
+  for (const auto& expression :
+       {"round(c0, c1)", "round(c0, cast(309 as integer))"}) {
+    SCOPED_TRACE(expression);
+    auto result = evaluate<SimpleVector<double>>(expression, input);
+    for (vector_size_t i = 0; i < input->size(); ++i) {
+      EXPECT_TRUE(std::isnan(result->valueAt(i)));
+    }
+  }
 }
 
 TEST_F(RoundTest, roundWithDecimalLargeNumbers) {

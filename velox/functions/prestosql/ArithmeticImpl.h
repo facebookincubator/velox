@@ -16,7 +16,9 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -91,21 +93,38 @@ VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
 
   const double factor = scaleFactor ? *scaleFactor : std::pow(10, decimals);
 
-  // Smaller numbers are less affected by precision loss being multiplied by the
-  // factor, but more affected by precision loss by adding truncated number to
-  // the rounded fraction in the end. Because of that, we use factor
-  // multiplication path on the smaller numbers.
-  // The threshold is a somewhat arbitrary/empirical number taking up 44 bits in
-  // the integer form.
   if constexpr (!std::is_integral_v<TNum>) {
     const auto scaled = number * factor;
-    // Avoid a lossy round trip when the decimal quantum is smaller than the
-    // spacing toward zero, including the narrower spacing at powers of two.
+    // An infinite factor cannot establish the decimal quantum. The magnitude
+    // prefilter skips the spacing calculation on common inputs.
     if (std::isfinite(factor) &&
-        std::abs(scaled) >= 1 / std::numeric_limits<TNum>::epsilon() &&
-        std::abs(number - std::nextafter(number, TNum{0})) * factor > 1) {
-      return number;
+        std::abs(scaled) >= 1 / std::numeric_limits<TNum>::epsilon()) {
+      const auto spacing = [&]() {
+        if constexpr (
+            std::is_same_v<TNum, float> || std::is_same_v<TNum, double>) {
+          using UInt = std::
+              conditional_t<std::is_same_v<TNum, float>, uint32_t, uint64_t>;
+          // For finite, nonzero FLOAT/DOUBLE, decrementing the bits moves one
+          // value toward zero, without a nextafter library call.
+          return std::abs(
+              number -
+              std::bit_cast<TNum>(std::bit_cast<UInt>(number) - UInt{1}));
+        } else {
+          return std::abs(number - std::nextafter(number, TNum{0}));
+        }
+      }();
+      // Avoid a lossy round trip when the decimal quantum is smaller than the
+      // spacing toward zero, including the narrower spacing at powers of two.
+      if (spacing * factor > 1) {
+        return number;
+      }
     }
+    // Smaller numbers are less affected by precision loss being multiplied by
+    // the factor, but more affected by precision loss by adding truncated
+    // number to the rounded fraction in the end. Because of that, we use factor
+    // multiplication path on the smaller numbers.
+    // The threshold is a somewhat arbitrary/empirical number taking up 44 bits
+    // in the integer form.
     if (fabs(number) < 17592186044415.F) {
       return std::round(scaled) / factor;
     }

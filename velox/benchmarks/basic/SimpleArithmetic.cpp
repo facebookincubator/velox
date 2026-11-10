@@ -22,7 +22,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/CheckedArithmeticImpl.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
-#include "velox/functions/prestosql/ArithmeticImpl.h"
+#include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(fuzzer_seed, 99887766, "Seed for random input dataset generator");
@@ -95,6 +95,10 @@ class SimpleArithmeticBenchmark
     registerFunction<PlusFunction, int64_t, int64_t, int64_t>({"plus"});
     registerFunction<CheckedPlusFunction, int64_t, int64_t, int64_t>(
         {"checked_plus"});
+    registerFunction<functions::RoundFunction, double, double, int32_t>(
+        {"round"});
+    registerFunction<functions::RoundFunction, float, float, int32_t>(
+        {"round"});
 
     // Set input schema.
     inputType_ = ROW({
@@ -110,6 +114,29 @@ class SimpleArithmeticBenchmark
     smallRowVector_ = makeRowVector(100);
     mediumRowVector_ = makeRowVector(1'000);
     largeRowVector_ = makeRowVector(10'000);
+
+    // Nonintegral inputs keep ROUND from returning before the precision guard.
+    constexpr vector_size_t kRoundSize = 10'000;
+    roundRowVector_ = maker().rowVector(
+        {"small_double",
+         "large_double",
+         "small_float",
+         "large_float",
+         "scale2",
+         "scale10",
+         "scale16"},
+        {maker().flatVector<double>(
+             kRoundSize,
+             [](auto row) { return 0.5 + row / (2.0 * kRoundSize); }),
+         maker().flatVector<double>(
+             kRoundSize, [](auto row) { return 1e14 + 9e10 * row + 0.25; }),
+         maker().flatVector<float>(
+             kRoundSize, [](auto row) { return 100'000.125f + row; }),
+         maker().flatVector<float>(
+             kRoundSize, [](auto row) { return 200'000.125f + row; }),
+         maker().flatVector<int32_t>(kRoundSize, [](auto) { return 2; }),
+         maker().flatVector<int32_t>(kRoundSize, [](auto) { return 10; }),
+         maker().flatVector<int32_t>(kRoundSize, [](auto) { return 16; })});
   }
 
   RowVectorPtr makeRowVector(vector_size_t size) {
@@ -149,11 +176,15 @@ class SimpleArithmeticBenchmark
     run(expression, kIterationsLarge, largeRowVector_);
   }
 
+  void runRound(const std::string& expression) {
+    run(expression, kIterationsLarge, roundRowVector_);
+  }
+
   // Runs `expression` `times` thousand times.
   size_t
   run(const std::string& expression, size_t times, const RowVectorPtr& input) {
     folly::BenchmarkSuspender suspender;
-    auto exprSet = compileExpression(expression, inputType_);
+    auto exprSet = compileExpression(expression, input->type());
     suspender.dismiss();
 
     size_t count = 0;
@@ -168,6 +199,7 @@ class SimpleArithmeticBenchmark
   RowVectorPtr smallRowVector_;
   RowVectorPtr mediumRowVector_;
   RowVectorPtr largeRowVector_;
+  RowVectorPtr roundRowVector_;
 };
 
 std::unique_ptr<SimpleArithmeticBenchmark> benchmark;
@@ -340,6 +372,53 @@ BENCHMARK(plusCheckedLarge) {
   benchmark->runLarge("checked_plus(c, d)");
 }
 
+BENCHMARK_DRAW_LINE();
+
+void roundBenchmark(const std::string& expression) {
+  benchmark->runRound(expression);
+}
+
+// Literal scales use the cached factor; flat scale columns compute it per row.
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    smallCoarseConstant,
+    "round(small_double, cast(2 as integer))");
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    smallCoarseDynamic,
+    "round(small_double, scale2)");
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    smallFineConstant,
+    "round(small_double, cast(16 as integer))");
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    smallFineDynamic,
+    "round(small_double, scale16)");
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    largeFineConstant,
+    "round(large_double, cast(10 as integer))");
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    largeFineDynamic,
+    "round(large_double, scale10)");
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    floatCoarseConstant,
+    "round(small_float, cast(2 as integer))");
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    floatCoarseDynamic,
+    "round(small_float, scale2)");
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    floatFineConstant,
+    "round(large_float, cast(2 as integer))");
+BENCHMARK_NAMED_PARAM(
+    roundBenchmark,
+    floatFineDynamic,
+    "round(large_float, scale2)");
 } // namespace
 
 int main(int argc, char* argv[]) {
