@@ -28,7 +28,10 @@
 namespace facebook::velox::cudf_velox {
 
 /// Returns the cuDF data type for \p type, or std::nullopt if the type
-/// (or any child type for ARRAY/ROW) cannot be represented in cuDF.
+/// (or any child type for ARRAY/ROW) cannot be represented in cuDF. A type
+/// with a custom comparison maps to the type of its physical representation;
+/// the operators and evaluators that would hash, compare or sort its values
+/// decline it instead (see containsCustomComparison()).
 std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type);
 
 /// Returns the cuDF data type for \p type.  Throws on unsupported types.
