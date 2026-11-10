@@ -72,6 +72,9 @@ std::shared_ptr<TypeBuilder> makeComplexValue(SchemaBuilder& builder) {
   return row;
 }
 
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyPresenceStreams) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
@@ -81,11 +84,12 @@ TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyPresenceStreams) {
   EXPECT_EQ(hybridMap->kind(), Kind::HybridFlatMap);
 
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const std::vector<std::string> groupKeys{"a", "b"};
   const auto nodeCountBeforeGroup = builder.nodeCount();
-  const auto streams = hybridMap->addGroup(7, {"a", "b"}, groupValue);
+  const auto streams = hybridMap->addGroup(7, groupKeys, groupValue);
   auto defaultValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
-  const auto defaultStreams =
-      hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, defaultValue);
+  const auto defaultStreams = hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId, kNoGroupKeys, defaultValue);
   root->addChild("features", hybridMap);
 
   EXPECT_EQ(builder.nodeCount(), nodeCountBeforeGroup + 5);
@@ -233,11 +237,13 @@ TEST(SchemaBuilderTest, hybridFlatMapKeyListTypesDefaultKeyPresence) {
     EXPECT_EQ(
         hybridMap->defaultGroupKeyPresenceMode(),
         HybridFlatMap::KeyPresenceMode::kKeyList);
+    const std::vector<std::string> groupKeys{"1"};
     const auto configured = hybridMap->addGroup(
-        7, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        7, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    std::vector<std::string> defaultKeys;
     const auto defaultGroup = hybridMap->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        defaultKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
     EXPECT_EQ(configured.keyPresenceDescriptor.scalarKind(), ScalarKind::Bool);
     EXPECT_EQ(defaultGroup.keyPresenceDescriptor.scalarKind(), keyKind);
@@ -254,9 +260,27 @@ TEST(SchemaBuilderTest, hybridFlatMapKeyListTypesDefaultKeyPresence) {
         hybridMapType.defaultGroup().keyPresenceDescriptor.scalarKind(),
         keyKind);
 
+    defaultKeys.push_back("9");
     NIMBLE_ASSERT_THROW(
-        hybridMap->appendDefaultGroupKey("9"),
-        "Hybrid FlatMap Default keys are listed per batch, not in the schema");
+        builder.schemaNodes(),
+        "Hybrid FlatMap Default group cannot list keys when batches list "
+        "their Default keys");
+
+    // addGroup() rejects Default keys that are already present when it is
+    // called.
+    {
+      SchemaBuilder seededBuilder;
+      auto seededHybridMap = seededBuilder.createHybridFlatMapTypeBuilder(
+          keyKind, HybridFlatMap::KeyPresenceMode::kKeyList);
+      const std::vector<std::string> seededKeys{"9"};
+      NIMBLE_ASSERT_THROW(
+          seededHybridMap->addGroup(
+              HybridFlatMap::kDefaultGroupId,
+              seededKeys,
+              seededBuilder.createScalarTypeBuilder(ScalarKind::Int64)),
+          "Hybrid FlatMap Default group cannot list keys when batches list "
+          "their Default keys");
+    }
   }
 }
 
@@ -264,10 +288,12 @@ TEST(SchemaBuilderTest, hybridFlatMapSupportsComplexGroupValueTypes) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
-  hybridMap->addGroup(0, {"a"}, makeComplexValue(builder));
-  hybridMap->addGroup(1, {"b"}, makeComplexValue(builder));
+  const std::vector<std::string> firstGroupKeys{"a"};
+  const std::vector<std::string> secondGroupKeys{"b"};
+  hybridMap->addGroup(0, firstGroupKeys, makeComplexValue(builder));
+  hybridMap->addGroup(1, secondGroupKeys, makeComplexValue(builder));
   hybridMap->addGroup(
-      HybridFlatMap::kDefaultGroupId, {}, makeComplexValue(builder));
+      HybridFlatMap::kDefaultGroupId, kNoGroupKeys, makeComplexValue(builder));
 
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
   const auto& value = schema->asHybridFlatMap().valueType().asRow();
@@ -284,210 +310,132 @@ TEST(SchemaBuilderTest, hybridFlatMapTracksDefaultGroupKeys) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
+  hybridMap->addGroup(
+      7, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+  std::vector<std::string> defaultKeys;
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      defaultKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
-  hybridMap->addGroup(
-      7, {"configured"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
 
-  EXPECT_TRUE(hybridMap->groupAt(0).groupKeys.empty());
-  hybridMap->appendDefaultGroupKey("observed");
+  EXPECT_TRUE(hybridMap->groupAt(1).groupKeys.empty());
+  defaultKeys.push_back("observed");
+  defaultKeys.push_back("observed");
   NIMBLE_ASSERT_THROW(
-      hybridMap->appendDefaultGroupKey("observed"),
-      "Duplicate Hybrid FlatMap key: 'observed'");
-  hybridMap->appendDefaultGroupKey("b");
-  hybridMap->appendDefaultGroupKey("a");
-  EXPECT_EQ(
-      hybridMap->groupAt(0).groupKeys,
-      (std::vector<std::string>{"observed", "b", "a"}));
+      builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'observed'");
+  defaultKeys.pop_back();
+  defaultKeys.push_back("b");
+  defaultKeys.push_back("a");
+  EXPECT_EQ(&hybridMap->groupAt(1).groupKeys, &defaultKeys);
   EXPECT_EQ(
       hybridMap->groupAt(1).groupKeys,
-      (std::vector<std::string>{"configured"}));
-
-  NIMBLE_ASSERT_THROW(
-      hybridMap->appendDefaultGroupKey("b"),
-      "Duplicate Hybrid FlatMap key: 'b'");
-  NIMBLE_ASSERT_THROW(
-      hybridMap->appendDefaultGroupKey("configured"),
-      "Duplicate Hybrid FlatMap key: 'configured'");
-  NIMBLE_ASSERT_THROW(
-      hybridMap->appendDefaultGroupKey(""),
-      "Hybrid FlatMap key cannot be empty");
+      (std::vector<std::string>{"observed", "b", "a"}));
   EXPECT_EQ(
       hybridMap->groupAt(0).groupKeys,
+      (std::vector<std::string>{"configured"}));
+
+  defaultKeys.push_back("b");
+  NIMBLE_ASSERT_THROW(
+      builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'b'");
+  defaultKeys.pop_back();
+  defaultKeys.push_back("configured");
+  NIMBLE_ASSERT_THROW(
+      builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'configured'");
+  defaultKeys.pop_back();
+  defaultKeys.push_back("");
+  NIMBLE_ASSERT_THROW(
+      builder.schemaNodes(), "Hybrid FlatMap key cannot be empty");
+  defaultKeys.pop_back();
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  EXPECT_EQ(
+      schema->asHybridFlatMap().defaultGroup().groupKeys,
       (std::vector<std::string>{"observed", "b", "a"}));
 }
 
-// Groups added from a bound HybridFlatMap read their keys from the builder's
-// copy of it instead of copying them.
-TEST(SchemaBuilderTest, hybridFlatMapReadsBoundGroupKeys) {
-  HybridFlatMap bound{
-      ScalarKind::String,
-      {{.groupId = 7, .groupKeys = {"grouped"}},
-       {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}}};
-  bound.setDefaultGroupKeyPresenceMode(
-      HybridFlatMap::KeyPresenceMode::kKeyList);
-  SchemaBuilder builder;
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
-      ScalarKind::String, HybridFlatMap::KeyPresenceMode::kKeyList);
-  hybridMap->addGroup(
-      bound,
-      /*groupIndex=*/0,
-      builder.createScalarTypeBuilder(ScalarKind::Int64));
-  hybridMap->addGroup(
-      bound,
-      /*groupIndex=*/1,
-      builder.createScalarTypeBuilder(ScalarKind::Int64));
-
-  EXPECT_EQ(hybridMap->groupAt(0).groupId, uint32_t{7});
-  EXPECT_EQ(&hybridMap->groupAt(0).groupKeys, &bound.groups()[0].groupKeys);
-  EXPECT_TRUE(hybridMap->groupAt(1).groupKeys.empty());
-  NIMBLE_ASSERT_THROW(
-      hybridMap->addGroup(
-          8, {"listed"}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
-      "Hybrid FlatMap groups cannot mix bound and listed keys.");
-}
-
-// A builder whose Default lists its keys adds the groups of one HybridFlatMap
-// bound to its key kind and Default key presence mode, in order, and no listed
-// groups with them.
-TEST(SchemaBuilderTest, hybridFlatMapRejectsInvalidBoundGroups) {
-  constexpr auto kBitmap = HybridFlatMap::KeyPresenceMode::kBitmap;
-  constexpr auto kKeyList = HybridFlatMap::KeyPresenceMode::kKeyList;
-  HybridFlatMap configuration;
-  configuration.addGroup(7, {"grouped"});
-  const HybridFlatMap bitmapBound{ScalarKind::String, configuration};
-  configuration.setDefaultGroupKeyPresenceMode(kKeyList);
-  const HybridFlatMap bound{ScalarKind::String, configuration};
+// The builder views a HybridFlatMap's grouped keys, and with a bitmap
+// the Default keys its caller appends.
+TEST(SchemaBuilderTest, hybridFlatMapReadsGroupedKeysInPlace) {
   {
-    SCOPED_TRACE("bound groups after listed ones");
+    const HybridFlatMap hybridFlatMap{
+        ScalarKind::String,
+        {
+            {.groupId = 7, .groupKeys = {"grouped"}},
+            {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+        },
+        HybridFlatMap::KeyPresenceMode::kBitmap};
+    std::vector<std::string> defaultKeys;
     SchemaBuilder builder;
-    auto hybridMap =
-        builder.createHybridFlatMapTypeBuilder(ScalarKind::String, kKeyList);
-    hybridMap->addGroup(
-        8, {"listed"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
-    NIMBLE_ASSERT_THROW(
-        hybridMap->addGroup(
-            bound,
-            /*groupIndex=*/0,
-            builder.createScalarTypeBuilder(ScalarKind::Int64)),
-        "Hybrid FlatMap groups cannot mix bound and listed keys.");
-  }
-
-  // Adds group `groupIndex` of `hybridFlatMap` to a new builder for keys of
-  // `keyKind` whose Default records keys in `mode`, after groups [0, numAdded)
-  // of `bound`, and expects `error`.
-  const auto expectRejected = [&](ScalarKind keyKind,
-                                  HybridFlatMap::KeyPresenceMode mode,
-                                  size_t numAdded,
-                                  const HybridFlatMap& hybridFlatMap,
-                                  size_t groupIndex,
-                                  std::string_view error) {
-    SCOPED_TRACE(error);
-    SchemaBuilder builder;
-    auto hybridMap = builder.createHybridFlatMapTypeBuilder(keyKind, mode);
-    for (size_t i = 0; i < numAdded; ++i) {
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+        ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    for (const auto& group : hybridFlatMap.groups()) {
       hybridMap->addGroup(
-          bound, i, builder.createScalarTypeBuilder(ScalarKind::Int64));
+          group.groupId,
+          HybridFlatMap::isDefaultGroup(group.groupId) ? defaultKeys
+                                                       : group.groupKeys,
+          builder.createScalarTypeBuilder(ScalarKind::Int64));
     }
-    NIMBLE_ASSERT_THROW(
-        hybridMap->addGroup(
-            hybridFlatMap,
-            groupIndex,
-            builder.createScalarTypeBuilder(ScalarKind::Int64)),
-        error);
-  };
-  const HybridFlatMap otherBound{ScalarKind::String, configuration};
-  expectRejected(
-      ScalarKind::String,
-      kBitmap,
-      /*numAdded=*/0,
-      bitmapBound,
-      /*groupIndex=*/0,
-      "Bound Hybrid FlatMap groups must have a Default group that lists its "
-      "keys.");
-  expectRejected(
-      ScalarKind::String,
-      kKeyList,
-      /*numAdded=*/0,
-      configuration,
-      /*groupIndex=*/0,
-      "Hybrid FlatMap groups must come from a bound HybridFlatMap.");
-  expectRejected(
-      ScalarKind::Int64,
-      kKeyList,
-      /*numAdded=*/0,
-      bound,
-      /*groupIndex=*/0,
-      "Bound Hybrid FlatMap is for keys of another type.");
-  expectRejected(
-      ScalarKind::String,
-      kKeyList,
-      /*numAdded=*/0,
-      bitmapBound,
-      /*groupIndex=*/0,
-      "Bound Hybrid FlatMap has another Default key presence mode.");
-  expectRejected(
-      ScalarKind::String,
-      kKeyList,
-      /*numAdded=*/1,
-      otherBound,
-      /*groupIndex=*/1,
-      "Hybrid FlatMap groups must all come from one bound HybridFlatMap");
-  expectRejected(
-      ScalarKind::String,
-      kKeyList,
-      /*numAdded=*/0,
-      bound,
-      /*groupIndex=*/1,
-      "Hybrid FlatMap bound groups must be added in order.");
-  expectRejected(
-      ScalarKind::String,
-      kKeyList,
-      /*numAdded=*/2,
-      bound,
-      /*groupIndex=*/2,
-      "Hybrid FlatMap bound group index is out of range.");
+
+    EXPECT_EQ(hybridMap->groupAt(0).groupId, uint32_t{7});
+    EXPECT_EQ(
+        &hybridMap->groupAt(0).groupKeys, &hybridFlatMap.groups()[0].groupKeys);
+    EXPECT_TRUE(hybridMap->groupAt(1).groupKeys.empty());
+    defaultKeys.push_back("seen");
+    EXPECT_EQ(&hybridMap->groupAt(1).groupKeys, &defaultKeys);
+    EXPECT_EQ(
+        hybridMap->groupAt(1).groupKeys, (std::vector<std::string>{"seen"}));
+  }
+  {
+    const HybridFlatMap hybridFlatMap{
+        ScalarKind::String,
+        {
+            {.groupId = 7, .groupKeys = {"grouped"}},
+            {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+        },
+        HybridFlatMap::KeyPresenceMode::kKeyList};
+    SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+        ScalarKind::String, HybridFlatMap::KeyPresenceMode::kKeyList);
+    for (const auto& group : hybridFlatMap.groups()) {
+      hybridMap->addGroup(
+          group.groupId,
+          group.groupKeys,
+          builder.createScalarTypeBuilder(ScalarKind::Int64));
+    }
+
+    EXPECT_EQ(hybridMap->groupAt(0).groupId, uint32_t{7});
+    EXPECT_EQ(
+        &hybridMap->groupAt(0).groupKeys, &hybridFlatMap.groups()[0].groupKeys);
+    EXPECT_TRUE(hybridMap->groupAt(1).groupKeys.empty());
+  }
 }
 
 TEST(SchemaBuilderTest, hybridFlatMapRejectsDuplicateDefaultKeysAfterGrowth) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  std::vector<std::string> defaultKeys;
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      defaultKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
 
-  // Enough keys to reallocate the catalog and rehash its key set.
+  // Enough keys to reallocate the Default keys the builder views.
   std::vector<std::string> expectedKeys;
   for (int i = 1'000; i > 0; --i) {
     expectedKeys.push_back("key" + std::to_string(i));
-    hybridMap->appendDefaultGroupKey(expectedKeys.back());
+    defaultKeys.push_back(expectedKeys.back());
   }
 
+  EXPECT_EQ(&hybridMap->groupAt(0).groupKeys, &defaultKeys);
   EXPECT_EQ(hybridMap->groupAt(0).groupKeys, expectedKeys);
   for (const auto& key : {expectedKeys.front(), expectedKeys.back()}) {
     SCOPED_TRACE(key);
+    defaultKeys.push_back(key);
     NIMBLE_ASSERT_THROW(
-        hybridMap->appendDefaultGroupKey(key),
-        "Duplicate Hybrid FlatMap key: '" + key + "'");
+        builder.schemaNodes(), "Duplicate Hybrid FlatMap key: '" + key + "'");
+    defaultKeys.pop_back();
   }
-}
-
-TEST(SchemaBuilderTest, hybridFlatMapAppendRequiresDefaultGroup) {
-  SchemaBuilder builder;
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
-      ScalarKind::String,
-      HybridFlatMap::KeyPresenceMode::kBitmap,
-      /*projection=*/true);
-  hybridMap->addGroup(
-      7, {"configured"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
-
-  NIMBLE_ASSERT_THROW(
-      hybridMap->appendDefaultGroupKey("observed"),
-      "Hybrid FlatMap Default group is not initialized");
 }
 
 TEST(SchemaBuilderTest, hybridFlatMapRequiresStrictlySortedConfiguredKeys) {
@@ -506,13 +454,16 @@ TEST(SchemaBuilderTest, hybridFlatMapRequiresStrictlySortedConfiguredKeys) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    hybridMap->addGroup(
+        7,
+        invalid.groupKeys,
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
+    hybridMap->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        kNoGroupKeys,
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
 
-    NIMBLE_ASSERT_THROW(
-        hybridMap->addGroup(
-            7,
-            invalid.groupKeys,
-            builder.createScalarTypeBuilder(ScalarKind::Int64)),
-        invalid.error);
+    NIMBLE_ASSERT_THROW(builder.schemaNodes(), invalid.error);
   }
 }
 
@@ -523,36 +474,37 @@ TEST(SchemaBuilderTest, hybridFlatMapKeepsDefaultGroupKeysInGivenOrder) {
         ScalarKind::String,
         HybridFlatMap::KeyPresenceMode::kBitmap,
         /*projection=*/true);
+    std::vector<std::string> defaultKeys{"z", "b"};
     hybridMap->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {"z", "b"},
+        defaultKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
-    hybridMap->appendDefaultGroupKey("a");
+    defaultKeys.push_back("a");
 
     EXPECT_EQ(
         hybridMap->groupAt(0).groupKeys,
         (std::vector<std::string>{"z", "b", "a"}));
+    defaultKeys.push_back("z");
     NIMBLE_ASSERT_THROW(
-        hybridMap->appendDefaultGroupKey("z"),
-        "Duplicate Hybrid FlatMap key: 'z'");
+        builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'z'");
   }
 
-  for (const auto& [groupKeys, error] :
-       std::vector<std::pair<std::vector<std::string>, std::string_view>>{
-           {{"x", "y", "x"}, "Duplicate Hybrid FlatMap key: 'x'"},
-           {{"x", ""}, "Hybrid FlatMap key cannot be empty"},
-       }) {
+  const std::vector<std::pair<std::vector<std::string>, std::string_view>>
+      cases{
+          {{"x", "y", "x"}, "Duplicate Hybrid FlatMap key: 'x'"},
+          {{"x", ""}, "Hybrid FlatMap key cannot be empty"},
+      };
+  for (const auto& [groupKeys, error] : cases) {
     SCOPED_TRACE(error);
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    hybridMap->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        groupKeys,
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
 
-    NIMBLE_ASSERT_THROW(
-        hybridMap->addGroup(
-            HybridFlatMap::kDefaultGroupId,
-            groupKeys,
-            builder.createScalarTypeBuilder(ScalarKind::Int64)),
-        error);
+    NIMBLE_ASSERT_THROW(builder.schemaNodes(), error);
   }
 }
 
@@ -560,11 +512,9 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsKeysSharedAcrossGroups) {
   const auto addGroup = [](SchemaBuilder& builder,
                            HybridFlatMapTypeBuilder& hybridMap,
                            uint32_t groupId,
-                           std::vector<std::string> groupKeys) {
+                           const std::vector<std::string>& groupKeys) {
     hybridMap.addGroup(
-        groupId,
-        std::move(groupKeys),
-        builder.createScalarTypeBuilder(ScalarKind::Int64));
+        groupId, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
   };
 
   // A configured group overlaps an earlier configured group.
@@ -572,10 +522,14 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsKeysSharedAcrossGroups) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
-    addGroup(builder, *hybridMap, 0, {"a", "b"});
+    const std::vector<std::string> firstGroupKeys{"a", "b"};
+    const std::vector<std::string> secondGroupKeys{"b", "c"};
+    const std::vector<std::string> defaultKeys;
+    addGroup(builder, *hybridMap, 0, firstGroupKeys);
+    addGroup(builder, *hybridMap, 1, secondGroupKeys);
+    addGroup(builder, *hybridMap, HybridFlatMap::kDefaultGroupId, defaultKeys);
     NIMBLE_ASSERT_THROW(
-        addGroup(builder, *hybridMap, 1, {"b", "c"}),
-        "Duplicate Hybrid FlatMap key: 'b'");
+        builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'b'");
   }
 
   // Default overlaps an earlier configured group.
@@ -585,11 +539,12 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsKeysSharedAcrossGroups) {
         ScalarKind::String,
         HybridFlatMap::KeyPresenceMode::kBitmap,
         /*projection=*/true);
-    addGroup(builder, *hybridMap, 0, {"a"});
+    const std::vector<std::string> groupKeys{"a"};
+    const std::vector<std::string> defaultKeys{"z", "a"};
+    addGroup(builder, *hybridMap, 0, groupKeys);
+    addGroup(builder, *hybridMap, HybridFlatMap::kDefaultGroupId, defaultKeys);
     NIMBLE_ASSERT_THROW(
-        addGroup(
-            builder, *hybridMap, HybridFlatMap::kDefaultGroupId, {"z", "a"}),
-        "Duplicate Hybrid FlatMap key: 'a'");
+        builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'a'");
   }
 
   // A configured group overlaps a key seeded in or appended to Default.
@@ -598,15 +553,18 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsKeysSharedAcrossGroups) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{"k"};
+    std::vector<std::string> defaultKeys;
+    if (!appended) {
+      defaultKeys.push_back("k");
+    }
+    addGroup(builder, *hybridMap, 0, groupKeys);
+    addGroup(builder, *hybridMap, HybridFlatMap::kDefaultGroupId, defaultKeys);
     if (appended) {
-      addGroup(builder, *hybridMap, HybridFlatMap::kDefaultGroupId, {});
-      hybridMap->appendDefaultGroupKey("k");
-    } else {
-      addGroup(builder, *hybridMap, HybridFlatMap::kDefaultGroupId, {"k"});
+      defaultKeys.push_back("k");
     }
     NIMBLE_ASSERT_THROW(
-        addGroup(builder, *hybridMap, 0, {"k"}),
-        "Duplicate Hybrid FlatMap key: 'k'");
+        builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'k'");
   }
 }
 
@@ -614,22 +572,26 @@ TEST(SchemaBuilderTest, hybridFlatMapFindsGroupsByKey) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> firstGroupKeys{"a", "c"};
+  const std::vector<std::string> secondGroupKeys{"m", "x"};
+  std::vector<std::string> defaultKeys{"z", "b"};
   hybridMap->addGroup(
-      0, {"a", "c"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, firstGroupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
   hybridMap->addGroup(
-      3, {"m", "x"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+      3, secondGroupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {"z", "b"},
+      defaultKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
-  hybridMap->appendDefaultGroupKey("k");
+  defaultKeys.push_back("k");
 
   // Each existing key, whether configured, seeded in Default or appended, is
   // rejected as a new Default key.
   for (const auto* key : {"a", "c", "m", "x", "z", "b", "k"}) {
     SCOPED_TRACE(key);
-    NIMBLE_ASSERT_THROW(
-        hybridMap->appendDefaultGroupKey(key), "Duplicate Hybrid FlatMap key");
+    defaultKeys.push_back(key);
+    NIMBLE_ASSERT_THROW(builder.schemaNodes(), "Duplicate Hybrid FlatMap key");
+    defaultKeys.pop_back();
   }
 
   const std::vector<std::pair<std::string, std::optional<size_t>>> expected{
@@ -655,24 +617,26 @@ TEST(SchemaBuilderTest, rejectsDuplicateDefaultGroupKeys) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> defaultKeys{"duplicate", "duplicate"};
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      defaultKeys,
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
 
   NIMBLE_ASSERT_THROW(
-      hybridMap->addGroup(
-          HybridFlatMap::kDefaultGroupId,
-          {"duplicate", "duplicate"},
-          builder.createScalarTypeBuilder(ScalarKind::Int64)),
-      "Duplicate Hybrid FlatMap key: 'duplicate'");
+      builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'duplicate'");
 }
 
 TEST(SchemaBuilderTest, hybridFlatMapSupportsEmptyFlatMapGroupValueTypes) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"a"};
   hybridMap->addGroup(
-      0, {"a"}, builder.createFlatMapTypeBuilder(ScalarKind::String));
+      0, groupKeys, builder.createFlatMapTypeBuilder(ScalarKind::String));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       builder.createFlatMapTypeBuilder(ScalarKind::String));
 
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
@@ -686,11 +650,12 @@ TEST(SchemaBuilderTest, hybridFlatMapStreamVisitorsShortCircuit) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"a"};
   hybridMap->addGroup(
-      0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
   const auto& map = schema->asHybridFlatMap();
@@ -750,16 +715,18 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsNestedHybridFlatMap) {
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
     auto nested = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> nestedKeys{"nested"};
     nested->addGroup(
-        1, {"nested"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        1, nestedKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
     nested->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
-    outer->addGroup(0, {"outer"}, nested);
+    const std::vector<std::string> outerKeys{"outer"};
+    outer->addGroup(0, outerKeys, nested);
     outer->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
@@ -773,18 +740,20 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsNestedHybridFlatMap) {
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
     auto nested = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> nestedKeys{"nested"};
     nested->addGroup(
-        1, {"nested"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        1, nestedKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
     nested->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
     auto row = builder.createRowTypeBuilder(1);
     row->addChild("nested", nested);
-    outer->addGroup(0, {"outer"}, row);
+    const std::vector<std::string> outerKeys{"outer"};
+    outer->addGroup(0, outerKeys, row);
     outer->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
@@ -798,20 +767,22 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsNestedHybridFlatMap) {
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
     auto nested = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> nestedKeys{"nested"};
     nested->addGroup(
-        1, {"nested"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        1, nestedKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
     nested->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
     auto flatMap = builder.createFlatMapTypeBuilder(ScalarKind::String);
     flatMap->addChild(
         "value", builder.createScalarTypeBuilder(ScalarKind::Int64));
     flatMap->addChild("nested", nested);
-    outer->addGroup(0, {"outer"}, flatMap);
+    const std::vector<std::string> outerKeys{"outer"};
+    outer->addGroup(0, outerKeys, flatMap);
     outer->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
@@ -934,22 +905,25 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsNestedRightFlatMapChild) {
       "first", builder.createScalarTypeBuilder(ScalarKind::Int64));
   homogeneousFlatMap->addChild(
       "second", builder.createScalarTypeBuilder(ScalarKind::Int64));
-  hybridMap->addGroup(0, {"configured"}, homogeneousFlatMap);
+  const std::vector<std::string> groupKeys{"configured"};
+  hybridMap->addGroup(0, groupKeys, homogeneousFlatMap);
 
   auto nested = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> nestedKeys{"nested"};
   nested->addGroup(
-      1, {"nested"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+      1, nestedKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
   nested->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
   auto heterogeneousFlatMap =
       builder.createFlatMapTypeBuilder(ScalarKind::String);
   heterogeneousFlatMap->addChild(
       "first", builder.createScalarTypeBuilder(ScalarKind::Int64));
   heterogeneousFlatMap->addChild("second", nested);
-  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, heterogeneousFlatMap);
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId, kNoGroupKeys, heterogeneousFlatMap);
 
   NIMBLE_ASSERT_THROW(
       builder.schemaNodes(),
@@ -1097,8 +1071,9 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
         ScalarKind::String,
         HybridFlatMap::KeyPresenceMode::kBitmap,
         /*projection=*/true);
+    const std::vector<std::string> groupKeys{"a"};
     hybridMap->addGroup(
-        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     EXPECT_NO_THROW(builder.schemaNodes());
   }
@@ -1107,8 +1082,9 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{"a"};
     hybridMap->addGroup(
-        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
         builder.schemaNodes(),
@@ -1133,7 +1109,7 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
     hybridMap->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     const auto nodes = builder.schemaNodes();
@@ -1157,10 +1133,12 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{"a"};
     hybridMap->addGroup(
-        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    const std::vector<std::string> otherGroupKeys{"b"};
     hybridMap->addGroup(
-        1, {"b"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        1, otherGroupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
         builder.schemaNodes(),
@@ -1173,12 +1151,12 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
     hybridMap->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
     NIMBLE_ASSERT_THROW(
         hybridMap->addGroup(
             HybridFlatMap::kDefaultGroupId,
-            {},
+            kNoGroupKeys,
             builder.createScalarTypeBuilder(ScalarKind::Int64)),
         "Hybrid FlatMap has multiple Default groups");
   }
@@ -1187,22 +1165,29 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{""};
+    hybridMap->addGroup(
+        0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    hybridMap->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        kNoGroupKeys,
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
-        hybridMap->addGroup(
-            0, {""}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
-        "Hybrid FlatMap key cannot be empty");
+        builder.schemaNodes(), "Hybrid FlatMap key cannot be empty");
   }
 
   {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{"a"};
     hybridMap->addGroup(
-        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    const std::vector<std::string> defaultKeys{"z", "default-key"};
     hybridMap->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {"z", "default-key"},
+        defaultKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     const auto schema = SchemaReader::getSchema(builder.schemaNodes());
@@ -1216,25 +1201,34 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{"a"};
     hybridMap->addGroup(
-        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    hybridMap->addGroup(
+        1, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    hybridMap->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        kNoGroupKeys,
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
-        hybridMap->addGroup(
-            1, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
-        "Duplicate Hybrid FlatMap key: 'a'");
+        builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'a'");
   }
 
   {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{"a"};
     hybridMap->addGroup(
-        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    const std::vector<std::string> otherGroupKeys{"b"};
 
     NIMBLE_ASSERT_THROW(
         hybridMap->addGroup(
-            0, {"b"}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
+            0,
+            otherGroupKeys,
+            builder.createScalarTypeBuilder(ScalarKind::Int64)),
         "Duplicate Hybrid FlatMap group ID: 0");
   }
 
@@ -1242,13 +1236,15 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{"a"};
+    const std::vector<std::string> otherGroupKeys{"b"};
     hybridMap->addGroup(
-        1, {"b"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        1, otherGroupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
     hybridMap->addGroup(
-        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
     hybridMap->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
@@ -1260,10 +1256,15 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+    hybridMap->addGroup(
+        0, kNoGroupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    hybridMap->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        kNoGroupKeys,
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
-        hybridMap->addGroup(
-            0, {}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
+        builder.schemaNodes(),
         "Hybrid FlatMap group must contain at least one key: 0");
   }
 
@@ -1335,9 +1336,12 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
-    hybridMap->addGroup(0, {"a"}, mismatch.configured(builder));
+    const std::vector<std::string> groupKeys{"a"};
+    hybridMap->addGroup(0, groupKeys, mismatch.configured(builder));
     hybridMap->addGroup(
-        HybridFlatMap::kDefaultGroupId, {}, mismatch.defaultValue(builder));
+        HybridFlatMap::kDefaultGroupId,
+        kNoGroupKeys,
+        mismatch.defaultValue(builder));
 
     NIMBLE_ASSERT_THROW(
         builder.schemaNodes(),

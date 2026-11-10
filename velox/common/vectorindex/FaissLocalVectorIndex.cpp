@@ -39,8 +39,9 @@
 #include <faiss/invlists/InvertedLists.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/vectorindex/CallbackWriter.h"
-#include "velox/common/vectorindex/SingleThreadedFaiss.h"
+#include "velox/common/vectorindex/FaissThreads.h"
 
 namespace facebook::velox::common::vectorindex {
 
@@ -189,7 +190,7 @@ void FaissLocalVectorIndex::build(
   VELOX_USER_CHECK(
       std::find(ids.begin(), ids.end(), kPaddingId) == ids.end(),
       "Local vector index embedding id must not be -1");
-  SingleThreadedFaiss singleThreaded;
+  FaissThreads singleThreaded{1};
   switch (metric) {
     case VectorIndexMetric::kCosine: {
       auto index = makeIndex(
@@ -287,6 +288,8 @@ std::vector<float> twoLevelSphericalKMeans(
   std::mutex errorMutex;
 #pragma omp parallel
   {
+    // Each thread trains its coarse clusters on itself alone.
+    FaissThreads singleThreaded{1};
     for (auto i = nextCluster++; i < numCoarse; i = nextCluster++) {
       const auto share = boundary(i + 1) - boundary(i);
       if (share == 0) {
@@ -326,25 +329,35 @@ std::vector<float> twoLevelSphericalKMeans(
 std::vector<float> FaissLocalVectorIndex::trainCentroids(
     VectorIndexMetric metric,
     int64_t numClusters,
-    const Embeddings& embeddings) {
+    const Embeddings& embeddings,
+    const CodecOptions& options,
+    int32_t numThreads) {
   VELOX_CHECK_GT(numClusters, 0);
+  VELOX_CHECK_GT(numThreads, 0);
   if (numClusters >= embeddings.size()) {
     return {
         embeddings.data(),
         embeddings.data() + embeddings.size() * embeddings.dimension()};
   }
-  // TODO: Cap the threads of concurrent trainings, which each take all of
-  // FAISS's OpenMP threads and so oversubscribe the host.
+
+  const bool twoLevel = numClusters > options.maxFlatClusters;
+
+  if (auto* statWriter = getThreadLocalRunTimeStatWriter()) {
+    statWriter->addCount(TrainStats::kEmbeddings, embeddings.size());
+    statWriter->addCount(TrainStats::kThreads, numThreads);
+    statWriter->addCount(TrainStats::kLevels, twoLevel ? 2 : 1);
+  }
+
+  RuntimeStatWallTimer timer{TrainStats::kWallNanos};
+  FaissThreads threads{numThreads};
   switch (metric) {
     case VectorIndexMetric::kCosine:
-      if (numClusters > kMaxFlatClusters) {
-        return twoLevelSphericalKMeans(numClusters, embeddings);
-      }
-      return sphericalKMeans(
-          embeddings.dimension(),
-          numClusters,
-          embeddings.data(),
-          embeddings.size());
+      return twoLevel ? twoLevelSphericalKMeans(numClusters, embeddings)
+                      : sphericalKMeans(
+                            embeddings.dimension(),
+                            numClusters,
+                            embeddings.data(),
+                            embeddings.size());
   }
   VELOX_UNREACHABLE();
 }
@@ -446,8 +459,38 @@ void FaissLocalVectorIndex::search(
       "Query embedding length must match the vector index's");
   VELOX_CHECK_EQ(ids.size(), queries.size() * k);
   VELOX_CHECK_EQ(scores.size(), queries.size() * k);
-  SingleThreadedFaiss singleThreaded;
-  index_->search(queries.size(), queries.data(), k, scores.data(), ids.data());
+  FaissThreads singleThreaded{1};
+  const auto* ivf = dynamic_cast<const faiss::IndexIVF*>(index_.get());
+  if (ivf == nullptr) {
+    index_->search(
+        queries.size(), queries.data(), k, scores.data(), ids.data());
+    return;
+  }
+  // IndexIVF::search adds its statistics to a process-wide global without
+  // synchronization, so concurrent searches race on it.
+  // IndexIVF::search_preassigned takes the caller's statistics instead.
+  // TODO: Call IndexIVF::search once it can take the caller's statistics.
+  const auto numProbes = static_cast<faiss::idx_t>(ivf->nprobe);
+  std::vector<faiss::idx_t> lists(queries.size() * numProbes);
+  std::vector<float> listScores(queries.size() * numProbes);
+  ivf->quantizer->search(
+      queries.size(),
+      queries.data(),
+      numProbes,
+      listScores.data(),
+      lists.data());
+  faiss::IndexIVFStats stats;
+  ivf->search_preassigned(
+      queries.size(),
+      queries.data(),
+      k,
+      lists.data(),
+      listScores.data(),
+      scores.data(),
+      ids.data(),
+      /*store_pairs=*/false,
+      /*params=*/nullptr,
+      &stats);
 }
 
 namespace {

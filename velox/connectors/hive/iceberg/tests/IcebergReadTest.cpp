@@ -443,10 +443,8 @@ class IcebergReadTest : public test::IcebergTestBase {
     queryBuilder.maxDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(kMultiBatchRowsPerBatch))
-        .config(
-            core::QueryConfig::kMaxOutputBatchRows,
-            std::to_string(kMultiBatchRowsPerBatch))
+            kMultiBatchRowsPerBatch)
+        .config(core::QueryConfig::kMaxOutputBatchRows, kMultiBatchRowsPerBatch)
         .splits({makeIcebergSplitWithInfoColumns(
             dataFilePath->getPath(), infoColumns)});
     auto task = numSelected == 0
@@ -803,7 +801,7 @@ TEST_F(IcebergReadTest, identityPartitionFilterOnlyConstantDoesNotLeak) {
   // Without preloading, both splits share the driver's scan spec.
   exec::test::AssertQueryBuilder(plan)
       .maxDrivers(1)
-      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
       .splits(splits)
       .assertResults(
           makeRowVector({"value"}, {makeFlatVector<std::string>({"c", "d"})}));
@@ -932,7 +930,7 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterReenabledForNextSplit) {
           .endTableScan()
           .planNode())
       .maxDrivers(1)
-      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
       .splits(splits)
       .assertResults(
           makeRowVector({"value"}, {makeFlatVector<std::string>({"a", "b"})}));
@@ -1089,20 +1087,21 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterOnlyColumnIsNotRead) {
                         .endTableScan()
                         .planNode();
 
-  const auto readBytes = [&](const std::unordered_set<int32_t>&
-                                 enforcedFieldIds) {
-    auto splits = makeIcebergSplits(dataFile->getPath());
-    for (auto& split : splits) {
-      std::dynamic_pointer_cast<HiveIcebergSplit>(split)
-          ->partitionEnforcedFieldIds = enforcedFieldIds;
-    }
-    std::shared_ptr<exec::Task> task;
-    const auto result =
-        exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(
-            pool(), task);
-    EXPECT_EQ(result->size(), kNumRows);
-    return exec::toPlanStats(task->taskStats()).at(plan->id()).rawInputBytes;
-  };
+  const auto readBytes =
+      [&](const std::unordered_set<int32_t>& enforcedFieldIds) {
+        auto splits = makeIcebergSplits(dataFile->getPath());
+        for (auto& split : splits) {
+          std::dynamic_pointer_cast<HiveIcebergSplit>(split)
+              ->partitionEnforcedFieldIds = enforcedFieldIds;
+        }
+        std::shared_ptr<exec::Task> task;
+        const auto result =
+            exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(
+                pool(), task);
+        EXPECT_EQ(result->size(), kNumRows);
+        return exec::PlanNodeStats::extract(task->taskStats(), plan->id())
+            .rawInputBytes;
+      };
 
   const auto enforcedBytes = readBytes({1});
   const auto filteredBytes = readBytes({});
@@ -2727,17 +2726,16 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
                     {"c0", "_row_id"})
                 .planNode();
 
-        auto task =
-            exec::test::AssertQueryBuilder(plan)
-                .maxDrivers(1)
-                .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "2")
-                .splits(scanId, splits)
-                .assertResults(makeRowVector(
-                    {"c0", "_row_id"},
-                    {
-                        makeFlatVector<int64_t>(expectedValues),
-                        makeFlatVector<int64_t>(expectedRowIds),
-                    }));
+        auto task = exec::test::AssertQueryBuilder(plan)
+                        .maxDrivers(1)
+                        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 2)
+                        .splits(scanId, splits)
+                        .assertResults(makeRowVector(
+                            {"c0", "_row_id"},
+                            {
+                                makeFlatVector<int64_t>(expectedValues),
+                                makeFlatVector<int64_t>(expectedRowIds),
+                            }));
 
         const auto planStats = exec::toPlanStats(task->taskStats());
         const auto& scanStats = planStats.at(scanId);

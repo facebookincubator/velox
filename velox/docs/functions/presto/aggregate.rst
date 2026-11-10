@@ -1083,7 +1083,7 @@ These functions are available when Velox is built with FAISS
         FROM items
         GROUP BY cluster_id;
 
-.. function:: vector_index_train(embedding, id, num_clusters, metric) -> vector_index
+.. function:: vector_index_train(embedding, id, num_clusters, metric, options) -> vector_index
 
     Clusters the embeddings with k-means and returns the codec of the
     clusters: a ``'flat'`` local index over the centroids, as
@@ -1099,13 +1099,23 @@ These functions are available when Velox is built with FAISS
       which the k-means is spherical: embeddings and centroids are normalized
       to length 1, and an embedding goes to the centroid with the largest dot
       product.
+    * ``options`` (MAP(VARCHAR, VARCHAR)): a constant map of training settings,
+      possibly empty. Supported keys:
+
+      * ``train.maxFlatClusters``: the most clusters trained in one level,
+        1,000 by default. More clusters train in two levels: about
+        sqrt(``num_clusters``) coarse clusters, then within each a share of
+        ``num_clusters`` in proportion to its embeddings, which cuts the work
+        by about sqrt(``num_clusters``) / 2.
 
     Rows with a null ``embedding`` or ``id`` are ignored. The k-means runs over
-    all of the group's embeddings, on FAISS's threads, so a large group is
-    best sampled first.
+    all of the group's embeddings, so a large group is best sampled first. It
+    runs on the number of threads in the ``vector_index_train_threads`` session
+    property, 1 by default.
 
     Example::
 
-        SELECT ds, vector_index_train(embedding, id, 1000, 'cosine')
+        SELECT ds, vector_index_train(embedding, id, 1000, 'cosine',
+            map(array['train.maxFlatClusters'], array['500']))
         FROM items
         GROUP BY ds;

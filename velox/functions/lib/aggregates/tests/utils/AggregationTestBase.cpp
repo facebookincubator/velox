@@ -403,19 +403,19 @@ void testAbandonedPartialMerge(
       AssertQueryBuilder(plan)
           .configs(config)
           .maxDrivers(1)
-          .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+          .config(core::QueryConfig::kMaxOutputBatchRows, 2)
           .config(core::QueryConfig::kMaxPartialAggregationMemory, 1ULL << 60)
           .config(
               core::QueryConfig::kMaxExtendedPartialAggregationMemory,
               1ULL << 60)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "101")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 101)
           .copyResults(pool);
 
   // Use a new builder because a run consumes the builder's configs, and a
   // later run would then drop kMaxOutputBatchRows and 'config'.
   AssertQueryBuilder queryBuilder(plan);
   queryBuilder.configs(config).config(
-      core::QueryConfig::kMaxOutputBatchRows, "2");
+      core::QueryConfig::kMaxOutputBatchRows, 2);
   enableAbandonPartialAggregation(queryBuilder);
   auto task = queryBuilder.assertResults({expected});
   const auto stats = toPlanStats(task->taskStats());
@@ -606,10 +606,9 @@ void AggregationTestBase::testCompanionExtract(
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto partialInputRows =
-        toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    const auto finalInputRows =
-        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    const auto planStats = exec::toPlanStats(task->taskStats());
+    const auto partialInputRows = planStats.at(partialNodeId).inputRows;
+    const auto finalInputRows = planStats.at(finalNodeId).inputRows;
     if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
           << "partial inputRows: " << partialInputRows
@@ -1216,10 +1215,9 @@ void AggregationTestBase::testAggregationsImpl(
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto partialInputRows =
-        toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    const auto finalInputRows =
-        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    const auto planStats = exec::toPlanStats(task->taskStats());
+    const auto partialInputRows = planStats.at(partialNodeId).inputRows;
+    const auto finalInputRows = planStats.at(finalNodeId).inputRows;
     if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
           << "partial inputRows: " << partialInputRows

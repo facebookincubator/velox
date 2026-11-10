@@ -370,15 +370,13 @@ class NimbleHierarchicalKeyCodec final : public HierarchicalKeyCodec {
   }
 };
 
-// Returns the codec of Nimble's key encoding, which every factory of the
-// built-in index shares.
+} // namespace
+
 const std::shared_ptr<const HierarchicalKeyCodec>& nimbleKeyCodec() {
   static const std::shared_ptr<const HierarchicalKeyCodec> keyCodec =
       std::make_shared<const NimbleHierarchicalKeyCodec>();
   return keyCodec;
 }
-
-} // namespace
 
 std::string HierarchicalKeyCodec::encodeKey(
     std::span<const uint64_t> levels,
@@ -402,23 +400,22 @@ void HierarchicalKeyCodec::encodeKeys(
   }
 }
 
-NimbleHierarchicalClusterIndexFactory::NimbleHierarchicalClusterIndexFactory()
-    : NimbleHierarchicalClusterIndexFactory{
+HierarchicalClusterIndexFactory::HierarchicalClusterIndexFactory()
+    : HierarchicalClusterIndexFactory{
           std::string{kHierarchicalClusterIndexName},
           nimbleKeyCodec()} {}
 
-NimbleHierarchicalClusterIndexFactory::NimbleHierarchicalClusterIndexFactory(
+HierarchicalClusterIndexFactory::HierarchicalClusterIndexFactory(
     std::string name,
     std::shared_ptr<const HierarchicalKeyCodec> keyCodec)
     : name_{std::move(name)},
       keyCodec_{velox::checkedNotNull(std::move(keyCodec))} {}
 
-std::string_view NimbleHierarchicalClusterIndexFactory::name() const {
+std::string_view HierarchicalClusterIndexFactory::name() const {
   return name_;
 }
 
-std::unique_ptr<IndexWriter>
-NimbleHierarchicalClusterIndexFactory::createWriter(
+std::unique_ptr<IndexWriter> HierarchicalClusterIndexFactory::createWriter(
     const IndexConfig& config,
     const velox::TypePtr& inputType,
     velox::memory::MemoryPool* pool) const {
@@ -429,7 +426,7 @@ NimbleHierarchicalClusterIndexFactory::createWriter(
 }
 
 std::unique_ptr<IndexKeyEncoder>
-NimbleHierarchicalClusterIndexFactory::createKeyEncoder(
+HierarchicalClusterIndexFactory::createKeyEncoder(
     const std::vector<std::string>& columns,
     const velox::RowTypePtr& inputType,
     const std::vector<SortOrder>& sortOrders,
@@ -440,8 +437,7 @@ NimbleHierarchicalClusterIndexFactory::createKeyEncoder(
       columns, *inputType, sortOrders, keyCodec_, pool);
 }
 
-std::unique_ptr<ClusterIndexBase>
-NimbleHierarchicalClusterIndexFactory::createReader(
+std::unique_ptr<ClusterIndexBase> HierarchicalClusterIndexFactory::createReader(
     Section rootSection,
     velox::memory::MemoryPool* pool,
     const IndexLookup::Options& options) const {
@@ -451,13 +447,12 @@ NimbleHierarchicalClusterIndexFactory::createReader(
       std::move(rootSection), keyCodec_, pool, readerOptions);
 }
 
-const KeyComparator* NimbleHierarchicalClusterIndexFactory::keyComparator()
-    const {
+const KeyComparator* HierarchicalClusterIndexFactory::keyComparator() const {
   return keyCodec_->keyComparator();
 }
 
 const std::shared_ptr<const HierarchicalKeyCodec>&
-NimbleHierarchicalClusterIndexFactory::testingKeyCodec() const {
+HierarchicalClusterIndexFactory::testingKeyCodec() const {
   return keyCodec_;
 }
 

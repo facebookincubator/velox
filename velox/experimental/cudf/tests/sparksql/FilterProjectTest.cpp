@@ -176,7 +176,9 @@ TEST_F(CudfFilterProjectTest, isNull) {
         evaluator = std::make_shared<ASTExpression>(
             expression, data->rowType(), pool_.get(), queryCtx_->queryConfig());
       } else {
-        ASSERT_TRUE(FunctionExpression::canEvaluate(expression));
+        ASSERT_TRUE(
+            FunctionExpression::canEvaluate(
+                expression, queryCtx_->queryConfig()));
         evaluator = FunctionExpression::create(
             expression, data->rowType(), pool_.get(), queryCtx_->queryConfig());
       }

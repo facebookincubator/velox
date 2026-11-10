@@ -356,7 +356,7 @@ bool StreamingAggregation::startDrain() {
 }
 
 void StreamingAggregation::maybeFinishDrain() {
-  if (FOLLY_LIKELY((numGroups_ != 0) || !isDraining())) {
+  if ((numGroups_ != 0) || !isDraining()) [[likely]] {
     return;
   }
   prevInput_ = nullptr;

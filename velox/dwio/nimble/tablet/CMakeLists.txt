@@ -194,6 +194,7 @@ add_library(
   Checkpoint.h
   Chunk.h
   Callbacks.h
+  IoAlignment.h
 )
 target_link_libraries(
   nimble_tablet_common

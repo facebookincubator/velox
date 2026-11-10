@@ -2321,9 +2321,9 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunksDifferentChunksInParallel) {
       rootBuf->asMutable<char>(),
       indexBuffers.rootIndex.data(),
       indexBuffers.rootIndex.size());
-  Section indexSection{MetadataBuffer(
+  Section indexSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
-          std::move(rootBuf), CompressionType::Uncompressed, pool_.get()))};
+          std::move(rootBuf), CompressionType::Uncompressed, pool_.get())))};
   metadataFile_ =
       std::make_shared<velox::InMemoryReadFile>(indexBuffers.indexPartitions);
   ioStats_ = std::make_shared<velox::io::IoStatistics>();

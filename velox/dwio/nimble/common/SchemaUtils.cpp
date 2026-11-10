@@ -873,6 +873,13 @@ std::shared_ptr<TypeBuilder> buildHybridFlatMapValueType(
   NIMBLE_UNREACHABLE("Unknown type kind: {}.", source.kind());
 }
 
+// Returns the keys of the keyless Default group of a projection that selects
+// no group. They never change, so every projected schema builder can view them.
+const std::vector<std::string>& emptyDefaultGroupKeys() {
+  static const std::vector<std::string> kEmptyDefaultGroupKeys;
+  return kEmptyDefaultGroupKeys;
+}
+
 // Builds selected HFM groups before later siblings so their descriptors are
 // allocated in final projected-schema order. With no selected group, builds a
 // keyless Default group: a Hybrid FlatMap needs at least one group, and the
@@ -889,11 +896,15 @@ std::shared_ptr<HybridFlatMapTypeBuilder> buildProjectedHybridFlatMapType(
   if (projectedHybridFlatMap.groupIndices.empty()) {
     result->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        /*groupKeys=*/{},
+        emptyDefaultGroupKeys(),
         buildHybridFlatMapValueType(
             builder, projectedHybridFlatMap.source->valueType()));
     return result;
   }
+
+  // The builder views each selected group's keys in the source, which outlives
+  // it. A selected bitmap Default keeps every key the source recorded, in
+  // first-seen order, since its key-presence bits index them.
   for (const auto groupIndex : projectedHybridFlatMap.groupIndices) {
     const auto& group = projectedHybridFlatMap.source->groupAt(groupIndex);
     result->addGroup(

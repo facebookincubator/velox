@@ -30,10 +30,12 @@
 namespace facebook::nimble::index {
 
 /// Configuration shared by the built-in flat and hierarchical cluster indexes.
+/// The configuration of an index that nests one, such as a weighted cluster
+/// index, extends it.
 ///
 /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
 /// production tables without consulting the Nimble team (oncall: dwios).
-struct ClusterIndexConfig final : IndexConfig {
+struct ClusterIndexConfig : IndexConfig {
   ClusterIndexConfig(
       std::string indexName,
       std::vector<std::string> columns,
@@ -88,7 +90,9 @@ struct ClusterIndexConfig final : IndexConfig {
       hierarchicalKeyEncodingReadFactors;
 };
 
-/// Builds configuration for a registered cluster-index implementation.
+/// Builds configuration for a registered cluster-index implementation. The
+/// builder of an index that nests one, such as a weighted cluster index,
+/// extends it and overrides build().
 ///
 /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
 /// production tables without consulting the Nimble team (oncall: dwios).
@@ -99,6 +103,14 @@ class ClusterIndexConfigBuilder {
   /// Selects the registered cluster-index implementation by name.
   explicit ClusterIndexConfigBuilder(std::string_view indexName)
       : indexName_{indexName} {}
+
+  virtual ~ClusterIndexConfigBuilder() = default;
+
+  ClusterIndexConfigBuilder(const ClusterIndexConfigBuilder&) = default;
+  ClusterIndexConfigBuilder& operator=(const ClusterIndexConfigBuilder&) =
+      default;
+  ClusterIndexConfigBuilder(ClusterIndexConfigBuilder&&) = default;
+  ClusterIndexConfigBuilder& operator=(ClusterIndexConfigBuilder&&) = default;
 
   ClusterIndexConfigBuilder& withKeyColumns(std::vector<std::string> columns) {
     columns_ = std::move(columns);
@@ -144,7 +156,7 @@ class ClusterIndexConfigBuilder {
   }
 
   /// Builds an immutable configuration consumed by the index factory.
-  std::shared_ptr<const IndexConfig> build() const {
+  virtual std::shared_ptr<const IndexConfig> build() const {
     return std::make_shared<const ClusterIndexConfig>(
         indexName_,
         columns_,

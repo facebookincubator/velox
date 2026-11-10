@@ -746,7 +746,7 @@ uint64_t Task::timeSinceStartMsLocked() const {
 SplitsState& Task::getPlanNodeSplitsStateLocked(
     const core::PlanNodeId& planNodeId) {
   auto it = splitsStates_.find(planNodeId);
-  if (FOLLY_LIKELY(it != splitsStates_.end())) {
+  if (it != splitsStates_.end()) [[likely]] {
     return it->second;
   }
 
@@ -4200,7 +4200,7 @@ ContinueFuture Task::requestPause() {
 }
 
 bool Task::pauseRequested(ContinueFuture* future) {
-  if (FOLLY_LIKELY(future == nullptr)) {
+  if (future == nullptr) [[likely]] {
     // It is ok to return 'pauseRequested_' without a mutex lock if user doesn't
     // want to wait for task to resume.
     return pauseRequested_;
@@ -4365,7 +4365,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
     uint64_t maxWaitMs,
     memory::MemoryReclaimer::Stats& stats) {
   auto task = ensureTask();
-  if (FOLLY_UNLIKELY(task == nullptr)) {
+  if (task == nullptr) [[unlikely]] {
     return 0;
   }
   VELOX_CHECK_EQ(task->pool()->name(), pool->name());
@@ -4449,7 +4449,7 @@ void Task::MemoryReclaimer::abort(
     memory::MemoryPool* pool,
     const std::exception_ptr& error) {
   auto task = ensureTask();
-  if (FOLLY_UNLIKELY(task == nullptr)) {
+  if (task == nullptr) [[unlikely]] {
     return;
   }
   VELOX_CHECK_EQ(task->pool()->name(), pool->name());

@@ -281,7 +281,7 @@ OperatorSupplier makeOperatorSupplier(const core::PlanNodePtr& planNode) {
           planNode)) {
 #ifdef VELOX_ENABLE_FAISS
     return [join](int32_t operatorId, DriverCtx* ctx) {
-      return std::make_unique<VectorSearchJoinBuild>(operatorId, ctx, join);
+      return BaseVectorSearchJoinBuild::create(operatorId, ctx, join);
     };
 #else
     VELOX_UNSUPPORTED(kVectorSearchUnsupported);
@@ -673,7 +673,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
                 planNode)) {
 #ifdef VELOX_ENABLE_FAISS
       operators.push_back(
-          std::make_unique<VectorSearchJoinProbe>(
+          BaseVectorSearchJoinProbe::create(
               id, ctx.get(), vectorSearchJoinNode));
 #else
       VELOX_UNSUPPORTED(kVectorSearchUnsupported);

@@ -174,8 +174,8 @@ TEST_P(MultiThreadedHashJoinTest, spillEnabledJoinWithPartialLimit) {
                     .spillDirectory(spillDirectory->getPath())
                     .config(core::QueryConfig::kSpillEnabled, "true")
                     .config(core::QueryConfig::kJoinSpillEnabled, "true")
-                    .config(core::QueryConfig::kMaxSpillLevel, "2")
-                    .config(core::QueryConfig::kSpillWriteBufferSize, "0")
+                    .config(core::QueryConfig::kMaxSpillLevel, 2)
+                    .config(core::QueryConfig::kSpillWriteBufferSize, 0)
                     .assertResults(makeRowVector(
                         {"t_key"}, {makeFlatVector<int64_t>({999})}));
     if (injectSpill) {
@@ -225,8 +225,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesLastProber) {
       queryBuilder.spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kJoinSpillEnabled, "true")
-          .config(core::QueryConfig::kMaxSpillLevel, "2")
-          .config(core::QueryConfig::kSpillWriteBufferSize, "0");
+          .config(core::QueryConfig::kMaxSpillLevel, 2)
+          .config(core::QueryConfig::kSpillWriteBufferSize, 0);
     }
 
     std::shared_ptr<Task> task;
@@ -341,8 +341,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
       queryBuilder.spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kJoinSpillEnabled, "true")
-          .config(core::QueryConfig::kMaxSpillLevel, "2")
-          .config(core::QueryConfig::kSpillWriteBufferSize, "0");
+          .config(core::QueryConfig::kMaxSpillLevel, 2)
+          .config(core::QueryConfig::kSpillWriteBufferSize, 0);
     }
 
     std::shared_ptr<Task> task;
@@ -429,8 +429,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBetweenSpillRounds) {
                       .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, "true")
                       .config(core::QueryConfig::kJoinSpillEnabled, "true")
-                      .config(core::QueryConfig::kMaxSpillLevel, "2")
-                      .config(core::QueryConfig::kSpillWriteBufferSize, "0")
+                      .config(core::QueryConfig::kMaxSpillLevel, 2)
+                      .config(core::QueryConfig::kSpillWriteBufferSize, 0)
                       .copyResults(pool_.get(), task);
     ASSERT_GT(result->size(), 0);
     ASSERT_LE(result->size(), 5 * numDrivers_);

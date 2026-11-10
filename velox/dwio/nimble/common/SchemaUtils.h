@@ -85,7 +85,8 @@ struct ColumnEncodings {
 
 /// Non-owning projection plan for one top-level Hybrid FlatMap column.
 struct ProjectedHybridFlatMap {
-  /// Source Hybrid FlatMap. It must outlive this projection plan.
+  /// Source Hybrid FlatMap. It must outlive this projection plan. The projected
+  /// schema builder views its group keys.
   const HybridFlatMapType* source;
 
   /// Selected group indices in source-schema order. Empty when every requested

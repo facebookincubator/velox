@@ -364,6 +364,52 @@ TEST_F(StreamReaderTest, decodesRowsWithCoroutineApi) {
       (std::vector<int64_t>{11, 12}));
 }
 
+// A read without null rows does not allocate nulls for an output without them,
+// and clears the null rows that it writes in an output with them.
+TEST_F(StreamReaderTest, readsRowsWithoutNullsIntoOutputNulls) {
+  const auto stream = encodeChunk<int64_t>(
+      std::vector<int64_t>{10, 11, 12}, EncodingType::Trivial);
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"value"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{1, ScalarKind::Int64}),
+      });
+  StreamReader reader{type, pool_.get()};
+  const std::array<std::string_view, 2> streams{std::string_view{}, stream};
+  const std::array<RowRange, 1> ranges{{{1, 3}}};
+  const auto expectValues = [](const velox::VectorPtr& output) {
+    const auto* flat =
+        output->as<velox::RowVector>()->childAt(0)->asFlatVector<int64_t>();
+    ASSERT_NE(flat, nullptr);
+    EXPECT_EQ(
+        (std::vector<int64_t>{flat->valueAt(0), flat->valueAt(1)}),
+        (std::vector<int64_t>{11, 12}));
+  };
+
+  auto output = velox::BaseVector::create(
+      velox::ROW("value", velox::BIGINT()), 2, pool_.get());
+  runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+  expectValues(output);
+  EXPECT_EQ(output->rawNulls(), nullptr);
+  EXPECT_EQ(output->as<velox::RowVector>()->childAt(0)->rawNulls(), nullptr);
+
+  auto nullOutput = velox::BaseVector::create(
+      velox::ROW("value", velox::BIGINT()), 2, pool_.get());
+  auto& child = nullOutput->as<velox::RowVector>()->childAt(0);
+  for (velox::vector_size_t row{0}; row < 2; ++row) {
+    nullOutput->setNull(row, true);
+    child->setNull(row, true);
+  }
+  runRead(reader, streams, ranges, /*outputOffset=*/0, nullOutput);
+  expectValues(nullOutput);
+  for (velox::vector_size_t row{0}; row < 2; ++row) {
+    EXPECT_FALSE(nullOutput->isNullAt(row));
+    EXPECT_FALSE(child->isNullAt(row));
+  }
+}
+
 TEST_F(StreamReaderTest, reusesRowOutputAcrossSequentialReads) {
   const std::vector<int64_t> values{10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
   const auto stream = encodeChunk<int64_t>(values, EncodingType::Trivial);

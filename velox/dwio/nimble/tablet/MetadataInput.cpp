@@ -340,10 +340,26 @@ std::vector<std::shared_ptr<MetadataBuffer>> DirectMetadataInput::load(
 std::shared_ptr<MetadataBuffer> DirectMetadataInput::store(
     const MetadataSection& /*section*/,
     velox::BufferPtr&& decompressed) {
-  return std::make_shared<MetadataBuffer>(std::move(decompressed));
+  return std::make_shared<MetadataBuffer>(
+      toPinnedBuffer(std::move(decompressed)));
 }
 
 // --- CachedMetadataInput ---
+
+namespace {
+
+// Returns the bytes of the cache entry 'pin' holds. The bufferHolder holds
+// 'pin', so the entry stays pinned while any copy of the bytes is alive.
+PinnedBuffer toPinnedBuffer(velox::cache::CachePin pin) {
+  NIMBLE_CHECK(!pin.empty(), "CachePin must not be empty");
+  auto* entry = pin.checkedEntry();
+  const std::string_view data{
+      entry->contiguousData(), static_cast<size_t>(entry->size())};
+  return PinnedBuffer{
+      std::make_shared<velox::cache::CachePin>(std::move(pin)), data};
+}
+
+} // namespace
 
 CachedMetadataInput::CachedMetadataInput(
     velox::ReadFile* file,
@@ -406,7 +422,7 @@ std::shared_ptr<MetadataBuffer> CachedMetadataInput::tryCacheHit(
       expectedSize,
       "Cached entry size mismatch with expected size");
   ioStats_->ramHit().increment(entry->size());
-  return std::make_shared<MetadataBuffer>(std::move(pin));
+  return std::make_shared<MetadataBuffer>(toPinnedBuffer(std::move(pin)));
 }
 
 std::shared_ptr<MetadataBuffer> CachedMetadataInput::promoteCachePin(
@@ -428,7 +444,7 @@ std::shared_ptr<MetadataBuffer> CachedMetadataInput::promoteCachePin(
   }
   ioCounter.increment(entry->size());
   entry->setExclusiveToShared();
-  return std::make_shared<MetadataBuffer>(std::move(pin));
+  return std::make_shared<MetadataBuffer>(toPinnedBuffer(std::move(pin)));
 }
 
 void CachedMetadataInput::loadFromSsd(
@@ -648,7 +664,8 @@ std::shared_ptr<MetadataBuffer> CachedMetadataInput::store(
   // without uncompressed_size and sections too large to cache. Cacheable
   // sections with known sizes are handled directly in loadFromFile.
   if (!cacheable(decompressed->size())) {
-    return std::make_shared<MetadataBuffer>(std::move(decompressed));
+    return std::make_shared<MetadataBuffer>(
+        toPinnedBuffer(std::move(decompressed)));
   }
 
   const velox::cache::RawFileCacheKey key{fileId_.id(), section.offset()};
@@ -671,7 +688,7 @@ std::shared_ptr<MetadataBuffer> CachedMetadataInput::store(
   auto* destination = entry->contiguousData();
   std::memcpy(destination, decompressed->as<char>(), decompressed->size());
   entry->setExclusiveToShared();
-  return std::make_shared<MetadataBuffer>(std::move(pin));
+  return std::make_shared<MetadataBuffer>(toPinnedBuffer(std::move(pin)));
 }
 
 std::unique_ptr<MetadataBuffer> CachedMetadataInput::findCachedMetadata(
@@ -702,7 +719,7 @@ std::unique_ptr<MetadataBuffer> CachedMetadataInput::findCachedMetadata(
         entry->hasContiguousData(), "Cached entry must have contiguous data");
     ioStats_->ramHit().increment(entry->size());
     ioStats_->incRawBytesRead(entry->size());
-    return std::make_unique<MetadataBuffer>(std::move(pin));
+    return std::make_unique<MetadataBuffer>(toPinnedBuffer(std::move(pin)));
   }
 }
 

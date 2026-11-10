@@ -1708,7 +1708,9 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
             column,
             HybridFlatMap{
                 keyKindOf(*mapColumn->type()->asMap().keyType()),
-                grouping.groups});
+                grouping.groups,
+                HybridFlatMap::KeyPresenceMode::kBitmap,
+            });
         groupings.emplace(column, std::move(grouping));
       }
 
@@ -1789,9 +1791,10 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
       groups.push_back(
           {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
       HybridFlatMap grouping{
-          keyKindOf(*mapColumn->type()->asMap().keyType()), std::move(groups)};
-      grouping.setDefaultGroupKeyPresenceMode(
-          HybridFlatMap::KeyPresenceMode::kKeyList);
+          keyKindOf(*mapColumn->type()->asMap().keyType()),
+          std::move(groups),
+          HybridFlatMap::KeyPresenceMode::kKeyList,
+      };
       keyListColumns.emplace(column, std::move(grouping));
 
       std::set<std::string> keys;
