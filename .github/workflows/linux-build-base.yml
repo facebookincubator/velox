@@ -1103,7 +1103,11 @@ jobs:
       # define NDEBUG_SANITIZER to keep Protobuf on the same layout as the
       # image's libabsl. Without it, protoc crashes at startup in
       # PrepareInsertNonSoo.
-      - name: Rebuild Protobuf with ASan
+      #
+      # gRPC is rebuilt too: its grpc_cpp_plugin links the shared libprotoc,
+      # which is now built with ASan, and an uninstrumented plugin cannot load
+      # it.
+      - name: Rebuild Protobuf and gRPC with ASan
         env:
           CC: clang
           CXX: clang++
@@ -1116,7 +1120,7 @@ jobs:
         run: |
           mkdir -p /tmp/protobuf-asan
           cd /tmp/protobuf-asan
-          bash "${GITHUB_WORKSPACE}/scripts/setup-centos9.sh" install_protobuf
+          bash "${GITHUB_WORKSPACE}/scripts/setup-centos9.sh" install_protobuf install_grpc
           cd /
           rm -rf /tmp/protobuf-asan
 
