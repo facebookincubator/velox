@@ -1034,18 +1034,13 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
                           .finalAggregation()
                           .planNode())
                   .assertResults("SELECT distinct c0 FROM tmp");
-  EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
-          .customStats.at("flushRowCount")
-          .sum,
-      0);
-  EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
-          .customStats.at("flushRowCount")
-          .max,
-      0);
+  {
+    const auto flushRowCount =
+        PlanNodeStats::extract(task->taskStats(), aggNodeId)
+            .customStats.at("flushRowCount");
+    EXPECT_GT(flushRowCount.sum, 0);
+    EXPECT_GT(flushRowCount.max, 0);
+  }
 
   // Count aggregation.
   task = AssertQueryBuilder(duckDbQueryRunner_)
@@ -1058,18 +1053,13 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
                      .finalAggregation()
                      .planNode())
              .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
-  EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
-          .customStats.at("flushRowCount")
-          .count,
-      0);
-  EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
-          .customStats.at("flushRowCount")
-          .max,
-      0);
+  {
+    const auto flushRowCount =
+        PlanNodeStats::extract(task->taskStats(), aggNodeId)
+            .customStats.at("flushRowCount");
+    EXPECT_GT(flushRowCount.count, 0);
+    EXPECT_GT(flushRowCount.max, 0);
+  }
 
   // Global aggregation.
   task = AssertQueryBuilder(duckDbQueryRunner_)
@@ -1084,8 +1074,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
              .assertResults("SELECT sum(c0) FROM tmp");
   EXPECT_EQ(
       0,
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
+      PlanNodeStats::extract(task->taskStats(), aggNodeId)
           .customStats.count("flushRowCount"));
 }
 
@@ -1287,7 +1276,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimitIncrease) {
                             .planNode())
                     .assertResults("SELECT distinct c0 FROM tmp");
     const auto runtimeStats =
-        toPlanStats(task->taskStats()).at(aggNodeId).customStats;
+        PlanNodeStats::extract(task->taskStats(), aggNodeId).customStats;
     if (testData.expectedPartialOutputFlush > 0) {
       EXPECT_LT(0, runtimeStats.at("flushRowCount").count);
       EXPECT_LT(0, runtimeStats.at("flushRowCount").max);
@@ -1343,7 +1332,7 @@ TEST_F(AggregationTest, partialAggregationMaybeReservationReleaseCheck) {
                         .planNode();
   auto task = assertQuery(params, "SELECT distinct c0 FROM tmp");
   const auto runtimeStats =
-      toPlanStats(task->taskStats()).at(aggNodeId).customStats;
+      PlanNodeStats::extract(task->taskStats(), aggNodeId).customStats;
   EXPECT_EQ(0, runtimeStats.count("flushRowCount"));
   EXPECT_EQ(0, runtimeStats.count("maxExtendedPartialAggregationMemoryUsage"));
   EXPECT_EQ(0, runtimeStats.count("partialAggregationPct"));
@@ -2002,7 +1991,8 @@ TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
                     .assertResults(expected);
     // The raw-input aggregation must run on multiple drivers to exercise the
     // peer barrier.
-    EXPECT_GT(toPlanStats(task->taskStats()).at(rawInputAggId).numDrivers, 1)
+    EXPECT_GT(
+        PlanNodeStats::extract(task->taskStats(), rawInputAggId).numDrivers, 1)
         << (split ? "partial+final" : "single-step");
   };
   run(/*split=*/false);
@@ -2046,7 +2036,8 @@ TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverNonEmpty) {
                     .assertResults(expected);
     // The raw-input aggregation must run on multiple drivers to exercise the
     // peer barrier.
-    EXPECT_GT(toPlanStats(task->taskStats()).at(rawInputAggId).numDrivers, 1)
+    EXPECT_GT(
+        PlanNodeStats::extract(task->taskStats(), rawInputAggId).numDrivers, 1)
         << (split ? "partial+final" : "single-step");
   };
   run(/*split=*/false);
@@ -2171,10 +2162,10 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
                     .capturePlanNodeId(aggrNodeId)
                     .planNode())
             .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY 1");
-    ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
-    ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
-        testData.expectedNumOutputVectors);
+    const auto aggrStats =
+        PlanNodeStats::extract(task->taskStats(), aggrNodeId);
+    ASSERT_GT(aggrStats.spilledBytes, 0);
+    ASSERT_EQ(aggrStats.outputVectors, testData.expectedNumOutputVectors);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
@@ -2237,10 +2228,10 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
                     .planNode())
             .assertResults(
                 "SELECT c0, array_agg(c1 order by c1) FROM tmp GROUP BY 1");
-    ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
-    ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
-        testData.expectedNumOutputVectors);
+    const auto aggrStats =
+        PlanNodeStats::extract(task->taskStats(), aggrNodeId);
+    ASSERT_GT(aggrStats.spilledBytes, 0);
+    ASSERT_EQ(aggrStats.outputVectors, testData.expectedNumOutputVectors);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
@@ -2285,12 +2276,11 @@ TEST_F(AggregationTest, spillDuringOutputProcessing) {
           .assertResults(
               "SELECT c0, c1, max(c2), min(c3) FROM tmp GROUP BY 1, 2");
 
-  ASSERT_EQ(
-      toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
-      vectorSize / numOutputRows);
-  ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
+  const auto aggrStats = PlanNodeStats::extract(task->taskStats(), aggrNodeId);
+  ASSERT_EQ(aggrStats.outputVectors, vectorSize / numOutputRows);
+  ASSERT_GT(aggrStats.spilledBytes, 0);
   // There is only one partition for spilling triggered during output stage.
-  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledPartitions, 1);
+  ASSERT_EQ(aggrStats.spilledPartitions, 1);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -2366,7 +2356,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithoutSpill) {
             .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY 1");
 
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), aggrNodeId).outputVectors,
         testData.expectedNumOutputVectors);
   }
 }
@@ -3039,8 +3029,9 @@ TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
           .assertResults("SELECT c0, c1, sum(c2) FROM tmp GROUP BY c0, c1");
   auto stats = task->taskStats().pipelineStats;
   // Verify that spilling is not triggered.
-  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledInputBytes, 0);
-  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
+  const auto aggrStats = PlanNodeStats::extract(task->taskStats(), aggrNodeId);
+  ASSERT_EQ(aggrStats.spilledInputBytes, 0);
+  ASSERT_EQ(aggrStats.spilledBytes, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -5329,8 +5320,7 @@ TEST_F(AggregationTest, barrierExecutionPartialAggregation) {
 
   ASSERT_EQ(task->taskStats().numBarriers, 2);
   ASSERT_EQ(
-      toPlanStats(task->taskStats())
-          .at(partialNodeId)
+      PlanNodeStats::extract(task->taskStats(), partialNodeId)
           .customStats.count(
               std::string(HashAggregation::kAbandonedPartialAggregationRows)),
       0);
@@ -5387,8 +5377,7 @@ TEST_F(AggregationTest, barrierExecutionAbandonedPartialAggregation) {
 
   ASSERT_EQ(task->taskStats().numBarriers, 3);
   ASSERT_GT(
-      toPlanStats(task->taskStats())
-          .at(partialNodeId)
+      PlanNodeStats::extract(task->taskStats(), partialNodeId)
           .customStats
           .at(std::string(HashAggregation::kAbandonedPartialAggregationRows))
           .sum,

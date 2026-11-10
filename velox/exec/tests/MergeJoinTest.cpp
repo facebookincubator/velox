@@ -1822,7 +1822,7 @@ TEST_F(MergeJoinTest, streamLeftSideInertWhereUnsupported) {
                     .assertResults(testCase.duckDbSql);
 
     const auto runtimeStats =
-        toPlanStats(task->taskStats()).at(mergeJoinNodeId).customStats;
+        PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId).customStats;
     ASSERT_EQ(runtimeStats.at("streamedLeftBatches").sum, 0);
   }
 }
@@ -1898,10 +1898,10 @@ TEST_F(MergeJoinTest, streamLeftSideWithFilter) {
                     fmt::format(
                         "SELECT t1, u1 FROM t JOIN u ON t0 = u0 AND ({})",
                         filter));
-        const auto streamedBatches = toPlanStats(task->taskStats())
-                                         .at(joinId)
-                                         .customStats.at("streamedLeftBatches")
-                                         .sum;
+        const auto streamedBatches =
+            PlanNodeStats::extract(task->taskStats(), joinId)
+                .customStats.at("streamedLeftBatches")
+                .sum;
         if (streamLeft == std::string_view("true")) {
           ASSERT_GT(streamedBatches, 0);
         } else {
@@ -1988,7 +1988,8 @@ TEST_F(MergeJoinTest, streamLeftSideMultiBatchKeyGroup) {
       // a streamed run has to drop some; without it the config could quietly
       // become inert and every result assertion above would still pass.
       const auto runtimeStats =
-          toPlanStats(task->taskStats()).at(mergeJoinNodeId).customStats;
+          PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId)
+              .customStats;
       const auto streamedBatches = runtimeStats.at("streamedLeftBatches").sum;
       if (streamLeft == std::string_view("true")) {
         ASSERT_GT(streamedBatches, 0);

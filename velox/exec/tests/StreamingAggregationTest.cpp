@@ -919,8 +919,8 @@ TEST_F(StreamingAggregationTest, sortedAggregationsMemoryDoesNotGrowWithInput) {
     AssertQueryBuilder(plan)
         .config(core::QueryConfig::kStreamingAggregationMinOutputBatchRows, "1")
         .copyResults(pool(), task);
-    return velox::exec::toPlanStats(task->taskStats())
-        .at(aggregationNodeId)
+    return velox::exec::PlanNodeStats::extract(
+               task->taskStats(), aggregationNodeId)
         .peakMemoryBytes;
   };
 

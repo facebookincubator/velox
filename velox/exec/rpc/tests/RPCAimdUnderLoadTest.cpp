@@ -1054,8 +1054,7 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesKeepRowIdentityAcrossBatches) {
     EXPECT_TRUE(seen.insert(inputs->valueAt(i).str()).second);
   }
   EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at("rpc-0")
+      PlanNodeStats::extract(task->taskStats(), "rpc-0")
           .customStats.at(RPCOperator::kRpcCapacityRetries)
           .sum,
       0);

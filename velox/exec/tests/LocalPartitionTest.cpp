@@ -686,8 +686,7 @@ TEST_F(LocalPartitionTest, blockingOnLocalExchangeQueue) {
                         localExchangeBufferSize)
                     .assertResults("SELECT c0, count(1) FROM tmp GROUP BY c0");
     ASSERT_EQ(
-        exec::toPlanStats(task->taskStats())
-            .at(nodeId)
+        exec::PlanNodeStats::extract(task->taskStats(), nodeId)
             .customStats["blockedWaitForConsumerTimes"]
             .sum,
         test.numBlocked);

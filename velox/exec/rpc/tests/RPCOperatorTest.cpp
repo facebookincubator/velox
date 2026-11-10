@@ -915,8 +915,7 @@ class RPCOperatorTest : public OperatorTestBase {
   // own policy rather than the backend's shared limiter.
   static bool ranOnPolicyScopedLimiter(
       const std::shared_ptr<exec::Task>& task) {
-    return toPlanStats(task->taskStats())
-               .at("rpc-0")
+    return PlanNodeStats::extract(task->taskStats(), "rpc-0")
                .customStats.count(RPCOperator::kRpcRateLimiterPolicyScoped) > 0;
   }
 
@@ -1170,8 +1169,7 @@ TEST_F(
   const core::QueryConfig defaults{
       std::unordered_map<std::string, std::string>{}};
   EXPECT_EQ(
-      toPlanStats(task->taskStats())
-          .at("rpc-0")
+      PlanNodeStats::extract(task->taskStats(), "rpc-0")
           .customStats.at(RPCOperator::kRpcRateLimiterHardLimit)
           .max,
       defaults.rpcRateLimiterMaxLimit())
@@ -1203,8 +1201,7 @@ TEST_F(RPCOperatorTest, explicitSessionLimitsAreHonoredOnSealedBackend) {
         .config(core::QueryConfig::kRpcRateLimiterMaxLimit, limit)
         .copyResults(pool(), task);
     return Run{
-        .lowestCap = toPlanStats(task->taskStats())
-                         .at("rpc-0")
+        .lowestCap = PlanNodeStats::extract(task->taskStats(), "rpc-0")
                          .customStats.at(RPCOperator::kRpcRateLimiterCap)
                          .min,
         .policyScoped = ranOnPolicyScopedLimiter(task)};
@@ -1266,7 +1263,7 @@ TEST_F(RPCOperatorTest, eagerAdmissionReportsPolicyScopedLimiter) {
         std::shared_ptr<exec::Task> task;
         AssertQueryBuilder(plan).maxDrivers(1).configs(session).copyResults(
             pool(), task);
-        return toPlanStats(task->taskStats()).at("rpc-0").customStats;
+        return PlanNodeStats::extract(task->taskStats(), "rpc-0").customStats;
       };
 
   {
@@ -2440,7 +2437,7 @@ TEST_F(RPCOperatorTest, limiterSpanStartsAtTheFirstAdmissionRequest) {
     auto result =
         AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
     EXPECT_EQ(result->size(), prompts.size());
-    return toPlanStats(task->taskStats()).at(plan->id()).customStats;
+    return PlanNodeStats::extract(task->taskStats(), plan->id()).customStats;
   };
 
   {

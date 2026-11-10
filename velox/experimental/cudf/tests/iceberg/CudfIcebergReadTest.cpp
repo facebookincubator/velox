@@ -531,7 +531,7 @@ TEST_F(CudfIcebergReadTest, ignoreMissingFiles) {
                     .splits(splits)
                     .assertResults({data});
     const auto stats =
-        toPlanStats(task->taskStats()).at(plan->id()).customStats;
+        PlanNodeStats::extract(task->taskStats(), plan->id()).customStats;
     EXPECT_EQ(stats.count("skippedSplits"), 0);
     EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
     EXPECT_EQ(stats.at("processedSplits").sum, 1);

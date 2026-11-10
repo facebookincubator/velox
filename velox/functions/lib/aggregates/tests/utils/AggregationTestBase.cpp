@@ -606,10 +606,9 @@ void AggregationTestBase::testCompanionExtract(
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto partialInputRows =
-        toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    const auto finalInputRows =
-        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    const auto planStats = exec::toPlanStats(task->taskStats());
+    const auto partialInputRows = planStats.at(partialNodeId).inputRows;
+    const auto finalInputRows = planStats.at(finalNodeId).inputRows;
     if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
           << "partial inputRows: " << partialInputRows
@@ -1216,10 +1215,9 @@ void AggregationTestBase::testAggregationsImpl(
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto partialInputRows =
-        toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    const auto finalInputRows =
-        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    const auto planStats = exec::toPlanStats(task->taskStats());
+    const auto partialInputRows = planStats.at(partialNodeId).inputRows;
+    const auto finalInputRows = planStats.at(finalNodeId).inputRows;
     if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
           << "partial inputRows: " << partialInputRows
