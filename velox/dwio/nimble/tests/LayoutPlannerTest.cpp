@@ -280,6 +280,9 @@ TEST(DefaultLayoutPlannerTests, reorderFlatMap) {
   testStreamLayout(rng, planner, std::move(streams), std::move(expected));
 }
 
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST(DefaultLayoutPlannerTests, hybridFlatMapUsesPhysicalGroups) {
   nimble::SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
@@ -287,11 +290,12 @@ TEST(DefaultLayoutPlannerTests, hybridFlatMapUsesPhysicalGroups) {
       nimble::ScalarKind::Int32,
       nimble::HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
-  const auto groupStreams = hybridMap->addGroup(0, {"1"}, groupValue);
+  const std::vector<std::string> groupKeys{"1"};
+  const auto groupStreams = hybridMap->addGroup(0, groupKeys, groupValue);
   auto defaultValue =
       builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
   const auto defaultStreams = hybridMap->addGroup(
-      nimble::HybridFlatMap::kDefaultGroupId, {}, defaultValue);
+      nimble::HybridFlatMap::kDefaultGroupId, kNoGroupKeys, defaultValue);
   root->addChild("features", hybridMap);
 
   const std::vector<uint32_t> expectedOffsets{

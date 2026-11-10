@@ -29,6 +29,10 @@
 using namespace facebook;
 using namespace facebook::nimble;
 using testing::ElementsAre;
+
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   const std::vector<std::string> groupKeys{
       "feature,with:delimiters|and;slashes/",
@@ -43,11 +47,14 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   features->setAttributes({{"user.a", "1"}, {"user.b", "2"}});
   features->addGroup(
       0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Double));
+  const std::vector<std::string> secondGroupKeys{"C"};
   features->addGroup(
-      1, {"C"}, schemaBuilder.createScalarTypeBuilder(ScalarKind::Double));
+      1,
+      secondGroupKeys,
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Double));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Double));
   row->addChild("features", features);
 
@@ -157,13 +164,12 @@ TEST(SchemaSerializationTest, hybridFlatMapKeyKindsRoundTrip) {
     SchemaBuilder schemaBuilder;
     auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
         keyKind, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{"configured"};
     hybridMap->addGroup(
-        0,
-        {"configured"},
-        schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
     hybridMap->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
 
     const auto serializedSchema = serializer.serialize(schemaBuilder);

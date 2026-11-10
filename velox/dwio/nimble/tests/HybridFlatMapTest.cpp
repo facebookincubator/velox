@@ -224,51 +224,65 @@ std::vector<HybridFlatMap::Group> config(
 }
 
 constexpr uint32_t kDefault = HybridFlatMap::kDefaultGroupId;
+constexpr auto kBitmap = HybridFlatMap::KeyPresenceMode::kBitmap;
+constexpr auto kKeyList = HybridFlatMap::KeyPresenceMode::kKeyList;
 
 // Keys come back canonical and sorted, as strings: 10 before 9.
 TEST(HybridFlatMapTest, constructorSortsKeys) {
   EXPECT_EQ(
       HybridFlatMap(
           ScalarKind::Int64,
-          config({{0, {"9", "10", "-3"}}, {4, {"2"}}, {kDefault, {}}}))
+          config({{0, {"9", "10", "-3"}}, {4, {"2"}}, {kDefault, {}}}),
+          kBitmap)
           .groups(),
       config({{0, {"-3", "10", "9"}}, {4, {"2"}}, {kDefault, {}}}));
   EXPECT_EQ(
       HybridFlatMap(
-          ScalarKind::String, config({{0, {"b", "a"}}, {kDefault, {}}}))
+          ScalarKind::String,
+          config({{0, {"b", "a"}}, {kDefault, {}}}),
+          kBitmap)
           .groups(),
       config({{0, {"a", "b"}}, {kDefault, {}}}));
   // Only the last key is out of order, so the whole group must be checked.
   EXPECT_EQ(
       HybridFlatMap(
           ScalarKind::String,
-          config({{0, {"b", "c", "d", "a"}}, {kDefault, {}}}))
+          config({{0, {"b", "c", "d", "a"}}, {kDefault, {}}}),
+          kBitmap)
           .groups(),
       config({{0, {"a", "b", "c", "d"}}, {kDefault, {}}}));
   // A Default-only configuration is valid: Default holds every key.
   EXPECT_EQ(
-      HybridFlatMap(ScalarKind::Int32, config({{kDefault, {}}})).groups(),
+      HybridFlatMap(ScalarKind::Int32, config({{kDefault, {}}}), kBitmap)
+          .groups(),
       config({{kDefault, {}}}));
 }
 
 TEST(HybridFlatMapTest, constructorRejectsNonCanonicalKeys) {
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap(
-          ScalarKind::Int64, config({{0, {"1", "07"}}, {kDefault, {}}})),
+          ScalarKind::Int64,
+          config({{0, {"1", "07"}}, {kDefault, {}}}),
+          kBitmap),
       "Hybrid FlatMap key '07' is not canonical.");
   NIMBLE_ASSERT_USER_THROW(
-      HybridFlatMap(ScalarKind::Int8, config({{0, {"128"}}, {kDefault, {}}})),
+      HybridFlatMap(
+          ScalarKind::Int8, config({{0, {"128"}}, {kDefault, {}}}), kBitmap),
       "Hybrid FlatMap key '128' cannot be parsed as");
 }
 
 TEST(HybridFlatMapTest, constructorRejectsRepeatedKeys) {
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap(
-          ScalarKind::Int64, config({{0, {"1", "1"}}, {kDefault, {}}})),
+          ScalarKind::Int64,
+          config({{0, {"1", "1"}}, {kDefault, {}}}),
+          kBitmap),
       "Duplicate Hybrid FlatMap key: '1'.");
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap(
-          ScalarKind::Int64, config({{0, {"1"}}, {1, {"1"}}, {kDefault, {}}})),
+          ScalarKind::Int64,
+          config({{0, {"1"}}, {1, {"1"}}, {kDefault, {}}}),
+          kBitmap),
       "Duplicate Hybrid FlatMap key: '1'.");
 }
 
@@ -278,258 +292,81 @@ TEST(HybridFlatMapTest, constructorRejectsRepeatedKeyBeforeLaterErrors) {
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap(
           ScalarKind::Int8,
-          config({{0, {"1"}}, {1, {"1", "300"}}, {kDefault, {}}})),
+          config({{0, {"1"}}, {1, {"1", "300"}}, {kDefault, {}}}),
+          kBitmap),
       "Duplicate Hybrid FlatMap key: '1'.");
   NIMBLE_ASSERT_USER_THROW(
-      HybridFlatMap(ScalarKind::Int64, config({{0, {"1", "1"}}})),
+      HybridFlatMap(ScalarKind::Int64, config({{0, {"1", "1"}}}), kBitmap),
       "Duplicate Hybrid FlatMap key: '1'.");
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap(
           ScalarKind::String,
-          config({{0, {"b", "a"}}, {1, {"b", "a"}}, {kDefault, {}}})),
+          config({{0, {"b", "a"}}, {1, {"b", "a"}}, {kDefault, {}}}),
+          kBitmap),
       "Duplicate Hybrid FlatMap key: 'b'.");
 }
 
 TEST(HybridFlatMapTest, constructorRejectsUnorderedGroupIds) {
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap(
-          ScalarKind::Int64, config({{1, {"1"}}, {0, {"2"}}, {kDefault, {}}})),
+          ScalarKind::Int64,
+          config({{1, {"1"}}, {0, {"2"}}, {kDefault, {}}}),
+          kBitmap),
       "Hybrid FlatMap group IDs must be in ascending order.");
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap(
-          ScalarKind::Int64, config({{0, {"1"}}, {0, {"2"}}, {kDefault, {}}})),
+          ScalarKind::Int64,
+          config({{0, {"1"}}, {0, {"2"}}, {kDefault, {}}}),
+          kBitmap),
       "Hybrid FlatMap group IDs must be in ascending order.");
 }
 
 TEST(HybridFlatMapTest, constructorRejectsEmptyConfiguredGroups) {
   NIMBLE_ASSERT_USER_THROW(
-      HybridFlatMap(ScalarKind::Int64, config({{0, {}}, {kDefault, {}}})),
+      HybridFlatMap(
+          ScalarKind::Int64, config({{0, {}}, {kDefault, {}}}), kBitmap),
       "Hybrid FlatMap group must contain at least one key: 0.");
 }
 
 TEST(HybridFlatMapTest, constructorRequiresOneDefaultGroupWithoutKeys) {
   NIMBLE_ASSERT_USER_THROW(
-      HybridFlatMap(ScalarKind::Int64, config({{0, {"1"}}})),
+      HybridFlatMap(ScalarKind::Int64, config({{0, {"1"}}}), kBitmap),
       "Hybrid FlatMap must have exactly one Default group.");
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap(
           ScalarKind::Int64,
-          config({{0, {"1"}}, {kDefault, {}}, {kDefault, {}}})),
+          config({{0, {"1"}}, {kDefault, {}}, {kDefault, {}}}),
+          kBitmap),
       "Hybrid FlatMap has multiple Default groups.");
   NIMBLE_ASSERT_USER_THROW(
-      HybridFlatMap(ScalarKind::Int64, config({{0, {"1"}}, {kDefault, {"2"}}})),
+      HybridFlatMap(
+          ScalarKind::Int64, config({{0, {"1"}}, {kDefault, {"2"}}}), kBitmap),
       "Hybrid FlatMap Default group keys are appended in first-seen order and "
       "cannot be configured.");
 }
 
 TEST(HybridFlatMapTest, constructorRejectsUnsupportedKeyKinds) {
   NIMBLE_ASSERT_USER_THROW(
-      HybridFlatMap(ScalarKind::Double, config({{kDefault, {}}})),
+      HybridFlatMap(ScalarKind::Double, config({{kDefault, {}}}), kBitmap),
       "Unsupported Hybrid FlatMap key kind");
 }
 
-// An empty configuration holds just the Default group, with or without a key
-// kind.
-TEST(HybridFlatMapTest, emptyConfigurationHoldsDefaultGroup) {
-  const HybridFlatMap withoutKeyKind;
-  EXPECT_EQ(withoutKeyKind.groups(), config({{kDefault, {}}}));
-  EXPECT_EQ(withoutKeyKind.keyKind(), std::nullopt);
-  const HybridFlatMap withKeyKind{ScalarKind::Int32};
-  EXPECT_EQ(withKeyKind.groups(), config({{kDefault, {}}}));
-  EXPECT_EQ(withKeyKind.keyKind(), ScalarKind::Int32);
-  NIMBLE_ASSERT_USER_THROW(
-      HybridFlatMap{ScalarKind::Double}, "Unsupported Hybrid FlatMap key kind");
-}
-
-// Groups added one by one go before the Default group with their keys sorted,
-// as the constructor taking every group lays them out.
-TEST(HybridFlatMapTest, addGroupSortsKeysBeforeDefaultGroup) {
-  HybridFlatMap hybridMap{ScalarKind::Int64};
-  hybridMap.addGroup(0, {"9", "10", "-3"});
-  hybridMap.addGroup(4, {"2"});
-  EXPECT_EQ(
-      hybridMap,
-      HybridFlatMap(
-          ScalarKind::Int64,
-          config({{0, {"9", "10", "-3"}}, {4, {"2"}}, {kDefault, {}}})));
-}
-
-TEST(HybridFlatMapTest, addGroupChecksEachGroup) {
-  {
-    SCOPED_TRACE("group IDs out of order");
-    HybridFlatMap hybridMap;
-    hybridMap.addGroup(1, {"1"});
-    NIMBLE_ASSERT_USER_THROW(
-        hybridMap.addGroup(1, {"2"}),
-        "Hybrid FlatMap group IDs must be in ascending order.");
-    NIMBLE_ASSERT_USER_THROW(
-        hybridMap.addGroup(0, {"2"}),
-        "Hybrid FlatMap group IDs must be in ascending order.");
-  }
-  {
-    SCOPED_TRACE("the Default group");
-    HybridFlatMap hybridMap;
-    NIMBLE_ASSERT_USER_THROW(
-        hybridMap.addGroup(kDefault, {"1"}),
-        "Hybrid FlatMap Default group keys are appended in first-seen order "
-        "and cannot be configured.");
-  }
-  {
-    SCOPED_TRACE("no keys");
-    HybridFlatMap hybridMap;
-    NIMBLE_ASSERT_USER_THROW(
-        hybridMap.addGroup(0, {}),
-        "Hybrid FlatMap group must contain at least one key: 0.");
-  }
-  {
-    SCOPED_TRACE("an empty key");
-    HybridFlatMap hybridMap;
-    NIMBLE_ASSERT_USER_THROW(
-        hybridMap.addGroup(0, {""}), "Hybrid FlatMap key cannot be empty.");
-  }
-  {
-    SCOPED_TRACE("a key repeated within a group");
-    HybridFlatMap hybridMap;
-    NIMBLE_ASSERT_USER_THROW(
-        hybridMap.addGroup(0, {"1", "1"}),
-        "Duplicate Hybrid FlatMap key: '1'.");
-  }
-  {
-    SCOPED_TRACE("a key repeated across groups");
-    HybridFlatMap hybridMap;
-    hybridMap.addGroup(0, {"1"});
-    NIMBLE_ASSERT_USER_THROW(
-        hybridMap.addGroup(1, {"1"}), "Duplicate Hybrid FlatMap key: '1'.");
-  }
-}
-
-// With a key kind, addGroup() checks each key for it on the spot; without
-// one, the check waits for a writer to bind the configuration.
-TEST(HybridFlatMapTest, addGroupChecksCanonicalKeysOnlyWithKeyKind) {
-  HybridFlatMap withKeyKind{ScalarKind::Int64};
-  NIMBLE_ASSERT_USER_THROW(
-      withKeyKind.addGroup(0, {"07"}),
-      "Hybrid FlatMap key '07' is not canonical.");
-  HybridFlatMap withoutKeyKind;
-  withoutKeyKind.addGroup(0, {"07"});
-  EXPECT_EQ(withoutKeyKind.groups(), config({{0, {"07"}}, {kDefault, {}}}));
-}
-
-// Schema metadata need not end with its Default group, so groups are added
-// only to a writer configuration.
-TEST(HybridFlatMapTest, addGroupRejectsSchemaMetadata) {
-  auto metadata = HybridFlatMap::fromSchema(
-      config({{0, {"1"}}}), HybridFlatMap::KeyPresenceMode::kBitmap);
-  NIMBLE_ASSERT_USER_THROW(
-      metadata.addGroup(1, {"2"}),
-      "Hybrid FlatMap groups can be added only to a writer configuration.");
-}
-
-// addGroup() rejects a HybridFlatMap built with every group at once, whose
-// copies share its groups, and leaves its groups and lookup unchanged.
-TEST(HybridFlatMapTest, addGroupRejectsSharedGroups) {
-  HybridFlatMap hybridMap{
-      ScalarKind::Int64, config({{0, {"1"}}, {kDefault, {}}})};
-  const HybridFlatMap copy{hybridMap};
-  const auto* groups = &hybridMap.groups();
-  NIMBLE_ASSERT_USER_THROW(
-      hybridMap.addGroup(1, {"2"}),
-      "Hybrid FlatMap built with every group at once cannot take more "
-      "groups.");
-  EXPECT_EQ(&hybridMap.groups(), groups);
-  EXPECT_EQ(&copy.groups(), groups);
-  EXPECT_EQ(hybridMap.groups(), config({{0, {"1"}}, {kDefault, {}}}));
-  EXPECT_EQ(hybridMap.findGroup("1"), size_t{0});
-  EXPECT_EQ(hybridMap.numGroupedKeys(), size_t{1});
-}
-
-// Only the constructor taking every group, which binding uses, builds the
-// lookup of findGroup().
+// Schema metadata has no grouped-key index for findGroup().
 TEST(HybridFlatMapTest, findGroupNeedsLookup) {
-  HybridFlatMap configuration;
-  configuration.addGroup(0, {"1"});
-  EXPECT_FALSE(configuration.hasGroupLookupIndex());
   NIMBLE_ASSERT_THROW(
-      configuration.findGroup("1"), "Hybrid FlatMap has no group lookup");
+      metadata().findGroup("a"), "Hybrid FlatMap has no grouped-key index");
   NIMBLE_ASSERT_THROW(
-      configuration.numGroupedKeys(), "Hybrid FlatMap has no group lookup");
-  NIMBLE_ASSERT_THROW(
-      metadata().findGroup("a"), "Hybrid FlatMap has no group lookup");
-
-  HybridFlatMap int64Configuration{ScalarKind::Int64};
-  int64Configuration.addGroup(0, {"1"});
-  EXPECT_FALSE(int64Configuration.hasGroupLookupIndex());
-  NIMBLE_ASSERT_THROW(
-      int64Configuration.findGroup("1"), "Hybrid FlatMap has no group lookup");
-
-  const HybridFlatMap bound{ScalarKind::Int64, configuration};
-  EXPECT_TRUE(bound.hasGroupLookupIndex());
-  EXPECT_EQ(bound.findGroup("1"), size_t{0});
+      metadata().numGroupedKeys(), "Hybrid FlatMap has no grouped-key index");
 }
 
-// Binding a configuration built without a key kind checks it for the column's.
-TEST(HybridFlatMapTest, bindingChecksConfigurationWithoutKeyKind) {
-  HybridFlatMap configuration;
-  configuration.addGroup(0, {"7", "300"});
-  const HybridFlatMap int16Column{ScalarKind::Int16, configuration};
-  EXPECT_EQ(int16Column.keyKind(), ScalarKind::Int16);
-  EXPECT_EQ(int16Column.groups(), config({{0, {"300", "7"}}, {kDefault, {}}}));
-  NIMBLE_ASSERT_USER_THROW(
-      (HybridFlatMap{ScalarKind::Int8, configuration}),
-      "Hybrid FlatMap key '300' cannot be parsed as");
-
-  HybridFlatMap nonCanonical;
-  nonCanonical.addGroup(0, {"07"});
-  NIMBLE_ASSERT_USER_THROW(
-      (HybridFlatMap{ScalarKind::Int64, nonCanonical}),
-      "Hybrid FlatMap key '07' is not canonical.");
-  EXPECT_EQ(
-      (HybridFlatMap{ScalarKind::String, nonCanonical}).groups(),
-      config({{0, {"07"}}, {kDefault, {}}}));
-}
-
-// A configuration built for a key kind binds only to a column of that kind.
-TEST(HybridFlatMapTest, bindingRejectsConfigurationForOtherKeys) {
-  const HybridFlatMap configuration{
-      ScalarKind::Int64, config({{0, {"1"}}, {kDefault, {}}})};
-  EXPECT_EQ((HybridFlatMap{ScalarKind::Int64, configuration}), configuration);
-  NIMBLE_ASSERT_USER_THROW(
-      (HybridFlatMap{ScalarKind::Int32, configuration}),
-      "Hybrid FlatMap configuration is for keys of another type.");
-}
-
-TEST(HybridFlatMapTest, bindingKeepsDefaultGroupKeyPresenceMode) {
-  HybridFlatMap configuration;
-  configuration.setDefaultGroupKeyPresenceMode(
-      HybridFlatMap::KeyPresenceMode::kKeyList);
-  EXPECT_EQ(
-      (HybridFlatMap{ScalarKind::Int64, configuration})
-          .defaultGroupKeyPresenceMode(),
-      HybridFlatMap::KeyPresenceMode::kKeyList);
-}
-
-// The binding constructor builds new groups even for a configuration built with
-// every group for the column's key kind.
-TEST(HybridFlatMapTest, bindingCopiesGroupsBuiltForKeyKind) {
-  const HybridFlatMap configuration{
-      ScalarKind::Int8, config({{0, {"9", "10"}}, {kDefault, {}}})};
-  const HybridFlatMap bound{ScalarKind::Int8, configuration};
-  EXPECT_EQ(bound, configuration);
-  EXPECT_NE(&bound.groups(), &configuration.groups());
-  EXPECT_EQ(bound.findGroup("10"), size_t{0});
-}
-
-// Copies of a HybridFlatMap built with every group share its groups and
-// lookup, as copies into SerializerOptions::hybridFlatMapColumns do.
+// Copies of a HybridFlatMap share its groups and grouped-key index, as copies
+// into SerializerOptions::hybridFlatMapColumns do.
 TEST(HybridFlatMapTest, copiesShareGroupsBuiltForKeyKind) {
-  HybridFlatMap hybridMap{
-      ScalarKind::Int8, config({{0, {"9", "10"}}, {kDefault, {}}})};
-  hybridMap.setDefaultGroupKeyPresenceMode(
-      HybridFlatMap::KeyPresenceMode::kKeyList);
+  const HybridFlatMap hybridMap{
+      ScalarKind::Int8, config({{0, {"9", "10"}}, {kDefault, {}}}), kKeyList};
   const folly::F14FastMap<std::string, HybridFlatMap> columns{
       {"column", hybridMap}};
   const auto& copy = columns.at("column");
-  EXPECT_TRUE(copy.hasGroupLookupIndex());
   EXPECT_EQ(&copy.groups(), &hybridMap.groups());
   EXPECT_EQ(copy, hybridMap);
   EXPECT_EQ(copy.keyKind(), ScalarKind::Int8);
@@ -549,12 +386,17 @@ TEST(HybridFlatMapTest, identifiesDefaultGroup) {
 }
 
 TEST(HybridFlatMapTest, usesKeyPresentListOnlyForKeyListDefault) {
-  HybridFlatMap hybridMap;
-  EXPECT_FALSE(hybridMap.useKeyPresentList(HybridFlatMap::kDefaultGroupId));
-  hybridMap.setDefaultGroupKeyPresenceMode(
-      HybridFlatMap::KeyPresenceMode::kKeyList);
-  EXPECT_TRUE(hybridMap.useKeyPresentList(HybridFlatMap::kDefaultGroupId));
-  EXPECT_FALSE(hybridMap.useKeyPresentList(0));
+  {
+    const HybridFlatMap hybridMap{
+        ScalarKind::Int64, config({{kDefault, {}}}), kBitmap};
+    EXPECT_FALSE(hybridMap.useKeyPresentList(HybridFlatMap::kDefaultGroupId));
+  }
+  {
+    const HybridFlatMap hybridMap{
+        ScalarKind::Int64, config({{kDefault, {}}}), kKeyList};
+    EXPECT_TRUE(hybridMap.useKeyPresentList(HybridFlatMap::kDefaultGroupId));
+    EXPECT_FALSE(hybridMap.useKeyPresentList(0));
+  }
 }
 
 TEST(HybridFlatMapTest, formatsKeyPresenceMode) {
@@ -583,14 +425,14 @@ TEST(HybridFlatMapTest, releaseGroupsMovesGroupsOut) {
   EXPECT_EQ(std::move(hybridMap).releaseGroups(), expected);
 }
 
-// A HybridFlatMap built with every group at once shares its groups with its
-// copies, so it releases a copy of them and the copies keep theirs.
+// A HybridFlatMap shares its groups with its copies, so it releases a copy of
+// them and the copies keep theirs.
 TEST(HybridFlatMapTest, releaseGroupsCopiesSharedGroups) {
   const std::vector<HybridFlatMap::Group> groups{
       {.groupId = 0, .groupKeys = {"1", "2"}},
       {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
   };
-  HybridFlatMap hybridMap{ScalarKind::Int64, groups};
+  HybridFlatMap hybridMap{ScalarKind::Int64, groups, kBitmap};
   const auto copy = hybridMap;
 
   EXPECT_EQ(std::move(hybridMap).releaseGroups(), groups);

@@ -59,9 +59,8 @@ std::string canonicalIntegerKey(std::string_view key) {
   return std::string(key);
 }
 
-// Sorts `keys` as strings. Binding a Hybrid FlatMap to a column may sort its
-// grouped keys again, and they usually arrive sorted, so a sorted group costs
-// one comparison per key.
+// Sorts `keys` as strings. Grouped keys usually arrive sorted, so a sorted
+// group costs one comparison per key.
 void sortGroupKeys(std::vector<std::string>& keys) {
   if (!std::is_sorted(keys.begin(), keys.end())) {
     std::sort(keys.begin(), keys.end());
@@ -113,8 +112,8 @@ size_t totalNumKeys(const std::vector<HybridFlatMap::Group>& groups) {
 }
 
 // Returns the index in `groups` of the group of each key, viewing the keys of
-// `groups`. The constructor taking every group has rejected a key repeated
-// within or across groups.
+// `groups`. The writer constructor has rejected a key repeated within or
+// across groups, and a key in the Default group.
 folly::F14FastMap<std::string_view, size_t> buildIndexGroupsByKey(
     const std::vector<HybridFlatMap::Group>& groups) {
   // Reserves room for every grouped key, which can number in the thousands,
@@ -132,40 +131,12 @@ folly::F14FastMap<std::string_view, size_t> buildIndexGroupsByKey(
 
 } // namespace
 
-namespace detail {
-
-// The groups of a HybridFlatMap built with every group at once, and the group
-// of each grouped key. Immutable, so every copy of the HybridFlatMap shares
-// one, on any thread.
-struct GroupLookupIndex {
-  // Indexes `checkedGroups`, whose explicit groups hold non-empty keys sorted
-  // as strings, none repeated within or across groups, and whose only Default
-  // group comes last, without keys.
-  explicit GroupLookupIndex(std::vector<HybridFlatMap::Group> checkedGroups)
-      : groups{std::move(checkedGroups)},
-        groupIndexByKey{buildIndexGroupsByKey(groups)} {}
-
-  ~GroupLookupIndex() = default;
-
-  // groupIndexByKey views the keys of groups, which a copy or a move would not
-  // keep.
-  GroupLookupIndex(const GroupLookupIndex&) = delete;
-  GroupLookupIndex& operator=(const GroupLookupIndex&) = delete;
-  GroupLookupIndex(GroupLookupIndex&&) = delete;
-  GroupLookupIndex& operator=(GroupLookupIndex&&) = delete;
-
-  // See HybridFlatMap::groups().
-  const std::vector<HybridFlatMap::Group> groups;
-
-  // Each grouped key -> index of its group in groups. Built after the keys
-  // are sorted, since sorting moves them.
-  const folly::F14FastMap<std::string_view, size_t> groupIndexByKey;
-};
-
-} // namespace detail
-
-HybridFlatMap::HybridFlatMap(ScalarKind keyKind, std::vector<Group> groups)
-    : keyKind_{keyKind} {
+HybridFlatMap::HybridFlatMap(
+    ScalarKind keyKind,
+    std::vector<Group> groups,
+    KeyPresenceMode defaultGroupKeyPresenceMode)
+    : keyKind_{keyKind},
+      defaultGroupKeyPresenceMode_{defaultGroupKeyPresenceMode} {
   NIMBLE_USER_CHECK(
       supportedKeyKind(keyKind),
       "Unsupported Hybrid FlatMap key kind: {}.",
@@ -216,117 +187,44 @@ HybridFlatMap::HybridFlatMap(ScalarKind keyKind, std::vector<Group> groups)
   for (auto& group : groups) {
     sortGroupKeys(group.groupKeys);
   }
-  groupLookupIndex_ =
-      std::make_shared<const detail::GroupLookupIndex>(std::move(groups));
-}
-
-HybridFlatMap::HybridFlatMap()
-    : groups_{{Group{.groupId = kDefaultGroupId, .groupKeys = {}}}} {}
-
-HybridFlatMap::HybridFlatMap(ScalarKind keyKind)
-    : keyKind_{keyKind},
-      groups_{{Group{.groupId = kDefaultGroupId, .groupKeys = {}}}} {
-  NIMBLE_USER_CHECK(
-      supportedKeyKind(keyKind),
-      "Unsupported Hybrid FlatMap key kind: {}.",
-      keyKind);
+  groups_ = std::make_shared<std::vector<Group>>(std::move(groups));
+  groupedKeyIndex_ =
+      std::make_shared<const folly::F14FastMap<std::string_view, size_t>>(
+          buildIndexGroupsByKey(*groups_));
 }
 
 HybridFlatMap::HybridFlatMap(
-    ScalarKind keyKind,
-    const HybridFlatMap& configuration)
-    : HybridFlatMap{keyKind, groupsForKeyKind(keyKind, configuration)} {
-  defaultGroupKeyPresenceMode_ = configuration.defaultGroupKeyPresenceMode_;
-}
-
-std::vector<HybridFlatMap::Group> HybridFlatMap::groupsForKeyKind(
-    ScalarKind keyKind,
-    const HybridFlatMap& configuration) {
-  if (configuration.keyKind_.has_value()) {
-    NIMBLE_USER_CHECK_EQ(
-        *configuration.keyKind_,
-        keyKind,
-        "Hybrid FlatMap configuration is for keys of another type.");
-  }
-  return configuration.groups();
-}
-
-void HybridFlatMap::addGroup(uint32_t groupId, std::vector<std::string> keys) {
-  // Copies of a HybridFlatMap built with every group at once share its groups,
-  // so those groups never change.
-  NIMBLE_USER_CHECK_NULL(
-      groupLookupIndex_,
-      "Hybrid FlatMap built with every group at once cannot take more "
-      "groups.");
-  // A writer configuration ends with its Default group; schema metadata
-  // (fromSchema()) need not.
-  NIMBLE_USER_CHECK(
-      !groups_.empty(),
-      "Hybrid FlatMap groups can be added only to a writer configuration.");
-  NIMBLE_USER_CHECK(
-      isDefaultGroup(groups_.back().groupId),
-      "Hybrid FlatMap groups can be added only to a writer configuration.");
-  NIMBLE_USER_CHECK(
-      !isDefaultGroup(groupId),
-      "Hybrid FlatMap Default group keys are appended in first-seen order "
-      "and cannot be configured.");
-  // groups_ ends with the Default group, so the last explicit group, if any,
-  // is the one before it.
-  if (groups_.size() > 1) {
-    NIMBLE_USER_CHECK_LT(
-        groups_[groups_.size() - 2].groupId,
-        groupId,
-        "Hybrid FlatMap group IDs must be in ascending order.");
-  }
-  NIMBLE_USER_CHECK(
-      !keys.empty(),
-      "Hybrid FlatMap group must contain at least one key: {}.",
-      groupId);
-  folly::F14FastSet<std::string_view> existingKeys;
-  for (const auto& group : groups_) {
-    existingKeys.insert(group.groupKeys.begin(), group.groupKeys.end());
-  }
-  for (const auto& key : keys) {
-    if (keyKind_.has_value()) {
-      // Throws unless `key` is canonical; a canonical key is returned as is.
-      canonicalKey(*keyKind_, key);
-    } else {
-      NIMBLE_USER_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
-    }
-    const bool inserted = existingKeys.insert(key).second;
-    NIMBLE_USER_CHECK(inserted, "Duplicate Hybrid FlatMap key: '{}'.", key);
-  }
-  sortGroupKeys(keys);
-  groups_.insert(
-      groups_.end() - 1,
-      Group{.groupId = groupId, .groupKeys = std::move(keys)});
-}
+    std::vector<Group> groups,
+    KeyPresenceMode defaultGroupKeyPresenceMode)
+    : groups_{std::make_shared<std::vector<Group>>(std::move(groups))},
+      defaultGroupKeyPresenceMode_{defaultGroupKeyPresenceMode} {}
 
 HybridFlatMap HybridFlatMap::fromSchema(
     std::vector<Group> groups,
     KeyPresenceMode defaultGroupKeyPresenceMode) {
-  return HybridFlatMap{
-      AsRecorded{}, std::move(groups), defaultGroupKeyPresenceMode};
+  return HybridFlatMap{std::move(groups), defaultGroupKeyPresenceMode};
 }
 
 const std::vector<HybridFlatMap::Group>& HybridFlatMap::groups() const {
-  return groupLookupIndex_ == nullptr ? groups_ : groupLookupIndex_->groups;
+  return *groups_;
 }
 
 std::vector<HybridFlatMap::Group> HybridFlatMap::releaseGroups() && {
-  if (groupLookupIndex_ != nullptr) {
-    return groupLookupIndex_->groups;
+  // The grouped-key index views the keys of groups_ and is shared exactly as
+  // groups_ is, so a sole owner may move them out of this expiring
+  // HybridFlatMap.
+  if (groups_.use_count() == 1) {
+    return std::move(*groups_);
   }
-  return std::move(groups_);
+  return *groups_;
 }
 
 std::optional<size_t> HybridFlatMap::findGroup(std::string_view key) const {
   NIMBLE_CHECK_NOT_NULL(
-      groupLookupIndex_,
-      "Hybrid FlatMap has no group lookup: build it with every group at once "
-      "or bind it.");
-  const auto it = groupLookupIndex_->groupIndexByKey.find(key);
-  if (it == groupLookupIndex_->groupIndexByKey.end()) {
+      groupedKeyIndex_,
+      "Hybrid FlatMap has no grouped-key index: schema metadata holds none.");
+  const auto it = groupedKeyIndex_->find(key);
+  if (it == groupedKeyIndex_->end()) {
     return std::nullopt;
   }
   return it->second;
@@ -334,10 +232,9 @@ std::optional<size_t> HybridFlatMap::findGroup(std::string_view key) const {
 
 size_t HybridFlatMap::numGroupedKeys() const {
   NIMBLE_CHECK_NOT_NULL(
-      groupLookupIndex_,
-      "Hybrid FlatMap has no group lookup: build it with every group at once "
-      "or bind it.");
-  return groupLookupIndex_->groupIndexByKey.size();
+      groupedKeyIndex_,
+      "Hybrid FlatMap has no grouped-key index: schema metadata holds none.");
+  return groupedKeyIndex_->size();
 }
 
 bool HybridFlatMap::operator==(const HybridFlatMap& other) const {

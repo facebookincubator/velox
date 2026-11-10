@@ -44,7 +44,8 @@ namespace {
 
 HybridFlatMap makeHybridFlatMap(
     ScalarKind keyKind,
-    std::vector<std::vector<std::string>> explicitGroups) {
+    std::vector<std::vector<std::string>> explicitGroups,
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode) {
   std::vector<HybridFlatMap::Group> groups;
   groups.reserve(explicitGroups.size() + 1);
   for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
@@ -59,7 +60,7 @@ HybridFlatMap makeHybridFlatMap(
           .groupId = HybridFlatMap::kDefaultGroupId,
           .groupKeys = {},
       });
-  return HybridFlatMap{keyKind, std::move(groups)};
+  return HybridFlatMap{keyKind, std::move(groups), defaultGroupKeyPresenceMode};
 }
 
 std::shared_ptr<TypeBuilder> makeComplexValueType(SchemaBuilder& builder) {
@@ -117,7 +118,8 @@ class DeserializerTest : public ::testing::Test {
                   makeHybridFlatMap(
                       std::is_same_v<TKey, std::string> ? ScalarKind::String
                                                         : ScalarKind::Int64,
-                      {})}},
+                      {},
+                      HybridFlatMap::KeyPresenceMode::kBitmap)}},
         },
         input->type(),
         pool_.get()};
@@ -188,14 +190,20 @@ TEST_F(DeserializerTest, acceptsRegularFlatMapSchema) {
   EXPECT_NO_THROW(Deserializer(schema, pool_.get()));
 }
 
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST_F(DeserializerTest, traversesComplexHybridValueSubtrees) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
-  hybridMap->addGroup(0, {"1"}, makeComplexValueType(builder));
+  const std::vector<std::string> groupKeys{"1"};
+  hybridMap->addGroup(0, groupKeys, makeComplexValueType(builder));
   hybridMap->addGroup(
-      HybridFlatMap::kDefaultGroupId, {}, makeComplexValueType(builder));
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      makeComplexValueType(builder));
   root->addChild("features", hybridMap);
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
 
@@ -266,7 +274,10 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsConstantGroupMetadata) {
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
               {{"features",
-                makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}})}},
+                makeHybridFlatMap(
+                    ScalarKind::Int64,
+                    {{"1", "2"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
           .skipConstantHybridFlatMapMetadataStreams = true,
       },
       type,
@@ -329,7 +340,11 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsAllTrueKeyPresenceForFixedGroups) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap(ScalarKind::Int64, {{"1"}})}},
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int64,
+                    {{"1"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
           .skipConstantHybridFlatMapMetadataStreams = true,
       },
       type,
@@ -400,7 +415,11 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsAllFalseDefaultGroupMetadata) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap(ScalarKind::Int64, {{"1"}})}},
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int64,
+                    {{"1"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
           .skipConstantHybridFlatMapMetadataStreams = true,
       },
       makeInput({"{99: 90}"})->type(),
@@ -485,9 +504,8 @@ TEST_F(DeserializerTest, hybridFlatMapKeyListKeepsSchemaAcrossBatches) {
   for (const auto& maps : batchMaps) {
     expectedMaps.insert(expectedMaps.end(), maps.begin(), maps.end());
   }
-  auto hybridMap = makeHybridFlatMap(ScalarKind::Int64, {{"1"}});
-  hybridMap.setDefaultGroupKeyPresenceMode(
-      HybridFlatMap::KeyPresenceMode::kKeyList);
+  const auto hybridMap = makeHybridFlatMap(
+      ScalarKind::Int64, {{"1"}}, HybridFlatMap::KeyPresenceMode::kKeyList);
 
   const auto streamOffsets = [&](const std::string& batch) {
     serde::StreamDataParser parser{pool_.get()};
@@ -552,7 +570,10 @@ TEST_F(DeserializerTest, hybridFlatMapMetadataIsRetainedByDefault) {
       SerializerOptions{
           .hybridFlatMapColumns =
               {{"features",
-                makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}})}},
+                makeHybridFlatMap(
+                    ScalarKind::Int64,
+                    {{"1", "2"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
       },
       input->type(),
       pool_.get()};
@@ -617,7 +638,9 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
           .hybridFlatMapColumns =
               {{"features",
                 makeHybridFlatMap(
-                    ScalarKind::Int32, {{"1", "2", "4"}, {"3"}})}},
+                    ScalarKind::Int32,
+                    {{"1", "2", "4"}, {"3"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
           .skipConstantHybridFlatMapMetadataStreams = true,
       },
       type,
