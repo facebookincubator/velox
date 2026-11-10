@@ -99,8 +99,8 @@ std::optional<std::string> toSparkConstantSql(
     const auto timestamp = value.value<TypeKind::TIMESTAMP>();
     // The Spark fuzzer generates timestamps representable in microseconds.
     VELOX_CHECK_EQ(timestamp.getNanos() % 1'000, 0);
-    VELOX_CHECK_GE(timestamp, Timestamp::minMicros());
-    VELOX_CHECK_LE(timestamp, Timestamp::maxMicros());
+    VELOX_CHECK(timestamp >= Timestamp::minMicros());
+    VELOX_CHECK(timestamp <= Timestamp::maxMicros());
     return fmt::format("timestamp_micros({})", timestamp.toMicros());
   }
   if (type->isVarchar() || type->isVarbinary()) {
