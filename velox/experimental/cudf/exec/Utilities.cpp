@@ -118,10 +118,9 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
 
   cudf::detail::join_streams(inputStreams, stream);
 
-  // Even for a single input table we must concatenate (copy) rather than
-  // release in-place: the output is owned by `stream` but the input buffer was
-  // allocated on a different stream, so releasing it would bind deallocation to
-  // the wrong stream.
+  // Concatenate even a single input so the output is allocated from 'mr'.
+  // Releasing the input in place would return buffers from the producer's
+  // memory resource.
   auto output = cudf::concatenate(tableViews, stream, mr);
 
   orderCudfVectorDeallocationsAfterStream(tables, stream);
