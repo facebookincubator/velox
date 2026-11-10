@@ -142,6 +142,7 @@ TopNRowNumber::TopNRowNumber(
       rankFunction_(node->rankFunction()),
       limit_{node->limit()},
       generateRowNumber_{node->generateRowNumber()},
+      partial_{node->isPartial()},
       numPartitionKeys_{node->partitionKeys().size()},
       numSortingKeys_{node->sortingKeys().size()},
       inputChannels_{reorderInputChannels(
@@ -261,7 +262,7 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
 }
 
 bool TopNRowNumber::abandonPartialEarly() const {
-  if (generateRowNumber_ || spiller_ != nullptr) {
+  if (!partial_ || spiller_ != nullptr) {
     return false;
   }
 

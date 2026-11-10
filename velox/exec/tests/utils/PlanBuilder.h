@@ -1727,6 +1727,14 @@ class PlanBuilder {
       int32_t limit,
       bool generateRowNumber);
 
+  /// Add a partial TopNRowNumberNode for row_number. Same as 'topNRowNumber',
+  /// but does not generate the row number and may skip the limit, leaving it
+  /// to a later final step.
+  PlanBuilder& topNRowNumberPartial(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit);
+
   /// Add a TopNRowNumberNode to compute row_number, rank or dense_rank window
   /// function with a limit applied to sorted partitions.
   PlanBuilder& topNRank(
@@ -1735,6 +1743,15 @@ class PlanBuilder {
       const std::vector<std::string>& sortingKeys,
       int32_t limit,
       bool generateRowNumber);
+
+  /// Add a partial TopNRowNumberNode for row_number, rank or dense_rank. Same
+  /// as 'topNRank', but does not generate the rank and may skip the limit,
+  /// leaving it to a later final step.
+  PlanBuilder& topNRankPartial(
+      std::string_view function,
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit);
 
   /// Add a MarkDistinctNode to compute aggregate mask channel
   /// @param markerName Name of output mask channel
@@ -1896,6 +1913,15 @@ class PlanBuilder {
   }
 
  private:
+  // Adds a TopNRowNumberNode with the given rank column and partial flag.
+  PlanBuilder& addTopNRowNumber(
+      std::string_view function,
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      const std::optional<std::string>& rowNumberColumnName,
+      bool partial);
+
   std::shared_ptr<const core::FieldAccessTypedExpr> field(column_index_t index);
 
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> fields(
