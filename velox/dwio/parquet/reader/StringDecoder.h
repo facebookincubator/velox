@@ -21,8 +21,8 @@
 
 #include <folly/lang/Bits.h>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
-#include "velox/common/base/SimdUtil.h"
 #include "velox/dwio/parquet/reader/BigEndianDecimal.h"
 
 namespace facebook::velox::parquet {
@@ -30,14 +30,12 @@ namespace facebook::velox::parquet {
 class StringDecoder {
  public:
   StringDecoder(const char* start, const char* end, int fixedLength = -1)
-      : bufferStart_(start),
-        lastSafeWord_(end - simd::kPadding),
-        fixedLength_(fixedLength) {}
+      : bufferStart_(start), bufferEnd_(end), fixedLength_(fixedLength) {}
 
   /// Reset to decode from a new page buffer without reallocating.
   void reset(const char* start, const char* end, int fixedLength = -1) {
     bufferStart_ = start;
-    lastSafeWord_ = end - simd::kPadding;
+    bufferEnd_ = end;
     fixedLength_ = fixedLength;
   }
 
@@ -55,7 +53,7 @@ class StringDecoder {
       // offset is a constant multiple of the fixed width. This is both an
       // O(1) skip and a correctness fix: the variable-length branch below
       // would read the value bytes as a bogus 4-byte length.
-      bufferStart_ += static_cast<int64_t>(numValues) * fixedLength_;
+      advanceFixedLength(static_cast<int64_t>(numValues) * fixedLength_);
     } else {
       for (auto i = 0; i < numValues; ++i) {
         bufferStart_ += lengthAt(bufferStart_) + sizeof(int32_t);
@@ -126,13 +124,25 @@ class StringDecoder {
     return std::string_view(bufferStart_ - length, length);
   }
 
+  // Advances past 'numBytes' bytes of FIXED_LEN_BYTE_ARRAY values and returns
+  // their start. Throws if a corrupt page ends before them.
+  const char* advanceFixedLength(int64_t numBytes) {
+    VELOX_CHECK_LE(
+        numBytes,
+        bufferEnd_ - bufferStart_,
+        "FIXED_LEN_BYTE_ARRAY values must not extend past the end of the page");
+    const char* start = bufferStart_;
+    bufferStart_ += numBytes;
+    return start;
+  }
+
   std::string_view readFixedString() {
-    bufferStart_ += fixedLength_;
-    return std::string_view(bufferStart_ - fixedLength_, fixedLength_);
+    return std::string_view(advanceFixedLength(fixedLength_), fixedLength_);
   }
 
   const char* bufferStart_;
-  const char* lastSafeWord_;
+  // End of the page data.
+  const char* bufferEnd_;
   int fixedLength_;
 };
 

@@ -589,7 +589,9 @@ class PageReader {
 
   const tz::TimeZone* sessionTimezone_{nullptr};
 
-  // Decoders. Only one will be set at a time.
+  // Decoders. A decoder set up for a page is kept for later pages of the column
+  // chunk, so more than one is set if the pages use different encodings.
+  // 'encoding_' selects the decoder of the current page.
   std::unique_ptr<dwio::common::DirectDecoder<true>> directDecoder_;
   std::unique_ptr<RleBpDataDecoder> dictionaryIdDecoder_;
   std::unique_ptr<StringDecoder> stringDecoder_;
