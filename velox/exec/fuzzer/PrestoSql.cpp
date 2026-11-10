@@ -16,11 +16,12 @@
 
 #include "velox/exec/fuzzer/PrestoSql.h"
 
+#include <folly/String.h>
+
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/PrestoTypes.h"
-#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::exec::test {
 
@@ -331,50 +332,61 @@ std::string toConcatSql(const core::ConcatTypedExpr& concat) {
       facebook::velox::PrestoTypes::toSql(concat.type()));
 }
 
-template <typename T>
-T getConstantValue(const core::ConstantTypedExpr& expr) {
-  if (expr.hasValueVector()) {
-    return expr.valueVector()->as<SimpleVector<T>>()->valueAt(0);
-  } else {
-    return expr.value().value<T>();
-  }
-}
-
-template <>
-std::string getConstantValue(const core::ConstantTypedExpr& expr) {
-  if (expr.hasValueVector()) {
-    return expr.valueVector()
-        ->as<SimpleVector<StringView>>()
-        ->valueAt(0)
-        .getString();
-  } else {
-    return expr.value().value<std::string>();
-  }
-}
-
 std::string toConstantSql(const core::ConstantTypedExpr& constant) {
   const auto& type = constant.type();
   const auto typeSql = facebook::velox::PrestoTypes::toSql(type);
+  const auto value = constant.toVariant();
 
   std::stringstream sql;
-  if (constant.isNull()) {
+  if (value.isNull()) {
     // Syntax like BIGINT 'null' for typed null is not supported, so use cast
     // instead.
     sql << fmt::format("cast(null as {})", typeSql);
-  } else if (type->isVarchar() || type->isVarbinary()) {
+  } else if (type->isVarbinary()) {
+    sql << fmt::format(
+        "X'{}'", folly::hexlify(value.value<TypeKind::VARBINARY>()));
+  } else if (type->isVarchar()) {
     // Escape single quote in string literals used in SQL texts.
-    if (type->isVarbinary()) {
-      sql << typeSql << " ";
-    }
-    sql << std::quoted(getConstantValue<std::string>(constant), '\'', '\'');
+    sql << std::quoted(value.value<TypeKind::VARCHAR>(), '\'', '\'');
   } else if (type->isIntervalYearMonth()) {
     sql << fmt::format("INTERVAL '{}' YEAR TO MONTH", constant.toString());
   } else if (type->isIntervalDayTime()) {
     sql << fmt::format("INTERVAL '{}' DAY TO SECOND", constant.toString());
   } else if (type->isBigint()) {
-    sql << getConstantValue<int64_t>(constant);
+    sql << value.value<int64_t>();
   } else if (type->isPrimitiveType()) {
     sql << fmt::format("{} '{}'", typeSql, constant.toString());
+  } else if (type->isArray()) {
+    std::vector<std::string> elements;
+    for (const auto& element : value.array()) {
+      elements.push_back(
+          toConstantSql(core::ConstantTypedExpr(type->childAt(0), element)));
+    }
+    sql << fmt::format(
+        "cast(ARRAY[{}] as {})", folly::join(", ", elements), typeSql);
+  } else if (type->isMap()) {
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    for (const auto& [key, element] : value.map()) {
+      keys.push_back(
+          toConstantSql(core::ConstantTypedExpr(type->childAt(0), key)));
+      values.push_back(
+          toConstantSql(core::ConstantTypedExpr(type->childAt(1), element)));
+    }
+    sql << fmt::format(
+        "cast(MAP(ARRAY[{}], ARRAY[{}]) as {})",
+        folly::join(", ", keys),
+        folly::join(", ", values),
+        typeSql);
+  } else if (type->isRow()) {
+    std::vector<std::string> fields;
+    const auto& row = value.row();
+    for (auto i = 0; i < row.size(); ++i) {
+      fields.push_back(
+          toConstantSql(core::ConstantTypedExpr(type->childAt(i), row[i])));
+    }
+    sql << fmt::format(
+        "cast(ROW({}) as {})", folly::join(", ", fields), typeSql);
   } else {
     VELOX_NYI(
         "Constant expressions of {} are not supported yet.", type->toString());

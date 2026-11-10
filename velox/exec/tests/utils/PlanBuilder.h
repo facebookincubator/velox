@@ -100,27 +100,15 @@ class PlanBuilder {
   /// When creating tree-shaped plans, e.g. join queries, use the same instance
   /// of PlanNodeIdGenerator for all builders to ensure unique plan node IDs
   /// across the plan.
-  ///
-  /// Supplies typed literals to aggregate and projection expressions.
-  /// __complex_constant(name) references the first value of the corresponding
-  /// column in 'complexConstants', preserving its exact type.
   explicit PlanBuilder(
       std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator,
-      memory::MemoryPool* pool = nullptr,
-      RowVectorPtr complexConstants = nullptr)
-      : planNodeIdGenerator_{std::move(planNodeIdGenerator)},
-        pool_{pool},
-        complexConstants_{std::move(complexConstants)} {}
+      memory::MemoryPool* pool = nullptr)
+      : planNodeIdGenerator_{std::move(planNodeIdGenerator)}, pool_{pool} {}
 
   /// Constructor with no required parameters suitable for creating
   /// straight-line (e.g. no joins) query plans.
-  explicit PlanBuilder(
-      memory::MemoryPool* pool = nullptr,
-      RowVectorPtr complexConstants = nullptr)
-      : PlanBuilder(
-            std::make_shared<core::PlanNodeIdGenerator>(),
-            pool,
-            std::move(complexConstants)) {}
+  explicit PlanBuilder(memory::MemoryPool* pool = nullptr)
+      : PlanBuilder(std::make_shared<core::PlanNodeIdGenerator>(), pool) {}
 
   /// Constructor that allows an initial plane node to be specified for testing
   /// this is useful when testing additional connectors that do not rely on the
@@ -128,12 +116,10 @@ class PlanBuilder {
   PlanBuilder(
       core::PlanNodePtr initialPlanNode,
       std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator,
-      memory::MemoryPool* pool = nullptr,
-      RowVectorPtr complexConstants = nullptr)
+      memory::MemoryPool* pool = nullptr)
       : planNode_(std::move(initialPlanNode)),
         planNodeIdGenerator_{std::move(planNodeIdGenerator)},
-        pool_{pool},
-        complexConstants_{std::move(complexConstants)} {}
+        pool_{pool} {}
 
   virtual ~PlanBuilder() = default;
 
@@ -1852,6 +1838,10 @@ class PlanBuilder {
     options_ = options;
     return *this;
   }
+
+  /// Supplies typed literals when parsing aggregate and projection expressions.
+  /// __complex_constant(name) references the first value of the named column.
+  PlanBuilder& setComplexConstants(RowVectorPtr complexConstants);
 
   /// In a DistributedPlanBuilder, introduces a shuffle boundary. The plan so
   /// far is shuffled and subsequent nodes consume the shuffle. Arguments are as

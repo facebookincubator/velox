@@ -117,6 +117,10 @@ class ConstantTypedExpr : public ITypedExpr {
     return BaseVector::createConstant(type(), value_, 1, pool);
   }
 
+  /// Returns an owning value regardless of whether it is stored as a vector
+  /// or a Variant. Preserves nulls and all elements of complex values.
+  Variant toVariant() const;
+
   /// Returns value of boolean expression, std::nullopt for null booleans.
   /// Throws an error if expression is not of boolean type.
   std::optional<bool> toBool() const;

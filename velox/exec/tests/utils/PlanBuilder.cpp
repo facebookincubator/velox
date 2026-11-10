@@ -70,10 +70,16 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
 } // namespace
 
 PlanBuilder PlanBuilder::newPlan() const {
-  PlanBuilder builder(planNodeIdGenerator_, pool_, complexConstants_);
+  PlanBuilder builder(planNodeIdGenerator_, pool_);
+  builder.setComplexConstants(complexConstants_);
   builder.options_ = options_;
   builder.filtersAsNode_ = filtersAsNode_;
   return builder;
+}
+
+PlanBuilder& PlanBuilder::setComplexConstants(RowVectorPtr complexConstants) {
+  complexConstants_ = std::move(complexConstants);
+  return *this;
 }
 
 PlanBuilder& PlanBuilder::tableScan(

@@ -334,16 +334,32 @@ RowVectorPtr AggregationFuzzerBase::generateConstantInputs(
     auto constant = !input.empty() && input.front()->size() > 0
         ? BaseVector::wrapInConstant(1, 0, input.front()->childAt(i))
         : vectorFuzzer_.fuzzConstant(signature.args[i], 1);
-    for (auto& batch : input) {
-      batch->childAt(i) =
-          BaseVector::wrapInConstant(batch->size(), 0, constant);
-    }
     names.push_back(fmt::format("c{}", i));
     types.push_back(signature.args[i]);
     constants.push_back(std::move(constant));
   }
   if (constants.empty()) {
     return nullptr;
+  }
+  for (auto& batch : input) {
+    std::vector<std::string> inputNames;
+    std::vector<TypePtr> inputTypes;
+    std::vector<VectorPtr> children;
+    const auto& rowType = batch->type()->asRow();
+    for (auto i = 0; i < rowType.size(); ++i) {
+      if (i < signature.constantArgs.size() && signature.constantArgs[i]) {
+        continue;
+      }
+      inputNames.push_back(rowType.nameOf(i));
+      inputTypes.push_back(rowType.childAt(i));
+      children.push_back(batch->childAt(i));
+    }
+    batch = std::make_shared<RowVector>(
+        batch->pool(),
+        ROW(std::move(inputNames), std::move(inputTypes)),
+        batch->nulls(),
+        batch->size(),
+        std::move(children));
   }
   return std::make_shared<RowVector>(
       pool_.get(),
@@ -496,10 +512,6 @@ void AggregationFuzzerBase::printSignatureStats() {
   for (auto i = 0; i < signatureStats_.size(); ++i) {
     const auto& stats = signatureStats_[i];
     if (stats.numRuns == 0) {
-      continue;
-    }
-
-    if (stats.numFailed * 1.0 / stats.numRuns < 0.5) {
       continue;
     }
 

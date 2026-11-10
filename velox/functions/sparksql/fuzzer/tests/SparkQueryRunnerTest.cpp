@@ -16,6 +16,7 @@
 
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
+#include <limits>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
@@ -174,15 +175,24 @@ TEST_F(SparkQueryRunnerTest, toSql) {
       queryRunner->toSql(plan), "SELECT sum(distinct c0) as a0 FROM (t_0)");
 
   const std::vector<std::pair<VectorPtr, std::string>> cases{
-      {makeFlatVector<bool>({true}), "cast('true' as BOOLEAN)"},
-      {makeFlatVector<int8_t>({-1}), "cast('-1' as TINYINT)"},
-      {makeFlatVector<int16_t>({-123}), "cast('-123' as SMALLINT)"},
-      {makeFlatVector<int32_t>({42}), "cast('42' as INTEGER)"},
-      {makeFlatVector<int64_t>({9'007'199'254'740'993LL}),
-       "cast('9007199254740993' as BIGINT)"},
-      {makeFlatVector<float>({0.125f}), "cast('0.125' as REAL)"},
-      {makeFlatVector<double>({0.10000000000000002}),
-       "cast('0.10000000000000002' as DOUBLE)"},
+      {makeFlatVector<bool>({true}), "true"},
+      {makeFlatVector<bool>({false}), "false"},
+      {makeFlatVector<int8_t>({-128}), "-128Y"},
+      {makeFlatVector<int16_t>({-32'768}), "-32768S"},
+      {makeFlatVector<int32_t>({42}), "42"},
+      {makeFlatVector<int32_t>({0}, DATE()), "DATE '1970-01-01'"},
+      {makeFlatVector<int64_t>({9'007'199'254'740'993LL}), "9007199254740993L"},
+      {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::min()}),
+       "-9223372036854775808L"},
+      {makeFlatVector<float>({0.125f}), "0.125F"},
+      {makeFlatVector<double>({0.10000000000000002}), "0.10000000000000002D"},
+      {makeFlatVector<double>({-0.0}), "-0D"},
+      {makeFlatVector<float>({std::numeric_limits<float>::infinity()}),
+       "cast('Infinity' as FLOAT)"},
+      {makeFlatVector<double>({-std::numeric_limits<double>::infinity()}),
+       "cast('-Infinity' as DOUBLE)"},
+      {makeFlatVector<double>({std::numeric_limits<double>::quiet_NaN()}),
+       "cast('NaN' as DOUBLE)"},
       {makeNullableFlatVector<double>({std::nullopt}), "cast(null as DOUBLE)"},
       {makeNullableFlatVector<StringView>({std::nullopt}),
        "cast(null as STRING)"},
@@ -203,12 +213,35 @@ TEST_F(SparkQueryRunnerTest, toSql) {
        "timestamp_micros(-9223372036854775808)"},
       {makeFlatVector<Timestamp>({Timestamp::maxMicros()}),
        "timestamp_micros(9223372036854775807)"},
+      {makeFlatVector<int64_t>({123}, DECIMAL(10, 2)),
+       "cast(1.23BD as DECIMAL(10, 2))"},
+      {makeFlatVector<int128_t>({123}, DECIMAL(25, 2)),
+       "cast(1.23BD as DECIMAL(25, 2))"},
+      {makeArrayVector<int64_t>({{1, 2}}),
+       "cast(array(1L, 2L) as ARRAY<BIGINT>)"},
+      {makeArrayVector<int64_t>({{}}), "cast(array() as ARRAY<BIGINT>)"},
+      {makeArrayVectorFromJson<int64_t>({"[1, null]"}),
+       "cast(array(1L, cast(null as BIGINT)) as ARRAY<BIGINT>)"},
+      {makeMapVector<int64_t, int64_t>({{{1, 2}}}),
+       "cast(map(1L, 2L) as MAP<BIGINT, BIGINT>)"},
+      {makeMapVector<int64_t, int64_t>({{}}),
+       "cast(map() as MAP<BIGINT, BIGINT>)"},
+      {makeRowVector({makeFlatVector<int64_t>({3})}),
+       "cast(struct(3L) as STRUCT<`c0`: BIGINT>)"},
+      {makeRowVector(
+           {"a`b"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
+       "cast(struct(cast(null as STRING)) as STRUCT<`a``b`: STRING>)"},
+      {makeRowVector({makeArrayVector<int64_t>({{1, 2}})}),
+       "cast(struct(cast(array(1L, 2L) as ARRAY<BIGINT>)) as STRUCT<`c0`: ARRAY<BIGINT>>)"},
+      {BaseVector::createNullConstant(ARRAY(BIGINT()), 1, pool()),
+       "cast(null as ARRAY<BIGINT>)"},
   };
   for (const auto& [value, literalSql] : cases) {
     SCOPED_TRACE(literalSql);
     auto constants = makeRowVector({value});
     auto plan =
-        exec::test::PlanBuilder(pool(), constants)
+        exec::test::PlanBuilder(pool())
+            .setComplexConstants(constants)
             .tableScan(
                 "tmp",
                 ROW({{"c0", value->type()}, {"g", BIGINT()}, {"m", BOOLEAN()}}))
@@ -228,49 +261,44 @@ TEST_F(SparkQueryRunnerTest, toSql) {
              .planNode();
   EXPECT_EQ(
       queryRunner->toSql(plan),
-      "SELECT first(cast('true' as BOOLEAN)) as a0, first(cast(X'616263' as STRING)) as a1 FROM (tmp)");
+      "SELECT first(true) as a0, first(cast(X'616263' as STRING)) as a1 FROM (tmp)");
 
   const auto* aggregation =
       dynamic_cast<const core::AggregationNode*>(plan.get());
   ASSERT_NE(aggregation, nullptr);
-  auto aggregate = aggregation->aggregates()[0];
-  aggregate.call = std::make_shared<core::CallTypedExpr>(
-      VARBINARY(),
-      "first",
-      std::make_shared<core::ConstantTypedExpr>(
-          VARBINARY(), variant::binary(std::string("\0\x80\xff", 3))));
-  aggregate.rawInputTypes = {VARBINARY()};
-  auto binaryPlan = core::AggregationNode::Builder(*aggregation)
-                        .aggregates({aggregate})
-                        .aggregateNames({"a0"})
-                        .build();
+  const auto toSqlWithConstant =
+      [&](const core::ConstantTypedExprPtr& constant) {
+        auto aggregate = aggregation->aggregates()[0];
+        aggregate.call = std::make_shared<core::CallTypedExpr>(
+            constant->type(), "first", constant);
+        aggregate.rawInputTypes = {constant->type()};
+        auto literalPlan = core::AggregationNode::Builder(*aggregation)
+                               .aggregates({aggregate})
+                               .aggregateNames({"a0"})
+                               .build();
+        return queryRunner->toSql(literalPlan);
+      };
   EXPECT_EQ(
-      queryRunner->toSql(binaryPlan),
+      toSqlWithConstant(
+          std::make_shared<core::ConstantTypedExpr>(
+              VARBINARY(), variant::binary(std::string("\0\x80\xff", 3)))),
       "SELECT first(X'0080ff') as a0 FROM (tmp)");
-
-  aggregate.call = std::make_shared<core::CallTypedExpr>(
-      TIMESTAMP(),
-      "first",
-      std::make_shared<core::ConstantTypedExpr>(
-          TIMESTAMP(), Timestamp(-1, 999'999'000)));
-  aggregate.rawInputTypes = {TIMESTAMP()};
-  auto timestampPlan = core::AggregationNode::Builder(*aggregation)
-                           .aggregates({aggregate})
-                           .aggregateNames({"a0"})
-                           .build();
   EXPECT_EQ(
-      queryRunner->toSql(timestampPlan),
+      toSqlWithConstant(
+          std::make_shared<core::ConstantTypedExpr>(
+              TIMESTAMP(), Timestamp(-1, 999'999'000))),
       "SELECT first(timestamp_micros(-1)) as a0 FROM (tmp)");
 
   auto constants = makeRowVector({makeFlatVector<double>({0.125})});
-  plan = exec::test::PlanBuilder(pool(), constants)
+  plan = exec::test::PlanBuilder(pool())
+             .setComplexConstants(constants)
              .tableScan("tmp", ROW("c0", BIGINT()))
              .singleAggregation(
                  {}, {"approx_percentile(c0, __complex_constant(c0))"})
              .planNode();
   EXPECT_EQ(
       queryRunner->toSql(plan),
-      "SELECT approx_percentile(c0, cast('0.125' as DOUBLE)) as a0 FROM (tmp)");
+      "SELECT approx_percentile(c0, 0.125D) as a0 FROM (tmp)");
 }
 
 TEST_F(SparkQueryRunnerTest, unsupportedConstantArguments) {
@@ -278,23 +306,15 @@ TEST_F(SparkQueryRunnerTest, unsupportedConstantArguments) {
   auto queryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
       aggregatePool.get(), "unused", "unused", "unused");
   const std::vector<VectorPtr> values{
-      makeArrayVector<int64_t>({{1, 2}}),
-      makeMapVector<int64_t, int64_t>({{{1, 2}}}),
-      makeRowVector({makeFlatVector<int64_t>({1})}),
-      BaseVector::createNullConstant(ARRAY(BIGINT()), 1, pool()),
-      makeFlatVector<Timestamp>({Timestamp(1, 234'567'001)}),
-      makeFlatVector<Timestamp>({Timestamp(-1, 999'999'999)}),
-      makeFlatVector<Timestamp>({Timestamp(
-          Timestamp::minMicros().getSeconds(),
-          Timestamp::minMicros().getNanos() - 1'000)}),
-      makeFlatVector<Timestamp>({Timestamp(
-          Timestamp::maxMicros().getSeconds(),
-          Timestamp::maxMicros().getNanos() + 1'000)}),
+      makeFlatVector<int128_t>({123}),
+      makeArrayVector<int128_t>({{123}}),
+      BaseVector::createNullConstant(ARRAY(HUGEINT()), 1, pool()),
   };
   for (const auto& value : values) {
     SCOPED_TRACE(value->toString());
     auto constants = makeRowVector({value});
-    auto plan = exec::test::PlanBuilder(pool(), constants)
+    auto plan = exec::test::PlanBuilder(pool())
+                    .setComplexConstants(constants)
                     .tableScan("tmp", ROW("c0", BIGINT()))
                     .singleAggregation(
                         {}, {"count(c0)", "first(__complex_constant(c0))"})
@@ -307,6 +327,16 @@ TEST_F(SparkQueryRunnerTest, unsupportedConstantArguments) {
         result.second,
         exec::test::ReferenceQueryErrorCode::kReferenceQueryUnsupported);
   }
+
+  auto bloomPlan =
+      exec::test::PlanBuilder(pool())
+          .tableScan("tmp", ROW("c0", BIGINT()))
+          .singleAggregation({}, {"bloom_filter_agg(c0, 128, 1024)"})
+          .planNode();
+  EXPECT_FALSE(queryRunner->toSql(bloomPlan).has_value());
+  EXPECT_EQ(
+      queryRunner->executeAndReturnVector(bloomPlan).second,
+      exec::test::ReferenceQueryErrorCode::kReferenceQueryUnsupported);
 }
 
 // This test requires a Spark coordinator running at localhost, so disable it
@@ -333,7 +363,8 @@ TEST_F(SparkQueryRunnerTest, DISABLED_literalArguments) {
   for (auto i = 0; i < constants->childrenSize(); ++i) {
     aggregates.push_back(fmt::format("first(__complex_constant(c{}))", i));
   }
-  auto plan = exec::test::PlanBuilder(pool(), constants)
+  auto plan = exec::test::PlanBuilder(pool())
+                  .setComplexConstants(constants)
                   .values({makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})})
                   .singleAggregation({}, aggregates)
                   .planNode();

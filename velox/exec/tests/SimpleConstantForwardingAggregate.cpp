@@ -117,7 +117,6 @@ exec::AggregateRegistrationResult registerSimpleConstantForwardingAggregate(
             exec::SimpleAggregateAdapter<ConstantForwardingAggregate>>(
             step, argTypes, resultType);
       },
-      {.orderSensitive = false},
       /*registerCompanionFunctions=*/true,
       /*overwrite=*/true);
 }
