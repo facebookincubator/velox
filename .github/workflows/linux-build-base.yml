@@ -1097,15 +1097,20 @@ jobs:
       # helpers are handed back out by libprotobuf's uninstrumented copy without
       # being unpoisoned. Rebuild Protobuf with the same compiler and ASan so
       # both sides agree.
+      #
+      # Abseil from the image is reused and is not built with ASan. Abseil adds
+      # extra fields to its hash table and btree layouts when ASan is on, so
+      # define NDEBUG_SANITIZER to keep Protobuf on the same layout as the
+      # image's libabsl. Without it, protoc crashes at startup in
+      # PrepareInsertNonSoo.
       - name: Rebuild Protobuf with ASan
         env:
           CC: clang
           CXX: clang++
-          EXTRA_PKG_CXXFLAGS: " -fsanitize=address -fno-omit-frame-pointer"
-          CFLAGS: "-fsanitize=address -fno-omit-frame-pointer"
+          EXTRA_PKG_CXXFLAGS: " -fsanitize=address -fno-omit-frame-pointer -DNDEBUG_SANITIZER"
+          CFLAGS: "-fsanitize=address -fno-omit-frame-pointer -DNDEBUG_SANITIZER"
           LDFLAGS: "-fsanitize=address"
           ASAN_OPTIONS: detect_leaks=0
-          # Abseil from the image is reused as is; only Protobuf is rebuilt.
           VELOX_ABSEIL_INSTALLED: "1"
         run: |
           mkdir -p /tmp/protobuf-asan
