@@ -257,6 +257,10 @@ Generic Configuration
      - false
      - By default, if a key is found in multiple given maps, that key's value in the resulting map comes from the last one of those maps.
        If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions `CreateMap`, `MapFromArrays`, `MapFromEntries`, `StringToMap`, `MapConcat`, `TransformKeys`.
+   * - generate_constant_maps_as_flat_maps
+     - bool
+     - false
+     - If true, map functions that support it build a flat map when every key is constant. Today only Spark `CreateMap` supports it.
    * - index_lookup_join_max_prefetch_batches
      - integer
      - 0
