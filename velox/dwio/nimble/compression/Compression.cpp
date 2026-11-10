@@ -22,7 +22,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 
 #ifndef DISABLE_META_INTERNAL_COMPRESSOR
-#include "velox/dwio/nimble/compression/fb/MetaInternalCompressor.h"
+#include "fb_velox/dwio/nimble/compression/MetaInternalCompressor.h"
 #endif
 
 namespace facebook::nimble {
