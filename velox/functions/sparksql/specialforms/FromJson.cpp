@@ -239,39 +239,6 @@ size_t firstJsonValueSize(std::string_view input) {
   return input.size();
 }
 
-int hexDigitValue(char character) {
-  if (character >= '0' && character <= '9') {
-    return character - '0';
-  }
-  if (character >= 'a' && character <= 'f') {
-    return character - 'a' + 10;
-  }
-  if (character >= 'A' && character <= 'F') {
-    return character - 'A' + 10;
-  }
-  return -1;
-}
-
-bool parseUnicodeEscape(
-    std::string_view input,
-    size_t position,
-    uint16_t& codeUnit) {
-  if (position + 6 > input.size() || input[position] != '\\' ||
-      input[position + 1] != 'u') {
-    return false;
-  }
-
-  codeUnit = 0;
-  for (size_t i = position + 2; i < position + 6; ++i) {
-    const auto digit = hexDigitValue(input[i]);
-    if (digit < 0) {
-      return false;
-    }
-    codeUnit = static_cast<uint16_t>((codeUnit << 4) | digit);
-  }
-  return true;
-}
-
 // Returns the decimal value of a Unicode Nd code point, or -1 otherwise.
 int unicodeDecimalDigit(char32_t codePoint) {
   constexpr char32_t kDecimalDigitStarts[] = {
