@@ -963,7 +963,7 @@ DEBUG_ONLY_TEST_P(
             .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, "true")
             .config(core::QueryConfig::kJoinSpillEnabled, "true")
-            .config(core::QueryConfig::kSpillNumPartitionBits, "2")
+            .config(core::QueryConfig::kSpillNumPartitionBits, 2)
             .maxDrivers(numDrivers)
             .plan(
                 PlanBuilder()
@@ -1037,7 +1037,7 @@ DEBUG_ONLY_TEST_P(
                .spillDirectory(spillDirectory->getPath())
                .config(core::QueryConfig::kSpillEnabled, "true")
                .config(core::QueryConfig::kJoinSpillEnabled, "true")
-               .config(core::QueryConfig::kSpillNumPartitionBits, "2")
+               .config(core::QueryConfig::kSpillNumPartitionBits, 2)
                .plan(
                    PlanBuilder()
                        .values(vectors)
@@ -1122,7 +1122,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
             .config(core::QueryConfig::kWriterSpillEnabled, "true")
             // Set 0 file writer flush threshold to always trigger flush in
             // test.
-            .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
+            .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
             // Set stripe size to extreme large to avoid writer internal
             // triggered flush.
             .connectorSessionProperty(

@@ -1736,12 +1736,11 @@ TEST_F(TableScanTest, batchSize) {
   {
     SCOPED_TRACE("Projection");
     plan = PlanBuilder().tableScan(ROW({}, {}), {}, "", rowType).planNode();
-    auto task = AssertQueryBuilder(plan)
-                    .splits(makeHiveConnectorSplits({filePath}))
-                    .config(
-                        QueryConfig::kPreferredOutputBatchBytes,
-                        std::to_string(1 + numRows / 8))
-                    .assertResults(makeRowVector(ROW({}, {}), numRows));
+    auto task =
+        AssertQueryBuilder(plan)
+            .splits(makeHiveConnectorSplits({filePath}))
+            .config(QueryConfig::kPreferredOutputBatchBytes, 1 + numRows / 8)
+            .assertResults(makeRowVector(ROW({}, {}), numRows));
     const auto opStats = task->taskStats().pipelineStats[0].operatorStats[0];
     EXPECT_EQ(opStats.outputVectors, 1);
   }
@@ -3808,7 +3807,7 @@ TEST_F(TableScanTest, bucketConversionLazyColumn) {
   auto expected = makeRowVector({makeConstant<int64_t>(5, 1)});
   AssertQueryBuilder(plan)
       .splits(splits)
-      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
       .assertResults(expected);
 }
 
@@ -4906,9 +4905,7 @@ TEST_F(TableScanTest, parallelPrepare) {
     splits.push_back(makeHiveSplit(filePath->getPath()));
   }
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kMaxSplitPreloadPerDriver,
-          std::to_string(kNumParallel))
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, kNumParallel)
       .splits(splits)
       .copyResults(pool_.get());
 }
@@ -4948,12 +4945,11 @@ TEST_F(TableScanTest, parallelPrepareWithSubfieldFilters) {
     splits.push_back(makeHiveSplit(filePath->getPath()));
   }
 
-  auto result = AssertQueryBuilder(plan)
-                    .config(
-                        core::QueryConfig::kMaxSplitPreloadPerDriver,
-                        std::to_string(kNumParallel))
-                    .splits(splits)
-                    .copyResults(pool_.get());
+  auto result =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kMaxSplitPreloadPerDriver, kNumParallel)
+          .splits(splits)
+          .copyResults(pool_.get());
 
   // Verify results: c0 >= 10 AND c1 < 150 AND c0 % 2 = 0
   // So rows [10,12,14,...,74] = 33 rows per split
@@ -5848,7 +5844,7 @@ TEST_F(TableScanTest, flatMapReadOffset) {
   auto expected = makeRowVector({makeMapVector<int64_t, int64_t>({{{1, 2}}})});
   AssertQueryBuilder(plan)
       .split(split)
-      .config(QueryConfig::kMaxOutputBatchRows, "1")
+      .config(QueryConfig::kMaxOutputBatchRows, 1)
       .assertResults(expected);
 }
 
@@ -6085,12 +6081,12 @@ TEST_F(TableScanTest, bloomFilterPushdown) {
     builder
         .config(
             core::QueryConfig::kHashProbeBloomFilterPushdownMaxSize,
-            std::to_string(4 * build->size()))
+            4 * build->size())
         .split(probeScanId, makeHiveConnectorSplit(files[0]->getPath()))
         .split(buildScanId, makeHiveConnectorSplit(files[1]->getPath()));
     if (parallelBuild) {
       builder.serialExecution(false).maxDrivers(2).config(
-          core::QueryConfig::kMinTableRowsForParallelJoinBuild, "1");
+          core::QueryConfig::kMinTableRowsForParallelJoinBuild, 1);
     }
     auto task = builder.assertResults(build);
     auto planStats = toPlanStats(task->taskStats());
@@ -6555,7 +6551,7 @@ TEST_F(TableScanTest, rowId) {
                     .endTableScan()
                     .planNode();
     auto query = AssertQueryBuilder(plan);
-    query.config(core::QueryConfig::kMaxSplitPreloadPerDriver, "4");
+    query.config(core::QueryConfig::kMaxSplitPreloadPerDriver, 4);
     auto expected = BaseVector::create<RowVector>(outputType, 0, pool());
     for (int i = 0; i < 10; ++i) {
       auto split = makeHiveConnectorSplit(file->getPath());
@@ -6719,8 +6715,8 @@ TEST_F(TableScanTest, readRangeColumnsCoverWholeFile) {
   const auto result =
       AssertQueryBuilder(makeReadRangeScan({}, nullptr))
           .split(makeHiveConnectorSplit(file->getPath()))
-          .config(core::QueryConfig::kPreferredOutputBatchRows, "7")
-          .config(core::QueryConfig::kMaxOutputBatchRows, "7")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, 7)
+          .config(core::QueryConfig::kMaxOutputBatchRows, 7)
           .copyResults(pool());
 
   ASSERT_EQ(result->size(), kNumRows);
@@ -6759,8 +6755,8 @@ TEST_F(TableScanTest, readRangeColumnsWithFiltersAndPrunedStrides) {
   const auto result =
       AssertQueryBuilder(makeReadRangeScan(std::move(filters), remainingFilter))
           .split(makeHiveConnectorSplit(file->getPath()))
-          .config(core::QueryConfig::kPreferredOutputBatchRows, "7")
-          .config(core::QueryConfig::kMaxOutputBatchRows, "7")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, 7)
+          .config(core::QueryConfig::kMaxOutputBatchRows, 7)
           .copyResults(pool());
 
   // c0 >= 2000 and c0 % 3 == 0 keep 2001, 2004, ..., 9999.
@@ -7017,8 +7013,8 @@ TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
                   "8")
               // Disable coalesce so that each column stream has a separate read
               // per split at least.
-              .config(QueryConfig::kMaxOutputBatchRows, "10")
-              .config(QueryConfig::kMaxSplitPreloadPerDriver, "2")
+              .config(QueryConfig::kMaxOutputBatchRows, 10)
+              .config(QueryConfig::kMaxSplitPreloadPerDriver, 2)
               .splits(makeHiveConnectorSplits(filePaths))
               .assertResults(
                   "SELECT c0 FROM tmp WHERE (c1 IN (1,7,11) OR c1 IS NULL) AND (c3 IN (1,7,11)  OR c3 IS NULL)");
@@ -7049,8 +7045,8 @@ TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
                   kHiveConnectorId,
                   connector::hive::HiveConfig::kLoadQuantumSession,
                   "8")
-              .config(QueryConfig::kMaxOutputBatchRows, "10")
-              .config(QueryConfig::kMaxSplitPreloadPerDriver, "2")
+              .config(QueryConfig::kMaxOutputBatchRows, 10)
+              .config(QueryConfig::kMaxSplitPreloadPerDriver, 2)
               .splits(makeHiveConnectorSplits(filePaths))
               .assertResults(
                   "SELECT c0 FROM tmp WHERE (c1 IN (1,7,11) OR c1 IS NULL) AND (c3 IN (1,7,11)  OR c3 IS NULL)");
@@ -7900,7 +7896,7 @@ TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesPreload) {
   auto result = AssertQueryBuilder(tableScanNode())
                     .splits(makeHiveConnectorSplits(filePaths))
                     .queryCtx(queryCtx)
-                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "4")
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 4)
                     .maxDrivers(1)
                     .copyResults(pool_.get(), task);
   EXPECT_GT(result->size(), 0);
@@ -8612,7 +8608,7 @@ TEST_F(TableScanTest, extractionDeeplyNestedChain) {
 
   auto extractionTask =
       AssertQueryBuilder(plan)
-          .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+          .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
           .split(makeHiveConnectorSplit(file->getPath()))
           .copyResults(pool_.get());
 
@@ -8716,7 +8712,7 @@ TEST_F(TableScanTest, extractionMultipleFormatsMultipleSplits) {
   // Process 3 splits: DWRF, TEXT, DWRF.  Disable split preloading to ensure
   // all splits are processed by a single split reader.
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
                     .split(makeHiveConnectorSplit(dwrfFile1->getPath()))
                     .split(exec::Split(textSplit))
                     .split(makeHiveConnectorSplit(dwrfFile2->getPath()))
@@ -8801,7 +8797,7 @@ TEST_F(TableScanTest, extractionMultipleExtractionsTextFormat) {
       serdeParameters);
 
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
                     .split(exec::Split(textSplit))
                     .copyResults(pool_.get());
 

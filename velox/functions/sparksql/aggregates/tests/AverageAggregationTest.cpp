@@ -407,8 +407,8 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, avg(i) FILTER (WHERE m), "
               "avg(d) FILTER (WHERE m) FROM tmp GROUP BY k");
@@ -434,8 +434,8 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              .planNode();
   task = AssertQueryBuilder(plan, duckDbQueryRunner_)
              .maxDrivers(1)
-             .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-             .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+             .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+             .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
              .assertResults("SELECT k, avg(b), avg(v) FROM tmp GROUP BY k");
 
   const auto fastStats = exec::toPlanStats(task->taskStats());

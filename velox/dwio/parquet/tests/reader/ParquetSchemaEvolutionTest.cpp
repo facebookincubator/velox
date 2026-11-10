@@ -152,7 +152,7 @@ class ParquetSchemaEvolutionTest : public ParquetTableScanTestBase {
     const auto plan = PlanBuilder().tableScan(outputType).planNode();
     return AssertQueryBuilder(plan)
         .maxDrivers(1)
-        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
         .connectorSessionProperty(
             kHiveConnectorId, HiveConfig::kUseColumnNamesSession, "true")
         .connectorSessionProperty(

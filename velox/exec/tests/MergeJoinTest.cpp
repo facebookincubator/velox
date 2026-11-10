@@ -1149,7 +1149,7 @@ TEST_F(MergeJoinTest, semiJoinWithMultipleMatchVectors) {
                         joinType)
                     .planNode();
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kMaxOutputBatchRows, "1")
+        .config(core::QueryConfig::kMaxOutputBatchRows, 1)
         .assertResults(sql);
   };
 
@@ -1197,8 +1197,8 @@ TEST_F(MergeJoinTest, semiJoinWithMultiMatchedRowsWithFilter) {
                         joinType)
                     .planNode();
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
-        .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+        .config(core::QueryConfig::kPreferredOutputBatchRows, 2)
+        .config(core::QueryConfig::kMaxOutputBatchRows, 2)
         .assertResults(sql);
   };
 
@@ -1249,8 +1249,8 @@ TEST_F(MergeJoinTest, semiJoinWithOneMatchedRowWithFilter) {
                         joinType)
                     .planNode();
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
-        .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+        .config(core::QueryConfig::kPreferredOutputBatchRows, 2)
+        .config(core::QueryConfig::kMaxOutputBatchRows, 2)
         .assertResults(sql);
   };
 
@@ -1417,7 +1417,7 @@ TEST_F(MergeJoinTest, antiJoinFailed) {
           .planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kMaxOutputBatchRows, "10")
+      .config(core::QueryConfig::kMaxOutputBatchRows, 10)
       .assertResults(
           "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0) ");
 }
@@ -1751,7 +1751,7 @@ TEST_F(MergeJoinTest, streamLeftSideInstallmentBoundaries) {
             .config(core::QueryConfig::kMergeJoinStreamLeftSide, streamLeft)
             .config(
                 core::QueryConfig::kPreferredOutputBatchRows,
-                std::to_string(testCase.outputBatchRows))
+                testCase.outputBatchRows)
             .assertResults(
                 fmt::format(
                     "SELECT t0, t1, u1 FROM t {} JOIN u ON t.t0 = u.u0",
@@ -1818,7 +1818,7 @@ TEST_F(MergeJoinTest, streamLeftSideInertWhereUnsupported) {
 
     auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                     .config(core::QueryConfig::kMergeJoinStreamLeftSide, "true")
-                    .config(core::QueryConfig::kPreferredOutputBatchRows, "3")
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, 3)
                     .assertResults(testCase.duckDbSql);
 
     const auto runtimeStats =
@@ -1977,7 +1977,7 @@ TEST_F(MergeJoinTest, streamLeftSideMultiBatchKeyGroup) {
               // Small output batches force the cursor path, so a group is
               // emitted across several getOutput() calls as well as several
               // input batches.
-              .config(core::QueryConfig::kPreferredOutputBatchRows, "7")
+              .config(core::QueryConfig::kPreferredOutputBatchRows, 7)
               .assertResults(
                   fmt::format(
                       "SELECT t0, t1, u1 FROM t {} JOIN u ON t.t0 = u.u0",
@@ -2444,7 +2444,7 @@ TEST_F(MergeJoinTest, barrier) {
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
           rightNodeId, makeHiveConnectorSplit(rightFile->getPath()));
-      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, "32");
+      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, 32);
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t INNER JOIN u ON t.t0 = u.u0");
@@ -2490,7 +2490,7 @@ TEST_F(MergeJoinTest, barrier) {
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
           rightNodeId, makeHiveConnectorSplit(rightFile->getPath()));
-      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, "32");
+      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, 32);
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t FULL OUTER JOIN u ON t.t0 = u.u0");
@@ -2534,7 +2534,7 @@ TEST_F(MergeJoinTest, barrier) {
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
           rightNodeId, makeHiveConnectorSplit(rightFile->getPath()));
-      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, "32");
+      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, 32);
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t RIGHT JOIN u ON t.t0 = u.u0");
@@ -2578,7 +2578,7 @@ TEST_F(MergeJoinTest, barrier) {
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
           rightNodeId, makeHiveConnectorSplit(rightFile->getPath()));
-      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, "32");
+      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, 32);
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t LEFT JOIN u ON t.t0 = u.u0");
@@ -2624,7 +2624,7 @@ TEST_F(MergeJoinTest, barrier) {
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
           rightNodeId, makeHiveConnectorSplit(rightFile->getPath()));
-      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, "32");
+      queryBuilder.config(core::QueryConfig::kMaxOutputBatchRows, 32);
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1 FROM t WHERE NOT exists (select u0, u1 from u where t0 = u0)");
@@ -3099,7 +3099,7 @@ TEST_F(MergeJoinTest, fullOuterJoinRightRowIdCollisionAcrossBatches) {
                   .planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "32")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 32)
       .assertResults("SELECT * from t FULL OUTER JOIN u ON a = c AND b < d");
 }
 

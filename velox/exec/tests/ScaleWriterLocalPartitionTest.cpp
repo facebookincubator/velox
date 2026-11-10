@@ -564,11 +564,10 @@ class ScaleWriterLocalPartitionTestParametrized
     const auto& params = GetParam();
     queryBuilder.config(
         core::QueryConfig::kMinLocalExchangePartitionCountToUsePartitionBuffer,
-        std::to_string(
-            params.minLocalExchangePartitionCountToUsePartitionBuffer));
+        params.minLocalExchangePartitionCountToUsePartitionBuffer);
     queryBuilder.config(
         core::QueryConfig::kMaxLocalExchangePartitionBufferSize,
-        std::to_string(params.maxLocalExchangePartitionBufferSize));
+        params.maxLocalExchangePartitionBufferSize);
   }
 };
 
@@ -660,11 +659,10 @@ TEST_F(ScaleWriterLocalPartitionTest, unpartitionBasic) {
             .maxQueryCapacity(queryCapacity)
             .config(
                 core::QueryConfig::kMaxLocalExchangeBufferSize,
-                std::to_string(maxExchanegBufferSize))
+                maxExchanegBufferSize)
             .config(
                 core::QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio,
-                std::to_string(
-                    testData.scaleWriterRebalanceMaxMemoryUsageRatio))
+                testData.scaleWriterRebalanceMaxMemoryUsageRatio)
             .config(
                 core::QueryConfig::
                     kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
@@ -764,7 +762,7 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, unpartitionFuzzer) {
             .maxQueryCapacity(queryCapacity)
             .config(
                 core::QueryConfig::kMaxLocalExchangeBufferSize,
-                std::to_string(maxExchanegBufferSize))
+                maxExchanegBufferSize)
             .config(
                 core::QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio,
                 "1.0")
@@ -872,14 +870,13 @@ TEST_F(ScaleWriterLocalPartitionTest, partitionBasic) {
             .maxQueryCapacity(queryCapacity)
             .config(
                 core::QueryConfig::kMaxLocalExchangeBufferSize,
-                std::to_string(maxExchanegBufferSize))
+                maxExchanegBufferSize)
             .config(
                 core::QueryConfig::kScaleWriterMaxPartitionsPerWriter,
-                std::to_string(testData.numPartitionsPerWriter))
+                testData.numPartitionsPerWriter)
             .config(
                 core::QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio,
-                std::to_string(
-                    testData.scaleWriterRebalanceMaxMemoryUsageRatio))
+                testData.scaleWriterRebalanceMaxMemoryUsageRatio)
             .config(
                 core::QueryConfig::
                     kScaleWriterMinProcessedBytesRebalanceThreshold,
@@ -1006,7 +1003,7 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, partitionFuzzer) {
             .maxQueryCapacity(queryCapacity)
             .config(
                 core::QueryConfig::kMaxLocalExchangeBufferSize,
-                std::to_string(maxExchanegBufferSize))
+                maxExchanegBufferSize)
             .config(
                 core::QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio,
                 "1.0")
