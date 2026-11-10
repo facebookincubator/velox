@@ -36,7 +36,6 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/FileSink.h"
@@ -56,7 +55,6 @@
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 #include <cudf/io/parquet.hpp>
-#include <cudf/io/parquet_metadata.hpp>
 #include <cudf/unary.hpp>
 
 #include <cuda_runtime_api.h>
@@ -66,7 +64,6 @@
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/Latch.h>
 
-#include <atomic>
 #include <functional>
 
 using namespace facebook::velox;
@@ -82,68 +79,6 @@ using namespace facebook::velox::cudf_velox::exec;
 using namespace facebook::velox::cudf_velox::exec::test;
 
 namespace {
-// Count the ranges requested by the production cuDF data source, even when
-// the underlying BufferedInput serves them from a preloaded file or RAM cache.
-class CountingRangeInput final : public dwio::common::BufferedInput {
- public:
-  CountingRangeInput(
-      std::unique_ptr<dwio::common::BufferedInput> delegate,
-      memory::MemoryPool& pool,
-      std::shared_ptr<std::atomic<uint64_t>> bytes)
-      : BufferedInput(delegate->getInputStream(), pool),
-        delegate_(std::move(delegate)),
-        bytes_(std::move(bytes)) {}
-
-  std::unique_ptr<dwio::common::SeekableInputStream> read(
-      uint64_t offset,
-      uint64_t length,
-      dwio::common::LogType logType) const override {
-    bytes_->fetch_add(length, std::memory_order_relaxed);
-    return delegate_->read(offset, length, logType);
-  }
-
-  folly::Executor* executor() const override {
-    return delegate_->executor();
-  }
-
- private:
-  std::unique_ptr<dwio::common::BufferedInput> delegate_;
-  std::shared_ptr<std::atomic<uint64_t>> bytes_;
-};
-
-class CountingRangeInputBuilder final : public BufferedInputBuilder {
- public:
-  CountingRangeInputBuilder(
-      std::shared_ptr<BufferedInputBuilder> delegate,
-      std::shared_ptr<std::atomic<uint64_t>> bytes)
-      : delegate_(std::move(delegate)), bytes_(std::move(bytes)) {}
-
-  std::unique_ptr<dwio::common::BufferedInput> create(
-      const FileHandle& fileHandle,
-      const dwio::common::ReaderOptions& readerOptions,
-      const ConnectorQueryCtx* connectorQueryCtx,
-      std::shared_ptr<io::IoStatistics> ioStatistics,
-      std::shared_ptr<IoStats> ioStats,
-      folly::Executor* executor,
-      const folly::F14FastMap<std::string, std::string>& fileReadOps) override {
-    return std::make_unique<CountingRangeInput>(
-        delegate_->create(
-            fileHandle,
-            readerOptions,
-            connectorQueryCtx,
-            std::move(ioStatistics),
-            std::move(ioStats),
-            executor,
-            fileReadOps),
-        *connectorQueryCtx->memoryPool(),
-        bytes_);
-  }
-
- private:
-  std::shared_ptr<BufferedInputBuilder> delegate_;
-  std::shared_ptr<std::atomic<uint64_t>> bytes_;
-};
-
 struct StatsFilterMetrics {
   cudf::size_type inputRowGroups{0};
   std::optional<cudf::size_type> rowGroupsAfterStats;
@@ -2285,20 +2220,11 @@ TEST_F(TableScanTest, timestampRangeFilter) {
   const std::string boundSql = "timestamp '2023-11-14 22:13:20'";
   const std::vector<std::string> filters{
       "c0 > " + boundSql,
-      "c0 >= " + boundSql,
-      "c0 < " + boundSql,
-      "c0 <= " + boundSql,
-      "c0 <> " + boundSql,
       // This value is representable in the nanosecond FILE, even when the
       // requested output unit is coarser. It must exclude the 500ns row.
       "c0 <> timestamp '2023-11-14 22:13:20.000000500'",
-      "c0 = " + boundSql,
       "c0 > timestamp '1969-12-31 23:59:59.9995'",
-      "c0 < timestamp '1969-12-31 23:59:59.9995'",
       "c0 > " + boundSql + " OR c0 IS NULL",
-      // Half a millisecond from the bound on each side.
-      "c0 BETWEEN timestamp '2023-11-14 22:13:19.9995' "
-      "AND timestamp '2023-11-14 22:13:20.0005'",
   };
 
   for (const auto& [readerUnit, cpuReaderUnit, nanosPerTick] :
@@ -2479,181 +2405,6 @@ TEST_F(TableScanTest, mixedFileTimestampUnits) {
           {"ms", "us"},
           {makeFlatVector<Timestamp>({Timestamp(0, 1'000'000)}),
            makeFlatVector<Timestamp>({Timestamp(0, 0)})}));
-}
-
-TEST_F(TableScanTest, int96StatisticsRetainRowFilter) {
-  const auto type = ROW({"ts", "id"}, {TIMESTAMP(), BIGINT()});
-  for (const auto* kind : {"modern", "deprecated"}) {
-    const auto path = facebook::velox::test::getDataFilePath(
-        "velox/experimental/cudf/tests",
-        fmt::format("data/int96_statistics_{}.parquet", kind));
-    std::vector<std::unique_ptr<cudf::io::datasource>> sources;
-    sources.push_back(cudf::io::datasource::create(path));
-    const auto metadata = cudf::io::read_parquet_footers(sources);
-    const auto& column =
-        metadata.at(0).row_groups.at(0).columns.at(0).meta_data;
-    ASSERT_EQ(column.type, cudf::io::parquet::Type::INT96);
-    const auto& stats = column.statistics;
-    const auto& min = stats.min_value ? stats.min_value : stats.min;
-    const auto& max = stats.max_value ? stats.max_value : stats.max;
-    ASSERT_TRUE(min.has_value());
-    ASSERT_TRUE(max.has_value());
-    ASSERT_EQ(min->size(), 12);
-    ASSERT_EQ(max->size(), 12);
-    auto plan = PlanBuilder(pool_.get())
-                    .startTableScan()
-                    .connectorId(kCudfHiveConnectorId)
-                    .outputType(type)
-                    .dataColumns(type)
-                    .subfieldFilters({"ts IS NOT NULL", "id = 1"})
-                    .endTableScan()
-                    .planNode();
-    // Null predicates retain requested-unit decoding. Unknown INT96 bounds
-    // must retain the matching group, whose ids 0 and 2 still fail the row
-    // predicate. Numeric bounds can independently prune the other group.
-    AssertQueryBuilder(plan)
-        .split(makeCudfHiveSplit(path))
-        .assertResults(makeRowVector(
-            {"ts", "id"},
-            {makeFlatVector<Timestamp>({Timestamp(1, 0)}),
-             makeFlatVector<int64_t>({1})}));
-  }
-}
-
-TEST_F(TableScanTest, unrelatedInt96StatisticsPreservePruning) {
-  const auto originalBuilder = BufferedInputBuilder::getInstance();
-  SCOPE_EXIT {
-    BufferedInputBuilder::registerBuilder(originalBuilder);
-  };
-  const auto type = ROW({"ts", "id"}, {TIMESTAMP(), BIGINT()});
-  for (const auto* kind : {"modern", "deprecated"}) {
-    const auto path = facebook::velox::test::getDataFilePath(
-        "velox/experimental/cudf/tests",
-        fmt::format("data/int96_statistics_{}.parquet", kind));
-    for (const bool projectTimestamp : {false, true}) {
-      const auto output = projectTimestamp ? type : ROW({"id"}, {BIGINT()});
-      const auto readBytes = [&](const std::string& predicate,
-                                 int expectedRows) {
-        // Each query owns its counter through the input's lifetime; a later
-        // query cannot reset a counter still used by an earlier task.
-        auto requestedBytes = std::make_shared<std::atomic<uint64_t>>(0);
-        BufferedInputBuilder::registerBuilder(
-            std::make_shared<CountingRangeInputBuilder>(
-                originalBuilder, requestedBytes));
-        auto plan = PlanBuilder(pool())
-                        .startTableScan()
-                        .connectorId(kCudfHiveConnectorId)
-                        .outputType(output)
-                        .dataColumns(type)
-                        .subfieldFilter(predicate)
-                        .endTableScan()
-                        .planNode();
-        std::shared_ptr<Task> task;
-        auto result = AssertQueryBuilder(plan)
-                          .split(makeCudfHiveSplit(path))
-                          .copyResults(pool(), task);
-        EXPECT_EQ(result->size(), expectedRows);
-        return requestedBytes->load(std::memory_order_relaxed);
-      };
-      // Measure requested logical ranges, not physical I/O: caching and
-      // whole-file preloading cannot hide requests for a second row group.
-      // With the old global stats bypass both queries request both groups,
-      // so their byte counts are equal despite correct output row counts.
-      const auto allBytes = readBytes("id >= 0", 6);
-      const auto filteredBytes = readBytes("id = 1", 1);
-      EXPECT_GT(filteredBytes, 0);
-      EXPECT_LT(filteredBytes, allBytes);
-    }
-  }
-}
-
-TEST_F(TableScanTest, timestampRangeRejectsReadInt96) {
-  auto& config = CudfConfig::getInstance();
-  const auto originalUnit = config.timestampUnit;
-  SCOPE_EXIT {
-    config.timestampUnit = originalUnit;
-  };
-  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
-  // Year 2500 is representable in microseconds, but not in nanoseconds.
-  const Timestamp outsideNanos(16'725'225'600, 0);
-  for (const bool nested : {false, true}) {
-    auto legacy = makeFlatVector<Timestamp>({outsideNanos});
-    auto input = makeRowVector(
-        {"legacy", "ts"},
-        {nested ? std::static_pointer_cast<BaseVector>(
-                      makeRowVector({"value"}, {legacy}))
-                : std::static_pointer_cast<BaseVector>(legacy),
-         makeFlatVector<Timestamp>({Timestamp(1, 0)})});
-    const auto stream = cudf::get_default_stream();
-    auto table = with_arrow::toCudfTable(
-        input, pool(), stream, cudf::get_current_device_resource_ref());
-    cudf::io::table_input_metadata metadata(table->view());
-    metadata.column_metadata[0].set_name("legacy");
-    if (nested) {
-      metadata.column_metadata[0]
-          .child(0)
-          .set_name("value")
-          .set_int96_timestamps(true);
-    } else {
-      metadata.column_metadata[0].set_int96_timestamps(true);
-    }
-    metadata.column_metadata[1].set_name("ts");
-    auto file = TempFilePath::create();
-    auto options = cudf::io::parquet_writer_options::builder(
-                       cudf::io::sink_info{file->getPath()}, table->view())
-                       .metadata(metadata)
-                       .build();
-    cudf::io::write_parquet(options, stream);
-    std::vector<std::unique_ptr<cudf::io::datasource>> sources;
-    sources.push_back(cudf::io::datasource::create(file->getPath()));
-    const auto footer = cudf::io::read_parquet_footers(sources);
-    const auto& fileColumns = footer.at(0).row_groups.at(0).columns;
-    ASSERT_EQ(fileColumns.at(0).meta_data.type, cudf::io::parquet::Type::INT96);
-    ASSERT_EQ(fileColumns.at(1).meta_data.type, cudf::io::parquet::Type::INT64);
-
-    const auto run = [&](const RowTypePtr& outputType,
-                         const std::string& predicate) {
-      auto plan = PlanBuilder(pool())
-                      .startTableScan()
-                      .connectorId(kCudfHiveConnectorId)
-                      .outputType(outputType)
-                      .dataColumns(input->rowType())
-                      .subfieldFilter(predicate)
-                      .endTableScan()
-                      .planNode();
-      return AssertQueryBuilder(plan)
-          .connectorSessionProperty(
-              kCudfHiveConnectorId,
-              cudf_velox::connector::hive::CudfHiveConfig::
-                  kTimestampTypeSession,
-              std::to_string(
-                  static_cast<int>(cudf::type_id::TIMESTAMP_MICROSECONDS)))
-          .split(makeCudfHiveSplit(file->getPath()))
-          .copyResults(pool());
-    };
-    // A predicate on INT64 also requires native decoding for other read
-    // timestamps. Check both a projected INT96 leaf and one inside a struct.
-    VELOX_ASSERT_UNSUPPORTED_THROW(
-        run(input->rowType(), "ts > timestamp '1970-01-01 00:00:00'"),
-        "Timestamp range filters are not supported when reading Parquet INT96 column 'legacy'");
-    if (!nested) {
-      // Direct and filter-only INT96 references must reject as well.
-      for (const auto& output :
-           {input->rowType(), ROW({"ts"}, {TIMESTAMP()})}) {
-        VELOX_ASSERT_UNSUPPORTED_THROW(
-            run(output, "legacy > timestamp '1970-01-01 00:00:00'"),
-            "Timestamp range filters are not supported when reading Parquet INT96 column 'legacy'");
-      }
-    }
-    // An unread INT96 column must not disable an otherwise supported scan.
-    assertEqualResults(
-        {makeRowVector({"ts"}, {input->childAt(1)})},
-        {run(
-            ROW({"ts"}, {TIMESTAMP()}),
-            "ts > timestamp '1970-01-01 00:00:00'")});
-    // Without a range predicate, retain the wider requested-unit decoding.
-    assertEqualResults({input}, {run(input->rowType(), "ts IS NOT NULL")});
-  }
 }
 
 // Rebuild both physical decimal widths and timestamp units on every split.

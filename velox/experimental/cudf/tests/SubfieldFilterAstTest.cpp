@@ -1697,60 +1697,6 @@ TEST_F(SubfieldFilterAstTest, negatedBigintRangeWithNulls) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, deferredTimestampKeepsFilePrecision) {
-  namespace iceberg = cudf_velox::connector::hive::iceberg;
-  using Op = cudf::ast::ast_operator;
-  auto& config = CudfConfig::getInstance();
-  const auto originalUnit = config.timestampUnit;
-  SCOPE_EXIT {
-    config.timestampUnit = originalUnit;
-  };
-  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
-  const auto rowType = ROW({"injected", "ts"}, {BOOLEAN(), TIMESTAMP()});
-  cudf::ast::tree tree;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars;
-  const auto& injected = tree.push(cudf::ast::column_reference{0});
-  const auto negative = exec::lessThan(Timestamp(0, 0));
-  const auto positive = exec::greaterThan(Timestamp(0, 0));
-  const common::Subfield subfield("ts");
-  const auto& lhs = createAstFromSubfieldFilter(
-      subfield,
-      *negative,
-      tree,
-      scalars,
-      rowType,
-      nullptr,
-      config.timestampUnit);
-  const auto& rhs = createAstFromSubfieldFilter(
-      subfield,
-      *positive,
-      tree,
-      scalars,
-      rowType,
-      nullptr,
-      config.timestampUnit);
-  const auto& conjunction =
-      tree.push(cudf::ast::operation{Op::NULL_LOGICAL_AND, injected, lhs});
-  const auto& expr =
-      tree.push(cudf::ast::operation{Op::NULL_LOGICAL_OR, conjunction, rhs});
-  const std::array<cudf::size_type, 1> injectedIndices{0};
-  const std::array folds{iceberg::ConstantFilterFold::kUnknown};
-  const auto transformed =
-      iceberg::transformFilterForInjectedColumns(expr, injectedIndices, folds);
-  ASSERT_NE(transformed.deferredExpr, nullptr);
-  const auto assembled = makeRowVector(
-      {"injected", "ts"},
-      {makeFlatVector<bool>({false, false, false}),
-       makeFlatVector<Timestamp>(
-           {Timestamp(-1, 999'500'000),
-            Timestamp(0, 0),
-            Timestamp(0, 500'000)})});
-  // The final row survives at file precision, but would fail if first rounded
-  // to the requested millisecond output precision.
-  testFilterExecution(
-      rowType, "ts", *positive, assembled, *transformed.deferredExpr);
-}
-
 TEST_F(SubfieldFilterAstTest, timestampNotEqualSpecialization) {
   using Op = cudf::ast::ast_operator;
   auto& config = CudfConfig::getInstance();

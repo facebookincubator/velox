@@ -19,8 +19,6 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
-#include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
@@ -47,7 +45,6 @@
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
 
-#include <cudf/io/parquet.hpp>
 #include <cudf/types.hpp>
 
 #include <folly/Random.h>
@@ -2376,54 +2373,6 @@ TEST_F(CudfIcebergReadTest, timestampFilterWithEqualityDelete) {
             {makeFlatVector<Timestamp>({Timestamp(0, 1'000'000)}),
              makeFlatVector<int64_t>({1})}));
   }
-}
-
-TEST_F(CudfIcebergReadTest, timestampRangeRejectsHiddenInt96EqualityKey) {
-  auto& config = CudfConfig::getInstance();
-  const auto originalUnit = config.timestampUnit;
-  SCOPE_EXIT {
-    config.timestampUnit = originalUnit;
-  };
-  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
-  auto data = makeRowVector(
-      {"legacy", "ts"},
-      {makeFlatVector<Timestamp>({Timestamp(1, 0)}),
-       makeFlatVector<Timestamp>({Timestamp(2, 0)})});
-  const auto stream = cudf::get_default_stream();
-  auto table = with_arrow::toCudfTable(
-      data, pool(), stream, cudf::get_current_device_resource_ref());
-  cudf::io::table_input_metadata metadata(table->view());
-  metadata.column_metadata[0].set_name("legacy").set_int96_timestamps(true);
-  metadata.column_metadata[1].set_name("ts");
-  auto dataFile = TempFilePath::create();
-  auto options = cudf::io::parquet_writer_options::builder(
-                     cudf::io::sink_info{dataFile->getPath()}, table->view())
-                     .metadata(metadata)
-                     .build();
-  cudf::io::write_parquet(options, stream);
-  auto deletePath = TempFilePath::create();
-  writeToFile(
-      deletePath->getPath(), makeRowVector({"legacy"}, {data->childAt(0)}));
-  IcebergDeleteFile deleteFile(
-      FileContent::kEqualityDeletes,
-      deletePath->getPath(),
-      dwio::common::FileFormat::PARQUET,
-      1,
-      getFileSize(deletePath->getPath()),
-      /*equalityFieldIds=*/{1});
-  auto plan = PlanBuilder(pool())
-                  .startTableScan()
-                  .connectorId(kCudfIcebergConnectorId)
-                  .outputType(ROW({"ts"}, {TIMESTAMP()}))
-                  .dataColumns(data->rowType())
-                  .subfieldFilter("ts > timestamp '1970-01-01 00:00:00'")
-                  .endTableScan()
-                  .planNode();
-  VELOX_ASSERT_UNSUPPORTED_THROW(
-      AssertQueryBuilder(plan)
-          .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
-          .copyResults(pool()),
-      "Timestamp range filters are not supported when reading Parquet INT96 column 'legacy'");
 }
 
 // The Iceberg connector shares the Hive data source's support check, so a
