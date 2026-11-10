@@ -638,14 +638,6 @@ CudfHiveDataSource::CudfHiveDataSource(
     auto const readerFilterType = getTableRowType();
     hasDecimalSubfieldFilter_ =
         hasDecimalSubfieldFilter(subfieldFilters_, readerFilterType);
-    for (const auto& [subfield, filter] : subfieldFilters_) {
-      if (filter &&
-          (filter->kind() == common::FilterKind::kTimestampRange ||
-           filter->kind() == common::FilterKind::kMultiRange) &&
-          readerFilterType->findChild(subfield.baseName())->isTimestamp()) {
-        hasTimestampSubfieldFilter_ = true;
-      }
-    }
     subfieldFilterAst_ = &createAstFromSubfieldFilters(
         subfieldFilters_,
         subfieldTree_,
@@ -758,18 +750,29 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     return;
   }
 
+  const auto readerFilterType = getTableRowType();
+  bool hasTimestampFilter = false;
+  for (const auto& [subfield, filter] : subfieldFilters_) {
+    if (filter &&
+        (filter->kind() == common::FilterKind::kTimestampRange ||
+         filter->kind() == common::FilterKind::kMultiRange) &&
+        readerFilterType->findChild(subfield.baseName())->isTimestamp()) {
+      hasTimestampFilter = true;
+      break;
+    }
+  }
+
   // An empty split has no footer to build the filter from.
-  if ((hasDecimalSubfieldFilter_ or hasTimestampSubfieldFilter_) and
+  if ((hasDecimalSubfieldFilter_ or hasTimestampFilter) and
       not cudfSplitReader_->fileMetaDatas().empty()) {
     const auto& fileMetadatas = cudfSplitReader_->fileMetaDatas();
-    const auto readerFilterType = getTableRowType();
     const HiveConfig hiveConfig(cudfHiveConfig_->config());
     const auto fileColumnNamesReadAsLowerCase =
         hiveConfig.isFileColumnNamesReadAsLowerCase(
             connectorQueryCtx_->sessionProperties());
     const auto timestampTypes = parquetTimestampTypes(
         fileMetadatas.front().schema, fileColumnNamesReadAsLowerCase);
-    if (hasTimestampSubfieldFilter_) {
+    if (hasTimestampFilter) {
       subfieldTree_ = cudf::ast::tree{};
       subfieldScalars_.clear();
       subfieldFilterAst_ = &createAstFromSubfieldFilters(
@@ -797,7 +800,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         &decimalTypes,
         constantTimestampType(
             *cudfHiveConfig_, connectorQueryCtx_->sessionProperties()),
-        hasTimestampSubfieldFilter_ ? &timestampTypes : nullptr);
+        hasTimestampFilter ? &timestampTypes : nullptr);
     cudfSplitReader_->setPushdownFilter(&filter);
   }
   cudfSplitReader_->prepareSplit(runtimeStats_);
