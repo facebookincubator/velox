@@ -507,9 +507,10 @@ class Reader {
       VELOX_CHECK_EQ(bytesRead, size, "Short KvikIO read while filling cache");
       countBytes("cudfKvikioCacheMissBytes", size);
     }
-    // An entry larger than an SSD region (64 MiB) never fits on SSD, and trying
-    // to write it there never finishes. Such an entry is not saved to SSD.
-    const bool ssdSavable = size <= cache::SsdFile::kRegionSize;
+    // An SSD cache entry holds at most 8 MiB. A larger entry is not saved to
+    // SSD. Velox's buffered input stays within the same limit (its load
+    // quantum).
+    const bool ssdSavable = size <= (1 << cache::SsdRun::kSizeBits);
     // Filled: make the entry readable by other reads (shared).
     entry->setExclusiveToShared(ssdSavable);
     return pin;

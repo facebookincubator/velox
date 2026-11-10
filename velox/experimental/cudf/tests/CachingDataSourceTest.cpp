@@ -564,49 +564,35 @@ TEST_F(CachingDataSourceTest, ramMissReadsFromSsd) {
   cache->shutdown();
 }
 
-// An entry larger than an SSD region (64 MiB) never fits on SSD. Saving it to
-// SSD must not evict the other entries on SSD. If such an entry is saved to SSD,
-// this test hangs in waitForWriteToFinish() instead of failing.
-TEST_F(CachingDataSourceTest, entryLargerThanSsdRegionKeepsSsdEntries) {
+// An SSD cache entry holds at most 8 MiB. An entry of that size may be saved to
+// SSD. A larger entry is not.
+TEST_F(CachingDataSourceTest, onlyEntriesWithinSsdLimitAreSavedToSsd) {
   // The temp directory may be on tmpfs, which does not support O_DIRECT.
   FLAGS_velox_ssd_odirect = false;
   filesystems::registerLocalFileSystem();
   auto directory = common::testutil::TempDirectoryPath::create();
   folly::CPUThreadPoolExecutor ssdExecutor(1);
-  // Room for two regions on SSD.
   auto ssdCache = std::make_unique<cache::SsdCache>(cache::SsdCache::Config(
-      directory->getPath() + "/cache",
-      2 * cache::SsdFile::kRegionSize,
-      1,
-      &ssdExecutor));
+      directory->getPath() + "/cache", 64 << 20, 1, &ssdExecutor));
   // An allocator serves one cache. The fixture's allocator serves 'cache_'.
   memory::MallocAllocator allocator(memory::MemoryAllocator::Options{
-      .capacity = 256 << 20, .reservationByteLimit = 0});
+      .capacity = 32 << 20, .reservationByteLimit = 0});
   auto cache = cache::AsyncDataCache::create(&allocator, std::move(ssdCache));
-  constexpr size_t kSmallBytes = 4096;
-  constexpr size_t kLargeBytes = cache::SsdFile::kRegionSize + 4096;
-  fillPattern(kSmallBytes + kLargeBytes);
+  constexpr size_t kSsdLimitBytes = 1 << cache::SsdRun::kSizeBits;
+  fillPattern(2 * kSsdLimitBytes + 1);
   auto input = maybeCacheKvikioDataSource(
       std::make_unique<MemorySource>(read_), path_, cache.get(), true, stats_);
 
-  // A small entry, written to SSD.
-  input->host_read(0, kSmallBytes);
-  ASSERT_TRUE(cache->ssdCache()->startWrite());
-  cache->saveToSsd(/*saveAll=*/true);
-  cache->ssdCache()->waitForWriteToFinish();
+  input->host_read(0, kSsdLimitBytes);
+  input->host_read(kSsdLimitBytes, kSsdLimitBytes + 1);
 
-  // An entry larger than an SSD region. The cache starts a write to SSD by
-  // itself once enough bytes wait to be saved, which this entry alone is.
-  // Wait for that write.
-  input->host_read(kSmallBytes, kLargeBytes);
-  EXPECT_EQ(read_->reads, 2);
-  cache->ssdCache()->waitForWriteToFinish();
-
-  // The small entry is still on SSD: after dropping RAM, it comes from SSD.
-  cache->clear();
-  EXPECT_EQ(input->host_read(0, kSmallBytes)->size(), kSmallBytes);
-  EXPECT_EQ(read_->reads, 2);
-  EXPECT_EQ(stats_->stats().at("cudfKvikioCacheSsdBytes").sum, kSmallBytes);
+  StringIdLease file(fileIds(), path_);
+  auto atLimit = cache->find({file.id(), 0}, nullptr);
+  ASSERT_TRUE(atLimit.has_value());
+  EXPECT_TRUE(atLimit->checkedEntry()->ssdSaveable());
+  auto overLimit = cache->find({file.id(), kSsdLimitBytes}, nullptr);
+  ASSERT_TRUE(overLimit.has_value());
+  EXPECT_FALSE(overLimit->checkedEntry()->ssdSaveable());
 
   cache->shutdown();
 }
