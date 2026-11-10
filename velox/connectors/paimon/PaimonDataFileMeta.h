@@ -28,7 +28,7 @@
 
 namespace facebook::velox::connector::paimon {
 
-/// Immutable metadata for a Paimon data or changelog file within a split.
+/// Represents a single Paimon file (data or changelog) within a split.
 /// Mirrors Apache Paimon's DataFileMeta structure.
 ///
 /// Both data files and changelog files use the same physical file format
@@ -37,6 +37,8 @@ namespace facebook::velox::connector::paimon {
 ///   - kData: regular data file (current state of records).
 ///   - kChangelog: changelog file with RowKind (+I/-U/+U/-D) for streaming.
 struct PaimonDataFile {
+  explicit PaimonDataFile(int64_t schemaId);
+
   /// Whether this file is a data file or a changelog file. Both use the
   /// same physical format — this enum distinguishes their semantic role.
   ///
@@ -76,20 +78,6 @@ struct PaimonDataFile {
     kCompact,
   };
 
-  explicit PaimonDataFile(
-      int64_t schemaId,
-      std::string path = "",
-      uint64_t size = 0,
-      uint64_t rowCount = 0,
-      int32_t level = 0,
-      int64_t minSequenceNumber = 0,
-      int64_t maxSequenceNumber = 0,
-      int64_t deleteRowCount = 0,
-      int64_t creationTimeMs = 0,
-      Type type = Type::kData,
-      Source source = Source::kAppend,
-      std::optional<PaimonDeletionFile> deletionFile = std::nullopt);
-
   /// Returns the string name of the file type (e.g., "DATA").
   static std::string typeString(Type type);
 
@@ -103,23 +91,23 @@ struct PaimonDataFile {
   static Source sourceFromString(const std::string& str);
 
   /// Path to the file (ORC, Parquet, etc.).
-  const std::string path;
+  std::string path;
 
   /// Schema used to write this file, supplied from its Paimon metadata.
-  const int64_t schemaId;
+  int64_t schemaId;
 
   /// Size of the file in bytes.
-  const uint64_t size;
+  uint64_t size{0};
 
   /// Number of rows in this file.
-  const uint64_t rowCount;
+  uint64_t rowCount{0};
 
   /// LSM-tree level of this file. Level 0 contains the newest (unflushed)
   /// data; higher levels contain progressively more compacted data. Within
   /// level 0, files CAN have overlapping keys. Within level 1+, compaction
   /// guarantees non-overlapping key ranges across files.
   /// Always 0 for append-only tables (no compaction).
-  const int32_t level;
+  int32_t level{0};
 
   /// Sequence number range of records in this file. Auto-generated per-commit,
   /// monotonically increasing. For level 0 files, min == max (single commit).
@@ -128,8 +116,8 @@ struct PaimonDataFile {
   /// number wins. Per-file metadata only (not per-row); after compaction,
   /// per-row sequence attribution is lost but LSM level order makes it
   /// unnecessary.
-  const int64_t minSequenceNumber;
-  const int64_t maxSequenceNumber;
+  int64_t minSequenceNumber{0};
+  int64_t maxSequenceNumber{0};
 
   /// Number of rows in this file with RowKind = DELETE or UPDATE_BEFORE.
   /// row_count = addRowCount + deleteRowCount, where addRowCount is the
@@ -146,16 +134,16 @@ struct PaimonDataFile {
   /// Used to determine rawConvertible: if deleteRowCount > 0, the file
   /// contains changelog records and cannot be read raw (needs RowKind
   /// filtering during merge-on-read).
-  const int64_t deleteRowCount;
+  int64_t deleteRowCount{0};
 
   /// Timestamp (epoch millis) when this file was created.
-  const int64_t creationTimeMs;
+  int64_t creationTimeMs{0};
 
   /// Whether this is a data file or changelog file.
-  const Type type;
+  Type type{Type::kData};
 
   /// How this file was produced (write vs compaction).
-  const Source source;
+  Source source{Source::kAppend};
 
   /// Deletion file for this data file. Contains a roaring bitmap of deleted
   /// row positions. Nullopt if no rows have been deleted from this file.
@@ -164,7 +152,7 @@ struct PaimonDataFile {
   /// deletionFile marks positional deletes, while deleteRowCount counts
   /// RowKind-based changelog records.
   /// See PaimonDeletionFile for details.
-  const std::optional<PaimonDeletionFile> deletionFile;
+  std::optional<PaimonDeletionFile> deletionFile;
 
   std::string toString() const;
   folly::dynamic serialize() const;
