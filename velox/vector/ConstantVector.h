@@ -209,7 +209,7 @@ class ConstantVector final : public SimpleVector<T> {
       return this;
     }
     auto loaded = BaseVector::loadedVectorShared(valueVector_);
-    if (loaded == valueVector_) {
+    if (loaded == valueVector_ && initialized_) {
       return this;
     }
     valueVector_ = loaded;

@@ -48,7 +48,11 @@ class CentralMomentsAggregationTest
     auto sql = fmt::format(
         "SELECT c0, {0} * {1}(c1) FROM tmp GROUP BY 1", coefficient, aggName);
 
-    testAggregations({data}, {"c0"}, {partialAgg}, sql);
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates({partialAgg})
+        .assertResults(sql);
   }
 
   void testGlobalAgg(
@@ -65,7 +69,10 @@ class CentralMomentsAggregationTest
     auto sql =
         fmt::format("SELECT {0} * {1}(c1) FROM tmp", coefficient, aggName);
 
-    testAggregations({data}, {}, {partialAgg}, sql);
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({partialAgg})
+        .assertResults(sql);
   }
 
   void testSingleColGlobalAgg(
@@ -73,7 +80,10 @@ class CentralMomentsAggregationTest
       const RowVectorPtr& data,
       const std::vector<RowVectorPtr>& expectedResult) {
     auto partialAgg = fmt::format("{0}(c0)", aggName);
-    testAggregations({data}, {}, {partialAgg}, expectedResult);
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({partialAgg})
+        .assertResults(expectedResult);
   }
 
   template <typename T>

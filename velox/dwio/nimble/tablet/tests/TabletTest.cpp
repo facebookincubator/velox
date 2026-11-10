@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <fmt/format.h>
+#include <folly/container/F14Set.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -1535,7 +1536,12 @@ TEST_P(TabletTest, vectorIndex) {
 
       ASSERT_NE(warmVectorIndex, nullptr);
       EXPECT_EQ(warmVectorIndex->numVectors(), kNumVectors);
-      EXPECT_EQ(indexIoStats_->rawBytesRead(), warmIndexBytesBeforeLoad);
+
+      // Raw bytes read count the cache hits too, at the size of the reads they
+      // replace.
+      EXPECT_EQ(
+          indexIoStats_->rawBytesRead() - warmIndexBytesBeforeLoad,
+          indexBytesAfterLoad - indexBytesBeforeLoad);
       EXPECT_EQ(indexIoStats_->read().count(), warmIndexReadsBeforeLoad);
       EXPECT_GT(indexIoStats_->ramHit().count(), 0);
 
@@ -2613,13 +2619,18 @@ TEST_P(TabletTest, stripeGroupEncodingLayouts) {
     }
   }
 
-  // An out-of-range streamId is a programming error: point access check-fails
-  // rather than silently returning 0.
+  // Point access check-fails on an out-of-range streamId rather than silently
+  // returning 0. Location lookups, load() and totalStreamSize() read it as
+  // absent, like a stream added after this stripe group was written.
   for (const auto& tablet : {rawTablet, streamMajorTablet}) {
     auto stripe = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripe);
     EXPECT_ANY_THROW(tablet->streamOffset(stripe, streamCount));
     EXPECT_ANY_THROW(tablet->streamSize(stripe, streamCount));
+    EXPECT_EQ(tablet->streamLocation(stripe, streamCount).size, 0);
+    const std::vector<uint32_t> outOfRangeStreamIds{streamCount};
+    EXPECT_EQ(tablet->load(stripe, outOfRangeStreamIds)[0], nullptr);
+    EXPECT_EQ(tablet->totalStreamSize(stripe, outOfRangeStreamIds), 0);
   }
 
   auto expectAllLocations = [](const std::shared_ptr<nimble::TabletReader>&
@@ -2830,9 +2841,14 @@ TEST_P(TabletTest, stripeGroupEncodingLayoutsMultipleGroups) {
         EXPECT_EQ(
             rawTablet->streamOffset(rawStripe, streamId),
             encodedTablet->streamOffset(encStripe, streamId));
+        const auto rawSize = rawTablet->streamSize(rawStripe, streamId);
+        EXPECT_EQ(rawSize, encodedTablet->streamSize(encStripe, streamId));
+        const nimble::TabletReader::StreamMetadata location =
+            encodedTablet->streamLocation(encStripe, streamId);
+        EXPECT_EQ(location.size, rawSize);
         EXPECT_EQ(
-            rawTablet->streamSize(rawStripe, streamId),
-            encodedTablet->streamSize(encStripe, streamId));
+            location.offset,
+            rawSize == 0 ? 0 : rawTablet->streamOffset(rawStripe, streamId));
       }
 
       std::vector<nimble::TabletReader::StreamMetadata> rawLocations(
@@ -3051,8 +3067,13 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
           /*deduplicate=*/false, flushThreshold, compressionThreshold);
       const auto deduplicatedFile = writeTablet(
           /*deduplicate=*/true, flushThreshold, compressionThreshold);
-      const auto tablet = createTabletReader(file);
-      const auto deduplicatedTablet = createTabletReader(deduplicatedFile);
+      nimble::TabletReader::Options viewDeduplicationOptions;
+      viewDeduplicationOptions.stripeGroupEncodingViewDeduplicationEnabled =
+          true;
+      const auto tablet = createTabletReader(file, viewDeduplicationOptions);
+      const auto deduplicatedTablet =
+          createTabletReader(deduplicatedFile, viewDeduplicationOptions);
+      const auto unsharedViewsTablet = createTabletReader(deduplicatedFile);
       ASSERT_EQ(deduplicatedTablet->stripeCount(), kStripeCount);
       const auto& sections = tablet->stripeGroupsMetadata();
       const auto& deduplicatedSections =
@@ -3063,6 +3084,9 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
       } else {
         EXPECT_EQ(sections.size(), 1);
       }
+
+      // Counts distinct encoded payloads per deduplicated group.
+      std::vector<size_t> numDistinctPayloads(sections.size());
       for (size_t group = 0; group < sections.size(); ++group) {
         EXPECT_LT(
             deduplicatedSections[group].uncompressedSize().value(),
@@ -3088,19 +3112,71 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
         EXPECT_NE(sizes->Get(0), sizes->Get(1));
         EXPECT_EQ(offsets->Get(3), sizes->Get(3));
         EXPECT_EQ(offsets->Get(0), sizes->Get(3));
+        folly::F14FastSet<const void*> payloads;
+        for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
+          payloads.insert(offsets->Get(streamId)->data());
+          payloads.insert(sizes->Get(streamId)->data());
+        }
+        numDistinctPayloads[group] = payloads.size();
       }
       for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
         const auto stripeId = tablet->stripeIdentifier(stripe);
         const auto deduplicatedId =
             deduplicatedTablet->stripeIdentifier(stripe);
+        const auto unsharedViewsId =
+            unsharedViewsTablet->stripeIdentifier(stripe);
+        const auto& deduplicatedGroup = deduplicatedId.stripeGroup();
+        std::vector<nimble::StripeGroup::StreamMetadata> locations(
+            kStreamCount);
+        deduplicatedGroup->streamLocations(stripe, locations);
         for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
           SCOPED_TRACE(fmt::format("stripe={} stream={}", stripe, streamId));
+          const auto expectedOffset = tablet->streamOffset(stripeId, streamId);
           EXPECT_EQ(
               deduplicatedTablet->streamSize(deduplicatedId, streamId),
               streamSize(stripe, streamId));
           EXPECT_EQ(
               deduplicatedTablet->streamOffset(deduplicatedId, streamId),
-              tablet->streamOffset(stripeId, streamId));
+              expectedOffset);
+          EXPECT_EQ(
+              unsharedViewsTablet->streamSize(unsharedViewsId, streamId),
+              streamSize(stripe, streamId));
+          EXPECT_EQ(
+              unsharedViewsTablet->streamOffset(unsharedViewsId, streamId),
+              expectedOffset);
+          EXPECT_EQ(locations[streamId].size, streamSize(stripe, streamId));
+          if (locations[streamId].size != 0) {
+            EXPECT_EQ(locations[streamId].offset, expectedOffset);
+          }
+        }
+
+        // Every stream owns an offsets and a sizes view unless view
+        // deduplication is enabled and its payload is shared, in which case it
+        // reuses the payload's single view.
+        EXPECT_EQ(
+            stripeId.stripeGroup()->testingEncodingViewCount(),
+            2 * kStreamCount);
+        EXPECT_EQ(
+            unsharedViewsId.stripeGroup()->testingEncodingViewCount(),
+            2 * kStreamCount);
+        EXPECT_EQ(
+            deduplicatedGroup->testingEncodingViewCount(),
+            numDistinctPayloads[deduplicatedGroup->index()]);
+        EXPECT_LT(
+            deduplicatedGroup->testingEncodingViewCount(), 2 * kStreamCount);
+
+        // The selected-streams overload reads through the same shared views.
+        const std::vector<uint32_t> selectedStreamIds{0, 3, 4};
+        std::vector<nimble::StripeGroup::StreamMetadata> selectedLocations(
+            selectedStreamIds.size());
+        deduplicatedGroup->streamLocations(
+            stripe, selectedStreamIds, selectedLocations);
+        for (size_t i = 0; i < selectedStreamIds.size(); ++i) {
+          EXPECT_EQ(
+              selectedLocations[i].size, locations[selectedStreamIds[i]].size);
+          EXPECT_EQ(
+              selectedLocations[i].offset,
+              locations[selectedStreamIds[i]].offset);
         }
       }
     }
@@ -3214,8 +3290,11 @@ TEST_P(TabletTest, stripeGroupViewsKeepTheirValues) {
   viewManagerOptions.trackDefaultUsage = true;
   velox::memory::MemoryManager viewManager{viewManagerOptions};
   const auto viewPool = viewManager.addLeafPool();
-  const nimble::StripeGroup group{
-      /*stripeGroupIndex=*/0, *stripes, std::move(stripeGroup), viewPool.get()};
+  const nimble::StripeGroup group{/*stripeGroupIndex=*/0,
+                                  *stripes,
+                                  std::move(stripeGroup),
+                                  /*encodingViewDeduplicationEnabled=*/false,
+                                  viewPool.get()};
   // A cached Varint view decodes every row into a uint32 vector from its pool,
   // for the offsets and for the sizes of the one stream. An uncached view
   // decodes on each read and keeps nothing, so this pool stays empty. That is
@@ -5547,7 +5626,7 @@ TEST_P(TabletWithIndexTest, loadClusterIndex) {
 
   for (bool loadClusterIndex : {false, true}) {
     SCOPED_TRACE(fmt::format("loadClusterIndex={}", loadClusterIndex));
-    const auto metadataBytesReadBefore = metadataIoStats_->rawBytesRead();
+    const auto metadataBytesReadBefore = metadataIoStats_->read().sum();
     const auto indexBytesReadBefore = indexIoStats_->rawBytesRead();
     nimble::TabletReader::Options options;
     options.loadClusterIndex = loadClusterIndex;
@@ -5557,7 +5636,7 @@ TEST_P(TabletWithIndexTest, loadClusterIndex) {
     auto tablet = TabletTest::createTabletReader(readFile, options);
     if (loadClusterIndex) {
       ASSERT_NE(tablet->clusterIndex(), nullptr);
-      EXPECT_GT(metadataIoStats_->rawBytesRead(), metadataBytesReadBefore);
+      EXPECT_GT(metadataIoStats_->read().sum(), metadataBytesReadBefore);
       // Index key stream data is lazy-loaded on first lookup, not during
       // init. Only metadata IO (root section) happens here.
       EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesReadBefore);
@@ -5567,7 +5646,7 @@ TEST_P(TabletWithIndexTest, loadClusterIndex) {
       // cluster index requested, that single tail read (covering this small
       // file in full) is the only metadata IO; no index section is read.
       EXPECT_EQ(
-          metadataIoStats_->rawBytesRead() - metadataBytesReadBefore,
+          metadataIoStats_->read().sum() - metadataBytesReadBefore,
           file.size());
       EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesReadBefore);
     }
@@ -5631,7 +5710,7 @@ TEST_P(TabletWithIndexTest, preloadClusterIndex) {
   // Case 2: preloadIndex=true with loadClusterIndex=false is a no-op for
   // the index (the cluster index section is not even loaded).
   {
-    const auto metadataBytesReadBefore = metadataIoStats_->rawBytesRead();
+    const auto metadataBytesReadBefore = metadataIoStats_->read().sum();
     const auto indexBytesReadBefore = indexIoStats_->rawBytesRead();
     nimble::TabletReader::Options options;
     options.loadClusterIndex = false;
@@ -5646,7 +5725,7 @@ TEST_P(TabletWithIndexTest, preloadClusterIndex) {
     // cache (no IO) when caching is enabled.
     const uint64_t expectedMetadataBytes = expectHasCache() ? 0 : file.size();
     EXPECT_EQ(
-        metadataIoStats_->rawBytesRead() - metadataBytesReadBefore,
+        metadataIoStats_->read().sum() - metadataBytesReadBefore,
         expectedMetadataBytes);
     EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesReadBefore);
   }
@@ -6292,7 +6371,7 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPath) {
 
     // Warm path should serve metadata from RAM cache.
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     // Verify stripe groups are accessible from cache.
     for (uint32_t i = 0; i < kNumStripes; ++i) {
@@ -6655,6 +6734,22 @@ TEST_P(TabletTest, configureOptionsCacheKeyEncodingViews) {
           .cacheKeyEncodingViews);
 }
 
+TEST_P(TabletTest, configureOptionsStripeGroupEncodingViewDeduplication) {
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  EXPECT_FALSE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .stripeGroupEncodingViewDeduplicationEnabled);
+
+  auto nimbleOptions = std::make_shared<nimble::NimbleReaderOptions>();
+  nimbleOptions->stripeGroupEncodingViewDeduplicationEnabled = true;
+  readerOptions.setFormatSpecificOptions(std::move(nimbleOptions));
+  EXPECT_TRUE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .stripeGroupEncodingViewDeduplicationEnabled);
+}
+
 TEST_P(TabletTest, configureOptionsCacheFields) {
   // Verify configureOptions wires fileHandle and cache from
   // ReaderOptions into TabletReader::Options, and that a TabletReader
@@ -6745,7 +6840,7 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
     EXPECT_EQ(tablet->stripeCount(), 1);
 
     EXPECT_GT(warmMetadataIoStats->ramHit().count(), 0);
-    EXPECT_EQ(warmMetadataIoStats->rawBytesRead(), 0);
+    EXPECT_EQ(warmMetadataIoStats->read().sum(), 0);
   }
 
   cache->shutdown();
@@ -6945,7 +7040,7 @@ TEST_P(TabletCacheTest, cacheWarmPath) {
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
 
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
     EXPECT_EQ(dataIoStats_->rawBytesRead(), 0);
     EXPECT_EQ(indexIoStats_->rawBytesRead(), 0);
 
@@ -7029,7 +7124,7 @@ TEST_P(TabletCacheTest, cacheMetadataWithChunkStats) {
 
     auto warmReader = createTabletReader(readFile, options);
     nimble::test::TabletReaderTestHelper helper{warmReader.get()};
-    const auto rawBytesBeforeWarmLookup = metadataIoStats_->rawBytesRead();
+    const auto bytesReadBeforeWarmLookup = metadataIoStats_->read().sum();
     const auto ramHitsBeforeWarmLookup = metadataIoStats_->ramHit().count();
 
     auto warmStripe = warmReader->stripeIdentifier(1);
@@ -7038,17 +7133,17 @@ TEST_P(TabletCacheTest, cacheMetadataWithChunkStats) {
         1, 0, warmReader->streamSize(warmStripe, 0));
     ASSERT_NE(warmStreamIndex, nullptr);
     EXPECT_EQ(warmStreamIndex->lookupChunk(50).chunkOffset, 11);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), rawBytesBeforeWarmLookup);
+    EXPECT_EQ(metadataIoStats_->read().sum(), bytesReadBeforeWarmLookup);
     EXPECT_GT(metadataIoStats_->ramHit().count(), ramHitsBeforeWarmLookup);
 
-    const auto rawBytesBeforeColdLookup = metadataIoStats_->rawBytesRead();
+    const auto bytesReadBeforeColdLookup = metadataIoStats_->read().sum();
     auto coldStripe = warmReader->stripeIdentifier(2);
     ASSERT_NE(coldStripe.chunkStats(), nullptr);
     auto coldStreamIndex = coldStripe.chunkStats()->createStreamIndex(
         2, 0, warmReader->streamSize(coldStripe, 0));
     ASSERT_NE(coldStreamIndex, nullptr);
     EXPECT_EQ(coldStreamIndex->lookupChunk(50).chunkOffset, 12);
-    EXPECT_GT(metadataIoStats_->rawBytesRead(), rawBytesBeforeColdLookup);
+    EXPECT_GT(metadataIoStats_->read().sum(), bytesReadBeforeColdLookup);
   }
 }
 
@@ -7136,7 +7231,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedRoundtrip) {
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
 
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
@@ -7147,7 +7242,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedRoundtrip) {
       ASSERT_NE(streamIndex, nullptr);
       EXPECT_EQ(streamIndex->lookupChunk(5).chunkOffset, 5);
     }
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 
   // No evictions — entries should be correct size from cacheMetadata().
@@ -7251,7 +7346,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedSsdRoundtrip) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ssdRead().count(), ssdReadsBefore);
-    const auto rawBytesBeforeLookups = metadataIoStats_->rawBytesRead();
+    const auto bytesReadBeforeLookups = metadataIoStats_->read().sum();
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
       EXPECT_NE(stripeId.stripeGroup(), nullptr);
@@ -7261,7 +7356,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedSsdRoundtrip) {
       ASSERT_NE(streamIndex, nullptr);
       EXPECT_EQ(streamIndex->lookupChunk(5).chunkOffset, 5);
     }
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), rawBytesBeforeLookups);
+    EXPECT_EQ(metadataIoStats_->read().sum(), bytesReadBeforeLookups);
   }
 }
 
@@ -7325,7 +7420,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedContentVerification) {
     auto warmReader = createTabletReader(readFile);
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
@@ -7400,7 +7495,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedMultipleWarmReaders) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
@@ -7472,7 +7567,7 @@ TEST_P(TabletCacheTest, cacheMetadataUncompressedRoundtrip) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 
   auto warmStats = cache_->refreshStats();
@@ -7530,7 +7625,7 @@ TEST_P(TabletCacheTest, cacheMetadataSingleStripe) {
     EXPECT_EQ(warmReader->stripeCount(), 1);
     EXPECT_EQ(warmReader->tabletRowCount(), 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
     EXPECT_NE(warmReader->stripeIdentifier(0).stripeGroup(), nullptr);
   }
 
@@ -7608,7 +7703,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedStripeConsistency) {
     auto warmReader = createTabletReader(readFile);
     EXPECT_EQ(warmReader->tabletRowCount(), coldTotalRows);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       SCOPED_TRACE(fmt::format("Stripe {}", i));
@@ -7788,7 +7883,7 @@ TEST_P(TabletCacheTest, cacheMetadataTwoFileIsolation) {
     EXPECT_EQ(warmA->stripeCount(), 3);
     EXPECT_EQ(warmA->tabletRowCount(), 300);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 
   dataIoStats_ = std::make_shared<velox::io::IoStatistics>();
@@ -7801,7 +7896,7 @@ TEST_P(TabletCacheTest, cacheMetadataTwoFileIsolation) {
     EXPECT_EQ(warmB->stripeCount(), 5);
     EXPECT_EQ(warmB->tabletRowCount(), 1000);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 }
 
@@ -7862,7 +7957,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedStripesSection) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 10);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 
   auto warmStats = cache_->refreshStats();
@@ -8001,7 +8096,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedFooter) {
     EXPECT_EQ(warmReader->stripeCount(), coldStripeCount);
     EXPECT_EQ(warmReader->tabletRowCount(), coldTotalRows);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     // Verify all stripes are accessible via the cached metadata.
     for (uint32_t i = 0; i < coldStripeCount; ++i) {
@@ -8151,7 +8246,7 @@ TEST_P(TabletCacheTest, cacheMetadataRowToStripeNavigation) {
     EXPECT_EQ(warmReader->stripeCount(), 5);
     EXPECT_EQ(warmReader->tabletRowCount(), 900);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     // Verify per-stripe row counts.
     for (size_t i = 0; i < rowCounts.size(); ++i) {
@@ -8204,7 +8299,7 @@ TEST_P(TabletCacheTest, cacheMetadataEmptyFile) {
     auto warmReader = createTabletReader(readFile);
     EXPECT_EQ(warmReader->stripeCount(), 0);
     EXPECT_EQ(warmReader->tabletRowCount(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
   }
 }
 
@@ -8341,7 +8436,7 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedMultipleStripeGroups) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
@@ -8690,7 +8785,7 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPathCompressedChunkIndex) {
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
     EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
-    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+    EXPECT_EQ(metadataIoStats_->read().sum(), 0);
     EXPECT_TRUE(warmReader->hasClusterIndex());
 
     for (uint32_t i = 0; i < kNumStripes; ++i) {

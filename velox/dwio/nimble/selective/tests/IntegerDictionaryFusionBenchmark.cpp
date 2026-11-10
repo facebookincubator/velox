@@ -30,6 +30,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -257,7 +258,7 @@ class IntegerDictionaryFusionBenchmark : public velox::test::VectorTestBase {
              kNumRows,
              [](auto row) { return dictionaryValue<T>(valueAt(row)); },
              [nullPattern](auto row) { return isNullAt(nullPattern, row); }),
-         makeFlatVector<int64_t>(kNumRows, folly::identity)});
+         makeFlatVector<int64_t>(kNumRows, std::identity{})});
     EncodingLayout indicesLayout{
         indicesEncoding, {}, CompressionType::Uncompressed};
     EncodingLayout dictionaryLayout{

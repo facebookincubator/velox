@@ -284,9 +284,8 @@ cpp_library(
         "Compression.cpp",
         "Lz4Compressor.cpp",
         "MyCodecCompressor.cpp",  # <-- new
+        "OpenZLCompressor.cpp",
         "ZstdCompressor.cpp",
-        "fb/MetaInternalCompressor.cpp",
-        "fb/MetaInternalMCCompressor.cpp",
     ],
     headers = [
         # ... existing headers ...

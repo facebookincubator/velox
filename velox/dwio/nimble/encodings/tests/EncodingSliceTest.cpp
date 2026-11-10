@@ -700,6 +700,61 @@ TEST_F(EncodingSliceTest, materializesNativeSliceForNullableEncoding) {
   EXPECT_EQ(std::vector<uint32_t>(output.begin(), output.end()), expected);
 }
 
+TEST_F(EncodingSliceTest, slicesWithValueDelta) {
+  const auto sliceWithDelta =
+      [&](std::string_view encoded, uint32_t offset, uint32_t length) {
+        auto encoding = createEncoding(
+            nimble::EncodingFactory::slice(
+                encoded,
+                offset,
+                length,
+                /*valueDelta=*/-10,
+                *buffer_,
+                nimble::Encoding::Options{}));
+        std::vector<int32_t> output(length);
+        encoding->materialize(length, output.data());
+        return output;
+      };
+
+  // FixedBitWidth folds the delta into its baseline.
+  {
+    const auto values = makeVector<int32_t>({10, 11, 12, 13, 14, 15});
+    const auto encoded =
+        nimble::test::Encoder<nimble::FixedBitWidthEncoding<int32_t>>::encode(
+            *buffer_, values);
+    EXPECT_EQ(
+        sliceWithDelta(encoded, /*offset=*/2, /*length=*/3),
+        (std::vector<int32_t>{2, 3, 4}));
+  }
+
+  // RLE cannot absorb the delta, so the reader applies it.
+  {
+    const auto values = makeVector<int32_t>({10, 10, 11, 11, 12, 12});
+    const auto encoded =
+        nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+            *buffer_, values);
+    EXPECT_EQ(
+        sliceWithDelta(encoded, /*offset=*/1, /*length=*/4),
+        (std::vector<int32_t>{0, 1, 1, 2}));
+  }
+
+  {
+    const auto values = makeVector<double>({1.5, 2.5, 3.5});
+    const auto encoded =
+        nimble::test::Encoder<nimble::TrivialEncoding<double>>::encode(
+            *buffer_, values);
+    NIMBLE_ASSERT_THROW(
+        nimble::EncodingFactory::slice(
+            encoded,
+            /*offset=*/0,
+            /*length=*/2,
+            /*valueDelta=*/-1,
+            *buffer_,
+            nimble::Encoding::Options{}),
+        "A value delta requires an integer stream");
+  }
+}
+
 TEST_F(EncodingSliceTest, rejectsOutOfRangeSlice) {
   const auto values = makeVector<int32_t>({10, 11, 12});
   const auto encoded =

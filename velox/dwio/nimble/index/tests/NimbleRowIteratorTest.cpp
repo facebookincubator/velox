@@ -38,9 +38,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
-#include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/common/SchemaSerialization.h"
-#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
@@ -56,11 +54,9 @@
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/serializer/StreamReader.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/FilePropertiesGenerated.h"
-#include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
@@ -72,7 +68,6 @@
 #include "folly/FileUtil.h"
 #include "folly/Random.h"
 #include "velox/common/caching/AsyncDataCache.h"
-#include "velox/common/caching/FileIds.h"
 #include "velox/common/file/IoUringReader.h"
 #include "velox/common/file/LocalFile.h"
 #include "velox/common/io/IoStatistics.h"
@@ -236,6 +231,42 @@ TEST_P(NimbleRowIteratorTest, rowIteratorKeepsKeysAlignedAfterSkippingRows) {
   expectKey(8);
 }
 
+TEST_P(NimbleRowIteratorTest, rowIteratorKeepsItsStreamReader) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  // Each StreamReader constructs its output type once. Retain the types so
+  // that rebuilding a reader cannot reuse an earlier type's address.
+  std::set<velox::TypePtr> decodedTypes;
+  const auto decodeRows = compactRowDecoder();
+  TestNimbleIterator iterator{createEntryIterator(
+      projectedSubfields,
+      [&](const velox::RowVectorPtr& rows,
+          nimble::index::KeyCursor& keyCursor,
+          folly::IOBufQueue& keyStorage,
+          folly::IOBufQueue& valueStorage,
+          std::vector<std::string_view>& keys,
+          std::vector<std::string_view>& values) {
+        decodedTypes.insert(rows->type());
+        decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
+      },
+      /*options=*/{})};
+
+  // The iterator builds a reader for its first stripe and keeps it for the
+  // other stripes and for later seeks.
+  for (int seek = 0; seek < 2; ++seek) {
+    SCOPED_TRACE(seek);
+    iterator.seekToFirst();
+    int32_t numRows{0};
+    for (; iterator.valid(); iterator.next()) {
+      ++numRows;
+    }
+    EXPECT_EQ(numRows, 12);
+  }
+  EXPECT_THAT(decodedTypes, ::testing::SizeIs(1));
+}
+
 TEST_P(NimbleRowIteratorTest, rowIteratorSkipsRowsAcrossPrefetchedStripes) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
 
@@ -294,7 +325,7 @@ TEST_P(NimbleRowIteratorTest, entryIteratorSupportsEmptyEntries) {
   EXPECT_EQ(numDecoderCalls.load(std::memory_order_relaxed), 1);
 }
 
-TEST_P(NimbleRowIteratorTest, rowIteratorDecodesPrefetchedStripesAhead) {
+TEST_P(NimbleRowIteratorTest, rowIteratorReadsAheadAndDecodesOnConsumer) {
   constexpr int32_t kRowsPerStripe{4};
   constexpr int32_t kNumStripes{12};
   constexpr int32_t kMaxPrefetchStripes{4};
@@ -302,7 +333,7 @@ TEST_P(NimbleRowIteratorTest, rowIteratorDecodesPrefetchedStripesAhead) {
 
   std::vector<Subfield> projectedSubfields;
   projectedSubfields.emplace_back("value");
-  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(4);
+  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
   std::mutex mutex;
   std::set<std::thread::id> decoderThreads;
   int32_t numDecoderCalls{0};
@@ -328,41 +359,38 @@ TEST_P(NimbleRowIteratorTest, rowIteratorDecodesPrefetchedStripesAhead) {
       });
   iterator->seekToFirst();
 
-  // The prefetch decodes its stripe limit before the iterator reads an entry.
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds{10};
-  const auto numCalls = [&] {
+  std::promise<void> producerPaused;
+  auto paused = producerPaused.get_future();
+  executor->add([&] { producerPaused.set_value(); });
+  ASSERT_EQ(
+      paused.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+  EXPECT_EQ(iterator->stats().numReadStripes, kMaxPrefetchStripes);
+  EXPECT_EQ(iterator->stats().numMaterializedRows, 0);
+  {
     const std::lock_guard<std::mutex> lock{mutex};
-    return numDecoderCalls;
-  };
-  while (numCalls() < kMaxPrefetchStripes) {
-    ASSERT_LT(std::chrono::steady_clock::now(), deadline);
-    std::this_thread::yield();
+    EXPECT_EQ(numDecoderCalls, 0);
   }
 
   while (iterator->valid()) {
     iterator->value();
     iterator->nextRow();
   }
-  // Waits for the prefetch, which could still hold the decoder that refers to
-  // this scope.
   iterator->reset();
   const std::lock_guard<std::mutex> lock{mutex};
   EXPECT_EQ(numDecoderCalls, kNumStripes);
-  // The prefetch decodes every stripe, and the reader none.
-  EXPECT_EQ(decoderThreads.count(std::this_thread::get_id()), 0);
+  EXPECT_EQ(decoderThreads.size(), 1);
+  EXPECT_EQ(decoderThreads.count(std::this_thread::get_id()), 1);
 }
 
-TEST_P(NimbleRowIteratorTest, rowIteratorDecodesStripesConcurrently) {
+TEST_P(NimbleRowIteratorTest, rowIteratorResetSkipsPrefetchedDecoding) {
   constexpr int32_t kRowsPerStripe{4};
   constexpr int32_t kNumStripes{12};
   writeResumeKeyTestData(kRowsPerStripe, kNumStripes);
 
   std::vector<Subfield> projectedSubfields;
   projectedSubfields.emplace_back("value");
-  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(4);
+  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
   std::atomic_int32_t numCalls{0};
-  std::atomic_int32_t numConcurrentCalls{0};
   const auto decodeRows = compactRowDecoder();
   auto iterator = createEntryIterator(
       projectedSubfields,
@@ -372,18 +400,7 @@ TEST_P(NimbleRowIteratorTest, rowIteratorDecodesStripesConcurrently) {
           folly::IOBufQueue& valueStorage,
           std::vector<std::string_view>& keys,
           std::vector<std::string_view>& values) {
-        if (numCalls.fetch_add(1) < 2) {
-          // The two stripes of the first prefetch batch wait until both run.
-          const auto deadline =
-              std::chrono::steady_clock::now() + std::chrono::seconds{10};
-          while (numCalls.load() < 2 &&
-                 std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::yield();
-          }
-          if (numCalls.load() >= 2) {
-            numConcurrentCalls.fetch_add(1);
-          }
-        }
+        numCalls.fetch_add(1);
         decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
       },
       NimbleIterator::Options{
@@ -391,11 +408,17 @@ TEST_P(NimbleRowIteratorTest, rowIteratorDecodesStripesConcurrently) {
           .maxPrefetchStripes = 4,
       });
   iterator->seekToFirst();
+  std::promise<void> producerPaused;
+  auto paused = producerPaused.get_future();
+  executor->add([&] { producerPaused.set_value(); });
+  ASSERT_EQ(
+      paused.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+  EXPECT_EQ(iterator->stats().numReadStripes, 4);
   iterator->key();
-  // Waits for the prefetch, which calls the decoder that refers to this scope.
   iterator->reset();
 
-  EXPECT_EQ(numConcurrentCalls.load(), 2);
+  EXPECT_EQ(numCalls.load(), 1);
+  EXPECT_EQ(iterator->stats().numMaterializedRows, kRowsPerStripe);
 }
 
 TEST_P(NimbleRowIteratorTest, entryIteratorMovesOverTheEntriesOfEveryRow) {
@@ -762,9 +785,11 @@ TEST_P(NimbleRowIteratorTest, entryIteratorFailsAtAStripeThatFailsToDecode) {
         iterator->nextRow();
       }
       ASSERT_TRUE(iterator->valid());
-      // The failure is the same each time the iterator asks for the stripe.
+      // The caller must seek again after a prefetched decode failure.
       NIMBLE_ASSERT_THROW(iterator->key(), "Decoder failed");
-      NIMBLE_ASSERT_THROW(iterator->value(), "Decoder failed");
+      if (!prefetch) {
+        NIMBLE_ASSERT_THROW(iterator->value(), "Decoder failed");
+      }
     }
   }
 }

@@ -55,6 +55,7 @@ class ScanSpec {
     kRegular, // Read from file or constant
     kRowIndex, // Row number in the file starting from 0
     kComposite, // A struct with all children not read from file
+    kReadRange, // ROW<offset, length> of the current read's file rows
   };
 
   /// Convert ColumnType to its string name representation.

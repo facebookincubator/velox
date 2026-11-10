@@ -17,6 +17,8 @@
 // Thin gtest wrapper so CI can run the fuzzer loop. All setup and run logic is
 // shared with the standalone binary via NimbleWriterFuzzerRunner.
 
+#include <map>
+
 #include <folly/init/Init.h>
 #include <folly/json.h>
 #include <gtest/gtest.h>
@@ -71,6 +73,136 @@ TEST(NimbleWriterFuzzerTest, cappingJsonShape) {
   EXPECT_TRUE(sawLongT1);
   EXPECT_TRUE(sawPresent402);
   EXPECT_TRUE(sawPresent921);
+}
+
+TEST(NimbleWriterFuzzerTest, chunkStatsCoverageBreakdownsAddUp) {
+  auto rootPool = velox::memory::memoryManager()->addRootPool(
+      "chunkStatsCoverageBreakdownsAddUp", velox::memory::kMaxMemory);
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.batchSize = 64;
+  options.numBatches = 4;
+  NimbleWriterFuzzer fuzzer(options, *rootPool);
+  for (int iteration = 0; iteration < 3; ++iteration) {
+    fuzzer.run();
+    fuzzer.reSeed();
+  }
+
+  const auto& coverage = fuzzer.chunkStatsCoverage();
+  ASSERT_GT(coverage.numV2IndexedStreams, 0U);
+
+  const auto sumBuckets = [](const std::map<uint32_t, uint64_t>& buckets) {
+    uint64_t sum{0};
+    for (const auto& [bucket, count] : buckets) {
+      sum += count;
+    }
+    return sum;
+  };
+  uint64_t numFilesByStripes{0};
+  for (const auto& [flushRegime, buckets] : coverage.filesByStripes) {
+    numFilesByStripes += sumBuckets(buckets);
+  }
+  uint64_t numFilesByStripeGroups{0};
+  for (const auto& [threshold, buckets] : coverage.filesByStripeGroups) {
+    numFilesByStripeGroups += sumBuckets(buckets);
+  }
+  const auto numFiles = coverage.numV2IndexedFiles + coverage.numUnindexedFiles;
+  EXPECT_EQ(numFilesByStripes, numFiles);
+  EXPECT_EQ(numFilesByStripeGroups, numFiles);
+  EXPECT_EQ(sumBuckets(coverage.streamsByChunks), coverage.numV2IndexedStreams);
+
+  // The chunk-per-batch regime never cuts a stripe before the writer closes.
+  const auto chunkPerBatch = coverage.filesByStripes.find("chunkPerBatch");
+  ASSERT_NE(chunkPerBatch, coverage.filesByStripes.end());
+  ASSERT_EQ(chunkPerBatch->second.size(), 1U);
+  EXPECT_EQ(chunkPerBatch->second.begin()->first, 1U);
+
+  ChunkStatsVerificationCoverage::StreamKindCoverage kindTotals;
+  const auto addKinds =
+      [&](const std::map<
+          std::string,
+          ChunkStatsVerificationCoverage::StreamKindCoverage>& streamKinds) {
+        uint64_t numStreams{0};
+        for (const auto& [kind, kindCoverage] : streamKinds) {
+          // Every chunk either carries min/max or has one reason for lacking
+          // it.
+          EXPECT_EQ(
+              kindCoverage.numBoundedChunks +
+                  kindCoverage.numAllNullUnboundedChunks +
+                  kindCoverage.numNaNUnboundedChunks +
+                  kindCoverage.numLongStringUnboundedChunks,
+              kindCoverage.numChunks)
+              << kind;
+          EXPECT_LE(
+              kindCoverage.numSingleValueChunks, kindCoverage.numBoundedChunks)
+              << kind;
+          numStreams += kindCoverage.numStreams;
+          kindTotals.numMultiChunkStreams += kindCoverage.numMultiChunkStreams;
+          kindTotals.numZeroNullChunks += kindCoverage.numZeroNullChunks;
+          kindTotals.numPartiallyNullChunks +=
+              kindCoverage.numPartiallyNullChunks;
+          kindTotals.numFullyNullChunks += kindCoverage.numFullyNullChunks;
+          kindTotals.numBoundedChunks += kindCoverage.numBoundedChunks;
+        }
+        return numStreams;
+      };
+  EXPECT_EQ(addKinds(coverage.scalarStreamKinds), coverage.numScalarStreams);
+  EXPECT_EQ(
+      addKinds(coverage.complexStreamKinds), coverage.numStructuralStreams);
+  EXPECT_EQ(kindTotals.numMultiChunkStreams, coverage.numMultiChunkStreams);
+  EXPECT_EQ(kindTotals.numZeroNullChunks, coverage.numZeroNullChunks);
+  EXPECT_EQ(kindTotals.numPartiallyNullChunks, coverage.numPartiallyNullChunks);
+  EXPECT_EQ(kindTotals.numFullyNullChunks, coverage.numFullyNullChunks);
+  EXPECT_EQ(kindTotals.numBoundedChunks, coverage.numV2BoundedChunks);
+  EXPECT_LE(
+      coverage.numNullBatchIterationsWithFullyNullChunk,
+      coverage.numNullBatchIterations);
+}
+
+TEST(NimbleWriterFuzzerTest, pointLookupsMatchInput) {
+  auto rootPool = velox::memory::memoryManager()->addRootPool(
+      "pointLookupsMatchInput", velox::memory::kMaxMemory);
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.batchSize = 64;
+  options.numBatches = 4;
+  NimbleWriterFuzzer fuzzer(options, *rootPool);
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    fuzzer.run();
+    fuzzer.reSeed();
+  }
+
+  const auto& coverage = fuzzer.pointLookupCoverage();
+  uint64_t numLookups{0};
+  for (const auto& [numColumns, counts] : coverage.byNumColumns) {
+    EXPECT_GE(numColumns, 1U);
+    EXPECT_LE(numColumns, 3U);
+    EXPECT_LE(counts.numLookupsWithChunkSkips, counts.numLookups);
+    numLookups += counts.numLookups;
+  }
+  EXPECT_GT(numLookups, 0U);
+  EXPECT_LE(numLookups, fuzzer.numUnfilteredFilesWritten());
+  EXPECT_GT(coverage.byNumColumns.rbegin()->first, 1U);
+
+  for (const auto& [type, byKind] : coverage.byType) {
+    for (const auto& [kind, counts] : byKind) {
+      EXPECT_LE(counts.numLookupsWithChunkSkips, counts.numLookups)
+          << type << " " << kind;
+    }
+  }
+
+  uint64_t numBucketedLookups{0};
+  for (const auto& [anchoring, buckets] : coverage.lookupsByMatchedRows) {
+    for (const auto& [bucket, count] : buckets) {
+      numBucketedLookups += count;
+    }
+  }
+  EXPECT_EQ(numBucketedLookups, numLookups);
+
+  // Anchored lookups return whole blocks of consecutive rows.
+  const auto anchored = coverage.lookupsByMatchedRows.find("anchored");
+  ASSERT_NE(anchored, coverage.lookupsByMatchedRows.end());
+  EXPECT_GT(anchored->second.rbegin()->first, 1U);
 }
 
 TEST(NimbleWriterFuzzerTest, run) {

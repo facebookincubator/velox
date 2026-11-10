@@ -17,6 +17,7 @@
 
 #include <concepts>
 
+#include "velox/common/base/Portability.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/expression/VectorWriters.h"
@@ -231,12 +232,19 @@ concept NonDefaultNullAccumulator =
 ///   Called only in steps that read raw input, partial and single
 ///   aggregation; steps that merge intermediate results have no raw
 ///   arguments.
-/// - static bool toIntermediate(out, args...): converts one raw input row to
-///   an intermediate result without an accumulator, for plans that abandon
-///   partial aggregation. Returns false for a null result. 'args' are
-///   arg_type<T1>, ... with default null behavior, where rows with a null
-///   argument produce null without a call; otherwise optional_arg_type<T1>,
-///   ....
+/// - static toIntermediate(out, args...): converts one raw input row to an
+///   intermediate result without an accumulator, for plans that abandon
+///   partial aggregation. Returns bool, false for a null result, or void when
+///   the result is never null. 'args' are arg_type<T1>, ... with default null
+///   behavior, where rows with a null argument produce null without a call;
+///   otherwise optional_arg_type<T1>, ....
+/// - static fillEmptyIntermediate(out): writes the intermediate result of a
+///   group that received no input, which the merge companion uses for
+///   masked-out and null rows when it abandons partial aggregation. Returns
+///   bool, false for a null result, or void when the result is never null.
+///   Only functions that set default_null_behavior_ to false define it,
+///   because the adapter writes null for the others. Without it, the merge
+///   companion falls back to creating fake groups.
 ///
 /// Optional members of AccumulatorType:
 /// - is_fixed_size_ (default true): false when the accumulator allocates from
@@ -332,6 +340,14 @@ class SimpleAggregateAdapter : public Aggregate {
       : std::true_type {};
 
   template <typename T, typename = void>
+  struct support_fill_empty_intermediate : std::false_type {};
+
+  template <typename T>
+  struct support_fill_empty_intermediate<
+      T,
+      std::void_t<decltype(&T::fillEmptyIntermediate)>> : std::true_type {};
+
+  template <typename T, typename = void>
   struct support_initialize : std::false_type {};
 
   template <typename T>
@@ -392,6 +408,14 @@ class SimpleAggregateAdapter : public Aggregate {
 
   static constexpr bool support_to_intermediate_ =
       support_to_intermediate<FUNC>::value;
+
+  static constexpr bool support_fill_empty_intermediate_ =
+      support_fill_empty_intermediate<FUNC>::value;
+
+  static_assert(
+      !(aggregate_default_null_behavior_ && support_fill_empty_intermediate_),
+      "Functions with default null behavior must not define "
+      "fillEmptyIntermediate, because the adapter writes null for them.");
 
   static constexpr bool support_initialize_ = support_initialize<FUNC>::value;
 
@@ -474,6 +498,31 @@ class SimpleAggregateAdapter : public Aggregate {
 
   bool supportsToIntermediate() const override {
     return support_to_intermediate_;
+  }
+
+  bool supportsFillEmptyIntermediate() const override {
+    return aggregate_default_null_behavior_ || support_fill_empty_intermediate_;
+  }
+
+  void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
+      const override {
+    if constexpr (aggregate_default_null_behavior_) {
+      result->addNulls(rows);
+    } else if constexpr (support_fill_empty_intermediate_) {
+      using IntermediateType = typename FUNC::IntermediateType;
+      auto* vector =
+          result->as<typename TypeToFlatVector<IntermediateType>::type>();
+      VectorWriter<IntermediateType> writer;
+      writer.init(*vector);
+      rows.applyToSelected([&](vector_size_t row) {
+        writer.setOffset(row);
+        writer.commit(callWrite(
+            [&] { return FUNC::fillEmptyIntermediate(writer.current()); }));
+      });
+      writer.finish();
+    } else {
+      VELOX_UNREACHABLE("fillEmptyIntermediate is not supported");
+    }
   }
 
   void toIntermediate(
@@ -583,9 +632,9 @@ class SimpleAggregateAdapter : public Aggregate {
   }
 
  protected:
-  // Calls 'write', a writeIntermediateResult() or writeFinalResult() call, and
-  // returns whether the result is non-NULL: what 'write' returns, or true when
-  // it returns void.
+  // Calls 'write', a call to a method that writes a result, such as
+  // writeIntermediateResult() or toIntermediate(), and returns whether the
+  // result is non-NULL: what 'write' returns, or true when it returns void.
   template <typename TWrite>
   static bool callWrite(TWrite&& write) {
     if constexpr (std::is_void_v<std::invoke_result_t<TWrite>>) {
@@ -696,6 +745,10 @@ class SimpleAggregateAdapter : public Aggregate {
 
   // Process rows with the accumulated readers. Use Is to access the original
   // input types to create OptionalAccessor.
+  //
+  // The per-row lambdas are force-inlined. The compiler often runs out of
+  // inlining budget and leaves a call per input row. Intermediate results are
+  // left to the compiler to keep the code size down.
   template <std::size_t... Is, typename... TReader>
   void addRawInputWithReadersImpl(
       char** groups,
@@ -707,7 +760,7 @@ class SimpleAggregateAdapter : public Aggregate {
         "Reader count must match InputType size");
 
     if constexpr (aggregate_default_null_behavior_) {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         // If any input is null, we ignore the whole row. For variadic
         // arguments, this includes nulls within the variadic elements.
         if (!(isInputNonNull<Is>(readers, row) && ...)) {
@@ -722,7 +775,7 @@ class SimpleAggregateAdapter : public Aggregate {
         clearNull(groups[row]);
       });
     } else {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         std::optional<RowSizeTracker<char, uint32_t>> tracker;
         if constexpr (!accumulator_is_fixed_size_) {
           tracker.emplace(groups[row][rowSizeOffset_], *allocator_);
@@ -758,7 +811,8 @@ class SimpleAggregateAdapter : public Aggregate {
   }
 
   // Process rows for a single group with the accumulated readers. Use Is to
-  // access the original input types to create OptionalAccessor.
+  // access the original input types to create OptionalAccessor. The per-row
+  // lambdas are force-inlined as in addRawInputWithReadersImpl.
   template <std::size_t... Is, typename... TReader>
   void addSingleGroupRawInputWithReadersImpl(
       char* group,
@@ -772,7 +826,7 @@ class SimpleAggregateAdapter : public Aggregate {
     auto accumulator = value<typename FUNC::AccumulatorType>(group);
 
     if constexpr (aggregate_default_null_behavior_) {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         // If any input is null, we ignore the whole row. For variadic
         // arguments, this includes nulls within the variadic elements.
         if (!(isInputNonNull<Is>(readers, row) && ...)) {
@@ -786,7 +840,7 @@ class SimpleAggregateAdapter : public Aggregate {
         clearNull(group);
       });
     } else {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         std::optional<RowSizeTracker<char, uint32_t>> tracker;
         if constexpr (!accumulator_is_fixed_size_) {
           tracker.emplace(group[rowSizeOffset_], *allocator_);
@@ -856,17 +910,19 @@ class SimpleAggregateAdapter : public Aggregate {
           writer.commitNull();
           return;
         }
-        bool nonNull = FUNC::toIntermediate(writer.current(), readers[row]...);
-        writer.commit(nonNull);
+        writer.commit(callWrite([&] {
+          return FUNC::toIntermediate(writer.current(), readers[row]...);
+        }));
       });
     } else {
       rows.applyToSelected([&](vector_size_t row) {
         writer.setOffset(row);
-        bool nonNull = FUNC::toIntermediate(
-            writer.current(),
-            OptionalAccessor<typename FUNC::InputType::template type_at<Is>>{
-                &readers, (int64_t)row}...);
-        writer.commit(nonNull);
+        writer.commit(callWrite([&] {
+          return FUNC::toIntermediate(
+              writer.current(),
+              OptionalAccessor<typename FUNC::InputType::template type_at<Is>>{
+                  &readers, (int64_t)row}...);
+        }));
       });
     }
   }

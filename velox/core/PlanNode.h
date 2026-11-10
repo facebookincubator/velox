@@ -4771,33 +4771,44 @@ class SpatialJoinNode : public PlanNode {
 
 using SpatialJoinNodePtr = std::shared_ptr<const SpatialJoinNode>;
 
-/// Joins each probe row with the entries of vector indexes nearest to its
-/// embedding. Translates to an exec::VectorSearchJoinProbe and an
-/// exec::VectorSearchJoinBuild, which Velox builds only with
+/// Joins rows with query embeddings to the entries of vector indexes nearest to
+/// them. Translates to an exec::BaseVectorSearchJoinProbe and an
+/// exec::BaseVectorSearchJoinBuild, which Velox builds only with
 /// VELOX_ENABLE_FAISS. A separate pipeline is produced for the build side when
 /// generating exec::Operators.
 ///
-/// Each build row holds a packed local vector index over embeddings with ids
-/// (see common::vectorindex::LocalVectorIndex). A vector index's codec is a
-/// local index over its centroids, with cluster ids as ids. All indexes of the
-/// build side must have the same dimension, the length of the probe
-/// embeddings; a build side with indexes of different dimensions is a user
-/// error. The join runs in two steps:
+/// One side has the index rows, the other the query rows; 'indexSide' says
+/// which. Each index row holds a packed local vector index over embeddings with
+/// ids (see common::vectorindex::LocalVectorIndex). A vector index's codec is a
+/// local index over its centroids, with cluster ids as ids. Each query row has
+/// an embedding. The join runs in two steps:
 ///
-/// 1. The equality conditions on 'leftKeys' and 'rightKeys' match each probe
-///    row to build rows, as in a hash join. With no keys, every probe row
-///    matches every build row.
-/// 2. Within each match, the probe row's embedding, normalized for the metric,
-///    is searched in the build row's index for its 'k' nearest embeddings. A
-///    probe row matching several build rows gets up to 'k' from each.
+/// 1. The equality conditions on 'leftKeys' and 'rightKeys' match each query
+///    row to index rows, as in a hash join. With no keys, every query row
+///    matches every index row.
+/// 2. Within each match, the query row's embedding, normalized for the metric,
+///    is searched in the index row's index for its 'k' nearest embeddings. A
+///    query row matching several index rows gets up to 'k' from each.
 ///
-/// Each embedding found gives an output row of the probe row's and the build
+/// Each embedding found gives an output row of the query row's and the index
 /// row's columns, the embedding's id and its score: the similarity the metric
-/// defines, where larger is nearer. Probe and build rows with a
-/// null key, probe rows with a null embedding and build rows with a null index
-/// match nothing. A left join outputs a probe row that finds no embeddings
-/// once, with nulls for the build columns, the id and the score. A probe
-/// embedding of another length, or with a null element, is a user error.
+/// defines, where larger is nearer. Rows with a null key, query rows with a
+/// null embedding and index rows with a null index match nothing. An outer
+/// join, left with the query rows on the left or right with the query rows on
+/// the right, outputs a query row that finds no embeddings once, with nulls
+/// for the index row's columns, the id and the score. A join may not preserve
+/// the index rows.
+/// All query embeddings must have the same length and all indexes the same
+/// dimension, equal to it, and no embedding may have a null element; a
+/// violation is a user error. Every query row is checked, whether it matches
+/// an index row or not. An index row that matches no query row may not be
+/// read.
+///
+/// The build side, the right, is held in memory and the probe side, the left,
+/// streams. With the index rows on the build side, each probe batch of query
+/// rows is searched in the indexes it matches. With the index rows on the
+/// probe side, each streaming index is searched with the query rows it
+/// matches, and an index row is decoded once per probe batch.
 ///
 /// Unlike inner and left joins of AbstractJoinNode (see
 /// isPreservingProbeOrder()), the join does not preserve the order of the
@@ -4805,28 +4816,40 @@ using SpatialJoinNodePtr = std::shared_ptr<const SpatialJoinNode>;
 /// at a time.
 class VectorSearchJoinNode : public PlanNode {
  public:
-  /// @param probeEmbedding Probe column of type ARRAY(REAL) with the query
-  /// embedding.
-  /// @param buildIndex Build column of type VARBINARY with the packed local
-  /// index. It may not appear in the output.
+  /// The side of the join with the index rows: the probe side, the left, or
+  /// the build side, the right.
+  enum class IndexSide { kProbe, kBuild };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(IndexSide);
+
+  /// @param indexSide The side with the index rows. The other side has the
+  /// query rows.
+  /// @param embedding Column of the query side, of type ARRAY(REAL), with the
+  /// query embedding.
+  /// @param index Column of the index side, of type VARBINARY, with the packed
+  /// local index. It may not appear in the output.
+  /// @param format The format of the local indexes: its name in the query's
+  /// common::vectorindex::LocalVectorIndexFormats registry.
   /// @param metric The metric the indexes were built for.
   /// @param k The number of embeddings to find in each matching index, at
   /// least 1. At most the size of the index are found.
   /// @param searchOptions Search settings that override the ones recorded in
-  /// the indexes (see LocalVectorIndexOptions::parseSearch).
+  /// the indexes. Their keys and values are the format's.
   /// @param idName Name of the output column with the id of each embedding
   /// found, of type BIGINT. Not set if the output does not include it.
   /// @param scoreName Name of the output column with the score of each
   /// embedding found, of type REAL. Not set if the output does not include it.
-  /// @param outputType Probe and build columns, and the id and score columns,
+  /// @param outputType Left and right columns, and the id and score columns,
   /// in any order.
   VectorSearchJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
       std::vector<FieldAccessTypedExprPtr> leftKeys,
       std::vector<FieldAccessTypedExprPtr> rightKeys,
-      FieldAccessTypedExprPtr probeEmbedding,
-      FieldAccessTypedExprPtr buildIndex,
+      IndexSide indexSide,
+      FieldAccessTypedExprPtr embedding,
+      FieldAccessTypedExprPtr index,
+      std::string format,
       common::vectorindex::VectorIndexMetric metric,
       int64_t k,
       std::vector<std::pair<std::string, std::string>> searchOptions,
@@ -4863,12 +4886,34 @@ class VectorSearchJoinNode : public PlanNode {
     return rightKeys_;
   }
 
-  const FieldAccessTypedExprPtr& probeEmbedding() const {
-    return probeEmbedding_;
+  IndexSide indexSide() const {
+    return indexSide_;
   }
 
-  const FieldAccessTypedExprPtr& buildIndex() const {
-    return buildIndex_;
+  bool isIndexOnBuild() const {
+    return indexSide_ == IndexSide::kBuild;
+  }
+
+  const RowTypePtr& probeType() const {
+    return sources_[0]->outputType();
+  }
+
+  const RowTypePtr& buildType() const {
+    return sources_[1]->outputType();
+  }
+
+  /// The query embedding column: a column of the side opposite the index.
+  const FieldAccessTypedExprPtr& embedding() const {
+    return embedding_;
+  }
+
+  /// The packed local index column: a column of the side indexSide() names.
+  const FieldAccessTypedExprPtr& index() const {
+    return index_;
+  }
+
+  const std::string& format() const {
+    return format_;
   }
 
   common::vectorindex::VectorIndexMetric metric() const {
@@ -4902,8 +4947,10 @@ class VectorSearchJoinNode : public PlanNode {
   const JoinType joinType_;
   const std::vector<FieldAccessTypedExprPtr> leftKeys_;
   const std::vector<FieldAccessTypedExprPtr> rightKeys_;
-  const FieldAccessTypedExprPtr probeEmbedding_;
-  const FieldAccessTypedExprPtr buildIndex_;
+  const IndexSide indexSide_;
+  const FieldAccessTypedExprPtr embedding_;
+  const FieldAccessTypedExprPtr index_;
+  const std::string format_;
   const common::vectorindex::VectorIndexMetric metric_;
   const int64_t k_;
   const std::vector<std::pair<std::string, std::string>> searchOptions_;

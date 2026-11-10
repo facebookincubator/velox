@@ -118,6 +118,13 @@ class FileDataSource : public DataSource {
 
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
 
+  /// Sets the options passed to the split reader's prepareSplit() for every
+  /// split added after this call. The reader forwards them to the FileSystem
+  /// when it opens the file and on every read. Empty by default.
+  void setFileReadOps(folly::F14FastMap<std::string, std::string> fileReadOps) {
+    fileReadOps_ = std::move(fileReadOps);
+  }
+
   int64_t estimatedRowSize() override;
 
   const common::SubfieldFilters* getFilters() const override {
@@ -229,6 +236,8 @@ class FileDataSource : public DataSource {
   /// HiveColumnHandle::postProcessor(). Applied after reading and filtering to
   /// transform column values. Indexed by output column position.
   std::vector<std::function<void(VectorPtr&)>> columnPostProcessors_;
+  // Passed to the split reader for each split. See setFileReadOps().
+  folly::F14FastMap<std::string, std::string> fileReadOps_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowVectorPtr emptyOutput_;
   std::atomic_uint64_t totalRemainingFilterTime_{0};

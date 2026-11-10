@@ -398,7 +398,7 @@ class DecimalUtil : public DecimalArithmetic {
   /// bits in the result indicates overflow. Adjust the signs of sum and
   /// overflow based on the signs of the inputs. The caller must sum up overflow
   /// values and call adjustSumForOverflow after processing all inputs.
-  inline static int64_t
+  FOLLY_ALWAYS_INLINE static int64_t
   addWithOverflow(int128_t& result, int128_t lhs, int128_t rhs) {
     bool isLhsNegative = lhs < 0;
     bool isRhsNegative = rhs < 0;

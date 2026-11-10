@@ -500,38 +500,53 @@ TEST_F(PlanNodeToStringTest, nestedLoopJoin) {
 }
 
 TEST_F(PlanNodeToStringTest, vectorSearchJoin) {
-  auto plan =
-      PlanBuilder()
-          .values({makeRowVector(
-              {"t0", "t1"},
-              {
-                  makeFlatVector<int64_t>({1}),
-                  makeArrayVector<float>({{1, 0}}),
-              })})
-          .vectorSearchJoin(
-              {"t0"},
-              {"u0"},
-              PlanBuilder()
-                  .values({makeRowVector(
-                      {"u0", "u1"},
-                      {
-                          makeFlatVector<int64_t>({1}),
-                          makeFlatVector<std::string>({"a"}, VARBINARY()),
-                      })})
-                  .planNode(),
-              "t1",
-              "u1",
-              /*k=*/10,
-              {"t0", "id", "score"},
-              "id",
-              "score",
-              core::JoinType::kLeft,
-              {{"ivf.nprobe", "4"}})
-          .planNode();
+  const auto queries = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int64_t>({1}),
+          makeArrayVector<float>({{1, 0}}),
+      });
+  const auto indexes = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeFlatVector<int64_t>({1}),
+          makeFlatVector<std::string>({"a"}, VARBINARY()),
+      });
 
+  auto plan = PlanBuilder()
+                  .values({queries})
+                  .vectorSearchJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder().values({indexes}).planNode(),
+                      "t1",
+                      "u1",
+                      /*k=*/10,
+                      {"t0", "id", "score"},
+                      "id",
+                      "score",
+                      core::JoinType::kLeft,
+                      {{"ivf.nprobe", "4"}})
+                  .planNode();
   ASSERT_EQ("-- VectorSearchJoin[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- VectorSearchJoin[1][LEFT t0=u0, t1 nearest in u1 (cosine), k: 10, ivf.nprobe: 4] -> t0:BIGINT, id:BIGINT, score:REAL\n",
+      "-- VectorSearchJoin[1][LEFT t0=u0, t1 nearest in u1 (faiss, cosine), k: 10, ivf.nprobe: 4] -> t0:BIGINT, id:BIGINT, score:REAL\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values({indexes})
+             .vectorSearchJoin(
+                 {"u0"},
+                 {"t0"},
+                 PlanBuilder().values({queries}).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/10,
+                 {"t0", "id"},
+                 "id")
+             .planNode();
+  ASSERT_EQ(
+      "-- VectorSearchJoin[1][INNER u0=t0, t1 nearest in u1 (faiss, cosine), k: 10, index: PROBE] -> t0:BIGINT, id:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1292,7 +1307,7 @@ TEST_F(PlanNodeToStringTest, fixedPointSequence) {
 
   ASSERT_EQ("-- FixedPoint[3]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], plans: 1, maxIterations: 9] -> x:BIGINT\n",
+      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], stages: 1, maxIterations: 9] -> x:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1324,7 +1339,7 @@ TEST_F(PlanNodeToStringTest, fixedPointFibonacci) {
 
   ASSERT_EQ("-- FixedPoint[5]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], plans: 1, maxIterations: 100, convergencePlans: 1] -> a:BIGINT, b:BIGINT\n",
+      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], stages: 1, maxIterations: 100, convergenceStages: 1] -> a:BIGINT, b:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1371,7 +1386,7 @@ TEST_F(PlanNodeToStringTest, fixedPointThreeDegrees) {
 
   ASSERT_EQ("-- FixedPoint[8]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], plans: 1, maxIterations: 3, convergencePlans: 1] -> id:BIGINT, depth:BIGINT\n",
+      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], stages: 1, maxIterations: 3, convergenceStages: 1] -> id:BIGINT, depth:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1407,7 +1422,7 @@ TEST_F(PlanNodeToStringTest, fixedPointDistributed) {
 
   ASSERT_EQ("-- FixedPoint[6]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], plans: 2, maxIterations: 3] -> key:BIGINT, val:BIGINT\n",
+      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], stages: 2, maxIterations: 3] -> key:BIGINT, val:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1445,7 +1460,7 @@ TEST_F(PlanNodeToStringTest, fixedPointOnWorkerZero) {
                   .planNode();
 
   ASSERT_EQ(
-      "-- FixedPoint[8][outputStateEntry: total, states: [total (vector, replace, initialized)], plans: 2, maxIterations: 100, verdict, outputOnWorkerZero] -> key:BIGINT, val:BIGINT\n",
+      "-- FixedPoint[8][outputStateEntry: total, states: [total (vector, replace, initialized)], stages: 2, maxIterations: 100, convergenceStages: 1, verdictOnWorkerZero, outputOnWorkerZero] -> key:BIGINT, val:BIGINT\n",
       plan->toString(true, false));
 }
 

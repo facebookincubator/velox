@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -54,11 +55,14 @@ class DeletionVectorReader {
   /// @param connectorConfig Connector configuration used to resolve the
   ///        filesystem for the Puffin file (e.g. Manifold client credentials).
   ///        Passing nullptr leaves config-requiring filesystems unconfigured.
+  /// @param fileReadOps Options forwarded to the FileSystem when the Puffin
+  ///        file is opened and on every read from it.
   DeletionVectorReader(
       const IcebergDeleteFile& dvFile,
       uint64_t splitOffset,
       memory::MemoryPool* pool,
-      std::shared_ptr<const config::ConfigBase> connectorConfig);
+      std::shared_ptr<const config::ConfigBase> connectorConfig,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {});
 
   /// Reads deleted positions from the DV and sets corresponding bits in the
   /// deleteBitmap for the current batch range. Batches must be read in
@@ -125,6 +129,10 @@ class DeletionVectorReader {
   // The blob read from the file. Containers point into it by offset, so it
   // must not change after loading.
   std::string blob_;
+
+  // Options for the Puffin file's open and reads. Kept because the file is
+  // opened lazily in loadBitmap(), after the split reader has returned.
+  const folly::F14FastMap<std::string, std::string> fileReadOps_;
 
   // Position and size of the roaring bitmap within 'blob_', after removing the
   // deletion-vector-v1 frame.

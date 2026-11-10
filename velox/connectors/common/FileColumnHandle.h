@@ -187,6 +187,11 @@ class FileColumnHandle : public ColumnHandle {
     /// Row numbers are unique within a single file only.
     kRowIndex,
     kRowId,
+    /// A ROW<offset BIGINT, length INTEGER>, constant within one reader batch:
+    /// the file rows [offset, offset + length) the batch scanned, including
+    /// rows that filters removed. Each row of the batch comes from a file row
+    /// in that range.
+    kReadRange,
   };
 
   const std::string& name() const override {

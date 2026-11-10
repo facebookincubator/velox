@@ -972,11 +972,9 @@ std::string_view FsstEncoding::slice(
     Buffer& buffer,
     const Encoding::Options& options) {
   validateEncodedPrefix(encoded, options);
-  const auto sourceRowCount =
+  const uint32_t sourceRowCount =
       EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(sourceRowCount, offset, length);
 
   const auto header = parseHeader(
       encoded, EncodingPrefix::prefixSize(encoded, options.useVarintRowCount));
