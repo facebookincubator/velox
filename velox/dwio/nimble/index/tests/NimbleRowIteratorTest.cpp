@@ -24,6 +24,7 @@
 #include <limits>
 #include <mutex>
 #include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -830,6 +831,238 @@ TEST_P(NimbleRowIteratorTest, rowIteratorMaterializesOnlySelectedRows) {
     }
     EXPECT_EQ(iterator.stats().numMaterializedRows, 2 + kRowsPerStripe);
   }
+}
+
+// A point-lookup iterator keeps the stripe of its last lookup until it decodes
+// another stripe or resets, so that later lookups in the stripe, in any order,
+// decode without loading it again. A scan iterator keeps no stripe.
+TEST_P(NimbleRowIteratorTest, rowIteratorKeepsTheStripeOfAPointLookup) {
+  constexpr int32_t kRowsPerStripe{4};
+  constexpr int32_t kNumStripes{3};
+  writeResumeKeyTestData(kRowsPerStripe, kNumStripes);
+
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  const auto expectLookup = [&](NimbleIterator& iterator, int64_t key) {
+    iterator.seek(makePointLookup(rowType, {"key"}, key));
+    if (key >= kRowsPerStripe * kNumStripes) {
+      EXPECT_FALSE(iterator.valid());
+      return;
+    }
+    ASSERT_TRUE(iterator.valid());
+    const auto actual = velox::row::CompactRow::deserialize(
+        {iterator.value()}, ROW("value", INTEGER()), leafPool_.get());
+    expectVectorRows(
+        actual,
+        vectorMaker_->rowVector(
+            {"value"},
+            {vectorMaker_->flatVector<int32_t>(
+                {static_cast<int32_t>(key * 10)})}));
+  };
+
+  struct TestParam {
+    std::string description;
+    int64_t key;
+    bool reset;
+    uint32_t numReadStripes;
+
+    std::string debugString() const {
+      return fmt::format(
+          "{}: key {}, reset {}, numReadStripes {}",
+          description,
+          key,
+          reset,
+          numReadStripes);
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {"loads stripe 0 and keeps it", 1, false, 1},
+      {"reads on in the kept stripe", 2, false, 1},
+      {"reads an earlier row of the kept stripe", 0, false, 1},
+      {"a miss keeps the stripe", 1'000, false, 1},
+      {"reads the last row of the kept stripe", 3, false, 1},
+      {"keeps the stripe after its last row", 2, false, 1},
+      {"loads stripe 1, which replaces stripe 0", 5, false, 2},
+      {"loads stripe 0 again", 0, false, 3},
+      {"reset() releases the stripe", 0, true, 4},
+  };
+  const auto pointLookupIterator = createRowIterator(
+      projectedSubfields, NimbleIterator::Options{.forGet = true});
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    if (testData.reset) {
+      pointLookupIterator->reset();
+    }
+    expectLookup(*pointLookupIterator, testData.key);
+    EXPECT_EQ(
+        pointLookupIterator->stats().numReadStripes, testData.numReadStripes);
+  }
+
+  const auto scanIterator =
+      createRowIterator(projectedSubfields, NimbleIterator::Options{});
+  for (const uint32_t numReadStripes : {1, 2}) {
+    SCOPED_TRACE(numReadStripes);
+    expectLookup(*scanIterator, 1);
+    EXPECT_EQ(scanIterator->stats().numReadStripes, numReadStripes);
+  }
+}
+
+// A stripe that fails to bind is not kept, so that the next lookup in it loads
+// it again.
+TEST_P(NimbleRowIteratorTest, rowIteratorDoesNotKeepAStripeThatFailsToBind) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/2);
+  // Makes the first chunk of each stream of stripe 0 longer than its stream:
+  // the fourth byte of a chunk header is the high byte of its length.
+  corruptStripe0Streams(
+      [](const TabletReader::StreamMetadata& /*location*/) -> uint64_t {
+        return 3;
+      });
+
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  const auto iterator = createRowIterator(
+      projectedSubfields, NimbleIterator::Options{.forGet = true});
+  for (const uint32_t numReadStripes : {1, 2}) {
+    SCOPED_TRACE(numReadStripes);
+    iterator->seek(makePointLookup(rowType, {"key"}, 1));
+    NIMBLE_ASSERT_FILE_THROW(
+        iterator->value(), "Chunk data exceeds stream boundary");
+    EXPECT_EQ(iterator->stats().numReadStripes, numReadStripes);
+  }
+
+  // A lookup in the other stripe decodes.
+  iterator->seek(makePointLookup(rowType, {"key"}, 5));
+  const auto actual = velox::row::CompactRow::deserialize(
+      {iterator->value()}, ROW("value", INTEGER()), leafPool_.get());
+  expectVectorRows(
+      actual,
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int32_t>({50})}));
+}
+
+// Ranges of rows decode from the kept stripe too, and the keys of their entries
+// stay aligned with their rows, also when a range goes on into the next stripe.
+TEST_P(NimbleRowIteratorTest, entryIteratorServesRangesFromAKeptStripe) {
+  constexpr int32_t kRowsPerStripe{4};
+  constexpr int32_t kNumStripes{3};
+  writeResumeKeyTestData(kRowsPerStripe, kNumStripes);
+
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  const auto iterator = createEntryIterator(
+      projectedSubfields,
+      decodeTwoEntriesPerRow,
+      NimbleIterator::Options{.forGet = true});
+
+  struct TestParam {
+    std::string description;
+    int64_t startKey;
+    int64_t endKey;
+    uint32_t numReadStripes;
+
+    std::string debugString() const {
+      return fmt::format(
+          "{}: keys [{}, {}), numReadStripes {}",
+          description,
+          startKey,
+          endKey,
+          numReadStripes);
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {"loads stripe 0 and keeps it", 1, 3, 1},
+      {"ends in the kept stripe 0 and keeps stripe 1", 3, 5, 2},
+      {"reads on in the kept stripe", 6, 7, 2},
+      {"reads the whole kept stripe", 4, 8, 2},
+      {"reads an earlier row of the kept stripe", 5, 6, 2},
+      {"loads stripe 0 again", 0, 2, 3},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    iterator->seek(
+        makeRangeLookup(rowType, {"key"}, testData.startKey, testData.endKey));
+    std::vector<std::pair<std::string, std::string>> entries;
+    while (iterator->valid()) {
+      entries.emplace_back(iterator->key(), iterator->value());
+      iterator->nextRow();
+    }
+
+    std::vector<std::pair<std::string, std::string>> expectedEntries;
+    for (auto row = testData.startKey; row < testData.endKey; ++row) {
+      for (const char suffix : {'a', 'b'}) {
+        expectedEntries.emplace_back(
+            fmt::format("k{:06}{}", row * 10, suffix),
+            fmt::format("v{}{}", row * 10, suffix));
+      }
+    }
+    EXPECT_EQ(entries, expectedEntries);
+    EXPECT_EQ(iterator->stats().numReadStripes, testData.numReadStripes);
+  }
+}
+
+// A get iterator does not prefetch, also when its options set a prefetch
+// executor, so that its lookups read the stripe that it holds.
+TEST_P(NimbleRowIteratorTest, getIteratorDoesNotPrefetch) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
+  const auto iterator = createRowIterator(
+      projectedSubfields,
+      NimbleIterator::Options{
+          .prefetchExecutor = folly::getKeepAliveToken(*executor),
+          .maxPrefetchStripes = 1,
+          .forGet = true,
+      });
+  for (const auto& [key, numReadStripes] :
+       std::vector<std::pair<int64_t, uint32_t>>{
+           {1, 1}, {2, 1}, {0, 1}, {5, 2}}) {
+    SCOPED_TRACE(key);
+    iterator->seek(makePointLookup(rowType, {"key"}, key));
+    ASSERT_TRUE(iterator->valid());
+    const auto actual = velox::row::CompactRow::deserialize(
+        {iterator->value()}, ROW("value", INTEGER()), leafPool_.get());
+    expectVectorRows(
+        actual,
+        vectorMaker_->rowVector(
+            {"value"},
+            {vectorMaker_->flatVector<int32_t>(
+                {static_cast<int32_t>(key * 10)})}));
+    EXPECT_EQ(iterator->stats().numReadStripes, numReadStripes);
+  }
+  iterator->reset();
+}
+
+// The kept stripe holds memory until the iterator resets, so that an idle
+// iterator holds no stripe.
+TEST_P(NimbleRowIteratorTest, rowIteratorFreesTheKeptStripeOnReset) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  const auto iterator = createRowIterator(
+      projectedSubfields, NimbleIterator::Options{.forGet = true});
+  const auto lookup = [&](int64_t key) {
+    iterator->seek(makePointLookup(rowType, {"key"}, key));
+    ASSERT_TRUE(iterator->valid());
+    iterator->value();
+  };
+
+  // The first lookup builds the stream reader, which the iterator keeps.
+  lookup(1);
+  iterator->reset();
+  const auto idleBytes = leafPool_->usedBytes();
+
+  lookup(1);
+  EXPECT_GT(leafPool_->usedBytes(), idleBytes);
+  iterator->reset();
+  EXPECT_LE(leafPool_->usedBytes(), idleBytes);
 }
 
 TEST_P(

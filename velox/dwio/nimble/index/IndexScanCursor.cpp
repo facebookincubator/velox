@@ -282,7 +282,9 @@ IndexScanCursor::IndexScanCursor(
     const NimbleIterator::Options& options)
     : projector_{velox::checkedNotNull(std::move(projector))},
       prefetchExecutor_{options.prefetchExecutor},
-      maxPrefetchStripes_{options.maxPrefetchStripes},
+      // A get reads the rows of one key, which a prefetch would not speed up,
+      // and reads the stripe that the materializer holds without loading it.
+      maxPrefetchStripes_{options.forGet ? 0 : options.maxPrefetchStripes},
       stripeMaterializer_{velox::checkedNotNull(std::move(materializer))} {
   NIMBLE_CHECK_LE(projector_->numRows(), std::numeric_limits<uint32_t>::max());
   projector_->setTimingEnabled(options.collectTimings);
@@ -410,13 +412,20 @@ folly::coro::Task<std::unique_ptr<IndexScanCursor::StripeMaterializer::Entries>>
 IndexScanCursor::co_nextStripe(uint32_t row) {
   const auto& selection = selectStripe(row);
   ProjectedStripe stripe;
-  if (scanPrefetcher_ == nullptr) {
+  if (stripeMaterializer_->hasLoadedStripe(selection.stripeIndex)) {
+    // The materializer decodes the selected rows from the streams that it
+    // holds. Only a get iterator holds a stripe, and it does not prefetch,
+    // which would load the stripe again.
+    NIMBLE_CHECK_NULL(
+        scanPrefetcher_, "A cursor that prefetches must load every stripe");
+    stripe.selection = selection;
+  } else if (scanPrefetcher_ != nullptr) {
+    stripe = co_await scanPrefetcher_->co_nextStripe(selection.stripeIndex);
+  } else {
     auto stripes =
         projector_->loadStripeStreams(selection.stripeIndex, /*numStripes=*/1);
     NIMBLE_CHECK_EQ(stripes.size(), 1);
     stripe = std::move(stripes.at(0));
-  } else {
-    stripe = co_await scanPrefetcher_->co_nextStripe(selection.stripeIndex);
   }
   stripe.selection.rowRange = selection.rowRange;
   auto entries = co_await stripeMaterializer_->materialize(
