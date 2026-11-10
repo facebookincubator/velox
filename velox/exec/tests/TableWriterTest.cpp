@@ -1527,19 +1527,16 @@ TEST_P(UnpartitionedTableWriterTest, differentCompression) {
         compressionKind == CompressionKind_ZLIB ||
         compressionKind == CompressionKind_GZIP ||
         compressionKind == CompressionKind_ZSTD) {
-      auto result = AssertQueryBuilder(plan)
-                        .config(
-                            QueryConfig::kTaskWriterCount,
-                            std::to_string(numTableWriterCount_))
-                        .copyResults(pool());
+      auto result =
+          AssertQueryBuilder(plan)
+              .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
+              .copyResults(pool());
       assertEqualResults(
           {makeRowVector({makeConstant<int64_t>(100, 1)})}, {result});
     } else {
       VELOX_ASSERT_THROW(
           AssertQueryBuilder(plan)
-              .config(
-                  QueryConfig::kTaskWriterCount,
-                  std::to_string(numTableWriterCount_))
+              .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
               .copyResults(pool()),
           "Unsupported compression type:");
     }
@@ -1600,7 +1597,7 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
         connector::hive::LocationHandle::TableType::kNew);
     const std::shared_ptr<Task> task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .config(QueryConfig::kTaskWriterCount, std::to_string(1))
+            .config(QueryConfig::kTaskWriterCount, 1)
             .connectorSessionProperty(
                 kHiveConnectorId,
                 dwio::common::formatSessionProperty(
@@ -1674,11 +1671,10 @@ TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
           AssertQueryBuilder(plan).copyResults(pool()),
           "Unpartitioned Hive tables are immutable.");
     } else {
-      auto result = AssertQueryBuilder(plan)
-                        .config(
-                            QueryConfig::kTaskWriterCount,
-                            std::to_string(numTableWriterCount_))
-                        .copyResults(pool());
+      auto result =
+          AssertQueryBuilder(plan)
+              .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
+              .copyResults(pool());
       assertEqualResults(
           {makeRowVector({makeConstant<int64_t>(100, 1)})}, {result});
     }
@@ -2976,7 +2972,7 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
         commitStrategy_);
     const std::shared_ptr<Task> task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .config(QueryConfig::kTaskWriterCount, std::to_string(1))
+            .config(QueryConfig::kTaskWriterCount, 1)
             .connectorSessionProperty(
                 kHiveConnectorId,
                 HiveConfig::kSortWriterMaxOutputRowsSession,
@@ -3055,7 +3051,7 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, yield) {
     const int prevYieldCount = Driver::yieldCount();
     const std::shared_ptr<Task> task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .config(QueryConfig::kTaskWriterCount, std::to_string(1))
+            .config(QueryConfig::kTaskWriterCount, 1)
             .connectorSessionProperty(
                 kHiveConnectorId,
                 HiveConfig::kSortWriterFinishTimeSliceLimitMsSession,
@@ -3815,7 +3811,7 @@ DEBUG_ONLY_TEST_F(
       .config(core::QueryConfig::kWriterSpillEnabled, "true")
       // Set file writer flush threshold of zero to always trigger flush in
       // test.
-      .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
+      .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
       .connectorSessionProperty(

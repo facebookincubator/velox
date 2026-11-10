@@ -3767,7 +3767,7 @@ TEST_P(HashJoinTest, leftJoinPreserveProbeOrder) {
               core::JoinType::kLeft)
           .planNode();
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
                     .serialExecution(true)
                     .copyResults(pool_.get());
   ASSERT_EQ(result->size(), 3);

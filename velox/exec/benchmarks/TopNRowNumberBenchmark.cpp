@@ -83,7 +83,7 @@ class TopNRowNumberBenchmark : public VectorTestBase {
                   .maxDrivers(1)
                   .config(
                       QueryConfig::kAbandonPartialTopNRowNumberMinRows,
-                      "2147483647")
+                      2'147'483'647)
                   .countResults();
           folly::doNotOptimizeAway(count);
           return 1;

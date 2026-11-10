@@ -303,7 +303,7 @@ TEST_P(LeadLagTest, largePartitions) {
     auto queryInfo = buildWindowQuery({data}, functionSql, "order by c0", "");
     SCOPED_TRACE(queryInfo.functionSql);
     AssertQueryBuilder(queryInfo.planNode, duckDbQueryRunner_)
-        .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
         .assertResults(queryInfo.querySql);
   };
 
@@ -331,7 +331,7 @@ TEST_P(LeadLagTest, largePartitions) {
   {
     SCOPED_TRACE(queryInfo.functionSql);
     AssertQueryBuilder(queryInfo.planNode)
-        .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
         .assertResults(appendColumn(data, expectedWindow));
   }
 
@@ -363,7 +363,7 @@ TEST_P(LeadLagTest, largePartitions) {
   {
     SCOPED_TRACE(queryInfo.functionSql);
     AssertQueryBuilder(queryInfo.planNode)
-        .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
         .assertResults(appendColumn(data, expectedWindow));
   }
 }

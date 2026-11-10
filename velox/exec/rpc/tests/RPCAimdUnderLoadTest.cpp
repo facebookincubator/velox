@@ -777,7 +777,7 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
                     .config("rpc.ratelimiter.decrease_factor", "0.5")
                     .config("rpc.congestion.max_window", kMaxWindow)
                     .config("rpc.congestion.min_window", 1)
-                    .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
                     .copyResults(pool(), task);
 
   // The query completes end-to-end: every row yields an output row, and exactly
@@ -1118,7 +1118,7 @@ TEST_F(RPCAimdUnderLoadTest, perRowBackendErrorsDoNotBackOff) {
                     .config("rpc.ratelimiter.decrease_factor", "0.5")
                     .config("rpc.congestion.max_window", kMaxWindow)
                     .config("rpc.congestion.min_window", 1)
-                    .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
                     .copyResults(pool(), task);
 
   ASSERT_EQ(result->size(), kTotalRows);

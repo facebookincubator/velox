@@ -1613,8 +1613,8 @@ TEST_F(ParquetTableScanTest, structElementsByName) {
   AssertQueryBuilder(plan)
       // Force multiple reads within each row group so preset nulls and lengths
       // are consumed and refreshed without a row-group transition.
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
-      .config(core::QueryConfig::kMaxOutputBatchRows, "1")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
+      .config(core::QueryConfig::kMaxOutputBatchRows, 1)
       .connectorSessionProperty(
           kHiveConnectorId,
           connector::FileConfig::kUseColumnNamesSession,
@@ -2535,8 +2535,8 @@ TEST_F(ParquetTableScanTest, structSkipNulls) {
   // 'id >= 200' filters out entirely, so the nulls-only 's' column lags and is
   // then skipped forward.
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "64")
-      .config(core::QueryConfig::kMaxOutputBatchRows, "64")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 64)
+      .config(core::QueryConfig::kMaxOutputBatchRows, 64)
       .splits(splits)
       .assertResults("SELECT id, s FROM tmp WHERE id >= 200 AND s IS NULL");
 }

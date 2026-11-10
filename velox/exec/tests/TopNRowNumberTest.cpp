@@ -329,7 +329,7 @@ TEST_P(MultiTopNRowNumberTest, largeOutput) {
         functionName_,
         limit);
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1024)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
         .assertResults(sql);
 
     // Spilling.
@@ -337,7 +337,7 @@ TEST_P(MultiTopNRowNumberTest, largeOutput) {
       TestScopedSpillInjection scopedSpillInjection(100);
       auto task =
           AssertQueryBuilder(plan, duckDbQueryRunner_)
-              .config(core::QueryConfig::kPreferredOutputBatchBytes, 1024)
+              .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
               .config(core::QueryConfig::kSpillEnabled, "true")
               .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
               .spillDirectory(spillDirectory->getPath())
@@ -359,7 +359,7 @@ TEST_P(MultiTopNRowNumberTest, largeOutput) {
                .planNode();
 
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1024)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
         .assertResults(
             fmt::format(
                 "SELECT * FROM (SELECT *, {}() over (order by s) as rn FROM tmp) "

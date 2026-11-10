@@ -2815,13 +2815,10 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithInnerJoin) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
+            GetParam().numPrefetches)
         .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(testData.maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            core::QueryConfig::kPreferredOutputBatchRows, testData.maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.splitOutput ? "true" : "false")
@@ -3046,13 +3043,10 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
+            GetParam().numPrefetches)
         .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(testData.maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            core::QueryConfig::kPreferredOutputBatchRows, testData.maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.splitOutput ? "true" : "false")
@@ -3190,13 +3184,9 @@ TEST_P(IndexLookupJoinTest, splitOutputNodeOverride) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            GetParam().numPrefetches)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.configSplitOutput ? "true" : "false")

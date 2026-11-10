@@ -1263,10 +1263,10 @@ TEST_F(AggregationTest, partialAggregationMemoryLimitIncrease) {
     auto task = AssertQueryBuilder(duckDbQueryRunner_)
                     .config(
                         QueryConfig::kMaxPartialAggregationMemory,
-                        std::to_string(testData.initialPartialMemoryLimit))
+                        testData.initialPartialMemoryLimit)
                     .config(
                         QueryConfig::kMaxExtendedPartialAggregationMemory,
-                        std::to_string(testData.extendedPartialMemoryLimit))
+                        testData.extendedPartialMemoryLimit)
                     .plan(
                         PlanBuilder()
                             .values(vectors)
@@ -1363,14 +1363,13 @@ TEST_F(AggregationTest, spillAll) {
     auto tempDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
     TestScopedSpillInjection scopedSpillInjection(100);
-    auto task = AssertQueryBuilder(plan)
-                    .spillDirectory(tempDirectory->getPath())
-                    .config(QueryConfig::kSpillEnabled, true)
-                    .config(QueryConfig::kAggregationSpillEnabled, true)
-                    .config(
-                        QueryConfig::kSpillNumPartitionBits,
-                        std::to_string(numPartitionBits))
-                    .assertResults(results);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(tempDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, numPartitionBits)
+            .assertResults(results);
 
     auto stats = task->taskStats().pipelineStats;
     ASSERT_LT(
@@ -1455,10 +1454,8 @@ TEST_F(AggregationTest, spillWithCappedMergeFiles) {
             .spillDirectory(spillDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
-            .config(QueryConfig::kSpillNumPartitionBits, "0")
-            .config(
-                QueryConfig::kSpillNumMaxMergeFiles,
-                std::to_string(numMaxMergeFiles))
+            .config(QueryConfig::kSpillNumPartitionBits, 0)
+            .config(QueryConfig::kSpillNumMaxMergeFiles, numMaxMergeFiles)
             .config(
                 QueryConfig::kMaxOutputBatchRows, testCase.maxOutputBatchRows)
             .maxDrivers(1)
@@ -1511,17 +1508,16 @@ TEST_F(AggregationTest, distinctSpillWithCappedMergeFiles) {
 
     auto spillDirectory = TempDirectoryPath::create();
     TestScopedSpillInjection scopedSpillInjection(100);
-    auto task = AssertQueryBuilder(plan)
-                    .spillDirectory(spillDirectory->getPath())
-                    .config(QueryConfig::kSpillEnabled, true)
-                    .config(QueryConfig::kAggregationSpillEnabled, true)
-                    .config(QueryConfig::kSpillNumPartitionBits, "2")
-                    .config(QueryConfig::kMaxSpillRunRows, "4096")
-                    .config(
-                        QueryConfig::kSpillNumMaxMergeFiles,
-                        std::to_string(numMaxMergeFiles))
-                    .maxDrivers(1)
-                    .assertResults(expected);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(spillDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, 2)
+            .config(QueryConfig::kMaxSpillRunRows, 4'096)
+            .config(QueryConfig::kSpillNumMaxMergeFiles, numMaxMergeFiles)
+            .maxDrivers(1)
+            .assertResults(expected);
 
     const auto planStats = toPlanStats(task->taskStats());
     const auto& stats = planStats.at(aggregationNodeId);
@@ -1567,16 +1563,15 @@ TEST_F(AggregationTest, distinctSpillWithCappedMergeFilesSparseKeys) {
 
     auto spillDirectory = TempDirectoryPath::create();
     TestScopedSpillInjection scopedSpillInjection(100);
-    auto task = AssertQueryBuilder(plan)
-                    .spillDirectory(spillDirectory->getPath())
-                    .config(QueryConfig::kSpillEnabled, true)
-                    .config(QueryConfig::kAggregationSpillEnabled, true)
-                    .config(QueryConfig::kSpillNumPartitionBits, "0")
-                    .config(
-                        QueryConfig::kSpillNumMaxMergeFiles,
-                        std::to_string(numMaxMergeFiles))
-                    .maxDrivers(1)
-                    .assertResults(expected);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(spillDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, 0)
+            .config(QueryConfig::kSpillNumMaxMergeFiles, numMaxMergeFiles)
+            .maxDrivers(1)
+            .assertResults(expected);
 
     const auto planStats = toPlanStats(task->taskStats());
     const auto& stats = planStats.at(aggregationNodeId);
@@ -2151,10 +2146,8 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .config(
                 QueryConfig::kPreferredOutputBatchBytes,
-                std::to_string(testData.maxOutputBytes))
-            .config(
-                QueryConfig::kMaxOutputBatchRows,
-                std::to_string(testData.maxOutputRows))
+                testData.maxOutputBytes)
+            .config(QueryConfig::kMaxOutputBatchRows, testData.maxOutputRows)
             .plan(
                 PlanBuilder()
                     .values(inputs)
@@ -2216,10 +2209,8 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .config(
                 QueryConfig::kPreferredOutputBatchBytes,
-                std::to_string(testData.maxOutputBytes))
-            .config(
-                QueryConfig::kMaxOutputBatchRows,
-                std::to_string(testData.maxOutputRows))
+                testData.maxOutputBytes)
+            .config(QueryConfig::kMaxOutputBatchRows, testData.maxOutputRows)
             .plan(
                 PlanBuilder()
                     .values(vectors)
@@ -2261,12 +2252,9 @@ TEST_F(AggregationTest, spillDuringOutputProcessing) {
           .config(QueryConfig::kAggregationSpillEnabled, true)
           // Set very large output buffer size, the number of output rows is
           // effectively controlled by 'kPreferredOutputBatchBytes'.
-          .config(
-              QueryConfig::kPreferredOutputBatchBytes,
-              std::to_string(1'000'000'000))
-          .config(
-              QueryConfig::kMaxOutputBatchRows, std::to_string(numOutputRows))
-          .config(QueryConfig::kSpillNumPartitionBits, "0")
+          .config(QueryConfig::kPreferredOutputBatchBytes, 1'000'000'000)
+          .config(QueryConfig::kMaxOutputBatchRows, numOutputRows)
+          .config(QueryConfig::kSpillNumPartitionBits, 0)
           .plan(
               PlanBuilder()
                   .values({input})
@@ -2343,10 +2331,8 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithoutSpill) {
         AssertQueryBuilder(duckDbQueryRunner_)
             .config(
                 QueryConfig::kPreferredOutputBatchBytes,
-                std::to_string(testData.maxOutputBytes))
-            .config(
-                QueryConfig::kMaxOutputBatchRows,
-                std::to_string(testData.maxOutputRows))
+                testData.maxOutputBytes)
+            .config(QueryConfig::kMaxOutputBatchRows, testData.maxOutputRows)
             .plan(
                 PlanBuilder()
                     .values(inputs)
@@ -2405,10 +2391,10 @@ DEBUG_ONLY_TEST_F(AggregationTest, minSpillableMemoryReservation) {
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .config(
                 QueryConfig::kMinSpillableReservationPct,
-                std::to_string(minSpillableReservationPct))
+                minSpillableReservationPct)
             .config(
                 QueryConfig::kSpillableReservationGrowthPct,
-                std::to_string(minSpillableReservationPct + 1))
+                minSpillableReservationPct + 1)
             .plan(
                 PlanBuilder()
                     .values(batches)
@@ -2794,21 +2780,20 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
     auto testPlan = [&](const core::PlanNodePtr& plan, const std::string& sql) {
       SCOPED_TRACE(sql);
       TestScopedSpillInjection scopedSpillInjection(100);
-      auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                      .spillDirectory(spillDirectory->getPath())
-                      .config(QueryConfig::kSpillEnabled, true)
-                      .config(QueryConfig::kAggregationSpillEnabled, true)
-                      .config(
-                          QueryConfig::kSpillPrefixSortEnabled,
-                          testData.prefixSortSpillEnabled)
-                      .config(
-                          QueryConfig::kPrefixSortMinRows,
-                          std::to_string(testData.minNumRows))
-                      .config(
-                          QueryConfig::kPrefixSortNormalizedKeyMaxBytes,
-                          std::to_string(testData.maxNormalizedKeyBytes))
-                      .plan(plan)
-                      .assertResults(sql);
+      auto task =
+          AssertQueryBuilder(duckDbQueryRunner_)
+              .spillDirectory(spillDirectory->getPath())
+              .config(QueryConfig::kSpillEnabled, true)
+              .config(QueryConfig::kAggregationSpillEnabled, true)
+              .config(
+                  QueryConfig::kSpillPrefixSortEnabled,
+                  testData.prefixSortSpillEnabled)
+              .config(QueryConfig::kPrefixSortMinRows, testData.minNumRows)
+              .config(
+                  QueryConfig::kPrefixSortNormalizedKeyMaxBytes,
+                  testData.maxNormalizedKeyBytes)
+              .plan(plan)
+              .assertResults(sql);
 
       auto taskStats = exec::toPlanStats(task->taskStats());
       auto& stats = taskStats.at(aggrNodeId);
@@ -4475,9 +4460,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
             .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, true)
             .config(core::QueryConfig::kAggregationSpillEnabled, true)
-            .config(
-                core::QueryConfig::kMaxSpillRunRows,
-                std::to_string(maxSpillRunRows))
+            .config(core::QueryConfig::kMaxSpillRunRows, maxSpillRunRows)
             .plan(
                 PlanBuilder()
                     .values(vectors)
@@ -4526,20 +4509,19 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
 
     const auto spillDirectory = TempDirectoryPath::create();
     core::PlanNodeId aggrNodeId;
-    auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                    .spillDirectory(spillDirectory->getPath())
-                    .config(core::QueryConfig::kSpillEnabled, true)
-                    .config(core::QueryConfig::kAggregationSpillEnabled, true)
-                    .config(
-                        core::QueryConfig::kMaxSpillRunRows,
-                        std::to_string(maxSpillRunRows))
-                    .plan(
-                        PlanBuilder()
-                            .values(vectors)
-                            .singleAggregation({"c0"}, {})
-                            .capturePlanNodeId(aggrNodeId)
-                            .planNode())
-                    .assertResults("SELECT distinct c0 FROM tmp");
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .spillDirectory(spillDirectory->getPath())
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kAggregationSpillEnabled, true)
+            .config(core::QueryConfig::kMaxSpillRunRows, maxSpillRunRows)
+            .plan(
+                PlanBuilder()
+                    .values(vectors)
+                    .singleAggregation({"c0"}, {})
+                    .capturePlanNodeId(aggrNodeId)
+                    .planNode())
+            .assertResults("SELECT distinct c0 FROM tmp");
     auto taskStats = exec::toPlanStats(task->taskStats());
     auto& planStats = taskStats.at(aggrNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
@@ -5655,8 +5637,8 @@ TEST_F(
   auto result =
       AssertQueryBuilder(plan)
           .maxDrivers(1)
-          .config(QueryConfig::kMaxPartialAggregationMemory, "4096")
-          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, "4096")
+          .config(QueryConfig::kMaxPartialAggregationMemory, 4'096)
+          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, 4'096)
           .copyResults(pool());
   EXPECT_EQ(result->size(), totalRows);
 }
@@ -5692,9 +5674,9 @@ TEST_F(AggregationTest, duplicateKeysWithSpillingAndPreMerge) {
       .config(QueryConfig::kSpillEnabled, true)
       .config(QueryConfig::kAggregationSpillEnabled, true)
       // Force a batch boundary at the transition from key 99 to key 100.
-      .config(QueryConfig::kMaxOutputBatchRows, "100")
-      .config(QueryConfig::kSpillNumPartitionBits, "0")
-      .config(QueryConfig::kSpillNumMaxMergeFiles, "2")
+      .config(QueryConfig::kMaxOutputBatchRows, 100)
+      .config(QueryConfig::kSpillNumPartitionBits, 0)
+      .config(QueryConfig::kSpillNumMaxMergeFiles, 2)
       .maxDrivers(1)
       .plan(
           PlanBuilder()
