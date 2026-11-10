@@ -19,7 +19,9 @@
 
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -39,6 +41,8 @@
 #include <limits>
 #include <mutex>
 #include <thread>
+
+DECLARE_bool(velox_ssd_odirect);
 
 namespace facebook::velox::cudf_velox::connector::hive {
 namespace {
@@ -519,6 +523,92 @@ TEST_F(CachingDataSourceTest, hostMissHitAndFileIdentity) {
       true);
   anotherFile->host_read(17, 512);
   EXPECT_EQ(read_->reads, 2);
+}
+
+// An entry written to the SSD cache and then dropped from RAM is read back
+// from SSD, without a remote read.
+TEST_F(CachingDataSourceTest, ramMissReadsFromSsd) {
+  // The temp directory may be on tmpfs, which does not support O_DIRECT.
+  FLAGS_velox_ssd_odirect = false;
+  filesystems::registerLocalFileSystem();
+  auto directory = common::testutil::TempDirectoryPath::create();
+  folly::CPUThreadPoolExecutor ssdExecutor(1);
+  auto ssdCache = std::make_unique<cache::SsdCache>(cache::SsdCache::Config(
+      directory->getPath() + "/cache", 64 << 20, 1, &ssdExecutor));
+  // An allocator serves one cache. The fixture's allocator serves 'cache_'.
+  memory::MallocAllocator allocator(memory::MemoryAllocator::Options{
+      .capacity = 16 << 20, .reservationByteLimit = 0});
+  auto cache = cache::AsyncDataCache::create(&allocator, std::move(ssdCache));
+  fillPattern(read_->data.size());
+  auto input = maybeCacheKvikioDataSource(
+      std::make_unique<MemorySource>(read_), path_, cache.get(), true, stats_);
+
+  // RAM miss, SSD miss: remote read into a new RAM entry.
+  input->host_read(64, 4096);
+
+  // Write the entry to SSD, then drop it from RAM.
+  ASSERT_TRUE(cache->ssdCache()->startWrite());
+  cache->saveToSsd(/*saveAll=*/true);
+  cache->ssdCache()->waitForWriteToFinish();
+  cache->clear();
+
+  // RAM miss, SSD hit: the bytes come from SSD, not from a remote read.
+  std::vector<uint8_t> dst(4096);
+  EXPECT_EQ(input->host_read(64, dst.size(), dst.data()), dst.size());
+  EXPECT_EQ(std::memcmp(dst.data(), read_->data.data() + 64, dst.size()), 0);
+  EXPECT_EQ(read_->reads, 1);
+  const auto metrics = stats_->stats();
+  EXPECT_EQ(metrics.at("cudfKvikioCacheMissBytes").sum, 4096);
+  EXPECT_EQ(metrics.at("cudfKvikioCacheSsdBytes").sum, 4096);
+
+  cache->shutdown();
+}
+
+// An entry larger than an SSD region (64 MiB) never fits on SSD. Saving it to
+// SSD must not evict the other entries on SSD. If such an entry is saved to SSD,
+// this test hangs in waitForWriteToFinish() instead of failing.
+TEST_F(CachingDataSourceTest, entryLargerThanSsdRegionKeepsSsdEntries) {
+  // The temp directory may be on tmpfs, which does not support O_DIRECT.
+  FLAGS_velox_ssd_odirect = false;
+  filesystems::registerLocalFileSystem();
+  auto directory = common::testutil::TempDirectoryPath::create();
+  folly::CPUThreadPoolExecutor ssdExecutor(1);
+  // Room for two regions on SSD.
+  auto ssdCache = std::make_unique<cache::SsdCache>(cache::SsdCache::Config(
+      directory->getPath() + "/cache",
+      2 * cache::SsdFile::kRegionSize,
+      1,
+      &ssdExecutor));
+  // An allocator serves one cache. The fixture's allocator serves 'cache_'.
+  memory::MallocAllocator allocator(memory::MemoryAllocator::Options{
+      .capacity = 256 << 20, .reservationByteLimit = 0});
+  auto cache = cache::AsyncDataCache::create(&allocator, std::move(ssdCache));
+  constexpr size_t kSmallBytes = 4096;
+  constexpr size_t kLargeBytes = cache::SsdFile::kRegionSize + 4096;
+  fillPattern(kSmallBytes + kLargeBytes);
+  auto input = maybeCacheKvikioDataSource(
+      std::make_unique<MemorySource>(read_), path_, cache.get(), true, stats_);
+
+  // A small entry, written to SSD.
+  input->host_read(0, kSmallBytes);
+  ASSERT_TRUE(cache->ssdCache()->startWrite());
+  cache->saveToSsd(/*saveAll=*/true);
+  cache->ssdCache()->waitForWriteToFinish();
+
+  // An entry larger than an SSD region. The cache starts a write to SSD by
+  // itself once enough bytes wait to be saved, which this entry alone is.
+  // Wait for that write.
+  input->host_read(kSmallBytes, kLargeBytes);
+  EXPECT_EQ(read_->reads, 2);
+  cache->ssdCache()->waitForWriteToFinish();
+
+  // The small entry is still on SSD: after dropping RAM, it comes from SSD.
+  cache->clear();
+  EXPECT_EQ(input->host_read(0, kSmallBytes)->size(), kSmallBytes);
+  EXPECT_EQ(read_->reads, 2);
+  EXPECT_EQ(stats_->stats().at("cudfKvikioCacheSsdBytes").sum, kSmallBytes);
+
+  cache->shutdown();
 }
 
 TEST_F(CachingDataSourceTest, failedAndShortReadsAreNotCached) {

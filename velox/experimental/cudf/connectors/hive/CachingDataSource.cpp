@@ -19,6 +19,7 @@
 
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/caching/SsdCache.h"
 
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -52,14 +53,16 @@
 // The requested byte range is served piece by piece, starting at its offset.
 // Each piece comes from one async data cache entry, looked up by (file, offset
 // of the piece):
-//   - Entry found: copy its bytes. The entry may be shorter than the rest of
-//     the range. The next piece then starts where this entry ends.
-//   - No entry: do a remote read of the rest of the range into a new entry,
-//     then copy its bytes.
+//   - Entry found: copy its bytes. The entry may end before the end of the
+//     range. The next piece then starts where this entry ends.
+//   - No entry: fill a new entry with the bytes from this piece's offset to
+//     the end of the range, then copy its bytes. The bytes come from the SSD
+//     cache when it is enabled and holds them, otherwise from a remote read.
 //   - Entry being filled by another read: wait for it, then look it up again.
 //   - The async data cache cannot hold the piece (not enough free memory for
 //     it, or 2 GiB or more, the most an entry can hold): do a remote read of
-//     the rest of the range without the async data cache.
+//     the bytes from this piece's offset to the end of the range, without the
+//     async data cache.
 //
 // Device reads copy each piece from host memory into a pinned buffer, then to
 // the GPU. device_read_async() uses two thread pools: a fill thread brings the
@@ -322,8 +325,9 @@ class Reader {
   }
 
   // Puts the range from 'offset' in the cache, piece by piece, and returns a
-  // pin per piece. Stops at the first piece that cannot be cached. The rest of
-  // the range is then read without the cache.
+  // pin per piece. Stops at the first piece that cannot be cached. The bytes
+  // from that piece's offset to the end of the range are then read without the
+  // cache.
   std::vector<cache::CachePin> cacheRange(size_t offset, size_t bytes) {
     std::vector<cache::CachePin> pins;
     size_t cached = 0;
@@ -371,8 +375,8 @@ class Reader {
   }
 
   // Queues the GPU copies of the cached pieces in 'pins', from cacheRange(),
-  // then reads the rest of the range without the cache. Returns the number of
-  // bytes queued.
+  // then reads the bytes after the last cached piece, up to the end of the
+  // range, without the cache. Returns the number of bytes queued.
   size_t copyRangeToGpu(
       std::vector<cache::CachePin> pins,
       const DeviceRead& read) {
@@ -491,15 +495,52 @@ class Reader {
       }
       return pin;
     }
-    // Miss: this read created the entry (exclusive) and fills it from S3.
-    const auto bytesRead = kvikioSource_->host_read(
-        offset, size, reinterpret_cast<uint8_t*>(entry->contiguousData()));
-    // Never make a partly filled entry readable.
-    VELOX_CHECK_EQ(bytesRead, size, "Short KvikIO read while filling cache");
+    // Miss: this read created a new, empty RAM entry. Fill it with the piece's
+    // bytes, from the SSD cache if the SSD cache holds them, otherwise from S3
+    // through KvikIO.
+    if (fillEntryFromSsd(pin, offset)) {
+      countBytes("cudfKvikioCacheSsdBytes", size);
+    } else {
+      const auto bytesRead = kvikioSource_->host_read(
+          offset, size, reinterpret_cast<uint8_t*>(entry->contiguousData()));
+      // Never make a partly filled entry readable.
+      VELOX_CHECK_EQ(bytesRead, size, "Short KvikIO read while filling cache");
+      countBytes("cudfKvikioCacheMissBytes", size);
+    }
+    // An entry larger than an SSD region (64 MiB) never fits on SSD, and trying
+    // to write it there never finishes. Such an entry is not saved to SSD.
+    const bool ssdSavable = size <= cache::SsdFile::kRegionSize;
     // Filled: make the entry readable by other reads (shared).
-    entry->setExclusiveToShared();
-    countBytes("cudfKvikioCacheMissBytes", size);
+    entry->setExclusiveToShared(ssdSavable);
     return pin;
+  }
+
+  // Fills the new entry in 'pin', for the piece at 'offset', from the SSD
+  // cache. Returns false when there is no SSD cache, or when the SSD cache
+  // does not hold the whole piece.
+  bool fillEntryFromSsd(cache::CachePin& pin, size_t offset) {
+    auto* ssdCache = cache_->ssdCache();
+    if (ssdCache == nullptr) {
+      return false;
+    }
+    auto& ssdFile = ssdCache->file(fileId_.id());
+    auto ssdPin = ssdFile.find(cache::RawFileCacheKey{fileId_.id(), offset});
+    if (ssdPin.empty()) {
+      return false;
+    }
+    // The SSD copy may be shorter than the piece. Read the piece from KvikIO.
+    if (ssdPin.run().size() < pin.checkedEntry()->size()) {
+      return false;
+    }
+    std::vector<cache::SsdPin> ssdPins;
+    ssdPins.push_back(std::move(ssdPin));
+    // load() takes vectors of pins. A pin on an entry being filled cannot be
+    // copied. Move it into the vector, then back.
+    std::vector<cache::CachePin> pins;
+    pins.push_back(std::move(pin));
+    ssdFile.load(ssdPins, pins);
+    pin = std::move(pins[0]);
+    return true;
   }
 
   static void
