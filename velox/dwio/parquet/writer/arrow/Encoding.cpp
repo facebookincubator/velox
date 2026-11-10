@@ -20,6 +20,7 @@
 
 #include <glog/logging.h>
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -2623,8 +2624,7 @@ void DeltaBitPackEncoder<DType>::flushBlock() {
 
     // The minimum number of bits required to write any of values in deltas_.
     // Vector. See overflow comment above.
-    const auto bitWidth = bitWidthData[i] =
-        ::arrow::bit_util::NumRequiredBits(maxDelta - minDelta);
+    const auto bitWidth = bitWidthData[i] = std::bit_width(maxDelta - minDelta);
 
     for (uint32_t j = start; j < start + valuesCurrentMiniBlock; j++) {
       // See overflow comment above.
