@@ -216,6 +216,52 @@ TEST_P(BRoundTest, floatingPointEncodings) {
   testFloatingPointEncodings<double>();
 }
 
+TEST_P(BRoundTest, floatingPointLargePositiveScales) {
+  const auto input = makeNullableFlatVector<double>(
+      {9'007'199'254'740'991.0,
+       -9'007'199'254'740'991.0,
+       4'503'599'627'370'495.5,
+       -4'503'599'627'370'495.5,
+       std::nullopt});
+  const auto row = makeRowVector({input});
+  for (const char* name : {"round", "bround"}) {
+    for (int32_t scale : {1, 2, 15}) {
+      SCOPED_TRACE(fmt::format("{} at scale {}", name, scale));
+      testEncodings(
+          makeTypedExpr(
+              fmt::format("{}(c0, cast({} as integer))", name, scale),
+              row->rowType()),
+          {input},
+          input);
+    }
+  }
+
+  const auto ties = makeNullableFlatVector<double>(
+      {17'592'186'044'415.75,
+       17'592'186'044'416.0,
+       17'592'186'044'416.25,
+       17'592'186'044'416.75,
+       -17'592'186'044'415.75,
+       -17'592'186'044'416.0,
+       -17'592'186'044'416.25,
+       -17'592'186'044'416.75,
+       std::nullopt});
+  testEncodings(
+      makeTypedExpr(
+          "bround(c0, cast(1 as integer))", makeRowVector({ties})->rowType()),
+      {ties},
+      makeNullableFlatVector<double>(
+          {17'592'186'044'415.8,
+           17'592'186'044'416.0,
+           17'592'186'044'416.2,
+           17'592'186'044'416.8,
+           -17'592'186'044'415.8,
+           -17'592'186'044'416.0,
+           -17'592'186'044'416.2,
+           -17'592'186'044'416.8,
+           std::nullopt}));
+}
+
 TEST_P(BRoundTest, floatingPointExtremePositiveScales) {
   EXPECT_EQ(
       bround<double>(std::numeric_limits<double>::max(), 1),
