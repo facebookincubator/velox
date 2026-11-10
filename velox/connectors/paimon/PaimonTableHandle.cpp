@@ -146,9 +146,6 @@ folly::dynamic PaimonTableHandle::serialize() const {
   folly::dynamic obj = serializeFileFields("PaimonTableHandle");
   obj["version"] = kSerdeVersion;
   if (!tableSchemas_.empty()) {
-    // Old workers must reject scans needing historical identity rather than
-    // silently interpret the files using the current column names.
-    obj["version"] = kSchemaEvolutionSerdeVersion;
     obj["dataSchemas"] = folly::dynamic::array;
     for (const auto& [id, schema] : tableSchemas_) {
       obj["dataSchemas"].push_back(
@@ -173,11 +170,7 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
     const folly::dynamic& obj,
     void* context) {
   VELOX_USER_CHECK(
-      obj.at("version").isInt() &&
-          ((obj.at("version").asInt() == kSerdeVersion &&
-            !obj.count("dataSchemas")) ||
-           (obj.at("version").asInt() == kSchemaEvolutionSerdeVersion &&
-            obj.count("dataSchemas"))),
+      obj.at("version").isInt() && obj.at("version").asInt() == kSerdeVersion,
       "Unsupported Paimon table handle wire version");
 
   TableSchemas tableSchemas;

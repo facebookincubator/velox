@@ -179,8 +179,11 @@ PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
     std::string filePath,
     uint64_t fileSize,
     int32_t level) {
-  dataFiles_.emplace_back(
-      schemaId, std::move(filePath), fileSize, /*rowCount=*/0, level);
+  PaimonDataFile meta(schemaId);
+  meta.path = std::move(filePath);
+  meta.size = fileSize;
+  meta.level = level;
+  dataFiles_.emplace_back(std::move(meta));
   return *this;
 }
 

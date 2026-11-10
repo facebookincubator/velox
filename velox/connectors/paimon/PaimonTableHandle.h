@@ -28,7 +28,6 @@ namespace facebook::velox::connector::paimon {
 class PaimonTableHandle final : public connector::FileTableHandle {
  public:
   static constexpr int32_t kSerdeVersion = 1;
-  static constexpr int32_t kSchemaEvolutionSerdeVersion = 2;
 
   /// Caller-resolved historical table fields, in their declared order,
   /// including partition columns. Only top-level identities are represented.

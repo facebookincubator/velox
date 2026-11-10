@@ -218,7 +218,7 @@ TEST_F(PaimonTableHandleTest, historicalSchemas) {
   };
   const auto original = make({{0, {oldType, {8, 7, 30}}}});
   const auto obj = original.serialize();
-  EXPECT_EQ(obj["version"], PaimonTableHandle::kSchemaEvolutionSerdeVersion);
+  EXPECT_EQ(obj["version"], PaimonTableHandle::kSerdeVersion);
   const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
   ASSERT_EQ(copy->tableSchemas().size(), 1);
   EXPECT_EQ(*copy->tableSchemas().at(0).rowType, *oldType);
@@ -226,15 +226,11 @@ TEST_F(PaimonTableHandleTest, historicalSchemas) {
       copy->tableSchemas().at(0).fieldIds, (std::vector<int32_t>{8, 7, 30}));
   EXPECT_EQ(*copy->rowType(), *original.rowType());
   EXPECT_EQ(copy->fieldIds(), original.fieldIds());
+  EXPECT_EQ(copy->serialize(), obj);
   EXPECT_EQ(make({}).serialize()["version"], 1);
   EXPECT_EQ(make({}).serialize().count("dataSchemas"), 0);
 
   auto invalid = obj;
-  invalid["version"] = 1;
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle::create(invalid, nullptr),
-      "Unsupported Paimon table handle wire version");
-  invalid = obj;
   invalid["dataSchemas"].push_back(obj["dataSchemas"][0]);
   VELOX_ASSERT_THROW(
       PaimonTableHandle::create(invalid, nullptr),
