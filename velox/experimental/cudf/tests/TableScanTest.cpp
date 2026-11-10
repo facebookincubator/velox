@@ -2244,6 +2244,9 @@ TEST_F(TableScanTest, timestampRangeFilter) {
       "c0 < " + boundSql,
       "c0 <= " + boundSql,
       "c0 <> " + boundSql,
+      // This value is representable in the nanosecond FILE, even when the
+      // requested output unit is coarser. It must exclude the 500ns row.
+      "c0 <> timestamp '2023-11-14 22:13:20.000000500'",
       "c0 = " + boundSql,
       "c0 > timestamp '1969-12-31 23:59:59.9995'",
       "c0 < timestamp '1969-12-31 23:59:59.9995'",

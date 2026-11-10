@@ -531,6 +531,55 @@ cudf::ast::expression const& createAlwaysFalseExpr(
   return tree.push(Operation{Op::NULL_LOGICAL_AND, isNull, isNotNull});
 }
 
+int128_t timestampNanos(const Timestamp& timestamp) {
+  return int128_t{timestamp.getSeconds()} * Timestamp::kNanosInSecond +
+      timestamp.getNanos();
+}
+
+// Recognize exactly the complement of one nanosecond, independent of order.
+std::optional<int128_t> excludedTimestamp(
+    const std::vector<const common::Filter*>& filters) {
+  if (filters.size() != 2 ||
+      filters[0]->kind() != common::FilterKind::kTimestampRange ||
+      filters[1]->kind() != common::FilterKind::kTimestampRange) {
+    return std::nullopt;
+  }
+  auto* lower = static_cast<const common::TimestampRange*>(filters[0]);
+  auto* upper = static_cast<const common::TimestampRange*>(filters[1]);
+  if (lower->lower() > upper->lower()) {
+    std::swap(lower, upper);
+  }
+  const auto excluded = timestampNanos(lower->upper()) + 1;
+  if (lower->lower() != Timestamp::min() ||
+      upper->upper() != Timestamp::max() ||
+      timestampNanos(upper->lower()) != excluded + 1) {
+    return std::nullopt;
+  }
+  return excluded;
+}
+
+template <typename T>
+const cudf::ast::expression& compareTimestampTicks(
+    int128_t ticks,
+    cudf::ast::ast_operator op,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::column_reference& columnRef,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  scalars.push_back(
+      std::make_unique<cudf::timestamp_scalar<T>>(
+          T{typename T::duration{static_cast<typename T::rep>(ticks)}},
+          true,
+          stream,
+          mr));
+  stream.sync();
+  auto const& literal = tree.push(
+      cudf::ast::literal{
+          *static_cast<cudf::timestamp_scalar<T>*>(scalars.back().get())});
+  return tree.push(cudf::ast::operation{op, columnRef, literal});
+}
+
 // Converts a TimestampRange to comparisons with literals of the column's
 // timestamp type T. Column values are whole ticks of T, so rounding the lower
 // bound up and the upper bound down to ticks keeps the result exact, including
@@ -552,10 +601,6 @@ const cudf::ast::expression& buildTimestampRangeExpr(
   constexpr int128_t kNanosPerTick =
       int128_t{Timestamp::kNanosInSecond} * T::period::num / T::period::den;
 
-  const auto toNanos = [](const Timestamp& timestamp) {
-    return int128_t{timestamp.getSeconds()} * Timestamp::kNanosInSecond +
-        timestamp.getNanos();
-  };
   // Rounds 'nanos' down (up if 'roundUp') to ticks.
   const auto toTicks = [&](int128_t nanos, bool roundUp) {
     const auto quotient = nanos / kNanosPerTick;
@@ -571,8 +616,8 @@ const cudf::ast::expression& buildTimestampRangeExpr(
 
   constexpr int128_t kMinTicks = std::numeric_limits<Rep>::min();
   constexpr int128_t kMaxTicks = std::numeric_limits<Rep>::max();
-  const auto lowerTicks = toTicks(toNanos(range.lower()), true);
-  const auto upperTicks = toTicks(toNanos(range.upper()), false);
+  const auto lowerTicks = toTicks(timestampNanos(range.lower()), true);
+  const auto upperTicks = toTicks(timestampNanos(range.upper()), false);
 
   if (lowerTicks > kMaxTicks || upperTicks < kMinTicks ||
       lowerTicks > upperTicks) {
@@ -580,17 +625,8 @@ const cudf::ast::expression& buildTimestampRangeExpr(
   }
 
   auto compare = [&](int128_t ticks, Op op) -> const cudf::ast::expression& {
-    scalars.push_back(
-        std::make_unique<cudf::timestamp_scalar<T>>(
-            T{typename T::duration{static_cast<Rep>(ticks)}},
-            true,
-            stream,
-            mr));
-    stream.sync();
-    auto const& literal = tree.push(
-        cudf::ast::literal{
-            *static_cast<cudf::timestamp_scalar<T>*>(scalars.back().get())});
-    return tree.push(Operation{op, columnRef, literal});
+    return compareTimestampTicks<T>(
+        ticks, op, tree, scalars, columnRef, stream, mr);
   };
 
   if (lowerTicks == upperTicks) {
@@ -850,6 +886,30 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
       collectValueFilters(filter, valueFilters);
       if (valueFilters.empty()) {
         return createAlwaysFalseExpr(columnRef, tree);
+      }
+      if (const auto excluded = excludedTimestamp(valueFilters);
+          excluded && timestampType) {
+        return cudf::type_dispatcher(
+            cudf::data_type{*timestampType},
+            [&]<typename T>() -> const cudf::ast::expression& {
+              if constexpr (cudf::is_timestamp<T>()) {
+                constexpr int128_t kNanosPerTick =
+                    int128_t{Timestamp::kNanosInSecond} * T::period::num /
+                    T::period::den;
+                const auto ticks = *excluded / kNanosPerTick;
+                if (*excluded % kNanosPerTick != 0 ||
+                    ticks < std::numeric_limits<typename T::rep>::min() ||
+                    ticks > std::numeric_limits<typename T::rep>::max()) {
+                  // No non-null column value can equal the excluded timestamp.
+                  auto const& isNull =
+                      tree.push(Operation{Op::IS_NULL, columnRef});
+                  return tree.push(Operation{Op::NOT, isNull});
+                }
+                return compareTimestampTicks<T>(
+                    ticks, Op::NOT_EQUAL, tree, scalars, columnRef, stream, mr);
+              }
+              VELOX_UNREACHABLE();
+            });
       }
       return createAstFromFiltersOr(
           subfield,

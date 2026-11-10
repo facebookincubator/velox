@@ -1722,6 +1722,110 @@ TEST_F(SubfieldFilterAstTest, deferredTimestampKeepsFilePrecision) {
       rowType, "ts", *positive, assembled, *transformed.deferredExpr);
 }
 
+TEST_F(SubfieldFilterAstTest, timestampNotEqualSpecialization) {
+  using Op = cudf::ast::ast_operator;
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  const auto rowType = ROW({"c0"}, {TIMESTAMP()});
+  const common::Subfield subfield("c0");
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_MILLISECONDS,
+        cudf::type_id::TIMESTAMP_NANOSECONDS}) {
+    config.timestampUnit = unit;
+    const auto vector = makeRowVector(
+        {"c0"},
+        {makeNullableFlatVector<Timestamp>(
+            {Timestamp(-2, 0),
+             Timestamp(-1, 0),
+             Timestamp(0, 0),
+             Timestamp(1, 0),
+             Timestamp(2, 0),
+             Timestamp(
+                 -1,
+                 unit == cudf::type_id::TIMESTAMP_NANOSECONDS ? 1 : 1'000'000),
+             std::nullopt})});
+    for (const bool nullAllowed : {false, true}) {
+      const auto check = [&](const common::Filter& filter,
+                             Op valueOp,
+                             std::optional<size_t> scalarCount) {
+        cudf::ast::tree tree;
+        std::vector<std::unique_ptr<cudf::scalar>> scalars;
+        const auto& expr = createAstFromSubfieldFilter(
+            subfield, filter, tree, scalars, rowType, nullptr, unit);
+        const auto* root = dynamic_cast<const cudf::ast::operation*>(&expr);
+        ASSERT_NE(root, nullptr);
+        if (nullAllowed) {
+          ASSERT_EQ(root->get_operator(), Op::NULL_LOGICAL_OR);
+          root = dynamic_cast<const cudf::ast::operation*>(
+              &root->get_operands()[1].get());
+          ASSERT_NE(root, nullptr);
+        }
+        EXPECT_EQ(root->get_operator(), valueOp);
+        if (valueOp == Op::NOT) {
+          const auto* operand = dynamic_cast<const cudf::ast::operation*>(
+              &root->get_operands()[0].get());
+          ASSERT_NE(operand, nullptr);
+          EXPECT_EQ(operand->get_operator(), Op::IS_NULL);
+        }
+        if (scalarCount) {
+          EXPECT_EQ(scalars.size(), *scalarCount);
+        }
+        testFilterExecution(rowType, "c0", filter, vector, expr);
+      };
+      for (const auto excluded :
+           {Timestamp(1, 0),
+            Timestamp(-1, 0),
+            Timestamp(-1, 1),
+            Timestamp(Timestamp::kMinSeconds, 1),
+            Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos - 1)}) {
+        SCOPED_TRACE(excluded.getSeconds());
+        // Reverse the ranges and nest them with IsNull: only the outer null
+        // policy is authoritative, regardless of children or their order.
+        std::vector<std::unique_ptr<common::Filter>> ranges;
+        ranges.push_back(exec::greaterThan(excluded, !nullAllowed));
+        ranges.push_back(exec::lessThan(excluded, !nullAllowed));
+        std::vector<std::unique_ptr<common::Filter>> outer;
+        outer.push_back(
+            std::make_unique<common::MultiRange>(
+                std::move(ranges), !nullAllowed));
+        outer.push_back(std::make_unique<common::IsNull>());
+        common::MultiRange filter(std::move(outer), nullAllowed);
+        const bool representable = excluded.getSeconds() >= -1 &&
+            excluded.getSeconds() <= 1 &&
+            (excluded.getNanos() == 0 ||
+             unit == cudf::type_id::TIMESTAMP_NANOSECONDS);
+        check(
+            filter,
+            representable ? Op::NOT_EQUAL : Op::NOT,
+            representable ? 1 : 0);
+      }
+      // At Velox's endpoints only one range survives; leave that path alone.
+      for (const auto endpoint : {Timestamp::min(), Timestamp::max()}) {
+        std::vector<std::unique_ptr<common::Filter>> ranges;
+        ranges.push_back(
+            endpoint == Timestamp::min() ? exec::greaterThan(endpoint)
+                                         : exec::lessThan(endpoint));
+        common::MultiRange filter(std::move(ranges), nullAllowed);
+        check(filter, Op::EQUAL, 0);
+      }
+      // A wider hole or a bounded outside endpoint is not a <> predicate.
+      for (const bool finiteEndpoint : {false, true}) {
+        std::vector<std::unique_ptr<common::Filter>> ranges;
+        ranges.push_back(
+            finiteEndpoint
+                ? exec::between(Timestamp(-2, 0), Timestamp(-1, 999'999'999))
+                : exec::lessThan(Timestamp(-1, 0)));
+        ranges.push_back(exec::greaterThan(Timestamp(0, 0)));
+        common::MultiRange filter(std::move(ranges), nullAllowed);
+        check(filter, Op::NULL_LOGICAL_OR, std::nullopt);
+      }
+    }
+  }
+}
+
 // The bounds become literals of the column's timestamp unit, rounded inward to
 // whole ticks so that the +/-1ns encoding of exclusive bounds stays exact.
 // Bounds beyond the unit's range must not throw.
