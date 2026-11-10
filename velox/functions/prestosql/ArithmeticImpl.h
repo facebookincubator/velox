@@ -98,8 +98,16 @@ VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
   // The threshold is a somewhat arbitrary/empirical number taking up 44 bits in
   // the integer form.
   if constexpr (!std::is_integral_v<TNum>) {
+    const auto scaled = number * factor;
+    // Avoid a lossy round trip when the decimal quantum is smaller than the
+    // spacing toward zero, including the narrower spacing at powers of two.
+    if (std::isfinite(factor) &&
+        std::abs(scaled) >= 1 / std::numeric_limits<TNum>::epsilon() &&
+        std::abs(number - std::nextafter(number, TNum{0})) * factor > 1) {
+      return number;
+    }
     if (fabs(number) < 17592186044415.F) {
-      return std::round(number * factor) / factor;
+      return std::round(scaled) / factor;
     }
   }
 

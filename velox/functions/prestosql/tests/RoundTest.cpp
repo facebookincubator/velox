@@ -15,6 +15,8 @@
  */
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
+#include <cmath>
+
 using namespace facebook::velox;
 
 class RoundTest : public functions::test::FunctionBaseTest {
@@ -178,6 +180,28 @@ TEST_F(RoundTest, roundWithConstantDecimals) {
           12345,
           std::numeric_limits<int64_t>::max(),
           std::numeric_limits<int64_t>::min()});
+}
+
+TEST_F(RoundTest, roundWithDecimalPrecisionBoundary) {
+  runRoundWithDecimalTest<double>(
+      {{17'592'186'044'415.75, 10, 17'592'186'044'415.75},
+       {-17'592'186'044'415.75, 10, -17'592'186'044'415.75},
+       {17'592'186'044'415.5, 20, 17'592'186'044'415.5},
+       {-17'592'186'044'415.5, 20, -17'592'186'044'415.5},
+       {0.75, 23, 0.75},
+       {-0.75, 23, -0.75},
+       {std::nextafter(0.5, 0.0), 16, 0.4999999999999999},
+       {std::nextafter(-0.5, 0.0), 16, -0.4999999999999999},
+       {std::nextafter(0.5, 1.0), 16, std::nextafter(0.5, 1.0)},
+       {std::nextafter(-0.5, -1.0), 16, std::nextafter(-0.5, -1.0)}});
+  runRoundWithDecimalTest<float>(
+      {{100'000.125f, 2, 100'000.13f},
+       {-100'000.125f, 2, -100'000.13f},
+       {200'000.125f, 2, 200'000.125f},
+       {-200'000.125f, 2, -200'000.125f},
+       {std::numeric_limits<float>::denorm_min(),
+        46,
+        std::numeric_limits<float>::denorm_min()}});
 }
 
 TEST_F(RoundTest, roundWithDecimalLargeNumbers) {
