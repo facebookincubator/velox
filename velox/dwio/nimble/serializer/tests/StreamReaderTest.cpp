@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
 #include <folly/coro/BlockingWait.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -580,6 +581,52 @@ TEST_F(StreamReaderTest, decodesMultipleNullableEncodingChunks) {
       actual,
       testing::ElementsAre(
           "alpha", std::nullopt, std::nullopt, "epsilon", "zeta"));
+}
+
+// Ranges that fill consecutive output rows decode in place at their output
+// offset, with their nulls, and leave the other output rows as they are.
+TEST_F(StreamReaderTest, readsDenseScalarRangesInPlace) {
+  const auto stream = encodeNullableChunk<int64_t>(
+      {10, std::nullopt, 12, 13, std::nullopt, 15}, EncodingType::Trivial);
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::Int64});
+  const std::array<std::string_view, 1> streams{stream};
+
+  struct TestParam {
+    std::vector<RowRange> ranges;
+    velox::vector_size_t outputOffset;
+    std::vector<std::optional<int64_t>> expected;
+
+    std::string debugString() const {
+      return fmt::format(
+          "ranges {}, outputOffset {}", ranges.size(), outputOffset);
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {{{0, 2}}, 0, {10, std::nullopt, -1, -1, -1, -1, -1}},
+      {{{2, 4}}, 3, {-1, -1, -1, 12, 13, -1, -1}},
+      {{{1, 3}, {4, 6}}, 2, {-1, -1, std::nullopt, 12, std::nullopt, 15, -1}},
+      {{{2, 4}}, 5, {-1, -1, -1, -1, -1, 12, 13}},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    StreamReader reader{type, pool_.get()};
+    auto output = velox::BaseVector::create(velox::BIGINT(), 7, pool_.get());
+    auto* flat = output->asFlatVector<int64_t>();
+    for (velox::vector_size_t row{0}; row < output->size(); ++row) {
+      flat->set(row, -1);
+    }
+
+    runRead(reader, streams, testData.ranges, testData.outputOffset, output);
+
+    std::vector<std::optional<int64_t>> actual;
+    for (velox::vector_size_t row{0}; row < output->size(); ++row) {
+      actual.push_back(
+          flat->isNullAt(row) ? std::nullopt
+                              : std::optional<int64_t>{flat->valueAt(row)});
+    }
+    EXPECT_THAT(actual, testing::ElementsAreArray(testData.expected));
+  }
 }
 
 TEST_F(StreamReaderTest, decodesMultipleCompressedEncodingChunks) {
