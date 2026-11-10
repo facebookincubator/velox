@@ -17,6 +17,7 @@
 #include <arrow/io/file.h>
 #include <arrow/io/memory.h>
 #include <gmock/gmock.h>
+#include <algorithm>
 #include <numeric>
 
 #include "velox/common/Casts.h"
@@ -97,6 +98,28 @@ class ParquetReaderTest : public ParquetTestBase {
     auto reader = createReader(fileName);
     assertReadWithReaderAndFilters(
         *reader, fileSchema, std::move(filters), expected);
+  }
+
+  // Loads lazy columns while the deleted-row bitmap is still alive.
+  VectorPtr read(
+      dwio::common::RowReader& rowReader,
+      const RowTypePtr& rowType,
+      uint64_t numRows,
+      const std::vector<vector_size_t>& deletedRows) {
+    std::vector<uint64_t> deletedRowBits(bits::nwords(numRows));
+    for (const auto row : deletedRows) {
+      bits::setBit(deletedRowBits.data(), row);
+    }
+    dwio::common::Mutation mutation;
+    mutation.deletedRows = deletedRowBits.data();
+
+    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+    EXPECT_EQ(
+        rowReader.next(
+            numRows, result, deletedRows.empty() ? nullptr : &mutation),
+        numRows);
+    result->loadedVector();
+    return result;
   }
 
   // Builds ReaderOptions with the Parquet thrift footer-memory tracking
@@ -1391,36 +1414,50 @@ TEST_F(ParquetReaderTest, decimalDictionaryFallbackToDeltaByteArray) {
 
 namespace {
 
+// A Parquet file starts with the magic number and ends with the footer, the
+// footer length as a 4-byte little-endian integer, and the magic number.
+constexpr std::string_view kMagic{"PAR1"};
+
+// Returns the footer of Parquet 'file' and the offset where it starts.
+std::pair<thrift::FileMetaData, size_t> readFooter(std::string_view file) {
+  uint32_t footerLength;
+  std::memcpy(
+      &footerLength,
+      file.data() + file.size() - kMagic.size() - sizeof(footerLength),
+      sizeof(footerLength));
+  const auto footerOffset =
+      file.size() - kMagic.size() - sizeof(footerLength) - footerLength;
+
+  thrift::FileMetaData metadata;
+  thrift::deserialize(&metadata, file.substr(footerOffset, footerLength));
+  return {std::move(metadata), footerOffset};
+}
+
+// Returns 'data', which holds the leading magic number and the column chunks
+// of a Parquet file, followed by 'metadata' as the footer.
+std::string appendFooter(
+    std::string data,
+    const thrift::FileMetaData& metadata) {
+  const auto footerOffset = data.size();
+  folly::IOBufQueue footer;
+  thrift::serialize(metadata, &footer);
+  footer.appendToString(data);
+  const uint32_t footerLength = data.size() - footerOffset;
+  data.append(
+      reinterpret_cast<const char*>(&footerLength), sizeof(footerLength));
+  data.append(kMagic);
+  return data;
+}
+
 // Returns a copy of Parquet 'file' whose schema element at 'schemaIndex'
 // declares 'typeLength'. The column data is unchanged.
 std::string overrideTypeLength(
     std::string_view file,
     size_t schemaIndex,
     int32_t typeLength) {
-  // A Parquet file ends with the footer, the footer length as a 4-byte
-  // little-endian integer, and the magic number "PAR1".
-  constexpr size_t kMagicSize = 4;
-  uint32_t footerLength;
-  std::memcpy(
-      &footerLength,
-      file.data() + file.size() - kMagicSize - sizeof(footerLength),
-      sizeof(footerLength));
-  const auto footerOffset =
-      file.size() - kMagicSize - sizeof(footerLength) - footerLength;
-
-  thrift::FileMetaData metadata;
-  thrift::deserialize(&metadata, file.substr(footerOffset, footerLength));
+  auto [metadata, footerOffset] = readFooter(file);
   metadata.schema()->at(schemaIndex).type_length() = typeLength;
-
-  std::string result(file.substr(0, footerOffset));
-  folly::IOBufQueue footer;
-  thrift::serialize(metadata, &footer);
-  footer.appendToString(result);
-  const uint32_t newFooterLength = result.size() - footerOffset;
-  result.append(
-      reinterpret_cast<const char*>(&newFooterLength), sizeof(newFooterLength));
-  result.append(file.substr(file.size() - kMagicSize));
-  return result;
+  return appendFooter(std::string(file.substr(0, footerOffset)), metadata);
 }
 
 // Creates a reader over the Parquet file held in 'file'.
@@ -1511,7 +1548,105 @@ std::string toBigEndian(int128_t value, int32_t numBytes) {
   return bytes;
 }
 
+// Returns a copy of Parquet 'first' whose column chunk is followed by the pages
+// of the column chunk of Parquet 'second'. Both files must hold one column of
+// the same type in one row group without a dictionary page, and use the same
+// compression. The writers used in tests switch encodings within a column
+// chunk only to fall back from dictionary encoding.
+std::string concatenateColumnChunks(
+    std::string_view first,
+    std::string_view second) {
+  auto metadata = readFooter(first).first;
+  const auto secondMetadata = readFooter(second).first;
+  auto& rowGroup = metadata.row_groups()->at(0);
+  auto& columnChunk = rowGroup.columns()->at(0);
+  auto& columnMetadata = columnChunk.meta_data().value();
+  const auto& secondRowGroup = secondMetadata.row_groups()->at(0);
+  const auto& secondColumnMetadata =
+      secondRowGroup.columns()->at(0).meta_data().value();
+  VELOX_CHECK(!columnMetadata.dictionary_page_offset().has_value());
+  VELOX_CHECK(!secondColumnMetadata.dictionary_page_offset().has_value());
+
+  // Drops what follows the column chunk of 'first', such as its page index.
+  std::string data(first.substr(
+      0,
+      *columnMetadata.data_page_offset() +
+          *columnMetadata.total_compressed_size()));
+  data.append(second.substr(
+      *secondColumnMetadata.data_page_offset(),
+      *secondColumnMetadata.total_compressed_size()));
+
+  *metadata.num_rows() += *secondMetadata.num_rows();
+  *rowGroup.num_rows() += *secondRowGroup.num_rows();
+  *rowGroup.total_byte_size() += *secondRowGroup.total_byte_size();
+  if (rowGroup.total_compressed_size().has_value()) {
+    rowGroup.total_compressed_size().value() +=
+        secondRowGroup.total_compressed_size().value();
+  }
+  *columnMetadata.num_values() += *secondColumnMetadata.num_values();
+  *columnMetadata.total_uncompressed_size() +=
+      *secondColumnMetadata.total_uncompressed_size();
+  *columnMetadata.total_compressed_size() +=
+      *secondColumnMetadata.total_compressed_size();
+  auto& encodings = *columnMetadata.encodings();
+  for (const auto encoding : *secondColumnMetadata.encodings()) {
+    if (std::find(encodings.begin(), encodings.end(), encoding) ==
+        encodings.end()) {
+      encodings.push_back(encoding);
+    }
+  }
+  // These describe the pages of 'first' only.
+  columnMetadata.statistics().reset();
+  columnMetadata.encoding_stats().reset();
+  columnMetadata.size_statistics().reset();
+  columnChunk.offset_index_offset().reset();
+  columnChunk.offset_index_length().reset();
+  columnChunk.column_index_offset().reset();
+  columnChunk.column_index_length().reset();
+  return appendFooter(std::move(data), metadata);
+}
+
 } // namespace
+
+// A column chunk may hold pages of different encodings. Skipping values on a
+// page must use the decoder of that page, not one kept from an earlier page.
+TEST_F(ParquetReaderTest, decimalSkipAfterPageEncodingChange) {
+  const auto type = DECIMAL(10, 2);
+  const auto rowType = ROW("value", type);
+  // DECIMAL(10, 2) is written as FIXED_LEN_BYTE_ARRAY(5).
+  const auto writeValues = [&](parquet::arrow::Encoding::type encoding,
+                               const std::vector<int64_t>& values) {
+    std::vector<std::optional<std::string>> bytes;
+    for (const auto value : values) {
+      bytes.push_back(toBigEndian(value, 5));
+    }
+    return writeFixedLenByteArray(type, /*typeLength=*/5, encoding, bytes);
+  };
+  const auto makeExpected = [&](const std::vector<int64_t>& values) {
+    return makeRowVector({"value"}, {makeFlatVector<int64_t>(values, type)});
+  };
+  // The column chunk holds a PLAIN page and then a DELTA_BYTE_ARRAY page.
+  const auto file = concatenateColumnChunks(
+      writeValues(parquet::arrow::Encoding::kPlain, {5}),
+      writeValues(parquet::arrow::Encoding::kDeltaByteArray, {10, 20, 30}));
+
+  {
+    auto reader = createReaderFromBytes(file, makeDefaultReaderOptions());
+    auto rowReader = createRowReaderFromReader(*reader, rowType);
+    assertReadWithReaderAndExpected(
+        rowType, *rowReader, makeExpected({5, 10, 20, 30}), *leafPool_);
+  }
+
+  {
+    // Deleting row 1 skips the first value of the DELTA_BYTE_ARRAY page after
+    // the PLAIN page is read.
+    auto reader = createReaderFromBytes(file, makeDefaultReaderOptions());
+    auto rowReader = createRowReaderFromReader(*reader, rowType);
+    auto result = read(*rowReader, rowType, 4, {1});
+    ASSERT_EQ(result->size(), 3);
+    assertEqualVectorPart(makeExpected({5, 20, 30}), result, 0);
+  }
+}
 
 // A FIXED_LEN_BYTE_ARRAY value must be exactly as long as the type length of
 // its column. DELTA_BYTE_ARRAY stores the length of each value, so a corrupt
@@ -1534,18 +1669,46 @@ TEST_F(ParquetReaderTest, decimalDeltaByteArrayLengthMismatch) {
         overrideTypeLength(file, /*schemaIndex=*/1, typeLength),
         makeDefaultReaderOptions());
     auto rowReader = createRowReaderFromReader(*reader, data->rowType());
-    const auto read = [&]() {
-      VectorPtr result =
-          BaseVector::create(data->rowType(), 0, leafPool_.get());
-      rowReader->next(data->size(), result);
-      // Top-level columns are loaded lazily.
-      result->loadedVector();
-    };
     VELOX_ASSERT_THROW(
-        read(),
+        read(*rowReader, data->rowType(), data->size(), {}),
         fmt::format(
             "(5 vs. {}) DELTA_BYTE_ARRAY value length must equal the FIXED_LEN_BYTE_ARRAY type length",
             typeLength));
+  }
+}
+
+// A PLAIN page stores FIXED_LEN_BYTE_ARRAY values back to back. Reads and
+// skips must not go past the end of a corrupt page that is too short for its
+// values.
+TEST_F(ParquetReaderTest, decimalTruncatedPlainPage) {
+  const auto rowType = ROW("value", DECIMAL(10, 2));
+  // The page holds three 5-byte values, 15 bytes in total, but the column
+  // declares 8-byte values.
+  const auto file = overrideTypeLength(
+      writeFixedLenByteArray(
+          rowType->childAt(0),
+          /*typeLength=*/5,
+          parquet::arrow::Encoding::kPlain,
+          {toBigEndian(1, 5), toBigEndian(2, 5), toBigEndian(3, 5)}),
+      /*schemaIndex=*/1,
+      /*typeLength=*/8);
+
+  {
+    // Reading the second value needs bytes 8 to 15.
+    auto reader = createReaderFromBytes(file, makeDefaultReaderOptions());
+    auto rowReader = createRowReaderFromReader(*reader, rowType);
+    VELOX_ASSERT_THROW(
+        read(*rowReader, rowType, 3, {}),
+        "(8 vs. 7) FIXED_LEN_BYTE_ARRAY values must not extend past the end of the page");
+  }
+
+  {
+    // Reading only the third value skips the first two, which need 16 bytes.
+    auto reader = createReaderFromBytes(file, makeDefaultReaderOptions());
+    auto rowReader = createRowReaderFromReader(*reader, rowType);
+    VELOX_ASSERT_THROW(
+        read(*rowReader, rowType, 3, {0, 1}),
+        "(16 vs. 15) FIXED_LEN_BYTE_ARRAY values must not extend past the end of the page");
   }
 }
 
@@ -1628,14 +1791,9 @@ TEST_F(ParquetReaderTest, decimalWideFixedLenByteArray) {
             {toBigEndian(12'345, 16), toBigEndian(int128_t{1} << 63, 16)}),
         makeDefaultReaderOptions());
     auto rowReader = createRowReaderFromReader(*reader, rowType);
-    const auto read = [&]() {
-      VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-      rowReader->next(2, result);
-      // Top-level columns are loaded lazily.
-      result->loadedVector();
-    };
     VELOX_ASSERT_THROW(
-        read(), "Decimal value of 16 bytes does not fit in 8 bytes");
+        read(*rowReader, rowType, 2, {}),
+        "Decimal value of 16 bytes does not fit in 8 bytes");
   }
 }
 
@@ -2302,6 +2460,89 @@ TEST_F(ParquetReaderTest, readDictFLBAStringBinary) {
             {"apple", berry, "apple", berry}, VARBINARY()));
     assertReadWithFilters(
         filename, ROW("value", VARBINARY()), std::move(filters), expected);
+  }
+}
+
+// Reads FIXED_LEN_BYTE_ARRAY strings from DELTA_BYTE_ARRAY pages, which
+// parquet-mr writes with v2 pages when dictionary encoding is disabled or falls
+// back.
+TEST_F(ParquetReaderTest, readDeltaByteArrayFLBAStringBinary) {
+  const std::string berry("b\0rry", 5);
+  const std::vector<std::optional<std::string>> values = {
+      "apple",
+      std::nullopt,
+      berry,
+      "cider",
+      "apple",
+      std::nullopt,
+      "cider",
+      berry,
+  };
+  const auto file = writeFixedLenByteArray(
+      VARBINARY(),
+      /*typeLength=*/5,
+      parquet::arrow::Encoding::kDeltaByteArray,
+      values);
+
+  // Without a file schema, the unannotated column reads as VARBINARY.
+  {
+    const auto rowType = ROW("value", VARBINARY());
+    auto reader = createReaderFromBytes(file, makeDefaultReaderOptions());
+    EXPECT_THAT(
+        reader->fileMetaData().rowGroup(0).columnChunk(0).encodings(),
+        testing::Contains(thrift::Encoding::DELTA_BYTE_ARRAY));
+    auto column = std::static_pointer_cast<const ParquetTypeWithId>(
+        reader->typeWithId()->childAt(0));
+    EXPECT_EQ(column->parquetType_, thrift::Type::FIXED_LEN_BYTE_ARRAY);
+    EXPECT_EQ(*column->type(), *VARBINARY());
+
+    auto rowReader = createRowReaderFromReader(*reader, rowType);
+    auto expected = makeRowVector(
+        {"value"}, {makeNullableFlatVector<std::string>(values, VARBINARY())});
+    assertReadWithReaderAndExpected(rowType, *rowReader, expected, *leafPool_);
+  }
+
+  // A VARCHAR file schema reads the same bytes as VARCHAR.
+  {
+    const auto rowType = ROW("value", VARCHAR());
+    auto readerOptions = makeDefaultReaderOptions();
+    readerOptions.setFileSchema(rowType);
+    auto reader = createReaderFromBytes(file, readerOptions);
+    EXPECT_EQ(*reader->typeWithId()->childAt(0)->type(), *VARCHAR());
+
+    auto rowReader = createRowReaderFromReader(*reader, rowType);
+    auto expected = makeRowVector(
+        {"value"}, {makeNullableFlatVector<std::string>(values, VARCHAR())});
+    assertReadWithReaderAndExpected(rowType, *rowReader, expected, *leafPool_);
+  }
+
+  // A BytesValues filter selects rows by value and drops nulls.
+  {
+    auto reader = createReaderFromBytes(file, makeDefaultReaderOptions());
+    FilterMap filters;
+    filters.insert(
+        {"value",
+         std::make_unique<common::BytesValues>(
+             std::vector<std::string>{"apple", berry},
+             /*nullAllowed=*/false)});
+    auto expected = makeRowVector(
+        {"value"},
+        {makeFlatVector<std::string>(
+            {"apple", berry, "apple", berry}, VARBINARY())});
+    assertReadWithReaderAndFilters(
+        *reader, ROW("value", VARBINARY()), std::move(filters), expected);
+  }
+
+  // Values must be as long as the type length of the column.
+  {
+    const auto rowType = ROW("value", VARBINARY());
+    auto reader = createReaderFromBytes(
+        overrideTypeLength(file, /*schemaIndex=*/1, /*typeLength=*/6),
+        makeDefaultReaderOptions());
+    auto rowReader = createRowReaderFromReader(*reader, rowType);
+    VELOX_ASSERT_THROW(
+        read(*rowReader, rowType, values.size(), {}),
+        "(5 vs. 6) DELTA_BYTE_ARRAY value length must equal the FIXED_LEN_BYTE_ARRAY type length");
   }
 }
 

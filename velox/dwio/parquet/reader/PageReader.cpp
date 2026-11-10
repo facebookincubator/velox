@@ -962,15 +962,16 @@ void PageReader::makeDecoder() {
       break;
     case Encoding::DELTA_BYTE_ARRAY: {
       // Decimals are supported as FIXED_LEN_BYTE_ARRAY only. Other types are
-      // read as strings and are supported as BYTE_ARRAY only.
-      // TODO: Support FIXED_LEN_BYTE_ARRAY strings, and BYTE_ARRAY decimals,
-      // which also need PLAIN and dictionary page support.
-      const auto supportedType = type_->type()->isDecimal()
-          ? thrift::Type::FIXED_LEN_BYTE_ARRAY
-          : thrift::Type::BYTE_ARRAY;
-      if (parquetType != supportedType) {
+      // read as strings from BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY.
+      // TODO: Support BYTE_ARRAY decimals, which also need PLAIN and
+      // dictionary page support.
+      const bool isSupported =
+          parquetType == thrift::Type::FIXED_LEN_BYTE_ARRAY ||
+          (parquetType == thrift::Type::BYTE_ARRAY &&
+           !type_->type()->isDecimal());
+      if (!isSupported) {
         VELOX_UNSUPPORTED(
-            "DELTA_BYTE_ARRAY encoding is supported only for FIXED_LEN_BYTE_ARRAY decimals and BYTE_ARRAY non-decimals. Parquet type: {}, Velox type: {}",
+            "DELTA_BYTE_ARRAY encoding is supported only for FIXED_LEN_BYTE_ARRAY columns and non-decimal BYTE_ARRAY columns. Parquet type: {}, Velox type: {}",
             parquetType,
             type_->type());
       }
@@ -1059,25 +1060,43 @@ void PageReader::skip(int64_t numRows) {
     return;
   }
 
-  // Skip the decoder
-  if (isDictionary()) {
-    dictionaryIdDecoder_->skip(toSkip);
-  } else if (directDecoder_) {
-    directDecoder_->skip(toSkip);
-  } else if (stringDecoder_) {
-    stringDecoder_->skip(toSkip);
-  } else if (booleanDecoder_) {
-    booleanDecoder_->skip(toSkip);
-  } else if (deltaBpDecoder_) {
-    deltaBpDecoder_->skip(toSkip);
-  } else if (deltaByteArrDecoder_) {
-    deltaByteArrDecoder_->skip(toSkip);
-  } else if (deltaLengthByteArrDecoder_) {
-    deltaLengthByteArrDecoder_->skip(toSkip);
-  } else if (rleBooleanDecoder_) {
-    rleBooleanDecoder_->skip(toSkip);
-  } else {
-    VELOX_FAIL("No decoder to skip");
+  // Skip the decoder of the current page. Decoders of earlier pages may also be
+  // set.
+  switch (encoding_) {
+    case Encoding::RLE_DICTIONARY:
+    case Encoding::PLAIN_DICTIONARY:
+      dictionaryIdDecoder_->skip(toSkip);
+      break;
+    case Encoding::PLAIN:
+      switch (type_->parquetType_.value()) {
+        case thrift::Type::BOOLEAN:
+          booleanDecoder_->skip(toSkip);
+          break;
+        case thrift::Type::BYTE_ARRAY:
+        case thrift::Type::FIXED_LEN_BYTE_ARRAY:
+          stringDecoder_->skip(toSkip);
+          break;
+        default:
+          directDecoder_->skip(toSkip);
+      }
+      break;
+    case Encoding::DELTA_BINARY_PACKED:
+      deltaBpDecoder_->skip(toSkip);
+      break;
+    case Encoding::RLE:
+      rleBooleanDecoder_->skip(toSkip);
+      break;
+    case Encoding::DELTA_BYTE_ARRAY:
+      deltaByteArrDecoder_->skip(toSkip);
+      break;
+    case Encoding::BYTE_STREAM_SPLIT:
+      directDecoder_->skip(toSkip);
+      break;
+    case Encoding::DELTA_LENGTH_BYTE_ARRAY:
+      deltaLengthByteArrDecoder_->skip(toSkip);
+      break;
+    default:
+      VELOX_UNREACHABLE("No decoder to skip for encoding: {}", encoding_);
   }
 }
 
