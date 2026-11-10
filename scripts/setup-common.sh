@@ -175,7 +175,11 @@ function install_protobuf {
 
 function install_grpc {
   wget_and_untar https://github.com/grpc/grpc/archive/refs/tags/v"${GRPC_VERSION}".tar.gz grpc
+  # With a shared Protobuf, grpc_cpp_plugin links libprotoc.so. Record the
+  # install directory in its RPATH so it can be run from other builds even
+  # when that directory is not on the default library search path.
   cmake_install_dir grpc \
+    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON \
     -DgRPC_BUILD_TESTS=OFF \
     -DgRPC_ABSL_PROVIDER=package \
     -DgRPC_ZLIB_PROVIDER=package \
