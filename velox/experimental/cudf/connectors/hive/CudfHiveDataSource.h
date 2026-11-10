@@ -149,6 +149,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Whether any subfield filter targets a decimal column. If so, addSplit()
   // rebuilds the pushdown AST against each split's Parquet decimal types.
   bool hasDecimalSubfieldFilter_{false};
+  bool hasTimestampSubfieldFilter_{false};
 
  private:
   // A partition key the data source resolves from the split.

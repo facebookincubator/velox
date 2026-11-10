@@ -1711,7 +1711,7 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - parquet.reader.timestamp_type
      - string
      - TIMESTAMP_MILLISECONDS
-     - Timestamp type used to cast all timestamp columns (e.g. TIMESTAMP_DAYS, TIMESTAMP_SECONDS, TIMESTAMP_MILLISECONDS, TIMESTAMP_MICROSECONDS, TIMESTAMP_NANOSECONDS). Maps to ``set_timestamp_type`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
+     - Output type for TIMESTAMP columns: TIMESTAMP_SECONDS, TIMESTAMP_MILLISECONDS, TIMESTAMP_MICROSECONDS or TIMESTAMP_NANOSECONDS. TIMESTAMP_DAYS is not supported as a TIMESTAMP reader unit; SQL DATE columns are unaffected. Maps to ``set_timestamp_type`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
    * - parquet.reader.chunk-read-limit
      - parquet.reader.chunk_read_limit
      - integer

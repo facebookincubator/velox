@@ -1668,7 +1668,61 @@ TEST_F(SubfieldFilterAstTest, negatedBigintRangeWithNulls) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-// The bounds become literals of the reader's timestamp unit, rounded inward to
+TEST_F(SubfieldFilterAstTest, deferredTimestampKeepsFilePrecision) {
+  namespace iceberg = cudf_velox::connector::hive::iceberg;
+  using Op = cudf::ast::ast_operator;
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  const auto rowType = ROW({"injected", "ts"}, {BOOLEAN(), TIMESTAMP()});
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& injected = tree.push(cudf::ast::column_reference{0});
+  const auto negative = exec::lessThan(Timestamp(0, 0));
+  const auto positive = exec::greaterThan(Timestamp(0, 0));
+  const common::Subfield subfield("ts");
+  const auto& lhs = createAstFromSubfieldFilter(
+      subfield,
+      *negative,
+      tree,
+      scalars,
+      rowType,
+      nullptr,
+      config.timestampUnit);
+  const auto& rhs = createAstFromSubfieldFilter(
+      subfield,
+      *positive,
+      tree,
+      scalars,
+      rowType,
+      nullptr,
+      config.timestampUnit);
+  const auto& conjunction =
+      tree.push(cudf::ast::operation{Op::NULL_LOGICAL_AND, injected, lhs});
+  const auto& expr =
+      tree.push(cudf::ast::operation{Op::NULL_LOGICAL_OR, conjunction, rhs});
+  const std::array<cudf::size_type, 1> injectedIndices{0};
+  const std::array folds{iceberg::ConstantFilterFold::kUnknown};
+  const auto transformed =
+      iceberg::transformFilterForInjectedColumns(expr, injectedIndices, folds);
+  ASSERT_NE(transformed.deferredExpr, nullptr);
+  const auto assembled = makeRowVector(
+      {"injected", "ts"},
+      {makeFlatVector<bool>({false, false, false}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(-1, 999'500'000),
+            Timestamp(0, 0),
+            Timestamp(0, 500'000)})});
+  // The final row survives at file precision, but would fail if first rounded
+  // to the requested millisecond output precision.
+  testFilterExecution(
+      rowType, "ts", *positive, assembled, *transformed.deferredExpr);
+}
+
+// The bounds become literals of the column's timestamp unit, rounded inward to
 // whole ticks so that the +/-1ns encoding of exclusive bounds stays exact.
 // Bounds beyond the unit's range must not throw.
 TEST_F(SubfieldFilterAstTest, timestampRange) {
@@ -1680,12 +1734,13 @@ TEST_F(SubfieldFilterAstTest, timestampRange) {
 
   const auto rowType = ROW({"c0"}, {TIMESTAMP()});
   const common::Subfield subfield("c0");
-  const Timestamp bound(1'700'000'000, 0);
+  const Timestamp bound(-1, 0);
   const Timestamp maxSeconds(Timestamp::kMaxSeconds, 0);
   const Timestamp minSeconds(Timestamp::kMinSeconds, 0);
 
   for (const auto& [unit, nanosPerTick] :
-       {std::pair{cudf::type_id::TIMESTAMP_MILLISECONDS, 1'000'000},
+       {std::pair{cudf::type_id::TIMESTAMP_SECONDS, 1'000'000'000},
+        std::pair{cudf::type_id::TIMESTAMP_MILLISECONDS, 1'000'000},
         std::pair{cudf::type_id::TIMESTAMP_MICROSECONDS, 1'000},
         std::pair{cudf::type_id::TIMESTAMP_NANOSECONDS, 1}}) {
     SCOPED_TRACE(static_cast<int32_t>(unit));
@@ -1711,13 +1766,20 @@ TEST_F(SubfieldFilterAstTest, timestampRange) {
     filters.push_back(exec::lessThanOrEqual(bound));
     filters.push_back(exec::between(ticksFromBound(-1), ticksFromBound(1)));
     filters.push_back(exec::equal(bound));
-    // Lies between two ticks, so no value equals it.
+    // Between ticks for coarser units; representable for nanoseconds.
     filters.push_back(exec::equal(Timestamp(bound.getSeconds(), 1)));
+    filters.push_back(exec::greaterThan(Timestamp(bound.getSeconds(), 1)));
+    filters.push_back(exec::lessThan(Timestamp(bound.getSeconds(), 1)));
     // Bounds beyond the range of some units.
     filters.push_back(exec::between(minSeconds, maxSeconds));
     filters.push_back(exec::greaterThan(maxSeconds, /*nullAllowed=*/true));
     filters.push_back(exec::lessThanOrEqual(minSeconds));
     filters.push_back(exec::between(minSeconds, bound));
+    std::vector<std::unique_ptr<common::Filter>> notEqual;
+    notEqual.push_back(exec::lessThan(bound));
+    notEqual.push_back(exec::greaterThan(bound));
+    filters.push_back(
+        std::make_unique<common::MultiRange>(std::move(notEqual), true));
 
     for (const auto& filter : filters) {
       SCOPED_TRACE(filter->toString());

@@ -97,12 +97,12 @@ cudf::data_type CudfHiveConfig::timestampType() const {
   const auto unit = config_->get<cudf::type_id>(
       kTimestampType, cudf::type_id::TIMESTAMP_MILLISECONDS /*milli*/);
   VELOX_CHECK(
-      unit == cudf::type_id::TIMESTAMP_DAYS /*days*/ ||
-          unit == cudf::type_id::TIMESTAMP_SECONDS /*seconds*/ ||
+      unit == cudf::type_id::TIMESTAMP_SECONDS /*seconds*/ ||
           unit == cudf::type_id::TIMESTAMP_MILLISECONDS /*milli*/ ||
           unit == cudf::type_id::TIMESTAMP_MICROSECONDS /*micro*/ ||
           unit == cudf::type_id::TIMESTAMP_NANOSECONDS /*nano*/,
-      "Invalid timestamp unit.");
+      "Invalid Parquet TIMESTAMP reader unit: expected seconds, milliseconds, "
+      "microseconds or nanoseconds; TIMESTAMP_DAYS is not supported.");
   return cudf::data_type(cudf::type_id{unit});
 }
 
@@ -113,12 +113,12 @@ cudf::data_type CudfHiveConfig::timestampTypeSession(
       config_->get<cudf::type_id>(
           kTimestampType, cudf::type_id::TIMESTAMP_MILLISECONDS /*milli*/));
   VELOX_CHECK(
-      unit == cudf::type_id::TIMESTAMP_DAYS /*days*/ ||
-          unit == cudf::type_id::TIMESTAMP_SECONDS /*seconds*/ ||
+      unit == cudf::type_id::TIMESTAMP_SECONDS /*seconds*/ ||
           unit == cudf::type_id::TIMESTAMP_MILLISECONDS /*milli*/ ||
           unit == cudf::type_id::TIMESTAMP_MICROSECONDS /*micro*/ ||
           unit == cudf::type_id::TIMESTAMP_NANOSECONDS /*nano*/,
-      "Invalid timestamp unit.");
+      "Invalid Parquet TIMESTAMP reader unit: expected seconds, milliseconds, "
+      "microseconds or nanoseconds; TIMESTAMP_DAYS is not supported.");
   return cudf::data_type(cudf::type_id{unit});
 }
 

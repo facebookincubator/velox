@@ -18,6 +18,8 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
@@ -41,6 +43,7 @@
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
 
+#include <cudf/io/parquet.hpp>
 #include <cudf/types.hpp>
 
 #include <folly/Random.h>
@@ -2260,6 +2263,157 @@ TEST_F(CudfIcebergReadTest, partitionTimestampMixedWithFileTimestamp) {
         "2020-01-01 00:00:00",
         caseValues);
   }
+}
+
+TEST_F(CudfIcebergReadTest, timestampPartitionAndFileFilters) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  auto data = makeRowVector(
+      {"file_ts", "id"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(0, 0), Timestamp(0, 500'000), Timestamp(0, 1'500'000)}),
+       makeFlatVector<int64_t>({0, 1, 2})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+  const auto type = ROW(
+      {"partition_ts", "file_ts", "id"}, {TIMESTAMP(), TIMESTAMP(), BIGINT()});
+  auto plan = PlanBuilder(pool())
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(type)
+                  .dataColumns(type)
+                  .assignments(makeAssignments(type, {"partition_ts"}))
+                  .subfieldFilters(
+                      {"partition_ts = timestamp '2020-01-01 00:00:00'",
+                       "file_ts > timestamp '1970-01-01 00:00:00'"})
+                  .endTableScan()
+                  .planNode();
+  auto splits = makeIcebergSplits(
+      dataFile->getPath(), {}, {{"partition_ts", "2019-01-01 00:00:00"}});
+  auto matching = makeIcebergSplits(
+      dataFile->getPath(), {}, {{"partition_ts", "2020-01-01 00:00:00"}});
+  splits.insert(splits.end(), matching.begin(), matching.end());
+  auto expected = makeRowVector(
+      {"partition_ts", "file_ts", "id"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(1'577'836'800, 0), Timestamp(1'577'836'800, 0)}),
+       makeFlatVector<Timestamp>({Timestamp(0, 0), Timestamp(0, 1'000'000)}),
+       makeFlatVector<int64_t>({1, 2})});
+  AssertQueryBuilder(plan)
+      .maxDrivers(1)
+      .connectorSessionProperty(
+          kCudfIcebergConnectorId,
+          facebook::velox::connector::hive::HiveConfig::
+              kReadTimestampPartitionValueAsLocalTimeSession,
+          "false")
+      .connectorSessionProperty(
+          kCudfIcebergConnectorId,
+          cudf_velox::connector::hive::CudfHiveConfig::kTimestampTypeSession,
+          std::to_string(
+              static_cast<int>(cudf::type_id::TIMESTAMP_MILLISECONDS)))
+      .splits(splits)
+      .assertResults(expected);
+}
+
+TEST_F(CudfIcebergReadTest, timestampFilterWithEqualityDelete) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  auto data = makeRowVector(
+      {"ts", "id"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(0, 500'000), Timestamp(0, 1'500'000), Timestamp(0, 0)}),
+       makeFlatVector<int64_t>({0, 1, 2})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+  auto deletePath = TempFilePath::create();
+  writeToFile(
+      deletePath->getPath(),
+      makeRowVector({"ts"}, {makeFlatVector<Timestamp>({Timestamp(0, 0)})}));
+  IcebergDeleteFile deleteFile(
+      FileContent::kEqualityDeletes,
+      deletePath->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      1,
+      getFileSize(deletePath->getPath()),
+      /*equalityFieldIds=*/{1});
+  for (const auto* bound : {"1970-01-01 00:00:00", "1970-01-01 00:00:00.001"}) {
+    auto plan = PlanBuilder(pool())
+                    .startTableScan()
+                    .connectorId(kCudfIcebergConnectorId)
+                    .outputType(data->rowType())
+                    .dataColumns(data->rowType())
+                    .subfieldFilter(fmt::format("ts > timestamp '{}'", bound))
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .connectorSessionProperty(
+            kCudfIcebergConnectorId,
+            cudf_velox::connector::hive::CudfHiveConfig::kTimestampTypeSession,
+            std::to_string(
+                static_cast<int>(cudf::type_id::TIMESTAMP_MILLISECONDS)))
+        .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
+        .assertResults(makeRowVector(
+            {"ts", "id"},
+            {makeFlatVector<Timestamp>({Timestamp(0, 1'000'000)}),
+             makeFlatVector<int64_t>({1})}));
+  }
+}
+
+TEST_F(CudfIcebergReadTest, timestampRangeRejectsHiddenInt96EqualityKey) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  auto data = makeRowVector(
+      {"legacy", "ts"},
+      {makeFlatVector<Timestamp>({Timestamp(1, 0)}),
+       makeFlatVector<Timestamp>({Timestamp(2, 0)})});
+  const auto stream = cudf::get_default_stream();
+  auto table = with_arrow::toCudfTable(
+      data, pool(), stream, cudf::get_current_device_resource_ref());
+  cudf::io::table_input_metadata metadata(table->view());
+  metadata.column_metadata[0].set_name("legacy").set_int96_timestamps(true);
+  metadata.column_metadata[1].set_name("ts");
+  auto dataFile = TempFilePath::create();
+  auto options = cudf::io::parquet_writer_options::builder(
+                     cudf::io::sink_info{dataFile->getPath()}, table->view())
+                     .metadata(metadata)
+                     .build();
+  cudf::io::write_parquet(options, stream);
+  auto deletePath = TempFilePath::create();
+  writeToFile(
+      deletePath->getPath(), makeRowVector({"legacy"}, {data->childAt(0)}));
+  IcebergDeleteFile deleteFile(
+      FileContent::kEqualityDeletes,
+      deletePath->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      1,
+      getFileSize(deletePath->getPath()),
+      /*equalityFieldIds=*/{1});
+  auto plan = PlanBuilder(pool())
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(ROW({"ts"}, {TIMESTAMP()}))
+                  .dataColumns(data->rowType())
+                  .subfieldFilter("ts > timestamp '1970-01-01 00:00:00'")
+                  .endTableScan()
+                  .planNode();
+  VELOX_ASSERT_UNSUPPORTED_THROW(
+      AssertQueryBuilder(plan)
+          .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
+          .copyResults(pool()),
+      "Timestamp range filters are not supported when reading Parquet INT96 column 'legacy'");
 }
 
 // The Iceberg data source shares the Hive constructor, so it rejects a

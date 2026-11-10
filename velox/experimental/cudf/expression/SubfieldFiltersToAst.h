@@ -45,6 +45,11 @@ struct SubfieldFilterDecimalType {
 using SubfieldFilterDecimalTypes =
     std::unordered_map<std::string, SubfieldFilterDecimalType>;
 
+// Native file units for top-level timestamp fields; absent fields use the
+// constant timestamp type (e.g. injected Iceberg columns).
+using SubfieldFilterTimestampTypes =
+    std::unordered_map<std::string, cudf::type_id>;
+
 bool hasDecimalSubfieldFilter(
     const common::SubfieldFilters& subfieldFilters,
     const RowTypePtr& inputRowSchema);
@@ -62,13 +67,14 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
 // Build a single AST expression representing logical AND of all filters in
 // 'subfieldFilters'. The resulting expression reference is owned by the passed
-// 'tree'.
+// 'tree'. Per-column timestamp types override 'timestampType'.
 cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     const SubfieldFilterDecimalTypes* decimalTypes = nullptr,
-    std::optional<cudf::type_id> timestampType = std::nullopt);
+    std::optional<cudf::type_id> timestampType = std::nullopt,
+    const SubfieldFilterTimestampTypes* timestampTypes = nullptr);
 
 } // namespace facebook::velox::cudf_velox

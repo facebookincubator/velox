@@ -520,6 +520,17 @@ void collectValueFilters(
   }
 }
 
+cudf::ast::expression const& createAlwaysFalseExpr(
+    const cudf::ast::column_reference& columnRef,
+    cudf::ast::tree& tree) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+  auto const& isNotNull = tree.push(Operation{Op::NOT, isNull});
+  return tree.push(Operation{Op::NULL_LOGICAL_AND, isNull, isNotNull});
+}
+
 // Converts a TimestampRange to comparisons with literals of the column's
 // timestamp type T. Column values are whole ticks of T, so rounding the lower
 // bound up and the upper bound down to ticks keeps the result exact, including
@@ -532,7 +543,7 @@ const cudf::ast::expression& buildTimestampRangeExpr(
     const common::TimestampRange& range,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const cudf::ast::expression& columnRef,
+    const cudf::ast::column_reference& columnRef,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   using Op = cudf::ast::ast_operator;
@@ -565,7 +576,7 @@ const cudf::ast::expression& buildTimestampRangeExpr(
 
   if (lowerTicks > kMaxTicks || upperTicks < kMinTicks ||
       lowerTicks > upperTicks) {
-    return tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
+    return createAlwaysFalseExpr(columnRef, tree);
   }
 
   auto compare = [&](int128_t ticks, Op op) -> const cudf::ast::expression& {
@@ -581,6 +592,10 @@ const cudf::ast::expression& buildTimestampRangeExpr(
             *static_cast<cudf::timestamp_scalar<T>*>(scalars.back().get())});
     return tree.push(Operation{op, columnRef, literal});
   };
+
+  if (lowerTicks == upperTicks) {
+    return compare(lowerTicks, Op::EQUAL);
+  }
 
   const cudf::ast::expression* lowerExpr = nullptr;
   if (lowerTicks > kMinTicks) {
@@ -598,17 +613,6 @@ const cudf::ast::expression& buildTimestampRangeExpr(
     return *upperExpr;
   }
   return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
-}
-
-cudf::ast::expression const& createAlwaysFalseExpr(
-    const cudf::ast::column_reference& columnRef,
-    cudf::ast::tree& tree) {
-  using Op = cudf::ast::ast_operator;
-  using Operation = cudf::ast::operation;
-
-  auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
-  auto const& isNotNull = tree.push(Operation{Op::NOT, isNull});
-  return tree.push(Operation{Op::NULL_LOGICAL_AND, isNull, isNotNull});
 }
 
 cudf::ast::expression const& createAstFromSubfieldFilterImpl(
@@ -949,7 +953,8 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     const SubfieldFilterDecimalTypes* decimalTypes,
-    std::optional<cudf::type_id> timestampType) {
+    std::optional<cudf::type_id> timestampType,
+    const SubfieldFilterTimestampTypes* timestampTypes) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
@@ -960,6 +965,13 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     if (!filterPtr) {
       continue;
     }
+    auto columnTimestampType = timestampType;
+    if (timestampTypes) {
+      if (const auto it = timestampTypes->find(subfield.baseName());
+          it != timestampTypes->end()) {
+        columnTimestampType = it->second;
+      }
+    }
     auto const& expr = createAstFromSubfieldFilter(
         subfield,
         *filterPtr,
@@ -967,7 +979,7 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
         scalars,
         inputRowSchema,
         decimalTypes,
-        timestampType);
+        columnTimestampType);
     exprRefs.push_back(&expr);
   }
 
