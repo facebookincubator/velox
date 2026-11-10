@@ -130,3 +130,10 @@
 -Wtautological-compare
 -Wunused-but-set-variable
 -Wstring-conversion
+
+# Clang versions newer than fbcode's add warnings to groups that fbcode makes
+# fatal, so fbcode never sees them. These flags turn them off. Older Clang
+# ignores them through -Wno-unknown-warning-option.
+#
+# Clang 23 adds -Wunused-but-set-global to -Wunused-but-set-variable.
+-Wno-unused-but-set-global
