@@ -140,6 +140,12 @@ Generic Configuration
        creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
        (for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
        when 1% of the data size observed so far is accumulated.
+   * - exchange_vector_reset_interval
+     - integer
+     - 0
+     - Reuse the Exchange result vector for this many columnar output batches, then release it before the next batch
+       and refresh the row-size estimate. A shorter interval recovers sooner from estimates inflated by retained
+       capacity, at the cost of more allocations. Zero disables resets. Row-based serializers are unaffected.
    * - merge_exchange.max_buffer_size
      - integer
      - 128MB

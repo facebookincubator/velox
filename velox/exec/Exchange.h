@@ -92,6 +92,9 @@ class Exchange : public SourceOperator {
 
   const uint64_t preferredOutputBatchBytes_;
 
+  // Number of columnar output batches to reuse a vector. Zero disables resets.
+  const uint32_t vectorResetInterval_;
+
   const std::string serdeKind_;
 
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
@@ -112,6 +115,9 @@ class Exchange : public SourceOperator {
 
   // Reusable result vector.
   RowVectorPtr result_;
+
+  // Number of successful columnar output batches since the last vector reset.
+  uint32_t numBatchesSinceVectorReset_{0};
 
   std::vector<std::unique_ptr<SerializedPageBase>> currentPages_;
   bool atEnd_{false};

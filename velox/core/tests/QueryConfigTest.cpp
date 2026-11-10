@@ -284,6 +284,26 @@ TEST_F(QueryConfigTest, sessionStartTime) {
   }
 }
 
+TEST_F(QueryConfigTest, exchangeVectorResetInterval) {
+  EXPECT_EQ(QueryConfig{{}}.exchangeVectorResetInterval(), 0);
+  for (const uint32_t interval : {0, 1, 16}) {
+    QueryConfig config{{
+        {QueryConfig::kExchangeVectorResetInterval, std::to_string(interval)},
+    }};
+    EXPECT_EQ(config.exchangeVectorResetInterval(), interval);
+  }
+
+  const config::ConfigProperty* found{nullptr};
+  for (const auto& property : QueryConfig::registeredProperties()) {
+    if (property.name == QueryConfig::kExchangeVectorResetInterval) {
+      found = &property;
+    }
+  }
+  ASSERT_NE(found, nullptr);
+  EXPECT_EQ(found->type, config::ConfigPropertyType::kInteger);
+  EXPECT_EQ(found->defaultValue, "0");
+}
+
 TEST_F(QueryConfigTest, singleSourceExchangeOptimizationConfig) {
   // Test default value (should be false)
   {

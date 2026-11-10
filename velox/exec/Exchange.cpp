@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Exchange.h"
 #include "velox/common/serialization/Serializable.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/serializers/CompactRowSerializer.h"
@@ -71,6 +72,8 @@ Exchange::Exchange(
           operatorType),
       preferredOutputBatchBytes_{
           driverCtx->queryConfig().preferredOutputBatchBytes()},
+      vectorResetInterval_{
+          driverCtx->queryConfig().exchangeVectorResetInterval()},
       serdeKind_{exchangeNode->serdeKind()},
       serdeOptions_{getVectorSerdeOptions(
           common::stringToCompressionKind(operatorCtx_->driverCtx()
@@ -191,6 +194,16 @@ RowVectorPtr Exchange::getOutputFromColumnarPages(VectorSerde* serde) {
             kInitialOutputRows)
       : kInitialOutputRows;
 
+  if (vectorResetInterval_ > 0 &&
+      numBatchesSinceVectorReset_ == vectorResetInterval_) {
+    // Keep this batch's target while relearning row size from fresh storage.
+    result_ = nullptr;
+    estimatedRowSize_.reset();
+    numBatchesSinceVectorReset_ = 0;
+  }
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::Exchange::getOutputFromColumnarPages", &result_);
+
   // Process pages one-by-one from currentPages_ pointed by columnarPageIdx_.
   // Within each page, deserialize vectors incrementally until we hit the target
   // batch size.
@@ -256,6 +269,9 @@ RowVectorPtr Exchange::getOutputFromColumnarPages(VectorSerde* serde) {
   }
 
   recordInputStats(rawInputBytes);
+  if (vectorResetInterval_ > 0) {
+    ++numBatchesSinceVectorReset_;
+  }
   return result_;
 }
 

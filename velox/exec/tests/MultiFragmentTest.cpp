@@ -3014,6 +3014,141 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
   }
 }
 
+DEBUG_ONLY_TEST_P(MultiFragmentTest, exchangeVectorResetInterval) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+  });
+  configSettings_[core::QueryConfig::kPartitionedOutputEagerFlush] = "true";
+  const auto plan = exchange(data->rowType()).planNode();
+  constexpr int32_t kNumPages = 24;
+
+  for (const uint32_t interval : {0, 1, 4}) {
+    SCOPED_TRACE(interval);
+    const auto producerTaskId = makeTaskId("reset-producer", interval);
+    auto producerTask = startLeafTask(
+        producerTaskId, std::vector<RowVectorPtr>(kNumPages, data));
+    SCOPE_EXIT {
+      producerTask->requestCancel();
+      waitForTaskCompletion(producerTask.get());
+    };
+
+    uint32_t numBatches{0};
+    uint32_t numObservedBatches{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Exchange::getOutputFromColumnarPages",
+        std::function<void(RowVectorPtr*)>([&](RowVectorPtr* result) {
+          const bool expectFresh = numObservedBatches == 0 ||
+              (interval > 0 && numObservedBatches % interval == 0);
+          EXPECT_EQ(*result == nullptr, expectFresh);
+          ++numObservedBatches;
+        }));
+    std::unordered_map<std::string, std::string> configs{
+        {core::QueryConfig::kExchangeVectorResetInterval,
+         std::to_string(interval)},
+        {core::QueryConfig::kPreferredOutputBatchBytes, "1"},
+    };
+    auto task = makeTask(
+        makeTaskId("reset-consumer", interval),
+        plan,
+        configs,
+        0,
+        [&](RowVectorPtr result, bool /*drained*/, ContinueFuture* /*future*/) {
+          if (result != nullptr) {
+            ++numBatches;
+          }
+          return BlockingReason::kNotBlocked;
+        });
+    SCOPE_EXIT {
+      task->requestCancel();
+      waitForTaskCompletion(task.get());
+    };
+    task->start(1);
+    task->addSplit(plan->id(), remoteSplit(producerTaskId));
+    task->noMoreSplits(plan->id());
+    ASSERT_TRUE(waitForTaskCompletion(task.get()));
+    ASSERT_GT(numBatches, interval);
+    EXPECT_EQ(
+        numObservedBatches, GetParam().serdeKind == "Presto" ? numBatches : 0);
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(plan->id());
+    EXPECT_EQ(stats.outputRows, kNumPages * data->size());
+  }
+}
+
+TEST_P(MultiFragmentTest, exchangeBatchSizeAfterShortBatch) {
+  for (const uint32_t interval : {1, 4}) {
+    SCOPED_TRACE(interval);
+    constexpr uint64_t kMaxWaitMicros = 30'000'000;
+    const auto page = makeRowVector({
+        makeFlatVector<int64_t>(60, [](auto row) { return row; }),
+        makeArrayVector<float>(
+            60,
+            [](auto /*row*/) { return 256; },
+            [](auto row, auto index) { return row + index * 0.5f; }),
+    });
+    const auto producerPlan =
+        PlanBuilder()
+            .values({page})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
+    const auto producerTaskId = "local://short-batch-producer";
+    auto producerTask = makeTask(producerTaskId, producerPlan);
+    bufferManager_->initializeTask(
+        producerTask, core::PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+    SCOPE_EXIT {
+      producerTask->requestCancel();
+      bufferManager_->removeTask(producerTaskId);
+    };
+    constexpr int32_t kNumPages = 500;
+    int64_t numBytes{0};
+    for (auto i = 0; i < kNumPages; ++i) {
+      numBytes += enqueue(producerTaskId, 0, page);
+    }
+    bufferManager_->noMoreData(producerTaskId);
+
+    const auto plan = exchange(page->rowType()).planNode();
+    std::unordered_map<std::string, std::string> configs{
+        {core::QueryConfig::kExchangeVectorResetInterval,
+         std::to_string(interval)},
+    };
+    vector_size_t numRows{0};
+    auto task = makeTask(
+        "short-batch-consumer",
+        plan,
+        configs,
+        0,
+        [&](RowVectorPtr result, bool /*drained*/, ContinueFuture* /*future*/) {
+          if (result != nullptr) {
+            const auto* values = result->childAt(0)->as<FlatVector<int64_t>>();
+            for (auto i = 0; i < result->size(); ++i) {
+              EXPECT_EQ(values->valueAt(i), (numRows + i) % page->size());
+            }
+            numRows += result->size();
+          }
+          return BlockingReason::kNotBlocked;
+        });
+    SCOPE_EXIT {
+      task->requestCancel();
+      waitForTaskCompletion(task.get());
+    };
+    task->start(1);
+    task->addSplit(plan->id(), remoteSplit(producerTaskId));
+    task->noMoreSplits(plan->id());
+    ASSERT_TRUE(waitForTaskCompletion(task.get(), kMaxWaitMicros));
+
+    const auto preferredBytes =
+        core::QueryConfig{{}}.preferredOutputBatchBytes();
+    const auto numSets = bits::divRoundUp(numBytes, preferredBytes);
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(plan->id());
+    EXPECT_EQ(numRows, kNumPages * page->size());
+    EXPECT_EQ(stats.outputRows, numRows);
+    // Allow up to an interval of small batches before a poisoned estimate
+    // resets.
+    EXPECT_LE(stats.outputVectors, interval * (2 * numSets + 1));
+  }
+}
+
 TEST_P(MultiFragmentTest, splitLargeCompactRowsInExchange) {
   if (GetParam().serdeKind != "CompactRow") {
     return;

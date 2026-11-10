@@ -387,6 +387,18 @@ class QueryConfig {
       2UL << 20,
       "Minimum bytes to accumulate before unblocking an exchange consumer.")
 
+  /// Reuses the Exchange result vector for this many columnar output batches,
+  /// then releases it and refreshes the row-size estimate. Zero disables
+  /// resets. Row-based serializers already produce fresh vectors and are
+  /// unaffected.
+  VELOX_QUERY_CONFIG(
+      kExchangeVectorResetInterval,
+      exchangeVectorResetInterval,
+      "exchange_vector_reset_interval",
+      uint32_t,
+      0,
+      "Number of columnar Exchange output batches between vector and row-size estimate resets. 0 disables resets.")
+
   VELOX_QUERY_CONFIG(
       kMaxPartialAggregationMemory,
       maxPartialAggregationMemoryUsage,
