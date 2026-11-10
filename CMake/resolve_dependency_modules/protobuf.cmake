@@ -51,5 +51,9 @@ FetchContent_Declare(
 
 set(protobuf_BUILD_TESTS OFF)
 set(protobuf_ABSL_PROVIDER "package")
+# With a shared libvelox, a static libprotobuf would be linked into both the
+# library and each executable, giving the process two copies of Protobuf's
+# arena runtime.
+set(protobuf_BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 FetchContent_MakeAvailable(protobuf)
 set(Protobuf_INCLUDE_DIRS ${protobuf_SOURCE_DIR}/src)

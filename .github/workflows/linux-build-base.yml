@@ -1112,6 +1112,7 @@ jobs:
           LDFLAGS: "-fsanitize=address"
           ASAN_OPTIONS: detect_leaks=0
           VELOX_ABSEIL_INSTALLED: "1"
+          VELOX_BUILD_SHARED: "ON"
         run: |
           mkdir -p /tmp/protobuf-asan
           cd /tmp/protobuf-asan
