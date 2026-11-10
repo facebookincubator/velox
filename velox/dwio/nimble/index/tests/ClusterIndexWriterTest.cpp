@@ -1301,7 +1301,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     NIMBLE_ASSERT_THROW(
         HierarchicalClusterIndex::create(
             makeRootSection(),
-            NimbleHierarchicalClusterIndexFactory{}.testingKeyCodec(),
+            nimbleKeyCodec(),
             pool_.get(),
             comparatorOptions),
         "Hierarchical cluster index requires bytewise key order");
@@ -1671,8 +1671,7 @@ encodeBounds(
 TEST_F(ClusterIndexWriterTest, hierarchicalFactoryKeyEncoderWritesNimbleKeys) {
   const auto& factory = clusterIndexFactory(kHierarchicalClusterIndexName);
   ASSERT_NE(
-      dynamic_cast<const NimbleHierarchicalClusterIndexFactory*>(&factory),
-      nullptr);
+      dynamic_cast<const HierarchicalClusterIndexFactory*>(&factory), nullptr);
   EXPECT_EQ(factory.keyComparator(), nullptr);
 
   const std::vector<std::string> keyColumns{"tinyKey", "smallKey", "bigKey"};
@@ -1766,7 +1765,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryKeyEncoderWritesNimbleKeys) {
 // order, which the caller does not pass. Its key encoder writes the keys that
 // the key cursor returns, and lookup bounds that find their rows.
 TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
-  const NimbleHierarchicalClusterIndexFactory factory{
+  const HierarchicalClusterIndexFactory factory{
       "test.inverted_keys", std::make_shared<const InvertedKeyCodec>()};
   EXPECT_NE(factory.keyComparator(), nullptr);
 
