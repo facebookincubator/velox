@@ -49,6 +49,22 @@ RowTypePtr deriveDataColumns(
   return ROW(std::move(names), std::move(types));
 }
 
+void checkTableSchema(const PaimonTableHandle::TableSchema& schema) {
+  VELOX_USER_CHECK_NOT_NULL(
+      schema.rowType, "Missing Paimon data schema row type");
+  VELOX_USER_CHECK_EQ(
+      schema.fieldIds.size(),
+      schema.rowType->size(),
+      "Paimon data schema field IDs must be aligned to columns");
+  std::unordered_set<int32_t> ids;
+  for (auto fieldId : schema.fieldIds) {
+    VELOX_USER_CHECK_GE(fieldId, 0, "Paimon field ID must be nonnegative");
+    const auto inserted = ids.insert(fieldId).second;
+    VELOX_USER_CHECK(
+        inserted, "Duplicate Paimon data schema field ID {}", fieldId);
+  }
+}
+
 } // namespace
 
 PaimonTableHandle::PaimonTableHandle(
@@ -96,20 +112,7 @@ PaimonTableHandle::PaimonTableHandle(
   for (const auto& [id, schema] : tableSchemas_) {
     VELOX_USER_CHECK_GE(id, 0, "Paimon schema ID must be nonnegative");
     VELOX_USER_CHECK_NE(id, schemaId_, "Duplicate Paimon target schema ID");
-    VELOX_USER_CHECK_NOT_NULL(
-        schema.rowType, "Missing Paimon data schema row type");
-    VELOX_USER_CHECK_EQ(
-        schema.fieldIds.size(),
-        schema.rowType->size(),
-        "Paimon data schema field IDs must be aligned to columns");
-    std::unordered_set<int32_t> dataIds;
-    for (auto fieldId : schema.fieldIds) {
-      VELOX_USER_CHECK_GE(fieldId, 0, "Paimon field ID must be nonnegative");
-      VELOX_USER_CHECK(
-          dataIds.insert(fieldId).second,
-          "Duplicate Paimon data schema field ID {}",
-          fieldId);
-    }
+    checkTableSchema(schema);
   }
   VELOX_USER_CHECK(
       std::isfinite(sampleRate) && sampleRate > 0 && sampleRate <= 1,
@@ -180,7 +183,7 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
     for (const auto& schema : obj.at("dataSchemas")) {
       const auto id =
           ISerializable::deserialize<int64_t>(schema.at("schemaId"));
-      VELOX_USER_CHECK(
+      const auto inserted =
           tableSchemas
               .emplace(
                   id,
@@ -189,9 +192,8 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
                           schema.at("rowType"), context),
                       ISerializable::deserialize<std::vector<int32_t>>(
                           schema.at("fieldIds"))})
-              .second,
-          "Duplicate Paimon data schema ID {}",
-          id);
+              .second;
+      VELOX_USER_CHECK(inserted, "Duplicate Paimon data schema ID {}", id);
     }
   }
 

@@ -105,7 +105,10 @@ PaimonSplitReader::FileReadSchema PaimonSplitReader::makeFileReadSchema(
   // TODO: Support nested field evolution using historical nested field IDs.
   for (column_index_t i = 0; i < tableToFileColumns.size(); ++i) {
     const auto fileColumn = tableToFileColumns[i];
-    if (!fileColumn) {
+    if (!fileColumn.has_value()) {
+      // This field ID is absent from the file's schema. Leave it unmapped so
+      // FileSplitReader::adaptColumns supplies NULL for regular columns;
+      // partition columns continue to use the split's partition values.
       continue;
     }
     const auto& name = table.rowType()->nameOf(i);

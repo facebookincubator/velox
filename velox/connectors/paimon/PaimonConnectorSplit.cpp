@@ -183,8 +183,7 @@ PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
   meta.path = std::move(filePath);
   meta.size = fileSize;
   meta.level = level;
-  dataFiles_.emplace_back(std::move(meta));
-  return *this;
+  return addFile(std::move(meta));
 }
 
 PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::partitionKey(

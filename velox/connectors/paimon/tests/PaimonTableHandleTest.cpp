@@ -250,6 +250,39 @@ TEST_F(PaimonTableHandleTest, historicalSchemas) {
       "Duplicate Paimon data schema field ID");
 }
 
+TEST_F(PaimonTableHandleTest, multipleHistoricalSchemas) {
+  const PaimonTableHandle original(
+      "test-paimon",
+      "orders",
+      17,
+      rowType(),
+      {7, 8, 20},
+      PaimonTableType::kAppendOnly,
+      {"p"},
+      {},
+      {},
+      nullptr,
+      {},
+      1.0,
+      "",
+      {{0, {ROW({{"old_id", BIGINT()}, {"p", VARCHAR()}}), {7, 8}}},
+       {8,
+        {ROW({{"p", VARCHAR()}, {"id", BIGINT()}, {"old_value", DOUBLE()}}),
+         {8, 7, 20}}}});
+  const auto copy =
+      ISerializable::deserialize<PaimonTableHandle>(original.serialize());
+  EXPECT_EQ(copy->schemaId(), original.schemaId());
+  EXPECT_EQ(*copy->rowType(), *original.rowType());
+  EXPECT_EQ(copy->fieldIds(), original.fieldIds());
+  ASSERT_EQ(copy->tableSchemas().size(), original.tableSchemas().size());
+  for (const auto& [id, schema] : original.tableSchemas()) {
+    const auto it = copy->tableSchemas().find(id);
+    ASSERT_NE(it, copy->tableSchemas().end());
+    EXPECT_EQ(*it->second.rowType, *schema.rowType);
+    EXPECT_EQ(it->second.fieldIds, schema.fieldIds);
+  }
+}
+
 TEST_F(PaimonTableHandleTest, commonFieldsMatchHive) {
   HiveColumnHandle::registerSerDe();
   HiveTableHandle::registerSerDe();

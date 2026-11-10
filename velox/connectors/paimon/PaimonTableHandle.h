@@ -17,6 +17,8 @@
 
 #include <unordered_map>
 
+#include <folly/container/F14Map.h>
+
 #include "velox/connectors/common/FileTableHandle.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
 
@@ -37,7 +39,8 @@ class PaimonTableHandle final : public connector::FileTableHandle {
     RowTypePtr rowType;
     std::vector<int32_t> fieldIds;
   };
-  using TableSchemas = std::unordered_map<int64_t, TableSchema>;
+  /// Maps a file's schema ID to its caller-resolved table schema definition.
+  using TableSchemas = folly::F14FastMap<int64_t, TableSchema>;
 
   /// rowType includes partition columns; fieldIds follow its column order.
   /// options are resolved by the caller.
