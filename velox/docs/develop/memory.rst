@@ -875,27 +875,30 @@ Custom Memory Resources
 *CustomMemoryResource* lets an extension expose memory tiers other than
 host DRAM (GPU device memory, CXL-attached memory, pinned host memory,
 NUMA-bound pools) side-by-side with the default CPU tier. A resource
-bundles a tag, an allocator, an arbitrator, and a factory that builds a
-per-query reclaimer. The constructor requires a non-empty tag and
-non-null allocator, arbitrator, and reclaimerFactory; the resource is
-immutable once constructed:
+bundles a tag, an allocator, an arbitrator, and a reclaimer factory. The
+constructor requires a non-empty tag and non-null allocator, arbitrator,
+and reclaimerFactory; the resource is immutable once constructed:
 
 .. code-block:: c++
 
   class CustomMemoryResource {
    public:
+    using ReclaimerFactory = std::function<
+        std::unique_ptr<MemoryReclaimer>(const ReclaimerContext&)>;
+
     CustomMemoryResource(
         std::string tag,
         std::shared_ptr<MemoryAllocator> allocator,
         std::shared_ptr<MemoryArbitrator> arbitrator,
-        std::function<std::unique_ptr<MemoryReclaimer>()> reclaimerFactory,
+        ReclaimerFactory reclaimerFactory,
         int64_t maxCapacity = std::numeric_limits<int64_t>::max());
 
     const std::string& tag() const;
     int64_t maxCapacity() const;
     MemoryAllocator* allocator() const;
     MemoryArbitrator* arbitrator() const;
-    std::unique_ptr<MemoryReclaimer> newReclaimer() const;
+    std::unique_ptr<MemoryReclaimer> newReclaimer(
+        const ReclaimerContext& context = PoolReclaimerContext{nullptr}) const;
   };
 
 Each resource carries its own allocator and arbitrator; the default CPU
@@ -920,7 +923,9 @@ global scope at process startup, after *initializeMemoryManager*:
       "device",
       std::make_shared<MyTieredAllocator>(...),
       MemoryArbitrator::create(...),
-      []() { return std::make_unique<MyReclaimer>(); },
+      [](const memory::ReclaimerContext&) {
+        return std::make_unique<MyReclaimer>();
+      },
       deviceCapacity);
   memory::CustomMemoryResourceRegistry::global().insert(
       resource->tag(), resource);
@@ -965,6 +970,81 @@ from each resource's ``reclaimerFactory`` via
 *CustomMemoryResource::newReclaimer*, so capacity decisions and reclaim
 on a custom subtree are governed end-to-end by the resource's own
 arbitrator and reclaimer — separate from the default DRAM tier.
+
+Query- and Task-Aware Reclaimers
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The factory receives a *ReclaimerContext*, a ``std::variant`` of
+*PoolReclaimerContext*, *QueryReclaimerContext*, and
+*TaskReclaimerContext*. *Task* passes a task context for its custom task
+pool and a pool context for node pools. A ``nullptr`` result means the
+pool has no reclaimer. A factory can return Velox's built-in reclaimers so
+that arbitration on a custom root pauses the *Task* and reclaims only that
+resource's pools:
+
+.. code-block:: c++
+
+  std::unique_ptr<memory::MemoryReclaimer> makeDeviceReclaimer(
+      const memory::ReclaimerContext& context) {
+    if (const auto* query =
+            std::get_if<memory::QueryReclaimerContext>(&context)) {
+      return core::QueryCtx::MemoryReclaimer::create(
+          query->queryCtx, query->pool);
+    }
+    if (const auto* task =
+            std::get_if<memory::TaskReclaimerContext>(&context)) {
+      return exec::Task::MemoryReclaimer::create(
+          task->task, task->priority, std::string(task->resourceTag));
+    }
+    return exec::MemoryReclaimer::create();
+  }
+
+Velox never passes a query context itself. To give a custom root a query
+reclaimer, create the root with the *addCustomRootPool* overload that
+takes an allocator and an arbitrator, which installs no reclaimer, and set
+one before creating Tasks:
+
+.. code-block:: c++
+
+  auto queryCtx = core::QueryCtx::Builder().queryId("q0").build();
+  auto root = memory::memoryManager()->addCustomRootPool(
+      "query.q0.device",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity());
+  auto reclaimer = resource->newReclaimer(
+      memory::QueryReclaimerContext{queryCtx.get(), root.get()});
+  if (reclaimer != nullptr) {
+    root->setReclaimer(std::move(reclaimer));
+  }
+  queryCtx->addCustomPool(resource->tag(), std::move(root));
+
+Factories on a resource shared across queries must be safe to call
+concurrently.
+
+Reclamation of different resource roots may overlap. Query arbitration waiters
+are released after the last reclamation finishes. Task reclaimers acquire
+independent scoped pauses; one resource finishing cannot resume or close drivers
+that another resource is still reclaiming. The existing ``requestPause()`` and
+``resume()`` API retains its idempotent behavior and cannot release a scoped pause.
+Scoped pauses stop driver execution, but do not serialize reclamation callbacks.
+Extensions must protect mutable state shared by callbacks from different resources.
+
+Task and node factories are not called when their parent has no reclaimer.
+Custom operator leaves receive allocation-time suspension hooks at creation,
+including when reclamation is disabled: they may still wait for capacity from
+other queries. These hooks leave the leaf's reclaimer slot available for the
+extension's resource-specific implementation. Explicit hooks take precedence over
+the reclaimer's legacy enter/leave callbacks; they do not make buffers reclaimable.
+Connector leaves created outside this path must install equivalent hooks before
+driver-thread allocations can trigger arbitration.
+
+Arbitration context identifies the resource's arbitrator, including on background
+reclamation threads. A capacity exemption during reclamation applies only to that
+arbitrator. Allocations from another resource may consume already granted capacity,
+but cannot exceed it or recursively invoke another arbitrator. Such growth fails
+with a memory-capacity error; extensions must reserve that workspace before
+reclamation. A context without a resource owner grants no capacity exemption.
 
 Server OOM Prevention
 ---------------------

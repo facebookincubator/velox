@@ -456,7 +456,9 @@ std::strong_ordering MemoryArbitrator::Stats::operator<=>(
 }
 
 MemoryArbitrationContext::MemoryArbitrationContext(const MemoryPool* requestor)
-    : type(Type::kLocal), requestorName(requestor->name()) {}
+    : type(Type::kLocal),
+      requestorName(requestor->name()),
+      arbitrator(requestor->arbitrator()) {}
 
 std::string MemoryArbitrationContext::typeName(
     MemoryArbitrationContext::Type type) {
@@ -484,6 +486,12 @@ ScopedMemoryArbitrationContext::ScopedMemoryArbitrationContext(
 
 ScopedMemoryArbitrationContext::ScopedMemoryArbitrationContext()
     : savedArbitrationCtx_(arbitrationCtx), currentArbitrationCtx_() {
+  arbitrationCtx = &currentArbitrationCtx_;
+}
+
+ScopedMemoryArbitrationContext::ScopedMemoryArbitrationContext(
+    const MemoryArbitrator& arbitrator)
+    : savedArbitrationCtx_(arbitrationCtx), currentArbitrationCtx_(arbitrator) {
   arbitrationCtx = &currentArbitrationCtx_;
 }
 

@@ -783,7 +783,7 @@ uint64_t SharedArbitrator::shrinkCapacity(
   checkRunning();
 
   const uint64_t targetBytes = requestBytes == 0 ? capacity_ : requestBytes;
-  ScopedMemoryArbitrationContext abitrationCtx{};
+  ScopedMemoryArbitrationContext arbitrationCtx{*this};
   const folly::stop_watch<std::chrono::nanoseconds> reclaimWatch;
 
   uint64_t totalReclaimedCapacity{0};
@@ -1583,7 +1583,7 @@ SharedArbitrator::ScopedArbitration::~ScopedArbitration() {
 
 SharedArbitrator::GlobalArbitrationSection::GlobalArbitrationSection(
     SharedArbitrator* arbitrator)
-    : arbitrator_(arbitrator) {
+    : arbitrator_(arbitrator), arbitrationCtx_(*arbitrator) {
   VELOX_CHECK_NOT_NULL(arbitrator_);
   VELOX_CHECK(!arbitrator_->globalArbitrationRunning_);
   arbitrator_->globalArbitrationRunning_ = true;

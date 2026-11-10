@@ -480,9 +480,16 @@ struct MemoryArbitrationContext {
   /// global memory arbitration type.
   const std::string requestorName;
 
+  /// Budget whose reclamation may temporarily exceed granted pool capacity.
+  /// A context without an owner does not grant any capacity exemption.
+  const MemoryArbitrator* const arbitrator{nullptr};
+
   explicit MemoryArbitrationContext(const MemoryPool* requestor);
 
   MemoryArbitrationContext() : type(Type::kGlobal) {}
+
+  explicit MemoryArbitrationContext(const MemoryArbitrator& owner)
+      : type(Type::kGlobal), arbitrator(&owner) {}
 };
 
 /// Object used to set/restore the memory arbitration context when a thread is
@@ -495,6 +502,8 @@ class ScopedMemoryArbitrationContext {
       const MemoryArbitrationContext* context);
 
   explicit ScopedMemoryArbitrationContext(const MemoryPool* requestor);
+
+  explicit ScopedMemoryArbitrationContext(const MemoryArbitrator& arbitrator);
 
   ~ScopedMemoryArbitrationContext();
 
