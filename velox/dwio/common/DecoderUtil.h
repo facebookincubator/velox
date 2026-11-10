@@ -32,6 +32,7 @@ namespace facebook::velox {
 using RowSet = folly::Range<const int32_t*>;
 namespace common {
 class AlwaysTrue;
+class IsNotNull;
 template <typename TFilter, typename T>
 static bool applyFilter(TFilter& filter, T value);
 } // namespace common
@@ -330,6 +331,32 @@ void fixedWidthScan(
           int32_t numRowsInBuffer,
           int32_t rowOffset,
           const T* buffer) {
+        if constexpr (
+            std::is_same_v<TFilter, velox::common::IsNotNull> && !hasHook) {
+          // Nulls never reach this loop, so every value passes: copy the row
+          // numbers and the values without testing them.
+          const auto* hitRows = (scatter ? scatterRows : rows) + rowIndex;
+          std::memcpy(
+              filterHits + numValues,
+              hitRows,
+              sizeof(int32_t) * numRowsInBuffer);
+          if constexpr (!filterOnly) {
+            if (isDense(&rows[rowIndex], numRowsInBuffer)) {
+              std::memcpy(
+                  rawValues + numValues,
+                  fixedWidthValueBytes<T>(buffer, rows[rowIndex], rowOffset),
+                  sizeof(T) * numRowsInBuffer);
+            } else {
+              for (int32_t i = 0; i < numRowsInBuffer; ++i) {
+                rawValues[numValues + i] =
+                    folly::loadUnaligned<T>(fixedWidthValueBytes<T>(
+                        buffer, rows[rowIndex + i], rowOffset));
+              }
+            }
+          }
+          numValues += numRowsInBuffer;
+          return;
+        }
         if constexpr (!hasFilter && !hasHook && !scatter) {
           if (isDense(&rows[rowIndex], numRowsInBuffer)) {
             std::memcpy(
