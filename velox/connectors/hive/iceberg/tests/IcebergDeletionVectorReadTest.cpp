@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/DeletionVectorWriter.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
 #include <numeric>
@@ -34,7 +33,6 @@ namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
 using TempFilePath = common::testutil::TempFilePath;
-using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 // End-to-end reproduction of GitHub issue #18126: querying an Iceberg V3 table
 // whose rows are removed by a Spark-written deletion vector (a Puffin
@@ -50,49 +48,6 @@ class IcebergDeletionVectorReadTest : public test::IcebergTestBase {
     folly::SingletonVault::singleton()->registrationComplete();
     fileFormat_ = dwio::common::FileFormat::DWRF;
     dwio::common::LocalFileSink::registerFactory();
-  }
-
-  // Writes a spec-compliant Puffin deletion-vector-v1 file (PFA1 frame + magic
-  // + portable roaring bitmap + standard CRC-32) for 'deletedPositions',
-  // mirroring what Spark/Iceberg emits, and returns an IcebergDeleteFile
-  // pointing at the DV blob inside it. The returned TempDirectoryPath keeps the
-  // Puffin file alive for the duration of the scan.
-  std::pair<std::shared_ptr<TempDirectoryPath>, IcebergDeleteFile>
-  writeDeletionVector(
-      const std::string& referencedDataFile,
-      const std::vector<int64_t>& deletedPositions) {
-    DeletionVectorWriter writer;
-    writer.addDeletedPositions(deletedPositions);
-    const auto blob = writer.serialize();
-
-    // LocalFileSink refuses to open an existing file, so write the Puffin into
-    // a fresh path under a temp directory rather than a pre-created TempFile.
-    auto puffinDir = TempDirectoryPath::create();
-    const std::string puffinPath = puffinDir->getPath() + "/deletes.puffin";
-    auto sink = dwio::common::FileSink::create(
-        "file:" + puffinPath, {.pool = pool_.get()});
-    const auto [blobOffset, blobLength] = writePuffinFile(
-        *sink,
-        *pool_,
-        blob,
-        referencedDataFile,
-        static_cast<int64_t>(deletedPositions.size()));
-    sink->close();
-
-    IcebergDeleteFile dvFile(
-        FileContent::kDeletionVector,
-        puffinPath,
-        fileFormat_,
-        /*recordCount=*/deletedPositions.size(),
-        /*fileSizeInBytes=*/getFileSize(puffinPath),
-        /*equalityFieldIds=*/{},
-        /*lowerBounds=*/{},
-        /*upperBounds=*/{},
-        /*dataSequenceNumber=*/0,
-        /*contentOffset=*/static_cast<int64_t>(blobOffset),
-        /*contentLength=*/static_cast<int64_t>(blobLength),
-        /*referencedDataFile=*/referencedDataFile);
-    return {puffinDir, dvFile};
   }
 };
 

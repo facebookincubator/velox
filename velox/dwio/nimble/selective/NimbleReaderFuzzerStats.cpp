@@ -19,6 +19,7 @@
 #ifdef NIMBLE_READER_FUZZER_STATS_ENABLED
 
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::nimble::fuzzer {
 
@@ -26,6 +27,15 @@ namespace {
 
 void update(std::string_view name) {
   velox::addThreadLocalRuntimeStat(name, velox::RuntimeCounter(1));
+}
+
+// Counts one read under 'typeStat' and under its stat for the kind of
+// 'filter'.
+void updateDictionaryAwareReads(
+    std::string_view typeStat,
+    const velox::common::Filter& filter) {
+  update(typeStat);
+  update(dictionaryAwareReadsByFilterKind(typeStat, filter.kindName()));
 }
 
 } // namespace
@@ -38,24 +48,24 @@ void updateStringDictionaryEncodingAbandoned() {
   update(kStringDictionaryEncodingAbandoned);
 }
 
-void updateSmallintDictionaryAwareReads() {
-  update(kSmallintDictionaryAwareReads);
+void updateSmallintDictionaryAwareReads(const velox::common::Filter& filter) {
+  updateDictionaryAwareReads(kSmallintDictionaryAwareReads, filter);
 }
 
-void updateIntegerDictionaryAwareReads() {
-  update(kIntegerDictionaryAwareReads);
+void updateIntegerDictionaryAwareReads(const velox::common::Filter& filter) {
+  updateDictionaryAwareReads(kIntegerDictionaryAwareReads, filter);
 }
 
-void updateBigintDictionaryAwareReads() {
-  update(kBigintDictionaryAwareReads);
+void updateBigintDictionaryAwareReads(const velox::common::Filter& filter) {
+  updateDictionaryAwareReads(kBigintDictionaryAwareReads, filter);
 }
 
-void updateRealDictionaryAwareReads() {
-  update(kRealDictionaryAwareReads);
+void updateRealDictionaryAwareReads(const velox::common::Filter& filter) {
+  updateDictionaryAwareReads(kRealDictionaryAwareReads, filter);
 }
 
-void updateDoubleDictionaryAwareReads() {
-  update(kDoubleDictionaryAwareReads);
+void updateDoubleDictionaryAwareReads(const velox::common::Filter& filter) {
+  updateDictionaryAwareReads(kDoubleDictionaryAwareReads, filter);
 }
 
 } // namespace facebook::nimble::fuzzer

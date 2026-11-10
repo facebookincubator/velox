@@ -82,10 +82,7 @@ SortBuffer::SortBuffer(
   // listRowsFast speedup is not worth this failure mode; listRows() falls back
   // to scanning when the index is absent.
   data_ = std::make_unique<RowContainer>(
-      sortedColumnTypes,
-      nonSortedColumnTypes,
-      /*useListRowIndex=*/false,
-      pool_);
+      sortedColumnTypes, nonSortedColumnTypes, pool_);
   spillerStoreType_ =
       ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
@@ -142,7 +139,7 @@ void SortBuffer::noMoreInput() {
     // TODO: Reuse 'RowContainer::rowPointers_'.
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
-    data_->listRows(&iter, numInputRows_, sortedRows_.data());
+    data_->listRows(&iter, std::span(sortedRows_.data(), numInputRows_));
     PrefixSort::sort(
         data_.get(), sortCompareFlags_, prefixSortConfig_, pool_, sortedRows_);
   } else {
@@ -231,9 +228,7 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
     return;
   }
 
-  auto [freeRows, outOfLineFreeBytes] = data_->freeSpace();
-  const auto outOfLineBytes =
-      data_->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const auto outOfLineBytes = data_->usedVariableWidthBytes();
   const int64_t flatInputBytes = input->estimateFlatSize();
 
   // Test-only spill path.
@@ -247,12 +242,11 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
       currentMemoryUsage * spillConfig_->minSpillableReservationPct / 100;
   const auto availableReservationBytes = pool_->availableReservation();
   const int64_t estimatedIncrementalBytes =
-      data_->sizeIncrement(input->size(), outOfLineBytes ? flatInputBytes : 0);
+      data_->maxGrowthBytes(input->size(), outOfLineBytes ? flatInputBytes : 0);
   if (availableReservationBytes > minReservationBytes) {
     // If we have enough free rows for input rows and enough variable length
     // free space for the vector's flat size, no need for spilling.
-    if (freeRows > input->size() &&
-        (outOfLineBytes == 0 || outOfLineFreeBytes >= flatInputBytes)) {
+    if (estimatedIncrementalBytes == 0) {
       return;
     }
 

@@ -328,7 +328,7 @@ vector_size_t SortedAggregations::extractSingleGroup(
   std::vector<vector_size_t> rowNumbers;
   if (aggregate.mask) {
     FlatVectorPtr<bool> mask = BaseVector::create<FlatVector<bool>>(
-        BOOLEAN(), numGroupRows, inputData_->pool());
+        BOOLEAN(), numGroupRows, inputData_->stringAllocator().pool());
     inputData_->extractColumn(
         groupRows.data(),
         numGroupRows,
@@ -359,7 +359,9 @@ vector_size_t SortedAggregations::extractSingleGroup(
       const auto columnIndex = inputMapping_[aggregate.inputs[i]];
       if (inputVectors[i] == nullptr) {
         inputVectors[i] = BaseVector::create(
-            inputData_->keyTypes()[columnIndex], numRows, inputData_->pool());
+            inputData_->keyTypes()[columnIndex],
+            numRows,
+            inputData_->stringAllocator().pool());
       } else {
         BaseVector::prepareForReuse(inputVectors[i], numRows);
       }
@@ -369,7 +371,6 @@ vector_size_t SortedAggregations::extractSingleGroup(
             groupRows.data(),
             folly::Range(rowNumbers.data(), rowNumbers.size()),
             columnIndex,
-            0, // resultOffset
             inputVectors[i]);
       } else {
         inputData_->extractColumn(

@@ -118,12 +118,9 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
     // Create the table.
     auto table = HashTable<false>::createForJoin(
         std::move(hashers),
-        /*dependentTypes=*/dependentTypes,
-        /*allowDuplicates=*/true,
-        /*hasProbedFlag=*/false,
-        /*hasCountFlag=*/false,
-        /*minTableSizeForParallelJoinBuild=*/1,
-        pool_.get());
+        dependentTypes,
+        pool_.get(),
+        {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1});
 
     // Insert data into the row container.
     auto* rowContainer = table->rows();

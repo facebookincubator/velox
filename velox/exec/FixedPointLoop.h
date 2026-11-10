@@ -56,8 +56,14 @@ struct NestedFixedPoint {
   /// exists.
   std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch{};
 
-  /// The workers the nested loop runs on, by destination: the enclosing
-  /// loop's, or worker 0 alone for a loop nested in a verdict plan.
+  /// The unique row id pool of the loop's task (see Task::uniqueRowIdPool()),
+  /// which the sub-task's AssignUniqueId operators draw from, so their ids do
+  /// not repeat across the loop's stages and iterations.  Null when no loop
+  /// created the sub-task.
+  std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool{};
+
+  /// The workers the nested loop runs on, by destination: those of the
+  /// enclosing loop that run the stage it is nested in.
   std::vector<std::string> workers{};
 
   /// The enclosing loop's nesting.  The nested loop appends a step naming
@@ -72,8 +78,8 @@ struct NestedFixedPoint {
 /// Experimental and subject to change, like FixedPointExecutionStats.
 /// Statistics of one sub-task a fixed point ran.
 struct FixedPointPlanExecutionStats {
-  /// Index of the plan in the body plans followed by the convergence plans; 0
-  /// for an initial plan.
+  /// Index of the plan in the body's stages followed by the convergence's
+  /// (see FixedPointNode::body()); 0 for an initial plan.
   size_t planIndex{0};
 
   /// Driver limit the sub-task was started with.
@@ -87,11 +93,11 @@ struct FixedPointPlanExecutionStats {
 };
 
 /// Experimental and subject to change, like FixedPointExecutionStats.
-/// Statistics of one run of a body or convergence plan chain.
-/// Serial mode runs a single plan per chain, so it reports only totalNanos,
+/// Statistics of one run of the body's or the convergence's stages.
+/// Serial mode runs a single plan, so it reports only totalNanos,
 /// outputRows and plans; the other timings stay zero.
 struct FixedPointChainExecutionStats {
-  /// Time to create the chain's sub-tasks.
+  /// Time to create the stages' sub-tasks.
   uint64_t taskCreationNanos{0};
 
   /// Time to start them.
@@ -111,13 +117,13 @@ struct FixedPointChainExecutionStats {
   /// or not it arrived.  Part of totalNanos.
   uint64_t verdictWaitNanos{0};
 
-  /// Wall time of the whole chain.
+  /// Wall time of all the stages.
   uint64_t totalNanos{0};
 
-  /// Rows the last plan produced.
+  /// Rows the root produced.
   uint64_t outputRows{0};
 
-  /// One entry per plan, in chain order.
+  /// One entry per plan this worker ran; 'planIndex' says which.
   std::vector<FixedPointPlanExecutionStats> plans{};
 };
 
@@ -127,19 +133,19 @@ struct FixedPointIterationExecutionStats {
   /// Zero-based iteration number.
   int32_t iteration{0};
 
-  /// The body chain.
+  /// The body's stages.
   FixedPointChainExecutionStats body{};
 
   /// Time to write the body's output into the output state entry.
   uint64_t stateWriteNanos{0};
 
-  /// The convergence chain, when the node has one.
+  /// The convergence, when the node has one.
   std::optional<FixedPointChainExecutionStats> convergence{};
 
   /// Whether this iteration converged.
   bool converged{false};
 
-  /// Wall time of the body, the state write and the convergence chain.
+  /// Wall time of the body, the state write and the convergence.
   uint64_t totalNanos{0};
 };
 
@@ -340,25 +346,23 @@ class FixedPointLoop {
   folly::coro::Task<FixedPointPlanExecutionStats> buildHashTable(
       const core::HashTableStateDeclaration& declaration);
 
-  // Runs this worker's column of per-plan sub-tasks over the chain 'plans' for
-  // 'iteration', wiring each consumer plan's Exchange to the previous-plan
-  // producer of every worker.  Returns the last plan's output copied into
-  // 'pool'.  Serves both chains a fixed point runs: 'planIndexOffset' is added
-  // to the plan index in the statistics, so the body's plans (offset 0) and the
-  // convergence sequence's (offset node_->plans().size()) are told apart.  The
-  // plans this worker runs share iterationDrivers().
-  // 'producesVerdict' says the last plan produces the convergence verdict, a
-  // single row, so it runs on one driver of its own, outside the budget.
-  // 'runLastPlan' false skips the last plan on this worker; the chain's other
-  // plans still run and feed the peers that run it.  Records the run into
-  // 'stats'.
-  folly::coro::Task<std::vector<RowVectorPtr>> runParallelChain(
-      const std::vector<core::PlanNodePtr>& plans,
+  // Runs, for 'iteration', a sub-task for each stage of 'plan' that this
+  // worker runs -- a stage runs on the first numTasks() workers -- and wires
+  // each Exchange to the producer of the stage it reads on every worker that
+  // runs it (see ExchangeWiring).  Returns the root's output copied into
+  // 'pool', or nothing when this worker does not run the root.  Serves the
+  // body and the convergence: 'planIndexOffset' is added to the stage index
+  // in the statistics, so the body's stages (offset 0) and the convergence's
+  // (offset node_->body().stages().size()) are told apart.  The
+  // plans this worker runs share iterationDrivers().  'producesVerdict' says
+  // the root produces the convergence verdict, a single row, so it runs on one
+  // driver of its own, outside the budget.  Records the run into 'stats'.
+  folly::coro::Task<std::vector<RowVectorPtr>> runParallelStages(
+      const core::MultiStagePlan& plan,
       size_t planIndexOffset,
       int32_t iteration,
       memory::MemoryPool* pool,
       bool producesVerdict,
-      bool runLastPlan,
       FixedPointChainExecutionStats& stats);
 
   // Driver budget for the plans run after initialization; see
@@ -414,7 +418,7 @@ class FixedPointLoop {
   void releaseRemoteSplits();
 
   // Label for an internal sub-task of this worker that no peer addresses (an
-  // initial, convergence, serial-body, or last-in-chain sub-task).
+  // initial, convergence, serial-body, or root sub-task).
   std::string subTaskId();
 
   // The address of this loop on the worker at 'destination'.
@@ -448,10 +452,6 @@ class FixedPointLoop {
 
   // Lives in the owning task's plan fragment, which outlives this loop.
   const core::FixedPointNode* const node_;
-
-  // The convergence plans in the order they run: the node's convergence
-  // 'plans', then its 'verdict' plan, when set.
-  std::vector<core::PlanNodePtr> convergencePlans_;
 
   int32_t workerIndex_{0};
   int32_t numWorkers_{1};

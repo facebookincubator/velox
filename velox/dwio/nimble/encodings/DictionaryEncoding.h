@@ -617,18 +617,23 @@ template <typename V>
 void DictionaryEncoding<T>::readWithVisitor(
     V& visitor,
     ReadWithVisitorParams& params) {
-  // Decode indices with an AlwaysTrue visitor and forward them directly into
-  // the shared logical-value dictionary visitor.
-  if (params.dictionaryAwareReads) {
-    if constexpr (
-        isNumericType<T>() && sizeof(T) >= sizeof(int16_t) && !V::kHasHook &&
-        V::FilterType::deterministic && V::kHasBulkPath) {
+  // Takes the fused read only when both groups of conditions hold:
+  //   1. The shared visitor's limits, which DWRF and Parquet follow too.
+  //   2. Nimble's own conditions (TODO: remove in the long term):
+  //      - No hook (aggregation pushdown): processBulk() does not support one.
+  //      - A bulk path: Nimble's float reader has none for REAL read as DOUBLE.
+  //      - dictionaryAwareReads, the rollout switch, is on.
+  if constexpr (
+      detail::dictionaryColumnVisitorSupported<T, V>() && !V::kHasHook &&
+      V::kHasBulkPath) {
+    if (params.dictionaryAwareReads) {
       using DictionaryVisitor = velox::dwio::common::DictionaryColumnVisitor<
           T,
           typename V::FilterType,
           typename V::Extract,
           V::dense>;
 
+      // Set up this chunk's dictionary and verdict cache.
       auto& scanState = visitor.reader().scanState();
 
       // Projection-only reads never consult the verdict cache.
@@ -649,6 +654,7 @@ void DictionaryEncoding<T>::readWithVisitor(
           static_cast<int32_t>(alphabet_.size());
       dictionaryState.filterCache = scanState.filterCache.data();
 
+      // Read the chunk through the dictionary visitor.
       const auto numRows = visitor.numRows() - visitor.rowIndex();
       const auto outputCapacity = visitor.reader().numValues() + numRows;
       const auto requiredBytes = std::max(
@@ -672,6 +678,8 @@ void DictionaryEncoding<T>::readWithVisitor(
         params.prepareResultNulls();
       }
 
+      // The filter applies to dictionary values, not indices, so decode indices
+      // unfiltered and let the dictionary visitor translate and filter them.
       detail::FusedDictionaryIndicesHook<DictionaryVisitor> dictionaryHook{
           dictionaryVisitor, dictionaryState.filterCache};
       detail::ForwardingIndicesHook indicesHook{dictionaryHook};
@@ -692,17 +700,20 @@ void DictionaryEncoding<T>::readWithVisitor(
       callReadWithVisitor(*indicesEncoding_, indicesVisitor, params);
       dictionaryHook.processTrailingNulls();
       visitor.setRowIndex(dictionaryVisitor.rowIndex());
+
+      // Records fuzzer-only stats, which are no-ops in regular builds.
       if constexpr (std::is_same_v<T, int16_t>) {
-        fuzzer::updateSmallintDictionaryAwareReads();
+        fuzzer::updateSmallintDictionaryAwareReads(visitor.filter());
       } else if constexpr (std::is_same_v<T, int32_t>) {
-        fuzzer::updateIntegerDictionaryAwareReads();
+        fuzzer::updateIntegerDictionaryAwareReads(visitor.filter());
       } else if constexpr (std::is_same_v<T, int64_t>) {
-        fuzzer::updateBigintDictionaryAwareReads();
+        fuzzer::updateBigintDictionaryAwareReads(visitor.filter());
       } else if constexpr (std::is_same_v<T, float>) {
-        fuzzer::updateRealDictionaryAwareReads();
+        fuzzer::updateRealDictionaryAwareReads(visitor.filter());
       } else if constexpr (std::is_same_v<T, double>) {
-        fuzzer::updateDoubleDictionaryAwareReads();
+        fuzzer::updateDoubleDictionaryAwareReads(visitor.filter());
       }
+
       return;
     }
   }
@@ -926,11 +937,10 @@ std::string_view DictionaryEncoding<T>::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const auto sourceRowCount =
-      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+      offset,
+      length);
 
   const char* pos = encoded.data() +
       EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);

@@ -1113,6 +1113,8 @@ struct ConvFunction {
   static const uint64_t kMaxUnsignedInt64_ = 0xFFFFFFFFFFFFFFFF;
   static const int kMinBase = 2;
   static const int kMaxBase = 36;
+  // Fits 64 binary digits of a 64-bit value plus the negative symbol.
+  static constexpr int32_t kMaxResultSize = 65;
 
   static bool checkInput(StringView input, int32_t fromBase, int32_t toBase) {
     if (input.empty()) {
@@ -1161,77 +1163,38 @@ struct ConvFunction {
     }
   }
 
-  static std::pair<int64_t, int32_t> getSignedValueAndResultSize(
-      uint64_t unsignedValue,
-      bool isNegativeInput,
-      int32_t toBase) {
-    // This flag is used to make sure when we calculate the resultSize in
-    // `toChars` we always get a positive number. It is due to the
-    // `std::abs(min_int64)` would return a negative number.
-    auto isMinInt64Num =
-        unsignedValue == (uint64_t)std::numeric_limits<int64_t>::min();
-    int64_t signedValue;
-    int64_t absValue;
-    if (isMinInt64Num) {
-      signedValue = (int64_t)unsignedValue;
-      // `std::abs(min_int64)` return a negative number, so here we set
-      // absValue to max_int64 manually.
-      absValue = std::numeric_limits<int64_t>::max();
-    } else if (!isNegativeInput) {
-      signedValue = (int64_t)unsignedValue;
-      absValue = std::abs(signedValue);
-    } else {
-      signedValue = -std::abs((int64_t)unsignedValue);
-      absValue = std::abs(signedValue);
+  // Returns the value printed for a negative toBase.
+  static int64_t getSignedValue(uint64_t unsignedValue, bool isNegativeInput) {
+    // `std::abs(min_int64)` is undefined, so min_int64 is returned as is.
+    if (!isNegativeInput ||
+        unsignedValue == (uint64_t)std::numeric_limits<int64_t>::min()) {
+      return (int64_t)unsignedValue;
     }
-    int32_t resultSize =
-        (int32_t)std::floor(std::log(absValue) / std::log(-toBase)) + 1;
-    // Negative symbol is considered.
-    if (signedValue < 0) {
-      ++resultSize;
-    }
-    return std::make_pair(signedValue, resultSize);
+    return -std::abs((int64_t)unsignedValue);
   }
 
-  static std::pair<uint64_t, int32_t> getUnsignedValueAndResultSize(
+  // Returns the value printed for a positive toBase. A negative input wraps
+  // around to an unsigned value.
+  static uint64_t getUnsignedValue(
       uint64_t unsignedInput,
-      bool isNegativeInput,
-      int32_t toBase) {
-    uint64_t unsignedValue = unsignedInput;
+      bool isNegativeInput) {
     if (isNegativeInput) {
-      int64_t negativeInput = -std::abs((int64_t)unsignedValue);
-      unsignedValue = (uint64_t)negativeInput;
-    } // Here directly use unsignedValue if isNegativeInput = false.
-    int32_t resultSize =
-        (int32_t)std::floor(std::log(unsignedValue) / std::log(toBase)) + 1;
-    return std::make_pair(unsignedValue, resultSize);
+      return (uint64_t)(-std::abs((int64_t)unsignedInput));
+    }
+    return unsignedInput;
   }
 
-  // For signed value, toBase is negative.
-  static void toChars(
-      out_type<Varchar>& result,
-      int64_t signedValue,
-      int32_t toBase,
-      int32_t resultSize) {
-    result.resize(resultSize);
-    auto toStatus = std::to_chars(
-        result.data(), result.data() + result.size(), signedValue, -toBase);
-    result.resize(toStatus.ptr - result.data());
-  }
-
-  // For unsigned value, toBase is positive.
-  static void toChars(
-      out_type<Varchar>& result,
-      uint64_t unsignedValue,
-      int32_t toBase,
-      int32_t resultSize) {
-    result.resize(resultSize);
-    auto toStatus = std::to_chars(
-        result.data(),
-        result.data() + result.size(),
-        unsignedValue,
-        std::abs(toBase));
-    result.resize(toStatus.ptr - result.data());
+  // Writes 'value' in 'base' to 'result'.
+  template <typename TValue>
+  static void toChars(out_type<Varchar>& result, TValue value, int32_t base) {
+    char buffer[kMaxResultSize];
+    const auto [end, error] =
+        std::to_chars(buffer, buffer + kMaxResultSize, value, base);
+    VELOX_CHECK(
+        error == std::errc(),
+        "Result of conv() exceeds the maximum length: {}",
+        kMaxResultSize);
+    result.copy_from(std::string_view(buffer, end - buffer));
   }
 
   bool call(
@@ -1263,13 +1226,9 @@ struct ConvFunction {
     // When toBase is negative, converts to signed value. Otherwise, converts to
     // unsigned value. Overflow is allowed, consistent with Spark.
     if (toBase < 0) {
-      auto [signedValue, resultSize] =
-          getSignedValueAndResultSize(unsignedInput, isNegativeInput, toBase);
-      toChars(result, signedValue, toBase, resultSize);
+      toChars(result, getSignedValue(unsignedInput, isNegativeInput), -toBase);
     } else {
-      auto [unsignedValue, resultSize] =
-          getUnsignedValueAndResultSize(unsignedInput, isNegativeInput, toBase);
-      toChars(result, unsignedValue, toBase, resultSize);
+      toChars(result, getUnsignedValue(unsignedInput, isNegativeInput), toBase);
     }
 
     // Converts to upper case, consistent with Spark.

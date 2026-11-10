@@ -54,6 +54,14 @@ bool hasDecimalSubfieldFilter(
     const common::SubfieldFilters& subfieldFilters,
     const RowTypePtr& inputRowSchema);
 
+/// Returns whether createAstFromSubfieldFilter() converts 'filter' on
+/// 'subfield'. It converts filters on top-level columns only. A scan with a
+/// filter it cannot convert must run on the CPU. Timestamp ranges are eligible
+/// here; conversion requires the reader's timestamp type.
+bool canCreateAstFromSubfieldFilter(
+    const common::Subfield& subfield,
+    const common::Filter& filter);
+
 // Convert subfield filters to cudf AST. 'timestampType' is the cuDF type of
 // the TIMESTAMP columns being filtered; a TimestampRange filter requires it.
 cudf::ast::expression const& createAstFromSubfieldFilter(

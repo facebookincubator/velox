@@ -672,8 +672,8 @@ TEST_F(IndexFactoryTest, rejectDuplicateDenseIndex) {
   IndexLookup::Options options{.file = file, .ioOptions = &ioOptions};
 
   auto makeSection = [&] {
-    return Section{MetadataBuffer{
-        velox::AlignedBuffer::allocate<char>(1, leafPool_.get())}};
+    return Section{MetadataBuffer{toPinnedBuffer(
+        velox::AlignedBuffer::allocate<char>(1, leafPool_.get()))}};
   };
   std::vector<DenseIndexRegistry::Entry> entries;
   entries.emplace_back(

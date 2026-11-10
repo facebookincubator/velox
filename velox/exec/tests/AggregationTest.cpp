@@ -391,16 +391,13 @@ class AggregationTest : public HiveConnectorTestBase {
       const std::vector<TypePtr>& dependentTypes) {
     return std::make_unique<RowContainer>(
         keyTypes,
-        false,
         std::vector<Accumulator>{},
         dependentTypes,
-        false,
-        false,
-        true,
-        false, // hasCountFlag
-        true,
-        false,
-        pool_.get());
+        pool_.get(),
+        RowContainer::Options{
+            .nullableKeys = false,
+            .hasProbedFlag = true,
+            .hasNormalizedKey = true});
   }
 
   RowTypePtr rowType_{
@@ -897,25 +894,24 @@ TEST_F(AggregationTest, aggregateOfNulls) {
 // Verify behavior of setNull method.
 TEST_F(AggregationTest, setNull) {
   AggregateFunc aggregate(BIGINT());
-  int32_t accumulatorFlagsOffset = 0;
-  aggregate.setOffsets(
-      0,
-      RowContainer::nullByte(accumulatorFlagsOffset),
-      RowContainer::nullMask(accumulatorFlagsOffset),
-      RowContainer::initializedByte(accumulatorFlagsOffset),
-      RowContainer::initializedMask(accumulatorFlagsOffset),
-      0);
-  char group{0};
-  aggregate.clearNullTest(&group);
-  EXPECT_FALSE(aggregate.isNullTest(&group));
+  RowContainer rows(
+      /*keyTypes=*/{},
+      {Accumulator{&aggregate, BIGINT()}},
+      /*dependentTypes=*/{},
+      pool(),
+      RowContainer::Options{});
+  aggregate.setOffsets(rows.columnAt(0), rows.rowSizeOffset());
+  char* group = rows.newRow();
+  aggregate.clearNullTest(group);
+  EXPECT_FALSE(aggregate.isNullTest(group));
 
   // Verify setNull returns true if value is non null.
-  EXPECT_TRUE(aggregate.setNullTest(&group));
-  EXPECT_TRUE(aggregate.isNullTest(&group));
+  EXPECT_TRUE(aggregate.setNullTest(group));
+  EXPECT_TRUE(aggregate.isNullTest(group));
 
   // Verify setNull returns false if value is already null.
-  EXPECT_FALSE(aggregate.setNullTest(&group));
-  EXPECT_TRUE(aggregate.isNullTest(&group));
+  EXPECT_FALSE(aggregate.setNullTest(group));
+  EXPECT_TRUE(aggregate.isNullTest(group));
 }
 
 TEST_F(AggregationTest, hashmodes) {
@@ -4933,25 +4929,12 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
       [&agg](folly::Range<char**> groups) { agg.destroy(groups); });
 
   RowContainer rows(
-      {}, // keyTypes
-      false, // nullableKeys
+      {},
       {accumulator},
-      {}, // dependentTypes
-      false, // hasNext
-      false, // isJoinBuild
-      false, // hasProbedFlag
-      false, // hasCountFlag
-      false, // hasNormalizedKeys
-      false, // useListRowIndex
-      pool());
-  const auto rowColumn = rows.columnAt(0);
-  agg.setOffsets(
-      rowColumn.offset(),
-      rowColumn.nullByte(),
-      rowColumn.nullMask(),
-      rowColumn.initializedByte(),
-      rowColumn.initializedMask(),
-      rows.rowSizeOffset());
+      {},
+      pool(),
+      RowContainer::Options{.nullableKeys = false});
+  agg.setOffsets(rows.columnAt(0), rows.rowSizeOffset());
   rows.newRow();
   rows.clear();
 

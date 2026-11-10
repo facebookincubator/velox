@@ -50,7 +50,8 @@ void registerSparkFunctions(const std::string& prefix) {
       prefix + "isnull",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*,
+         const core::QueryConfig&) {
         return std::make_shared<IsNullFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -59,8 +60,9 @@ void registerSparkFunctions(const std::string& prefix) {
            .argumentType("T")
            .build()});
 
-  // The GPU cast from VARCHAR follows Presto's rules, not Spark's.
-  setCastFromVarcharEnabled(false);
+  // CastFunction's cast from VARCHAR and cast from TIMESTAMP to VARCHAR follow
+  // Presto's rules, not Spark's.
+  setPrestoCastEnabled(false);
 
   const std::vector<exec::FunctionSignaturePtr> subStringSignatures{
       FunctionSignatureBuilder()
@@ -82,7 +84,8 @@ void registerSparkFunctions(const std::string& prefix) {
         name,
         [](const std::string&,
            const core::TypedExprPtr& expr,
-           memory::MemoryPool* pool) {
+           memory::MemoryPool* pool,
+           const core::QueryConfig&) {
           return sparksql::makeSubStringFunction(expr, pool);
         },
         subStringSignatures);
@@ -92,7 +95,8 @@ void registerSparkFunctions(const std::string& prefix) {
       prefix + "hash_with_seed",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<sparksql::HashFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -102,13 +106,16 @@ void registerSparkFunctions(const std::string& prefix) {
            .variableArity("any")
            .build()},
       true,
-      sparksql::HashFunction::canEvaluate);
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
+        return sparksql::HashFunction::canEvaluate(expr);
+      });
 
   registerCudfFunction(
       prefix + "date_add",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<sparksql::DateAddFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -131,7 +138,8 @@ void registerSparkFunctions(const std::string& prefix) {
       prefix + "date_trunc",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<DateTruncFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -140,7 +148,9 @@ void registerSparkFunctions(const std::string& prefix) {
            .argumentType("timestamp")
            .build()},
       true,
-      DateTruncFunction::canEvaluate);
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
+        return DateTruncFunction::canEvaluate(expr);
+      });
 
   registerSparkArrayAccessFunctions(prefix);
 }

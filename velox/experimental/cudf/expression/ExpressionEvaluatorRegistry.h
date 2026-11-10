@@ -25,7 +25,7 @@
 #include <unordered_map>
 
 namespace facebook::velox::core {
-// Named only by reference in the create signature below, so a declaration is
+// Named only by reference in the callback signatures below, so a declaration is
 // enough and QueryConfig.h stays out of every evaluator's include graph.
 class QueryConfig;
 } // namespace facebook::velox::core
@@ -34,8 +34,13 @@ namespace facebook::velox::cudf_velox {
 
 class CudfExpression;
 
-using CudfExpressionEvaluatorCanEvaluate =
-    std::function<bool(const core::TypedExprPtr& expr)>;
+/// Returns whether an evaluator can handle `expr` under the session `config`.
+/// The function evaluator consults each function's eligibility predicate, which
+/// can reject a session setting the function does not implement, so plan-time
+/// checks and runtime evaluator selection pass the same config. `config` is
+/// valid only for the duration of the call.
+using CudfExpressionEvaluatorCanEvaluate = std::function<
+    bool(const core::TypedExprPtr& expr, const core::QueryConfig& config)>;
 /// Builds an evaluator for `expr` over `inputRowSchema`. `config` is the
 /// session config an evaluator reads while it builds the expression, as a
 /// simple function's initialize() does; it is valid for the duration of the
@@ -47,6 +52,7 @@ using CudfExpressionEvaluatorCreate =
         memory::MemoryPool* pool,
         const core::QueryConfig& config)>;
 
+/// An evaluator's priority, eligibility predicate, and creation callback.
 struct CudfExpressionEvaluatorEntry {
   int priority;
   CudfExpressionEvaluatorCanEvaluate canEvaluate;

@@ -702,12 +702,13 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
     const RowTypePtr& inputRowSchema,
     const SubfieldFilterDecimalTypes* decimalTypes,
     std::optional<cudf::type_id> timestampType) {
-  // First, create column reference from subfield
-  // For now, only support simple field references
-  if (subfield.path().empty() ||
-      subfield.path()[0]->kind() != common::SubfieldKind::kNestedField) {
-    VELOX_FAIL(
-        "Only simple field references are supported in subfield filters");
+  // The GPU scan check asks canCreateAstFromSubfieldFilter() too, so it lists
+  // what converts for both.
+  if (!canCreateAstFromSubfieldFilter(subfield, filter)) {
+    VELOX_NYI(
+        "Subfield filter not yet supported for cuDF AST conversion: {} {}",
+        subfield.toString(),
+        filter.toString());
   }
 
   auto nestedField = static_cast<const common::Subfield::NestedField*>(
@@ -948,9 +949,7 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
     }
 
     default:
-      VELOX_NYI(
-          "Filter type {} not yet supported for subfield filter conversion",
-          static_cast<int>(filter.kind()));
+      VELOX_UNREACHABLE();
   }
 }
 
@@ -972,6 +971,45 @@ bool hasDecimalSubfieldFilter(
     }
   }
   return false;
+}
+
+bool canCreateAstFromSubfieldFilter(
+    const common::Subfield& subfield,
+    const common::Filter& filter) {
+  if (subfield.path().size() != 1 ||
+      subfield.path()[0]->kind() != common::SubfieldKind::kNestedField) {
+    return false;
+  }
+  // Lists the kinds createAstFromSubfieldFilterImpl() converts.
+  switch (filter.kind()) {
+    case common::FilterKind::kBigintRange:
+    case common::FilterKind::kHugeintRange:
+    case common::FilterKind::kBigintValuesUsingHashTable:
+    case common::FilterKind::kBigintValuesUsingBitmask:
+    case common::FilterKind::kHugeintValuesUsingHashTable:
+    case common::FilterKind::kBytesValues:
+    case common::FilterKind::kNegatedBytesValues:
+    case common::FilterKind::kDoubleRange:
+    case common::FilterKind::kFloatRange:
+    case common::FilterKind::kBytesRange:
+    case common::FilterKind::kTimestampRange:
+    case common::FilterKind::kBoolValue:
+    case common::FilterKind::kIsNull:
+    case common::FilterKind::kIsNotNull:
+    case common::FilterKind::kBigintMultiRange:
+    case common::FilterKind::kNegatedBigintRange:
+      return true;
+    case common::FilterKind::kMultiRange: {
+      const auto& children =
+          static_cast<const common::MultiRange&>(filter).filters();
+      return !children.empty() &&
+          std::ranges::all_of(children, [&](const auto& child) {
+            return canCreateAstFromSubfieldFilter(subfield, *child);
+          });
+    }
+    default:
+      return false;
+  }
 }
 
 // Convert subfield filters to cudf AST

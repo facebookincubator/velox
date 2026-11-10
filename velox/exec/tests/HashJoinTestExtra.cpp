@@ -502,6 +502,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
   auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
     return [&] {
       std::vector<exec::Split> probeSplits;
+      probeSplits.reserve(tempFiles.size());
       for (auto& file : tempFiles) {
         probeSplits.push_back(
             exec::Split(makeHiveConnectorSplit(file->getPath())));
@@ -514,6 +515,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
 
   // 100 key values in [35, 233] range.
   std::vector<RowVectorPtr> buildVectors;
+  buildVectors.reserve(5);
   for (int i = 0; i < 5; ++i) {
     buildVectors.push_back(makeRowVector({
         makeFlatVector<int32_t>(
@@ -523,6 +525,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
     }));
   }
   std::vector<RowVectorPtr> keyOnlyBuildVectors;
+  keyOnlyBuildVectors.reserve(5);
   for (int i = 0; i < 5; ++i) {
     keyOnlyBuildVectors.push_back(
         makeRowVector({makeFlatVector<int32_t>(numRowsBuild / 5, [i](auto row) {
@@ -587,6 +590,38 @@ TEST_P(HashJoinTest, dynamicFilters) {
               ASSERT_EQ(
                   planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
                   std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
+
+    {
+      SCOPED_TRACE("Two join keys on one probe column");
+      // The scan filters c0 by the build values of both keys: u_c0 in [35, 233]
+      // and u_k in [1035, 1233]. No value is in both, so the join gets no probe
+      // rows.
+      PlanBuilder plan(pool_.get());
+      plan.tableScan(probeType)
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"c0", "c0"},
+              {"u_c0", "u_k"},
+              plan.newPlan()
+                  .values(buildVectors)
+                  .project({"c0 AS u_c0", "(c0 + 1000)::integer AS u_k"})
+                  .planNode(),
+              "",
+              {"c0", "c1"},
+              core::JoinType::kInner);
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(plan.planNode())
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT t.c0, t.c1 FROM t, u "
+              "WHERE t.c0 = u.c0 AND t.c0 = u.c0 + 1000")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            if (!hasSpill) {
+              ASSERT_EQ(getInputPositions(task, 1), 0);
             }
           })
           .run();
@@ -3798,6 +3833,12 @@ DEBUG_ONLY_TEST_P(HashJoinTest, minSpillableMemoryReservation) {
         .planNode(plan)
         .injectSpill(false)
         .spillDirectory(tempDirectory->getPath())
+        .config(
+            core::QueryConfig::kMinSpillableReservationPct,
+            std::to_string(minSpillableReservationPct))
+        .config(
+            core::QueryConfig::kSpillableReservationGrowthPct,
+            std::to_string(minSpillableReservationPct))
         .referenceQuery(
             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
         .run();

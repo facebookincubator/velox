@@ -1050,8 +1050,15 @@ class SelectiveNimbleReader : public dwio::common::Reader {
   SelectiveNimbleReader(
       std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options)
-      : readerBase_(ReaderBase::create(std::move(input), options)),
-        options_(options) {
+      : SelectiveNimbleReader(
+            ReaderBase::create(std::move(input), options),
+            options) {}
+
+  SelectiveNimbleReader(
+      std::shared_ptr<ReaderBase> readerBase,
+      const dwio::common::ReaderOptions& options)
+      : readerBase_(std::move(readerBase)), options_(options) {
+    NIMBLE_USER_CHECK_NOT_NULL(readerBase_, "readerBase must not be null");
     detail::initHook();
   }
 
@@ -1154,6 +1161,14 @@ SelectiveNimbleReaderFactory::createReader(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options) {
   return std::make_unique<SelectiveNimbleReader>(std::move(input), options);
+}
+
+std::unique_ptr<dwio::common::Reader>
+SelectiveNimbleReaderFactory::createReader(
+    std::shared_ptr<ReaderBase> readerBase,
+    const dwio::common::ReaderOptions& options) {
+  return std::make_unique<SelectiveNimbleReader>(
+      std::move(readerBase), options);
 }
 
 } // namespace facebook::nimble

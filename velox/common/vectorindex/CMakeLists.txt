@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The vector search join plan node, which builds without FAISS, holds and
-# validates these settings.
+# The vector search join plan node, which builds without FAISS, holds the
+# metric.
 velox_add_library(
   velox_vector_index_settings
   LocalVectorIndexOptions.cpp
@@ -37,10 +37,12 @@ if(VELOX_ENABLE_FAISS)
   velox_add_library(
     velox_vector_index
     Embeddings.cpp
+    FaissLocalVectorIndex.cpp
     LocalVectorIndex.cpp
     HEADERS
     CallbackWriter.h
     Embeddings.h
+    FaissLocalVectorIndex.h
     LocalVectorIndex.h
     SingleThreadedFaiss.h
   )

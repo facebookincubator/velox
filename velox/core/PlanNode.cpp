@@ -20,7 +20,6 @@
 #include "velox/core/PlanNode.h"
 
 #include "velox/common/EnumDefine.h"
-#include "velox/common/vectorindex/LocalVectorIndexOptions.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/vector/VectorSaver.h"
@@ -2988,6 +2987,7 @@ TopNRowNumberNode::TopNRowNumberNode(
     std::vector<SortOrder> sortingOrders,
     const std::optional<std::string>& rowNumberColumnName,
     int32_t limit,
+    bool partial,
     PlanNodePtr source)
     : PlanNode(std::move(id)),
       function_(function),
@@ -2995,6 +2995,7 @@ TopNRowNumberNode::TopNRowNumberNode(
       sortingKeys_{std::move(sortingKeys)},
       sortingOrders_{std::move(sortingOrders)},
       limit_{limit},
+      partial_{partial},
       sources_{std::move(source)},
       outputType_{getOptionalRowNumberOutputType(
           sources_[0]->outputType(),
@@ -3010,6 +3011,11 @@ TopNRowNumberNode::TopNRowNumberNode(
       "Number of sorting keys must be greater than zero");
 
   VELOX_USER_CHECK_GT(limit, 0, "Limit must be greater than zero");
+
+  VELOX_USER_CHECK(
+      !partial_ || !rowNumberColumnName.has_value(),
+      "Partial TopNRowNumber must not have a row number column: {}",
+      rowNumberColumnName.value_or(""));
 
   std::unordered_set<std::string> keyNames;
   for (const auto& key : partitionKeys_) {
@@ -3041,6 +3047,10 @@ void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
   stream << ") ";
 
   stream << "limit " << limit_;
+
+  if (partial_) {
+    stream << " partial";
+  }
 }
 
 folly::dynamic TopNRowNumberNode::serialize() const {
@@ -3053,6 +3063,7 @@ folly::dynamic TopNRowNumberNode::serialize() const {
     obj["rowNumberColumnName"] = outputType_->names().back();
   }
   obj["limit"] = limit_;
+  obj["partial"] = partial_;
   return obj;
 }
 
@@ -3078,6 +3089,11 @@ PlanNodePtr TopNRowNumberNode::create(
     rowNumberColumnName = obj["rowNumberColumnName"].asString();
   }
 
+  // Plans serialized before 'partial' existed mark a partial step by leaving
+  // out the row number column.
+  const bool partial = obj.count("partial") ? obj["partial"].asBool()
+                                            : !rowNumberColumnName.has_value();
+
   return std::make_shared<TopNRowNumberNode>(
       deserializePlanNodeId(obj),
       function,
@@ -3086,6 +3102,7 @@ PlanNodePtr TopNRowNumberNode::create(
       sortingOrders,
       rowNumberColumnName,
       obj["limit"].asInt(),
+      partial,
       source);
 }
 
@@ -3878,13 +3895,29 @@ PlanNodePtr SpatialJoinNode::create(const folly::dynamic& obj, void* context) {
       outputType);
 }
 
+namespace {
+const auto& indexSideNames() {
+  static const folly::
+      F14FastMap<VectorSearchJoinNode::IndexSide, std::string_view>
+          kNames = {
+              {VectorSearchJoinNode::IndexSide::kProbe, "PROBE"},
+              {VectorSearchJoinNode::IndexSide::kBuild, "BUILD"},
+          };
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(VectorSearchJoinNode, IndexSide, indexSideNames)
+
 VectorSearchJoinNode::VectorSearchJoinNode(
     const PlanNodeId& id,
     JoinType joinType,
     std::vector<FieldAccessTypedExprPtr> leftKeys,
     std::vector<FieldAccessTypedExprPtr> rightKeys,
-    FieldAccessTypedExprPtr probeEmbedding,
-    FieldAccessTypedExprPtr buildIndex,
+    IndexSide indexSide,
+    FieldAccessTypedExprPtr embedding,
+    FieldAccessTypedExprPtr index,
+    std::string format,
     common::vectorindex::VectorIndexMetric metric,
     int64_t k,
     std::vector<std::pair<std::string, std::string>> searchOptions,
@@ -3897,8 +3930,10 @@ VectorSearchJoinNode::VectorSearchJoinNode(
       joinType_(joinType),
       leftKeys_(std::move(leftKeys)),
       rightKeys_(std::move(rightKeys)),
-      probeEmbedding_(std::move(probeEmbedding)),
-      buildIndex_(std::move(buildIndex)),
+      indexSide_(indexSide),
+      embedding_(std::move(embedding)),
+      index_(std::move(index)),
+      format_(std::move(format)),
       metric_(metric),
       k_(k),
       searchOptions_(std::move(searchOptions)),
@@ -3907,33 +3942,43 @@ VectorSearchJoinNode::VectorSearchJoinNode(
       sources_({std::move(left), std::move(right)}),
       outputType_(std::move(outputType)) {
   VELOX_USER_CHECK(
-      joinType_ == JoinType::kInner || joinType_ == JoinType::kLeft,
+      joinType_ == JoinType::kInner || joinType_ == JoinType::kLeft ||
+          joinType_ == JoinType::kRight,
       "The join type is not supported by vector search join: {}",
+      JoinTypeName::toName(joinType_));
+  VELOX_USER_CHECK(
+      joinType_ !=
+          (indexSide_ == IndexSide::kBuild ? JoinType::kRight
+                                           : JoinType::kLeft),
+      "Vector search join may not preserve the index side: {}",
       JoinTypeName::toName(joinType_));
   const auto& leftType = sources_[0]->outputType();
   const auto& rightType = sources_[1]->outputType();
   checkJoinKeys(leftKeys_, rightKeys_, leftType, rightType);
 
+  const bool indexOnProbe = indexSide_ == IndexSide::kProbe;
+  const auto& queryType = indexOnProbe ? rightType : leftType;
+  const auto& indexType = indexOnProbe ? leftType : rightType;
   VELOX_USER_CHECK(
-      leftType->containsChild(probeEmbedding_->name()),
-      "Probe embedding not found in left side output: {}",
-      probeEmbedding_->name());
+      queryType->containsChild(embedding_->name()),
+      "Embedding not found in the output of the side without the index: {}",
+      embedding_->name());
   VELOX_USER_CHECK(
-      probeEmbedding_->type()->equivalent(*ARRAY(REAL())),
-      "Probe embedding must be ARRAY(REAL): {}",
-      probeEmbedding_->type()->toString());
+      embedding_->type()->equivalent(*ARRAY(REAL())),
+      "Embedding must be ARRAY(REAL): {}",
+      embedding_->type()->toString());
   VELOX_USER_CHECK(
-      rightType->containsChild(buildIndex_->name()),
-      "Build index not found in right side output: {}",
-      buildIndex_->name());
+      indexType->containsChild(index_->name()),
+      "Index not found in the output of the index side: {}",
+      index_->name());
   VELOX_USER_CHECK(
-      buildIndex_->type()->isVarbinary(),
-      "Build index must be VARBINARY: {}",
-      buildIndex_->type()->toString());
+      index_->type()->isVarbinary(),
+      "Index must be VARBINARY: {}",
+      index_->type()->toString());
 
+  VELOX_USER_CHECK(
+      !format_.empty(), "Vector search join requires a vector index format");
   VELOX_USER_CHECK_GE(k_, 1, "Vector search join requires k of at least 1");
-  common::vectorindex::LocalVectorIndexOptions::parseSearch(
-      {searchOptions_.begin(), searchOptions_.end()});
 
   VELOX_USER_CHECK(
       !idName_.has_value() || idName_ != scoreName_,
@@ -3957,8 +4002,8 @@ VectorSearchJoinNode::VectorSearchJoinNode(
     } else {
       VELOX_USER_CHECK_NE(
           name,
-          buildIndex_->name(),
-          "Vector search join output may not include the build index");
+          index_->name(),
+          "Vector search join output may not include the index");
       sourceNames.push_back(name);
       sourceTypes.push_back(type);
     }
@@ -3994,9 +4039,11 @@ void VectorSearchJoinNode::addDetails(std::stringstream& stream) const {
   if (!leftKeys_.empty()) {
     stream << ", ";
   }
-  stream << probeEmbedding_->name() << " nearest in " << buildIndex_->name()
-         << " (" << common::vectorindex::VectorIndexMetricName::toName(metric_)
-         << "), k: " << k_;
+  stream << embedding_->name() << " nearest in " << index_->name() << " ("
+         << format_ << ", " << metric_ << "), k: " << k_;
+  if (indexSide_ == IndexSide::kProbe) {
+    stream << ", index: " << toName(indexSide_);
+  }
   for (const auto& [key, value] : searchOptions_) {
     stream << ", " << key << ": " << value;
   }
@@ -4007,8 +4054,10 @@ folly::dynamic VectorSearchJoinNode::serialize() const {
   obj["joinType"] = JoinTypeName::toName(joinType_);
   obj["leftKeys"] = ISerializable::serialize(leftKeys_);
   obj["rightKeys"] = ISerializable::serialize(rightKeys_);
-  obj["probeEmbedding"] = probeEmbedding_->serialize();
-  obj["buildIndex"] = buildIndex_->serialize();
+  obj["indexSide"] = toName(indexSide_);
+  obj["embedding"] = embedding_->serialize();
+  obj["index"] = index_->serialize();
+  obj["format"] = format_;
   obj["metric"] = common::vectorindex::VectorIndexMetricName::toName(metric_);
   obj["k"] = k_;
   auto options = folly::dynamic::array();
@@ -4046,8 +4095,10 @@ PlanNodePtr VectorSearchJoinNode::create(
       JoinTypeName::toJoinType(obj["joinType"].asString()),
       deserializeFields(obj["leftKeys"], context),
       deserializeFields(obj["rightKeys"], context),
-      deserializeField(obj["probeEmbedding"]),
-      deserializeField(obj["buildIndex"]),
+      toIndexSide(obj["indexSide"].asString()),
+      deserializeField(obj["embedding"]),
+      deserializeField(obj["index"]),
+      obj["format"].asString(),
       common::vectorindex::VectorIndexMetricName::toVectorIndexMetric(
           obj["metric"].asString()),
       obj["k"].asInt(),
