@@ -280,7 +280,9 @@ void PinnedBufferPool::freeAll() {
   std::lock_guard<std::mutex> lock(mutex_);
   for (auto& [device, memories] : free_) {
     const rmm::cuda_set_device_raii onDevice{rmm::cuda_device_id{device}};
-    for (auto& memory : memories) {
+    while (!memories.empty()) {
+      const Memory memory = memories.back();
+      memories.pop_back();
       if (memory.lastCopy != nullptr) {
         CUDF_CUDA_TRY(cudaEventSynchronize(memory.lastCopy));
         CUDF_CUDA_TRY(cudaEventDestroy(memory.lastCopy));
@@ -290,7 +292,6 @@ void PinnedBufferPool::freeAll() {
       }
     }
   }
-  free_.clear();
 }
 
 // One device read: 'bytes' bytes at file 'offset' go to 'dst' on 'device',
