@@ -501,6 +501,18 @@ struct Selection {
     return ans;
   }
 
+  // Returns one past the last selected row.
+  vector_size_t end() const {
+    if (!changed()) {
+      return total_;
+    }
+    vector_size_t ans = 0;
+    for (auto [offset, size] : *ranges_) {
+      ans = std::max(ans, offset + size);
+    }
+    return ans;
+  }
+
   void clearAll() {
     ranges_ = std::vector<std::pair<vector_size_t, vector_size_t>>();
   }
@@ -515,40 +527,48 @@ struct Selection {
   vector_size_t total_;
 };
 
-// Gather values from time buffer. Nulls are skipped.
+// Returns true if 'nulls' marks 'row' null. 'nulls' may be nullptr.
+inline bool isNull(const uint64_t* nulls, vector_size_t row) {
+  return nulls != nullptr && bits::isBitNull(nulls, row);
+}
+
+// Gather values from time buffer. Rows that 'nulls' marks null are skipped.
 // TIME is stored as int64_t milliseconds in Velox, converted to int32_t
 // milliseconds for Arrow time32.
 void gatherFromTimeBuffer(
     const BaseVector& vec,
     const Selection& rows,
+    const uint64_t* nulls,
     Buffer& out) {
   auto src = (*vec.values()).as<int64_t>();
   auto dst = out.asMutable<int32_t>();
   vector_size_t j = 0;
-  if (!vec.mayHaveNulls()) {
+  if (nulls == nullptr) {
     // Convert int64 milliseconds to int32 milliseconds.
     rows.apply(
         [&](vector_size_t i) { dst[j++] = static_cast<int32_t>(src[i]); });
     return;
   }
   rows.apply([&](vector_size_t i) {
-    if (!vec.isNullAt(i)) {
+    if (!bits::isBitNull(nulls, i)) {
       dst[j] = static_cast<int32_t>(src[i]); // int64 to int32 milliseconds.
     }
     j++;
   });
 }
 
-// Gather values from timestamp buffer. Nulls are skipped.
+// Gather values from timestamp buffer. Rows that 'nulls' marks null are
+// skipped.
 void gatherFromTimestampBuffer(
     const BaseVector& vec,
     const Selection& rows,
     TimestampUnit unit,
+    const uint64_t* nulls,
     Buffer& out) {
   auto src = (*vec.values()).as<Timestamp>();
   auto dst = out.asMutable<int64_t>();
   vector_size_t j = 0; // index into dst
-  if (!vec.mayHaveNulls()) {
+  if (nulls == nullptr) {
     switch (unit) {
       case TimestampUnit::kSecond:
         rows.apply([&](vector_size_t i) { dst[j++] = src[i].getSeconds(); });
@@ -570,7 +590,7 @@ void gatherFromTimestampBuffer(
   switch (unit) {
     case TimestampUnit::kSecond:
       rows.apply([&](vector_size_t i) {
-        if (!vec.isNullAt(i)) {
+        if (!bits::isBitNull(nulls, i)) {
           dst[j] = src[i].getSeconds();
         }
         j++;
@@ -578,7 +598,7 @@ void gatherFromTimestampBuffer(
       break;
     case TimestampUnit::kMilli:
       rows.apply([&](vector_size_t i) {
-        if (!vec.isNullAt(i)) {
+        if (!bits::isBitNull(nulls, i)) {
           dst[j] = src[i].toMillis();
         }
         j++;
@@ -586,7 +606,7 @@ void gatherFromTimestampBuffer(
       break;
     case TimestampUnit::kMicro:
       rows.apply([&](vector_size_t i) {
-        if (!vec.isNullAt(i)) {
+        if (!bits::isBitNull(nulls, i)) {
           dst[j] = src[i].toMicros();
         };
         j++;
@@ -594,7 +614,7 @@ void gatherFromTimestampBuffer(
       break;
     case TimestampUnit::kNano:
       rows.apply([&](vector_size_t i) {
-        if (!vec.isNullAt(i)) {
+        if (!bits::isBitNull(nulls, i)) {
           dst[j] = src[i].toNanos();
         }
         j++;
@@ -855,16 +875,62 @@ VectorPtr createStringFlatVectorFromFixedSizeBinary(
       optionalNullCount(arrowArray.null_count));
 }
 
+// Returns the nulls to export for 'vec'. Values under a null struct are
+// undefined, so the rows under one are exported as null, like the vector's own
+// null rows: 'parentNulls', the nulls of the enclosing structs at 'rows' (may
+// be nullptr), are merged with the vector's own. A constant has no nulls per
+// row and gets only 'parentNulls'. They apply when it is flattened; exported
+// run-end encoded, it has no validity buffer, and its value is defined.
+BufferPtr nullsToExport(
+    const BaseVector& vec,
+    const Selection& rows,
+    const BufferPtr& parentNulls,
+    memory::MemoryPool* pool) {
+  if (vec.encoding() == VectorEncoding::Simple::CONSTANT) {
+    return parentNulls;
+  }
+  // A dictionary's own nulls, not the nulls of its base. A nulls buffer in
+  // which no row is null is the same as none: it must not make the children of
+  // a struct, or the base of a dictionary, export differently.
+  const auto* rawOwnNulls = vec.rawNulls();
+  if (rawOwnNulls == nullptr ||
+      bits::isAllSet(rawOwnNulls, 0, vec.size(), bits::kNotNull)) {
+    return parentNulls;
+  }
+  if (parentNulls == nullptr) {
+    return vec.nulls();
+  }
+  const auto* rawParentNulls = parentNulls->as<uint64_t>();
+  // A child can be shorter than its struct when the struct is null at the rows
+  // past the child's end, so cover every selected row.
+  const auto size = std::max(vec.size(), rows.end());
+  auto nulls = allocateNulls(size, pool);
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  if (!rows.changed() && size == vec.size()) {
+    bits::andBits(rawNulls, rawParentNulls, rawOwnNulls, 0, rows.count());
+  } else {
+    rows.apply([&](vector_size_t row) {
+      if (bits::isBitNull(rawParentNulls, row) ||
+          (row < vec.size() && bits::isBitNull(rawOwnNulls, row))) {
+        bits::setNull(rawNulls, row);
+      }
+    });
+  }
+  return nulls;
+}
+
 // This functions does two things: (a) sets the value of null_count, and (b)
-// the validity buffer (if there is at least one null row).
+// the validity buffer (if there is at least one null row). 'nulls' are the
+// nulls to export for 'vec', see nullsToExport().
 void exportValidityBitmap(
     const BaseVector& vec,
     const Selection& rows,
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
-  if (!vec.nulls()) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& nulls) {
+  if (!nulls) {
     out.null_count = 0;
     return;
   }
@@ -877,19 +943,19 @@ void exportValidityBitmap(
     return;
   }
 
-  auto nulls = vec.nulls();
+  auto validity = nulls;
 
   // If we're only exporting a subset, create a new validity buffer.
   if (rows.changed()) {
-    nulls = AlignedBuffer::allocate<bool>(out.length, pool);
-    gatherFromBuffer(*BOOLEAN(), *vec.nulls(), rows, options, *nulls);
+    validity = AlignedBuffer::allocate<bool>(out.length, pool);
+    gatherFromBuffer(*BOOLEAN(), *nulls, rows, options, *validity);
   }
 
   // Count the nulls. The null count stored in the vector may be out of date.
-  out.null_count = BaseVector::countNulls(nulls, rows.count());
+  out.null_count = BaseVector::countNulls(validity, rows.count());
 
   if (out.null_count > 0) {
-    holder.setBuffer(0, nulls);
+    holder.setBuffer(0, validity);
   }
 }
 
@@ -934,7 +1000,8 @@ void exportValues(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* nulls) {
   const auto& type = vec.type();
   out.n_buffers = 2;
 
@@ -956,11 +1023,11 @@ void exportValues(
         "Missing values buffer is only supported for all-null vectors.");
     std::memset(values->asMutable<uint8_t>(), 0, values->size());
   } else if (type->kind() == TypeKind::TIMESTAMP) {
-    gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
+    gatherFromTimestampBuffer(vec, rows, options.timestampUnit, nulls, *values);
   } else if (
       type->kind() == TypeKind::BIGINT && type->isTime() &&
       type->equivalent(*TIME())) {
-    gatherFromTimeBuffer(vec, rows, *values);
+    gatherFromTimeBuffer(vec, rows, nulls, *values);
   } else {
     gatherFromBuffer(*type, *vec.values(), rows, options, *values);
   }
@@ -972,7 +1039,8 @@ void exportViews(
     const Selection& rows,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* nulls) {
   auto stringBuffers = vec.stringBuffers();
   size_t numStringBuffers = stringBuffers.size();
   // Buffers for nulls, values, variadic_buffer_sizes, and all stringBuffers.
@@ -1037,7 +1105,7 @@ void exportViews(
   vector_size_t outputIndex = 0;
   rows.apply([&](vector_size_t i) {
     auto* outputView = &rawUtf8Views[outputIndex++];
-    if (vec.isNullAt(i)) {
+    if (isNull(nulls, i)) {
       std::memset(outputView, 0, sizeof(StringView));
       return;
     }
@@ -1075,11 +1143,12 @@ void exportStrings(
     const Selection& rows,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* nulls) {
   out.n_buffers = 3;
   size_t bufSize = 0;
   rows.apply([&](vector_size_t i) {
-    if (!vec.isNullAt(i)) {
+    if (!isNull(nulls, i)) {
       bufSize += vec.valueAtFast(i).size();
     }
   });
@@ -1092,7 +1161,7 @@ void exportStrings(
   *rawOffsets = 0;
   rows.apply([&](vector_size_t i) {
     auto newOffset = *rawOffsets;
-    if (!vec.isNullAt(i)) {
+    if (!isNull(nulls, i)) {
       auto sv = vec.valueAtFast(i);
       memcpy(rawBuffer, sv.data(), sv.size());
       rawBuffer += sv.size();
@@ -1109,7 +1178,8 @@ void exportFlat(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* nulls) {
   out.n_children = 0;
   out.children = nullptr;
   switch (vec.typeKind()) {
@@ -1122,7 +1192,7 @@ void exportFlat(
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::TIMESTAMP:
-      exportValues(vec, rows, options, out, pool, holder);
+      exportValues(vec, rows, options, out, pool, holder, nulls);
       break;
     case TypeKind::UNKNOWN:
       // Keep out.n_children = 0 for UNKNOWN type.
@@ -1132,13 +1202,13 @@ void exportFlat(
       const auto& stringVector = *vec.asUnchecked<FlatVector<StringView>>();
       switch (options.varTypeLayout) {
         case ArrowOptions::VarTypeLayout::kDefault:
-          exportStrings(stringVector, rows, out, pool, holder);
+          exportStrings(stringVector, rows, out, pool, holder, nulls);
           break;
         case ArrowOptions::VarTypeLayout::kStringView:
-          exportViews(stringVector, rows, out, pool, holder);
+          exportViews(stringVector, rows, out, pool, holder, nulls);
           break;
         case ArrowOptions::VarTypeLayout::kLarge:
-          exportStrings<int64_t>(stringVector, rows, out, pool, holder);
+          exportStrings<int64_t>(stringVector, rows, out, pool, holder, nulls);
           break;
       }
       break;
@@ -1150,20 +1220,29 @@ void exportFlat(
   }
 }
 
+// 'parentNulls' are the nulls of the enclosing structs, indexed like 'rows', or
+// nullptr if there are none, e.g. for array elements. For a dictionary base,
+// they mark the base rows that no row outside a null struct points to. The rows
+// they mark are exported as null, see nullsToExport().
 void exportToArrowImpl(
     const BaseVector&,
     const Selection&,
     const ArrowOptions& options,
     ArrowArray&,
-    memory::MemoryPool*);
+    memory::MemoryPool*,
+    const BufferPtr& parentNulls = nullptr);
 
+// 'nulls' are the nulls to export for 'vec', merged with those of the
+// enclosing structs. Child values are undefined where a struct is null, so
+// they are the children's parent nulls.
 void exportRows(
     const RowVector& vec,
     const Selection& rows,
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& nulls) {
   out.n_buffers = 1;
   holder.resizeChildren(vec.childrenSize());
   out.n_children = vec.childrenSize();
@@ -1175,7 +1254,8 @@ void exportRows(
           rows,
           options,
           *holder.allocateChild(i),
-          pool);
+          pool,
+          nulls);
     } catch (const VeloxException&) {
       for (column_index_t j = 0; j < i; ++j) {
         // When exception is thrown, i th child is guaranteed unset.
@@ -1203,7 +1283,8 @@ void exportOffsets(
     ArrowArray& out,
     memory::MemoryPool* pool,
     VeloxToArrowBridgeHolder& holder,
-    Selection& childRows) {
+    Selection& childRows,
+    const uint64_t* nulls) {
   VELOX_CHECK_GE(vec.size(), rows.count());
 
   auto offsets = AlignedBuffer::allocate<vector_size_t>(
@@ -1223,7 +1304,7 @@ void exportOffsets(
     vector_size_t j = 0, k = 0;
     rows.apply([&](vector_size_t i) {
       rawOffsets[j++] = k;
-      if (!vec.isNullAt(i)) {
+      if (!isNull(nulls, i)) {
         childRows.addRange(vec.offsetAt(i), vec.sizeAt(i));
         k += vec.sizeAt(i);
       }
@@ -1241,9 +1322,10 @@ void exportArrays(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* nulls) {
   Selection childRows(vec.elements()->size());
-  exportOffsets(vec, rows, out, pool, holder, childRows);
+  exportOffsets(vec, rows, out, pool, holder, childRows, nulls);
   holder.resizeChildren(1);
   exportToArrowImpl(
       *vec.elements()->loadedVector(),
@@ -1261,7 +1343,8 @@ void exportMaps(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* nulls) {
   RowVector child(
       pool,
       ROW({"key", "value"}, {vec.mapKeys()->type(), vec.mapValues()->type()}),
@@ -1269,7 +1352,7 @@ void exportMaps(
       vec.mapKeys()->size(),
       {vec.mapKeys(), vec.mapValues()});
   Selection childRows(child.size());
-  exportOffsets(vec, rows, out, pool, holder, childRows);
+  exportOffsets(vec, rows, out, pool, holder, childRows, nulls);
   holder.resizeChildren(1);
   exportToArrowImpl(child, childRows, options, *holder.allocateChild(0), pool);
   out.n_children = 1;
@@ -1283,29 +1366,47 @@ void flattenAndExport(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* nulls) {
   using NativeType = typename velox::TypeTraits<kind>::NativeType;
-  SelectivityVector allRows(vec.size());
-  DecodedVector decoded(vec, allRows);
+  // A child can be shorter than its struct when the struct is null at the rows
+  // past the child's end, so cover every selected row.
   auto flatVector = BaseVector::create<FlatVector<NativeType>>(
-      vec.type(), decoded.size(), pool);
+      vec.type(), std::max(vec.size(), rows.end()), pool);
+
+  // Rows that 'nulls' marks are exported as null without decoding them: under
+  // a null struct, a dictionary may have any index.
+  SelectivityVector rowsToDecode(vec.size());
+  if (nulls != nullptr) {
+    rowsToDecode.clearAll();
+    rows.apply([&](vector_size_t row) {
+      if (row >= vec.size() || bits::isBitNull(nulls, row)) {
+        flatVector->setNull(row, true);
+      } else {
+        rowsToDecode.setValid(row, true);
+      }
+    });
+    rowsToDecode.updateBounds();
+  }
+  DecodedVector decoded(vec, rowsToDecode);
 
   if (decoded.mayHaveNulls()) {
-    allRows.applyToSelected([&](vector_size_t row) {
+    rowsToDecode.applyToSelected([&](vector_size_t row) {
       if (decoded.isNullAt(row)) {
         flatVector->setNull(row, true);
       } else {
         flatVector->set(row, decoded.valueAt<NativeType>(row));
       }
     });
-    exportValidityBitmap(*flatVector, rows, options, out, pool, holder);
-    exportFlat(*flatVector, rows, options, out, pool, holder);
   } else {
-    allRows.applyToSelected([&](vector_size_t row) {
+    rowsToDecode.applyToSelected([&](vector_size_t row) {
       flatVector->set(row, decoded.valueAt<NativeType>(row));
     });
-    exportFlat(*flatVector, rows, options, out, pool, holder);
   }
+  exportValidityBitmap(
+      *flatVector, rows, options, out, pool, holder, flatVector->nulls());
+  exportFlat(
+      *flatVector, rows, options, out, pool, holder, flatVector->rawNulls());
 }
 
 void exportDictionary(
@@ -1314,7 +1415,8 @@ void exportDictionary(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& parentNulls) {
   out.n_buffers = 2;
   out.n_children = 0;
   if (rows.changed()) {
@@ -1325,9 +1427,32 @@ void exportDictionary(
     holder.setBuffer(1, vec.wrapInfo());
   }
   auto& values = *vec.valueVector()->loadedVector();
+
+  // The whole base is exported. The indices of rows under a null struct are
+  // undefined, so a base row is known to hold a defined value only if a row
+  // outside a null struct points to it. The other base rows are exported as
+  // null. Rows the dictionary marks null point nowhere.
+  BufferPtr baseParentNulls;
+  if (parentNulls != nullptr) {
+    baseParentNulls = allocateNulls(values.size(), pool, bits::kNull);
+    auto* rawBaseParentNulls = baseParentNulls->asMutable<uint64_t>();
+    const auto* rawParentNulls = parentNulls->as<uint64_t>();
+    const auto* indices = vec.wrapInfo()->as<vector_size_t>();
+    const auto* nulls = vec.rawNulls();
+    rows.apply([&](vector_size_t i) {
+      if (!bits::isBitNull(rawParentNulls, i) && !isNull(nulls, i)) {
+        bits::clearNull(rawBaseParentNulls, indices[i]);
+      }
+    });
+  }
   out.dictionary = holder.allocateDictionary();
   exportToArrowImpl(
-      values, Selection(values.size()), options, *out.dictionary, pool);
+      values,
+      Selection(values.size()),
+      options,
+      *out.dictionary,
+      pool,
+      baseParentNulls);
 }
 
 void exportFlattenedVector(
@@ -1336,13 +1461,22 @@ void exportFlattenedVector(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* nulls) {
   VELOX_CHECK(
       vec.valueVector() == nullptr || vec.wrappedVector()->isFlatEncoding(),
       "An unsupported nested encoding was found.");
   VELOX_CHECK(vec.isScalar(), "Flattening is only supported for scalar types.");
   VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      flattenAndExport, vec.typeKind(), vec, rows, options, out, pool, holder);
+      flattenAndExport,
+      vec.typeKind(),
+      vec,
+      rows,
+      options,
+      out,
+      pool,
+      holder,
+      nulls);
 }
 
 void exportConstantValue(
@@ -1430,38 +1564,62 @@ void exportToArrowImpl(
     const Selection& rows,
     const ArrowOptions& options,
     ArrowArray& out,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const BufferPtr& parentNulls) {
   auto holder = std::make_unique<VeloxToArrowBridgeHolder>();
   out.buffers = holder->getArrowBuffers();
   out.length = rows.count();
   out.offset = 0;
   out.dictionary = nullptr;
-  exportValidityBitmap(vec, rows, options, out, pool, *holder);
+  const auto nulls = nullsToExport(vec, rows, parentNulls, pool);
+  exportValidityBitmap(vec, rows, options, out, pool, *holder, nulls);
+  const auto* rawNulls = nulls ? nulls->as<uint64_t>() : nullptr;
 
   switch (vec.encoding()) {
     case VectorEncoding::Simple::FLAT:
-      exportFlat(vec, rows, options, out, pool, *holder);
+      exportFlat(vec, rows, options, out, pool, *holder, rawNulls);
       break;
     case VectorEncoding::Simple::ROW:
       exportRows(
-          *vec.asUnchecked<RowVector>(), rows, options, out, pool, *holder);
+          *vec.asUnchecked<RowVector>(),
+          rows,
+          options,
+          out,
+          pool,
+          *holder,
+          nulls);
       break;
     case VectorEncoding::Simple::ARRAY:
       exportArrays(
-          *vec.asUnchecked<ArrayVector>(), rows, options, out, pool, *holder);
+          *vec.asUnchecked<ArrayVector>(),
+          rows,
+          options,
+          out,
+          pool,
+          *holder,
+          rawNulls);
       break;
     case VectorEncoding::Simple::MAP:
       exportMaps(
-          *vec.asUnchecked<MapVector>(), rows, options, out, pool, *holder);
+          *vec.asUnchecked<MapVector>(),
+          rows,
+          options,
+          out,
+          pool,
+          *holder,
+          rawNulls);
       break;
     case VectorEncoding::Simple::DICTIONARY:
       options.flattenDictionary
-          ? exportFlattenedVector(vec, rows, options, out, pool, *holder)
-          : exportDictionary(vec, rows, options, out, pool, *holder);
+          ? exportFlattenedVector(
+                vec, rows, options, out, pool, *holder, rawNulls)
+          : exportDictionary(
+                vec, rows, options, out, pool, *holder, parentNulls);
       break;
     case VectorEncoding::Simple::CONSTANT:
       options.flattenConstant
-          ? exportFlattenedVector(vec, rows, options, out, pool, *holder)
+          ? exportFlattenedVector(
+                vec, rows, options, out, pool, *holder, rawNulls)
           : exportConstant(vec, rows, options, out, pool, *holder);
       break;
     default:
