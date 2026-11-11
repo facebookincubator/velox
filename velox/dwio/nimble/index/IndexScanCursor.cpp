@@ -24,12 +24,14 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include <glog/logging.h>
 
 #include <folly/ExceptionWrapper.h>
+#include <folly/ScopeGuard.h>
 #include <folly/Try.h>
 #include <folly/coro/AsyncScope.h>
 #include <folly/coro/Baton.h>
@@ -45,6 +47,49 @@
 #include "velox/dwio/nimble/index/NimbleIndexProjector.h"
 
 namespace facebook::nimble::detail {
+
+namespace {
+
+// Reads the keys of the selected rows of one stripe from the key cursor of the
+// scan, which then reads on from the first row of the next stripe.
+class StripeKeyCursor final : public index::KeyCursor {
+ public:
+  StripeKeyCursor(index::KeyCursor* scanKeyCursor, uint32_t numRows)
+      : scanKeyCursor_{velox::checkedNotNull(scanKeyCursor)},
+        numRemaining_{numRows} {}
+
+  bool hasNext() const override {
+    return numRemaining_ > 0 && scanKeyCursor_->hasNext();
+  }
+
+  std::string_view next() override {
+    NIMBLE_CHECK_GT(numRemaining_, 0, "The stripe has no more keys");
+    const auto key = scanKeyCursor_->next();
+    --numRemaining_;
+    return key;
+  }
+
+  void next(
+      size_t maxKeys,
+      std::vector<std::string_view>& keys,
+      const BufferAllocator& bufferAllocator) override {
+    const auto numKeys = keys.size();
+    scanKeyCursor_->next(
+        std::min<size_t>(maxKeys, numRemaining_), keys, bufferAllocator);
+    numRemaining_ -= static_cast<uint32_t>(keys.size() - numKeys);
+  }
+
+  // Returns the number of keys of the stripe that were not read.
+  uint32_t numRemaining() const {
+    return numRemaining_;
+  }
+
+ private:
+  index::KeyCursor* const scanKeyCursor_;
+  uint32_t numRemaining_;
+};
+
+} // namespace
 
 // Loads encoded streams in contiguous stripe batches within the configured
 // stripe limit. The consumer materializes them.
@@ -325,14 +370,14 @@ IndexScanCursor::~IndexScanCursor() {
 std::optional<RowRange> IndexScanCursor::seek(
     const velox::serializer::EncodedKeyBounds& bounds) {
   reset();
-  setStripeSelections(projector_->lookup(bounds));
+  setStripeSelections(projector_->lookup(bounds, keyCursor_));
   startPrefetch();
   return range_;
 }
 
 std::optional<RowRange> IndexScanCursor::seek(std::string encodedKey) {
   reset();
-  setStripeSelections(projector_->lookup(std::move(encodedKey)));
+  setStripeSelections(projector_->lookup(std::move(encodedKey), keyCursor_));
   startPrefetch();
   return range_;
 }
@@ -353,6 +398,7 @@ void IndexScanCursor::reset() {
   }
   range_.reset();
   stripeSelections_.clear();
+  keyCursor_.reset();
   stripeOffset_ = 0;
 }
 
@@ -428,11 +474,33 @@ IndexScanCursor::co_nextStripe(uint32_t row) {
     stripe = std::move(stripes.at(0));
   }
   stripe.selection.rowRange = selection.rowRange;
+  const auto selectedRows = selection.selectedRowRange();
+  StripeKeyCursor stripeKeyCursor{
+      ensureKeyCursor(selection), selectedRows.numRows()};
+  // A failed stripe can stop the key cursor at any row, so a retry of the
+  // stripe starts a new one. Dismissed on success.
+  auto resetKeyCursor = folly::makeGuard([this] { keyCursor_.reset(); });
   auto entries = co_await stripeMaterializer_->materialize(
-      std::move(stripe), projector_->clusterIndex());
-  numOutputRows_ += selection.selectedRowRange().numRows();
+      std::move(stripe), stripeKeyCursor);
+  resetKeyCursor.dismiss();
+  numOutputRows_ += selectedRows.numRows();
   ++stripeOffset_;
+  // A stripe that left keys unread did not move the key cursor to the next
+  // stripe, and the last stripe releases the key chunk that it holds.
+  if (stripeKeyCursor.numRemaining() > 0 ||
+      stripeOffset_ == stripeSelections_.size()) {
+    keyCursor_.reset();
+  }
   co_return entries;
+}
+
+index::KeyCursor* IndexScanCursor::ensureKeyCursor(
+    const StripeSelection& selection) {
+  if (keyCursor_ == nullptr) {
+    keyCursor_ = projector_->clusterIndex().keyCursor(
+        RowRange{selection.selectedRowRange().startRow, range_->endRow});
+  }
+  return keyCursor_.get();
 }
 
 void IndexScanCursor::startPrefetch() {

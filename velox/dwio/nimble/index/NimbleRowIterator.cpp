@@ -39,7 +39,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
-#include "velox/dwio/nimble/index/ClusterIndexBase.h"
 #include "velox/dwio/nimble/index/IndexScanCursor.h"
 #include "velox/dwio/nimble/index/KeyCursor.h"
 #include "velox/dwio/nimble/index/NimbleIndexProjector.h"
@@ -110,10 +109,9 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
 
   folly::coro::Task<std::unique_ptr<Entries>> materialize(
       ProjectedStripe stripe,
-      const index::ClusterIndexBase& clusterIndex) override {
-    const auto startRow = stripe.selection.selectedRowRange().startRow;
+      index::KeyCursor& keyCursor) override {
     auto rows = co_await co_decode(std::move(stripe));
-    co_return convert(std::move(rows), startRow, clusterIndex);
+    co_return convert(std::move(rows), keyCursor);
   }
 
   bool hasLoadedStripe(uint32_t stripeIndex) const override {
@@ -287,11 +285,10 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
     return std::static_pointer_cast<velox::RowVector>(std::move(rows));
   }
 
-  // Decodes the entries of decoded rows that start at the file row 'startRow'.
+  // Decodes the entries of decoded rows, whose keys 'keyCursor' reads.
   std::unique_ptr<Entries> convert(
       velox::RowVectorPtr rows,
-      uint32_t startRow,
-      const index::ClusterIndexBase& clusterIndex) {
+      index::KeyCursor& keyCursor) {
     // Times the conversion of the stripe.
     velox::OptionalCpuWallTimer timer{
         collectTimings_, [this](const velox::CpuWallTiming& timing) {
@@ -299,11 +296,9 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
         }};
     auto entries = std::make_unique<Entries>(iobufFactory_);
     entries->numRows = rows->size();
-    const auto keyCursor = clusterIndex.keyCursor(
-        RowRange{startRow, startRow + static_cast<uint32_t>(rows->size())});
     entryDecoder_(
         rows,
-        *keyCursor,
+        keyCursor,
         entries->keyStorage,
         entries->valueStorage,
         entries->keys,
