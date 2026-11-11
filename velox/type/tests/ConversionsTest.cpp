@@ -411,6 +411,22 @@ TEST_F(ConversionsTest, toIntegralTypes) {
             0,
         },
         /*truncate*/ true);
+
+    const auto max = std::numeric_limits<int64_t>::max();
+    const auto min = std::numeric_limits<int64_t>::min();
+    const auto infinity = std::numeric_limits<double>::infinity();
+    testConversion<double, int64_t>(
+        {std::nextafter(0x1p63, 0.0),
+         0x1p63,
+         std::nextafter(0x1p63, infinity),
+         std::nextafter(-0x1p63, 0.0),
+         -0x1p63,
+         std::nextafter(-0x1p63, -infinity),
+         infinity,
+         -infinity,
+         std::numeric_limits<double>::quiet_NaN()},
+        {max - 1'023, max, max, min + 1'024, min, min, max, min, 0},
+        /*truncate=*/true);
   }
 
   // From float.
@@ -431,6 +447,25 @@ TEST_F(ConversionsTest, toIntegralTypes) {
     testConversion<float, int32_t>({kNan}, {0}, /*truncate*/ true);
     testConversion<float, int16_t>({kNan}, {0}, /*truncate*/ true);
     testConversion<float, int8_t>({kNan}, {0}, /*truncate*/ true);
+
+    const auto max = std::numeric_limits<int64_t>::max();
+    const auto min = std::numeric_limits<int64_t>::min();
+    testConversion<float, int64_t>(
+        {std::nextafter(0x1p63f, 0.0f), 0x1p63f, -0x1p63f},
+        {max - ((int64_t{1} << 39) - 1), max, min},
+        /*truncate=*/true);
+    testConversion<float, int32_t>(
+        {std::nextafter(0x1p31f, 0.0f), 0x1p31f, -0x1p31f},
+        {std::numeric_limits<int32_t>::max() - 127,
+         std::numeric_limits<int32_t>::max(),
+         std::numeric_limits<int32_t>::min()},
+        /*truncate=*/true);
+    // Spark first saturates to INTEGER, then narrows to TINYINT or SMALLINT.
+    // INT32_MAX narrows to -1, while INT32_MIN narrows to 0.
+    testConversion<float, int8_t>(
+        {0x1p31f, -0x1p31f}, {-1, 0}, /*truncate=*/true);
+    testConversion<float, int16_t>(
+        {0x1p31f, -0x1p31f}, {-1, 0}, /*truncate=*/true);
   }
 
   // From string.
@@ -593,38 +628,6 @@ TEST_F(ConversionsTest, toIntegralTypes) {
             0,
         });
   }
-}
-
-TEST_F(ConversionsTest, sparkFloatingPointUpperLimit) {
-  const auto max = std::numeric_limits<int64_t>::max();
-  const auto min = std::numeric_limits<int64_t>::min();
-  const auto infinity = std::numeric_limits<double>::infinity();
-  testConversion<double, int64_t>(
-      {std::nextafter(0x1p63, 0.0),
-       0x1p63,
-       std::nextafter(0x1p63, infinity),
-       std::nextafter(-0x1p63, 0.0),
-       -0x1p63,
-       std::nextafter(-0x1p63, -infinity),
-       infinity,
-       -infinity,
-       std::numeric_limits<double>::quiet_NaN()},
-      {max - 1'023, max, max, min + 1'024, min, min, max, min, 0},
-      /*truncate=*/true);
-  testConversion<float, int64_t>(
-      {std::nextafter(0x1p63f, 0.0f), 0x1p63f, -0x1p63f},
-      {max - ((int64_t{1} << 39) - 1), max, min},
-      /*truncate=*/true);
-  testConversion<float, int32_t>(
-      {std::nextafter(0x1p31f, 0.0f), 0x1p31f, -0x1p31f},
-      {std::numeric_limits<int32_t>::max() - 127,
-       std::numeric_limits<int32_t>::max(),
-       std::numeric_limits<int32_t>::min()},
-      /*truncate=*/true);
-  testConversion<float, int8_t>(
-      {0x1p31f, -0x1p31f}, {-1, 0}, /*truncate=*/true);
-  testConversion<float, int16_t>(
-      {0x1p31f, -0x1p31f}, {-1, 0}, /*truncate=*/true);
 }
 
 TEST_F(ConversionsTest, toString) {

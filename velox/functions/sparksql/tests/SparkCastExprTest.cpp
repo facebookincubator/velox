@@ -3569,9 +3569,7 @@ TEST_F(SparkCastExprTestAnsiOff, castNumericToIntegralOverflow) {
       "smallint", {100000}, {static_cast<int16_t>(100000)});
   testCast<double, int32_t>(
       "integer", {3.0e10}, {std::numeric_limits<int32_t>::max()});
-}
 
-TEST_F(SparkCastExprTestAnsiOff, castFloatToIntegralRoundedUpperLimit) {
   testCast(
       makeFlatVector<double>({0x1p63, std::nextafter(0x1p63, 0.0), -0x1p63}),
       makeFlatVector<int64_t>(
@@ -3587,6 +3585,8 @@ TEST_F(SparkCastExprTestAnsiOff, castFloatToIntegralRoundedUpperLimit) {
       makeFlatVector<float>({0x1p31f}),
       makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()}),
       /*isTryCast=*/false);
+  // Spark saturates to INT32_MAX before narrowing to TINYINT or SMALLINT,
+  // so both casts retain the low bits and produce -1.
   testCast(
       makeFlatVector<float>({0x1p31f}),
       makeFlatVector<int8_t>({-1}),
