@@ -263,6 +263,16 @@ class FileConfig {
       "demand. Small streams that fit in one quantum see no reduction. "
       "Streams coalesced with eager columns may also be loaded early.")
 
+  VELOX_FILE_CONFIG(
+      kNimbleLazyFileStatsSession,
+      nimbleLazyFileStats,
+      "nimble_lazy_file_stats",
+      bool,
+      false,
+      "Decode Nimble file column statistics on first use, and only those a "
+      "read needs, instead of all of them when the file is opened.")
+  static constexpr const char* kNimbleLazyFileStats = "nimble-lazy-file-stats";
+
   // --- VELOX_FILE_CONFIG_PROPERTY properties ---
 
   VELOX_FILE_CONFIG_PROPERTY(
