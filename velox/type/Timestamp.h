@@ -147,19 +147,28 @@ struct Timestamp {
 
   // Keep it in header for getting inlined.
   int64_t toNanos() const {
-    // int64 can store around 292 years in nanos ~ till 2262-04-12.
-    // When an integer overflow occurs in the calculation,
-    // an exception will be thrown.
-    try {
-      return checkedPlus(
-          checkedMultiply(seconds_, (int64_t)1'000'000'000), (int64_t)nanos_);
-    } catch (const std::exception& e) {
-      VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to nanoseconds, {}",
-          seconds_,
-          nanos_,
-          e.what());
+    // int64_t nanoseconds span 1677-09-21 to 2262-04-11, and other timestamps
+    // throw. Checked int64_t arithmetic handles the common case with one
+    // multiply and one add.
+    int64_t result;
+    if (mulWithOverflow(seconds_, kNanosInSecond, &result) ||
+        addWithOverflow(result, static_cast<int64_t>(nanos_), &result))
+        [[unlikely]] {
+      // seconds_ * 10^9 can be below INT64_MIN while adding nanos_ brings the
+      // result back into range, so the exact sum decides. For example,
+      // Timestamp(-9223372037, 145'224'192) is INT64_MIN nanoseconds.
+      const __int128_t exact =
+          static_cast<__int128_t>(seconds_) * kNanosInSecond +
+          static_cast<int64_t>(nanos_);
+      if (exact < INT64_MIN || exact > INT64_MAX) {
+        VELOX_USER_FAIL(
+            "Could not convert Timestamp({}, {}) to nanoseconds",
+            seconds_,
+            nanos_);
+      }
+      return static_cast<int64_t>(exact);
     }
+    return result;
   }
 
   // Keep it in header for getting inlined.
