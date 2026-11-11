@@ -100,7 +100,7 @@ class BufferedOutputStream : public google::protobuf::io::ZeroCopyOutputStream {
     if (bufferHolder_.tryResize(buffer_, headerSize, increment)) {
       // if original buffer is empty. need to adjust buffer position/size to
       // accommodate header
-      if (FOLLY_UNLIKELY(!origSize && headerSize)) {
+      if (!origSize && headerSize) [[unlikely]] {
         origSize = headerSize;
       }
       *buffer = buffer_.data() + origSize;
