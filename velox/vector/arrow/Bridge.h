@@ -156,9 +156,11 @@ TypePtr importFromArrow(const ArrowSchema& arrowSchema);
 /// The buffers must follow Arrow's recommended alignment and padding: aligned
 /// and padded to a multiple of 8 or 64 bytes
 /// (https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding).
-/// Such buffers meet the contract on Buffer, so they are imported without a
-/// copy, except long decimals that aren't 16-byte aligned. Buffers that don't
-/// follow it get no guarantees.
+/// Such buffers meet the contract on Buffer, so the import needs no copy to
+/// align or pad them. Long decimals that aren't 16-byte aligned are still
+/// copied, and types whose Arrow and Velox representations differ, such as
+/// timestamps, are converted into new buffers. Buffers that don't follow it get
+/// no guarantees.
 ///
 /// The function throws in case the conversion fails.
 ///
