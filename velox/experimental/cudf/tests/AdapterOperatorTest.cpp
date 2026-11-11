@@ -28,6 +28,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -199,6 +200,58 @@ class DecliningAdapter : public cudf_velox::OperatorAdapter {
         "createReplacements() must not be called for a declined operator");
   }
 };
+
+// Accepts FilterProject but declares a key with custom comparison, so the
+// driver adapter must keep the operator on CPU.
+class CustomComparisonKeyAdapter : public cudf_velox::OperatorAdapter {
+ public:
+  CustomComparisonKeyAdapter()
+      : cudf_velox::OperatorAdapter("CustomComparisonKey") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::FilterProject*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& /*planNode*/) const override {
+    return {std::make_shared<core::FieldAccessTypedExpr>(
+        facebook::velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), "c0")};
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/,
+      int32_t /*operatorId*/) const override {
+    VELOX_FAIL(
+        "createReplacements() must not be called for a custom comparison key");
+  }
+};
+
+const cudf_velox::OperatorAdapter* findAdapterByName(const std::string& name) {
+  for (const auto& adapter :
+       cudf_velox::OperatorAdapterRegistry::getInstance().getAdapters()) {
+    if (adapter->name() == name) {
+      return adapter.get();
+    }
+  }
+  return nullptr;
+}
 } // namespace
 
 TEST_F(AdapterOperatorTest, adapterStatsMergedIntoPlanNode) {
@@ -376,4 +429,88 @@ TEST_F(AdapterOperatorTest, fromVeloxRejectsDeviceInput) {
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
       "CudfFromVelox received a device-resident CudfVector");
+}
+
+// A declared key with custom comparison keeps the operator on CPU.
+TEST_F(AdapterOperatorTest, customComparisonKeyIsRejectedWithoutFallback) {
+  registerAdapterFirst(std::make_unique<CustomComparisonKeyAdapter>());
+
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto plan = PlanBuilder().values({data}).project({"c0 * 2 as x"}).planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Replacement with cuDF operator failed: keys need custom comparison");
+}
+
+TEST_F(AdapterOperatorTest, customComparisonKeyRunsOnCpuWithFallback) {
+  enableCpuFallback();
+  registerAdapterFirst(std::make_unique<CustomComparisonKeyAdapter>());
+
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  core::PlanNodeId projNodeId;
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"c0 * 2 as x"})
+                  .capturePlanNodeId(projNodeId)
+                  .planNode();
+
+  std::shared_ptr<exec::Task> task;
+  auto results = AssertQueryBuilder(plan).copyResults(pool(), task);
+  facebook::velox::test::assertEqualVectors(
+      makeRowVector({"x"}, {makeFlatVector<int64_t>({2, 4, 6, 8, 10})}),
+      results);
+
+  auto stats = toPlanStats(task->taskStats());
+  auto& projStats = stats.at(projNodeId);
+  EXPECT_EQ(projStats.operatorStats.count("FilterProject"), 1);
+  EXPECT_EQ(projStats.operatorStats.count("CudfFilterProject"), 0);
+}
+
+// Built-in keyed adapters declare the keys of their plan node.
+TEST_F(AdapterOperatorTest, builtInAdaptersDeclareComparisonKeys) {
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({3, 4})});
+  auto buildData = makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({3, 4})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(
+      PlanBuilder(planNodeIdGenerator)
+          .values({data})
+          .hashJoin(
+              {"c0", "c1"},
+              {"u0", "u1"},
+              PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+              "",
+              {"c0", "u1"})
+          .planNode());
+  ASSERT_NE(joinNode, nullptr);
+  std::vector<core::TypedExprPtr> joinKeys(
+      joinNode->leftKeys().begin(), joinNode->leftKeys().end());
+  joinKeys.insert(
+      joinKeys.end(),
+      joinNode->rightKeys().begin(),
+      joinNode->rightKeys().end());
+  for (const auto& name : {"HashJoinBuild", "HashJoinProbe"}) {
+    const auto* adapter = findAdapterByName(name);
+    ASSERT_NE(adapter, nullptr) << name;
+    EXPECT_EQ(adapter->comparisonKeys(joinNode), joinKeys) << name;
+  }
+
+  auto orderByNode = std::dynamic_pointer_cast<const core::OrderByNode>(
+      PlanBuilder()
+          .values({data})
+          .orderBy({"c1 DESC", "c0 ASC"}, false)
+          .planNode());
+  ASSERT_NE(orderByNode, nullptr);
+  const auto* orderByAdapter = findAdapterByName("OrderBy");
+  ASSERT_NE(orderByAdapter, nullptr);
+  EXPECT_EQ(
+      orderByAdapter->comparisonKeys(orderByNode),
+      std::vector<core::TypedExprPtr>(
+          orderByNode->sortingKeys().begin(),
+          orderByNode->sortingKeys().end()));
 }
