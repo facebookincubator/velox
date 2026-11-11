@@ -31,7 +31,8 @@
 
 namespace facebook::nimble {
 
-/// Represents a stream of chunks with a file offset.
+/// A stream's chunks. 'offset' is the stream's index in the schema's stream
+/// list, not a byte offset.
 struct Stream {
   uint32_t offset{0};
   std::vector<Chunk> chunks{};

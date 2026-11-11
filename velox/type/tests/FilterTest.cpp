@@ -2195,6 +2195,27 @@ TEST(FilterTest, clone) {
   auto filter10 =
       createBigintValues({1, 10, 100, 10'000}, /*nullAllowed=*/false);
   EXPECT_TRUE(filter10->clone(/*nullAllowed*/ true)->testNull());
+
+  // A clone must work after the original is destroyed. The bounds are over 12
+  // bytes so that StringView does not inline them.
+  {
+    auto filter = between("2026-09-15 07:00:00", "2026-10-02 15:00:00");
+    auto copy = filter->clone();
+    filter.reset();
+    EXPECT_TRUE(testBytes(*copy, "2026-09-15 07:00:00"));
+    EXPECT_TRUE(testBytes(*copy, "2026-10-02 15:00:00"));
+    EXPECT_FALSE(testBytes(*copy, "2026-09-15 06:59:59"));
+    EXPECT_FALSE(testBytes(*copy, "2026-10-02 15:00:01"));
+  }
+  {
+    auto filter = notBetween("2026-09-15 07:00:00", "2026-10-02 15:00:00");
+    auto copy = filter->clone();
+    filter.reset();
+    EXPECT_TRUE(testBytes(*copy, "2026-09-15 06:59:59"));
+    EXPECT_TRUE(testBytes(*copy, "2026-10-02 15:00:01"));
+    EXPECT_FALSE(testBytes(*copy, "2026-09-15 07:00:00"));
+    EXPECT_FALSE(testBytes(*copy, "2026-10-02 15:00:00"));
+  }
 }
 
 TEST(FilterTest, mergeWithBytesValues) {

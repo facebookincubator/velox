@@ -22,187 +22,154 @@
 
 namespace facebook::velox::exec {
 
-namespace {
-
-// Hashes the keys of 'row'. Equal keys give equal hashes whatever their
-// encoding.
-uint64_t hashKeys(
-    const std::vector<const BaseVector*>& keys,
-    vector_size_t row) {
-  uint64_t hash = 0;
-  for (const auto* key : keys) {
-    hash = bits::hashMix(hash, key->hashValueAt(row));
-  }
-  return hash;
-}
-
-} // namespace
-
-VectorSearchJoinTable::VectorSearchJoinTable(
-    RowVectorPtr rows,
-    column_index_t numKeys,
-    std::vector<Index> indexes,
-    std::vector<VectorPtr> packedColumns)
-    : rows_{std::move(rows)},
-      numKeys_{numKeys},
-      packedColumns_{std::move(packedColumns)},
-      indexes_{std::move(indexes)} {
-  VELOX_CHECK_EQ(rows_->size(), indexes_.size());
-  keys_.reserve(numKeys_);
-  for (column_index_t i = 0; i < numKeys_; ++i) {
-    keys_.push_back(rows_->childAt(i).get());
-  }
-  for (vector_size_t row = 0; row < rows_->size(); ++row) {
-    rowsByHash_[hashKeys(keys_, row)].push_back(row);
-  }
-  if (!indexes_.empty()) {
-    dimension_ = indexes_[0]->dimension();
-  }
-  for (const auto& index : indexes_) {
-    VELOX_USER_CHECK_EQ(
-        index->dimension(),
-        dimension_,
-        "Vector search join indexes must have the same dimension");
-  }
-}
-
-void VectorSearchJoinTable::forEachMatch(
-    const std::vector<const BaseVector*>& probeKeys,
-    vector_size_t row,
-    folly::FunctionRef<void(vector_size_t buildRow)> onMatch) const {
-  const auto it = rowsByHash_.find(hashKeys(probeKeys, row));
-  if (it == rowsByHash_.end()) {
-    return;
-  }
-  for (const auto buildRow : it->second) {
-    bool equal = true;
-    for (column_index_t i = 0; i < numKeys_ && equal; ++i) {
-      equal = probeKeys[i]->equalValueAt(keys_[i], row, buildRow);
-    }
-    if (equal) {
-      onMatch(buildRow);
-    }
-  }
-}
-
-int64_t VectorSearchJoinTable::numResults(vector_size_t row, int64_t k) const {
-  return std::min(k, indexes_[row]->size());
-}
-
-void VectorSearchJoinTable::search(
-    vector_size_t row,
-    const common::vectorindex::Embeddings& queries,
-    int64_t numResults,
-    std::span<int64_t> ids,
-    std::span<float> scores) const {
-  indexes_[row]->search(queries, numResults, ids, scores);
-}
-
-VectorSearchJoinBuild::VectorSearchJoinBuild(
+std::unique_ptr<Operator> BaseVectorSearchJoinBuild::create(
     int32_t operatorId,
     DriverCtx* driverCtx,
-    const core::VectorSearchJoinNodePtr& joinNode)
+    const core::VectorSearchJoinNodePtr& joinNode) {
+  if (joinNode->isIndexOnBuild()) {
+    return std::make_unique<VectorSearchJoinIndexBuild>(
+        operatorId, driverCtx, joinNode);
+  }
+  return std::make_unique<VectorSearchJoinQueryBuild>(
+      operatorId, driverCtx, joinNode);
+}
+
+BaseVectorSearchJoinBuild::BaseVectorSearchJoinBuild(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const core::VectorSearchJoinNodePtr& joinNode,
+    const core::FieldAccessTypedExprPtr& value,
+    bool keepUnmatchableRows)
     : Operator(
           driverCtx,
           nullptr,
           operatorId,
           joinNode->id(),
           OperatorType::kVectorSearchJoinBuild),
-      metric_{joinNode->metric()},
-      searchOptions_{common::vectorindex::LocalVectorIndexOptions::parseSearch(
-          {joinNode->searchOptions().begin(),
-           joinNode->searchOptions().end()})} {
-  const auto& buildType = joinNode->sources()[1]->outputType();
-  const auto& outputType = joinNode->outputType();
-  channels_.reserve(joinNode->rightKeys().size() + outputType->size());
-  for (const auto& key : joinNode->rightKeys()) {
-    channels_.push_back(buildType->getChildIdx(key->name()));
-  }
-  numKeys_ = channels_.size();
-  for (const auto& name : outputType->names()) {
+      keepUnmatchableRows_{keepUnmatchableRows},
+      minTableRowsForParallelJoinBuild_{
+          driverCtx->queryConfig().minTableRowsForParallelJoinBuild()},
+      vectorHasherMaxNumDistinct_{
+          driverCtx->queryConfig().joinBuildVectorHasherMaxNumDistinct()},
+      numKeys_{static_cast<column_index_t>(joinNode->rightKeys().size())},
+      hashers_{VectorHasher::createForKeys(
+          joinNode->buildType(),
+          joinNode->rightKeys())} {
+  const auto& buildType = joinNode->buildType();
+  for (const auto& name : joinNode->outputType()->names()) {
     if (const auto channel = buildType->getChildIdxIfExists(name)) {
-      channels_.push_back(*channel);
+      dependentChannels_.push_back(*channel);
+      dependentTypes_.push_back(buildType->childAt(*channel));
     }
   }
-  std::vector<TypePtr> types;
-  types.reserve(channels_.size());
-  for (const auto channel : channels_) {
-    types.push_back(buildType->childAt(channel));
-  }
-  rowType_ = ROW(std::move(types));
-  indexChannel_ = buildType->getChildIdx(joinNode->buildIndex()->name());
+  valueChannel_ = buildType->getChildIdx(value->name());
+  decodedDependents_.resize(dependentChannels_.size());
 }
 
-void VectorSearchJoinBuild::addInput(RowVectorPtr input) {
+void BaseVectorSearchJoinBuild::createTable(int32_t valueSize) {
+  // The probed flag marks the query rows of a right join that find embeddings.
+  if (numKeys_ == 0) {
+    rows_ = std::make_unique<RowContainer>(
+        std::vector<TypePtr>{},
+        std::vector<Accumulator>{},
+        dependentTypes_,
+        pool(),
+        RowContainer::Options{
+            .hasProbedFlag = keepUnmatchableRows_,
+            .rawDependentSize = valueSize,
+        });
+    return;
+  }
+
+  table_ = HashTable<true>::createForJoin(
+      std::move(hashers_),
+      dependentTypes_,
+      pool(),
+      {
+          .allowDuplicates = true,
+          .hasProbedFlag = keepUnmatchableRows_,
+          .minTableSizeForParallelJoinBuild = minTableRowsForParallelJoinBuild_,
+          .rawDependentSize = valueSize,
+      });
+  analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
+}
+
+void BaseVectorSearchJoinBuild::addInput(RowVectorPtr input) {
   for (auto& child : input->children()) {
     child->loadedVector();
   }
-  DecodedVector index(*input->childAt(indexChannel_));
-  std::vector<const BaseVector*> keys;
-  keys.reserve(numKeys_);
-  for (column_index_t i = 0; i < numKeys_; ++i) {
-    keys.push_back(input->childAt(channels_[i]).get());
+  const auto numRows = input->size();
+  for (column_index_t i = 0; i < dependentChannels_.size(); ++i) {
+    decodedDependents_[i].decode(*input->childAt(dependentChannels_[i]));
+  }
+  const auto& valueColumn = input->childAt(valueChannel_);
+  values_.decode(*valueColumn);
+  addBatch(valueColumn);
+
+  // A row with a null value or a null key cannot match.
+  SelectivityVector rows(numRows);
+  if (const auto* nulls = values_.nulls()) {
+    rows.deselectNulls(nulls, 0, numRows);
+  }
+  for (auto& hasher : keyHashers()) {
+    hasher->decode(*input->childAt(hasher->channel()), rows);
+    if (const auto* nulls = hasher->decodedVector().nulls(&rows)) {
+      rows.deselectNulls(nulls, 0, numRows);
+    }
   }
 
-  std::vector<vector_size_t> rows;
-  for (vector_size_t row = 0; row < input->size(); ++row) {
-    if (index.isNullAt(row) ||
-        std::any_of(keys.begin(), keys.end(), [&](const auto* key) {
-          return key->isNullAt(row);
-        })) {
-      continue;
-    }
-    const auto bytes = index.valueAt<StringView>(row);
-    const std::string_view packed(bytes.data(), bytes.size());
-    indexes_.push_back(
-        std::make_unique<common::vectorindex::LocalVectorIndex>(
-            packed, metric_, searchOptions_));
-    rows.push_back(row);
+  if (keepUnmatchableRows_ && rows.countSelected() < numRows) {
+    SelectivityVector unmatchable(numRows);
+    unmatchable.deselect(rows);
+    addUnmatchableRows(unmatchable);
   }
-  if (rows.empty()) {
+  if (!rows.hasSelections()) {
     return;
   }
-  packedColumns_.push_back(input->childAt(indexChannel_));
 
-  std::vector<VectorPtr> children;
-  children.reserve(channels_.size());
-  for (const auto channel : channels_) {
-    children.push_back(input->childAt(channel));
+  if (table_ == nullptr && rows_ == nullptr) {
+    createTable(valueSize());
   }
-  const auto projected = std::make_shared<RowVector>(
-      pool(), rowType_, nullptr, input->size(), std::move(children));
-  std::vector<BaseVector::CopyRange> ranges;
-  ranges.reserve(rows.size());
-  for (vector_size_t i = 0; i < rows.size(); ++i) {
-    ranges.push_back({rows[i], i, 1});
+  if (analyzeKeys_) {
+    analyzeKeys_ = table_->analyzeKeys(rows);
   }
-  auto selected = BaseVector::create<RowVector>(rowType_, rows.size(), pool());
-  selected->copyRanges(projected.get(), ranges);
-  rows_.push_back(std::move(selected));
+
+  auto* tableRows = table_ != nullptr ? table_->rows() : rows_.get();
+  const auto& hashers = keyHashers();
+  rows.applyToSelected([&](vector_size_t row) {
+    char* newRow = tableRows->newRow();
+    for (column_index_t i = 0; i < numKeys_; ++i) {
+      tableRows->store(hashers[i]->decodedVector(), row, newRow, i);
+    }
+    for (column_index_t i = 0; i < decodedDependents_.size(); ++i) {
+      tableRows->store(decodedDependents_[i], row, newRow, numKeys_ + i);
+    }
+    storeValue(values_, row, tableRows->rawDependent(newRow));
+  });
 }
 
-RowVectorPtr VectorSearchJoinBuild::mergeRows() const {
-  vector_size_t numRows = 0;
-  for (const auto& rows : rows_) {
-    numRows += rows->size();
+void BaseVectorSearchJoinBuild::addUnmatchableRows(
+    const SelectivityVector& rows) {
+  if (unmatchableRows_ == nullptr) {
+    unmatchableRows_ = std::make_unique<RowContainer>(
+        std::vector<TypePtr>{}, dependentTypes_, pool());
   }
-  auto merged = BaseVector::create<RowVector>(rowType_, numRows, pool());
-  vector_size_t offset = 0;
-  for (const auto& rows : rows_) {
-    merged->copy(rows.get(), offset, 0, rows->size());
-    offset += rows->size();
-  }
-  return merged;
+  rows.applyToSelected([&](vector_size_t row) {
+    char* newRow = unmatchableRows_->newRow();
+    for (column_index_t i = 0; i < decodedDependents_.size(); ++i) {
+      unmatchableRows_->store(decodedDependents_[i], row, newRow, i);
+    }
+  });
 }
 
-void VectorSearchJoinBuild::close() {
-  rows_.clear();
-  indexes_.clear();
-  packedColumns_.clear();
+void BaseVectorSearchJoinBuild::close() {
+  table_.reset();
+  rows_.reset();
+  unmatchableRows_.reset();
   Operator::close();
 }
 
-BlockingReason VectorSearchJoinBuild::isBlocked(ContinueFuture* future) {
+BlockingReason BaseVectorSearchJoinBuild::isBlocked(ContinueFuture* future) {
   if (!future_.valid()) {
     return BlockingReason::kNotBlocked;
   }
@@ -210,16 +177,25 @@ BlockingReason VectorSearchJoinBuild::isBlocked(ContinueFuture* future) {
   return BlockingReason::kWaitForJoinBuild;
 }
 
-void VectorSearchJoinBuild::noMoreInput() {
+void BaseVectorSearchJoinBuild::noMoreInput() {
   Operator::noMoreInput();
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Operator>> peerOperators;
-  // The last Driver to hit VectorSearchJoinBuild::noMoreInput gathers the
-  // rows and indexes of all build Drivers and hands them to the probe side.
+  // The last Driver to hit BaseVectorSearchJoinBuild::noMoreInput merges the
+  // tables of all build Drivers and hands the result to the probe side.
   if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     return;
   }
 
+  std::vector<std::unique_ptr<BaseHashTable>> otherTables;
+  std::vector<std::unique_ptr<RowContainer>> rows;
+  if (rows_ != nullptr) {
+    rows.push_back(std::move(rows_));
+  }
+  std::vector<std::unique_ptr<RowContainer>> unmatchableRows;
+  if (unmatchableRows_ != nullptr) {
+    unmatchableRows.push_back(std::move(unmatchableRows_));
+  }
   {
     SCOPE_EXIT {
       // Realize the promises so that the other Drivers (which were not
@@ -231,34 +207,171 @@ void VectorSearchJoinBuild::noMoreInput() {
     };
 
     for (const auto& peer : peerOperators) {
-      auto* build = peer->as<VectorSearchJoinBuild>();
+      auto* build = peer->as<BaseVectorSearchJoinBuild>();
       VELOX_CHECK_NOT_NULL(build);
-      rows_.insert(
-          rows_.end(),
-          std::make_move_iterator(build->rows_.begin()),
-          std::make_move_iterator(build->rows_.end()));
-      indexes_.insert(
-          indexes_.end(),
-          std::make_move_iterator(build->indexes_.begin()),
-          std::make_move_iterator(build->indexes_.end()));
-      packedColumns_.insert(
-          packedColumns_.end(),
-          std::make_move_iterator(build->packedColumns_.begin()),
-          std::make_move_iterator(build->packedColumns_.end()));
+      updateDimension(build->dimension_);
+      takeFromPeer(*build);
+      if (build->table_ != nullptr) {
+        otherTables.push_back(std::move(build->table_));
+      }
+      if (build->rows_ != nullptr) {
+        rows.push_back(std::move(build->rows_));
+      }
+      if (build->unmatchableRows_ != nullptr) {
+        unmatchableRows.push_back(std::move(build->unmatchableRows_));
+      }
     }
   }
 
-  auto table = std::make_shared<const VectorSearchJoinTable>(
-      mergeRows(), numKeys_, std::move(indexes_), std::move(packedColumns_));
-  rows_.clear();
+  if (table_ == nullptr && !otherTables.empty()) {
+    table_ = std::move(otherTables.back());
+    otherTables.pop_back();
+  }
+  if (table_ != nullptr) {
+    auto* executor = otherTables.empty()
+        ? nullptr
+        : operatorCtx_->task()->queryCtx()->executor();
+    table_->prepareJoinTable(
+        std::move(otherTables),
+        BaseHashTable::kNoSpillInputStartPartitionBit,
+        vectorHasherMaxNumDistinct_,
+        /*dropDuplicates=*/false,
+        executor);
+  }
+  auto table =
+      makeTable(std::move(table_), std::move(rows), std::move(unmatchableRows));
   operatorCtx_->task()
-      ->getVectorSearchJoinBridge(
-          operatorCtx_->driverCtx()->splitGroupId, planNodeId())
+      ->getVectorSearchJoinBridge(splitGroupId(), planNodeId())
       ->setData(std::move(table));
 }
 
-bool VectorSearchJoinBuild::isFinished() {
+void BaseVectorSearchJoinBuild::updateDimension(int32_t dimension) {
+  if (dimension == 0) {
+    return;
+  }
+  if (dimension_ == 0) {
+    dimension_ = dimension;
+  }
+  VELOX_USER_CHECK_EQ(dimension, dimension_, "{}", dimensionError());
+}
+
+bool BaseVectorSearchJoinBuild::isFinished() {
   return !future_.valid() && noMoreInput_;
+}
+
+VectorSearchJoinIndexBuild::VectorSearchJoinIndexBuild(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const core::VectorSearchJoinNodePtr& joinNode)
+    : BaseVectorSearchJoinBuild(
+          operatorId,
+          driverCtx,
+          joinNode,
+          joinNode->index(),
+          /*keepUnmatchableRows=*/false) {
+  const auto formats =
+      driverCtx->task->queryCtx()
+          ->registry<common::vectorindex::LocalVectorIndexFormats>(
+              common::vectorindex::LocalVectorIndexFormat::kRegistryKey);
+  VELOX_CHECK_NOT_NULL(formats, "QueryCtx has no local vector index formats");
+  reader_ = formats->makeReader(
+      joinNode->format(), joinNode->metric(), joinNode->searchOptions());
+}
+
+void VectorSearchJoinIndexBuild::addBatch(const VectorPtr& values) {
+  packedIndexes_ = values;
+}
+
+int32_t VectorSearchJoinIndexBuild::valueSize() const {
+  return sizeof(common::vectorindex::LocalVectorIndex*);
+}
+
+void VectorSearchJoinIndexBuild::storeValue(
+    const DecodedVector& values,
+    vector_size_t row,
+    std::span<char> bytes) {
+  const auto packed = values.valueAt<StringView>(row);
+  auto index = reader_->open(packed);
+  updateDimension(index->dimension());
+  // The raw dependent is 8-byte aligned.
+  *reinterpret_cast<common::vectorindex::LocalVectorIndex**>(bytes.data()) =
+      index.get();
+  // The index refers to the bytes of the input it is opened from.
+  indexes_.push_back({packedIndexes_, std::move(index)});
+}
+
+std::string_view VectorSearchJoinIndexBuild::dimensionError() const {
+  return "Vector search join indexes must have the same dimension";
+}
+
+void VectorSearchJoinIndexBuild::takeFromPeer(BaseVectorSearchJoinBuild& peer) {
+  auto& build = dynamic_cast<VectorSearchJoinIndexBuild&>(peer);
+  indexes_.insert(
+      indexes_.end(),
+      std::make_move_iterator(build.indexes_.begin()),
+      std::make_move_iterator(build.indexes_.end()));
+}
+
+std::shared_ptr<const VectorSearchJoinTable>
+VectorSearchJoinIndexBuild::makeTable(
+    std::unique_ptr<BaseHashTable> hashTable,
+    std::vector<std::unique_ptr<RowContainer>> rows,
+    std::vector<std::unique_ptr<RowContainer>> /*unmatchableRows*/) {
+  return std::make_shared<const VectorSearchJoinIndexTable>(
+      std::move(hashTable), std::move(rows), dimension_, std::move(indexes_));
+}
+
+void VectorSearchJoinIndexBuild::close() {
+  BaseVectorSearchJoinBuild::close();
+  indexes_.clear();
+  packedIndexes_.reset();
+}
+
+VectorSearchJoinQueryBuild::VectorSearchJoinQueryBuild(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const core::VectorSearchJoinNodePtr& joinNode)
+    : BaseVectorSearchJoinBuild(
+          operatorId,
+          driverCtx,
+          joinNode,
+          joinNode->embedding(),
+          joinNode->joinType() == core::JoinType::kRight),
+      metric_{joinNode->metric()} {}
+
+void VectorSearchJoinQueryBuild::addBatch(const VectorPtr& values) {
+  embeddings_.emplace(*values, metric_);
+  updateDimension(embeddings_->dimension());
+}
+
+int32_t VectorSearchJoinQueryBuild::valueSize() const {
+  return dimension_ * sizeof(float);
+}
+
+void VectorSearchJoinQueryBuild::storeValue(
+    const DecodedVector& /*values*/,
+    vector_size_t row,
+    std::span<char> bytes) {
+  embeddings_->copyNormalized(
+      row,
+      {reinterpret_cast<float*>(bytes.data()),
+       static_cast<size_t>(dimension_)});
+}
+
+std::string_view VectorSearchJoinQueryBuild::dimensionError() const {
+  return "Query embeddings must have the same length";
+}
+
+std::shared_ptr<const VectorSearchJoinTable>
+VectorSearchJoinQueryBuild::makeTable(
+    std::unique_ptr<BaseHashTable> hashTable,
+    std::vector<std::unique_ptr<RowContainer>> rows,
+    std::vector<std::unique_ptr<RowContainer>> unmatchableRows) {
+  return std::make_shared<const VectorSearchJoinQueryTable>(
+      std::move(hashTable),
+      std::move(rows),
+      dimension_,
+      std::move(unmatchableRows));
 }
 
 } // namespace facebook::velox::exec

@@ -34,9 +34,12 @@ class FirstAggregateTest : public AggregationTestBase {
   void SetUp() override {
     AggregationTestBase::SetUp();
     registerAggregateFunctions("spark_");
-    // Disable incremental aggregation tests because the boolean field in
-    // intermediate result of spark_first is unset and has undefined value.
-    AggregationTestBase::disableTestIncremental();
+  }
+
+  // spark_first leaves the boolean field of its intermediate result unset, so
+  // extracting the intermediate result twice can give different values.
+  AggregationTester tester() {
+    return AggregationTester(*this).disableIncremental();
   }
 
   template <typename T>
@@ -56,11 +59,12 @@ class FirstAggregateTest : public AggregationTestBase {
       // result non-deterministic.
       {
         SCOPED_TRACE("ignore null + group by");
-        testAggregations(
-            vectors,
-            {"c0"},
-            {"spark_first_ignore_null(c1)"},
-            "SELECT c0, first(c1 ORDER BY c1 NULLS LAST) FROM tmp GROUP BY c0");
+        tester()
+            .inputs(vectors)
+            .groupBy({"c0"})
+            .aggregates({"spark_first_ignore_null(c1)"})
+            .assertResults(
+                "SELECT c0, first(c1 ORDER BY c1 NULLS LAST) FROM tmp GROUP BY c0");
       }
       {
         // Expected result should have first 7 rows including nulls.
@@ -72,7 +76,11 @@ class FirstAggregateTest : public AggregationTestBase {
                 [](auto row) { return row; }, // valueAt
                 [](auto row) { return row % 3 == 0; }), // nullAt
         })};
-        testAggregations(vectors, {"c0"}, {"spark_first(c1)"}, expected);
+        tester()
+            .inputs(vectors)
+            .groupBy({"c0"})
+            .aggregates({"spark_first(c1)"})
+            .assertResults(expected);
       }
     }
 
@@ -84,14 +92,19 @@ class FirstAggregateTest : public AggregationTestBase {
       {
         SCOPED_TRACE("ignore null + global");
         auto expectedTrue = {makeRowVector({makeNullableFlatVector<T>({1})})};
-        testAggregations(
-            vectors, {}, {"spark_first_ignore_null(c0)"}, expectedTrue);
+        tester()
+            .inputs(vectors)
+            .aggregates({"spark_first_ignore_null(c0)"})
+            .assertResults(expectedTrue);
       }
       {
         SCOPED_TRACE("not ignore null + global");
         auto expectedFalse = {
             makeRowVector({makeNullableFlatVector<T>({std::nullopt})})};
-        testAggregations(vectors, {}, {"spark_first(c0)"}, expectedFalse);
+        tester()
+            .inputs(vectors)
+            .aggregates({"spark_first(c0)"})
+            .assertResults(expectedFalse);
       }
     }
   }
@@ -102,13 +115,20 @@ class FirstAggregateTest : public AggregationTestBase {
       std::vector<RowVectorPtr> hasNullData) {
     {
       SCOPED_TRACE("ignore null + group by");
-      testAggregations(
-          data, {"c0"}, {"spark_first_ignore_null(c1)"}, ignoreNullData);
+      tester()
+          .inputs(data)
+          .groupBy({"c0"})
+          .aggregates({"spark_first_ignore_null(c1)"})
+          .assertResults(ignoreNullData);
     }
 
     {
       SCOPED_TRACE("not ignore null + group by");
-      testAggregations(data, {"c0"}, {"spark_first(c1)"}, hasNullData);
+      tester()
+          .inputs(data)
+          .groupBy({"c0"})
+          .aggregates({"spark_first(c1)"})
+          .assertResults(hasNullData);
     }
   }
 
@@ -118,13 +138,18 @@ class FirstAggregateTest : public AggregationTestBase {
       std::vector<RowVectorPtr> hasNullData) {
     {
       SCOPED_TRACE("ignore null + global");
-      testAggregations(
-          data, {}, {"spark_first_ignore_null(c0)"}, ignoreNullData);
+      tester()
+          .inputs(data)
+          .aggregates({"spark_first_ignore_null(c0)"})
+          .assertResults(ignoreNullData);
     }
 
     {
       SCOPED_TRACE("not ignore null + global");
-      testAggregations(data, {}, {"spark_first(c0)"}, hasNullData);
+      tester()
+          .inputs(data)
+          .aggregates({"spark_first(c0)"})
+          .assertResults(hasNullData);
     }
   }
 };
@@ -176,8 +201,12 @@ TEST_F(FirstAggregateTest, unknownInput) {
         makeAllNullFlatVector<UnknownValue>(numGroups),
     });
 
-    testAggregations({input}, {}, aggregates, {expectedGlobal});
-    testAggregations({input}, {"c0"}, aggregates, {expectedGrouped});
+    tester().inputs(input).aggregates(aggregates).assertResults(expectedGlobal);
+    tester()
+        .inputs(input)
+        .groupBy({"c0"})
+        .aggregates(aggregates)
+        .assertResults(expectedGrouped);
   }
 }
 
@@ -450,11 +479,12 @@ TEST_F(FirstAggregateTest, varcharGroupBy) {
 
   {
     SCOPED_TRACE("ignore null + group by");
-    testAggregations(
-        vectors,
-        {"c0"},
-        {"spark_first_ignore_null(c1)"},
-        "SELECT c0, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0");
+    tester()
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"spark_first_ignore_null(c1)"})
+        .assertResults(
+            "SELECT c0, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0");
   }
 
   {
@@ -466,7 +496,11 @@ TEST_F(FirstAggregateTest, varcharGroupBy) {
             [&data](auto row) { return StringView(data[row]); }, // valueAt
             nullEvery(3)),
     })};
-    testAggregations(vectors, {"c0"}, {"spark_first(c1)"}, expected);
+    tester()
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"spark_first(c1)"})
+        .assertResults(expected);
   }
 }
 
@@ -557,7 +591,11 @@ TEST_F(FirstAggregateTest, mapGroupBy) {
           [](auto idx) { return idx * 0.1; }), // valueAt
   })};
 
-  testAggregations(vectors, {"c0"}, {"spark_first(c1)"}, expected);
+  tester()
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"spark_first(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(FirstAggregateTest, mapGlobal) {

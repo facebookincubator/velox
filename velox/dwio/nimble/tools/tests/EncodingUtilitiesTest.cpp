@@ -23,6 +23,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
@@ -471,6 +472,42 @@ TEST_F(EncodingUtilitiesTest, getEncodingLabelBlockBitPacking) {
   EXPECT_NE(label.find("Baselines:Trivial"), std::string::npos);
   EXPECT_NE(label.find("BitWidths:Trivial"), std::string::npos);
   EXPECT_NE(label.find("DataOffsets:Trivial"), std::string::npos);
+}
+
+// --- PartitionedEliasFano nested directories ---
+
+TEST_F(EncodingUtilitiesTest, traverseEncodingsPartitionedEliasFanoChildren) {
+  nimble::Buffer buffer(*pool_);
+  // Partitions [3, 5] and [1, 2].
+  nimble::Vector<uint32_t> values(pool_.get());
+  for (const uint32_t value : {3, 5, 1, 2}) {
+    values.push_back(value);
+  }
+  const auto stream = nimble::test::Encoder<
+      nimble::PartitionedEliasFanoEncoding<uint32_t>>::encode(buffer, values);
+
+  EncodingType rootType = EncodingType::Constant; // init to something else
+  std::vector<std::string> nestedNames;
+  traverseEncodings(
+      stream,
+      [&](EncodingType encodingType,
+          DataType /* dataType */,
+          uint32_t level,
+          uint32_t /* index */,
+          const std::string& nestedEncodingName,
+          const std::unordered_map<EncodingPropertyType, EncodingProperty>&
+          /* properties */) -> bool {
+        if (level == 0) {
+          rootType = encodingType;
+        } else {
+          nestedNames.push_back(nestedEncodingName);
+        }
+        return true;
+      });
+
+  EXPECT_EQ(rootType, EncodingType::PartitionedEliasFano);
+  const std::vector<std::string> expected{"PartitionOffsets", "PartitionBases"};
+  EXPECT_EQ(nestedNames, expected);
 }
 
 TEST_F(EncodingUtilitiesTest, traverseEncodingsSharedDictionary) {

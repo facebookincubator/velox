@@ -48,6 +48,13 @@ bool hasDecimalSubfieldFilter(
     const common::SubfieldFilters& subfieldFilters,
     const RowTypePtr& inputRowSchema);
 
+/// Returns whether createAstFromSubfieldFilter() converts 'filter' on
+/// 'subfield'. It converts filters on top-level columns only. A scan with a
+/// filter it cannot convert must run on the CPU.
+bool canCreateAstFromSubfieldFilter(
+    const common::Subfield& subfield,
+    const common::Filter& filter);
+
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,

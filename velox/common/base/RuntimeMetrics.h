@@ -155,6 +155,41 @@ class RuntimeStatWriterScopeGuard {
   BaseRuntimeStatWriter* const prevWriter_;
 };
 
+/// Adds the wall time of its scope under 'name', in nanoseconds, to the
+/// runtime stats writer of the thread when the scope starts, if any, or to
+/// 'writer' if given. 'name' must outlive the timer.
+///
+///   {
+///     RuntimeStatWallTimer timer{"trainWallNanos"};
+///     train();
+///   }
+class RuntimeStatWallTimer {
+ public:
+  explicit RuntimeStatWallTimer(std::string_view name)
+      : RuntimeStatWallTimer{getThreadLocalRunTimeStatWriter(), name} {}
+
+  RuntimeStatWallTimer(BaseRuntimeStatWriter& writer, std::string_view name)
+      : RuntimeStatWallTimer{&writer, name} {}
+
+  ~RuntimeStatWallTimer() {
+    if (writer_ != nullptr) {
+      writer_->addTiming(name_, std::chrono::steady_clock::now() - start_);
+    }
+  }
+
+  RuntimeStatWallTimer(const RuntimeStatWallTimer&) = delete;
+  RuntimeStatWallTimer& operator=(const RuntimeStatWallTimer&) = delete;
+
+ private:
+  RuntimeStatWallTimer(BaseRuntimeStatWriter* writer, std::string_view name)
+      : name_{name}, writer_{writer} {}
+
+  const std::string_view name_;
+  BaseRuntimeStatWriter* const writer_;
+  const std::chrono::steady_clock::time_point start_{
+      std::chrono::steady_clock::now()};
+};
+
 } // namespace facebook::velox
 template <>
 struct fmt::formatter<facebook::velox::RuntimeCounter::Unit> : formatter<int> {

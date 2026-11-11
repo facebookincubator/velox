@@ -156,9 +156,9 @@ class FlatKeyChunkBuilder final : public KeyChunkBuilder {
 
       for (auto row = std::max<size_t>(newKeyStart, 1); row < keys.size();
            ++row) {
-        if (FOLLY_UNLIKELY(!isKeyOrdered(
+        if (!isKeyOrdered(
                 keyOrder.compare(keyAtView(row), keyAtView(row - 1)),
-                noDuplicateKey_))) {
+                noDuplicateKey_)) [[unlikely]] {
           failKeyOrder(
               noDuplicateKey_,
               row,

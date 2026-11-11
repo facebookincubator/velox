@@ -439,7 +439,7 @@ void IndexLookupJoin::initLookupInput() {
     VELOX_CHECK(lookupKeyOrConditionHashers_.empty());
     VELOX_CHECK(!lookupInputChannels_.empty());
     lookupKeyOrConditionHashers_ =
-        createVectorHashers(probeType_, lookupInputChannels_);
+        VectorHasher::createForKeys(probeType_, lookupInputChannels_);
   };
 
   for (const auto& condition : joinConditions_) {
@@ -572,11 +572,6 @@ void IndexLookupJoin::initOutputProjections() {
     }
     probeOutputProjections_.emplace_back(i, outputChannelOpt.value());
   }
-  if (joinType_ == core::JoinType::kLeft) {
-    VELOX_USER_CHECK(
-        !probeOutputProjections_.empty(),
-        "Lookup join with left join type must read at least one column from probe side");
-  }
 
   for (auto i = 0; i < lookupOutputType_->size(); ++i) {
     const auto& name = lookupOutputType_->nameOf(i);
@@ -627,6 +622,7 @@ void IndexLookupJoin::initFilter() {
     projections.emplace_back(channel, filterChannel++);
   };
 
+  const auto& lookupSourceOutputType = joinNode_->lookupSource()->outputType();
   for (const auto& field : filter_->expr(0)->distinctFields()) {
     const auto& name = field->field();
     auto channel = probeType_->getChildIdxIfExists(name);
@@ -635,6 +631,20 @@ void IndexLookupJoin::initFilter() {
       continue;
     }
     channel = lookupOutputType_->getChildIdxIfExists(name);
+    // The filter can also read lookup columns the join does not output.
+    if (!channel.has_value() && lookupSourceOutputType->containsChild(name)) {
+      VELOX_USER_CHECK_EQ(
+          lookupColumnHandles_.count(name),
+          1,
+          "Lookup output column {} is not found in lookup table handle",
+          name);
+      auto lookupNames = lookupOutputType_->names();
+      auto lookupTypes = lookupOutputType_->children();
+      lookupNames.push_back(name);
+      lookupTypes.push_back(lookupSourceOutputType->findChild(name));
+      lookupOutputType_ = ROW(std::move(lookupNames), std::move(lookupTypes));
+      channel = lookupOutputType_->size() - 1;
+    }
     if (channel.has_value()) {
       addChannel(
           channel.value(), lookupOutputType_, filterLookupInputProjections_);

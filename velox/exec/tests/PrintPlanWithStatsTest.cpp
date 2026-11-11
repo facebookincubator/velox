@@ -309,8 +309,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
     auto task =
         AssertQueryBuilder(op, duckDbQueryRunner_)
             .config(
-                core::QueryConfig::kMaxSplitPreloadPerDriver,
-                std::to_string(numPrefetchSplit))
+                core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplit)
             .splits(makeHiveConnectorSplits({filePath}))
             .assertResults(
                 "SELECT c5, max(c0), sum(c1), sum(c2), sum(c3), sum(c4) FROM tmp group by c5");

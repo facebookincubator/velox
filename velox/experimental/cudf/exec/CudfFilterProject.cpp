@@ -60,7 +60,7 @@ bool checkAddIdentityProjection(
     const core::TypedExprPtr& projection,
     const RowTypePtr& inputType,
     column_index_t outputChannel,
-    std::vector<exec::IdentityProjection>& identityProjections) {
+    std::vector<IdentityProjection>& identityProjections) {
   if (auto field = core::TypedExprs::asFieldAccess(projection)) {
     const auto& inputs = field->inputs();
     if (inputs.empty() ||

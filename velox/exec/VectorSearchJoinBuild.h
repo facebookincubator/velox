@@ -16,87 +16,24 @@
 
 #pragma once
 
-#include <memory>
-
-#include <folly/Function.h>
-#include <folly/container/F14Map.h>
-
-#include "velox/common/vectorindex/Embeddings.h"
-#include "velox/common/vectorindex/LocalVectorIndex.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/VectorSearchJoinEmbeddings.h"
+#include "velox/exec/VectorSearchJoinTable.h"
 
 namespace facebook::velox::exec {
 
-/// The build side of a vector search join: the build rows that can match,
-/// each with its decoded local index, looked up by the join keys. A build side
-/// holds few rows, one per local index, so a map from the hash of the keys to
-/// rows serves the lookups.
-class VectorSearchJoinTable {
+/// The common part of the build operators of a vector search join: adds the
+/// build rows that can match to a hash table, or to a row container for a join
+/// without keys. The last build driver gathers the rows of all drivers and
+/// hands them to the probe side as a VectorSearchJoinTable.
+///
+/// VectorSearchJoinIndexBuild builds index rows and VectorSearchJoinQueryBuild
+/// query rows. create() makes the one for the join's index side.
+class BaseVectorSearchJoinBuild : public Operator {
  public:
-  using Index = std::unique_ptr<common::vectorindex::LocalVectorIndex>;
-
-  /// 'rows' holds the build rows: their 'numKeys' keys, then the build
-  /// columns of the join's output. 'indexes' holds each row's index. No key
-  /// is null. 'packedColumns' hold the bytes the indexes refer to. Throws a
-  /// user error if the indexes have different dimensions.
-  VectorSearchJoinTable(
-      RowVectorPtr rows,
-      column_index_t numKeys,
-      std::vector<Index> indexes,
-      std::vector<VectorPtr> packedColumns);
-
-  const RowVectorPtr& rows() const {
-    return rows_;
-  }
-
-  /// Calls 'onMatch' with each build row whose keys equal the keys of
-  /// probe 'row' in 'probeKeys'. A null probe key matches nothing.
-  void forEachMatch(
-      const std::vector<const BaseVector*>& probeKeys,
-      vector_size_t row,
-      folly::FunctionRef<void(vector_size_t buildRow)> onMatch) const;
-
-  /// The embedding dimension of the indexes, which all have the same one. 0
-  /// if there are no build rows.
-  int32_t dimension() const {
-    return dimension_;
-  }
-
-  /// The number of results per query of searching build 'row's index for the
-  /// 'k' nearest embeddings: 'k', capped at the size of the index.
-  int64_t numResults(vector_size_t row, int64_t k) const;
-
-  /// Searches build 'row's index for the 'numResults' embeddings nearest to
-  /// each of 'queries', writing them to 'ids' and 'scores' as
-  /// LocalVectorIndex::search does.
-  void search(
-      vector_size_t row,
-      const common::vectorindex::Embeddings& queries,
-      int64_t numResults,
-      std::span<int64_t> ids,
-      std::span<float> scores) const;
-
- private:
-  const RowVectorPtr rows_;
-  const column_index_t numKeys_;
-  // Holds the bytes 'indexes_' refer to. Declared before 'indexes_' so that
-  // it outlives them.
-  const std::vector<VectorPtr> packedColumns_;
-  const std::vector<Index> indexes_;
-  // The key columns of 'rows_'.
-  std::vector<const BaseVector*> keys_;
-  int32_t dimension_{0};
-  // The rows of 'rows_' by the hash of their keys.
-  folly::F14FastMap<uint64_t, std::vector<vector_size_t>> rowsByHash_;
-};
-
-/// Decodes the vector index of each build row of a vector search join and,
-/// in the last build driver, hands the build rows of all drivers to the probe
-/// side as a VectorSearchJoinTable.
-class VectorSearchJoinBuild : public Operator {
- public:
-  VectorSearchJoinBuild(
+  /// Makes the build operator for the side 'joinNode' has its index rows on.
+  static std::unique_ptr<Operator> create(
       int32_t operatorId,
       DriverCtx* driverCtx,
       const core::VectorSearchJoinNodePtr& joinNode);
@@ -119,30 +56,165 @@ class VectorSearchJoinBuild : public Operator {
 
   void close() override;
 
+ protected:
+  /// @param value The column of the index of index rows, or of the embedding
+  /// of query rows. A row with a null key or a null value cannot match.
+  /// @param keepUnmatchableRows Whether to keep the rows that cannot match,
+  /// the query rows of a right join.
+  BaseVectorSearchJoinBuild(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const core::VectorSearchJoinNodePtr& joinNode,
+      const core::FieldAccessTypedExprPtr& value,
+      bool keepUnmatchableRows);
+
+  /// Called with the value column of each input before its rows are stored.
+  virtual void addBatch(const VectorPtr& /*values*/) {}
+
+  /// The number of bytes the decoded value of a row takes.
+  virtual int32_t valueSize() const = 0;
+
+  /// Writes the decoded value of 'row', which can match, to 'bytes'.
+  virtual void storeValue(
+      const DecodedVector& values,
+      vector_size_t row,
+      std::span<char> bytes) = 0;
+
+  /// The error of values with different dimensions.
+  virtual std::string_view dimensionError() const = 0;
+
+  /// Sets 'dimension_' to 'dimension' if it is 0, or checks that they are
+  /// equal. Ignores a 0 'dimension'.
+  void updateDimension(int32_t dimension);
+
+  /// Takes what 'peer' gathered besides its rows.
+  virtual void takeFromPeer(BaseVectorSearchJoinBuild& /*peer*/) {}
+
+  /// Makes the table of the rows of all drivers that can match: 'hashTable'
+  /// for a join with keys, 'rows' for a join without keys.
+  virtual std::shared_ptr<const VectorSearchJoinTable> makeTable(
+      std::unique_ptr<BaseHashTable> hashTable,
+      std::vector<std::unique_ptr<RowContainer>> rows,
+      std::vector<std::unique_ptr<RowContainer>> unmatchableRows) = 0;
+
+  /// The dimension of the indexes or the length of the query embeddings. 0
+  /// before the first.
+  int32_t dimension_{0};
+
  private:
-  // Concatenates 'rows_' into one vector.
-  RowVectorPtr mergeRows() const;
+  // Makes 'table_', or 'rows_' for a join without keys, with a raw dependent
+  // of 'valueSize' bytes for the decoded values.
+  void createTable(int32_t valueSize);
 
-  const common::vectorindex::VectorIndexMetric metric_;
-  const common::vectorindex::LocalVectorIndexOptions searchOptions_;
-  // Channels of the keys, then of the build columns of the output.
-  std::vector<column_index_t> channels_;
-  // The type of the input projected on 'channels_'.
-  RowTypePtr rowType_;
-  column_index_t numKeys_;
-  column_index_t indexChannel_;
+  // Adds 'rows' of the current input, which cannot match, to
+  // 'unmatchableRows_'.
+  void addUnmatchableRows(const SelectivityVector& rows);
 
-  // The input rows that can match, those with no null key and a non-null
-  // index, projected on 'channels_'.
-  std::vector<RowVectorPtr> rows_;
-  // The input columns holding the bytes 'indexes_' refer to.
-  std::vector<VectorPtr> packedColumns_;
-  // The decoded index of each row in 'rows_', in order.
-  std::vector<VectorSearchJoinTable::Index> indexes_;
+  // The hashers of the keys, which 'table_' owns once it is made.
+  const std::vector<std::unique_ptr<VectorHasher>>& keyHashers() const {
+    return table_ != nullptr ? table_->hashers() : hashers_;
+  }
+
+  const bool keepUnmatchableRows_;
+  const uint32_t minTableRowsForParallelJoinBuild_;
+  const uint32_t vectorHasherMaxNumDistinct_;
+  // The number of keys, 0 for a join without keys.
+  const column_index_t numKeys_;
+  // Decode the keys of the input, at their channels, until 'table_' takes
+  // them.
+  std::vector<std::unique_ptr<VectorHasher>> hashers_;
+  // The channels of the build columns of the output and of the value.
+  std::vector<column_index_t> dependentChannels_;
+  column_index_t valueChannel_;
+  // The types of the build columns of the output.
+  std::vector<TypePtr> dependentTypes_;
+
+  // The build columns and the values of the current input.
+  std::vector<DecodedVector> decodedDependents_;
+  DecodedVector values_;
+
+  // The rows that can match, in a hash table for a join with keys, or in a
+  // row container for a join without keys. Made with the first of them.
+  std::unique_ptr<BaseHashTable> table_;
+  std::unique_ptr<RowContainer> rows_;
+  // Whether to analyze the keys, for the table to choose an array or
+  // normalized key mode.
+  bool analyzeKeys_{false};
+  // The rows that cannot match, if kept.
+  std::unique_ptr<RowContainer> unmatchableRows_;
 
   // Future for synchronizing with other Drivers of the same pipeline. All build
   // Drivers must be completed before making data available for the probe side.
   ContinueFuture future_{ContinueFuture::makeEmpty()};
+};
+
+/// Builds a VectorSearchJoinIndexTable of index rows, decoding the index of
+/// each.
+class VectorSearchJoinIndexBuild : public BaseVectorSearchJoinBuild {
+ public:
+  VectorSearchJoinIndexBuild(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const core::VectorSearchJoinNodePtr& joinNode);
+
+  void close() override;
+
+ private:
+  void addBatch(const VectorPtr& values) override;
+
+  int32_t valueSize() const override;
+
+  void storeValue(
+      const DecodedVector& values,
+      vector_size_t row,
+      std::span<char> bytes) override;
+
+  std::string_view dimensionError() const override;
+
+  void takeFromPeer(BaseVectorSearchJoinBuild& peer) override;
+
+  std::shared_ptr<const VectorSearchJoinTable> makeTable(
+      std::unique_ptr<BaseHashTable> hashTable,
+      std::vector<std::unique_ptr<RowContainer>> rows,
+      std::vector<std::unique_ptr<RowContainer>> unmatchableRows) override;
+
+  // Reads the indexes with the join's metric and search settings, in the
+  // format the join names, from the query's registry.
+  std::unique_ptr<common::vectorindex::LocalVectorIndexReader> reader_;
+  // The packed indexes of the current input.
+  VectorPtr packedIndexes_;
+  // The decoded indexes the rows point to.
+  std::vector<VectorSearchJoinIndexTable::Index> indexes_;
+};
+
+/// Builds a VectorSearchJoinQueryTable of query rows.
+class VectorSearchJoinQueryBuild : public BaseVectorSearchJoinBuild {
+ public:
+  VectorSearchJoinQueryBuild(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const core::VectorSearchJoinNodePtr& joinNode);
+
+ private:
+  void addBatch(const VectorPtr& values) override;
+
+  int32_t valueSize() const override;
+
+  void storeValue(
+      const DecodedVector& values,
+      vector_size_t row,
+      std::span<char> bytes) override;
+
+  std::string_view dimensionError() const override;
+
+  std::shared_ptr<const VectorSearchJoinTable> makeTable(
+      std::unique_ptr<BaseHashTable> hashTable,
+      std::vector<std::unique_ptr<RowContainer>> rows,
+      std::vector<std::unique_ptr<RowContainer>> unmatchableRows) override;
+
+  const common::vectorindex::VectorIndexMetric metric_;
+  // The embeddings of the current input.
+  std::optional<VectorSearchJoinEmbeddings> embeddings_;
 };
 
 } // namespace facebook::velox::exec

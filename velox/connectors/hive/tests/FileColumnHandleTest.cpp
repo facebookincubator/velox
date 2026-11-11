@@ -39,6 +39,10 @@ TEST(FileColumnHandleTest, columnTypeName) {
   EXPECT_EQ(
       FileColumnHandle::columnTypeName(FileColumnHandle::ColumnType::kRowId),
       "RowId");
+  EXPECT_EQ(
+      FileColumnHandle::columnTypeName(
+          FileColumnHandle::ColumnType::kReadRange),
+      "ReadRange");
 }
 
 TEST(FileColumnHandleTest, columnTypeFromName) {
@@ -57,6 +61,9 @@ TEST(FileColumnHandleTest, columnTypeFromName) {
   EXPECT_EQ(
       FileColumnHandle::columnTypeFromName("RowId"),
       FileColumnHandle::ColumnType::kRowId);
+  EXPECT_EQ(
+      FileColumnHandle::columnTypeFromName("ReadRange"),
+      FileColumnHandle::ColumnType::kReadRange);
 }
 
 TEST(FileColumnHandleTest, columnTypeFromNameInvalid) {
@@ -72,6 +79,7 @@ TEST(FileColumnHandleTest, columnTypeRoundTrip) {
       FileColumnHandle::ColumnType::kSynthesized,
       FileColumnHandle::ColumnType::kRowIndex,
       FileColumnHandle::ColumnType::kRowId,
+      FileColumnHandle::ColumnType::kReadRange,
   };
   for (auto type : allTypes) {
     EXPECT_EQ(

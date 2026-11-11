@@ -274,11 +274,30 @@ Decimal Special Forms
 
 .. spark:function:: decimal_round(decimal[, scale]) -> [decimal]
 
-    Returns ``decimal`` rounded to a new scale using HALF_UP rounding mode. In HALF_UP rounding, the digit 5 is rounded up.
-    ``scale`` is the new scale to be rounded to. It is 0 by default, and integer in [INT_MIN, INT_MAX] is allowed to be its value.
-    When the absolute value of scale exceeds the maximum precision of long decimal (38), the round logic is equivalent to the case where it is 38 as we cannot exceed the maximum precision.
+    Rounds ``decimal`` to a new scale using HALF_UP rounding: exact halfway
+    cases round away from zero.
+    ``scale`` defaults to zero and must be a constant INTEGER expression in
+    the full INTEGER range, or NULL.
+    A null scale returns null without evaluating the runtime decimal child;
+    its resolved output type is the same as for scale zero.
+    The expression must supply the resolved decimal result type, which is
+    validated against the native precision and scale rules below.
     The result precision and scale are decided with the precision and scale of input ``decimal`` and ``scale``.
     After rounding we may need one more digit in the integral part.
+    If a negative scale causes the rounded value to exceed decimal precision
+    38, evaluation raises a user error regardless of ANSI mode. ``try`` catches
+    that error per row.
+    A scale at or above the input scale returns the value unchanged. If the
+    input scale minus the target scale is greater than 38, every non-null input
+    rounds to zero. Dropping exactly 38 digits can still round away from zero
+    and overflow.
+
+    At scales ``-2147483648`` and ``-2147483647``, the native result type is
+    ``DECIMAL(38, 0)``. Spark 4.1 computes part of this metadata using 32-bit
+    arithmetic and resolves ``DECIMAL(min(p - s + 1, 38), 0)`` for input
+    ``DECIMAL(p, s)``. The types differ when ``p - s + 1 < 38``. Integrations
+    requiring exact Spark type parity must retain compatibility validation and
+    fallback for these scales.
 
     ::
 
@@ -309,7 +328,7 @@ Decimal Special Forms
     ::
 
         SELECT round(cast (85.681 as DECIMAL(5, 3)), 1); -- decimal 85.7
-        SELECT round(cast (85.681 as DECIMAL(5, 3)), 999); -- decimal 85.681
+        SELECT round(cast (85.681 as DECIMAL(5, 3)), 2147483647); -- decimal 85.681
         SELECT round(cast (0.1234567890123456789 as DECIMAL(19, 19)), 14); -- decimal 0.12345678901235
 
 .. spark:function:: make_decimal(x[, nullOnOverflow]) -> decimal

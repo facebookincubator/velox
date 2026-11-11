@@ -151,6 +151,50 @@ TEST_F(CompactRowTest, fixedRowSize) {
   ASSERT_EQ(1, CompactRow::fixedRowSize(ROW({UNKNOWN()})));
 }
 
+TEST_F(CompactRowTest, deserializeWithNulls) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({10, 20, 30, 40}),
+      makeFlatVector<std::string>({"a", "bb", "", "long"}),
+      makeArrayVector<int64_t>({{1, 2}, {3}, {}, {4, 5}}),
+      makeRowVector({
+          makeFlatVector<int32_t>({1, 2, 3, 4}),
+          makeFlatVector<std::string>({"x", "y", "z", "w"}),
+      }),
+  });
+  const auto rowType = asRowType(data->type());
+  const CompactRow compactRow{data};
+  std::vector<std::string> serialized;
+  for (vector_size_t row = 0; row < data->size(); ++row) {
+    serialized.emplace_back(compactRow.rowSize(row), '\0');
+    compactRow.serialize(row, serialized.back().data());
+  }
+  for (const bool allNull : {false, true}) {
+    SCOPED_TRACE(allNull);
+    auto nulls = allocateNulls(data->size(), pool());
+    auto* rawNulls = nulls->asMutable<uint64_t>();
+    std::vector<std::string_view> views{serialized.begin(), serialized.end()};
+    for (vector_size_t row = 0; row < data->size(); ++row) {
+      const bool isNull = allNull || row % 2 == 1;
+      bits::setNull(rawNulls, row, isNull);
+      data->setNull(row, isNull);
+      if (isNull) {
+        views[row] = {};
+      }
+    }
+
+    const auto decoded = CompactRow::deserialize(views, nulls, rowType, pool());
+
+    assertEqualVectors(data, decoded);
+    for (vector_size_t row = 0; row < data->size(); ++row) {
+      if (data->isNullAt(row)) {
+        for (const auto& child : decoded->children()) {
+          EXPECT_TRUE(child->isNullAt(row));
+        }
+      }
+    }
+  }
+}
+
 TEST_F(CompactRowTest, rowSizeString) {
   auto data = makeRowVector({
       makeFlatVector<std::string>({"a", "abc", "Longer string", "d", ""}),

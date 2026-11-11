@@ -336,9 +336,8 @@ std::shared_ptr<const Payload> payload;
   * `int* foo;` `const Bar& bar;` NOT `int *foo;` `const Bar &bar`;
   * Beware that `int* foo, bar;` will be parsed as declaring `foo` as an `int*`
     and `bar` as an `int`. Note that multiple declaration is discouraged.
-* Use trailing commas in multi-line initializer lists, enum definitions, and
-  function-call argument lists that span multiple lines. This produces cleaner
-  diffs when items are added or reordered.
+* Use trailing commas in multi-line initializer lists and enum definitions.
+  This produces cleaner diffs when items are added or reordered.
 * For member variables:
   * Group member variable and methods based on their visibility (public,
     protected and private)

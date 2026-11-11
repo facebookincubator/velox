@@ -20,6 +20,8 @@
 
 namespace facebook::nimble {
 
+class ReaderBase;
+
 class SelectiveNimbleReaderFactory : public velox::dwio::common::ReaderFactory {
  public:
   SelectiveNimbleReaderFactory()
@@ -28,6 +30,12 @@ class SelectiveNimbleReaderFactory : public velox::dwio::common::ReaderFactory {
   std::unique_ptr<velox::dwio::common::Reader> createReader(
       std::unique_ptr<velox::dwio::common::BufferedInput>,
       const velox::dwio::common::ReaderOptions&) override;
+
+  /// Creates a reader sharing already loaded metadata and its input. Throws if
+  /// 'readerBase' is null.
+  std::unique_ptr<velox::dwio::common::Reader> createReader(
+      std::shared_ptr<ReaderBase> readerBase,
+      const velox::dwio::common::ReaderOptions& options);
 };
 
 inline void registerSelectiveNimbleReaderFactory() {

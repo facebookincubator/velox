@@ -90,9 +90,7 @@ TEST_P(UnnestTest, skipArrayElement) {
   auto expected =
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -117,9 +115,7 @@ TEST_P(UnnestTest, skipMapValue) {
       {makeFlatVector<int64_t>({1, 1, 2}),
        makeFlatVector<int32_t>({10, 11, 20})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -144,9 +140,7 @@ TEST_P(UnnestTest, skipMapKey) {
       {makeFlatVector<int64_t>({1, 1, 2}),
        makeFlatVector<double>({1.5, 2.5, 3.5})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -172,9 +166,7 @@ TEST_P(UnnestTest, skipMixedArrayAndMap) {
       {makeFlatVector<int64_t>({1, 1, 2}),
        makeFlatVector<int32_t>({100, 101, 200})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -197,9 +189,7 @@ TEST_P(UnnestTest, skipAllArrayToCount) {
   auto expected =
       makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{5})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -230,9 +220,7 @@ TEST_P(UnnestTest, skipMapKeyWithOrdinalityAndMarker) {
        makeFlatVector<int64_t>({1, 2, 1}),
        makeFlatVector<bool>({true, true, true})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -262,9 +250,7 @@ TEST_P(UnnestTest, skipArrayOfRowElement) {
            makeFlatVector<std::string>({"x", "y", "z", "p", "q"}),
        })});
   AssertQueryBuilder(keepPlan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(keepExpected);
 
   // Prune: the ROW column is dropped entirely; only the replicated column
@@ -279,9 +265,7 @@ TEST_P(UnnestTest, skipArrayOfRowElement) {
   auto skipExpected =
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
   AssertQueryBuilder(skipPlan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(skipExpected);
 }
 
@@ -335,7 +319,7 @@ TEST_P(UnnestTest, arrayWithIdentityMap) {
     auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                     .config(
                         core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(testData.outputBatchSize))
+                        testData.outputBatchSize)
                     .assertResults("SELECT c0, UNNEST(c1) FROM tmp");
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
@@ -398,7 +382,7 @@ TEST_P(UnnestTest, arrayWithoutIdentityMap) {
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(
                 core::QueryConfig::kPreferredOutputBatchRows,
-                std::to_string(testData.outputBatchSize))
+                testData.outputBatchSize)
             .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
@@ -429,11 +413,9 @@ TEST_P(UnnestTest, arrayWithNull) {
                   .capturePlanNodeId(unnestPlanNodeId)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(
-              core::QueryConfig::kPreferredOutputBatchRows, std::to_string(25))
-          .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .config(core::QueryConfig::kPreferredOutputBatchRows, 25)
+                  .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
   const auto taskStats = task->taskStats();
   ASSERT_EQ(
       exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors, 164);
@@ -1033,11 +1015,10 @@ TEST_P(UnnestTest, batchSize) {
       makeFlatVector<int64_t>(1'000 * 3, [](auto row) { return 1 + row % 3; }),
   });
 
-  auto task = AssertQueryBuilder(plan)
-                  .config(
-                      core::QueryConfig::kPreferredOutputBatchRows,
-                      std::to_string(batchSize_))
-                  .assertResults({expected});
+  auto task =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
+          .assertResults({expected});
   auto stats = exec::toPlanStats(task->taskStats());
 
   ASSERT_EQ(3'000, stats.at(unnestId).outputRows);
@@ -1111,15 +1092,14 @@ TEST_P(UnnestTest, barrier) {
             .config(
                 SparkQueryConfig::qualify(SparkQueryConfig::kPartitionId), "0")
             .config(
-                core::QueryConfig::kMaxSplitPreloadPerDriver,
-                std::to_string(tempFiles.size()))
+                core::QueryConfig::kMaxSplitPreloadPerDriver, tempFiles.size())
             .splits(makeHiveConnectorSplits(tempFiles))
             .serialExecution(testData.serialExecution)
             .maxDrivers(testData.serialExecution ? 1 : 3)
             .barrierExecution(testData.barrierExecution)
             .config(
                 core::QueryConfig::kPreferredOutputBatchRows,
-                std::to_string(testData.numOutputRows))
+                testData.numOutputRows)
             .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
@@ -1178,14 +1158,13 @@ TEST_P(UnnestTest, spiltOutput) {
       {false, bits::divRoundUp(inputBatchSize * 3, GetParam()) * numBatches}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
-    auto task = AssertQueryBuilder(plan)
-                    .config(
-                        core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(GetParam()))
-                    .config(
-                        core::QueryConfig::kUnnestSplitOutput,
-                        testData.produceSingleOutput ? "false" : "true")
-                    .assertResults(expectedResult);
+    auto task =
+        AssertQueryBuilder(plan)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, GetParam())
+            .config(
+                core::QueryConfig::kUnnestSplitOutput,
+                testData.produceSingleOutput ? "false" : "true")
+            .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
         exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
@@ -1271,14 +1250,13 @@ TEST_P(UnnestTest, splitOutputNodeOverride) {
         ? bits::divRoundUp(inputBatchSize * 3, GetParam()) * numBatches
         : numBatches;
 
-    auto task = AssertQueryBuilder(unnestNode)
-                    .config(
-                        core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(GetParam()))
-                    .config(
-                        core::QueryConfig::kUnnestSplitOutput,
-                        testData.configSplitOutput ? "true" : "false")
-                    .assertResults(expectedResult);
+    auto task =
+        AssertQueryBuilder(unnestNode)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, GetParam())
+            .config(
+                core::QueryConfig::kUnnestSplitOutput,
+                testData.configSplitOutput ? "true" : "false")
+            .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
         exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,

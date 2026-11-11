@@ -185,6 +185,7 @@ TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
       connector::FileColumnHandle::ColumnType::kSynthesized,
       connector::FileColumnHandle::ColumnType::kRowIndex,
       connector::FileColumnHandle::ColumnType::kRowId,
+      connector::FileColumnHandle::ColumnType::kReadRange,
   };
 
   for (auto columnHandleType : columnHandleTypes) {

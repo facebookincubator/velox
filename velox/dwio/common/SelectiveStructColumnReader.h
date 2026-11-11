@@ -218,6 +218,10 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
 
   int64_t currentRowNumber_{-1};
 
+  // The number of file rows the current next() call covers, including rows
+  // that filters or deletes remove.
+  vector_size_t currentReadLength_{0};
+
   const Mutation* mutation_ = nullptr;
 
   // After read() call mutation_ could go out of scope.  Need to keep this

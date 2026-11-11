@@ -93,16 +93,10 @@ std::unique_ptr<RowContainer>
 makeContainer(int32_t rowWidth, int64_t targetBytes, memory::MemoryPool* pool) {
   auto container = std::make_unique<RowContainer>(
       keyTypesForWidth(rowWidth),
-      /*nullableKeys=*/false,
       std::vector<Accumulator>{},
       std::vector<TypePtr>{},
-      /*hasNext=*/false,
-      /*isJoinBuild=*/false,
-      /*hasProbedFlag=*/true,
-      /*hasCountFlag=*/false,
-      /*hasNormalizedKey=*/false,
-      /*useListRowIndex=*/false,
-      pool);
+      pool,
+      RowContainer::Options{.nullableKeys = false, .hasProbedFlag = true});
   VELOX_CHECK_EQ(container->fixedRowSize(), rowWidth);
 
   const int64_t numRows = std::max<int64_t>(kBatchSize, targetBytes / rowWidth);
@@ -129,9 +123,9 @@ uint64_t scanAndProbeOnce(
   uint64_t checksum = 0;
   while (true) {
     const auto count = container.listRows<
-        RowContainer::ProbeType::kNotProbed,
+        RowContainer::ProbedFilter::kNotProbed,
         prefetchDistanceBytes>(
-        &iter, kBatchSize, RowContainer::kUnlimited, rows.data());
+        &iter, std::span(rows), RowContainer::kUnlimited);
     if (count == 0) {
       break;
     }

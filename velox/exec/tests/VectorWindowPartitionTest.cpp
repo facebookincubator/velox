@@ -126,12 +126,12 @@ TEST_F(VectorWindowPartitionTest, extractsNullsAcrossBlocksAfterRemoval) {
   partition.removeProcessedRows(2);
 
   auto nulls = allocateNulls(4, pool_.get());
-  partition.extractNulls(1, 2, 4, nulls);
+  EXPECT_EQ(partition.extractNulls(1, 2, 4, nulls), 2);
   const auto* rawNulls = nulls->as<uint64_t>();
-  EXPECT_FALSE(bits::isBitSet(rawNulls, 0));
-  EXPECT_TRUE(bits::isBitSet(rawNulls, 1));
-  EXPECT_FALSE(bits::isBitSet(rawNulls, 2));
-  EXPECT_TRUE(bits::isBitSet(rawNulls, 3));
+  EXPECT_FALSE(bits::isBitNull(rawNulls, 0));
+  EXPECT_TRUE(bits::isBitNull(rawNulls, 1));
+  EXPECT_FALSE(bits::isBitNull(rawNulls, 2));
+  EXPECT_TRUE(bits::isBitNull(rawNulls, 3));
 
   auto frameStarts = AlignedBuffer::allocate<vector_size_t>(2, pool_.get());
   auto frameEnds = AlignedBuffer::allocate<vector_size_t>(2, pool_.get());
@@ -150,10 +150,10 @@ TEST_F(VectorWindowPartitionTest, extractsNullsAcrossBlocksAfterRemoval) {
   EXPECT_EQ(frameNullRange->second, 4);
 
   rawNulls = frameNulls->as<uint64_t>();
-  EXPECT_FALSE(bits::isBitSet(rawNulls, 0));
-  EXPECT_TRUE(bits::isBitSet(rawNulls, 1));
-  EXPECT_FALSE(bits::isBitSet(rawNulls, 2));
-  EXPECT_TRUE(bits::isBitSet(rawNulls, 3));
+  EXPECT_FALSE(bits::isBitNull(rawNulls, 0));
+  EXPECT_TRUE(bits::isBitNull(rawNulls, 1));
+  EXPECT_FALSE(bits::isBitNull(rawNulls, 2));
+  EXPECT_TRUE(bits::isBitNull(rawNulls, 3));
 }
 
 TEST_F(VectorWindowPartitionTest, computesPeerBuffersAfterRemoval) {

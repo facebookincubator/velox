@@ -23,6 +23,7 @@
 #include <future>
 #include <limits>
 #include <numeric>
+#include <random>
 #include <string_view>
 #include <vector>
 
@@ -167,8 +168,7 @@ TEST(NimbleTypeProjectionTest, buildsScalarProjection) {
   EXPECT_EQ(projectedRow.nameAt(0), "value");
   EXPECT_EQ(projectedRow.childAt(0)->kind(), Kind::Scalar);
   EXPECT_EQ(projection.streamOffsets, std::vector<uint32_t>({2, 1}));
-  EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams, std::vector<bool>({true, false}));
+  EXPECT_EQ(projection.barrierStreams, std::vector<bool>({true, false}));
 }
 
 TEST(NimbleTypeProjectionTest, buildsFlatMapProjectionWithMissingKey) {
@@ -202,7 +202,7 @@ TEST(NimbleTypeProjectionTest, buildsFlatMapProjectionWithMissingKey) {
       projection.streamOffsets,
       std::vector<uint32_t>({1, 0, 2, 3, UINT32_MAX, UINT32_MAX}));
   EXPECT_EQ(
-      projection.rowOrFlatMapNullStreams,
+      projection.barrierStreams,
       std::vector<bool>({true, true, false, false, false, false}));
 }
 
@@ -399,8 +399,8 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
 
   for (const auto& stripe : stripes) {
     SCOPED_TRACE(fmt::format("stripeIndex={}", stripe.selection.stripeIndex));
-    StreamReader reader(schema, leafPool_.get(), encodingOptions);
-    reader.setStreams(stripe.streams);
+    StreamReader reader(schema, leafPool_.get());
+    reader.setStreams(stripe.streams, encodingOptions);
     velox::VectorPtr actual;
     folly::coro::blockingWait(reader.co_next(kRowsPerStripe, actual));
     const auto expected = vectorMaker_->rowVector(
@@ -624,7 +624,8 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
            int8_t{7},
            int8_t{50},
        })});
-  // The last call switches back, so the projector rebuilds its reader twice.
+  // The projector keeps one reader and decodes each call with the encoding
+  // options of the call, including a call that switches back.
   for (const bool cacheEncodingView : {false, true, false}) {
     SCOPED_TRACE(fmt::format("cacheEncodingView={}", cacheEncodingView));
     const auto result = projectRows(
@@ -2888,6 +2889,117 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullFlatMapsDeserialize) {
     EXPECT_EQ(
         projector->stats().numSlicedStripes > 0, maxOverfetchRowsRatio == 0.0);
   }
+}
+
+TEST_P(NimbleIndexProjectorTest, projectedDedupStreamsDeserialize) {
+  // A column in dictionaryArrayColumns stores its arrays as ArrayWithOffsets,
+  // and one in deduplicatedMapColumns stores its maps as SlidingWindowMap.
+  // Both keep one copy of a run of equal values: a per-row offsets stream
+  // points into the lengths of the distinct values. Every value below repeats
+  // in the next row, and features holds such arrays under its flat-map keys.
+  auto batch = vectorMaker_->rowVector(
+      {"key", "tags", "scores", "features"},
+      {
+          vectorMaker_->flatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7}),
+          vectorMaker_->arrayVector<int64_t>(
+              {{1, 2}, {1, 2}, {3}, {3}, {}, {}, {4, 5, 6}, {4, 5, 6}}),
+          vectorMaker_->mapVector<int32_t, float>({
+              {{1, 0.5f}},
+              {{1, 0.5f}},
+              {{2, 1.5f}, {3, 2.5f}},
+              {{2, 1.5f}, {3, 2.5f}},
+              {},
+              {},
+              {{4, 3.5f}},
+              {{4, 3.5f}},
+          }),
+          vectorMaker_->mapVector(
+              {0, 2, 4, 6, 8, 10, 12, 14},
+              vectorMaker_->flatVector<int32_t>(
+                  {1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2}),
+              vectorMaker_->arrayVector<int64_t>({
+                  {10, 11},
+                  {20},
+                  {10, 11},
+                  {20},
+                  {12},
+                  {20},
+                  {12},
+                  {20},
+                  {12},
+                  {21, 22},
+                  {12},
+                  {21, 22},
+                  {13},
+                  {23},
+                  {13},
+                  {23},
+              })),
+      });
+  WriterOptions options;
+  options.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  options.dictionaryArrayColumns = {"tags", "features"};
+  options.deduplicatedMapColumns = {"scores"};
+  options.flatMapColumns.emplace("features", std::set<std::string>{});
+  // Ends a stripe after every two-row batch. Each stripe numbers its distinct
+  // values from 0, so the lookup below reads two stripes whose offsets must
+  // not be mixed up.
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*shouldFlush=*/[](const StripeProgress&) { return true; });
+  };
+  std::vector<RowVectorPtr> batches;
+  for (vector_size_t row = 0; row < batch->size(); row += 2) {
+    batches.push_back(
+        std::dynamic_pointer_cast<RowVector>(batch->slice(row, 2)));
+  }
+  writeBatches(batches, std::move(options));
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("tags");
+  subfields.emplace_back("scores");
+  subfields.emplace_back("features[1]");
+  subfields.emplace_back("features[2]");
+  auto projector = createProjector(subfields);
+  const auto& projectedRow = projector->projectedNimbleType()->asRow();
+  ASSERT_EQ(projectedRow.childAt(0)->kind(), Kind::ArrayWithOffsets);
+  ASSERT_EQ(projectedRow.childAt(1)->kind(), Kind::SlidingWindowMap);
+  ASSERT_EQ(
+      projectedRow.childAt(2)->asFlatMap().childAt(0)->kind(),
+      Kind::ArrayWithOffsets);
+
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makeRangeLookup(ROW({"key"}, {BIGINT()}), {"key"}, 2, 6)};
+  // The stream slicer cannot slice these kinds, so every slice holds a whole
+  // stripe and its header selects the requested rows.
+  NimbleIndexProjector::Options projectOptions;
+  projectOptions.maxOverfetchRowsRatio = 1.0;
+  const auto result = projector->projectStreams(request, projectOptions);
+  ASSERT_EQ(result.responses.size(), 1);
+  const auto& slices = result.responses[0].slices;
+  ASSERT_EQ(slices.size(), 2);
+  std::vector<folly::IOBuf> owned;
+  std::vector<std::string_view> serializedBatches;
+  owned.reserve(slices.size());
+  for (const auto& slice : slices) {
+    // The projector asks for each stripe to be decoded on its own.
+    EXPECT_TRUE(readEmbeddedTabletChunkHeader(slice).requiredBarrier);
+    owned.push_back(coalesceChunkSlice(slice));
+    serializedBatches.emplace_back(
+        reinterpret_cast<const char*>(owned.back().data()),
+        owned.back().length());
+  }
+
+  const auto expected = vectorMaker_->rowVector(
+      {"tags", "scores", "features"},
+      {
+          batch->childAt(1)->slice(2, 4),
+          batch->childAt(2)->slice(2, 4),
+          batch->childAt(3)->slice(2, 4),
+      });
+  expectVectorRows(
+      deserializeProjectedBatches(*projector, serializedBatches), expected);
 }
 
 TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
@@ -7445,6 +7557,129 @@ TEST_P(
       vectorMaker_->rowVector(
           {"value"}, {vectorMaker_->flatVector<int32_t>({500})}),
       values[0]);
+}
+
+// One projector turns verification on and off between requests, as a cached
+// iterator does for lookups with different verify_checksums.
+TEST_P(
+    NimbleIndexProjectorChecksumTest,
+    setVerifyStreamChecksumsTogglesVerification) {
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, 200);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  // The trailers are corrupt and the streams intact, so a verifying request
+  // fails and an unverified one reads the value.
+  ASSERT_NO_FATAL_FAILURE(corruptStreamTrailers());
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  const auto expectUnverified = [&](NimbleIndexProjector& projector) {
+    const auto values = projectValues(projector, request);
+    ASSERT_EQ(values.size(), 1);
+    velox::test::assertEqualVectors(
+        vectorMaker_->rowVector(
+            {"value"}, {vectorMaker_->flatVector<int32_t>({500})}),
+        values[0]);
+  };
+
+  auto projector = createProjector(subfields);
+  expectUnverified(*projector);
+  projector->setVerifyStreamChecksums(true);
+  NIMBLE_ASSERT_THROW(
+      project(*projector, request, {}), "Stream checksum mismatch");
+  projector->setVerifyStreamChecksums(false);
+  expectUnverified(*projector);
+
+  auto verifyingProjector = createVerifyingProjector(subfields);
+  verifyingProjector->setVerifyStreamChecksums(false);
+  expectUnverified(*verifyingProjector);
+  verifyingProjector->setVerifyStreamChecksums(true);
+  NIMBLE_ASSERT_THROW(
+      project(*verifyingProjector, request, {}), "Stream checksum mismatch");
+}
+
+// Toggles verification at random between point lookups and range scans on one
+// projector: each request verifies exactly when the setting before it says so.
+TEST_P(
+    NimbleIndexProjectorChecksumTest,
+    randomVerifyStreamChecksumsTogglesWithLookupsAndScans) {
+  constexpr int kNumRows{200};
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, kNumRows);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  // The trailers are corrupt and the streams intact, so a verifying request
+  // fails and an unverified one reads the values.
+  ASSERT_NO_FATAL_FAILURE(corruptStreamTrailers());
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  auto projector = createProjector(subfields);
+  constexpr uint32_t kSeed{20'261'108};
+  std::mt19937 random{kSeed};
+  for (int iteration = 0; iteration < 100; ++iteration) {
+    const bool verify = random() % 2 == 0;
+    const bool scan = random() % 2 == 0;
+    // A scan reads 5 rows. Its upper key falls between two keys, so the scan
+    // reads the same rows whether the bound is inclusive or exclusive.
+    const int firstRow = static_cast<int>(random() % (kNumRows - 5));
+    const int numRows = scan ? 5 : 1;
+    SCOPED_TRACE(
+        fmt::format(
+            "seed {}, iteration {}, verify {}, scan {}, firstRow {}",
+            kSeed,
+            iteration,
+            verify,
+            scan,
+            firstRow));
+    projector->setVerifyStreamChecksums(verify);
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {
+        scan ? makeRangeLookup(
+                   rowType,
+                   {"key"},
+                   firstRow * 10,
+                   (firstRow + numRows - 1) * 10 + 5)
+             : makePointLookup(rowType, {"key"}, firstRow * 10)};
+    if (verify) {
+      NIMBLE_ASSERT_THROW(
+          project(*projector, request, {}), "Stream checksum mismatch");
+      continue;
+    }
+    std::vector<int32_t> expected(numRows);
+    for (int row = 0; row < numRows; ++row) {
+      expected[row] = (firstRow + row) * 100;
+    }
+    const auto values = projectValues(*projector, request);
+    ASSERT_EQ(values.size(), 1);
+    velox::test::assertEqualVectors(
+        vectorMaker_->rowVector(
+            {"value"}, {vectorMaker_->flatVector<int32_t>(expected)}),
+        values[0]);
+  }
 }
 
 // A trailer this reader cannot find a checksum in, such as one a newer writer
