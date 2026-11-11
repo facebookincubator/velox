@@ -25,7 +25,9 @@ namespace facebook::velox::common::testutil {
 /// read past the end of the page faults instead of quietly succeeding. Tests
 /// place a buffer so that its valid bytes, rounded up to its alignment, end at
 /// end() to check that code stays within it, as memory from outside Velox may
-/// have no padding.
+/// have no padding. ASan doesn't check reads by x86 gather instructions, such
+/// as the one in simd::gather8Bits, so it misses those over-reads. A guard page
+/// catches them, and in builds without ASan too.
 class PageBeforeGuard {
  public:
   PageBeforeGuard();

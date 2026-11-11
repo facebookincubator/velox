@@ -122,9 +122,9 @@ without a copy:
 AlignedBuffer additionally provides at least simd::kPadding addressable bytes
 past its capacity, but a BufferView, such as one wrapping memory imported from
 Arrow, has none. A function that relies on padding says so next to its
-signature, and its callers must pass an AlignedBuffer. Memory from Arrow
-producers that follow Arrow's recommended layout, 64-byte aligned with lengths
-rounded up to 64 bytes, meets the contract.
+signature, and its callers must pass an AlignedBuffer. Memory that follows
+Arrow's recommended alignment and padding, a multiple of 8 or 64 bytes, meets
+the contract. The Arrow bridge requires it of the buffers it imports.
 
 Null Flags
 ----------

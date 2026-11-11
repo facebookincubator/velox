@@ -153,6 +153,13 @@ TypePtr importFromArrow(const ArrowSchema& arrowSchema);
 /// buffers, so it's the client's responsibility to ensure the buffer's
 /// lifetime.
 ///
+/// The buffers must follow Arrow's recommended alignment and padding: aligned
+/// and padded to a multiple of 8 or 64 bytes
+/// (https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding).
+/// Such buffers meet the contract on Buffer, so they are imported without a
+/// copy, except long decimals that aren't 16-byte aligned. Buffers that don't
+/// follow it get no guarantees.
+///
 /// The function throws in case the conversion fails.
 ///
 /// Example usage:
@@ -180,6 +187,9 @@ VectorPtr importFromArrowAsViewer(
 /// (https://arrow.apache.org/docs/format/CDataInterface.html). Afterwards, the
 /// returned Vector will be responsible for calling the release callbacks when
 /// destructed.
+///
+/// The buffers must follow the same alignment and padding as for
+/// importFromArrowAsViewer.
 VectorPtr importFromArrowAsOwner(
     ArrowSchema& arrowSchema,
     ArrowArray& arrowArray,
