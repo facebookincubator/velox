@@ -20,6 +20,8 @@
 #include <cstring>
 #include <random>
 
+#include <folly/executors/IOThreadPoolExecutor.h>
+
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 
@@ -27,14 +29,18 @@
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/File.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/file/IoUringReader.h"
 #include "velox/common/file/LocalFile.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/nimble/tablet/BlockCache.h"
+
+DECLARE_bool(velox_ssd_odirect);
 
 namespace facebook::nimble {
 namespace {
@@ -790,6 +796,59 @@ TEST_F(DataInputTest, cacheMissFailureReleasesEntries) {
     auto handle = input.load();
     EXPECT_EQ(refData(input.bufferRef(stream)), data.substr(180, 80));
   }
+  cache->shutdown();
+}
+
+TEST_F(DataInputTest, cachedDataInputLoadsFromSsd) {
+  std::string data(4'096, '\0');
+  for (size_t i{0}; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  velox::filesystems::registerLocalFileSystem();
+  FLAGS_velox_ssd_odirect = false;
+  const auto ssdDirectory =
+      velox::common::testutil::TempDirectoryPath::create();
+  folly::IOThreadPoolExecutor ssdExecutor{1};
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator(),
+      std::make_unique<velox::cache::SsdCache>(velox::cache::SsdCache::Config(
+          fmt::format("{}/cache", ssdDirectory->getPath()),
+          /*_maxBytes=*/64UL << 20,
+          /*_numShards=*/1,
+          &ssdExecutor)));
+  velox::StringIdLease fileId{
+      velox::fileIds(), "CachedDataInputTest.loadsFromSsd"};
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = getBlockCache(cache.get()),
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+  {
+    auto file = createFile(data);
+    CachedDataInput input{file.get(), options};
+    input.reserve(1);
+    input.startGroup(DataInput::Region{100, 1'000});
+    input.enqueue(DataInput::Region{180, 80});
+    input.load();
+  }
+  ASSERT_TRUE(cache->ssdCache()->startWrite());
+  cache->saveToSsd(/*saveAll=*/true);
+  cache->ssdCache()->waitForWriteToFinish();
+  cache->clear();
+
+  // Every read of this file fails, so the group must come from SSD.
+  {
+    auto file = std::make_unique<FailingPreadvInMemoryReadFile>(data);
+    CachedDataInput input{file.get(), options};
+    input.reserve(1);
+    input.startGroup(DataInput::Region{100, 1'000});
+    const auto stream = input.enqueue(DataInput::Region{180, 80});
+    auto handle = input.load();
+    EXPECT_EQ(refData(input.bufferRef(stream)), data.substr(180, 80));
+  }
+  EXPECT_EQ(ioStats_->ssdRead().sum(), 1'000);
+  EXPECT_EQ(ioStats_->read().count(), 1);
   cache->shutdown();
 }
 
