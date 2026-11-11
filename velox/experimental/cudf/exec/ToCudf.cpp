@@ -95,8 +95,7 @@ bool CompileState::compile(bool allowCpuFallback) {
   auto& registry = OperatorAdapterRegistry::getInstance();
 
   // Cached operator properties including adapter pointer.
-  struct OperatorProperties {
-    OperatorAdapter::Properties adapterProps;
+  struct OperatorProperties : OperatorAdapter::Properties {
     const OperatorAdapter* adapter = nullptr;
     core::PlanNodePtr planNode;
     bool inputTypesConvertible = true;
@@ -106,14 +105,14 @@ bool CompileState::compile(bool allowCpuFallback) {
     bool eligible() const {
       return outputTypesConvertible && !keysNeedCustomComparison;
     }
-    bool canRunOnGPU() const {
-      return adapterProps.canRunOnGPU && eligible();
+    bool eligibleToRunOnGpu() const {
+      return canRunOnGPU && eligible();
     }
-    bool acceptsGpuInput() const {
-      return adapterProps.acceptsGpuInput && eligible();
+    bool eligibleToAcceptGpuInput() const {
+      return acceptsGpuInput && eligible();
     }
-    bool producesGpuOutput() const {
-      return adapterProps.producesGpuOutput && eligible();
+    bool eligibleToProduceGpuOutput() const {
+      return producesGpuOutput && eligible();
     }
   };
 
@@ -124,7 +123,8 @@ bool CompileState::compile(bool allowCpuFallback) {
         props.adapter = adapter;
         props.planNode = resolveOperatorPlanNode(op);
         if (adapter && props.planNode) {
-          props.adapterProps = adapter->properties(op, props.planNode, ctx);
+          static_cast<OperatorAdapter::Properties&>(props) =
+              adapter->properties(op, props.planNode, ctx);
           const auto keys = adapter->comparisonKeys(props.planNode);
           props.keysNeedCustomComparison =
               std::any_of(keys.begin(), keys.end(), [](const auto& key) {
@@ -134,9 +134,9 @@ bool CompileState::compile(bool allowCpuFallback) {
         if (isAnyOf<CudfOperator>(op)) {
           // CudfOperator is always fully GPU compatible
           // (runs on GPU, accepts GPU input, produces GPU output).
-          props.adapterProps.canRunOnGPU = true;
-          props.adapterProps.acceptsGpuInput = true;
-          props.adapterProps.producesGpuOutput = true;
+          props.canRunOnGPU = true;
+          props.acceptsGpuInput = true;
+          props.producesGpuOutput = true;
         }
         props.outputTypesConvertible = !props.planNode ||
             isTypeSupportedByCudf(props.planNode->outputType());
@@ -173,10 +173,10 @@ bool CompileState::compile(bool allowCpuFallback) {
     const auto& thisOpProps =
         opProps[operatorIndex]; // cached operator properties
 
-    const bool previousOperatorIsNotGpu =
-        operatorIndex > 0 and !opProps[operatorIndex - 1].producesGpuOutput();
+    const bool previousOperatorIsNotGpu = operatorIndex > 0 and
+        !opProps[operatorIndex - 1].eligibleToProduceGpuOutput();
     const bool nextOperatorIsNotGpu = (operatorIndex < operators.size() - 1) and
-        !opProps[operatorIndex + 1].acceptsGpuInput();
+        !opProps[operatorIndex + 1].eligibleToAcceptGpuInput();
     const bool isLastOperatorOfTask =
         driverFactory_.outputDriver and operatorIndex == operators.size() - 1;
 
@@ -186,7 +186,7 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     bool inputTypesSkippedGpu = false;
     if (!skipGpuReplacement and previousOperatorIsNotGpu and
-        thisOpProps.acceptsGpuInput() and planNode) {
+        thisOpProps.eligibleToAcceptGpuInput() and planNode) {
       // Check that the previous operator's output types can be converted to
       // cuDF.  If not, skip both the CudfFromVelox insertion and the current
       // operator's GPU replacement so the whole pipeline stays on CPU.
@@ -234,7 +234,7 @@ bool CompileState::compile(bool allowCpuFallback) {
     if (adapter) {
       keepOperator = adapter->keepOperator();
       const bool canUseGpuPath =
-          planNode && thisOpProps.canRunOnGPU() && !skipGpuReplacement;
+          planNode && thisOpProps.eligibleToRunOnGpu() && !skipGpuReplacement;
       if (canUseGpuPath) {
         // canRunOnGPU() controls whether createReplacements() is called;
         // keepOperator() determines whether returned operators replace or
@@ -269,7 +269,7 @@ bool CompileState::compile(bool allowCpuFallback) {
       }
     }
 
-    if (thisOpProps.producesGpuOutput() and !skipGpuReplacement and
+    if (thisOpProps.eligibleToProduceGpuOutput() and !skipGpuReplacement and
         (nextOperatorIsNotGpu or isLastOperatorOfTask) and planNode) {
       replaceOp.push_back(
           std::make_unique<CudfToVelox>(
@@ -285,11 +285,10 @@ bool CompileState::compile(bool allowCpuFallback) {
                 << ", nextOperatorIsNotGpu = " << nextOperatorIsNotGpu
                 << ", isLastOperatorOfTask = " << isLastOperatorOfTask
                 << ", canRunOnGPU[" << operatorIndex
-                << "] = " << thisOpProps.adapterProps.canRunOnGPU
-                << ", acceptsGpuInput[" << operatorIndex
-                << "] = " << thisOpProps.adapterProps.acceptsGpuInput
+                << "] = " << thisOpProps.canRunOnGPU << ", acceptsGpuInput["
+                << operatorIndex << "] = " << thisOpProps.acceptsGpuInput
                 << ", producesGpuOutput[" << operatorIndex
-                << "] = " << thisOpProps.adapterProps.producesGpuOutput
+                << "] = " << thisOpProps.producesGpuOutput
                 << ", inputTypesConvertible = "
                 << thisOpProps.inputTypesConvertible
                 << ", outputTypesConvertible = "
