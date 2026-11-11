@@ -51,7 +51,7 @@ void gatherMerge(
     bufferSourceIndices[numBatchRows] =
         currentStream->currentIndex(&endOfBatch);
     ++numBatchRows;
-    if (FOLLY_UNLIKELY(endOfBatch)) {
+    if (endOfBatch) [[unlikely]] {
       // The stream is at end of input batch. Need to copy out the rows before
       // fetching next batch in 'pop'.
       gatherCopy(
@@ -68,7 +68,7 @@ void gatherMerge(
   }
   VELOX_CHECK_LE(totalNumRows + numBatchRows, target->size());
 
-  if (FOLLY_LIKELY(numBatchRows != 0)) {
+  if (numBatchRows != 0) [[likely]] {
     gatherCopy(
         target.get(),
         totalNumRows,
@@ -381,7 +381,7 @@ SpillPartition::createOrderedReaderInternal(
   }
   files_.clear();
   // Check if the partition is empty or not.
-  if (FOLLY_UNLIKELY(streams.empty())) {
+  if (streams.empty()) [[unlikely]] {
     return nullptr;
   }
   return std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
@@ -710,7 +710,7 @@ bool ConcatFilesSpillBatchStream::nextBatch(RowVectorPtr& batch) {
 
 SpillPartitionId::SpillPartitionId(uint32_t partitionNumber)
     : encodedId_(partitionNumber) {
-  if (FOLLY_UNLIKELY(partitionNumber >= (1 << kMaxPartitionBits))) {
+  if (partitionNumber >= (1 << kMaxPartitionBits)) [[unlikely]] {
     VELOX_FAIL(
         fmt::format(
             "Partition number {} exceeds max partition number {}",
@@ -723,7 +723,7 @@ SpillPartitionId::SpillPartitionId(
     SpillPartitionId parent,
     uint32_t partitionNumber) {
   const auto childSpillLevel = parent.spillLevel() + 1;
-  if (FOLLY_UNLIKELY(childSpillLevel > kMaxSpillLevel)) {
+  if (childSpillLevel > kMaxSpillLevel) [[unlikely]] {
     VELOX_FAIL(
         fmt::format(
             "Spill level {} exceeds max spill level {}",
@@ -784,7 +784,7 @@ uint32_t SpillPartitionId::partitionNumber() const {
 /// level.
 uint32_t SpillPartitionId::partitionNumber(uint32_t level) const {
   const auto leafLevel = spillLevel();
-  if (FOLLY_UNLIKELY(level > leafLevel)) {
+  if (level > leafLevel) [[unlikely]] {
     VELOX_FAIL(
         "spillLevel needs to be equal or smaller than leaf level {} vs {}",
         level,

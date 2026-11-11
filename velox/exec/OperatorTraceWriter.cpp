@@ -64,7 +64,7 @@ OperatorTraceInputWriter::OperatorTraceInputWriter(
 bool OperatorTraceInputWriter::write(
     const RowVectorPtr& rows,
     ContinueFuture*) {
-  if (FOLLY_UNLIKELY(finished_)) {
+  if (finished_) [[unlikely]] {
     return false;
   }
 
