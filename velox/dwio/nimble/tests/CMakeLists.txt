@@ -72,6 +72,7 @@ add_executable(
   ChunkedStreamTest.cpp
   DecodedVectorManagerTest.cpp
   EncodingLayoutTreeTest.cpp
+  FieldReaderTest.cpp
   LayoutPlannerTest.cpp
   OrderedRangesTest.cpp
   RawSizeContextTest.cpp
@@ -115,6 +116,10 @@ target_link_libraries(
   nimble_shared_dictionary_test_utils
   nimble_writer_test_utils
   nimble_batch_reader
+  nimble_velox_field_reader
+  nimble_velox_schema_builder
+  nimble_serializer
+  nimble_deserializer
   nimble_velox_shared_dictionary_config
   nimble_writer
   nimble_velox_layout_planner
