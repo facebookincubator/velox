@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/exec/SimpleAggregateAdapter.h"
+#include <folly/CPortability.h>
+
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
@@ -24,6 +26,7 @@ using namespace facebook::velox::exec::test;
 using facebook::velox::functions::aggregate::test::AggregationTestBase;
 
 namespace facebook::velox::aggregate::test {
+
 namespace {
 
 const char* const kSimpleAvg = "simple_avg";
@@ -121,96 +124,6 @@ exec::AggregateRegistrationResult registerSimpleCountNullsAggregate(
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         return std::make_unique<SimpleAggregateAdapter<CountNullsAggregate>>(
-            step, argTypes, resultType);
-      },
-      false /*registerCompanionFunctions*/,
-      true /*overwrite*/);
-}
-
-class ConstantInputForwardingAggregate {
- public:
-  using InputType = Row<int64_t, int64_t>;
-  using IntermediateType = int64_t;
-  using OutputType = int64_t;
-
-  void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
-    // The hook fires for each aggregation step. In the final aggregation
-    // step the only argument is the intermediate column, so there are no
-    // constants to read.
-    if (constantInputs.size() != 2) {
-      return;
-    }
-    VELOX_CHECK_NULL(constantInputs[0]);
-    VELOX_CHECK_NOT_NULL(constantInputs[1]);
-    auto* constant = constantInputs[1]->as<ConstantVector<int64_t>>();
-    VELOX_CHECK_NOT_NULL(constant);
-
-    offset_ = constant->valueAt(0);
-  }
-
-  struct Accumulator {
-    int64_t sum{0};
-    ConstantInputForwardingAggregate* fn;
-
-    explicit Accumulator(
-        HashStringAllocator* /*allocator*/,
-        ConstantInputForwardingAggregate* fn)
-        : fn(fn) {}
-
-    void addInput(
-        HashStringAllocator* /*allocator*/,
-        exec::arg_type<int64_t> value,
-        exec::arg_type<int64_t> /*constantValue*/) {
-      sum += value + fn->offset_;
-    }
-
-    void combine(
-        HashStringAllocator* /*allocator*/,
-        exec::arg_type<int64_t> other) {
-      sum += other;
-    }
-
-    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
-      out = sum;
-      return true;
-    }
-
-    bool writeFinalResult(exec::out_type<OutputType>& out) {
-      out = sum;
-      return true;
-    }
-  };
-
-  using AccumulatorType = Accumulator;
-
-  // Read from the constant second argument; 0 when constants are not
-  // forwarded, which makes the aggregate result detectably wrong.
-  int64_t offset_{0};
-};
-
-exec::AggregateRegistrationResult registerSimpleConstantForwardingAggregate(
-    const std::string& name) {
-  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType("bigint")
-          .intermediateType("bigint")
-          .argumentType("bigint")
-          .argumentType("bigint")
-          .build()};
-
-  return exec::registerAggregateFunction(
-      name,
-      std::move(signatures),
-      [name](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
-          -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_EQ(
-            argTypes.size(), 2, "{} takes exactly two arguments", name);
-        return std::make_unique<
-            SimpleAggregateAdapter<ConstantInputForwardingAggregate>>(
             step, argTypes, resultType);
       },
       false /*registerCompanionFunctions*/,
@@ -323,6 +236,93 @@ exec::AggregateRegistrationResult registerFuncLevelVariableTestAggregate(
       true /*overwrite*/);
 }
 
+// The classes below check that SimpleAggregateFunction rejects interfaces the
+// adapter cannot call. A concept checks declarations only, so their members
+// have no definitions and are never used.
+FOLLY_PUSH_WARNING
+FOLLY_CLANG_DISABLE_WARNING("-Wunused-member-function")
+FOLLY_CLANG_DISABLE_WARNING("-Wunneeded-member-function")
+
+// Takes VARCHAR input, which addInput does not accept.
+class MismatchedInputAggregate {
+ public:
+  using InputType = Row<Varchar>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedInputAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    void combine(HashStringAllocator*, int64_t);
+    bool writeIntermediateResult(int64_t&);
+    bool writeFinalResult(int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedInputAggregate>);
+
+// Has default null behavior but declares the write methods with the
+// 'nonNullGroup' flag.
+class MismatchedNullBehaviorAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedNullBehaviorAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    void combine(HashStringAllocator*, int64_t);
+    bool writeIntermediateResult(bool, int64_t&);
+    bool writeFinalResult(bool, int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedNullBehaviorAggregate>);
+
+// Handles nulls itself but declares addInput without optional arguments and
+// without a result.
+class MismatchedOptionalInputAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  static constexpr bool default_null_behavior_ = false;
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedOptionalInputAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    bool combine(HashStringAllocator*, exec::optional_arg_type<int64_t>);
+    bool writeIntermediateResult(bool, int64_t&);
+    bool writeFinalResult(bool, int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedOptionalInputAggregate>);
+
+// Declares setConstantInputs with a parameter the adapter does not pass.
+class MismatchedConstantInputsAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  void setConstantInputs(const VectorPtr&);
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedConstantInputsAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    void combine(HashStringAllocator*, int64_t);
+    bool writeIntermediateResult(int64_t&);
+    bool writeFinalResult(int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedConstantInputsAggregate>);
+
+FOLLY_POP_WARNING
+
 class SimpleAggregateAdapterTest : public AggregationTestBase {
  protected:
   void SetUp() override {
@@ -385,26 +385,37 @@ TEST_F(SimpleAggregateAdapterTest, averageAggregate) {
       {makeFlatVector<bool>({true, false}),
        makeFlatVector<double>({5, 6}),
        makeFlatVector<double>({5.5, 6.6})});
-  testAggregations(
-      {inputVectors}, {"c0"}, {"simple_avg(c2)", "simple_avg(c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_avg(c2)", "simple_avg(c3)"})
+      .assertResults(expected);
 
   expected = makeRowVector(
       {makeFlatVector<bool>({true, false}),
        makeNullableFlatVector<double>({5.5, std::nullopt}),
        makeNullableFlatVector<double>({6.05, std::nullopt})});
-  testAggregations(
-      {inputVectors}, {"c1"}, {"simple_avg(c2)", "simple_avg(c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c1"})
+      .aggregates({"simple_avg(c2)", "simple_avg(c3)"})
+      .assertResults(expected);
 
   expected = makeRowVector(
       {makeFlatVector<double>(std::vector<double>{5.5}),
        makeFlatVector<double>(std::vector<double>{6.05})});
-  testAggregations(
-      {inputVectors}, {}, {"simple_avg(c2)", "simple_avg(c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_avg(c2)", "simple_avg(c3)"})
+      .assertResults(expected);
 
   inputVectors = makeRowVector({makeNullableFlatVector<int64_t>(
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt})});
   expected = makeRowVector({makeNullableFlatVector<double>({std::nullopt})});
-  testAggregations({inputVectors}, {}, {"simple_avg(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_avg(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, arrayAggNumbers) {
@@ -466,12 +477,11 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggNumbers) {
              11,
              std::nullopt,
              std::nullopt}})});
-  testAggregations(
-      {inputVectors},
-      {},
-      {"simple_array_agg(c2)", "simple_array_agg(c3)"},
-      {"array_sort(a0)", "array_sort(a1)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_array_agg(c2)", "simple_array_agg(c3)"})
+      .project({"array_sort(a0)", "array_sort(a1)"})
+      .assertResults(expected);
 
   expected = makeRowVector(
       {makeFlatVector<bool>({true, false}),
@@ -480,12 +490,12 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggNumbers) {
        makeNullableArrayVector<double>(
            {{1.1, 3.3, 5.5, 7.7, 9.9, std::nullopt},
             {2.2, 4.4, 6.6, 8.8, 11, std::nullopt}})});
-  testAggregations(
-      {inputVectors},
-      {"c0"},
-      {"simple_array_agg(c2)", "simple_array_agg(c3)"},
-      {"c0", "array_sort(a0)", "array_sort(a1)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_array_agg(c2)", "simple_array_agg(c3)"})
+      .project({"c0", "array_sort(a0)", "array_sort(a1)"})
+      .assertResults(expected);
 
   expected = makeRowVector(
       {makeFlatVector<bool>({true, false}),
@@ -494,18 +504,21 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggNumbers) {
        vectorMaker_.arrayVectorNullable<double>(
            {{{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 11}},
             {{std::nullopt, std::nullopt}}})});
-  testAggregations(
-      {inputVectors},
-      {"c1"},
-      {"simple_array_agg(c2)", "simple_array_agg(c3)"},
-      {"c1", "array_sort(a0)", "array_sort(a1)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c1"})
+      .aggregates({"simple_array_agg(c2)", "simple_array_agg(c3)"})
+      .project({"c1", "array_sort(a0)", "array_sort(a1)"})
+      .assertResults(expected);
 
   inputVectors = makeRowVector({makeNullableFlatVector<int64_t>(
       {std::nullopt, std::nullopt, std::nullopt})});
   expected = makeRowVector({vectorMaker_.arrayVectorNullable<int64_t>(
       {{{std::nullopt, std::nullopt, std::nullopt}}})});
-  testAggregations({inputVectors}, {}, {"simple_array_agg(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_array_agg(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, arrayAggNestedArray) {
@@ -534,12 +547,12 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggNestedArray) {
        makeNullableNestedArrayVector<StringView>(
            {{{{{"1a", "2a"}}, {{"5a", "6a"}}, std::nullopt}},
             {{{{"3a", "4a"}}, {{"7a", "8a"}}, std::nullopt}}})});
-  testAggregations(
-      {inputVectors},
-      {"c0"},
-      {"simple_array_agg(c1)", "simple_array_agg(c2)"},
-      {"c0", "array_sort(a0)", "array_sort(a1)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_array_agg(c1)", "simple_array_agg(c2)"})
+      .project({"c0", "array_sort(a0)", "array_sort(a1)"})
+      .assertResults(expected);
 
   expected = makeRowVector(
       {makeNullableNestedArrayVector<int32_t>(
@@ -556,12 +569,11 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggNestedArray) {
               {{"7a", "8a"}},
               std::nullopt,
               std::nullopt}}})});
-  testAggregations(
-      {inputVectors},
-      {},
-      {"simple_array_agg(c1)", "simple_array_agg(c2)"},
-      {"array_sort(a0)", "array_sort(a1)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_array_agg(c1)", "simple_array_agg(c2)"})
+      .project({"array_sort(a0)", "array_sort(a1)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, arrayAggTrackRowSize) {
@@ -575,30 +587,25 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggTrackRowSize) {
                               : core::AggregationNode::Step::kSingle,
         std::vector<TypePtr>{BIGINT()},
         ARRAY(BIGINT()),
-        queryConfig);
+        queryConfig,
+        /*constantInputs=*/{});
 
-    HashStringAllocator stringAllocator{pool()};
-    memory::AllocationPool allocationPool{pool()};
-    fn->setAllocator(&stringAllocator);
-
-    int32_t rowSizeOffset = bits::nbytes(1);
-    int32_t offset = rowSizeOffset + sizeof(uint32_t);
-    offset = bits::roundUp(offset, fn->accumulatorAlignmentSize());
-    fn->setOffsets(
-        offset,
-        RowContainer::nullByte(0),
-        RowContainer::nullMask(0),
-        RowContainer::initializedByte(0),
-        RowContainer::initializedMask(0),
-        rowSizeOffset);
+    RowContainer groupRows(
+        /*keyTypes=*/{},
+        {Accumulator{fn.get(), ARRAY(BIGINT())}},
+        /*dependentTypes=*/{},
+        pool(),
+        RowContainer::Options{});
+    fn->setAllocator(&groupRows.stringAllocator());
+    fn->setOffsets(groupRows.columnAt(0), groupRows.rowSizeOffset());
 
     // Make two groups for odd and even rows.
     auto size = input->size();
-    std::vector<char> group1(offset + fn->accumulatorFixedWidthSize());
-    std::vector<char> group2(offset + fn->accumulatorFixedWidthSize());
+    char* group1 = groupRows.newRow();
+    char* group2 = groupRows.newRow();
     std::vector<char*> groups(size);
     for (auto i = 0; i < size; ++i) {
-      groups[i] = i % 2 == 0 ? group1.data() : group2.data();
+      groups[i] = i % 2 == 0 ? group1 : group2;
     }
 
     std::vector<vector_size_t> indices{0, 1};
@@ -607,22 +614,21 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggTrackRowSize) {
     SelectivityVector rows{size};
     if (isRawInput(step)) {
       if (testGlobal) {
-        fn->addSingleGroupRawInput(group1.data(), rows, {input}, false);
+        fn->addSingleGroupRawInput(group1, rows, {input}, false);
       } else {
         fn->addRawInput(groups.data(), rows, {input}, false);
       }
     } else {
       if (testGlobal) {
-        fn->addSingleGroupIntermediateResults(
-            group1.data(), rows, {input}, false);
+        fn->addSingleGroupIntermediateResults(group1, rows, {input}, false);
       } else {
         fn->addIntermediateResults(groups.data(), rows, {input}, false);
       }
     }
 
-    VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[0] + rowSizeOffset), 0);
+    VELOX_CHECK_GT(groupRows.rowSize(group1), groupRows.fixedRowSize());
     if (!testGlobal) {
-      VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[1] + rowSizeOffset), 0);
+      VELOX_CHECK_GT(groupRows.rowSize(group2), groupRows.fixedRowSize());
     }
   };
 
@@ -646,42 +652,50 @@ TEST_F(SimpleAggregateAdapterTest, countNulls) {
   auto expected = makeRowVector(
       {makeNullableFlatVector<bool>({true, false}),
        makeNullableFlatVector<int64_t>({2, 1})});
-  testAggregations({vectors}, {"c0"}, {"simple_count_nulls(c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_count_nulls(c2)"})
+      .assertResults(expected);
 
   expected = makeRowVector(
       {makeNullableFlatVector<bool>({true, false}),
        makeNullableFlatVector<int64_t>({std::nullopt, 3})});
-  testAggregations({vectors}, {"c1"}, {"simple_count_nulls(c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c1"})
+      .aggregates({"simple_count_nulls(c2)"})
+      .assertResults(expected);
 
   expected = makeRowVector({makeNullableFlatVector<int64_t>({3})});
-  testAggregations({vectors}, {}, {"simple_count_nulls(c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"simple_count_nulls(c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, forwardsConstantInputs) {
   auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
   auto expected = makeRowVector({makeConstant<int64_t>(36, 1)});
-  // The literal 10 parses to a BIGINT constant -> AggregateInfo discovers it
-  // and calls setConstantInputs(), which the adapter forwards to the simple
-  // function. A cast expression like BIGINT '10' would be rejected by
-  // AggregateInfo, which only accepts field accesses, constants, and lambdas.
-  testAggregations({input}, {}, {"simple_const_fwd(c0, 10)"}, {expected});
+  // simple_const_fwd adds its constant second argument to every input value:
+  // (1 + 10) + (2 + 10) + (3 + 10) = 36. The _partial companion wraps the
+  // aggregate and must pass the constant on.
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"simple_const_fwd(c0, 10)"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, functionLevelVariables) {
   auto inputVectors = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
   std::vector<double> finalResult = {2.5};
   auto expected = makeRowVector({makeFlatVector<double>(finalResult)});
-  testAggregations(
-      {inputVectors}, {}, {"simple_func_level_variable_agg(c0)"}, {expected});
-  testAggregationsWithCompanion(
-      {inputVectors},
-      [](auto& /*builder*/) {},
-      {},
-      {"simple_func_level_variable_agg(c0)"},
-      {{BIGINT()}},
-      {},
-      {expected},
-      {});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_func_level_variable_agg(c0)"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, variadicSum) {
@@ -699,8 +713,10 @@ TEST_F(SimpleAggregateAdapterTest, variadicSum) {
 
   auto expected = makeRowVector({makeArrayVector<int64_t>({{5, 7, 9}})});
 
-  testAggregations(
-      {inputVectors}, {}, {"simple_variadic_sum(c0, c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_variadic_sum(c0, c1, c2, c3)"})
+      .assertResults(expected);
 
   // Test with grouping.
   // Group true: [1+5, 2+6] = [6, 8]
@@ -717,8 +733,11 @@ TEST_F(SimpleAggregateAdapterTest, variadicSum) {
       makeArrayVector<int64_t>({{6, 8}, {10, 12}}),
   });
 
-  testAggregations(
-      {inputVectors}, {"c0"}, {"simple_variadic_sum(c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_variadic_sum(c1, c2, c3)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, variadicSumWithNulls) {
@@ -738,8 +757,10 @@ TEST_F(SimpleAggregateAdapterTest, variadicSumWithNulls) {
 
   auto expected = makeRowVector({makeArrayVector<int64_t>({{11, 13, 15}})});
 
-  testAggregations(
-      {inputVectors}, {}, {"simple_variadic_sum(c0, c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_variadic_sum(c0, c1, c2, c3)"})
+      .assertResults(expected);
 
   // Test with grouping and null values.
   // Row 0 (true):  variadic=[1, 2, 3]    -> processed
@@ -761,11 +782,11 @@ TEST_F(SimpleAggregateAdapterTest, variadicSumWithNulls) {
       makeArrayVector<int64_t>({{1, 2, 3}, {10, 11, 12}}),
   });
 
-  testAggregations(
-      {inputVectors},
-      {"c0"},
-      {"simple_variadic_sum(c1, c2, c3, c4)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_variadic_sum(c1, c2, c3, c4)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, variadicSumSingleArgument) {
@@ -781,8 +802,10 @@ TEST_F(SimpleAggregateAdapterTest, variadicSumSingleArgument) {
 
   auto expected = makeRowVector({makeArrayVector<int64_t>({{30}})});
 
-  testAggregations(
-      {inputVectors}, {}, {"simple_variadic_sum(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_variadic_sum(c0, c1)"})
+      .assertResults(expected);
 
   // Test with only 1 variadic argument with grouping.
   // Group true: [10+30] = [40]
@@ -798,8 +821,11 @@ TEST_F(SimpleAggregateAdapterTest, variadicSumSingleArgument) {
       makeArrayVector<int64_t>({{40}, {60}}),
   });
 
-  testAggregations(
-      {inputVectors}, {"c0"}, {"simple_variadic_sum(c1, c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_variadic_sum(c1, c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, variadicSumNoArguments) {
@@ -811,7 +837,10 @@ TEST_F(SimpleAggregateAdapterTest, variadicSumNoArguments) {
 
   auto expected = makeRowVector({makeArrayVector<int64_t>({{}})});
 
-  testAggregations({inputVectors}, {}, {"simple_variadic_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_variadic_sum(c0)"})
+      .assertResults(expected);
 
   // Test with no variadic argument with grouping.
   // Group true: []
@@ -826,8 +855,11 @@ TEST_F(SimpleAggregateAdapterTest, variadicSumNoArguments) {
       makeArrayVector<int64_t>({{}, {}}),
   });
 
-  testAggregations(
-      {inputVectors}, {"c0"}, {"simple_variadic_sum(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_variadic_sum(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, variadicArrayAgg) {
@@ -845,12 +877,11 @@ TEST_F(SimpleAggregateAdapterTest, variadicArrayAgg) {
   auto expected =
       makeRowVector({makeArrayVector<int64_t>({{1, 2, 3, 4, 5, 6}})});
 
-  testAggregations(
-      {inputVectors},
-      {},
-      {"simple_variadic_array_agg(c0, c1, c2)"},
-      {"array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_variadic_array_agg(c0, c1, c2)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with grouping.
   // Group true: rows 1 and 3 -> [1, 2, 5, 6]
@@ -866,12 +897,12 @@ TEST_F(SimpleAggregateAdapterTest, variadicArrayAgg) {
       makeArrayVector<int64_t>({{3, 4, 7, 8}, {1, 2, 5, 6}}),
   });
 
-  testAggregations(
-      {inputVectors},
-      {"c0"},
-      {"simple_variadic_array_agg(c1, c2)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_variadic_array_agg(c1, c2)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, variadicArrayAggWithNulls) {
@@ -889,12 +920,11 @@ TEST_F(SimpleAggregateAdapterTest, variadicArrayAggWithNulls) {
   auto expected = makeRowVector({vectorMaker_.arrayVectorNullable<int64_t>(
       {{{1, 3, 4, 5, std::nullopt, std::nullopt}}})});
 
-  testAggregations(
-      {inputVectors},
-      {},
-      {"simple_variadic_array_agg(c0, c1, c2)"},
-      {"array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_variadic_array_agg(c0, c1, c2)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with grouping and null values.
   // Group true: rows 1, 3 -> [1, null, 3, 5, 7, null]
@@ -913,12 +943,12 @@ TEST_F(SimpleAggregateAdapterTest, variadicArrayAggWithNulls) {
            {{1, 3, 5, 7, std::nullopt, std::nullopt}}}),
   });
 
-  testAggregations(
-      {inputVectors},
-      {"c0"},
-      {"simple_variadic_array_agg(c1, c2, c3)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_variadic_array_agg(c1, c2, c3)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, variadicArrayAggStrings) {
@@ -933,12 +963,11 @@ TEST_F(SimpleAggregateAdapterTest, variadicArrayAggStrings) {
   auto expected = makeRowVector(
       {makeArrayVector<StringView>({{"a", "b", "c", "d", "e", "f"}})});
 
-  testAggregations(
-      {inputVectors},
-      {},
-      {"simple_variadic_array_agg(c0, c1, c2)"},
-      {"array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_variadic_array_agg(c0, c1, c2)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with grouping and string type.
   // Group true: rows 1, 3 -> ["a", "b", "e", "f"]
@@ -954,12 +983,12 @@ TEST_F(SimpleAggregateAdapterTest, variadicArrayAggStrings) {
       makeArrayVector<StringView>({{"c", "d", "g", "h"}, {"a", "b", "e", "f"}}),
   });
 
-  testAggregations(
-      {inputVectors},
-      {"c0"},
-      {"simple_variadic_array_agg(c1, c2)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_variadic_array_agg(c1, c2)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, variadicArrayAggSingleArgument) {
@@ -975,12 +1004,11 @@ TEST_F(SimpleAggregateAdapterTest, variadicArrayAggSingleArgument) {
 
   auto expected = makeRowVector({makeArrayVector<int64_t>({{10, 20, 30}})});
 
-  testAggregations(
-      {inputVectors},
-      {},
-      {"simple_variadic_array_agg(c0)"},
-      {"array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"simple_variadic_array_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with only 1 variadic argument with grouping.
   // Group true: [10, 30]
@@ -995,12 +1023,12 @@ TEST_F(SimpleAggregateAdapterTest, variadicArrayAggSingleArgument) {
       makeArrayVector<int64_t>({{20, 40}, {10, 30}}),
   });
 
-  testAggregations(
-      {inputVectors},
-      {"c0"},
-      {"simple_variadic_array_agg(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"simple_variadic_array_agg(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 }
 
 } // namespace

@@ -62,6 +62,8 @@ jobs:
           python-version: '3.10'
 
       - name: Restore ccache
+        continue-on-error: true
+        timeout-minutes: 30
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
         with:
@@ -69,6 +71,8 @@ jobs:
           key: ccache-wheels-${{ matrix.os }}
 
       - name: Restore macOS Dependencies
+        continue-on-error: true
+        timeout-minutes: 30
         if: startsWith(matrix.os, 'macos')
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-deps
@@ -85,6 +89,7 @@ jobs:
           echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
 
           source scripts/setup-macos.sh
+          echo "OPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR" >> $GITHUB_ENV
           install_build_prerequisites
           install_velox_deps_from_brew
           # CMake 4.0 causes issues with arrows bundled dependencies
@@ -99,8 +104,10 @@ jobs:
           bash scripts/setup-macos.sh
 
       - name: Save macOS Dependencies
+        continue-on-error: true
+        timeout-minutes: 20
         if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         with:
           path: dependencies
           key: dependencies-pyvelox-${{ matrix.os }}-${{ hashFiles('scripts/setup-macos.sh') }}
@@ -115,7 +122,7 @@ jobs:
           uv build --sdist --out-dir wheelhouse
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2.0
+        uses: pypa/cibuildwheel@b9e566a2b284570af229f6c2a33673410d0389a3 # v4.3.4
         env:
           BUILD_VERSION: ${{ inputs.version }}
           CIBW_BUILD: cp310-* cp311-* cp312-* cp313-*
@@ -128,7 +135,9 @@ jobs:
           output-dir: wheelhouse
 
       - name: Save ccache
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        continue-on-error: true
+        timeout-minutes: 20
+        uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         with:
           path: ccache
           key: ccache-wheels-${{ matrix.os }}
@@ -154,7 +163,7 @@ jobs:
     needs: build_wheels
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: wheels-*
           merge-multiple: true

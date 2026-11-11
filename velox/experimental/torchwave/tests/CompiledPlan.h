@@ -58,6 +58,13 @@ class CompiledPlan {
     /// Number of intra-kernel ordering barriers in this kernel.
     int32_t numBarriers{0};
 
+    /// Generated device code of the kernel's case, empty for a standalone.
+    std::string code;
+
+    /// True when the launch count is the broadcast of its size leaves rather
+    /// than the largest of them.
+    bool broadcastCount{false};
+
     /// Returns true if the normalized 'op' is one of this kernel's targets.
     bool has(std::string_view op) const;
   };
@@ -65,6 +72,9 @@ class CompiledPlan {
   /// Holds the parallel launches at one step.
   struct StepView {
     std::vector<KernelView> kernels;
+
+    /// Threads per block the step's launch runs at.
+    int32_t blockSize{0};
   };
 
   /// Holds the step sequence of one CompiledNode. A kernel boundary sits
@@ -124,6 +134,12 @@ class CompiledPlan {
       std::string_view op,
       std::string_view anchor,
       int32_t howMany) const;
+
+  /// Passes if 'op' is fused into some kernel and every step running it
+  /// launches 'threads' per block.
+  ::testing::AssertionResult runsAtBlockSize(
+      std::string_view op,
+      int32_t threads) const;
 
   /// Returns a human-readable dump of the plan for failure messages.
   std::string describe() const;

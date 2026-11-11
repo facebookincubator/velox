@@ -198,15 +198,13 @@ TEST_F(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
               .numQueries = 1,
               .numSplits = 2,
               .skippedSplits = 1,
-              .numStringDictionaryEncodingPreserved = 3,
-              .numStringDictionaryEncodingAbandoned = 1,
+              .customRuntimeStats = {{"statA", 3}, {"statB", 1}},
           },
       .reference =
           TableEvolutionFuzzer::ScanPlanCoverage{
               .numQueries = 1,
               .numSplits = 2,
-              .numStringDictionaryEncodingPreserved = 5,
-              .numStringDictionaryEncodingAbandoned = 1,
+              .customRuntimeStats = {{"statA", 5}, {"statB", 1}},
           },
       .hasSubfieldFilters = false,
       .hasRemainingFilter = false,
@@ -288,10 +286,14 @@ TEST_F(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
   EXPECT_EQ(coverage.configs.schemaEvolutionByPosition.at("rowField"), 1);
   EXPECT_EQ(coverage.pushdown.numQueries, 1);
   EXPECT_EQ(coverage.reference.numQueries, 1);
-  EXPECT_EQ(coverage.pushdown.numStringDictionaryEncodingPreserved, 3);
-  EXPECT_EQ(coverage.pushdown.numStringDictionaryEncodingAbandoned, 1);
-  EXPECT_EQ(coverage.reference.numStringDictionaryEncodingPreserved, 5);
-  EXPECT_EQ(coverage.reference.numStringDictionaryEncodingAbandoned, 1);
+  EXPECT_THAT(
+      coverage.pushdown.customRuntimeStats,
+      testing::UnorderedElementsAre(
+          testing::Pair("statA", 3), testing::Pair("statB", 1)));
+  EXPECT_THAT(
+      coverage.reference.customRuntimeStats,
+      testing::UnorderedElementsAre(
+          testing::Pair("statA", 5), testing::Pair("statB", 1)));
 }
 
 TEST_F(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {
@@ -657,6 +659,35 @@ TEST_F(TableEvolutionFuzzerTest, aggregationConfigQuotesIdentifiers) {
     }
   }
   EXPECT_TRUE(sawAggregate);
+}
+
+// The reference plan projects aggregate inputs through these expressions, and
+// the parser reads them back, so every column name has to be quoted. Unquoted,
+// "table" fails to parse and "1_ensemble_prediction" binds as the literal 1
+// aliased to "_ensemble_prediction".
+TEST_F(
+    TableEvolutionFuzzerTest,
+    aggregationBlockingProjectExpressionsQuoteIdentifiers) {
+  const auto schema = ROW(
+      {{"table", BIGINT()},
+       {"window", BIGINT()},
+       {"1_ensemble_prediction", BIGINT()}});
+  AggregationConfig aggregationConfig;
+  aggregationConfig.aggregates = {"max(\"window\")"};
+
+  const auto expressions =
+      TableEvolutionFuzzer::aggregationBlockingProjectExpressions(
+          schema, aggregationConfig);
+
+  EXPECT_THAT(
+      expressions,
+      testing::ElementsAre(
+          "\"table\"",
+          "if(\"window\" is null, cast(null as BIGINT), \"window\") as \"window\"",
+          "\"1_ensemble_prediction\""));
+  const auto plan =
+      PlanBuilder().tableScan(schema).project(expressions).planNode();
+  EXPECT_EQ(*plan->outputType(), *schema);
 }
 
 // A column is "used by aggregation" if it is a grouping key or appears in an

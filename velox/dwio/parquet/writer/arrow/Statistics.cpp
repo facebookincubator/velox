@@ -1202,7 +1202,6 @@ std::shared_ptr<Comparator> Comparator::make(
   } else {
     throw ParquetException("UNKNOWN Sort Order");
   }
-  return nullptr;
 }
 
 std::shared_ptr<Comparator> Comparator::make(const ColumnDescriptor* descr) {

@@ -13,14 +13,18 @@ does not contain ALP blocks or switch between the two algorithms internally.
 ## Scope and selection
 
 ALP_RD supports explicit layouts, opt-in automatic selection through the manual
-policy, ordinary Nimble file reads, and the generic visitor path. It has no
-encoding view yet.
+policy, ordinary Nimble file reads, bulk and generic visitor paths, encoded
+slices, and a FLOAT/DOUBLE encoding view.
 
 To enable automatic selection, add `ALPRD=<readFactor>` to the manual policy's
 candidate configuration. ALP_RD is absent from production default candidates.
-ALP and ALP_RD compete with all eligible encodings at the same selection node
-using `estimatedSize * readFactor`; there is no dedicated ALP-failure fallback
-or special mutual exclusion. A lower factor favors an encoding. A size win
+Ordinary candidates provide size estimates; the selection policy scores them
+using estimated size times the configured read factor. A candidate may supply
+its own cost, which selection preserves. ALP_RD supplies the sum of its selected
+child sizes plus container overhead, scored with its configured read factor.
+ALP and ALP_RD compete using their estimated policy costs with
+other eligible encodings at the same selection node; there is no dedicated
+ALP-failure fallback or special mutual exclusion. Lower cost wins. A size win
 alone does not establish a decoding-speed win.
 
 The encoding applies to one Nimble encoding payload. Each payload has its own
@@ -146,12 +150,10 @@ input. It evaluates high-part widths from 1 through 16. At each width it counts
 high-prefix frequencies and tries dictionaries containing one through eight
 of the most frequent prefixes, bounded by the number of distinct prefixes.
 
-Each split is scored using fixed scalar child-size heuristics. All modeled
-codecs are enabled by Nimble's default manual policy: Constant, FixedBitWidth
-and Trivial. The cost model does not create child policies or invoke selection,
-and it does not encode candidate payloads. Split selection needs only the
-bounded input sample, prefix frequencies and value ranges; it does not build
-four candidate child arrays.
+Split training uses fixed scalar child-size heuristics. This first stage chooses
+only the right-bit width and high-part dictionary; it does not choose the child
+encodings used by the writer. Split training needs only the bounded input
+sample, prefix frequencies and value ranges.
 
 | Child | Heuristic |
 | --- | --- |
@@ -167,8 +169,7 @@ position. Using the full row range is conservative when exceptions cluster.
 Nimble's Varint encodes offsets from the minimum value rather than gaps between
 successive positions. It also requires 32- or 64-bit values, whereas codes and
 exception high parts are uint16. The fixed model therefore uses the three
-scalar codecs above; actual child selection can still choose other configured
-encodings.
+scalar codecs above for both split training and automatic root scoring.
 
 FixedBitWidth uses the caller's `fixedBitWidthUseExactBits` option. By default,
 widths round up to whole bytes: two dictionary entries therefore cost about
@@ -176,51 +177,29 @@ one byte per code, not one bit. Trivial limits the estimate when the packed
 width approaches the physical integer width. Equal split costs prefer narrower
 right parts, then smaller dictionaries.
 
-### Size estimation from samples
+### Automatic root scoring from samples
 
-The same bounded split search supplies both ALP_RD's automatic size estimate
-and its writer parameters. Let `N` be the target row count, `M` the number of
-sampled values, and `e` the number of sampled dictionary misses. The projected
-exception count is:
+ALP_RD selects the split with the scalar model above, then creates the
+configured policies for its bounded child samples. Each child policy selects
+its encoding and reports the estimated size and cost for the target row count.
+ALP_RD adds format metadata and child-length prefixes once to the selected
+child sizes. Child costs determine which child encodings are selected. The
+root policy scores the resulting total size with the ALP_RD read factor.
+Child selection lives in ALP_RD and requires no callback from the manual policy.
 
-```text
-E = ceil(e * N / M)
-```
+Full child inputs use normal selection. Projected child samples require a
+policy that supports projection; incompatible candidates are skipped. If any
+required child cannot provide a size and cost, ALP_RD is skipped as a root
+candidate. Configured child policies can override candidate size and cost
+through the normal selection hook.
 
-Codes and right parts each represent `N` values. The two exception streams each
-represent `E` values and are omitted when `E == 0`. For a non-empty child with
-estimated range `[minValue, maxValue]`, the shared scalar model is:
-
-```text
-if minValue == maxValue:
-    childSize = prefixSize(childRows) + sizeof(childType)
-else:
-    childSize = min(
-        FixedBitWidth::estimateSize(childRows, minValue, maxValue, options),
-        Trivial::estimateSize(childRows))
-```
-
-The existing child estimators receive the target child row count directly.
-Their headers are counted once, not multiplied by the sampling ratio. They
-retain Nimble's existing approximate size convention, including the fixed
-prefix used by FixedBitWidth and Trivial estimates. ALP_RD does not convert
-those estimates to exact serialized bytes or add codec-specific padding.
-
-ALP_RD then adds its own format overhead once:
-
-```text
-estimatedSize = prefixSize(N)
-    + 2                         // right width and dictionary size
-    + 2 * dictionarySize        // uint16 high prefixes
-    + varintSize(E)
-    + sum(varintSize(childSize) + childSize for each present child)
-```
-
-`prefixSize` follows `useVarintRowCount`. Child-length fields and the exception
-count always use varints. The result is a heuristic byte estimate for comparing
-ALP_RD with other candidates through the ordinary policy's
-`estimatedSize * readFactor` rule. It is not an exact prediction of serialized
-size. Sampling may miss rare values, and generic compression is not predicted.
+Codes and right parts represent the target row count. Exception counts are
+projected from the bounded sample using `ceil(sampleExceptions * N / M)`.
+Exception positions use the complete `[0, N - 1]` range when there are multiple
+projected exceptions. Exception high parts retain their observed range.
+Constant child headers are counted once, and row-count prefixes follow
+`useVarintRowCount`. Child lengths and exception counts always use varints.
+Sampling may miss rare values, so the result remains a heuristic.
 
 ALP uses the same scalar child-cost helpers in `NestedAlpSizeEstimation` for its
 transformed integers, exception positions and original exception values. It
@@ -230,17 +209,12 @@ encoding estimators keep their existing contracts.
 
 ### Writing the selected split
 
-The writer trains with the same policy-independent model, transforms the full
-input into child arrays, and passes each array to the existing `encodeNested()`
-path. Child policies then apply their configured candidates, read factors,
-ancestor filters and replayed layouts to the actual child data.
-
-Consequently, changing a child policy does not change the split model, but it
-can change the written child encodings and payload size. The model can be less
-accurate under custom candidates or weights. This is the same separation of
-heuristic parent estimation and actual child selection used by existing Nimble
-containers. Dictionary, RLE and MainlyConstant retain their existing parent
-estimators; they do not recursively simulate an ALP_RD subtree during estimation.
+The writer trains the split with the same bounded scalar model, transforms the
+full input into child arrays, and passes each array to the existing
+`encodeNested()` path. Child policies then apply their configured candidates,
+read factors, compression policy, ancestor filters and replayed layouts to the
+actual child data. Their choices can differ from the scoring sample because
+the bounded sample may not represent the full child stream.
 
 For the same input, target row count and options, split selection is
 deterministic. The full input is encoded against the selected dictionary;
@@ -302,8 +276,15 @@ their own allocation behavior.
 
 `skip` advances both main children and the exception cursor. `reset` restores
 them to the beginning. The generic visitor uses these same operations for
-correct filtering and selected-row reads. Optimized selective reading and
-encoding views can be added independently while retaining this format.
+filtering and selected-row reads. Dense visitors with at least 128 remaining
+rows use the existing bulk visitor machinery when its type, extraction and
+filter conditions permit. ALP_RD materializes contiguous non-null values in
+batches, including exception patches, then uses the framework's fixed-width
+filter/scatter operation. NULL row mapping stays in the surrounding reader.
+Sparse visitors, short batches and unsupported visitor modes retain the generic
+path; they do not decode gaps just to form a larger batch.
+
+### Encoded slices
 
 Slicing preserves the dictionary and split, slices both main children, keeps
 only exceptions in the requested range, and rebases their positions to zero.
@@ -311,6 +292,44 @@ It uses the shared exception loader to validate both exception streams without
 constructing a complete ALP_RD decoder. It omits both exception children when
 the slice has no exceptions. A slice must contain at least one row and stay
 within the original row range.
+
+The main children are sliced by row range; the exception children are sliced by
+their matching slot range. Exception positions use native child slicing followed
+by a `SliceEncoding` value delta. Where supported, the delta is folded into the
+child's baseline or copied values. Otherwise the existing wrapper applies it at
+decode time. There is no position-array re-encoding just to subtract the offset.
+The complete exception streams are still decoded and validated before range
+lookup; binary search does not replace ordering validation.
+
+Native slicing can keep complete touched runs or blocks inside a wrapper.
+If a child is already a `SliceEncoding`, ALP_RD composes another wrapper with
+the new row range and delta, retaining that child's bytes. Repeated slicing
+therefore remains readable but can retain bytes outside the final range and add
+wrapper overhead. Capturing such a result records its Slice child layout; it
+does not make Slice an ordinary writer-selectable encoding.
+
+### Random access views
+
+`ALPRDEncodingView<float/double>` implements scalar, indexed and range reads.
+It references the original encoded bytes, which the caller must keep alive.
+The two main streams use their existing typed views. Single-row reads locate
+exceptions by binary search; range reads batch the main streams and locate the
+first exception once. The typed view framework handles repeated and contiguous
+indices. Access does not depend on a sequential decoder cursor.
+
+The view keeps both validated exception arrays, using the caller's MemoryPool
+and buffer pool. Construction retains the decoder's complete exception checks
+and O(exceptionCount) allocation/work. Codes and low parts are checked when
+accessed, including at exception positions. Reusing a view amortizes construction;
+creating one per requested value does not avoid exception loading.
+
+Both main children must support views, including their nested layouts. A legal
+main child without a view, such as Varint or Slice, produces the existing
+unsupported-view error; it remains readable by the sequential decoder.
+Exception children are decoded during construction and need no view support.
+`supportsEncodingView(ALPRD)` reports top-level support, not the capability of
+every possible child tree. Nullable access uses the existing null-aware view
+API and non-null row mapping.
 
 ## Validation and benchmark
 
@@ -322,7 +341,7 @@ limits during exception loading, invalid positions throughout the exception
 stream, and valid compressed exception streams whose counts exceed their
 payload sizes.
 `ALPRDSelectionTest` checks scalar size heuristics, bounded sampling, exception
-projection, policy-independent estimation, writer candidate constraints, positive
+projection, configured child size and cost scoring, writer candidate constraints, positive
 and negative choices, read factors, candidate inheritance, ALP/ALP_RD nesting,
 nullable layouts and replay. File tests cover automatic selection without an
 explicit layout and ordinary writer fallback for incompatible child layouts.
@@ -331,9 +350,13 @@ ALP_RD, including shared-prefix workloads and unmodified special values.
 `FloatingPointColumnReaderTest` and
 `ALPRDColumnReaderTest` verify real file reads, filters, NULLs, multiple chunks,
 and layout caching through both the native and legacy reader paths.
-`ReadWithVisitorTest` adds sparse input rows, selected and skipped exceptions,
+`ReadWithVisitorTest` adds dense and sparse input rows, selected and skipped exceptions,
 special IEEE bit patterns, NULL mapping, filtering, and filter-only reads across
-batches and chunks. `StreamSlicerTest` verifies exception rebasing for raw
+batches and chunks. It exercises the bulk cutoff, all-null batches and output
+continuation across chunks. `ALPRDEncodingViewTest` and the view fuzzer compare
+random/range reads with the decoder, including special bit patterns, nullable
+access and unsupported child layouts. Independent fixtures check view corruption
+handling and pool limits. `StreamSlicerTest` verifies exception rebasing for raw
 serialized streams and uncompressed or compressed tablet chunks.
 
 The `nimble_alprd_benchmark` target provides FLOAT/DOUBLE workloads with shared
@@ -347,6 +370,22 @@ Data generation/loading, encoded snapshot copying and caller output allocation
 are outside timing. Complete encoding includes training and child selection;
 construction-plus-decoding includes exception loading and destruction. Both
 decoding lifecycles are validated bit-for-bit before timing.
+
+`--read_profile` measures construction, materialization, dense visitors with
+automatic bulk dispatch or a forced generic path, 10%/1% selected rows, encoded
+slicing, and random/range access. It uses one encoded snapshot for every read
+operation. `--read_batch_size` controls visitor batches; `--range_rows` controls
+the slice and range-read size. Random access probes 128 indices per operation.
+`--profile_operation` restricts this mode to one operation for CPU profiling.
+The setup record on stderr includes the encoded checksum and child layout,
+retained decoder/view pool allocations, and sliced payload size. Pool figures
+exclude caller buffers and C++ objects allocated outside MemoryPool.
+
+Visitor timing includes output preparation and filtering. Slice timing includes
+its allocations and output serialization. View construction includes exception
+loading and destruction; random/range timings reuse an existing view. Input
+preparation and bit-level validation remain outside these measurements. These
+are single-thread encoding/visitor measurements, not end-to-end file scans.
 
 The `--selection_profile` mode compares a configured baseline candidate set
 against the same set with ALP_RD added. It reports serialized trees, estimated

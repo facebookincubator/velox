@@ -18,9 +18,9 @@
 #include "velox/common/config/Config.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/common/PartitionValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
-#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
@@ -29,7 +29,6 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
-#include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/FilterToExpression.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -77,12 +76,11 @@ DEFINE_int64(
 DEFINE_int32(
     input_file_query_shapes,
     4,
-    "Number of query shapes run per call when reading an existing file. Kept "
-    "well below the count used for generated files: there is no expensive "
-    "write to amortize here, and a caller loops until its own deadline, so "
-    "this is the granularity at which that deadline can be honoured. Each "
-    "shape scans the whole file twice, which on a production file is not "
-    "cheap.");
+    "Maximum number of query shapes run per call when reading an existing "
+    "file. Kept well below the count used for generated files: there is no "
+    "expensive write to amortize here. A call stops early, after at least one "
+    "shape, once the caller's deadline passes. Each shape scans the whole file "
+    "twice, which on a production file is not cheap.");
 
 DEFINE_int32(
     input_file_sample_rows,
@@ -164,7 +162,8 @@ int64_t runtimeStatCount(const OperatorStats& op, std::string_view key) {
 }
 
 TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
-    const std::shared_ptr<exec::Task>& task) {
+    const std::shared_ptr<exec::Task>& task,
+    const std::vector<std::string_view>& customRuntimeStatKeys) {
   TableEvolutionFuzzer::ScanPlanCoverage result;
   result.numQueries = 1;
   bool remainingFilterEvaluated{false};
@@ -216,10 +215,9 @@ TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
           runtimeStatSum(op, "dataSourceLazyCpuNanos");
       result.dataSourceLazyWallNanos +=
           runtimeStatSum(op, "dataSourceLazyWallNanos");
-      result.numStringDictionaryEncodingPreserved += runtimeStatSum(
-          op, nimble::fuzzer::kStringDictionaryEncodingPreserved);
-      result.numStringDictionaryEncodingAbandoned += runtimeStatSum(
-          op, nimble::fuzzer::kStringDictionaryEncodingAbandoned);
+      for (const auto& key : customRuntimeStatKeys) {
+        result.customRuntimeStats[std::string(key)] += runtimeStatSum(op, key);
+      }
     }
   }
   result.numQueriesWithValueHook = result.numValuesLoadedToValueHook > 0;
@@ -255,10 +253,9 @@ void addScanStats(
 
   coverage.numStripeLoads += stats.numStripeLoads;
   coverage.numIndexFilterConversions += stats.numIndexFilterConversions;
-  coverage.numStringDictionaryEncodingPreserved +=
-      stats.numStringDictionaryEncodingPreserved;
-  coverage.numStringDictionaryEncodingAbandoned +=
-      stats.numStringDictionaryEncodingAbandoned;
+  for (const auto& [key, value] : stats.customRuntimeStats) {
+    coverage.customRuntimeStats[key] += value;
+  }
   coverage.numQueriesWithValueHook += stats.numQueriesWithValueHook;
   coverage.numValuesLoadedToValueHook += stats.numValuesLoadedToValueHook;
   coverage.numQueriesWithRemainingFilterEvaluation +=
@@ -293,13 +290,16 @@ void logScanStats(
           << " processedStrides=" << stats.processedStrides
           << " chunkSkippedRows=" << stats.chunkSkippedRows
           << " processedRows=" << stats.processedRows;
-  VLOG(1) << "ScanCoverage[" << label
-          << "] nimble: stripeLoads=" << stats.numStripeLoads
-          << " indexFilterConv=" << stats.numIndexFilterConversions
-          << " dictionaryEncodingPreserved="
-          << stats.numStringDictionaryEncodingPreserved
-          << " dictionaryEncodingAbandoned="
-          << stats.numStringDictionaryEncodingAbandoned;
+  if (VLOG_IS_ON(1)) {
+    std::string customStats;
+    for (const auto& [key, value] : stats.customRuntimeStats) {
+      customStats += fmt::format(" {}={}", key, value);
+    }
+    VLOG(1) << "ScanCoverage[" << label
+            << "] format: stripeLoads=" << stats.numStripeLoads
+            << " indexFilterConv=" << stats.numIndexFilterConversions
+            << customStats;
+  }
   VLOG(1) << "ScanCoverage[" << label
           << "] execution: valueHookQueries=" << stats.numQueriesWithValueHook
           << " valueHookValues=" << stats.numValuesLoadedToValueHook
@@ -324,9 +324,8 @@ std::vector<TableEvolutionFuzzer::InputFile> extractInputFiles(
   std::vector<TableEvolutionFuzzer::InputFile> files;
   files.reserve(splits.size());
   for (const auto& split : splits) {
-    auto fileSplit =
-        std::dynamic_pointer_cast<connector::hive::FileConnectorSplit>(
-            split.connectorSplit);
+    auto fileSplit = std::dynamic_pointer_cast<connector::FileConnectorSplit>(
+        split.connectorSplit);
     VELOX_CHECK_NOT_NULL(fileSplit);
     files.push_back({fileSplit->filePath, fileSplit->fileFormat});
   }
@@ -784,7 +783,7 @@ void buildScanSplitFromTableWriteResult(
       for (auto bucketColumnIndex : bucketColumnIndices) {
         auto handle = std::make_unique<connector::hive::HiveColumnHandle>(
             tableSchema->nameOf(bucketColumnIndex),
-            connector::hive::FileColumnHandle::ColumnType::kRegular,
+            connector::FileColumnHandle::ColumnType::kRegular,
             tableSchema->childAt(bucketColumnIndex),
             tableSchema->childAt(bucketColumnIndex));
         bucketConversion.bucketColumnHandles.push_back(std::move(handle));
@@ -984,6 +983,16 @@ std::string TableEvolutionFuzzer::quoteIdentifier(std::string_view name) {
     quoted.push_back(character);
   }
   quoted.push_back('"');
+  return quoted;
+}
+
+std::vector<std::string> TableEvolutionFuzzer::quoteIdentifiers(
+    const std::vector<std::string>& names) {
+  std::vector<std::string> quoted;
+  quoted.reserve(names.size());
+  for (const auto& name : names) {
+    quoted.push_back(quoteIdentifier(name));
+  }
   return quoted;
 }
 
@@ -1344,32 +1353,6 @@ std::vector<std::string> groupingKeyTypeKinds(
   return typeKindsForColumns(schema, groupingKeys);
 }
 
-std::vector<std::string> aggregationBlockingProjectExpressions(
-    const RowTypePtr& schema,
-    const AggregationConfig& aggregationConfig) {
-  std::vector<std::string> expressions;
-  expressions.reserve(schema->size());
-  for (int i = 0; i < schema->size(); ++i) {
-    const auto& name = schema->nameOf(i);
-    const bool isAggregateInput = std::any_of(
-        aggregationConfig.aggregates.begin(),
-        aggregationConfig.aggregates.end(),
-        [&](const auto& aggregate) {
-          return containsIdentifier(aggregate, name);
-        });
-    if (isAggregateInput) {
-      expressions.push_back(
-          fmt::format(
-              "if({0} is null, cast(null as {1}), {0}) as {0}",
-              name,
-              schema->childAt(i)->toString()));
-    } else {
-      expressions.push_back(name);
-    }
-  }
-  return expressions;
-}
-
 void addTypeEvolution(
     const TypePtr& previous,
     const TypePtr& current,
@@ -1422,6 +1405,34 @@ void addTypeEvolution(
 }
 
 } // namespace
+
+std::vector<std::string>
+TableEvolutionFuzzer::aggregationBlockingProjectExpressions(
+    const RowTypePtr& schema,
+    const AggregationConfig& aggregationConfig) {
+  std::vector<std::string> expressions;
+  expressions.reserve(schema->size());
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& name = schema->nameOf(i);
+    const bool isAggregateInput = std::any_of(
+        aggregationConfig.aggregates.begin(),
+        aggregationConfig.aggregates.end(),
+        [&](const auto& aggregate) {
+          return containsIdentifier(aggregate, name);
+        });
+    const auto quotedName = quoteIdentifier(name);
+    if (isAggregateInput) {
+      expressions.push_back(
+          fmt::format(
+              "if({0} is null, cast(null as {1}), {0}) as {0}",
+              quotedName,
+              schema->childAt(i)->toString()));
+    } else {
+      expressions.push_back(quotedName);
+    }
+  }
+  return expressions;
+}
 
 void TableEvolutionFuzzer::CoverageAccumulator::addSchemaEvolution(
     const RowTypePtr& previous,
@@ -1732,7 +1743,9 @@ RowVectorPtr TableEvolutionFuzzer::readInputFileSample(
   return fuzzer::mergeRowVectors(batches, config_.pool);
 }
 
-bool TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
+bool TableEvolutionFuzzer::runOnInputFile(
+    const InputFile& inputFile,
+    std::chrono::steady_clock::time_point deadline) {
   inputFile_ = &inputFile;
   SCOPE_EXIT {
     inputFile_ = nullptr;
@@ -1777,6 +1790,10 @@ bool TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
 
   auto executor = folly::getGlobalCPUExecutor();
   for (int shape = 0; shape < FLAGS_input_file_query_shapes; ++shape) {
+    if (shape > 0 && std::chrono::steady_clock::now() >= deadline) {
+      LOG(INFO) << "Deadline reached after " << shape << " query shapes";
+      break;
+    }
     VLOG(1) << "Running query shape " << shape;
     runQueryShape(
         noWriteResults,
@@ -2137,8 +2154,10 @@ void TableEvolutionFuzzer::runQueryShape(
     return;
   }
 
-  auto pushdownStats = extractScanStats(scanTasks[0]->task());
-  auto referenceStats = extractScanStats(scanTasks[1]->task());
+  auto pushdownStats =
+      extractScanStats(scanTasks[0]->task(), config_.customRuntimeStatKeys);
+  auto referenceStats =
+      extractScanStats(scanTasks[1]->task(), config_.customRuntimeStatKeys);
   queryCoverage.pushdown = pushdownStats;
   queryCoverage.reference = referenceStats;
   queryCoverage.executionSucceeded = true;
@@ -2751,13 +2770,11 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeValuesTask(
                     std::make_shared<core::FieldAccessExpr>(name, std::nullopt),
                     std::make_shared<core::ConstantExpr>(
                         mapType.keyType(),
-                        connector::hive::PartitionValue::fromString(
+                        connector::PartitionValue::fromString(
                             key,
                             *mapType.keyType(),
-                            connector::hive::PartitionValue::TimestampMode::
-                                kUtc,
-                            connector::hive::PartitionValue::DateMode::
-                                kIsoString),
+                            connector::PartitionValue::TimestampMode::kUtc,
+                            connector::PartitionValue::DateMode::kIsoString),
                         std::nullopt)},
                 std::nullopt));
       }
@@ -2792,7 +2809,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeValuesTask(
       builder.project(aggregationBlockingProjectExpressions(
           projectedSchema, *pushdownConfig.aggregationConfig));
     } else {
-      builder.project(projectedSchema->names());
+      builder.project(quoteIdentifiers(projectedSchema->names()));
     }
   }
   if (pushdownConfig.aggregationConfig.has_value()) {
@@ -2861,7 +2878,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
           name,
           std::make_shared<connector::hive::HiveColumnHandle>(
               name,
-              connector::hive::FileColumnHandle::ColumnType::kRegular,
+              connector::FileColumnHandle::ColumnType::kRegular,
               type,
               type));
     }
@@ -2893,13 +2910,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     } else {
       // Reachable only when pruned, since the branch above takes every
       // aggregation case, so the pruned schema is the one to project.
-      const auto& projectedNames = projectedSchema->names();
-      std::vector<std::string> projections;
-      projections.reserve(projectedNames.size());
-      for (const auto& name : projectedNames) {
-        projections.push_back(quoteIdentifier(name));
-      }
-      builder.project(projections);
+      builder.project(quoteIdentifiers(projectedSchema->names()));
     }
   }
 

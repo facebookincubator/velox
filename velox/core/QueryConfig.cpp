@@ -22,6 +22,11 @@
 
 namespace facebook::velox::core {
 
+namespace {
+constexpr const char* kUseSessionTimezoneForTimestampWithTimezone =
+    "use_session_timezone_for_timestamp_with_timezone";
+}
+
 const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
     std::vector<config::ConfigProperty> properties;
@@ -35,7 +40,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kSessionTimezone);
     VELOX_REGISTER_QUERY_CONFIG(kSessionStartTime);
     VELOX_REGISTER_QUERY_CONFIG(kAdjustTimestampToTimezone);
-    VELOX_REGISTER_QUERY_CONFIG(kUseSessionTimezoneForTimestampWithTimezone);
+    VELOX_REGISTER_QUERY_CONFIG(kIgnoreTimeZoneLabel);
 
     // Expression evaluation.
     VELOX_REGISTER_QUERY_CONFIG(kExprEvalSimplified);
@@ -54,6 +59,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     // Cast.
     VELOX_REGISTER_QUERY_CONFIG(kLegacyCast);
     VELOX_REGISTER_QUERY_CONFIG(kCastMatchStructByName);
+    VELOX_REGISTER_QUERY_CONFIG(kCastStringToFloatingPointLenientInfNan);
 
     // Local exchange.
     VELOX_REGISTER_QUERY_CONFIG(kMaxLocalExchangeBufferSize);
@@ -146,6 +152,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Task writer.
     VELOX_REGISTER_QUERY_CONFIG(kTaskWriterCount);
+    VELOX_REGISTER_QUERY_CONFIG(kTaskPartitionedWriterCount);
 
     // Hash probe.
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeFinishEarlyOnEmptyBuild);
@@ -227,6 +234,9 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kStreamingAggregationMinOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kStreamingAggregationEagerFlush);
 
+    // Vector index training.
+    VELOX_REGISTER_QUERY_CONFIG(kVectorIndexTrainThreads);
+
     // Exchange optimization.
     VELOX_REGISTER_QUERY_CONFIG(kSkipRequestDataSizeWithSingleSourceEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kExchangeLazyFetchingEnabled);
@@ -261,9 +271,11 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kMarkSortedZeroCopyThreshold);
 
     // RPC congestion.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionBatchStartWindow);
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMinWindow);
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionStepCoef);
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMaxWindow);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionAsyncGrowthMaxWindow);
 
     // RPC adaptive rate limiter.
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterAdaptiveEnabled);
@@ -271,12 +283,21 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMaxLimit);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterHardLimit);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMaxProbeIntervalMs);
 
 #undef VELOX_REGISTER_QUERY_CONFIG
 
     return properties;
   }();
   return kProperties;
+}
+
+bool QueryConfig::ignoreTimeZoneLabel() const {
+  const auto ignoreTimeZoneLabel = get<bool>(kIgnoreTimeZoneLabel);
+  if (ignoreTimeZoneLabel.has_value()) {
+    return ignoreTimeZoneLabel.value();
+  }
+  return get<bool>(kUseSessionTimezoneForTimestampWithTimezone, false);
 }
 
 QueryConfig::QueryConfig(std::unordered_map<std::string, std::string> values)

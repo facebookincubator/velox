@@ -15,6 +15,7 @@ add_executable(
   velox_hive_connector_test
   FileColumnHandleTest.cpp
   FileConfigTest.cpp
+  FileDataSourceTest.cpp
   HiveIndexSourceUtilsTest.cpp
   FileConnectorSplitTest.cpp
   FileConnectorUtilTest.cpp
@@ -29,6 +30,7 @@ add_executable(
   HiveSplitTest.cpp
   PartitionIdGeneratorTest.cpp
   PartitionValueTest.cpp
+  SortingWriterTest.cpp
   TableHandleTest.cpp
 )
 add_test(velox_hive_connector_test velox_hive_connector_test)

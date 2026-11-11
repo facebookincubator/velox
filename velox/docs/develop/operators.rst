@@ -43,6 +43,7 @@ MarkSortedNode              MarkSorted
 HashJoinNode                HashProbe and HashBuild
 MergeJoinNode               MergeJoin
 NestedLoopJoinNode          NestedLoopJoinProbe and NestedLoopJoinBuild
+VectorSearchJoinNode        VectorSearchJoinProbe and VectorSearchJoinBuild
 OrderByNode                 OrderBy
 TopNNode                    TopN
 LimitNode                   Limit
@@ -587,6 +588,71 @@ thread of execution.
      - Expression used as the join condition, may reference columns from both inputs.
    * - outputType
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
+
+VectorSearchJoinNode
+~~~~~~~~~~~~~~~~~~~~
+
+VectorSearchJoinNode joins rows with query embeddings to the nearest entries of
+local vector indexes (see :doc:`/functions/presto/vectorindex`). One side of the
+join has the index rows, each with a packed local index; the other side has the
+query rows, each with an embedding. The equality conditions on the keys match
+each query row to index rows, as in a hash join; with no keys, every query row
+matches every index row. Within each match, the query embedding, normalized for
+the metric, is searched in the index for its k nearest embeddings. Each
+embedding found gives an output row with the columns of the query row and the
+index row, the embedding's id and its score, where larger is nearer.
+
+Rows with a null key, query rows with a null embedding and index rows with a
+null index match nothing. An outer join, left with the query rows on the left
+or right with the query rows on the right, outputs a query row that finds no
+embeddings once, with nulls for the index row's columns, the id and the score.
+A join may not preserve the index rows.
+All query embeddings must have the same length, equal to the dimension of every
+index, and no embedding may have a null, NaN or infinite element; a violation
+is a user error.
+
+The right side is loaded into memory and the left side streams. With the
+indexes on the right, each batch of query rows is searched in the indexes it
+matches. With the indexes on the left, each streaming index is decoded once per
+batch and searched with the query rows it matches. A join other than left
+pushes filters on the keys of the right side into the left side's table scan,
+and reads no left rows if no right row can match. The output does not preserve
+the order of the left side. Available when Velox is built with FAISS
+(``VELOX_ENABLE_FAISS``).
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - joinType
+     - Join type: inner; left, if the index rows are on the right; or right, if the index rows are on the left.
+   * - leftKeys
+     - Columns from the left hand side input that are part of the equality condition. May be empty.
+   * - rightKeys
+     - Columns from the right hand side input that are part of the equality condition. The number and order of the rightKeys must match the number and order of the leftKeys.
+   * - indexSide
+     - The side with the index rows: PROBE, the left, or BUILD, the right. The other side has the query rows.
+   * - embedding
+     - Column of the query side, of type ARRAY(REAL), with the query embedding.
+   * - index
+     - Column of the index side, of type VARBINARY, with the packed local index. May not appear in the output.
+   * - format
+     - The format of the local indexes: its name in the query's registry of local vector index formats.
+   * - metric
+     - The metric the indexes were built for.
+   * - k
+     - The number of embeddings to find in each matching index, at least 1. At most the size of the index are found.
+   * - searchOptions
+     - Optional search settings that override the ones recorded in the indexes. Their keys and values are the format's.
+   * - idName
+     - Optional name of the output column, of type BIGINT, with the id of each embedding found.
+   * - scoreName
+     - Optional name of the output column, of type REAL, with the score of each embedding found.
+   * - outputType
+     - A list of output columns: columns of the left and right inputs, and the id and score columns, in any order.
 
 OrderByNode
 ~~~~~~~~~~~

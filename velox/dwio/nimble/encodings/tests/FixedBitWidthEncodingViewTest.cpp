@@ -22,15 +22,14 @@
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using FixedBitWidthEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsFixedBitWidthEncoding) {
+TEST_P(FixedBitWidthEncodingViewTest, readsFixedBitWidthEncoding) {
   expectReads<nimble::FixedBitWidthEncoding<int32_t>>(
       makeVector({10, 12, 15, 31, 33, 63}), {5, 0, 4, 2, 1});
 }
 
-TEST_F(FixedBitWidthEncodingViewTest, readsInternallyCompressedPayload) {
+TEST_P(FixedBitWidthEncodingViewTest, readsInternallyCompressedPayload) {
   const auto values = randomNarrowUnsigned<uint32_t>(/*seed=*/36);
   const auto positions = randomizedPositions(/*seed=*/37);
   for (const auto compressionType :
@@ -41,8 +40,10 @@ TEST_F(FixedBitWidthEncodingViewTest, readsInternallyCompressedPayload) {
   }
 }
 
-TEST_F(FixedBitWidthEncodingViewTest, concurrent) {
+TEST_P(FixedBitWidthEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::FixedBitWidthEncoding<uint32_t>>(
       randomNarrowUnsigned<uint32_t>(/*seed=*/6),
       randomizedPositions(/*seed=*/7));
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(FixedBitWidthEncodingViewTest);

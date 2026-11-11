@@ -35,6 +35,37 @@ namespace {
 
 class IcebergParquetStatsTest : public test::IcebergTestBase {
  protected:
+  void checkSplitOffsets(
+      const std::string& commitTask,
+      int expectedRowGroups,
+      bool dictionaryEnabled) {
+    const auto task = folly::parseJson(commitTask);
+    ASSERT_TRUE(task.count("splitOffsets"));
+    const auto& offsets = task["splitOffsets"];
+    ASSERT_EQ(offsets.size(), expectedRowGroups);
+    EXPECT_EQ(task["metrics"].count("splitOffsets"), 0);
+
+    parquet::ParquetReader reader(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<LocalReadFile>(task["path"].asString()), *opPool_),
+        dwio::common::ReaderOptions(opPool_.get()));
+    const auto metadata = reader.fileMetaData();
+    ASSERT_EQ(metadata.numRowGroups(), expectedRowGroups);
+    for (auto i = 0; i < expectedRowGroups; ++i) {
+      const auto column = metadata.rowGroup(i).columnChunk(0);
+      ASSERT_EQ(column.hasDictionaryPageOffset(), dictionaryEnabled);
+      const auto expectedOffset = dictionaryEnabled
+          ? column.dictionaryPageOffset()
+          : column.dataPageOffset();
+      EXPECT_EQ(offsets[i].asInt(), expectedOffset);
+      EXPECT_GT(offsets[i].asInt(), 0);
+      EXPECT_LT(offsets[i].asInt(), task["fileSizeInBytes"].asInt());
+      if (i > 0) {
+        EXPECT_GT(offsets[i].asInt(), offsets[i - 1].asInt());
+      }
+    }
+  }
+
   static IcebergDataFileStatisticsPtr statsFromMetrics(
       const folly::dynamic& metrics) {
     VELOX_CHECK(metrics.isObject());
@@ -180,6 +211,74 @@ class IcebergParquetStatsTest : public test::IcebergTestBase {
     }
   }
 };
+
+TEST_F(IcebergParquetStatsTest, splitOffsets) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(100, [](auto row) { return row % 5; }),
+      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+  });
+  for (const bool dictionaryEnabled : {false, true}) {
+    SCOPED_TRACE(dictionaryEnabled);
+    setConnectorSessionProperty(
+        "parquet_writer_enable_dictionary",
+        dictionaryEnabled ? "true" : "false");
+    for (const bool multipleRowGroups : {false, true}) {
+      SCOPED_TRACE(multipleRowGroups);
+      setConnectorSessionProperty(
+          "parquet_writer_row_group_size", multipleRowGroups ? "1B" : "128MB");
+      const auto outputDir = TempDirectoryPath::create();
+      const auto sink =
+          createDataSinkAndAppendData({data, data, data}, outputDir->getPath());
+      const auto tasks = sink->close();
+      ASSERT_EQ(tasks.size(), 1);
+      checkSplitOffsets(tasks[0], multipleRowGroups ? 3 : 1, dictionaryEnabled);
+    }
+  }
+}
+
+TEST_F(IcebergParquetStatsTest, splitOffsetsForPartitionedAndRotatedFiles) {
+  setConnectorSessionProperty("parquet_writer_row_group_size", "1B");
+  setConnectorSessionProperty("parquet_writer_max_target_file_size", "1B");
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(100, [](auto row) { return row % 2; }),
+      makeFlatVector<int64_t>(100, [](auto row) { return row % 5; }),
+  });
+  const auto outputDir = TempDirectoryPath::create();
+  const auto sink = createDataSinkAndAppendData(
+      {data, data, data},
+      outputDir->getPath(),
+      {{0, TransformType::kIdentity, std::nullopt}});
+  const auto tasks = sink->close();
+  ASSERT_EQ(tasks.size(), 6);
+  int64_t rows = 0;
+  for (const auto& task : tasks) {
+    const auto json = folly::parseJson(task);
+    const auto records = json["metrics"]["recordCount"].asInt();
+    rows += records;
+    checkSplitOffsets(task, static_cast<int>(records / 50), true);
+  }
+  EXPECT_EQ(rows, 300);
+}
+
+TEST_F(IcebergParquetStatsTest, emptyWriteHasNoSplitOffsets) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto sink =
+      createDataSink(ROW({"id"}, {BIGINT()}), outputDir->getPath());
+  ASSERT_TRUE(sink->finish());
+  EXPECT_TRUE(sink->close().empty());
+}
+
+TEST_F(IcebergParquetStatsTest, nonParquetWriteDoesNotInventSplitOffsets) {
+  fileFormat_ = dwio::common::FileFormat::DWRF;
+  const auto outputDir = TempDirectoryPath::create();
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  const auto sink = createDataSinkAndAppendData({data}, outputDir->getPath());
+  const auto tasks = sink->close();
+  ASSERT_EQ(tasks.size(), 1);
+  const auto task = folly::parseJson(tasks[0]);
+  EXPECT_EQ(task.count("splitOffsets"), 0);
+  EXPECT_EQ(task["metrics"]["recordCount"].asInt(), 2);
+}
 
 TEST_F(IcebergParquetStatsTest, mixedNull) {
   constexpr vector_size_t size = 100;
@@ -473,6 +572,52 @@ TEST_F(IcebergParquetStatsTest, nullValues) {
   }
 }
 
+TEST_F(IcebergParquetStatsTest, nullTypeColumn) {
+  // Parquet NullType columns (Velox UNKNOWN type) carry SortOrder::kUnknown, so
+  // the Parquet writer never initialises a statistics object for them. Verify
+  // that null_value_count still equals the row count so that the Iceberg
+  // aggregate optimizer can correctly compute COUNT(unknown_col) = 0.
+  constexpr vector_size_t size = 100;
+  constexpr int32_t intColId = 1;
+  constexpr int32_t unknownColId = 2;
+
+  const auto& stats = writeDataAndGetAllStats(makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeNullConstant(TypeKind::UNKNOWN, size),
+  }));
+  verifyBasicStats(
+      stats[0],
+      size,
+      {{intColId, size}, {unknownColId, size}},
+      {{intColId, 0}, {unknownColId, size}});
+  verifyBoundsNotExist(stats[0], {unknownColId});
+}
+
+TEST_F(IcebergParquetStatsTest, nullTypeColumnMultipleRowGroups) {
+  // Verify null_value_count accumulates correctly across multiple row groups.
+  setConnectorSessionProperty("parquet_writer_row_group_size", "1B");
+  constexpr vector_size_t size = 100;
+  constexpr int32_t intColId = 1;
+  constexpr int32_t unknownColId = 2;
+
+  const auto batch = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeNullConstant(TypeKind::UNKNOWN, size),
+  });
+  const auto outputDir = TempDirectoryPath::create();
+  auto commitTasks =
+      createDataSinkAndAppendData({batch, batch, batch}, outputDir->getPath())
+          ->close();
+  ASSERT_EQ(commitTasks.size(), 1);
+  const auto& stats = statsFromCommitTasks(commitTasks);
+  verifyBasicStats(
+      stats[0],
+      3 * size,
+      {{intColId, 3 * size}, {unknownColId, 3 * size}},
+      {{intColId, 0}, {unknownColId, 3 * size}});
+  verifyBoundsNotExist(stats[0], {unknownColId});
+}
+
 TEST_F(IcebergParquetStatsTest, real) {
   constexpr vector_size_t size = 100;
   constexpr int32_t expectedNulls = 20;
@@ -763,9 +908,9 @@ TEST_F(IcebergParquetStatsTest, partitionedTableWithNulls) {
            nullEvery(11))});
   const auto& fileStats =
       writeDataAndGetAllStats(rowVector, partitionTransforms);
-  int32_t totalIntNulls = 0;
-  int32_t totalDateNulls = 0;
-  int32_t totalVarcharNulls = 0;
+  int64_t totalIntNulls = 0;
+  int64_t totalDateNulls = 0;
+  int64_t totalVarcharNulls = 0;
   int32_t totalRecords = 0;
 
   constexpr int32_t intColId = 1;
@@ -776,15 +921,18 @@ TEST_F(IcebergParquetStatsTest, partitionedTableWithNulls) {
     totalRecords += stats->numRecords;
     // Add null counts if present.
     if (stats->columnStats.contains(intColId)) {
-      totalIntNulls += stats->columnStats.at(intColId).nullValueCount;
+      totalIntNulls +=
+          stats->columnStats.at(intColId).nullValueCount.value_or(0);
     }
 
     if (stats->columnStats.contains(dateColId)) {
-      totalDateNulls += stats->columnStats.at(dateColId).nullValueCount;
+      totalDateNulls +=
+          stats->columnStats.at(dateColId).nullValueCount.value_or(0);
     }
 
     if (stats->columnStats.contains(varcharColId)) {
-      totalVarcharNulls += stats->columnStats.at(varcharColId).nullValueCount;
+      totalVarcharNulls +=
+          stats->columnStats.at(varcharColId).nullValueCount.value_or(0);
     }
   }
 

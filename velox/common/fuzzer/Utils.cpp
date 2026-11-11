@@ -16,6 +16,7 @@
 
 #include "velox/common/fuzzer/Utils.h"
 #include <fmt/format.h>
+#include <bit>
 #include "velox/type/Time.h"
 
 namespace facebook::velox::fuzzer {
@@ -247,5 +248,86 @@ std::string timezoneOffsetToString(int16_t offsetMinutes) {
   // Format as "+HH:mm" or "-HH:mm" with zero-padding
   return fmt::format("{}{:02d}:{:02d}", sign, hours, minutes);
 }
+
+namespace {
+
+template <typename T>
+using FloatingPointBits =
+    std::conditional_t<sizeof(T) == sizeof(uint32_t), uint32_t, uint64_t>;
+
+// Returns, with equal probability, the negative quiet NaN, or a quiet or
+// signaling NaN with a random sign and a random nonzero payload.
+template <typename T>
+T randNonCanonicalNaN(FuzzerGenerator& rng) {
+  using Bits = FloatingPointBits<T>;
+  constexpr auto kQuietBit = Bits{1} << (std::numeric_limits<T>::digits - 2);
+  constexpr auto kSignBit = Bits{1} << (sizeof(T) * 8 - 1);
+  const auto infinityBits =
+      std::bit_cast<Bits>(std::numeric_limits<T>::infinity());
+  const auto sign = coinToss(rng, 0.5) ? kSignBit : Bits{0};
+  const auto payload =
+      boost::random::uniform_int_distribution<Bits>(1, kQuietBit - 1)(rng);
+  switch (boost::random::uniform_int_distribution<int>(0, 2)(rng)) {
+    case 0:
+      return -std::numeric_limits<T>::quiet_NaN();
+    case 1:
+      return std::bit_cast<T>(infinityBits | kQuietBit | payload | sign);
+    default:
+      return std::bit_cast<T>(infinityBits | payload | sign);
+  }
+}
+
+// Returns, with equal probability, the largest finite, smallest normal or
+// smallest subnormal magnitude or a random subnormal, with a random sign.
+template <typename T>
+T randExtreme(FuzzerGenerator& rng) {
+  using Bits = FloatingPointBits<T>;
+  constexpr auto kMaxSubnormalBits =
+      (Bits{1} << (std::numeric_limits<T>::digits - 1)) - 1;
+  T magnitude;
+  switch (boost::random::uniform_int_distribution<int>(0, 3)(rng)) {
+    case 0:
+      magnitude = std::numeric_limits<T>::max();
+      break;
+    case 1:
+      magnitude = std::numeric_limits<T>::min();
+      break;
+    case 2:
+      magnitude = std::numeric_limits<T>::denorm_min();
+      break;
+    default:
+      magnitude =
+          std::bit_cast<T>(boost::random::uniform_int_distribution<Bits>(
+              1, kMaxSubnormalBits)(rng));
+  }
+  return coinToss(rng, 0.5) ? -magnitude : magnitude;
+}
+
+} // namespace
+
+template <typename T>
+T randFloatingPoint(FuzzerGenerator& rng, DataSpec dataSpec) {
+  if (dataSpec.includeNegativeInfinity && coinToss(rng, 0.05)) {
+    return -std::numeric_limits<T>::infinity();
+  }
+  if (dataSpec.includeSignedZeros && coinToss(rng, 0.05)) {
+    return coinToss(rng, 0.5) ? -T{0} : T{0};
+  }
+  if (dataSpec.includeNonCanonicalNaN && coinToss(rng, 0.05)) {
+    return randNonCanonicalNaN<T>(rng);
+  }
+  if (dataSpec.includeExtremes && coinToss(rng, 0.05)) {
+    return randExtreme<T>(rng);
+  }
+  const auto value = boost::random::uniform_01<T>()(rng);
+  return dataSpec.includeNegative && coinToss(rng, 0.5) ? -value : value;
+}
+
+template float randFloatingPoint<float>(
+    FuzzerGenerator& rng,
+    DataSpec dataSpec);
+template double randFloatingPoint<double>(
+    FuzzerGenerator& rng,
+    DataSpec dataSpec);
 
 } // namespace facebook::velox::fuzzer

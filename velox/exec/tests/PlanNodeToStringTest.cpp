@@ -499,6 +499,57 @@ TEST_F(PlanNodeToStringTest, nestedLoopJoin) {
       plan->toString(true, false));
 }
 
+TEST_F(PlanNodeToStringTest, vectorSearchJoin) {
+  const auto queries = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int64_t>({1}),
+          makeArrayVector<float>({{1, 0}}),
+      });
+  const auto indexes = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeFlatVector<int64_t>({1}),
+          makeFlatVector<std::string>({"a"}, VARBINARY()),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({queries})
+                  .vectorSearchJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder().values({indexes}).planNode(),
+                      "t1",
+                      "u1",
+                      /*k=*/10,
+                      {"t0", "id", "score"},
+                      "id",
+                      "score",
+                      core::JoinType::kLeft,
+                      {{"ivf.nprobe", "4"}})
+                  .planNode();
+  ASSERT_EQ("-- VectorSearchJoin[1]\n", plan->toString());
+  ASSERT_EQ(
+      "-- VectorSearchJoin[1][LEFT t0=u0, t1 nearest in u1 (faiss, cosine), k: 10, ivf.nprobe: 4] -> t0:BIGINT, id:BIGINT, score:REAL\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values({indexes})
+             .vectorSearchJoin(
+                 {"u0"},
+                 {"t0"},
+                 PlanBuilder().values({queries}).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/10,
+                 {"t0", "id"},
+                 "id")
+             .planNode();
+  ASSERT_EQ(
+      "-- VectorSearchJoin[1][INNER u0=t0, t1 nearest in u1 (faiss, cosine), k: 10, index: PROBE] -> t0:BIGINT, id:BIGINT\n",
+      plan->toString(true, false));
+}
+
 TEST_F(PlanNodeToStringTest, orderBy) {
   auto plan = PlanBuilder()
                   .values({data_})
@@ -1000,13 +1051,13 @@ void topNRankPlanNodeToStringTest(std::string_view function) {
   auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
   auto plan = PlanBuilder()
                   .tableScan(rowType)
-                  .topNRank(function, {}, {"a DESC"}, 10, false)
+                  .topNRankPartial(function, {}, {"a DESC"}, 10)
                   .planNode();
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
       fmt::format(
-          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10 partial] -> a:BIGINT, b:VARCHAR\n",
           function),
       plan->toString(true, false));
 
@@ -1024,13 +1075,25 @@ void topNRankPlanNodeToStringTest(std::string_view function) {
 
   plan = PlanBuilder()
              .tableScan(rowType)
-             .topNRank(function, {"a"}, {"b"}, 10, false)
+             .topNRank(function, {}, {"a DESC"}, 10, false)
              .planNode();
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
       fmt::format(
-          "-- TopNRowNumber[1][{} partition by (a) order by (b ASC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          function),
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .tableScan(rowType)
+             .topNRankPartial(function, {"a"}, {"b"}, 10)
+             .planNode();
+
+  ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
+  ASSERT_EQ(
+      fmt::format(
+          "-- TopNRowNumber[1][{} partition by (a) order by (b ASC NULLS LAST) limit 10 partial] -> a:BIGINT, b:VARCHAR\n",
           function),
       plan->toString(true, false));
 }
@@ -1201,19 +1264,23 @@ TEST_F(PlanNodeToStringTest, stateSource) {
   auto schema = ROW({"id", "depth"}, BIGINT());
 
   // delta: an append entry's in-loop frontier (rows written last iteration).
-  auto frontier =
-      PlanBuilder().stateSource("reach", schema, /*delta=*/true).planNode();
-  ASSERT_EQ("-- StateSource[0]\n", frontier->toString());
-  ASSERT_EQ(
-      "-- StateSource[0][state: reach, delta] -> id:BIGINT, depth:BIGINT\n",
-      frontier->toString(true, false));
+  {
+    auto plan =
+        PlanBuilder().stateSource("reach", schema, /*delta=*/true).planNode();
+    ASSERT_EQ("-- StateSource[0]\n", plan->toString());
+    ASSERT_EQ(
+        "-- StateSource[0][state: reach, delta] -> id:BIGINT, depth:BIGINT\n",
+        plan->toString(true, false));
+  }
 
   // full: the entry's whole accumulation.
-  auto full =
-      PlanBuilder().stateSource("reach", schema, /*delta=*/false).planNode();
-  ASSERT_EQ(
-      "-- StateSource[0][state: reach, full] -> id:BIGINT, depth:BIGINT\n",
-      full->toString(true, false));
+  {
+    auto plan =
+        PlanBuilder().stateSource("reach", schema, /*delta=*/false).planNode();
+    ASSERT_EQ(
+        "-- StateSource[0][state: reach, full] -> id:BIGINT, depth:BIGINT\n",
+        plan->toString(true, false));
+  }
 }
 
 TEST_F(PlanNodeToStringTest, stateHashJoin) {
@@ -1236,14 +1303,14 @@ TEST_F(PlanNodeToStringTest, stateHashJoin) {
 TEST_F(PlanNodeToStringTest, fixedPointSequence) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto schema = ROW("x", BIGINT());
-  auto seed =
-      PlanBuilder(idGenerator)
-          .values({makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})})
-          .planNode();
   auto plan =
       PlanBuilder(idGenerator)
           .fixedPoint(
-              core::VectorState("n", schema, /*append=*/true).initial(seed),
+              core::VectorState("n", schema, /*append=*/true)
+                  .initial(PlanBuilder(idGenerator)
+                               .values({makeRowVector(
+                                   {"x"}, {makeFlatVector<int64_t>({1})})})
+                               .planNode()),
               PlanBuilder(idGenerator)
                   .stateSource("n", schema)
                   .project({"x + 1 AS x"}),
@@ -1252,7 +1319,7 @@ TEST_F(PlanNodeToStringTest, fixedPointSequence) {
 
   ASSERT_EQ("-- FixedPoint[3]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], plans: 1, maxIterations: 9, errorWhenMaxIterationReached: false, stopWhenDeltaEmpty: false, convergencePlans: 0] -> x:BIGINT\n",
+      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], stages: 1, maxIterations: 9] -> x:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1262,28 +1329,29 @@ TEST_F(PlanNodeToStringTest, fixedPointSequence) {
 TEST_F(PlanNodeToStringTest, fixedPointFibonacci) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto schema = ROW({"a", "b"}, BIGINT());
-  auto seed =
-      PlanBuilder(idGenerator)
-          .values({makeRowVector(
-              {"a", "b"},
-              {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({1})})})
-          .planNode();
-  auto convergence = PlanBuilder(idGenerator)
-                         .stateSource("fib", schema, /*delta=*/false)
-                         .project({"b > 100 AS converged"})
-                         .planNode();
   auto plan = PlanBuilder(idGenerator)
                   .fixedPoint(
-                      core::VectorState("fib", schema).initial(seed),
+                      core::VectorState("fib", schema)
+                          .initial(PlanBuilder(idGenerator)
+                                       .values({makeRowVector(
+                                           {"a", "b"},
+                                           {makeFlatVector<int64_t>({0}),
+                                            makeFlatVector<int64_t>({1})})})
+                                       .planNode()),
                       PlanBuilder(idGenerator)
                           .stateSource("fib", schema, /*delta=*/false)
                           .project({"b AS a", "a + b AS b"}),
-                      core::ConvergenceConfig::converging(convergence, 100))
+                      core::ConvergenceConfig::converging(
+                          PlanBuilder(idGenerator)
+                              .stateSource("fib", schema, /*delta=*/false)
+                              .project({"b > 100 AS converged"})
+                              .planNode(),
+                          100))
                   .planNode();
 
   ASSERT_EQ("-- FixedPoint[5]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], plans: 1, maxIterations: 100, errorWhenMaxIterationReached: true, stopWhenDeltaEmpty: false, convergencePlans: 1] -> a:BIGINT, b:BIGINT\n",
+      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], stages: 1, maxIterations: 100, convergenceStages: 1] -> a:BIGINT, b:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1295,45 +1363,42 @@ TEST_F(PlanNodeToStringTest, fixedPointThreeDegrees) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto people = ROW({"id", "depth"}, BIGINT());
   auto edges = ROW({"src", "dst"}, BIGINT());
-  auto joinOutput = ROW({"id", "depth", "dst"}, BIGINT());
-
-  auto me =
-      PlanBuilder(idGenerator)
-          .values({makeRowVector(
-              {"id", "depth"},
-              {makeFlatVector<int64_t>({1}), makeFlatVector<int64_t>({0})})})
-          .planNode();
-  auto graph = PlanBuilder(idGenerator)
-                   .values({makeRowVector(
-                       {"src", "dst"},
-                       {makeFlatVector<int64_t>({1, 2}),
-                        makeFlatVector<int64_t>({2, 3})})})
-                   .planNode();
-
-  auto body = PlanBuilder(idGenerator)
-                  .stateSource("reach", people, /*delta=*/true)
-                  .stateHashJoin("graph", {"id"}, joinOutput)
-                  .project({"dst AS id", "depth + 1 AS depth"})
-                  .planNode();
-  auto convergence = PlanBuilder(idGenerator)
-                         .stateSource("reach", people, /*delta=*/true)
-                         .singleAggregation({}, {"count(1)"})
-                         .project({"a0 = 0 AS converged"})
-                         .planNode();
-
   auto plan =
       PlanBuilder(idGenerator)
           .fixedPoint(
-              {core::HashTableState("graph", edges, {"src"}).initial(graph),
-               core::VectorState("reach", people, /*append=*/true).initial(me)},
-              {body},
-              core::ConvergenceConfig::converging(convergence, 3),
+              {core::HashTableState("graph", edges, {"src"})
+                   .initial(PlanBuilder(idGenerator)
+                                .values({makeRowVector(
+                                    {"src", "dst"},
+                                    {makeFlatVector<int64_t>({1, 2}),
+                                     makeFlatVector<int64_t>({2, 3})})})
+                                .planNode()),
+               core::VectorState("reach", people, /*append=*/true)
+                   .initial(PlanBuilder(idGenerator)
+                                .values({makeRowVector(
+                                    {"id", "depth"},
+                                    {makeFlatVector<int64_t>({1}),
+                                     makeFlatVector<int64_t>({0})})})
+                                .planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("reach", people, /*delta=*/true)
+                   .stateHashJoin(
+                       "graph", {"id"}, ROW({"id", "depth", "dst"}, BIGINT()))
+                   .project({"dst AS id", "depth + 1 AS depth"})
+                   .planNode()},
+              core::ConvergenceConfig::converging(
+                  PlanBuilder(idGenerator)
+                      .stateSource("reach", people, /*delta=*/true)
+                      .singleAggregation({}, {"count(1)"})
+                      .project({"a0 = 0 AS converged"})
+                      .planNode(),
+                  3),
               "reach")
           .planNode();
 
   ASSERT_EQ("-- FixedPoint[8]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], plans: 1, maxIterations: 3, errorWhenMaxIterationReached: true, stopWhenDeltaEmpty: false, convergencePlans: 1] -> id:BIGINT, depth:BIGINT\n",
+      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], stages: 1, maxIterations: 3, convergenceStages: 1] -> id:BIGINT, depth:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1345,32 +1410,69 @@ TEST_F(PlanNodeToStringTest, fixedPointThreeDegrees) {
 TEST_F(PlanNodeToStringTest, fixedPointDistributed) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto schema = ROW({"key", "val"}, BIGINT());
-  auto seed = PlanBuilder(idGenerator)
-                  .values({makeRowVector(
-                      {"key", "val"},
-                      {makeFlatVector<int64_t>({0, 1}),
-                       makeFlatVector<int64_t>({1, 1})})})
-                  .planNode();
-  auto producer = PlanBuilder(idGenerator)
-                      .stateSource("frontier", schema)
-                      .partitionedOutput({"key"}, 2)
-                      .planNode();
-  auto consumer = PlanBuilder(idGenerator)
-                      .exchange(schema, "Presto")
-                      .singleAggregation({"key"}, {"sum(val)"})
-                      .project({"key", "a0 AS val"})
-                      .planNode();
   auto plan = PlanBuilder(idGenerator)
                   .fixedPoint(
-                      {core::VectorState("frontier", schema).initial(seed)},
-                      {producer, consumer},
+                      {core::VectorState("frontier", schema)
+                           .initial(PlanBuilder(idGenerator)
+                                        .values({makeRowVector(
+                                            {"key", "val"},
+                                            {makeFlatVector<int64_t>({0, 1}),
+                                             makeFlatVector<int64_t>({1, 1})})})
+                                        .planNode())},
+                      {PlanBuilder(idGenerator)
+                           .stateSource("frontier", schema)
+                           .partitionedOutput({"key"}, 2)
+                           .planNode(),
+                       PlanBuilder(idGenerator)
+                           .exchange(schema, "Presto")
+                           .singleAggregation({"key"}, {"sum(val)"})
+                           .project({"key", "a0 AS val"})
+                           .planNode()},
                       core::ConvergenceConfig::withMaxIterations(3),
                       "frontier")
                   .planNode();
 
   ASSERT_EQ("-- FixedPoint[6]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], plans: 2, maxIterations: 3, errorWhenMaxIterationReached: false, stopWhenDeltaEmpty: false, convergencePlans: 0] -> key:BIGINT, val:BIGINT\n",
+      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], stages: 2, maxIterations: 3] -> key:BIGINT, val:BIGINT\n",
+      plan->toString(true, false));
+}
+
+// A replicated state: every worker sums every worker's values, worker 0 decides
+// over its own copy, and only worker 0 emits the output.
+TEST_F(PlanNodeToStringTest, fixedPointOnWorkerZero) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {core::VectorState("total", schema)
+                           .initial(PlanBuilder(idGenerator)
+                                        .values({makeRowVector(
+                                            {"key", "val"},
+                                            {makeFlatVector<int64_t>({0}),
+                                             makeFlatVector<int64_t>({1})})})
+                                        .planNode())},
+                      {PlanBuilder(idGenerator)
+                           .stateSource("total", schema)
+                           .partitionedOutputBroadcast()
+                           .planNode(),
+                       PlanBuilder(idGenerator)
+                           .exchange(schema, "Presto")
+                           .singleAggregation({}, {"sum(val)"})
+                           .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
+                           .planNode()},
+                      core::ConvergenceConfig::workerZeroVerdict(
+                          PlanBuilder(idGenerator)
+                              .stateSource("total", schema)
+                              .project({"val >= 8"})
+                              .planNode(),
+                          100),
+                      "total",
+                      /*outputOnWorkerZero=*/true)
+                  .planNode();
+
+  ASSERT_EQ(
+      "-- FixedPoint[8][outputStateEntry: total, states: [total (vector, replace, initialized)], stages: 2, maxIterations: 100, convergenceStages: 1, verdictOnWorkerZero, outputOnWorkerZero] -> key:BIGINT, val:BIGINT\n",
       plan->toString(true, false));
 }
 

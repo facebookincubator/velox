@@ -18,7 +18,10 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <span>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -37,7 +40,8 @@ namespace facebook::nimble::index {
 std::unique_ptr<KeyEncoding> KeyEncoding::create(
     velox::memory::MemoryPool& pool,
     std::string_view encodedData,
-    std::function<void*(uint32_t)> stringBufferFactory) {
+    std::function<void*(uint32_t)> stringBufferFactory,
+    const KeyComparator* comparator) {
   NIMBLE_CHECK_GE(
       encodedData.size(),
       EncodingPrefix::kRowCountOffset,
@@ -53,11 +57,15 @@ std::unique_ptr<KeyEncoding> KeyEncoding::create(
       const uint32_t count = encoding->rowCount();
       std::vector<std::string_view> values(count);
       encoding->materialize(count, values.data());
-      return std::make_unique<TrivialKeyEncoding>(std::move(values));
+      return std::make_unique<TrivialKeyEncoding>(
+          std::move(values), comparator);
     }
     case EncodingType::Prefix:
       return std::make_unique<PrefixKeyEncoding>(
-          encodedData, encoding->rowCount(), encoding->dataOffset());
+          encodedData,
+          encoding->rowCount(),
+          encoding->dataOffset(),
+          comparator);
     default:
       NIMBLE_FAIL(
           "Unsupported key encoding type: {}",
@@ -88,6 +96,39 @@ class TrivialKeyCursor final : public KeyCursor {
     return *position_++;
   }
 
+  void next(
+      size_t maxKeys,
+      std::vector<std::string_view>& keys,
+      const BufferAllocator& bufferAllocator) override {
+    const std::span<const std::string_view> batch{
+        position_,
+        std::min<size_t>(maxKeys, static_cast<size_t>(end_ - position_))};
+    if (batch.empty()) {
+      return;
+    }
+    size_t numBytes{0};
+    for (const auto key : batch) {
+      numBytes += key.size();
+    }
+    auto* const buffer = static_cast<char*>(bufferAllocator(numBytes));
+    NIMBLE_CHECK_NOT_NULL(buffer);
+    keys.reserve(keys.size() + batch.size());
+
+    // TODO: Copy the keys of a batch with one memcpy when they lie back to back
+    // in the string buffer of the chunk, or hand out views into that buffer
+    // instead of copies once the caller can hold it, as TrivialEncoding plans
+    // for its string buffer.
+    size_t offset{0};
+    for (const auto key : batch) {
+      if (!key.empty()) {
+        std::memcpy(buffer + offset, key.data(), key.size());
+      }
+      keys.emplace_back(buffer + offset, key.size());
+      offset += key.size();
+    }
+    position_ += batch.size();
+  }
+
  private:
   const std::string_view* position_;
   const std::string_view* const end_;
@@ -95,15 +136,19 @@ class TrivialKeyCursor final : public KeyCursor {
 
 } // namespace
 
-TrivialKeyEncoding::TrivialKeyEncoding(std::vector<std::string_view> values)
-    : values_{std::move(values)} {}
+TrivialKeyEncoding::TrivialKeyEncoding(
+    std::vector<std::string_view> values,
+    const KeyComparator* comparator)
+    : values_{std::move(values)}, comparator_{comparator} {}
 
 std::optional<uint32_t> TrivialKeyEncoding::seek(
     std::string_view value,
     bool inclusive) const {
-  const auto it = inclusive
-      ? std::lower_bound(values_.begin(), values_.end(), value)
-      : std::upper_bound(values_.begin(), values_.end(), value);
+  const auto it = withKeyOrder(comparator_, [&](auto keyOrder) {
+    return inclusive
+        ? std::lower_bound(values_.begin(), values_.end(), value, keyOrder)
+        : std::upper_bound(values_.begin(), values_.end(), value, keyOrder);
+  });
   if (it == values_.end()) {
     return std::nullopt;
   }
@@ -137,6 +182,26 @@ std::unique_ptr<KeyCursor> TrivialKeyEncoding::cursor(uint32_t startRow) const {
 // ---------------------------------------------------------------------------
 // PrefixKeyEncoding
 // ---------------------------------------------------------------------------
+
+namespace {
+
+// Gathers the bytes of the keys of a batch of prefix-encoded keys, and the
+// size of each, before the batch copies them to the caller's memory.
+struct BatchKeyScratch {
+  std::string bytes;
+  std::vector<size_t> sizes;
+};
+
+// Returns the batch scratch of this thread. A batch holds it only within its
+// next() call, and the caller's buffer allocator reads no keys, so the cursors
+// of a thread share it. It keeps its capacity across batches and cursors, so
+// a scan stops allocating once it holds the largest batch.
+BatchKeyScratch& batchKeyScratch() {
+  thread_local BatchKeyScratch scratch;
+  return scratch;
+}
+
+} // namespace
 
 class PrefixKeyEncoding::KeyScratch {
  public:
@@ -205,6 +270,38 @@ class PrefixKeyEncoding::PrefixKeyCursor final : public KeyCursor {
     return decodeEntryAt(position_, end_, row_, scratch_);
   }
 
+  // Each key builds on the key before in scratch_, so a batch gathers its keys
+  // in the batch scratch of the thread first and then copies them to the
+  // caller's memory with one allocation.
+  void next(
+      size_t maxKeys,
+      std::vector<std::string_view>& keys,
+      const BufferAllocator& bufferAllocator) override {
+    auto& batch = batchKeyScratch();
+    batch.bytes.clear();
+    batch.sizes.clear();
+    for (size_t key = 0; key < maxKeys && hasNext(); ++key) {
+      const auto decoded = decodeEntryAt(position_, end_, row_, scratch_);
+      batch.bytes.append(decoded);
+      batch.sizes.emplace_back(decoded.size());
+    }
+    if (batch.sizes.empty()) {
+      return;
+    }
+    auto* const buffer =
+        static_cast<char*>(bufferAllocator(batch.bytes.size()));
+    NIMBLE_CHECK_NOT_NULL(buffer);
+    if (!batch.bytes.empty()) {
+      std::memcpy(buffer, batch.bytes.data(), batch.bytes.size());
+    }
+    keys.reserve(keys.size() + batch.sizes.size());
+    size_t offset{0};
+    for (const auto size : batch.sizes) {
+      keys.emplace_back(buffer + offset, size);
+      offset += size;
+    }
+  }
+
  private:
   const char* position_;
   const char* const end_;
@@ -257,7 +354,8 @@ std::string_view PrefixKeyEncoding::decodeEntryAt(
 PrefixKeyEncoding::PrefixKeyEncoding(
     std::string_view encodedData,
     uint32_t rowCount,
-    uint32_t dataOffset)
+    uint32_t dataOffset,
+    const KeyComparator* comparator)
     : rowCount_{rowCount},
       restartInterval_{[&] {
         const auto* pos = encodedData.data() + dataOffset;
@@ -266,7 +364,8 @@ PrefixKeyEncoding::PrefixKeyEncoding(
       numRestarts_{velox::bits::divRoundUp(rowCount_, restartInterval_)},
       restartOffsets_{encodedData.data() + dataOffset + sizeof(uint32_t)},
       dataStart_{restartOffsets_ + numRestarts_ * sizeof(uint32_t)},
-      dataEnd_{encodedData.data() + encodedData.size()} {}
+      dataEnd_{encodedData.data() + encodedData.size()},
+      comparator_{comparator} {}
 
 uint32_t PrefixKeyEncoding::restartOffset(uint32_t restartIndex) const {
   NIMBLE_CHECK_LT(restartIndex, numRestarts_, "Restart index out of bounds");
@@ -277,6 +376,16 @@ uint32_t PrefixKeyEncoding::restartOffset(uint32_t restartIndex) const {
 std::optional<uint32_t> PrefixKeyEncoding::seek(
     std::string_view targetValue,
     bool inclusive) const {
+  return withKeyOrder(comparator_, [&](auto keyOrder) {
+    return seekWithOrder(targetValue, inclusive, keyOrder);
+  });
+}
+
+template <typename KeyOrder>
+std::optional<uint32_t> PrefixKeyEncoding::seekWithOrder(
+    std::string_view targetValue,
+    bool inclusive,
+    KeyOrder keyOrder) const {
   auto& scratch = scanScratch();
   const char* pos{nullptr};
   uint32_t row{0};
@@ -293,7 +402,7 @@ std::optional<uint32_t> PrefixKeyEncoding::seek(
     scratch.clear();
     const auto restartValue = decodeEntryAt(pos, dataEnd_, row, scratch);
 
-    if (restartValue.compare(targetValue) < 0) {
+    if (keyOrder.compare(restartValue, targetValue) < 0) {
       left = mid + 1;
     } else {
       right = mid;
@@ -313,13 +422,15 @@ std::optional<uint32_t> PrefixKeyEncoding::seek(
 
   if (inclusive) {
     while (row < rowCount_) {
-      if (decodeEntryAt(pos, dataEnd_, row, scratch) >= targetValue) {
+      if (keyOrder.compare(
+              decodeEntryAt(pos, dataEnd_, row, scratch), targetValue) >= 0) {
         return row - 1;
       }
     }
   } else {
     while (row < rowCount_) {
-      if (decodeEntryAt(pos, dataEnd_, row, scratch) > targetValue) {
+      if (keyOrder.compare(
+              decodeEntryAt(pos, dataEnd_, row, scratch), targetValue) > 0) {
         return row - 1;
       }
     }

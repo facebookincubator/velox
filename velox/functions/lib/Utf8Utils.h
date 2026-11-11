@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 #include "folly/CPortability.h"
 
@@ -56,6 +58,19 @@ namespace facebook::velox::functions {
 /// https://github.com/airlift/slice/blob/master/src/main/java/io/airlift/slice/SliceUtf8.java
 int32_t
 tryGetUtf8CharLength(const char* input, int64_t size, int32_t& codePoint);
+
+/// Decodes the next UTF-8 code point, replacing malformed input with U+FFFD
+/// using Java's malformed-input grouping. Returns the number of input bytes
+/// consumed and always sets codePoint.
+///
+/// @param input Pointer to the first byte of the code point. Must not be null.
+/// @param size Number of available bytes. Must be greater than zero.
+/// @param codePoint Populated with the decoded code point or U+FFFD for
+/// malformed input.
+int32_t decodeUtf8CodePointOrReplacement(
+    const char* input,
+    int64_t size,
+    int32_t& codePoint);
 
 /// Return the length in byte of the next UTF-8 encoded character at the
 /// beginning of `string`. If the beginning of `string` is not valid UTF-8
@@ -98,6 +113,14 @@ void writeUtf16Escape(char16_t value, char*& out);
 /// UTF-16 surrogate pair for a supplementary-plane code point (>= U+10000). The
 /// caller must ensure `out` has room (6 bytes for BMP, 12 for supplementary).
 void encodeUtf16Hex(char32_t codePoint, char*& out);
+
+/// Reads the unicode escape of four hexadecimal digits that starts at the
+/// given position of the input into the UTF-16 code unit. Returns false if
+/// there is no complete escape at that position.
+bool parseUnicodeEscape(
+    std::string_view input,
+    size_t position,
+    uint16_t& codeUnit);
 
 /// Invalid character replacement matrix.
 constexpr std::array<std::string_view, 6> kReplacementCharacterStrings{

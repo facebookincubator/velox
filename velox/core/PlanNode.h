@@ -22,6 +22,7 @@
 
 #include "velox/common/EnumDeclare.h"
 #include "velox/common/rpc/RPCTypes.h"
+#include "velox/common/vectorindex/VectorIndexMetric.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
@@ -32,6 +33,9 @@ struct ArrowArrayStream;
 namespace facebook::velox::core {
 
 class PlanNodeVisitor;
+class FixedPointNode;
+class StateSourceNode;
+class StateHashJoinNode;
 class PlanNodeVisitorContext;
 
 using PlanNodeId = std::string;
@@ -221,7 +225,9 @@ class PlanNode : public ISerializable {
   /// Returns true if this is a leaf plan node and corresponding operator
   /// requires an ExchangeClient to retrieve data. For instance, TableScanNode
   /// is a leaf node that doesn't require an ExchangeClient. But ExchangeNode is
-  /// a leaf node that requires an ExchangeClient.
+  /// a leaf node that requires an ExchangeClient. Except for MergeExchangeNode,
+  /// the task forwards the node's splits, which must be RemoteConnectorSplits,
+  /// to the client.
   virtual bool requiresExchangeClient() const {
     return false;
   }
@@ -323,6 +329,14 @@ class PlanNode : public ISerializable {
   static const PlanNode* findFirstNode(
       const PlanNode* root,
       const std::function<bool(const PlanNode* node)>& predicate);
+
+  /// Returns the first node of type T in the tree under 'root', or nullptr.
+  template <typename T>
+  static const T* findFirstNode(const PlanNode* root) {
+    const PlanNode* node = findFirstNode(
+        root, [](const PlanNode* candidate) { return candidate->is<T>(); });
+    return node == nullptr ? nullptr : node->as<T>();
+  }
 
   /// @return PlanNode with matching ID or nullptr if not found.
   static const PlanNode* findNodeById(
@@ -4757,6 +4771,197 @@ class SpatialJoinNode : public PlanNode {
 
 using SpatialJoinNodePtr = std::shared_ptr<const SpatialJoinNode>;
 
+/// Joins rows with query embeddings to the entries of vector indexes nearest to
+/// them. Translates to an exec::BaseVectorSearchJoinProbe and an
+/// exec::BaseVectorSearchJoinBuild, which Velox builds only with
+/// VELOX_ENABLE_FAISS. A separate pipeline is produced for the build side when
+/// generating exec::Operators.
+///
+/// One side has the index rows, the other the query rows; 'indexSide' says
+/// which. Each index row holds a packed local vector index over embeddings with
+/// ids (see common::vectorindex::LocalVectorIndex). A vector index's codec is a
+/// local index over its centroids, with cluster ids as ids. Each query row has
+/// an embedding. The join runs in two steps:
+///
+/// 1. The equality conditions on 'leftKeys' and 'rightKeys' match each query
+///    row to index rows, as in a hash join. With no keys, every query row
+///    matches every index row.
+/// 2. Within each match, the query row's embedding, normalized for the metric,
+///    is searched in the index row's index for its 'k' nearest embeddings. A
+///    query row matching several index rows gets up to 'k' from each.
+///
+/// Each embedding found gives an output row of the query row's and the index
+/// row's columns, the embedding's id and its score: the similarity the metric
+/// defines, where larger is nearer. Rows with a null key, query rows with a
+/// null embedding and index rows with a null index match nothing. An outer
+/// join, left with the query rows on the left or right with the query rows on
+/// the right, outputs a query row that finds no embeddings once, with nulls
+/// for the index row's columns, the id and the score. A join may not preserve
+/// the index rows.
+/// All query embeddings must have the same length and all indexes the same
+/// dimension, equal to it, and no embedding may have a null element; a
+/// violation is a user error. Every query row is checked, whether it matches
+/// an index row or not. An index row that matches no query row may not be
+/// read.
+///
+/// The build side, the right, is held in memory and the probe side, the left,
+/// streams. With the index rows on the build side, each probe batch of query
+/// rows is searched in the indexes it matches. With the index rows on the
+/// probe side, each streaming index is searched with the query rows it
+/// matches, and an index row is decoded once per probe batch.
+///
+/// Unlike inner and left joins of AbstractJoinNode (see
+/// isPreservingProbeOrder()), the join does not preserve the order of the
+/// probe rows within an input batch: it outputs the results of one local index
+/// at a time.
+class VectorSearchJoinNode : public PlanNode {
+ public:
+  /// The side of the join with the index rows: the probe side, the left, or
+  /// the build side, the right.
+  enum class IndexSide { kProbe, kBuild };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(IndexSide);
+
+  /// @param indexSide The side with the index rows. The other side has the
+  /// query rows.
+  /// @param embedding Column of the query side, of type ARRAY(REAL), with the
+  /// query embedding.
+  /// @param index Column of the index side, of type VARBINARY, with the packed
+  /// local index. It may not appear in the output.
+  /// @param format The format of the local indexes: its name in the query's
+  /// common::vectorindex::LocalVectorIndexFormats registry.
+  /// @param metric The metric the indexes were built for.
+  /// @param k The number of embeddings to find in each matching index, at
+  /// least 1. At most the size of the index are found.
+  /// @param searchOptions Search settings that override the ones recorded in
+  /// the indexes. Their keys and values are the format's.
+  /// @param idName Name of the output column with the id of each embedding
+  /// found, of type BIGINT. Not set if the output does not include it.
+  /// @param scoreName Name of the output column with the score of each
+  /// embedding found, of type REAL. Not set if the output does not include it.
+  /// @param outputType Left and right columns, and the id and score columns,
+  /// in any order.
+  VectorSearchJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      std::vector<FieldAccessTypedExprPtr> leftKeys,
+      std::vector<FieldAccessTypedExprPtr> rightKeys,
+      IndexSide indexSide,
+      FieldAccessTypedExprPtr embedding,
+      FieldAccessTypedExprPtr index,
+      std::string format,
+      common::vectorindex::VectorIndexMetric metric,
+      int64_t k,
+      std::vector<std::pair<std::string, std::string>> searchOptions,
+      std::optional<std::string> idName,
+      std::optional<std::string> scoreName,
+      PlanNodePtr left,
+      PlanNodePtr right,
+      RowTypePtr outputType);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  std::string_view name() const override {
+    return "VectorSearchJoin";
+  }
+
+  JoinType joinType() const {
+    return joinType_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& leftKeys() const {
+    return leftKeys_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& rightKeys() const {
+    return rightKeys_;
+  }
+
+  IndexSide indexSide() const {
+    return indexSide_;
+  }
+
+  bool isIndexOnBuild() const {
+    return indexSide_ == IndexSide::kBuild;
+  }
+
+  const RowTypePtr& probeType() const {
+    return sources_[0]->outputType();
+  }
+
+  const RowTypePtr& buildType() const {
+    return sources_[1]->outputType();
+  }
+
+  /// The query embedding column: a column of the side opposite the index.
+  const FieldAccessTypedExprPtr& embedding() const {
+    return embedding_;
+  }
+
+  /// The packed local index column: a column of the side indexSide() names.
+  const FieldAccessTypedExprPtr& index() const {
+    return index_;
+  }
+
+  const std::string& format() const {
+    return format_;
+  }
+
+  common::vectorindex::VectorIndexMetric metric() const {
+    return metric_;
+  }
+
+  int64_t k() const {
+    return k_;
+  }
+
+  const std::vector<std::pair<std::string, std::string>>& searchOptions()
+      const {
+    return searchOptions_;
+  }
+
+  const std::optional<std::string>& idName() const {
+    return idName_;
+  }
+
+  const std::optional<std::string>& scoreName() const {
+    return scoreName_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const JoinType joinType_;
+  const std::vector<FieldAccessTypedExprPtr> leftKeys_;
+  const std::vector<FieldAccessTypedExprPtr> rightKeys_;
+  const IndexSide indexSide_;
+  const FieldAccessTypedExprPtr embedding_;
+  const FieldAccessTypedExprPtr index_;
+  const std::string format_;
+  const common::vectorindex::VectorIndexMetric metric_;
+  const int64_t k_;
+  const std::vector<std::pair<std::string, std::string>> searchOptions_;
+  const std::optional<std::string> idName_;
+  const std::optional<std::string> scoreName_;
+  const std::vector<PlanNodePtr> sources_;
+  const RowTypePtr outputType_;
+};
+
+using VectorSearchJoinNodePtr = std::shared_ptr<const VectorSearchJoinNode>;
+
 class TopNNode : public PlanNode {
  public:
   TopNNode(
@@ -6192,10 +6397,15 @@ class TopNRowNumberNode : public PlanNode {
   /// @param sortingOrders Sorting orders, one per sorting key.
   /// @param rowNumberColumnName Optional name of the column containing row
   /// numbers or rank or dense_rank. If not specified, the output doesn't
-  /// include 'row_number' column. This is used when computing partial results.
-  /// @param limit Per-partition limit. The number of
-  /// rows produced by this node will not exceed this value for any given
-  /// partition. Extra rows will be dropped.
+  /// include that column.
+  /// @param limit Per-partition limit. Unless 'partial', the number of rows
+  /// produced by this node will not exceed this value for any given partition.
+  /// Extra rows will be dropped.
+  /// @param partial True for a step that runs on part of each partition's rows
+  /// before a final step that sees them all. A partial step may stop
+  /// filtering and pass its input through, leaving the limit to the final
+  /// step, so it must not have 'rowNumberColumnName'. Any other step applies
+  /// the limit exactly.
   TopNRowNumberNode(
       PlanNodeId id,
       RankFunction function,
@@ -6204,7 +6414,31 @@ class TopNRowNumberNode : public PlanNode {
       std::vector<SortOrder> sortingOrders,
       const std::optional<std::string>& rowNumberColumnName,
       int32_t limit,
+      bool partial,
       PlanNodePtr source);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Legacy constructor: a node without 'rowNumberColumnName' is partial.
+  TopNRowNumberNode(
+      PlanNodeId id,
+      RankFunction function,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      const std::optional<std::string>& rowNumberColumnName,
+      int32_t limit,
+      PlanNodePtr source)
+      : TopNRowNumberNode(
+            std::move(id),
+            function,
+            std::move(partitionKeys),
+            std::move(sortingKeys),
+            std::move(sortingOrders),
+            rowNumberColumnName,
+            limit,
+            /*partial=*/!rowNumberColumnName.has_value(),
+            std::move(source)) {}
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   class Builder {
    public:
@@ -6219,6 +6453,7 @@ class TopNRowNumberNode : public PlanNode {
           ? std::make_optional(other.outputType()->names().back())
           : std::nullopt;
       limit_ = other.limit();
+      isPartial_ = other.isPartial();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
       function_ = other.rankFunction();
@@ -6260,6 +6495,11 @@ class TopNRowNumberNode : public PlanNode {
       return *this;
     }
 
+    Builder& isPartial(bool isPartial) {
+      isPartial_ = isPartial;
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -6281,6 +6521,8 @@ class TopNRowNumberNode : public PlanNode {
       VELOX_USER_CHECK(
           limit_.has_value(), "TopNRowNumberNode limit is not set");
       VELOX_USER_CHECK(
+          isPartial_.has_value(), "TopNRowNumberNode isPartial is not set");
+      VELOX_USER_CHECK(
           source_.has_value(), "TopNRowNumberNode source is not set");
 
       return std::make_shared<TopNRowNumberNode>(
@@ -6291,6 +6533,7 @@ class TopNRowNumberNode : public PlanNode {
           sortingOrders_.value(),
           rowNumberColumnName_.value(),
           limit_.value(),
+          isPartial_.value(),
           source_.value());
     }
 
@@ -6302,6 +6545,7 @@ class TopNRowNumberNode : public PlanNode {
     std::optional<std::vector<SortOrder>> sortingOrders_;
     std::optional<std::optional<std::string>> rowNumberColumnName_;
     std::optional<int32_t> limit_;
+    std::optional<bool> isPartial_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -6348,6 +6592,10 @@ class TopNRowNumberNode : public PlanNode {
     return outputType_->size() > sources_[0]->outputType()->size();
   }
 
+  bool isPartial() const {
+    return partial_;
+  }
+
   std::string_view name() const override {
     return "TopNRowNumber";
   }
@@ -6367,6 +6615,8 @@ class TopNRowNumberNode : public PlanNode {
   const std::vector<SortOrder> sortingOrders_;
 
   const int32_t limit_;
+
+  const bool partial_;
 
   const std::vector<PlanNodePtr> sources_;
 
@@ -6593,6 +6843,10 @@ class PlanNodeVisitor {
   virtual void visit(const SpatialJoinNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
+  virtual void visit(
+      const VectorSearchJoinNode& node,
+      PlanNodeVisitorContext& ctx) const = 0;
+
   virtual void visit(const OrderByNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
@@ -6639,6 +6893,15 @@ class PlanNodeVisitor {
       const = 0;
 
   virtual void visit(const MixedUnionNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const FixedPointNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const StateSourceNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const StateHashJoinNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
   /// Used to visit custom PlanNodes that extend the set provided by Velox.

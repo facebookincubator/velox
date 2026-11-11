@@ -51,12 +51,12 @@ TEST_F(CacheTTLControllerTest, addOpenFileInfo) {
 TEST_F(CacheTTLControllerTest, getCacheAgeStats) {
   CacheTTLController::create(*cache_);
 
-  int64_t fileOpenTime = getCurrentTimeSec();
+  int64_t fileOpenTime = EpochTime::now<std::chrono::seconds>();
   for (auto i = 0; i < 1000; i++) {
     CacheTTLController::getInstance()->addOpenFileInfo(i, fileOpenTime + i);
   }
 
-  int64_t current = getCurrentTimeSec();
+  int64_t current = EpochTime::now<std::chrono::seconds>();
   EXPECT_GE(
       CacheTTLController::getInstance()->getCacheAgeStats().maxAgeSecs,
       current - fileOpenTime);

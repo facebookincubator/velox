@@ -41,6 +41,8 @@
 #include "velox/dwio/nimble/tablet/Compression.h"
 
 #include "folly/executors/IOThreadPoolExecutor.h"
+#include "folly/executors/InlineExecutor.h"
+#include "folly/executors/ManualExecutor.h"
 #include "folly/synchronization/Baton.h"
 
 #include <thread>
@@ -282,6 +284,92 @@ TEST_F(DirectMetadataInputTest, repeatedLoad) {
   NIMBLE_ASSERT_THROW(
       input->load(std::span<const nimble::MetadataSection>{}),
       "No sections to load");
+}
+
+TEST_F(DirectMetadataInputTest, executorStartsNoTaskDuringLoad) {
+  // The gap between the sections exceeds the coalesce distance, so they form
+  // two IO groups and load() hands the second group to the executor.
+  const std::string data0 = "first";
+  const std::string data1 = "second";
+  const nimble::MetadataSection section0{
+      /*offset=*/0,
+      /*size=*/static_cast<uint32_t>(data0.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data0.size()),
+  };
+  const nimble::MetadataSection section1{
+      /*offset=*/data0.size() + 100,
+      /*size=*/static_cast<uint32_t>(data1.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data1.size()),
+  };
+  const auto fileContent =
+      buildFileContent({section0, section1}, {data0, data1});
+  auto readFile = std::make_shared<nimble::testing::TrackingReadFile>(
+      std::make_shared<velox::InMemoryReadFile>(fileContent));
+
+  // The manual executor starts no task until drain(), so load() reads both
+  // groups itself and returns while the task is still queued.
+  folly::ManualExecutor executor;
+  auto options = makeMetadataInputOptions(/*maxCoalesceDistance=*/0);
+  options.executor = &executor;
+  auto input = nimble::MetadataInput::create(readFile.get(), options);
+  const auto results = input->load(std::array{section0, section1});
+  ASSERT_EQ(results.size(), 2);
+  EXPECT_EQ(results[0]->content(), data0);
+  EXPECT_EQ(results[1]->content(), data1);
+
+  // load() reads the unqueued group before it claims the queued one. That
+  // gives a running executor time to start the queued one.
+  const auto ioGroups = readFile->ioGroups();
+  ASSERT_EQ(ioGroups.size(), 2);
+  EXPECT_EQ(ioGroups[0].offset, section0.offset());
+  EXPECT_EQ(ioGroups[1].offset, section1.offset());
+
+  // The queued task runs after load() returns and after the MetadataInput is
+  // destroyed, as when a cached tablet is evicted. ASAN reports any access to
+  // the freed state.
+  input.reset();
+  EXPECT_EQ(executor.drain(), 1);
+}
+
+TEST_F(DirectMetadataInputTest, executorReadsAllButFirstGroup) {
+  // The gap between the sections exceeds the coalesce distance, so they form
+  // two IO groups.
+  const std::string data0 = "first";
+  const std::string data1 = "second";
+  const nimble::MetadataSection section0{
+      /*offset=*/0,
+      /*size=*/static_cast<uint32_t>(data0.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data0.size()),
+  };
+  const nimble::MetadataSection section1{
+      /*offset=*/data0.size() + 100,
+      /*size=*/static_cast<uint32_t>(data1.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data1.size()),
+  };
+  const auto fileContent =
+      buildFileContent({section0, section1}, {data0, data1});
+  auto readFile = std::make_shared<nimble::testing::TrackingReadFile>(
+      std::make_shared<velox::InMemoryReadFile>(fileContent));
+
+  // The inline executor runs each task inside add(), so the first read is the
+  // group load() queued. load() then reads the first group and takes the
+  // queued group's finished read.
+  auto options = makeMetadataInputOptions(/*maxCoalesceDistance=*/0);
+  options.executor = &folly::InlineExecutor::instance();
+  auto input = nimble::MetadataInput::create(readFile.get(), options);
+  const auto results = input->load(std::array{section0, section1});
+  ASSERT_EQ(results.size(), 2);
+  EXPECT_EQ(results[0]->content(), data0);
+  EXPECT_EQ(results[1]->content(), data1);
+
+  const auto ioGroups = readFile->ioGroups();
+  ASSERT_EQ(ioGroups.size(), 2);
+  EXPECT_EQ(ioGroups[0].offset, section1.offset());
+  EXPECT_EQ(ioGroups[1].offset, section0.offset());
 }
 
 TEST_F(DirectMetadataInputTest, ioStats) {
@@ -703,9 +791,17 @@ TEST_P(CachedMetadataInputTest, loadWithCache) {
     const auto fileContent = buildFileContent(sections, fileDataParts);
     auto readFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
 
+    // Every load counts each section at its size in the file, whether it reads
+    // the section from the file, RAM or SSD.
+    uint64_t sectionBytes{0};
+    for (const auto& section : sections) {
+      sectionBytes += section.size();
+    }
+
     // First load — populates cache, expect zero ram hits.
     {
       const auto ramHitBefore = metadataIoStats_->ramHit().count();
+      const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
       const auto storageLatencyBefore =
           metadataIoStats_->storageReadLatencyUs().count();
       auto input = createCachedInput(readFile.get());
@@ -714,6 +810,8 @@ TEST_P(CachedMetadataInputTest, loadWithCache) {
         EXPECT_EQ(results[i]->content(), testData.specs[i].data);
       }
       EXPECT_EQ(metadataIoStats_->ramHit().count(), ramHitBefore);
+      EXPECT_EQ(
+          metadataIoStats_->rawBytesRead() - rawBytesBefore, sectionBytes);
       EXPECT_GT(
           metadataIoStats_->storageReadLatencyUs().count(),
           storageLatencyBefore);
@@ -724,9 +822,11 @@ TEST_P(CachedMetadataInputTest, loadWithCache) {
           return s.hasUncompressedSize;
         });
 
-    // Second load — sections with uncompressed size hit cache directly.
+    // Second load — sections with uncompressed size hit cache directly. The
+    // others are read from the file again and then found in the cache.
     {
       const auto ramHitBefore = metadataIoStats_->ramHit().count();
+      const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
       auto input = createCachedInput(readFile.get());
       auto results = input->load(sections);
       for (uint32_t i = 0; i < results.size(); ++i) {
@@ -734,6 +834,8 @@ TEST_P(CachedMetadataInputTest, loadWithCache) {
       }
       EXPECT_GE(
           metadataIoStats_->ramHit().count() - ramHitBefore, sectionsWithSize);
+      EXPECT_EQ(
+          metadataIoStats_->rawBytesRead() - rawBytesBefore, sectionBytes);
     }
 
     // Third load (SSD only) — flush RAM to SSD, clear RAM, read from SSD.
@@ -745,6 +847,7 @@ TEST_P(CachedMetadataInputTest, loadWithCache) {
 
       const auto ramHitBefore = metadataIoStats_->ramHit().count();
       const auto ssdReadBefore = metadataIoStats_->ssdRead().count();
+      const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
       const auto storageLatencyBefore =
           metadataIoStats_->storageReadLatencyUs().count();
 
@@ -758,6 +861,31 @@ TEST_P(CachedMetadataInputTest, loadWithCache) {
       EXPECT_GE(
           metadataIoStats_->ssdRead().count() - ssdReadBefore,
           sectionsWithSize);
+      EXPECT_EQ(
+          metadataIoStats_->rawBytesRead() - rawBytesBefore, sectionBytes);
+      EXPECT_EQ(
+          metadataIoStats_->storageReadLatencyUs().count(),
+          storageLatencyBefore);
+    }
+
+    // Fourth load (SSD only) — the third load put every section back in RAM. A
+    // section without an uncompressed size is still looked up on SSD first,
+    // which gives the size of its RAM entry.
+    if (enableSsd()) {
+      const auto ssdReadBefore = metadataIoStats_->ssdRead().count();
+      const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
+      const auto storageLatencyBefore =
+          metadataIoStats_->storageReadLatencyUs().count();
+
+      auto input = createCachedInput(readFile.get());
+      auto results = input->load(sections);
+      for (uint32_t i = 0; i < results.size(); ++i) {
+        EXPECT_EQ(results[i]->content(), testData.specs[i].data);
+      }
+
+      EXPECT_EQ(metadataIoStats_->ssdRead().count(), ssdReadBefore);
+      EXPECT_EQ(
+          metadataIoStats_->rawBytesRead() - rawBytesBefore, sectionBytes);
       EXPECT_EQ(
           metadataIoStats_->storageReadLatencyUs().count(),
           storageLatencyBefore);
@@ -894,7 +1022,8 @@ DEBUG_ONLY_TEST_P(CachedMetadataInputTest, ioCoalescing) {
       EXPECT_EQ(metadataIoStats_->ramHit().count(), ramHitBefore);
     }
 
-    // Second load — warm cache, expect all RAM hits, zero file IO.
+    // Second load — warm cache, expect all RAM hits, zero file IO. Raw bytes
+    // read count the hits too.
     {
       const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
       const auto overreadBefore = metadataIoStats_->rawOverreadBytes();
@@ -905,7 +1034,9 @@ DEBUG_ONLY_TEST_P(CachedMetadataInputTest, ioCoalescing) {
       auto input = createCachedInput(readFile.get());
       input->load(sections);
 
-      EXPECT_EQ(metadataIoStats_->rawBytesRead(), rawBytesBefore);
+      EXPECT_EQ(
+          metadataIoStats_->rawBytesRead() - rawBytesBefore,
+          expectedPayloadBytes);
       EXPECT_EQ(metadataIoStats_->rawOverreadBytes(), overreadBefore);
       EXPECT_EQ(
           metadataIoStats_->ramHit().count() - ramHitBefore, sections.size());
@@ -931,7 +1062,9 @@ DEBUG_ONLY_TEST_P(CachedMetadataInputTest, ioCoalescing) {
       auto input = createCachedInput(readFile.get());
       input->load(sections);
 
-      EXPECT_EQ(metadataIoStats_->rawBytesRead(), rawBytesBefore);
+      EXPECT_EQ(
+          metadataIoStats_->rawBytesRead() - rawBytesBefore,
+          expectedPayloadBytes);
       EXPECT_EQ(metadataIoStats_->rawOverreadBytes(), overreadBefore);
       EXPECT_EQ(metadataIoStats_->ramHit().count(), ramHitBefore);
       EXPECT_EQ(
@@ -1262,10 +1395,14 @@ TEST_P(CachedMetadataInputTest, cacheAndFindMetadata) {
   input->cacheMetadata(42, ranges);
 
   // Cache hit after caching.
+  const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
   auto result = input->findCachedMetadata(42);
   ASSERT_NE(result, nullptr);
   EXPECT_EQ(result->content().size(), data1.size() + data2.size());
   EXPECT_EQ(result->content(), std::string_view("helloworld"));
+  EXPECT_EQ(
+      metadataIoStats_->rawBytesRead() - rawBytesBefore,
+      result->content().size());
 }
 
 TEST_P(CachedMetadataInputTest, cacheAndFindMetadataRespectsSizeLimit) {
@@ -1378,7 +1515,7 @@ TEST_P(CachedMetadataInputTest, loweredLimitSkipsExistingSsdEntry) {
   cache_->ssdCache()->waitForWriteToFinish();
   cache_->clear();
 
-  const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
+  const auto bytesReadBefore = metadataIoStats_->read().sum();
   const auto ssdReadBefore = metadataIoStats_->ssdRead().count();
   auto input = createCachedInput(
       readFile.get(),
@@ -1387,7 +1524,7 @@ TEST_P(CachedMetadataInputTest, loweredLimitSkipsExistingSsdEntry) {
       kLowerLimit);
   auto results = input->load(std::array{section});
   EXPECT_EQ(results[0]->content(), data);
-  EXPECT_GT(metadataIoStats_->rawBytesRead(), rawBytesBefore);
+  EXPECT_EQ(metadataIoStats_->read().sum() - bytesReadBefore, data.size());
   EXPECT_EQ(metadataIoStats_->ssdRead().count(), ssdReadBefore);
 }
 

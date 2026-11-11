@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include "velox/exec/AggregateCompanionAdapter.h"
 #include "velox/exec/AggregateCompanionSignatures.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/exec/window/AggregateWindow.h"
 
 namespace facebook::velox::exec {
@@ -294,10 +295,15 @@ std::unique_ptr<Aggregate> Aggregate::create(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& config,
+    const std::vector<VectorPtr>& constantInputs) {
   // Lookup the function in the new registry first.
   if (auto func = getAggregateFunctionEntry(name)) {
-    return func->factory(step, argTypes, resultType, config);
+    auto aggregate = func->factory(step, argTypes, resultType, config);
+    if (!constantInputs.empty()) {
+      aggregate->setConstantInputs(constantInputs);
+    }
+    return aggregate;
   }
 
   VELOX_USER_FAIL("Aggregate function not registered: {}", name);
@@ -314,18 +320,16 @@ void Aggregate::setAllocatorInternal(HashStringAllocator* allocator) {
   allocator_ = allocator;
 }
 
-void Aggregate::setOffsetsInternal(
-    int32_t offset,
-    int32_t nullByte,
-    uint8_t nullMask,
-    int32_t initializedByte,
-    uint8_t initializedMask,
-    int32_t rowSizeOffset) {
-  nullByte_ = nullByte;
-  nullMask_ = nullMask;
-  initializedByte_ = initializedByte;
-  initializedMask_ = initializedMask;
-  offset_ = offset;
+void Aggregate::setOffsets(RowColumn column, int32_t rowSizeOffset) {
+  setOffsetsInternal(column, rowSizeOffset);
+}
+
+void Aggregate::setOffsetsInternal(RowColumn column, int32_t rowSizeOffset) {
+  nullByte_ = column.nullByte();
+  nullMask_ = column.nullMask();
+  initializedByte_ = column.initializedByte();
+  initializedMask_ = column.initializedMask();
+  offset_ = column.offset();
   rowSizeOffset_ = rowSizeOffset;
 }
 

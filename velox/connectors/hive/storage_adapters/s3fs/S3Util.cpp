@@ -19,6 +19,7 @@
 // type of file can be constructed based on a filename. See the
 // (register|generate)ReadFile and (register|generate)WriteFile functions.
 
+#include "folly/Conv.h"
 #include "folly/IPAddress.h"
 #include "re2/re2.h"
 
@@ -156,7 +157,7 @@ std::optional<folly::Uri> S3ProxyConfigurationBuilder::build() {
   /// 2 parts separated by a colon.
   std::vector<std::string> endpointElements{};
   folly::split(':', s3Endpoint_, endpointElements);
-  if (FOLLY_UNLIKELY(endpointElements.size() > 2)) {
+  if (endpointElements.size() > 2) [[unlikely]] {
     LOG(ERROR) << fmt::format(
         "Too many parts in S3 endpoint URI {} ", s3Endpoint_);
     return std::nullopt;
@@ -200,6 +201,21 @@ std::optional<std::string> parseAWSStandardRegionName(
 
   // Use default region set by the SDK.
   return std::nullopt;
+}
+
+bool useFipsEndpoint(const S3Config& s3Config) {
+  const auto useFips = s3Config.useFips();
+  if (useFips.has_value()) {
+    return useFips.value();
+  }
+  const char* value = std::getenv("AWS_USE_FIPS_ENDPOINT");
+  if (value == nullptr || *value == '\0') {
+    return false;
+  }
+  const auto result = folly::tryTo<bool>(value);
+  VELOX_USER_CHECK(
+      result.hasValue(), "Invalid AWS_USE_FIPS_ENDPOINT value: {}", value);
+  return result.value();
 }
 
 } // namespace facebook::velox::filesystems

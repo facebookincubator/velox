@@ -1160,6 +1160,132 @@ TEST_P(EncodedVectorCopyTest, allNullDictionaryOverEmptyBase) {
   test::assertEqualVectors(expected, target);
 }
 
+TEST_P(EncodedVectorCopyTest, allNullRowOverEmptyChildren) {
+  // Every row is null, so the children need no rows.
+  auto source = std::make_shared<RowVector>(
+      pool(),
+      ROW("a", BIGINT()),
+      allocateNulls(2, pool(), bits::kNull),
+      2,
+      std::vector<VectorPtr>{makeFlatVector<int64_t>({})});
+  source->validate({});
+
+  // Copy into a new target.
+  {
+    BaseVector::CopyRange range = {0, 0, 2};
+    VectorPtr target;
+    copy(source, folly::Range(&range, 1), target);
+
+    auto expected = makeRowVector(
+        {makeFlatVector<int64_t>({0, 0})}, [](auto /*row*/) { return true; });
+    test::assertEqualVectors(expected, target);
+  }
+
+  // Copy into an existing target.
+  {
+    BaseVector::CopyRange range = {0, 1, 2};
+    VectorPtr target = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+    copy(source, folly::Range(&range, 1), target);
+
+    auto expected = makeRowVector(
+        {makeFlatVector<int64_t>({1, 0, 0})}, [](auto row) { return row > 0; });
+    test::assertEqualVectors(expected, target);
+  }
+}
+
+TEST_P(EncodedVectorCopyTest, trailingNullRowsOverShortChildren) {
+  // Rows 1 and 2 are null, so the child only needs row 0.
+  auto nulls = allocateNulls(3, pool(), bits::kNotNull);
+  bits::setNull(nulls->asMutable<uint64_t>(), 1);
+  bits::setNull(nulls->asMutable<uint64_t>(), 2);
+  auto source = std::make_shared<RowVector>(
+      pool(),
+      ROW("a", BIGINT()),
+      nulls,
+      3,
+      std::vector<VectorPtr>{makeFlatVector<int64_t>({7})});
+  source->validate({});
+
+  // Copy into a new target.
+  {
+    BaseVector::CopyRange range = {0, 0, 3};
+    VectorPtr target;
+    copy(source, folly::Range(&range, 1), target);
+
+    auto expected = makeRowVector(
+        {makeFlatVector<int64_t>({7, 0, 0})}, [](auto row) { return row > 0; });
+    test::assertEqualVectors(expected, target);
+  }
+
+  // Copy into an existing target.
+  {
+    BaseVector::CopyRange range = {0, 1, 3};
+    VectorPtr target = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+    copy(source, folly::Range(&range, 1), target);
+
+    auto expected = makeRowVector(
+        {makeFlatVector<int64_t>({1, 7, 0, 0})},
+        [](auto row) { return row > 1; });
+    test::assertEqualVectors(expected, target);
+  }
+}
+
+TEST_P(EncodedVectorCopyTest, rowWithUnprojectedChild) {
+  // A null child is a column the reader did not project.
+  const auto rowType = ROW({{"a", BIGINT()}, {"b", BIGINT()}});
+  auto makeRow = [&](const std::vector<int64_t>& values) {
+    return std::make_shared<RowVector>(
+        pool(),
+        rowType,
+        nullptr,
+        values.size(),
+        std::vector<VectorPtr>{makeFlatVector<int64_t>(values), nullptr});
+  };
+  EncodedVectorCopyOptions options;
+  options.pool = pool();
+  options.reuseSource = reuseSource();
+  const auto source = makeRow({4, 5});
+  const auto expected = makeRow({1, 2, 4, 5});
+
+  {
+    SCOPED_TRACE("New copy");
+    BaseVector::CopyRange range = {0, 0, 2};
+    VectorPtr target;
+    encodedVectorCopy(options, source, folly::Range(&range, 1), target);
+    test::assertEqualVectors(source, target);
+    EXPECT_EQ(target->asChecked<RowVector>()->childAt(1), nullptr);
+  }
+
+  {
+    SCOPED_TRACE("Immutable target");
+    BaseVector::CopyRange range = {0, 2, 2};
+    const VectorPtr target = makeRow({1, 2});
+    auto actual = target;
+    encodedVectorCopy(options, source, folly::Range(&range, 1), actual);
+    test::assertEqualVectors(expected, actual);
+    EXPECT_EQ(actual->asChecked<RowVector>()->childAt(1), nullptr);
+  }
+
+  {
+    SCOPED_TRACE("Mutable target");
+    BaseVector::CopyRange range = {0, 2, 2};
+    VectorPtr target = makeRow({1, 2});
+    encodedVectorCopy(options, source, folly::Range(&range, 1), target);
+    test::assertEqualVectors(expected, target);
+    EXPECT_EQ(target->asChecked<RowVector>()->childAt(1), nullptr);
+  }
+
+  {
+    SCOPED_TRACE("Projection mismatch");
+    BaseVector::CopyRange range = {0, 2, 2};
+    VectorPtr target = makeRowVector(
+        {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({1, 2})});
+    VELOX_ASSERT_THROW(
+        encodedVectorCopy(options, source, folly::Range(&range, 1), target),
+        "Source and target must project the same row children");
+  }
+}
+
 TEST_P(EncodedVectorCopyTest, lazyFlatMapIntoFlatMap) {
   // Like the fuzzer tests, use lazy sources only when the source is reused.
   if (!reuseSource()) {

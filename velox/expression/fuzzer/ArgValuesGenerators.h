@@ -251,4 +251,19 @@ class InverseFCdfArgValuesGenerator : public ArgValuesGenerator {
       ExpressionFuzzerState& state) override;
 };
 
+/// Generates arguments for Spark levenshtein. Reads each argument from an
+/// input column, with strings of at most 1,000 characters. The distance takes
+/// time proportional to the product of the two lengths, so strings near the
+/// 1 MB limit of functions like lpad take minutes per row.
+class LevenshteinArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  ~LevenshteinArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+};
+
 } // namespace facebook::velox::fuzzer

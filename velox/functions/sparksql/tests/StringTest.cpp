@@ -82,6 +82,34 @@ TEST_F(StringTest, bitLengthVarbinary) {
   EXPECT_EQ(bitLength("\U0001F408"), 32);
 }
 
+TEST_F(StringTest, octetLength) {
+  const auto octetLength = [&](const std::optional<std::string>& input,
+                               const TypePtr& inputType) {
+    return evaluateOnce<int32_t>("octet_length(c0)", inputType, input);
+  };
+
+  for (const auto& inputType : std::vector<TypePtr>{VARCHAR(), VARBINARY()}) {
+    SCOPED_TRACE(inputType->toString());
+    EXPECT_EQ(octetLength("", inputType), 0);
+    EXPECT_EQ(octetLength(std::string("\0", 1), inputType), 1);
+    EXPECT_EQ(octetLength("1", inputType), 1);
+    EXPECT_EQ(octetLength("123", inputType), 3);
+    // Verifies byte count rather than character count.
+    EXPECT_EQ(octetLength("😋", inputType), 4);
+    // Euro sign is 3 bytes in UTF-8.
+    EXPECT_EQ(octetLength("€", inputType), 3);
+    // Consists of five codepoints (17 bytes).
+    EXPECT_EQ(octetLength(kWomanFacepalmingLightSkinTone, inputType), 17);
+    EXPECT_EQ(octetLength("\U0001F408", inputType), 4);
+    EXPECT_EQ(octetLength(std::string("\xFF\x00\x80", 3), inputType), 3);
+    EXPECT_EQ(octetLength(std::nullopt, inputType), std::nullopt);
+  }
+
+  // ASCII boundary: DEL (0x7F) is 1 byte, next codepoint (0x80) is 2 bytes.
+  EXPECT_EQ(octetLength("\x7F", VARBINARY()), 1);
+  EXPECT_EQ(octetLength("\xC2\x80", VARBINARY()), 2);
+}
+
 TEST_F(StringTest, chr) {
   const auto chr = [&](std::optional<int64_t> arg) {
     return evaluateOnce<std::string>("chr(c0)", arg);
@@ -147,6 +175,20 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
   EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
 
+  // Powers of the target base and values just above them.
+  EXPECT_EQ(conv("3E8", 16, 10), "1000");
+  EXPECT_EQ(conv("1000", 10, 10), "1000");
+  EXPECT_EQ(conv("1000000", 10, 10), "1000000");
+  EXPECT_EQ(conv("1000000000", 10, 10), "1000000000");
+  EXPECT_EQ(conv("1000000000000", 10, 10), "1000000000000");
+  EXPECT_EQ(conv("1000000000000000", 10, 10), "1000000000000000");
+  EXPECT_EQ(conv("DE0B6B3A7640000", 16, 10), "1000000000000000000");
+  EXPECT_EQ(conv("1000000000000002112", 10, 10), "1000000000000002112");
+  EXPECT_EQ(conv("1000000000000002113", 10, 10), "1000000000000002113");
+  EXPECT_EQ(conv("1000", 10, -10), "1000");
+  EXPECT_EQ(conv("-1000", 10, -10), "-1000");
+  EXPECT_EQ(conv("4913", 10, 17), "1000");
+
   // Leading and trailing spaces.
   EXPECT_EQ(conv("15 ", 10, 16), "F");
   EXPECT_EQ(conv(" 15 ", 10, 16), "F");
@@ -172,6 +214,63 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv(" ", 10, 16), std::nullopt);
   EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
   EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
+}
+
+TEST_F(StringTest, convPowersOfBase) {
+  // Reference conversion of a non-negative value, in upper case like Spark.
+  const auto toDigits = [](uint64_t value, int32_t base) {
+    std::string digits;
+    do {
+      const auto digit = static_cast<int32_t>(value % base);
+      digits.insert(
+          digits.begin(),
+          static_cast<char>(digit < 10 ? '0' + digit : 'A' + digit - 10));
+      value /= base;
+    } while (value != 0);
+    return digits;
+  };
+
+  const auto testConv = [&](const std::vector<std::string>& inputs,
+                            int32_t toBase,
+                            const std::vector<std::string>& expected) {
+    const auto size = static_cast<vector_size_t>(inputs.size());
+    const auto result = evaluate(
+        "conv(c0, c1, c2)",
+        makeRowVector({
+            makeFlatVector<std::string>(inputs),
+            makeConstant<int32_t>(10, size),
+            makeConstant<int32_t>(toBase, size),
+        }));
+    velox::test::assertEqualVectors(
+        makeFlatVector<std::string>(expected), result);
+  };
+
+  for (int32_t base = 2; base <= 36; ++base) {
+    SCOPED_TRACE("base " + std::to_string(base));
+    std::vector<std::string> inputs;
+    std::vector<std::string> expected;
+    std::vector<std::string> signedInputs;
+    std::vector<std::string> signedExpected;
+    // Every power of 'base' that fits in 64 bits, and its neighbors.
+    for (uint64_t power = base;; power *= base) {
+      for (const uint64_t value : {power - 1, power, power + 1}) {
+        inputs.push_back(std::to_string(value));
+        expected.push_back(toDigits(value, base));
+        if (value <=
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+          signedInputs.push_back(std::to_string(value));
+          signedExpected.push_back(toDigits(value, base));
+          signedInputs.push_back("-" + std::to_string(value));
+          signedExpected.push_back("-" + toDigits(value, base));
+        }
+      }
+      if (power > std::numeric_limits<uint64_t>::max() / base) {
+        break;
+      }
+    }
+    testConv(inputs, base, expected);
+    testConv(signedInputs, -base, signedExpected);
+  }
 }
 
 TEST_F(StringTest, levenshtein) {
@@ -606,6 +705,112 @@ TEST_F(StringTest, left) {
   EXPECT_EQ(left("da\u6570\u636Eta", 2), "da");
   EXPECT_EQ(left("da\u6570\u636Eta", 3), "da\u6570");
   EXPECT_EQ(left("da\u6570\u636Eta", 30), "da\u6570\u636Eta");
+}
+
+TEST_F(StringTest, right) {
+  const auto right = [&](const std::optional<std::string>& str,
+                         const std::optional<int32_t>& length) {
+    return evaluateOnce<std::string>("right(c0, c1)", str, length);
+  };
+
+  EXPECT_EQ(right(std::nullopt, 2), std::nullopt);
+  EXPECT_EQ(right("example", std::nullopt), std::nullopt);
+  EXPECT_EQ(right(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(right("", 3), "");
+
+  EXPECT_EQ(right("example", -2), "");
+  EXPECT_EQ(right("example", 0), "");
+  EXPECT_EQ(right("example", 2), "le");
+  EXPECT_EQ(right("example", 7), "example");
+  EXPECT_EQ(right("example", 20), "example");
+  EXPECT_EQ(right("example", std::numeric_limits<int32_t>::min()), "");
+  EXPECT_EQ(right("example", std::numeric_limits<int32_t>::max()), "example");
+
+  EXPECT_EQ(right("ASCII", 3), "CII");
+  EXPECT_EQ(right("da\u6570\u636Eta", 3), "\u636Eta");
+  EXPECT_EQ(right("a\U0001F60Bb", 2), "\U0001F60Bb");
+
+  // Combining marks are separate code points, not grapheme clusters.
+  EXPECT_EQ(right("Cafe\u0301", 1), "\u0301");
+  EXPECT_EQ(right("Cafe\u0301", 2), "e\u0301");
+}
+
+TEST_F(StringTest, rightMalformedUtf8) {
+  const auto right = [&](const std::optional<std::string>& str,
+                         const std::optional<int32_t>& length) {
+    return evaluateOnce<std::string>("right(c0, c1)", str, length);
+  };
+
+  const std::string leadingContinuationBytes{
+      "\x80\x80"
+      "ab",
+      4};
+  const std::string interiorContinuationByte{
+      "a\x80"
+      "b",
+      3};
+  const std::string onlyContinuationBytes{"\x80\x80", 2};
+  const std::string disallowedLeadingBytes{
+      "a\xC0\xC1\xF5"
+      "b",
+      5};
+  const std::string invalidContinuationAfterLead{
+      "\xC2"
+      "ab",
+      3};
+
+  EXPECT_EQ(right(leadingContinuationBytes, 2), "ab");
+  EXPECT_EQ(
+      right(interiorContinuationByte, 2),
+      std::string(
+          "\x80"
+          "b",
+          2));
+  EXPECT_EQ(right(onlyContinuationBytes, 1), std::string("\x80", 1));
+  EXPECT_EQ(
+      right(disallowedLeadingBytes, 4),
+      std::string(
+          "\xC0\xC1\xF5"
+          "b",
+          4));
+  EXPECT_EQ(right(invalidContinuationAfterLead, 1), "b");
+  EXPECT_EQ(
+      right(invalidContinuationAfterLead, 2), invalidContinuationAfterLead);
+}
+
+TEST_F(StringTest, rightColumnAndConstantArguments) {
+  auto strings = makeNullableFlatVector<std::string>(
+      {"abcdef",
+       "a\U0001F60Bb",
+       "da\u6570\u636Eta",
+       "Cafe\u0301",
+       "",
+       std::nullopt});
+  auto lengths = makeNullableFlatVector<int32_t>(
+      {1, 2, 3, 2, std::numeric_limits<int32_t>::max(), 4});
+  auto data = makeRowVector({strings, lengths});
+
+  VectorPtr result = makeFlatVector<std::string>(
+      data->size(), [](vector_size_t /*row*/) { return "previous"; });
+  SelectivityVector rows(data->size());
+  auto actual =
+      evaluate<FlatVector<StringView>>("right(c0, c1)", data, rows, result);
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"f", "\U0001F60Bb", "\u636Eta", "e\u0301", "", std::nullopt}),
+      actual);
+
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"ef", "\U0001F60Bb", "ta", "e\u0301", "", std::nullopt}),
+      evaluate("right(c0, cast(2 as integer))", makeRowVector({strings})));
+
+  auto varyingLengths =
+      makeNullableFlatVector<int32_t>({-1, 0, 2, 6, 20, std::nullopt});
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"", "", "ef", "abcdef", "abcdef", std::nullopt}),
+      evaluate("right('abcdef', c0)", makeRowVector({varyingLengths})));
 }
 
 TEST_F(StringTest, lengthString) {

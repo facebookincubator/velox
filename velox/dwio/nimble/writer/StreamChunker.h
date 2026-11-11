@@ -18,7 +18,7 @@
 
 #include <algorithm>
 
-#include "velox/dwio/nimble/velox/StreamData.h"
+#include "velox/dwio/nimble/writer/StreamData.h"
 
 namespace facebook::nimble {
 namespace detail {
@@ -364,7 +364,7 @@ class NullableContentStreamChunker final : public StreamChunker {
         minChunkSize_{options.minChunkSize},
         maxChunkSize_{options.maxChunkSize},
         omitStream_{detail::shouldOmitDataStream(
-            streamData.data().size(),
+            streamData.data().size() + streamData.extraMemory(),
             options.minChunkSize,
             streamData.nonNulls().empty(),
             options.isFirstChunk)},

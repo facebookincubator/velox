@@ -24,8 +24,8 @@
 #include "folly/io/IOBuf.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -185,7 +185,7 @@ class Projector {
       const std::vector<uint32_t>& selectedStreamIndices,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
@@ -200,7 +200,7 @@ class Projector {
       const std::vector<uint32_t>& selectedStreamIndices,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
@@ -214,7 +214,7 @@ class Projector {
       const std::vector<uint32_t>& selectedStreamIndices,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
@@ -228,7 +228,7 @@ class Projector {
       const std::vector<StreamMapping>& sortedStreamMappings,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 

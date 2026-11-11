@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <concepts>
+
+#include "velox/common/base/Portability.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/expression/VectorWriters.h"
@@ -72,7 +75,207 @@ using arg_type = typename VectorExec::template resolver<T>::in_type;
 template <typename T>
 using optional_arg_type = OptionalAccessor<T>;
 
-template <typename FUNC>
+namespace detail {
+
+// Whether 'F' has default null behavior: true unless 'F' sets
+// default_null_behavior_ to false.
+template <typename F>
+constexpr bool hasDefaultNullBehavior() {
+  if constexpr (requires { F::default_null_behavior_; }) {
+    return F::default_null_behavior_;
+  } else {
+    return true;
+  }
+}
+
+template <typename Accumulator, typename... T>
+concept AcceptsInput =
+    requires(Accumulator& accumulator, HashStringAllocator* allocator) {
+      accumulator.addInput(allocator, std::declval<arg_type<T>>()...);
+    };
+
+template <typename Accumulator, typename... T>
+concept AcceptsOptionalInput =
+    requires(Accumulator& accumulator, HashStringAllocator* allocator) {
+      {
+        accumulator.addInput(allocator, std::declval<optional_arg_type<T>>()...)
+      } -> std::convertible_to<bool>;
+    };
+
+// Accept a pointer to Row<T...> or AggregateInputType<T...> when
+// 'Accumulator' accepts the arguments 'T...'. Unpacking the arguments here
+// lets a failed check name the addInput call that does not compile.
+template <
+    typename Accumulator,
+    template <typename...> class TInput,
+    typename... T>
+  requires AcceptsInput<Accumulator, T...>
+void checkInput(TInput<T...>*);
+
+template <
+    typename Accumulator,
+    template <typename...> class TInput,
+    typename... T>
+  requires AcceptsOptionalInput<Accumulator, T...>
+void checkOptionalInput(TInput<T...>*);
+
+} // namespace detail
+
+/// What a write method returns: bool, true when it wrote a non-null value and
+/// false when the result is null; or void, when the result is never null.
+template <typename T>
+concept AggregateWriteResult = std::same_as<T, bool> || std::same_as<T, void>;
+
+/// The accumulator of a simple aggregation function 'F' with default null
+/// behavior. T1, ... are the arguments of F::InputType. Groups start null.
+///
+/// - addInput(allocator, arg_type<T1>, ...) adds one row of raw input. Rows
+///   with a null argument never reach it; for a Variadic argument, a null in
+///   any of its elements skips the row too.
+/// - combine(allocator, arg_type<IntermediateType>) adds one intermediate
+///   result. Null intermediate results never reach it.
+/// - writeIntermediateResult(out) and writeFinalResult(out) write the
+///   accumulator out. They run only for non-null groups; null groups produce
+///   null without a call. See SimpleAggregateFunction for what they must
+///   preserve.
+///
+/// After addInput() or combine(), the group is non-null.
+template <typename F, typename Accumulator = typename F::AccumulatorType>
+concept DefaultNullAccumulator =
+    requires(typename F::InputType* input) {
+      detail::checkInput<Accumulator>(input);
+    } &&
+    requires(
+        Accumulator& accumulator,
+        HashStringAllocator* allocator,
+        out_type<typename F::IntermediateType>& intermediateOut,
+        out_type<typename F::OutputType>& finalOut) {
+      accumulator.combine(
+          allocator, std::declval<arg_type<typename F::IntermediateType>>());
+      {
+        accumulator.writeIntermediateResult(intermediateOut)
+      } -> AggregateWriteResult;
+      { accumulator.writeFinalResult(finalOut) } -> AggregateWriteResult;
+    };
+
+/// The accumulator of a simple aggregation function 'F' that sets
+/// default_null_behavior_ to false. T1, ... are the arguments of F::InputType.
+/// Groups start null.
+///
+/// - addInput(allocator, optional_arg_type<T1>, ...) adds one row of raw
+///   input, nulls included.
+/// - combine(allocator, optional_arg_type<IntermediateType>) adds one
+///   intermediate result, nulls included.
+///
+/// Both return whether the group is non-null after the call; returning false
+/// leaves a group that is already non-null as it is.
+///
+/// - writeIntermediateResult(nonNullGroup, out) and writeFinalResult(
+///   nonNullGroup, out) write the accumulator out, for every group, with
+///   'nonNullGroup' saying whether the group is non-null. See
+///   SimpleAggregateFunction for what they must preserve.
+template <typename F, typename Accumulator = typename F::AccumulatorType>
+concept NonDefaultNullAccumulator =
+    requires(typename F::InputType* input) {
+      detail::checkOptionalInput<Accumulator>(input);
+    } &&
+    requires(
+        Accumulator& accumulator,
+        HashStringAllocator* allocator,
+        bool nonNullGroup,
+        out_type<typename F::IntermediateType>& intermediateOut,
+        out_type<typename F::OutputType>& finalOut) {
+      {
+        accumulator.combine(
+            allocator,
+            std::declval<optional_arg_type<typename F::IntermediateType>>())
+      } -> std::convertible_to<bool>;
+      {
+        accumulator.writeIntermediateResult(nonNullGroup, intermediateOut)
+      } -> AggregateWriteResult;
+      {
+        accumulator.writeFinalResult(nonNullGroup, finalOut)
+      } -> AggregateWriteResult;
+    };
+
+/// A simple aggregation function: a class that SimpleAggregateAdapter turns
+/// into an Aggregate. For example, see GeometricMeanAggregate in
+/// velox/functions/prestosql/aggregates.
+///
+/// Required members:
+/// - InputType: the raw input arguments, Row<T1, ...>; AggregateInputType<T1,
+///   ...> allows a Variadic last argument.
+/// - IntermediateType and OutputType: the types of the intermediate and final
+///   results.
+/// - AccumulatorType: one group's state, constructed for every group, null or
+///   not, with (HashStringAllocator*, F*). F* is the function object shared by
+///   all groups; it carries function-level state such as the result type.
+///   The methods are DefaultNullAccumulator, or NonDefaultNullAccumulator when
+///   default_null_behavior_ is false.
+///
+/// The write methods must leave the accumulator representing the same input.
+/// Window functions over a frame that grows row by row, such as ROWS BETWEEN
+/// UNBOUNDED PRECEDING AND CURRENT ROW, add each new row to one accumulator
+/// and write the result after every row. Streaming systems that embed Velox
+/// aggregates do the same over unbounded input. A write may rearrange the
+/// accumulator's contents, as long as later calls behave as if no write had
+/// happened.
+///
+/// Optional members of F:
+/// - default_null_behavior_ (default true) and is_reducing_ (default true:
+///   the state is smaller than its input; set to false when the state grows
+///   with the input, as when collecting values into an array).
+/// - initialize(step, argTypes, resultType[, config]): called once, at
+///   construction.
+/// - setConstantInputs(constantInputs): called at most once, before any
+///   input, with one entry per raw argument, null for non-constant ones.
+///   Called only in steps that read raw input, partial and single
+///   aggregation; steps that merge intermediate results have no raw
+///   arguments.
+/// - static toIntermediate(out, args...): converts one raw input row to an
+///   intermediate result without an accumulator, for plans that abandon
+///   partial aggregation. Returns bool, false for a null result, or void when
+///   the result is never null. 'args' are arg_type<T1>, ... with default null
+///   behavior, where rows with a null argument produce null without a call;
+///   otherwise optional_arg_type<T1>, ....
+/// - static fillEmptyIntermediate(out): writes the intermediate result of a
+///   group that received no input, which the merge companion uses for
+///   masked-out and null rows when it abandons partial aggregation. Returns
+///   bool, false for a null result, or void when the result is never null.
+///   Only functions that set default_null_behavior_ to false define it,
+///   because the adapter writes null for the others. Without it, the merge
+///   companion falls back to creating fake groups.
+///
+/// Optional members of AccumulatorType:
+/// - is_fixed_size_ (default true): false when the accumulator allocates from
+///   the HashStringAllocator; the adapter then tracks each group's memory.
+/// - use_external_memory_ (default false): true when the accumulator uses
+///   memory that Velox does not track.
+/// - is_aligned_ (default false): true when the accumulator requires
+///   alignof(AccumulatorType) alignment.
+/// - destroy(allocator): releases the memory of a non-null group. When
+///   destroy() is defined, the destructor never runs, so memory the
+///   constructor allocates leaks; without it, the destructor runs for every
+///   group.
+template <typename F>
+concept SimpleAggregateFunction = std::default_initializable<F> &&
+    requires {
+      typename F::InputType;
+      typename F::IntermediateType;
+      typename F::OutputType;
+      typename F::AccumulatorType;
+    } &&
+    std::constructible_from<typename F::AccumulatorType,
+                            HashStringAllocator*,
+                            F*> &&
+    ((detail::hasDefaultNullBehavior<F>() && DefaultNullAccumulator<F>) ||
+     (!detail::hasDefaultNullBehavior<F>() && NonDefaultNullAccumulator<F>)) &&
+    (!requires { &F::setConstantInputs; } ||
+     requires(F& function, const std::vector<VectorPtr>& constantInputs) {
+       function.setConstantInputs(constantInputs);
+     });
+
+template <SimpleAggregateFunction FUNC>
 class SimpleAggregateAdapter : public Aggregate {
  public:
   explicit SimpleAggregateAdapter(
@@ -91,10 +294,7 @@ class SimpleAggregateAdapter : public Aggregate {
     }
   }
 
-  // Assume most aggregate functions have fixed-size accumulators. Functions
-  // that
-  // have non-fixed-size accumulators should overwrite `is_fixed_size_` in their
-  // accumulator structs.
+  // Detect the optional members described in SimpleAggregateFunction.
   template <typename T, typename = void>
   struct accumulator_is_fixed_size : std::true_type {};
 
@@ -102,9 +302,6 @@ class SimpleAggregateAdapter : public Aggregate {
   struct accumulator_is_fixed_size<T, std::void_t<decltype(T::is_fixed_size_)>>
       : std::integral_constant<bool, T::is_fixed_size_> {};
 
-  // Assume most aggregate functions produce state that is smaller than their
-  // input. Functions whose state generally grows with input cardinality should
-  // overwrite `is_reducing_`.
   template <typename T, typename = void>
   struct aggregate_is_reducing : std::true_type {};
 
@@ -112,66 +309,6 @@ class SimpleAggregateAdapter : public Aggregate {
   struct aggregate_is_reducing<T, std::void_t<decltype(T::is_reducing_)>>
       : std::integral_constant<bool, T::is_reducing_> {};
 
-  // Assume most aggregate functions have default null behavior, i.e., ignoring
-  // rows that have null values in raw input and intermediate results, and
-  // returning null for groups of no input rows or only null rows.
-  // For example: select sum(col0)
-  //              from (values (1, 10), (2, 20), (3, 30)) as t(col0, col1)
-  //              where col0 > 10; -- NULL
-  // Functions that have non-default null behavior should overwrite
-  // `default_null_behavior_`.
-  // All accumulators are initialized to NULL before the aggregation starts.
-  // However, for functions that have default and non-default null behaviors,
-  // there are a couple of differences in their implementations.
-  // 1. When default_null_behavior_ is true, authors define
-  //     void AccumulatorType::addInput(HashStringAllocator* allocator,
-  //                                    exec::arg_type<T1> arg1, ...)
-  //     void AccumulatorType::combine(HashStringAllocator* allocator,
-  //                                   exec::arg_type<IntermediateType> arg)
-  // These functions only receive non-null input values. Input rows that contain
-  // at least one NULL argument are ignored. The accumulator of a group is set
-  // to non-null if at least one input is added to this group through addInput()
-  // or combine(). Similarly, authors define
-  //     bool AccumulatorType::writeIntermediateResult(
-  //         exec::out_type<IntermediateType>&out)
-  //     bool AccumulatorType::writeFinalResult(exec::out_type<OutputType>&out)
-  // These functions are only called on groups of non-null accumulators. Groups
-  // that have NULL accumulators automatically become NULL in the result vector.
-  // These functions also return a bool indicating whether the current group
-  // should be a NULL in the result vector.
-  //
-  // 2. When default_null_behavior_ is false, authors define
-  //     bool AccumulatorType::addInput(HashStringAllocator* allocator,
-  //                                    exec::optional_arg_type<T1> arg1, ...)
-  //     bool AccumulatorType::combine(
-  //         HashStringAllocator* allocator,
-  //         exec::optional_arg_type<IntermediateType> arg)
-  // These functions receive both non-null and null inputs. They return a bool
-  // indicating whether to set the current group's accumulator to non-null. If
-  // the accumulator of a group is already non-NULL, returning false from
-  // addInput() or combine() doesn't change this group's nullness. Authors also
-  // define
-  //     bool AccumulatorType::writeIntermediateResult(
-  //         bool nonNullGroup,
-  //         exec::out_type<IntermediateType>& out)
-  //     bool AccumulatorType::writeFinalResult(
-  //         bool nonNullGroup,
-  //         exec::out_type<OutputType>& out)
-  // These functions are called on groups of both non-null and null
-  // accumulators. These functions also return a bool indicating whether the
-  // current group should be a NULL in the result vector.
-  template <typename T, typename = void>
-  struct aggregate_default_null_behavior : std::true_type {};
-
-  template <typename T>
-  struct aggregate_default_null_behavior<
-      T,
-      std::void_t<decltype(T::default_null_behavior_)>>
-      : std::integral_constant<bool, T::default_null_behavior_> {};
-
-  // Assume most aggregate functions do not use external memory. Functions that
-  // use external memory should overwrite `use_external_memory_` in their
-  // accumulator structs.
   template <typename T, typename = void>
   struct accumulator_use_external_memory : std::false_type {};
 
@@ -203,6 +340,14 @@ class SimpleAggregateAdapter : public Aggregate {
       : std::true_type {};
 
   template <typename T, typename = void>
+  struct support_fill_empty_intermediate : std::false_type {};
+
+  template <typename T>
+  struct support_fill_empty_intermediate<
+      T,
+      std::void_t<decltype(&T::fillEmptyIntermediate)>> : std::true_type {};
+
+  template <typename T, typename = void>
   struct support_initialize : std::false_type {};
 
   template <typename T>
@@ -223,10 +368,8 @@ class SimpleAggregateAdapter : public Aggregate {
           std::declval<const TypePtr&>(),
           std::declval<const core::QueryConfig&>()))>> : std::true_type {};
 
-  // Whether the function defines setConstantInputs(). AggregateInfo discovers
-  // constant arguments after the aggregate is constructed and calls
-  // Aggregate::setConstantInputs() once before processing input rows. The
-  // adapter forwards that hook to simple aggregates that opt in.
+  // Whether the function defines setConstantInputs(). If it does, the adapter
+  // forwards Aggregate::setConstantInputs() to it.
   template <typename T, typename = void>
   struct support_set_constant_inputs : std::false_type {};
 
@@ -249,7 +392,7 @@ class SimpleAggregateAdapter : public Aggregate {
       : std::integral_constant<bool, T::is_aligned_> {};
 
   static constexpr bool aggregate_default_null_behavior_ =
-      aggregate_default_null_behavior<FUNC>::value;
+      detail::hasDefaultNullBehavior<FUNC>();
 
   static constexpr bool accumulator_is_fixed_size_ =
       accumulator_is_fixed_size<typename FUNC::AccumulatorType>::value;
@@ -265,6 +408,14 @@ class SimpleAggregateAdapter : public Aggregate {
 
   static constexpr bool support_to_intermediate_ =
       support_to_intermediate<FUNC>::value;
+
+  static constexpr bool support_fill_empty_intermediate_ =
+      support_fill_empty_intermediate<FUNC>::value;
+
+  static_assert(
+      !(aggregate_default_null_behavior_ && support_fill_empty_intermediate_),
+      "Functions with default null behavior must not define "
+      "fillEmptyIntermediate, because the adapter writes null for them.");
 
   static constexpr bool support_initialize_ = support_initialize<FUNC>::value;
 
@@ -349,6 +500,31 @@ class SimpleAggregateAdapter : public Aggregate {
     return support_to_intermediate_;
   }
 
+  bool supportsFillEmptyIntermediate() const override {
+    return aggregate_default_null_behavior_ || support_fill_empty_intermediate_;
+  }
+
+  void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
+      const override {
+    if constexpr (aggregate_default_null_behavior_) {
+      result->addNulls(rows);
+    } else if constexpr (support_fill_empty_intermediate_) {
+      using IntermediateType = typename FUNC::IntermediateType;
+      auto* vector =
+          result->as<typename TypeToFlatVector<IntermediateType>::type>();
+      VectorWriter<IntermediateType> writer;
+      writer.init(*vector);
+      rows.applyToSelected([&](vector_size_t row) {
+        writer.setOffset(row);
+        writer.commit(callWrite(
+            [&] { return FUNC::fillEmptyIntermediate(writer.current()); }));
+      });
+      writer.finish();
+    } else {
+      VELOX_UNREACHABLE("fillEmptyIntermediate is not supported");
+    }
+  }
+
   void toIntermediate(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -410,13 +586,15 @@ class SimpleAggregateAdapter : public Aggregate {
         if (isNull(groups[i])) {
           writer.commitNull();
         } else {
-          bool nonNull = group->writeIntermediateResult(writer.current());
-          writer.commit(nonNull);
+          writer.commit(callWrite([&] {
+            return group->writeIntermediateResult(writer.current());
+          }));
         }
       } else {
-        bool nonNull = group->writeIntermediateResult(
-            !isNull(groups[i]), writer.current());
-        writer.commit(nonNull);
+        writer.commit(callWrite([&] {
+          return group->writeIntermediateResult(
+              !isNull(groups[i]), writer.current());
+        }));
       }
     }
     writer.finish();
@@ -441,19 +619,32 @@ class SimpleAggregateAdapter : public Aggregate {
         if (isNull(groups[i])) {
           writer.commitNull();
         } else {
-          bool nonNull = group->writeFinalResult(writer.current());
-          writer.commit(nonNull);
+          writer.commit(callWrite(
+              [&] { return group->writeFinalResult(writer.current()); }));
         }
       } else {
-        bool nonNull =
-            group->writeFinalResult(!isNull(groups[i]), writer.current());
-        writer.commit(nonNull);
+        writer.commit(callWrite([&] {
+          return group->writeFinalResult(!isNull(groups[i]), writer.current());
+        }));
       }
     }
     writer.finish();
   }
 
  protected:
+  // Calls 'write', a call to a method that writes a result, such as
+  // writeIntermediateResult() or toIntermediate(), and returns whether the
+  // result is non-NULL: what 'write' returns, or true when it returns void.
+  template <typename TWrite>
+  static bool callWrite(TWrite&& write) {
+    if constexpr (std::is_void_v<std::invoke_result_t<TWrite>>) {
+      write();
+      return true;
+    } else {
+      return write();
+    }
+  }
+
   void initializeNewGroupsInternal(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
@@ -554,6 +745,10 @@ class SimpleAggregateAdapter : public Aggregate {
 
   // Process rows with the accumulated readers. Use Is to access the original
   // input types to create OptionalAccessor.
+  //
+  // The per-row lambdas are force-inlined. The compiler often runs out of
+  // inlining budget and leaves a call per input row. Intermediate results are
+  // left to the compiler to keep the code size down.
   template <std::size_t... Is, typename... TReader>
   void addRawInputWithReadersImpl(
       char** groups,
@@ -565,7 +760,7 @@ class SimpleAggregateAdapter : public Aggregate {
         "Reader count must match InputType size");
 
     if constexpr (aggregate_default_null_behavior_) {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         // If any input is null, we ignore the whole row. For variadic
         // arguments, this includes nulls within the variadic elements.
         if (!(isInputNonNull<Is>(readers, row) && ...)) {
@@ -580,7 +775,7 @@ class SimpleAggregateAdapter : public Aggregate {
         clearNull(groups[row]);
       });
     } else {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         std::optional<RowSizeTracker<char, uint32_t>> tracker;
         if constexpr (!accumulator_is_fixed_size_) {
           tracker.emplace(groups[row][rowSizeOffset_], *allocator_);
@@ -616,7 +811,8 @@ class SimpleAggregateAdapter : public Aggregate {
   }
 
   // Process rows for a single group with the accumulated readers. Use Is to
-  // access the original input types to create OptionalAccessor.
+  // access the original input types to create OptionalAccessor. The per-row
+  // lambdas are force-inlined as in addRawInputWithReadersImpl.
   template <std::size_t... Is, typename... TReader>
   void addSingleGroupRawInputWithReadersImpl(
       char* group,
@@ -630,7 +826,7 @@ class SimpleAggregateAdapter : public Aggregate {
     auto accumulator = value<typename FUNC::AccumulatorType>(group);
 
     if constexpr (aggregate_default_null_behavior_) {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         // If any input is null, we ignore the whole row. For variadic
         // arguments, this includes nulls within the variadic elements.
         if (!(isInputNonNull<Is>(readers, row) && ...)) {
@@ -644,7 +840,7 @@ class SimpleAggregateAdapter : public Aggregate {
         clearNull(group);
       });
     } else {
-      rows.applyToSelected([&](vector_size_t row) {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
         std::optional<RowSizeTracker<char, uint32_t>> tracker;
         if constexpr (!accumulator_is_fixed_size_) {
           tracker.emplace(group[rowSizeOffset_], *allocator_);
@@ -714,17 +910,19 @@ class SimpleAggregateAdapter : public Aggregate {
           writer.commitNull();
           return;
         }
-        bool nonNull = FUNC::toIntermediate(writer.current(), readers[row]...);
-        writer.commit(nonNull);
+        writer.commit(callWrite([&] {
+          return FUNC::toIntermediate(writer.current(), readers[row]...);
+        }));
       });
     } else {
       rows.applyToSelected([&](vector_size_t row) {
         writer.setOffset(row);
-        bool nonNull = FUNC::toIntermediate(
-            writer.current(),
-            OptionalAccessor<typename FUNC::InputType::template type_at<Is>>{
-                &readers, (int64_t)row}...);
-        writer.commit(nonNull);
+        writer.commit(callWrite([&] {
+          return FUNC::toIntermediate(
+              writer.current(),
+              OptionalAccessor<typename FUNC::InputType::template type_at<Is>>{
+                  &readers, (int64_t)row}...);
+        }));
       });
     }
   }

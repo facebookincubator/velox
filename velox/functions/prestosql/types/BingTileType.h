@@ -50,6 +50,8 @@ class BingTileType final : public BigintType {
   BingTileType() = default;
 
  public:
+  static std::shared_ptr<const BingTileType> create() = delete;
+
   static std::shared_ptr<const BingTileType> get() {
     VELOX_CONSTEXPR_SINGLETON BingTileType kInstance;
     return {std::shared_ptr<const BingTileType>{}, &kInstance};

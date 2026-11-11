@@ -27,7 +27,7 @@
 namespace facebook::velox::type::fbhive {
 
 // TODO : Find out what to do with these types
-// NUMERIC, INTERVAL, VARCHAR, VOID
+// NUMERIC, INTERVAL, VARCHAR
 enum class TokenType {
   Boolean,
   Byte,
@@ -59,6 +59,8 @@ enum class TokenType {
   Time,
   LeftRoundBracket,
   RightRoundBracket,
+  // "void" is the Hive/Presto serialization of the Iceberg V3 unknown type.
+  Void,
   MaxTokenType
 };
 

@@ -22,7 +22,6 @@
 #include <utility>
 
 #include <fmt/format.h>
-#include <folly/Format.h>
 #include <folly/Range.h>
 #include <folly/container/F14Map.h>
 
@@ -901,10 +900,14 @@ class BaseVector {
 
   /// Creates a vector from a list of Variant values. The result is a flat
   /// vector with one element per value.
-  static VectorPtr createFromVariants(
+  template <typename T = BaseVector>
+  static std::shared_ptr<T> createFromVariants(
       const TypePtr& type,
       const std::vector<Variant>& values,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool) {
+    return std::static_pointer_cast<T>(
+        createFromVariantsInternal(type, values, pool));
+  }
 
   /// Returns string representation of the value in the specified row.
   virtual std::string toString(vector_size_t index) const;
@@ -1057,6 +1060,11 @@ class BaseVector {
   std::optional<ByteCount> storageByteCount_;
 
  private:
+  static VectorPtr createFromVariantsInternal(
+      const TypePtr& type,
+      const std::vector<Variant>& values,
+      velox::memory::MemoryPool* pool);
+
   static VectorPtr createInternal(
       const TypePtr& type,
       vector_size_t size,
@@ -1163,28 +1171,6 @@ OutputStream& operator<<(
 }
 
 } // namespace facebook::velox
-
-namespace folly {
-
-/// Allow VectorEncoding::Simple to be transparently used by folly::sformat.
-/// e.g: folly::sformat("type: {}", encodingType);
-template <>
-class FormatValue<facebook::velox::VectorEncoding::Simple> {
- public:
-  explicit FormatValue(const facebook::velox::VectorEncoding::Simple& type)
-      : type_(type) {}
-
-  template <typename FormatCallback>
-  void format(FormatArg& arg, FormatCallback& cb) const {
-    return format_value::formatString(
-        facebook::velox::VectorEncoding::mapSimpleToName(type_), arg, cb);
-  }
-
- private:
-  facebook::velox::VectorEncoding::Simple type_;
-};
-
-} // namespace folly
 
 template <>
 struct fmt::formatter<facebook::velox::VectorEncoding::Simple> {

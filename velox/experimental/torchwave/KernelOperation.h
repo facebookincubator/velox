@@ -56,6 +56,8 @@ struct ElementExpr {
 
 /// Describes how to determine the number of blocks to run for a
 /// KernelOperation based on input sizes.
+struct ViewRecipe;
+
 struct SizeExpr {
   SizeShortcut op{SizeShortcut::kNone};
   std::vector<nativert::ValueId> values;
@@ -87,6 +89,13 @@ struct SizeExpr {
   /// kSum.
   std::vector<Dim> dims(FrameP frame) const;
 
+  /// numElements() and dims() over the pre-resolved value table. A value
+  /// absent from the table counts as None, as in the frame.
+  int64_t numElements(
+      const ValueTable& table,
+      nativert::ValueId* largestOut = nullptr) const;
+  void dims(const ValueTable& table, std::vector<Dim>& result) const;
+
   /// Substitutes Values in 'this' according to 'bindings' and returns a deep
   /// copy with the Values replaced.
   SizeExpr toActual(
@@ -96,10 +105,14 @@ struct SizeExpr {
 
 /// Describes a single output of a KernelOperation.
 struct OutputDesc {
-  /// Determines the shape to allocate for this output.
-  std::function<std::vector<std::vector<
-      Dim>>(nativert::ExecutionFrame&, const FormalToActual&, const NodeMap&)>
-      reserveShape;
+  /// Computes the shape to allocate for this output (ArgumentMeta::reserve),
+  /// with the nodes its operand names resolve against: inputs by ordinal on
+  /// 'reserveNode', names on 'reserveAttrNode'.
+  /// Null for an output sized another way.
+  ReserveFn reserveFn{nullptr};
+  std::shared_ptr<const ReserveInputs> reserveInputs;
+  NodeCP reserveNode{nullptr};
+  NodeCP reserveAttrNode{nullptr};
 
   /// True if device code sets the dims. If reserveFunc is nullptr,
   /// and shapeSetOnDevice is true, then the device code does a view and
@@ -122,6 +135,12 @@ struct OutputDesc {
   /// If set, this output is produced by executing a standalone view node
   /// (e.g. view, reshape) rather than allocating a new tensor.
   NodeCP viewNode{nullptr};
+
+  /// 'viewNode' as a metadata shortcut, built the first time the view runs.
+  /// Null for a view op the shortcuts do not
+  /// cover, which keeps going through the op's kernel.
+  mutable std::shared_ptr<const ViewRecipe> viewRecipe;
+  mutable bool viewRecipeTried{false};
 
   /// If set, this output is the result of an in-place op (e.g. add_/clamp_)
   /// whose return aliases its mutated self argument. Instead of allocating a
@@ -154,9 +173,31 @@ struct OutputDesc {
   /// pointer because a descriptor is copied per launch and the operand list is
   /// not small; null for every other output.
   std::shared_ptr<const ConcatLayout> concatLayout;
+
+  /// The output's shape is computed on the host before its launch: by its
+  /// reserve, or by the concat layout.
+  bool sizedByReserve() const {
+    return reserveFn != nullptr || concatLayout != nullptr;
+  }
 };
 
 void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src);
+
+/// The values 'desc''s ReserveFn reads the elements of, translated through an
+/// invocation's 'bindings'. Empty when it reads none.
+std::vector<int32_t> hostTensorIds(
+    const OutputDesc& desc,
+    const FormalToActual& bindings);
+
+/// Resolves the operands 'desc.reserveInputs' names to actual value ids and
+/// constants for the launch 'bindings' and 'nodeMap' describe. Returns false
+/// when an operand has no table form, e.g. an integer list the frame holds as
+/// a list, which is a bind error.
+bool bindReserve(
+    const OutputDesc& desc,
+    const FormalToActual& bindings,
+    const NodeMap& nodeMap,
+    ReserveBinding& args);
 
 bool addOrUpdateOutput(
     std::vector<ValueCP>& outputValues,
@@ -377,6 +418,20 @@ class KernelOperation {
     return ownDimsCalcOffsets_;
   }
 
+  /// Records that the leaf at 'leafOffset' broadcasts against the tensor at
+  /// 'refOffset' instead of its expression's output. A fused scatter's loop
+  /// runs over its source, whose shape is the index's, while the expression
+  /// output is the (larger) destination.
+  void setBroadcastRef(int32_t leafOffset, int32_t refOffset) {
+    broadcastRefs_[leafOffset] = refOffset;
+  }
+
+  /// Leaf param offset -> param offset of the tensor it broadcasts against,
+  /// for leaves that do not broadcast against their expression's output.
+  const folly::F14FastMap<int32_t, int32_t>& broadcastRefs() const {
+    return broadcastRefs_;
+  }
+
   const std::unordered_set<NodeCP>& allNodes() const {
     return allNodes_;
   }
@@ -396,11 +451,18 @@ class KernelOperation {
     return alwaysSingleBlock_;
   }
 
-  /// Bytes of dynamic shared memory this op needs, i.e. the max over its
-  /// nodes' Metadata::dynamicSharedMemory. A launch passes the max over its
-  /// ops as the kernel's dynamic shared memory size.
-  int64_t dynamicSharedBytes() const {
-    return dynamicSharedBytes_;
+  /// Bytes of dynamic shared memory this op needs when it runs at
+  /// 'blockSize' threads per block, i.e. the max over its nodes'
+  /// Metadata::dynamicSharedMemory. A launch passes the max over its ops as the
+  /// kernel's dynamic shared memory size.
+  int64_t dynamicSharedBytes(int32_t blockSize) const;
+
+  /// Threads per block this op asks for, i.e. the max over its nodes'
+  /// Metadata::blockSize, or 0 when none asks. A launch runs at the largest of
+  /// its ops' and WaveConfig::blockSize, and every op in it is compiled for
+  /// that size.
+  int32_t blockSizePreference() const {
+    return blockSizePreference_;
   }
 
   /// Blocks per SM this op wants the containing kernel compiled for, i.e. the
@@ -466,7 +528,7 @@ class KernelOperation {
   /// given node and return index. Copies sizeShortcut, shapeSetOnDevice, and
   /// neededOnHost. Expands sizeArgs ordinals to Value pointers from the node's
   /// inputs: for non-list ordinals takes the single Value, for list ordinals
-  /// expands via getListElements(). Wraps reserveShape in a lambda if present.
+  /// expands via getListElements(). Takes the reserve, if any.
   OutputDesc makeOutputDesc(
       const ArgumentMeta& returnMeta,
       NodeCP node,
@@ -559,13 +621,20 @@ class KernelOperation {
   // ownDimsCalcOffsets().
   std::unordered_set<int32_t> ownDimsCalcOffsets_;
 
+  // See broadcastRefs().
+  folly::F14FastMap<int32_t, int32_t> broadcastRefs_;
+
   std::unordered_set<NodeCP> allNodes_;
 
   // True if any node in the subgraph has alwaysSingleBlock set in its metadata.
   bool alwaysSingleBlock_{false};
 
-  // Max Metadata::dynamicSharedMemory over the nodes in the subgraph.
-  int64_t dynamicSharedBytes_{0};
+  // Max Metadata::dynamicSharedMemory over the nodes in the subgraph, for each
+  // block size from WaveConfig::blockSize up to 1024.
+  std::vector<std::pair<int32_t, int64_t>> dynamicSharedBytes_;
+
+  // Max Metadata::blockSize over the nodes in the subgraph.
+  int32_t blockSizePreference_{0};
 
   // Max Metadata::minBlocksPerSm over the nodes in the subgraph.
   int32_t minBlocksPerSm_{0};

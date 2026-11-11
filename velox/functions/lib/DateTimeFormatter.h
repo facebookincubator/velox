@@ -19,6 +19,7 @@
 #include <vector>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
+#include "velox/functions/lib/DateTimeUnit.h"
 #include "velox/type/Timestamp.h"
 
 namespace facebook::velox::functions {
@@ -117,23 +118,6 @@ enum class DateTimeFormatSpecifier : uint8_t {
   // Week of month based on java.text.SimpleDateFormat, e.g: 2
   WEEK_OF_MONTH = 24
 };
-
-enum class DateTimeUnit {
-  kMicrosecond,
-  kMillisecond,
-  kSecond,
-  kMinute,
-  kHour,
-  kDay,
-  kWeek,
-  kMonth,
-  kQuarter,
-  kYear
-};
-
-FOLLY_ALWAYS_INLINE bool isTimeUnit(const DateTimeUnit unit) {
-  return unit < DateTimeUnit::kDay;
-}
 
 struct FormatPattern {
   DateTimeFormatSpecifier specifier;

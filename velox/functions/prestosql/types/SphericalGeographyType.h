@@ -26,6 +26,8 @@ class SphericalGeographyType final : public VarbinaryType {
   SphericalGeographyType() = default;
 
  public:
+  static std::shared_ptr<const SphericalGeographyType> create() = delete;
+
   static std::shared_ptr<const SphericalGeographyType> get() {
     VELOX_CONSTEXPR_SINGLETON SphericalGeographyType kInstance;
     return {std::shared_ptr<const SphericalGeographyType>{}, &kInstance};

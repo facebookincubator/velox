@@ -34,4 +34,10 @@ exec::AggregateRegistrationResult registerSimpleVariadicSumAggregate(
 exec::AggregateRegistrationResult registerSimpleVariadicArrayAggAggregate(
     const std::string& name);
 
+/// Registers a bigint aggregate, with companion functions, that adds its
+/// constant second argument to every input value. Used to test that constant
+/// arguments reach the aggregate.
+exec::AggregateRegistrationResult registerSimpleConstantForwardingAggregate(
+    const std::string& name);
+
 } // namespace facebook::velox::aggregate

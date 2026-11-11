@@ -179,6 +179,7 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
       std::iota(targetColumnChannels.begin(), targetColumnChannels.end(), 0);
       const column_index_t operationChannel = numTargetColumns;
       const column_index_t rowIdChannel = numTargetColumns + 1;
+      const column_index_t insertFromUpdateChannel = numTargetColumns + 2;
       return std::make_unique<IcebergMergeSink>(
           inputType,
           icebergInsertHandle,
@@ -188,7 +189,8 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
           icebergConfig_,
           std::move(targetColumnChannels),
           operationChannel,
-          rowIdChannel);
+          rowIdChannel,
+          insertFromUpdateChannel);
     }
     case IcebergInsertTableHandle::WriteKind::kPositionDelete:
       // V2 position-delete sink: not yet implemented in Velox. V2 DELETE

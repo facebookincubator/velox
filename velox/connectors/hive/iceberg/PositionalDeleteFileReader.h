@@ -17,10 +17,11 @@
 #pragma once
 
 #include <folly/Executor.h>
+#include <folly/container/F14Map.h>
 #include <memory>
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -69,18 +70,21 @@ class PositionalDeleteFileReader {
   ///   data file. Delete positions are absolute within the file, so this offset
   ///   is used to translate them to split-relative positions.
   /// @param connectorId Connector ID for constructing the internal split.
+  /// @param fileReadOps Options forwarded to the FileSystem when the delete
+  ///   file is opened and on every read from it.
   PositionalDeleteFileReader(
       const IcebergDeleteFile& deleteFile,
       const std::string& baseFilePath,
       FileHandleFactory* fileHandleFactory,
       const ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const connector::FileConfig>& fileConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       dwio::common::RuntimeStats& runtimeStats,
       uint64_t splitOffset,
-      const std::string& connectorId);
+      const std::string& connectorId,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps);
 
   /// Reads delete positions for the current batch and sets corresponding bits
   /// in the deletion bitmap.
@@ -125,7 +129,7 @@ class PositionalDeleteFileReader {
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
-  const std::shared_ptr<const FileConfig> fileConfig_;
+  const std::shared_ptr<const connector::FileConfig> fileConfig_;
   const std::shared_ptr<io::IoStatistics> ioStatistics_;
   const std::shared_ptr<IoStats> ioStats_;
   memory::MemoryPool* const pool_;

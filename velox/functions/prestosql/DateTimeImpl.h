@@ -17,6 +17,7 @@
 
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Doubles.h"
+#include "velox/common/base/Macros.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/DateTimeUtil.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -26,29 +27,31 @@
 
 namespace facebook::velox::functions {
 
-FOLLY_ALWAYS_INLINE double toUnixtime(const Timestamp& timestamp) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE double toUnixtime(
+    const Timestamp& timestamp) {
   double result = timestamp.getSeconds();
   result +=
       static_cast<double>(timestamp.getNanos()) / Timestamp::kNanosInSecond;
   return result;
 }
 
-FOLLY_ALWAYS_INLINE Timestamp fromUnixtime(double unixtime) {
-  if (FOLLY_UNLIKELY(std::isnan(unixtime))) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Timestamp
+fromUnixtime(double unixtime) {
+  if (std::isnan(unixtime)) [[unlikely]] {
     return Timestamp(0, 0);
   }
 
-  if (FOLLY_UNLIKELY(unixtime >= static_cast<double>(Timestamp::kMaxSeconds))) {
+  if (unixtime >= static_cast<double>(Timestamp::kMaxSeconds)) [[unlikely]] {
     return Timestamp::maxMillis();
   }
 
-  if (FOLLY_UNLIKELY(unixtime <= static_cast<double>(Timestamp::kMinSeconds))) {
+  if (unixtime <= static_cast<double>(Timestamp::kMinSeconds)) [[unlikely]] {
     return Timestamp::minMillis();
   }
 
   auto seconds = std::floor(unixtime);
   auto milliseconds = std::llround((unixtime - seconds) * kMillisInSecond);
-  if (FOLLY_UNLIKELY(milliseconds == kMillisInSecond)) {
+  if (milliseconds == kMillisInSecond) [[unlikely]] {
     ++seconds;
     milliseconds = 0;
   }
@@ -56,22 +59,23 @@ FOLLY_ALWAYS_INLINE Timestamp fromUnixtime(double unixtime) {
       seconds, milliseconds * Timestamp::kNanosecondsInMillisecond);
 }
 
-FOLLY_ALWAYS_INLINE int64_t fromUnixtime(double unixtime, int16_t timeZoneId) {
-  if (FOLLY_UNLIKELY(std::isnan(unixtime))) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
+fromUnixtime(double unixtime, int16_t timeZoneId) {
+  if (std::isnan(unixtime)) [[unlikely]] {
     return pack(0, timeZoneId);
   }
 
   static const int64_t kMin = std::numeric_limits<int64_t>::min();
 
-  if (FOLLY_UNLIKELY(unixtime >= kMinDoubleAboveInt64Max)) {
+  if (unixtime >= kMinDoubleAboveInt64Max) [[unlikely]] {
     return pack(std::numeric_limits<int64_t>::max(), timeZoneId);
   }
 
-  if (FOLLY_UNLIKELY(unixtime <= kMin)) {
+  if (unixtime <= kMin) [[unlikely]] {
     return pack(std::numeric_limits<int64_t>::min(), timeZoneId);
   }
 
-  if (FOLLY_UNLIKELY(std::isinf(unixtime))) {
+  if (std::isinf(unixtime)) [[unlikely]] {
     return unixtime < 0 ? pack(std::numeric_limits<int64_t>::min(), timeZoneId)
                         : pack(std::numeric_limits<int64_t>::max(), timeZoneId);
   }
@@ -82,7 +86,7 @@ FOLLY_ALWAYS_INLINE int64_t fromUnixtime(double unixtime, int16_t timeZoneId) {
 
 // If time zone is provided, use it for the arithmetic operation (convert to it,
 // apply operation, then convert back to UTC).
-FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
     const Timestamp& timestamp,
     DateTimeUnit unit,
     int32_t value,
@@ -103,7 +107,8 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
 /// `addToTimestampWithTimezone` performs for calendar units, whose length
 /// varies across a daylight saving boundary. Takes int64 because a
 /// day-to-second interval does not fit in that function's int32.
-FOLLY_ALWAYS_INLINE int64_t addMillisToTimestampWithTimezone(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
+addMillisToTimestampWithTimezone(
     int64_t timestampWithTimezone,
     int64_t millis) {
   return pack(
@@ -115,7 +120,7 @@ FOLLY_ALWAYS_INLINE int64_t addMillisToTimestampWithTimezone(
 /// `renderZone` and preserves the embedded zone key. Calendar units are
 /// applied in local time, where a day can span 23 or 25 hours across a daylight
 /// saving boundary.
-FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
     int64_t timestampWithTimezone,
     DateTimeUnit unit,
     int32_t value,
@@ -131,7 +136,7 @@ FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
 /// reject what does not fit; a day-to-second interval, whose millisecond count
 /// routinely exceeds int32, goes through `addMillisToTimestampWithTimezone`
 /// instead.
-FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
     int64_t timestampWithTimezone,
     DateTimeUnit unit,
     int32_t value) {
@@ -146,7 +151,7 @@ FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
       timestampWithTimezone, unit, value, *embeddedZone);
 }
 
-FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
     int64_t timestampWithTimezone,
     DateTimeUnit unit,
     int32_t value,
@@ -180,7 +185,7 @@ FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
 /// Returns the difference in a calendar `unit`, interpreting both values in
 /// `renderZone`. Calendar units use local time, so a day can span 23 or 25
 /// hours across a daylight saving boundary.
-FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
     DateTimeUnit unit,
     int64_t fromTimestampWithTimeZone,
     int64_t toTimestampWithTimeZone,
@@ -189,7 +194,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
 /// Returns the difference between values with the same embedded zone. Units
 /// below a day compare UTC instants; calendar units compare local times in the
 /// embedded zone.
-FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
     DateTimeUnit unit,
     int64_t fromTimestampWithTimeZone,
     int64_t toTimestampWithTimeZone) {
@@ -210,7 +215,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
       unit, fromTimestampWithTimeZone, toTimestampWithTimeZone, *embeddedZone);
 }
 
-FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
     DateTimeUnit unit,
     int64_t fromTimestampWithTimeZone,
     int64_t toTimestampWithTimeZone,

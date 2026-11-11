@@ -154,6 +154,59 @@ TEST_F(EliasFanoEncodingTest, supportsRandomAccessAndValueLowerBound) {
   EXPECT_EQ(eliasFano->lowerBound(41), input.size());
 }
 
+TEST_F(EliasFanoEncodingTest, lowerBoundReturnsFoundValue) {
+  const std::vector<uint64_t> input{10, 20, 20, 40};
+  const auto encoding = createEncoding(input);
+  const auto& eliasFano =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding);
+
+  for (const uint64_t value : {0, 10, 15, 20, 21, 40}) {
+    SCOPED_TRACE(value);
+    uint64_t found{0};
+    const auto row = eliasFano.list().lowerBound(value, found);
+    EXPECT_EQ(row, eliasFano.lowerBound(value));
+    EXPECT_EQ(found, input[row]);
+  }
+  EXPECT_EQ(eliasFano.lowerBound(41), input.size());
+}
+
+TEST_F(EliasFanoEncodingTest, listReadsWithoutEncoding) {
+  const std::vector<uint64_t> input{10, 20, 20, 40, 80};
+  auto encoding = createEncoding(input);
+  const auto list =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding)
+          .list();
+  encoding.reset();
+
+  for (uint32_t row = 0; row < input.size(); ++row) {
+    EXPECT_EQ(list.valueAt(row), input[row]);
+  }
+  std::vector<uint64_t> output(3);
+  list.materializeAt(
+      /*offset=*/1, static_cast<uint32_t>(output.size()), output.data());
+  EXPECT_EQ(output, (std::vector<uint64_t>{20, 20, 40}));
+  uint64_t found{0};
+  EXPECT_EQ(list.lowerBound(21, found), 3);
+  EXPECT_EQ(found, 40);
+  EXPECT_EQ(list.lowerBound(81, found), input.size());
+}
+
+TEST_F(EliasFanoEncodingTest, listChecksMaterializeRange) {
+  const std::vector<uint64_t> input{10, 20};
+  const auto encoding = createEncoding(input);
+  const auto& list =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding)
+          .list();
+  list.materializeAt(/*offset=*/2, /*rowCount=*/0, nullptr);
+  std::vector<uint64_t> output(2);
+  NIMBLE_ASSERT_THROW(
+      list.materializeAt(/*offset=*/3, /*rowCount=*/0, output.data()),
+      "Invalid encoding position");
+  NIMBLE_ASSERT_THROW(
+      list.materializeAt(/*offset=*/1, /*rowCount=*/2, output.data()),
+      "Reading past end of encoding");
+}
+
 TEST_F(EliasFanoEncodingTest, absoluteReadsPreserveSequentialPosition) {
   const std::vector<uint64_t> input{10, 20, 20, 40, 80};
   auto encoding = createEncoding(input);

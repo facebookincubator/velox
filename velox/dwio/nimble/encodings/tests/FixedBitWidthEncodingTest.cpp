@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 #include <glog/logging.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <cstring>
 #include <string>
 #include "folly/Random.h"
+#include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
@@ -132,9 +134,32 @@ TYPED_TEST(FixedBitWidthEncodingTest, serializeThenDeserialize) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 10);
   encoding->materialize(10, result.data());
-  for (uint32_t i = 0; i < 10; ++i) {
-    EXPECT_EQ(result[i], values[i]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
+}
+
+TYPED_TEST(FixedBitWidthEncodingTest, materializePreservesUnusedPoolBuffer) {
+  velox::BufferPool bufferPool{32};
+  auto scratch =
+      velox::AlignedBuffer::allocate<uint32_t>(64, this->pool_.get());
+  auto* scratchIdentity = scratch.get();
+  bufferPool.release(std::move(scratch));
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint, .bufferPool = &bufferPool};
+  auto values = this->toVector({0, 1, 2, 3, 4, 5, 6, 7});
+  auto encoding = this->createEncoding(values, options);
+  EXPECT_EQ(bufferPool.size(), 1);
+  std::vector<uint32_t> output(values.size());
+  encoding->materialize(values.size(), output.data());
+  EXPECT_THAT(output, testing::ElementsAreArray(values));
+  EXPECT_EQ(bufferPool.size(), 1);
+  encoding->reset();
+  encoding->skip(2);
+  output.resize(3);
+  encoding->materialize(output.size(), output.data());
+  EXPECT_THAT(output, testing::ElementsAre(2, 3, 4));
+  encoding.reset();
+  EXPECT_EQ(bufferPool.size(), 1);
+  EXPECT_EQ(bufferPool.get().get(), scratchIdentity);
 }
 
 TYPED_TEST(
@@ -184,7 +209,7 @@ TYPED_TEST(
       *this->pool_, defaultSerialized, this->stringBufferFactory());
   std::vector<uint32_t> result(values.size());
   encoding->materialize(values.size(), result.data());
-  EXPECT_EQ(result, std::vector<uint32_t>(values.begin(), values.end()));
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, decodesByteRoundedPayload) {
@@ -206,7 +231,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, decodesByteRoundedPayload) {
       *this->pool_, serialized, this->stringBufferFactory());
   std::vector<uint32_t> result(values.size());
   encoding->materialize(values.size(), result.data());
-  EXPECT_EQ(result, std::vector<uint32_t>(values.begin(), values.end()));
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, slice) {
@@ -262,7 +287,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, slice) {
       const std::vector<uint32_t> expected{
           values.begin() + range.offset,
           values.begin() + range.offset + range.length};
-      EXPECT_EQ(result, expected);
+      EXPECT_THAT(result, testing::ElementsAreArray(expected));
     }
   }
 }
@@ -326,7 +351,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, sliceCompressedSource) {
 
   const std::vector<uint32_t> expected{
       values.begin() + kOffset, values.begin() + kOffset + kLength};
-  EXPECT_EQ(result, expected);
+  EXPECT_THAT(result, testing::ElementsAreArray(expected));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, singleValue) {
@@ -340,7 +365,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, singleValue) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 1);
   encoding->materialize(1, result.data());
-  EXPECT_EQ(result[0], 42u);
+  EXPECT_THAT(result, testing::ElementsAre(42u));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, allZeros) {
@@ -352,9 +377,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, allZeros) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 5);
   encoding->materialize(5, result.data());
-  for (uint32_t i = 0; i < 5; ++i) {
-    EXPECT_EQ(result[i], 0u) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAre(0u, 0u, 0u, 0u, 0u));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, allSameNonZero) {
@@ -366,9 +389,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, allSameNonZero) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 4);
   encoding->materialize(4, result.data());
-  for (uint32_t i = 0; i < 4; ++i) {
-    EXPECT_EQ(result[i], 100u) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAre(100u, 100u, 100u, 100u));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, largeValues) {
@@ -382,9 +403,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, largeValues) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 5);
   encoding->materialize(5, result.data());
-  for (uint32_t i = 0; i < 5; ++i) {
-    EXPECT_EQ(result[i], values[i]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, skipThenMaterialize) {
@@ -398,9 +417,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, skipThenMaterialize) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 3);
   encoding->materialize(3, result.data());
-  for (uint32_t i = 0; i < 3; ++i) {
-    EXPECT_EQ(result[i], values[i + 3]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAre(40u, 50u, 60u));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, resetAndRematerialize) {
@@ -410,17 +427,15 @@ TYPED_TEST(FixedBitWidthEncodingTest, resetAndRematerialize) {
   auto values = this->toVector({5, 15, 25, 35, 45});
   auto encoding = this->createEncoding(values, options);
 
-  nimble::Vector<uint32_t> result1(this->pool_.get(), 5);
-  encoding->materialize(5, result1.data());
+  nimble::Vector<uint32_t> initialResult(this->pool_.get(), 5);
+  encoding->materialize(5, initialResult.data());
+  EXPECT_THAT(initialResult, testing::ElementsAreArray(values));
 
   encoding->reset();
 
-  nimble::Vector<uint32_t> result2(this->pool_.get(), 5);
-  encoding->materialize(5, result2.data());
-
-  for (uint32_t i = 0; i < 5; ++i) {
-    EXPECT_EQ(result1[i], result2[i]) << "index " << i;
-  }
+  nimble::Vector<uint32_t> resetResult(this->pool_.get(), 5);
+  encoding->materialize(5, resetResult.data());
+  EXPECT_THAT(resetResult, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, incrementalMaterialize) {
@@ -435,9 +450,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, incrementalMaterialize) {
   encoding->materialize(3, result.data() + 4);
   encoding->materialize(3, result.data() + 7);
 
-  for (uint32_t i = 0; i < 10; ++i) {
-    EXPECT_EQ(result[i], values[i]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, materializeZeroRows) {
@@ -451,9 +464,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, materializeZeroRows) {
   encoding->materialize(0, result.data());
 
   encoding->materialize(3, result.data());
-  for (uint32_t i = 0; i < 3; ++i) {
-    EXPECT_EQ(result[i], values[i]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, narrowBitWidth) {
@@ -465,9 +476,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, narrowBitWidth) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 8);
   encoding->materialize(8, result.data());
-  for (uint32_t i = 0; i < 8; ++i) {
-    EXPECT_EQ(result[i], values[i]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, baselineOffset) {
@@ -479,9 +488,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, baselineOffset) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 5);
   encoding->materialize(5, result.data());
-  for (uint32_t i = 0; i < 5; ++i) {
-    EXPECT_EQ(result[i], values[i]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, fuzz) {
@@ -493,6 +500,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, fuzz) {
   std::mt19937 rng(seed);
 
   for (int trial = 0; trial < 20; ++trial) {
+    SCOPED_TRACE(testing::Message() << "trial " << trial);
     uint32_t rowCount = folly::Random::rand32(1, 500, rng);
     uint32_t maxBits = folly::Random::rand32(1, 32, rng);
     uint32_t mask = maxBits >= 32 ? std::numeric_limits<uint32_t>::max()
@@ -511,9 +519,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, fuzz) {
     nimble::Vector<uint32_t> result(this->pool_.get(), rowCount);
     encoding->materialize(rowCount, result.data());
 
-    for (uint32_t i = 0; i < rowCount; ++i) {
-      EXPECT_EQ(result[i], values[i]) << "trial " << trial << " index " << i;
-    }
+    EXPECT_THAT(result, testing::ElementsAreArray(values));
   }
 }
 
@@ -536,9 +542,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, withZstdCompression) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 200);
   encoding->materialize(200, result.data());
-  for (uint32_t i = 0; i < 200; ++i) {
-    EXPECT_EQ(result[i], values[i]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, largeDataset) {
@@ -555,9 +559,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, largeDataset) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 10000);
   encoding->materialize(10000, result.data());
-  for (uint32_t i = 0; i < 10000; ++i) {
-    EXPECT_EQ(result[i], values[i]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, wideRange) {
@@ -578,9 +580,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, wideRange) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), values.size());
   encoding->materialize(values.size(), result.data());
-  for (uint32_t i = 0; i < values.size(); ++i) {
-    EXPECT_EQ(result[i], values[i]) << "index " << i;
-  }
+  EXPECT_THAT(result, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(FixedBitWidthEncodingTest, uint64MaterializeWideBitWidths) {
@@ -606,7 +606,7 @@ TYPED_TEST(FixedBitWidthEncodingTest, uint64MaterializeWideBitWidths) {
 
     const std::vector<uint64_t> expected{
         values.begin() + skipCount, values.end()};
-    EXPECT_EQ(result, expected);
+    EXPECT_THAT(result, testing::ElementsAreArray(expected));
   };
 
   roundTripAfterSkip(
@@ -654,5 +654,5 @@ TYPED_TEST(FixedBitWidthEncodingTest, skipToEnd) {
 
   nimble::Vector<uint32_t> result(this->pool_.get(), 1);
   encoding->materialize(1, result.data());
-  EXPECT_EQ(result[0], 50u);
+  EXPECT_THAT(result, testing::ElementsAre(50u));
 }

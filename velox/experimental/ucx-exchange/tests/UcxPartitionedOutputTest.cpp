@@ -20,6 +20,7 @@
 #include <cudf/null_mask.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <folly/ScopeGuard.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
@@ -29,9 +30,12 @@
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/OutputTransportRegistry.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+#include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
@@ -124,7 +128,58 @@ class UcxPartitionedOutputTest : public testing::Test {
         /*operatorId=*/0,
         driverCtx_.get(),
         partitionedOutputNode,
+        /*eagerFlush=*/false,
         queueManager_);
+  }
+
+  // Creates a task partitioned on c0 of kTestRowType and registers it with the
+  // queue manager, for the cases that build the operator from the registry.
+  std::shared_ptr<Task> makeKeyPartitionedTask(
+      const std::unordered_map<std::string, std::string>& extraConfig) {
+    auto task = createPartitionedOutputTask(
+        taskId_,
+        pool_,
+        UcxTestData::kTestRowType,
+        kNumPartitions,
+        {"c0"},
+        FOUR_GBYTES,
+        extraConfig);
+    queueManager_->initializeTask(
+        task,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        kNumPartitions,
+        /*numDrivers=*/1);
+    return task;
+  }
+
+  // Builds the operator the way a Task does: through the kUcx output transport
+  // entry, so that the factory's handling of 'eagerFlush' is covered as well.
+  // The caller registers the UCX transports.
+  std::unique_ptr<exec::Operator> makePartitionedOutputFromRegistry(
+      const std::shared_ptr<Task>& task,
+      bool eagerFlush) {
+    auto partitionedOutputNode =
+        std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
+            task->planFragment().planNode);
+    VELOX_CHECK_NOT_NULL(partitionedOutputNode);
+    driverCtx_ = std::make_shared<exec::DriverCtx>(
+        task,
+        /*driverId=*/0,
+        /*pipelineId=*/0,
+        exec::kUngroupedGroupId,
+        /*partitionId=*/0);
+    auto entry = exec::OutputTransportRegistry::tryGet(
+        std::string{core::TransportKind::kUcx});
+    VELOX_CHECK_NOT_NULL(entry);
+    return entry->makeOutputOperator(
+        /*operatorId=*/0, driverCtx_.get(), partitionedOutputNode, eagerFlush);
+  }
+
+  // Number of packed tables enqueued for 'taskId_' and not yet consumed.
+  int64_t numBufferedPages() {
+    const auto stats = queueManager_->stats(taskId_);
+    VELOX_CHECK(stats.has_value());
+    return stats->bufferedPages;
   }
 
   // Wraps 'keyColumn' in a CudfVector of kTestRowType and feeds it as one
@@ -259,6 +314,7 @@ TEST_F(UcxPartitionedOutputTest, requiresProcessWideQueueManager) {
           /*operatorId=*/0,
           driverCtx_.get(),
           partitionedOutputNode,
+          /*eagerFlush=*/false,
           std::make_shared<UcxOutputQueueManager>()),
       "requires the process-wide output queue manager");
 }
@@ -334,6 +390,69 @@ TEST_F(UcxPartitionedOutputTest, preservesColumnLessOutputRowCounts) {
 
   EXPECT_THAT(rowsPerDestination, testing::ElementsAre(2, 2, 3));
   EXPECT_EQ(totalRows, kFirstBatchRows + kSecondBatchRows);
+}
+
+// Without eagerFlush, rows wait for kUcxPartitionedOutputBatchRows (10'000 by
+// default) or noMoreInput(). The control for the two cases below.
+TEST_F(UcxPartitionedOutputTest, buffersBatchesWithoutEagerFlush) {
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
+  auto task = makeKeyPartitionedTask(/*extraConfig=*/{});
+  registerUcxTransports();
+  SCOPE_EXIT {
+    unregisterUcxTransports();
+  };
+
+  auto op = makePartitionedOutputFromRegistry(task, /*eagerFlush=*/false);
+  auto* partitionedOutput = dynamic_cast<UcxPartitionedOutput*>(op.get());
+  ASSERT_NE(partitionedOutput, nullptr);
+  feedBatch(
+      partitionedOutput, makeKeyColumn({1, 2, 3, 4, 5, 6}, {}, stream), stream);
+  EXPECT_EQ(numBufferedPages(), 0);
+
+  finishPartitionedOutput(partitionedOutput);
+  EXPECT_GT(numBufferedPages(), 0);
+}
+
+// LocalPlanner sets eagerFlush below a small partial LIMIT so that the final
+// LIMIT can end the query as soon as enough rows arrive. Six rows are far below
+// the 10'000-row chunk, so only eagerFlush can have sent them.
+TEST_F(UcxPartitionedOutputTest, eagerFlushSendsEachBatchBeforeNoMoreInput) {
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
+  auto task = makeKeyPartitionedTask(/*extraConfig=*/{});
+  registerUcxTransports();
+  SCOPE_EXIT {
+    unregisterUcxTransports();
+  };
+
+  auto op = makePartitionedOutputFromRegistry(task, /*eagerFlush=*/true);
+  auto* partitionedOutput = dynamic_cast<UcxPartitionedOutput*>(op.get());
+  ASSERT_NE(partitionedOutput, nullptr);
+  feedBatch(
+      partitionedOutput, makeKeyColumn({1, 2, 3, 4, 5, 6}, {}, stream), stream);
+  EXPECT_GT(numBufferedPages(), 0);
+
+  finishPartitionedOutput(partitionedOutput);
+}
+
+// The session property has the same effect as the planner's flag, as it has
+// for the CPU PartitionedOutput.
+TEST_F(UcxPartitionedOutputTest, eagerFlushFromSessionPropertySendsEachBatch) {
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
+  auto task = makeKeyPartitionedTask(
+      {{core::QueryConfig::kPartitionedOutputEagerFlush, "true"}});
+  registerUcxTransports();
+  SCOPE_EXIT {
+    unregisterUcxTransports();
+  };
+
+  auto op = makePartitionedOutputFromRegistry(task, /*eagerFlush=*/false);
+  auto* partitionedOutput = dynamic_cast<UcxPartitionedOutput*>(op.get());
+  ASSERT_NE(partitionedOutput, nullptr);
+  feedBatch(
+      partitionedOutput, makeKeyColumn({1, 2, 3, 4, 5, 6}, {}, stream), stream);
+  EXPECT_GT(numBufferedPages(), 0);
+
+  finishPartitionedOutput(partitionedOutput);
 }
 
 // The bug: both null-keyed rows land in a single hash bucket, so two of the

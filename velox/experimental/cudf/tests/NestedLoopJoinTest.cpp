@@ -587,7 +587,7 @@ TEST_F(CudfNestedLoopJoinTest, filteredJoinEmptyProbe) {
 
 // Multi-driver build coordination test.
 // Verifies that multiple build operators correctly coordinate via
-// allPeersFinished(). Build side uses parallelizable values (4 drivers each
+// allPeersArrived(). Build side uses parallelizable values (4 drivers each
 // get all vectors), probe side is non-parallelizable (1 driver reads all).
 // Build data is 4x due to driver replication.
 TEST_F(CudfNestedLoopJoinTest, multiDriverBuild) {

@@ -1,0 +1,1720 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <array>
+#include <limits>
+#include <map>
+#include <numeric>
+#include <optional>
+#include <vector>
+
+#include "folly/coro/BlockingWait.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/TypeWithId.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/reader/Decoder.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
+#include "velox/dwio/nimble/serializer/Deserializer.h"
+#include "velox/dwio/nimble/serializer/Serializer.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/FlatVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+
+namespace facebook::nimble {
+namespace {
+
+// The Nimble key kind of a Hybrid FlatMap column whose keys are `keyType`.
+ScalarKind keyKindOf(const velox::Type& keyType) {
+  const auto kind = keyType.kind();
+  if (kind == velox::TypeKind::TINYINT) {
+    return ScalarKind::Int8;
+  }
+  if (kind == velox::TypeKind::SMALLINT) {
+    return ScalarKind::Int16;
+  }
+  if (kind == velox::TypeKind::INTEGER) {
+    return ScalarKind::Int32;
+  }
+  if (kind == velox::TypeKind::BIGINT) {
+    return ScalarKind::Int64;
+  }
+  if (kind == velox::TypeKind::VARCHAR) {
+    return ScalarKind::String;
+  }
+  NIMBLE_UNREACHABLE("No Hybrid FlatMap key kind for {}", keyType.toString());
+}
+
+HybridFlatMap makeHybridFlatMap(
+    ScalarKind keyKind,
+    std::vector<std::vector<std::string>> explicitGroups,
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode) {
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(explicitGroups.size() + 1);
+  for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
+    groups.push_back(
+        HybridFlatMap::Group{
+            .groupId = groupId,
+            .groupKeys = std::move(explicitGroups[groupId]),
+        });
+  }
+  groups.push_back(
+      HybridFlatMap::Group{
+          .groupId = HybridFlatMap::kDefaultGroupId,
+          .groupKeys = {},
+      });
+  return HybridFlatMap{keyKind, std::move(groups), defaultGroupKeyPresenceMode};
+}
+
+template <typename T>
+class TestDecoder final : public Decoder {
+ public:
+  explicit TestDecoder(std::vector<T> values, bool nullable = false)
+      : values_{std::move(values)}, nullable_{nullable} {}
+
+  uint32_t next(
+      uint32_t count,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>&,
+      const velox::bits::Bitmap*) override {
+    NIMBLE_CHECK_LE(index_ + count, values_.size());
+    auto* typedOutput = static_cast<T*>(output);
+    std::copy_n(values_.data() + index_, count, typedOutput);
+    index_ += count;
+    if (nullable_) {
+      NIMBLE_CHECK_GT(count, 0);
+      NIMBLE_CHECK_NOT_NULL(getOutputNulls);
+      auto* nulls = static_cast<uint64_t*>(getOutputNulls());
+      velox::bits::fillBits(
+          nulls,
+          0,
+          static_cast<velox::vector_size_t>(count),
+          velox::bits::kNotNull);
+      velox::bits::clearBit(nulls, 0);
+      return count - 1;
+    }
+    return count;
+  }
+
+  uint32_t remainingRows() override {
+    return static_cast<uint32_t>(values_.size() - index_);
+  }
+
+  uint32_t read(
+      std::span<const uint32_t>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("not implemented");
+  }
+
+  uint32_t read(
+      std::span<const RowRange>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("not implemented");
+  }
+
+  void skip(uint32_t count) override {
+    index_ += count;
+  }
+
+  void reset() override {
+    index_ = 0;
+  }
+
+  const Encoding* encoding() const override {
+    return nullptr;
+  }
+
+ private:
+  std::vector<T> values_;
+  uint32_t index_{0};
+  const bool nullable_;
+};
+
+// Supplies constant non-null values without pool allocations during decoding.
+template <typename T>
+class RepeatingDecoder final : public Decoder {
+ public:
+  explicit RepeatingDecoder(T value) : value_{value} {}
+
+  // Fills the requested rows without advancing a finite input stream.
+  uint32_t next(
+      uint32_t count,
+      void* output,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&,
+      const velox::bits::Bitmap* scatterBitmap) override {
+    NIMBLE_CHECK_NULL(scatterBitmap);
+    std::fill_n(static_cast<T*>(output), count, value_);
+    return count;
+  }
+
+  // Keeps the decoder available across repeated growth reads.
+  uint32_t remainingRows() override {
+    return std::numeric_limits<uint32_t>::max();
+  }
+
+  // Rejects selective reads, which these sequential fixtures do not use.
+  uint32_t read(
+      std::span<const uint32_t>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("Selective reads are not supported by RepeatingDecoder");
+  }
+
+  // Rejects range reads, which these sequential fixtures do not use.
+  uint32_t read(
+      std::span<const RowRange>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("Range reads are not supported by RepeatingDecoder");
+  }
+
+  // Supports skip calls without introducing finite-stream state.
+  void skip(uint32_t) override {}
+
+  // Allows reuse without tracking a stream cursor.
+  void reset() override {}
+
+  // Isolates reader allocations from encoded payload construction.
+  const Encoding* encoding() const override {
+    return nullptr;
+  }
+
+  // Changes the next read's lengths without creating a new reader.
+  void setValue(T value) {
+    value_ = value;
+  }
+
+ private:
+  // Value written into each requested non-null row.
+  T value_;
+};
+
+class BoolDecoder final : public Decoder {
+ public:
+  explicit BoolDecoder(std::vector<uint8_t> values, bool nullable = false)
+      : values_{std::move(values)}, nullable_{nullable} {}
+
+  uint32_t next(
+      uint32_t count,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>&,
+      const velox::bits::Bitmap*) override {
+    NIMBLE_CHECK_LE(index_ + count, values_.size());
+    auto* typedOutput = static_cast<bool*>(output);
+    for (uint32_t i = 0; i < count; ++i) {
+      typedOutput[i] = values_[index_++];
+    }
+    if (nullable_) {
+      NIMBLE_CHECK_GT(count, 0);
+      NIMBLE_CHECK_NOT_NULL(getOutputNulls);
+      auto* nulls = static_cast<uint64_t*>(getOutputNulls());
+      velox::bits::fillBits(
+          nulls,
+          0,
+          static_cast<velox::vector_size_t>(count),
+          velox::bits::kNotNull);
+      velox::bits::clearBit(nulls, 0);
+      return count - 1;
+    }
+    return count;
+  }
+
+  uint32_t remainingRows() override {
+    return static_cast<uint32_t>(values_.size() - index_);
+  }
+
+  uint32_t read(
+      std::span<const uint32_t>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("not implemented");
+  }
+
+  uint32_t read(
+      std::span<const RowRange>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("not implemented");
+  }
+
+  void skip(uint32_t count) override {
+    index_ += count;
+  }
+
+  void reset() override {
+    index_ = 0;
+  }
+
+  const Encoding* encoding() const override {
+    return nullptr;
+  }
+
+ private:
+  std::vector<uint8_t> values_;
+  uint32_t index_{0};
+  const bool nullable_;
+};
+
+// Exposes the wrapped decoder's rows as several encoded chunks.
+class SegmentedDecoder final : public Decoder {
+ public:
+  SegmentedDecoder(
+      std::unique_ptr<Decoder> decoder,
+      std::vector<uint32_t> chunkRowCounts)
+      : decoder_{std::move(decoder)},
+        chunkRowCounts_{std::move(chunkRowCounts)} {}
+
+  uint32_t next(
+      uint32_t count,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers,
+      const velox::bits::Bitmap* scatterOutputBitmap) override {
+    NIMBLE_CHECK_LE(count, remainingRows());
+    const auto nonNullCount = decoder_->next(
+        count,
+        output,
+        std::move(getOutputNulls),
+        stringBuffers,
+        scatterOutputBitmap);
+    currentChunkOffset_ += count;
+    if (currentChunkOffset_ == chunkRowCounts_[currentChunkIndex_]) {
+      ++currentChunkIndex_;
+      currentChunkOffset_ = 0;
+    }
+    return nonNullCount;
+  }
+
+  uint32_t remainingRows() override {
+    if (currentChunkIndex_ >= chunkRowCounts_.size()) {
+      return 0;
+    }
+    return chunkRowCounts_[currentChunkIndex_] - currentChunkOffset_;
+  }
+
+  uint32_t read(
+      std::span<const uint32_t>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("not implemented");
+  }
+
+  uint32_t read(
+      std::span<const RowRange>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("not implemented");
+  }
+
+  void skip(uint32_t count) override {
+    while (count > 0) {
+      const auto rowsToSkip = std::min(count, remainingRows());
+      NIMBLE_CHECK_GT(rowsToSkip, 0);
+      decoder_->skip(rowsToSkip);
+      currentChunkOffset_ += rowsToSkip;
+      count -= rowsToSkip;
+      if (currentChunkOffset_ == chunkRowCounts_[currentChunkIndex_]) {
+        ++currentChunkIndex_;
+        currentChunkOffset_ = 0;
+      }
+    }
+  }
+
+  void reset() override {
+    decoder_->reset();
+    currentChunkIndex_ = 0;
+    currentChunkOffset_ = 0;
+  }
+
+  const Encoding* encoding() const override {
+    return nullptr;
+  }
+
+ private:
+  // Supplies the decoded rows.
+  const std::unique_ptr<Decoder> decoder_;
+  // Row count of each encoded chunk, in order.
+  const std::vector<uint32_t> chunkRowCounts_;
+  size_t currentChunkIndex_{0};
+  uint32_t currentChunkOffset_{0};
+};
+
+// Tests allocation and ownership through the public field-reader interface.
+class FieldReaderTest : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    velox::memory::MemoryManager::testingSetInstance(
+        velox::memory::MemoryManager::Options{});
+  }
+
+  void SetUp() override {
+    rootPool_ =
+        velox::memory::memoryManager()->addRootPool("field_reader_test");
+    pool_ = rootPool_->addLeafChild("leaf");
+    vectorMaker_ = std::make_unique<velox::test::VectorMaker>(pool_.get());
+  }
+
+  // Builds a reader while retaining the schema and factory it references.
+  void createReader(SchemaBuilder& builder) {
+    schema_ = SchemaReader::getSchema(builder.schemaNodes());
+    const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+        velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema_));
+    std::vector<uint32_t> streamOffsets;
+    factory_ = FieldReaderFactory::create(
+        {},
+        schema_,
+        typeWithId,
+        streamOffsets,
+        [](uint32_t) { return true; },
+        pool_.get());
+    reader_ = factory_->createReader(decoders_);
+  }
+
+  // Reads a batch into the same caller-owned output slot.
+  void next(uint32_t count) {
+    folly::coro::blockingWait(reader_->co_next(count, output_));
+  }
+
+  // Chooses a count beyond both actual collection buffer capacities.
+  uint32_t collectionGrowthRows() const {
+    const auto* collection = output_->as<velox::ArrayVectorBase>();
+    const auto growthRows = std::max(
+                                collection->offsets()->capacity(),
+                                collection->sizes()->capacity()) /
+            sizeof(velox::vector_size_t) +
+        64;
+    NIMBLE_CHECK_LE(growthRows, std::numeric_limits<uint32_t>::max());
+    return static_cast<uint32_t>(growthRows);
+  }
+
+  template <typename T>
+  void verifyHybridKeyType(
+      const velox::TypePtr& keyType,
+      const std::array<T, 4>& keyData,
+      std::string groupedKey,
+      HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode) {
+    constexpr velox::vector_size_t kRows{2};
+    constexpr velox::vector_size_t kEntries{4};
+    const auto mapType = velox::MAP(keyType, velox::BIGINT());
+    auto keys = velox::BaseVector::create(keyType, kEntries, pool_.get());
+    auto values =
+        velox::BaseVector::create(velox::BIGINT(), kEntries, pool_.get());
+    for (velox::vector_size_t i = 0; i < kEntries; ++i) {
+      keys->template asFlatVector<T>()->set(i, keyData[i]);
+      values->template asFlatVector<int64_t>()->set(i, 10 + i);
+    }
+    auto map = std::make_shared<velox::MapVector>(
+        pool_.get(),
+        mapType,
+        nullptr,
+        kRows,
+        velox::allocateOffsets(kRows, pool_.get()),
+        velox::allocateSizes(kRows, pool_.get()),
+        keys,
+        values);
+    const std::array<velox::vector_size_t, kRows> offsets{0, 2};
+    const std::array<velox::vector_size_t, kRows> sizes{2, 2};
+    std::copy(
+        offsets.begin(),
+        offsets.end(),
+        map->mutableOffsets(kRows)->template asMutable<velox::vector_size_t>());
+    std::copy(
+        sizes.begin(),
+        sizes.end(),
+        map->mutableSizes(kRows)->template asMutable<velox::vector_size_t>());
+
+    const auto input = vectorMaker_->rowVector({"features"}, {map});
+    auto hybridMap = makeHybridFlatMap(
+        keyKindOf(*keyType),
+        {{std::move(groupedKey)}},
+        defaultGroupKeyPresenceMode);
+    Serializer serializer{
+        SerializerOptions{
+            .version = SerializationVersion::kSerialization,
+            .hybridFlatMapColumns = {{"features", std::move(hybridMap)}},
+        },
+        input->type(),
+        pool_.get()};
+    const std::string serialized{
+        serializer.serialize(input, OrderedRanges::of(0, kRows))};
+    const auto schema =
+        SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+    EXPECT_EQ(
+        schema->asRow()
+            .childAt(0)
+            ->asHybridFlatMap()
+            .defaultGroupKeyPresenceMode(),
+        defaultGroupKeyPresenceMode);
+    Deserializer deserializer{schema, pool_.get()};
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized, output);
+    for (velox::vector_size_t row = 0; row < kRows; ++row) {
+      EXPECT_TRUE(input->equalValueAt(output.get(), row, row));
+    }
+  }
+
+  // Keeps all pool-backed output alive until after each assertion.
+  std::shared_ptr<velox::memory::MemoryPool> rootPool_;
+  std::shared_ptr<velox::memory::MemoryPool> pool_;
+  std::unique_ptr<velox::test::VectorMaker> vectorMaker_;
+
+  // Keeps schema descriptors alive for the retained reader factory.
+  std::shared_ptr<const Type> schema_;
+
+  // Owns the stream decoders borrowed by the reader.
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders_;
+
+  // Owns the flat-map key and scratch storage borrowed by the reader.
+  std::unique_ptr<FieldReaderFactory> factory_;
+
+  // Preserves decoding state across repeated batch reads.
+  std::unique_ptr<FieldReader> reader_;
+
+  // Reuses one output slot to exercise retained-buffer growth.
+  velox::VectorPtr output_;
+};
+
+TEST_F(FieldReaderTest, scalarGrowthAllocatesOnlyTheOwnedValuesBuffer) {
+  SchemaBuilder builder;
+  const auto scalar = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  decoders_[scalar->scalarDescriptor().offset()] =
+      std::make_unique<RepeatingDecoder<int64_t>>(17);
+  createReader(builder);
+  next(16);
+
+  const auto* reusedVector = output_.get();
+  const auto growthRows =
+      output_->asFlatVector<int64_t>()->values()->capacity() / sizeof(int64_t) +
+      64;
+  ASSERT_LE(growthRows, std::numeric_limits<uint32_t>::max());
+  const auto before = pool_->stats();
+  next(static_cast<uint32_t>(growthRows));
+  const auto after = pool_->stats();
+
+  EXPECT_EQ(output_.get(), reusedVector);
+  EXPECT_EQ(after.numAllocs - before.numAllocs, 1);
+  EXPECT_THAT(
+      std::vector<int64_t>(
+          output_->asFlatVector<int64_t>()->rawValues(),
+          output_->asFlatVector<int64_t>()->rawValues() + growthRows),
+      testing::Each(17));
+  EXPECT_EQ(
+      output_->asFlatVector<int64_t>()->values()->size(),
+      growthRows * sizeof(int64_t));
+}
+
+TEST_F(FieldReaderTest, arrayGrowthAllocatesOnlyOwnedBuffers) {
+  SchemaBuilder builder;
+  const auto array = builder.createArrayTypeBuilder();
+  const auto elements = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  array->setChildren(elements);
+  decoders_[array->lengthsDescriptor().offset()] =
+      std::make_unique<RepeatingDecoder<uint32_t>>(1);
+  decoders_[elements->scalarDescriptor().offset()] =
+      std::make_unique<RepeatingDecoder<int64_t>>(17);
+  createReader(builder);
+  next(16);
+
+  const auto* reusedVector = output_.get();
+  const auto growthRows = std::max<uint64_t>(
+      collectionGrowthRows(),
+      output_->as<velox::ArrayVector>()
+                  ->elements()
+                  ->asFlatVector<int64_t>()
+                  ->values()
+                  ->capacity() /
+              sizeof(int64_t) +
+          64);
+  ASSERT_LE(growthRows, std::numeric_limits<uint32_t>::max());
+  const auto before = pool_->stats();
+  next(static_cast<uint32_t>(growthRows));
+  const auto after = pool_->stats();
+
+  EXPECT_EQ(output_.get(), reusedVector);
+  EXPECT_EQ(after.numAllocs - before.numAllocs, 3);
+  const auto* arrayOutput = output_->as<velox::ArrayVector>();
+  EXPECT_EQ(arrayOutput->offsets()->size(), growthRows * sizeof(int32_t));
+  EXPECT_EQ(arrayOutput->sizes()->size(), growthRows * sizeof(int32_t));
+  std::vector<int32_t> expectedOffsets(growthRows);
+  std::iota(expectedOffsets.begin(), expectedOffsets.end(), 0);
+  EXPECT_THAT(
+      std::vector<int32_t>(
+          arrayOutput->rawOffsets(), arrayOutput->rawOffsets() + growthRows),
+      testing::ElementsAreArray(expectedOffsets));
+  EXPECT_THAT(
+      std::vector<int32_t>(
+          arrayOutput->rawSizes(), arrayOutput->rawSizes() + growthRows),
+      testing::Each(1));
+  const auto* elementOutput = arrayOutput->elements()->asFlatVector<int64_t>();
+  ASSERT_EQ(elementOutput->size(), growthRows);
+  EXPECT_THAT(
+      std::vector<int64_t>(
+          elementOutput->rawValues(), elementOutput->rawValues() + growthRows),
+      testing::Each(17));
+
+  // Guards logical size bookkeeping when capacity survives a shrink.
+  next(13);
+  EXPECT_EQ(
+      output_->as<velox::ArrayVector>()->sizes()->size(), 13 * sizeof(int32_t));
+  const auto beforeRegrowth = pool_->stats();
+  next(static_cast<uint32_t>(growthRows));
+  EXPECT_EQ(pool_->stats().numAllocs, beforeRegrowth.numAllocs);
+  EXPECT_EQ(
+      output_->as<velox::ArrayVector>()->offsets()->size(),
+      growthRows * sizeof(int32_t));
+  EXPECT_EQ(
+      output_->as<velox::ArrayVector>()->sizes()->size(),
+      growthRows * sizeof(int32_t));
+}
+
+TEST_F(FieldReaderTest, mapGrowthAllocatesOnlyOwnedBuffers) {
+  SchemaBuilder builder;
+  const auto map = builder.createMapTypeBuilder();
+  const auto keys = builder.createScalarTypeBuilder(ScalarKind::Int32);
+  const auto values = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  map->setChildren(keys, values);
+  decoders_[map->lengthsDescriptor().offset()] =
+      std::make_unique<RepeatingDecoder<uint32_t>>(1);
+  decoders_[keys->scalarDescriptor().offset()] =
+      std::make_unique<RepeatingDecoder<int32_t>>(9);
+  decoders_[values->scalarDescriptor().offset()] =
+      std::make_unique<RepeatingDecoder<int64_t>>(17);
+  createReader(builder);
+  next(16);
+
+  const auto* reusedVector = output_.get();
+  const auto* initialMap = output_->as<velox::MapVector>();
+  const auto growthRows = std::max<uint64_t>({
+      collectionGrowthRows(),
+      initialMap->mapKeys()->asFlatVector<int32_t>()->values()->capacity() /
+              sizeof(int32_t) +
+          64,
+      initialMap->mapValues()->asFlatVector<int64_t>()->values()->capacity() /
+              sizeof(int64_t) +
+          64,
+  });
+  ASSERT_LE(growthRows, std::numeric_limits<uint32_t>::max());
+  const auto before = pool_->stats();
+  next(static_cast<uint32_t>(growthRows));
+  const auto after = pool_->stats();
+
+  EXPECT_EQ(output_.get(), reusedVector);
+  EXPECT_EQ(after.numAllocs - before.numAllocs, 4);
+  const auto* mapOutput = output_->as<velox::MapVector>();
+  std::vector<int32_t> expectedOffsets(growthRows);
+  std::iota(expectedOffsets.begin(), expectedOffsets.end(), 0);
+  EXPECT_THAT(
+      std::vector<int32_t>(
+          mapOutput->rawOffsets(), mapOutput->rawOffsets() + growthRows),
+      testing::ElementsAreArray(expectedOffsets));
+  EXPECT_THAT(
+      std::vector<int32_t>(
+          mapOutput->rawSizes(), mapOutput->rawSizes() + growthRows),
+      testing::Each(1));
+  EXPECT_EQ(mapOutput->offsets()->size(), growthRows * sizeof(int32_t));
+  EXPECT_EQ(mapOutput->sizes()->size(), growthRows * sizeof(int32_t));
+  const auto* keyOutput = mapOutput->mapKeys()->asFlatVector<int32_t>();
+  const auto* valueOutput = mapOutput->mapValues()->asFlatVector<int64_t>();
+  ASSERT_EQ(keyOutput->size(), growthRows);
+  ASSERT_EQ(valueOutput->size(), growthRows);
+  EXPECT_THAT(
+      std::vector<int32_t>(
+          keyOutput->rawValues(), keyOutput->rawValues() + growthRows),
+      testing::Each(9));
+  EXPECT_THAT(
+      std::vector<int64_t>(
+          valueOutput->rawValues(), valueOutput->rawValues() + growthRows),
+      testing::Each(17));
+}
+
+TEST_F(FieldReaderTest, rebuildsArrayWhenMetadataBuffersAreShared) {
+  SchemaBuilder builder;
+  const auto array = builder.createArrayTypeBuilder();
+  const auto elements = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  array->setChildren(elements);
+  auto lengths = std::make_unique<RepeatingDecoder<uint32_t>>(1);
+  auto* lengthsDecoder = lengths.get();
+  decoders_[array->lengthsDescriptor().offset()] = std::move(lengths);
+  decoders_[elements->scalarDescriptor().offset()] =
+      std::make_unique<RepeatingDecoder<int64_t>>(17);
+  createReader(builder);
+  next(4);
+
+  const auto oldOffsets = output_->as<velox::ArrayVector>()->offsets();
+  const auto oldSizes = output_->as<velox::ArrayVector>()->sizes();
+  lengthsDecoder->setValue(2);
+  next(8);
+
+  EXPECT_NE(
+      output_->as<velox::ArrayVector>()->offsets().get(), oldOffsets.get());
+  EXPECT_NE(output_->as<velox::ArrayVector>()->sizes().get(), oldSizes.get());
+  EXPECT_THAT(
+      std::vector<int32_t>(
+          oldOffsets->as<int32_t>(), oldOffsets->as<int32_t>() + 4),
+      testing::ElementsAre(0, 1, 2, 3));
+  EXPECT_THAT(
+      std::vector<int32_t>(
+          oldSizes->as<int32_t>(), oldSizes->as<int32_t>() + 4),
+      testing::ElementsAre(1, 1, 1, 1));
+}
+
+TEST_F(FieldReaderTest, roundTripsEveryHybridKeyType) {
+  // Default sees keys 10 and 9 in that order. A KeyList Default lists them by
+  // typed value, 9 before 10, which reorders map entries; equalValueAt
+  // compares map entries in any order.
+  for (const auto defaultGroupKeyPresenceMode :
+       {HybridFlatMap::KeyPresenceMode::kBitmap,
+        HybridFlatMap::KeyPresenceMode::kKeyList}) {
+    SCOPED_TRACE(static_cast<int>(defaultGroupKeyPresenceMode));
+    verifyHybridKeyType<int8_t>(
+        velox::TINYINT(), {1, 10, 9, 1}, "1", defaultGroupKeyPresenceMode);
+    verifyHybridKeyType<int16_t>(
+        velox::SMALLINT(), {1, 10, 9, 1}, "1", defaultGroupKeyPresenceMode);
+    verifyHybridKeyType<int32_t>(
+        velox::INTEGER(), {1, 10, 9, 1}, "1", defaultGroupKeyPresenceMode);
+    verifyHybridKeyType<int64_t>(
+        velox::BIGINT(), {1, 10, 9, 1}, "1", defaultGroupKeyPresenceMode);
+    verifyHybridKeyType<velox::StringView>(
+        velox::VARCHAR(),
+        {velox::StringView{"a"},
+         velox::StringView{"z"},
+         velox::StringView{"m"},
+         velox::StringView{"a"}},
+        "a",
+        defaultGroupKeyPresenceMode);
+  }
+}
+
+TEST_F(FieldReaderTest, createsRegularFlatMapReaderWithoutNullStream) {
+  const auto type =
+      velox::ROW({{"features", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .flatMapColumns = {{"features", {"1"}}},
+      },
+      type,
+      pool_.get()};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+  EXPECT_NE(factory->createReader(decoders), nullptr);
+}
+
+TEST_F(FieldReaderTest, sparseFlatMapReusesKeyStorageAcrossBatches) {
+  constexpr uint32_t kRows{1'024};
+  constexpr uint32_t kBatches{5};
+  constexpr uint32_t kPresentRow{7};
+  SchemaBuilder builder;
+  const auto root = builder.createRowTypeBuilder(1);
+  const auto flatMap = builder.createFlatMapTypeBuilder(ScalarKind::Int32);
+  const auto value = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const auto& inMapDescriptor = flatMap->addChild("9", value);
+  root->addChild("features", flatMap);
+
+  std::vector<uint8_t> inMap(kRows * kBatches, false);
+  std::vector<int64_t> values(kBatches);
+  for (uint32_t batch = 0; batch < kBatches; ++batch) {
+    inMap[batch * kRows + kPresentRow] = true;
+    values[batch] = 17 + batch;
+  }
+  decoders_[inMapDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::move(inMap));
+  decoders_[value->scalarDescriptor().offset()] =
+      std::make_unique<TestDecoder<int64_t>>(std::move(values));
+  createReader(builder);
+  next(kRows);
+
+  const auto* warmedMap =
+      output_->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+  ASSERT_NE(warmedMap, nullptr);
+  const auto* reusedKeys = warmedMap->mapKeys().get();
+  ASSERT_LT(
+      warmedMap->mapKeys()->asFlatVector<int32_t>()->values()->capacity(),
+      kRows * sizeof(int32_t));
+  std::vector<int32_t> expectedSizes(kRows, 0);
+  expectedSizes[kPresentRow] = 1;
+  std::vector<int32_t> expectedOffsets(kRows, 0);
+  std::fill(
+      expectedOffsets.begin() + kPresentRow + 1, expectedOffsets.end(), 1);
+
+  // Keeps the key capacity below the map-row count to exercise every read.
+  for (uint32_t batch = 1; batch < kBatches; ++batch) {
+    SCOPED_TRACE(batch);
+    const auto before = pool_->stats();
+    next(kRows);
+    const auto after = pool_->stats();
+
+    const auto* mapOutput =
+        output_->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+    ASSERT_EQ(mapOutput, warmedMap);
+    EXPECT_EQ(mapOutput->mapKeys().get(), reusedKeys);
+    EXPECT_EQ(after.numAllocs, before.numAllocs);
+    EXPECT_THAT(
+        std::vector<int32_t>(
+            mapOutput->rawSizes(), mapOutput->rawSizes() + kRows),
+        testing::ElementsAreArray(expectedSizes));
+    EXPECT_THAT(
+        std::vector<int32_t>(
+            mapOutput->rawOffsets(), mapOutput->rawOffsets() + kRows),
+        testing::ElementsAreArray(expectedOffsets));
+    const auto* keyOutput = mapOutput->mapKeys()->asFlatVector<int32_t>();
+    const auto* valueOutput = mapOutput->mapValues()->asFlatVector<int64_t>();
+    ASSERT_EQ(keyOutput->size(), 1);
+    ASSERT_EQ(valueOutput->size(), 1);
+    EXPECT_EQ(keyOutput->valueAt(0), 9);
+    EXPECT_EQ(valueOutput->valueAt(0), 17 + batch);
+    EXPECT_EQ(keyOutput->values()->size(), sizeof(int32_t));
+    EXPECT_LT(keyOutput->values()->capacity(), kRows * sizeof(int32_t));
+  }
+}
+
+TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
+  using Entry = std::pair<int32_t, std::optional<int64_t>>;
+  const auto input = vectorMaker_->rowVector(
+      {"features"},
+      {vectorMaker_->mapVector<int32_t, int64_t>(
+          std::vector<std::vector<Entry>>{{}, {}})});
+  Serializer serializer{
+      SerializerOptions{
+          .hybridFlatMapColumns =
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int32,
+                    {{"1"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
+      },
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  const auto& defaultGroup =
+      schema->asRow().childAt(0)->asHybridFlatMap().defaultGroup();
+  ASSERT_TRUE(defaultGroup.groupKeys.empty());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  const auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+  ASSERT_NE(factory, nullptr);
+  EXPECT_THAT(
+      streamOffsets,
+      testing::Contains(defaultGroup.keyPresenceDescriptor.offset()));
+  EXPECT_THAT(
+      streamOffsets, testing::Contains(defaultGroup.inMapDescriptor.offset()));
+
+  Deserializer deserializer{schema, pool_.get()};
+  velox::VectorPtr output;
+  deserializer.deserialize(serialized, output);
+
+  const auto* map =
+      output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+  ASSERT_NE(map, nullptr);
+  EXPECT_EQ(map->sizeAt(0), 0);
+  EXPECT_EQ(map->sizeAt(1), 0);
+}
+
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
+TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"1"};
+  const auto group = hybridMap->addGroup(
+      7, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+  decoders[group.keyPresenceDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{false});
+  decoders[group.inMapDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{});
+  auto reader = factory->createReader(decoders);
+
+  folly::coro::blockingWait(reader->co_skip(1));
+  velox::VectorPtr output;
+  folly::coro::blockingWait(reader->co_next(2, output));
+
+  ASSERT_EQ(output->size(), 2);
+  const auto* map =
+      output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+  ASSERT_NE(map, nullptr);
+  EXPECT_EQ(map->sizeAt(0), 0);
+  EXPECT_EQ(map->sizeAt(1), 0);
+}
+
+TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
+  auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const auto valueOffset = groupValue->scalarDescriptor().offset();
+  const std::vector<std::string> groupKeys{"1"};
+  const auto group = hybridMap->addGroup(7, groupKeys, std::move(groupValue));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+
+  struct TestCase {
+    std::string_view name;
+    std::optional<std::vector<uint8_t>> keyPresence;
+    std::optional<std::vector<uint8_t>> inMap;
+    std::optional<std::vector<int64_t>> values;
+    std::vector<std::string> expectedMaps;
+  };
+  const std::vector<TestCase> testCases{
+      {
+          .name = "inMapOnly",
+          .keyPresence = std::nullopt,
+          .inMap = std::vector<uint8_t>{true, false},
+          .values = std::nullopt,
+          .expectedMaps = {"{1: null}", "{}"},
+      },
+      {
+          .name = "keyPresenceOnly",
+          .keyPresence = std::vector<uint8_t>{true},
+          .inMap = std::nullopt,
+          .values = std::nullopt,
+          .expectedMaps = {"{}", "{}"},
+      },
+      {
+          .name = "allAbsent",
+          .keyPresence = std::nullopt,
+          .inMap = std::nullopt,
+          .values = std::nullopt,
+          .expectedMaps = {"{}", "{}"},
+      },
+  };
+
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+    if (testCase.keyPresence.has_value()) {
+      decoders[group.keyPresenceDescriptor.offset()] =
+          std::make_unique<BoolDecoder>(*testCase.keyPresence);
+    }
+    if (testCase.inMap.has_value()) {
+      decoders[group.inMapDescriptor.offset()] =
+          std::make_unique<BoolDecoder>(*testCase.inMap);
+    }
+    if (testCase.values.has_value()) {
+      decoders[valueOffset] =
+          std::make_unique<TestDecoder<int64_t>>(*testCase.values);
+    }
+    auto reader = factory->createReader(decoders);
+    velox::VectorPtr output;
+    folly::coro::blockingWait(reader->co_next(2, output));
+    const auto expected = vectorMaker.rowVector(
+        {"features"},
+        {vectorMaker.mapVectorFromJson<int32_t, int64_t>(
+            testCase.expectedMaps)});
+    ASSERT_EQ(output->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      EXPECT_TRUE(expected->equalValueAt(output.get(), row, row));
+    }
+  }
+}
+
+TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
+  auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const auto groupValueOffset = groupValue->scalarDescriptor().offset();
+  const std::vector<std::string> groupKeys{"1", "2"};
+  const auto group = hybridMap->addGroup(7, groupKeys, std::move(groupValue));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  FieldReaderParams params;
+  params.flatMapFeatureSelector["features"] = {
+      .features = {"1"}, .mode = SelectionMode::Include};
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      params,
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+
+  const auto expectFailure =
+      [&](std::optional<std::vector<uint8_t>> keyPresence,
+          std::optional<std::vector<uint8_t>> inMap,
+          std::optional<std::vector<int64_t>> values,
+          std::string_view message) {
+        folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+        if (keyPresence.has_value()) {
+          decoders[group.keyPresenceDescriptor.offset()] =
+              std::make_unique<BoolDecoder>(std::move(*keyPresence));
+        }
+        if (inMap.has_value()) {
+          decoders[group.inMapDescriptor.offset()] =
+              std::make_unique<BoolDecoder>(std::move(*inMap));
+        }
+        if (values.has_value()) {
+          decoders[groupValueOffset] =
+              std::make_unique<TestDecoder<int64_t>>(std::move(*values));
+        }
+        auto reader = factory->createReader(decoders);
+        velox::VectorPtr output;
+        NIMBLE_ASSERT_FILE_THROW(
+            folly::coro::blockingWait(reader->co_next(1, output)), message);
+      };
+
+  expectFailure(
+      std::vector<uint8_t>{true, true, true},
+      std::vector<uint8_t>{true},
+      std::nullopt,
+      "exceeds schema key count");
+  expectFailure(
+      std::nullopt,
+      std::vector<uint8_t>{true},
+      std::nullopt,
+      "in-map count is not divisible by present key count");
+  expectFailure(
+      std::nullopt,
+      std::nullopt,
+      std::vector<int64_t>{10},
+      "Hybrid FlatMap group with present keys is missing in-map rows.");
+  expectFailure(
+      std::vector<uint8_t>{false},
+      std::vector<uint8_t>{true},
+      std::nullopt,
+      "in-map rows without present keys");
+  expectFailure(
+      std::vector<uint8_t>{true},
+      std::vector<uint8_t>{false},
+      std::nullopt,
+      "has no present rows");
+  const auto expectNullableMetadataFailure = [&](bool nullableKey,
+                                                 std::string_view message) {
+    folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+    decoders[group.keyPresenceDescriptor.offset()] =
+        std::make_unique<BoolDecoder>(std::vector<uint8_t>{true}, nullableKey);
+    decoders[group.inMapDescriptor.offset()] =
+        std::make_unique<BoolDecoder>(std::vector<uint8_t>{true}, !nullableKey);
+    auto reader = factory->createReader(decoders);
+    velox::VectorPtr output;
+    NIMBLE_ASSERT_FILE_THROW(
+        folly::coro::blockingWait(reader->co_next(1, output)), message);
+  };
+  expectNullableMetadataFailure(
+      /*nullableKey=*/true, "key-presence-bits stream must not contain nulls");
+  expectNullableMetadataFailure(
+      /*nullableKey=*/false, "in-map stream must not contain nulls");
+
+  const auto expectMultipleChunkFailure =
+      [&](std::vector<uint8_t> keyPresence,
+          std::vector<uint32_t> keyPresenceChunkRowCounts,
+          std::vector<uint8_t> inMap,
+          std::vector<uint32_t> inMapChunkRowCounts,
+          std::string_view message) {
+        folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+        decoders[group.keyPresenceDescriptor.offset()] =
+            std::make_unique<SegmentedDecoder>(
+                std::make_unique<BoolDecoder>(std::move(keyPresence)),
+                std::move(keyPresenceChunkRowCounts));
+        decoders[group.inMapDescriptor.offset()] =
+            std::make_unique<SegmentedDecoder>(
+                std::make_unique<BoolDecoder>(std::move(inMap)),
+                std::move(inMapChunkRowCounts));
+        auto reader = factory->createReader(decoders);
+        velox::VectorPtr output;
+        NIMBLE_ASSERT_FILE_THROW(
+            folly::coro::blockingWait(reader->co_next(1, output)), message);
+      };
+  expectMultipleChunkFailure(
+      /*keyPresence=*/{true, true},
+      /*keyPresenceChunkRowCounts=*/{1, 1},
+      /*inMap=*/{true, true},
+      /*inMapChunkRowCounts=*/{2},
+      "key-presence-bits stream must have one encoded chunk per decode run");
+  expectMultipleChunkFailure(
+      /*keyPresence=*/{true},
+      /*keyPresenceChunkRowCounts=*/{1},
+      /*inMap=*/{true, true},
+      /*inMapChunkRowCounts=*/{1, 1},
+      "in-map stream must have one encoded chunk per decode run");
+
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> partialDecoders;
+  partialDecoders[group.keyPresenceDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true});
+  partialDecoders[group.inMapDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
+  partialDecoders[groupValueOffset] =
+      std::make_unique<TestDecoder<int64_t>>(std::vector<int64_t>{10, 11});
+  auto partialReader = factory->createReader(partialDecoders);
+  velox::VectorPtr partialOutput;
+  folly::coro::blockingWait(partialReader->co_next(1, partialOutput));
+  const auto* partialMap =
+      partialOutput->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+  ASSERT_NE(partialMap, nullptr);
+  EXPECT_EQ(partialMap->sizeAt(0), 1);
+  EXPECT_NO_THROW(partialReader->reset());
+}
+
+TEST_F(FieldReaderTest, rejectsKeyListWithoutInMapRows) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kKeyList);
+  const std::vector<std::string> groupKeys{"1"};
+  hybridMap->addGroup(
+      7, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+  const auto defaultGroup = hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+  decoders[defaultGroup.keyPresenceDescriptor.offset()] =
+      std::make_unique<TestDecoder<int32_t>>(std::vector<int32_t>{9});
+  auto reader = factory->createReader(decoders);
+  velox::VectorPtr output;
+  NIMBLE_ASSERT_FILE_THROW(
+      folly::coro::blockingWait(reader->co_next(1, output)),
+      "Hybrid FlatMap group lists keys without in-map rows");
+}
+
+TEST_F(FieldReaderTest, readsCanonicalHybridSchemaKeys) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
+  auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const auto groupValueOffset = groupValue->scalarDescriptor().offset();
+  // Schema keys ascend as strings, so "-5" comes first.
+  const std::vector<std::string> groupKeys{"-5", "0", "2147483647"};
+  const auto group = hybridMap->addGroup(7, groupKeys, std::move(groupValue));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+  decoders[group.keyPresenceDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true, true});
+  decoders[group.inMapDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true, true});
+  decoders[groupValueOffset] =
+      std::make_unique<TestDecoder<int64_t>>(std::vector<int64_t>{10, 11, 12});
+  auto reader = factory->createReader(decoders);
+  velox::VectorPtr output;
+  folly::coro::blockingWait(reader->co_next(1, output));
+
+  const auto* map =
+      output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+  ASSERT_NE(map, nullptr);
+  const auto* keys = map->mapKeys()->as<velox::FlatVector<int32_t>>();
+  ASSERT_NE(keys, nullptr);
+  const auto* values = map->mapValues()->as<velox::FlatVector<int64_t>>();
+  ASSERT_NE(values, nullptr);
+  const auto begin = map->offsetAt(0);
+  const auto end = begin + map->sizeAt(0);
+  EXPECT_THAT(
+      std::vector<int32_t>(keys->rawValues() + begin, keys->rawValues() + end),
+      testing::ElementsAre(-5, 0, 2'147'483'647));
+  EXPECT_THAT(
+      std::vector<int64_t>(
+          values->rawValues() + begin, values->rawValues() + end),
+      testing::ElementsAre(10, 11, 12));
+}
+
+TEST_F(FieldReaderTest, rejectsNonCanonicalHybridSchemaKeys) {
+  const auto expectFailure = [&](std::string key, std::string_view message) {
+    SCOPED_TRACE(key);
+    SchemaBuilder builder;
+    auto root = builder.createRowTypeBuilder(1);
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+        ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
+    const std::vector<std::string> groupKeys{std::move(key)};
+    hybridMap->addGroup(
+        7, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    hybridMap->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        kNoGroupKeys,
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
+    root->addChild("features", hybridMap);
+    const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+    const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+        velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+    std::vector<uint32_t> streamOffsets;
+    auto factory = FieldReaderFactory::create(
+        {},
+        schema,
+        typeWithId,
+        streamOffsets,
+        [](uint32_t) { return true; },
+        pool_.get());
+    const folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+    NIMBLE_ASSERT_USER_THROW(factory->createReader(decoders), message);
+  };
+
+  expectFailure("07", "Hybrid FlatMap key '07' is not canonical.");
+  expectFailure("-0", "Hybrid FlatMap key '-0' is not canonical.");
+  expectFailure(
+      "2147483648",
+      "Hybrid FlatMap key '2147483648' cannot be parsed as Int32.");
+  expectFailure("7x", "Hybrid FlatMap key '7x' cannot be parsed as Int32.");
+}
+
+TEST_F(FieldReaderTest, filtersDecodedHybridGroupsToRequestedFeatures) {
+  using Entry = std::pair<int32_t, std::optional<int64_t>>;
+  const std::vector<std::vector<Entry>> maps{
+      {{1, 10}, {2, 20}, {9, 90}, {10, 100}},
+      {{2, 21}, {10, 101}},
+      {{1, 12}, {9, 92}},
+      {{1, 13}, {9, 93}},
+  };
+  const auto input = vectorMaker_->rowVector(
+      {"features"}, {vectorMaker_->mapVector<int32_t, int64_t>(maps)});
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int32,
+                    {{"1", "2"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
+      },
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+
+  Deserializer wholeGroupDeserializer{schema, pool_.get()};
+  velox::VectorPtr wholeGroupOutput;
+  wholeGroupDeserializer.deserialize(serialized, wholeGroupOutput);
+  for (velox::vector_size_t row = 0; row < input->size(); ++row) {
+    EXPECT_TRUE(input->equalValueAt(wholeGroupOutput.get(), row, row));
+  }
+
+  std::vector<Deserializer::Subfield> selected;
+  selected.emplace_back("features[1]");
+  selected.emplace_back("features[9]");
+  Deserializer deserializer{
+      schema, selected, pool_.get(), DeserializerOptions{}};
+  velox::VectorPtr output;
+  deserializer.deserialize(serialized, output);
+
+  const auto* outputMap =
+      output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+  ASSERT_NE(outputMap, nullptr);
+  const auto* keys = outputMap->mapKeys()->as<velox::FlatVector<int32_t>>();
+  const auto* values = outputMap->mapValues()->as<velox::FlatVector<int64_t>>();
+  ASSERT_NE(keys, nullptr);
+  ASSERT_NE(values, nullptr);
+  const std::array<std::map<int32_t, int64_t>, 4> expected{
+      std::map<int32_t, int64_t>{{1, 10}, {9, 90}},
+      std::map<int32_t, int64_t>{},
+      std::map<int32_t, int64_t>{{1, 12}, {9, 92}},
+      std::map<int32_t, int64_t>{{1, 13}, {9, 93}},
+  };
+  for (velox::vector_size_t row = 0; row < outputMap->size(); ++row) {
+    std::map<int32_t, int64_t> actual;
+    for (velox::vector_size_t entry = 0; entry < outputMap->sizeAt(row);
+         ++entry) {
+      const auto index = outputMap->offsetAt(row) + entry;
+      actual.emplace(keys->valueAt(index), values->valueAt(index));
+    }
+    EXPECT_EQ(actual, expected[row]);
+  }
+
+  deserializer.deserialize(serialized, std::vector<RowRange>{{1, 2}}, output);
+  ASSERT_EQ(output->size(), 1);
+  EXPECT_EQ(
+      output->as<velox::RowVector>()
+          ->childAt(0)
+          ->as<velox::MapVector>()
+          ->sizeAt(0),
+      0);
+
+  deserializer.deserialize(
+      serialized, std::vector<RowRange>{{1, 2}, {3, 4}}, output);
+  ASSERT_EQ(output->size(), 2);
+  EXPECT_EQ(
+      output->as<velox::RowVector>()
+          ->childAt(0)
+          ->as<velox::MapVector>()
+          ->sizeAt(0),
+      0);
+  EXPECT_EQ(
+      output->as<velox::RowVector>()
+          ->childAt(0)
+          ->as<velox::MapVector>()
+          ->sizeAt(1),
+      2);
+
+  deserializer.deserialize(serialized, std::vector<RowRange>{{0, 0}}, output);
+  ASSERT_NE(output, nullptr);
+  EXPECT_EQ(output->size(), 0);
+}
+
+TEST_F(FieldReaderTest, filtersKeyListDefaultToRequestedFeatures) {
+  using Entry = std::pair<int32_t, std::optional<int64_t>>;
+  const auto input = vectorMaker_->rowVector(
+      {"features"},
+      {vectorMaker_->mapVector<int32_t, int64_t>(
+          std::vector<std::vector<Entry>>{
+              {{1, 10}, {2, 20}, {10, 100}, {9, 90}},
+              {{2, 21}, {10, 101}},
+              {{9, 92}},
+          })});
+  auto hybridMap = makeHybridFlatMap(
+      ScalarKind::Int32,
+      {{"1", "2"}},
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns = {{"features", std::move(hybridMap)}},
+      },
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+
+  // Default may list ungrouped key 9 in any batch, so Default is read and
+  // filtered to the requested keys.
+  {
+    std::vector<Deserializer::Subfield> selected;
+    selected.emplace_back("features[1]");
+    selected.emplace_back("features[9]");
+    Deserializer deserializer{
+        schema, selected, pool_.get(), DeserializerOptions{}};
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized, output);
+
+    const auto expected = vectorMaker_->rowVector(
+        {"features"},
+        {vectorMaker_->mapVector<int32_t, int64_t>(
+            std::vector<std::vector<Entry>>{
+                {{1, 10}, {9, 90}},
+                {},
+                {{9, 92}},
+            })});
+    ASSERT_EQ(output->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      EXPECT_TRUE(expected->equalValueAt(output.get(), row, row))
+          << "row " << row << " expected " << expected->toString(row)
+          << " actual " << output->toString(row);
+    }
+  }
+
+  // A request for configured keys only never reads Default.
+  {
+    const auto& defaultGroup =
+        schema->asRow().childAt(0)->asHybridFlatMap().defaultGroup();
+    const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+        velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+    FieldReaderParams params;
+    params.flatMapFeatureSelector["features"] = {
+        .features = {"1", "2"}, .mode = SelectionMode::Include};
+    std::vector<uint32_t> streamOffsets;
+    const auto factory = FieldReaderFactory::create(
+        params,
+        schema,
+        typeWithId,
+        streamOffsets,
+        [](uint32_t) { return true; },
+        pool_.get());
+    ASSERT_NE(factory, nullptr);
+    EXPECT_THAT(
+        streamOffsets,
+        testing::Not(
+            testing::Contains(defaultGroup.keyPresenceDescriptor.offset())));
+    EXPECT_THAT(
+        streamOffsets,
+        testing::Not(testing::Contains(defaultGroup.inMapDescriptor.offset())));
+  }
+}
+
+TEST_F(FieldReaderTest, excludesRequestedKeysAfterWholeGroupDecode) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
+  auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const auto groupValueOffset = groupValue->scalarDescriptor().offset();
+  const std::vector<std::string> groupKeys{"1", "2"};
+  const auto group = hybridMap->addGroup(0, groupKeys, std::move(groupValue));
+  auto defaultValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const auto defaultValueOffset = defaultValue->scalarDescriptor().offset();
+  std::vector<std::string> defaultKeys;
+  const auto defaultGroup = hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId, defaultKeys, std::move(defaultValue));
+  defaultKeys.push_back("9");
+  defaultKeys.push_back("10");
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  FieldReaderParams params;
+  params.flatMapFeatureSelector["features"] = {
+      .features = {"2", "9"}, .mode = SelectionMode::Exclude};
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      params,
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+  decoders[group.keyPresenceDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
+  decoders[group.inMapDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
+  decoders[groupValueOffset] =
+      std::make_unique<TestDecoder<int64_t>>(std::vector<int64_t>{10, 20});
+  decoders[defaultGroup.keyPresenceDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
+  decoders[defaultGroup.inMapDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
+  decoders[defaultValueOffset] =
+      std::make_unique<TestDecoder<int64_t>>(std::vector<int64_t>{90, 100});
+
+  auto reader = factory->createReader(decoders);
+  velox::VectorPtr output;
+  folly::coro::blockingWait(reader->co_next(1, output));
+  const auto* map =
+      output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+  ASSERT_NE(map, nullptr);
+  ASSERT_EQ(map->sizeAt(0), 2);
+  const auto* keys = map->mapKeys()->as<velox::FlatVector<int32_t>>();
+  ASSERT_NE(keys, nullptr);
+  EXPECT_EQ(keys->valueAt(map->offsetAt(0)), 1);
+  EXPECT_EQ(keys->valueAt(map->offsetAt(0) + 1), 10);
+}
+
+TEST_F(FieldReaderTest, skipsNullRowsWithoutAdvancingHybridGroups) {
+  using Entry = std::pair<int32_t, std::optional<int64_t>>;
+  const auto map = vectorMaker_->mapVector<int32_t, int64_t>(
+      std::vector<std::vector<Entry>>{{{1, 10}}, {{1, 20}}});
+  map->setNull(0, true);
+  const auto input = vectorMaker_->rowVector({"features"}, {map});
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int32,
+                    {{"1"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
+      },
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  Deserializer deserializer{schema, pool_.get()};
+
+  velox::VectorPtr output;
+  deserializer.deserialize(serialized, std::vector<RowRange>{{1, 2}}, output);
+
+  ASSERT_EQ(output->size(), 1);
+  EXPECT_TRUE(input->equalValueAt(output.get(), 1, 0));
+}
+
+TEST_F(FieldReaderTest, hybridFlatMapRoundTripsNestedValues) {
+  constexpr velox::vector_size_t kRows{3};
+  constexpr velox::vector_size_t kMapEntries{6};
+  constexpr velox::vector_size_t kArrayElements{7};
+  const auto valueType = velox::ARRAY(velox::BIGINT());
+  const auto mapType = velox::MAP(velox::INTEGER(), valueType);
+
+  auto keys =
+      velox::BaseVector::create(velox::INTEGER(), kMapEntries, pool_.get());
+  const std::array<int32_t, kMapEntries> keyData{1, 99, 2, 3, 99, 1};
+  for (velox::vector_size_t i = 0; i < kMapEntries; ++i) {
+    keys->asFlatVector<int32_t>()->set(i, keyData[i]);
+  }
+
+  auto elements =
+      velox::BaseVector::create(velox::BIGINT(), kArrayElements, pool_.get());
+  const std::array<int64_t, kArrayElements> elementData{
+      10, 11, 90, 20, 30, 31, 12};
+  for (velox::vector_size_t i = 0; i < kArrayElements; ++i) {
+    elements->asFlatVector<int64_t>()->set(i, elementData[i]);
+  }
+
+  auto arrays = std::make_shared<velox::ArrayVector>(
+      pool_.get(),
+      valueType,
+      nullptr,
+      kMapEntries,
+      velox::allocateOffsets(kMapEntries, pool_.get()),
+      velox::allocateSizes(kMapEntries, pool_.get()),
+      elements);
+  const std::array<velox::vector_size_t, kMapEntries> arrayOffsets{
+      0, 2, 3, 4, 6, 6};
+  const std::array<velox::vector_size_t, kMapEntries> arraySizes{
+      2, 1, 1, 2, 0, 1};
+  std::copy(
+      arrayOffsets.begin(),
+      arrayOffsets.end(),
+      arrays->mutableOffsets(kMapEntries)->asMutable<velox::vector_size_t>());
+  std::copy(
+      arraySizes.begin(),
+      arraySizes.end(),
+      arrays->mutableSizes(kMapEntries)->asMutable<velox::vector_size_t>());
+
+  auto map = std::make_shared<velox::MapVector>(
+      pool_.get(),
+      mapType,
+      nullptr,
+      kRows,
+      velox::allocateOffsets(kRows, pool_.get()),
+      velox::allocateSizes(kRows, pool_.get()),
+      keys,
+      arrays);
+  const std::array<velox::vector_size_t, kRows> mapOffsets{0, 2, 4};
+  const std::array<velox::vector_size_t, kRows> mapSizes{2, 2, 2};
+  std::copy(
+      mapOffsets.begin(),
+      mapOffsets.end(),
+      map->mutableOffsets(kRows)->asMutable<velox::vector_size_t>());
+  std::copy(
+      mapSizes.begin(),
+      mapSizes.end(),
+      map->mutableSizes(kRows)->asMutable<velox::vector_size_t>());
+
+  const auto type = velox::ROW({{"features", mapType}});
+  const auto input = std::make_shared<velox::RowVector>(
+      pool_.get(), type, nullptr, kRows, std::vector<velox::VectorPtr>{map});
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int32,
+                    {{"1", "2"}, {"3"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
+      },
+      type,
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, kRows))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  const auto& hybridMap = schema->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(hybridMap.groupCount(), 3);
+  EXPECT_TRUE(hybridMap.groupAt(0).valueType->isArray());
+  EXPECT_EQ(hybridMap.groupAt(2).groupId, HybridFlatMap::kDefaultGroupId);
+
+  Deserializer deserializer{schema, pool_.get()};
+  velox::VectorPtr output;
+  deserializer.deserialize(serialized, output);
+  ASSERT_EQ(output->size(), input->size());
+  for (velox::vector_size_t row = 0; row < kRows; ++row) {
+    EXPECT_TRUE(input->equalValueAt(output.get(), row, row))
+        << "row " << row << " expected " << input->toString(row) << " actual "
+        << output->toString(row);
+  }
+}
+
+TEST_F(FieldReaderTest, hybridFlatMapCopiesGroupsInKeyOrder) {
+  // Row 0 has keys of both explicit groups and Default, row 1 is null, and
+  // row 2 lists its keys out of schema order. Map equality ignores key order,
+  // so the checks below compare each row's keys in order.
+  const auto map = vectorMaker_->mapVector(
+      /*offsets=*/{0, 4, 4},
+      vectorMaker_->flatVector<int32_t>({1, 2, 5, 7, 2, 3, 1}),
+      vectorMaker_->arrayVector<int64_t>(
+          {{10}, {20, 21}, {50}, {70}, {22}, {30}, {11}}),
+      /*nulls=*/{1});
+  const auto input = vectorMaker_->rowVector({"features"}, {map});
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int32,
+                    {{"1", "2", "3"}, {"5"}},
+                    HybridFlatMap::KeyPresenceMode::kBitmap)}},
+      },
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  Deserializer deserializer{schema, pool_.get()};
+
+  // Checks that output row `outputRow` holds `expectedKeys` in that order, each
+  // with the values of input entry `expectedEntries`.
+  const auto expectRow =
+      [&](const velox::VectorPtr& output,
+          velox::vector_size_t outputRow,
+          const std::vector<int32_t>& expectedKeys,
+          const std::vector<velox::vector_size_t>& expectedEntries) {
+        const auto* outputMap =
+            output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+        ASSERT_NE(outputMap, nullptr);
+        const auto* keys =
+            outputMap->mapKeys()->as<velox::FlatVector<int32_t>>();
+        ASSERT_NE(keys, nullptr);
+        const auto offset = outputMap->offsetAt(outputRow);
+        const std::vector<int32_t> actualKeys(
+            keys->rawValues() + offset,
+            keys->rawValues() + offset + outputMap->sizeAt(outputRow));
+        ASSERT_THAT(actualKeys, testing::ElementsAreArray(expectedKeys));
+        for (size_t i = 0; i < expectedEntries.size(); ++i) {
+          EXPECT_TRUE(outputMap->mapValues()->equalValueAt(
+              map->mapValues().get(), offset + i, expectedEntries[i]))
+              << "entry " << i;
+        }
+      };
+
+  {
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized, output);
+    ASSERT_EQ(output->size(), 3);
+    expectRow(output, 0, {1, 2, 5, 7}, {0, 1, 2, 3});
+    EXPECT_TRUE(output->as<velox::RowVector>()->childAt(0)->isNullAt(1));
+    expectRow(output, 2, {1, 2, 3}, {6, 4, 5});
+  }
+
+  // A one-row window copies every present key of a group in one call.
+  {
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized, std::vector<RowRange>{{2, 3}}, output);
+    ASSERT_EQ(output->size(), 1);
+    expectRow(output, 0, {1, 2, 3}, {6, 4, 5});
+  }
+}
+
+} // namespace
+} // namespace facebook::nimble

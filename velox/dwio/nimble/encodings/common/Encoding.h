@@ -109,6 +109,10 @@ struct ReadWithVisitorParams {
   // When true, DictionaryEncoding uses a fused DictionaryColumnVisitor
   // instead of the two-pass DictionaryIndicesHook fallback.
   bool dictionaryAwareReads{false};
+
+  // When true, encodings use the scan fast path instead of the
+  // per-row slow path.
+  bool scanFastPath{false};
 };
 
 class Encoding {
@@ -187,6 +191,29 @@ class Encoding {
     /// FSST is kept only when its final encoded size is at most this fraction
     /// of the original string bytes.
     double fsstCompressionTargetRatio = 0.6;
+
+    /// Reuses decoded FSST strings whose compressed payload repeats within one
+    /// materialize() or readWithVisitor() call. The cache is never shared
+    /// across calls or FSST encodings because payload bytes are meaningful only
+    /// with the symbol table that encoded them.
+    bool enableFsstDecodeCache{false};
+
+    /// Maximum number of distinct FSST payloads retained by one decode call.
+    uint32_t fsstMaxDecodeCacheEntries{256};
+
+    /// Whether repeated FSST strings can be cached with these options.
+    bool fsstDecodeCacheEnabled() const {
+      return enableFsstDecodeCache && fsstMaxDecodeCacheEntries != 0;
+    }
+
+    /// Makes an encoding view build and keep the structures that make many
+    /// reads cheap, such as offsets, bitmaps and decoded chunks, when it is
+    /// created. Set it for a view that serves many reads, such as a scan or a
+    /// binary search. When unset, the view builds only what one read needs and
+    /// derives the rest for each read, which suits a view that serves a few
+    /// reads and costs more per read. Both settings return the same values, and
+    /// reads stay thread safe. Other encodings ignore it.
+    bool cacheEncodingView{false};
   };
 
   static constexpr int kEncodingTypeOffset =
@@ -281,6 +308,11 @@ class Encoding {
       int /*begin*/) {
     NIMBLE_NOT_IMPLEMENTED(typeid(*this).name());
   }
+
+  /// Reads the nulls of the next |rowCount| rows into |nulls|, starting at bit
+  /// |begin|, and skips their values without decoding them. Only called by
+  /// nulls-only reads (ChunkedDecoder::nextNulls).
+  virtual void readNulls(uint32_t rowCount, uint64_t* nulls, int begin);
 
   /// Whether this encoding is nullable, i.e. contains any nulls. This property
   /// modifies how engines need to interpret many of the function results, and a
@@ -647,12 +679,17 @@ void readSparseMaterializedIndices(
   visitor.setRowIndex(visitor.numRows());
 }
 
-template <typename DecoderVisitor, typename Skip, typename F>
+template <
+    typename DecoderVisitor,
+    typename Skip,
+    typename F,
+    typename Process = std::nullptr_t>
 void readWithVisitorSlow(
     DecoderVisitor& visitor,
     const ReadWithVisitorParams& params,
     Skip skip,
-    F decodeOne) {
+    F decodeOne,
+    Process process = nullptr) {
   using T = typename DecoderVisitor::DataType;
   constexpr bool kExtractToReader = std::is_same_v<
       typename DecoderVisitor::Extract,
@@ -687,7 +724,11 @@ void readWithVisitorSlow(
         visitor.processNull(atEnd);
       }
     } else {
-      visitor.process(castFromPhysicalType<T>(decodeOne()), atEnd);
+      if constexpr (std::is_null_pointer_v<Process>) {
+        visitor.process(castFromPhysicalType<T>(decodeOne()), atEnd);
+      } else {
+        process(decodeOne(), atEnd);
+      }
     }
   }
 }
@@ -879,6 +920,41 @@ T* mutableValues(const V& visitor, vector_size_t size) {
         visitor.reader().numValues();
   }
   return values;
+}
+
+// Returns whether a hook explicitly opts in to the encoding bulk fast path.
+template <typename Hook>
+constexpr bool hookAllowsBulkFastPath() {
+  if constexpr (requires { Hook::kBulkFastPath; }) {
+    return Hook::kBulkFastPath;
+  }
+  return false;
+}
+
+// Returns whether visitor 'V' takes the encoding bulk fast path while
+// ReadWithVisitorParams::scanFastPath is off: reads that extract into the
+// reader, and hooks without a filter that opt in through kBulkFastPath.
+template <typename V>
+constexpr bool bulkFastPathByDefault() {
+  return std::is_same_v<
+             typename V::Extract,
+             velox::dwio::common::ExtractToReader> ||
+      (V::kHasHook && !V::kHasFilter &&
+       hookAllowsBulkFastPath<typename V::HookType>());
+}
+
+// Returns whether DictionaryColumnVisitor's bulk read supports value type 'T'
+// and visitor 'V'. These limits belong to the shared visitor, so DWRF and
+// Parquet bulk dictionary reads have them too. Returns true only when both of
+// these hold:
+//   - T is a 2-, 4- or 8-byte numeric type. The visitor has no dictionary index
+//     type for 1-byte values, and strings use StringDictionaryColumnVisitor.
+//   - V's filter is deterministic. The visitor caches one verdict per
+//     dictionary value.
+template <typename T, typename V>
+constexpr bool dictionaryColumnVisitorSupported() {
+  return isNumericType<T>() && sizeof(T) >= sizeof(int16_t) &&
+      V::FilterType::deterministic;
 }
 
 } // namespace detail

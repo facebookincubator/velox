@@ -20,6 +20,8 @@
 #include <cstring>
 #include <limits>
 
+#include <folly/ScopeGuard.h>
+
 #include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/NimbleException.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -87,7 +89,6 @@ template <typename ReadFunction>
 uint32_t readSelected(
     uint32_t numRows,
     DataType dataType,
-    const EncodingView& encodingView,
     velox::memory::MemoryPool* pool,
     void* output,
     const std::function<void*()>& getOutputNulls,
@@ -97,10 +98,6 @@ uint32_t readSelected(
     return 0;
   }
   NIMBLE_CHECK_NOT_NULL(output);
-  NIMBLE_CHECK_EQ(
-      encodingView.dataType(),
-      dataType,
-      "EncodingView data type does not match FieldReader");
 
   void* outputNulls{nullptr};
   const auto setNull = [&](uint32_t outputIndex) {
@@ -129,16 +126,52 @@ uint32_t readSelected(
 } // namespace
 
 EncodingViewDecoder::EncodingViewDecoder(
-    std::string_view encoded,
+    std::span<const std::string_view> chunks,
     velox::memory::MemoryPool* pool,
     velox::BufferPool* bufferPool,
     const EncodingViewFactory& encodingViewFactory)
-    : pool_{velox::checkedNotNull(pool)}, bufferPool_{bufferPool} {
+    : pool_{velox::checkedNotNull(pool)},
+      encodingViewFactory_{encodingViewFactory} {
   NIMBLE_CHECK(
-      encodingViewFactory != nullptr,
+      encodingViewFactory_ != nullptr,
       "EncodingViewDecoder requires an EncodingView factory");
-  encodingView_ = encodingViewFactory(encoded);
-  NIMBLE_CHECK_NOT_NULL(encodingView_);
+  rebind(chunks, bufferPool);
+}
+
+void EncodingViewDecoder::rebind(
+    std::span<const std::string_view> chunks,
+    velox::BufferPool* bufferPool) {
+  release();
+  bufferPool_ = bufferPool;
+  NIMBLE_CHECK(
+      !chunks.empty(), "EncodingViewDecoder requires at least one chunk");
+  SCOPE_FAIL {
+    release();
+  };
+  uint32_t endRow{0};
+  for (const auto chunk : chunks) {
+    auto encodingView = encodingViewFactory_(chunk);
+    NIMBLE_CHECK_NOT_NULL(encodingView);
+    // @lint-ignore NULLSAFECLANG nullable-dereference
+    const auto& view = *encodingView;
+    if (!chunks_.empty()) {
+      NIMBLE_CHECK_FILE_EQ(
+          view.dataType(),
+          dataType(),
+          "Encoding chunks of a stream must store the same data type");
+    }
+    NIMBLE_CHECK_FILE_LE(
+        view.rowCount(),
+        std::numeric_limits<uint32_t>::max() - endRow,
+        "Stream rows must fit in uint32_t");
+    endRow += view.rowCount();
+    chunks_.push_back({std::move(encodingView), endRow});
+  }
+}
+
+void EncodingViewDecoder::release() {
+  chunks_.clear();
+  nextRow_ = 0;
 }
 
 uint32_t EncodingViewDecoder::next(
@@ -147,8 +180,8 @@ uint32_t EncodingViewDecoder::next(
     std::function<void*()> getOutputNulls,
     std::vector<velox::BufferPtr>& stringBuffers,
     const velox::bits::Bitmap* scatterOutputBitmap) {
-  NIMBLE_CHECK_LE(nextRow_, encodingView_->rowCount());
-  NIMBLE_CHECK_LE(count, encodingView_->rowCount() - nextRow_);
+  NIMBLE_CHECK_LE(nextRow_, numRows());
+  NIMBLE_CHECK_LE(count, numRows() - nextRow_);
   const auto scatterSize = scatterOutputBitmap == nullptr
       ? 0
       : static_cast<int32_t>(scatterOutputBitmap->size());
@@ -176,11 +209,7 @@ uint32_t EncodingViewDecoder::next(
   const std::array<RowRange, 1> range{{{nextRow_, nextRow_ + count}}};
   if (scatterOutputBitmap == nullptr) {
     const auto numNonNulls = read(
-        range,
-        encodingView_->dataType(),
-        output,
-        std::move(getOutputNulls),
-        stringBuffers);
+        range, dataType(), output, std::move(getOutputNulls), stringBuffers);
     nextRow_ += count;
     return numNonNulls;
   }
@@ -193,11 +222,7 @@ uint32_t EncodingViewDecoder::next(
       "Scatter bitmap must contain one position per decoded row");
   if (scatterOutputBitmap->size() == count) {
     const auto numNonNulls = read(
-        range,
-        encodingView_->dataType(),
-        output,
-        std::move(getOutputNulls),
-        stringBuffers);
+        range, dataType(), output, std::move(getOutputNulls), stringBuffers);
     nextRow_ += count;
     return numNonNulls;
   }
@@ -209,8 +234,11 @@ uint32_t EncodingViewDecoder::next(
 }
 
 uint32_t EncodingViewDecoder::remainingRows() {
-  NIMBLE_CHECK_LE(nextRow_, encodingView_->rowCount());
-  return encodingView_->rowCount() - nextRow_;
+  NIMBLE_CHECK_LE(nextRow_, numRows());
+  if (nextRow_ == numRows()) {
+    return 0;
+  }
+  return chunks_[findChunkIndex(nextRow_)].endRow - nextRow_;
 }
 
 uint32_t EncodingViewDecoder::scatterNext(
@@ -220,7 +248,7 @@ uint32_t EncodingViewDecoder::scatterNext(
     std::vector<velox::BufferPtr>& stringBuffers,
     const uint64_t* scatterBits,
     int32_t scatterSize) {
-  const auto valueWidth = decodedValueWidth(encodingView_->dataType());
+  const auto valueWidth = decodedValueWidth(dataType());
   ScopedVector<char> values{
       static_cast<size_t>(count) * valueWidth, pool_, bufferPool_};
   std::memset(values->data(), 0, values->size());
@@ -229,7 +257,7 @@ uint32_t EncodingViewDecoder::scatterNext(
   const std::array<RowRange, 1> range{{{nextRow_, nextRow_ + count}}};
   const auto numNonNulls = read(
       range,
-      encodingView_->dataType(),
+      dataType(),
       values->data(),
       [&]() { return decodedNulls->data(); },
       stringBuffers);
@@ -285,17 +313,18 @@ uint32_t EncodingViewDecoder::read(
   NIMBLE_CHECK_LE(
       rows.size(),
       static_cast<size_t>(std::numeric_limits<velox::vector_size_t>::max()));
+  NIMBLE_CHECK_EQ(
+      this->dataType(),
+      dataType,
+      "EncodingView data type does not match FieldReader");
   return readSelected(
       static_cast<uint32_t>(rows.size()),
       dataType,
-      *encodingView_,
       pool_,
       output,
       getOutputNulls,
       stringBuffers,
-      [&](const auto& setNull) {
-        return encodingView_->read(rows, setNull, output);
-      });
+      [&](const auto& setNull) { return readRows(rows, setNull, output); });
 }
 
 uint32_t EncodingViewDecoder::read(
@@ -305,22 +334,126 @@ uint32_t EncodingViewDecoder::read(
     std::function<void*()> getOutputNulls,
     std::vector<velox::BufferPtr>& stringBuffers) {
   const auto numRows = countRows(ranges);
+  NIMBLE_CHECK_EQ(
+      this->dataType(),
+      dataType,
+      "EncodingView data type does not match FieldReader");
   return readSelected(
       numRows,
       dataType,
-      *encodingView_,
       pool_,
       output,
       getOutputNulls,
       stringBuffers,
-      [&](const auto& setNull) {
-        return encodingView_->read(ranges, setNull, output);
-      });
+      [&](const auto& setNull) { return readRanges(ranges, setNull, output); });
+}
+
+uint32_t EncodingViewDecoder::readRows(
+    std::span<const uint32_t> rows,
+    const std::function<void(uint32_t)>& setNull,
+    void* output) {
+  // A single chunk starts at stream row zero, so its rows are the stream rows.
+  if (chunks_.size() == 1) {
+    return chunks_.front().view->read(rows, setNull, output);
+  }
+
+  const auto valueWidth = decodedValueWidth(dataType());
+
+  // Holds the part of 'rows' that falls in one chunk, converted to rows of that
+  // chunk.
+  std::vector<uint32_t> chunkRows;
+  chunkRows.reserve(rows.size());
+  uint32_t numNonNulls{0};
+  size_t rowIndex{0};
+  while (rowIndex < rows.size()) {
+    // Reads each run of adjacent entries of 'rows' that fall in one chunk with
+    // a single call. Rows can come in any order, so a chunk can be visited more
+    // than once.
+    const auto chunkIndex = findChunkIndex(rows[rowIndex]);
+    const auto startRow = chunkStartRow(chunkIndex);
+    const auto endRow = chunks_[chunkIndex].endRow;
+    const auto outputOffset = static_cast<uint32_t>(rowIndex);
+    chunkRows.clear();
+    while (rowIndex < rows.size() && rows[rowIndex] >= startRow &&
+           rows[rowIndex] < endRow) {
+      chunkRows.push_back(rows[rowIndex] - startRow);
+      ++rowIndex;
+    }
+    numNonNulls += chunks_[chunkIndex].view->read(
+        chunkRows,
+        [&setNull, outputOffset](uint32_t index) {
+          setNull(outputOffset + index);
+        },
+        static_cast<char*>(output) +
+            static_cast<size_t>(outputOffset) * valueWidth);
+  }
+  return numNonNulls;
+}
+
+uint32_t EncodingViewDecoder::readRanges(
+    std::span<const RowRange> ranges,
+    const std::function<void(uint32_t)>& setNull,
+    void* output) {
+  // A single chunk starts at stream row zero, so its rows are the stream rows.
+  if (chunks_.size() == 1) {
+    return chunks_.front().view->read(ranges, setNull, output);
+  }
+
+  const auto valueWidth = decodedValueWidth(dataType());
+
+  // Holds the parts of 'ranges' that fall in one chunk, converted to rows of
+  // that chunk. A chunk gets at most one part of each range.
+  std::vector<RowRange> chunkRanges;
+  chunkRanges.reserve(ranges.size());
+  uint32_t numNonNulls{0};
+  uint32_t outputOffset{0};
+  size_t rangeIndex{0};
+
+  // First row of ranges[rangeIndex] that is not read yet. A range that crosses
+  // a chunk boundary is read in parts, one per chunk.
+  uint32_t nextRangeRow{ranges[rangeIndex].startRow};
+  while (rangeIndex < ranges.size()) {
+    // Reads the parts of the ranges that fall in one chunk with a single call.
+    const auto chunkIndex = findChunkIndex(nextRangeRow);
+    const auto startRow = chunkStartRow(chunkIndex);
+    const auto endRow = chunks_[chunkIndex].endRow;
+    const auto chunkOutputOffset = outputOffset;
+    chunkRanges.clear();
+    while (rangeIndex < ranges.size() && nextRangeRow < endRow) {
+      const auto& range = ranges[rangeIndex];
+      const auto rangeEndRow = std::min(range.endRow, endRow);
+      chunkRanges.emplace_back(nextRangeRow - startRow, rangeEndRow - startRow);
+      outputOffset += rangeEndRow - nextRangeRow;
+      if (rangeEndRow < range.endRow) {
+        nextRangeRow = rangeEndRow;
+        break;
+      }
+      if (++rangeIndex < ranges.size()) {
+        nextRangeRow = ranges[rangeIndex].startRow;
+      }
+    }
+    numNonNulls += chunks_[chunkIndex].view->read(
+        chunkRanges,
+        [&setNull, chunkOutputOffset](uint32_t index) {
+          setNull(chunkOutputOffset + index);
+        },
+        static_cast<char*>(output) +
+            static_cast<size_t>(chunkOutputOffset) * valueWidth);
+  }
+  return numNonNulls;
+}
+
+size_t EncodingViewDecoder::findChunkIndex(uint32_t row) const {
+  NIMBLE_CHECK_LT(row, numRows(), "Read rows must be within the stream");
+  return static_cast<size_t>(
+      std::ranges::upper_bound(
+          chunks_, row, std::ranges::less{}, &Chunk::endRow) -
+      chunks_.begin());
 }
 
 void EncodingViewDecoder::skip(uint32_t count) {
-  NIMBLE_CHECK_LE(nextRow_, encodingView_->rowCount());
-  NIMBLE_CHECK_LE(count, encodingView_->rowCount() - nextRow_);
+  NIMBLE_CHECK_LE(nextRow_, numRows());
+  NIMBLE_CHECK_LE(count, numRows() - nextRow_);
   nextRow_ += count;
 }
 
@@ -328,7 +461,7 @@ void EncodingViewDecoder::reset() {
   nextRow_ = 0;
 }
 
-// The decoder reads through an EncodingView and never materializes an
+// The decoder reads through EncodingViews and never materializes an
 // Encoding, so callers must treat the result as absent.
 // @lint-ignore CLANGTIDY facebook-hte-NullableReturn
 const Encoding* EncodingViewDecoder::encoding() const {

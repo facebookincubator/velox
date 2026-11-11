@@ -17,6 +17,8 @@ add_executable(
   UcxOutputQueueManagerTest.cpp
   UcxPartitionedOutputTest.cpp
   UcxExchangeTest.cpp
+  UcxExchangeTaskTest.cpp
+  UcxExchangeTestBase.cpp
   Main.cpp
   UcxTestHelpers.cpp
   UcxTestData.cpp

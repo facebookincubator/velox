@@ -278,6 +278,26 @@ std::unordered_map<core::PlanNodeId, PlanNodeStats> toPlanStats(
   return planStats;
 }
 
+const RuntimeMetric& PlanNodeStats::customStat(std::string_view name) const {
+  auto it = customStats.find(std::string(name));
+  VELOX_CHECK(it != customStats.end(), "Custom stat not found: {}", name);
+  return it->second;
+}
+
+bool PlanNodeStats::hasCustomStat(std::string_view name) const {
+  return customStats.contains(std::string(name));
+}
+
+// static
+PlanNodeStats PlanNodeStats::extract(
+    const TaskStats& taskStats,
+    const core::PlanNodeId& planNodeId) {
+  auto planStats = toPlanStats(taskStats);
+  auto it = planStats.find(planNodeId);
+  VELOX_CHECK(it != planStats.end(), "Plan node has no stats: {}", planNodeId);
+  return std::move(it->second);
+}
+
 folly::dynamic toPlanStatsJson(const facebook::velox::exec::TaskStats& stats) {
   folly::dynamic jsonStats = folly::dynamic::array;
   auto planStats = facebook::velox::exec::toPlanStats(stats);

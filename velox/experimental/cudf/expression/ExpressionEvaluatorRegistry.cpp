@@ -63,13 +63,14 @@ void ensureBuiltinExpressionEvaluatorsRegistered() {
   registerCudfExpressionEvaluator(
       "function",
       kFunctionPriority,
-      [](const core::TypedExprPtr& expr) {
-        return FunctionExpression::canEvaluate(expr);
+      [](const core::TypedExprPtr& expr, const core::QueryConfig& config) {
+        return FunctionExpression::canEvaluate(expr, config);
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         memory::MemoryPool* pool) {
-        return FunctionExpression::create(expr, row, pool);
+         memory::MemoryPool* pool,
+         const core::QueryConfig& config) {
+        return FunctionExpression::create(expr, row, pool, config);
       },
       /*overwrite=*/false);
 

@@ -37,6 +37,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 namespace facebook::velox::cudf_velox {
 
@@ -218,16 +219,30 @@ void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
       break;
     }
     case TypeKind::VARBINARY: {
-      // Replace any format string with "z" to indicate VARBINARY.
-      static constexpr const char* kVarbinaryArrowFormat = "z";
-      if (schema->format != nullptr) {
-        std::free(const_cast<char*>(schema->format));
-        schema->format = nullptr;
+      // Each Arrow string format has a binary twin that uses the same buffers
+      // ("u"/"z" for 32-bit offsets, "U"/"Z" for 64-bit offsets and "vu"/"vz"
+      // for string views). The importer reads the buffers according to the
+      // format, so the offset layout must be preserved when relabelling the
+      // string format as binary. Binary formats are accepted as is.
+      VELOX_CHECK_NOT_NULL(
+          schema->format, "Missing Arrow format for VARBINARY column");
+      const std::string_view format{schema->format};
+      const char* varbinaryArrowFormat = nullptr;
+      if (format == "u" || format == "z") {
+        varbinaryArrowFormat = "z";
+      } else if (format == "U" || format == "Z") {
+        varbinaryArrowFormat = "Z";
+      } else if (format == "vu" || format == "vz") {
+        varbinaryArrowFormat = "vz";
+      } else {
+        VELOX_FAIL("Unexpected Arrow format for VARBINARY column: {}", format);
       }
-      const size_t bufferLen = std::strlen(kVarbinaryArrowFormat) + 1;
+      std::free(const_cast<char*>(schema->format));
+      schema->format = nullptr;
+      const size_t bufferLen = std::strlen(varbinaryArrowFormat) + 1;
       auto* buffer = static_cast<char*>(std::malloc(bufferLen));
       VELOX_CHECK_NOT_NULL(buffer);
-      std::memcpy(buffer, kVarbinaryArrowFormat, bufferLen);
+      std::memcpy(buffer, varbinaryArrowFormat, bufferLen);
       schema->format = buffer;
       break;
     }
@@ -263,11 +278,12 @@ RowVectorPtr toVeloxColumn(
   arrowSchema->release = nullptr;
 
   // Override schema type recursively with outputType if provided. This is
-  // needed for some types like VARBINARY which are exported as STRING (the
-  // format is overridden to "z" when the exportVarbinaryAsString option is set
-  // to true in the exportToArrow() call) because cuDF does not have a VARBINARY
-  // type. This code implements the other side of the conversion, to change the
-  // format back to "z" so that the data re-imports as VARBINARY.
+  // needed for types like VARBINARY, which cuDF does not have: toCudfTable
+  // exports them as strings (exportVarbinaryAsString), so cuDF holds them as
+  // STRING columns and to_arrow_schema reports a string format ("u", or "U"
+  // for 64-bit offsets). This code implements the other side of that
+  // conversion, restoring the matching binary format ("z" or "Z") so that the
+  // data re-imports as VARBINARY.
   if (outputType) {
     setArrowFormatBackToVarbinary(&schemaCopy, *outputType);
   }

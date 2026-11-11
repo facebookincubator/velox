@@ -29,7 +29,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -87,32 +87,147 @@ struct PairCoverage {
   uint64_t numFilesSeen{0};
 };
 
-/// Reader paths a written file is verified through. Nimble has two independent
-/// encoding-deserialization tables and the selective reader picks between them
-/// at runtime, so an encoding can round-trip on one path and fail on another.
-/// Adding ALP and Fsst to the writer's candidate set previously required
-/// repairing both legacy tables by hand (D114295784); covering all four here
-/// turns that class of gap into a fuzzer failure.
+/// Counts the physical stream and metadata shapes validated during the run.
+struct ChunkStatsVerificationCoverage {
+  /// Breaks the validated streams and chunks down by physical stream kind: a
+  /// scalar kind such as Int64 for value streams, or a structural stream such
+  /// as Array.lengths or Row.nulls.
+  struct StreamKindCoverage {
+    /// Counts V2-indexed streams and those split into multiple chunks.
+    uint64_t numStreams{0};
+    uint64_t numMultiChunkStreams{0};
+
+    /// Counts chunks, their rows and their decoded nulls.
+    uint64_t numChunks{0};
+    uint64_t numRows{0};
+    uint64_t numNulls{0};
+
+    /// Counts decoded null distributions.
+    uint64_t numZeroNullChunks{0};
+    uint64_t numPartiallyNullChunks{0};
+    uint64_t numFullyNullChunks{0};
+
+    /// Counts chunks carrying min/max bounds, and those whose min equals
+    /// their max.
+    uint64_t numBoundedChunks{0};
+    uint64_t numSingleValueChunks{0};
+
+    /// Counts chunks without min/max, by why the writer omitted them: every
+    /// row is null, a value is NaN, or the min or max string is longer than
+    /// maxChunkStringStatSize.
+    uint64_t numAllNullUnboundedChunks{0};
+    uint64_t numNaNUnboundedChunks{0};
+    uint64_t numLongStringUnboundedChunks{0};
+  };
+
+  /// Counts files whose V2 chunk stats were enabled or disabled.
+  uint64_t numV2IndexedFiles{0};
+  uint64_t numUnindexedFiles{0};
+
+  /// Counts V2 indexes and chunks carrying min/max bounds.
+  uint64_t numV2IndexedStreams{0};
+  uint64_t numV2BoundedChunks{0};
+
+  /// Counts indexed groups and stripes.
+  uint64_t numStripeGroups{0};
+  uint64_t numStripes{0};
+
+  /// Counts files whose chunk stats span more than one stripe group.
+  uint64_t numMultiGroupFiles{0};
+
+  /// Counts present scalar-value streams, structural streams emitted for
+  /// complex types, and streams split into multiple chunks.
+  uint64_t numScalarStreams{0};
+  uint64_t numStructuralStreams{0};
+  uint64_t numMultiChunkStreams{0};
+
+  /// Counts chunk positions within their streams.
+  uint64_t numFirstChunks{0};
+  uint64_t numMiddleChunks{0};
+  uint64_t numFinalChunks{0};
+
+  /// Counts decoded null distributions.
+  uint64_t numZeroNullChunks{0};
+  uint64_t numPartiallyNullChunks{0};
+  uint64_t numFullyNullChunks{0};
+
+  /// Counts physical chunk-wrapper compression states.
+  uint64_t numCompressedChunks{0};
+  uint64_t numUncompressedChunks{0};
+
+  /// Counts every written file by its stripe count, keyed first by the flush
+  /// regime drawn for it. Count keys here and below are power-of-two floors
+  /// capped at 16: key 4 counts files with 4 to 7 stripes, and key 16 those
+  /// with 16 or more.
+  std::map<std::string, std::map<uint32_t, uint64_t>> filesByStripes;
+
+  /// Counts every written file by its stripe-group count, keyed first by
+  /// whether its metadataFlushThreshold was lowered.
+  std::map<std::string, std::map<uint32_t, uint64_t>> filesByStripeGroups;
+
+  /// Counts V2-indexed streams by their chunk count within one stripe.
+  std::map<uint32_t, uint64_t> streamsByChunks;
+
+  /// Validated streams and chunks per kind of scalar-value stream, such as
+  /// Int64 or Timestamp.micros.
+  std::map<std::string, StreamKindCoverage> scalarStreamKinds;
+
+  /// Validated streams and chunks per kind of structural stream that a complex
+  /// type emits, such as Array.lengths or Row.nulls.
+  std::map<std::string, StreamKindCoverage> complexStreamKinds;
+
+  /// Counts iterations that nulled every other batch of some column, and how
+  /// many of them produced a fully-null chunk.
+  uint64_t numNullBatchIterations{0};
+  uint64_t numNullBatchIterationsWithFullyNullChunk{0};
+};
+
+/// Counts point lookups: selective reads of a whole file with filters on one to
+/// three top-level columns, checked against the input.
+struct PointLookupCoverage {
+  /// Tallies a group of lookups.
+  struct LookupCounts {
+    /// Counts lookups, and those where chunk stats let the reader skip rows.
+    uint64_t numLookups{0};
+    uint64_t numLookupsWithChunkSkips{0};
+
+    /// Counts rows the lookups returned, and rows chunk stats skipped.
+    uint64_t numMatchedRows{0};
+    uint64_t numChunkSkippedRows{0};
+  };
+
+  /// Keyed by the number of filtered columns.
+  std::map<uint32_t, LookupCounts> byNumColumns;
+
+  /// Keyed by column type, such as BIGINT, then by filter kind: equal, in,
+  /// atMost, atLeast, between, isNull or isNotNull. A lookup counts once under
+  /// each of its filters.
+  std::map<std::string, std::map<std::string, LookupCounts>> byType;
+
+  /// Keyed by "anchored" or "unanchored", then by the power-of-two floor of the
+  /// rows a lookup returned, capped at 1,024. Anchored lookups filter so that
+  /// blocks of consecutive input rows match.
+  std::map<std::string, std::map<uint32_t, uint64_t>> lookupsByMatchedRows;
+};
+
+/// Reader paths a written file is verified through. The batch reader and the
+/// selective reader consume encodings through different code, so an encoding
+/// can round-trip on one path and fail on another. Adding ALP and Fsst to the
+/// writer's candidate set previously required repairing the deserialization
+/// tables by hand (D114295784); covering both paths here turns that class of
+/// gap into a fuzzer failure.
 enum class ReaderPath {
-  /// nimble::BatchReader with the default legacy::EncodingFactory.
-  kLegacyFactory,
+  /// nimble::BatchReader.
+  kBatchReader,
 
-  /// nimble::BatchReader with the non-legacy EncodingFactory.
-  kDefaultFactory,
-
-  /// Selective reader, legacy::LegacyEncodingTrait visitor dispatch.
-  kSelectiveLegacyDispatch,
-
-  /// Selective reader, DefaultEncodingTrait visitor dispatch.
-  kSelectiveDefaultDispatch,
+  /// Selective reader.
+  kSelectiveReader,
 };
 
 /// Every reader path a file is checked through, in verification order.
-inline constexpr std::array<ReaderPath, 4> kAllReaderPaths = {
-    ReaderPath::kLegacyFactory,
-    ReaderPath::kDefaultFactory,
-    ReaderPath::kSelectiveLegacyDispatch,
-    ReaderPath::kSelectiveDefaultDispatch,
+inline constexpr std::array<ReaderPath, 2> kAllReaderPaths = {
+    ReaderPath::kBatchReader,
+    ReaderPath::kSelectiveReader,
 };
 
 std::string_view toString(ReaderPath readerPath);
@@ -268,6 +383,17 @@ class NimbleWriterFuzzer {
     return numUnfilteredFilesWritten_;
   }
 
+  /// Physical chunk and metadata shapes validated, accumulated across every
+  /// run().
+  const ChunkStatsVerificationCoverage& chunkStatsCoverage() const {
+    return chunkStatsCoverage_;
+  }
+
+  /// Point lookups run, accumulated across every run().
+  const PointLookupCoverage& pointLookupCoverage() const {
+    return pointLookupCoverage_;
+  }
+
   /// Logs the coverage tally with never-applied encodings first, so a candidate
   /// that exercises nothing is the first thing visible in a CI log.
   void logCoverage() const;
@@ -278,8 +404,13 @@ class NimbleWriterFuzzer {
   /// as covered.
   void logPairCoverage() const;
 
-  /// Logs the physical chunk and metadata shapes validated by the run.
+  /// Logs two blocks: the chunk layouts validated by the run, then the values
+  /// their chunk stats recorded.
   void logChunkStatsCoverage() const;
+
+  /// Logs the point lookups run, by filtered columns, rows returned, and column
+  /// type and filter kind.
+  void logPointLookupCoverage() const;
 
   /// Candidate encodings that were never applied to a single chunk, either
   /// because no iteration drew a schema they accept or because every stream
@@ -308,35 +439,6 @@ class NimbleWriterFuzzer {
   std::vector<std::string_view> uncoveredChunkStatsShapes() const;
 
  private:
-  // Counts physical stream and metadata shapes validated during the run.
-  struct ChunkStatsVerificationCoverage {
-    // Counts files whose V2 chunk stats were enabled or disabled.
-    uint64_t numV2IndexedFiles{0};
-    uint64_t numUnindexedFiles{0};
-    // Counts V2 indexes and chunks carrying min/max bounds.
-    uint64_t numV2IndexedStreams{0};
-    uint64_t numV2BoundedChunks{0};
-    // Counts indexed groups and stripes.
-    uint64_t numStripeGroups{0};
-    uint64_t numStripes{0};
-    // Counts present scalar-value streams, structural streams emitted for
-    // complex types, and streams split into multiple chunks.
-    uint64_t numScalarStreams{0};
-    uint64_t numStructuralStreams{0};
-    uint64_t numMultiChunkStreams{0};
-    // Counts chunk positions within their streams.
-    uint64_t numFirstChunks{0};
-    uint64_t numMiddleChunks{0};
-    uint64_t numFinalChunks{0};
-    // Counts decoded null distributions.
-    uint64_t numZeroNullChunks{0};
-    uint64_t numPartiallyNullChunks{0};
-    uint64_t numFullyNullChunks{0};
-    // Counts physical chunk-wrapper compression states.
-    uint64_t numCompressedChunks{0};
-    uint64_t numUncompressedChunks{0};
-  };
-
   // Writes 'batches', returning the file bytes. When 'encodingType' is set,
   // that is the only candidate offered to the random policy; otherwise the
   // policy chooses from its full default set. The write type is taken from
@@ -348,10 +450,14 @@ class NimbleWriterFuzzer {
 
   // Validates the chunk-stats section against independently parsed and decoded
   // physical chunks, and records which metadata shapes were exercised.
+  // 'flushRegime' and 'metadataFlushThreshold' name the writer settings drawn
+  // for the file, which key its stripe and stripe-group counts.
   void verifyChunkStatsMetadata(
       const std::string& file,
       bool chunkStatsEnabled,
-      uint32_t maxStringStatSize);
+      uint32_t maxStringStatSize,
+      std::string_view flushRegime,
+      std::string_view metadataFlushThreshold);
 
   // Verifies file-level column statistics (value count, null count, min, max)
   // against the data that was actually written.
@@ -375,6 +481,20 @@ class NimbleWriterFuzzer {
       const std::vector<velox::VectorPtr>& batches,
       std::string_view selectionContext,
       ReaderPath readerPath);
+
+  // Reads 'file' through the selective reader with filters on one to three
+  // random top-level scalar columns, drawn from 'lookupSeed': equality, IN, a
+  // range or a null check, with bounds taken from the input. Most lookups are
+  // anchored on blocks of consecutive rows that every filter accepts, so they
+  // return many rows. Checks the returned rows against the input rows all
+  // filters accept. Chunk stats let the reader skip chunks that cannot match,
+  // and each skip seeks with the chunk index, so a wrong stat, merged skip
+  // range or lookup returns the wrong rows.
+  void verifyPointLookup(
+      const std::string& file,
+      const velox::RowTypePtr& schema,
+      const std::vector<velox::VectorPtr>& batches,
+      uint64_t lookupSeed);
 
   // Records the encodings an unfiltered random-policy file actually used and
   // returns the candidate encodings observed in that file.
@@ -400,6 +520,7 @@ class NimbleWriterFuzzer {
   std::map<EncodingPair, PairCoverage> pairCoverage_;
   uint64_t numUnfilteredFilesWritten_{0};
   ChunkStatsVerificationCoverage chunkStatsCoverage_;
+  PointLookupCoverage pointLookupCoverage_;
   // DataTypes some stream actually carried. Bounds what unappliedPairs() may
   // demand, and is deliberately observed rather than derived from the schema:
   // the writer emits Uint32 length streams, Bool null streams and the Uint16

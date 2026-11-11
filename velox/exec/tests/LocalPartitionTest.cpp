@@ -110,11 +110,10 @@ class LocalPartitionTestParametrized
     const auto& params = GetParam();
     queryBuilder.config(
         core::QueryConfig::kMinLocalExchangePartitionCountToUsePartitionBuffer,
-        std::to_string(
-            params.minLocalExchangePartitionCountToUsePartitionBuffer));
+        params.minLocalExchangePartitionCountToUsePartitionBuffer);
     queryBuilder.config(
         core::QueryConfig::kMaxLocalExchangePartitionBufferSize,
-        std::to_string(params.maxLocalExchangePartitionBufferSize));
+        params.maxLocalExchangePartitionBufferSize);
   }
 };
 
@@ -255,7 +254,7 @@ TEST_P(LocalPartitionTestParametrized, partition) {
   AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
   applyTestParameters(queryBuilder);
   queryBuilder.maxDrivers(4);
-  queryBuilder.config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2");
+  queryBuilder.config(core::QueryConfig::kMaxLocalExchangePartitionCount, 2);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
         scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
@@ -511,7 +510,7 @@ TEST_F(LocalPartitionTest, maxBufferSizeGather) {
 
   auto task =
       AssertQueryBuilder(op)
-          .config(core::QueryConfig::kMaxLocalExchangeBufferSize, "100")
+          .config(core::QueryConfig::kMaxLocalExchangeBufferSize, 100)
           .assertResults({Variant(2'100LL), Variant(-71), Variant(228)});
 
   verifyExchangeSourceOperatorStats(task, 2100, 21, 1);
@@ -686,8 +685,7 @@ TEST_F(LocalPartitionTest, blockingOnLocalExchangeQueue) {
                         localExchangeBufferSize)
                     .assertResults("SELECT c0, count(1) FROM tmp GROUP BY c0");
     ASSERT_EQ(
-        exec::toPlanStats(task->taskStats())
-            .at(nodeId)
+        exec::PlanNodeStats::extract(task->taskStats(), nodeId)
             .customStats["blockedWaitForConsumerTimes"]
             .sum,
         test.numBlocked);

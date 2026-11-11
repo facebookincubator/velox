@@ -130,24 +130,165 @@ bool DefaultOutputBufferManager::getData(
   return false;
 }
 
+namespace {
+
+// Returns the pending buffer of 'taskId', a sub-task of 'parentTaskId',
+// adding one if there is none.
+template <typename PendingBuffers, typename PendingSubTaskIds>
+auto& addPending(
+    PendingBuffers& pendingBuffers,
+    PendingSubTaskIds& pendingSubTaskIds,
+    const std::string& parentTaskId,
+    const std::string& taskId) {
+  auto [it, inserted] = pendingBuffers.try_emplace(taskId);
+  if (inserted) {
+    it->second.parentTaskId = parentTaskId;
+    pendingSubTaskIds[parentTaskId].insert(taskId);
+  }
+  return it->second;
+}
+
+// Removes 'taskId' from the pending sub-tasks of 'parentTaskId'.
+template <typename PendingSubTaskIds>
+void eraseSubTaskId(
+    PendingSubTaskIds& pendingSubTaskIds,
+    const std::string& parentTaskId,
+    const std::string& taskId) {
+  auto subTaskIds = pendingSubTaskIds.find(parentTaskId);
+  VELOX_CHECK(subTaskIds != pendingSubTaskIds.end());
+  subTaskIds->second.erase(taskId);
+  if (subTaskIds->second.empty()) {
+    pendingSubTaskIds.erase(subTaskIds);
+  }
+}
+
+// Erases the pending buffer at 'it' and returns the next one.
+template <typename PendingBuffers, typename PendingSubTaskIds>
+auto erasePending(
+    PendingBuffers& pendingBuffers,
+    PendingSubTaskIds& pendingSubTaskIds,
+    typename PendingBuffers::iterator it) {
+  eraseSubTaskId(pendingSubTaskIds, it->second.parentTaskId, it->first);
+  return pendingBuffers.erase(it);
+}
+
+template <typename PendingBuffers, typename PendingSubTaskIds>
+void dropInactive(
+    PendingBuffers& pendingBuffers,
+    PendingSubTaskIds& pendingSubTaskIds) {
+  for (auto it = pendingBuffers.begin(); it != pendingBuffers.end();) {
+    auto& pending = it->second;
+    std::erase_if(pending.requests, [](const auto& request) {
+      return !request.activeCheck();
+    });
+    it = pending.requests.empty() && pending.deletedDestinations.empty()
+        ? erasePending(pendingBuffers, pendingSubTaskIds, it)
+        : std::next(it);
+  }
+}
+
+} // namespace
+
+void DefaultOutputBufferManager::deleteResultsWhenCreated(
+    const std::string& parentTaskId,
+    const std::string& taskId,
+    int destination) {
+  auto buffer =
+      buffers_.withLock([&](auto& buffers) -> std::shared_ptr<OutputBuffer> {
+        if (auto it = buffers.find(taskId); it != buffers.end()) {
+          return it->second;
+        }
+        // Without its parent, the sub-task is never created.
+        if (!buffers.contains(parentTaskId)) {
+          return nullptr;
+        }
+        auto& pending = addPending(
+            pendingBuffers_, pendingSubTaskIds_, parentTaskId, taskId);
+        std::erase_if(pending.requests, [&](const auto& request) {
+          return request.destination == destination;
+        });
+        if (std::find(
+                pending.deletedDestinations.begin(),
+                pending.deletedDestinations.end(),
+                destination) == pending.deletedDestinations.end()) {
+          pending.deletedDestinations.push_back(destination);
+        }
+        return nullptr;
+      });
+  if (buffer != nullptr) {
+    buffer->deleteResults(destination);
+  }
+}
+
+void DefaultOutputBufferManager::getDataWhenCreated(
+    const std::string& parentTaskId,
+    const std::string& taskId,
+    int destination,
+    uint64_t maxBytes,
+    int64_t sequence,
+    DataAvailableCallback notify,
+    DataConsumerActiveCheckCallback activeCheck) {
+  VELOX_CHECK_NOT_NULL(activeCheck);
+  auto buffer =
+      buffers_.withLock([&](auto& buffers) -> std::shared_ptr<OutputBuffer> {
+        if (auto it = buffers.find(taskId); it != buffers.end()) {
+          return it->second;
+        }
+        // Without its parent, the sub-task is never created.
+        if (!buffers.contains(parentTaskId)) {
+          return nullptr;
+        }
+        dropInactive(pendingBuffers_, pendingSubTaskIds_);
+        auto& pending = addPending(
+            pendingBuffers_, pendingSubTaskIds_, parentTaskId, taskId);
+        pending.requests.push_back(
+            {destination, maxBytes, sequence, notify, activeCheck});
+        return nullptr;
+      });
+  if (buffer != nullptr) {
+    buffer->getData(destination, maxBytes, sequence, notify, activeCheck);
+  }
+}
+
 void DefaultOutputBufferManager::initializeTask(
     std::shared_ptr<Task> task,
     core::PartitionedOutputNode::Kind kind,
     int numDestinations,
     int numDrivers,
     const std::string& /*transportOptions*/) {
-  const auto& taskId = task->taskId();
+  const auto taskId = task->taskId();
 
+  std::shared_ptr<OutputBuffer> buffer;
+  PendingBuffer pending;
   buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
     if (it == buffers.end()) {
-      buffers[taskId] = std::make_shared<OutputBuffer>(
+      buffer = std::make_shared<OutputBuffer>(
           std::move(task), kind, numDestinations, numDrivers);
+      buffers[taskId] = buffer;
     } else {
       VELOX_FAIL(
           "Registering an output buffer for pre-existing taskId {}", taskId);
     }
+    if (auto entry = pendingBuffers_.find(taskId);
+        entry != pendingBuffers_.end()) {
+      pending = std::move(pendingBuffers_.extract(entry).mapped());
+      eraseSubTaskId(pendingSubTaskIds_, pending.parentTaskId, taskId);
+    }
   });
+  for (auto destination : pending.deletedDestinations) {
+    buffer->deleteResults(destination);
+  }
+  for (auto& request : pending.requests) {
+    if (request.activeCheck()) {
+      buffer->getData(
+          request.destination,
+          request.maxBytes,
+          request.sequence,
+          std::move(request.notify),
+          std::move(request.activeCheck));
+    }
+  }
 }
 
 bool DefaultOutputBufferManager::updateOutputBuffers(
@@ -174,6 +315,13 @@ bool DefaultOutputBufferManager::updateNumDrivers(
 void DefaultOutputBufferManager::removeTask(const std::string& taskId) {
   auto buffer =
       buffers_.withLock([&](auto& buffers) -> std::shared_ptr<OutputBuffer> {
+        if (auto subTaskIds = pendingSubTaskIds_.find(taskId);
+            subTaskIds != pendingSubTaskIds_.end()) {
+          for (const auto& subTaskId : subTaskIds->second) {
+            pendingBuffers_.erase(subTaskId);
+          }
+          pendingSubTaskIds_.erase(subTaskIds);
+        }
         auto it = buffers.find(taskId);
         if (it == buffers.end()) {
           // Already removed.

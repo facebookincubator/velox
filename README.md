@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
+- [Iceberg V3 in Velox](https://velox-lib.io/blog/iceberg-v3) (2026-10-30)
+- [Hybrid FlatMap: Group-Level Feature Projection in Nimble](https://velox-lib.io/blog/nimble-hybrid-flatmap) (2026-10-09)
 - [Parallel Encoding and Decoding in Nimble: Faster Flushes and Reads](https://velox-lib.io/blog/nimble-parallel-encoding-decoding) (2026-10-05)
-- [Slicing Encoded Streams Efficiently in Velox Nimble](https://velox-lib.io/blog/nimble-stream-slicing) (2026-09-08)
-- [Native Delta Statistics with Velox Task Barriers](https://velox-lib.io/blog/native-delta-statistics) (2026-08-25)
 
 ## Community
 
@@ -144,6 +144,7 @@ Alternative combinations:
 | CentOS 9/RHEL 9 | gcc | 11 |
 | Ubuntu 20.04 | gcc | 11 |
 | Ubuntu 24.04 | clang | 15 |
+| CentOS 9/RHEL 9 | clang | system |
 
 ### Setting up dependencies
 
@@ -219,17 +220,24 @@ the individual install command, e.g. `setup-centos9.sh install_aws`.
 
 ### Using Clang on Linux
 
-Clang 15 can be additionally installed during the setup step for Ubuntu 22.04/24.04
+Clang can be additionally installed during the setup step for Ubuntu 22.04/24.04
 and CentOS 9 by setting the `USE_CLANG` environment variable prior to running the platform specific setup script.
 ```shell
 $ export USE_CLANG=true
 ```
-This will install and use Clang 15 to build the dependencies instead of using the default GCC compiler.
+This will install and use Clang to build the dependencies instead of using the default GCC compiler:
+Clang 15 on Ubuntu, and the system Clang with its OpenMP runtime on CentOS 9.
 
-Once completed, and before running any `make` command, set the compiler to be used:
+Once completed, and before running any `make` command, set the compiler to be used. On Ubuntu:
 ```shell
 $ export CC=/usr/bin/clang-15
 $ export CXX=/usr/bin/clang++-15
+$ make
+```
+On CentOS 9:
+```shell
+$ export CC=/usr/bin/clang
+$ export CXX=/usr/bin/clang++
 $ make
 ```
 

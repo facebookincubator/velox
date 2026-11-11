@@ -186,6 +186,13 @@ void appendWithSupplementaryEscapes(
     std::string_view raw,
     exec::StringWriter& out);
 
+// Writes the object or array slice `raw` to `out` as Spark's Jackson generator
+// writes it: no whitespace between tokens, numbers as in the input, and string
+// escapes decoded, except that quotes, backslashes, control characters and
+// surrogates are written as Jackson escapes them. Returns false if `raw` has an
+// incomplete escape.
+bool compactJson(std::string_view raw, std::string& out);
+
 } // namespace detail
 
 /// Parses a JSON string and returns the value at the specified path.
@@ -194,9 +201,6 @@ void appendWithSupplementaryEscapes(
 template <typename T>
 struct GetJsonObjectFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  // ASCII input always produces ASCII result.
-  static constexpr bool is_default_ascii_behavior = true;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
@@ -223,17 +227,21 @@ struct GetJsonObjectFunction {
     const auto formattedJsonPath = jsonPath_.has_value()
         ? jsonPath_.value()
         : pathNormalizer_.normalize(jsonPath);
-    // jsonPath is "$".
-    if (formattedJsonPath.empty()) {
-      result.append(json);
-      return true;
-    }
     simdjson::ondemand::document jsonDoc;
     simdjson::padded_string paddedJson(json.data(), json.size());
     if (simdjsonParseIncomplete(paddedJson).get(jsonDoc)) {
       return false;
     }
     try {
+      // jsonPath is "$".
+      if (formattedJsonPath.empty()) {
+        simdjson::ondemand::value root;
+        if (jsonDoc.get_value().get(root)) {
+          result.append(json);
+          return true;
+        }
+        return extractStringResult(std::move(root), result);
+      }
       // Can return error result or throw exception possibly.
       auto rawResult = jsonDoc.at_path(formattedJsonPath);
       if (rawResult.error()) {
@@ -321,10 +329,11 @@ struct GetJsonObjectFunction {
         // simdjson returns the object/array as its raw input slice, verbatim
         // (no unescaping) -- exactly what we want.
         std::string_view raw;
-        if (rawResult.raw_json().get(raw)) {
+        if (rawResult.raw_json().get(raw) ||
+            !detail::compactJson(raw, minified_)) {
           return false;
         }
-        detail::appendWithSupplementaryEscapes(raw, result);
+        detail::appendWithSupplementaryEscapes(minified_, result);
         return true;
       }
       default:
@@ -365,7 +374,7 @@ struct GetJsonObjectFunction {
     while ((pos = static_cast<const char*>(std::memchr(
                 pos, '\\', static_cast<size_t>(end - pos)))) != nullptr) {
       const auto remaining = static_cast<size_t>(end - pos);
-      if (FOLLY_UNLIKELY(remaining < 2)) {
+      if (remaining < 2) [[unlikely]] {
         return false; // Incomplete escape at end, let parser handle it.
       }
 
@@ -412,6 +421,9 @@ struct GetJsonObjectFunction {
   std::optional<std::string> jsonPath_;
 
   detail::JsonPathNormalizer pathNormalizer_;
+
+  // Holds a minified object or array result.
+  std::string minified_;
 };
 
 } // namespace facebook::velox::functions::sparksql

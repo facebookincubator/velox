@@ -31,17 +31,21 @@ target_link_libraries(nimble_encoding_layout_test_helper nimble_encodings)
 add_executable(
   nimble_encodings_tests
   ALPRDEncodingTest.cpp
+  ALPRDEncodingViewTest.cpp
   ALPRDSelectionTest.cpp
   ALPEncodingTest.cpp
   ALPEncodingViewTest.cpp
   BufferedEncodingTest.cpp
   BlockBitPackingEncodingViewTest.cpp
+  BlockBitPackingV2EncodingViewTest.cpp
   ConstantEncodingViewTest.cpp
   ConstantEncodingTest.cpp
   DictionaryEncodingTest.cpp
   DictionaryEncodingViewTest.cpp
   EliasFanoEncodingTest.cpp
   EliasFanoEncodingViewTest.cpp
+  PartitionedEliasFanoEncodingTest.cpp
+  PartitionedEliasFanoEncodingViewTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp
@@ -49,11 +53,11 @@ add_executable(
   EncodingViewUtilsTest.cpp
   CompressionTest.cpp
   EncodingTest.cpp
-  EncodingLegacyTest.cpp
   EncodingPrefixTest.cpp
   EncodingTypeDispatchTest.cpp
   FixedBitWidthEncodingViewTest.cpp
   FsstEncodingTest.cpp
+  FsstEncodingViewTest.cpp
   HuffmanEncodingTest.cpp
   HuffmanEncodingViewTest.cpp
   FOREncodingViewTest.cpp
@@ -71,6 +75,7 @@ add_executable(
   RLEEncodingViewTest.cpp
   RLEEncodingTest.cpp
   SentinelEncodingTest.cpp
+  SentinelEncodingViewTest.cpp
   SharedDictionaryBuilderTest.cpp
   SharedDictionaryEncodingTest.cpp
   SimdForBitpackEncodingViewTest.cpp
@@ -78,6 +83,7 @@ add_executable(
   SparseBoolEncodingViewTest.cpp
   StatisticsTest.cpp
   TrivialEncodingViewTest.cpp
+  VarintEncodingViewTest.cpp
   TrivialEncodingTest.cpp
   EncodingViewTestUtils.h
 )
@@ -93,7 +99,6 @@ target_link_libraries(
   nimble_encoding_layout_test_helper
   nimble_encodings_tests_utils
   nimble_encodings
-  nimble_encodings_legacy
   nimble_common
   nimble_tools_common
   velox_common_base

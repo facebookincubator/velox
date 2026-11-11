@@ -17,11 +17,11 @@
 #include "velox/exec/tests/utils/IndexLookupJoinTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 
 namespace facebook::velox::exec::test {
 using namespace facebook::velox::common::testutil;
-using velox::test::assertEqualVectors;
 
 namespace {
 std::vector<std::string> appendMarker(const std::vector<std::string> columns) {
@@ -425,8 +425,7 @@ std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
   return AssertQueryBuilder(duckDbQueryRunner_)
       .plan(plan)
       .config(
-          QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-          std::to_string(numPrefetchBatches))
+          QueryConfig::kIndexLookupJoinMaxPrefetchBatches, numPrefetchBatches)
       .assertResults(duckDbVerifySql);
 }
 
@@ -446,10 +445,9 @@ std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
       .serialExecution(serialExecution)
       .barrierExecution(barrierExecution)
       .maxDrivers(maxDrivers)
-      .config(QueryConfig::kMaxOutputBatchRows, std::to_string(maxOutputRows))
+      .config(QueryConfig::kMaxOutputBatchRows, maxOutputRows)
       .config(
-          QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-          std::to_string(numPrefetchBatches));
+          QueryConfig::kIndexLookupJoinMaxPrefetchBatches, numPrefetchBatches);
   if (needsIndexSplit) {
     // Add a fake split for the index source. The test index source doesn't
     // actually use splits, but this is used to verify the split passing
@@ -469,9 +467,13 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
     const PlanNodePtr& planWithMatchColumn,
     const PlanNodeId& probeScanNodeIdWithMatchColumn,
     const std::vector<std::shared_ptr<TempFilePath>>& probeFiles,
-    bool needsIndexSplit) {
+    bool needsIndexSplit,
+    bool serialExecution,
+    int maxDrivers) {
   AssertQueryBuilder expectedResultBuilder(duckDbQueryRunner_);
   expectedResultBuilder.plan(planWithoutMatchColumn)
+      .serialExecution(serialExecution)
+      .maxDrivers(maxDrivers)
       .splits(
           probeScanNodeIdWithoutMatchColumn,
           makeHiveConnectorSplits(probeFiles));
@@ -487,6 +489,8 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
 
   AssertQueryBuilder resultWithMatchColumnBuilder(duckDbQueryRunner_);
   resultWithMatchColumnBuilder.plan(planWithMatchColumn)
+      .serialExecution(serialExecution)
+      .maxDrivers(maxDrivers)
       .splits(
           probeScanNodeIdWithMatchColumn, makeHiveConnectorSplits(probeFiles));
   if (needsIndexSplit) {
@@ -515,7 +519,10 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
     }
   }
   auto resultWithoutMatchColumn = makeRowVector(childVectors);
-  assertEqualVectors(expectedResult, resultWithoutMatchColumn);
+  // Parallel executions may return the same rows in different orders.
+  ASSERT_TRUE(assertEqualResults(
+      {std::static_pointer_cast<RowVector>(expectedResult)},
+      {resultWithoutMatchColumn}));
   // Verify the match column if it is expected.
   const auto matchColumn =
       rowResultWithMatchMatchColumn

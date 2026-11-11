@@ -157,15 +157,68 @@ class ClockTimer {
   uint64_t start_;
 };
 
-/// Returns the current epoch time in seconds.
-uint64_t getCurrentTimeSec();
+/// Reads the steady clock, which never goes backward. Only the difference
+/// between two readings is meaningful. Use where the start of an interval must
+/// be stored as a plain integer, such as in an atomic; otherwise measure the
+/// interval with folly::stop_watch.
+class SteadyTime {
+ public:
+  /// Returns the current reading in 'Duration' units, e.g.
+  /// SteadyTime::now<std::chrono::microseconds>().
+  template <typename Duration>
+  static uint64_t now() {
+    return std::chrono::duration_cast<Duration>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  }
+};
 
-/// Returns the current epoch time in milliseconds.
-uint64_t getCurrentTimeMs();
+/// Reads the system clock as time since the Unix epoch, comparable across
+/// processes and machines. Use only for absolute timestamps, such as a task's
+/// start time. The system clock can jump backward or forward, so the difference
+/// of two readings is not a duration: measure durations with folly::stop_watch,
+/// or MicrosecondWallTimer / NanosecondWallTimer. Debug builds can override the
+/// readings with common::testutil::ScopedTestTime.
+class EpochTime {
+ public:
+  /// Returns the time since the Unix epoch in 'Duration' units, e.g.
+  /// EpochTime::now<std::chrono::milliseconds>().
+  template <typename Duration>
+  static uint64_t now() {
+    return std::chrono::duration_cast<Duration>(
+               std::chrono::nanoseconds(nowNanos()))
+        .count();
+  }
 
-/// Returns the current epoch time in microseconds.
-uint64_t getCurrentTimeMicro();
+ private:
+  static uint64_t nowNanos();
+};
 
-/// Returns the current epoch time in nanoseconds.
-uint64_t getCurrentTimeNano();
+[[deprecated(
+    "Use EpochTime::now<std::chrono::seconds>() for timestamps and "
+    "folly::stop_watch for durations.")]] inline uint64_t
+getCurrentTimeSec() {
+  return EpochTime::now<std::chrono::seconds>();
+}
+
+[[deprecated(
+    "Use EpochTime::now<std::chrono::milliseconds>() for timestamps and "
+    "folly::stop_watch for durations.")]] inline uint64_t
+getCurrentTimeMs() {
+  return EpochTime::now<std::chrono::milliseconds>();
+}
+
+[[deprecated(
+    "Use EpochTime::now<std::chrono::microseconds>() for timestamps and "
+    "folly::stop_watch for durations.")]] inline uint64_t
+getCurrentTimeMicro() {
+  return EpochTime::now<std::chrono::microseconds>();
+}
+
+[[deprecated(
+    "Use EpochTime::now<std::chrono::nanoseconds>() for timestamps and "
+    "folly::stop_watch for durations.")]] inline uint64_t
+getCurrentTimeNano() {
+  return EpochTime::now<std::chrono::nanoseconds>();
+}
 } // namespace facebook::velox

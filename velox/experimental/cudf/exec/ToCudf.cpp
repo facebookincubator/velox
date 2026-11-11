@@ -28,6 +28,9 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
+#endif
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
@@ -168,10 +171,20 @@ bool CompileState::compile(bool allowCpuFallback) {
       // operator's GPU replacement so the whole pipeline stays on CPU.
       const auto& prevPlanNode = opProps[operatorIndex - 1].planNode;
       if (prevPlanNode && isTypeSupportedByCudf(prevPlanNode->outputType())) {
+        // CudfFromVelox converts the batches of the CPU operator before
+        // 'oper', so it takes that operator's output type. That operator may
+        // already have been replaced, so its plan node comes from 'opProps',
+        // which was filled before any replacement.
+        //
+        // 'planNode' cannot provide the type: its output type is what 'oper'
+        // produces, and its first source is not always the input of 'oper'.
+        // For HashBuild, 'planNode' is the HashJoinNode, whose output type is
+        // the join result and whose first source is the probe side. The
+        // build-side batches come from the second source.
         replaceOp.push_back(
             std::make_unique<CudfFromVelox>(
                 id,
-                planNode->outputType(),
+                prevPlanNode->outputType(),
                 ctx,
                 planNode->id() + "-from-velox"));
       } else {
@@ -389,10 +402,23 @@ void registerCudf() {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
 
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  // Registered last, after the memory resources and driver adapter it relies
+  // on, so a registerCudf() that fails part way leaves no kUcx behind.
+  if (CudfConfig::getInstance().exchange) {
+    ucx_exchange::registerUcxTransports();
+  }
+#endif
+
   isCudfRegistered = true;
 }
 
 void unregisterCudf() {
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  // Unconditionally unregister the UCX transports, whether or not
+  // CudfConfig::exchange was set when registerCudf() ran.
+  ucx_exchange::unregisterUcxTransports();
+#endif
   // Reset the any_resource copies before the adaptors they were copied from,
   // so that the wrapped upstream resources are released here.
   output_mr_.reset();

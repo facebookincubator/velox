@@ -52,6 +52,12 @@ class CudfOrderBy : public CudfOperatorBase {
     return finished_;
   }
 
+  /// Returns kOutput when built for a MergeExchangeNode, whose input the
+  /// exchange operator sharing that node reports, and kBoth for an OrderByNode.
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return planNodeBoundary_;
+  }
+
  protected:
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
@@ -70,6 +76,9 @@ class CudfOrderBy : public CudfOperatorBase {
   std::vector<cudf::order> columnOrder_;
   std::vector<cudf::null_order> nullOrder_;
   bool finished_{false};
+
+  // See planNodeBoundary().
+  const core::PlanNode::Boundary planNodeBoundary_;
 };
 
 } // namespace facebook::velox::cudf_velox

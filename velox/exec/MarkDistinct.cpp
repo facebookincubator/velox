@@ -61,7 +61,8 @@ MarkDistinct::MarkDistinct(
     distinctKeyChannels_.push_back(inputType_->getChildIdx(key->name()));
   }
 
-  auto hashers = createVectorHashers(inputType_, planNode->distinctKeys());
+  auto hashers =
+      VectorHasher::createForKeys(inputType_, planNode->distinctKeys());
   std::vector<Accumulator> extraAccumulators;
   if (numMasks() > 0) {
     const auto numBytes = static_cast<int32_t>(bits::nbytes(numMasks()));
@@ -343,9 +344,7 @@ void MarkDistinct::ensureInputFits(const RowVectorPtr& input) {
 
   auto* table = groupingSet_->table();
   auto* rows = table->rows();
-  const auto [freeRows, outOfLineFreeBytes] = rows->freeSpace();
-  const auto outOfLineBytes =
-      rows->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const auto outOfLineBytes = rows->usedVariableWidthBytes();
   const auto outOfLineBytesPerRow = outOfLineBytes / numDistinct;
 
   if (testingTriggerSpill(pool()->name())) {
@@ -361,14 +360,12 @@ void MarkDistinct::ensureInputFits(const RowVectorPtr& input) {
   const auto tableIncrementBytes =
       static_cast<int64_t>(table->hashTableSizeIncrease(input->size()));
   const auto incrementBytes =
-      static_cast<int64_t>(rows->sizeIncrement(
+      static_cast<int64_t>(rows->maxGrowthBytes(
           input->size(), outOfLineBytesPerRow * input->size())) +
       tableIncrementBytes;
 
   if (availableReservationBytes >= minReservationBytes) {
-    if ((tableIncrementBytes == 0) && (freeRows > input->size()) &&
-        (outOfLineBytes == 0 ||
-         outOfLineFreeBytes >= outOfLineBytesPerRow * input->size())) {
+    if (incrementBytes == 0) {
       return;
     }
 

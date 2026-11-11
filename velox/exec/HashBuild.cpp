@@ -216,7 +216,7 @@ bool HashBuild::receivedCachedHashTable() {
   if (!useHashTableCache() || future_.valid()) {
     return false;
   }
-  // Builder task drivers coordinate via allPeersFinished and should fall
+  // Builder task drivers coordinate via allPeersArrived and should fall
   // through to the kWaitForProbe path in isBlocked(). Only waiter task
   // drivers (different taskId than the builder) should enter here.
   VELOX_CHECK_NOT_NULL(cacheEntry_);
@@ -261,11 +261,11 @@ void HashBuild::setupTable() {
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
-        true, // allowDuplicates
-        true, // hasProbedFlag
-        false, // hasCountFlag
-        queryConfig.minTableRowsForParallelJoinBuild(),
-        tableMemoryPool());
+        tableMemoryPool(),
+        {.allowDuplicates = true,
+         .hasProbedFlag = true,
+         .minTableSizeForParallelJoinBuild =
+             queryConfig.minTableRowsForParallelJoinBuild()});
   } else {
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
@@ -276,22 +276,25 @@ void HashBuild::setupTable() {
       table_ = HashTable<false>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates_, // allowDuplicates
-          needProbedFlag, // hasProbedFlag
-          hasCountFlag,
-          queryConfig.minTableRowsForParallelJoinBuild(),
-          tableMemoryPool());
+          tableMemoryPool(),
+          {.allowDuplicates = !dropDuplicates_,
+           .hasProbedFlag = needProbedFlag,
+           .hasCountFlag = hasCountFlag,
+           .minTableSizeForParallelJoinBuild =
+               queryConfig.minTableRowsForParallelJoinBuild()});
     } else {
       // Ignore null keys
       table_ = HashTable<true>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates_, // allowDuplicates
-          needProbedFlag, // hasProbedFlag
-          hasCountFlag,
-          queryConfig.minTableRowsForParallelJoinBuild(),
           tableMemoryPool(),
-          queryConfig.hashProbeBloomFilterPushdownMaxSize());
+          {.allowDuplicates = !dropDuplicates_,
+           .hasProbedFlag = needProbedFlag,
+           .hasCountFlag = hasCountFlag,
+           .minTableSizeForParallelJoinBuild =
+               queryConfig.minTableRowsForParallelJoinBuild(),
+           .bloomFilterMaxSize =
+               queryConfig.hashProbeBloomFilterPushdownMaxSize()});
     }
   }
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
@@ -549,25 +552,10 @@ void HashBuild::addInput(RowVectorPtr input) {
     abandonHashBuildDedup();
   }
 
-  if (analyzeKeys_ && hashes_.size() < activeRows_.end()) {
-    hashes_.resize(activeRows_.end());
-  }
-
-  // As long as analyzeKeys is true, we keep running the keys through
-  // the Vectorhashers so that we get a possible mapping of the keys
-  // to small ints for array or normalized key. When mayUseValueIds is
-  // false for the first time we stop. We do not retain the value ids
-  // since the final ones will only be known after all data is
-  // received.
-  for (auto& hasher : hashers) {
-    // TODO: Load only for active rows, except if right/full outer join.
-    if (analyzeKeys_) {
-      hasher->computeValueIds(activeRows_, hashes_);
-      analyzeKeys_ = hasher->mayUseValueIds();
-    }
+  if (analyzeKeys_) {
+    analyzeKeys_ = table_->analyzeKeys(activeRows_);
   }
   auto rows = table_->rows();
-  auto nextOffset = rows->nextOffset();
   FlatVector<bool>* spillProbedFlagVector{nullptr};
   if (isInputFromSpill() && needProbedFlagSpill_) {
     spillProbedFlagVector =
@@ -576,9 +564,6 @@ void HashBuild::addInput(RowVectorPtr input) {
 
   activeRows_.applyToSelected([&](auto rowIndex) {
     char* newRow = rows->newRow();
-    if (nextOffset) {
-      *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
-    }
     // Store the columns for each row in sequence. At probe time
     // strings of the row will probably be in consecutive places, so
     // reading one will prime the cache for the next.
@@ -591,7 +576,7 @@ void HashBuild::addInput(RowVectorPtr input) {
     if (spillProbedFlagVector != nullptr) {
       VELOX_CHECK(!spillProbedFlagVector->isNullAt(rowIndex));
       if (spillProbedFlagVector->valueAt(rowIndex)) {
-        rows->setProbedFlag(&newRow, 1);
+        rows->setProbedFlag({&newRow, 1});
       }
     }
   });
@@ -613,9 +598,7 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
   auto* rows = table_->rows();
   const auto numRows = rows->numRows();
 
-  auto [freeRows, outOfLineFreeBytes] = rows->freeSpace();
-  const auto outOfLineBytes =
-      rows->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const auto outOfLineBytes = rows->usedVariableWidthBytes();
   const auto currentUsage = pool()->usedBytes();
 
   if (numRows != 0) {
@@ -634,14 +617,14 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
   const int64_t flatBytes = input->estimateFlatSize();
   const auto rowContainerIncrementBytes = numRows == 0
       ? flatBytes * 2
-      : rows->sizeIncrement(
+      : rows->maxGrowthBytes(
             input->size(), outOfLineBytes > 0 ? flatBytes * 2 : 0);
   const auto incrementBytes = rowContainerIncrementBytes + tableIncrementBytes;
 
   // First to check if we have sufficient minimal memory reservation.
   if (availableReservationBytes >= minReservationBytes) {
-    if (freeRows > input->size() &&
-        (outOfLineBytes == 0 || outOfLineFreeBytes >= flatBytes)) {
+    if (rows->maxGrowthBytes(
+            input->size(), outOfLineBytes > 0 ? flatBytes : 0) == 0) {
       // Enough free rows for input rows and enough variable length free
       // space for the flat size of the whole vector. If outOfLineBytes
       // is 0 there is no need for variable length space.
@@ -828,13 +811,13 @@ bool HashBuild::finishHashBuild() {
   // The last Driver to hit HashBuild::finish gathers the data from
   // all build Drivers and hands it over to the probe side. At this
   // point all build Drivers are continued and will free their
-  // state. allPeersFinished is true only for the last Driver of the
+  // state. allPeersArrived is true only for the last Driver of the
   // build pipeline.
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     if (useHashTableCache() && !hashTableCacheBuilderTask()) {
       // Waiter task non-last driver: no partial table was built (we used the
       // cached table). Nothing to contribute — finish immediately. Clear the
-      // future since allPeersFinished() set it but we don't need to wait.
+      // future since allPeersArrived() set it but we don't need to wait.
       VELOX_CHECK_NULL(
           table_, "Waiter task should not have built a partial hash table");
       future_ = folly::SemiFuture<folly::Unit>::makeEmpty();
@@ -1519,7 +1502,7 @@ void HashBuildSpiller::extractSpill(
   }
   if (spillProbeFlag_) {
     container_->extractProbedFlags(
-        rows.data(), rows.size(), false, false, result->childAt(types.size()));
+        rows, false, false, result->childAt(types.size()));
   }
 }
 

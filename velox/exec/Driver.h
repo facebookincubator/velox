@@ -24,6 +24,7 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
+#include <folly/stop_watch.h>
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Portability.h"
@@ -110,21 +111,21 @@ struct ThreadState {
   /// True if there is a future outstanding that will schedule this on an
   /// executor thread when some promise is realized.
   tsan_atomic<bool> hasBlockingFuture{false};
-  /// Timestamp in microseconds when the driver became blocked. Used to record
-  /// blocked time when the driver is terminated while still blocked.
+  /// SteadyTime reading in microseconds when the driver became blocked. Used to
+  /// record blocked time when the driver is terminated while still blocked.
   tsan_atomic<uint64_t> blockingStartUs{0};
   /// The number of suspension requests on a on-thread driver. If > 0, this
   /// driver thread is in a (recursive) section waiting for RPC or memory
   /// strategy decision. The thread is not supposed to access its memory, which
   /// a third party can revoke while the thread is in this state.
   std::atomic<uint32_t> numSuspensions{0};
-  /// The start execution time on thread in milliseconds. It is reset when the
-  /// driver goes off thread. This is used to track the time that a driver has
-  /// continuously run on a thread for per-driver cpu time slice enforcement.
-  size_t startExecTimeMs{0};
-  /// The end execution time on thread in milliseconds. It is set when the
-  /// driver goes off thread and reset when the driver gets on a thread.
-  size_t endExecTimeMs{0};
+  /// Started when the driver gets on a thread and reset when it goes off
+  /// thread. This is used to track the time that a driver has continuously run
+  /// on a thread for per-driver cpu time slice enforcement.
+  std::optional<folly::stop_watch<std::chrono::milliseconds>> onThreadWatch;
+  /// Started when the driver goes off thread and reset when it gets on a
+  /// thread.
+  std::optional<folly::stop_watch<std::chrono::milliseconds>> offThreadWatch;
   /// Total time the driver in pause.
   uint64_t totalPauseTimeMs{0};
   /// Total off thread time (including blocked time and pause time).
@@ -136,10 +137,10 @@ struct ThreadState {
 
   void setThread() {
     thread = std::this_thread::get_id();
-    startExecTimeMs = getCurrentTimeMs();
-    if (endExecTimeMs != 0) {
-      totalOffThreadTimeMs += startExecTimeMs - endExecTimeMs;
-      endExecTimeMs = 0;
+    onThreadWatch.emplace();
+    if (offThreadWatch.has_value()) {
+      totalOffThreadTimeMs += offThreadWatch->elapsed().count();
+      offThreadWatch.reset();
     }
 #if !defined(__APPLE__)
     // This is a debugging feature disabled on the Mac since syscall
@@ -150,21 +151,22 @@ struct ThreadState {
 
   void clearThread() {
     thread = std::thread::id(); // no thread.
-    endExecTimeMs = getCurrentTimeMs();
+    offThreadWatch.emplace();
+    VELOX_CHECK(onThreadWatch.has_value());
     RECORD_HISTOGRAM_METRIC_VALUE(
-        kMetricDriverExecTimeMs, (endExecTimeMs - startExecTimeMs));
-    startExecTimeMs = 0;
+        kMetricDriverExecTimeMs, onThreadWatch->elapsed().count());
+    onThreadWatch.reset();
     tid = 0;
   }
 
   /// Returns the driver execution time on thread. Returns zero if the driver
   /// is currently not running on thread.
   size_t execTimeMs() const {
-    if (startExecTimeMs == 0) {
+    if (!onThreadWatch.has_value()) {
       VELOX_CHECK(!isOnThread());
       return 0;
     }
-    return getCurrentTimeMs() - startExecTimeMs;
+    return onThreadWatch->elapsed().count();
   }
 
   bool suspended() const {
@@ -178,9 +180,17 @@ struct ThreadState {
     obj["isTerminated"] = isTerminated.load();
     obj["isEnqueued"] = isEnqueued.load();
     obj["hasBlockingFuture"] = tsanAtomicValue(hasBlockingFuture);
-    obj["blockingStartUs"] = tsanAtomicValue(blockingStartUs);
+    uint64_t blockedUs{0};
+    if (tsanAtomicValue(hasBlockingFuture)) {
+      // The driver thread sets 'blockingStartUs' without the task mutex. Read
+      // it before the clock so a newer start cannot exceed 'nowUs'.
+      const uint64_t startUs = tsanAtomicValue(blockingStartUs);
+      const auto nowUs = SteadyTime::now<std::chrono::microseconds>();
+      blockedUs = nowUs > startUs ? nowUs - startUs : 0;
+    }
+    obj["blockedUs"] = blockedUs;
     obj["isSuspended"] = suspended();
-    obj["startExecTime"] = startExecTimeMs;
+    obj["execTimeMs"] = execTimeMs();
     return obj;
   }
 };
@@ -298,11 +308,12 @@ constexpr const char* kOpMethodGetOutput = "getOutput";
 constexpr const char* kOpMethodAddInput = "addInput";
 constexpr const char* kOpMethodNoMoreInput = "noMoreInput";
 constexpr const char* kOpMethodIsFinished = "isFinished";
+constexpr const char* kOpMethodClose = "close";
 
 /// Non-atomic snapshot of OpCallStatus, used to return a consistent status from
 /// OpCallStatus which uses atomic members internally.
 struct OpCallStatusRaw {
-  /// Time (ms) when the operator call started.
+  /// SteadyTime reading in milliseconds when the operator call started.
   size_t timeStartMs{0};
   /// Id of the operator, method of which is currently running. It is the index
   /// into the vector of Driver's operators.
@@ -334,7 +345,7 @@ class OpCallStatus {
   void stop();
 
  private:
-  /// Time (ms) when the operator call started.
+  /// SteadyTime reading in milliseconds when the operator call started.
   std::atomic_size_t timeStartMs_{0};
   /// Id of the operator, method of which is currently running. It is the index
   /// into the vector of Driver's operators.
@@ -354,6 +365,13 @@ struct PushdownFilters {
   /// Whether static filters has been added to filters.  This only needs to be
   /// done once per node by the first driver.
   bool staticFiltersInitialized = false;
+
+  /// Positions in the 'channels' of Driver::pushdownFilters() for which one
+  /// of the node's drivers has produced a dynamic filter for the operators
+  /// upstream. The other drivers reuse the filter instead of producing it
+  /// again. Two positions can name the same channel, e.g. for the join keys of
+  /// t.a = u.x AND t.a = u.y, and each produces a filter of its own.
+  folly::F14FastSet<column_index_t> producedFilters;
 };
 
 /// Pushdown filters on nodes in the pipeline.  Locks must be acquired in the
@@ -437,8 +455,10 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   void initializeOperatorStats(std::vector<OperatorStats>& stats);
 
-  /// Close operators and add operator stats to the task.
-  void closeOperators();
+  /// Closes all operators and adds operator stats to the task. Closes every
+  /// operator even if an earlier one throws, and returns the first exception
+  /// thrown, or nullptr.
+  std::exception_ptr closeOperators();
 
   /// Returns true if all operators between the source and 'aggregation' are
   /// order-preserving and do not increase cardinality.
@@ -454,19 +474,17 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// operator which accept dynamic filters.  `channels' are the inputs for
   /// `filterSource'.
   ///
-  /// `makeFilter' is called with a lock held on the node of `filterSource' in
-  /// `pushdownFilters_'.  It should return whether a filter should be added,
-  /// and set the FilterPtr output parameter with a new filter if one is
-  /// generated.  If `makeFilter' returns true but FilterPtr is not set, it
-  /// means a filter is already generated by another operator on the same node,
-  /// and we just need to set the new merged filter on the accepting operator.
+  /// `makeFilter' is called with a position in `channels' and a lock held on
+  /// the node of `filterSource' in `pushdownFilters_'. It returns the filter
+  /// for the channel, or null if there is none. Once a driver of the node has
+  /// produced a filter for a position in `channels', the other drivers reuse it
+  /// instead of calling `makeFilter'.
   ///
   /// Return the number of filters produced.
   int pushdownFilters(
       Operator* filterSource,
       const std::vector<column_index_t>& channels,
-      const std::function<bool(column_index_t, common::FilterPtr&)>&
-          makeFilter);
+      const std::function<common::FilterPtr(column_index_t)>& makeFilter);
 
   int operatorIndex(const Operator* op) const;
 
@@ -510,7 +528,8 @@ class Driver : public std::enable_shared_from_this<Driver> {
   }
 
   /// Updates the stats in Task and frees resources. Only called by Task for
-  /// closing non-running Drivers.
+  /// closing non-running Drivers. The task is already terminated, so a failure
+  /// in an operator's close() is logged instead of thrown.
   void closeByTask();
 
   BlockingReason blockingReason() const {
@@ -659,6 +678,9 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // draining signal to consumer driver pipeline through connected queues.
   void finishBarrier();
 
+  // Closes the operators and removes the driver from the task. Runs at most
+  // once. Reports a failure in an operator's close() to the task as its error
+  // instead of throwing.
   void close();
 
   using TimingMemberPtr = CpuWallTiming OperatorStats::*;
@@ -722,19 +744,19 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // Driver-level lifecycle timing: independently tracks the three states
   // a driver can be in (queued, on-thread, blocked) to enable gap analysis.
   // Reported as RuntimeStats on the source operator at close time.
-  // All three use high_resolution_clock for consistency, matching
-  // BlockingState::sinceUs_ and enabling accurate gap analysis
-  // (queued + on-thread + blocked ≈ elapsed time).
+  // All three use SteadyTime readings in microseconds, matching
+  // BlockingState::sinceUs_ and enabling accurate gap analysis (queued +
+  // on-thread + blocked ≈ elapsed time).
   // Atomic because closeByTask() may read these from a different thread
   // than the one running the onThreadTimeGuard scope guard.
   std::atomic<uint64_t> totalDriverQueuedNanos_{0};
   std::atomic<uint64_t> totalDriverOnThreadNanos_{0};
   std::atomic<uint64_t> totalDriverBlockedNanos_{0};
-  // Timestamp (micros, high_resolution_clock) when the current on-thread
-  // period started. Set at the beginning of runInternal, used by
-  // closeOperators to snapshot on-thread time before the scope guard fires.
-  // Atomic because closeByTask() may access it from a different thread
-  // than the one running the onThreadTimeGuard scope guard in runInternal.
+  // SteadyTime reading in microseconds when the current on-thread period
+  // started. Set at the beginning of runInternal, used by closeOperators to
+  // snapshot on-thread time before the scope guard fires. Atomic because
+  // closeByTask() may access it from a different thread than the one running
+  // the onThreadTimeGuard scope guard in runInternal.
   std::atomic<uint64_t> onThreadStartUs_{0};
 
   // Id (index in the vector) of the current operator to run (or the 1st one if
@@ -826,6 +848,8 @@ struct DriverFactory {
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeHashJoinNodeIds;
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Nested Loop Joins.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeNestedLoopJoinNodeIds;
+  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Vector Search Joins.
+  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeVectorSearchJoinNodeIds;
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for custom join bridges.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeCustomJoinNodeIds;
 
@@ -927,6 +951,10 @@ struct DriverFactory {
   /// Returns plan node IDs for which IndexLookupJoin Bridges must be created
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsIndexLookupJoinBridges() const;
+
+  /// Returns plan node IDs for which Vector Search Join Bridges must be created
+  /// based on this pipeline.
+  std::vector<core::PlanNodeId> needsVectorSearchJoinBridges() const;
 
   /// Returns plan node IDs for which custom join bridges must be created
   /// based on this pipeline.  Mirrors needsHashJoinBridges(): ungrouped

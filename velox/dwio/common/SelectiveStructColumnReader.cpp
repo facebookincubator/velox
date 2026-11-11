@@ -138,9 +138,53 @@ void setRowNumberField(
   }
 }
 
+// Sets 'field' to 'size' rows of 'value'. Reuses 'field' when nothing else
+// holds it and it already has that value.
+template <typename T>
+void setConstantValueField(
+    T value,
+    const TypePtr& type,
+    vector_size_t size,
+    memory::MemoryPool* pool,
+    VectorPtr& field) {
+  if (field && field.use_count() == 1 && field->isConstantEncoding() &&
+      field->size() > 0 && !field->isNullAt(0) &&
+      field->asUnchecked<ConstantVector<T>>()->valueAt(0) == value) {
+    field->resize(size);
+    return;
+  }
+  field = BaseVector::createConstant(type, value, size, pool);
+}
+
+// Fills 'field', a ROW<offset BIGINT, length INTEGER>, with the read's first
+// file row 'offset' and the number of file rows 'length' it covers, for each
+// row in 'rows'.
+void setReadRangeField(
+    int64_t offset,
+    vector_size_t length,
+    const RowSet& rows,
+    memory::MemoryPool* pool,
+    VectorPtr& field) {
+  VELOX_CHECK(field && field->type()->isRow());
+  prepareResult(field);
+  auto* rowField = field->asChecked<RowVector>();
+  rowField->clearAllNulls();
+  const auto size = static_cast<vector_size_t>(rows.size());
+  rowField->unsafeResize(size);
+  setConstantValueField<int64_t>(
+      offset, BIGINT(), size, pool, rowField->childAt(0));
+  setConstantValueField<int32_t>(
+      static_cast<int32_t>(length),
+      INTEGER(),
+      size,
+      pool,
+      rowField->childAt(1));
+}
+
 void setCompositeField(
     const velox::common::ScanSpec& spec,
     int64_t offset,
+    vector_size_t readLength,
     const RowSet& rows,
     memory::MemoryPool* pool,
     VectorPtr& field) {
@@ -160,7 +204,10 @@ void setCompositeField(
         setRowNumberField(offset, rows, pool, childField);
         break;
       case velox::common::ScanSpec::ColumnType::kComposite:
-        setCompositeField(*child, offset, rows, pool, childField);
+        setCompositeField(*child, offset, readLength, rows, pool, childField);
+        break;
+      case velox::common::ScanSpec::ColumnType::kReadRange:
+        setReadRangeField(offset, readLength, rows, pool, childField);
         break;
     }
   }
@@ -314,6 +361,7 @@ void SelectiveStructColumnReaderBase::next(
     const Mutation* mutation) {
   mutation_ = mutation;
   hasDeletion_ = common::hasDeletion(mutation);
+  currentReadLength_ = static_cast<vector_size_t>(numValues);
   const RowSet rows(iota(numValues, rows_), numValues);
 
   if (!children_.empty()) {
@@ -382,6 +430,17 @@ void SelectiveStructColumnReaderBase::next(
       setCompositeField(
           *childSpec,
           currentRowNumber_,
+          currentReadLength_,
+          outputRows(),
+          resultRowVector->pool(),
+          childField);
+    } else if (
+        childSpec->columnType() ==
+        velox::common::ScanSpec::ColumnType::kReadRange) {
+      VELOX_CHECK(!childSpec->hasFilter());
+      setReadRangeField(
+          currentRowNumber_,
+          currentReadLength_,
           outputRows(),
           resultRowVector->pool(),
           childField);
@@ -711,7 +770,23 @@ void SelectiveStructColumnReaderBase::getValues(
     if (childSpec->columnType() ==
         velox::common::ScanSpec::ColumnType::kComposite) {
       setCompositeField(
-          *childSpec, currentRowNumber_, rows, resultRow->pool(), childResult);
+          *childSpec,
+          currentRowNumber_,
+          currentReadLength_,
+          rows,
+          resultRow->pool(),
+          childResult);
+      continue;
+    }
+
+    if (childSpec->columnType() ==
+        velox::common::ScanSpec::ColumnType::kReadRange) {
+      setReadRangeField(
+          currentRowNumber_,
+          currentReadLength_,
+          rows,
+          resultRow->pool(),
+          childResult);
       continue;
     }
 

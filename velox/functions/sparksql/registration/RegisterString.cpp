@@ -23,7 +23,9 @@
 #include "velox/functions/sparksql/CharTypeWriteSideCheck.h"
 #include "velox/functions/sparksql/ConcatWs.h"
 #include "velox/functions/sparksql/Elt.h"
+#include "velox/functions/sparksql/EncodeFunction.h"
 #include "velox/functions/sparksql/FormatNumber.h"
+#include "velox/functions/sparksql/FormatString.h"
 #include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
 #include "velox/functions/sparksql/MaskFunction.h"
@@ -156,10 +158,16 @@ void registerStringFunctions(const std::string& prefix) {
       Varchar>({prefix + "str_to_map"});
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
       {prefix + "left"});
+  registerFunction<sparksql::RightFunction, Varchar, Varchar, int32_t>(
+      {prefix + "right"});
   registerFunction<sparksql::BitLengthFunction, int32_t, Varchar>(
       {prefix + "bit_length"});
   registerFunction<sparksql::BitLengthFunction, int32_t, Varbinary>(
       {prefix + "bit_length"});
+  registerFunction<sparksql::OctetLengthFunction, int32_t, Varchar>(
+      {prefix + "octet_length"});
+  registerFunction<sparksql::OctetLengthFunction, int32_t, Varbinary>(
+      {prefix + "octet_length"});
   exec::registerStatefulVectorFunction(
       prefix + "instr", instrSignatures(), makeInstr);
   exec::registerStatefulVectorFunction(
@@ -199,6 +207,12 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunctionCallToSpecialForm(
       ConcatWsCallToSpecialForm::kConcatWs,
       std::make_unique<ConcatWsCallToSpecialForm>());
+  registerFunctionCallToSpecialForm(
+      FormatStringCallToSpecialForm::kFormatString,
+      std::make_unique<FormatStringCallToSpecialForm>());
+  registerFunctionCallToSpecialForm(
+      FormatStringCallToSpecialForm::kPrintf,
+      std::make_unique<FormatStringCallToSpecialForm>());
   registerFunction<LuhnCheckFunction, bool, Varchar>({prefix + "luhn_check"});
 
   using SparkUpperFunction = UpperLowerTemplateFunction<
@@ -230,6 +244,8 @@ void registerStringFunctions(const std::string& prefix) {
 
   registerFunction<Base64Function, Varchar, Varbinary>({prefix + "base64"});
   registerFunction<UnBase64Function, Varbinary, Varchar>({prefix + "unbase64"});
+  registerFunction<EncodeFunction, Varbinary, Varchar, Varchar>(
+      {prefix + "encode"});
 
   registerFunction<InitCapFunction, Varchar, Varchar>({prefix + "initcap"});
 

@@ -27,6 +27,7 @@
 
 namespace facebook::nimble::index {
 
+class KeyComparator;
 class KeyEncoding;
 
 /// Immutable random-access reader for one decoded key chunk.
@@ -76,10 +77,14 @@ class FlatKeyReader final : public KeyReader {
   const std::unique_ptr<KeyEncoding> encoding_;
 };
 
-/// Opens a flat packed-key reader.
+/// Opens a flat packed-key reader over keys that sort under 'comparator', or
+/// bytewise when it is null. Readers of a cluster index get the comparator
+/// from ClusterIndexFactory::keyComparator() of the index's factory. The
+/// comparator must outlive the reader.
 std::unique_ptr<KeyReader> createFlatKeyReader(
     std::string_view encodedKeys,
     std::function<void*(uint32_t)> stringBufferFactory,
+    const KeyComparator* comparator,
     velox::memory::MemoryPool* pool);
 
 } // namespace facebook::nimble::index

@@ -20,15 +20,13 @@
 #include <limits>
 #include <numeric>
 
-#include <folly/executors/QueuedImmediateExecutor.h>
-
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CoalesceIo.h"
-#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/tablet/IoAlignment.h"
 
 namespace facebook::nimble {
 
@@ -39,20 +37,6 @@ namespace {
 velox::ReadFile* checkedFile(velox::ReadFile* file) {
   NIMBLE_CHECK_NOT_NULL(file);
   return file;
-}
-
-uint64_t readAlignment(const velox::ReadFile& file) {
-  uint64_t alignment{0};
-  return file.directIo(/*alignment=*/alignment) ? alignment : 1;
-}
-
-DataInput::Region alignedRegion(DataInput::Region region, uint64_t alignment) {
-  NIMBLE_DCHECK_GT(alignment, 0);
-  NIMBLE_DCHECK(velox::bits::isPowerOfTwo(alignment));
-  const auto alignedOffset = region.offset & ~(alignment - 1);
-  const auto alignedEnd =
-      (region.offset + region.length + alignment - 1) & ~(alignment - 1);
-  return {alignedOffset, alignedEnd - alignedOffset};
 }
 
 } // namespace
@@ -219,7 +203,8 @@ void DirectDataInput::computeIoGroups(
                 sortedRegions[begin].region.offset,
                 lastEnd - sortedRegions[begin].region.offset,
             },
-            alignment_);
+            alignment_,
+            file_->size());
         group.readOffset = readRegion.offset;
         group.readSize = readRegion.length;
         group.payloadSize = payloadSize;
@@ -277,8 +262,7 @@ std::pair<char*, DataInput::Handle> DirectDataInput::allocateBuffer(
 
 void DirectDataInput::executeIoGroups(
     std::vector<IoGroup>& ioGroups,
-    char* buffer,
-    uint64_t bufferSize) {
+    char* buffer) {
   NIMBLE_CHECK(!ioGroups.empty());
   readRegions_.clear();
   readRegions_.reserve(ioGroups.size());
@@ -294,7 +278,12 @@ void DirectDataInput::executeIoGroups(
           readRegions_.data(), readRegions_.size()),
       folly::Range<const folly::Range<char*>*>(
           readBuffers_.data(), readBuffers_.size()));
-  NIMBLE_CHECK_EQ(bytesRead, bufferSize, "preadv returned a short read");
+  NIMBLE_CHECK_GE(
+      bytesRead,
+      fileReadBytes(readRegions_, file_->size()),
+      "preadv returned a short read. It's worth noting that different "
+      "preadv impls may return read bytes differently. The bottom line is that "
+      "the read bytes should be >= to the before end region sum");
 }
 
 DataInput::Handle DirectDataInput::load(LoadCallback loadCallback) {
@@ -355,7 +344,7 @@ DataInput::Handle DirectDataInput::load(LoadCallback loadCallback) {
   uint64_t ioUs{0};
   {
     velox::MicrosecondTimer ioTimer(&ioUs);
-    executeIoGroups(ioGroups_, buffer, readBytes);
+    executeIoGroups(ioGroups_, buffer);
   }
 
   for (const auto& group : ioGroups_) {
@@ -541,7 +530,7 @@ uint64_t CachedDataInput::populateBufferRefs(
 void CachedDataInput::loadCacheMissGroups(
     std::span<const CacheMissGroup> cacheMissGroups,
     uint64_t stagingBufferSize,
-    const std::vector<velox::cache::CachePin>& cachePins,
+    std::vector<BlockCache::Entry>& cacheEntries,
     LoadCallback loadCallback) {
   char* stagingBuffer{nullptr};
   Handle stagingHandle;
@@ -565,15 +554,13 @@ void CachedDataInput::loadCacheMissGroups(
   std::vector<folly::Range<char*>> readBuffers;
   readRegions.reserve(cacheMissGroups.size());
   readBuffers.reserve(cacheMissGroups.size());
-  uint64_t expectedReadBytes{0};
   for (const auto& cacheMissGroup : cacheMissGroups) {
     readRegions.push_back(cacheMissGroup.readRegion);
-    auto* entry = cachePins.at(cacheMissGroup.groupIndex).checkedEntry();
+    auto& entry = cacheEntries.at(cacheMissGroup.groupIndex);
     auto* destination = alignment_ == 1
-        ? entry->contiguousData()
+        ? entry.data()
         : stagingBuffer + cacheMissGroup.stagingBufferOffset;
     readBuffers.emplace_back(destination, cacheMissGroup.readRegion.length);
-    expectedReadBytes += cacheMissGroup.readRegion.length;
   }
 
   uint64_t storageReadUs{0};
@@ -585,18 +572,21 @@ void CachedDataInput::loadCacheMissGroups(
         folly::Range<const folly::Range<char*>*>(
             readBuffers.data(), readBuffers.size()));
   }
-  NIMBLE_CHECK_EQ(bytesRead, expectedReadBytes, "preadv returned a short read");
+  NIMBLE_CHECK_GE(
+      bytesRead,
+      fileReadBytes(readRegions, file_->size()),
+      "preadv returned a short read");
   ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
   ioStats_->storageReadLatencyUs().increment(storageReadUs);
   ioStats_->incTotalScanTimeNs(static_cast<int64_t>(storageReadUs) * 1'000);
 
   for (const auto& cacheMissGroup : cacheMissGroups) {
     const auto groupIndex = cacheMissGroup.groupIndex;
-    auto* entry = cachePins.at(groupIndex).checkedEntry();
+    auto& entry = cacheEntries.at(groupIndex);
     const auto& group = groups_[groupIndex];
     if (alignment_ > 1) {
       std::memcpy(
-          entry->contiguousData(),
+          entry.data(),
           stagingBuffer + cacheMissGroup.stagingBufferOffset +
               group.groupRegion.offset - cacheMissGroup.readRegion.offset,
           group.groupRegion.length);
@@ -612,11 +602,11 @@ void CachedDataInput::loadCacheMissGroups(
     // Note what this does and does not guarantee: an entry is checked by
     // whoever filled it, not by whoever reads it. A reader that passes no
     // callback can fill an entry that a later checking reader then hits and
-    // accepts unchecked. That holds only while every reader sharing an
-    // AsyncDataCache agrees on checking.
+    // accepts unchecked. That holds only while every reader sharing a cache
+    // agrees on checking.
     invokeLoadCallback(loadCallback, groupIndex);
 
-    entry->setExclusiveToShared(/*ssdSavable=*/false);
+    cache_->seal(entry);
   }
 }
 
@@ -653,10 +643,10 @@ DataInput::Handle CachedDataInput::load(LoadCallback loadCallback) {
       "Read group must contain a region");
   loaded_ = true;
 
-  // Releasing a pin removes an unfinished exclusive cache entry and wakes its
-  // waiters if any subsequent cache-fill work throws.
-  auto cachePins = std::make_shared<std::vector<velox::cache::CachePin>>();
-  cachePins->reserve(groups_.size());
+  // Releasing an entry removes an unfinished cache entry and wakes its waiters
+  // if any subsequent cache-fill work throws.
+  auto cacheEntries = std::make_shared<std::vector<BlockCache::Entry>>();
+  cacheEntries->reserve(groups_.size());
   std::vector<CacheMissGroup> cacheMissGroups;
   cacheMissGroups.reserve(groups_.size());
   uint64_t stagingBufferSize{0};
@@ -664,43 +654,17 @@ DataInput::Handle CachedDataInput::load(LoadCallback loadCallback) {
     const auto& group = groups_[groupIndex];
     const auto endRegion = groupEndRegion(groupIndex);
 
-    velox::cache::CachePin pin;
-    do {
-      folly::SemiFuture<bool> waitFuture{false};
-      pin = cache_->findOrCreate(
-          velox::cache::RawFileCacheKey{fileId_, group.groupRegion.offset},
-          group.groupRegion.length,
-          /*contiguous=*/true,
-          &waitFuture);
-      if (pin.empty()) {
-        NIMBLE_CHECK(waitFuture.valid(), "Cache wait future is invalid");
-        uint64_t waitUs{0};
-        {
-          velox::MicrosecondTimer timer(&waitUs);
-          std::move(waitFuture)
-              .via(&folly::QueuedImmediateExecutor::instance())
-              .wait();
-        }
-        ioStats_->queryThreadIoLatencyUs().increment(waitUs);
-        ioStats_->cacheWaitLatencyUs().increment(waitUs);
-        // The future only signals that the competing exclusive load finished;
-        // findOrCreate must run again to acquire a shared or exclusive pin.
-      }
-    } while (pin.empty());
-
-    auto* entry = pin.checkedEntry();
-    const bool firstUse = entry->getAndClearFirstUseFlag();
-    const bool loadedFromStorage = entry->isExclusive();
-    if (!loadedFromStorage && !firstUse) {
-      ioStats_->ramHit().increment(group.groupRegion.length);
-    }
+    auto entry = cache_->getOrCreate(
+        fileId_, group.groupRegion.offset, group.groupRegion.length, *ioStats_);
+    const bool needLoad = !entry.sealed();
 
     const auto payloadBytes =
-        populateBufferRefs(group, endRegion, entry->contiguousData());
+        populateBufferRefs(group, endRegion, entry.data());
     NIMBLE_CHECK_LE(payloadBytes, group.groupRegion.length);
     ioStats_->incRawBytesRead(static_cast<int64_t>(payloadBytes));
-    if (loadedFromStorage) {
-      const auto readRegion = alignedRegion(group.groupRegion, alignment_);
+    if (needLoad) {
+      const auto readRegion =
+          alignedRegion(group.groupRegion, alignment_, file_->size());
       cacheMissGroups.push_back(
           CacheMissGroup{
               .groupIndex = groupIndex,
@@ -710,16 +674,16 @@ DataInput::Handle CachedDataInput::load(LoadCallback loadCallback) {
           });
       stagingBufferSize += readRegion.length;
     }
-    cachePins->push_back(std::move(pin));
+    cacheEntries->push_back(std::move(entry));
   }
 
   if (!cacheMissGroups.empty()) {
     loadCacheMissGroups(
-        cacheMissGroups, stagingBufferSize, *cachePins, loadCallback);
+        cacheMissGroups, stagingBufferSize, *cacheEntries, loadCallback);
   }
 
   regions_.clear();
-  return std::static_pointer_cast<void>(cachePins);
+  return std::static_pointer_cast<void>(cacheEntries);
 }
 
 const DataInput::BufferRef& CachedDataInput::bufferRef(uint32_t index) const {

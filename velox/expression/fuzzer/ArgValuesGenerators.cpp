@@ -743,4 +743,43 @@ std::vector<core::TypedExprPtr> InverseFCdfArgValuesGenerator::generate(
   return inputExpressions;
 }
 
+std::vector<core::TypedExprPtr> LevenshteinArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_GE(signature.args.size(), 2);
+  VELOX_CHECK_LE(signature.args.size(), 3);
+  populateInputTypesAndNames(signature, state);
+
+  // Keeps the product of the two lengths within 1,000,000, the combined size
+  // that Presto's levenshtein_distance accepts.
+  static constexpr size_t kMaxLength = 1'000;
+
+  const auto firstColumn = state.inputRowNames_.size() - signature.args.size();
+  const auto column = [&](size_t index) {
+    return std::make_shared<core::FieldAccessTypedExpr>(
+        signature.args[index], state.inputRowNames_[firstColumn + index]);
+  };
+  const auto boundedString = [&](size_t index) {
+    return std::make_shared<RandomInputGenerator<StringView>>(
+        rand<uint32_t>(rng),
+        signature.args[index],
+        options.nullRatio,
+        kMaxLength);
+  };
+
+  state.customInputGenerators_.emplace_back(boundedString(0));
+  state.customInputGenerators_.emplace_back(boundedString(1));
+  std::vector<core::TypedExprPtr> inputExpressions{column(0), column(1)};
+
+  // The optional threshold does not affect the cost, so it keeps the default
+  // random values.
+  if (signature.args.size() == 3) {
+    state.customInputGenerators_.emplace_back(nullptr);
+    inputExpressions.emplace_back(column(2));
+  }
+  return inputExpressions;
+}
+
 } // namespace facebook::velox::fuzzer

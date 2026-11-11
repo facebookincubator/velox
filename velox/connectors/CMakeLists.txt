@@ -30,7 +30,9 @@ velox_link_libraries(velox_connector_registry velox_connector velox_scoped_regis
 add_subdirectory(fuzzer)
 
 if(${VELOX_ENABLE_HIVE_CONNECTOR})
+  add_subdirectory(common)
   add_subdirectory(hive)
+  add_subdirectory(paimon)
 endif()
 
 if(${VELOX_ENABLE_TPCH_CONNECTOR})

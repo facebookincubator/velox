@@ -128,6 +128,8 @@ enum class EncodingType {
   // Stores integer data in fixed-size chunks (default 1024 rows), each with
   // its own baseline and bit width. Adapts per-chunk variable bit widths for
   // better compression on data with locally narrow value ranges.
+  // The first block may hold fewer rows than the block size. Superseded by
+  // BlockBitPackingV2.
   // EXPERIMENTAL: Not production-ready. Do not enable for production tables
   // without consulting the Nimble team (oncall: dwios).
   BlockBitPacking = 15,
@@ -172,17 +174,32 @@ enum class EncodingType {
   // EXPERIMENTAL: Not production-ready. Do not enable for production tables
   // without consulting the Nimble team (oncall: dwios).
   EliasFano = 24,
-  /// Splits 32- or 64-bit integers into configured, independently encoded
-  /// bit-range child streams inside one self-describing encoded chunk.
-  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
-  /// without consulting the Nimble team (oncall: dwios).
-  BitRangeSplit = 25,
+  // 25 was BitRangeSplit, which SubIntSplit replaces. Never reuse it; see
+  // kRemovedBitRangeSplitEncodingType.
   /// Encodes floating-point high bits using a small dictionary and preserves
   /// low bits in a separate integer stream. Selected through explicit layouts.
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   ALPRD = 26,
+  /// Stores integer streams made of ascending runs. A new partition starts
+  /// wherever a value drops, and adjacent partitions of similar density share
+  /// one Elias-Fano list.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  PartitionedEliasFano = 27,
+  /// Same per-block packing as BlockBitPacking, but every block holds exactly
+  /// the block size rows except the last, so the header stores no first-block
+  /// row count.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  BlockBitPackingV2 = 28,
 };
+
+/// Serialized value of the removed BitRangeSplit encoding. It stays reserved so
+/// that no other encoding takes it, and decoders reject data that uses it.
+inline constexpr auto kRemovedBitRangeSplitEncodingType =
+    static_cast<EncodingType>(25);
+
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.
 EncodingType toEncodingType(std::string_view name);

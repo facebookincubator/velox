@@ -16,14 +16,16 @@
 #pragma once
 
 #include <glog/logging.h>
+#include <cstddef>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
@@ -33,23 +35,34 @@
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 
 namespace facebook::nimble {
 
 namespace detail {
 
-/// Estimates encoded data size for encoding selection. Estimates are heuristic
-/// and are not expected to match the serialized size exactly.
+// Identifies encodings that can project size from sampled statistics alone.
+template <typename T>
+inline bool canProjectSizeEstimation(EncodingType encodingType) {
+  return encodingType == EncodingType::Constant ||
+      (encodingType == EncodingType::Trivial && !isStringType<T>()) ||
+      encodingType == EncodingType::FixedBitWidth ||
+      encodingType == EncodingType::SimdForBitpack;
+}
+
+/// Estimates encoded size for encoding selection. Size
+/// estimates are heuristic and need not match the serialized size exactly.
 template <typename T>
 struct EncodingSizeEstimation {
   using physicalType = typename TypeTraits<T>::physicalType;
 
-  /// Estimates size from statistics over the full input.
+  /// Estimates size from the target row count and the relevant statistics.
   static std::optional<uint64_t> estimateSize(
       const EncodingType encodingType,
       const size_t entryCount,
@@ -76,6 +89,7 @@ struct EncodingSizeEstimation {
 
   /// Estimates size from the full input and its statistics.
   static std::optional<uint64_t> estimateSize(
+      EncodingSelectionPolicyBase& selectionPolicy,
       const EncodingType encodingType,
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
@@ -84,7 +98,12 @@ struct EncodingSizeEstimation {
           nestedEncodingReadFactors = {}) {
     if constexpr (isNumericType<physicalType>()) {
       return estimateNumericSize(
-          encodingType, values, statistics, options, nestedEncodingReadFactors);
+          selectionPolicy,
+          encodingType,
+          values,
+          statistics,
+          options,
+          nestedEncodingReadFactors);
     } else if constexpr (isBoolType<physicalType>()) {
       return estimateBoolSize(encodingType, values, statistics, options);
     } else if constexpr (isStringType<physicalType>()) {
@@ -105,7 +124,8 @@ struct EncodingSizeEstimation {
           nestedEncodingReadFactors) {
     switch (encodingType) {
       case EncodingType::Constant: {
-        return std::nullopt;
+        return ConstantEncoding<T>::estimateSize(
+            entryCount, statistics, options);
       }
       case EncodingType::MainlyConstant: {
         // TODO: Wire per-block tightening when BlockBitPacking is a
@@ -162,7 +182,11 @@ struct EncodingSizeEstimation {
         // estimateSize() returns nullopt when the stream has more blocks than
         // the uint16_t block index can address, so selection skips this
         // encoding instead of picking it and hard-failing in encode().
-        return BlockBitPackingEncoding<physicalType>::estimateSize(
+        return deprecated::BlockBitPackingEncoding<physicalType>::estimateSize(
+            statistics, options.blockBitPackingBlockSize);
+      }
+      case EncodingType::BlockBitPackingV2: {
+        return BlockBitPackingV2Encoding<physicalType>::estimateSize(
             statistics, options.blockBitPackingBlockSize);
       }
       default: {
@@ -172,6 +196,7 @@ struct EncodingSizeEstimation {
   }
 
   static std::optional<uint64_t> estimateNumericSize(
+      EncodingSelectionPolicyBase& selectionPolicy,
       const EncodingType encodingType,
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
@@ -195,7 +220,8 @@ struct EncodingSizeEstimation {
       }
       case EncodingType::ALPRD: {
         if constexpr (isFloatingPointType<T>()) {
-          return ALPRDEncoding<T>::estimateSize(values, options);
+          return ALPRDEncoding<T>::estimateSize(
+              selectionPolicy, values, options);
         } else {
           return std::nullopt;
         }
@@ -222,6 +248,13 @@ struct EncodingSizeEstimation {
           return std::nullopt;
         }
       }
+      case EncodingType::PartitionedEliasFano: {
+        if constexpr (isIntegralType<T>()) {
+          return PartitionedEliasFanoEncoding<T>::estimateSize(values, options);
+        } else {
+          return std::nullopt;
+        }
+      }
       default: {
         return estimateNumericSize(
             encodingType,
@@ -240,7 +273,8 @@ struct EncodingSizeEstimation {
       const Encoding::Options& options) {
     switch (encodingType) {
       case EncodingType::Constant: {
-        return std::nullopt;
+        return ConstantEncoding<bool>::estimateSize(
+            entryCount, statistics, options);
       }
       case EncodingType::SparseBool: {
         return SparseBoolEncoding::estimateSize(
@@ -282,7 +316,8 @@ struct EncodingSizeEstimation {
       const Encoding::Options& options) {
     switch (encodingType) {
       case EncodingType::Constant: {
-        return std::nullopt;
+        return ConstantEncoding<std::string_view>::estimateSize(
+            entryCount, statistics, options);
       }
       case EncodingType::MainlyConstant: {
         return MainlyConstantEncoding<std::string_view>::estimateSize(

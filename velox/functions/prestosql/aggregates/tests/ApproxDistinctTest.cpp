@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <functional>
+
 #include <folly/base64.h>
 
 #include "velox/common/hyperloglog/HllUtils.h"
@@ -41,31 +43,22 @@ class ApproxDistinctTest : public AggregationTestBase {
     auto expected =
         makeRowVector({makeNullableFlatVector<int64_t>({expectedResult})});
 
-    testAggregations(
-        {vectors},
-        {},
-        {fmt::format("approx_distinct(c0, {})", maxStandardError)},
-        {expected});
-    testAggregationsWithCompanion(
-        {vectors},
-        [](auto& /*builder*/) {},
-        {},
-        {fmt::format("approx_distinct(c0, {})", maxStandardError)},
-        {{values->type(), DOUBLE()}},
-        {},
-        {expected});
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({fmt::format("approx_distinct(c0, {})", maxStandardError)})
+        .withCompanion()
+        .assertResults(expected);
 
     if (testApproxSet) {
       if (expectedApproxSetResult.has_value()) {
         expected = makeRowVector(
             {makeNullableFlatVector<int64_t>({*expectedApproxSetResult})});
       }
-      testAggregations(
-          {vectors},
-          {},
-          {fmt::format("approx_set(c0, {})", maxStandardError)},
-          {"cardinality(a0)"},
-          {expected});
+      AggregationTester(*this)
+          .inputs(vectors)
+          .aggregates({fmt::format("approx_set(c0, {})", maxStandardError)})
+          .project({"cardinality(a0)"})
+          .assertResults(expected);
     }
   }
 
@@ -77,19 +70,18 @@ class ApproxDistinctTest : public AggregationTestBase {
     auto expected =
         makeRowVector({makeNullableFlatVector<int64_t>({expectedResult})});
 
-    testAggregations({vectors}, {}, {"approx_distinct(c0)"}, {expected});
-    testAggregationsWithCompanion(
-        {vectors},
-        [](auto& /*builder*/) {},
-        {},
-        {"approx_distinct(c0)"},
-        {{values->type()}},
-        {},
-        {expected});
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"approx_distinct(c0)"})
+        .withCompanion()
+        .assertResults(expected);
 
     if (testApproxSet) {
-      testAggregations(
-          {vectors}, {}, {"approx_set(c0)"}, {"cardinality(a0)"}, {expected});
+      AggregationTester(*this)
+          .inputs(vectors)
+          .aggregates({"approx_set(c0)"})
+          .project({"cardinality(a0)"})
+          .assertResults(expected);
     }
   }
 
@@ -116,27 +108,20 @@ class ApproxDistinctTest : public AggregationTestBase {
     auto vectors = makeRowVector({keys, values});
     auto expected = toRowVector(expectedResults);
 
-    testAggregations(
-        {vectors, vectors, vectors},
-        {"c0"},
-        {"approx_distinct(c1)"},
-        {expected});
-    testAggregationsWithCompanion(
-        {vectors, vectors, vectors},
-        [](auto& /*builder*/) {},
-        {"c0"},
-        {"approx_distinct(c1)"},
-        {{values->type()}},
-        {},
-        {expected});
+    AggregationTester(*this)
+        .inputs({vectors, vectors, vectors})
+        .groupBy({"c0"})
+        .aggregates({"approx_distinct(c1)"})
+        .withCompanion()
+        .assertResults(expected);
 
     if (testApproxSet) {
-      testAggregations(
-          {vectors, vectors, vectors},
-          {"c0"},
-          {"approx_set(c1)"},
-          {"c0", "cardinality(a0)"},
-          {expected});
+      AggregationTester(*this)
+          .inputs({vectors, vectors, vectors})
+          .groupBy({"c0"})
+          .aggregates({"approx_set(c1)"})
+          .project({"c0", "cardinality(a0)"})
+          .assertResults(expected);
     }
   }
 };
@@ -191,12 +176,12 @@ TEST_F(ApproxDistinctTest, groupByHighCardinalityIntegers) {
 
   testGroupByAgg(keys, values, {{0, 516}, {1, 507}}, false);
   auto vectors = makeRowVector({keys, values});
-  testAggregations(
-      {vectors, vectors, vectors},
-      {"c0"},
-      {"approx_set(c1)"},
-      {"c0", "cardinality(a0)"},
-      {toRowVector<int32_t, int64_t>({{0, 500}, {1, 500}})});
+  AggregationTester(*this)
+      .inputs({vectors, vectors, vectors})
+      .groupBy({"c0"})
+      .aggregates({"approx_set(c1)"})
+      .project({"c0", "cardinality(a0)"})
+      .assertResults(toRowVector<int32_t, int64_t>({{0, 500}, {1, 500}}));
 }
 
 TEST_F(ApproxDistinctTest, groupByVeryLowCardinalityIntegers) {
@@ -217,16 +202,12 @@ TEST_F(ApproxDistinctTest, groupByAllNulls) {
   auto vectors = makeRowVector({keys, values});
   auto expected = toRowVector<int32_t, int64_t>({{0, 0}, {1, 3}});
 
-  testAggregations(
-      {vectors, vectors, vectors}, {"c0"}, {"approx_distinct(c1)"}, {expected});
-  testAggregationsWithCompanion(
-      {vectors, vectors, vectors},
-      [](auto& /*builder*/) {},
-      {"c0"},
-      {"approx_distinct(c1)"},
-      {{values->type()}},
-      {},
-      {expected});
+  AggregationTester(*this)
+      .inputs({vectors, vectors, vectors})
+      .groupBy({"c0"})
+      .aggregates({"approx_distinct(c1)"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(ApproxDistinctTest, globalAggIntegers) {
@@ -268,12 +249,12 @@ TEST_F(ApproxDistinctTest, globalAggHighCardinalityIntegers) {
   auto values = makeFlatVector<int64_t>(size, [](auto row) { return row; });
 
   testGlobalAgg(values, 1010, false);
-  testAggregations(
-      {makeRowVector({values})},
-      {},
-      {"approx_set(c0)"},
-      {"cardinality(a0)"},
-      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>({1005}))})});
+  AggregationTester(*this)
+      .inputs(makeRowVector({values}))
+      .aggregates({"approx_set(c0)"})
+      .project({"cardinality(a0)"})
+      .assertResults(makeRowVector(
+          {makeFlatVector<int64_t>(std::vector<int64_t>({1005}))}));
 }
 
 TEST_F(ApproxDistinctTest, globalAggVeryLowCardinalityIntegers) {
@@ -456,7 +437,8 @@ TEST_F(ApproxDistinctTest, memoryLeakInMerge) {
   // Should be significantly smaller than 500KB (the number before the fix),
   // because we should be able to convert to DenseHll in the process.
   ASSERT_LT(
-      toPlanStats(task->taskStats()).at(finalAgg).peakMemoryBytes, 180'000);
+      PlanNodeStats::extract(task->taskStats(), finalAgg).peakMemoryBytes,
+      180'000);
 }
 
 TEST_F(ApproxDistinctTest, mergeWithEmpty) {
@@ -464,7 +446,7 @@ TEST_F(ApproxDistinctTest, mergeWithEmpty) {
   auto input = makeRowVector({
       makeFlatVector<int32_t>(kSize, [](auto i) { return std::min(i, 1); }),
       makeFlatVector<int64_t>(
-          kSize, folly::identity, [](auto i) { return i == 0; }),
+          kSize, std::identity{}, [](auto i) { return i == 0; }),
   });
   auto op = PlanBuilder()
                 .values({input})
@@ -487,8 +469,12 @@ TEST_F(ApproxDistinctTest, toIntermediate) {
                   .singleAggregation({"c0"}, {"approx_set(c1)"})
                   .planNode();
   auto digests = split(AssertQueryBuilder(plan).copyResults(pool()), 2);
-  testAggregations(
-      digests, {"c0"}, {"merge(a0)"}, {"c0", "cardinality(a0)"}, {input});
+  AggregationTester(*this)
+      .inputs(digests)
+      .groupBy({"c0"})
+      .aggregates({"merge(a0)"})
+      .project({"c0", "cardinality(a0)"})
+      .assertResults(input);
 }
 
 TEST_F(ApproxDistinctTest, unknownType) {
@@ -497,37 +483,36 @@ TEST_F(ApproxDistinctTest, unknownType) {
       makeFlatVector<int32_t>(kSize, [](auto i) { return i % 2; }),
       makeAllNullFlatVector<UnknownValue>(kSize),
   });
-  testAggregations(
-      {input},
-      {},
-      {"approx_distinct(c1)", "approx_distinct(c1, 0.023)"},
-      {makeRowVector(std::vector<VectorPtr>(2, makeConstant<int64_t>(0, 1)))});
-  testAggregations(
-      {input},
-      {},
-      {"approx_set(c1)", "approx_set(c1, 0.01625)"},
-      {"cardinality(a0)", "cardinality(a1)"},
-      {makeRowVector(
-          std::vector<VectorPtr>(2, makeNullConstant(TypeKind::BIGINT, 1)))});
-  testAggregations(
-      {input},
-      {"c0"},
-      {"approx_distinct(c1)", "approx_distinct(c1, 0.023)"},
-      {makeRowVector({
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"approx_distinct(c1)", "approx_distinct(c1, 0.023)"})
+      .assertResults(makeRowVector(
+          std::vector<VectorPtr>(2, makeConstant<int64_t>(0, 1))));
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"approx_set(c1)", "approx_set(c1, 0.01625)"})
+      .project({"cardinality(a0)", "cardinality(a1)"})
+      .assertResults(makeRowVector(
+          std::vector<VectorPtr>(2, makeNullConstant(TypeKind::BIGINT, 1))));
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"approx_distinct(c1)", "approx_distinct(c1, 0.023)"})
+      .assertResults(makeRowVector({
           makeFlatVector<int32_t>({0, 1}),
           makeFlatVector<int64_t>({0, 0}),
           makeFlatVector<int64_t>({0, 0}),
-      })});
-  testAggregations(
-      {input},
-      {"c0"},
-      {"approx_set(c1)", "approx_set(c1, 0.01625)"},
-      {"c0", "cardinality(a0)", "cardinality(a1)"},
-      {makeRowVector({
+      }));
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"approx_set(c1)", "approx_set(c1, 0.01625)"})
+      .project({"c0", "cardinality(a0)", "cardinality(a1)"})
+      .assertResults(makeRowVector({
           makeFlatVector<int32_t>({0, 1}),
           makeNullConstant(TypeKind::BIGINT, 2),
           makeNullConstant(TypeKind::BIGINT, 2),
-      })});
+      }));
 }
 
 TEST_F(ApproxDistinctTest, approxSetMatchJava) {

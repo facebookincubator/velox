@@ -24,19 +24,10 @@
 namespace facebook::velox::exec {
 
 void AggregateCompanionFunctionBase::setOffsetsInternal(
-    int32_t offset,
-    int32_t nullByte,
-    uint8_t nullMask,
-    int32_t initializedByte,
-    uint8_t initializedMask,
+    RowColumn column,
     int32_t rowSizeOffset) {
-  fn_->setOffsets(
-      offset,
-      nullByte,
-      nullMask,
-      initializedByte,
-      initializedMask,
-      rowSizeOffset);
+  Aggregate::setOffsetsInternal(column, rowSizeOffset);
+  fn_->setOffsets(column, rowSizeOffset);
 }
 
 int32_t AggregateCompanionFunctionBase::accumulatorFixedWidthSize() const {
@@ -64,8 +55,9 @@ void AggregateCompanionFunctionBase::setAllocatorInternal(
   fn_->setAllocator(allocator);
 }
 
-void AggregateCompanionFunctionBase::destroy(folly::Range<char**> groups) {
-  fn_->destroy(groups);
+void AggregateCompanionFunctionBase::setConstantInputs(
+    const std::vector<VectorPtr>& constantInputs) {
+  fn_->setConstantInputs(constantInputs);
 }
 
 void AggregateCompanionFunctionBase::destroyInternal(
@@ -75,12 +67,6 @@ void AggregateCompanionFunctionBase::destroyInternal(
 
 void AggregateCompanionFunctionBase::clearInternal() {
   fn_->clear();
-}
-
-void AggregateCompanionFunctionBase::initializeNewGroups(
-    char** groups,
-    folly::Range<const vector_size_t*> indices) {
-  fn_->initializeNewGroups(groups, indices);
 }
 
 void AggregateCompanionFunctionBase::initializeNewGroupsInternal(
@@ -147,6 +133,38 @@ void AggregateCompanionAdapter::PartialFunction::extractValues(
   fn_->extractAccumulators(groups, numGroups, result);
 }
 
+bool AggregateCompanionAdapter::MergeFunction::supportsToIntermediate() const {
+  return fn_->supportsFillEmptyIntermediate();
+}
+
+void AggregateCompanionAdapter::MergeFunction::toIntermediate(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args,
+    VectorPtr& result) const {
+  VELOX_CHECK_EQ(args.size(), 1);
+  if (rows.isAllSelected() && !args[0]->mayHaveNulls()) {
+    result = args[0];
+    return;
+  }
+  auto emptyRows = rows.complement();
+  // Merges ignore null inputs, so selected nulls need the empty intermediate
+  // value (e.g. 0 for count) rather than passing through null.
+  if (args[0]->mayHaveNulls()) {
+    rows.applyToSelected([&](vector_size_t row) {
+      if (args[0]->isNullAt(row)) {
+        emptyRows.setValid(row, true);
+      }
+    });
+    emptyRows.updateBounds();
+  }
+  if (!emptyRows.hasSelections()) {
+    result = args[0];
+    return;
+  }
+  result->copy(args[0].get(), rows, nullptr);
+  fn_->fillEmptyIntermediate(emptyRows, result);
+}
+
 void AggregateCompanionAdapter::MergeFunction::addRawInput(
     char** groups,
     const SelectivityVector& rows,
@@ -179,37 +197,6 @@ void AggregateCompanionAdapter::MergeExtractFunction::extractValues(
   fn_->extractValues(groups, numGroups, result);
 }
 
-int32_t AggregateCompanionAdapter::ExtractFunction::setOffset() const {
-  const int32_t rowSizeOffset = bits::nbytes(1);
-  // Tracked row size takes an uint32_t slot. Accumulator starts after the
-  // row-size slot.
-  int32_t offset = rowSizeOffset + sizeof(uint32_t);
-  offset = bits::roundUp(offset, fn_->accumulatorAlignmentSize());
-  fn_->setOffsets(
-      offset,
-      RowContainer::nullByte(0),
-      RowContainer::nullMask(0),
-      RowContainer::initializedByte(0),
-      RowContainer::initializedMask(0),
-      rowSizeOffset);
-  return offset;
-}
-
-char** AggregateCompanionAdapter::ExtractFunction::allocateGroups(
-    memory::AllocationPool& allocationPool,
-    const SelectivityVector& rows,
-    uint64_t offsetInGroup) const {
-  auto* groups = reinterpret_cast<char**>(
-      allocationPool.allocateFixed(sizeof(char*) * rows.end()));
-
-  auto size = fn_->accumulatorFixedWidthSize();
-  auto alignment = fn_->accumulatorAlignmentSize();
-  rows.applyToSelected([&](auto row) {
-    groups[row] = allocationPool.allocateFixed(size + offsetInGroup, alignment);
-  });
-  return groups;
-}
-
 std::tuple<vector_size_t, BufferPtr>
 AggregateCompanionAdapter::ExtractFunction::compactGroups(
     memory::MemoryPool* pool,
@@ -234,17 +221,26 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
     const TypePtr& outputType,
     exec::EvalCtx& context,
     VectorPtr& result) const {
-  // Set up data members of fn_.
-  HashStringAllocator stringAllocator{context.pool()};
-  memory::AllocationPool allocationPool{context.pool()};
-  fn_->setAllocator(&stringAllocator);
+  // One group per row. The container destroys the accumulators when it goes
+  // out of scope.
+  RowContainer groupRows(
+      /*keyTypes=*/{},
+      {Accumulator{fn_.get(), args[0]->type()}},
+      /*dependentTypes=*/{},
+      context.pool(),
+      RowContainer::Options{});
+  fn_->setAllocator(&groupRows.stringAllocator());
+  fn_->setOffsets(groupRows.columnAt(0), groupRows.rowSizeOffset());
 
-  auto offset = setOffset();
-  char** groups = allocateGroups(allocationPool, rows, offset);
+  std::vector<char*> groupsStorage(rows.end());
+  char** groups = groupsStorage.data();
+  std::vector<vector_size_t> allSelectedRange;
+  rows.applyToSelected([&](auto row) {
+    groups[row] = groupRows.newRow();
+    allSelectedRange.push_back(row);
+  });
 
   // Perform per-row aggregation.
-  std::vector<vector_size_t> allSelectedRange;
-  rows.applyToSelected([&](auto row) { allSelectedRange.push_back(row); });
   fn_->initializeNewGroups(groups, allSelectedRange);
   fn_->enableValidateIntermediateInputs();
   fn_->addIntermediateResults(groups, rows, args, false);
@@ -256,10 +252,6 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
   localResult = BaseVector::wrapInDictionary(
       nullptr, rowsToGroupsIndices, rows.end(), localResult);
   context.moveOrCopyResult(localResult, rows, result);
-
-  if (fn_->accumulatorUsesExternalMemory()) {
-    fn_->destroy(folly::Range(groups, groupCount));
-  }
 }
 
 bool CompanionFunctionsRegistrar::registerPartialFunction(

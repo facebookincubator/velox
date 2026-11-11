@@ -697,7 +697,9 @@ uint64_t DwrfRowReader::next(
 }
 
 void DwrfRowReader::resetFilterCaches() {
-  if (getSelectiveColumnReader()) {
+  // There is no column reader to reset before a stripe is loaded, after EOF,
+  // or when the split range contains no stripes.
+  if (currentUnit_ && getSelectiveColumnReader()) {
     getSelectiveColumnReader()->resetFilterCaches();
     recomputeStridesToSkip_ = true;
   }

@@ -209,7 +209,8 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   };
 
   // Builds a cudf scalar for an injected column from its optional string value;
-  // a `nullopt` value yields a typed NULL.
+  // a `nullopt` value yields a typed NULL. A TIMESTAMP column takes the type
+  // the reader gives file timestamps, so an expression can combine the two.
   std::unique_ptr<cudf::scalar> makeInjectedScalar(
       const InjectedColumn& col) const;
 
@@ -270,6 +271,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Columns to inject after reading.
   std::vector<InjectedColumn> injectedColumns_;
 
+  // The type an injected TIMESTAMP column takes, resolved once per split.
+  std::optional<cudf::type_id> injectedTimestampType_;
+
   // Whether the filter rejects this split entirely.
   bool skipSplit_{false};
 
@@ -278,8 +282,8 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // nothing can be pushed.
   std::optional<TransformedFilter> transformedPushdownFilter_;
 
-  // Transform of the logical filter, held only when a `PushdownFilterBuilder`
-  // has transformed it differently from the pushed filter.
+  // Transform of the logical filter, held only when the split-specific filter
+  // is transformed differently from the pushed filter.
   std::optional<TransformedFilter> transformedLogicalFilter_;
 
   // Bitmaps for positional deletes

@@ -19,6 +19,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <folly/container/F14Map.h>
+
 #include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -74,6 +76,10 @@ struct IcebergDeleteFile {
   /// When set (non-empty), the reader can skip this DV for any other data file
   /// as a belt-and-suspenders pruning step. Empty string disables the filter.
   std::string referencedDataFile{};
+
+  /// Options this delete file adds to the reader's fileReadOps when it is
+  /// opened and read. They only add keys: the reader's keys win.
+  folly::F14FastMap<std::string, std::string> fileReadOps{};
 
   IcebergDeleteFile(
       FileContent _content,

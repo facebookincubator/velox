@@ -52,26 +52,6 @@ class HivePartitionFunction : public core::PartitionFunction {
   // Precompute single value hive hash for a constant partition key.
   void precompute(const BaseVector& value, size_t column_index_t);
 
-  void hash(
-      const DecodedVector& values,
-      TypeKind typeKind,
-      const SelectivityVector& rows,
-      bool mix,
-      std::vector<uint32_t>& hashes,
-      size_t poolIndex);
-
-  template <TypeKind kind>
-  void hashTyped(
-      const DecodedVector& /* values */,
-      const SelectivityVector& /* rows */,
-      bool /* mix */,
-      std::vector<uint32_t>& /* hashes */,
-      size_t /* poolIndex */) {
-    VELOX_UNSUPPORTED(
-        "Hive partitioning function doesn't support {} type",
-        TypeTraits<kind>::name);
-  }
-
   // Helper functions to retrieve reusable memory from pools.
   DecodedVector& getDecodedVector(size_t poolIndex = 0);
   SelectivityVector& getRows(size_t poolIndex = 0);

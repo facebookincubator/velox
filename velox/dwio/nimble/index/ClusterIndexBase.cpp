@@ -149,6 +149,7 @@ ClusterIndexBase::ClusterIndexBase(
     std::shared_ptr<MetadataInput> metadataInput,
     std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
     KeyReaderFactory keyReaderFactory,
+    const KeyComparator* keyComparator,
     bool pinIndex,
     bool preloadIndex,
     velox::memory::MemoryPool* pool)
@@ -166,6 +167,7 @@ ClusterIndexBase::ClusterIndexBase(
       metadataInput_{std::move(metadataInput)},
       dataInput_{std::move(dataInput)},
       keyReaderFactory_{std::move(keyReaderFactory)},
+      keyComparator_{keyComparator},
       pool_{pool},
       pinIndex_{pinIndex},
       partitions_(numPartitions_) {
@@ -252,15 +254,18 @@ void ClusterIndexBase::loadPartitions(
 
 std::optional<uint32_t> ClusterIndexBase::lookupPartition(
     std::string_view key) const {
-  if (key < firstKey_) {
-    return 0;
-  }
-  const auto it =
-      std::lower_bound(partitionKeys_.begin(), partitionKeys_.end(), key);
-  if (it == partitionKeys_.end()) {
-    return std::nullopt;
-  }
-  return static_cast<uint32_t>(it - partitionKeys_.begin());
+  return withKeyOrder(
+      keyComparator_, [&](auto keyOrder) -> std::optional<uint32_t> {
+        if (keyOrder(key, firstKey_)) {
+          return 0;
+        }
+        const auto it = std::lower_bound(
+            partitionKeys_.begin(), partitionKeys_.end(), key, keyOrder);
+        if (it == partitionKeys_.end()) {
+          return std::nullopt;
+        }
+        return static_cast<uint32_t>(it - partitionKeys_.begin());
+      });
 }
 
 const ClusterIndexBase::IndexPartition* ClusterIndexBase::lookupPartition(
@@ -380,7 +385,10 @@ void ClusterIndexBase::partitionRangeLookups(
 
     // Skip empty ranges where upper bound <= lower bound.
     if (keyBound.lowerKey.has_value() && keyBound.upperKey.has_value() &&
-        keyBound.upperKey.value() <= keyBound.lowerKey.value()) {
+        compareKeys(
+            keyBound.upperKey.value(),
+            keyBound.lowerKey.value(),
+            keyComparator_) <= 0) {
       continue;
     }
 
@@ -487,16 +495,19 @@ ClusterIndexBase::IndexPartition::IndexPartition(
 }
 
 uint32_t ClusterIndexBase::IndexPartition::chunkIndex(
-    std::string_view encodedKey) const {
+    std::string_view encodedKey,
+    const KeyComparator* keyComparator) const {
   const auto& partitionIndex = *velox::checkedNotNull(index);
   const auto* chunkKeys = partitionIndex.chunk_keys();
-  auto it = std::lower_bound(
-      chunkKeys->begin(),
-      chunkKeys->end(),
-      encodedKey,
-      [](const flatbuffers::String* a, std::string_view b) {
-        return a->string_view() < b;
-      });
+  const auto it = withKeyOrder(keyComparator, [&](auto keyOrder) {
+    return std::lower_bound(
+        chunkKeys->begin(),
+        chunkKeys->end(),
+        encodedKey,
+        [keyOrder](const flatbuffers::String* chunkKey, std::string_view key) {
+          return keyOrder(chunkKey->string_view(), key);
+        });
+  });
   NIMBLE_CHECK(
       it != chunkKeys->end(), "Key must be within partition's chunk range");
   return static_cast<uint32_t>(it - chunkKeys->begin());
@@ -546,7 +557,7 @@ ChunkLocation ClusterIndexBase::lookupChunk(
     const IndexPartition* partition,
     std::string_view encodedKey) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
-  const uint32_t idx = loadedPartition.chunkIndex(encodedKey);
+  const uint32_t idx = loadedPartition.chunkIndex(encodedKey, keyComparator_);
   return ChunkLocation{
       idx,
       loadedPartition.chunkOffset(idx),
@@ -727,6 +738,14 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
 
   std::string_view next() override;
 
+  // Reads the keys of each chunk that the batch crosses from the key cursor of
+  // the chunk, which writes them to the caller's memory, so a key stays valid
+  // past its chunk.
+  void next(
+      size_t maxKeys,
+      std::vector<std::string_view>& keys,
+      const BufferAllocator& bufferAllocator) override;
+
  private:
   // Loads the chunk holding 'row' and positions the key cursor at it. Runs
   // once per chunk, so the binary searches it performs are amortized over
@@ -747,7 +766,9 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
   std::shared_ptr<DecodedKeyChunk> chunk_;
 
   // Reads keys from chunk_. Exhausted exactly at the chunk boundary, which
-  // is what drives the transition to the next chunk.
+  // is what drives the transition to the next chunk. Null until the first
+  // read: the constructor opens no chunk, so a cursor that is never read loads
+  // none.
   std::unique_ptr<KeyCursor> cursor_;
 };
 
@@ -785,6 +806,32 @@ std::string_view ClusterIndexBase::KeyIterator::next() {
   const auto key = cursor_->next();
   ++nextRow_;
   return key;
+}
+
+void ClusterIndexBase::KeyIterator::next(
+    size_t maxKeys,
+    std::vector<std::string_view>& keys,
+    const BufferAllocator& bufferAllocator) {
+  auto remainingKeys = maxKeys;
+  while (remainingKeys > 0 && hasNext()) {
+    // cursor_ is null on the first read and exhausted at the end of its chunk.
+    // openChunkAt() sets it or throws, so it is not null past this point.
+    if (cursor_ == nullptr || !cursor_->hasNext()) {
+      openChunkAt(nextRow_);
+    }
+
+    // The key cursor stops at the end of its chunk, and the iteration may stop
+    // before it.
+    const auto numKeys = keys.size();
+    cursor_->next(
+        std::min<size_t>(remainingKeys, endRow_ - nextRow_),
+        keys,
+        bufferAllocator);
+    const auto numRead = keys.size() - numKeys;
+    NIMBLE_CHECK_GT(numRead, 0, "Cluster index key cursor returned no key");
+    nextRow_ += static_cast<uint32_t>(numRead);
+    remainingKeys -= numRead;
+  }
 }
 
 void ClusterIndexBase::KeyIterator::openChunkAt(uint32_t row) {

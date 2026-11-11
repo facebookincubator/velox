@@ -264,7 +264,7 @@ When a ``HashBuild`` operator is initialized, it checks the cache via
   ``builderTaskId == taskId``). Each driver calls ``setupTable()`` to allocate
   its own partial ``BaseHashTable`` using ``cacheEntry->tablePool``, receives its
   subset of input via ``addInput()``, and builds a partial table. Intra-task
-  coordination between these drivers uses the standard ``allPeersFinished()`` /
+  coordination between these drivers uses the standard ``allPeersArrived()`` /
   ``JoinBridge`` mechanism, not the cache.
 
 - **The Wait (Waiters)**: If other tasks arrive while the Builder is building,
@@ -330,7 +330,7 @@ Build and Publish
 .. code-block:: text
 
     noMoreInput() → finishHashBuild():
-        if not allPeersFinished():          // wait for peer drivers in same task
+        if not allPeersArrived():           // wait for peer drivers in same task
             state = kWaitForBuild
             return
 

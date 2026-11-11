@@ -38,11 +38,8 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   bool isReducing() const override final;
 
-  void destroy(folly::Range<char**> groups) override final;
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override final;
+  /// Forwards the constant inputs to the wrapped aggregate.
+  void setConstantInputs(const std::vector<VectorPtr>& constantInputs) override;
 
   void addRawInput(
       char** groups,
@@ -72,13 +69,8 @@ class AggregateCompanionFunctionBase : public Aggregate {
       override final;
 
  protected:
-  void setOffsetsInternal(
-      int32_t offset,
-      int32_t nullByte,
-      uint8_t nullMask,
-      int32_t initializedByte,
-      uint8_t initializedMask,
-      int32_t rowSizeOffset) override final;
+  void setOffsetsInternal(RowColumn column, int32_t rowSizeOffset)
+      override final;
 
   void setAllocatorInternal(HashStringAllocator* allocator) override final;
 
@@ -118,6 +110,18 @@ struct AggregateCompanionAdapter {
         std::unique_ptr<Aggregate> fn,
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
+
+    /// Does nothing: the inputs are intermediate results, which carry none of
+    /// the wrapped aggregate's raw arguments.
+    void setConstantInputs(
+        const std::vector<VectorPtr>& /*constantInputs*/) override {}
+
+    bool supportsToIntermediate() const override;
+
+    void toIntermediate(
+        const SelectivityVector& rows,
+        std::vector<VectorPtr>& args,
+        VectorPtr& result) const override;
 
     void addRawInput(
         char** groups,
@@ -159,13 +163,6 @@ struct AggregateCompanionAdapter {
         VectorPtr& result) const override;
 
    private:
-    int32_t setOffset() const;
-
-    char** allocateGroups(
-        memory::AllocationPool& allocationPool,
-        const SelectivityVector& rows,
-        uint64_t offsetInGroup) const;
-
     // Compact `groups` into a contiguous array of groups for selected rows.
     // Return the number of groups after compaction and a mapping from original
     // indices in `groups` to new indices after compaction.

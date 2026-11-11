@@ -31,7 +31,8 @@
 
 namespace facebook::nimble {
 
-/// Represents a stream of chunks with a file offset.
+/// A stream's chunks. 'offset' is the stream's index in the schema's stream
+/// list, not a byte offset.
 struct Stream {
   uint32_t offset{0};
   std::vector<Chunk> chunks{};
@@ -86,7 +87,7 @@ class TabletWriter {
     // Skip writing chunk stats for a stripe group if the average number
     // of chunks per stream is below this threshold. 0 disables chunk stats
     // skipping.
-    float chunkStatsMinAvgChunks{2};
+    float chunkStatsMinAvgChunks{0};
     // Maximum string or binary value length retained in per-chunk bounds.
     uint32_t maxChunkStringStatSize{
         ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize};
@@ -100,6 +101,10 @@ class TabletWriter {
     // its own candidate set (Constant, Trivial, FixedBitWidth, Dictionary).
     std::vector<std::pair<EncodingType, float>>
         stripeGroupEncodingLayoutReadFactors{};
+    /// When true, identical kStreamMajor offsets or sizes arrays share one
+    /// encoding in the same stripe group.
+    /// Enabling this can increase temporary writer memory.
+    bool stripeGroupMetadataDeduplicationEnabled{false};
     // Callback invoked at stripe group flush boundaries. Used by index
     // writers (e.g., ClusterIndexWriter) to write partition data aligned
     // with stripe groups.

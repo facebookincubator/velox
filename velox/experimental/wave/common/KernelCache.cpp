@@ -144,28 +144,38 @@ class KernelGenerator {
     auto future = holder->promise.getFuture();
     auto* device = currentDevice();
     compilerExecutor()->add([genCopy = *gen, holder, device]() {
-      setDevice(device);
-      auto spec = genCopy();
-      ModulePtr module;
+      // Every exit from this task must complete the promise. Letting an
+      // exception escape into the executor destroys the promise unfulfilled,
+      // so the waiter in FutureCompiledModule::ensureReady() sees folly's
+      // "Broken promise" and the compile error that caused it -- typically the
+      // nvrtc log from CompiledModule::create -- is lost.
       try {
-        if (!spec.fromCubinPath.empty()) {
-          if (spec.loweredNames.empty()) {
-            waveError("loweredNames must be set when using fromCubinPath");
+        setDevice(device);
+        auto spec = genCopy();
+        ModulePtr module;
+        try {
+          if (!spec.fromCubinPath.empty()) {
+            if (spec.loweredNames.empty()) {
+              waveError("loweredNames must be set when using fromCubinPath");
+            }
+            module = CompiledModule::fromCubin(spec.fromCubinPath, spec);
+          } else {
+            module = CompiledModule::create(spec);
           }
-          module = CompiledModule::fromCubin(spec.fromCubinPath, spec);
-        } else {
-          module = CompiledModule::create(spec);
+          if (spec.postCompile) {
+            spec.postCompile(spec, nullptr);
+          }
+        } catch (...) {
+          if (spec.postCompile) {
+            spec.postCompile(spec, std::current_exception());
+          }
+          throw;
         }
-        if (spec.postCompile) {
-          spec.postCompile(spec, nullptr);
-        }
+        holder->promise.setValue(module);
       } catch (...) {
-        if (spec.postCompile) {
-          spec.postCompile(spec, std::current_exception());
-        }
-        throw;
+        holder->promise.setException(
+            folly::exception_wrapper(std::current_exception()));
       }
-      holder->promise.setValue(module);
     });
     ModulePtr result =
         std::make_shared<FutureCompiledModule>(std::move(future));

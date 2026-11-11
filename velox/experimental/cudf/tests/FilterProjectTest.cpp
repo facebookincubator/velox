@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
@@ -27,13 +28,20 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
 
+#include <cudf/table/table.hpp>
+#include <cudf/unary.hpp>
+
+#include <fmt/format.h>
 #include <folly/ScopeGuard.h>
 
 #include <atomic>
 #include <limits>
+#include <string_view>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -1031,11 +1039,7 @@ TEST_F(CudfFilterProjectTest, dateLiteralComparisons) {
   }
 }
 
-// TODO: Re-enable once https://github.com/facebookincubator/velox/pull/17314
-// (NotFunction, IsNullFunction, IsNotNullFunction) lands. AST/JIT cannot
-// evaluate timestamp expressions, so IS [NOT] NULL and NOT BETWEEN over
-// TIMESTAMP rely on the function-registry path provided by that PR.
-TEST_F(CudfFilterProjectTest, DISABLED_timestampBetweenAndNullSemantics) {
+TEST_F(CudfFilterProjectTest, timestampBetweenAndNullSemantics) {
   std::vector<std::optional<Timestamp>> timestamps = {
       Timestamp(1735689599, 0), // 2024-12-31 23:59:59
       std::nullopt,
@@ -1428,6 +1432,231 @@ TEST_F(CudfFilterProjectTest, dateTruncGroupByOrderBy) {
   assertPlanMatchesVelox(plan);
 }
 
+TEST_F(CudfFilterProjectTest, fromUnixtimeMatchesVelox) {
+  // Whole seconds, fractions that round down and up, the half-millisecond,
+  // the fraction that rolls into the next second, negatives, NaN and NULL,
+  // under every unit that holds a millisecond.
+  auto input = makeRowVector(
+      {"seconds"},
+      {makeNullableFlatVector<double>({
+          0.0,
+          1.0,
+          -1.0,
+          1736942461.123,
+          0.5,
+          0.0005,
+          0.9995,
+          -0.5,
+          -1.0005,
+          0.0001,
+          std::numeric_limits<double>::quiet_NaN(),
+          std::nullopt,
+      })});
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_MILLISECONDS,
+        cudf::type_id::TIMESTAMP_MICROSECONDS,
+        cudf::type_id::TIMESTAMP_NANOSECONDS}) {
+    SCOPED_TRACE("unit=" + std::to_string(static_cast<int32_t>(unit)));
+    config.timestampUnit = unit;
+    assertProjectMatchesVelox(
+        {input},
+        {"from_unixtime(seconds) AS ts",
+         "to_unixtime(from_unixtime(seconds)) AS round_trip"});
+  }
+}
+
+TEST_F(CudfFilterProjectTest, fromUnixtimeBeyondRange) {
+  // The millisecond unit holds every CPU result. The microsecond and
+  // nanosecond units hold less: a row inside the range matches the CPU, and a
+  // row past it fails with a user error. The nanosecond rows are the last
+  // millisecond in range and the first past it; the microsecond rows sit a
+  // second on either side, since doubles there are 2 ms apart.
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  auto makeInput = [&](const std::vector<double>& seconds) {
+    return makeRowVector({"seconds"}, {makeFlatVector<double>(seconds)});
+  };
+  // A null row never reaches the kernel, whatever value its slot holds.
+  auto nullSlotPastRange = makeFlatVector<double>({1e300, 0.0});
+  nullSlotPastRange->setNull(0, true);
+  auto nullRowInput = makeRowVector({"seconds"}, {nullSlotPastRange});
+  auto assertOutOfRange = [&](double seconds, std::string_view unitName) {
+    SCOPED_TRACE(fmt::format("unit={} seconds={}", unitName, seconds));
+    auto input = makeRowVector(
+        {"seconds"},
+        {makeNullableFlatVector<double>({std::nullopt, 0.0, seconds})});
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .project({"from_unixtime(seconds) AS ts"})
+                    .planNode();
+    VELOX_ASSERT_USER_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        fmt::format(
+            "from_unixtime result is out of range for the cuDF timestamp "
+            "unit set by cudf.timestamp_unit: {}",
+            unitName));
+  };
+
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+  assertProjectMatchesVelox(
+      {makeInput(
+           {kInfinity,
+            -kInfinity,
+            1e300,
+            -1e300,
+            1e10,
+            9'223'372'036'855.0,
+            -9'223'372'036'855.0}),
+       nullRowInput},
+      {"from_unixtime(seconds) AS ts"});
+
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  assertProjectMatchesVelox(
+      {makeInput({9'223'372'036'854.0, -9'223'372'036'854.0, 1e10}),
+       nullRowInput},
+      {"from_unixtime(seconds) AS ts"});
+  for (const double seconds :
+       {9'223'372'036'855.0,
+        -9'223'372'036'855.0,
+        1e300,
+        -1e300,
+        kInfinity,
+        -kInfinity}) {
+    assertOutOfRange(seconds, "us");
+  }
+
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  assertProjectMatchesVelox(
+      {makeInput({9'223'372'036.854, -9'223'372'036.854}), nullRowInput},
+      {"from_unixtime(seconds) AS ts"});
+  for (const double seconds :
+       {9'223'372'036.855,
+        -9'223'372'036.855,
+        1e10,
+        1e300,
+        -1e300,
+        kInfinity,
+        -kInfinity}) {
+    assertOutOfRange(seconds, "ns");
+  }
+}
+
+TEST_F(CudfFilterProjectTest, fromUnixtimeSecondsUnit) {
+  // The seconds unit keeps the floor of the seconds of the CPU's millisecond
+  // timestamp, so a fraction is dropped after the rounding and the rollover,
+  // and the pinned extremes are Timestamp::kMaxSeconds and kMinSeconds.
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  auto input = makeRowVector(
+      {"seconds"},
+      {makeNullableFlatVector<double>({
+          0.0,
+          1.0,
+          -1.0,
+          1.5,
+          -0.5,
+          0.9995,
+          std::numeric_limits<double>::quiet_NaN(),
+          kInfinity,
+          -kInfinity,
+          1e300,
+          std::nullopt,
+      })});
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_SECONDS;
+  auto expected = makeRowVector({makeNullableFlatVector<Timestamp>(
+      {Timestamp(0, 0),
+       Timestamp(1, 0),
+       Timestamp(-1, 0),
+       Timestamp(1, 0),
+       Timestamp(-1, 0),
+       Timestamp(1, 0),
+       Timestamp(0, 0),
+       Timestamp(Timestamp::kMaxSeconds, 0),
+       Timestamp(Timestamp::kMinSeconds, 0),
+       Timestamp(Timestamp::kMaxSeconds, 0),
+       std::nullopt},
+      TIMESTAMP())});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"from_unixtime(seconds) AS ts"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, toUnixtimeMatchesVelox) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  // Whole seconds, which every unit carries exactly.
+  auto wholeSeconds = makeRowVector(
+      {"event_ts"},
+      {makeNullableFlatVector<Timestamp>(
+          {Timestamp(-14400, 0),
+           Timestamp(-1, 0),
+           Timestamp(0, 0),
+           Timestamp(1609459200, 0),
+           std::nullopt},
+          TIMESTAMP())});
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_SECONDS,
+        cudf::type_id::TIMESTAMP_MILLISECONDS,
+        cudf::type_id::TIMESTAMP_MICROSECONDS,
+        cudf::type_id::TIMESTAMP_NANOSECONDS}) {
+    SCOPED_TRACE("unit=" + std::to_string(static_cast<int32_t>(unit)));
+    config.timestampUnit = unit;
+    assertProjectMatchesVelox(
+        {wholeSeconds}, {"to_unixtime(event_ts) AS seconds"});
+  }
+
+  // The fixture timestamps are whole milliseconds, which the millisecond and
+  // finer units carry exactly.
+  auto vectors = makeTimestampExtractVectors();
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_MILLISECONDS,
+        cudf::type_id::TIMESTAMP_MICROSECONDS,
+        cudf::type_id::TIMESTAMP_NANOSECONDS}) {
+    SCOPED_TRACE("unit=" + std::to_string(static_cast<int32_t>(unit)));
+    config.timestampUnit = unit;
+    assertProjectMatchesVelox(vectors, {"to_unixtime(event_ts) AS seconds"});
+  }
+}
+
+TEST_F(CudfFilterProjectTest, toUnixtimeNanosecondFractions) {
+  // Under the nanosecond unit a sub-millisecond fraction reaches the GPU.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  auto input = makeRowVector(
+      {"ts"},
+      {makeNullableFlatVector<Timestamp>(
+          {Timestamp(1, 999'999'999),
+           Timestamp(-1, 1),
+           Timestamp(0, 1),
+           Timestamp(-1, 999'999'999),
+           std::nullopt},
+          TIMESTAMP())});
+  assertProjectMatchesVelox({input}, {"to_unixtime(ts) AS seconds"});
+}
+
 TEST_F(CudfFilterProjectTest, extractTimestampComponents) {
   auto vectors = makeTimestampExtractVectors();
   const std::vector<std::string> projections{
@@ -1611,8 +1840,9 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
   functionEntry.create = [create = previousEntry.create, &betweenCreations](
                              const core::TypedExprPtr& expr,
                              const RowTypePtr& rowType,
-                             memory::MemoryPool* pool) {
-    auto evaluator = create(expr, rowType, pool);
+                             memory::MemoryPool* pool,
+                             const core::QueryConfig& config) {
+    auto evaluator = create(expr, rowType, pool, config);
     if (expr->isCallKind() &&
         expr->asUnchecked<core::CallTypedExpr>()->name() == "between") {
       ++betweenCreations;
@@ -2283,6 +2513,26 @@ TEST_F(CudfFilterProjectTest, cardinalityAndSplitFused) {
   AssertQueryBuilder(plan).assertResults({expected});
 }
 
+// array_join runs inside CudfFilterProject on an array column; CPU fallback
+// is off, so the GPU has to produce the rows.
+TEST_F(CudfFilterProjectTest, arrayJoin) {
+  using Elements = std::vector<std::optional<std::string>>;
+  auto input = makeRowVector({makeNullableArrayVector<std::string>({
+      Elements{"a", "b", "c"},
+      Elements{},
+      Elements{"", "d"},
+      Elements{"e", std::nullopt},
+      std::nullopt,
+  })});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"array_join(c0, ', ') AS joined"})
+                  .planNode();
+  auto expected = makeRowVector({makeNullableFlatVector<std::string>(
+      {"a, b, c", "", ", d", "e", std::nullopt})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(CudfFilterProjectTest, negativeSubstr) {
   auto input =
       makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
@@ -2599,6 +2849,36 @@ TEST_F(CudfFilterProjectTest, switchWithoutElseNestedTypes) {
   facebook::velox::test::assertEqualVectors(cpuResult, fallbackResult);
 }
 
+// cast_string_to_floating_point_lenient_inf_nan admits inf and nan in any
+// letter case. CastFunction parses the Presto spellings only, so the project
+// runs on the CPU under the config.
+TEST_F(CudfFilterProjectTest, castFromVarcharLenientInfNanFallsBackToCpu) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto previousFallback = config.allowCpuFallback;
+  SCOPE_EXIT {
+    config.allowCpuFallback = previousFallback;
+  };
+  config.allowCpuFallback = true;
+
+  auto data = makeRowVector(
+      {makeFlatVector<std::string>({"inf", "-Infinity", "nan", "1.5"})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"cast(c0 as double) AS result"})
+                  .planNode();
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Cannot cast VARCHAR 'inf' to DOUBLE.");
+
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  auto expected = makeRowVector({makeFlatVector<double>(
+      {kInfinity, -kInfinity, std::numeric_limits<double>::quiet_NaN(), 1.5})});
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kCastStringToFloatingPointLenientInfNan, "true")
+      .assertResults(expected);
+}
+
 TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
   auto data = makeRowVector({
       makeFlatVector<double>({1.0, 5.0, -3.0}),
@@ -2689,6 +2969,34 @@ TEST_F(CudfFilterProjectTest, betweenDouble) {
   assertQuery(plan, "SELECT c0 BETWEEN 0.0 AND 2.0 AS result FROM tmp");
 }
 
+// The AST has no 32-bit cast, so a cast to INTEGER must keep INTEGER type
+// next to INTEGER literals and columns.
+TEST_F(CudfFilterProjectTest, castToIntegerInAst) {
+  auto data = makeRowVector(
+      {"event_id", "c_bigint", "c_smallint", "c_int"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+       makeNullableFlatVector<int64_t>({5, std::nullopt, -5, 5, 7}),
+       makeNullableFlatVector<int16_t>({1, 2, std::nullopt, -3, 4}),
+       makeNullableFlatVector<int32_t>({1, 4, 2, std::nullopt, 0})});
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  assertPlanMatchesVelox(
+      PlanBuilder()
+          .setParseOptions(options)
+          .values({data})
+          .filter("cast(c_bigint AS INTEGER) = 5")
+          .project({"event_id"})
+          .planNode());
+  assertPlanMatchesVelox(
+      PlanBuilder()
+          .setParseOptions(options)
+          .values({data})
+          .project(
+              {"cast(c_smallint AS INTEGER) + 1 AS a",
+               "cast(c_smallint AS INTEGER) + 1 > c_int AS b"})
+          .planNode());
+}
+
 class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
@@ -2716,7 +3024,93 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     auto actual = evaluate(makeTypedExpr(expr, rowType), input);
     facebook::velox::test::assertEqualVectors(expected, actual);
   }
+
+  // Checks that the GPU agrees with the CPU on CAST and TRY_CAST to 'target'
+  // of a VARCHAR column holding 'values'.
+  void assertCastFromVarcharMatchesCpu(
+      const std::string& target,
+      const std::vector<std::optional<std::string>>& values) {
+    const auto rowType = ROW({{"c0", VARCHAR()}});
+    const auto input =
+        makeRowVector({makeNullableFlatVector<std::string>(values)});
+    assertExpressionMatchesCpu(
+        fmt::format("cast(c0 as {})", target), input, rowType);
+    assertExpressionMatchesCpu(
+        fmt::format("try_cast(c0 as {})", target), input, rowType);
+  }
+
+  // Checks that no string in 'values' is a 'target' value: CAST fails on the
+  // CPU and on the GPU with an error naming the string, and TRY_CAST gives
+  // NULL on both.
+  void assertCastFromVarcharRejects(
+      const std::string& target,
+      const std::vector<std::string>& values) {
+    const auto rowType = ROW({{"c0", VARCHAR()}});
+    const auto castExpr = fmt::format("cast(c0 as {})", target);
+    const auto targetName =
+        makeTypedExpr(castExpr, rowType)->type()->toString();
+    for (const auto& value : values) {
+      SCOPED_TRACE(value);
+      const auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      const auto message =
+          fmt::format("Cannot cast VARCHAR '{}' to {}.", value, targetName);
+      auto exprSet = compileExpression(castExpr, rowType);
+      VELOX_ASSERT_USER_THROW(
+          functions::test::FunctionBaseTest::evaluate(*exprSet, input),
+          message);
+      VELOX_ASSERT_USER_THROW(
+          evaluate(makeTypedExpr(castExpr, rowType), input), message);
+    }
+    assertExpressionMatchesCpu(
+        fmt::format("try_cast(c0 as {})", target),
+        makeRowVector({makeNullableFlatVector<std::string>(
+            std::vector<std::optional<std::string>>(
+                values.begin(), values.end()))}),
+        rowType);
+  }
 };
+
+// Registers the Presto functions on top of the built-in ones for the suite
+// and clears them afterwards, so the registry of the next suite starts clean.
+class CudfPrestoFunctionTest : public CudfSimpleFilterProjectTest {
+ protected:
+  static void SetUpTestCase() {
+    CudfSimpleFilterProjectTest::SetUpTestCase();
+    cudf_velox::registerPrestoFunctions("");
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
+    CudfSimpleFilterProjectTest::TearDownTestCase();
+  }
+};
+
+// Every shape of an array row, joined by a plain, an empty and a multi-byte
+// separator, must match the CPU: a null element is skipped, an empty or
+// all-null array joins to an empty string and a null array stays null.
+TEST_F(CudfPrestoFunctionTest, arrayJoinMatchesCpu) {
+  using Elements = std::vector<std::optional<std::string>>;
+  auto rowType = ROW({{"c0", ARRAY(VARCHAR())}});
+  auto input = makeRowVector({makeNullableArrayVector<std::string>({
+      Elements{"a", "b", "c"},
+      Elements{},
+      Elements{"", "d"},
+      Elements{"e", std::nullopt},
+      Elements{std::nullopt, "f"},
+      Elements{std::nullopt},
+      std::nullopt,
+      Elements{"g"},
+      Elements{"h", "", std::nullopt, "i"},
+      Elements{"héllo", std::nullopt, std::nullopt, "longer than twelve bytes"},
+  })});
+  for (const auto* expr :
+       {"array_join(c0, ', ')",
+        "array_join(c0, '')",
+        "array_join(c0, ' — ')"}) {
+    SCOPED_TRACE(expr);
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
 
 TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto castValue = evaluateOnce<int16_t, int32_t>("cast(c0 as smallint)", 12);
@@ -2724,6 +3118,716 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto tryCast =
       evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
   EXPECT_EQ(tryCast, -214);
+}
+
+// The GPU casts that follow Presto's rules, from VARCHAR and from TIMESTAMP to
+// VARCHAR, are on in a session with the Presto functions registered, and off
+// again for the suites that follow once this one unregisters them.
+class CudfPrestoCastTest : public CudfSimpleFilterProjectTest {
+ protected:
+  static void SetUpTestCase() {
+    CudfSimpleFilterProjectTest::SetUpTestCase();
+    cudf_velox::registerPrestoFunctions(
+        cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
+    CudfSimpleFilterProjectTest::TearDownTestCase();
+  }
+
+  // Evaluates 'expr' over 'input', a TIMESTAMP column, with the column stored
+  // at day resolution, cuDF's TIMESTAMP_DAYS, the way a reader set to that
+  // unit stores it.
+  VectorPtr evaluateOverDays(
+      const std::string& expr,
+      const RowVectorPtr& input) {
+    auto& config = cudf_velox::CudfConfig::getInstance();
+    const auto originalUnit = config.timestampUnit;
+    SCOPE_EXIT {
+      config.timestampUnit = originalUnit;
+    };
+    config.timestampUnit = cudf::type_id::TIMESTAMP_SECONDS;
+    auto stream = cudf_velox::cudfGlobalStreamPool().get_stream();
+    auto mr = cudf_velox::get_output_mr();
+    auto columns =
+        cudf_velox::with_arrow::toCudfTable(input, pool_.get(), stream, mr)
+            ->release();
+    columns.front() = cudf::cast(
+        columns.front()->view(),
+        cudf::data_type{cudf::type_id::TIMESTAMP_DAYS},
+        stream,
+        mr);
+    return evaluate(
+        makeTypedExpr(expr, input->rowType()),
+        input->rowType(),
+        std::make_unique<cudf::table>(std::move(columns)),
+        stream);
+  }
+};
+
+// A DATE or TIMESTAMP cast to VARCHAR prints as the CPU prints it. cuDF's %Y
+// covers the years 0 to 9999, so a batch holding a year outside that range,
+// negative or five digits long, takes the path that formats the year apart,
+// and a day past the calendar cuDF places a day on fails the cast.
+TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
+  const auto check = [&](const VectorPtr& values) {
+    const auto rowType = ROW("c0", values->type());
+    for (const auto* expr :
+         {"cast(c0 as varchar)", "try_cast(c0 as varchar)"}) {
+      SCOPED_TRACE(expr);
+      assertExpressionMatchesCpu(expr, makeRowVector({values}), rowType);
+    }
+  };
+
+  // Under the default nanosecond unit: 1970-01-01 00:00:00.000, 1969-12-31
+  // 23:59:59.999 and 2026-01-02 00:45:00.123, the fraction cut to
+  // milliseconds.
+  check(
+      makeNullableFlatVector<Timestamp>(
+          {
+              Timestamp(0, 0),
+              Timestamp(-1, 999'999'999),
+              Timestamp(1'767'314'700, 123'456'789),
+              std::nullopt,
+          },
+          TIMESTAMP()));
+
+  // The years past the nanosecond range take the coarser units the cuDF
+  // Parquet reader and cudf.timestamp_unit produce.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  for (const auto unit : {
+           cudf::type_id::TIMESTAMP_SECONDS,
+           cudf::type_id::TIMESTAMP_MILLISECONDS,
+           cudf::type_id::TIMESTAMP_MICROSECONDS,
+       }) {
+    SCOPED_TRACE(static_cast<int>(unit));
+    config.timestampUnit = unit;
+    // 0000-01-01, 0001-01-01 and 9999-12-31 23:59:59 all fit %Y.
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(-62'167'219'200, 0),
+                Timestamp(-62'135'596'800, 0),
+                std::nullopt,
+                Timestamp(253'402'300'799, 0),
+            },
+            TIMESTAMP()));
+    // 10000-01-01 and -0001-01-01 beside an ordinary row.
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(253'402'300'800, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+                Timestamp(-62'198'755'200, 0),
+            },
+            TIMESTAMP()));
+    // 10000-01-01 beside 0001-01-01 leaves the %Y range at the top alone, and
+    // -0001-12-31 23:59:59 beside an ordinary row at the bottom alone.
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(253'402'300'800, 0),
+                Timestamp(-62'135'596'800, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+            },
+            TIMESTAMP()));
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(-62'167'219'201, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+            },
+            TIMESTAMP()));
+    // -32768-01-01 and 32767-12-31 are the first and last days of cuDF's
+    // 16-bit calendar year; -32769-12-31 23:59:59 and 32768-01-01 lie past it.
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(-1'096'225'401'600, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+                Timestamp(971'890'876'800, 0),
+                Timestamp(-1'096'225'401'601, 0),
+                Timestamp(971'890'963'200, 0),
+            },
+            TIMESTAMP()));
+  }
+
+  // The seconds and milliseconds units reach the edges of the calendar cuDF
+  // places a day on: -5877641-06-23, day -2^31, and 5879610-09-09 23:59:59,
+  // the last second of day 2^31 - 719469, print as on the CPU, and the second
+  // before the first and the day after the last fail the cast.
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_SECONDS,
+        cudf::type_id::TIMESTAMP_MILLISECONDS}) {
+    SCOPED_TRACE(static_cast<int>(unit));
+    config.timestampUnit = unit;
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(-185'542'587'187'200, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+                Timestamp(185'480'425'151'999, 0),
+            },
+            TIMESTAMP()));
+    for (const int64_t seconds : {-185'542'587'187'201, 185'480'425'152'000}) {
+      SCOPED_TRACE(seconds);
+      VELOX_ASSERT_UNSUPPORTED_THROW(
+          evaluate(
+              makeTypedExpr("cast(c0 as varchar)", ROW("c0", TIMESTAMP())),
+              makeRowVector({makeFlatVector<Timestamp>(
+                  {Timestamp(seconds, 0), Timestamp(0, 0)})})),
+          "Cast to VARCHAR of a TIMESTAMP before day -2147483648 or after "
+          "day 2146764179 of 1970-01-01 is not supported on the GPU "
+          "(https://github.com/facebookincubator/velox/issues/19785)");
+    }
+  }
+
+  // Under the microsecond unit the fraction is cut to milliseconds as well:
+  // 2026-01-02 00:45:00.123 and 1970-01-01 00:00:00.999.
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  check(
+      makeNullableFlatVector<Timestamp>(
+          {
+              Timestamp(1'767'314'700, 123'456'000),
+              Timestamp(0, 999'999'000),
+              std::nullopt,
+          },
+          TIMESTAMP()));
+
+  // 1970-01-01, 1969-12-31, 2026-01-02, 0000-01-01, 0001-01-01 and 9999-12-31.
+  const auto dates = makeNullableFlatVector<int32_t>(
+      {
+          0,
+          -1,
+          DATE()->toDays("2026-01-02"),
+          std::nullopt,
+          -719'528,
+          -719'162,
+          2'932'896,
+      },
+      DATE());
+  check(dates);
+  // A batch of nulls spans no year.
+  check(makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}, DATE()));
+  // 10000-01-01 and -0001-01-01 beside an ordinary row.
+  check(
+      makeNullableFlatVector<int32_t>(
+          {
+              2'932'897,
+              0,
+              std::nullopt,
+              -719'893,
+          },
+          DATE()));
+  // 10000-01-01 beside 0001-01-01 leaves the %Y range at the top alone, and
+  // -0001-12-31 beside an ordinary row at the bottom alone.
+  check(
+      makeNullableFlatVector<int32_t>(
+          {2'932'897, -719'162, 0, std::nullopt}, DATE()));
+  check(makeNullableFlatVector<int32_t>({-719'529, 0, std::nullopt}, DATE()));
+  // -32768-01-01 and 32767-12-31 are the first and last days of cuDF's 16-bit
+  // calendar year; -32769-12-31, 32768-01-01 and 33000-01-01 lie past it.
+  check(
+      makeNullableFlatVector<int32_t>(
+          {
+              -12'687'794,
+              0,
+              std::nullopt,
+              11'248'737,
+              -12'687'795,
+              11'248'738,
+              11'333'475,
+          },
+          DATE()));
+  // The first day a DATE can hold, -5877641-06-23, and the last day cuDF
+  // places on the calendar, 5879610-09-09, print as on the CPU; the day after
+  // the latter and the last day a DATE can hold fail the cast.
+  check(
+      makeNullableFlatVector<int32_t>(
+          {
+              std::numeric_limits<int32_t>::min(),
+              0,
+              std::nullopt,
+              2'146'764'179,
+          },
+          DATE()));
+  for (const int32_t day :
+       {2'146'764'180, std::numeric_limits<int32_t>::max()}) {
+    SCOPED_TRACE(day);
+    VELOX_ASSERT_UNSUPPORTED_THROW(
+        evaluate(
+            makeTypedExpr("cast(c0 as varchar)", ROW("c0", DATE())),
+            makeRowVector({makeFlatVector<int32_t>({day, 0}, DATE())})),
+        "Cast to VARCHAR of a DATE before day -2147483648 or after day "
+        "2146764179 of 1970-01-01 is not supported on the GPU "
+        "(https://github.com/facebookincubator/velox/issues/19785)");
+  }
+
+  // A DATE prints the same under legacy_cast and under a session time zone.
+  setLegacyCast(true);
+  check(dates);
+  setTimezone("Asia/Kolkata");
+  check(dates);
+}
+
+// A TIMESTAMP column a reader stores at day resolution shares cuDF's
+// TIMESTAMP_DAYS with DATE and still prints as a TIMESTAMP.
+TEST_F(CudfPrestoCastTest, castTimestampStoredAsDaysToVarchar) {
+  // 2026-01-02, 1969-12-31, 0000-01-01 and 10000-01-01 at midnight: whole
+  // days, which day resolution holds exactly.
+  const auto input = makeRowVector({makeNullableFlatVector<Timestamp>(
+      {Timestamp(1'767'312'000, 0),
+       Timestamp(-86'400, 0),
+       std::nullopt,
+       Timestamp(-62'167'219'200, 0),
+       Timestamp(253'402'300'800, 0)},
+      TIMESTAMP())});
+  for (const auto* expr : {"cast(c0 as varchar)", "try_cast(c0 as varchar)"}) {
+    SCOPED_TRACE(expr);
+    auto exprSet = compileExpression(expr, input->rowType());
+    facebook::velox::test::assertEqualVectors(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input),
+        evaluateOverDays(expr, input));
+  }
+}
+
+// The DATE and TIMESTAMP casts to VARCHAR run on the GPU unless the session
+// changes the TIMESTAMP's text: legacy_cast prints it with a 'T' separator and
+// an unpadded year, and adjust_timestamp_to_session_timezone with a session
+// time zone prints it in that zone. A DATE prints the same under both.
+TEST_F(CudfPrestoCastTest, castTemporalToVarcharRunsOnGpu) {
+  const auto rowType = ROW(
+      {{"ts", TIMESTAMP()},
+       {"d", DATE()},
+       {"zoned", TIMESTAMP_WITH_TIME_ZONE()}});
+  const auto runsOnGpu = [&](const std::string& expr,
+                             core::QueryCtx* queryCtx) {
+    return cudf_velox::canExprRunOnGpu(
+        makeTypedExpr(expr, rowType), queryCtx, execCtx_.pool());
+  };
+
+  auto* defaults = execCtx_.queryCtx();
+  EXPECT_TRUE(runsOnGpu("cast(ts as varchar)", defaults));
+  EXPECT_TRUE(runsOnGpu("try_cast(ts as varchar)", defaults));
+  EXPECT_TRUE(runsOnGpu("cast(d as varchar)", defaults));
+  EXPECT_TRUE(runsOnGpu("length(cast(ts as varchar)) = 23", defaults));
+  // JSON is a VARCHAR under another name with its own cast, which quotes the
+  // text.
+  EXPECT_FALSE(runsOnGpu("cast(ts as json)", defaults));
+  EXPECT_FALSE(runsOnGpu("cast(d as json)", defaults));
+  // TIMESTAMP WITH TIME ZONE has no cuDF type, so its cast stays on the CPU
+  // before any rule below applies.
+  EXPECT_FALSE(runsOnGpu("cast(zoned as varchar)", defaults));
+
+  const auto legacy = core::QueryCtx::create(
+      nullptr, core::QueryConfig({{core::QueryConfig::kLegacyCast, "true"}}));
+  EXPECT_FALSE(runsOnGpu("cast(ts as varchar)", legacy.get()));
+  EXPECT_FALSE(runsOnGpu("length(cast(ts as varchar)) = 23", legacy.get()));
+  EXPECT_TRUE(runsOnGpu("cast(d as varchar)", legacy.get()));
+
+  const auto zoned = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig(
+          {{core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+           {core::QueryConfig::kSessionTimezone, "Asia/Kolkata"}}));
+  EXPECT_FALSE(runsOnGpu("cast(ts as varchar)", zoned.get()));
+  EXPECT_TRUE(runsOnGpu("cast(d as varchar)", zoned.get()));
+
+  // Without a session time zone there is nothing to adjust to.
+  const auto unzoned = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig(
+          {{core::QueryConfig::kAdjustTimestampToTimezone, "true"}}));
+  EXPECT_TRUE(runsOnGpu("cast(ts as varchar)", unzoned.get()));
+}
+
+// A cast from VARCHAR runs on the GPU for the targets CastFunction parses and
+// stays on the CPU for the others.
+TEST_F(CudfPrestoCastTest, castFromVarcharRunsOnGpu) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  const auto runsOnGpu = [&](const std::string& expr) {
+    return cudf_velox::canExprRunOnGpu(
+        makeTypedExpr(expr, rowType), execCtx_.queryCtx(), execCtx_.pool());
+  };
+  for (const auto* target :
+       {"tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "real",
+        "double",
+        "boolean"}) {
+    SCOPED_TRACE(target);
+    EXPECT_TRUE(runsOnGpu(fmt::format("cast(c0 as {})", target)));
+    EXPECT_TRUE(runsOnGpu(fmt::format("try_cast(c0 as {})", target)));
+    EXPECT_TRUE(runsOnGpu(fmt::format("cast(c0 as {}) is null", target)));
+  }
+  for (const auto* target :
+       {"date", "timestamp", "decimal(10, 2)", "interval day to second"}) {
+    SCOPED_TRACE(target);
+    EXPECT_FALSE(runsOnGpu(fmt::format("cast(c0 as {})", target)));
+  }
+  // A cast of a constant folds to a literal unless it fails; a failing one is
+  // left to the CPU, which raises its error.
+  EXPECT_TRUE(runsOnGpu("cast('1.5' as real)"));
+  EXPECT_FALSE(runsOnGpu("cast('abc' as real)"));
+
+  // On the CPU a CAST error never surfaces on a row the rest of the expression
+  // settles without the cast, so a CAST beside another non-constant argument
+  // stays on the CPU, whichever argument holds the cast, a branch of if or
+  // switch included. A TRY_CAST there and a CAST with only non-null constants
+  // beside it run on the GPU.
+  const auto twoColumns = ROW({{"c0", VARCHAR()}, {"c1", DOUBLE()}});
+  const auto runsOnGpuWith = [&](const std::string& expr) {
+    return cudf_velox::canExprRunOnGpu(
+        makeTypedExpr(expr, twoColumns), execCtx_.queryCtx(), execCtx_.pool());
+  };
+  EXPECT_FALSE(runsOnGpu("c0 <> '' and cast(c0 as integer) > 0"));
+  EXPECT_FALSE(runsOnGpu("cast(c0 as integer) > 0 or c0 = ''"));
+  EXPECT_FALSE(
+      runsOnGpu("coalesce(try_cast(c0 as integer), cast(c0 as integer))"));
+  EXPECT_FALSE(runsOnGpuWith("cast(c0 as double) > c1"));
+  EXPECT_FALSE(runsOnGpuWith("cast(c0 as double) + c1 > 0.0"));
+  EXPECT_FALSE(runsOnGpuWith("if(cast(c0 as boolean), c1, 0.0)"));
+  EXPECT_FALSE(runsOnGpu("if(c0 <> '', cast(c0 as bigint), 0)"));
+  EXPECT_FALSE(runsOnGpuWith("if(c1 > 0.0, cast(c0 as double), c1)"));
+  EXPECT_FALSE(
+      runsOnGpu("if(c0 is null, 0, cast(coalesce(c0, 'x') as bigint))"));
+  // DuckDB's parser turns a CASE with one WHEN into if, so the switch node is
+  // built by hand.
+  const auto parsedIf =
+      makeTypedExpr("if(c0 = '', 0, cast(c0 as bigint))", rowType);
+  EXPECT_FALSE(
+      cudf_velox::canExprRunOnGpu(
+          std::make_shared<core::CallTypedExpr>(
+              parsedIf->type(), parsedIf->inputs(), "switch"),
+          execCtx_.queryCtx(),
+          execCtx_.pool()));
+  EXPECT_TRUE(runsOnGpu("cast(c0 as double) > 0.0"));
+  EXPECT_TRUE(runsOnGpu("cast(c0 as double) is null"));
+  EXPECT_TRUE(runsOnGpu("if(cast(c0 as boolean), 1, 0)"));
+  EXPECT_TRUE(runsOnGpu("c0 <> '' and try_cast(c0 as integer) > 0"));
+  EXPECT_TRUE(runsOnGpuWith("try_cast(c0 as double) > c1"));
+  EXPECT_TRUE(runsOnGpu("if(c0 <> '', try_cast(c0 as bigint), 0)"));
+
+  // A NULL constant beside the cast keeps it on the CPU as well: a default-null
+  // function returns NULL there and drops any error the cast raised. A non-null
+  // constant does not.
+  EXPECT_FALSE(runsOnGpu("cast(null as bigint) + cast(c0 as bigint) > 0"));
+  EXPECT_FALSE(runsOnGpu("cast(c0 as bigint) + cast(null as bigint) > 0"));
+  EXPECT_TRUE(runsOnGpu("cast(c0 as bigint) + 1 > 0"));
+  EXPECT_TRUE(runsOnGpu("1 + cast(c0 as bigint) > 0"));
+
+  // A join filter is optimized before its check, so a cast of a literal folds
+  // away; a CAST of a column keeps the join on the CPU and a TRY_CAST does not.
+  const auto joinFilterRunsOnGpu = [&](const std::string& expr) {
+    return cudf_velox::canJoinFilterRunOnGpu(
+        makeTypedExpr(expr, twoColumns), execCtx_.queryCtx(), execCtx_.pool());
+  };
+  EXPECT_TRUE(joinFilterRunsOnGpu("c1 > cast('1.5' as double)"));
+  EXPECT_FALSE(joinFilterRunsOnGpu("cast(c0 as double) > c1"));
+  EXPECT_TRUE(joinFilterRunsOnGpu("try_cast(c0 as double) > c1"));
+
+  // JSON is of VARCHAR kind but has its own cast operator on the CPU.
+  const auto jsonRowType = ROW({{"c0", JSON()}});
+  for (const auto* target : {"bigint", "double", "boolean"}) {
+    SCOPED_TRACE(target);
+    EXPECT_FALSE(
+        cudf_velox::canExprRunOnGpu(
+            makeTypedExpr(fmt::format("cast(c0 as {})", target), jsonRowType),
+            execCtx_.queryCtx(),
+            execCtx_.pool()));
+  }
+
+  // legacy_cast selects rules CastFunction does not implement.
+  auto legacyQueryCtx = core::QueryCtx::create(
+      nullptr, core::QueryConfig({{core::QueryConfig::kLegacyCast, "true"}}));
+  EXPECT_FALSE(
+      cudf_velox::canExprRunOnGpu(
+          makeTypedExpr("cast(c0 as integer)", rowType),
+          legacyQueryCtx.get(),
+          execCtx_.pool()));
+
+  // cast_string_to_floating_point_lenient_inf_nan admits spellings of infinity
+  // and NaN that CastFunction rejects; it changes only the casts to REAL and
+  // DOUBLE.
+  auto lenientQueryCtx = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig(
+          {{core::QueryConfig::kCastStringToFloatingPointLenientInfNan,
+            "true"}}));
+  const auto runsOnGpuLenient = [&](const std::string& expr) {
+    return cudf_velox::canExprRunOnGpu(
+        makeTypedExpr(expr, rowType), lenientQueryCtx.get(), execCtx_.pool());
+  };
+  EXPECT_FALSE(runsOnGpuLenient("cast(c0 as real)"));
+  EXPECT_FALSE(runsOnGpuLenient("cast(c0 as double)"));
+  EXPECT_FALSE(runsOnGpuLenient("try_cast(c0 as double) is null"));
+  EXPECT_TRUE(runsOnGpuLenient("cast(c0 as integer)"));
+  EXPECT_TRUE(runsOnGpuLenient("try_cast(c0 as boolean)"));
+}
+
+TEST_F(CudfPrestoCastTest, castFromVarcharToIntegral) {
+  // An optional sign and digits, around which Velox trims ASCII whitespace and
+  // control characters.
+  const std::vector<std::optional<std::string>> values = {
+      "7",
+      "-8",
+      "+5",
+      "0",
+      "-0",
+      "00012",
+      "127",
+      "-128",
+      " 12 ",
+      "\t7\n",
+      "\x01"
+      "9"
+      "\x1f",
+      std::nullopt};
+  for (const auto* target : {"tinyint", "smallint", "integer", "bigint"}) {
+    SCOPED_TRACE(target);
+    assertCastFromVarcharMatchesCpu(target, values);
+  }
+  assertCastFromVarcharMatchesCpu("smallint", {"128", "32767", "-32768"});
+  assertCastFromVarcharMatchesCpu(
+      "integer", {"32768", "2147483647", "-2147483648"});
+  assertCastFromVarcharMatchesCpu(
+      "bigint", {"2147483648", "9223372036854775807", "-9223372036854775808"});
+
+  // Fractions and exponents, other characters, nothing but whitespace, and
+  // anything non-ASCII, Unicode spaces included.
+  const std::vector<std::string> rejected = {
+      "1.5",
+      "1.",
+      "1e3",
+      "abc",
+      "",
+      " ",
+      "12abc",
+      "1 2",
+      "+",
+      "-",
+      "++5",
+      "0x1A",
+      "1,000",
+      "1_000",
+      "\u00a0"
+      "12",
+      "\u2003"
+      "42"
+      "\u2029",
+      "１２",
+      "12 "
+      "\x80",
+      "12\t"
+      "\x80",
+      "12 "
+      "\x80"
+      " "};
+  for (const auto* target : {"tinyint", "smallint", "integer", "bigint"}) {
+    SCOPED_TRACE(target);
+    assertCastFromVarcharRejects(target, rejected);
+  }
+  // Out of range, including a magnitude that begins with the type's minimum.
+  assertCastFromVarcharRejects("tinyint", {"128", "-129", "-1280", "-1281"});
+  assertCastFromVarcharRejects("smallint", {"32768", "-32769", "-327681"});
+  assertCastFromVarcharRejects(
+      "integer", {"2147483648", "-2147483649", "-21474836481"});
+  assertCastFromVarcharRejects(
+      "bigint",
+      {"9223372036854775808", "-9223372036854775809", "-92233720368547758081"});
+}
+
+TEST_F(CudfPrestoCastTest, castFromVarcharToFloatingPoint) {
+  // Decimal and scientific literals with the ASCII whitespace Presto skips
+  // around them, the exact spellings Infinity and NaN, and values beyond the
+  // range of the type.
+  const std::vector<std::optional<std::string>> values = {
+      "1.5",
+      "-2",
+      "0",
+      "-0",
+      "+5",
+      "1.",
+      ".5",
+      "+.5",
+      "1.e2",
+      "007.5",
+      "0.1",
+      "2.675",
+      "123456.789",
+      "1e3",
+      "1E3",
+      "1e-3",
+      "1.25E+2",
+      "-100",
+      " 1.5 ",
+      "\t2\n",
+      "\x1c"
+      "3"
+      "\x1f",
+      "1e400",
+      "-1e400",
+      "1e-400",
+      "Infinity",
+      "+Infinity",
+      "-Infinity",
+      "NaN",
+      "+NaN",
+      "-NaN",
+      std::nullopt};
+  assertCastFromVarcharMatchesCpu("real", values);
+  assertCastFromVarcharMatchesCpu("double", values);
+  // Beyond the range of REAL.
+  assertCastFromVarcharMatchesCpu("real", {"1.7E308", "4e38", "-4e38"});
+
+  // Other spellings of infinity and NaN, letters, missing digits, and the
+  // control characters and Unicode spaces that only the integral cast trims.
+  const std::vector<std::string> rejected = {
+      "abc",
+      "",
+      " ",
+      "1.2f",
+      "1.2d",
+      "1.2.3",
+      "1e",
+      "1e+",
+      "e5",
+      ".e5",
+      ".",
+      "+",
+      "-",
+      "+-1",
+      "0x1A",
+      "1,000",
+      "1_000",
+      "1 2",
+      "12abc",
+      "inf",
+      "-inf",
+      "Inf",
+      "infinity",
+      "INFINITY",
+      "InfiNiTy",
+      "nan",
+      "NAN",
+      "\u00a0"
+      "1.5",
+      "\x01"
+      "1.5",
+      "\u2003"
+      "1.5",
+      "１.５",
+      "1.5 "
+      "\x80",
+      "1.5\t"
+      "\x80"};
+  assertCastFromVarcharRejects("real", rejected);
+  assertCastFromVarcharRejects("double", rejected);
+}
+
+// CAST names the first string, in row order, that spells no value.
+TEST_F(CudfPrestoCastTest, castFromVarcharNamesFirstOffendingRow) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  const auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {"1", std::nullopt, "abc", "xyz", "0"})});
+  for (const auto& [target, name] :
+       {std::pair{"double", "DOUBLE"},
+        std::pair{"bigint", "BIGINT"},
+        std::pair{"boolean", "BOOLEAN"}}) {
+    SCOPED_TRACE(target);
+    const auto castExpr = fmt::format("cast(c0 as {})", target);
+    const auto message = fmt::format("Cannot cast VARCHAR 'abc' to {}.", name);
+    auto exprSet = compileExpression(castExpr, rowType);
+    VELOX_ASSERT_USER_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input), message);
+    VELOX_ASSERT_USER_THROW(
+        evaluate(makeTypedExpr(castExpr, rowType), input), message);
+  }
+}
+
+// The evaluator hands a branch of if its inputs with the other rows nulled, so
+// a cast of a column in a branch raises on no string the condition excludes.
+// The validator keeps such an if on the CPU all the same, see
+// castFromVarcharRunsOnGpu.
+TEST_F(CudfPrestoCastTest, castFromVarcharUnderIf) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  const auto input = makeRowVector(
+      {makeNullableFlatVector<std::string>({"1", "x", std::nullopt, "3", ""})});
+  assertExpressionMatchesCpu(
+      "if(c0 <> 'x' and c0 <> '', cast(c0 as bigint), 0)", input, rowType);
+  assertExpressionMatchesCpu(
+      "if(c0 = 'x' or c0 = '', 0, cast(c0 as bigint))", input, rowType);
+}
+
+TEST_F(CudfPrestoCastTest, castFromVarcharToBoolean) {
+  // t, f, 1, 0, true and false in any case; nothing is trimmed.
+  assertCastFromVarcharMatchesCpu(
+      "boolean",
+      {"t",
+       "T",
+       "f",
+       "F",
+       "1",
+       "0",
+       "true",
+       "TRUE",
+       "True",
+       "tRuE",
+       "false",
+       "FALSE",
+       "False",
+       std::nullopt});
+  assertCastFromVarcharRejects(
+      "boolean",
+      {" true",
+       "true ",
+       "tru",
+       "truee",
+       "yes",
+       "no",
+       "on",
+       "off",
+       "y",
+       "n",
+       "2",
+       "-1",
+       "01",
+       "",
+       "nan"});
+}
+
+// A cast from VARCHAR inside an expression the AST evaluates is precomputed by
+// CastFunction, since the AST has no cast from strings.
+TEST_F(CudfPrestoCastTest, castFromVarcharInsideAstExpression) {
+  const auto rowType = ROW({{"c0", VARCHAR()}, {"c1", DOUBLE()}});
+  const auto input = makeRowVector(
+      {makeNullableFlatVector<std::string>(
+           {"1.5", "-2", "0", "1e3", std::nullopt, "x"}),
+       makeFlatVector<double>({1.0, -3.0, 0.5, 999.0, 2.0, 3.0})});
+  assertExpressionMatchesCpu("try_cast(c0 as double) < 0.0", input, rowType);
+  assertExpressionMatchesCpu("try_cast(c0 as double) > c1", input, rowType);
+  assertExpressionMatchesCpu("try_cast(c0 as double) + c1", input, rowType);
+  assertExpressionMatchesCpu("try_cast(c0 as bigint) < 0", input, rowType);
+  assertExpressionMatchesCpu(
+      "try_cast(c0 as real) is null and c1 > 0.0", input, rowType);
+
+  const auto valid = makeRowVector(
+      {makeNullableFlatVector<std::string>({"1.5", "-2", std::nullopt, "1e3"}),
+       makeFlatVector<double>({1.0, -3.0, 0.5, 999.0})});
+  assertExpressionMatchesCpu("cast(c0 as double) < 0.0", valid, rowType);
+  assertExpressionMatchesCpu("cast(c0 as double) > c1", valid, rowType);
 }
 
 TEST_F(CudfSimpleFilterProjectTest, rowConstructorAndDereference) {
@@ -3163,6 +4267,54 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       999999999999999.5,
   })});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Constant projections over a zero-column input are filled to the row count of
+// each batch: here the first and third batches, which the filter cuts to 3 and
+// 2 rows. The second batch, which the filter empties, never reaches the
+// projection.
+TEST_F(CudfFilterProjectTest, constantProjectionsOverZeroColumns) {
+  const std::vector<RowVectorPtr> batches = {
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})}),
+      makeRowVector({makeFlatVector<int64_t>({0, 1})}),
+      makeRowVector({makeFlatVector<int64_t>({5, 0, 6})}),
+  };
+  const auto constant = [](const TypePtr& type,
+                           const Variant& value) -> core::TypedExprPtr {
+    return std::make_shared<core::ConstantTypedExpr>(type, value);
+  };
+  auto plan =
+      PlanBuilder()
+          .values(batches)
+          .filter("c0 > 1")
+          .project({})
+          .projectExpressions(
+              {constant(VARCHAR(), "abc"),
+               constant(BIGINT(), int64_t(42)),
+               constant(DOUBLE(), 1.5),
+               constant(BOOLEAN(), true),
+               constant(DATE(), int32_t(20'454)),
+               constant(INTERVAL_DAY_TIME(), int64_t(86'400'000)),
+               constant(BIGINT(), Variant::null(TypeKind::BIGINT)),
+               constant(VARCHAR(), Variant::null(TypeKind::VARCHAR)),
+               constant(INTERVAL_DAY_TIME(), Variant::null(TypeKind::BIGINT))})
+          .planNode();
+
+  const vector_size_t numRows = 5;
+  auto expected = makeRowVector(
+      {makeConstant(StringView("abc"), numRows),
+       makeConstant<int64_t>(42, numRows),
+       makeConstant(1.5, numRows),
+       makeConstant(true, numRows),
+       makeConstant<int32_t>(20'454, numRows, DATE()),
+       makeConstant<int64_t>(86'400'000, numRows, INTERVAL_DAY_TIME()),
+       makeNullConstant(TypeKind::BIGINT, numRows),
+       makeNullConstant(TypeKind::VARCHAR, numRows),
+       BaseVector::createNullConstant(INTERVAL_DAY_TIME(), numRows, pool())});
+  // Each Values batch reaches the GPU on its own.
+  AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+      .assertResults(expected);
 }
 
 } // namespace

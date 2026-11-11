@@ -93,11 +93,13 @@ static ds_key_t date_join(
     case STORE_RETURNS:
       nMin = SS_MIN_SHIP_DELAY;
       nMax = SS_MAX_SHIP_DELAY;
+      [[fallthrough]];
     case CATALOG_RETURNS:
       if (nMin == -1) {
         nMin = CS_MIN_SHIP_DELAY;
         nMax = CS_MAX_SHIP_DELAY;
       }
+      [[fallthrough]];
     case WEB_RETURNS:
       if (nMin == -1) {
         nMin = WS_MIN_SHIP_DELAY;

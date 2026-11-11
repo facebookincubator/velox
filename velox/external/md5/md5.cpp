@@ -26,7 +26,7 @@
  */
 #include "md5.h"
 #include <folly/Conv.h>
-#include <folly/Format.h>
+#include <fmt/format.h>
 
 namespace facebook::velox::crypto {
 
@@ -275,7 +275,7 @@ namespace facebook::velox::crypto {
       unsigned char digest[MD5_HASH_LENGTH_BINARY];
       Finish(digest);
       // padding the string with 0 at beginning if the length is less than 32 and the needPadding == true
-      auto dec = needPadding ? folly::sformat("{:0>*}", 32, DigestToBase10(digest)) : DigestToBase10(digest);
+      auto dec = needPadding ? fmt::format("{:0>{}}", DigestToBase10(digest), 32) : DigestToBase10(digest);
       int size = dec.size();
       std::memcpy(out_digest, dec.data(), size);
       return size;

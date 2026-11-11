@@ -24,9 +24,10 @@
 
 #include "folly/Range.h"
 #include "folly/container/F14Map.h"
+#include "velox/common/base/IdentityProjection.h"
+#include "velox/dwio/nimble/common/RowRange.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/FieldReader.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/BaseVector.h"
 
@@ -203,23 +204,12 @@ class Deserializer {
     uint32_t batches{0};
   };
 
-  // Channel mapping for one projected Row child. The reader decodes selected
-  // fields into their original source channels; projection wraps them into the
-  // compact output Row using outputChannel.
-  struct IdentityProjection {
-    IdentityProjection(
-        velox::column_index_t inputChannel,
-        velox::column_index_t outputChannel)
-        : inputChannel{inputChannel}, outputChannel{outputChannel} {}
-
-    velox::column_index_t inputChannel;
-    velox::column_index_t outputChannel;
-  };
-
-  // Maps projected Row children to decoded channels. Nested plans are present
-  // only for recursively projected Row children.
+  // Maps projected Row children to decoded channels. The reader decodes
+  // selected fields into their original source channels; identity projections
+  // wrap them into the compact output Row. Nested plans are present only for
+  // recursively projected Row children.
   struct OutputProjection {
-    std::vector<IdentityProjection> identityProjections;
+    std::vector<velox::IdentityProjection> identityProjections;
     std::vector<OutputProjection> childProjections;
   };
 

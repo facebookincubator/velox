@@ -15,6 +15,7 @@
  */
 #include "velox/functions/lib/Re2Functions.h"
 
+#include <folly/CPortability.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/mman.h>
@@ -35,23 +36,7 @@
 #include "velox/vector/FlatVector.h"
 
 // Detect sanitizer builds for guarding death tests.
-#ifdef __has_feature
-#define RE2_BUILDING_WITH_ASAN() __has_feature(address_sanitizer)
-#define RE2_BUILDING_WITH_TSAN() __has_feature(thread_sanitizer)
-#else
-#if defined(__SANITIZE_ADDRESS__) && __SANITIZE_ADDRESS__
-#define RE2_BUILDING_WITH_ASAN() 1
-#else
-#define RE2_BUILDING_WITH_ASAN() 0
-#endif
-#if defined(__SANITIZE_THREAD__) && __SANITIZE_THREAD__
-#define RE2_BUILDING_WITH_TSAN() 1
-#else
-#define RE2_BUILDING_WITH_TSAN() 0
-#endif
-#endif
-
-#if RE2_BUILDING_WITH_TSAN() || RE2_BUILDING_WITH_ASAN()
+#if defined(FOLLY_SANITIZE_ADDRESS) || defined(FOLLY_SANITIZE_THREAD)
 #define RE2_BUILDING_WITH_SAN
 #endif
 

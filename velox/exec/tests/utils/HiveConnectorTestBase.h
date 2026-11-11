@@ -47,6 +47,10 @@ class HiveConnectorTestBase : public OperatorTestBase {
 
   void writeToFile(const std::string& filePath, RowVectorPtr vector);
 
+  /// Writes 'data' to a temporary DWRF file and returns its handle. Keep the
+  /// handle alive while reading the file.
+  std::shared_ptr<TempFilePath> writeToFile(const RowVectorPtr& data);
+
   void writeToFile(
       const std::string& filePath,
       const std::vector<RowVectorPtr>& vectors,
@@ -168,8 +172,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const TypePtr& dataType,
       const TypePtr& hiveType,
       const std::vector<std::string>& requiredSubfields,
-      connector::hive::FileColumnHandle::ColumnType columnType =
-          connector::hive::FileColumnHandle::ColumnType::kRegular);
+      connector::FileColumnHandle::ColumnType columnType =
+          connector::FileColumnHandle::ColumnType::kRegular);
 
   /// @param targetDirectory Final directory of the target table after commit.
   /// @param writeDirectory Write directory of the target table before commit.

@@ -16,6 +16,8 @@
 
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include "velox/vector/FlatMapVector.h"
+
 namespace facebook::velox::test {
 
 BufferPtr makeIndicesInReverse(vector_size_t size, memory::MemoryPool* pool) {
@@ -61,6 +63,19 @@ VectorPtr VectorTestBase::wrapInDictionary(
     VectorPtr vector) {
   return wrapInDictionary(
       indices, indices->size() / sizeof(vector_size_t), vector);
+}
+
+RowVectorPtr VectorTestBase::makeNamedRowVector(
+    const std::vector<std::pair<std::string, VectorPtr>>& children) {
+  std::vector<std::string> names;
+  std::vector<VectorPtr> vectors;
+  names.reserve(children.size());
+  vectors.reserve(children.size());
+  for (const auto& [name, child] : children) {
+    names.push_back(name);
+    vectors.push_back(child);
+  }
+  return makeRowVector(names, vectors);
 }
 
 BufferPtr VectorTestBase::makeOddIndices(vector_size_t size) {
@@ -177,6 +192,50 @@ void assertCopyableVector(const VectorPtr& vector) {
   auto copy =
       BaseVector::create(vector->type(), vector->size(), vector->pool());
   copy->copy(vector.get(), 0, 0, vector->size());
+}
+
+namespace {
+
+// Returns 'input' with its base map converted to 'encoding', keeping any
+// dictionary or constant wrapping.
+VectorPtr withMapBaseEncoding(
+    const VectorPtr& input,
+    VectorEncoding::Simple encoding) {
+  switch (input->encoding()) {
+    case VectorEncoding::Simple::MAP:
+      if (encoding == VectorEncoding::Simple::FLAT_MAP) {
+        return FlatMapVector::fromMapVector(*input->asUnchecked<MapVector>());
+      }
+      return input;
+    case VectorEncoding::Simple::FLAT_MAP:
+      if (encoding == VectorEncoding::Simple::MAP) {
+        return input->asUnchecked<FlatMapVector>()->toMapVector();
+      }
+      return input;
+    case VectorEncoding::Simple::DICTIONARY:
+      return BaseVector::wrapInDictionary(
+          input->nulls(),
+          input->wrapInfo(),
+          input->size(),
+          withMapBaseEncoding(input->valueVector(), encoding));
+    case VectorEncoding::Simple::CONSTANT:
+      return BaseVector::wrapInConstant(
+          input->size(),
+          input->wrappedIndex(0),
+          withMapBaseEncoding(input->valueVector(), encoding));
+    default:
+      return input;
+  }
+}
+
+} // namespace
+
+VectorPtr withFlatMapBase(const VectorPtr& input) {
+  return withMapBaseEncoding(input, VectorEncoding::Simple::FLAT_MAP);
+}
+
+VectorPtr withMapBase(const VectorPtr& input) {
+  return withMapBaseEncoding(input, VectorEncoding::Simple::MAP);
 }
 
 } // namespace facebook::velox::test

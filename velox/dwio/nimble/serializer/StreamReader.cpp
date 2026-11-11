@@ -20,31 +20,20 @@
 #include <limits>
 #include <utility>
 
-#include <folly/coro/BlockingWait.h>
+#include <folly/ScopeGuard.h>
+
 #include "velox/common/Casts.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/TypeWithId.h"
-#include "velox/dwio/nimble/common/NimbleException.h"
+#include "velox/dwio/nimble/common/ChunkHeader.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/dwio/nimble/serializer/EncodingViewDecoder.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
-#include "velox/dwio/nimble/velox/FieldReader.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 namespace facebook::nimble {
 namespace {
-
-// Exposes already-loaded bytes through the ChunkedStream interface.
-class StringViewStreamLoader final : public StreamLoader {
- public:
-  explicit StringViewStreamLoader(std::string_view stream) : stream_{stream} {}
-
-  const std::string_view getStream() const override {
-    return stream_;
-  }
-
- private:
-  const std::string_view stream_;
-};
 
 void validateFieldReaderOffsets(
     std::span<const uint32_t> projectionOffsets,
@@ -64,8 +53,6 @@ void validateFieldReaderOffsets(
 
 // Validates one request and builds its dense source-to-output mapping.
 std::vector<velox::BaseVector::CopyRange> makeOutputRanges(
-    size_t numStreams,
-    size_t expectedNumStreams,
     const velox::TypePtr& outputType,
     std::span<const RowRange> ranges,
     velox::vector_size_t outputOffset,
@@ -76,10 +63,6 @@ std::vector<velox::BaseVector::CopyRange> makeOutputRanges(
       "Output type does not match the projected schema: {} vs. {}",
       output->type()->toString(),
       outputType->toString());
-  NIMBLE_CHECK_EQ(
-      numStreams,
-      expectedNumStreams,
-      "Stream count must match the projected schema");
   NIMBLE_CHECK(!ranges.empty(), "Read ranges must not be empty");
   NIMBLE_CHECK_GE(outputOffset, 0, "Output offset must be non-negative");
 
@@ -124,16 +107,72 @@ std::vector<velox::BaseVector::CopyRange> makeOutputRanges(
   return outputRanges;
 }
 
+// Checks that a stripe supplies one stream per projected stream.
+void checkStreamCount(size_t numStreams, size_t numProjectedStreams) {
+  NIMBLE_CHECK_EQ(
+      numStreams,
+      numProjectedStreams,
+      "Stream count must match the projected schema");
+}
+
+// Packs one bit per stream into 'key', set when the stream is present. Reuses
+// the capacity of 'key'.
+void makePresenceKey(
+    std::span<const std::string_view> streams,
+    Vector<uint8_t>& key) {
+  key.resize(velox::bits::nbytes(streams.size()));
+  for (size_t i{0}; i < streams.size(); ++i) {
+    velox::bits::setBit(key.data(), i, !streams[i].empty());
+  }
+}
+
+// Returns true when 'key' is the presence key of 'streams'. Compares the
+// streams with 'key' directly, so no key is built for the streams.
+bool matchesPresenceKey(
+    std::span<const std::string_view> streams,
+    const Vector<uint8_t>& key) {
+  if (key.size() != velox::bits::nbytes(streams.size())) {
+    return false;
+  }
+  for (size_t i{0}; i < streams.size(); ++i) {
+    if (velox::bits::isBitSet(key.data(), i) == streams[i].empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
+
+struct StreamReader::CachedReader {
+  // Decoders for present streams, keyed by stream id.
+  folly::F14FastMap<uint32_t, std::unique_ptr<Decoder>> decodersByStreamId;
+
+  // Points to the same decoders in stream order, with null for absent streams.
+  std::vector<EncodingViewDecoder*> streamDecoders;
+
+  // Root of the FieldReader tree built over decodersByStreamId.
+  std::unique_ptr<FieldReader> root;
+
+  // Releases the views of every decoder. The decoders and the tree stay, since
+  // only the views reference a stripe's bytes, so that the next stripe can
+  // rebind the decoders and, with the same presence pattern, keep the tree.
+  void reset() {
+    for (auto* decoder : streamDecoders) {
+      if (decoder != nullptr) {
+        decoder->release();
+      }
+    }
+  }
+};
 
 StreamReader::StreamReader(
     std::shared_ptr<const Type> type,
-    velox::memory::MemoryPool* pool,
-    Encoding::Options options)
+    velox::memory::MemoryPool* pool)
     : type_{std::move(type)},
       outputType_{convertToVeloxType(*velox::checkedNotNull(type_.get()))},
       pool_{velox::checkedNotNull(pool)},
-      options_{std::move(options)} {
+      cachedKey_{pool_} {
   NIMBLE_CHECK_NOT_NULL(outputType_);
 
   init();
@@ -144,7 +183,6 @@ void StreamReader::init() {
       std::shared_ptr<const velox::dwio::common::TypeWithId>{
           velox::dwio::common::TypeWithId::create(outputType_)};
   auto readerParams = FieldReaderParams{};
-  readerParams.optimizeStringBufferHandling = true;
   std::vector<uint32_t> readerOffsets;
   readerFactory_ = FieldReaderFactory::create(
       readerParams,
@@ -159,68 +197,174 @@ void StreamReader::init() {
 
 StreamReader::~StreamReader() = default;
 
-void StreamReader::read(
-    std::span<const std::string_view> streams,
-    std::span<const RowRange> ranges,
-    velox::vector_size_t outputOffset,
-    velox::VectorPtr& output) {
-  folly::coro::blockingWait(co_read(streams, ranges, outputOffset, output));
-}
-
 folly::coro::Task<void> StreamReader::co_read(
     std::span<const std::string_view> streams,
     std::span<const RowRange> ranges,
     velox::vector_size_t outputOffset,
+    const Encoding::Options& options,
     velox::VectorPtr& output) {
-  const auto outputRanges = makeOutputRanges(
-      streams.size(),
-      inputOffsets_.size(),
-      outputType_,
-      ranges,
-      outputOffset,
-      output);
-  prepareRead(streams);
+  checkStreamCount(streams.size(), inputOffsets_.size());
+  const auto outputRanges =
+      makeOutputRanges(outputType_, ranges, outputOffset, output);
+  prepareRead(streams, options);
+
+  // The streams are only valid during this call.
+  SCOPE_EXIT {
+    reset();
+  };
   co_await co_decodeRows(ranges, outputRanges, output);
 }
 
-void StreamReader::prepareRead(std::span<const std::string_view> streams) {
-  const auto makeDecoder = [this](std::string_view stream) {
-    auto chunkedStream = std::make_unique<InMemoryChunkedStream>(
-        *pool_, std::make_unique<StringViewStreamLoader>(stream));
-    NIMBLE_CHECK(
-        chunkedStream->hasNext(), "StreamReader requires a non-empty stream");
-    const auto encoded = chunkedStream->nextChunk();
-    NIMBLE_CHECK(
-        !chunkedStream->hasNext(),
-        "StreamReader requires exactly one encoded chunk per stream");
-    auto decoder = std::make_unique<EncodingViewDecoder>(
-        encoded, pool_, options_.bufferPool, [this](std::string_view encoding) {
-          return createEncodingView(encoding, pool_, options_);
-        });
-    chunkedStreams_.push_back(std::move(chunkedStream));
-    return decoder;
-  };
+folly::coro::Task<void> StreamReader::co_read(
+    std::span<const RowRange> ranges,
+    velox::vector_size_t outputOffset,
+    velox::VectorPtr& output) {
+  const auto outputRanges =
+      makeOutputRanges(outputType_, ranges, outputOffset, output);
+  co_await co_decodeRows(ranges, outputRanges, output);
+}
 
-  // TODO: Cache reader trees by stream-presence pattern if rebuild cost
-  // becomes material.
-  reader_.reset();
-  streamDecoders_.clear();
-  chunkedStreams_.clear();
-  streamDecoders_.reserve(streams.size());
-  chunkedStreams_.reserve(streams.size());
-  for (size_t i{0}; i < streams.size(); ++i) {
-    if (!streams[i].empty()) {
-      streamDecoders_.emplace(inputOffsets_[i], makeDecoder(streams[i]));
-    }
+void StreamReader::setStreams(
+    std::span<const std::string_view> streams,
+    const Encoding::Options& options) {
+  checkStreamCount(streams.size(), inputOffsets_.size());
+  prepareRead(streams, options);
+}
+
+StreamReader::CachedReader& StreamReader::reader() const {
+  NIMBLE_CHECK(hasBoundStreams(), "No streams are bound");
+  return *cachedReader_;
+}
+
+std::shared_ptr<const EncodingView> StreamReader::makeEncodingView(
+    std::string_view encoding) const {
+  return createEncodingView(encoding, pool_, options_);
+}
+
+folly::coro::Task<void> StreamReader::co_next(
+    uint32_t numRows,
+    velox::VectorPtr& output) {
+  co_await reader().root->co_next(numRows, output);
+}
+
+folly::coro::Task<void> StreamReader::co_skip(uint32_t numRows) {
+  co_await reader().root->co_skip(numRows);
+}
+
+void StreamReader::reset() {
+  // Release the views before the chunk buffers they reference. This covers a
+  // reader that a failed bind left partly rebound.
+  if (cachedReader_ != nullptr) {
+    cachedReader_->reset();
   }
-  reader_ = readerFactory_->createReader(streamDecoders_);
+  streamsBound_ = false;
+  decompressedChunks_.clear();
+}
+
+void StreamReader::loadChunks(std::string_view stream) {
+  loadedChunks_.clear();
+  while (!stream.empty()) {
+    NIMBLE_CHECK_FILE_GE(
+        stream.size(), kChunkHeaderSize, "Truncated chunk header in stream");
+    const char* header = stream.data();
+    const auto [length, compressionType] = readChunkHeader(header);
+    stream.remove_prefix(kChunkHeaderSize);
+    NIMBLE_CHECK_FILE_LE(
+        length, stream.size(), "Chunk data exceeds stream boundary");
+    const auto payload = stream.substr(0, length);
+    stream.remove_prefix(length);
+    if (compressionType == CompressionType::Uncompressed) {
+      loadedChunks_.push_back(payload);
+      continue;
+    }
+
+    // ChunkedStreamWriter compresses chunks only with Zstd or Lz4.
+    NIMBLE_CHECK_FILE(
+        compressionType == CompressionType::Zstd ||
+            compressionType == CompressionType::Lz4,
+        "Unsupported chunk compression type: {}",
+        compressionType);
+    auto decompressed = Compression::uncompress(
+        // @lint-ignore NULLSAFECLANG nullable-dereference
+        *pool_,
+        compressionType,
+        DataType::String,
+        payload,
+        /*decompressCounter=*/nullptr);
+    loadedChunks_.emplace_back(decompressed->as<char>(), decompressed->size());
+    decompressedChunks_.push_back(std::move(decompressed));
+  }
+}
+
+void StreamReader::rebuildReader(std::span<const std::string_view> streams) {
+  const EncodingViewDecoder::EncodingViewFactory encodingViewFactory =
+      [this](std::string_view encoding) { return makeEncodingView(encoding); };
+  auto& cachedReader = *cachedReader_;
+  cachedReader.streamDecoders.assign(streams.size(), nullptr);
+  cachedReader.decodersByStreamId.reserve(streams.size());
+  for (size_t i{0}; i < streams.size(); ++i) {
+    const auto streamId = inputOffsets_[i];
+    if (streams[i].empty()) {
+      cachedReader.decodersByStreamId.erase(streamId);
+      continue;
+    }
+
+    const auto it = cachedReader.decodersByStreamId.find(streamId);
+    if (it != cachedReader.decodersByStreamId.end()) {
+      auto* decoder = static_cast<EncodingViewDecoder*>(it->second.get());
+      loadChunks(streams[i]);
+      // @lint-ignore NULLSAFECLANG nullable-dereference
+      decoder->rebind(loadedChunks_, options_.bufferPool);
+      cachedReader.streamDecoders[i] = decoder;
+      continue;
+    }
+
+    // TODO: Support encodings without an EncodingView.
+    loadChunks(streams[i]);
+    auto decoder = std::make_unique<EncodingViewDecoder>(
+        loadedChunks_, pool_, options_.bufferPool, encodingViewFactory);
+    cachedReader.streamDecoders[i] = decoder.get();
+    cachedReader.decodersByStreamId.emplace(streamId, std::move(decoder));
+  }
+  cachedReader.root =
+      readerFactory_->createReader(cachedReader.decodersByStreamId);
+}
+
+void StreamReader::prepareRead(
+    std::span<const std::string_view> streams,
+    const Encoding::Options& options) {
+  reset();
+  options_ = options;
+  if (cachedReader_ != nullptr && cachedReader_->root != nullptr &&
+      matchesPresenceKey(streams, cachedKey_)) {
+    // The reader points to its decoders, so rebinding replaces their views and
+    // keeps the reader.
+    for (size_t i{0}; i < streams.size(); ++i) {
+      if (!streams[i].empty()) {
+        loadChunks(streams[i]);
+        cachedReader_->streamDecoders[i]->rebind(
+            loadedChunks_, options_.bufferPool);
+      }
+    }
+    cachedReader_->root->reset();
+  } else {
+    if (cachedReader_ == nullptr) {
+      cachedReader_ = std::make_unique<CachedReader>();
+    }
+    // Drop the tree first, so that a failure below leaves no usable reader
+    // paired with another pattern's key.
+    cachedReader_->root.reset();
+    makePresenceKey(streams, cachedKey_);
+    rebuildReader(streams);
+  }
+  streamsBound_ = true;
 }
 
 folly::coro::Task<void> StreamReader::co_decodeRows(
     std::span<const RowRange> sourceRanges,
     std::span<const velox::BaseVector::CopyRange> outputRanges,
     velox::VectorPtr& output) {
-  co_await reader_->co_read(sourceRanges, outputRanges, output);
+  co_await reader().root->co_read(sourceRanges, outputRanges, output);
 }
 
 } // namespace facebook::nimble

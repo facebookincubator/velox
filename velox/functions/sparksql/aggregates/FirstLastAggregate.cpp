@@ -492,6 +492,10 @@ AggregateRegistrationResult registerFirstLast(
           case TypeKind::HUGEINT:
             return std::make_unique<TClass<ignoreNull, int128_t, true>>(
                 resultType);
+          case TypeKind::UNKNOWN:
+            // UNKNOWN values are always null, so no value payload is needed.
+            return std::make_unique<TClass<ignoreNull, UnknownValue, true>>(
+                resultType);
           case TypeKind::VARBINARY:
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:

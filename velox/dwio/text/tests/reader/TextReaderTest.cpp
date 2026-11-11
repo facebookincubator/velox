@@ -17,7 +17,7 @@
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
-#include "velox/connectors/hive/ExtractionUtils.h"
+#include "velox/connectors/common/ExtractionUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -2029,10 +2029,10 @@ TEST_F(TextReaderTest, extractionMapKeys) {
   auto* mapSpec = spec->addField("col_map", 0);
   mapSpec->addAllChildFields(*MAP(BIGINT(), BOOLEAN()));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   auto chain = std::vector<ExtractionPathElementPtr>{
       ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
   mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kKeys);
@@ -2097,10 +2097,10 @@ TEST_F(TextReaderTest, extractionMapValues) {
   auto* mapSpec = spec->addField("col_map", 0);
   mapSpec->addAllChildFields(*MAP(BIGINT(), BOOLEAN()));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   auto chain = std::vector<ExtractionPathElementPtr>{
       ExtractionPathElement::simple(ExtractionStep::kMapValues)};
   mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kValues);
@@ -2175,10 +2175,10 @@ TEST_F(TextReaderTest, extractionMapKeyFilter) {
   auto* mapSpec = spec->addField("col_map", 0);
   mapSpec->addAllChildFields(*MAP(VARCHAR(), BIGINT()));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   auto chain = std::vector<ExtractionPathElementPtr>{
       ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"a", "b"})};
   mapSpec->setTransform(
@@ -2243,10 +2243,10 @@ TEST_F(TextReaderTest, extractionTransformOnMapColumn) {
   auto* mapSpec = spec->addField("col_map", 0);
   mapSpec->addAllChildFields(*MAP(BIGINT(), BOOLEAN()));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   auto chain = std::vector<ExtractionPathElementPtr>{
       ExtractionPathElement::simple(ExtractionStep::kSize)};
   mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kSize);

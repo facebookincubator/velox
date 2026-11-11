@@ -52,21 +52,6 @@ void ScopedTestTime::setCurrentTestTimeNano(uint64_t currentTimeNs) {
   testTimeNs_ = currentTimeNs;
 }
 
-std::optional<uint64_t> ScopedTestTime::getCurrentTestTimeSec() {
-  return testTimeNs_.has_value()
-      ? std::make_optional(*testTimeNs_ / 1'000'000'000L)
-      : testTimeNs_;
-}
-std::optional<uint64_t> ScopedTestTime::getCurrentTestTimeMs() {
-  return testTimeNs_.has_value() ? std::make_optional(*testTimeNs_ / 1000'000L)
-                                 : testTimeNs_;
-}
-
-std::optional<uint64_t> ScopedTestTime::getCurrentTestTimeMicro() {
-  return testTimeNs_.has_value() ? std::make_optional(*testTimeNs_ / 1000L)
-                                 : testTimeNs_;
-}
-
 std::optional<uint64_t> ScopedTestTime::getCurrentTestTimeNano() {
   return testTimeNs_;
 }

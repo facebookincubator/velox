@@ -21,7 +21,6 @@ endif()
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
-add_subdirectory(legacy)
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(selection/tests)
 endif()
@@ -72,26 +71,31 @@ add_library(
   views/EncodingView.cpp
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
+  views/PartitionedEliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
+  views/FsstEncodingView.cpp
   views/HuffmanEncodingView.h
   views/TrivialEncodingView.h
+  views/VarintEncodingView.h
   views/SparseBoolEncodingView.h
   views/SimdForBitpackEncodingView.h
   views/SubIntSplitEncodingView.h
   views/RLEEncodingView.h
+  views/SentinelEncodingView.h
   views/PFOREncodingView.h
   views/MainlyConstantEncodingView.h
   views/NullableEncodingView.h
   views/FixedBitWidthEncodingView.h
+  views/FsstEncodingView.h
   views/FOREncodingView.h
   views/EncodingViewFactory.h
   views/EncodingViewUtils.h
   views/EncodingView.h
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
-  views/BlockBitPackingEncodingView.h
-  views/BitRangeSplitEncodingView.h
+  views/BlockBitPackingV2EncodingView.h
   views/ALPEncodingView.h
+  views/ALPRDEncodingView.h
   selection/Statistics.h
   selection/NestedAlpSizeEstimation.h
   selection/EncodingSizeEstimation.h
@@ -107,6 +111,8 @@ add_library(
   common/EncodingFactory.h
   common/Encoding.h
   common/BufferedEncoding.h
+  deprecated/BlockBitPackingEncodingView.h
+  deprecated/BlockBitPackingEncoding.h
   VarintEncoding.h
   TrivialEncoding.h
   SubIntSplitEncoding.h
@@ -127,12 +133,12 @@ add_library(
   FixedBitWidthEncoding.h
   EncodingSliceFactory.h
   EliasFanoEncoding.h
+  PartitionedEliasFanoEncoding.h
   DictionaryEncoding.h
   DeltaEncoding.h
   DeltaBlockEncoding.h
   ConstantEncoding.h
-  BlockBitPackingEncoding.h
-  BitRangeSplitEncoding.h
+  BlockBitPackingV2Encoding.h
   ALPEncoding.h
   ALPRDEncoding.h
 )

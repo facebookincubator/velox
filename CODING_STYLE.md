@@ -274,6 +274,9 @@ std::shared_ptr<const Payload> payload;
   * `VELOX_CHECK(idx < children_.size());`
 * The former will evaluate and include both expressions values in the
   exception.
+* Use one check per condition. Split `VELOX_CHECK(a && b)` into
+  `VELOX_CHECK(a)` and `VELOX_CHECK(b)`: a failure then names the condition
+  that broke, and each check can use a two-argument form.
 * All macro also provide the following optional features:
   * Specifying error code (error code listed in
     `velox/common/base/VeloxException.h`): 
@@ -296,6 +299,22 @@ std::shared_ptr<const Payload> payload;
   | ❌ Avoid | ✅ Prefer |
   |----------|-----------|
   | `VELOX_USER_FAIL("Column '{}' is ambiguous", name);` | `VELOX_USER_FAIL("Column is ambiguous: {}", name);` |
+* **Error messages name the mistake.** Say what was wrong with the input, or
+  state the requirement it broke with "must". A sentence that only describes
+  the correct state reads as documentation and leaves the reader to work out
+  what they did.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_USER_FAIL("A placeholder's type is declared with CAST, not TRY_CAST: {}", name);` | `VELOX_USER_FAIL("TRY_CAST of a placeholder is not supported: {}", name);` |
+  | `VELOX_USER_CHECK_GE(k, 1, "k is at least 1");` | `VELOX_USER_CHECK_GE(k, 1, "k must be at least 1");` |
+* Pass a value to a formatted message or `fmt::format` as is when its type has
+  an `fmt::formatter`, such as `TypeKind`. The formatter already produces the
+  text, so converting the value to a string first only repeats it.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_FAIL("Unsupported type: {}", TypeKindName::toName(kind));` | `VELOX_FAIL("Unsupported type: {}", kind);` |
 
 ## Variables
 
@@ -317,9 +336,8 @@ std::shared_ptr<const Payload> payload;
   * `int* foo;` `const Bar& bar;` NOT `int *foo;` `const Bar &bar`;
   * Beware that `int* foo, bar;` will be parsed as declaring `foo` as an `int*`
     and `bar` as an `int`. Note that multiple declaration is discouraged.
-* Use trailing commas in multi-line initializer lists, enum definitions, and
-  function-call argument lists that span multiple lines. This produces cleaner
-  diffs when items are added or reordered.
+* Use trailing commas in multi-line initializer lists and enum definitions.
+  This produces cleaner diffs when items are added or reordered.
 * For member variables:
   * Group member variable and methods based on their visibility (public,
     protected and private)
@@ -616,6 +634,28 @@ defines it; CMake and every open-source build see the new API alone.
       : ExchangeNode(id, std::move(type), VectorSerde::kindName(kind)) {}
 #endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 ```
+
+## Pitfalls Tests Rarely Catch
+
+These rules prevent failures that appear only under particular timing or load,
+so a passing test suite says little about them.
+
+* **Measure intervals with a steady clock.** Durations, timeouts and deadlines
+  use `std::chrono::steady_clock`. Measure an interval with
+  `folly::stop_watch`. `MicrosecondWallTimer` / `NanosecondWallTimer` in
+  `velox/common/time/Timer.h` add the duration of a scope to a counter. When
+  the start of an interval must be stored as a plain integer, such as in an
+  atomic, read it with `SteadyTime::now<Duration>()`. `system_clock` and
+  `EpochTime` follow the OS wall clock, which time synchronization can step
+  backward at any moment, so the difference of two readings can be negative.
+  Use them only for absolute timestamps, such as a task's start time.
+* **Convert epoch seconds to calendar time with
+  `Timestamp::epochToCalendarUtc()`.** `gmtime` returns a pointer to shared
+  static storage and is not thread-safe
+  ([#5029](https://github.com/facebookincubator/velox/issues/5029)). In glibc,
+  `gmtime_r` takes a global lock in `__tz_convert`, which serializes threads
+  under high concurrency
+  ([#6801](https://github.com/facebookincubator/velox/issues/6801)).
 
 ## Tests
 

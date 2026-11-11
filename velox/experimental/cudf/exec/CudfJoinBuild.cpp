@@ -80,7 +80,7 @@ void CudfJoinBuild::doNoMoreInput() {
 
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Operator>> peerOperators;
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     return;
   }
 

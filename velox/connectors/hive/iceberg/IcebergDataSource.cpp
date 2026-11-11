@@ -51,14 +51,14 @@ IcebergDataSource::IcebergDataSource(
   // IcebergConnector::createDataSource validates handle.subfieldFilters()
   // before FileDataSource's constructor runs.  However, FileDataSource's
   // constructor calls extractFiltersFromRemainingFilter which can pull
-  // additional entries into filters_  (e.g. "rowdata.id < 50" expressed as a
-  // remainingFilter becomes Subfield("rowdata.id") in filters_).  Those
+  // additional entries into the state's filters (e.g. "rowdata.id < 50"
+  // expressed as a remainingFilter becomes Subfield("rowdata.id")). Those
   // extracted entries bypass the pre-construction check, and
   // applyChangelogFilters only inspects operation/ordinal/snapshotid, so the
   // predicate silently disappears and extra rows are returned.  Re-running the
-  // validation here against the fully-populated filters_ turns the silent miss
+  // validation here against the fully-populated filters turns the silent miss
   // into a loud error.
-  IcebergConnector::validateChangelogSubfieldFilters(filters_);
+  IcebergConnector::validateChangelogSubfieldFilters(fileScanState_->filters);
 
   // For changelog queries, build the ChangelogScanContext once so it is
   // reused across all splits.  This lets stats-based filter reordering and
@@ -85,7 +85,7 @@ IcebergDataSource::IcebergDataSource(
 
   // Changelog metadata filters (operation/ordinal/snapshotid) must NOT be
   // forwarded — those names don't exist in the base-table schema.
-  auto dataScanSpec = makeScanSpec(
+  auto dataScanSpec = connector::makeScanSpec(
       dataReaderOutputType,
       /*outputSubfields=*/{},
       common::SubfieldFilters{},
@@ -109,8 +109,19 @@ void IcebergDataSource::addDynamicFilter(
     const std::shared_ptr<common::Filter>& filter) {
   if (!changelogScanContext_.has_value()) {
     // Regular (non-changelog) query: delegate to the base implementation which
-    // sets the filter on scanSpec_ for the row reader to consume.
-    FileDataSource::addDynamicFilter(outputChannel, filter);
+    // sets the filter on the ScanSpec for the row reader to consume. The
+    // current split may have disabled the column's filter as
+    // partition-enforced.
+    const auto& columnName =
+        fileScanState_->scanSpec->getChildByChannel(outputChannel).fieldName();
+    scanSpecState_.dynamicFilterColumns.insert(columnName);
+    if (splitReader_ != nullptr) {
+      auto* icebergSplitReader =
+          dynamic_cast<IcebergSplitReader*>(splitReader_.get());
+      VELOX_CHECK_NOT_NULL(icebergSplitReader);
+      icebergSplitReader->enableFilterForDynamicFilter(columnName);
+    }
+    connector::FileDataSource::addDynamicFilter(outputChannel, filter);
     return;
   }
 
@@ -120,7 +131,7 @@ void IcebergDataSource::addDynamicFilter(
   // rowdata is a ROW-typed column; HashProbe never produces a pushable filter
   // for ROW types (VectorHasher::getFilter returns null for them), so this
   // branch is unreachable in practice.  If it were somehow reached, delegating
-  // to FileDataSource::addDynamicFilter would set the filter on scanSpec_
+  // to FileDataSource::addDynamicFilter would set the filter on the ScanSpec
   // (changelog-space) rather than dataScanSpec (base-table), silently dropping
   // it and producing wrong results.  We therefore drop it explicitly here —
   // the join key comparison in HashProbe will still enforce correctness.
@@ -140,9 +151,13 @@ void IcebergDataSource::addDynamicFilter(
   }
 }
 
-std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
+std::unique_ptr<connector::FileSplitReader>
+IcebergDataSource::createSplitReader() {
   prepareSplit();
   auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split_);
+  auto* icebergTableHandle = tableHandle_->as<IcebergTableHandle>();
+  VELOX_CHECK_NOT_NULL(
+      icebergTableHandle, "tableHandle_ is not IcebergTableHandle");
 
   if (changelogScanContext_.has_value()) {
     // Pass readerOutputType_ (not outputType()) so that columns referenced
@@ -166,7 +181,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
         ioExecutor_,
         readerOutputType_,
         *columnHandles_,
-        &filters_,
+        &fileScanState_->filters,
         &changelogDynamicFilters_);
   }
 
@@ -183,8 +198,34 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
-      scanSpec_,
-      columnHandles_);
+      fileScanState_->scanSpec,
+      columnHandles_,
+      &scanSpecState_);
+}
+
+void IcebergDataSource::setFromDataSource(
+    std::unique_ptr<DataSource> sourceUnique) {
+  auto* source = checkedPointerCast<IcebergDataSource>(sourceUnique.get());
+  // The constants belong to the scan spec this data source adopts.
+  scanSpecState_.splitConstantColumns =
+      std::move(source->scanSpecState_.splitConstantColumns);
+  scanSpecState_.dynamicFilterColumns.insert(
+      source->scanSpecState_.dynamicFilterColumns.begin(),
+      source->scanSpecState_.dynamicFilterColumns.end());
+  HiveDataSource::setFromDataSource(std::move(sourceUnique));
+
+  auto* icebergSplitReader =
+      dynamic_cast<IcebergSplitReader*>(splitReader_.get());
+  VELOX_CHECK_NOT_NULL(icebergSplitReader);
+  icebergSplitReader->setScanSpecState(&scanSpecState_);
+  if (scanSpecState_.dynamicFilterColumns.empty()) {
+    return;
+  }
+  for (const auto& columnName : scanSpecState_.dynamicFilterColumns) {
+    icebergSplitReader->enableFilterForDynamicFilter(columnName);
+  }
+  fileScanState_->scanSpec->resetCachedValues(true);
+  splitReader_->resetFilterCaches();
 }
 
 } // namespace facebook::velox::connector::hive::iceberg
