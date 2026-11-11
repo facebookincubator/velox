@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
@@ -949,6 +950,83 @@ TEST_F(ToCudfSelectionTest, complexGroupingKeyExpressionsFallsBack) {
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+}
+
+// A TIMESTAMP WITH TIME ZONE column that a FilterProject only carries keeps
+// the operator on the GPU; nothing compares its values.
+TEST_F(ToCudfSelectionTest, customComparisonColumnPassesThroughOnGpu) {
+  auto input = makeRowVector(
+      {"k", "tz"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>(
+           {pack(0, 0), pack(1'000, 1'825), pack(2'000, 0)},
+           TIMESTAMP_WITH_TIME_ZONE())});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .filter("k > 1")
+                  .project({"k + 10 AS k10", "tz"})
+                  .planNode();
+  auto expected = makeRowVector(
+      {"k10", "tz"},
+      {makeFlatVector<int64_t>({12, 13}),
+       makeFlatVector<int64_t>(
+           {pack(1'000, 1'825), pack(2'000, 0)}, TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto task = AssertQueryBuilder(plan)
+                  .config("cudf.enabled", true)
+                  .assertResults(expected);
+  EXPECT_TRUE(wasCudfFilterProjectUsed(task));
+  EXPECT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// Aggregates and window functions that order a TIMESTAMP WITH TIME ZONE
+// argument must stay on the CPU, since cuDF would reduce the packed bits where
+// Velox keeps the first encoding seen; count ignores the value and keeps
+// running on the GPU.
+TEST_F(ToCudfSelectionTest, customComparisonArgumentsFallBack) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto data = keys.makeRows(2);
+
+  struct TestCase {
+    std::string name;
+    core::PlanNodePtr plan;
+    std::string_view cpuOperator;
+    std::string cudfOperator;
+  };
+  for (const auto& function : {"min", "max", "count"}) {
+    const auto call = std::string(function) + "(k)";
+    const std::vector<TestCase> testCases = {
+        {"reduce",
+         PlanBuilder().values({data}).singleAggregation({}, {call}).planNode(),
+         OperatorType::kAggregation,
+         "CudfReduce"},
+        {"groupBy",
+         PlanBuilder()
+             .values({data})
+             .singleAggregation({"g"}, {call})
+             .planNode(),
+         OperatorType::kAggregation,
+         "CudfGroupby"},
+        {"window",
+         PlanBuilder()
+             .values({data})
+             .window(
+                 {call +
+                  " over (partition by g rows between unbounded preceding "
+                  "and unbounded following) as w"})
+             .planNode(),
+         OperatorType::kWindow,
+         "CudfWindow"},
+    };
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(call + " " + testCase.name);
+      if (call == "count(k)") {
+        keys.assertRunsOnGpu(testCase.plan, testCase.cudfOperator);
+      } else {
+        keys.assertFallsBackToCpu(testCase.plan, testCase.cpuOperator);
+      }
+    }
+  }
 }
 
 // Test supported aggregation input expressions should use CUDF

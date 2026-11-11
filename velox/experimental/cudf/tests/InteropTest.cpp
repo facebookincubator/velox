@@ -16,6 +16,8 @@
 
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/arrow/Abi.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -547,6 +549,17 @@ TEST_F(InteropTest, unsupportedLogicalTypes) {
   EXPECT_TRUE(isTypeSupportedByCudf(INTERVAL_DAY_TIME()));
   EXPECT_EQ(
       veloxToCudfDataType(INTERVAL_DAY_TIME()).id(), cudf::type_id::INT64);
+}
+
+// A type with a custom comparison is held as its physical type. The operators
+// that only carry it are covered by
+// ToCudfSelectionTest.customComparisonColumnPassesThroughOnGpu.
+TEST_F(InteropTest, customComparisonTypeHeldAsPhysicalType) {
+  EXPECT_EQ(
+      veloxToCudfDataType(TIMESTAMP_WITH_TIME_ZONE()).id(),
+      cudf::type_id::INT64);
+  // cuDF has no 128-bit integer other than DECIMAL.
+  EXPECT_FALSE(isTypeSupportedByCudf(IPADDRESS()));
 }
 
 } // namespace

@@ -17,9 +17,11 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -850,5 +852,22 @@ TEST_F(TopNRowNumberTest, unsupportedRankKeys) {
     cudf_velox::unregisterCudf();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+  }
+}
+
+// cuDF would partition the two zone encodings of one instant apart, so the
+// operator must stay on the CPU.
+TEST_F(TopNRowNumberTest, customComparisonKeyFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto data = keys.makeRows(2);
+
+  for (const bool generateRowNumber : {true, false}) {
+    SCOPED_TRACE(generateRowNumber ? "withRowNumber" : "withoutRowNumber");
+    keys.assertFallsBackToCpu(
+        PlanBuilder()
+            .values({data})
+            .topNRowNumber({"k"}, {"id"}, 1, generateRowNumber)
+            .planNode(),
+        exec::OperatorType::kTopNRowNumber);
   }
 }

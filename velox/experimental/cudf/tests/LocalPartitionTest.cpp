@@ -18,8 +18,10 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -298,6 +300,28 @@ TEST_F(LocalPartitionTest, unsupportedPartitionSpecIntoTopN) {
   AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
   queryBuilder.maxDrivers(2);
   queryBuilder.assertResults("SELECT c0 FROM tmp ORDER BY c0 DESC LIMIT 10");
+}
+
+// cuDF would hash the two zone encodings of one instant to different
+// partitions, whose drivers then aggregate them apart, so the exchange must
+// stay on the CPU.
+TEST_F(LocalPartitionTest, customComparisonKeyFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .localPartition(
+                      {"k"},
+                      {PlanBuilder(planNodeIdGenerator)
+                           .values({keys.makeRows(16)})
+                           .planNode()})
+                  .singleAggregation({"k"}, {"count(id)", "sum(id)"})
+                  .planNode();
+
+  for (const int32_t maxDrivers : {2, 4}) {
+    SCOPED_TRACE(maxDrivers);
+    keys.assertFallsBackToCpu(
+        plan, exec::OperatorType::kLocalPartition, maxDrivers);
+  }
 }
 
 TEST_F(LocalPartitionTest, unionAllLocalExchange) {
