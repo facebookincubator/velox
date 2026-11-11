@@ -22,12 +22,14 @@ JSON Functions
 .. spark:function:: from_json(jsonString) -> array / map / row
 
     Casts ``jsonString`` to an ARRAY, MAP, or ROW type, with the output type
-    determined by the expression. Returns NULL, if the input string is unparsable.
-    Supported element types include BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
-    REAL, DOUBLE, DECIMAL, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY
-    or MAP, the element type of the array or the value type of the map must be one
-    of these supported types, and for maps, the key type must be VARCHAR. Casting
-    to ROW supports only JSON objects.
+    determined by the expression. An unparsable ARRAY or MAP input returns NULL.
+    In permissive mode, a nonempty unparsable ROW input returns a non-null row
+    whose fields are all NULL, matching Spark. Supported element types include
+    BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, DECIMAL, DATE,
+    VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY or MAP, the element type
+    of the array or the value type of the map must be one of these supported
+    types, and for maps, the key type must be VARCHAR. Casting to ROW supports
+    only JSON objects and matches field names exactly.
     Note that since the result type can be inferred from the expression, in Velox we
     do not need to provide the ``schema`` parameter as required by Spark's from_json
     function. ::
@@ -50,11 +52,27 @@ JSON Functions
 
     * Only supports partial result mode, which requires spark configuration spark.sql.json.enablePartialResults = true.
 
-    * Does not allow single quotes enclosed string, {'a':1}. NULL will be returned.
+    * Does not support ``spark.sql.legacy.json.allowEmptyString.enabled = true``.
+
+    * DATE schemas require ``spark.sql.legacy.timeParserPolicy=CORRECTED`` and
+      ``spark.sql.legacy.json.enableDateTimeParsingFallback`` to be unset or true.
 
     * Does not support schemas that include a corrupt record column, for example, the Spark function below is not supported. ::
 
         from_json('{"a":1, "b":0.8}', 'a INT, b DOUBLE, _corrupt_record STRING')
+
+    * Conversion failures inside nested ARRAY-of-ROW values return NULL. Spark
+      can throw ``ClassCastException`` or fail the query for some malformed
+      inputs.
+
+    * Recovery from malformed JSON may differ from Spark for these parser-specific
+      cases:
+
+      * Number artifacts such as ``01``, ``.5``, and ``1.``.
+      * Field-name realignment after an error.
+      * Malformed nested values in root maps.
+      * Malformed values after a conversion error in the same array or map.
+      * Invalid escapes inside ignored fields.
 
 .. spark:function:: get_json_object(jsonString, path) -> varchar
 

@@ -23,6 +23,7 @@ add_executable(
   ConcurrentRuntimeStatWriterTest.cpp
   ExceptionTest.cpp
   FsTest.cpp
+  IdentityProjectionTest.cpp
   IndexedPriorityQueueTest.cpp
   LazyCPUThreadPoolExecutorTest.cpp
   RangeTest.cpp

@@ -69,13 +69,13 @@ class IcebergMergeSinkTest : public IcebergTestBase {
     columnHandles.emplace_back(
         std::make_shared<const IcebergColumnHandle>(
             "id",
-            FileColumnHandle::ColumnType::kRegular,
+            connector::FileColumnHandle::ColumnType::kRegular,
             BIGINT(),
             parquet::ParquetFieldId{1, {}}));
     columnHandles.emplace_back(
         std::make_shared<const IcebergColumnHandle>(
             "name",
-            FileColumnHandle::ColumnType::kRegular,
+            connector::FileColumnHandle::ColumnType::kRegular,
             VARCHAR(),
             parquet::ParquetFieldId{2, {}}));
 
@@ -192,7 +192,6 @@ class IcebergMergeSinkTest : public IcebergTestBase {
 
   // Lookup keys for commit-message JSON entries.
   static constexpr const char* kContentKey = "content";
-  static constexpr const char* kFileFormatKey = "fileFormat";
 
   static std::vector<std::optional<StringView>> toStringViews(
       const std::vector<std::optional<std::string>>& values) {

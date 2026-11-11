@@ -46,6 +46,15 @@ class SelectiveFlatMapColumnReader : public SelectiveStructColumnReaderBase {
 
   virtual const BufferPtr& inMapBuffer(column_index_t childIndex) const = 0;
 
+  /// Returns the in-map bits of 'rows', copied from 'inMap', which has a bit
+  /// for every row read rather than every row selected. Returns nullptr if
+  /// 'inMap' is null. The copy also keeps the result from sharing a buffer the
+  /// reader reuses for the next batch.
+  static BufferPtr selectInMap(
+      const BufferPtr& inMap,
+      const RowSet& rows,
+      memory::MemoryPool* pool);
+
   VectorPtr keysVector_;
 
  private:

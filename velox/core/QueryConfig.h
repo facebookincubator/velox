@@ -128,20 +128,35 @@ class QueryConfig {
       false,
       "Adjust timezone-less timestamp conversions to session timezone and cast TIMESTAMP WITH TIME ZONE to TIMESTAMP as a UTC instant.")
 
-  /// If true, operations that render a TIMESTAMP WITH TIME ZONE use the session
-  /// time zone, so values that compare equal produce equal results. If false,
-  /// they use each value's embedded time zone. The timezone_hour and
-  /// timezone_minute functions always report the offset stored in the value.
-  /// When adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use
-  /// the session zone when this property is true and the embedded zone when it
-  /// is false.
-  VELOX_QUERY_CONFIG(
-      kUseSessionTimezoneForTimestampWithTimezone,
-      useSessionTimezoneForTimestampWithTimezone,
-      "use_session_timezone_for_timestamp_with_timezone",
+  /// If true, operations that render a TIMESTAMP WITH TIME ZONE ignore the
+  /// stored time zone label and use the session time zone, so values that
+  /// compare equal produce equal results. If false, they use each value's
+  /// stored time zone label. The timezone_hour and timezone_minute functions
+  /// always report the offset stored in the value. When
+  /// adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the
+  /// session zone when this property is true and the stored zone when it is
+  /// false.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kIgnoreTimeZoneLabel,
+      "ignore_time_zone_label",
       bool,
       false,
-      "Render TIMESTAMP WITH TIME ZONE values in the session timezone (true) or each value's embedded zone (false); when adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the session zone (true) or embedded zone (false).")
+      "Ignore TIMESTAMP WITH TIME ZONE labels and render values in the session timezone (true), or render each value using its stored label (false); when adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the session zone (true) or stored zone (false).")
+
+  /// Returns the explicitly configured value, or the deprecated property's
+  /// value when the new property is absent.
+  bool ignoreTimeZoneLabel() const;
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated config key retained while downstream callers migrate.
+  static constexpr const char* kUseSessionTimezoneForTimestampWithTimezone =
+      "use_session_timezone_for_timestamp_with_timezone";
+
+  /// Legacy API. Prefer ignoreTimeZoneLabel().
+  bool useSessionTimezoneForTimestampWithTimezone() const {
+    return ignoreTimeZoneLabel();
+  }
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   /// Whether to use the simplified expression evaluation path. False by
   /// default.
@@ -1555,11 +1570,12 @@ class QueryConfig {
       "drain, additive-increase on a clean drain. On by default because it is "
       "the protective behavior for shared, rate-limited inference backends; set "
       "false to keep a static cap. Unlike the per-driver congestion window, this "
-      "coordinates all drivers on the worker and reacts to the rate-limit signal "
+      "coordinates all drivers on the worker that run the same policy and "
+      "reacts to the rate-limit signal "
       "directly, not to RTT. Recovery doubles a fractional window until one, "
-      "then uses additive increase. The first query to reach a backend fixes "
-      "its policy for the life of the worker process; later queries contribute "
-      "their outcomes to the adaptation but cannot change the setting. ")
+      "then uses additive increase. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
   /// Legacy integral override for the adaptive congestion-window floor.
   VELOX_QUERY_CONFIG(
@@ -1569,12 +1585,15 @@ class QueryConfig {
       int64_t,
       50,
       "Integral override for a backend's adaptive congestion-window floor. "
-      "Positive values preserve the legacy in-flight floor; zero delegates to "
-      "the backend policy, which may select a fractional floor and pace "
-      "discrete admissions using the learned service horizon. Only used when "
-      "rpc.ratelimiter.adaptive_enabled is true. The first query to reach a "
-      "backend fixes its policy for the life of the worker process; later "
-      "queries contribute outcomes but cannot change it.")
+      "While rpc.ratelimiter.hard_limit is -1, a positive value replaces the "
+      "function's floor. When rpc.ratelimiter.hard_limit is 0 or more, or this "
+      "property is 0, the function's floor applies; it may be fractional, "
+      "pacing discrete admissions using the learned service horizon. This "
+      "value, or 50 if it is 0, applies when the function declares no floor. "
+      "Only used when "
+      "rpc.ratelimiter.adaptive_enabled is true. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
   /// Multiplicative-decrease factor for the adaptive rate-limit capacity.
   VELOX_QUERY_CONFIG(
@@ -1587,7 +1606,9 @@ class QueryConfig {
       "on overload. Canonical typed overload completions from the same admitted "
       "epoch are coalesced; function-specific aggregate overload verdicts "
       "apply at driver consumption. Default 0.5 (halve). Clamped to "
-      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true. The first query to reach a backend fixes its policy for the life of the worker process; later queries contribute their outcomes to the adaptation but cannot change the setting. ")
+      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
   /// Legacy ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
@@ -1600,13 +1621,13 @@ class QueryConfig {
       "across drivers. Default 200. Zero defers to the function ceiling or the "
       "built-in legacy limit. A positive value overrides the function ceiling. "
       "With admission-controlled dispatch this cap bounds in-flight work "
-      "against that backend across every driver on the worker; the adaptive "
+      "against that backend across every driver on the worker that runs the "
+      "same policy; the adaptive "
       "limiter shrinks from here toward rpc.ratelimiter.min_limit under "
       "overload. Superseded by rpc.ratelimiter.hard_limit when that property "
-      "is non-negative. The first "
-      "query to reach a backend fixes its policy for the life of the worker "
-      "process; later queries contribute their outcomes to the adaptation but "
-      "cannot change the setting.")
+      "is non-negative. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
   /// Versioned hard ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
@@ -1615,12 +1636,38 @@ class QueryConfig {
       "rpc.ratelimiter.hard_limit",
       int64_t,
       -1,
-      "Versioned session hard ceiling for the per-backend rate-limit capacity. "
-      "Minus one preserves rpc.ratelimiter.max_limit semantics for mixed-version "
-      "rollouts. Zero adds no session ceiling; a positive value is combined "
-      "with the function ceiling using the smaller positive value. With no "
-      "positive ceiling, adaptive mode starts at 200 with a 1,000,000 safety "
-      "ceiling and fixed mode uses 200.")
+      "Versioned session hard ceiling for the per-backend rate-limit capacity, "
+      "and the switch to the function's bounds. Minus one keeps the session's "
+      "precedence: rpc.ratelimiter.min_limit and rpc.ratelimiter.max_limit "
+      "override the function's floor and ceiling. Zero or more lets the "
+      "function's floor and ceiling win, since session properties apply to "
+      "every function in the query, and ignores rpc.ratelimiter.max_limit. A "
+      "positive value caps the function's ceiling, the smaller winning, and is "
+      "the ceiling when the function declares none. Zero adds no session "
+      "ceiling: with no function ceiling, adaptive mode starts at 200 and may "
+      "grow to a 1,000,000 safety ceiling, and fixed mode uses 200. To use the "
+      "function's bounds and keep a cap, set the cap here, e.g. 200. Queries that resolve to the same "
+      "policy share a backend's rate limiter, and each distinct policy gets "
+      "its own.")
+
+  /// Longest gap between paced probes of an overloaded backend.
+  VELOX_QUERY_CONFIG(
+      kRpcRateLimiterMaxProbeIntervalMs,
+      rpcRateLimiterMaxProbeIntervalMs,
+      "rpc.ratelimiter.max_probe_interval_ms",
+      int64_t,
+      60'000,
+      "Longest gap, in milliseconds, between paced calls to a backend that "
+      "rejects everything, when rejections return quickly; a call that hangs "
+      "until it times out holds the only paced slot until then. A shorter gap "
+      "notices recovery sooner; a longer one sends fewer calls to a backend "
+      "that is down. It is also a minimum load: each worker sends at least one "
+      "call per gap to the backend, and probes come up to 20% early at random, "
+      "about 11% more on average. Calls that take longer than half this gap "
+      "are probed every two call durations instead. Zero removes the bound, "
+      "so the window can fall to the function's floor. Only used when "
+      "rpc.ratelimiter.adaptive_enabled is true. The first query to reach a "
+      "backend fixes its policy for the life of the worker process.")
 
   // --- Hand-written accessors for properties that need custom logic ---
 

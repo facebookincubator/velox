@@ -76,6 +76,10 @@ using Subfield = velox::common::Subfield;
 /// different row ranges share the body+trailer bytes via refcounted IOBuf
 /// clones; only the header node is unique per slice.
 ///
+/// A request cut short before any of its rows were read gets a single
+/// header-only slice instead: NODE 1 alone, with rowCount 0, an empty row
+/// range, and the resume key.
+///
 /// Usage:
 ///   auto result = projector.projectStreams(request, options);
 ///   for (size_t i = 0; i < result.responses.size(); ++i) {
@@ -162,6 +166,28 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
+    /// Caps the summed StripeGroupDescriptor::metadataSize of the stripe groups
+    /// that one metadata load returns while planning which stripes to read. A
+    /// load always returns the group of the stripe being planned, even when
+    /// that group alone exceeds the cap. It then adds the next groups that hold
+    /// stripes the key lookups found. It stops before the first group that
+    /// would take the total past the cap, so 0 loads only the stripe's own
+    /// group. Cached groups count toward the cap because planning holds them.
+    /// Planning keeps the groups of a load until it reaches a stripe outside
+    /// them, so a projection loads each group it uses at most once. A load of
+    /// several groups coalesces nearby sections and can read the rest in
+    /// parallel when the tablet reader has an IO executor. Its extra groups can
+    /// include ones that a row or byte limit keeps planning from reaching. A
+    /// read error in any of them fails the projection. Pinned metadata keeps
+    /// them in memory for the reader's lifetime.
+    uint64_t maxStripeGroupMetadataBytesPerLoad{0};
+    /// Makes co_projectRows() build the lookup structures of each encoding
+    /// view when it binds a stripe's streams, which pays off when a projection
+    /// reads many rows of each stripe. When unset, each read derives only what
+    /// it needs, which suits point lookups. Both settings return the same rows.
+    /// Changing it between calls rebuilds the projector's StreamReader. See
+    /// Encoding::Options::cacheEncodingView.
+    bool cacheEncodingView{false};
   };
 
   /// Request for a batch of index lookups.
@@ -174,13 +200,15 @@ class NimbleIndexProjector {
   struct SerializedResponse {
     /// One self-describing kTablet IOBuf chain per (request × stripe)
     /// intersection. Each entry covers a contiguous row range within one
-    /// stripe; the row range is embedded in the chain's header. Empty for
-    /// miss. Slices for overlapping requests share the body+trailer bytes
-    /// via refcounted SharedInfo on the second IOBuf node.
+    /// stripe; the row range is embedded in the chain's header. Empty when
+    /// the request returns no rows and has no resume key. Slices for
+    /// overlapping requests share the body+trailer bytes via refcounted
+    /// SharedInfo on the second IOBuf node.
     ///
     /// If the response is truncated and has a resume key, it is embedded in
     /// the header of the last slice. Use `rocks::readResultResumeKey()` on
-    /// the last slice to extract it.
+    /// the last slice to extract it. A request cut short before any of its
+    /// rows were read holds one header-only slice with 0 rows and the key.
     std::vector<folly::IOBuf> slices;
 
     /// When Options::needResumeKey is set and this request's results were cut
@@ -189,9 +217,9 @@ class NimbleIndexProjector {
     /// this as lowerKey with their original upperKey. nullopt if complete, a
     /// miss, or needResumeKey was not set.
     ///
-    /// Also embedded in the last slice's per-slice header (when slices
-    /// is non-empty) so consumers that hold an IOBuf can recover the key
-    /// without keeping the SerializedResponse struct around.
+    /// Also embedded in the last slice's per-slice header so consumers that
+    /// hold an IOBuf can recover the key without keeping the
+    /// SerializedResponse struct around.
     std::optional<std::string> resumeKey;
   };
 
@@ -446,14 +474,11 @@ class NimbleIndexProjector {
     bool requiredBarrier{false};
   };
 
-  // Locates this stripe's projected streams, staging them at the tail of
-  // ScanPlan::projectedStreams. The stripe is not part of the plan until
-  // appendStripePlan() commits it; a stripe dropped in between leaves the
-  // staged slots to be overwritten by the next stripe, and prepareStripes()
-  // trims any left over.
-  StripeStreams locateStripeStreams(uint32_t stripeIndex);
-
-  // Stages projected stream locations from metadata already loaded in a batch.
+  // Locates this stripe's projected streams from its loaded metadata, staging
+  // them at the tail of ScanPlan::projectedStreams. The stripe is not part of
+  // the plan until appendStripePlan() commits it; a stripe dropped in between
+  // leaves the staged slots to be overwritten by the next stripe, and
+  // prepareStripes() trims any left over.
   StripeStreams locateStripeStreams(const StripeIdentifier& stripe);
 
   // Appends one stripe to the plan using streams already staged for it by
@@ -495,29 +520,31 @@ class NimbleIndexProjector {
   // Builds serialized responses from the loaded stripe streams.
   SerializedResult processStripeStreams();
 
-  // Checks one loaded stream against the checksum the file records for it,
-  // throwing when they differ. With stream trailers, `data` ends with the
-  // stream's trailer. Otherwise the checksum comes from the stream's stripe
-  // group, at the stream's position in ctx_.expectedStreamChecksums, which is
-  // `enqueueIndex`: the index DataInput returned from enqueue().
+  // Checks one loaded stream against the checksum in its stream trailer, which
+  // `data` ends with, throwing when they differ. `enqueueIndex`, the index
+  // DataInput returned from enqueue(), only locates the stream for the error.
   void verifyStreamChecksum(uint32_t enqueueIndex, std::string_view data) const;
 
   // Validates the projected row schema.
   void validateProjection() const;
 
-  // Builds streamChecksum_, and for files with stream trailers the trailer
-  // members, when `verifyStreamChecksums` is set and the file records
-  // per-stream checksums.
+  // Returns the stream slicer, which the first call creates.
+  serde::StreamSlicer& streamSlicer();
+
+  // Builds streamChecksum_ and the stream trailer members when
+  // `verifyStreamChecksums` is set and the file's stream trailers carry a
+  // checksum.
   void initStreamChecksum(bool verifyStreamChecksums);
 
   // Resolves the request's stripes and loads their projected streams.
   void loadStripes(const Request& request, const Options& options);
 
   // Returns decoding options backed by this projector's scratch pool.
-  Encoding::Options encodingOptions();
+  Encoding::Options encodingOptions(bool cacheEncodingView);
 
-  // Creates the schema-derived reader on first use by co_projectRows().
-  void ensureStreamReader();
+  // Creates the schema-derived reader on first use by co_projectRows(), and
+  // again when 'cacheEncodingView' differs from the current reader's setting.
+  void ensureStreamReader(bool cacheEncodingView);
 
   // Computes per-stripe pack ranges and returns the upper-bound byte estimate
   // used to allocate the sliced-output arena. Returns 0 when no stripe will be
@@ -579,15 +606,18 @@ class NimbleIndexProjector {
       size_t stripeOffset,
       const RowRange& packRange);
 
-  // When Options::needResumeKey is set, resolves resume keys for requests
-  // whose results were cut short and stores them in ctx_.resumeKeys. No-op
-  // when needResumeKey is unset.
+  // After global truncation (maxRows or maxBytes), resolves resume keys for the
+  // requests it cut short and stores them in ctx_.resumeKeys: a request
+  // continuing past the last planned stripe resumes at the next stripe, and a
+  // request planning never reached resumes from its lower key. No-op when
+  // Options::needResumeKey is unset or the plan was not truncated.
   void prepareResumeKeys();
 
   // Iterates planned stripes and ctx_.packedStripes to build per-request
   // output slices. Each slice clones the shared stripe body and prepends a
   // per-request header with the row range and (on the last slice of a
-  // truncated response) the resume key.
+  // truncated response) the resume key. A request that planning never reached
+  // has no data slice, so its resume key gets a header-only slice.
   void buildResult(SerializedResult& result);
 
   inline uint32_t stripeRowCount(uint32_t stripe) const {
@@ -611,18 +641,17 @@ class NimbleIndexProjector {
   // True when every emitted slice must preserve a native HFM batch boundary,
   // even if the selected group has no physical stream in a stripe.
   const bool hasProjectedHybridFlatMaps_{false};
-  // Reused across stripes; its raw input format is fixed by the tablet.
-  const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
   std::unique_ptr<DataInput> dataInput_;
-  // Verifies a stream read from storage against the checksum the file records
-  // for it. Built only when ReaderOptions::verifyStreamChecksums() is set and
-  // the file records per-stream checksums, so null means this projector does
-  // not verify. Stateful, so it relies on this class being single-threaded.
+  // Verifies a stream read from storage against the checksum in its stream
+  // trailer. Built only when ReaderOptions::verifyStreamChecksums() is set and
+  // the file's stream trailers carry a checksum, so null means this projector
+  // does not verify. Stateful, so it relies on this class being
+  // single-threaded.
   std::unique_ptr<Checksum> streamChecksum_;
-  // When verifying a file whose checksums are in stream trailers: the stream
-  // trailer's size, read with every stream, and the checksum's offset within
-  // it. Zero otherwise, so unverified reads load exactly the stream's bytes.
+  // When verifying: the stream trailer's size, read with every stream, and the
+  // checksum's offset within it. Zero otherwise, so unverified reads load
+  // exactly the stream's bytes.
   uint32_t streamTrailerSize_{0};
   uint32_t streamTrailerChecksumOffset_{0};
   // Whether the stats timings read the CPU and wall clocks.
@@ -634,6 +663,13 @@ class NimbleIndexProjector {
   // Decodes projected rows into Velox vectors. The serialized path does not
   // need this reader, so it is created on the first co_projectRows() call.
   std::unique_ptr<StreamReader> streamReader_;
+  // Options::cacheEncodingView of the call that created 'streamReader_'.
+  bool cacheEncodingView_{false};
+
+  // Reused across stripes; its raw input format is fixed by the tablet. Only
+  // the serialized path slices streams, so the slicer is created on the first
+  // slice and a projector that decodes rows never builds it.
+  std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
   // One range tagged with the tablet stripe it falls in, before grouping.
   // Sorting a vector of these on (tabletStripeIndex, range.requestIndex) is
@@ -656,25 +692,14 @@ class NimbleIndexProjector {
     StripeRanges stripeRanges;
     // Populated by prepareStripes().
     ScanPlan plan;
-    // Per-request flag: true once planning has processed a stripe range for
-    // the request. Deliberately not "contributed a range to the plan": it is
-    // also set when the stripe is dropped for projecting no streams, because
-    // what prepareResumeKeys() needs to know is whether the request was reached
-    // before global truncation, not whether it produced output. Set by
-    // prepareStripes(), used by setResumeKeys().
-    std::vector<bool> hasProcessedStripeRange;
-    // Per-request resume keys set when a request reaches maxRowsPerRequest and
-    // Options::needResumeKey is enabled.
+    // Per-request resume keys, set by setResumeKey() when a request reaches
+    // maxRowsPerRequest and by prepareResumeKeys() after global truncation.
+    // All nullopt when Options::needResumeKey is unset.
     std::vector<std::optional<std::string>> resumeKeys;
     // Flat array of enqueue indices, logically
     // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent
     // streams. Populated by loadStripeStreams().
     std::vector<std::optional<uint32_t>> dataInputIndices;
-    // Expected checksum of each enqueued stream, indexed by the enqueue index
-    // DataInput returns. Appended in enqueue order by loadStripes(). Empty
-    // when checksum verification is off or reads checksums from stream
-    // trailers.
-    std::vector<uint32_t> expectedStreamChecksums;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;
     // Serialized stripe bodies and metadata, one per planned stripe. Populated

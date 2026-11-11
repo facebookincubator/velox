@@ -20,11 +20,11 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
-#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/connectors/hive/SortingWriter.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/common/SortingWriter.h"
 #include "velox/exec/SortBuffer.h"
 
 #include <boost/lexical_cast.hpp>
@@ -641,7 +641,7 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
       connectorQueryCtx_->adjustTimestampToTimezone();
   options->maxTargetFileSizeBytes =
       (isBucketed() || sortWrite()) ? 0 : maxTargetFileBytes_;
-  auto formatScopedConfigs = makeFormatScopedConfigs(
+  auto formatScopedConfigs = connector::makeFormatScopedConfigs(
       *hiveConfig_, *connectorSessionProperties, writerFactory_->fileFormat());
   auto sessionFormatOptions = writerFactory_->createFormatOptions(
       formatScopedConfigs.connectorConfig,
@@ -716,7 +716,7 @@ HiveDataSink::maybeCreateBucketSortWriter(
       spillConfig_,
       writerInfo_[writerIndex]->spillStats.get());
 
-  return std::make_unique<dwio::common::SortingWriter>(
+  return std::make_unique<SortingWriter>(
       std::move(writer),
       std::move(sortBuffer),
       hiveConfig_->sortWriterMaxOutputRows(

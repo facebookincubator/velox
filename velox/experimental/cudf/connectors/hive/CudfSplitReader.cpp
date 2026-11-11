@@ -24,7 +24,7 @@
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -171,6 +171,16 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
         std::move(columns[columnIndex]), columnTypes[i], stream, mr);
   }
   return std::make_unique<cudf::table>(std::move(columns));
+}
+
+std::optional<cudf::type_id> constantTimestampType(
+    const CudfHiveConfig& config,
+    const config::ConfigBase* session) {
+  const auto timestampType = config.timestampTypeSession(session).id();
+  if (timestampType == cudf::type_id::TIMESTAMP_DAYS) {
+    return std::nullopt;
+  }
+  return timestampType;
 }
 
 CudfSplitReader::CudfSplitReader(
@@ -673,7 +683,7 @@ void CudfSplitReader::setupCudfDataSource() {
   }
 
   auto bufferedInput =
-      velox::connector::hive::BufferedInputBuilder::getInstance()->create(
+      velox::connector::BufferedInputBuilder::getInstance()->create(
           *fileHandleCachePtr,
           baseReaderOpts_,
           connectorQueryCtx_,
@@ -716,7 +726,8 @@ void CudfSplitReader::setupReaderOptions() {
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemasSession(
                   sessionProperties))
-          .timestamp_type(cudfHiveConfig_->timestampType())
+          .timestamp_type(
+              cudfHiveConfig_->timestampTypeSession(sessionProperties))
           // cuDF currently only folds ASCII letters, unlike the CPU reader's
           // UTF-8 folding, so non-ASCII names (rare case) that differ in case
           // do not match.

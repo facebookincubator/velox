@@ -700,10 +700,7 @@ std::string_view SimdForBitpackEncoding<T>::slice(
     Buffer& buffer,
     const Encoding::Options& options) {
   const auto sourceHeader = parseHeader(encoded, options);
-  const auto sourceRowCount = sourceHeader.rowCount;
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
+  EncodingPrefix::checkSliceRange(sourceHeader.rowCount, offset, length);
 
   const auto firstGroup = groupInfo(sourceHeader, offset);
   Header sliceHeader;

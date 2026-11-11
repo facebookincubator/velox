@@ -88,6 +88,8 @@ class HuffmanEncoding final
 
   void reset() final {
     currentRow_ = 0;
+    cursorRow_ = 0;
+    cursorBitOffset_ = 0;
   }
 
   void skip(uint32_t rowCount) final {
@@ -103,7 +105,11 @@ class HuffmanEncoding final
         visitor,
         params,
         [&](auto count) { skip(count); },
-        [&] { return decodeValue(currentRow_++); });
+        [&] {
+          seekCursor();
+          ++currentRow_;
+          return decodeNext();
+        });
   }
 
   static std::string_view encode(
@@ -222,7 +228,18 @@ class HuffmanEncoding final
     assignCodeLengths(nodes, queue.top().node, 0, lengths);
   }
 
-  physicalType decodeValue(uint32_t row) const;
+  // Moves the decode cursor to currentRow_, decoding forward from the cursor
+  // when it is in the same checkpoint interval and behind currentRow_, and from
+  // currentRow_'s checkpoint otherwise.
+  void seekCursor();
+
+  // Returns the stream bits starting at 'bitOffset' in the low bits, at least
+  // kMaxCodeBits of them. The 4 bytes of decoder padding at the end of the
+  // stream keep the 4-byte load of any valid symbol in bounds.
+  uint32_t lookahead(uint32_t bitOffset) const;
+
+  // Decodes the value at the cursor and moves the cursor past it.
+  physicalType decodeNext();
 
   Vector<physicalType> alphabet_;
   Vector<DecodeEntry> decodeTable_;
@@ -231,6 +248,10 @@ class HuffmanEncoding final
   uint32_t bitstreamBytes_{0};
   uint8_t tableLog_{0};
   uint32_t currentRow_{0};
+  // Row and stream bit offset of the next value the cursor decodes. Sequential
+  // reads continue from it instead of restarting at a checkpoint for each row.
+  uint32_t cursorRow_{0};
+  uint32_t cursorBitOffset_{0};
 };
 
 template <typename T>
@@ -299,34 +320,56 @@ HuffmanEncoding<T>::HuffmanEncoding(
 }
 
 template <typename T>
-typename HuffmanEncoding<T>::physicalType HuffmanEncoding<T>::decodeValue(
-    uint32_t row) const {
-  const uint32_t checkpoint = row / kCheckpointStride;
-  uint32_t bitOffset = checkpoints_[checkpoint];
-  uint32_t current = checkpoint * kCheckpointStride;
-  while (current <= row) {
-    uint32_t bits = 0;
-    const uint32_t byteOffset = bitOffset >> 3;
-    const uint32_t available =
-        std::min<uint32_t>(4, bitstreamBytes_ - byteOffset);
-    std::memcpy(&bits, bitstream_ + byteOffset, available);
-    bits >>= bitOffset & 7;
-    const auto entry = decodeTable_[bits & ((1u << tableLog_) - 1)];
-    NIMBLE_CHECK_GT(entry.bits, 0);
-    bitOffset += entry.bits;
-    if (current++ == row) {
-      return alphabet_[entry.symbol];
-    }
+void HuffmanEncoding<T>::seekCursor() {
+  if (cursorRow_ == currentRow_) {
+    return;
   }
-  NIMBLE_UNREACHABLE("Invalid Huffman row {}", row);
+  const uint32_t checkpointRow = currentRow_ - currentRow_ % kCheckpointStride;
+  if (cursorRow_ > currentRow_ || cursorRow_ < checkpointRow) {
+    cursorRow_ = checkpointRow;
+    cursorBitOffset_ = checkpoints_[currentRow_ / kCheckpointStride];
+  }
+  const uint32_t mask = (1u << tableLog_) - 1;
+  while (cursorRow_ < currentRow_) {
+    const auto entry = decodeTable_[lookahead(cursorBitOffset_) & mask];
+    NIMBLE_CHECK_GT(entry.bits, 0);
+    cursorBitOffset_ += entry.bits;
+    ++cursorRow_;
+  }
+}
+
+template <typename T>
+uint32_t HuffmanEncoding<T>::lookahead(uint32_t bitOffset) const {
+  const uint32_t byteOffset = bitOffset >> 3;
+  NIMBLE_CHECK_FILE_LE(
+      byteOffset + sizeof(uint32_t),
+      bitstreamBytes_,
+      "Huffman symbol starts past the end of the stream");
+  uint32_t bits;
+  std::memcpy(&bits, bitstream_ + byteOffset, sizeof(bits));
+  return bits >> (bitOffset & 7);
+}
+
+template <typename T>
+typename HuffmanEncoding<T>::physicalType HuffmanEncoding<T>::decodeNext() {
+  const auto entry =
+      decodeTable_[lookahead(cursorBitOffset_) & ((1u << tableLog_) - 1)];
+  NIMBLE_CHECK_GT(entry.bits, 0);
+  cursorBitOffset_ += entry.bits;
+  ++cursorRow_;
+  return alphabet_[entry.symbol];
 }
 
 template <typename T>
 void HuffmanEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
   NIMBLE_DCHECK_LE(currentRow_ + rowCount, this->rowCount_);
+  if (rowCount == 0) {
+    return;
+  }
+  seekCursor();
   auto* output = static_cast<physicalType*>(buffer);
   for (uint32_t i = 0; i < rowCount; ++i) {
-    output[i] = decodeValue(currentRow_ + i);
+    output[i] = decodeNext();
   }
   currentRow_ += rowCount;
 }

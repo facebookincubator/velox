@@ -28,7 +28,10 @@ class IcebergTableHandle;
 ///   support for delete files and schema evolution.
 /// - Creates IcebergDataSink instances for writing data with Iceberg-specific
 ///   partition transforms and commit metadata.
-class IcebergConnector final : public HiveConnector {
+///
+/// Subclasses that override createDataSource() or createDataSink() should
+/// delegate to these implementations, which enforce Iceberg-specific checks.
+class IcebergConnector : public HiveConnector {
  public:
   IcebergConnector(
       const std::string& id,

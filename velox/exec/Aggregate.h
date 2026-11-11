@@ -96,13 +96,23 @@ class Aggregate {
     return false;
   }
 
+  /// Returns true if fillEmptyIntermediate() is supported, allowing merge
+  /// companions to bypass accumulator construction.
+  virtual bool supportsFillEmptyIntermediate() const {
+    return false;
+  }
+
   void setAllocator(HashStringAllocator* allocator) {
     setAllocatorInternal(allocator);
   }
 
   /// Called by Aggregate::create() to pass constant input values to the
-  /// aggregate. Non-constant inputs have null entries in 'constantInputs'. This
-  /// is called before any data is processed, allowing the aggregate to read
+  /// aggregate, one entry per raw input argument; non-constant inputs have null
+  /// entries. Called only in steps that read raw input (see isRawInput()):
+  /// steps that merge intermediate results have no raw arguments. The step
+  /// passed to create() says only whether the output is partial, so callers
+  /// that run a merge step pass no constant inputs. This is
+  /// called before any data is processed, allowing the aggregate to read
   /// constant arguments (e.g., flags, configuration values) at initialization
   /// time rather than extracting them from 'args' at runtime.
   ///
@@ -314,6 +324,15 @@ class Aggregate {
       std::vector<VectorPtr>& args,
       VectorPtr& result) const {
     VELOX_NYI("toIntermediate not supported");
+  }
+
+  /// Writes an empty group's intermediate into selected rows of 'result',
+  /// leaving other rows unchanged, so merge pass-through can handle masked-out
+  /// and null inputs.
+  virtual void fillEmptyIntermediate(
+      const SelectivityVector& rows,
+      VectorPtr& result) const {
+    VELOX_NYI("fillEmptyIntermediate not supported");
   }
 
   // Frees any out of line storage for the accumulator in

@@ -42,17 +42,21 @@ TEST_F(NoisyCountIfGaussianAggregationTest, constNoNoise) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_count_if_gaussian(c1, 0.0)", "noisy_count_if_gaussian(c2, 0.0)"},
-      "SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"noisy_count_if_gaussian(c1, 0.0)",
+           "noisy_count_if_gaussian(c2, 0.0)"})
+      .assertResults("SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"noisy_count_if_gaussian(c1, 0.0)", "noisy_count_if_gaussian(c2, 0.0)"},
-      "SELECT c0, sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp group by c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates(
+          {"noisy_count_if_gaussian(c1, 0.0)",
+           "noisy_count_if_gaussian(c2, 0.0)"})
+      .assertResults(
+          "SELECT c0, sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp group by c0");
 }
 
 TEST_F(NoisyCountIfGaussianAggregationTest, invalidNoise) {
@@ -66,11 +70,10 @@ TEST_F(NoisyCountIfGaussianAggregationTest, invalidNoise) {
 
   createDuckDbTable(vectors);
 
-  testFailingAggregations(
-      vectors,
-      {},
-      {"noisy_count_if_gaussian(c0, -1.0)"},
-      "Noise scale must be a non-negative value");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_count_if_gaussian(c0, -1.0)"})
+      .assertError("Noise scale must be a non-negative value");
 }
 
 TEST_F(NoisyCountIfGaussianAggregationTest, oneAggregateSingleGroupNoNoise) {
@@ -84,11 +87,10 @@ TEST_F(NoisyCountIfGaussianAggregationTest, oneAggregateSingleGroupNoNoise) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_count_if_gaussian(c0, 0.0)"},
-      "SELECT sum(if(c0, 1, 0)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_count_if_gaussian(c0, 0.0)"})
+      .assertResults("SELECT sum(if(c0, 1, 0)) FROM tmp");
 }
 
 TEST_F(NoisyCountIfGaussianAggregationTest, oneAggregateSingleGroupEmpty) {
@@ -98,11 +100,10 @@ TEST_F(NoisyCountIfGaussianAggregationTest, oneAggregateSingleGroupEmpty) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_count_if_gaussian(c0, 0.0)"},
-      "SELECT sum(if(c0, 1, NULL)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_count_if_gaussian(c0, 0.0)"})
+      .assertResults("SELECT sum(if(c0, 1, NULL)) FROM tmp");
 }
 
 TEST_F(NoisyCountIfGaussianAggregationTest, oneAggregateMultipleGroupsNoNoise) {
@@ -117,22 +118,23 @@ TEST_F(NoisyCountIfGaussianAggregationTest, oneAggregateMultipleGroupsNoNoise) {
   };
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"noisy_count_if_gaussian(c1, 0.0)"},
-      "SELECT c0, sum(if(c1, 1, 0)) FROM tmp GROUP BY c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"noisy_count_if_gaussian(c1, 0.0)"})
+      .assertResults("SELECT c0, sum(if(c1, 1, 0)) FROM tmp GROUP BY c0");
 }
 
 TEST_F(NoisyCountIfGaussianAggregationTest, twoAggregatesSingleGroupNoNoise) {
   auto vectors = makeVectors(rowType_, 10, 4);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_count_if_gaussian(c1, 0.0)", "noisy_count_if_gaussian(c2, 0.0)"},
-      "SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"noisy_count_if_gaussian(c1, 0.0)",
+           "noisy_count_if_gaussian(c2, 0.0)"})
+      .assertResults("SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
 }
 
 TEST_F(
@@ -151,11 +153,14 @@ TEST_F(
   };
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"noisy_count_if_gaussian(c1, 0.0)", "noisy_count_if_gaussian(c2, 0.0)"},
-      "SELECT c0, SUM(if(c1, 1, 0)), SUM(if(c2, 1, 0)) FROM tmp GROUP BY c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates(
+          {"noisy_count_if_gaussian(c1, 0.0)",
+           "noisy_count_if_gaussian(c2, 0.0)"})
+      .assertResults(
+          "SELECT c0, SUM(if(c1, 1, 0)), SUM(if(c2, 1, 0)) FROM tmp GROUP BY c0");
 }
 
 TEST_F(
@@ -164,15 +169,18 @@ TEST_F(
   auto vectors = makeVectors(rowType_, 10, 4);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors)
-            .filter("c0 % 2 = 0")
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.filter("c0 % 2 = 0")
             .project({"c0 % 11 AS c0_mod_11", "c1", "c2"});
-      },
-      {"c0_mod_11"},
-      {"noisy_count_if_gaussian(c1, 0.0)", "noisy_count_if_gaussian(c2, 0.0)"},
-      "SELECT c0 % 11, SUM(if(c1, 1, 0)), SUM(if(c2, 1, 0)) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
+      })
+      .groupBy({"c0_mod_11"})
+      .aggregates(
+          {"noisy_count_if_gaussian(c1, 0.0)",
+           "noisy_count_if_gaussian(c2, 0.0)"})
+      .assertResults(
+          "SELECT c0 % 11, SUM(if(c1, 1, 0)), SUM(if(c2, 1, 0)) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
 }
 
 // Test that the aggregation works with zero rows, multiple groups and a
@@ -181,11 +189,14 @@ TEST_F(NoisyCountIfGaussianAggregationTest, zeroRowsMultipleGroupsNoNoise) {
   auto vectors = makeVectors(rowType_, 0, 5);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"noisy_count_if_gaussian(c1, 0.0)", "noisy_count_if_gaussian(c2, 0.0)"},
-      "SELECT c0, sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp group by c0, c1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates(
+          {"noisy_count_if_gaussian(c1, 0.0)",
+           "noisy_count_if_gaussian(c2, 0.0)"})
+      .assertResults(
+          "SELECT c0, sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp group by c0, c1");
 }
 
 // Test that the aggregation supports BIGINT as a valid
@@ -194,11 +205,11 @@ TEST_F(NoisyCountIfGaussianAggregationTest, bigIntNoiseScaleTypeNoNoise) {
   auto vectors = makeVectors(rowType_, 10, 4);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_count_if_gaussian(c1, 0)", "noisy_count_if_gaussian(c2, 0)"},
-      "SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"noisy_count_if_gaussian(c1, 0)", "noisy_count_if_gaussian(c2, 0)"})
+      .assertResults("SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
 }
 
 // Test that the aggregation random seed as input
@@ -206,12 +217,12 @@ TEST_F(NoisyCountIfGaussianAggregationTest, randomSeedNoNoise) {
   auto vectors = makeVectors(rowType_, 10, 4);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_count_if_gaussian(c1, 0.0, 456)",
-       "noisy_count_if_gaussian(c2, 0.0, 456)"},
-      "SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"noisy_count_if_gaussian(c1, 0.0, 456)",
+           "noisy_count_if_gaussian(c2, 0.0, 456)"})
+      .assertResults("SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
 }
 
 // Test that given a random seed, the aggregation is deterministic.
@@ -239,8 +250,10 @@ TEST_F(NoisyCountIfGaussianAggregationTest, randomSeedDeterminism) {
   // The result should be the same for the same input, noise scale, and seed
   int numRuns = 10;
   for (int i = 0; i < numRuns; i++) {
-    testAggregations(
-        vectors, {}, {"noisy_count_if_gaussian(c1, 3, 456)"}, {expectedResult});
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"noisy_count_if_gaussian(c1, 3, 456)"})
+        .assertResults(expectedResult);
   }
 }
 

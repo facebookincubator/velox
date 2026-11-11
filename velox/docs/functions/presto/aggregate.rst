@@ -1014,3 +1014,98 @@ Miscellaneous
 .. function:: sum_data_size_for_stats(x) -> bigint
 
     Returns an estimate of the sum of in-memory size in bytes of ``x``.
+
+Vector Index Aggregate Functions
+--------------------------------
+
+These functions are available when Velox is built with FAISS
+(``VELOX_ENABLE_FAISS``).
+
+.. function:: vector_count(index) -> bigint
+
+    Returns the number of embeddings in the group's vector indexes: the sum of
+    ``cardinality(index)``. Rows with a null ``index`` are ignored. Returns
+    NULL if the group has no non-null ``index``.
+
+    Example::
+
+        SELECT ds, vector_count(local_index)
+        FROM local_indexes
+        GROUP BY ds;
+
+.. function:: vector_index_build(embedding, id, index_type, metric, options) -> vector_index
+
+    Builds a local vector index over the group's rows: a FAISS index holding
+    each embedding with its ``id``, serialized as ``faiss::write_index``
+    writes it. A vector index keeps one local index per group of nearby
+    embeddings, and a search looks only in the groups nearest to the query.
+
+    * ``embedding`` (ARRAY(REAL)): all embeddings must have the same, non-zero
+      length and must not contain null, NaN or infinite elements.
+    * ``id`` (BIGINT): the id a search returns for the embedding. Ids need not
+      be distinct. An id may not be -1, which FAISS returns for a missing
+      result.
+    * ``index_type`` (VARCHAR): a constant. Supported values:
+
+      * ``'flat'``: every embedding stored in full; a search is exact.
+      * ``'ivf_flat'``: the embeddings clustered into lists; a search scans
+        the lists nearest to the query.
+      * ``'ivf_sq'``: as ``'ivf_flat'``, with each dimension compressed to 8
+        bits.
+      * ``'hnsw_sq'``: a graph of near neighbors over embeddings with each
+        dimension compressed to 8 bits.
+
+    * ``metric`` (VARCHAR): a constant. Supported values: ``'cosine'``, which
+      normalizes embeddings to length 1 and compares by dot product.
+    * ``options`` (MAP(VARCHAR, VARCHAR)): a constant map of settings, each a
+      positive integer. Settings that do not apply to ``index_type`` are
+      errors.
+
+      * ``ivf.nlist``: the number of lists. Defaults to ``4 * sqrt(n)`` for
+        ``n`` embeddings, between 8 and 16384. Reduced, even when set, to give
+        each list at least 39 embeddings.
+      * ``ivf.nprobe``: the number of lists a search scans by default.
+        Defaults to all the lists, and is capped at the number of lists.
+      * ``hnsw.M``: the number of neighbors of each embedding in the graph,
+        between 2 and 256. Defaults to 32.
+      * ``hnsw.efConstruction``: the number of candidates the build explores.
+        Defaults to 200.
+      * ``hnsw.efSearch``: the number of candidates a search explores by
+        default. Defaults to 64.
+
+    Rows with a null ``embedding`` or ``id`` are ignored.
+
+    Example::
+
+        SELECT cluster_id,
+            vector_index_build(embedding, id, 'ivf_flat', 'cosine',
+                map(array['ivf.nprobe'], array['4']))
+        FROM items
+        GROUP BY cluster_id;
+
+.. function:: vector_index_train(embedding, id, num_clusters, metric) -> vector_index
+
+    Clusters the embeddings with k-means and returns the codec of the
+    clusters: a ``'flat'`` local index over the centroids, as
+    :func:`vector_index_build` writes it, with clusters numbered from 0.
+
+    * ``embedding`` (ARRAY(REAL)): all embeddings must have the same, non-zero
+      length and must not contain null, NaN or infinite elements.
+    * ``id`` (BIGINT): orders the embeddings before the k-means, so the result
+      does not depend on the order of rows, if the ids are distinct.
+    * ``num_clusters`` (BIGINT): a positive constant. A group with fewer
+      embeddings gets one cluster per embedding.
+    * ``metric`` (VARCHAR): a constant. Supported values: ``'cosine'``, for
+      which the k-means is spherical: embeddings and centroids are normalized
+      to length 1, and an embedding goes to the centroid with the largest dot
+      product.
+
+    Rows with a null ``embedding`` or ``id`` are ignored. The k-means runs over
+    all of the group's embeddings, on FAISS's threads, so a large group is
+    best sampled first.
+
+    Example::
+
+        SELECT ds, vector_index_train(embedding, id, 1000, 'cosine')
+        FROM items
+        GROUP BY ds;

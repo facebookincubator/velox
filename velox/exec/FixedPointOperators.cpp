@@ -67,11 +67,13 @@ std::shared_ptr<PersistentState> stateOf(
 // task: it waits for the loop to finish, then reads the loop's output entry.
 class StateSourceOperator : public exec::SourceOperator {
  public:
+  // With 'emits' false, the operator waits for 'loop' and then emits nothing.
   StateSourceOperator(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       const core::StateSourceNodePtr& node,
-      FixedPointLoop* loop = nullptr)
+      FixedPointLoop* loop,
+      bool emits)
       : SourceOperator(
             driverCtx,
             node->outputType(),
@@ -81,6 +83,7 @@ class StateSourceOperator : public exec::SourceOperator {
         stateName_{node->stateName()},
         delta_{node->delta()},
         loop_{loop},
+        emits_{emits},
         driverIndex_{driverCtx->partitionId} {
     if (loop_ == nullptr) {
       const auto state = stateOf(driverCtx, stateName_, /*hashTable=*/false);
@@ -126,7 +129,9 @@ class StateSourceOperator : public exec::SourceOperator {
     }
     // A failed loop fails the task, which stops this driver.
     VELOX_CHECK(loop_->succeeded(), "The fixed point failed");
-    batches_ = loop_->state()->getVector(stateName_);
+    if (emits_) {
+      batches_ = loop_->state()->getVector(stateName_);
+    }
     read_ = true;
     return exec::BlockingReason::kNotBlocked;
   }
@@ -157,6 +162,10 @@ class StateSourceOperator : public exec::SourceOperator {
 
   // The loop whose output this reads, if it is a FixedPointNode leaf.
   FixedPointLoop* const loop_;
+
+  // False when this worker emits none of the loop's output (see
+  // core::FixedPointNode::outputOnWorkerZero).
+  const bool emits_;
 
   // This driver emits batches driverIndex_, driverIndex_ + numDrivers_, and so
   // on.
@@ -361,14 +370,20 @@ std::unique_ptr<Operator> FixedPointOperators::create(
   auto* loop = driverCtx->task->fixedPoint();
   VELOX_CHECK_NOT_NULL(loop, "A FixedPointNode leaf needs its task's loop");
   return std::make_unique<StateSourceOperator>(
-      operatorId, driverCtx, stateSource, loop);
+      operatorId,
+      driverCtx,
+      stateSource,
+      loop,
+      /*emits=*/!node->outputOnWorkerZero() ||
+          driverCtx->task->destination() == 0);
 }
 
 std::unique_ptr<Operator> FixedPointOperators::create(
     int32_t operatorId,
     DriverCtx* driverCtx,
     const core::StateSourceNodePtr& node) {
-  return std::make_unique<StateSourceOperator>(operatorId, driverCtx, node);
+  return std::make_unique<StateSourceOperator>(
+      operatorId, driverCtx, node, /*loop=*/nullptr, /*emits=*/true);
 }
 
 std::unique_ptr<Operator> FixedPointOperators::create(

@@ -19,6 +19,8 @@
 #include "velox/connectors/hive/iceberg/DeletionVectorFormat.h"
 
 #include <fstream>
+#include <random>
+#include <set>
 
 #include <folly/json.h>
 #include <folly/lang/Bits.h>
@@ -1575,4 +1577,238 @@ TEST_F(DeletionVectorReaderTest, allContainerEncodingsInOneBitmap) {
 
   DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
   EXPECT_EQ(reader.deletedPositions(), expected);
+}
+
+TEST_F(DeletionVectorReaderTest, batchesMatchExpandedPositions) {
+  // Batches are filled straight from the compressed containers. Check every
+  // batch against the expanded positions, across all three container
+  // encodings, two Roaring64 groups, and batch sizes that do and do not line
+  // up with bitmap words or container boundaries.
+  using Encoding = ContainerSpec::Encoding;
+  for (uint32_t seed : {1u, 2u, 3u}) {
+    SCOPED_TRACE("seed " + std::to_string(seed));
+    std::mt19937 rng(seed);
+    const auto randomValues = [&](size_t count) {
+      std::uniform_int_distribution<uint32_t> value(0, 65'535);
+      std::set<uint16_t> values;
+      while (values.size() < count) {
+        values.insert(static_cast<uint16_t>(value(rng)));
+      }
+      return std::vector<uint16_t>(values.begin(), values.end());
+    };
+    const auto randomRunValues = [&]() {
+      std::uniform_int_distribution<uint32_t> gap(1, 3'000);
+      std::uniform_int_distribution<uint32_t> length(1, 2'000);
+      std::vector<uint16_t> values;
+      for (uint32_t next = gap(rng); next < 60'000;) {
+        const uint32_t end = next + length(rng);
+        for (uint32_t value = next; value < end; ++value) {
+          values.push_back(static_cast<uint16_t>(value));
+        }
+        next = end + gap(rng);
+      }
+      return values;
+    };
+
+    const std::vector<ContainerSpec> lowGroup = {
+        {0, Encoding::kArray, randomValues(1'000)},
+        {1, Encoding::kRun, randomRunValues()},
+        {2, Encoding::kBitset, randomValues(30'000)},
+        {5, Encoding::kArray, randomValues(17)},
+    };
+    const std::vector<ContainerSpec> highGroup = {
+        {3, Encoding::kBitset, randomValues(10'000)},
+    };
+
+    constexpr int64_t kHighGroupBase = int64_t{1} << 32;
+    std::vector<int64_t> expected;
+    for (const auto& [groupBase, containers] :
+         {std::pair{int64_t{0}, &lowGroup},
+          std::pair{kHighGroupBase, &highGroup}}) {
+      for (const auto& spec : *containers) {
+        for (auto value : spec.values) {
+          expected.push_back(
+              groupBase + (static_cast<int64_t>(spec.key) << 16) + value);
+        }
+      }
+    }
+    std::sort(expected.begin(), expected.end());
+
+    auto bitmapData = wrapInRoaring64(
+        {{0, serializeRoaringBitmapMixed(lowGroup)},
+         {1, serializeRoaringBitmapMixed(highGroup)}});
+    auto tempFile = writeDvFile(bitmapData);
+    auto dvFile = makeDvDeleteFile(
+        tempFile->getPath(),
+        expected.size(),
+        static_cast<uint64_t>(bitmapData.size()));
+
+    constexpr int64_t kSplitOffset = 7;
+    DeletionVectorReader reader(dvFile, kSplitOffset, pool_.get(), nullptr);
+
+    const std::vector<uint64_t> batchSizes = {1, 63, 64, 1'000, 7'777, 65'549};
+    size_t nextSize = 0;
+    const auto checkBatches = [&](int64_t start, int64_t end) {
+      while (start < end) {
+        const uint64_t size = batchSizes[nextSize++ % batchSizes.size()];
+        auto bitmap = allocateBitmap(size);
+        reader.readDeletePositions(start - kSplitOffset, size, bitmap);
+
+        std::vector<uint64_t> expectedBits;
+        for (auto it =
+                 std::lower_bound(expected.begin(), expected.end(), start);
+             it != expected.end() && *it < start + static_cast<int64_t>(size);
+             ++it) {
+          expectedBits.push_back(static_cast<uint64_t>(*it - start));
+        }
+        ASSERT_EQ(getSetBits(bitmap, size), expectedBits) << "batch " << start;
+        start += static_cast<int64_t>(size);
+      }
+    };
+    checkBatches(kSplitOffset, 6 * 65'536);
+    EXPECT_FALSE(reader.noMoreData());
+    checkBatches(
+        kHighGroupBase + 3 * 65'536 - 5'000, kHighGroupBase + 4 * 65'536 + 100);
+    EXPECT_TRUE(reader.noMoreData());
+
+    DeletionVectorReader expander(dvFile, 0, pool_.get(), nullptr);
+    EXPECT_EQ(expander.deletedPositions(), expected);
+  }
+}
+
+TEST_F(DeletionVectorReaderTest, keepsBitsAlreadySetInBatch) {
+  // Positional delete files fill the same bitmap before the deletion vector
+  // does, so applying a deletion vector must only add bits.
+  std::vector<uint16_t> runValues;
+  for (uint16_t value = 20; value < 300; ++value) {
+    runValues.push_back(value);
+  }
+  auto bitmapData = serializeRoaringBitmapMixed(
+      {{0, ContainerSpec::Encoding::kRun, runValues}});
+  auto tempFile = writeDvFile(bitmapData);
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      runValues.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+
+  auto bitmap = allocateBitmap(400);
+  bits::setBit(bitmap->asMutable<uint8_t>(), 5);
+  bits::setBit(bitmap->asMutable<uint8_t>(), 350);
+  reader.readDeletePositions(0, 400, bitmap);
+
+  std::vector<uint64_t> expected = {5};
+  for (uint64_t i = 20; i < 300; ++i) {
+    expected.push_back(i);
+  }
+  expected.push_back(350);
+  EXPECT_EQ(getSetBits(bitmap, 400), expected);
+}
+
+TEST_F(DeletionVectorReaderTest, runFillStaysInsideBatchBitmap) {
+  // A run covering the whole batch is filled a byte at a time. It must not
+  // write past the bytes the batch needs, or the bits after it in the last
+  // byte.
+  std::vector<uint16_t> runValues;
+  for (uint16_t value = 0; value < 200; ++value) {
+    runValues.push_back(value);
+  }
+  auto bitmapData = serializeRoaringBitmapMixed(
+      {{0, ContainerSpec::Encoding::kRun, runValues}});
+  auto tempFile = writeDvFile(bitmapData);
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      runValues.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+
+  constexpr uint64_t kBatchSize = 21;
+  auto bitmap = AlignedBuffer::allocate<uint8_t>(
+      bits::nbytes(kBatchSize) + 1, pool_.get(), 0);
+  reader.readDeletePositions(0, kBatchSize, bitmap);
+
+  const auto* raw = bitmap->as<uint8_t>();
+  EXPECT_EQ(raw[0], 0xFF);
+  EXPECT_EQ(raw[1], 0xFF);
+  EXPECT_EQ(raw[2], 0x1F);
+  EXPECT_EQ(raw[3], 0);
+}
+
+TEST_F(DeletionVectorReaderTest, appliesGroupsWrittenOutOfOrder) {
+  // Writers emit Roaring64 groups in increasing order, but a blob that does
+  // not must still delete every row it lists.
+  auto bitmapData = wrapInRoaring64(
+      {{1, serializeRoaringBitmapNoRun({6})},
+       {0, serializeRoaringBitmapNoRun({3})}});
+  auto tempFile = writeDvFile(bitmapData);
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(), 2, static_cast<uint64_t>(bitmapData.size()));
+
+  constexpr int64_t kHighGroupBase = int64_t{1} << 32;
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  auto low = allocateBitmap(10);
+  reader.readDeletePositions(0, 10, low);
+  EXPECT_EQ(getSetBits(low, 10), (std::vector<uint64_t>{3}));
+  auto high = allocateBitmap(10);
+  reader.readDeletePositions(kHighGroupBase, 10, high);
+  EXPECT_EQ(getSetBits(high, 10), (std::vector<uint64_t>{6}));
+  EXPECT_TRUE(reader.noMoreData());
+
+  DeletionVectorReader expander(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(
+      expander.deletedPositions(),
+      (std::vector<int64_t>{3, kHighGroupBase + 6}));
+}
+
+TEST_F(DeletionVectorReaderTest, rejectsUnsortedArrayContainer) {
+  // Batches binary-search array containers, so unsorted values would silently
+  // skip deletes. Reject them instead.
+  auto bitmapData = serializeRoaringBitmapMixed(
+      {{0, ContainerSpec::Encoding::kArray, {5, 3}}});
+  auto tempFile = writeDvFile(bitmapData);
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(), 2, static_cast<uint64_t>(bitmapData.size()));
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  auto bitmap = allocateBitmap(10);
+  VELOX_ASSERT_THROW(
+      reader.readDeletePositions(0, 10, bitmap),
+      "Roaring array container values are not strictly increasing.");
+}
+
+TEST_F(DeletionVectorReaderTest, rejectsMalformedRuns) {
+  // One run container, below the offset-section threshold. Each run is
+  // (start, lengthMinus1).
+  const auto runContainerBitmap =
+      [](const std::vector<std::pair<uint16_t, uint16_t>>& runs) {
+        std::string data;
+        const uint32_t cookie = 12'347;
+        data.append(reinterpret_cast<const char*>(&cookie), 4);
+        data.push_back('\x01');
+        const uint16_t key = 0;
+        const uint16_t cardMinus1 = 0;
+        data.append(reinterpret_cast<const char*>(&key), 2);
+        data.append(reinterpret_cast<const char*>(&cardMinus1), 2);
+        const auto numRuns = static_cast<uint16_t>(runs.size());
+        data.append(reinterpret_cast<const char*>(&numRuns), 2);
+        for (auto [start, lengthMinus1] : runs) {
+          data.append(reinterpret_cast<const char*>(&start), 2);
+          data.append(reinterpret_cast<const char*>(&lengthMinus1), 2);
+        }
+        return data;
+      };
+  const auto readRuns =
+      [&](const std::vector<std::pair<uint16_t, uint16_t>>& runs) {
+        auto bitmapData = runContainerBitmap(runs);
+        auto tempFile = writeDvFile(bitmapData);
+        auto dvFile = makeDvDeleteFile(
+            tempFile->getPath(), 1, static_cast<uint64_t>(bitmapData.size()));
+        DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+        return reader.deletedPositions();
+      };
+
+  EXPECT_EQ(readRuns({{2, 1}, {10, 0}}), (std::vector<int64_t>{2, 3, 10}));
+  VELOX_ASSERT_THROW(
+      readRuns({{65'530, 10}}), "Roaring run extends past its container.");
+  VELOX_ASSERT_THROW(
+      readRuns({{0, 10}, {5, 3}}), "Roaring runs are not sorted and disjoint.");
 }

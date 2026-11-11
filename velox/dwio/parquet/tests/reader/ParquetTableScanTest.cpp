@@ -782,8 +782,70 @@ TEST_F(ParquetTableScanTest, array) {
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .connectorSessionProperty(
-          kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+          kHiveConnectorId,
+          connector::FileConfig::kUseColumnNamesSession,
+          "true")
       .splits({makeSplit(getExampleFilePath("nested_array_struct.parquet"))})
+      .assertResults(expected);
+}
+
+TEST_F(ParquetTableScanTest, legacyThriftListOfRow) {
+  // In parquet-thrift-compat.parquet, complexColumn is a MAP whose value is a
+  // legacy two-level LIST. Its two-field repeated group "value_tuple" is the
+  // list element, so it reads as ARRAY<ROW>.
+  const auto rowType =
+      ROW("complexColumn",
+          MAP(INTEGER(),
+              ARRAY(ROW({
+                  {"nestedIntsColumn", ARRAY(INTEGER())},
+                  {"nestedStringColumn", VARCHAR()},
+              }))));
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(rowType, {}, "", rowType, {})
+                  .planNode();
+
+  auto genOffsets = [](vector_size_t size) {
+    std::vector<vector_size_t> offsets;
+    for (auto i = 0; i < size; ++i) {
+      if (i % 3 == 0) {
+        offsets.emplace_back(i);
+      }
+    }
+    return offsets;
+  };
+
+  const vector_size_t size = 10;
+  auto arrayOfInts = makeArrayVector(
+      genOffsets(size * 27), makeFlatVector<int32_t>(size * 27, [](auto row) {
+        return row / 27 + (row % 9) / 3 + row % 3;
+      }));
+  auto rowOfArray = makeRowVector(
+      {"nestedIntsColumn", "nestedStringColumn"},
+      {
+          arrayOfInts,
+          makeFlatVector<std::string>(
+              size * 9,
+              [](auto row) {
+                return "val_" + std::to_string(row / 9 + row % 3);
+              }),
+      });
+  auto arrayOfRow = makeArrayVector(genOffsets(size * 9), rowOfArray);
+  auto expected = makeRowVector(
+      rowType->names(),
+      {
+          makeMapVector(
+              genOffsets(size * 3),
+              makeFlatVector<int32_t>(
+                  size * 3, [](auto row) { return row / 3 + row % 3; }),
+              arrayOfRow),
+      });
+
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          connector::FileConfig::kUseColumnNamesSession,
+          "true")
+      .splits({makeSplit(getExampleFilePath("parquet-thrift-compat.parquet"))})
       .assertResults(expected);
 }
 
@@ -1011,19 +1073,19 @@ TEST_F(ParquetTableScanTest, rowIndex) {
   connector::ColumnHandleMap assignments;
   assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
       "a",
-      connector::hive::FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       BIGINT(),
       BIGINT());
   assignments["b"] = std::make_shared<connector::hive::HiveColumnHandle>(
       "b",
-      connector::hive::FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       DOUBLE(),
       DOUBLE());
   assignments[kPath] = synthesizedColumn(kPath, VARCHAR());
   assignments["_tmp_metadata_row_index"] =
       std::make_shared<connector::hive::HiveColumnHandle>(
           "_tmp_metadata_row_index",
-          connector::hive::FileColumnHandle::ColumnType::kRowIndex,
+          connector::FileColumnHandle::ColumnType::kRowIndex,
           BIGINT(),
           BIGINT());
 
@@ -1112,13 +1174,17 @@ TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
           }));
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
-      "c0", BIGINT(), BIGINT(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c0",
+      BIGINT(),
+      BIGINT(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
       "c1",
       BIGINT(),
       BIGINT(),
       {},
-      FileColumnHandle::ColumnType::kPartitionKey);
+      connector::FileColumnHandle::ColumnType::kPartitionKey);
 
   const auto filePath =
       getExampleFilePath("icebergNullIcebergPartition.parquet");
@@ -1550,7 +1616,9 @@ TEST_F(ParquetTableScanTest, structElementsByName) {
       .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
       .config(core::QueryConfig::kMaxOutputBatchRows, "1")
       .connectorSessionProperty(
-          kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+          kHiveConnectorId,
+          connector::FileConfig::kUseColumnNamesSession,
+          "true")
       .split(makeSplit(file->getPath()))
       .assertResults(expected);
 }
@@ -1795,15 +1863,35 @@ TEST_F(ParquetTableScanTest, booleanRle) {
   loadData(schema, vector);
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
-      "c0", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c0",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
-      "c1", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c1",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
-      "c2", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c2",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c3 = makeColumnHandle(
-      "c3", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c3",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c4 = makeColumnHandle(
-      "c4", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c4",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
 
   assertSelect({makeSplit(file->getPath())}, {"c0"}, "SELECT c0 FROM tmp");
   assertSelect({makeSplit(file->getPath())}, {"c1"}, "SELECT c1 FROM tmp");
@@ -1831,11 +1919,23 @@ TEST_F(ParquetTableScanTest, singleBooleanRle) {
   loadData(schema, vector);
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
-      "c0", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c0",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
-      "c1", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c1",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
-      "c2", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c2",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
 
   assertSelect({makeSplit(file->getPath())}, {"c0"}, "SELECT c0 FROM tmp");
   assertSelect({makeSplit(file->getPath())}, {"c1"}, "SELECT c1 FROM tmp");

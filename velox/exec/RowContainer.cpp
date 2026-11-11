@@ -271,7 +271,16 @@ RowContainer::RowContainer(
                                                  : RowColumn::kNotNullOffset);
     ++nullOffsetsPos;
   }
-  rowColumnsStats_.resize(types_.size());
+  initColumnStats();
+}
+
+void RowContainer::initColumnStats() {
+  rowColumnsStats_.clear();
+  rowColumnsStats_.reserve(types_.size());
+  for (size_t i = 0; i < types_.size(); ++i) {
+    rowColumnsStats_.emplace_back(
+        types_[i]->isFixedWidth() ? typeKindSize(typeKinds_[i]) : -1);
+  }
 }
 
 RowContainer::~RowContainer() {
@@ -344,9 +353,8 @@ void RowContainer::removeOrUpdateRowColumnStats(
   for (auto i = 0; i < types_.size(); i++) {
     if (isNullAt(row, columnAt(i))) {
       rowColumnsStats_[i].removeOrUpdateCellStats(0, true, setToNull);
-    } else if (types_[i]->isFixedWidth()) {
-      rowColumnsStats_[i].removeOrUpdateCellStats(
-          fixedSizeAt(i), false, setToNull);
+    } else if (rowColumnsStats_[i].isFixedWidth()) {
+      rowColumnsStats_[i].removeOrUpdateCellStats(0, false, setToNull);
     } else {
       rowColumnsStats_[i].removeOrUpdateCellStats(
           variableSizeAt(row, i), false, setToNull);
@@ -456,19 +464,28 @@ void RowColumn::Stats::removeOrUpdateCellStats(
     }
   } else {
     --nonNullCount_;
-    sumBytes_ -= bytes;
+    if (!isFixedWidth()) {
+      sumBytes_ -= bytes;
+    }
     if (setToNull) {
       ++nullCount_;
     }
   }
-  invalidateMinMaxColumnStats();
+  // The min and max of a fixed-width column stay exact after a removal.
+  if (!isFixedWidth()) {
+    invalidateMinMaxColumnStats();
+  }
 }
 
 // static
 RowColumn::Stats RowColumn::Stats::merge(
     const std::vector<RowColumn::Stats>& statsList) {
   RowColumn::Stats mergedStats;
+  if (!statsList.empty()) {
+    mergedStats.fixedWidth_ = statsList.front().fixedWidth_;
+  }
   for (const auto& stats : statsList) {
+    VELOX_DCHECK_EQ(mergedStats.fixedWidth_, stats.fixedWidth_);
     if (mergedStats.numCells() == 0) {
       mergedStats.minBytes_ = stats.minBytes_;
       mergedStats.maxBytes_ = stats.maxBytes_;
@@ -504,8 +521,8 @@ void RowContainer::updateColumnStats(
   auto& columnStats = rowColumnsStats_[columnIndex];
   if (decoded.isNullAt(rowIndex)) {
     columnStats.addNullCell();
-  } else if (types_[columnIndex]->isFixedWidth()) {
-    columnStats.addCellSize(fixedSizeAt(columnIndex));
+  } else if (columnStats.isFixedWidth()) {
+    columnStats.addFixedWidthCell();
   } else {
     columnStats.addCellSize(variableSizeAt(row, columnIndex));
   }
@@ -517,8 +534,8 @@ void RowContainer::updateColumnStats(char* row, int32_t columnIndex) {
   auto& columnStats = rowColumnsStats_[columnIndex];
   if (nullColumn) {
     columnStats.addNullCell();
-  } else if (types_[columnIndex]->isFixedWidth()) {
-    columnStats.addCellSize(fixedSizeAt(columnIndex));
+  } else if (columnStats.isFixedWidth()) {
+    columnStats.addFixedWidthCell();
   } else {
     columnStats.addCellSize(variableSizeAt(row, columnIndex));
   }
@@ -840,9 +857,14 @@ int32_t RowContainer::compareStringAsc(
     StringView left,
     const DecodedVector& decoded,
     vector_size_t index) {
+  auto right = decoded.valueAt<StringView>(index);
+  // Decides from the prefix without contiguousString(), which reads the
+  // allocator header of an out-of-line 'left'.
+  if (auto result = left.comparePrefix(right)) {
+    return *result;
+  }
   std::string storage;
-  return HashStringAllocator::contiguousString(left, storage)
-      .compare(decoded.valueAt<StringView>(index));
+  return HashStringAllocator::contiguousString(left, storage).compare(right);
 }
 
 // static
@@ -859,6 +881,9 @@ int RowContainer::compareComplexType(
 }
 
 int32_t RowContainer::compareStringAsc(StringView left, StringView right) {
+  if (auto result = left.comparePrefix(right)) {
+    return *result;
+  }
   std::string leftStorage;
   std::string rightStorage;
   return HashStringAllocator::contiguousString(left, leftStorage)
@@ -992,8 +1017,7 @@ void RowContainer::clear() {
   numFreeRows_ = 0;
   firstFreeRow_ = nullptr;
 
-  rowColumnsStats_.clear();
-  rowColumnsStats_.resize(types_.size());
+  initColumnStats();
 }
 
 void RowContainer::setProbedFlag(char** rows, int32_t numRows) {

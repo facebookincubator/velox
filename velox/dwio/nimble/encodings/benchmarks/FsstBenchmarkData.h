@@ -146,16 +146,30 @@ inline std::string fsstBenchmarkStructuredValue(uint32_t row, uint64_t seed) {
 
 } // namespace detail
 
-/// Builds the deterministic SortedStructuredTextMixedLengths FSST corpus.
+/// Selects the string patterns in a deterministic FSST benchmark corpus.
+enum class FsstBenchmarkCorpusKind { kMixed, kUrl, kJsonLog };
+
+/// Builds a sorted deterministic FSST corpus with the selected string patterns.
 inline StringBenchmarkCorpus makeFsstBenchmarkCorpus(
     uint32_t rowCount = kFsstBenchmarkDefaultRowCount,
-    uint64_t seed = kFsstBenchmarkDefaultSeed) {
+    uint64_t seed = kFsstBenchmarkDefaultSeed,
+    FsstBenchmarkCorpusKind corpusKind = FsstBenchmarkCorpusKind::kMixed) {
   std::vector<std::string> storage;
   storage.reserve(rowCount);
   for (uint32_t row = 0; row < rowCount; ++row) {
-    storage.push_back(
-        row < 16 ? detail::fsstBenchmarkEdgeValue(row, seed)
-                 : detail::fsstBenchmarkStructuredValue(row, seed));
+    switch (corpusKind) {
+      case FsstBenchmarkCorpusKind::kMixed:
+        storage.push_back(
+            row < 16 ? detail::fsstBenchmarkEdgeValue(row, seed)
+                     : detail::fsstBenchmarkStructuredValue(row, seed));
+        break;
+      case FsstBenchmarkCorpusKind::kUrl:
+        storage.push_back(detail::fsstBenchmarkUrlValue(row, seed));
+        break;
+      case FsstBenchmarkCorpusKind::kJsonLog:
+        storage.push_back(detail::fsstBenchmarkLogValue(row, seed));
+        break;
+    }
   }
   return finalizeStringBenchmarkCorpus(std::move(storage));
 }

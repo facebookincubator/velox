@@ -24,7 +24,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/tests/TestUtils.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/dwrf/test/TestReadFile.h"
 
@@ -736,7 +736,7 @@ class CustomDirectBufferedInput
 };
 
 class CustomBufferedInputBuilder
-    : public facebook::velox::connector::hive::BufferedInputBuilder {
+    : public facebook::velox::connector::BufferedInputBuilder {
  public:
   std::unique_ptr<facebook::velox::dwio::common::BufferedInput> create(
       const facebook::velox::FileHandle& fileHandle,
@@ -768,7 +768,7 @@ class CustomBufferedInputTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     MemoryManager::testingSetInstance(MemoryManager::Options{});
-    facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+    facebook::velox::connector::BufferedInputBuilder::registerBuilder(
         std::make_shared<CustomBufferedInputBuilder>());
   }
 
@@ -791,9 +791,8 @@ TEST_F(CustomBufferedInputTest, basic) {
   auto executor = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
 
   VELOX_ASSERT_THROW(
-      facebook::velox::connector::hive::BufferedInputBuilder::getInstance()
-          ->create(
-              fileHandle, readerOpts, nullptr, ioStatistics, ioStats, nullptr),
+      facebook::velox::connector::BufferedInputBuilder::getInstance()->create(
+          fileHandle, readerOpts, nullptr, ioStatistics, ioStats, nullptr),
       "Not implemented in CustomBufferedInputBuilder");
 }
 

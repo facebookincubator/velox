@@ -20,7 +20,6 @@
 #include <algorithm>
 #include <cmath>
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
 #include "velox/dwio/nimble/index/IndexFilter.h"
@@ -29,7 +28,6 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/Statistics.h"
-#include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/selective/ColumnReader.h"
 #include "velox/dwio/nimble/selective/ReaderBase.h"
@@ -49,9 +47,12 @@ using namespace facebook::velox;
 
 namespace {
 
-Encoding::Options encodingOptions(const TabletReader& tablet) {
+Encoding::Options encodingOptions(
+    const TabletReader& tablet,
+    const dwio::common::RowReaderOptions& rowOptions) {
   Encoding::Options options;
   options.useVarintRowCount = tablet.properties().compactRowCountEncoding();
+  options.enableFsstDecodeCache = rowOptions.nimbleFsstDecodeRepeatedPayloads();
   return options;
 }
 
@@ -335,6 +336,13 @@ void mergeRowRanges(std::vector<RowRange>& ranges) {
   ranges.resize(outputIndex + 1);
 }
 
+// Returns true when 'ranges' skip all rows in [0, numRows). The ranges are
+// sorted and merged, so only the first one needs checking.
+bool coversAllRows(const std::vector<RowRange>& ranges, uint32_t numRows) {
+  return !ranges.empty() && ranges.front().startRow == 0 &&
+      ranges.front().endRow >= numRows;
+}
+
 } // namespace
 
 namespace {
@@ -347,15 +355,9 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
       : lazyIoColumns_{computeLazyIoColumns(options)},
         readerBase_{readerBase},
         options_{options},
-        enableStripeStats_{featureGate()->enabled(
-            FeatureGate::FeatureSet::kStripeStatsPruning,
-            /*defaultValue=*/false)},
         encodingFactory_(
-            options.stringDecoderZeroCopy()
-                ? std::make_unique<const EncodingFactory>(
-                      encodingOptions(readerBase_->tablet()))
-                : std::make_unique<const legacy::EncodingFactory>(
-                      encodingOptions(readerBase_->tablet()))),
+            std::make_unique<const EncodingFactory>(
+                encodingOptions(readerBase_->tablet(), options))),
         streams_(readerBase_),
         rowSizeTracker_{
             std::make_unique<RowSizeTracker>(readerBase->fileSchemaWithId())} {
@@ -447,7 +449,10 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   // if stats are available.
   void computeStatsBasedRowSize() const;
 
-  bool skipStripe(uint32_t stripe) const;
+  // Returns true when chunk statistics rule out every row of the current
+  // stripe, and counts those rows as skipped by them. Otherwise the stripe's
+  // skip ranges stay in skipRanges_ for reading it.
+  bool skipStripeByChunkStats(uint32_t numStripeRows);
 
   // Computes which top-level columns should use lazy I/O based on the scan
   // spec and remaining filter columns. Returns a const set used for the
@@ -461,10 +466,6 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
 
   const std::shared_ptr<ReaderBase> readerBase_;
   const dwio::common::RowReaderOptions options_;
-  // Reader-side killswitch, evaluated once at construction (not per stripe):
-  // FeatureGate maps to JK dwio/nimble:enable_stripe_stats_pruning. When false,
-  // skipStripe does no pruning and every stripe is read.
-  const bool enableStripeStats_;
   const std::unique_ptr<const EncodingFactory> encodingFactory_;
   StripeStreams streams_;
   std::vector<int64_t> stripeRowOffsets_;
@@ -533,14 +534,13 @@ int64_t SelectiveNimbleRowReader::nextRowNumber() {
         advanceToNextStripe();
         continue;
       }
-      if (skipStripe(currentStripe_)) {
+      if (skipStripeByChunkStats(numStripeRows)) {
         maybeUpdateRandomSkip(numStripeRows);
         ++skippedStripes_;
         advanceToNextStripe();
         continue;
       }
       loadCurrentStripe();
-      computeSkipRowRanges();
     }
     if (endRowInCurrentStripe_.has_value()) {
       NIMBLE_CHECK_LE(endRowInCurrentStripe_.value(), numStripeRows);
@@ -639,8 +639,12 @@ void SelectiveNimbleRowReader::computeSkipRowRanges() {
     return;
   }
 
+  NIMBLE_CHECK_EQ(
+      streams_.stripeIndex(),
+      currentStripe_,
+      "Chunk statistics must come from the current stripe.");
   const auto* scanSpec = options_.scanSpec().get();
-  if (columnReader_ == nullptr || scanSpec == nullptr) {
+  if (scanSpec == nullptr) {
     return;
   }
 
@@ -744,94 +748,19 @@ void SelectiveNimbleRowReader::computeStatsBasedRowSize() const {
   }
 }
 
-bool SelectiveNimbleRowReader::skipStripe(uint32_t stripe) const {
-  // Reader-side killswitch: when disabled, read every stripe (no pruning).
-  if (!enableStripeStats_) {
+bool SelectiveNimbleRowReader::skipStripeByChunkStats(uint32_t numStripeRows) {
+  if (!readerBase_->tablet().supportsChunkStatsPruning()) {
     return false;
   }
-  const auto& stripeStats = readerBase_->stripeColumnStats();
-  if (stripe >= stripeStats.size() || stripeStats[stripe].empty()) {
+  // Also keeps the stripe metadata cached for loadCurrentStripe().
+  streams_.setStripe(currentStripe_);
+  computeSkipRowRanges();
+  if (!coversAllRows(skipRanges_, numStripeRows)) {
     return false;
   }
-  const auto& rootType = *readerBase_->fileSchemaWithId();
-  const auto& rowType = rootType.type()->asRow();
-  const auto stableChildren = options_.scanSpec()->stableChildren();
-  for (const auto& childSpec : *stableChildren) {
-    if (!childSpec->hasFilter() || childSpec->filter() == nullptr ||
-        childSpec->isConstant() || !childSpec->readFromFile()) {
-      continue;
-    }
-    const auto columnIndex =
-        rowType.getChildIdxIfExists(childSpec->fieldName());
-    if (!columnIndex.has_value()) {
-      continue;
-    }
-    const auto& childType = rootType.childAt(columnIndex.value());
-    if (childType == nullptr) {
-      continue;
-    }
-    // Prune top-level scalar columns whose per-stripe min/max prove the filter
-    // cannot match. Integral (incl. DATE, which is represented as INTEGER),
-    // floating-point, and string/bytes columns are supported; the writer emits
-    // min/max for all three in the stripe-stats section. Other kinds (map,
-    // array, row, timestamp) are handled by other pruning paths or not at all.
-    // Explicit comparisons are used instead of a switch over TypeKind to avoid
-    // -Wswitch-enum requiring every enumerator to be listed.
-    const auto kind = childType->type()->kind();
-
-    // Per-stripe stats are laid out by schema type id: the writer snapshots
-    // statsCollectors_ (indexed by TypeWithId::id()) in order, so
-    // stripeStats[stripe][id] matches childType->id() just like the file-level
-    // column stats. The bound check below guards against a stats section that
-    // covers fewer columns than the current schema.
-    const auto columnId = childType->id();
-    if (columnId >= stripeStats[stripe].size() ||
-        !stripeStats[stripe][columnId]) {
-      continue;
-    }
-    const auto& stripeStat = stripeStats[stripe][columnId];
-    const auto* filter = childSpec->filter();
-
-    if (kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
-        kind == TypeKind::INTEGER || kind == TypeKind::BIGINT) {
-      const auto* stats = stripeStat->as<IntegralStatistics>();
-      if (stats == nullptr || !stats->getMin().has_value() ||
-          !stats->getMax().has_value()) {
-        continue;
-      }
-      if (!filter->testInt64Range(
-              *stats->getMin(), *stats->getMax(), stats->getNullCount() > 0)) {
-        return true;
-      }
-    } else if (kind == TypeKind::REAL || kind == TypeKind::DOUBLE) {
-      const auto* stats = stripeStat->as<FloatingPointStatistics>();
-      if (stats == nullptr || !stats->getMin().has_value() ||
-          !stats->getMax().has_value()) {
-        continue;
-      }
-      if (!filter->testDoubleRange(
-              *stats->getMin(), *stats->getMax(), stats->getNullCount() > 0)) {
-        return true;
-      }
-    } else if (kind == TypeKind::VARCHAR || kind == TypeKind::VARBINARY) {
-      const auto* stats = stripeStat->as<StringStatistics>();
-      if (stats == nullptr) {
-        continue;
-      }
-      const auto min = stats->getMin();
-      const auto max = stats->getMax();
-      if (!min.has_value() || !max.has_value()) {
-        continue;
-      }
-      if (!filter->testBytesRange(
-              std::string_view(*min),
-              std::string_view(*max),
-              stats->getNullCount() > 0)) {
-        return true;
-      }
-    }
-  }
-  return false;
+  chunkSkippedRows_ += numStripeRows;
+  processedRows_ += numStripeRows;
+  return true;
 }
 
 std::optional<size_t> SelectiveNimbleRowReader::estimatedRowSize() const {
@@ -921,7 +850,6 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
       streams_,
       options_.trackRowSize() ? rowSizeTracker_.get() : nullptr,
       *encodingFactory_,
-      options_.stringDecoderZeroCopy(),
       options_.preserveFlatMapsInMemory(),
       options_.nimblePreserveDictionaryEncoding(),
       lazyIoColumns_.empty() ? nullptr : &lazyIoColumns_,
@@ -1122,8 +1050,15 @@ class SelectiveNimbleReader : public dwio::common::Reader {
   SelectiveNimbleReader(
       std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options)
-      : readerBase_(ReaderBase::create(std::move(input), options)),
-        options_(options) {
+      : SelectiveNimbleReader(
+            ReaderBase::create(std::move(input), options),
+            options) {}
+
+  SelectiveNimbleReader(
+      std::shared_ptr<ReaderBase> readerBase,
+      const dwio::common::ReaderOptions& options)
+      : readerBase_(std::move(readerBase)), options_(options) {
+    NIMBLE_USER_CHECK_NOT_NULL(readerBase_, "readerBase must not be null");
     detail::initHook();
   }
 
@@ -1226,6 +1161,14 @@ SelectiveNimbleReaderFactory::createReader(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options) {
   return std::make_unique<SelectiveNimbleReader>(std::move(input), options);
+}
+
+std::unique_ptr<dwio::common::Reader>
+SelectiveNimbleReaderFactory::createReader(
+    std::shared_ptr<ReaderBase> readerBase,
+    const dwio::common::ReaderOptions& options) {
+  return std::make_unique<SelectiveNimbleReader>(
+      std::move(readerBase), options);
 }
 
 } // namespace facebook::nimble

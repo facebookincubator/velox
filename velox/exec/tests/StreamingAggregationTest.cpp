@@ -847,17 +847,84 @@ TEST_P(StreamingAggregationTest, closeUninitialized) {
 
 TEST_P(StreamingAggregationTest, sortedAggregations) {
   const auto size = 512;
-  std::vector<VectorPtr> keys = {
-      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-      makeFlatVector<int32_t>(size, [size](auto row) { return (size + row); }),
-      makeFlatVector<int32_t>(
-          size, [size](auto row) { return (2 * size + row); }),
-      makeFlatVector<int32_t>(
-          78, [size](auto row) { return (3 * size + row); }),
+  {
+    std::vector<VectorPtr> keys = {
+        makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+        makeFlatVector<int32_t>(
+            size, [size](auto row) { return (size + row); }),
+        makeFlatVector<int32_t>(
+            size, [size](auto row) { return (2 * size + row); }),
+        makeFlatVector<int32_t>(
+            78, [size](auto row) { return (3 * size + row); }),
+    };
+
+    testSortedAggregation(keys, 512);
+    testSortedAggregation(keys, 32);
+  }
+
+  // Groups span input batch boundaries.
+  {
+    std::vector<VectorPtr> keys = {
+        makeFlatVector<int32_t>(size, [](auto row) { return row / 5; }),
+        makeFlatVector<int32_t>(
+            size, [size](auto row) { return (size + row) / 5; }),
+        makeFlatVector<int32_t>(
+            size, [size](auto row) { return (2 * size + row) / 5; }),
+        makeFlatVector<int32_t>(
+            78, [size](auto row) { return (3 * size + row) / 5; }),
+    };
+
+    testSortedAggregation(keys, 512);
+    testSortedAggregation(keys, 32);
+  }
+}
+
+TEST_F(StreamingAggregationTest, sortedAggregationsMemoryDoesNotGrowWithInput) {
+  const auto peakMemory = [&](int32_t numBatches) {
+    constexpr int32_t kBatchSize = 1'000;
+    constexpr int32_t kGroupSize = 10;
+    std::vector<RowVectorPtr> data;
+    data.reserve(numBatches);
+    for (auto batch = 0; batch < numBatches; ++batch) {
+      data.push_back(makeRowVector({
+          makeFlatVector<int32_t>(
+              kBatchSize,
+              [batch](auto row) {
+                return batch * (kBatchSize / kGroupSize) + row / kGroupSize;
+              }),
+          makeFlatVector<StringView>(
+              kBatchSize,
+              [](auto /*row*/) {
+                return StringView(
+                    "a value long enough to be stored out of line in a row container");
+              }),
+          makeFlatVector<int32_t>(
+              kBatchSize,
+              [](auto row) { return kGroupSize - row % kGroupSize; }),
+      }));
+    }
+
+    core::PlanNodeId aggregationNodeId;
+    const auto plan = PlanBuilder()
+                          .values(data)
+                          .streamingAggregation(
+                              {"c0"},
+                              {"array_agg(c1 order by c2)"},
+                              {},
+                              core::AggregationNode::Step::kSingle,
+                              /*ignoreNullKeys=*/false)
+                          .capturePlanNodeId(aggregationNodeId)
+                          .planNode();
+    std::shared_ptr<Task> task;
+    AssertQueryBuilder(plan)
+        .config(core::QueryConfig::kStreamingAggregationMinOutputBatchRows, "1")
+        .copyResults(pool(), task);
+    return velox::exec::toPlanStats(task->taskStats())
+        .at(aggregationNodeId)
+        .peakMemoryBytes;
   };
 
-  testSortedAggregation(keys, 512);
-  testSortedAggregation(keys, 32);
+  EXPECT_LT(peakMemory(200), 2 * peakMemory(20));
 }
 
 TEST_P(StreamingAggregationTest, distinctAggregations) {

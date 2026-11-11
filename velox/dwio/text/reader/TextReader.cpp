@@ -17,6 +17,7 @@
 #include "velox/dwio/text/reader/TextReader.h"
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <functional>
 #include <string>
 
 #include "velox/common/encode/Base64.h"
@@ -1453,7 +1454,7 @@ void TextRowReader::readElement(
         flatVector->setNull(insertionRow, true);
       } else {
         auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(s).thenOrThrow(
-            folly::identity,
+            std::identity{},
             [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
         ts.toGMT(Timestamp::defaultTimezone());
         flatVector->set(

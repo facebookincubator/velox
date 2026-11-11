@@ -299,6 +299,22 @@ std::shared_ptr<const Payload> payload;
   | ❌ Avoid | ✅ Prefer |
   |----------|-----------|
   | `VELOX_USER_FAIL("Column '{}' is ambiguous", name);` | `VELOX_USER_FAIL("Column is ambiguous: {}", name);` |
+* **Error messages name the mistake.** Say what was wrong with the input, or
+  state the requirement it broke with "must". A sentence that only describes
+  the correct state reads as documentation and leaves the reader to work out
+  what they did.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_USER_FAIL("A placeholder's type is declared with CAST, not TRY_CAST: {}", name);` | `VELOX_USER_FAIL("TRY_CAST of a placeholder is not supported: {}", name);` |
+  | `VELOX_USER_CHECK_GE(k, 1, "k is at least 1");` | `VELOX_USER_CHECK_GE(k, 1, "k must be at least 1");` |
+* Pass a value to a formatted message or `fmt::format` as is when its type has
+  an `fmt::formatter`, such as `TypeKind`. The formatter already produces the
+  text, so converting the value to a string first only repeats it.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_FAIL("Unsupported type: {}", TypeKindName::toName(kind));` | `VELOX_FAIL("Unsupported type: {}", kind);` |
 
 ## Variables
 
@@ -320,9 +336,8 @@ std::shared_ptr<const Payload> payload;
   * `int* foo;` `const Bar& bar;` NOT `int *foo;` `const Bar &bar`;
   * Beware that `int* foo, bar;` will be parsed as declaring `foo` as an `int*`
     and `bar` as an `int`. Note that multiple declaration is discouraged.
-* Use trailing commas in multi-line initializer lists, enum definitions, and
-  function-call argument lists that span multiple lines. This produces cleaner
-  diffs when items are added or reordered.
+* Use trailing commas in multi-line initializer lists and enum definitions.
+  This produces cleaner diffs when items are added or reordered.
 * For member variables:
   * Group member variable and methods based on their visibility (public,
     protected and private)

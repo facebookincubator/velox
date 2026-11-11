@@ -16,27 +16,59 @@
 #pragma once
 
 #include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+#include <folly/Conv.h>
+#include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/SchemaTypes.h"
+#include "velox/dwio/nimble/common/Types.h"
 
 namespace facebook::nimble {
 
+namespace detail {
+
+struct GroupLookupIndex;
+
+} // namespace detail
+
+/// Groups the keys of a MAP column for the Hybrid FlatMap writer, or holds the
+/// groups a written schema records (fromSchema()). A HybridFlatMap built with
+/// every group at once, or bound to a column, holds its groups and a lookup of
+/// each grouped key's group in immutable state that its copies share, so a
+/// copy costs one reference count and threads may read copies concurrently.
 class HybridFlatMap {
  public:
+  /// How a group's key-presence stream records which keys a batch contains.
+  /// Configured groups always use kBitmap; defaultGroupKeyPresenceMode()
+  /// selects the mode of the Default group.
+  enum class KeyPresenceMode : uint8_t {
+    /// One bit per schema key of the group. Default appends newly seen keys to
+    /// the schema in first-seen order, so the schema can change with the data,
+    /// and a key the schema has not seen projects as no group.
+    kBitmap = 0,
+    /// Default lists no schema keys; each batch lists the typed Default keys
+    /// it contains. The schema depends only on the configured groups, and a
+    /// key in no configured group projects as the whole Default group.
+    kKeyList = 1,
+  };
+
   /// Describes one group in logical schema order.
   struct Group {
     uint32_t groupId{0};
     /// Keys in key-presence bitmap order. Configured groups are sorted;
-    /// Default preserves first-seen order.
+    /// Default preserves first-seen order, and lists no keys with
+    /// KeyPresenceMode::kKeyList.
     std::vector<std::string> groupKeys;
 
     bool operator==(const Group&) const = default;
@@ -51,29 +83,158 @@ class HybridFlatMap {
     return groupId == kDefaultGroupId;
   }
 
+  /// An empty writer configuration: only the Default group, without keys.
+  /// addGroup() adds the explicit groups. Without a key kind, as when the
+  /// caller does not know the map's key type yet, the keys are checked for one
+  /// when a writer binds the configuration to its column (see the binding
+  /// constructor below).
+  HybridFlatMap();
+
+  /// As above, for keys of `keyKind`, so addGroup() checks each key for it
+  /// on the spot.
+  explicit HybridFlatMap(ScalarKind keyKind);
+
+  /// A writer configuration for keys of `keyKind`, checked with user errors
+  /// and normalized: every key canonical (canonicalKey()), group IDs
+  /// ascending, no key repeated within or across groups, every explicit
+  /// group non-empty, and exactly one Default group, without keys. groups()
+  /// then holds each group's keys sorted, the schema and key-presence bitmap
+  /// order. Builds the lookup of findGroup(), which copies share.
+  ///
+  /// Example: for Int64 keys, groups {0: ["9", "10"], Default: []} hold
+  /// {0: ["10", "9"], Default: []}; {0: ["07"], Default: []} and
+  /// {1: ["1"], 0: ["2"], Default: []} are rejected.
+  HybridFlatMap(ScalarKind keyKind, std::vector<Group> groups);
+
+  /// `configuration` bound to a column whose keys are of `keyKind`, as a
+  /// writer does when it meets the column. A configuration built without a
+  /// key kind is checked for `keyKind` as the constructor above checks one; a
+  /// configuration built for another key kind is rejected. Keeps the
+  /// configuration's defaultGroupKeyPresenceMode().
+  ///
+  /// Example: a configuration with group {0: ["7", "300"]} and no key kind
+  /// binds to an Int16 column, and is rejected for an Int8 column, where
+  /// "300" does not parse.
+  HybridFlatMap(ScalarKind keyKind, const HybridFlatMap& configuration);
+
+  /// The groups of a written schema, as recorded: the Default group holds
+  /// the keys found while writing, in first-seen order, and a projection may
+  /// leave groups out. Not checked as a writer configuration; schema readers
+  /// and builders apply their own checks. Its key kind is the schema type's,
+  /// and `defaultGroupKeyPresenceMode` is the mode the schema records.
+  static HybridFlatMap fromSchema(
+      std::vector<Group> groups,
+      KeyPresenceMode defaultGroupKeyPresenceMode);
+
+  /// The key kind a writer configuration was built for; empty for a
+  /// configuration built without one, until a writer binds it, and for schema
+  /// metadata (fromSchema()), whose key kind is the schema type's.
+  std::optional<ScalarKind> keyKind() const {
+    return keyKind_;
+  }
+
+  /// Logical groups in schema order.
+  const std::vector<Group>& groups() const;
+
+  /// Returns the index in groups() of the explicit group that holds `key`, or
+  /// std::nullopt when no explicit group holds it. Needs the lookup
+  /// (hasGroupLookupIndex()); fails without it.
+  std::optional<size_t> findGroup(std::string_view key) const;
+
+  /// Returns the number of keys in explicit groups. Needs the lookup, as
+  /// findGroup() does.
+  size_t numGroupedKeys() const;
+
+  /// Returns whether this HybridFlatMap holds the lookup of findGroup(), which
+  /// the constructor taking every group builds and copies share. A writer for
+  /// a column of keyKind() uses such a HybridFlatMap as is instead of binding
+  /// it again.
+  bool hasGroupLookupIndex() const {
+    return groupLookupIndex_ != nullptr;
+  }
+
+  /// Moves the groups out, for a reader that builds its own type from them.
+  /// Returns a copy of groups that copies of this HybridFlatMap share.
+  std::vector<Group> releaseGroups() &&;
+
+  /// Adds explicit group `groupId` holding `keys`, checked with user errors
+  /// on the spot: `groupId` above every explicit group added before and below
+  /// the Default group's, `keys` non-empty, no key empty or already in a
+  /// group, and, with a key kind, every key canonical for it. The group goes
+  /// before the Default group with its keys sorted, the key-presence bitmap
+  /// order. Rejects a HybridFlatMap with the lookup of findGroup(), whose
+  /// copies share its groups. A call that fails a check changes nothing.
+  ///
+  /// Example: on HybridFlatMap{ScalarKind::Int64}, addGroup(0, {"9", "10"})
+  /// adds {0: ["10", "9"]}; a later addGroup(0, {"1"}) or addGroup(1, {"9"})
+  /// is rejected.
+  void addGroup(uint32_t groupId, std::vector<std::string> keys);
+
+  /// How batches record their Default keys. A writer configuration uses
+  /// KeyPresenceMode::kBitmap unless setDefaultGroupKeyPresenceMode() changes
+  /// it; schema metadata holds the mode its schema records.
+  KeyPresenceMode defaultGroupKeyPresenceMode() const {
+    return defaultGroupKeyPresenceMode_;
+  }
+
+  /// Sets defaultGroupKeyPresenceMode() of a writer configuration.
+  void setDefaultGroupKeyPresenceMode(KeyPresenceMode mode) {
+    defaultGroupKeyPresenceMode_ = mode;
+  }
+
+  /// Returns whether group `groupId` writes its key-presence stream as a key
+  /// list: the batch's present keys, typed by the map key kind, instead of a
+  /// bitmap over schema keys. True only for Default with
+  /// KeyPresenceMode::kKeyList. Depends only on the schema, never on
+  /// batch data.
+  static constexpr bool hasKeyPresenceList(
+      KeyPresenceMode defaultGroupKeyPresenceMode,
+      uint32_t groupId) {
+    return isDefaultGroup(groupId) &&
+        defaultGroupKeyPresenceMode == KeyPresenceMode::kKeyList;
+  }
+
+  /// Returns whether group `groupId` lists its keys under
+  /// defaultGroupKeyPresenceMode(). See hasKeyPresenceList().
+  bool useKeyPresentList(uint32_t groupId) const {
+    return hasKeyPresenceList(defaultGroupKeyPresenceMode_, groupId);
+  }
+
   /// Returns the logical group with `groupId`. Fails when it is absent.
   const Group& groupById(uint32_t groupId) const;
 
   /// Reserved schema attribute containing serialized group metadata.
   static constexpr std::string_view kAttributeName{"hybridFlatMap"};
 
-  /// Logical groups in schema order.
-  std::vector<Group> groups;
-
-  bool operator==(const HybridFlatMap&) const = default;
+  /// Compares keyKind(), groups() and defaultGroupKeyPresenceMode(), whether
+  /// or not the lookup of findGroup() is built.
+  bool operator==(const HybridFlatMap& other) const;
 
   /// Returns whether `kind` is supported for Hybrid FlatMap keys.
   static bool supportedKeyKind(ScalarKind kind);
+
+  /// Returns `key` as a Hybrid FlatMap schema writes keys of `keyKind`: a
+  /// String key unchanged, an integer key as the decimal form of its value.
+  /// Throws a user error when `key` is empty, does not parse as `keyKind`, or
+  /// is not written that way, e.g. "07" or "+7" for an integer kind.
+  static std::string canonicalKey(ScalarKind keyKind, std::string_view key);
+
+  /// Returns the value of `key` as a key of the integer type T. Throws the user
+  /// error of canonicalKey() when it would reject `key`. Builds no string for a
+  /// canonical key, so a reader can parse every schema key of every batch.
+  template <typename T>
+  static T parseCanonicalIntegerKey(std::string_view key);
 
   /// Serializes the groups into the flattened HybridFlatMap FlatBuffer table.
   /// `group_ids` and `group_key_counts` are parallel per-group vectors, and
   /// `group_keys` concatenates the keys of every group in group order, so
   /// group `i` owns the `group_key_counts[i]` keys that follow the keys of the
-  /// preceding groups.
+  /// preceding groups. The Default key presence mode is always written.
   std::string serialize() const;
 
-  /// Deserializes and validates groups produced by `serialize()`. Also accepts
-  /// an omitted `group_keys` vector when no group has keys.
+  /// Deserializes and validates groups produced by `serialize()`, as schema
+  /// metadata (fromSchema()). Also accepts an omitted `group_keys` vector when
+  /// no group has keys. Fails when the Default key presence mode is missing.
   static HybridFlatMap deserialize(std::string_view serialized);
 
   /// Deserializes the reserved metadata attribute, leaving `attributes`
@@ -90,7 +251,61 @@ class HybridFlatMap {
   /// stale value in place.
   void setAttribute(
       std::vector<std::pair<std::string, std::string>>& attributes) const;
+
+ private:
+  // fromSchema(): the groups as given, without a key kind.
+  struct AsRecorded {};
+  HybridFlatMap(
+      AsRecorded,
+      std::vector<Group> groups,
+      KeyPresenceMode defaultGroupKeyPresenceMode)
+      : groups_{std::move(groups)},
+        defaultGroupKeyPresenceMode_{defaultGroupKeyPresenceMode} {}
+
+  // Returns a copy of the groups of `configuration`, which the binding
+  // constructor checks for `keyKind`. Throws when `configuration` was built
+  // for a different key kind, e.g. Int64 for an Int32 column.
+  static std::vector<Group> groupsForKeyKind(
+      ScalarKind keyKind,
+      const HybridFlatMap& configuration);
+
+  // See keyKind(). Fixed at construction: binding to a column builds a new
+  // HybridFlatMap.
+  const std::optional<ScalarKind> keyKind_;
+  // The groups of a HybridFlatMap built by the other constructors and
+  // addGroup(), and the groups of schema metadata (fromSchema()). Empty while
+  // groupLookupIndex_ holds the groups.
+  std::vector<Group> groups_;
+  // The groups and the lookup of findGroup(), built by the constructor taking
+  // every group and shared by every copy. Null otherwise.
+  std::shared_ptr<const detail::GroupLookupIndex> groupLookupIndex_;
+  // See defaultGroupKeyPresenceMode().
+  KeyPresenceMode defaultGroupKeyPresenceMode_{KeyPresenceMode::kBitmap};
 };
+
+// Defined in the header so that readers inline it into their per-key loops.
+template <typename T>
+T HybridFlatMap::parseCanonicalIntegerKey(std::string_view key) {
+  T value{};
+  const auto* end = key.data() + key.size();
+  const auto [parsedEnd, error] = std::from_chars(key.data(), end, value);
+  if (error == std::errc{} && parsedEnd == end) {
+    // std::from_chars accepts leading zeros, which only the key "0" may have.
+    const size_t firstDigit{key.front() == '-' ? 1U : 0U};
+    if (key[firstDigit] != '0' || (firstDigit == 0 && key.size() == 1)) {
+      return value;
+    }
+  }
+  NIMBLE_USER_CHECK(
+      folly::tryTo<T>(key).hasValue(),
+      "Hybrid FlatMap key '{}' cannot be parsed as {}.",
+      key,
+      TypeTraits<T>::dataType);
+  NIMBLE_USER_FAIL("Hybrid FlatMap key '{}' is not canonical.", key);
+}
+
+/// Returns the name of `mode` as spelled in the serialized schema.
+std::string toString(HybridFlatMap::KeyPresenceMode mode);
 
 namespace detail {
 
@@ -104,12 +319,25 @@ void checkHybridFlatMapGroupKeys(
     uint32_t groupId,
     const std::vector<std::string>& groupKeys);
 
+// Rejects Default schema keys when batches list their Default keys, since the
+// schema must then depend only on the configured groups.
+void checkHybridFlatMapDefaultKeys(
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
+    uint32_t groupId,
+    const std::vector<std::string>& groupKeys);
+
+// Validates the group IDs and keys of a whole schema, and maps each key to its
+// group's index in `groupIndices`, which must start empty. The index also
+// detects repeated keys, so a caller that needs it hashes each key once.
+// Callers keep every group's keys alive and unchanged while they use
+// `groupIndices`, so views avoid copying each key.
 template <typename GroupIdAt, typename GroupKeysAt>
 void validateHybridFlatMapGroups(
     size_t groupCount,
     bool hasDefault,
     GroupIdAt groupIdAt,
-    GroupKeysAt groupKeysAt) {
+    GroupKeysAt groupKeysAt,
+    folly::F14FastMap<std::string_view, size_t>& groupIndices) {
   NIMBLE_CHECK_GE(
       groupCount, size_t{1}, "Hybrid FlatMap requires at least 1 group(s).");
   // Default alone is valid because it holds every key. A projection may keep a
@@ -121,10 +349,12 @@ void validateHybridFlatMapGroups(
         "Hybrid FlatMap single group must be Default: {}.",
         groupIdAt(0));
   }
+  size_t numKeys{0};
+  for (size_t i = 0; i < groupCount; ++i) {
+    numKeys += groupKeysAt(i).size();
+  }
+  groupIndices.reserve(numKeys);
   folly::F14FastSet<uint32_t> groupIds;
-  // Callers keep every group's keys alive and unchanged during validation, so
-  // views avoid copying each key.
-  folly::F14FastSet<std::string_view> keys;
   bool foundDefault{false};
   for (size_t i = 0; i < groupCount; ++i) {
     const auto groupId = groupIdAt(i);
@@ -141,8 +371,8 @@ void validateHybridFlatMapGroups(
     foundDefault |= HybridFlatMap::isDefaultGroup(groupId);
     checkHybridFlatMapGroupKeys(groupId, groupKeys);
     for (const auto& key : groupKeys) {
-      NIMBLE_CHECK(
-          keys.insert(key).second, "Duplicate Hybrid FlatMap key: '{}'.", key);
+      const bool isNewKey = groupIndices.emplace(key, i).second;
+      NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
     }
   }
   if (hasDefault) {
@@ -257,3 +487,14 @@ bool sameLogicalType(const TypeLike& lhs, const TypeLike& rhs) {
 } // namespace detail
 
 } // namespace facebook::nimble
+
+template <>
+struct fmt::formatter<facebook::nimble::HybridFlatMap::KeyPresenceMode>
+    : fmt::formatter<std::string> {
+  auto format(
+      facebook::nimble::HybridFlatMap::KeyPresenceMode mode,
+      format_context& ctx) const {
+    return fmt::formatter<std::string>::format(
+        facebook::nimble::toString(mode), ctx);
+  }
+};

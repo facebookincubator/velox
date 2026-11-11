@@ -133,27 +133,23 @@ namespace {
 
 void appendProjectionStream(
     std::vector<uint32_t>& streamOffsets,
-    std::vector<bool>* rowOrFlatMapNullStreams,
+    std::vector<bool>* barrierStreams,
     uint32_t streamOffset,
-    bool isRowOrFlatMapNullStream) {
+    bool isBarrierStream) {
   streamOffsets.emplace_back(streamOffset);
-  if (rowOrFlatMapNullStreams != nullptr) {
-    rowOrFlatMapNullStreams->emplace_back(isRowOrFlatMapNullStream);
+  if (barrierStreams != nullptr) {
+    barrierStreams->emplace_back(isBarrierStream);
   }
 }
 
 void appendProjectionStreams(
     const Type& type,
     std::vector<uint32_t>& streamOffsets,
-    std::vector<bool>* rowOrFlatMapNullStreams,
+    std::vector<bool>* barrierStreams,
     bool allowFlatMap) {
-  const auto append = [&](uint32_t streamOffset,
-                          bool isRowOrFlatMapNullStream = false) {
+  const auto append = [&](uint32_t streamOffset, bool isBarrierStream = false) {
     appendProjectionStream(
-        streamOffsets,
-        rowOrFlatMapNullStreams,
-        streamOffset,
-        isRowOrFlatMapNullStream);
+        streamOffsets, barrierStreams, streamOffset, isBarrierStream);
   };
 
   switch (type.kind()) {
@@ -171,10 +167,7 @@ void appendProjectionStreams(
       append(row.nullsDescriptor().offset(), true);
       for (size_t i{0}; i < row.childrenCount(); ++i) {
         appendProjectionStreams(
-            *row.childAt(i),
-            streamOffsets,
-            rowOrFlatMapNullStreams,
-            allowFlatMap);
+            *row.childAt(i), streamOffsets, barrierStreams, allowFlatMap);
       }
       return;
     }
@@ -182,40 +175,42 @@ void appendProjectionStreams(
       const auto& array = type.asArray();
       append(array.lengthsDescriptor().offset());
       appendProjectionStreams(
-          *array.elements(),
-          streamOffsets,
-          rowOrFlatMapNullStreams,
-          allowFlatMap);
+          *array.elements(), streamOffsets, barrierStreams, allowFlatMap);
       return;
     }
     case Kind::ArrayWithOffsets: {
+      // The offsets index the distinct arrays of their own stripe, so a batch
+      // holding them is decoded on its own.
       const auto& array = type.asArrayWithOffsets();
-      append(array.offsetsDescriptor().offset());
-      append(array.lengthsDescriptor().offset());
+      append(
+          array.offsetsDescriptor().offset(),
+          /*isBarrierStream=*/true);
+      append(
+          array.lengthsDescriptor().offset(),
+          /*isBarrierStream=*/true);
       appendProjectionStreams(
-          *array.elements(),
-          streamOffsets,
-          rowOrFlatMapNullStreams,
-          allowFlatMap);
+          *array.elements(), streamOffsets, barrierStreams, allowFlatMap);
       return;
     }
     case Kind::Map: {
       const auto& map = type.asMap();
       append(map.lengthsDescriptor().offset());
       appendProjectionStreams(
-          *map.keys(), streamOffsets, rowOrFlatMapNullStreams, allowFlatMap);
+          *map.keys(), streamOffsets, barrierStreams, allowFlatMap);
       appendProjectionStreams(
-          *map.values(), streamOffsets, rowOrFlatMapNullStreams, allowFlatMap);
+          *map.values(), streamOffsets, barrierStreams, allowFlatMap);
       return;
     }
     case Kind::SlidingWindowMap: {
+      // The offsets index the distinct maps of their own stripe, so a batch
+      // holding them is decoded on its own.
       const auto& map = type.asSlidingWindowMap();
-      append(map.offsetsDescriptor().offset());
-      append(map.lengthsDescriptor().offset());
+      append(map.offsetsDescriptor().offset(), /*isBarrierStream=*/true);
+      append(map.lengthsDescriptor().offset(), /*isBarrierStream=*/true);
       appendProjectionStreams(
-          *map.keys(), streamOffsets, rowOrFlatMapNullStreams, allowFlatMap);
+          *map.keys(), streamOffsets, barrierStreams, allowFlatMap);
       appendProjectionStreams(
-          *map.values(), streamOffsets, rowOrFlatMapNullStreams, allowFlatMap);
+          *map.values(), streamOffsets, barrierStreams, allowFlatMap);
       return;
     }
     case Kind::FlatMap: {
@@ -226,10 +221,7 @@ void appendProjectionStreams(
       append(flatMap.nullsDescriptor().offset(), true);
       for (size_t i{0}; i < flatMap.childrenCount(); ++i) {
         appendProjectionStreams(
-            *flatMap.childAt(i),
-            streamOffsets,
-            rowOrFlatMapNullStreams,
-            allowFlatMap);
+            *flatMap.childAt(i), streamOffsets, barrierStreams, allowFlatMap);
         append(flatMap.inMapDescriptorAt(i).offset());
       }
       return;
@@ -248,7 +240,7 @@ std::vector<uint32_t> projectionStreamOffsets(const Type& type) {
   appendProjectionStreams(
       type,
       streamOffsets,
-      /*rowOrFlatMapNullStreams=*/nullptr,
+      /*barrierStreams=*/nullptr,
       /*allowFlatMap=*/true);
   return streamOffsets;
 }
@@ -442,6 +434,54 @@ std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type) {
   return SchemaReader::getSchema(builder.schemaNodes());
 }
 
+ScalarKind hybridFlatMapKeyKind(const velox::Type& keyType) {
+  switch (keyType.kind()) {
+    case velox::TypeKind::TINYINT:
+      return ScalarKind::Int8;
+    case velox::TypeKind::SMALLINT:
+      return ScalarKind::Int16;
+    case velox::TypeKind::INTEGER:
+      return ScalarKind::Int32;
+    case velox::TypeKind::BIGINT:
+      return ScalarKind::Int64;
+    case velox::TypeKind::VARCHAR:
+      return ScalarKind::String;
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::VARBINARY:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::TIMESTAMP:
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::ARRAY:
+    case velox::TypeKind::MAP:
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
+      NIMBLE_UNSUPPORTED(
+          "Unsupported hybrid FlatMap key type {}.", keyType.toString());
+  }
+  NIMBLE_UNREACHABLE("Unknown type kind: {}.", keyType.kind());
+}
+
+ScalarKind hybridFlatMapKeyKind(
+    const velox::RowType& rowType,
+    std::string_view columnName) {
+  const auto columnIndex = rowType.getChildIdxIfExists(columnName);
+  NIMBLE_USER_CHECK(
+      columnIndex.has_value(),
+      "Hybrid FlatMap column {} is not in the row type.",
+      columnName);
+  const auto& columnType = rowType.childAt(*columnIndex);
+  NIMBLE_USER_CHECK(
+      columnType->kind() == velox::TypeKind::MAP,
+      "Hybrid FlatMap column {} must be a MAP, not {}.",
+      columnName,
+      columnType->toString());
+  return hybridFlatMapKeyKind(*columnType->childAt(0));
+}
+
 //
 // buildProjectedNimbleType and its helpers.
 //
@@ -488,14 +528,19 @@ using VeloxSelectedChildrenMap =
 // Resolves a single subfield path against a velox type tree, populating
 // selectedChildren with which children to include at each Row/Map node.
 // Similar to resolveSubfield for nimble types but walks velox types instead.
+// Appends to 'wholeStructs' the struct the path selects whole: the ROW it ends
+// at when it names that ROW by field names only. Map subscripts are excluded
+// because all keys of a map share one velox value type.
 void resolveVeloxSubfield(
     const velox::Type* type,
     const velox::common::Subfield& subfield,
-    VeloxSelectedChildrenMap& selectedChildren) {
+    VeloxSelectedChildrenMap& selectedChildren,
+    std::vector<const velox::RowType*>& wholeStructs) {
   const auto& path = subfield.path();
   NIMBLE_CHECK(!path.empty(), "Empty subfield path");
 
   const auto* current = type;
+  bool throughSubscript{false};
 
   for (const auto& element : path) {
     const auto kind = element->kind();
@@ -536,12 +581,46 @@ void resolveVeloxSubfield(
       selectedChildren[current].insert(keyName);
       // All map keys share the same value type, so descend into it.
       current = current->asMap().valueType().get();
+      throughSubscript = true;
     } else {
       NIMBLE_FAIL(
           "Unsupported subfield kind {} in subfield path '{}'",
           kind,
           subfield.toString());
     }
+  }
+  if (!throughSubscript && current->kind() == velox::TypeKind::ROW) {
+    wholeStructs.push_back(&current->asRow());
+  }
+}
+
+// Drops the child selections recorded at and under 'row', so a struct that a
+// subfield selects whole keeps every field. Under a struct only structs carry
+// selections, because key subscripts apply to top-level map columns only.
+void selectWhole(
+    const velox::RowType& row,
+    VeloxSelectedChildrenMap& selectedChildren) {
+  selectedChildren.erase(&row);
+  for (const auto& child : row.children()) {
+    if (child->kind() == velox::TypeKind::ROW) {
+      selectWhole(child->asRow(), selectedChildren);
+    }
+  }
+}
+
+// Resolves 'projectedSubfields' against 'type' into 'selectedChildren'. A
+// struct that some subfield selects whole keeps every field, whatever other
+// subfields select inside it.
+void resolveVeloxSubfields(
+    const velox::RowType& type,
+    const std::vector<velox::common::Subfield>& projectedSubfields,
+    VeloxSelectedChildrenMap& selectedChildren) {
+  std::vector<const velox::RowType*> wholeStructs;
+  for (const auto& subfield : projectedSubfields) {
+    resolveVeloxSubfield(&type, subfield, selectedChildren, wholeStructs);
+  }
+  for (const auto* wholeStruct : wholeStructs) {
+    selectWhole(*wholeStruct, selectedChildren);
   }
 }
 
@@ -555,8 +634,11 @@ void resolveVeloxSubfield(
 // - If the node is NOT in selectedChildren: converts the full subtree.
 //   Encoding hints (useDictionaryArray, useDeduplicatedMap, useFlatMap) create
 //   ArrayWithOffsets, SlidingWindowMap, or FlatMap respectively. These flags
-//   are only set for top-level children by the caller; recursive calls always
-//   pass false.
+//   are only set for top-level children by the caller. A FlatMap passes
+//   useDictionaryArray and useDeduplicatedMap on to the value of every key,
+//   because the writer applies dictionaryArrayColumns and
+//   deduplicatedMapColumns to the arrays and maps inside a column. Other
+//   recursive calls pass false.
 //
 // When useFlatMap is true and the MAP column is projected without key
 // subscripts, fails because key names/order cannot be recovered from the
@@ -630,8 +712,8 @@ std::shared_ptr<TypeBuilder> buildProjectedNimbleType(
                   builder,
                   *mapType.valueType(),
                   selectedChildren,
-                  /*useDictionaryArray=*/false,
-                  /*useDeduplicatedMap=*/false,
+                  useDictionaryArray,
+                  useDeduplicatedMap,
                   /*useFlatMap=*/false));
         }
         return flatMap;
@@ -800,7 +882,9 @@ std::shared_ptr<HybridFlatMapTypeBuilder> buildProjectedHybridFlatMapType(
     const ProjectedHybridFlatMap& projectedHybridFlatMap) {
   NIMBLE_CHECK_NOT_NULL(projectedHybridFlatMap.source);
   auto result = builder.createHybridFlatMapTypeBuilder(
-      projectedHybridFlatMap.source->keyScalarKind(), /*projection=*/true);
+      projectedHybridFlatMap.source->keyScalarKind(),
+      projectedHybridFlatMap.source->defaultGroupKeyPresenceMode(),
+      /*projection=*/true);
   result->setAttributes(projectedHybridFlatMap.source->attributes());
   if (projectedHybridFlatMap.groupIndices.empty()) {
     result->addGroup(
@@ -831,9 +915,7 @@ std::shared_ptr<const Type> buildProjectedNimbleType(
       !projectedSubfields.empty(), "projectedSubfields must not be empty");
 
   VeloxSelectedChildrenMap selectedChildren;
-  for (const auto& subfield : projectedSubfields) {
-    resolveVeloxSubfield(&type, subfield, selectedChildren);
-  }
+  resolveVeloxSubfields(type, projectedSubfields, selectedChildren);
 
   const auto& selectedTopLevelColumns = selectedChildren[&type];
   NIMBLE_CHECK(
@@ -900,11 +982,11 @@ using MissingChildrenMap =
 
 inline void appendProjectedStream(
     std::vector<uint32_t>& projectedStreamOffsets,
-    std::vector<bool>& rowOrFlatMapNullStreams,
+    std::vector<bool>& barrierStreams,
     uint32_t sourceStreamOffset,
-    bool isRowOrFlatMapNullStream) {
+    bool isBarrierStream) {
   projectedStreamOffsets.emplace_back(sourceStreamOffset);
-  rowOrFlatMapNullStreams.emplace_back(isRowOrFlatMapNullStream);
+  barrierStreams.emplace_back(isBarrierStream);
 }
 
 void validateProjectedHybridFlatMapSchema(const Type& schema) {
@@ -915,13 +997,15 @@ void validateProjectedHybridFlatMapSchema(const Type& schema) {
       continue;
     }
     const auto& hybridMap = child.asHybridFlatMap();
+    folly::F14FastMap<std::string_view, size_t> groupIndices;
     detail::validateHybridFlatMapGroups(
         hybridMap.groupCount(),
         /*hasDefault=*/false,
         [&hybridMap](size_t group) { return hybridMap.groupAt(group).groupId; },
         [&hybridMap](size_t group) -> const auto& {
           return hybridMap.groupAt(group).groupKeys;
-        });
+        },
+        groupIndices);
   }
 }
 
@@ -930,16 +1014,19 @@ void validateProjectedHybridFlatMapSchema(const Type& schema) {
 // source index) and missingChildren for FlatMap keys absent from the source
 // (by name). A Hybrid FlatMap key selects the index of the group containing
 // it; a key in no group leaves the column's group set unchanged, possibly
-// empty.
+// empty. Appends to 'wholeStructs' the struct the path selects whole, under
+// the same rule as resolveVeloxSubfield().
 void resolveSubfield(
     const Type* type,
     const velox::common::Subfield& subfield,
     SelectedChildrenMap& selectedChildren,
-    MissingChildrenMap& missingChildren) {
+    MissingChildrenMap& missingChildren,
+    std::vector<const RowType*>& wholeStructs) {
   const auto& path = subfield.path();
   NIMBLE_CHECK(!path.empty(), "Empty subfield path");
 
   const auto* current = type;
+  bool throughSubscript{false};
 
   for (size_t pathIndex = 0; pathIndex < path.size(); ++pathIndex) {
     const auto& element = path[pathIndex];
@@ -980,12 +1067,13 @@ void resolveSubfield(
             "Nested projection inside hybrid FlatMap key '{}' is not supported.",
             keyName);
 
-        // Default's keys list every key the payload stores in Default, so a
-        // key in no group is absent and selects nothing. The group set is
-        // created even when it stays empty, so a column whose requested keys
-        // are all absent projects as a keyless Default group.
+        // With a bitmap, Default's keys list every key the payload stores in
+        // Default, so a key in no group is absent and selects nothing. The
+        // group set is created even when it stays empty, so a column with no
+        // selected group projects as a keyless Default group.
         auto& selectedGroups = selectedChildren[current];
-        const auto groupIndex = current->asHybridFlatMap().findGroup(keyName);
+        const auto groupIndex =
+            current->asHybridFlatMap().findProjectionGroup(keyName);
         if (groupIndex.has_value()) {
           selectedGroups.insert(*groupIndex);
         }
@@ -1008,6 +1096,7 @@ void resolveSubfield(
       }
       selectedChildren[current].insert(*childIdx);
       current = flatMap.childAt(*childIdx).get();
+      throughSubscript = true;
     } else {
       NIMBLE_FAIL(
           "Unsupported subfield kind {} in subfield path '{}'",
@@ -1027,6 +1116,40 @@ void resolveSubfield(
       selectedGroups.insert(i);
     }
   }
+  if (!throughSubscript && current->isRow()) {
+    wholeStructs.push_back(&current->asRow());
+  }
+}
+
+// Drops the child selections recorded at and under 'row', so a struct that a
+// subfield selects whole keeps every field. Under a struct only structs carry
+// selections, because key subscripts apply to top-level FlatMap columns only.
+void selectWhole(const RowType& row, SelectedChildrenMap& selectedChildren) {
+  selectedChildren.erase(&row);
+  for (size_t i = 0; i < row.childrenCount(); ++i) {
+    const auto& child = row.childAt(i);
+    if (child->isRow()) {
+      selectWhole(child->asRow(), selectedChildren);
+    }
+  }
+}
+
+// Resolves 'projectedSubfields' against 'type' into 'selectedChildren' and
+// 'missingChildren'. A struct that some subfield selects whole keeps every
+// field, whatever other subfields select inside it.
+void resolveSubfields(
+    const Type* type,
+    const std::vector<velox::common::Subfield>& projectedSubfields,
+    SelectedChildrenMap& selectedChildren,
+    MissingChildrenMap& missingChildren) {
+  std::vector<const RowType*> wholeStructs;
+  for (const auto& subfield : projectedSubfields) {
+    resolveSubfield(
+        type, subfield, selectedChildren, missingChildren, wholeStructs);
+  }
+  for (const auto* wholeStruct : wholeStructs) {
+    selectWhole(*wholeStruct, selectedChildren);
+  }
 }
 
 // Walks a value-type (typically `flatMap.childAt(0)` from a source FlatMap
@@ -1039,39 +1162,37 @@ void resolveSubfield(
 void emitPlaceholderStreamOffsets(
     const Type* valueType,
     std::vector<uint32_t>& projectedStreamOffsets,
-    std::vector<bool>& rowOrFlatMapNullStreams) {
+    std::vector<bool>& barrierStreams) {
   switch (valueType->kind()) {
     case Kind::Scalar:
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/false);
       return;
     case Kind::TimestampMicroNano:
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/false);
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/false);
       return;
     case Kind::Row: {
       const auto& row = valueType->asRow();
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/true);
+          /*isBarrierStream=*/true);
       for (size_t i = 0; i < row.childrenCount(); ++i) {
         emitPlaceholderStreamOffsets(
-            row.childAt(i).get(),
-            projectedStreamOffsets,
-            rowOrFlatMapNullStreams);
+            row.childAt(i).get(), projectedStreamOffsets, barrierStreams);
       }
       return;
     }
@@ -1079,62 +1200,58 @@ void emitPlaceholderStreamOffsets(
       const auto& array = valueType->asArray();
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/false);
       emitPlaceholderStreamOffsets(
-          array.elements().get(),
-          projectedStreamOffsets,
-          rowOrFlatMapNullStreams);
+          array.elements().get(), projectedStreamOffsets, barrierStreams);
       return;
     }
     case Kind::ArrayWithOffsets: {
       const auto& array = valueType->asArrayWithOffsets();
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/true);
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/true);
       emitPlaceholderStreamOffsets(
-          array.elements().get(),
-          projectedStreamOffsets,
-          rowOrFlatMapNullStreams);
+          array.elements().get(), projectedStreamOffsets, barrierStreams);
       return;
     }
     case Kind::Map: {
       const auto& map = valueType->asMap();
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/false);
       emitPlaceholderStreamOffsets(
-          map.keys().get(), projectedStreamOffsets, rowOrFlatMapNullStreams);
+          map.keys().get(), projectedStreamOffsets, barrierStreams);
       emitPlaceholderStreamOffsets(
-          map.values().get(), projectedStreamOffsets, rowOrFlatMapNullStreams);
+          map.values().get(), projectedStreamOffsets, barrierStreams);
       return;
     }
     case Kind::SlidingWindowMap: {
       const auto& map = valueType->asSlidingWindowMap();
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/true);
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/true);
       emitPlaceholderStreamOffsets(
-          map.keys().get(), projectedStreamOffsets, rowOrFlatMapNullStreams);
+          map.keys().get(), projectedStreamOffsets, barrierStreams);
       emitPlaceholderStreamOffsets(
-          map.values().get(), projectedStreamOffsets, rowOrFlatMapNullStreams);
+          map.values().get(), projectedStreamOffsets, barrierStreams);
       return;
     }
     case Kind::FlatMap:
@@ -1151,7 +1268,7 @@ void projectStreamOffsets(
     const Type* type,
     const SelectedChildrenMap& selectedChildren,
     std::vector<uint32_t>& projectedStreamOffsets,
-    std::vector<bool>& rowOrFlatMapNullStreams);
+    std::vector<bool>& barrierStreams);
 
 // Emits the FlatMap branch of `projectStreamOffsets`. Merges present keys
 // (from `selectedChildren[flatMap]`, by source index) and missing keys (from
@@ -1165,7 +1282,7 @@ void projectFlatmapStreamOffsets(
     const SelectedChildrenMap& selectedChildren,
     const MissingChildrenMap& missingChildren,
     std::vector<uint32_t>& projectedStreamOffsets,
-    std::vector<bool>& rowOrFlatMapNullStreams) {
+    std::vector<bool>& barrierStreams) {
   const auto* flatMapPtr = static_cast<const Type*>(&flatMap);
   const auto selectedIt = selectedChildren.find(flatMapPtr);
   const auto missingIt = missingChildren.find(flatMapPtr);
@@ -1205,9 +1322,9 @@ void projectFlatmapStreamOffsets(
 
   appendProjectedStream(
       projectedStreamOffsets,
-      rowOrFlatMapNullStreams,
+      barrierStreams,
       flatMap.nullsDescriptor().offset(),
-      /*isRowOrFlatMapNullStream=*/true);
+      /*isBarrierStream=*/true);
   const auto* valueType = flatMap.childAt(0).get();
   for (const auto& entry : entries) {
     if (entry.valueIndex.has_value()) {
@@ -1215,20 +1332,20 @@ void projectFlatmapStreamOffsets(
           flatMap.childAt(*entry.valueIndex).get(),
           selectedChildren,
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams);
+          barrierStreams);
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           flatMap.inMapDescriptorAt(*entry.valueIndex).offset(),
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/false);
     } else {
       emitPlaceholderStreamOffsets(
-          valueType, projectedStreamOffsets, rowOrFlatMapNullStreams);
+          valueType, projectedStreamOffsets, barrierStreams);
       appendProjectedStream(
           projectedStreamOffsets,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           UINT32_MAX,
-          /*isRowOrFlatMapNullStream=*/false);
+          /*isBarrierStream=*/false);
     }
   }
 }
@@ -1240,13 +1357,13 @@ void projectStreamOffsets(
     const Type* type,
     const SelectedChildrenMap& selectedChildren,
     std::vector<uint32_t>& projectedStreamOffsets,
-    std::vector<bool>& rowOrFlatMapNullStreams) {
+    std::vector<bool>& barrierStreams) {
   const auto selectedIt = selectedChildren.find(type);
   if (selectedIt == selectedChildren.end()) {
     appendProjectionStreams(
         *type,
         projectedStreamOffsets,
-        &rowOrFlatMapNullStreams,
+        &barrierStreams,
         /*allowFlatMap=*/false);
     return;
   }
@@ -1257,16 +1374,16 @@ void projectStreamOffsets(
   const auto& row = type->asRow();
   appendProjectedStream(
       projectedStreamOffsets,
-      rowOrFlatMapNullStreams,
+      barrierStreams,
       row.nullsDescriptor().offset(),
-      /*isRowOrFlatMapNullStream=*/true);
+      /*isBarrierStream=*/true);
   // std::set<size_t> iterates in source child order.
   for (size_t childIndex : selectedIt->second) {
     projectStreamOffsets(
         row.childAt(childIndex).get(),
         selectedChildren,
         projectedStreamOffsets,
-        rowOrFlatMapNullStreams);
+        barrierStreams);
   }
 }
 
@@ -1277,33 +1394,31 @@ void projectStreamOffsets(
 void projectHybridFlatMapStreamOffsets(
     const ProjectedHybridFlatMap& projectedHybridFlatMap,
     std::vector<uint32_t>& projectedStreamOffsets,
-    std::vector<bool>& rowOrFlatMapNullStreams) {
+    std::vector<bool>& barrierStreams) {
   NIMBLE_CHECK_NOT_NULL(projectedHybridFlatMap.source);
   const auto& hybridMap = *projectedHybridFlatMap.source;
   const SelectedChildrenMap noSelectedChildren;
 
   appendProjectedStream(
       projectedStreamOffsets,
-      rowOrFlatMapNullStreams,
+      barrierStreams,
       hybridMap.nullsDescriptor().offset(),
-      /*isRowOrFlatMapNullStream=*/true);
+      /*isBarrierStream=*/true);
   if (projectedHybridFlatMap.groupIndices.empty()) {
     // Follows the builder's allocation order (value subtree, key presence,
     // in-map) so later columns keep their slots.
     emitPlaceholderStreamOffsets(
-        &hybridMap.valueType(),
-        projectedStreamOffsets,
-        rowOrFlatMapNullStreams);
+        &hybridMap.valueType(), projectedStreamOffsets, barrierStreams);
     appendProjectedStream(
         projectedStreamOffsets,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         UINT32_MAX, // Key-presence placeholder.
-        /*isRowOrFlatMapNullStream=*/true);
+        /*isBarrierStream=*/true);
     appendProjectedStream(
         projectedStreamOffsets,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         UINT32_MAX, // In-map placeholder.
-        /*isRowOrFlatMapNullStream=*/false);
+        /*isBarrierStream=*/false);
     return;
   }
   for (const auto groupIndex : projectedHybridFlatMap.groupIndices) {
@@ -1312,17 +1427,17 @@ void projectHybridFlatMapStreamOffsets(
         sourceGroup.valueType.get(),
         noSelectedChildren,
         projectedStreamOffsets,
-        rowOrFlatMapNullStreams);
+        barrierStreams);
     appendProjectedStream(
         projectedStreamOffsets,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         sourceGroup.keyPresenceDescriptor.offset(),
-        /*isRowOrFlatMapNullStream=*/true);
+        /*isBarrierStream=*/true);
     appendProjectedStream(
         projectedStreamOffsets,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         sourceGroup.inMapDescriptor.offset(),
-        /*isRowOrFlatMapNullStream=*/false);
+        /*isBarrierStream=*/false);
   }
 }
 
@@ -1330,16 +1445,30 @@ void projectHybridFlatMapStreamOffsets(
 // build the encoding hints the velox-source `buildProjectedNimbleType`
 // overload requires: FlatMap → flatMapColumns, ArrayWithOffsets →
 // dictionaryArrayColumns, SlidingWindowMap → deduplicatedMapColumns. Other
-// kinds produce no entry (plain encoding).
+// kinds produce no entry (plain encoding). A FlatMap whose values are
+// ArrayWithOffsets or SlidingWindowMap also lands in dictionaryArrayColumns or
+// deduplicatedMapColumns, so that its projected keys keep the value kind of
+// the source streams.
 // Internal helper of `buildProjectedNimbleType` (nimble-source overload).
 ColumnEncodings getColumnEncodings(const RowType& nimbleType) {
   ColumnEncodings encodings;
   for (size_t i = 0; i < nimbleType.childrenCount(); ++i) {
     const auto& name = nimbleType.nameAt(i);
     switch (nimbleType.childAt(i)->kind()) {
-      case Kind::FlatMap:
+      case Kind::FlatMap: {
         encodings.flatMapColumns.insert(std::string(name));
+        // The writer gives every FlatMap at least one key, a dummy one when all
+        // maps are empty, and the values of all keys the same kind, which the
+        // projections of missing keys follow as well.
+        const auto valueKind =
+            nimbleType.childAt(i)->asFlatMap().childAt(0)->kind();
+        if (valueKind == Kind::ArrayWithOffsets) {
+          encodings.dictionaryArrayColumns.insert(std::string(name));
+        } else if (valueKind == Kind::SlidingWindowMap) {
+          encodings.deduplicatedMapColumns.insert(std::string(name));
+        }
         break;
+      }
       case Kind::ArrayWithOffsets:
         encodings.dictionaryArrayColumns.insert(std::string(name));
         break;
@@ -1373,9 +1502,7 @@ NimbleTypeProjection buildProjectedNimbleType(
   // the two per FlatMap node before emitting.
   SelectedChildrenMap selectedChildren;
   MissingChildrenMap missingChildren;
-  for (const auto& subfield : projectedSubfields) {
-    resolveSubfield(type, subfield, selectedChildren, missingChildren);
-  }
+  resolveSubfields(type, projectedSubfields, selectedChildren, missingChildren);
 
   // An all-missing-keys projection is allowed: the projected FlatMap contains
   // a placeholder child per requested key, and the byte-copy pipeline emits
@@ -1423,13 +1550,13 @@ NimbleTypeProjection buildProjectedNimbleType(
 
   // Walk the source nimble in the same DFS pre-order + FlatMap-alphabetical
   // traversal the velox-source builder uses, emitting one source stream offset
-  // and Row/FlatMap null stream bit per projected stream position
+  // and barrier stream bit per projected stream position
   // (UINT32_MAX for missing keys).
   appendProjectedStream(
       projection.streamOffsets,
-      projection.rowOrFlatMapNullStreams,
+      projection.barrierStreams,
       rootRow.nullsDescriptor().offset(),
-      /*isRowOrFlatMapNullStream=*/true);
+      /*isBarrierStream=*/true);
   for (size_t columnIdx : selectedColumnIndices) {
     const auto* child = rootRow.childAt(columnIdx).get();
     if (child->kind() == Kind::HybridFlatMap) {
@@ -1438,20 +1565,20 @@ NimbleTypeProjection buildProjectedNimbleType(
       projectHybridFlatMapStreamOffsets(
           projectedHybridFlatMap,
           projection.streamOffsets,
-          projection.rowOrFlatMapNullStreams);
+          projection.barrierStreams);
     } else if (child->kind() == Kind::FlatMap) {
       projectFlatmapStreamOffsets(
           child->asFlatMap(),
           selectedChildren,
           missingChildren,
           projection.streamOffsets,
-          projection.rowOrFlatMapNullStreams);
+          projection.barrierStreams);
     } else {
       projectStreamOffsets(
           child,
           selectedChildren,
           projection.streamOffsets,
-          projection.rowOrFlatMapNullStreams);
+          projection.barrierStreams);
     }
   }
   validateProjectedHybridFlatMapSchema(*projection.nimbleType);
@@ -1461,8 +1588,7 @@ NimbleTypeProjection buildProjectedNimbleType(
       schemaNodes(*projection.nimbleType).size(),
       "Projected visible stream count does not match projected schema.");
   NIMBLE_DCHECK_EQ(
-      projection.streamOffsets.size(),
-      projection.rowOrFlatMapNullStreams.size());
+      projection.streamOffsets.size(), projection.barrierStreams.size());
 
   return projection;
 }

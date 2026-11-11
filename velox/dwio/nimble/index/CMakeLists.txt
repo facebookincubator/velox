@@ -28,6 +28,7 @@ add_library(
   HashIndex.cpp
   HashIndexWriter.cpp
   HierarchicalClusterIndex.cpp
+  HierarchicalClusterIndexFactory.cpp
   HierarchicalClusterIndexWriter.cpp
   IndexConfig.cpp
   IndexFilter.cpp
@@ -45,6 +46,7 @@ add_library(
   VectorIndexConfig.h
   SortedIndexWriter.h
   HierarchicalClusterIndex.h
+  HierarchicalClusterIndexFactory.h
   HierarchicalClusterIndexWriter.h
   HierarchicalKeyFormat.h
   HierarchicalKeyReader.h
@@ -107,8 +109,6 @@ target_link_libraries(
   Folly::folly
 )
 
-find_package(OpenMP REQUIRED)
-
 add_library(
   nimble_vector_index
   VectorIndex.cpp
@@ -166,7 +166,6 @@ add_library(
   nimble_index_iterator
   IndexScanCursor.cpp
   IndexScanCursor.h
-  NimbleBatchIterator.cpp
   NimbleIterator.cpp
   NimbleIterator.h
   NimbleRowIterator.cpp

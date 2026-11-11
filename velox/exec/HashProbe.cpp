@@ -414,18 +414,12 @@ void HashProbe::pushdownDynamicFilters() {
           ->queryConfig()
           .hashProbeStringDynamicFilterPushdownEnabled();
   auto numFilters = driver->pushdownFilters(
-      this,
-      keyChannels_,
-      [&](column_index_t sourceChannel,
-          std::shared_ptr<common::Filter>& filter) {
-        if (dynamicFiltersProducedOnChannels_.contains(sourceChannel)) {
-          return true;
-        }
-        auto& hasher = *table_->hashers()[sourceChannel];
+      this, keyChannels_, [&](column_index_t keyIndex) -> common::FilterPtr {
+        auto& hasher = *table_->hashers()[keyIndex];
         if (hasher.typeKind() == TypeKind::VARCHAR ||
             hasher.typeKind() == TypeKind::VARBINARY) {
           if (!hashProbeStringDynamicFilterPushdownEnabled) {
-            return false;
+            return nullptr;
           }
           // A custom logical type may have a connector-specific physical
           // representation that differs from its in-memory representation, so
@@ -438,14 +432,14 @@ void HashProbe::pushdownDynamicFilters() {
           // whose connector physical representation is known to match the
           // in-memory one, rather than skipping every custom type.
           if (customTypeExists(hasher.type()->name())) {
-            return false;
+            return nullptr;
           }
         }
-        filter = hasher.getFilter(false);
+        common::FilterPtr filter = hasher.getFilter(false);
         if (!filter) {
           filter = hasher.getBloomFilter();
           if (!filter) {
-            return false;
+            return nullptr;
           }
           auto* bloomFilter =
               checkedPointerCast<const common::BigintValuesUsingBloomFilter>(
@@ -454,11 +448,7 @@ void HashProbe::pushdownDynamicFilters() {
               std::string(HashProbe::kBloomFilterSize),
               RuntimeCounter(bloomFilter->blocksByteSize()));
         }
-        dynamicFiltersProducedOnChannels_.insert(sourceChannel);
-        for (auto* peer : findPeerOperators()) {
-          peer->dynamicFiltersProducedOnChannels_.insert(sourceChannel);
-        }
-        return true;
+        return filter;
       });
   // The join can be completely replaced with a pushed down filter when the
   // following conditions are met:

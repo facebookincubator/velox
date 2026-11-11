@@ -50,10 +50,11 @@ class IcebergChangelogSplitReader : public IcebergSplitReader {
  public:
   IcebergChangelogSplitReader(
       const std::shared_ptr<const HiveIcebergSplit>& icebergSplit,
-      const FileTableHandlePtr& tableHandle,
-      const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+      const connector::FileTableHandlePtr& tableHandle,
+      const std::unordered_map<std::string, connector::FileColumnHandlePtr>*
+          partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const connector::FileConfig>& fileConfig,
       const ChangelogScanContext& scanContext,
       const std::shared_ptr<io::IoStatistics>& dataIoStats,
       const std::shared_ptr<io::IoStatistics>& metadataIoStats,

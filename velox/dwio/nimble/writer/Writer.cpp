@@ -42,7 +42,6 @@
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/MetadataGenerated.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/common/SchemaReader.h"
@@ -112,9 +111,6 @@ class WriterContext : public FieldWriterContext {
         fsstEncodingNodeIds_{std::move(options.fsstEncodingNodeIds)},
         subIntSplitEncodingNodeIds_{std::move(options.subIntSplitEncodingNodeIds)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
-        stripeStatsWriteEnabled_{featureGate()->enabled(
-            FeatureGate::FeatureSet::kStripeStatsWrite,
-            /*defaultValue=*/false)},
         logger_{
             this->options_.metricsLogger == nullptr
                 ? std::make_shared<MetricsLogger>()
@@ -136,12 +132,6 @@ class WriterContext : public FieldWriterContext {
 
   const EncodingNodeIds& subIntSplitEncodingNodeIds() const {
     return subIntSplitEncodingNodeIds_;
-  }
-
-  // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
-  // is enabled. Resolved once at construction so it cannot flip mid-file.
-  bool stripeStatsWriteEnabled() const {
-    return stripeStatsWriteEnabled_;
   }
 
   bool hasStripeDictionaryConfig() const {
@@ -292,7 +282,6 @@ class WriterContext : public FieldWriterContext {
   const EncodingNodeIds fsstEncodingNodeIds_;
   const EncodingNodeIds subIntSplitEncodingNodeIds_;
   const bool hasStripeDictionaryConfig_;
-  const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
   velox::CpuWallTiming writeTiming_;
   velox::CpuWallTiming ingestionTiming_;
@@ -2274,6 +2263,7 @@ void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
   const auto numRows = input->size();
   bool batchHasTopLevelNulls{false};
   const bool mustCheckTopLevelNulls = clusterIndexWriter_ != nullptr ||
+      context_->options().enableChunkStats ||
       !context_->options().ignoreTopLevelNulls;
   if (mustCheckTopLevelNulls && input->mayHaveNulls()) {
     for (velox::vector_size_t row = 0; row < numRows; ++row) {
@@ -2286,6 +2276,11 @@ void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
   NIMBLE_USER_CHECK(
       clusterIndexWriter_ == nullptr || !batchHasTopLevelNulls,
       "Cluster-indexed Nimble files cannot contain top-level null rows");
+  if (context_->options().enableChunkStats) {
+    NIMBLE_USER_CHECK(
+        !batchHasTopLevelNulls,
+        "Nimble files with chunk stats cannot contain top-level null rows");
+  }
   hasTopLevelNulls_ = hasTopLevelNulls_ || batchHasTopLevelNulls;
 }
 
@@ -2370,7 +2365,7 @@ void Writer::writeMetadata() {
 }
 
 void Writer::writeColumnStats() {
-  context_->finalizeFileStatsFromStripes();
+  context_->finalizeFileStats();
   // Raw size now comes from the column statistics rather than a second pass
   // over the input with RawSizeUtils. The consistency check that validated the
   // two against each other has served its purpose and is gone, along with the
@@ -2389,14 +2384,6 @@ void Writer::writeColumnStats() {
     Buffer buffer{*encodingMemoryPool_};
     tabletWriter_->writeOptionalSection(
         std::string(kVectorizedStatsSection), fileStats.serialize(buffer));
-    if (context_->stripeStatsWriteEnabled()) {
-      VectorizedStripeStats stripeStats{
-          context_->stripeStats(), encodingMemoryPool_.get(), statsOptions};
-      Buffer stripeStatsBuffer{*encodingMemoryPool_};
-      tabletWriter_->writeOptionalSection(
-          std::string(kStripeStatsSection),
-          stripeStats.serialize(stripeStatsBuffer));
-    }
   } else {
     flatbuffers::FlatBufferBuilder builder;
     builder.Finish(
@@ -2563,7 +2550,6 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage),
-          /*hasStreamChecksums=*/false,
           std::move(streamTrailerLayout),
           hasTopLevelNulls_}
           .serialize();
@@ -3662,14 +3648,6 @@ bool Writer::writeStripe() {
     writeStreams();
   }
   writeStripeDictionaryStreams();
-
-  // Must run after writeStripeDictionaryStreams(), which still charges the
-  // stripe's alphabet bytes to the stats collectors: snapshotting first would
-  // shift those bytes into the next stripe and drop them for the last one.
-  if (context_->options().enableStatsCollection &&
-      context_->stripeStatsWriteEnabled()) {
-    context_->finalizeStripeStatsCollectors();
-  }
 
   uint64_t stripeSize{0};
   {

@@ -24,6 +24,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/OrderedInteger.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -59,8 +60,7 @@ class DeltaBlockEncodingView final : public TypedEncodingView<T> {
 
     blockBases_.resize(numBlocks_);
     for (uint32_t i = 0; i < numBlocks_; ++i) {
-      blockBases_[i] =
-          DeltaBlockEncoding<T>::fromOrdered(varint::readVarint64(&pos));
+      blockBases_[i] = fromOrdered<T>(varint::readVarint64(&pos));
     }
 
     bitWidths_.resize(numBlocks_);
@@ -124,7 +124,7 @@ class DeltaBlockEncodingView final : public TypedEncodingView<T> {
     cache.blockIndex = blockIndex;
     cache.position = 0;
     cache.bitWidth = bitWidths_[blockIndex];
-    cache.ordered = DeltaBlockEncoding<T>::toOrdered(blockBases_[blockIndex]);
+    cache.ordered = toOrdered<T>(blockBases_[blockIndex]);
     if (cache.bitWidth != 0) {
       cache.deltas = FixedBitArray{
           {packedData_ + blockOffsets_[blockIndex],
@@ -152,7 +152,7 @@ class DeltaBlockEncodingView final : public TypedEncodingView<T> {
       }
       cache.position = position;
     }
-    return DeltaBlockEncoding<T>::fromOrdered(cache.ordered);
+    return fromOrdered<T>(cache.ordered);
   }
 
   ReadCache* readCache() const {

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/AggregateCompanionAdapter.h"
 #include "velox/functions/lib/aggregates/SetBaseAggregate.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
@@ -274,17 +275,26 @@ void registerCollectSetAggAggregate(
 
   exec::registerAggregateFunction(
       prefix + "collect_set",
-      std::move(signatures),
-      [](core::AggregationNode::Step /*step*/,
+      signatures,
+      [](core::AggregationNode::Step step,
          const std::vector<TypePtr>& argTypes,
          const TypePtr& resultType,
          const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        const TypePtr& inputType = argTypes[0];
+        const TypePtr& inputType =
+            exec::isRawInput(step) ? argTypes[0] : argTypes[0]->childAt(0);
         return createSetAgg(inputType->kind(), inputType, resultType);
       },
       {.ignoreDuplicates = true},
       withCompanionFunctions,
       overwrite);
+
+  if (withCompanionFunctions) {
+    exec::CompanionFunctionsRegistrar::registerMergeExtractFunction(
+        prefix + "collect_set",
+        {signatures.front()},
+        {.ignoreDuplicates = true, .companionFunction = true},
+        overwrite);
+  }
 }
 } // namespace facebook::velox::functions::aggregate::sparksql

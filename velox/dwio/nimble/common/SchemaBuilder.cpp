@@ -361,10 +361,12 @@ const StreamDescriptorBuilder& FlatMapTypeBuilder::addChild(
 HybridFlatMapTypeBuilder::HybridFlatMapTypeBuilder(
     SchemaBuilder& schemaBuilder,
     ScalarKind keyScalarKind,
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
     bool requiresDefaultGroup)
     : TypeBuilder{schemaBuilder, Kind::HybridFlatMap},
       keyScalarKind_{keyScalarKind},
       requiresDefaultGroup_{requiresDefaultGroup},
+      defaultGroupKeyPresenceMode_{defaultGroupKeyPresenceMode},
       nullsDescriptor_{
           schemaBuilder_.allocateStreamOffset(),
           ScalarKind::Bool} {}
@@ -382,40 +384,23 @@ bool HybridFlatMapTypeBuilder::requiresDefaultGroup() const {
   return requiresDefaultGroup_;
 }
 
-namespace {
-
-// Rejects Default keys that repeat or already belong to a configured group.
-// Default can arrive with thousands of keys from a projected schema, so the
-// configured keys are probed against the Default keys rather than binary
-// searching every configured group for each Default key.
-template <typename StoredGroups>
-void checkNewDefaultGroupKeys(
-    const std::vector<std::string>& groupKeys,
-    const StoredGroups& configuredGroups) {
-  folly::F14FastSet<std::string_view> defaultKeys;
-  defaultKeys.reserve(groupKeys.size());
-  for (const auto& key : groupKeys) {
-    NIMBLE_CHECK(
-        defaultKeys.insert(key).second,
-        "Duplicate Hybrid FlatMap key: '{}'.",
-        key);
-  }
-  for (const auto& group : configuredGroups) {
-    for (const auto& key : group.groupKeys) {
-      NIMBLE_CHECK(
-          !defaultKeys.contains(key),
-          "Duplicate Hybrid FlatMap key: '{}'.",
-          key);
-    }
-  }
+HybridFlatMap::KeyPresenceMode
+HybridFlatMapTypeBuilder::defaultGroupKeyPresenceMode() const {
+  return defaultGroupKeyPresenceMode_;
 }
 
-} // namespace
+bool HybridFlatMapTypeBuilder::useKeyPresentList(uint32_t groupId) const {
+  return HybridFlatMap::hasKeyPresenceList(
+      defaultGroupKeyPresenceMode_, groupId);
+}
 
 HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
     uint32_t groupId,
     std::vector<std::string> groupKeys,
     std::shared_ptr<TypeBuilder> valueType) {
+  NIMBLE_CHECK(
+      !boundMap_.has_value(),
+      "Hybrid FlatMap groups cannot mix bound and listed keys.");
   const auto isDefaultGroup = HybridFlatMap::isDefaultGroup(groupId);
   NIMBLE_CHECK(
       !isDefaultGroup || !defaultGroupIndex_.has_value(),
@@ -428,28 +413,96 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
       "Duplicate Hybrid FlatMap group ID: {}.",
       groupId);
   detail::checkHybridFlatMapGroupKeys(groupId, groupKeys);
-  if (isDefaultGroup) {
-    checkNewDefaultGroupKeys(groupKeys, groups_);
-  } else {
-    for (const auto& key : groupKeys) {
-      NIMBLE_CHECK(
-          !containsKey(key), "Duplicate Hybrid FlatMap key: '{}'.", key);
-    }
+  detail::checkHybridFlatMapDefaultKeys(
+      defaultGroupKeyPresenceMode_, groupId, groupKeys);
+
+  // Inserting also rejects a key repeated within this group, which the sorted
+  // check above does not cover for Default keys in first-seen order.
+  for (const auto& key : groupKeys) {
+    const bool isNewKey = keys_.insert(key).second;
+    NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
   }
+  return storeGroup(
+      groupId,
+      std::move(groupKeys),
+      /*boundGroupKeys=*/nullptr,
+      std::move(valueType));
+}
+
+HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
+    const HybridFlatMap& bound,
+    size_t groupIndex,
+    std::shared_ptr<TypeBuilder> valueType) {
+  if (!boundMap_.has_value()) {
+    NIMBLE_CHECK(
+        groups_.empty(),
+        "Hybrid FlatMap groups cannot mix bound and listed keys.");
+    NIMBLE_CHECK_EQ(
+        defaultGroupKeyPresenceMode_,
+        HybridFlatMap::KeyPresenceMode::kKeyList,
+        "Bound Hybrid FlatMap groups must have a Default group that lists its "
+        "keys.");
+    NIMBLE_CHECK(
+        bound.keyKind().has_value(),
+        "Hybrid FlatMap groups must come from a bound HybridFlatMap.");
+    NIMBLE_CHECK_EQ(
+        *bound.keyKind(),
+        keyScalarKind_,
+        "Bound Hybrid FlatMap is for keys of another type.");
+    NIMBLE_CHECK_EQ(
+        bound.defaultGroupKeyPresenceMode(),
+        defaultGroupKeyPresenceMode_,
+        "Bound Hybrid FlatMap has another Default key presence mode.");
+    boundMap_.emplace(bound);
+  }
+
+  // Copies of a HybridFlatMap with a group lookup share its groups, so the
+  // groups of the same bound HybridFlatMap have one address.
+  NIMBLE_CHECK(
+      &boundMap_->groups() == &bound.groups(),
+      "Hybrid FlatMap groups must all come from one bound HybridFlatMap, "
+      "which has a group lookup.");
+  NIMBLE_CHECK_EQ(
+      groupIndex,
+      groups_.size(),
+      "Hybrid FlatMap bound groups must be added in order.");
+  const auto& boundGroups = boundMap_->groups();
+  NIMBLE_CHECK_LT(
+      groupIndex,
+      boundGroups.size(),
+      "Hybrid FlatMap bound group index is out of range.");
+  const auto& group = boundGroups[groupIndex];
+
+  // A bound HybridFlatMap holds checked, sorted keys in each explicit group
+  // and ends with its only Default group, which has no keys.
+  return storeGroup(
+      group.groupId,
+      /*groupKeys=*/{},
+      HybridFlatMap::isDefaultGroup(group.groupId) ? nullptr : &group.groupKeys,
+      std::move(valueType));
+}
+
+HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::storeGroup(
+    uint32_t groupId,
+    std::vector<std::string> groupKeys,
+    const std::vector<std::string>* boundGroupKeys,
+    std::shared_ptr<TypeBuilder> valueType) {
+  const auto isDefaultGroup = HybridFlatMap::isDefaultGroup(groupId);
   schemaBuilder_.registerChild(valueType);
   auto& group = groups_.emplace_back(
       StoredGroup{
           .groupId = groupId,
           .groupKeys = std::move(groupKeys),
+          .boundGroupKeys = boundGroupKeys,
           .keyPresenceDescriptor = std::make_unique<StreamDescriptorBuilder>(
-              schemaBuilder_.allocateStreamOffset(), ScalarKind::Bool),
+              schemaBuilder_.allocateStreamOffset(),
+              useKeyPresentList(groupId) ? keyScalarKind_ : ScalarKind::Bool),
           .inMapDescriptor = std::make_unique<StreamDescriptorBuilder>(
               schemaBuilder_.allocateStreamOffset(), ScalarKind::Bool),
           .valueType = std::move(valueType),
       });
   if (isDefaultGroup) {
     defaultGroupIndex_ = groups_.size() - 1;
-    defaultGroupKeys_.insert(group.groupKeys.begin(), group.groupKeys.end());
   }
   NIMBLE_CHECK_NOT_NULL(
       group.keyPresenceDescriptor,
@@ -464,21 +517,14 @@ void HybridFlatMapTypeBuilder::appendDefaultGroupKey(std::string key) {
   NIMBLE_CHECK(
       defaultGroupIndex_.has_value(),
       "Hybrid FlatMap Default group is not initialized.");
+  NIMBLE_CHECK_EQ(
+      defaultGroupKeyPresenceMode_,
+      HybridFlatMap::KeyPresenceMode::kBitmap,
+      "Hybrid FlatMap Default keys are listed per batch, not in the schema.");
   NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
-  NIMBLE_CHECK(!containsKey(key), "Duplicate Hybrid FlatMap key: '{}'.", key);
-  defaultGroupKeys_.insert(key);
+  const bool isNewKey = keys_.insert(key).second;
+  NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
   groups_[*defaultGroupIndex_].groupKeys.push_back(std::move(key));
-}
-
-bool HybridFlatMapTypeBuilder::containsKey(std::string_view key) const {
-  for (const auto& group : groups_) {
-    if (!HybridFlatMap::isDefaultGroup(group.groupId) &&
-        std::binary_search(
-            group.groupKeys.begin(), group.groupKeys.end(), key)) {
-      return true;
-    }
-  }
-  return defaultGroupKeys_.contains(key);
 }
 
 size_t HybridFlatMapTypeBuilder::groupCount() const {
@@ -492,9 +538,11 @@ HybridFlatMapTypeBuilder::Group HybridFlatMapTypeBuilder::groupAt(
   NIMBLE_CHECK_NOT_NULL(
       group.keyPresenceDescriptor,
       "Hybrid FlatMap key-presence descriptor is not initialized.");
+  const auto& groupKeys =
+      group.boundGroupKeys != nullptr ? *group.boundGroupKeys : group.groupKeys;
   return {
       .groupId = group.groupId,
-      .groupKeys = group.groupKeys,
+      .groupKeys = groupKeys,
       .keyPresenceDescriptor = *group.keyPresenceDescriptor,
       .inMapDescriptor = *group.inMapDescriptor,
       .valueType = *group.valueType,
@@ -617,6 +665,7 @@ std::shared_ptr<FlatMapTypeBuilder> SchemaBuilder::createFlatMapTypeBuilder(
 std::shared_ptr<HybridFlatMapTypeBuilder>
 SchemaBuilder::createHybridFlatMapTypeBuilder(
     ScalarKind keyScalarKind,
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
     bool projection) {
   NIMBLE_USER_CHECK(
       HybridFlatMap::supportedKeyKind(keyScalarKind),
@@ -626,14 +675,16 @@ SchemaBuilder::createHybridFlatMapTypeBuilder(
     MakeSharedEnabler(
         SchemaBuilder& schemaBuilder,
         ScalarKind keyScalarKind,
+        HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
         bool projection)
         : HybridFlatMapTypeBuilder(
               schemaBuilder,
               keyScalarKind,
+              defaultGroupKeyPresenceMode,
               /*requiresDefaultGroup=*/!projection) {}
   };
-  auto type =
-      std::make_shared<MakeSharedEnabler>(*this, keyScalarKind, projection);
+  auto type = std::make_shared<MakeSharedEnabler>(
+      *this, keyScalarKind, defaultGroupKeyPresenceMode, projection);
   roots_.insert(type);
   return type;
 }
@@ -714,13 +765,15 @@ const Type& schemaChild(const std::shared_ptr<const Type>& type) {
 }
 
 void validateForSerialization(const HybridFlatMapTypeBuilder& hybridMap) {
+  folly::F14FastMap<std::string_view, size_t> groupIndices;
   detail::validateHybridFlatMapGroups(
       hybridMap.groupCount(),
       hybridMap.requiresDefaultGroup(),
       [&hybridMap](size_t index) { return hybridMap.groupAt(index).groupId; },
       [&hybridMap](size_t index) -> const auto& {
         return hybridMap.groupAt(index).groupKeys;
-      });
+      },
+      groupIndices);
 
   // Group validation guarantees at least one group, so group 0 is the
   // reference and the comparison starts at 1.
@@ -880,18 +933,20 @@ void addSchemaNode(
     case Kind::HybridFlatMap: {
       const auto& hybridMap = type.asHybridFlatMap();
       validateForSerialization(hybridMap);
-      HybridFlatMap metadata;
-      metadata.groups.reserve(hybridMap.groupCount());
+      std::vector<HybridFlatMap::Group> groups;
+      groups.reserve(hybridMap.groupCount());
       for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
         const auto& group = hybridMap.groupAt(i);
-        metadata.groups.push_back(
+        groups.push_back(
             HybridFlatMap::Group{
                 .groupId = group.groupId,
                 .groupKeys = group.groupKeys,
             });
       }
       auto attributes = type.attributes();
-      metadata.setAttribute(attributes);
+      HybridFlatMap::fromSchema(
+          std::move(groups), hybridMap.defaultGroupKeyPresenceMode())
+          .setAttribute(attributes);
       nodes.emplace_back(
           type.kind(),
           hybridMap.nullsDescriptor().offset(),
@@ -904,7 +959,7 @@ void addSchemaNode(
         nodes.emplace_back(
             Kind::Scalar,
             group.keyPresenceDescriptor.offset(),
-            ScalarKind::Bool,
+            group.keyPresenceDescriptor.scalarKind(),
             std::nullopt);
         nodes.emplace_back(
             Kind::Scalar,

@@ -30,13 +30,13 @@
 #include "velox/common/Casts.h"
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/hive/FileColumnHandle.h"
+#include "velox/connectors/common/FileColumnHandle.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileSplitReader.h"
+#include "velox/connectors/common/PartitionValue.h"
 #include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
@@ -225,13 +225,19 @@ bool testPartitionKeyFilter(
   }
   return common::applyFilter(
       filter,
-      PartitionValue::fromString(
+      ::facebook::velox::connector::PartitionValue::fromString(
           *value,
           *type,
-          timestampValueAsLocalTime ? PartitionValue::TimestampMode::kLocalTime
-                                    : PartitionValue::TimestampMode::kUtc,
-          dateValueDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
-                                  : PartitionValue::DateMode::kIsoString));
+          timestampValueAsLocalTime
+              ? ::facebook::velox::connector::PartitionValue::TimestampMode::
+                    kLocalTime
+              : ::facebook::velox::connector::PartitionValue::TimestampMode::
+                    kUtc,
+          dateValueDaysSinceEpoch
+              ? ::facebook::velox::connector::PartitionValue::DateMode::
+                    kDaysSinceEpoch
+              : ::facebook::velox::connector::PartitionValue::DateMode::
+                    kIsoString));
 }
 
 } // namespace
@@ -282,10 +288,15 @@ CudfHiveDataSource::CudfHiveDataSource(
 
   // Column handles by table column name, including those of the columns only
   // the filters read.
-  std::unordered_map<std::string, const FileColumnHandle*> columnHandlesByName;
+  std::unordered_map<
+      std::string,
+      const ::facebook::velox::connector::FileColumnHandle*>
+      columnHandlesByName;
   for (const auto& [_, handle] : columnHandles) {
     const auto* fileColumnHandle =
-        checkedPointerCast<const FileColumnHandle>(handle).get();
+        checkedPointerCast<
+            const ::facebook::velox::connector::FileColumnHandle>(handle)
+            .get();
     columnHandlesByName.emplace(fileColumnHandle->name(), fileColumnHandle);
   }
   for (const auto& handle : tableHandle_->hiveFilterColumnHandles()) {
@@ -293,8 +304,8 @@ CudfHiveDataSource::CudfHiveDataSource(
   }
 
   // Returns the handle of a partition key the data source resolves, or null.
-  const auto partitionKeyHandle =
-      [&](const std::string& name) -> const FileColumnHandle* {
+  const auto partitionKeyHandle = [&](const std::string& name)
+      -> const ::facebook::velox::connector::FileColumnHandle* {
     if (partitionKeySource_ != PartitionKeySource::kDataSource) {
       return nullptr;
     }
@@ -303,17 +314,19 @@ CudfHiveDataSource::CudfHiveDataSource(
         ? it->second
         : nullptr;
   };
-  const auto addPartitionKey = [&](const std::string& name,
-                                   const TypePtr& type,
-                                   const FileColumnHandle& handle) {
-    if (partitionKeys_
-            .emplace(
-                name,
-                PartitionKey{type, handle.isPartitionDateValueDaysSinceEpoch()})
-            .second) {
-      columnTypes_.emplace(name, type);
-    }
-  };
+  const auto addPartitionKey =
+      [&](const std::string& name,
+          const TypePtr& type,
+          const ::facebook::velox::connector::FileColumnHandle& handle) {
+        if (partitionKeys_
+                .emplace(
+                    name,
+                    PartitionKey{
+                        type, handle.isPartitionDateValueDaysSinceEpoch()})
+                .second) {
+          columnTypes_.emplace(name, type);
+        }
+      };
   const auto materializePartitionKey = [&](const std::string& name) {
     if (std::find(partitionKeyNames_.begin(), partitionKeyNames_.end(), name) ==
         partitionKeyNames_.end()) {
@@ -354,7 +367,7 @@ CudfHiveDataSource::CudfHiveDataSource(
   // complex expressions and adds them to subfieldFilters_ for pushdown.
   double sampleRate = tableHandle_->sampleRate();
   auto remainingFilter =
-      facebook::velox::connector::hive::extractFiltersFromRemainingFilter(
+      facebook::velox::connector::extractFiltersFromRemainingFilter(
           tableHandle_->remainingFilter(),
           expressionEvaluator_,
           subfieldFilters_,
@@ -383,6 +396,24 @@ CudfHiveDataSource::CudfHiveDataSource(
       readColumnSet_.emplace(field.toString());
       readColumnNames_.emplace_back(field.toString());
     }
+  }
+  // A cast of a TIMESTAMP constant to VARCHAR beside a column became a
+  // subfield filter above, through the session's evaluator; one anywhere else
+  // reaches the fold below, whose local config carries the session time zone
+  // but not legacy_cast, under which the CPU prints a TIMESTAMP with a 'T'
+  // separator. Folding would fold such a cast with the default rules and
+  // leave no cast to find, so the check runs on the filter as it stands here.
+  // The data source cannot apply the session time zone to a column's text
+  // either.
+  // TODO: Keep such a scan on the CPU data source instead, once the connector
+  // sees the session config and checks the filter the way canExprRunOnGpu()
+  // does before choosing a data source (facebookincubator/velox#19476,
+  // facebookincubator/velox#18238).
+  if (remainingFilter && containsTimestampToVarcharCast(remainingFilter)) {
+    VELOX_UNSUPPORTED(
+        "Remaining filter with a cast from TIMESTAMP to VARCHAR is not "
+        "supported: {}",
+        remainingFilter->toString());
   }
   // Optimize (rewrites + constant folding) the remaining filter before
   // evaluator selection so CudfFunctions never see scalar-only operand sets.
@@ -420,6 +451,22 @@ CudfHiveDataSource::CudfHiveDataSource(
     optimizedRemainingFilter_ = nullptr;
   }
   if (optimizedRemainingFilter_) {
+    // The local config above carries no cast setting, so a cast from VARCHAR
+    // compiled against it follows Presto's strict rules in a session that sets
+    // legacy_cast or cast_string_to_floating_point_lenient_inf_nan, and a
+    // TRY_CAST would drop the rows those settings accept. The check runs on
+    // the folded filter so that a cast of a VARCHAR constant, the form a plan
+    // gives a DECIMAL constant, keeps folding to that constant.
+    // TODO: Keep such a scan on the CPU data source instead, once the
+    // connector sees the session config and checks the filter the way
+    // canExprRunOnGpu() does before choosing a data source
+    // (facebookincubator/velox#19476, facebookincubator/velox#18238).
+    if (containsCastFromVarchar(
+            optimizedRemainingFilter_, /*floatingPointOnly=*/false)) {
+      VELOX_UNSUPPORTED(
+          "Remaining filter with a cast from VARCHAR is not supported: {}",
+          optimizedRemainingFilter_->toString());
+    }
     // Add fields referenced by the filter to the columns to read. Collect from
     // the optimized expression since folding may drop branches and the columns
     // they reference. Read-column order does not affect results: the data
@@ -910,19 +957,14 @@ CudfHiveDataSource::makePartitionKeyScalars(cuda::stream_ref stream) const {
       readTimestampPartitionValueAsLocalTime();
   // A TIMESTAMP key takes the type the split reader gives file timestamps
   // rather than the unit cuDF expressions default to, so that an expression
-  // can combine the two. Day resolution is no unit a TIMESTAMP scalar can
-  // take, so the key keeps the default unit when the reader casts timestamps
-  // to days.
-  const auto readerTimestampType = cudfHiveConfig_->timestampType().id();
-  const std::optional<cudf::type_id> timestampType =
-      readerTimestampType == cudf::type_id::TIMESTAMP_DAYS
-      ? std::nullopt
-      : std::optional<cudf::type_id>{readerTimestampType};
+  // can combine the two.
+  const auto timestampType = constantTimestampType(
+      *cudfHiveConfig_, connectorQueryCtx_->sessionProperties());
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
   scalars.reserve(partitionKeyNames_.size());
   for (const auto& name : partitionKeyNames_) {
     const auto& partitionKey = partitionKeys_.at(name);
-    const auto constant = newConstantFromString(
+    const auto constant = ::facebook::velox::connector::newConstantFromString(
         partitionKey.type,
         partitionKeyValue(name),
         pool_,

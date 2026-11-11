@@ -43,6 +43,7 @@
 #include <re2/re2.h>
 
 #include <atomic>
+#include <functional>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -155,6 +156,98 @@ TEST_F(HashJoinTest, countStarOverNonAstFilteredJoinWithZeroColumnOutput) {
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({2})});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Join filters that cast VARCHAR to a number, the shape of
+// TRY_CAST(r.result AS DOUBLE) > d.threshold. The AST has no cast from
+// strings, so each side's cast is precomputed by CastFunction over the whole
+// side, which is why a TRY_CAST runs on the GPU and a CAST stays on the CPU.
+TEST_F(HashJoinTest, countStarOverJoinFilterCastingVarchar) {
+  // The GPU cast from VARCHAR follows Presto's rules and is on in a session
+  // with the Presto functions registered.
+  cudf_velox::registerPrestoFunctions(
+      cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2, 2, 3, 3}),
+       makeNullableFlatVector<std::string>(
+           {"x", " 6", "2.5", "-1e1", std::nullopt})});
+  auto build = makeRowVector(
+      {"u_k", "u_threshold", "u_val"},
+      {makeFlatVector<int32_t>({2, 2, 3, 4}),
+       makeFlatVector<double>({2.0, 5.0, -20.0, 1.0}),
+       makeFlatVector<std::string>({"5.5", "+7", "-10", "1"})});
+  const auto four = makeRowVector({makeFlatVector<int64_t>({4})});
+
+  // Matches: (k=2, " 6") x 2.0 and 5.0; (k=2, "2.5") x 2.0; (k=3, "-1e1") x
+  // -20.0. NULL never passes, and "x" sits in a row the join never matches.
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe,
+      build,
+      core::JoinType::kInner,
+      "try_cast(t_val as double) > u_threshold");
+  AssertQueryBuilder(plan).assertResults(four);
+
+  // Both sides cast; only " 6" > "5.5" passes.
+  plan = countStarOverZeroColumnHashJoinPlan(
+      probe,
+      build,
+      core::JoinType::kInner,
+      "try_cast(t_val as real) > try_cast(u_val as real)");
+  AssertQueryBuilder(plan).assertResults(
+      makeRowVector({makeFlatVector<int64_t>({1})}));
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.allowCpuFallback = true;
+  SCOPE_EXIT {
+    config.allowCpuFallback = false;
+  };
+  // Counts the matches of the join with 'filter', expecting four, and returns
+  // the types of the operators that ran the join.
+  const auto joinOperatorTypes = [&](const std::string& filter) {
+    core::PlanNodeId joinId;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto countPlan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .hashJoin(
+                {"k"},
+                {"u_k"},
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                filter,
+                {},
+                core::JoinType::kInner)
+            .capturePlanNodeId(joinId)
+            .partialAggregation({}, {"count(*)"})
+            .finalAggregation()
+            .planNode();
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(countPlan).copyResults(pool(), task);
+    facebook::velox::test::assertEqualVectors(four, result);
+    std::string operatorTypes;
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.planNodeId == joinId) {
+          operatorTypes += op.operatorType + " ";
+        }
+      }
+    }
+    return operatorTypes;
+  };
+
+  // A CAST keeps the join on the CPU, which casts only the pairs the join
+  // matches; the GPU would cast "x" in the row it never matches and fail.
+  auto operatorTypes = joinOperatorTypes("cast(t_val as double) > u_threshold");
+  EXPECT_NE(operatorTypes.find("HashProbe "), std::string::npos)
+      << operatorTypes;
+  EXPECT_EQ(operatorTypes.find("Cudf"), std::string::npos) << operatorTypes;
+
+  // A cast of a literal folds away before the check and leaves the join on the
+  // GPU.
+  operatorTypes = joinOperatorTypes(
+      "try_cast(t_val as double) > u_threshold * cast('1' as double)");
+  EXPECT_NE(operatorTypes.find("Cudf"), std::string::npos) << operatorTypes;
 }
 
 TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {
@@ -1691,7 +1784,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {"t0", "t1"},
           {
               makeFlatVector<int32_t>(200, [](auto row) { return row % 11; }),
-              makeFlatVector<int32_t>(200, folly::identity, nullEvery(97)),
+              makeFlatVector<int32_t>(200, std::identity{}, nullEvery(97)),
           });
     });
     auto buildVectors = makeBatches(3, [&](int32_t /*unused*/) {
@@ -1699,7 +1792,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {"u0", "u1"},
           {
               makeFlatVector<int32_t>(234, [](auto row) { return row % 5; }),
-              makeFlatVector<int32_t>(234, folly::identity, nullEvery(91)),
+              makeFlatVector<int32_t>(234, std::identity{}, nullEvery(91)),
           });
     });
     // null-anti join with filter not supported
@@ -1743,7 +1836,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {
               makeFlatVector<int32_t>(
                   200, [](auto row) { return row % 11; }, nullEvery(23)),
-              makeFlatVector<int32_t>(200, folly::identity, nullEvery(29)),
+              makeFlatVector<int32_t>(200, std::identity{}, nullEvery(29)),
           });
     });
     auto buildVectors = makeBatches(3, [&](int32_t /*unused*/) {
@@ -1752,7 +1845,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {
               makeFlatVector<int32_t>(
                   234, [](auto row) { return row % 5; }, nullEvery(31)),
-              makeFlatVector<int32_t>(234, folly::identity, nullEvery(37)),
+              makeFlatVector<int32_t>(234, std::identity{}, nullEvery(37)),
           });
     });
     // null-anti join with filter not supported

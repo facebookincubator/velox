@@ -267,6 +267,12 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
 )
 
+velox_add_cudf_test(
+  NAME velox_cudf_presto_page_device_test
+  SOURCES Main.cpp PrestoPageDeviceTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_presto_serializer
+)
+
 if(VELOX_ENABLE_S3)
   velox_add_cudf_test(
     NAME velox_cudf_s3_read_test
@@ -343,7 +349,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_topnrownumber_test
   SOURCES Main.cpp TopNRowNumberTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window fmt::fmt
 )
 
 # Only built when VELOX_ENABLE_UCX_EXCHANGE is on; without it the ucx-exchange

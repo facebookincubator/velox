@@ -171,6 +171,125 @@ TEST_P(MultiTopNRowNumberTest, basicWithPeers) {
   testLimit(5);
 }
 
+TEST_P(MultiTopNRowNumberTest, peersAtRankLimit) {
+  // The partitions contain tied peers, mixed peer groups, and a boundary row
+  // displaced by a later peer, respectively.
+  auto data = makeRowVector({
+      // Partitioning key.
+      makeFlatVector<int64_t>({0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2}),
+      // Sorting key.
+      makeFlatVector<int64_t>(
+          {100, 100, 100, 90, 110, 100, 100, 90, 100, 100, 100, 90, 100}),
+  });
+  createDuckDbTable({data});
+
+  auto testLimit = [&](auto limit) {
+    SCOPED_TRACE(fmt::format("Limit: {}", limit));
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .topNRank(functionName_, {"c0"}, {"c1 DESC"}, limit, true)
+                    .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (partition by c0 order by "
+            "c1 DESC) as rn FROM tmp) WHERE rn <= {}",
+            functionName_,
+            limit));
+  };
+
+  testLimit(2);
+  testLimit(3);
+  testLimit(4);
+}
+
+TEST_P(MultiTopNRowNumberTest, nonRootPeers) {
+  // Fill the heap with distinct keys, then repeat every key across batches.
+  // Dense rank must retain both rows of all seven peer groups.
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      {10, 20, 30, 40, 50, 60, 70, 20, 30, 40, 50, 60, 70, 10})});
+  createDuckDbTable({data});
+
+  for (const auto& order : {"ASC", "DESC"}) {
+    SCOPED_TRACE(fmt::format("Order: {}", order));
+    auto plan =
+        PlanBuilder()
+            .values(split(data, 2))
+            .topNRank(functionName_, {}, {fmt::format("c0 {}", order)}, 7, true)
+            .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (order by c0 {}) as rn "
+            "FROM tmp) WHERE rn <= 7",
+            functionName_,
+            order));
+  }
+}
+
+TEST_P(MultiTopNRowNumberTest, newRowAfterPeersReplacesTopRank) {
+  // Each partition receives 1, 2, 2, 9, 5 in that order (partition 2 is offset
+  // by 10). 9 fills the partition past the limit, then 5 replaces it and ranks
+  // after the two peers at 2.
+  auto data = makeRowVector({
+      // Partitioning key.
+      makeFlatVector<int64_t>({1, 2, 1, 2, 1, 2, 1, 2, 1, 2}),
+      // Sorting key.
+      makeFlatVector<int64_t>({1, 11, 2, 12, 2, 12, 9, 19, 5, 15}),
+      // Data. Mapping data to matching sorting keys to avoid ordering issues.
+      makeFlatVector<int64_t>({10, 110, 20, 120, 20, 120, 90, 190, 50, 150}),
+  });
+
+  createDuckDbTable({data});
+
+  auto testLimit = [&](auto limit) {
+    // Emit row numbers.
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .topNRank(functionName_, {"c0"}, {"c1"}, limit, true)
+                    .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // Do not emit row numbers.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {"c0"}, {"c1"}, limit, false)
+               .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT c0, c1, c2 FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // No partitioning keys.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {}, {"c1"}, limit, true)
+               .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+  };
+
+  testLimit(1);
+  testLimit(2);
+  testLimit(3);
+  testLimit(4);
+  testLimit(5);
+}
+
 TEST_P(MultiTopNRowNumberTest, largeOutput) {
   // Make 10 vectors. Use different types for partitioning key, sorting key and
   // data. Use order of columns different from partitioning keys, followed by

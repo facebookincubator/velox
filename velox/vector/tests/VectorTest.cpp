@@ -586,8 +586,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     }
     rowsToCopy.updateBounds();
 
-    SelectivityVector rowsToKeep(size);
-    rowsToKeep.deselect(rowsToCopy);
+    auto rowsToKeep = rowsToCopy.complement(size);
 
     // Copy from row N to N - 10 for N >= 0 and from row N to N for N < 10;
     std::vector<vector_size_t> toSourceRow(size);
@@ -857,15 +856,11 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
 
     std::vector<IndexRange> evenIndices;
     std::vector<IndexRange> oddIndices;
-    std::vector<vector_size_t> evenRows;
-    std::vector<vector_size_t> oddRows;
     for (vector_size_t i = 0; i < source->size(); ++i) {
       if (i % 2 == 0) {
         evenIndices.push_back(IndexRange{i, 1});
-        evenRows.push_back(i);
       } else {
         oddIndices.push_back(IndexRange{i, 1});
-        oddRows.push_back(i);
       }
     }
 
@@ -881,19 +876,10 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       oddSizePointers[i] = &oddSizes[i];
     }
 
-    Scratch scratch;
     VectorStreamGroup::estimateSerializedSize(
-        source.get(),
-        folly::Range(evenRows.data(), evenRows.size()),
-        nullptr,
-        evenSizePointers.data(),
-        scratch);
+        source.get(), evenIndices, nullptr, evenSizePointers.data());
     VectorStreamGroup::estimateSerializedSize(
-        source.get(),
-        folly::Range(oddRows.data(), oddRows.size()),
-        nullptr,
-        oddSizePointers.data(),
-        scratch);
+        source.get(), oddIndices, nullptr, oddSizePointers.data());
     even.append(
         sourceRow, folly::Range(evenIndices.data(), evenIndices.size() / 2));
     even.append(
@@ -2296,7 +2282,7 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
       std::make_unique<TestingLoader>(makeFlatIdentityVector<int64_t>(size)));
   lazy->loadedVector();
   EXPECT_TRUE(lazy->isLoaded());
-  auto dict = wrapInDictionary(makeIndices(size, folly::identity), size, lazy);
+  auto dict = wrapInDictionary(makeIndices(size, std::identity{}), size, lazy);
   auto valuesVector = dict->valueVector();
   EXPECT_FALSE(valuesVector->isLazy());
 }

@@ -32,6 +32,9 @@
 
 namespace facebook::velox::exec {
 
+class ExchangeClient;
+struct ExchangeTransportEntry;
+
 /// The nesting protocol's internal state, set by an enclosing FixedPointLoop on
 /// a sub-task it creates.  A coordinator never fills this in: it describes
 /// where a sub-task sits inside a loop that is already running, which only that
@@ -48,8 +51,19 @@ struct NestedFixedPoint {
   /// destroyed.  Null when no loop created the sub-task.
   std::shared_ptr<memory::MemoryPool> statePool{};
 
-  /// The workers the nested loop runs on, by destination: the enclosing
-  /// loop's, or worker 0 alone for a loop nested in a verdict plan.
+  /// The deletion latch of the loop's task, which the sub-task's latch holds,
+  /// so the loop's task is not reported deleted while the sub-task still
+  /// exists.
+  std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch{};
+
+  /// The unique row id pool of the loop's task (see Task::uniqueRowIdPool()),
+  /// which the sub-task's AssignUniqueId operators draw from, so their ids do
+  /// not repeat across the loop's stages and iterations.  Null when no loop
+  /// created the sub-task.
+  std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool{};
+
+  /// The workers the nested loop runs on, by destination: those of the
+  /// enclosing loop that run the stage it is nested in.
   std::vector<std::string> workers{};
 
   /// The enclosing loop's nesting.  The nested loop appends a step naming
@@ -64,25 +78,26 @@ struct NestedFixedPoint {
 /// Experimental and subject to change, like FixedPointExecutionStats.
 /// Statistics of one sub-task a fixed point ran.
 struct FixedPointPlanExecutionStats {
-  /// Index of the plan in the body plans followed by the convergence plans; 0
-  /// for an initial plan.
+  /// Index of the plan in the body's stages followed by the convergence's
+  /// (see FixedPointNode::body()); 0 for an initial plan.
   size_t planIndex{0};
 
   /// Driver limit the sub-task was started with.
   uint32_t maxDrivers{0};
 
   /// The sub-task's statistics.  Empty for a plan that nests a fixed point,
-  /// whose work runs in that nested loop's sub-tasks.
+  /// whose work runs in that nested loop's sub-tasks.  The nested loop reports
+  /// its iterations through FixedPointOptions::onIterationStats.
   /// TODO: Report the nested loop's own FixedPointExecutionStats.
   TaskStats taskStats{};
 };
 
 /// Experimental and subject to change, like FixedPointExecutionStats.
-/// Statistics of one run of a body or convergence plan chain.
-/// Serial mode runs a single plan per chain, so it reports only totalNanos,
+/// Statistics of one run of the body's or the convergence's stages.
+/// Serial mode runs a single plan, so it reports only totalNanos,
 /// outputRows and plans; the other timings stay zero.
 struct FixedPointChainExecutionStats {
-  /// Time to create the chain's sub-tasks.
+  /// Time to create the stages' sub-tasks.
   uint64_t taskCreationNanos{0};
 
   /// Time to start them.
@@ -102,13 +117,13 @@ struct FixedPointChainExecutionStats {
   /// or not it arrived.  Part of totalNanos.
   uint64_t verdictWaitNanos{0};
 
-  /// Wall time of the whole chain.
+  /// Wall time of all the stages.
   uint64_t totalNanos{0};
 
-  /// Rows the last plan produced.
+  /// Rows the root produced.
   uint64_t outputRows{0};
 
-  /// One entry per plan, in chain order.
+  /// One entry per plan this worker ran; 'planIndex' says which.
   std::vector<FixedPointPlanExecutionStats> plans{};
 };
 
@@ -118,19 +133,19 @@ struct FixedPointIterationExecutionStats {
   /// Zero-based iteration number.
   int32_t iteration{0};
 
-  /// The body chain.
+  /// The body's stages.
   FixedPointChainExecutionStats body{};
 
   /// Time to write the body's output into the output state entry.
   uint64_t stateWriteNanos{0};
 
-  /// The convergence chain, when the node has one.
+  /// The convergence, when the node has one.
   std::optional<FixedPointChainExecutionStats> convergence{};
 
   /// Whether this iteration converged.
   bool converged{false};
 
-  /// Wall time of the body, the state write and the convergence chain.
+  /// Wall time of the body, the state write and the convergence.
   uint64_t totalNanos{0};
 };
 
@@ -185,20 +200,25 @@ struct FixedPointExecutionStats {
 ///
 /// In parallel mode, when the owning task ends -- requestCancel(),
 /// requestAbort(), or a failure -- the loop stops at its next wait: it aborts
-/// the sub-tasks it is running, waits for them, and fails.  The loop waits on
-/// its sub-tasks, its peers and the verdict, so it stops within one step of the
-/// work it was doing.  A serial loop runs to completion inside the caller's
-/// next().  requestPause() does not end the task, and the loop keeps running
-/// through a pause.
+/// the sub-tasks it is running, waits for them, and fails.  A loop between two
+/// waits fails before it creates its next sub-tasks.  A loop that ends, or
+/// whose task ends before it runs, closes the exchange sources of the remote
+/// splits it still holds and of those that arrive later, so their producers
+/// stop keeping this worker's output.  The loop waits on its sub-tasks, its
+/// peers and the verdict, so it stops within one step of the work it was doing.
+/// A serial loop runs to completion inside the caller's next().  requestPause()
+/// does not end the task, and the loop keeps running through a pause.
 class FixedPointLoop {
  public:
   /// 'owner' is the fully constructed Task this loop runs the fragment for; it
-  /// owns the loop and so outlives it. 'node' is the FixedPointNode in the
-  /// owner's plan fragment.
+  /// owns the loop and so outlives it. 'ownerDeletionLatch' is the owner's
+  /// deletion latch, which the sub-tasks hold. 'node' is the FixedPointNode in
+  /// the owner's plan fragment.
   /// 'fixedPointOptions' supplies the hooks; the constructor checks that the
   /// ones this fixed point needs are set.
   FixedPointLoop(
       exec::Task* owner,
+      std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch,
       const core::FixedPointNode& node,
       const FixedPointOptions* fixedPointOptions,
       const NestedFixedPoint* nested);
@@ -326,25 +346,23 @@ class FixedPointLoop {
   folly::coro::Task<FixedPointPlanExecutionStats> buildHashTable(
       const core::HashTableStateDeclaration& declaration);
 
-  // Runs this worker's column of per-plan sub-tasks over the chain 'plans' for
-  // 'iteration', wiring each consumer plan's Exchange to the previous-plan
-  // producer of every worker.  Returns the last plan's output copied into
-  // 'pool'.  Serves both chains a fixed point runs: 'planIndexOffset' is added
-  // to the plan index in the statistics, so the body's plans (offset 0) and the
-  // convergence sequence's (offset node_->plans().size()) are told apart.  The
-  // plans this worker runs share iterationDrivers().
-  // 'producesVerdict' says the last plan produces the convergence verdict, a
-  // single row, so it runs on one driver of its own, outside the budget.
-  // 'runLastPlan' false skips the last plan on this worker; the chain's other
-  // plans still run and feed the peers that run it.  Records the run into
-  // 'stats'.
-  folly::coro::Task<std::vector<RowVectorPtr>> runParallelChain(
-      const std::vector<core::PlanNodePtr>& plans,
+  // Runs, for 'iteration', a sub-task for each stage of 'plan' that this
+  // worker runs -- a stage runs on the first numTasks() workers -- and wires
+  // each Exchange to the producer of the stage it reads on every worker that
+  // runs it (see ExchangeWiring).  Returns the root's output copied into
+  // 'pool', or nothing when this worker does not run the root.  Serves the
+  // body and the convergence: 'planIndexOffset' is added to the stage index
+  // in the statistics, so the body's stages (offset 0) and the convergence's
+  // (offset node_->body().stages().size()) are told apart.  The
+  // plans this worker runs share iterationDrivers().  'producesVerdict' says
+  // the root produces the convergence verdict, a single row, so it runs on one
+  // driver of its own, outside the budget.  Records the run into 'stats'.
+  folly::coro::Task<std::vector<RowVectorPtr>> runParallelStages(
+      const core::MultiStagePlan& plan,
       size_t planIndexOffset,
       int32_t iteration,
       memory::MemoryPool* pool,
       bool producesVerdict,
-      bool runLastPlan,
       FixedPointChainExecutionStats& stats);
 
   // Driver budget for the plans run after initialization; see
@@ -386,8 +404,21 @@ class FixedPointLoop {
   // plan has no split source (e.g. Values).
   void feedInitSplits(const exec::TaskPtr& task, const core::PlanNodePtr& plan);
 
+  // Tells the producer of 'split', a remote split for the Exchange
+  // 'planNodeId', that this worker reads none of its output, through a closed
+  // exchange client.  Does nothing to any other split, or in serial mode,
+  // where no Exchange runs.  Logs instead of throwing.  Called with
+  // splitsMutex_ held.
+  void releaseRemoteSplitLocked(
+      const core::PlanNodeId& planNodeId,
+      const exec::Split& split);
+
+  // Releases the remote splits this loop holds (releaseRemoteSplitLocked())
+  // and drops the rest, along with the sub-tasks that take later splits.
+  void releaseRemoteSplits();
+
   // Label for an internal sub-task of this worker that no peer addresses (an
-  // initial, convergence, serial-body, or last-in-chain sub-task).
+  // initial, convergence, serial-body, or root sub-task).
   std::string subTaskId();
 
   // The address of this loop on the worker at 'destination'.
@@ -409,6 +440,10 @@ class FixedPointLoop {
   // The task that owns this loop; outlives it by construction.
   exec::Task* const owner_;
 
+  // The owner's deletion latch, which each sub-task holds, so the owner is not
+  // reported deleted while a sub-task still exists.
+  const std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch_;
+
   // The parent task's maxDrivers (from start()), used for the Phase-1 initial
   // plans -- they read real sources (TableScan / Exchange / upstream) that
   // parallelize naturally -- and as a cap on iterationDrivers().  Serial mode
@@ -417,10 +452,6 @@ class FixedPointLoop {
 
   // Lives in the owning task's plan fragment, which outlives this loop.
   const core::FixedPointNode* const node_;
-
-  // The convergence plans in the order they run: the node's convergence
-  // 'plans', then its 'verdict' plan, when set.
-  std::vector<core::PlanNodePtr> convergencePlans_;
 
   int32_t workerIndex_{0};
   int32_t numWorkers_{1};
@@ -469,6 +500,21 @@ class FixedPointLoop {
   // to.  Guarded by splitsMutex_, as are nodeSplits_ and splitConsumers_.
   folly::F14FastSet<core::PlanNodeId> splitsComplete_;
 
+  // A transport's exchange client, closed as soon as it is created.  The entry
+  // is kept with the client, which may depend on state the entry owns.
+  struct ClosedClient {
+    std::shared_ptr<ExchangeTransportEntry> entry;
+    std::shared_ptr<ExchangeClient> client;
+  };
+
+  // The pool of the closed clients, created with the first.  Declared before
+  // them, so it outlives them.  Guarded by splitsMutex_.
+  std::shared_ptr<memory::MemoryPool> closedClientPool_;
+
+  // The closed clients releaseRemoteSplitLocked() releases producers through,
+  // by transport kind.  Guarded by splitsMutex_.
+  folly::F14FastMap<std::string, ClosedClient> closedClients_;
+
   // This worker's persistent state.  Its pool is a leaf of the owning task's
   // pool, which every sub-task holds.
   std::shared_ptr<PersistentState> state_;
@@ -512,8 +558,9 @@ class FixedPointLoop {
   // loop sees kCreated.
   Phase leaveCreated(Phase next);
 
-  // Ends the loop in the terminal phase 'terminal' and resolves 'finished_'.
-  // The only place the loop ends.
+  // Ends the loop in the terminal phase 'terminal', releases the remote splits
+  // it holds (releaseRemoteSplits()) and resolves 'finished_'.  The only place
+  // the loop ends.
   void finish(Phase terminal);
 
   // The last iteration passed to runIteration(), so a repeated or decreasing
@@ -521,11 +568,11 @@ class FixedPointLoop {
   // the cross-worker barrier, and reusing one desynchronizes the peers.
   int32_t lastIteration_{-1};
 
-  // Plan node ids a caller may address splits to.  The driver path rejects an
-  // unknown id in getPlanNodeSplitsStateLocked; without the same check here a
-  // split would be filed under an id nothing ever reads, and the query would
-  // return nothing rather than fail.
-  folly::F14FastSet<core::PlanNodeId> splitTargets_;
+  // Plan node ids a caller may address splits to, with the node each names.
+  // The driver path rejects an unknown id in getPlanNodeSplitsStateLocked;
+  // without the same check here a split would be filed under an id nothing
+  // ever reads, and the query would return nothing rather than fail.
+  folly::F14FastMap<core::PlanNodeId, const core::PlanNode*> splitTargets_;
 };
 
 } // namespace facebook::velox::exec

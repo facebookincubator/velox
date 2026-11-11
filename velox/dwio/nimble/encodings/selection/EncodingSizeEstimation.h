@@ -25,7 +25,7 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
@@ -35,11 +35,13 @@
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 
 namespace facebook::nimble {
 
@@ -180,7 +182,11 @@ struct EncodingSizeEstimation {
         // estimateSize() returns nullopt when the stream has more blocks than
         // the uint16_t block index can address, so selection skips this
         // encoding instead of picking it and hard-failing in encode().
-        return BlockBitPackingEncoding<physicalType>::estimateSize(
+        return deprecated::BlockBitPackingEncoding<physicalType>::estimateSize(
+            statistics, options.blockBitPackingBlockSize);
+      }
+      case EncodingType::BlockBitPackingV2: {
+        return BlockBitPackingV2Encoding<physicalType>::estimateSize(
             statistics, options.blockBitPackingBlockSize);
       }
       default: {
@@ -238,6 +244,13 @@ struct EncodingSizeEstimation {
         if constexpr (isIntegralType<T>()) {
           return EliasFanoEncoding<T>::estimateSize(
               values, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::PartitionedEliasFano: {
+        if constexpr (isIntegralType<T>()) {
+          return PartitionedEliasFanoEncoding<T>::estimateSize(values, options);
         } else {
           return std::nullopt;
         }

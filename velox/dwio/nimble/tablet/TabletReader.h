@@ -79,6 +79,15 @@ class NimbleReaderOptions : public velox::dwio::common::FormatSpecificOptions {
  public:
   /// Resolves External shared integer dictionaries referenced by this file.
   std::shared_ptr<const ExternalDictionaryResolver> externalDictionaryResolver;
+
+  /// Whether key chunk readers cache their encoding views. See
+  /// TabletReader::Options::cacheKeyEncodingViews.
+  bool cacheKeyEncodingViews{false};
+
+  /// When true, kStreamMajor stripe groups share one EncodingView among streams
+  /// whose offsets or sizes arrays reference the same encoded payload, which
+  /// files written with experimentalStripeGroupMetadataDeduplication contain.
+  bool stripeGroupEncodingViewDeduplicationEnabled{false};
 };
 
 namespace test {
@@ -126,6 +135,22 @@ class StripeIdentifier {
   std::shared_ptr<ChunkStatsGroup> chunkStats_;
 };
 
+/// Describes a stripe group from metadata held in memory, so a caller can size
+/// a load before reading the group. TabletReader::stripeGroupDescriptors()
+/// returns these.
+struct StripeGroupDescriptor {
+  /// Index of the stripe group in the file.
+  uint32_t index{0};
+
+  /// Decompressed size of the metadata that loading the group reads: its
+  /// stripe-group section, plus its chunk-stats section when the reader loads
+  /// chunk stats. A section written without its uncompressed size counts its
+  /// stored size.
+  uint64_t metadataSize{0};
+
+  bool operator==(const StripeGroupDescriptor&) const = default;
+};
+
 using index::ClusterIndexBase;
 
 /// Provides read access to a tablet written by a TabletWriter.
@@ -162,6 +187,10 @@ class TabletReader {
     /// Default false.
     bool preloadIndex{false};
 
+    /// Whether key chunk readers cache their encoding views. See
+    /// index::IndexLookup::Options::cacheKeyEncodingViews. Default false.
+    bool cacheKeyEncodingViews{false};
+
     /// Whether to load the chunk stats during initialization. Default true.
     bool loadChunkStats{true};
 
@@ -174,6 +203,14 @@ class TabletReader {
     /// when the weak-pointer cache entries would otherwise expire. Works
     /// independently of cacheMetadata.
     bool pinMetadata{false};
+
+    /// If true, kStreamMajor stripe groups build one EncodingView per distinct
+    /// encoded offsets or sizes payload instead of one per stream, so streams
+    /// whose arrays TabletWriter deduplicated share a view. Reduces resident
+    /// stripe-group metadata for files written with stripe-group metadata
+    /// deduplication. Set from
+    /// NimbleReaderOptions::stripeGroupEncodingViewDeduplicationEnabled.
+    bool stripeGroupEncodingViewDeduplicationEnabled{false};
 
     /// If true, caches file metadata and index metadata in the async data
     /// cache. Takes effect only when fileHandle and cache are provided.
@@ -216,6 +253,9 @@ class TabletReader {
     /// Resolves External shared integer dictionaries referenced by this file.
     std::shared_ptr<const ExternalDictionaryResolver>
         externalDictionaryResolver;
+
+    /// The stats and pool inside this context must outlive this tablet.
+    velox::FileIoContext fileIoContext;
   };
 
   /// Compute checksum from the beginning of the file all the way to footer
@@ -426,14 +466,6 @@ class TabletReader {
   /// stream does not exist in this stripe. O(1) point read.
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
 
-  /// Returns the checksum of `streamId` within `stripe` from the stripe
-  /// group's checksum array, which only legacy files carry; 0 otherwise,
-  /// including when the file keeps checksums in stream trailers. Gate on
-  /// properties().hasStreamChecksums() rather than on a non-zero result. O(1)
-  /// point read.
-  uint32_t streamChecksum(const StripeIdentifier& stripe, uint32_t streamId)
-      const;
-
   /// Relative byte location of one stream within a stripe. A zero size means
   /// the stream is absent.
   using StreamMetadata = StripeGroup::StreamMetadata;
@@ -451,9 +483,21 @@ class TabletReader {
       std::span<const uint32_t> streamIds,
       std::span<StreamMetadata> locations) const;
 
+  /// Returns the location of `streamId` in `stripe`, absent when the stream has
+  /// no data there or `streamId >= streamCount(stripe)`. One lookup, unlike
+  /// streamOffset() plus streamSize().
+  StreamMetadata streamLocation(
+      const StripeIdentifier& stripe,
+      uint32_t streamId) const;
+
   /// Returns the schema's leaf-stream count at the time `stripe`'s stripe
   /// group was written. May be less than the final schema's node count.
   uint32_t streamCount(const StripeIdentifier& stripe) const;
+
+  /// Describes the stripe group of each stripe, in input order. Reads only
+  /// metadata held in memory, so it does no IO.
+  std::vector<StripeGroupDescriptor> stripeGroupDescriptors(
+      std::span<const uint32_t> stripes) const;
 
   /// Loads the metadata identifying one stripe.
   StripeIdentifier stripeIdentifier(uint32_t stripeIndex) const;
@@ -464,6 +508,12 @@ class TabletReader {
   std::vector<StripeIdentifier> stripeIdentifiers(
       uint32_t stripeOffset,
       uint32_t numStripes) const;
+
+  /// Loads metadata for strictly ascending stripes, which need not be
+  /// consecutive, coalescing uncached stripe-group and chunk-stat sections
+  /// into one load. Returns identifiers in input order.
+  std::vector<StripeIdentifier> stripeIdentifiers(
+      std::span<const uint32_t> stripes) const;
 
   /// Returns whether any value stream uses a file or external dictionary.
   bool hasFileOrExternalDictionaries() const;
@@ -573,14 +623,6 @@ class TabletReader {
 
   std::shared_ptr<StripeGroup> loadStripeGroup(uint32_t stripeGroupIndex) const;
 
-  // Enforces that a file whose properties claim stripe-group checksum arrays
-  // has one in every non-empty stripe group. A group that violates this reads
-  // back as all-zero checksums, which verification would report as storage
-  // corruption rather than as the malformed file it is.
-  void checkStreamChecksumsPresent(
-      const StripeGroup& stripeGroup,
-      uint32_t stripeGroupIndex) const;
-
   // Parses the shared index section and caches its runtime descriptors.
   void initIndexDescriptors();
 
@@ -668,9 +710,12 @@ class TabletReader {
   const std::string clusterIndexName_;
   const bool loadChunkStats_;
   const bool loadDenseIndexes_;
+  // Copied from Options::stripeGroupEncodingViewDeduplicationEnabled.
+  const bool stripeGroupEncodingViewDeduplicationEnabled_;
   // IO options copied from Options.ioOptions (required, with non-null
   // metadataIoStats).
   const velox::io::ReaderOptions ioOptions_;
+  const velox::FileIoContext fileIoContext_;
   // IO config for index creation — indexes create their own MetadataInput
   // with index-specific IO stats.
   const index::IndexLookup::Options indexOptions_;
