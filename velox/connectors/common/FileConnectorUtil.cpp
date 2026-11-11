@@ -148,6 +148,8 @@ void configureReaderOptions(
   }
   readerOptions.setNimbleDirectBufferedInputEnabled(
       fileConfig->nimbleDirectBufferedInputEnabled(sessionProperties));
+  readerOptions.setNimbleLazyFileStats(
+      fileConfig->nimbleLazyFileStats(sessionProperties));
   readerOptions.setCacheMetadata(
       fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
