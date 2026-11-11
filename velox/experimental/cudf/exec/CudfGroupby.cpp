@@ -350,57 +350,6 @@ using GroupbyMinAggregator = SimpleGroupbyAggregator<
 using GroupbyMaxAggregator = SimpleGroupbyAggregator<
     &cudf::make_max_aggregation<cudf::groupby_aggregation>>;
 
-// Counts the distinct non-null values of each group for a single-step
-// count(DISTINCT). Its state, the set of distinct values, cannot be merged from
-// per-batch counts, so the node aggregates all of its input at once.
-struct GroupbyCountDistinctAggregator final : GroupbyAggregator {
-  GroupbyCountDistinctAggregator(
-      core::AggregationNode::Step step,
-      uint32_t inputIndex,
-      const TypePtr& resultType,
-      std::optional<uint32_t> maskIndex)
-      : GroupbyAggregator(step, inputIndex, nullptr, resultType, maskIndex) {}
-
-  void addGroupbyRequest(
-      cudf::table_view const& tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests,
-      cuda::stream_ref stream,
-      rmm::device_async_resource_ref mr) override {
-    VELOX_CHECK_EQ(step, core::AggregationNode::Step::kSingle);
-    auto& request = requests.emplace_back();
-    outputIndex_ = requests.size() - 1;
-    // Masked rows become nulls, which nunique excludes.
-    request.values = materializeMaskedInput(tbl, inputIndex, stream, mr);
-    request.aggregations.push_back(
-        cudf::make_nunique_aggregation<cudf::groupby_aggregation>(
-            cudf::null_policy::EXCLUDE));
-  }
-
-  std::unique_ptr<cudf::column> makeOutputColumn(
-      std::vector<cudf::groupby::aggregation_result>& results,
-      cuda::stream_ref stream,
-      rmm::device_async_resource_ref mr) override {
-    // cuDF counts in INT32; Velox expects BIGINT.
-    auto counts = std::move(results[outputIndex_].results[0]);
-    return cudf::cast(
-        *counts, cudf_velox::veloxToCudfDataType(resultType), stream, mr);
-  }
-
-  std::unique_ptr<cudf::column> finalize(
-      std::unique_ptr<cudf::column> /*state*/,
-      cuda::stream_ref /*stream*/,
-      rmm::device_async_resource_ref /*mr*/) override {
-    VELOX_UNREACHABLE("count(DISTINCT) is not aggregated incrementally");
-  }
-
-  bool stateGrowsWithInput() const override {
-    return true;
-  }
-
- private:
-  uint32_t outputIndex_{0};
-};
-
 // Decimal SUM and AVG aggregators are separate implementations, as they need to
 // handle the VARBINARY encoded intermediate state for streaming aggregation.
 // Due to the packing and unpacking of that intermediate state, and the special
@@ -710,9 +659,11 @@ struct GroupbyCountAggregator : GroupbyAggregator {
       uint32_t inputIndex,
       CountInputKind inputKind,
       const TypePtr& resultType,
-      std::optional<uint32_t> maskIndex)
+      std::optional<uint32_t> maskIndex,
+      bool distinct)
       : GroupbyAggregator(step, inputIndex, nullptr, resultType, maskIndex),
-        inputKind_(inputKind) {}
+        inputKind_(inputKind),
+        distinct_(distinct) {}
 
   void addGroupbyRequest(
       cudf::table_view const& tbl,
@@ -724,7 +675,15 @@ struct GroupbyCountAggregator : GroupbyAggregator {
     const bool countAll = (inputKind_ != CountInputKind::kColumn);
     auto& request = requests.emplace_back();
     outputIndex_ = requests.size() - 1;
-    if (exec::isRawInput(step) && maskIndex.has_value()) {
+    if (distinct_) {
+      VELOX_CHECK_EQ(step, core::AggregationNode::Step::kSingle);
+      VELOX_CHECK(inputKind_ == CountInputKind::kColumn);
+      // Masked rows become nulls, which nunique excludes.
+      request.values = materializeMaskedInput(tbl, inputIndex, stream, mr);
+      request.aggregations.push_back(
+          cudf::make_nunique_aggregation<cudf::groupby_aggregation>(
+              cudf::null_policy::EXCLUDE));
+    } else if (exec::isRawInput(step) && maskIndex.has_value()) {
       if (countAll) {
         // count(*)/count(const) FILTER(WHERE m): count mask-true rows via a
         // validity-only column + COUNT_VALID.
@@ -768,8 +727,14 @@ struct GroupbyCountAggregator : GroupbyAggregator {
       std::unique_ptr<cudf::column> state,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK(!distinct_, "count(DISTINCT) is not aggregated incrementally");
     VELOX_CHECK_EQ(step, core::AggregationNode::Step::kFinal);
     return makeCountResult(std::move(state), stream, mr);
+  }
+
+  bool stateGrowsWithInput() const override {
+    // Distinct sets cannot be merged by summing per-batch counts.
+    return distinct_;
   }
 
  private:
@@ -796,6 +761,7 @@ struct GroupbyCountAggregator : GroupbyAggregator {
 
  private:
   CountInputKind inputKind_;
+  bool distinct_;
   uint32_t outputIndex_;
   // Transient validity column for masked count(*)/count(const), valid until the
   // next addGroupbyRequest on this aggregator.
@@ -1362,13 +1328,6 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
     const core::QueryConfig& queryConfig) {
   auto const& kind = aggregate.kind;
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
-  if (aggregate.distinct) {
-    return std::make_unique<GroupbyCountDistinctAggregator>(
-        aggregate.companionStep,
-        aggregate.inputIndex,
-        aggregate.resultType,
-        aggregate.maskIndex);
-  }
   if (kind.rfind(prefix + "sum", 0) == 0) {
     if (aggregate.isDecimalAggregate) {
       return std::make_unique<GroupbyDecimalSumAggregator>(
@@ -1391,7 +1350,8 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
         aggregate.inputIndex,
         *aggregate.countInputKind,
         aggregate.resultType,
-        aggregate.maskIndex);
+        aggregate.maskIndex,
+        aggregate.distinct);
   } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<GroupbyMinAggregator>(
         aggregate.companionStep,
@@ -1646,7 +1606,7 @@ bool canGroupbyBeEvaluatedByCudf(
     }
 
     // Only a single-step count(DISTINCT) of a column runs on cuDF (see
-    // GroupbyCountDistinctAggregator). nunique compares raw values, so
+    // GroupbyCountAggregator). nunique compares raw values, so
     // floating-point inputs, where Velox treats all NaNs as equal and -0.0 as
     // 0.0, stay on the CPU, as do types without a plain cuDF equivalent and
     // timestamps truncated to a unit coarser than nanoseconds.

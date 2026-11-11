@@ -2750,6 +2750,55 @@ TEST_F(AggregationTest, countDistinctGroupby) {
       .assertResults(cpuResults(plan));
 }
 
+TEST_F(AggregationTest, countDistinctMixedCountsMultiBatch) {
+  auto first = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+       makeNullableFlatVector<int32_t>({10, 20, std::nullopt, 30, 40}),
+       makeNullableFlatVector<bool>({true, false, true, false, std::nullopt})});
+  auto second = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+       makeNullableFlatVector<int32_t>({10, 50, 60, 30, std::nullopt}),
+       makeNullableFlatVector<bool>(
+           {true, true, std::nullopt, false, std::nullopt})});
+  createDuckDbTable({first, second});
+  core::PlanNodeId aggregationId;
+  auto plan = PlanBuilder()
+                  .values({first, second})
+                  .singleAggregation(
+                      {"k"},
+                      {"count(distinct v)",
+                       "count(v)",
+                       "count(*)",
+                       "count(null)",
+                       "count(distinct v)",
+                       "count(v)",
+                       "count(*)",
+                       "count(null)"},
+                      {"", "", "", "", "m", "m", "m", "m"})
+                  .capturePlanNodeId(aggregationId)
+                  .planNode();
+  // Keep batches separate: v = 10 repeats across batches; k = 2 is all-masked.
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+                  .assertResults(
+                      "SELECT k, count(distinct v), count(v), count(*), "
+                      "count(null), count(distinct v) FILTER (WHERE m), "
+                      "count(v) FILTER (WHERE m), count(*) FILTER (WHERE m), "
+                      "count(null) FILTER (WHERE m) FROM tmp GROUP BY k");
+  bool ranOnGpu = false;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& stats : pipeline.operatorStats) {
+      if (stats.planNodeId == aggregationId &&
+          stats.operatorType.starts_with("CudfGroupby")) {
+        ranOnGpu = true;
+      }
+    }
+  }
+  ASSERT_TRUE(ranOnGpu);
+}
+
 // Multi-stage masked count (partial + final).
 TEST_F(AggregationTest, maskedCountMultiStage) {
   auto data = makeRowVector(
