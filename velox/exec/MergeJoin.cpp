@@ -1709,19 +1709,23 @@ void MergeJoin::evaluateFilter(const SelectivityVector& rows) {
 }
 
 bool MergeJoin::isFinished() {
+  // Matches retain buffered input and output cursors after input_ is cleared.
+  if (!noMoreInput_ || leftMatch_) {
+    return false;
+  }
+
   if (isRightJoin(joinType_)) {
     // If all rows on both the left and right sides match, we must also verify
     // the 'noMoreInput_' on the left side to ensure that all results are
     // complete.
-    return noMoreInput_ && noMoreRightInput_ && rightInput_ == nullptr;
+    return noMoreRightInput_ && rightInput_ == nullptr;
   }
 
   if (isFullJoin(joinType_)) {
-    return noMoreInput_ && input_ == nullptr && noMoreRightInput_ &&
-        rightInput_ == nullptr;
+    return input_ == nullptr && noMoreRightInput_ && rightInput_ == nullptr;
   }
 
-  return noMoreInput_ && input_ == nullptr;
+  return input_ == nullptr;
 }
 
 void MergeJoin::close() {
