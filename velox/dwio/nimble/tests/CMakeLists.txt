@@ -71,6 +71,7 @@ add_executable(
   BufferPolicyTest.cpp
   ChunkedStreamTest.cpp
   DecodedVectorManagerTest.cpp
+  FieldIdResolverTest.cpp
   EncodingLayoutTreeTest.cpp
   FieldReaderTest.cpp
   LayoutPlannerTest.cpp
@@ -120,6 +121,7 @@ target_link_libraries(
   nimble_velox_schema_builder
   nimble_serializer
   nimble_deserializer
+  nimble_velox_reader_factory
   nimble_velox_shared_dictionary_config
   nimble_writer
   nimble_velox_layout_planner
