@@ -55,9 +55,11 @@ class NimbleIterator {
   /// encoded cluster-index key per row of the stripe. The decoder writes the
   /// bytes of the entries into 'keyStorage' and 'valueStorage', and sets
   /// 'keys' and 'values', which view those storages, to the entries. The
-  /// iterator releases 'rows' after the call, so a decoder whose entries refer
-  /// to 'rows' ties them to a storage, for example with an IOBuf whose free
-  /// function holds them. A non-empty input must produce at least one entry.
+  /// iterator keeps 'rows' after the call and decodes the next rows into them
+  /// when nothing else holds them, so a decoder whose entries refer to 'rows'
+  /// holds them, for example with an IOBuf whose free function holds them,
+  /// which makes the iterator decode the next rows into a new vector. reset()
+  /// frees them. A non-empty input must produce at least one entry.
   /// The iterator calls the decoder on the thread consuming the iterator.
   /// I/O prefetch does not call the decoder.
   using EntryDecoder = std::function<void(
