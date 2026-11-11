@@ -464,23 +464,25 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
       {makeFlatVector<Timestamp>(
           {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
 
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"date_trunc('hour', event_ts) AS result"})
-                  .planNode();
+  for (const auto* projection :
+       {"date_trunc('minute', event_ts) AS result",
+        "date_trunc('hour', event_ts) AS result"}) {
+    SCOPED_TRACE(projection);
+    auto plan = PlanBuilder().values({input}).project({projection}).planNode();
 
-  std::shared_ptr<Task> task;
-  AssertQueryBuilder(plan)
-      .config("cudf.enabled", true)
-      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
-      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
-      .countResults(task);
+    std::shared_ptr<Task> task;
+    AssertQueryBuilder(plan)
+        .config("cudf.enabled", true)
+        .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+        .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+        .countResults(task);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+    ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+    ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  }
 }
 
-TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
+TEST_F(ToCudfSelectionTest, prestoDateTruncSecondAdjustTimezoneUsesCudf) {
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
@@ -488,9 +490,7 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
 
   auto plan = PlanBuilder()
                   .values({input})
-                  .project(
-                      {"date_trunc('second', event_ts) AS second",
-                       "date_trunc('minute', event_ts) AS minute"})
+                  .project({"date_trunc('second', event_ts) AS second"})
                   .planNode();
 
   std::shared_ptr<Task> task;

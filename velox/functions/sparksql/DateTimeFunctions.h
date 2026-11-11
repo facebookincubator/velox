@@ -601,7 +601,8 @@ struct DateTruncFunction {
       result = Timestamp(timestamp.getSeconds() - secondsDelta, 0);
       if (getSeconds(result, timeZone_) != truncatedLocal) {
         result = Timestamp(
-            timeZone_->correct_nonexistent_time(std::chrono::seconds(truncatedLocal))
+            timeZone_
+                ->correct_nonexistent_time(std::chrono::seconds(truncatedLocal))
                 .count(),
             0);
         result.toGMT(*timeZone_);
