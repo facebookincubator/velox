@@ -444,7 +444,7 @@ void SortBuffer::getOutputWithSpill() {
     spillSources_[outputSize] = stream->current().get();
     spillSourceRows_[outputSize] = stream->currentIndex(&isEndOfBatch);
     ++outputSize;
-    if (FOLLY_UNLIKELY(isEndOfBatch)) {
+    if (isEndOfBatch) [[unlikely]] {
       // The stream is at end of input batch. Need to copy out the rows before
       // fetching next batch in 'pop'.
       gatherCopy(
@@ -462,7 +462,7 @@ void SortBuffer::getOutputWithSpill() {
   }
   VELOX_CHECK_EQ(outputRow + outputSize, output_->size());
 
-  if (FOLLY_LIKELY(outputSize != 0)) {
+  if (outputSize != 0) [[likely]] {
     gatherCopy(
         output_.get(),
         outputRow,

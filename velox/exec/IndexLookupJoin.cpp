@@ -386,7 +386,7 @@ void IndexLookupJoin::createIndexSplitTracer() {
 }
 
 void IndexLookupJoin::traceIndexSplit(const exec::Split& split) {
-  if (FOLLY_UNLIKELY(indexSplitTracer_ != nullptr)) {
+  if (indexSplitTracer_ != nullptr) [[unlikely]] {
     auto connectorSplit = split.connectorSplit;
     indexSplitTracer_->write(exec::Split(std::move(connectorSplit)));
   }
