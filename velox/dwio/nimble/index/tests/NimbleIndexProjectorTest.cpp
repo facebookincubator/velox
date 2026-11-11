@@ -22,6 +22,7 @@
 #include <functional>
 #include <future>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <string_view>
@@ -1127,6 +1128,71 @@ class NimbleIndexProjectorMetadataLoadTest : public NimbleIndexProjectorTest {
         sizes.begin(), sizes.begin() + numStripeGroups, uint64_t{0});
   }
 };
+
+TEST_P(
+    NimbleIndexProjectorMetadataLoadTest,
+    streamScanRetainsOnlyActiveGroupMetadata) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/4, /*stripesPerGroup=*/2));
+  auto projector = createValueProjector();
+  const auto schema = projector->projectedNimbleType();
+  const Encoding::Options encodingOptions{
+      .useVarintRowCount = projector->properties().compactRowCountEncoding(),
+  };
+  std::vector<ProjectedStripe> firstStripe;
+  EXPECT_EQ(
+      countMetadataReads([&] {
+        firstStripe =
+            projector->loadStripeStreams(/*stripeOffset=*/0, /*numStripes=*/1);
+      }),
+      std::make_pair(uint64_t{1}, stripeGroupBytes({0})));
+  ASSERT_THAT(firstStripe, ::testing::SizeIs(1));
+  ASSERT_EQ(
+      countMetadataReads([&] {
+        projector->loadStripeStreams(/*stripeOffset=*/1, /*numStripes=*/1);
+      }),
+      std::make_pair(uint64_t{0}, uint64_t{0}));
+
+  std::weak_ptr<StripeGroup> firstGroup{
+      cachedTablet()->tablet()->stripeIdentifier(0).stripeGroup()};
+  EXPECT_FALSE(firstGroup.expired());
+  EXPECT_EQ(
+      countMetadataReads([&] {
+        projector->loadStripeStreams(/*stripeOffset=*/1, /*numStripes=*/2);
+      }),
+      std::make_pair(uint64_t{1}, stripeGroupBytes({1})));
+  if (!GetParam().pinMetadata) {
+    EXPECT_TRUE(firstGroup.expired());
+  }
+
+  std::weak_ptr<StripeGroup> activeGroup{
+      cachedTablet()->tablet()->stripeIdentifier(2).stripeGroup()};
+  EXPECT_FALSE(activeGroup.expired());
+  projector.reset();
+
+  // Earlier stream data outlives the metadata group and the projector.
+  StreamReader reader(schema, leafPool_.get());
+  reader.setStreams(firstStripe.front().streams, encodingOptions);
+  velox::VectorPtr actual;
+  folly::coro::blockingWait(reader.co_next(kRowsPerStripe, actual));
+  const auto expected = vectorMaker_->rowVector(
+      {"value"},
+      {vectorMaker_->flatVector<int32_t>(
+          kRowsPerStripe, [](auto row) { return static_cast<int32_t>(row); })});
+  velox::test::assertEqualVectors(expected, actual);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  const auto iterator = createRowIterator(subfields, {.forGet = true});
+  iterator->seek(makePointLookup(keyValueRowType(), {"key"}, 20));
+  iterator->value();
+  activeGroup = cachedTablet()->tablet()->stripeIdentifier(2).stripeGroup();
+  EXPECT_FALSE(activeGroup.expired());
+  iterator->reset();
+  if (!GetParam().pinMetadata) {
+    EXPECT_TRUE(activeGroup.expired());
+  }
+}
 
 TEST_P(NimbleIndexProjectorMetadataLoadTest, stripesOfAGroupShareOneLoad) {
   ASSERT_NO_FATAL_FAILURE(

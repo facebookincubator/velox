@@ -351,6 +351,7 @@ void IndexScanCursor::reset() {
   if (scanPrefetcher_ != nullptr) {
     folly::coro::blockingWait(co_resetPrefetch());
   }
+  projector_->resetStreamScan();
   range_.reset();
   stripeSelections_.clear();
   stripeOffset_ = 0;

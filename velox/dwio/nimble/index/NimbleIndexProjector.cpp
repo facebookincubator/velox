@@ -559,7 +559,12 @@ NimbleIndexProjector::loadStripeStreams(
             .dataHandle = ctx_.dataHandle,
         });
   }
+  activeStripeMetadata_ = std::move(stripes.back());
   return result;
+}
+
+void NimbleIndexProjector::resetStreamScan() {
+  activeStripeMetadata_.reset();
 }
 
 Encoding::Options NimbleIndexProjector::encodingOptions(

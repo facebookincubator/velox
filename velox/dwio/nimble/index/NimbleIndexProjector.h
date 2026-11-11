@@ -286,6 +286,9 @@ class NimbleIndexProjector {
       uint32_t stripeOffset,
       uint32_t numStripes);
 
+  /// Releases stream-scan resources after all stripe loads have stopped.
+  void resetStreamScan();
+
   /// Returns the projected nimble schema. Preserves encoding-specific types
   /// (ArrayWithOffsets, SlidingWindowMap, FlatMap) from the file schema.
   /// Clients need this to build a Deserializer for the output data.
@@ -648,6 +651,10 @@ class NimbleIndexProjector {
   const bool hasProjectedHybridFlatMaps_{false};
 
   std::unique_ptr<DataInput> dataInput_;
+
+  // Keeps the last group's metadata available to the next scan batch.
+  std::optional<StripeIdentifier> activeStripeMetadata_;
+
   // Verifies a stream read from storage against the checksum in its stream
   // trailer. Built only when ReaderOptions::verifyStreamChecksums() or
   // setVerifyStreamChecksums() turns verification on and the file's stream
