@@ -365,7 +365,7 @@ struct GetJsonObjectFunction {
     while ((pos = static_cast<const char*>(std::memchr(
                 pos, '\\', static_cast<size_t>(end - pos)))) != nullptr) {
       const auto remaining = static_cast<size_t>(end - pos);
-      if (FOLLY_UNLIKELY(remaining < 2)) {
+      if (remaining < 2) [[unlikely]] {
         return false; // Incomplete escape at end, let parser handle it.
       }
 

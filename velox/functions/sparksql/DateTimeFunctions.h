@@ -1057,7 +1057,7 @@ struct SecondsToTimestampFunction {
       result = Timestamp(static_cast<int64_t>(seconds), 0);
       return true;
     } else {
-      if (FOLLY_UNLIKELY(!std::isfinite(seconds))) {
+      if (!std::isfinite(seconds)) [[unlikely]] {
         return false;
       }
 

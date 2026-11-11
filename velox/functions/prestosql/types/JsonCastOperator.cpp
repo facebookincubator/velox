@@ -51,7 +51,7 @@ void generateJsonTyped(
     } else if constexpr (
         std::is_same_v<T, double> || std::is_same_v<T, float>) {
       if constexpr (!legacyCast) {
-        if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
+        if (std::isinf(value) || std::isnan(value)) [[unlikely]] {
           result.append(
               fmt::format(
                   "\"{}\"",
@@ -175,7 +175,7 @@ void castToJson(
 
   bool legacyCast = context.execCtx()->queryCtx()->queryConfig().isLegacyCast();
 
-  if (FOLLY_LIKELY(!legacyCast)) {
+  if (!legacyCast) [[likely]] {
     if (!isMapKey) {
       generateJsonNonKeyTyped<T, false>(
           *inputVector, context, rows, flatResult, hooks);
@@ -774,7 +774,7 @@ simdjson::simdjson_result<T> fromString(const std::string_view& s) {
 
   if constexpr (std::is_floating_point_v<T>) {
     // Only "NaN" is allowed to be converted to NaN.  "nan" is not allowed.
-    if (FOLLY_UNLIKELY(std::isnan(*result))) {
+    if (std::isnan(*result)) [[unlikely]] {
       if (s != "NaN" && s != "-NaN") {
         return simdjson::INCORRECT_TYPE;
       }
