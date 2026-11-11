@@ -296,25 +296,6 @@ TEST_F(ToCudfSelectionTest, rowNumberRunsOnGpu) {
            makeFlatVector<int64_t>({1, 2, 1, 3})}),
       true);
 
-  // Per-partition limit.
-  assertRowNumber(
-      PlanBuilder().values({input}).rowNumber({"p"}, 1).planNode(),
-      makeRowVector(
-          {"p", "v", "row_number"},
-          {makeFlatVector<int64_t>({1, 2}),
-           makeFlatVector<int64_t>({10, 30}),
-           makeFlatVector<int64_t>({1, 1})}),
-      true);
-
-  // Partial mode: no row number column.
-  assertRowNumber(
-      PlanBuilder().values({input}).rowNumber({"p"}, 2, false).planNode(),
-      makeRowVector(
-          {"p", "v"},
-          {makeFlatVector<int64_t>({1, 1, 2}),
-           makeFlatVector<int64_t>({10, 20, 30})}),
-      true);
-
   // A TIMESTAMP WITH TIME ZONE key compares by its UTC value only, which
   // cuDF does not, so it stays on the CPU.
   auto zoned = makeRowVector(

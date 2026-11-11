@@ -282,6 +282,8 @@ std::unique_ptr<cudf::column> CudfRowNumber::computePartitionedRowNumbers(
     }
   }
 
+  matchedGroups.reset();
+
   // Make the old state streams wait for the last state read on this stream
   // before the old state is freed or read on another input stream.
   streamsWaitForStream(*cudaEvent_, stateStreams, stream);
