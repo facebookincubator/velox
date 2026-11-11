@@ -32,8 +32,10 @@
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/sorting.hpp>
 #include <cudf/stream_compaction.hpp>
+#include <cudf/unary.hpp>
 
 #include <algorithm>
+#include <utility>
 
 namespace facebook::velox::cudf_velox {
 
@@ -155,29 +157,36 @@ std::unique_ptr<cudf::column> CudfRowNumber::computePartitionedRowNumbers(
           cudf::memory_resources{tempMr, tempMr});
       priorCounts = cudf::replace_nulls(
           gatheredCounts->get_column(0).view(), zero, stream, tempMr);
-    } else {
-      priorCounts =
-          cudf::sequence(groupSizes->size(), zero, zero, stream, tempMr);
     }
     groupColumns = groupKeys->release();
     groupKeys.reset();
     const cudf::data_type int64Type{cudf::type_id::INT64};
-    groupColumns.push_back(cudf::binary_operation(
-        priorCounts->view(),
-        groupSizes->view(),
-        cudf::binary_operator::ADD,
-        int64Type,
-        stream,
-        tempMr));
+    groupColumns.push_back(
+        priorCounts
+            ? cudf::binary_operation(
+                  priorCounts->view(),
+                  groupSizes->view(),
+                  cudf::binary_operator::ADD,
+                  int64Type,
+                  stream,
+                  tempMr)
+            : cudf::cast(groupSizes->view(), int64Type, stream, tempMr));
     // Mixed INT64/INT32 operations promote before arithmetic. Adjustments
     // can be negative when a group's start exceeds its prior count.
-    auto adjustment = cudf::binary_operation(
-        priorCounts->view(),
-        groupStarts->view(),
-        cudf::binary_operator::SUB,
-        int64Type,
-        stream,
-        tempMr);
+    auto adjustment = priorCounts ? cudf::binary_operation(
+                                        priorCounts->view(),
+                                        groupStarts->view(),
+                                        cudf::binary_operator::SUB,
+                                        int64Type,
+                                        stream,
+                                        tempMr)
+                                  : cudf::binary_operation(
+                                        zero,
+                                        groupStarts->view(),
+                                        cudf::binary_operator::SUB,
+                                        int64Type,
+                                        stream,
+                                        tempMr);
     priorCounts.reset();
     groupStarts.reset();
     auto repeatedAdjustment = cudf::repeat(
@@ -259,14 +268,18 @@ std::unique_ptr<cudf::column> CudfRowNumber::computePartitionedRowNumbers(
     } else {
       newKeys.reset();
     }
-    newCounts = std::move(
-        cudf::scatter(
-            cudf::table_view{{matchedGroups->get_column(0).view()}},
-            matchedGroups->get_column(1).view(),
-            cudf::table_view{{stateCounts_->view()}},
-            stream,
-            tempMr)
-            ->release()[0]);
+    if (matchedGroups->num_rows() > 0) {
+      newCounts = std::move(
+          cudf::scatter(
+              cudf::table_view{{matchedGroups->get_column(0).view()}},
+              matchedGroups->get_column(1).view(),
+              cudf::table_view{{stateCounts_->view()}},
+              stream,
+              tempMr)
+              ->release()[0]);
+    } else {
+      newCounts = std::move(stateCounts_);
+    }
   }
 
   // Make the old state streams wait for the last state read on this stream
@@ -289,6 +302,14 @@ RowVectorPtr CudfRowNumber::doGetOutput() {
     return nullptr;
   }
 
+  if (input_->size() == 0) {
+    input_ = nullptr;
+    return nullptr;
+  }
+  if (!generateRowNumber_ && !limit_) {
+    return std::exchange(input_, nullptr);
+  }
+
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudfInput, "CudfRowNumber expects CudfVector input");
   input_ = nullptr;
@@ -300,9 +321,6 @@ RowVectorPtr CudfRowNumber::doGetOutput() {
   // A zero-column cuDF table has no rows, so take the row count from the
   // vector.
   const auto numRows = static_cast<cudf::size_type>(cudfInput->size());
-  if (numRows == 0) {
-    return nullptr;
-  }
 
   std::unique_ptr<cudf::table> outputTable;
   vector_size_t outputSize;

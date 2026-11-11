@@ -104,6 +104,26 @@ TEST_F(CudfRowNumberTest, mixedGroupSizesAcrossBatches) {
           .planNode());
 }
 
+TEST_F(CudfRowNumberTest, newPartitionsAcrossBatches) {
+  auto batch1 = makeRowVector(
+      {"p", "v"},
+      {makeNullableFlatVector<int32_t>({2, std::nullopt, 2}),
+       makeFlatVector<int64_t>({0, 1, 2})});
+  auto batch2 = makeRowVector(
+      {"p", "v"},
+      {makeNullableFlatVector<int32_t>({3, 1, 3}),
+       makeFlatVector<int64_t>({3, 4, 5})});
+  auto batch3 = makeRowVector(
+      {"p", "v"},
+      {makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt}),
+       makeFlatVector<int64_t>({6, 7, 8, 9})});
+  assertGpuMatchesCpu(
+      PlanBuilder()
+          .values({batch1, batch2, batch3})
+          .rowNumber({"p"})
+          .planNode());
+}
+
 TEST_F(CudfRowNumberTest, singlePartitionAcrossBatches) {
   auto singleton = makeRowVector(
       {"p", "v"}, {makeFlatVector<int32_t>({7}), makeFlatVector<int64_t>({0})});
@@ -209,6 +229,24 @@ TEST_F(CudfRowNumberTest, partialModeWithLimit) {
       PlanBuilder()
           .values({batch1, batch2})
           .rowNumber({}, 5, false)
+          .planNode());
+}
+
+TEST_F(CudfRowNumberTest, partialModeWithoutLimit) {
+  auto empty = makeRowVector(
+      {"p", "v"}, {makeFlatVector<int32_t>({}), makeFlatVector<int64_t>({})});
+  auto batch1 = makeRowVector(
+      {"p", "v"},
+      {makeNullableFlatVector<int32_t>({2, std::nullopt, 1, 2}),
+       makeFlatVector<int64_t>({0, 1, 2, 3})});
+  auto batch2 = makeRowVector(
+      {"p", "v"},
+      {makeNullableFlatVector<int32_t>({1, 3, std::nullopt, 2}),
+       makeFlatVector<int64_t>({4, 5, 6, 7})});
+  assertGpuMatchesCpu(
+      PlanBuilder()
+          .values({empty, batch1, empty, batch2})
+          .rowNumber({"p"}, std::nullopt, false)
           .planNode());
 }
 
