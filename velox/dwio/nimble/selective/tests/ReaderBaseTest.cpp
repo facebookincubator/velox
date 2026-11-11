@@ -134,6 +134,36 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
     return file;
   }
 
+  // Writes 'numColumns' columns that alternate BIGINT and VARCHAR.
+  std::string writeWideTestFile(int numColumns) {
+    velox::test::VectorMaker vectorMaker(pool_.get());
+    std::vector<std::string> names;
+    std::vector<velox::VectorPtr> columns;
+    for (int column = 0; column < numColumns; ++column) {
+      names.push_back(fmt::format("c{}", column));
+      if (column % 2 == 0) {
+        columns.push_back(vectorMaker.flatVector<int64_t>(
+            100, [column](auto row) { return row + column; }));
+      } else {
+        columns.push_back(
+            vectorMaker.flatVector<velox::StringView>(100, [](auto row) {
+              return velox::StringView::makeInline("val" + std::to_string(row));
+            }));
+      }
+    }
+    auto vector = vectorMaker.rowVector(names, columns);
+
+    std::string file;
+    auto writer = std::make_unique<Writer>(
+        vector->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *pool_,
+        WriterOptions{});
+    writer->write(vector);
+    writer->close();
+    return file;
+  }
+
   velox::dwio::common::ReaderOptions makeReaderOptions() {
     velox::dwio::common::ReaderOptions opts(pool_.get());
     opts.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
@@ -392,6 +422,32 @@ TEST_P(ReaderBaseTest, lazyFileStatsMatchEager) {
   EXPECT_EQ(lazy->fileColumnStatistics(numNodes), nullptr);
   EXPECT_EQ(eager->fileColumnLogicalSize(numNodes), std::nullopt);
   EXPECT_EQ(lazy->fileColumnLogicalSize(numNodes), std::nullopt);
+}
+
+TEST_P(ReaderBaseTest, lazyFileStatsAllocateLess) {
+  const auto fileData = writeWideTestFile(/*numColumns=*/100);
+  struct Allocations {
+    uint64_t open;
+    uint64_t lookups;
+  };
+  const auto countAllocations = [&](bool lazyFileStats) {
+    auto readerOpts = makeReaderOptions();
+    readerOpts.setNimbleLazyFileStats(lazyFileStats);
+    const auto start = pool_->stats().numAllocs;
+    const auto reader = createReaderBase(fileData, readerOpts);
+    const auto opened = pool_->stats().numAllocs;
+    // A split prunes on one column and estimates the row size from four.
+    EXPECT_NE(reader->fileColumnStatistics(1), nullptr);
+    for (uint32_t nodeId = 1; nodeId <= 4; ++nodeId) {
+      EXPECT_TRUE(reader->fileColumnLogicalSize(nodeId).has_value());
+    }
+    return Allocations{opened - start, pool_->stats().numAllocs - opened};
+  };
+  const auto eager = countAllocations(/*lazyFileStats=*/false);
+  const auto lazy = countAllocations(/*lazyFileStats=*/true);
+  EXPECT_EQ(eager.lookups, 0);
+  EXPECT_LT(lazy.open, eager.open);
+  EXPECT_LT((lazy.open + lazy.lookups) * 2, eager.open);
 }
 
 TEST_P(ReaderBaseTest, fileStatsAbsent) {
