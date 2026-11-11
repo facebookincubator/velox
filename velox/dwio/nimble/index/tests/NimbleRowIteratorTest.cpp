@@ -504,14 +504,17 @@ TEST_P(NimbleRowIteratorTest, entryIteratorStartsAtTheSelectedRows) {
   EXPECT_FALSE(iterator->valid());
 }
 
-TEST_P(NimbleRowIteratorTest, rowIteratorReleasesTheDecodedRows) {
+// The row iterator keeps the decoded rows of a stripe after the decoder
+// converted them, to decode the next stripe into them, and frees them on
+// reset().
+TEST_P(NimbleRowIteratorTest, rowIteratorFreesTheDecodedRowsOnReset) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
 
   std::vector<Subfield> projectedSubfields;
   projectedSubfields.emplace_back("value");
   std::vector<std::weak_ptr<velox::RowVector>> decodedRows;
   const auto decodeRows = compactRowDecoder();
-  TestNimbleIterator iterator{createEntryIterator(
+  const auto iterator = createEntryIterator(
       projectedSubfields,
       [&](const velox::RowVectorPtr& rows,
           nimble::index::KeyCursor& keyCursor,
@@ -522,13 +525,14 @@ TEST_P(NimbleRowIteratorTest, rowIteratorReleasesTheDecodedRows) {
         decodedRows.emplace_back(rows);
         decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
       },
-      NimbleIterator::Options{})};
-  iterator.seekToFirst();
+      NimbleIterator::Options{});
+  iterator->seekToFirst();
 
-  // The entries of the first stripe outlive its decoded rows.
   const auto actual = velox::row::CompactRow::deserialize(
-      {iterator.value()}, ROW("value", INTEGER()), leafPool_.get());
+      {iterator->value()}, ROW("value", INTEGER()), leafPool_.get());
   ASSERT_EQ(decodedRows.size(), 1);
+  EXPECT_FALSE(decodedRows[0].expired());
+  iterator->reset();
   EXPECT_TRUE(decodedRows[0].expired());
   expectVectorRows(
       actual,
@@ -1036,6 +1040,116 @@ TEST_P(NimbleRowIteratorTest, getIteratorDoesNotPrefetch) {
     EXPECT_EQ(iterator->stats().numReadStripes, numReadStripes);
   }
   iterator->reset();
+}
+
+// The row iterator decodes into the output of its last decode when the entry
+// decoder released it, for gets and for the stripes of a scan, and into a new
+// vector when the decoder still holds it. reset() frees the output.
+TEST_P(NimbleRowIteratorTest, rowIteratorReusesTheOutputOfTheLastDecode) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  const auto decodeRows = compactRowDecoder();
+  bool holdRows{false};
+  std::vector<velox::RowVectorPtr> heldRows;
+  std::vector<std::weak_ptr<velox::RowVector>> outputs;
+  const auto iterator = createEntryIterator(
+      projectedSubfields,
+      [&](const velox::RowVectorPtr& rows,
+          nimble::index::KeyCursor& keyCursor,
+          folly::IOBufQueue& keyStorage,
+          folly::IOBufQueue& valueStorage,
+          std::vector<std::string_view>& keys,
+          std::vector<std::string_view>& values) {
+        outputs.emplace_back(rows);
+        if (holdRows) {
+          heldRows.emplace_back(rows);
+        }
+        decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
+      },
+      NimbleIterator::Options{.forGet = true});
+  const auto expectGet = [&](int64_t key) {
+    iterator->seek(makePointLookup(rowType, {"key"}, key));
+    ASSERT_TRUE(iterator->valid());
+    const auto actual = velox::row::CompactRow::deserialize(
+        {iterator->value()}, ROW("value", INTEGER()), leafPool_.get());
+    expectVectorRows(
+        actual,
+        vectorMaker_->rowVector(
+            {"value"},
+            {vectorMaker_->flatVector<int32_t>(
+                {static_cast<int32_t>(key * 10)})}));
+  };
+
+  for (const int64_t key : {1, 2, 0}) {
+    SCOPED_TRACE(key);
+    expectGet(key);
+  }
+  // The materializer holds the output between the gets and reuses it.
+  ASSERT_EQ(outputs.size(), 3);
+  ASSERT_NE(outputs[0].lock(), nullptr);
+  EXPECT_EQ(outputs[1].lock(), outputs[0].lock());
+  EXPECT_EQ(outputs[2].lock(), outputs[0].lock());
+
+  // A decoder that holds the rows makes the next get decode into a new vector.
+  holdRows = true;
+  for (const int64_t key : {3, 1}) {
+    SCOPED_TRACE(key);
+    expectGet(key);
+  }
+  ASSERT_EQ(outputs.size(), 5);
+  ASSERT_NE(outputs[3].lock(), nullptr);
+  EXPECT_NE(outputs[4].lock(), outputs[3].lock());
+
+  // A get in another stripe reuses the output too, once the decoder releases
+  // it.
+  holdRows = false;
+  heldRows.clear();
+  EXPECT_TRUE(outputs[0].expired());
+  expectGet(5);
+  expectGet(6);
+  ASSERT_EQ(outputs.size(), 7);
+  ASSERT_NE(outputs[4].lock(), nullptr);
+  EXPECT_EQ(outputs[5].lock(), outputs[4].lock());
+  EXPECT_EQ(outputs[6].lock(), outputs[4].lock());
+
+  iterator->reset();
+  EXPECT_TRUE(outputs[6].expired());
+
+  // A scan decodes its stripes into the same output.
+  outputs.clear();
+  const auto scanIterator = createEntryIterator(
+      projectedSubfields,
+      [&](const velox::RowVectorPtr& rows,
+          nimble::index::KeyCursor& keyCursor,
+          folly::IOBufQueue& keyStorage,
+          folly::IOBufQueue& valueStorage,
+          std::vector<std::string_view>& keys,
+          std::vector<std::string_view>& values) {
+        outputs.emplace_back(rows);
+        decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
+      },
+      NimbleIterator::Options{});
+  scanIterator->seekToFirst();
+  for (int32_t row{0}; row < 12; ++row) {
+    ASSERT_TRUE(scanIterator->valid());
+    const auto actual = velox::row::CompactRow::deserialize(
+        {scanIterator->value()}, ROW("value", INTEGER()), leafPool_.get());
+    expectVectorRows(
+        actual,
+        vectorMaker_->rowVector(
+            {"value"}, {vectorMaker_->flatVector<int32_t>({row * 10})}));
+    scanIterator->nextRow();
+  }
+  EXPECT_FALSE(scanIterator->valid());
+  ASSERT_EQ(outputs.size(), 3);
+  ASSERT_NE(outputs[0].lock(), nullptr);
+  EXPECT_EQ(outputs[1].lock(), outputs[0].lock());
+  EXPECT_EQ(outputs[2].lock(), outputs[0].lock());
+  scanIterator->reset();
+  EXPECT_TRUE(outputs[2].expired());
 }
 
 // The kept stripe holds memory until the iterator resets, so that an idle

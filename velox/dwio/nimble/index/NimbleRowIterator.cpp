@@ -120,6 +120,13 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
     return stripeDecoder_ != nullptr && stripeDecoder_->hasStripe(stripeIndex);
   }
 
+  // Releases the stripe that the materializer holds and frees the output of
+  // the last decode, so that an idle iterator holds neither.
+  void reset() {
+    releaseStripe();
+    rows_.reset();
+  }
+
   // Unbinds the stream reader from the stripe that the materializer holds, and
   // frees the stripe.
   void releaseStripe() {
@@ -224,13 +231,24 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
           decodingTiming_.wlock()->add(timing);
         }};
     const auto numRows = selection.rowRange.numRows();
-    velox::VectorPtr rows = velox::BaseVector::create(
-        rowType_, static_cast<velox::vector_size_t>(numRows), pool_);
+    prepareRows(static_cast<velox::vector_size_t>(numRows));
     co_await stripeDecoder_->streamReader.co_read(
         std::span<const RowRange>{&selection.rowRange, 1},
         /*outputOffset=*/0,
-        rows);
-    co_return finishDecode(std::move(rows), numRows);
+        rows_);
+    co_return finishDecode(rows_, numRows);
+  }
+
+  // Makes 'rows_' an output of 'numRows' rows for a get, which reads into
+  // an output of its size: the output of the last decode when nothing else
+  // holds it or any of its children and buffers, as after the entry decoder
+  // released it, or a new vector.
+  void prepareRows(velox::vector_size_t numRows) {
+    if (rows_ != nullptr && velox::BaseVector::recursivelyReusable(rows_)) {
+      velox::BaseVector::prepareForReuse(rows_, numRows);
+      return;
+    }
+    rows_ = velox::BaseVector::create(rowType_, numRows, pool_);
   }
 
   // Decodes the selected rows of 'stripe' for a scan, which reads each stripe
@@ -255,9 +273,10 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
         collectTimings_, [this](const velox::CpuWallTiming& timing) {
           decodingTiming_.wlock()->add(timing);
         }};
-    velox::VectorPtr rows;
-    co_await streamReader.co_next(rowRange.numRows(), rows);
-    co_return finishDecode(std::move(rows), rowRange.numRows());
+    // co_next() decodes into the output of the last decode when nothing else
+    // holds it, and into a new vector otherwise.
+    co_await streamReader.co_next(rowRange.numRows(), rows_);
+    co_return finishDecode(rows_, rowRange.numRows());
   }
 
   // Checks the decoded 'rows' and counts them.
@@ -321,6 +340,9 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
   // Decodes the stripes, built for the first stripe and kept until the
   // materializer is destroyed.
   std::unique_ptr<StripeDecoder> stripeDecoder_;
+  // The output of the last decode, which the next decode reuses unless the
+  // entry decoder still holds it. Freed by reset().
+  velox::VectorPtr rows_;
   // Track the time spent decoding stripes, and converting their rows into
   // entries.
   folly::Synchronized<velox::CpuWallTiming> decodingTiming_;
@@ -380,7 +402,7 @@ class NimbleRowIterator final : public NimbleIterator {
   void reset() override {
     resetState();
     cursor_->reset();
-    materializer_->releaseStripe();
+    materializer_->reset();
   }
 
   void nextRow() override {
