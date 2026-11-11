@@ -197,7 +197,8 @@ std::unique_ptr<cudf::column> CudfRowNumber::computePartitionedRowNumbers(
     adjustment.reset();
     groupSizes.reset();
     cudf::numeric_scalar<cudf::size_type> positionOne(1, true, stream, tempMr);
-    auto positions = cudf::sequence(keys.num_rows(), positionOne, stream, tempMr);
+    auto positions =
+        cudf::sequence(keys.num_rows(), positionOne, stream, tempMr);
     sortedRowNumbers = cudf::binary_operation(
         positions->view(),
         repeatedAdjustment->get_column(0).view(),
