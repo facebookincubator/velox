@@ -17,6 +17,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <vector>
@@ -126,12 +127,14 @@ class ReaderBase {
     return fileSchemaWithId_;
   }
 
-  /// File-level column statistics from the vectorized stats optional section.
-  /// Empty if absent.
-  const std::vector<std::unique_ptr<ColumnStatistics>>& fileColumnStats()
-      const {
-    return fileColumnStats_;
-  }
+  /// In lazy mode, loads the stats section on first call.
+  bool hasFileColumnStatistics() const;
+
+  /// In lazy mode, builds the node's statistics on first call.
+  const ColumnStatistics* fileColumnStatistics(uint32_t nodeId) const;
+
+  /// In lazy mode, decodes only the logical size stream.
+  std::optional<uint64_t> fileColumnLogicalSize(uint32_t nodeId) const;
 
  private:
   ReaderBase(
@@ -141,7 +144,11 @@ class ReaderBase {
       const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
       std::shared_ptr<const Type> nimbleSchema,
       velox::RowTypePtr fileSchema,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      bool lazyFileStats);
+
+  // Loads the section on first call.
+  const LazyVectorizedFileStats* loadLazyFileStats() const;
 
   const std::unique_ptr<velox::dwio::common::BufferedInput> input_;
   const std::shared_ptr<TabletReader> tablet_;
@@ -150,9 +157,16 @@ class ReaderBase {
   const std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const std::shared_ptr<const Type> nimbleSchema_;
   const velox::RowTypePtr fileSchema_;
-  // File-level column statistics deserialized from the vectorized stats
-  // optional section at construction.
+  // Whether file column statistics are decoded on first use.
+  const bool lazyFileStats_;
+  // Empty in lazy mode.
   const std::vector<std::unique_ptr<ColumnStatistics>> fileColumnStats_;
+  // Guards 'lazyStatsLoaded_' and 'lazyStats_'.
+  mutable std::mutex lazyStatsMutex_;
+  // Stays false after a failed load, so it is retried.
+  mutable bool lazyStatsLoaded_{false};
+  // Owns a copy of the section, so no cache pin is held.
+  mutable std::unique_ptr<LazyVectorizedFileStats> lazyStats_;
   mutable std::shared_ptr<const velox::dwio::common::TypeWithId>
       fileSchemaWithId_;
 };
