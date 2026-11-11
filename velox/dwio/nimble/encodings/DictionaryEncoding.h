@@ -396,6 +396,7 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
   /// Processes a single dictionary index. Handles leading nulls from the
   /// current row to the given row, then translates the index via the visitor.
   void addValue(vector_size_t row, int64_t index) final {
+    paths_.recordAddValue();
     processNulls(row);
     NIMBLE_DCHECK(
         !visitor_.atEnd(), "Dictionary visitor received an extra index");
@@ -415,6 +416,7 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     if (size == 0) {
       return;
     }
+    paths_.recordAddValues();
     processNulls(rows[0]);
     const auto startRowIndex = visitor_.rowIndex();
     const auto outputOffset = visitor_.reader().numValues();
@@ -440,6 +442,11 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
   /// processed.
   void processTrailingNulls() {
     processNulls(visitor_.numRows());
+  }
+
+  /// Returns the hook paths this read took, for fuzzer stats.
+  const fuzzer::DictionaryAwareReadPaths& paths() const {
+    return paths_;
   }
 
  private:
@@ -501,6 +508,8 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     auto outputPosition = numValues + numNulls - 1;
 
     if (numNulls * 4 >= size) {
+      paths_.recordMergeBulkNullsDense();
+
       // Dense nulls leave few passing rows between gaps, in counts a branch
       // cannot predict. Visit every non-null row instead, and take its verdict
       // from the filter cache, which processBulk() filled for every index in
@@ -537,6 +546,8 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
         }
       }
     } else {
+      paths_.recordMergeBulkNullsSparse();
+
       // Sparse nulls leave long runs between gaps, so jump from gap to gap and
       // move the passing values in between. The branches mispredict only
       // around the gaps, which are rare.
@@ -608,6 +619,10 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
 
   // Verdict per dictionary index, filled by the visitor's processBulk().
   const uint8_t* filterCache_;
+
+  // Hook paths this read took. Outside fuzzer builds it is an empty type whose
+  // record methods do nothing, so the hook pays nothing.
+  [[no_unique_address]] fuzzer::DictionaryAwareReadPaths paths_;
 };
 
 } // namespace detail
@@ -703,15 +718,20 @@ void DictionaryEncoding<T>::readWithVisitor(
 
       // Records fuzzer-only stats, which are no-ops in regular builds.
       if constexpr (std::is_same_v<T, int16_t>) {
-        fuzzer::updateSmallintDictionaryAwareReads(visitor.filter());
+        fuzzer::updateSmallintDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       } else if constexpr (std::is_same_v<T, int32_t>) {
-        fuzzer::updateIntegerDictionaryAwareReads(visitor.filter());
+        fuzzer::updateIntegerDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       } else if constexpr (std::is_same_v<T, int64_t>) {
-        fuzzer::updateBigintDictionaryAwareReads(visitor.filter());
+        fuzzer::updateBigintDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       } else if constexpr (std::is_same_v<T, float>) {
-        fuzzer::updateRealDictionaryAwareReads(visitor.filter());
+        fuzzer::updateRealDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       } else if constexpr (std::is_same_v<T, double>) {
-        fuzzer::updateDoubleDictionaryAwareReads(visitor.filter());
+        fuzzer::updateDoubleDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       }
 
       return;
