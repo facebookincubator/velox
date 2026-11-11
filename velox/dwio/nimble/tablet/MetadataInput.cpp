@@ -16,18 +16,24 @@
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 
 #include <algorithm>
+#include <cstring>
+#include <limits>
 
 #include <numeric>
 #include "velox/common/caching/FileHandle.h"
 
 #include "folly/Range.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
+#include "velox/dwio/nimble/tablet/IoAlignment.h"
 
-#include "folly/executors/QueuedImmediateExecutor.h"
+#include "folly/ScopeGuard.h"
 #include "folly/io/Cursor.h"
 #include "velox/common/base/AsyncSource.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CoalesceIo.h"
+#include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 
@@ -39,11 +45,9 @@ std::unique_ptr<MetadataInput> MetadataInput::create(
     velox::ReadFile* file,
     const Options& options) {
   NIMBLE_CHECK_NOT_NULL(file);
-  if (options.fileHandle != nullptr) {
-    NIMBLE_CHECK_NOT_NULL(
-        options.cache, "cache required when fileHandle is set");
-    return std::unique_ptr<MetadataInput>(new CachedMetadataInput(
-        file, options.fileHandle->uuid, options.cache, options));
+  if (options.blockCache != nullptr) {
+    return std::unique_ptr<MetadataInput>(
+        new CachedMetadataInput(file, options));
   }
   return std::unique_ptr<MetadataInput>(new DirectMetadataInput(file, options));
 }
@@ -56,6 +60,7 @@ MetadataInput::MetadataInput(velox::ReadFile* file, const Options& options)
       executor_{options.executor},
       ioStats_{options.ioStats},
       fileIoContext_{options.fileIoContext} {
+  NIMBLE_CHECK_NOT_NULL(file_);
   NIMBLE_CHECK_NOT_NULL(pool_);
   NIMBLE_CHECK_NOT_NULL(ioStats_.get());
 }
@@ -88,31 +93,21 @@ void MetadataInput::readRaw(uint64_t offset, uint64_t size, void* dest) {
   ioStats_->incRawBytesRead(size);
 }
 
-std::unique_ptr<MetadataBuffer> MetadataInput::findCachedMetadata(
-    uint64_t /*offset*/) {
-  NIMBLE_UNREACHABLE("findCachedMetadata requires CachedMetadataInput");
-}
-
-void MetadataInput::cacheMetadata(
-    uint64_t /*cacheOffset*/,
-    std::span<const std::string_view> /*ranges*/) {
-  NIMBLE_UNREACHABLE("cacheMetadata requires CachedMetadataInput");
-}
-
 std::shared_ptr<MetadataBuffer> MetadataInput::decompressAndStore(
     const MetadataSection& section,
     velox::BufferPtr&& buffer) {
   NIMBLE_CHECK_EQ(
       section.size(), buffer->size(), "Buffer size mismatch with section size");
   if (section.compressionType() == CompressionType::Uncompressed) {
-    return store(section, std::move(buffer));
+    return std::make_shared<MetadataBuffer>(toPinnedBuffer(std::move(buffer)));
   }
   NIMBLE_CHECK_EQ(
       static_cast<int>(section.compressionType()),
       static_cast<int>(CompressionType::Zstd),
       "Unsupported metadata compression type");
   std::string_view data{buffer->as<char>(), buffer->size()};
-  return store(section, ZstdCompression::uncompress(data, pool_));
+  return std::make_shared<MetadataBuffer>(
+      toPinnedBuffer(ZstdCompression::uncompress(data, pool_)));
 }
 
 std::optional<uint32_t> MetadataInput::resolveUncompressedSize(
@@ -207,7 +202,7 @@ std::vector<MetadataInput::IoGroup> MetadataInput::computeIoGroups(
   return ioGroups;
 }
 
-void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) {
+void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) const {
   // Shared with the executor tasks below, which can outlive this call.
   std::vector<std::shared_ptr<velox::AsyncSource<folly::Unit>>> asyncIos;
   asyncIos.reserve(ioGroups.size());
@@ -337,420 +332,543 @@ std::vector<std::shared_ptr<MetadataBuffer>> DirectMetadataInput::load(
   return extractResults(std::move(loadSections));
 }
 
-std::shared_ptr<MetadataBuffer> DirectMetadataInput::store(
-    const MetadataSection& /*section*/,
-    velox::BufferPtr&& decompressed) {
-  return std::make_shared<MetadataBuffer>(
-      toPinnedBuffer(std::move(decompressed)));
-}
-
 // --- CachedMetadataInput ---
 
 namespace {
 
-// Returns the bytes of the cache entry 'pin' holds. The bufferHolder holds
-// 'pin', so the entry stays pinned while any copy of the bytes is alive.
-PinnedBuffer toPinnedBuffer(velox::cache::CachePin pin) {
-  NIMBLE_CHECK(!pin.empty(), "CachePin must not be empty");
-  auto* entry = pin.checkedEntry();
-  const std::string_view data{
-      entry->contiguousData(), static_cast<size_t>(entry->size())};
+// Returns the indices of 'sections' in file offset order. Fails when two
+// non-empty sections share an offset, or a compressed section is too small
+// to hold its uncompressed size.
+std::vector<uint32_t> sortByOffset(std::span<const MetadataSection> sections) {
+  std::vector<uint32_t> sortIndices(sections.size());
+  std::iota(sortIndices.begin(), sortIndices.end(), 0);
+  std::sort(
+      sortIndices.begin(), sortIndices.end(), [&](uint32_t lhs, uint32_t rhs) {
+        return sections[lhs].offset() < sections[rhs].offset();
+      });
+  const MetadataSection* prev{nullptr};
+  for (const auto index : sortIndices) {
+    const auto& section = sections[index];
+    if (section.compressionType() != CompressionType::Uncompressed) {
+      // Compressed bytes start with their uncompressed size.
+      NIMBLE_CHECK_FILE_GE(
+          section.size(),
+          sizeof(uint32_t),
+          "Compressed metadata section is too small");
+    }
+    if (section.size() == 0) {
+      // An empty section takes no read and no cache entry, so it may share its
+      // offset with the next section, which is how the writer lays it out.
+      continue;
+    }
+    if (prev != nullptr) {
+      NIMBLE_CHECK_GT(
+          section.offset(),
+          prev->offset(),
+          "Metadata input must not contain duplicate regions");
+    }
+    prev = &section;
+  }
+  return sortIndices;
+}
+
+// Moves a sealed entry into bytes that keep it pinned.
+PinnedBuffer pinnedBuffer(BlockCache::Entry entry) {
+  const std::string_view data{entry.data(), entry.size()};
   return PinnedBuffer{
-      std::make_shared<velox::cache::CachePin>(std::move(pin)), data};
+      std::make_shared<BlockCache::Entry>(std::move(entry)), data};
+}
+
+// Largest cache entry. velox's AsyncDataCache stores entry sizes as int32.
+constexpr uint64_t kMaxCacheEntrySize{std::numeric_limits<int32_t>::max()};
+
+// Returns true if an entry of 'size' bytes can be cached: it cannot be empty,
+// and cannot exceed 'maxCacheEntrySize'. Sizes come from the file, and no valid
+// metadata section exceeds kMaxCacheEntrySize, so a larger one means a corrupt
+// file and fails.
+bool isCacheableSize(uint64_t size, std::optional<uint32_t> maxCacheEntrySize) {
+  NIMBLE_CHECK_FILE_LE(
+      size, kMaxCacheEntrySize, "Metadata section is too large");
+  return size > 0 &&
+      (!maxCacheEntrySize.has_value() || size <= maxCacheEntrySize.value());
+}
+
+// Writes 'data', compressed with 'compressionType', decompressed to the 'size'
+// bytes at 'destination'.
+void decompressTo(
+    std::string_view data,
+    CompressionType compressionType,
+    char* destination,
+    uint32_t size) {
+  if (compressionType == CompressionType::Uncompressed) {
+    NIMBLE_CHECK_EQ(
+        data.size(), size, "Section size mismatch with uncompressed size");
+    std::memcpy(destination, data.data(), size);
+    return;
+  }
+  NIMBLE_CHECK_FILE_EQ(
+      static_cast<int>(compressionType),
+      static_cast<int>(CompressionType::Zstd),
+      "Unsupported metadata compression type");
+  ZstdCompression::uncompress(data, destination, size);
 }
 
 } // namespace
 
 CachedMetadataInput::CachedMetadataInput(
     velox::ReadFile* file,
-    velox::StringIdLease fileId,
-    velox::cache::AsyncDataCache* cache,
     const Options& options)
     : MetadataInput(file, options),
-      cache_{cache},
-      fileId_{std::move(fileId)},
-      maxCacheEntrySize_{options.maxCacheEntrySize} {
-  NIMBLE_CHECK_NOT_NULL(cache_);
-
-  // SsdRun packs the entry size into kSizeBits bits, so a larger entry can
-  // never be written to SSD.
-  if (cache_->ssdCache() != nullptr && maxCacheEntrySize_.has_value()) {
-    NIMBLE_CHECK_LE(
-        maxCacheEntrySize_.value(),
-        1U << velox::cache::SsdRun::kSizeBits,
-        "MetadataInput::Options::maxCacheEntrySize must not exceed the Velox "
-        "SSD cache maximum entry size when an SSD cache is configured");
-  }
-}
-
-bool CachedMetadataInput::cacheable(uint64_t size) const {
-  return !maxCacheEntrySize_ || size <= *maxCacheEntrySize_;
-}
-
-velox::cache::CachePin CachedMetadataInput::acquireCachePin(
-    const velox::cache::RawFileCacheKey& key,
-    uint32_t size) {
-  for (;;) {
-    folly::SemiFuture<bool> waitFuture{false};
-    auto pin =
-        cache_->findOrCreate(key, size, /*contiguous=*/true, &waitFuture);
-    if (!pin.empty()) {
-      return pin;
-    }
-    uint64_t waitUs{0};
-    {
-      velox::MicrosecondTimer timer(&waitUs);
-      auto& exec = folly::QueuedImmediateExecutor::instance();
-      std::move(waitFuture).via(&exec).wait();
-    }
-    ioStats_->queryThreadIoLatencyUs().increment(waitUs);
-    ioStats_->cacheWaitLatencyUs().increment(waitUs);
-  }
-}
-
-std::shared_ptr<MetadataBuffer> CachedMetadataInput::tryCacheHit(
-    uint32_t expectedSize,
-    velox::cache::CachePin& pin) {
-  auto* entry = pin.checkedEntry();
-  if (!entry->isShared()) {
-    return nullptr;
-  }
+      blockCache_{options.blockCache},
+      fileId_{[&]() {
+        NIMBLE_USER_CHECK_NOT_NULL(
+            options.fileHandle, "blockCache requires fileHandle");
+        return options.fileHandle->uuid;
+      }()},
+      maxCacheEntrySize_{options.maxCacheEntrySize},
+      alignment_{readAlignment(*file_)} {
+  NIMBLE_CHECK_NOT_NULL(blockCache_);
+  NIMBLE_USER_CHECK(fileId_.hasValue(), "blockCache requires fileHandle->uuid");
+  NIMBLE_USER_CHECK_GE(
+      options.maxCoalesceDistance,
+      0,
+      "maxCoalesceDistance must not be negative");
+  NIMBLE_USER_CHECK_GE(
+      options.maxCoalesceBytes, 0, "maxCoalesceBytes must not be negative");
+  NIMBLE_CHECK_GT(alignment_, 0);
   NIMBLE_CHECK(
-      entry->hasContiguousData(), "Cached entry must have contiguous data");
-  NIMBLE_CHECK_EQ(
-      entry->size(),
-      expectedSize,
-      "Cached entry size mismatch with expected size");
-  ioStats_->ramHit().increment(entry->size());
-  return std::make_shared<MetadataBuffer>(toPinnedBuffer(std::move(pin)));
+      velox::bits::isPowerOfTwo(alignment_), "alignment must be a power of 2");
+  NIMBLE_CHECK_LE(
+      alignment_,
+      static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()),
+      "alignment exceeds the memory allocator limit");
 }
 
-std::shared_ptr<MetadataBuffer> CachedMetadataInput::promoteCachePin(
-    const MetadataSection& section,
-    velox::cache::CachePin pin,
-    velox::io::IoCounter& ioCounter) {
-  auto* entry = pin.checkedEntry();
-  NIMBLE_CHECK(entry->isExclusive(), "Expected exclusive cache pin");
-  NIMBLE_CHECK(
-      entry->hasContiguousData(), "Cache entry must have contiguous data");
-  NIMBLE_CHECK_GE(
-      entry->size(), section.size(), "Cache entry smaller than section size");
-  const auto uncompressedSize = resolveUncompressedSize(section);
-  if (uncompressedSize.has_value()) {
-    NIMBLE_CHECK_EQ(
-        entry->size(),
-        uncompressedSize.value(),
-        "Cache entry size mismatch with uncompressed size");
+std::vector<CachedMetadataInput::ReadGroup> CachedMetadataInput::coalesce(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> sortedIndices) const {
+  const auto fileSize = file_->size();
+  std::vector<ReadGroup> groups;
+  uint64_t groupBytes{0};
+  for (size_t i = 0; i < sortedIndices.size(); ++i) {
+    const auto& section = sections[sortedIndices[i]];
+    const auto region =
+        alignedRegion({section.offset(), section.size()}, alignment_, fileSize);
+    if (groups.empty()) {
+      groups.push_back(ReadGroup{.region = region, .begin = i, .end = i + 1});
+      groupBytes = section.size();
+      continue;
+    }
+    auto& lastGroup = groups.back();
+    const auto groupEnd = lastGroup.region.offset + lastGroup.region.length;
+    if (region.offset < groupEnd ||
+        (region.offset - groupEnd <=
+             static_cast<uint64_t>(maxCoalesceDistance_) &&
+         groupBytes + section.size() <=
+             static_cast<uint64_t>(maxCoalesceBytes_))) {
+      lastGroup.region.length =
+          std::max(groupEnd, region.offset + region.length) -
+          lastGroup.region.offset;
+      lastGroup.end = i + 1;
+      groupBytes += section.size();
+      continue;
+    }
+    groups.push_back(ReadGroup{.region = region, .begin = i, .end = i + 1});
+    groupBytes = section.size();
   }
-  ioCounter.increment(entry->size());
-  entry->setExclusiveToShared();
-  return std::make_shared<MetadataBuffer>(toPinnedBuffer(std::move(pin)));
+
+  uint64_t destBufferOffset{0};
+  for (auto& group : groups) {
+    group.destBufferOffset = destBufferOffset;
+    destBufferOffset += group.region.length;
+  }
+  return groups;
 }
 
-void CachedMetadataInput::loadFromSsd(
-    std::vector<LoadedSection>& sections,
-    std::vector<uint32_t>& loadIndices,
-    std::vector<std::optional<velox::cache::CachePin>>& cachePins) {
-  if (loadIndices.empty()) {
-    return;
-  }
-  NIMBLE_CHECK_EQ(
-      cachePins.size(),
-      sections.size(),
-      "cachePins size must match sections size");
-
-  auto* ssdCache = cache_->ssdCache();
-  if (ssdCache == nullptr) {
-    return;
+void CachedMetadataInput::readGroups(
+    std::span<const ReadGroup> groups,
+    char* buffer,
+    uint64_t payloadBytes) const {
+  std::vector<velox::common::Region> regions;
+  std::vector<folly::Range<char*>> buffers;
+  regions.reserve(groups.size());
+  buffers.reserve(groups.size());
+  for (const auto& group : groups) {
+    regions.push_back(group.region);
+    buffers.emplace_back(
+        buffer + group.destBufferOffset,
+        static_cast<size_t>(group.region.length));
   }
 
-  struct SsdHit {
-    uint32_t sectionIndex;
-    velox::cache::SsdPin ssdPin;
-    velox::cache::CachePin cachePin;
-  };
-  std::vector<SsdHit> ssdHits;
-  std::vector<uint32_t> remainingLoadIndices;
-  remainingLoadIndices.reserve(loadIndices.size());
-
-  auto& ssdFile = ssdCache->file(fileId_.id());
-  for (const auto index : loadIndices) {
-    auto& loaded = sections[index];
-    const auto uncompressedSize = resolveUncompressedSize(loaded.section);
-    if (uncompressedSize.has_value() && !cacheable(uncompressedSize.value())) {
-      remainingLoadIndices.emplace_back(index);
-      continue;
-    }
-
-    const velox::cache::RawFileCacheKey key{
-        fileId_.id(), loaded.section.offset()};
-
-    auto ssdPin = ssdFile.find(key);
-    if (ssdPin.empty()) {
-      remainingLoadIndices.emplace_back(index);
-      continue;
-    }
-
-    const auto ssdSize = ssdPin.run().size();
-    if (uncompressedSize.has_value()) {
-      NIMBLE_CHECK_EQ(
-          ssdSize,
-          uncompressedSize.value(),
-          "SSD entry size mismatch with expected uncompressed size");
-    }
-    if (!cacheable(ssdSize)) {
-      remainingLoadIndices.emplace_back(index);
-      continue;
-    }
-
-    velox::cache::CachePin pin;
-    if (cachePins[index].has_value()) {
-      pin = std::move(*cachePins[index]);
-      cachePins[index].reset();
-    } else {
-      pin = acquireCachePin(key, ssdSize);
-    }
-    auto buffer = tryCacheHit(ssdSize, pin);
-    if (buffer != nullptr) {
-      ioStats_->incRawBytesRead(loaded.section.size());
-      loaded.buffer = std::move(buffer);
-      continue;
-    }
-    ssdHits.emplace_back(SsdHit{index, std::move(ssdPin), std::move(pin)});
-  }
-
-  loadIndices = std::move(remainingLoadIndices);
-
-  if (ssdHits.empty()) {
-    return;
-  }
-
-  std::vector<velox::cache::SsdPin> ssdPins;
-  std::vector<velox::cache::CachePin> loadPins;
-  ssdPins.reserve(ssdHits.size());
-  loadPins.reserve(ssdHits.size());
-  for (auto& hit : ssdHits) {
-    ssdPins.emplace_back(std::move(hit.ssdPin));
-    loadPins.emplace_back(std::move(hit.cachePin));
-  }
-  uint64_t ssdLoadUs{0};
+  // Measure at nanosecond resolution so that fast reads still register a
+  // non-zero scan time.
+  uint64_t storageReadNs{0};
+  uint64_t bytesRead{0};
   {
-    velox::MicrosecondTimer timer(&ssdLoadUs);
-    ssdFile.load(ssdPins, loadPins);
+    velox::NanosecondTimer timer{&storageReadNs};
+    bytesRead = file_->preadv(
+        folly::Range<const velox::common::Region*>(
+            regions.data(), regions.size()),
+        folly::Range<const folly::Range<char*>*>(
+            buffers.data(), buffers.size()),
+        fileIoContext_);
   }
-  ioStats_->queryThreadIoLatencyUs().increment(ssdLoadUs);
-  ioStats_->ssdCacheReadLatencyUs().increment(ssdLoadUs);
-  for (uint32_t i = 0; i < ssdHits.size(); ++i) {
-    const auto& section = sections[ssdHits[i].sectionIndex].section;
-    ioStats_->incRawBytesRead(section.size());
-    sections[ssdHits[i].sectionIndex].buffer =
-        promoteCachePin(section, std::move(loadPins[i]), ioStats_->ssdRead());
-  }
+
+  // A read past the end of the file returns only the bytes before the end.
+  const auto fileBytes = fileReadBytes(regions, file_->size());
+  NIMBLE_CHECK_GE(bytesRead, fileBytes, "preadv returned a short read");
+  recordReadStats(storageReadNs, fileBytes, payloadBytes);
 }
 
-std::vector<uint32_t> CachedMetadataInput::loadFromCache(
-    std::vector<LoadedSection>& sections,
-    std::vector<std::optional<velox::cache::CachePin>>& cachePins) {
-  cachePins.resize(sections.size());
-  std::vector<uint32_t> loadIndices;
-  loadIndices.reserve(sections.size());
-  for (uint32_t index = 0; index < sections.size(); ++index) {
-    const auto& section = sections[index].section;
-    const velox::cache::RawFileCacheKey key{fileId_.id(), section.offset()};
-    const auto uncompressedSize = resolveUncompressedSize(section);
+void CachedMetadataInput::recordReadStats(
+    uint64_t storageReadNs,
+    uint64_t readBytes,
+    uint64_t payloadBytes) const {
+  const uint64_t storageReadUs = storageReadNs / 1'000;
+  ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
+  ioStats_->storageReadLatencyUs().increment(storageReadUs);
+  ioStats_->incTotalScanTimeNs(storageReadNs);
+  recordReadBytes(readBytes, payloadBytes);
+}
 
-    if (uncompressedSize.has_value() && cacheable(uncompressedSize.value())) {
-      auto pin = acquireCachePin(key, uncompressedSize.value());
-      auto buffer = tryCacheHit(uncompressedSize.value(), pin);
-      if (buffer != nullptr) {
-        ioStats_->incRawBytesRead(section.size());
-        sections[index].buffer = std::move(buffer);
-        continue;
-      }
-      cachePins[index] = std::move(pin);
-      loadIndices.push_back(index);
-    } else {
-      loadIndices.push_back(index);
+void CachedMetadataInput::recordReadBytes(
+    uint64_t readBytes,
+    uint64_t payloadBytes) const {
+  ioStats_->read().increment(readBytes);
+
+  // Overlapping sections, which only a corrupt file has, can make the payload
+  // exceed the bytes read.
+  const auto readPayloadBytes = std::min(payloadBytes, readBytes);
+  ioStats_->incRawBytesRead(readPayloadBytes);
+  ioStats_->incRawOverreadBytes(readBytes - readPayloadBytes);
+}
+
+void CachedMetadataInput::loadDirectIo(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> missIndices,
+    std::span<BlockCache::Entry> newEntries,
+    std::span<std::shared_ptr<MetadataBuffer>> buffers) {
+  std::vector<uint32_t> readIndices;
+  readIndices.reserve(missIndices.size());
+  uint64_t payloadBytes{0};
+  for (const auto index : missIndices) {
+    // An empty section needs no read, and a read buffer cannot be empty. The
+    // view still points at valid memory, as cacheSection() may pass it to
+    // memcpy.
+    if (sections[index].size() == 0) {
+      buffers[index] = cacheSection(
+          sections[index],
+          std::string_view{"", 0},
+          newEntries[index],
+          /*readBuffer=*/nullptr);
+      continue;
+    }
+    readIndices.push_back(index);
+    payloadBytes += sections[index].size();
+  }
+  if (readIndices.empty()) {
+    return;
+  }
+
+  const auto groups = coalesce(sections, readIndices);
+  const auto bufferSize =
+      groups.back().destBufferOffset + groups.back().region.length;
+  const auto allocationAlignment = static_cast<uint32_t>(std::max<uint64_t>(
+      alignment_, velox::memory::MemoryAllocator::kMinAlignment));
+  auto* buffer = static_cast<char*>(pool_->allocateAligned(
+      static_cast<int64_t>(bufferSize), allocationAlignment));
+  SCOPE_EXIT {
+    pool_->freeAligned(
+        buffer, static_cast<int64_t>(bufferSize), allocationAlignment);
+  };
+  readGroups(groups, buffer, payloadBytes);
+
+  for (const auto& group : groups) {
+    for (auto i = group.begin; i < group.end; ++i) {
+      const auto index = readIndices[i];
+      const auto& section = sections[index];
+      buffers[index] = cacheSection(
+          section,
+          {buffer + group.destBufferOffset +
+               (section.offset() - group.region.offset),
+           section.size()},
+          newEntries[index],
+          /*readBuffer=*/nullptr);
     }
   }
-  return loadIndices;
 }
 
-void CachedMetadataInput::prepareBuffers(
-    const std::vector<LoadedSection>& sections,
-    const std::vector<uint32_t>& loadIndices,
-    const std::vector<std::optional<velox::cache::CachePin>>& cachePins,
-    ReadBuffers& readBuffers) {
-  readBuffers.buffers.resize(loadIndices.size());
-  readBuffers.readRanges.resize(loadIndices.size());
-  for (size_t i = 0; i < loadIndices.size(); ++i) {
-    const auto sectionIndex = loadIndices[i];
-    const auto& section = sections[sectionIndex].section;
-    const auto& pin = cachePins[sectionIndex];
-    if (pin.has_value() &&
+void CachedMetadataInput::loadBufferedIo(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> missIndices,
+    std::span<BlockCache::Entry> newEntries,
+    std::span<std::shared_ptr<MetadataBuffer>> buffers) {
+  // Without direct I/O, each section is read into a buffer of its own size. An
+  // uncompressed section with a new entry is read straight into the entry.
+  std::vector<velox::BufferPtr> readBuffers(sections.size());
+  std::vector<folly::Range<char*>> destinations(sections.size());
+  for (const auto index : missIndices) {
+    const auto& section = sections[index];
+    const auto& entry = newEntries[index];
+    if (!entry.empty() &&
         section.compressionType() == CompressionType::Uncompressed) {
-      NIMBLE_CHECK(
-          pin->entry()->hasContiguousData(),
-          "Cache entry must have contiguous data");
-      readBuffers.readRanges[i] = {
-          pin->entry()->contiguousData(), section.size()};
-    } else {
-      readBuffers.buffers[i] =
-          velox::AlignedBuffer::allocate<char>(section.size(), pool_);
-      readBuffers.readRanges[i] = {
-          readBuffers.buffers[i]->asMutable<char>(), section.size()};
+      NIMBLE_CHECK_EQ(entry.size(), section.size());
+      destinations[index] = {entry.data(), section.size()};
+      continue;
     }
+    readBuffers[index] =
+        velox::AlignedBuffer::allocateExact<char>(section.size(), pool_);
+    destinations[index] = {
+        readBuffers[index]->asMutable<char>(), section.size()};
+  }
+  readSections(sections, missIndices, destinations);
+
+  for (const auto index : missIndices) {
+    const auto& section = sections[index];
+    auto& entry = newEntries[index];
+    if (readBuffers[index] == nullptr) {
+      // The read filled the entry: an uncompressed section with a new entry is
+      // read straight into it, with no read buffer.
+      blockCache_->seal(entry);
+      buffers[index] =
+          std::make_shared<MetadataBuffer>(pinnedBuffer(std::move(entry)));
+      continue;
+    }
+    const std::string_view data{readBuffers[index]->as<char>(), section.size()};
+    buffers[index] =
+        cacheSection(section, data, entry, std::move(readBuffers[index]));
   }
 }
 
-void CachedMetadataInput::processLoadedBuffers(
-    const std::vector<uint32_t>& loadIndices,
-    std::vector<LoadedSection>& sections,
-    std::vector<std::optional<velox::cache::CachePin>>& cachePins,
-    ReadBuffers& readBuffers) {
-  for (size_t i = 0; i < loadIndices.size(); ++i) {
-    const auto sectionIndex = loadIndices[i];
-    auto& loaded = sections[sectionIndex];
-    auto& pin = cachePins[sectionIndex];
-    if (pin.has_value()) {
-      if (loaded.section.compressionType() != CompressionType::Uncompressed) {
-        NIMBLE_CHECK_NOT_NULL(readBuffers.buffers[i]);
-        NIMBLE_CHECK(
-            pin->entry()->hasContiguousData(),
-            "Cache entry must have contiguous data");
-        std::string_view compressed{
-            readBuffers.buffers[i]->as<char>(), loaded.section.size()};
-        ZstdCompression::uncompress(
-            compressed, pin->entry()->contiguousData(), pin->entry()->size());
+void CachedMetadataInput::readSections(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> sortedIndices,
+    std::span<const folly::Range<char*>> destinations) const {
+  NIMBLE_CHECK(!directIo(), "readSections() must not read a direct-I/O file");
+  NIMBLE_CHECK_EQ(destinations.size(), sections.size());
+  std::vector<uint32_t> readIndices;
+  readIndices.reserve(sortedIndices.size());
+  uint64_t payloadBytes{0};
+  for (const auto index : sortedIndices) {
+    NIMBLE_CHECK_EQ(
+        destinations[index].size(),
+        sections[index].size(),
+        "Destination size mismatch with section size");
+
+    // An empty section needs no read.
+    if (sections[index].size() == 0) {
+      continue;
+    }
+    readIndices.push_back(index);
+    payloadBytes += sections[index].size();
+  }
+  if (readIndices.empty()) {
+    return;
+  }
+
+  // The ranges of a scatter read are the destinations of its sections in file
+  // order, with a null range over each gap, which the read skips. A section
+  // that overlaps the one before it, which only a corrupt file has, starts a
+  // new read, since a scatter read cannot go back.
+  std::vector<IoGroup> reads;
+  uint64_t readBytes{0};
+  for (const auto& group : coalesce(sections, readIndices)) {
+    uint64_t readEnd{0};
+    for (auto i = group.begin; i < group.end; ++i) {
+      const auto index = readIndices[i];
+      const auto& section = sections[index];
+      if (i == group.begin || section.offset() < readEnd) {
+        reads.push_back(IoGroup{.offset = section.offset(), .ranges = {}});
+      } else if (section.offset() > readEnd) {
+        const auto gap = section.offset() - readEnd;
+        reads.back().ranges.emplace_back(nullptr, reinterpret_cast<char*>(gap));
+        readBytes += gap;
       }
-      loaded.buffer =
-          promoteCachePin(loaded.section, std::move(*pin), ioStats_->read());
-    } else {
-      NIMBLE_CHECK(
-          !loaded.section.uncompressedSize().has_value() ||
-              !cacheable(loaded.section.uncompressedSize().value()),
-          "Section without cache pin must have an unknown or oversized "
-          "uncompressed size");
-      loaded.buffer =
-          decompressAndStore(loaded.section, std::move(readBuffers.buffers[i]));
+      reads.back().ranges.push_back(destinations[index]);
+      readBytes += section.size();
+      readEnd = section.offset() + section.size();
     }
   }
+  executeIoGroups(reads);
+  recordReadBytes(readBytes, payloadBytes);
+}
+
+std::shared_ptr<MetadataBuffer> CachedMetadataInput::decompress(
+    std::string_view data,
+    CompressionType compressionType) const {
+  return std::make_shared<MetadataBuffer>(
+      toPinnedBuffer(MetadataBuffer::decompress(data, compressionType, pool_)));
+}
+
+std::shared_ptr<MetadataBuffer> CachedMetadataInput::decompress(
+    velox::BufferPtr data,
+    CompressionType compressionType) const {
+  return std::make_shared<MetadataBuffer>(toPinnedBuffer(
+      MetadataBuffer::decompress(std::move(data), compressionType, pool_)));
 }
 
 std::vector<std::shared_ptr<MetadataBuffer>> CachedMetadataInput::load(
     std::span<const MetadataSection> sections) {
   NIMBLE_CHECK(!sections.empty(), "No sections to load");
+  std::vector<std::shared_ptr<MetadataBuffer>> buffers(sections.size());
+  // Entries created before the read, for the read to fill.
+  std::vector<BlockCache::Entry> newEntries(sections.size());
+  std::vector<uint32_t> missIndices;
 
-  std::vector<LoadedSection> loadSections(sections.begin(), sections.end());
-  std::vector<std::optional<velox::cache::CachePin>> cachePins;
-  auto missIndices = loadFromCache(loadSections, cachePins);
-  loadFromSsd(loadSections, missIndices, cachePins);
-
-  if (!missIndices.empty()) {
-    ReadBuffers readBuffers;
-    prepareBuffers(loadSections, missIndices, cachePins, readBuffers);
-
-    loadFromFile(loadSections, missIndices, readBuffers.readRanges);
-    processLoadedBuffers(missIndices, loadSections, cachePins, readBuffers);
+  // Entries are claimed in file offset order, the order of every load of this
+  // file, so loads waiting on each other's unfilled entries cannot deadlock.
+  // The claim that cacheSection() makes after the read is the exception.
+  const auto sortedIndices = sortByOffset(sections);
+  for (const auto index : sortedIndices) {
+    auto entry = find(sections[index]);
+    if (!entry.empty() && entry.sealed()) {
+      ioStats_->incRawBytesRead(sections[index].size());
+      buffers[index] =
+          std::make_shared<MetadataBuffer>(pinnedBuffer(std::move(entry)));
+      continue;
+    }
+    newEntries[index] = std::move(entry);
+    missIndices.push_back(index);
   }
 
-  return extractResults(std::move(loadSections));
+  if (missIndices.empty()) {
+    return buffers;
+  }
+
+  if (directIo()) {
+    loadDirectIo(sections, missIndices, newEntries, buffers);
+  } else {
+    loadBufferedIo(sections, missIndices, newEntries, buffers);
+  }
+  return buffers;
 }
 
-std::shared_ptr<MetadataBuffer> CachedMetadataInput::store(
+std::shared_ptr<MetadataBuffer> CachedMetadataInput::cacheSection(
     const MetadataSection& section,
-    velox::BufferPtr&& decompressed) {
-  // This path handles sections without pre-claimed cache pins: old files
-  // without uncompressed_size and sections too large to cache. Cacheable
-  // sections with known sizes are handled directly in loadFromFile.
-  if (!cacheable(decompressed->size())) {
-    return std::make_shared<MetadataBuffer>(
-        toPinnedBuffer(std::move(decompressed)));
+    std::string_view data,
+    BlockCache::Entry& entry,
+    velox::BufferPtr readBuffer) {
+  if (!resolveUncompressedSize(section).has_value()) {
+    // The file does not record the uncompressed size, so no entry could be
+    // created before the read: find() only probed, and missed. The compressed
+    // bytes start with the size.
+    return cacheSection(section, data);
+  }
+  if (!entry.empty()) {
+    // The size is known, so find() created an entry for this read to fill.
+    return fill(section, data, entry);
   }
 
-  const velox::cache::RawFileCacheKey key{fileId_.id(), section.offset()};
-  auto pin = acquireCachePin(key, decompressed->size());
-  auto buffer = tryCacheHit(decompressed->size(), pin);
+  // The section is empty or too large to cache.
+  if (readBuffer != nullptr) {
+    return decompress(std::move(readBuffer), section.compressionType());
+  }
+  return decompress(data, section.compressionType());
+}
 
-  // Counts no raw bytes, since the read of the section from the file counted
-  // them.
-  if (buffer != nullptr) {
-    return buffer;
+BlockCache::Entry CachedMetadataInput::find(
+    const MetadataSection& section) const {
+  const auto uncompressedSize = resolveUncompressedSize(section);
+  if (!uncompressedSize.has_value()) {
+    // The entry size is known only once the section is read, so this probes
+    // for an entry of any size.
+    return blockCache_->find(fileId_.id(), section.offset(), *ioStats_);
+  }
+  const auto size = uncompressedSize.value();
+  if (!isCacheableSize(size, maxCacheEntrySize_)) {
+    return {};
+  }
+  auto entry =
+      blockCache_->getOrCreate(fileId_.id(), section.offset(), size, *ioStats_);
+  if (entry.sealed()) {
+    NIMBLE_CHECK_EQ(
+        entry.size(), size, "Cached entry size mismatch with expected size");
+  }
+  return entry;
+}
+
+std::shared_ptr<MetadataBuffer> CachedMetadataInput::fill(
+    const MetadataSection& section,
+    std::string_view data,
+    BlockCache::Entry& entry) {
+  decompressTo(data, section.compressionType(), entry.data(), entry.size());
+  blockCache_->seal(entry);
+  return std::make_shared<MetadataBuffer>(pinnedBuffer(std::move(entry)));
+}
+
+std::shared_ptr<MetadataBuffer> CachedMetadataInput::cacheSection(
+    const MetadataSection& section,
+    std::string_view data) {
+  // Compressed bytes start with their uncompressed size.
+  const char* sizePosition = data.data();
+  const auto size = encoding::readUint32(sizePosition);
+  if (!isCacheableSize(size, maxCacheEntrySize_)) {
+    return decompress(data, section.compressionType());
   }
 
-  auto* entry = pin.checkedEntry();
-  NIMBLE_CHECK(
-      entry->hasContiguousData(), "Cache entry must have contiguous data");
-  NIMBLE_CHECK_EQ(
-      entry->size(),
-      decompressed->size(),
-      "Cache entry size mismatch with decompressed size");
-  auto* destination = entry->contiguousData();
-  std::memcpy(destination, decompressed->as<char>(), decompressed->size());
-  entry->setExclusiveToShared();
-  return std::make_shared<MetadataBuffer>(toPinnedBuffer(std::move(pin)));
+  // This claim is out of file offset order. It waits only on a reader that
+  // holds this offset unfilled. A reader that claimed it here fills it before
+  // it waits on any other entry. A reader that claimed it in find(),
+  // which takes a section of known uncompressed size at this offset, can wait
+  // on an entry this load holds and deadlock. Only a corrupt file describes one
+  // offset both ways.
+  auto entry = getOrCreateWithoutHit(section.offset(), size);
+  if (entry.sealed()) {
+    // Another reader cached the section while this load read it.
+    NIMBLE_CHECK_EQ(
+        entry.size(), size, "Cached entry size mismatch with expected size");
+    return std::make_shared<MetadataBuffer>(pinnedBuffer(std::move(entry)));
+  }
+  return fill(section, data, entry);
+}
+
+BlockCache::Entry CachedMetadataInput::getOrCreateWithoutHit(
+    uint64_t offset,
+    uint32_t size) const {
+  // An existing entry is not a RAM hit: this reader read the bytes from the
+  // file. Only the time spent waiting on another filler, and an SSD read of
+  // the entry, are recorded.
+  velox::io::IoStatistics probeStats;
+  auto entry = blockCache_->getOrCreate(fileId_.id(), offset, size, probeStats);
+  ioStats_->queryThreadIoLatencyUs().merge(probeStats.queryThreadIoLatencyUs());
+  ioStats_->cacheWaitLatencyUs().merge(probeStats.cacheWaitLatencyUs());
+  ioStats_->ssdRead().merge(probeStats.ssdRead());
+  ioStats_->ssdCacheReadLatencyUs().merge(probeStats.ssdCacheReadLatencyUs());
+  return entry;
 }
 
 std::unique_ptr<MetadataBuffer> CachedMetadataInput::findCachedMetadata(
     uint64_t offset) {
-  for (;;) {
-    const velox::cache::RawFileCacheKey key{fileId_.id(), offset};
-    folly::SemiFuture<bool> waitFuture{false};
-    auto pin = cache_->findOrCreate(key, 0, /*contiguous=*/true, &waitFuture);
-    if (pin.empty()) {
-      if (!waitFuture.valid()) {
-        return nullptr;
-      }
-      uint64_t waitUs{0};
-      {
-        velox::MicrosecondTimer timer(&waitUs);
-        auto& exec = folly::QueuedImmediateExecutor::instance();
-        std::move(waitFuture).via(&exec).wait();
-      }
-      ioStats_->queryThreadIoLatencyUs().increment(waitUs);
-      ioStats_->cacheWaitLatencyUs().increment(waitUs);
-      continue;
-    }
-    auto* entry = pin.checkedEntry();
-    if (!entry->isShared() || !cacheable(entry->size())) {
-      return nullptr;
-    }
-    NIMBLE_CHECK(
-        entry->hasContiguousData(), "Cached entry must have contiguous data");
-    ioStats_->ramHit().increment(entry->size());
-    ioStats_->incRawBytesRead(entry->size());
-    return std::make_unique<MetadataBuffer>(toPinnedBuffer(std::move(pin)));
+  auto entry = blockCache_->find(fileId_.id(), offset, *ioStats_);
+  if (entry.empty()) {
+    return nullptr;
   }
+  ioStats_->incRawBytesRead(entry.size());
+  return std::make_unique<MetadataBuffer>(pinnedBuffer(std::move(entry)));
 }
 
 void CachedMetadataInput::cacheMetadata(
     uint64_t cacheOffset,
     std::span<const std::string_view> ranges) {
-  uint64_t totalSize = 0;
+  uint64_t totalSize{0};
   for (const auto& range : ranges) {
     totalSize += range.size();
   }
-  if (!cacheable(totalSize)) {
+  if (!isCacheableSize(totalSize, maxCacheEntrySize_)) {
     return;
   }
 
-  const velox::cache::RawFileCacheKey key{fileId_.id(), cacheOffset};
-  auto pin = acquireCachePin(key, totalSize);
-  velox::common::testutil::TestValue::adjust(
-      "facebook::nimble::CachedMetadataInput::cacheMetadata", &pin);
-  auto* entry = pin.checkedEntry();
-  if (entry->isShared()) {
+  auto entry =
+      getOrCreateWithoutHit(cacheOffset, static_cast<uint32_t>(totalSize));
+  if (entry.sealed()) {
     return;
   }
-  NIMBLE_CHECK(
-      entry->hasContiguousData(), "Cache entry must have contiguous data");
-  NIMBLE_CHECK_EQ(entry->size(), totalSize);
-  auto* dest = entry->contiguousData();
+  auto* destination = entry.data();
   for (const auto& range : ranges) {
-    std::memcpy(dest, range.data(), range.size());
-    dest += range.size();
+    std::memcpy(destination, range.data(), range.size());
+    destination += range.size();
   }
-  entry->setExclusiveToShared();
+  blockCache_->seal(entry);
 }
 
 } // namespace facebook::nimble
