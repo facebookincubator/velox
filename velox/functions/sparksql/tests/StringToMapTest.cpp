@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "folly/ScopeGuard.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
@@ -77,14 +78,9 @@ TEST_F(StringToMapTest, basic) {
   testStringToMap(
       {"a:1_b:2_c:3", "_", "_"},
       {{"a:1", std::nullopt}, {"b:2", std::nullopt}, {"c:3", std::nullopt}});
-
-  // Exception for illegal empty delimiters.
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", "", ":"}),
-      "entryDelimiter cannot be empty");
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", ",", ""}),
-      "keyValueDelimiter cannot be empty");
+  testStringToMap(
+      {"a:1,b:2,", ",", ":"},
+      {{"a", "1"}, {"b", "2"}, {"", std::nullopt}});
 }
 
 TEST_F(StringToMapTest, defaultDelimiters) {
@@ -98,8 +94,8 @@ TEST_F(StringToMapTest, defaultDelimiters) {
   // 2 arguments (keyValueDelimiter defaults to ':')
   testStringToMap(
       {"a:1_b:2_c:3", "_"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
-  testStringToMap(
-      {"a:1,b:2", "_"}, {{"a:1,b:2", std::nullopt}});
+  testStringToMap({"a:1,b:2", "_"}, {{"a", "1,b:2"}});
+  testStringToMap({"a=1,b=2", "_"}, {{"a=1,b=2", std::nullopt}});
   testStringToMap({"", "_"}, {{"", std::nullopt}});
 }
 
@@ -197,6 +193,133 @@ TEST_F(StringToMapTest, lastWinPreservesFirstKeyPosition) {
       "map_keys(str_to_map(c0, ',', ':'))",
       makeRowVector({makeFlatVector<StringView>({"b:1,a:2,b:3"})}));
   assertEqualVectors(makeArrayVector<StringView>({{"b", "a"}}), result);
+}
+
+TEST_F(StringToMapTest, regexDelimiters) {
+  // Escaped regex metacharacters.
+  testStringToMap({"a=1|b=2", "\\|", "="}, {{"a", "1"}, {"b", "2"}});
+  testStringToMap({"a.1,b.2", ",", "\\."}, {{"a", "1"}, {"b", "2"}});
+  testStringToMap({"a$1|b$2", "\\|", "\\$"}, {{"a", "1"}, {"b", "2"}});
+  testStringToMap({"a+1?b+2", "\\?", "\\+"}, {{"a", "1"}, {"b", "2"}});
+
+  // Octal ASCII escape delimiter.
+  testStringToMap({"a$1,b$2", ",", "\\044"}, {{"a", "1"}, {"b", "2"}});
+
+  // Regular expression patterns (character classes, quantifiers, alternation).
+  testStringToMap(
+      {"a:1; b:2, c:3", "[;,]\\s*", ":"},
+      {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"a:=1|b==2|c:3", "\\|", "[:=]+"},
+      {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"k1:v1__99__k2:v2", "__\\d+__", ":"},
+      {{"k1", "v1"}, {"k2", "v2"}});
+
+  // keyValueDelimiter only splits at the first match (limit = 2).
+  testStringToMap(
+      {"a::1::2,b:3", ",", ":+"}, {{"a", "1::2"}, {"b", "3"}});
+
+  // Zero-width regex match.
+  testStringToMap({"a", ",", "z|"}, {{"a", ""}});
+
+  // Invalid regex patterns throw user errors.
+  VELOX_ASSERT_USER_THROW(
+      evaluateStringToMap({"a:1,b:2", "[", ":"}),
+      "invalid regular expression");
+  VELOX_ASSERT_USER_THROW(
+      evaluateStringToMap({"a:1,b:2", ",", "["}),
+      "invalid regular expression");
+  VELOX_ASSERT_USER_THROW(
+      evaluateStringToMap({"a:1,b:2", "\\", ":"}),
+      "invalid regular expression");
+}
+
+TEST_F(StringToMapTest, emptyDelimiters) {
+  // Aligns with Spark 3.4+/3.5 UTF8String.split when delimiters are empty.
+  testStringToMap(
+      {"a:1,b", "", ":"},
+      {{"a", std::nullopt},
+       {"", ""},
+       {"1", std::nullopt},
+       {",", std::nullopt},
+       {"b", std::nullopt}});
+  testStringToMap({"", "", ":"}, {{"", std::nullopt}});
+  testStringToMap({"ab,c", ",", ""}, {{"a", "b"}, {"c", std::nullopt}});
+  testStringToMap({"abc,d", ",", ""}, {{"a", "b"}, {"d", std::nullopt}});
+}
+
+TEST_F(StringToMapTest, nonConstantDelimiters) {
+  auto input = makeFlatVector<StringView>(
+      {"a:1,b:2", "a::1__b::2", "a=1|b==2", "a=1_b=2"});
+  auto entryDelimiters =
+      makeFlatVector<StringView>({",", "__", "\\|", "_"});
+  auto kvDelimiters = makeFlatVector<StringView>({":", "::", "=+", "="});
+
+  auto result = evaluate<MapVector>(
+      "str_to_map(c0, c1, c2)",
+      makeRowVector({input, entryDelimiters, kvDelimiters}));
+  auto expected = makeMapVector<StringView, StringView>(
+      {{{"a", "1"}, {"b", "2"}},
+       {{"a", "1"}, {"b", "2"}},
+       {{"a", "1"}, {"b", "2"}},
+       {{"a", "1"}, {"b", "2"}}});
+  assertEqualVectors(expected, result);
+
+  auto twoArgResult = evaluate<MapVector>(
+      "str_to_map(c0, c1)",
+      makeRowVector(
+          {makeFlatVector<StringView>({"a:1,b:2", "a:1_b:2"}),
+           makeFlatVector<StringView>({",", "_"})}));
+  auto twoArgExpected = makeMapVector<StringView, StringView>(
+      {{{"a", "1"}, {"b", "2"}}, {{"a", "1"}, {"b", "2"}}});
+  assertEqualVectors(twoArgExpected, twoArgResult);
+}
+
+TEST_F(StringToMapTest, bypassRegexCacheLimit) {
+  auto guard =
+      folly::makeGuard([&]() { queryCtx_->testingOverrideConfigUnsafe({}); });
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kExprMaxCompiledRegexes, "5"}});
+
+  auto input = makeFlatVector<StringView>(
+      {"a--1@@b--2",
+       "c==3##d==4",
+       "e__5~~f__6",
+       "g::7%%h::8",
+       "i;;9&&j;;10",
+       "k,,11!!l,,12"});
+  auto entryDelimiters =
+      makeFlatVector<StringView>({"@@", "##", "~~", "%%", "&&", "!!"});
+  auto kvDelimiters =
+      makeFlatVector<StringView>({"--", "==", "__", "::", ";;", ",,"});
+  auto expected = makeMapVector<StringView, StringView>(
+      {{{"a", "1"}, {"b", "2"}},
+       {{"c", "3"}, {"d", "4"}},
+       {{"e", "5"}, {"f", "6"}},
+       {{"g", "7"}, {"h", "8"}},
+       {{"i", "9"}, {"j", "10"}},
+       {{"k", "11"}, {"l", "12"}}});
+
+  // Plain-string fast paths skip regex compilation and bypass the cache limit.
+  VectorPtr result;
+  EXPECT_NO_THROW(
+      result = evaluate<MapVector>(
+          "str_to_map(c0, c1, c2)",
+          makeRowVector({input, entryDelimiters, kvDelimiters})));
+  assertEqualVectors(expected, result);
+
+  // Distinct regex patterns exceeding the limit still throw.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kExprMaxCompiledRegexes, "2"}});
+  VELOX_ASSERT_USER_THROW(
+      evaluate<MapVector>(
+          "str_to_map(c0, c1, c2)",
+          makeRowVector(
+              {makeFlatVector<StringView>({"a:1,b:2", "c:3;d:4", "e:5|f:6"}),
+               makeFlatVector<StringView>({"[,]+", "[;]+", "[|]+"}),
+               makeFlatVector<StringView>({":", ":", ":"})})),
+      "Max number of regex reached");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -22,6 +24,7 @@
 #include "folly/container/F14Map.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/sparksql/Split.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -38,38 +41,55 @@ struct StringToMapFunction {
       const arg_type<Varchar>* /*input*/) {
     throwExceptionOnDuplicateMapKeys_ =
         config.throwExceptionOnDuplicateMapKeys();
+    const auto maxRegexes = config.exprMaxCompiledRegexes();
+    entrySplitter_.initializeConstant(maxRegexes, kDefaultEntryDelimiter);
+    keyValueSplitter_.initializeConstant(maxRegexes, kDefaultKeyValueDelimiter);
   }
 
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* /*entryDelimiter*/) {
+      const arg_type<Varchar>* entryDelimiter) {
     throwExceptionOnDuplicateMapKeys_ =
         config.throwExceptionOnDuplicateMapKeys();
+    const auto maxRegexes = config.exprMaxCompiledRegexes();
+    entrySplitter_.initialize(maxRegexes, entryDelimiter);
+    keyValueSplitter_.initializeConstant(maxRegexes, kDefaultKeyValueDelimiter);
   }
 
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* /*entryDelimiter*/,
-      const arg_type<Varchar>* /*keyValueDelimiter*/) {
+      const arg_type<Varchar>* entryDelimiter,
+      const arg_type<Varchar>* keyValueDelimiter) {
     throwExceptionOnDuplicateMapKeys_ =
         config.throwExceptionOnDuplicateMapKeys();
+    const auto maxRegexes = config.exprMaxCompiledRegexes();
+    entrySplitter_.initialize(maxRegexes, entryDelimiter);
+    keyValueSplitter_.initialize(maxRegexes, keyValueDelimiter);
   }
 
   void call(
       out_type<Map<Varchar, Varchar>>& out,
       const arg_type<Varchar>& input) {
-    callImpl(out, toStringView(input), ",", ":");
+    callImpl(
+        out,
+        toStringView(input),
+        kDefaultEntryDelimiter,
+        kDefaultKeyValueDelimiter);
   }
 
   void call(
       out_type<Map<Varchar, Varchar>>& out,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter) {
-    callImpl(out, toStringView(input), toStringView(entryDelimiter), ":");
+    callImpl(
+        out,
+        toStringView(input),
+        toStringView(entryDelimiter),
+        kDefaultKeyValueDelimiter);
   }
 
   void call(
@@ -85,6 +105,9 @@ struct StringToMapFunction {
   }
 
  private:
+  static constexpr std::string_view kDefaultEntryDelimiter = ",";
+  static constexpr std::string_view kDefaultKeyValueDelimiter = ":";
+
   // A parsed entry. 'value' is empty when the entry has no key/value
   // delimiter, in which case the whole entry is the key and the value is NULL.
   struct Entry {
@@ -101,11 +124,6 @@ struct StringToMapFunction {
       std::string_view input,
       std::string_view entryDelimiter,
       std::string_view keyValueDelimiter) {
-    VELOX_USER_CHECK(
-        !entryDelimiter.empty(), "entryDelimiter cannot be empty");
-    VELOX_USER_CHECK(
-        !keyValueDelimiter.empty(), "keyValueDelimiter cannot be empty");
-
     // Entries are buffered before writing so that a repeated key can either
     // raise an error or overwrite the value of its first occurrence, which is
     // how Spark's ArrayBasedMapBuilder deduplicates under LAST_WIN: the key
@@ -113,20 +131,13 @@ struct StringToMapFunction {
     entries_.clear();
     keyToIndex_.clear();
 
-    size_t pos = 0;
-    auto nextEntryPos = input.find(entryDelimiter, pos);
-    while (nextEntryPos != std::string::npos) {
-      processEntry(
-          std::string_view(input.data() + pos, nextEntryPos - pos),
-          keyValueDelimiter);
-
-      pos = nextEntryPos + entryDelimiter.size();
-      nextEntryPos = input.find(entryDelimiter, pos);
-    }
-
-    processEntry(
-        std::string_view(input.data() + pos, input.size() - pos),
-        keyValueDelimiter);
+    entrySplitter_.split(
+        input,
+        entryDelimiter,
+        std::numeric_limits<int32_t>::max(),
+        [&](std::string_view entry) {
+          processEntry(entry, keyValueDelimiter);
+        });
 
     out.reserve(entries_.size());
     for (const auto& entry : entries_) {
@@ -143,17 +154,20 @@ struct StringToMapFunction {
   void processEntry(
       std::string_view entry,
       std::string_view keyValueDelimiter) {
-    const auto delimiterPos = entry.find(keyValueDelimiter, 0);
     // Allows keyValue delimiter not found: the whole entry is the key and the
-    // value is NULL.
+    // value is NULL. Otherwise splits into key and remaining value (limit 2).
     std::string_view key = entry;
     std::optional<std::string_view> value;
-    if (delimiterPos != std::string::npos) {
-      key = std::string_view(entry.data(), delimiterPos);
-      value = std::string_view(
-          entry.data() + delimiterPos + keyValueDelimiter.size(),
-          entry.size() - delimiterPos - keyValueDelimiter.size());
-    }
+    size_t partIndex = 0;
+    keyValueSplitter_.split(
+        entry, keyValueDelimiter, 2, [&](std::string_view part) {
+          if (partIndex == 0) {
+            key = part;
+          } else {
+            value = part;
+          }
+          ++partIndex;
+        });
 
     auto [it, inserted] = keyToIndex_.try_emplace(key, entries_.size());
     if (inserted) {
@@ -168,6 +182,8 @@ struct StringToMapFunction {
   }
 
   bool throwExceptionOnDuplicateMapKeys_{false};
+  detail::StringSplitter entrySplitter_;
+  detail::StringSplitter keyValueSplitter_;
 
   // Scratch buffers reused across rows to avoid per-row allocation. They hold
   // views into the current row's input and are cleared at the start of each
