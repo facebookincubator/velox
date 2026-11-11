@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <optional>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
@@ -401,6 +402,25 @@ uint64_t* maybeMutableRawNulls(velox::BaseVector& output, bool hasNulls) {
     return nullptr;
   }
   return output.mutableRawNulls();
+}
+
+// Returns the output row where 'outputRanges' start when they write dense
+// output rows, one range right after another, so that a read can decode them
+// in place. Returns std::nullopt otherwise. The source rows of the ranges are
+// always dense: they index the decoded rows of the read in order.
+std::optional<velox::vector_size_t> denseStartRow(
+    std::span<const velox::BaseVector::CopyRange> outputRanges) {
+  if (outputRanges.empty()) {
+    return std::nullopt;
+  }
+  for (size_t i{1}; i < outputRanges.size(); ++i) {
+    const auto& prevRange = outputRanges[i - 1];
+    if (outputRanges[i].targetIndex !=
+        prevRange.targetIndex + prevRange.count) {
+      return std::nullopt;
+    }
+  }
+  return outputRanges.front().targetIndex;
 }
 
 // Marks the rows of 'outputRanges' not null in 'rawNulls', unless it is null.
@@ -908,6 +928,14 @@ class ScalarFieldReader final
     NIMBLE_CHECK_NOT_NULL(vector, "Scattered read requires flat output");
 
     const auto rowCount = countRows(sourceRanges);
+    if constexpr (
+        std::is_same_v<TRequested, TData> && !std::is_same_v<TData, bool>) {
+      if (const auto startRow = denseStartRow(outputRanges)) {
+        denseRead(sourceRanges, outputRanges, *startRow, rowCount, *output);
+        co_return;
+      }
+    }
+
     auto* values = this->ensureBuffer(rowCount);
     velox::BufferPtr nulls;
     std::vector<velox::BufferPtr> stringBuffers;
@@ -1001,6 +1029,41 @@ class ScalarFieldReader final
   }
 
  private:
+  // Decodes 'sourceRanges' straight into the values of 'output' from row
+  // 'startRow', which the output ranges fill densely, instead of decoding into
+  // the scratch buffer and copying each range. The decoder writes nulls from
+  // bit 0, so they still go through a buffer of their own.
+  void denseRead(
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
+      velox::vector_size_t startRow,
+      uint32_t rowCount,
+      velox::BaseVector& output) {
+    auto* outputValues =
+        output.asFlatVector<TRequested>()->mutableRawValues() + startRow;
+    const auto nonNullCount = decoder_->read(
+        sourceRanges,
+        TypeTraits<TData>::dataType,
+        outputValues,
+        [&]() {
+          ensureBuffer<bool>(&denseReadNulls_, rowCount, pool_);
+          return denseReadNulls_->asMutable<void>();
+        },
+        stringBuffers_);
+    if (nonNullCount == rowCount) {
+      setNotNull(
+          maybeMutableRawNulls(output, /*hasNulls=*/false), outputRanges);
+      return;
+    }
+    NIMBLE_CHECK_NOT_NULL(denseReadNulls_);
+    velox::bits::copyBits(
+        denseReadNulls_->as<uint64_t>(),
+        0,
+        maybeMutableRawNulls(output, /*hasNulls=*/true),
+        startRow,
+        rowCount);
+  }
+
   template <typename ReadFunction>
   void
   read(uint32_t rowCount, velox::VectorPtr& output, ReadFunction readFunction) {
@@ -1088,6 +1151,9 @@ class ScalarFieldReader final
       }
     }
   }
+
+  // Holds the nulls that denseRead() decodes, reused across reads.
+  velox::BufferPtr denseReadNulls_;
 };
 
 template <typename T>
