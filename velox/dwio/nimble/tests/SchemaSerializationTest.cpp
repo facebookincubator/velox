@@ -105,7 +105,7 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   EXPECT_EQ(metadata->group_keys()->Get(1)->size(), 13);
   EXPECT_EQ(metadata->group_keys()->Get(2)->str(), "C");
 
-  const auto decodedMetadata = HybridFlatMap::deserialize(serializedMetadata);
+  const HybridFlatMap decodedMetadata{ScalarKind::String, serializedMetadata};
   ASSERT_EQ(decodedMetadata.groups().size(), 3);
   EXPECT_EQ(decodedMetadata.groups()[0].groupId, 0);
   EXPECT_EQ(decodedMetadata.groups()[0].groupKeys, groupKeys);
@@ -228,8 +228,8 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
     const auto attribute = fbs::CreateStringPair(
         builder,
         builder.CreateString(
-            HybridFlatMap::kAttributeName.data(),
-            HybridFlatMap::kAttributeName.size()),
+            HybridFlatMapType::kAttributeName.data(),
+            HybridFlatMapType::kAttributeName.size()),
         builder.CreateString(metadata.data(), metadata.size()));
     const auto attributes = builder.CreateVector(&attribute, 1);
     fbs::SchemaNodeBuilder nodeBuilder{builder};
@@ -244,12 +244,11 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
   };
 
   NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize("malformed"),
+      HybridFlatMap(ScalarKind::String, "malformed"),
       "Hybrid FlatMap metadata attribute is malformed");
 
-  const auto emptyMetadata =
-      HybridFlatMap::fromSchema({}, HybridFlatMap::KeyPresenceMode::kBitmap)
-          .serialize();
+  const auto emptyMetadata = HybridFlatMap::serialize(
+      /*groups=*/{}, HybridFlatMap::KeyPresenceMode::kBitmap);
   const auto schemaWithEmptyMetadata =
       encodeSchemaWithMetadataAttribute(emptyMetadata);
   NIMBLE_ASSERT_THROW(
@@ -257,18 +256,23 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
       "Hybrid FlatMap requires at least 1 group(s)");
 
   NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(
+      HybridFlatMap(
+          ScalarKind::String,
           encodeRawMetadata({0, HybridFlatMap::kDefaultGroupId}, {1}, {})),
       "Hybrid FlatMap group IDs and key counts must have the same size");
 
   NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(encodeRawMetadata(
-          {0, HybridFlatMap::kDefaultGroupId}, {1, 1}, {"a"})),
+      HybridFlatMap(
+          ScalarKind::String,
+          encodeRawMetadata(
+              {0, HybridFlatMap::kDefaultGroupId}, {1, 1}, {"a"})),
       "Hybrid FlatMap group key counts must match group keys size");
 
   NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(encodeRawMetadata(
-          {0, HybridFlatMap::kDefaultGroupId}, {0, 0}, {"unexpected"})),
+      HybridFlatMap(
+          ScalarKind::String,
+          encodeRawMetadata(
+              {0, HybridFlatMap::kDefaultGroupId}, {0, 0}, {"unexpected"})),
       "Hybrid FlatMap group key counts must match group keys size");
 }
 
