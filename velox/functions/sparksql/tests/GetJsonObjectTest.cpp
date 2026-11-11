@@ -45,10 +45,10 @@ TEST_F(GetJsonObjectTest, basic) {
   // Returns input json if json path is "$".
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$"),
-      R"({"name": "Alice", "age": 5, "id": "001"})");
+      R"({"name":"Alice","age":5,"id":"001"})");
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$  "),
-      R"({"name": "Alice", "age": 5, "id": "001"})");
+      R"({"name":"Alice","age":5,"id":"001"})");
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$.age"),
       "5");
@@ -96,19 +96,19 @@ TEST_F(GetJsonObjectTest, basic) {
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
           "$.my.info"),
-      R"({"name": "Alice", "age": "5", "id": "001"})");
+      R"({"name":"Alice","age":"5","id":"001"})");
   EXPECT_EQ(
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
           "$['my']['info']"),
-      R"({"name": "Alice", "age": "5", "id": "001"})");
+      R"({"name":"Alice","age":"5","id":"001"})");
 
   // Array as result.
   EXPECT_EQ(
       getJsonObject(
           R"([{"my": {"info": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
           "$[1].other"),
-      R"(["v1", "v2"])");
+      R"(["v1","v2"])");
   // Array element as result.
   EXPECT_EQ(
       getJsonObject(
@@ -141,7 +141,7 @@ TEST_F(GetJsonObjectTest, supplementaryPlaneInObject) {
   // that must stay literal.
   EXPECT_EQ(
       getJsonObject(R"({"a": {"name": "🧧会员"}})", "$.a"),
-      R"({"name": "\uD83E\uDDE7会员"})");
+      R"({"name":"\uD83E\uDDE7会员"})");
 
   // Literal emoji U+1F947 inside an array.
   EXPECT_EQ(getJsonObject(R"({"a": ["🥇"]})", "$.a"), R"(["\uD83E\uDD47"])");
@@ -152,11 +152,60 @@ TEST_F(GetJsonObjectTest, supplementaryPlaneInObject) {
   // \ u D 8 3 E \ u D D E 7 g i f t.
   EXPECT_EQ(
       getJsonObject(R"({"a": {"name": "\uD83E\uDDE7gift"}})", "$.a"),
-      R"({"name": "\uD83E\uDDE7gift"})");
+      R"({"name":"\uD83E\uDDE7gift"})");
 
   // A supplementary-plane character extracted as a scalar string leaf is
   // decoded to its literal form, unaffected by this change.
   EXPECT_EQ(getJsonObject(R"({"a": "🥇"})", "$.a"), "🥇");
+}
+
+TEST_F(GetJsonObjectTest, compactResult) {
+  EXPECT_EQ(
+      getJsonObject(R"({"a": {"b" : [1, "x y"]}})", "$.a"),
+      R"({"b":[1,"x y"]})");
+  EXPECT_EQ(getJsonObject(R"( [ 1 , 2 ] )", "$"), "[1,2]");
+  EXPECT_EQ(getJsonObject(R"({"a":"unterminated})", "$"), std::nullopt);
+}
+
+TEST_F(GetJsonObjectTest, escapedResult) {
+  EXPECT_EQ(
+      getJsonObject(R"({"a":["x\/y","\u0041","\u00e9","\u2028"]})", "$.a"),
+      "[\"x/y\",\"A\",\"\u00e9\",\"\u2028\"]");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":["\b\f\n\r\t","q\"z","\\"]})", "$.a"),
+      R"(["\b\f\n\r\t","q\"z","\\"])");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":["\u0001","\u001f","\u000a","\u0022"]})", "$.a"),
+      R"(["\u0001","\u001F","\n","\""])");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":["\ud83d\ude00","\ud83d","\uD800\u0041"]})", "$.a"),
+      R"(["\uD83D\uDE00","\uD83D","\uD800A"])");
+  EXPECT_EQ(
+      getJsonObject(R"({"k\u00e9\/":{"\n":1}})", "$"),
+      "{\"k\u00e9/\":{\"\\n\":1}}");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[1.0e2, 1e-7, -0, 0.10]})", "$.a"),
+      "[1.0e2,1e-7,-0,0.10]");
+}
+
+TEST_F(GetJsonObjectTest, nonAsciiResultOfAsciiInput) {
+  const auto input = makeRowVector({
+      makeFlatVector<std::string>({
+          R"({"a":["\u00e9"]})",
+          R"({"a":"\u00e9"})",
+      }),
+      makeFlatVector<std::string>({"$.a", "$.a"}),
+  });
+  const SelectivityVector rows(input->size());
+  for (const auto& child : input->children()) {
+    auto* strings = child->asFlatVector<StringView>();
+    strings->computeAndSetIsAscii(rows);
+    ASSERT_TRUE(strings->isAscii(rows).value());
+  }
+
+  velox::test::assertEqualVectors(
+      makeFlatVector<int32_t>({5, 1}),
+      evaluate("length(get_json_object(c0, c1))", input));
 }
 
 TEST_F(GetJsonObjectTest, nullResult) {
@@ -223,7 +272,7 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}},)",
           "$['my']['info']"),
-      R"({"name": "Alice", "age": "5", "id": "001"})");
+      R"({"name":"Alice","age":"5","id":"001"})");
 }
 
 TEST_F(GetJsonObjectTest, number) {
