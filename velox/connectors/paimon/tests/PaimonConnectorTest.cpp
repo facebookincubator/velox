@@ -1767,6 +1767,54 @@ TEST_F(PaimonConnectorTest, schemaReferencesValidatedBeforeFileOpen) {
   }
 }
 
+TEST_F(PaimonConnectorTest, fileSchemaVersionValidatedBeforeFileOpen) {
+  const auto input = makeRowVector({"b"}, {makeFlatVector<int64_t>({1, 2})});
+  const auto type = asRowType(input->type());
+  const auto table =
+      evolutionTable(type, {{0, {type, {10}}}, {18, {type, {10}}}});
+  const auto fileSystem = validationFileSystem();
+  auto queryCtx = core::QueryCtx::create();
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context = queryContextBuilder(queryCtx.get())
+                     .sessionProperties(config.get())
+                     .build();
+  for (const auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto paths = makeFilePaths(1);
+    writeFile(paths[0]->getPath(), input, format);
+    const auto path = "paimon-table-test:" + paths[0]->getPath();
+    auto source =
+        ConnectorRegistry::tryGet(kPaimonConnectorId)
+            ->createDataSource(
+                type, table, makePaimonColumnHandles(type), context.get());
+    fileSystem->openedFiles = 0;
+    for (const bool newerFirst : {false, true}) {
+      SCOPED_TRACE(newerFirst);
+      const auto split = evolutionSplit(
+          format, {{path, newerFirst ? 18 : 17}, {path, newerFirst ? 17 : 18}});
+      VELOX_ASSERT_USER_THROW(
+          source->addSplit(split),
+          "Paimon file schema 18 exceeds query schema 17");
+      EXPECT_EQ(fileSystem->openedFiles, 0);
+    }
+    // Rejection must leave the source usable for older and current schemas.
+    for (const auto schemaId : {0, 17}) {
+      SCOPED_TRACE(schemaId);
+      source->addSplit(evolutionSplit(format, {{path, schemaId}}));
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      auto result = source->next(100, future);
+      ASSERT_TRUE(result.has_value());
+      ASSERT_TRUE(*result);
+      test::assertEqualVectors(input, *result);
+      auto end = source->next(100, future);
+      ASSERT_TRUE(end.has_value());
+      EXPECT_EQ(*end, nullptr);
+    }
+    EXPECT_GT(fileSystem->openedFiles, 0);
+  }
+}
+
 TEST_F(PaimonConnectorTest, schemaEvolutionPrimitiveTypes) {
   const auto source = makeRowVector(
       {"old_text", "old_flag", "old_score", "old_id", "old_number"},

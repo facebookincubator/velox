@@ -57,15 +57,22 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       paimonSplit->rawConvertible(),
       "Paimon same-schema append reader requires rawConvertible=true; "
       "merge-on-read and data-evolution column merging are not implemented yet");
-  // The query's target schema is fixed, but files may use older schemas.
-  // Each file must resolve to the target or a supplied historical definition
-  // so the reader can map its fields to the target by stable field ID.
+  // The query uses the selected snapshot's schema. Each file must use that
+  // schema or an older one and resolve to a supplied definition so the reader
+  // can map its fields to the target by stable field ID.
   for (const auto& file : paimonSplit->dataFiles()) {
     VELOX_USER_CHECK(
         file.schemaId == paimonTableHandle_->schemaId() ||
             paimonTableHandle_->tableSchemas().count(file.schemaId),
         "Missing Paimon schema {} for file '{}'",
         file.schemaId,
+        file.path);
+    VELOX_USER_CHECK_LE(
+        file.schemaId,
+        paimonTableHandle_->schemaId(),
+        "Paimon file schema {} exceeds query schema {} for file '{}'",
+        file.schemaId,
+        paimonTableHandle_->schemaId(),
         file.path);
     VELOX_USER_CHECK(
         !file.deletionFile,
