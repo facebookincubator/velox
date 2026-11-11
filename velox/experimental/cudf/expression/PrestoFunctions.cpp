@@ -151,17 +151,16 @@ std::pair<const T*, vector_size_t> constantCollection(
   return {vector->wrappedVector()->as<T>(), vector->wrappedIndex(0)};
 }
 
-// Returns true if cuDF compares values of 'type' as Velox does. Velox compares
-// REAL and DOUBLE with NaN equal to NaN, and a type with custom comparison,
-// such as TIMESTAMP WITH TIME ZONE, by its own rules.
-bool comparesLikeVelox(const TypePtr& type) {
+// Restrict lookup keys to supported primitive types without floating-point
+// or custom comparison semantics.
+bool isSupportedConstantLookupKeyType(const TypePtr& type) {
   return type->isPrimitiveType() && !type->isReal() && !type->isDouble() &&
       !type->providesCustomComparison() && isTypeSupportedByCudf(type);
 }
 
 // Copies 'columns' of a constant collection to the GPU. toCudfTable()
 // synchronizes 'stream' before it returns.
-std::unique_ptr<cudf::table> toGpuTable(
+std::unique_ptr<cudf::table> copyConstantLookupColumnsToGpu(
     std::vector<VectorPtr> columns,
     memory::MemoryPool* pool,
     cuda::stream_ref stream) {
@@ -198,8 +197,8 @@ class ConstantMapElementAtFunction : public CudfFunction {
             cudf::type_id::TIMESTAMP_NANOSECONDS;
     return map != nullptr && map->sizeAt(row) > 0 &&
         !expr->inputs()[1]->isConstantKind() &&
-        comparesLikeVelox(mapType.keyType()) && keysStayDistinct &&
-        isTypeSupportedByCudf(mapType.valueType());
+        isSupportedConstantLookupKeyType(mapType.keyType()) &&
+        keysStayDistinct && isTypeSupportedByCudf(mapType.valueType());
   }
 
   ConstantMapElementAtFunction(
@@ -211,7 +210,7 @@ class ConstantMapElementAtFunction : public CudfFunction {
     const auto offset = map->offsetAt(row);
     const auto size = map->sizeAt(row);
     auto stream = getDefaultStreamForCurrentThread();
-    entries_ = toGpuTable(
+    entries_ = copyConstantLookupColumnsToGpu(
         {map->mapKeys()->slice(offset, size),
          map->mapValues()->slice(offset, size)},
         pool,
@@ -258,7 +257,8 @@ class ConstantArrayContainsFunction : public CudfFunction {
         constantCollection<ArrayVector>(expr->inputs()[0]);
     if (array == nullptr || array->sizeAt(row) == 0 ||
         expr->inputs()[1]->isConstantKind() ||
-        !comparesLikeVelox(array->type()->asArray().elementType())) {
+        !isSupportedConstantLookupKeyType(
+            array->type()->asArray().elementType())) {
       return false;
     }
     // Presto gives NULL, not false, when no element matches and one is NULL.
@@ -278,7 +278,7 @@ class ConstantArrayContainsFunction : public CudfFunction {
         canEvaluate(expr), "Unsupported contains: {}", expr->toString());
     const auto [array, row] =
         constantCollection<ArrayVector>(expr->inputs()[0]);
-    elements_ = toGpuTable(
+    elements_ = copyConstantLookupColumnsToGpu(
         {array->elements()->slice(array->offsetAt(row), array->sizeAt(row))},
         pool,
         getDefaultStreamForCurrentThread());
