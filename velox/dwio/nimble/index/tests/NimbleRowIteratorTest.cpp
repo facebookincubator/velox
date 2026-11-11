@@ -504,9 +504,7 @@ TEST_P(NimbleRowIteratorTest, entryIteratorStartsAtTheSelectedRows) {
   EXPECT_FALSE(iterator->valid());
 }
 
-// The row iterator keeps the decoded rows of a stripe after the decoder
-// converted them, to decode the next stripe into them, and frees them on
-// reset().
+// Copied entries remain valid after reset releases the decoded rows.
 TEST_P(NimbleRowIteratorTest, rowIteratorFreesTheDecodedRowsOnReset) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
 
@@ -1042,9 +1040,6 @@ TEST_P(NimbleRowIteratorTest, getIteratorDoesNotPrefetch) {
   iterator->reset();
 }
 
-// The row iterator decodes into the output of its last decode when the entry
-// decoder released it, for gets and for the stripes of a scan, and into a new
-// vector when the decoder still holds it. reset() frees the output.
 TEST_P(NimbleRowIteratorTest, rowIteratorReusesTheOutputOfTheLastDecode) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
 
@@ -1054,6 +1049,7 @@ TEST_P(NimbleRowIteratorTest, rowIteratorReusesTheOutputOfTheLastDecode) {
   const auto decodeRows = compactRowDecoder();
   bool holdRows{false};
   std::vector<velox::RowVectorPtr> heldRows;
+  // Weak references observe reuse without keeping outputs alive.
   std::vector<std::weak_ptr<velox::RowVector>> outputs;
   const auto iterator = createEntryIterator(
       projectedSubfields,
@@ -1103,8 +1099,7 @@ TEST_P(NimbleRowIteratorTest, rowIteratorReusesTheOutputOfTheLastDecode) {
   ASSERT_NE(outputs[3].lock(), nullptr);
   EXPECT_NE(outputs[4].lock(), outputs[3].lock());
 
-  // A get in another stripe reuses the output too, once the decoder releases
-  // it.
+  // Releasing the decoder's references permits reuse across stripe changes.
   holdRows = false;
   heldRows.clear();
   EXPECT_TRUE(outputs[0].expired());

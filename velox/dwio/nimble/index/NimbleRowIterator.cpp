@@ -120,8 +120,7 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
     return stripeDecoder_ != nullptr && stripeDecoder_->hasStripe(stripeIndex);
   }
 
-  // Releases the stripe that the materializer holds and frees the output of
-  // the last decode, so that an idle iterator holds neither.
+  // Releases the loaded stripe and the materializer's output reference.
   void reset() {
     releaseStripe();
     rows_.reset();
@@ -239,10 +238,8 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
     co_return finishDecode(rows_, numRows);
   }
 
-  // Makes 'rows_' an output of 'numRows' rows for a get, which reads into
-  // an output of its size: the output of the last decode when nothing else
-  // holds it or any of its children and buffers, as after the entry decoder
-  // released it, or a new vector.
+  // Point reads require an output sized to the selection. Shared vectors and
+  // children must stay intact for entries that still reference them.
   void prepareRows(velox::vector_size_t numRows) {
     if (rows_ != nullptr && velox::BaseVector::recursivelyReusable(rows_)) {
       velox::BaseVector::prepareForReuse(rows_, numRows);
@@ -273,8 +270,7 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
         collectTimings_, [this](const velox::CpuWallTiming& timing) {
           decodingTiming_.wlock()->add(timing);
         }};
-    // co_next() decodes into the output of the last decode when nothing else
-    // holds it, and into a new vector otherwise.
+    // Let co_next() reuse the previous output while preserving shared data.
     co_await streamReader.co_next(rowRange.numRows(), rows_);
     co_return finishDecode(rows_, rowRange.numRows());
   }
@@ -340,8 +336,7 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
   // Decodes the stripes, built for the first stripe and kept until the
   // materializer is destroyed.
   std::unique_ptr<StripeDecoder> stripeDecoder_;
-  // The output of the last decode, which the next decode reuses unless the
-  // entry decoder still holds it. Freed by reset().
+  // Output retained for reuse across lookups and scan stripes until reset().
   velox::VectorPtr rows_;
   // Track the time spent decoding stripes, and converting their rows into
   // entries.

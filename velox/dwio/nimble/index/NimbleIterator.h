@@ -54,12 +54,14 @@ class NimbleIterator {
   /// in key order, however many entries a row has. 'keyCursor' supplies one
   /// encoded cluster-index key per row of the stripe. The decoder writes the
   /// bytes of the entries into 'keyStorage' and 'valueStorage', and sets
-  /// 'keys' and 'values', which view those storages, to the entries. The
-  /// iterator keeps 'rows' after the call and decodes the next rows into them
-  /// when nothing else holds them, so a decoder whose entries refer to 'rows'
-  /// holds them, for example with an IOBuf whose free function holds them,
-  /// which makes the iterator decode the next rows into a new vector. reset()
-  /// frees them. A non-empty input must produce at least one entry.
+  /// 'keys' and 'values', which view those storages, to the entries. A
+  /// non-empty input must produce at least one entry.
+  ///
+  /// The iterator retains 'rows' for reuse between decodes. Entries that view
+  /// vector data must retain ownership of that data, for example by capturing
+  /// 'rows' in an IOBuf's free function. Retaining 'rows' prevents reuse of
+  /// that vector. reset() releases the iterator's reference to its last output.
+  ///
   /// The iterator calls the decoder on the thread consuming the iterator.
   /// I/O prefetch does not call the decoder.
   using EntryDecoder = std::function<void(
@@ -102,8 +104,8 @@ class NimbleIterator {
     /// lookup until it decodes another stripe or resets, so that later lookups
     /// in the stripe, in any order, decode their rows without loading the
     /// stripe again. A get iterator does not prefetch, which would load the
-    /// stripes of a lookup ahead instead. A scan iterator decodes each stripe
-    /// once and keeps nothing.
+    /// stripes of a lookup ahead instead. Row scans release each stripe after
+    /// decoding and retain the decoded output for reuse.
     bool forGet{false};
   };
 
@@ -179,8 +181,8 @@ class NimbleIterator {
   virtual void seekToFirst() = 0;
 
   /// Cancels pending prefetch, invalidates the current scan and releases the
-  /// stripe that the iterator keeps for later lookups. Blocks until the
-  /// prefetch stops.
+  /// iterator's retained stripe and decoded output. Blocks until the prefetch
+  /// stops.
   virtual void reset() = 0;
 
   /// Turns the verification of stream checksums on or off for the next seeks,
