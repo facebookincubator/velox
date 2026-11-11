@@ -208,9 +208,9 @@ RowVectorPtr CudfLocalMerge::mergeSources() {
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
   // Order the source deallocations after the merge by rebinding their buffers
-  // to `stream` (with an event-wait fallback). This frees the inputs promptly
-  // without forcing the pooled producer streams to wait on the merge.
-  orderCudfVectorDeallocationsAfterStream(inputs, inputStreams, stream);
+  // to `stream`. This frees the inputs promptly without forcing the pooled
+  // producer streams to wait on the merge.
+  orderCudfVectorDeallocationsAfterStream(inputs, stream);
 
   auto numRows = mergedTable->num_rows();
   return std::make_shared<CudfVector>(
