@@ -77,9 +77,6 @@ OperatorCtx::createConnectorQueryCtx(
           .taskId(taskId())
           .planNodeId(planNodeId)
           .driverId(driverCtx_->driverId)
-          .sessionTimezone(driverCtx_->queryConfig().sessionTimezone())
-          .adjustTimestampToTimezone(
-              driverCtx_->queryConfig().adjustTimestampToTimezone())
           .queryConfig(&driverCtx_->queryConfig())
           .cancellationToken(task->getCancellationToken())
           .tokenProvider(task->queryCtx()->fsTokenProvider())

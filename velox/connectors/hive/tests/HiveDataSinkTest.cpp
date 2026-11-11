@@ -142,6 +142,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             .operatorPool(opPool_.get())
             .connectorPool(connectorPool_.get())
             .sessionProperties(connectorSessionProperties_.get())
+            .queryConfig(&queryConfig_)
             .queryId("query.HiveDataSinkTest")
             .taskId("task.HiveDataSinkTest")
             .planNodeId("planNodeId.HiveDataSinkTest")
@@ -239,6 +240,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>(),
           /*mutable=*/true);
+  const core::QueryConfig queryConfig_{{}};
   std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
   std::shared_ptr<HiveConfig> connectorConfig_ =
       std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
@@ -756,6 +758,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, memoryReclaim) {
               .operatorPool(opPool_.get())
               .connectorPool(connectorPool_.get())
               .sessionProperties(connectorSessionProperties_.get())
+              .queryConfig(&queryConfig_)
               .spillConfig(spillConfig.get())
               .queryId("query.HiveDataSinkTest")
               .taskId("task.HiveDataSinkTest")
@@ -768,6 +771,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, memoryReclaim) {
               .operatorPool(opPool_.get())
               .connectorPool(connectorPool_.get())
               .sessionProperties(connectorSessionProperties_.get())
+              .queryConfig(&queryConfig_)
               .queryId("query.HiveDataSinkTest")
               .taskId("task.HiveDataSinkTest")
               .planNodeId("planNodeId.HiveDataSinkTest")
@@ -890,6 +894,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
               .operatorPool(opPool_.get())
               .connectorPool(connectorPool_.get())
               .sessionProperties(connectorSessionProperties_.get())
+              .queryConfig(&queryConfig_)
               .spillConfig(spillConfig.get())
               .queryId("query.HiveDataSinkTest")
               .taskId("task.HiveDataSinkTest")
@@ -902,6 +907,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
               .operatorPool(opPool_.get())
               .connectorPool(connectorPool_.get())
               .sessionProperties(connectorSessionProperties_.get())
+              .queryConfig(&queryConfig_)
               .queryId("query.HiveDataSinkTest")
               .taskId("task.HiveDataSinkTest")
               .planNodeId("planNodeId.HiveDataSinkTest")
@@ -1024,6 +1030,7 @@ TEST_F(HiveDataSinkTest, sortWriterMemoryReclaimDuringFinish) {
           .operatorPool(opPool_.get())
           .connectorPool(connectorPool_.get())
           .sessionProperties(connectorSessionProperties_.get())
+          .queryConfig(&queryConfig_)
           .spillConfig(spillConfig.get())
           .queryId("query.HiveDataSinkTest")
           .taskId("task.HiveDataSinkTest")
@@ -1086,6 +1093,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
           .operatorPool(opPool_.get())
           .connectorPool(connectorPool_.get())
           .sessionProperties(connectorSessionProperties_.get())
+          .queryConfig(&queryConfig_)
           .spillConfig(spillConfig.get())
           .queryId("query.HiveDataSinkTest")
           .taskId("task.HiveDataSinkTest")
@@ -1939,6 +1947,7 @@ TEST_F(HiveDataSinkTest, fileRotationWithMemoryReclaim) {
           .operatorPool(opPool_.get())
           .connectorPool(connectorPool_.get())
           .sessionProperties(connectorSessionProperties_.get())
+          .queryConfig(&queryConfig_)
           .spillConfig(spillConfig.get())
           .queryId("query.HiveDataSinkTest")
           .taskId("task.HiveDataSinkTest")

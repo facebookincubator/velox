@@ -174,6 +174,7 @@ class IcebergDeletionVectorSinkTest : public ::testing::Test {
             .operatorPool(pool_.get())
             .connectorPool(connectorPool_.get())
             .sessionProperties(sessionProperties_.get())
+            .queryConfig(&queryCtx_->queryConfig())
             .queryId("query.IcebergDeletionVectorSinkTest")
             .taskId("task.IcebergDeletionVectorSinkTest")
             .planNodeId("planNodeId.IcebergDeletionVectorSinkTest")
