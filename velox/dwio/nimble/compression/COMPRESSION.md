@@ -339,7 +339,7 @@ Add compression round-trip tests in `velox/dwio/nimble/encodings/tests/` or `vel
 | `compression/CompressionPolicy.cpp` | `ConfiguredCompressionPolicy` implementation |
 | `compression/ZstdCompressor.{h,cpp}` | Zstd codec (good reference implementation) |
 | `compression/Lz4Compressor.{h,cpp}` | LZ4 codec |
-| `compression/fb/MetaInternalCompressor.{h,cpp}` | Zstrong/Managed Compression (internal only) |
+| `fb_velox/dwio/nimble/compression/MetaInternalCompressor.{h,cpp}` | Zstrong/Managed Compression (internal only) |
 | `compression/BUCK` | Build target for all compression code |
 | `encodings/selection/EncodingSelectionPolicy.h` | Encoding selection policy |
 | `velox/WriterOptions.h` | `WriterOptions::compressionOptions` |
