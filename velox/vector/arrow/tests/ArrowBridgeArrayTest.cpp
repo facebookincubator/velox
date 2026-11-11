@@ -55,6 +55,16 @@ void validateOffsets(
   }
 }
 
+// Overwrites the timestamps at 'rows' with bytes that do not convert to
+// milli-, micro- or nanoseconds, like bytes left over in a reused buffer.
+void setOutOfRange(
+    FlatVector<Timestamp>& timestamps,
+    const std::vector<vector_size_t>& rows) {
+  for (auto row : rows) {
+    std::memset(&timestamps.mutableRawValues()[row], 0x71, sizeof(Timestamp));
+  }
+}
+
 template <typename T>
 struct VeloxToArrowType {
   using type = T;
@@ -177,11 +187,7 @@ class ArrowBridgeArrayExportTest : public testing::Test, public VectorTestBase {
       const TInput& input) {
     ArrowArray arrowArray;
     velox::exportToArrow(constantVector, arrowArray, pool(), options_);
-    validateConstant<isScalar, T>(
-        input,
-        constantVector->size(),
-        constantVector->mayHaveNulls(),
-        arrowArray);
+    validateConstant<isScalar, T>(input, constantVector->size(), arrowArray);
 
     arrowArray.release(&arrowArray);
     EXPECT_EQ(nullptr, arrowArray.release);
@@ -420,17 +426,13 @@ class ArrowBridgeArrayExportTest : public testing::Test, public VectorTestBase {
   void validateConstant(
       const TInput& inputData,
       size_t vectorSize,
-      bool isNullConstant,
       const ArrowArray& arrowArray) {
     using TRunEnds = int32_t;
 
-    // Validate base REE array.
+    // Validate base REE array. It has no validity buffer: the null of a null
+    // constant is in the values child.
     EXPECT_EQ(vectorSize, arrowArray.length);
-    if (isNullConstant) {
-      EXPECT_EQ(vectorSize, arrowArray.null_count);
-    } else {
-      EXPECT_EQ(0, arrowArray.null_count);
-    }
+    EXPECT_EQ(0, arrowArray.null_count);
     EXPECT_EQ(0, arrowArray.offset);
     EXPECT_EQ(0, arrowArray.n_buffers);
     EXPECT_EQ(nullptr, arrowArray.buffers);
@@ -500,6 +502,25 @@ class ArrowBridgeArrayExportTest : public testing::Test, public VectorTestBase {
 
   void exportToArrow(const TypePtr& type, ArrowSchema& out) {
     velox::exportToArrow(BaseVector::create(type, 0, pool()), out, options_);
+  }
+
+  // Exports 'vector', a struct, once for each timestamp unit and calls
+  // 'validate' with the result and the number of units in a second.
+  void exportForEachTimestampUnit(
+      const VectorPtr& vector,
+      const std::function<void(const arrow::StructArray&, int64_t)>& validate) {
+    for (const auto& [unit, unitsPerSecond] :
+         std::vector<std::pair<TimestampUnit, int64_t>>{
+             {TimestampUnit::kSecond, 1},
+             {TimestampUnit::kMilli, 1'000},
+             {TimestampUnit::kMicro, 1'000'000},
+             {TimestampUnit::kNano, 1'000'000'000}}) {
+      SCOPED_TRACE(fmt::format("unitsPerSecond: {}", unitsPerSecond));
+      options_.timestampUnit = unit;
+      auto array = toArrow(vector, options_, pool());
+      ASSERT_OK(array->ValidateFull());
+      validate(static_cast<const arrow::StructArray&>(*array), unitsPerSecond);
+    }
   }
 
   ArrowOptions options_;
@@ -781,8 +802,6 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorNullable) {
   vector->setNull(3, true);
   vector->setNull(7, true);
 
-  vector->setNullCount(3);
-
   ArrowArray arrowArray;
   velox::exportToArrow(vector, arrowArray, pool(), options_);
 
@@ -833,7 +852,6 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   auto longerNullableChild = makeFlatVector<double>(longerChildSize);
   longerNullableChild->setNull(0, true);
   longerNullableChild->setNull(longerChildSize - 1, true);
-  longerNullableChild->setNullCount(2);
 
   auto vector = makeRowVector({
       makeFlatVector<int64_t>(rowVectorSize),
@@ -842,7 +860,6 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
       makeMapVector<int64_t, int64_t>(64, identity, identity, identity),
   });
   vector->setNull(rowVectorSize - 1, true);
-  vector->setNullCount(1);
 
   ArrowArray arrowArray;
   velox::exportToArrow(vector, arrowArray, pool(), options_);
@@ -867,6 +884,26 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   arrowArray.release(&arrowArray);
   EXPECT_EQ(nullptr, arrowArray.release);
   EXPECT_EQ(nullptr, arrowArray.private_data);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, timestampWithStaleNullCount) {
+  // makeFlatVector records a null count of 0, and setNull leaves it there. The
+  // null row holds a timestamp that is not valid.
+  auto timestamps = makeFlatVector<Timestamp>(
+      {Timestamp(1, 0), Timestamp(), Timestamp(3, 0)});
+  timestamps->setNull(1, true);
+  setOutOfRange(*timestamps, {1});
+  auto vector = makeRowVector({timestamps});
+
+  exportForEachTimestampUnit(
+      vector, [](const auto& array, int64_t unitsPerSecond) {
+        const auto& values =
+            static_cast<const arrow::TimestampArray&>(*array.field(0));
+        EXPECT_EQ(1, values.null_count());
+        EXPECT_TRUE(values.IsNull(1));
+        EXPECT_EQ(1 * unitsPerSecond, values.Value(0));
+        EXPECT_EQ(3 * unitsPerSecond, values.Value(2));
+      });
 }
 
 template <typename T>
@@ -1020,7 +1057,6 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGapAllNullBigintChild) {
 TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
   auto elements = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
   elements->setNull(3, true);
-  elements->setNullCount(1);
   auto offsets = makeBuffer<vector_size_t>({3, 0});
   auto sizes = makeBuffer<vector_size_t>({2, 2});
   auto vec = std::make_shared<ArrayVector>(
@@ -1248,6 +1284,18 @@ TEST_F(ArrowBridgeArrayExportTest, constants) {
   VectorPtr vector = makeNullConstant(TypeKind::TINYINT, 2048);
   testConstantVector<true, int8_t>(
       vector, std::vector<std::optional<int8_t>>{std::nullopt});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nullConstant) {
+  // A run-end encoded array has no validity buffer, so its null count must be
+  // 0. The null is in the values child.
+  auto vector = makeNullConstant(TypeKind::BIGINT, 100);
+  ArrowArray arrowArray;
+  velox::exportToArrow(vector, arrowArray, pool(), options_);
+  EXPECT_EQ(0, arrowArray.null_count);
+  ASSERT_EQ(2, arrowArray.n_children);
+  EXPECT_EQ(1, arrowArray.children[1]->null_count);
+  arrowArray.release(&arrowArray);
 }
 
 TEST_F(ArrowBridgeArrayExportTest, constantComplex) {

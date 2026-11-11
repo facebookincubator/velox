@@ -525,7 +525,7 @@ void gatherFromTimeBuffer(
   auto src = (*vec.values()).as<int64_t>();
   auto dst = out.asMutable<int32_t>();
   vector_size_t j = 0;
-  if (!vec.mayHaveNulls() || vec.getNullCount() == 0) {
+  if (!vec.mayHaveNulls()) {
     // Convert int64 milliseconds to int32 milliseconds.
     rows.apply(
         [&](vector_size_t i) { dst[j++] = static_cast<int32_t>(src[i]); });
@@ -548,7 +548,7 @@ void gatherFromTimestampBuffer(
   auto src = (*vec.values()).as<Timestamp>();
   auto dst = out.asMutable<int64_t>();
   vector_size_t j = 0; // index into dst
-  if (!vec.mayHaveNulls() || vec.getNullCount() == 0) {
+  if (!vec.mayHaveNulls()) {
     switch (unit) {
       case TimestampUnit::kSecond:
         rows.apply([&](vector_size_t i) { dst[j++] = src[i].getSeconds(); });
@@ -869,6 +869,14 @@ void exportValidityBitmap(
     return;
   }
 
+  // A constant is exported as a run-end encoded array, which has no validity
+  // buffer: the null of a null constant is in the values child. A flattened
+  // constant gets its validity from the flat vector.
+  if (vec.encoding() == VectorEncoding::Simple::CONSTANT) {
+    out.null_count = 0;
+    return;
+  }
+
   auto nulls = vec.nulls();
 
   // If we're only exporting a subset, create a new validity buffer.
@@ -877,13 +885,8 @@ void exportValidityBitmap(
     gatherFromBuffer(*BOOLEAN(), *vec.nulls(), rows, options, *nulls);
   }
 
-  // Set null counts.
-  if (!rows.changed() && rows.count() == vec.size() &&
-      vec.getNullCount() != std::nullopt) {
-    out.null_count = *vec.getNullCount();
-  } else {
-    out.null_count = BaseVector::countNulls(nulls, rows.count());
-  }
+  // Count the nulls. The null count stored in the vector may be out of date.
+  out.null_count = BaseVector::countNulls(nulls, rows.count());
 
   if (out.null_count > 0) {
     holder.setBuffer(0, nulls);
@@ -1776,8 +1779,7 @@ void exportToArrow(
           ROW({"key", "value"}, {type->childAt(0), type->childAt(1)}),
           nullptr,
           0,
-          std::vector<VectorPtr>{maps.mapKeys(), maps.mapValues()},
-          maps.getNullCount());
+          std::vector<VectorPtr>{maps.mapKeys(), maps.mapValues()});
       exportToArrow(rows, *child, options);
       child->name = "entries";
       // Map data should be a non-nullable struct type.
