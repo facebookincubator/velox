@@ -268,13 +268,14 @@ class SelectiveNimbleReaderTest
   }
 
   // Writes 'input', which has columns c0 and c1, to a Nimble file with c0
-  // dictionary encoded over FixedBitWidth indices. A small
+  // dictionary encoded over 'indicesEncoding' indices. A small
   // 'maxStreamChunkRawSize' splits c0 into many chunks.
   std::string createDictionaryFile(
       const RowVectorPtr& input,
+      EncodingType indicesEncoding,
       std::optional<uint64_t> maxStreamChunkRawSize) {
     EncodingLayout indicesLayout{
-        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+        indicesEncoding, {}, CompressionType::Uncompressed};
     EncodingLayout dictionaryLayout{
         EncodingType::Dictionary,
         {},
@@ -298,28 +299,37 @@ class SelectiveNimbleReaderTest
     return test::createNimbleFile(*rootPool(), input, writerOptions);
   }
 
-  // Runs the dictionary-aware read cases shared by every numeric type.
+  // Runs the dictionary-aware read cases shared by every numeric type, over
+  // FixedBitWidth indices, which decode in batches, and Varint indices, which
+  // decode one at a time.
   template <typename T>
   void testDictionaryAwareReadsCases() {
-    {
-      SCOPED_TRACE("no nulls");
-      testDictionaryAwareReads<T>(nullptr, 127);
-    }
-    {
-      SCOPED_TRACE("every 17th row null");
-      testDictionaryAwareReads<T>(nullEvery(17), 127);
-    }
-    {
-      SCOPED_TRACE("long leading nulls");
-      testDictionaryAwareReads<T>([](auto row) { return row < 3'073; }, 127);
-    }
-    {
-      SCOPED_TRACE("one batch spanning every chunk");
-      testDictionaryAwareReads<T>(nullEvery(17), /*batchSize=*/4'097);
-    }
-    {
-      SCOPED_TRACE("all null");
-      testDictionaryAwareReads<T>([](auto /*row*/) { return true; }, 127);
+    for (const auto indicesEncoding :
+         {EncodingType::FixedBitWidth, EncodingType::Varint}) {
+      SCOPED_TRACE(toString(indicesEncoding));
+      {
+        SCOPED_TRACE("no nulls");
+        testDictionaryAwareReads<T>(nullptr, indicesEncoding, 127);
+      }
+      {
+        SCOPED_TRACE("every 17th row null");
+        testDictionaryAwareReads<T>(nullEvery(17), indicesEncoding, 127);
+      }
+      {
+        SCOPED_TRACE("long leading nulls");
+        testDictionaryAwareReads<T>(
+            [](auto row) { return row < 3'073; }, indicesEncoding, 127);
+      }
+      {
+        SCOPED_TRACE("one batch spanning every chunk");
+        testDictionaryAwareReads<T>(
+            nullEvery(17), indicesEncoding, /*batchSize=*/4'097);
+      }
+      {
+        SCOPED_TRACE("all null");
+        testDictionaryAwareReads<T>(
+            [](auto /*row*/) { return true; }, indicesEncoding, 127);
+      }
     }
   }
 
@@ -331,6 +341,7 @@ class SelectiveNimbleReaderTest
   template <typename T>
   void testDictionaryAwareReads(
       const std::function<bool(vector_size_t)>& isNullAt,
+      EncodingType indicesEncoding,
       vector_size_t batchSize) {
     constexpr vector_size_t kNumRows{4'097};
     constexpr int64_t kCardinality{1'000};
@@ -345,8 +356,8 @@ class SelectiveNimbleReaderTest
     auto values = makeFlatVector<T>(kNumRows, valueAt, isNullAt);
     auto rowIds = makeFlatVector<int64_t>(kNumRows, std::identity{});
     auto input = makeRowVector({"c0", "c1"}, {values, rowIds});
-    const auto file =
-        createDictionaryFile(input, /*maxStreamChunkRawSize=*/512);
+    const auto file = createDictionaryFile(
+        input, indicesEncoding, /*maxStreamChunkRawSize=*/512);
 
     constexpr T kFilterMin = std::is_floating_point_v<T> ? -75.5 : 200;
     constexpr T kFilterMax = std::is_floating_point_v<T> ? 75.5 : 800;
@@ -1685,8 +1696,10 @@ TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsFilterChange) {
       {"c0", "c1"},
       {makeFlatVector<int64_t>(kNumRows, valueAt),
        makeFlatVector<int64_t>(kNumRows, std::identity{})});
-  const auto file =
-      createDictionaryFile(input, /*maxStreamChunkRawSize=*/std::nullopt);
+  const auto file = createDictionaryFile(
+      input,
+      EncodingType::FixedBitWidth,
+      /*maxStreamChunkRawSize=*/std::nullopt);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
   auto* valueSpec = scanSpec->childByName("c0");

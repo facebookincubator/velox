@@ -402,7 +402,6 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
         !visitor_.atEnd(), "Dictionary visitor received an extra index");
     bool atEnd{false};
     visitor_.process(index, atEnd);
-    syncFilterOnlyNumValues();
   }
 
   /// Processes a batch of non-null indices with their requested-row positions.
@@ -418,6 +417,7 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     }
     paths_.recordAddValues();
     processNulls(rows[0]);
+    syncFilterOnlyNumValues();
     const auto startRowIndex = visitor_.rowIndex();
     const auto outputOffset = visitor_.reader().numValues();
     visitor_.processBulk(indices, size, rows);
@@ -431,7 +431,6 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
         setProjectionNulls(rows, size, startRowIndex, outputOffset);
       }
     }
-    syncFilterOnlyNumValues();
   }
 
   void addNull(vector_size_t /*row*/) final {
@@ -442,6 +441,7 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
   /// processed.
   void processTrailingNulls() {
     processNulls(visitor_.numRows());
+    syncFilterOnlyNumValues();
   }
 
   /// Returns the hook paths this read took, for fuzzer stats.
@@ -604,9 +604,10 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     while (visitor_.rowIndex() < row) {
       visitor_.processNull(atEnd);
     }
-    syncFilterOnlyNumValues();
   }
 
+  // Filter-only process() and processNull() add output rows without advancing
+  // numValues(). Sync before anything that reads it, such as processBulk().
   void syncFilterOnlyNumValues() {
     if constexpr (DictionaryVisitor::kFilterOnly) {
       visitor_.reader().setNumValues(visitor_.reader().outputRows().size());
