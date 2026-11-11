@@ -17,10 +17,13 @@
 #include "velox/dwio/text/reader/TextReader.h"
 
 #include <boost/algorithm/string/predicate.hpp>
-#include <cmath>
+#include <fast_float/fast_float.h>
 #include <functional>
 #include <limits>
+#include <locale>
 #include <string>
+#include <string_view>
+#include <system_error>
 
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
@@ -836,150 +839,67 @@ bool TextRowReader::getBoolean(
   return false;
 }
 
-namespace {
-
-static constexpr std::string_view kNaNStringView{"NaN"};
-
-// Return whether trimmed input is accepted given sscanf's %lln consumed-byte
-// count and whether its scanned value is NaN. NaN spellings and trailing
-// f/F/d/D type suffixes follow Java. Preserve C-library numeric grammar,
-// including hex inputs without Java's required p exponent. Hex significands
-// consume f/d as digits, so hex type suffixes follow a p exponent.
-bool isValidFloatingPoint(
-    std::string_view input,
-    size_t numConsumed,
-    bool isNaN) {
-  // Guard local indexing independently of the callers' scan preconditions.
-  if (input.empty()) {
-    return false;
-  }
-
-  auto literal = input;
-  if (literal.front() == '+' || literal.front() == '-') {
-    literal.remove_prefix(1);
-  }
-  if (isNaN) {
-    return numConsumed == input.size() && literal == kNaNStringView;
-  }
-  // Preserve case-insensitive infinity aliases such as inf, INF and -inf for
-  // backward compatibility, even though Hive's Double.parseDouble rejects them.
-  if (numConsumed == input.size()) {
-    return true;
-  }
-  if (numConsumed == 0 || numConsumed != input.size() - 1 || literal.empty()) {
-    return false;
-  }
-
-  const auto suffix = input.back();
-  if (suffix != 'f' && suffix != 'F' && suffix != 'd' && suffix != 'D') {
-    return false;
-  }
-
-  const auto isDigit = [](char character) {
-    return character >= '0' && character <= '9';
-  };
-  // Keep this explicit even though the last-byte check also rejects suffixed
-  // infinity spellings in the C numeric locale.
-  if (!isDigit(literal.front()) && literal.front() != '.') {
-    return false;
-  }
-
-  // glibc sscanf consumes incomplete exponents such as "1e+" and "0x1p+".
-  // Require a digit or decimal point before a suffix to reject these inputs.
-  const auto lastConsumed = input[numConsumed - 1];
-  return isDigit(lastConsumed) || lastConsumed == '.';
-}
-
-void trimStringInPlace(std::string& s) {
-  const auto isNotSpace = [](unsigned char ch) { return ch > 0x20; };
-  size_t start = 0;
-  size_t end = s.size();
-
-  // Find first non-whitespace character
-  while (start < end && !isNotSpace(s[start])) {
-    ++start;
-  }
-
-  // If the string is all whitespace
-  if (start == end) {
-    s.clear();
-    return;
-  }
-
-  // Find last non-whitespace character
-  size_t last = end - 1;
-  while (last > start && !isNotSpace(s[last])) {
-    --last;
-  }
-
-  // Erase leading and trailing whitespace
-  s = s.substr(start, last - start + 1);
-}
-
-} // namespace
-
-float TextRowReader::getFloat(
+template <typename T>
+T TextRowReader::getFloatingPoint(
     TextRowReader& th,
     bool& isNull,
     DelimType& delim) {
-  std::string& str = getString(th, isNull, delim);
-  if (str.empty()) {
-    isNull = true;
-  }
+  std::string_view input = getString(th, isNull, delim);
   if (isNull) {
     return 0;
   }
 
-  trimStringInPlace(str);
-  if (str.empty()) {
+  // Match Java String.trim() without copying the field.
+  while (!input.empty() && static_cast<unsigned char>(input.front()) <= 0x20) {
+    input.remove_prefix(1);
+  }
+  while (!input.empty() && static_cast<unsigned char>(input.back()) <= 0x20) {
+    input.remove_suffix(1);
+  }
+  if (input.empty()) {
     isNull = true;
-    return 0.0;
+    return 0;
   }
 
-  float v = 0.0;
-  long long numConsumed{0};
-  // We ignore ERANGE, since denormalized floats and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%f%lln", &v, &numConsumed);
-  const auto isNaN = std::isnan(v);
-  if (scanCount != 1 ||
-      !isValidFloatingPoint(str, static_cast<size_t>(numConsumed), isNaN)) {
-    isNull = true;
-    return 0.0;
+  auto literal = input;
+  const bool negative = literal.front() == '-';
+  if (negative || literal.front() == '+') {
+    literal.remove_prefix(1);
   }
-  // Java discards the sign of NaN, unlike sscanf.
-  return isNaN ? std::numeric_limits<float>::quiet_NaN() : v;
-}
-
-double
-TextRowReader::getDouble(TextRowReader& th, bool& isNull, DelimType& delim) {
-  std::string& str = getString(th, isNull, delim);
-  if (str.empty()) {
-    isNull = true;
+  // Java discards the sign of NaN.
+  if (literal == "NaN") {
+    return std::numeric_limits<T>::quiet_NaN();
+  }
+  // Preserve case-insensitive infinity aliases for backward compatibility,
+  // even though Hive's Java parser accepts only "Infinity".
+  if (boost::algorithm::iequals(literal, "inf", std::locale::classic()) ||
+      boost::algorithm::iequals(literal, "infinity", std::locale::classic())) {
+    const auto infinity = std::numeric_limits<T>::infinity();
+    return negative ? -infinity : infinity;
   }
 
-  if (isNull) {
-    return 0.0;
+  if (input.back() == 'f' || input.back() == 'F' || input.back() == 'd' ||
+      input.back() == 'D') {
+    input.remove_suffix(1);
   }
 
-  trimStringInPlace(str);
-  if (str.empty()) {
+  T value{};
+  const auto* end = input.data() + input.size();
+  const auto [ptr, error] = fast_float::from_chars(
+      input.data(),
+      end,
+      value,
+      fast_float::chars_format::general |
+          fast_float::chars_format::allow_leading_plus |
+          fast_float::chars_format::no_infnan);
+  // Keep fast_float's signed infinity/zero results on overflow/underflow.
+  // Special values are handled above, so suffixed NaN/Infinity stay invalid.
+  if (ptr != end ||
+      (error != std::errc{} && error != std::errc::result_out_of_range)) {
     isNull = true;
-    return 0.0;
+    return 0;
   }
-
-  double v = 0.0;
-  long long numConsumed{0};
-  // We ignore ERANGE, since denormalized doubles and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%lf%lln", &v, &numConsumed);
-  const auto isNaN = std::isnan(v);
-  if (scanCount != 1 ||
-      !isValidFloatingPoint(str, static_cast<size_t>(numConsumed), isNaN)) {
-    isNull = true;
-    return 0.0;
-  }
-  return isNaN ? std::numeric_limits<double>::quiet_NaN() : v;
+  return value;
 }
 
 /// TODO: Reconsider error handling strategy for malformed data
@@ -1431,11 +1351,13 @@ void TextRowReader::readElement(
     case TypeKind::REAL:
       switch (reqT->kind()) {
         case TypeKind::REAL:
-          putValue<float, float>(getFloat, data, insertionRow, delim);
+          putValue<float, float>(
+              getFloatingPoint<float>, data, insertionRow, delim);
           break;
         case TypeKind::DOUBLE:
           // Parse at the file column's precision before widening to DOUBLE.
-          putValue<float, double>(getFloat, data, insertionRow, delim);
+          putValue<float, double>(
+              getFloatingPoint<float>, data, insertionRow, delim);
           break;
         default:
           VELOX_FAIL(
@@ -1447,7 +1369,8 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::DOUBLE:
-      putValue<double, double>(getDouble, data, insertionRow, delim);
+      putValue<double, double>(
+          getFloatingPoint<double>, data, insertionRow, delim);
       break;
 
     case TypeKind::TIMESTAMP: {

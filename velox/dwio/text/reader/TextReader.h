@@ -184,9 +184,9 @@ class TextRowReader : public dwio::common::RowReader {
 
   static bool getBoolean(TextRowReader& th, bool& isNull, DelimType& delim);
 
-  static float getFloat(TextRowReader& th, bool& isNull, DelimType& delim);
-
-  static double getDouble(TextRowReader& th, bool& isNull, DelimType& delim);
+  // Parse at the file column's precision before any widening conversion.
+  template <typename T>
+  static T getFloatingPoint(TextRowReader& th, bool& isNull, DelimType& delim);
 
   void readElement(
       const std::shared_ptr<const Type>& t,
