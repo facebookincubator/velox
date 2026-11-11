@@ -870,4 +870,329 @@ VectorizedFileStats::toColumnStatistics(
   return columnStats;
 }
 
+namespace detail {
+
+// Type-erased base of TypedDecodedStatStream.
+class DecodedStatStream {
+ public:
+  virtual ~DecodedStatStream() = default;
+};
+
+// 'typedIndex' indexes the min/max streams of 'statType'.
+struct StatNodeInfo {
+  StatType statType;
+  uint32_t typedIndex;
+};
+
+namespace {
+
+// A decoded stat stream. Entries keep their positions, so lookup is O(1).
+template <typename T>
+class TypedDecodedStatStream final : public DecodedStatStream {
+ public:
+  // Decodes all entries of 'payload'.
+  TypedDecodedStatStream(
+      std::string_view payload,
+      velox::memory::MemoryPool& pool)
+      : values_{&pool}, isValid_{&pool} {
+    std::unique_ptr<Encoding> encoding = EncodingFactory().create(
+        pool,
+        payload,
+        [&](uint32_t totalLength) {
+          auto& buffer = stringBuffers_.emplace_back(
+              velox::AlignedBuffer::allocate<char>(totalLength, &pool));
+          return buffer->template asMutable<void>();
+        },
+        Encoding::Options{});
+    NIMBLE_CHECK_NOT_NULL(encoding);
+    NIMBLE_CHECK_FILE_EQ(
+        encoding->dataType(),
+        TypeTraits<T>::dataType,
+        "Stat stream has an unexpected data type");
+    const auto rowCount = encoding->rowCount();
+    values_.resize(rowCount);
+    isValid_.resize(rowCount, true);
+    if (encoding->isNullable()) {
+      auto nullsBuffer = velox::AlignedBuffer::allocate<bool>(
+          rowCount, &pool, /*initValue=*/velox::bits::kNull);
+      auto* nulls = nullsBuffer->asMutable<uint64_t>();
+      const auto numNonNulls = encoding->materializeNullable(
+          rowCount, values_.data(), [&]() { return nulls; });
+
+      // Leaves 'nulls' unset when no entry is null.
+      if (numNonNulls < rowCount) {
+        for (uint32_t i = 0; i < rowCount; ++i) {
+          isValid_[i] = velox::bits::isBitSet(nulls, i);
+        }
+      }
+    } else {
+      encoding->materialize(rowCount, values_.data());
+    }
+    encoding_ = std::move(encoding);
+  }
+
+  // Throws if 'index' is past the end.
+  std::optional<T> valueAt(uint32_t index) const {
+    NIMBLE_CHECK_FILE_LT(
+        index,
+        isValid_.size(),
+        "Stat stream has fewer entries than the schema has nodes");
+    if (!isValid_[index]) {
+      return std::nullopt;
+    }
+    return values_[index];
+  }
+
+ private:
+  // String values may point into its buffers.
+  std::unique_ptr<Encoding> encoding_;
+  // Buffers the encoding decodes strings into.
+  std::vector<velox::BufferPtr> stringBuffers_;
+  // Entries without a value hold a default value.
+  nimble::Vector<T> values_;
+  // Marks the entries that have a value.
+  nimble::Vector<bool> isValid_;
+};
+
+} // namespace
+} // namespace detail
+
+namespace {
+
+constexpr size_t kNumStatTypes =
+    static_cast<size_t>(StatType::DEDUPLICATED) + 1;
+
+// Must produce the node order and kinds of traverseSchema().
+void appendNodes(
+    const velox::Type& type,
+    std::array<uint32_t, kNumStatTypes>& numTypedNodes,
+    std::vector<detail::StatNodeInfo>& nodes) {
+  const auto appendTyped = [&](StatType statType) {
+    nodes.push_back({statType, numTypedNodes[static_cast<size_t>(statType)]++});
+  };
+  switch (type.kind()) {
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
+      appendTyped(StatType::INTEGRAL);
+      break;
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+      appendTyped(StatType::FLOATING_POINT);
+      break;
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
+      appendTyped(StatType::STRING);
+      break;
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::TIMESTAMP:
+      nodes.push_back({StatType::DEFAULT, 0});
+      break;
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::ARRAY:
+    case velox::TypeKind::MAP:
+      nodes.push_back({StatType::DEFAULT, 0});
+      for (uint32_t i = 0; i < type.size(); ++i) {
+        appendNodes(*type.childAt(i), numTypedNodes, nodes);
+      }
+      break;
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
+    default:
+      NIMBLE_UNSUPPORTED("Unsupported schema kind: {}.", type.kind());
+  }
+}
+
+} // namespace
+
+LazyVectorizedFileStats::LazyVectorizedFileStats(
+    std::string_view payload,
+    velox::TypePtr schema,
+    velox::memory::MemoryPool& pool)
+    : pool_{pool}, schema_{std::move(schema)} {
+  // Same layout as VectorizedFileStats::deserialize() reads.
+  constexpr uint64_t kFixedHeaderSize = sizeof(uint16_t) + 2 * sizeof(uint8_t);
+  NIMBLE_CHECK_FILE_GE(
+      payload.size(),
+      kFixedHeaderSize,
+      "Vectorized stats section is too small");
+
+  // Parse the copy, so views point into 'payload_'.
+  payload_ = velox::AlignedBuffer::allocate<char>(payload.size(), &pool_);
+  std::memcpy(payload_->asMutable<char>(), payload.data(), payload.size());
+  payload = std::string_view{payload_->as<char>(), payload.size()};
+  const auto* pos = payload.data();
+  const auto version = encoding::read<uint16_t>(pos);
+  NIMBLE_CHECK_FILE_EQ(
+      version, kVectorizedStatsVersion, "Unsupported vectorized stats version");
+  const auto streamCount = encoding::read<uint8_t>(pos);
+  const auto bitWidth = encoding::read<uint8_t>(pos);
+  const auto streamTypesSize = FixedBitArray::bufferSize(streamCount, bitWidth);
+  const uint64_t headerSize = kFixedHeaderSize + streamTypesSize +
+      sizeof(uint8_t) + streamCount * sizeof(uint64_t);
+  NIMBLE_CHECK_FILE_LE(
+      headerSize,
+      payload.size(),
+      "Vectorized stats header overflows the section");
+  FixedBitArray streamTypes(const_cast<char*>(pos), bitWidth);
+  pos += streamTypesSize;
+  const auto lengthsEncoded = encoding::read<uint8_t>(pos);
+  NIMBLE_CHECK_FILE_EQ(
+      lengthsEncoded, 0, "Encoded vectorized stats lengths are not supported");
+
+  uint64_t offset = headerSize;
+  for (uint8_t i = 0; i < streamCount; ++i) {
+    const auto length = encoding::readUint64(pos);
+    NIMBLE_CHECK_FILE_LE(
+        length,
+        payload.size() - offset,
+        "Vectorized stats stream overflows the section");
+    const auto type = streamTypes.get(i);
+
+    // Keeps the first stream of a type, as deserialize() does.
+    if (type < kNumStatStreamTypes && !streamPayloads_[type].has_value()) {
+      streamPayloads_[type] = payload.substr(offset, length);
+    }
+    offset += length;
+  }
+}
+
+LazyVectorizedFileStats::~LazyVectorizedFileStats() = default;
+
+const std::vector<detail::StatNodeInfo>& LazyVectorizedFileStats::nodes()
+    const {
+  if (nodes_.empty()) {
+    // Builds into a local, so a throw leaves 'nodes_' empty for a retry.
+    std::vector<detail::StatNodeInfo> nodes;
+    std::array<uint32_t, kNumStatTypes> numTypedNodes{};
+    appendNodes(*schema_, numTypedNodes, nodes);
+    nodes_ = std::move(nodes);
+  }
+  return nodes_;
+}
+
+template <typename T>
+const detail::DecodedStatStream* LazyVectorizedFileStats::stream(
+    StatStreamType type) const {
+  const auto index = static_cast<size_t>(type);
+  auto& decoded = decodedStreams_[index];
+  if (decoded == nullptr && streamPayloads_[index].has_value()) {
+    decoded = std::make_unique<detail::TypedDecodedStatStream<T>>(
+        *streamPayloads_[index], pool_);
+  }
+  return decoded.get();
+}
+
+template <typename T>
+std::optional<T> LazyVectorizedFileStats::valueAt(
+    StatStreamType type,
+    uint32_t index) const {
+  const auto* decoded = stream<T>(type);
+  if (decoded == nullptr) {
+    return std::nullopt;
+  }
+
+  // Debug only: a dynamic_cast per lookup is too costly.
+  NIMBLE_DCHECK_NOT_NULL(
+      dynamic_cast<const detail::TypedDecodedStatStream<T>*>(decoded),
+      "Stat stream value type mismatch");
+  return static_cast<const detail::TypedDecodedStatStream<T>*>(decoded)
+      ->valueAt(index);
+}
+
+uint64_t LazyVectorizedFileStats::defaultValueAt(
+    StatStreamType type,
+    uint32_t nodeId) const {
+  const auto value = valueAt<uint64_t>(type, nodeId);
+  NIMBLE_CHECK_FILE(
+      value.has_value(),
+      "Vectorized stats lack a default statistic: stream type {}, node {}",
+      static_cast<uint32_t>(type),
+      nodeId);
+  return *value;
+}
+
+std::unique_ptr<ColumnStatistics>
+LazyVectorizedFileStats::buildColumnStatistics(
+    uint32_t nodeId,
+    const detail::StatNodeInfo& node) const {
+  const auto valueCount = defaultValueAt(StatStreamType::VALUE_COUNT, nodeId);
+  const auto nullCount = defaultValueAt(StatStreamType::NULL_COUNT, nodeId);
+  const auto logicalSize = defaultValueAt(StatStreamType::LOGICAL_SIZE, nodeId);
+  const auto physicalSize =
+      defaultValueAt(StatStreamType::PHYSICAL_SIZE, nodeId);
+  switch (node.statType) {
+    case StatType::INTEGRAL:
+      return std::make_unique<IntegralStatistics>(
+          valueCount,
+          nullCount,
+          logicalSize,
+          physicalSize,
+          valueAt<int64_t>(StatStreamType::INTEGRAL_MIN, node.typedIndex),
+          valueAt<int64_t>(StatStreamType::INTEGRAL_MAX, node.typedIndex));
+    case StatType::FLOATING_POINT:
+      return std::make_unique<FloatingPointStatistics>(
+          valueCount,
+          nullCount,
+          logicalSize,
+          physicalSize,
+          valueAt<double>(StatStreamType::FLOATING_POINT_MIN, node.typedIndex),
+          valueAt<double>(StatStreamType::FLOATING_POINT_MAX, node.typedIndex));
+    case StatType::STRING: {
+      const auto toOptionalString = [](std::optional<std::string_view> value)
+          -> std::optional<std::string> {
+        if (!value.has_value()) {
+          return std::nullopt;
+        }
+        return std::string(*value);
+      };
+      return std::make_unique<StringStatistics>(
+          valueCount,
+          nullCount,
+          logicalSize,
+          physicalSize,
+          toOptionalString(
+              valueAt<std::string_view>(
+                  StatStreamType::STRING_MIN, node.typedIndex)),
+          toOptionalString(
+              valueAt<std::string_view>(
+                  StatStreamType::STRING_MAX, node.typedIndex)));
+    }
+    case StatType::DEFAULT:
+    default:
+      return std::make_unique<ColumnStatistics>(
+          valueCount, nullCount, logicalSize, physicalSize);
+  }
+}
+
+const ColumnStatistics* LazyVectorizedFileStats::columnStatistics(
+    uint32_t nodeId) const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  const auto& nodes = this->nodes();
+  if (nodeId >= nodes.size()) {
+    return nullptr;
+  }
+  if (columnStats_.empty()) {
+    columnStats_.resize(nodes.size());
+  }
+  auto& stats = columnStats_[nodeId];
+  if (stats == nullptr) {
+    stats = buildColumnStatistics(nodeId, nodes[nodeId]);
+  }
+  return stats.get();
+}
+
+std::optional<uint64_t> LazyVectorizedFileStats::logicalSize(
+    uint32_t nodeId) const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  if (nodeId >= nodes().size()) {
+    return std::nullopt;
+  }
+  return defaultValueAt(StatStreamType::LOGICAL_SIZE, nodeId);
+}
+
 } // namespace facebook::nimble

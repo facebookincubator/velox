@@ -302,7 +302,7 @@ class NimbleReader : public dwio::common::Reader {
 
   std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
       uint32_t /*index*/) const override {
-    // TODO: Implement using ReaderBase::fileColumnStats(), same as
+    // TODO: Implement using ReaderBase::fileColumnStatistics(), same as
     // SelectiveNimbleReader::columnStatistics().
     return nullptr;
   }
