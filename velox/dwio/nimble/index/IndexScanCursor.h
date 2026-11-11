@@ -79,14 +79,21 @@ class IndexScanCursor final {
 
     virtual ~StripeMaterializer() = default;
 
-    /// Decodes the selected rows of a loaded stripe and turns them into the
-    /// entries that the iterator serves. The selection of the stripe holds the
-    /// selected rows. 'clusterIndex' belongs to the file, and the entries can
-    /// take the keys of the rows from it. Runs on the caller of
-    /// co_nextStripe(), including when prefetch is enabled.
+    /// Decodes the selected rows of a stripe and turns them into the entries
+    /// that the iterator serves. The selection of the stripe holds the
+    /// selected rows. The stripe holds the streams that the cursor loaded, or
+    /// no streams when the materializer keeps the streams of the stripe from
+    /// an earlier call, as hasLoadedStripe() reports. 'clusterIndex' belongs to
+    /// the file, and the entries can take the keys of the rows from it. Runs
+    /// on the caller of co_nextStripe(), including when prefetch is enabled.
     virtual folly::coro::Task<std::unique_ptr<Entries>> materialize(
         ProjectedStripe stripe,
         const index::ClusterIndexBase& clusterIndex) = 0;
+
+    /// Returns whether the materializer keeps the streams of the stripe
+    /// 'stripeIndex' from an earlier call, so that the cursor does not load
+    /// the stripe again.
+    virtual bool hasLoadedStripe(uint32_t stripeIndex) const = 0;
   };
 
   /// Creates a cursor that owns `projector` and materializes loaded stripes
@@ -142,8 +149,10 @@ class IndexScanCursor final {
   /// materializes it on the caller. Its selected rows start at the
   /// iterator's file-level 'row', and the call returns its entries. The
   /// iterator reads the stripes in order: 'row' is the first row of the scan,
-  /// and then the end of the rows of the previous stripe. With prefetch
-  /// enabled, later calls rethrow a load failure until the next seek.
+  /// and then the end of the rows of the previous stripe. Without prefetch,
+  /// the cursor does not load a stripe whose streams the materializer keeps.
+  /// With prefetch enabled, later calls rethrow a load failure until the next
+  /// seek.
   /// Reset or seek before reading again after a prefetched materialization
   /// failure.
   folly::coro::Task<std::unique_ptr<StripeMaterializer::Entries>> co_nextStripe(
