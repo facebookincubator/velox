@@ -995,70 +995,74 @@ TEST_F(TextReaderTest, readFloatAsInt) {
   }
 }
 
+template <typename T>
+std::optional<T> valueAt(const VectorPtr& vector, vector_size_t row) {
+  if (vector->isNullAt(row)) {
+    return std::nullopt;
+  }
+  return vector->variantAt(row).value<T>();
+}
+
 TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
+  struct TestCase {
+    std::string line;
+    std::optional<int8_t> tinyint;
+    std::optional<int16_t> smallint;
+    std::optional<int32_t> integer;
+    std::optional<int64_t> bigint;
+  };
+  const std::vector<TestCase> testCases = {
+      {"+1,+2,+3,+4", 1, 2, 3, 4},
+      {"+127,+32767,+2147483647,+9223372036854775807",
+       127,
+       32'767,
+       2'147'483'647,
+       9'223'372'036'854'775'807LL},
+      {"+1.5,+2.5,+3.5,+4.5", 1, 2, 3, 4},
+      {"+128,+2,+3,+4", std::nullopt, 2, 3, 4},
+      {"+1,+32768,+3,+4", 1, std::nullopt, 3, 4},
+      {"+1,+2,+2147483648,+4", 1, 2, std::nullopt, 4},
+      {"+1,+2,+3,+9223372036854775808", 1, 2, 3, std::nullopt},
+      {"+,+2,+3,+4", std::nullopt, 2, 3, 4},
+      {"+1,++2,+3,+4", 1, std::nullopt, 3, 4},
+      {"+1,+2,+3x,+4", 1, 2, std::nullopt, 4},
+      {"+1,+2,+3,+-4", 1, 2, 3, std::nullopt},
+  };
   auto textFile = TempFilePath::create();
   {
     auto writeFile =
         std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
-    writeFile->append(
-        "+1,+2,+3,+4\n"
-        "+127,+32767,+2147483647,+9223372036854775807\n"
-        "+1.5,+2.5,+3.5,+4.5\n"
-        "+128,+2,+3,+4\n"
-        "+1,+32768,+3,+4\n"
-        "+1,+2,+2147483648,+4\n"
-        "+1,+2,+3,+9223372036854775808\n"
-        "+,+2,+3,+4\n"
-        "+1,++2,+3,+4\n"
-        "+1,+2,+3x,+4\n"
-        "+1,+2,+3,+-4\n");
+    for (const auto& testCase : testCases) {
+      writeFile->append(testCase.line + "\n");
+    }
     writeFile->close();
   }
 
-  auto expected = makeRowVector({
-      makeNullableFlatVector<int8_t>(
-          {1, 127, 1, std::nullopt, 1, 1, 1, std::nullopt, 1, 1, 1}),
-      makeNullableFlatVector<int16_t>(
-          {2, 32'767, 2, 2, std::nullopt, 2, 2, 2, std::nullopt, 2, 2}),
-      makeNullableFlatVector<int32_t>(
-          {3, 2'147'483'647, 3, 3, 3, std::nullopt, 3, 3, 3, std::nullopt, 3}),
-      makeNullableFlatVector<int64_t>(
-          {4,
-           9'223'372'036'854'775'807LL,
-           4,
-           4,
-           4,
-           4,
-           std::nullopt,
-           4,
-           4,
-           4,
-           std::nullopt}),
-  });
   auto type = ROW(
       {{"tinyint", TINYINT()},
        {"smallint", SMALLINT()},
        {"integer", INTEGER()},
        {"bigint", BIGINT()}});
-
-  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setFileSchema(type);
-  readerOptions.setSerDeOptions(dwio::common::SerDeOptions(',', '\2', '\3'));
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = factory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(
+      type, textFile->getPath(), dwio::common::SerDeOptions(',', '\2', '\3'));
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*type, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   VectorPtr result;
-  ASSERT_EQ(rowReader->next(11, result), 11);
-  for (int i = 0; i < 11; ++i) {
-    EXPECT_TRUE(result->equalValueAt(expected.get(), i, i));
+  ASSERT_EQ(rowReader->next(testCases.size(), result), testCases.size());
+  const auto* rowVector = result->as<RowVector>();
+  ASSERT_NE(rowVector, nullptr);
+  for (size_t row = 0; row < testCases.size(); ++row) {
+    const auto& testCase = testCases[row];
+    SCOPED_TRACE(testCase.line);
+    ASSERT_FALSE(rowVector->isNullAt(row));
+    EXPECT_EQ(valueAt<int8_t>(rowVector->childAt(0), row), testCase.tinyint);
+    EXPECT_EQ(valueAt<int16_t>(rowVector->childAt(1), row), testCase.smallint);
+    EXPECT_EQ(valueAt<int32_t>(rowVector->childAt(2), row), testCase.integer);
+    EXPECT_EQ(valueAt<int64_t>(rowVector->childAt(3), row), testCase.bigint);
   }
+  ASSERT_EQ(rowReader->next(1, result), 0);
 }
 
 TEST_F(TextReaderTest, simpleTypes) {
