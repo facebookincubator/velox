@@ -688,7 +688,8 @@ VectorPtr createFlatVector(
     BufferPtr nulls,
     vector_size_t length,
     BufferPtr values,
-    int64_t nullCount) {
+    int64_t nullCount,
+    std::vector<BufferPtr> stringBuffers = {}) {
   using T = typename TypeTraits<kind>::NativeType;
   return std::make_shared<FlatVector<T>>(
       pool,
@@ -696,7 +697,7 @@ VectorPtr createFlatVector(
       std::move(nulls),
       length,
       values,
-      std::vector<BufferPtr>(),
+      std::move(stringBuffers),
       SimpleVectorStats<T>{},
       std::nullopt,
       optionalNullCount(nullCount));
@@ -1367,6 +1368,16 @@ void exportConstantValue(
           ? sizeof(StringView)
           : vec.type()->cppSizeInBytes();
 
+      // A string longer than 12 bytes points into the constant's string buffer,
+      // so the flat vector must hold it too.
+      std::vector<BufferPtr> stringBuffers;
+      if (vec.type()->isVarchar() || vec.type()->isVarbinary()) {
+        if (auto stringBuffer = vec.asUnchecked<ConstantVector<StringView>>()
+                                    ->getStringBuffer()) {
+          stringBuffers.push_back(std::move(stringBuffer));
+        }
+      }
+
       valuesVector = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           createFlatVector,
           vec.typeKind(),
@@ -1375,7 +1386,8 @@ void exportConstantValue(
           vec.nulls(),
           1,
           wrapInBufferViewAsViewer(vec.valuesAsVoid(), bufferSize),
-          vec.mayHaveNulls() ? 1 : 0);
+          vec.mayHaveNulls() ? 1 : 0,
+          std::move(stringBuffers));
     }
   }
   exportToArrowImpl(*valuesVector, selection, options, out, pool);
