@@ -337,6 +337,14 @@ TEST_F(GetJsonObjectTest, mismatchedBrackets) {
   EXPECT_EQ(getJsonObject(R"({"a":1}])", "$.a"), "1");
 }
 
+TEST_F(GetJsonObjectTest, nullElement) {
+  EXPECT_EQ(getJsonObject("[null]", "$[0]"), "null");
+  EXPECT_EQ(getJsonObject(R"({"a":[1,null]})", "$.a[1]"), "null");
+  EXPECT_EQ(getJsonObject(R"({"a":null})", "$.a"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":null})", "$['a']"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"([{"a":null}])", "$[0].a"), std::nullopt);
+}
+
 TEST_F(GetJsonObjectTest, number) {
   EXPECT_EQ(getJsonObject(R"({"f": +INF})", "$.f"), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"f": -INF})", "$.f"), std::nullopt);

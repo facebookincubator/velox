@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/Likely.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -287,11 +288,26 @@ struct GetJsonObjectFunction {
       }
       // Can return error result or throw exception possibly.
       auto rawResult = jsonDoc.at_path(formattedJsonPath);
-      if (rawResult.error()) {
+      simdjson::ondemand::json_type type;
+      if (rawResult.type().get(type)) {
         return false;
       }
 
-      if (!extractStringResult(rawResult, result)) {
+      if (type == simdjson::ondemand::json_type::null) {
+        const auto open = formattedJsonPath.rfind('[');
+        const bool lastStepIsIndex = formattedJsonPath.back() == ']' &&
+            open != std::string::npos && open + 2 < formattedJsonPath.size() &&
+            std::all_of(formattedJsonPath.begin() + open + 1,
+                        formattedJsonPath.end() - 1,
+                        [](char character) {
+                          return character >= '0' && character <= '9';
+                        });
+        bool isNull{false};
+        if (!lastStepIsIndex || rawResult.is_null().get(isNull) || !isNull) {
+          return false;
+        }
+        result.append("null");
+      } else if (!extractStringResult(rawResult, result)) {
         return false;
       }
     } catch (simdjson::simdjson_error&) {
