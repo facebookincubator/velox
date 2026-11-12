@@ -1022,11 +1022,8 @@ TEST_P(HashTableTest, listJoinResultsConstantSize) {
   auto table = HashTable<true>::createForJoin(
       std::move(keyHashers),
       {BIGINT()},
-      /*allowDuplicates=*/true,
-      /*hasProbedFlag=*/false,
-      /*hasCountFlag=*/false,
-      1'000,
-      pool());
+      pool(),
+      {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1'000});
   std::vector<RowVectorPtr> batches{makeRowVector(
       {makeFlatVector<int64_t>(
            kNumRows, [](vector_size_t row) { return row % kNumKeys; }),
