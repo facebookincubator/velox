@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#include <optional>
-
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
@@ -55,10 +53,6 @@ class TextReaderTest : public testing::Test,
     unregisterTextReaderFactory();
   }
 
-  memory::MemoryPool& poolRef() {
-    return *pool();
-  }
-
   void setScanSpec(const Type& type, dwio::common::RowReaderOptions& options) {
     auto spec = std::make_shared<common::ScanSpec>("root");
     spec->addAllChildFields(type);
@@ -68,8 +62,8 @@ class TextReaderTest : public testing::Test,
   std::unique_ptr<dwio::common::Reader> createReader(
       const RowTypePtr& type,
       const std::string& fileName,
-      const std::optional<dwio::common::SerDeOptions>& serDeOptions =
-          std::nullopt) {
+      const dwio::common::SerDeOptions& serDeOptions =
+          dwio::common::SerDeOptions()) {
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
     auto path =
@@ -79,11 +73,9 @@ class TextReaderTest : public testing::Test,
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileSchema(type);
-    if (serDeOptions.has_value()) {
-      readerOptions.setSerDeOptions(serDeOptions.value());
-    }
+    readerOptions.setSerDeOptions(serDeOptions);
     auto input =
-        std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
     return factory->createReader(std::move(input), readerOptions);
   }
 
@@ -91,9 +83,6 @@ class TextReaderTest : public testing::Test,
       std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
-
- private:
-  std::shared_ptr<LocalReadFile> readFile_;
 };
 
 struct TestCompressionParam {
