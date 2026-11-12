@@ -182,6 +182,7 @@ BaseVector::BaseVector(
       "Length must be smaller or equal to max(vector_size_t).");
 
   if (nulls_) {
+    dcheckVectorBufferAlignment(nulls_, sizeof(uint64_t));
     int32_t bytes = byteSize<bool>(length_);
     VELOX_CHECK_GE(nulls_->capacity(), bytes);
     if (nulls_->size() < bytes) {
@@ -651,6 +652,7 @@ void BaseVector::clearNulls(vector_size_t begin, vector_size_t end) {
 void BaseVector::setNulls(const BufferPtr& nulls) {
   if (nulls) {
     VELOX_DCHECK_GE(nulls->size(), bits::nbytes(length_));
+    dcheckVectorBufferAlignment(nulls, sizeof(uint64_t));
     nulls_ = nulls;
     rawNulls_ = nulls->as<uint64_t>();
     nullCount_ = std::nullopt;

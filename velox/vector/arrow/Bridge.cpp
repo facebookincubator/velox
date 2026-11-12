@@ -2632,8 +2632,11 @@ VectorPtr importFromArrowImpl(
         arrowArray.n_buffers,
         2,
         "Primitive types expect two buffers as input.");
+    // BOOLEAN values are a bitmap, one bit per row.
     auto values = wrapInBufferView(
-        arrowArray.buffers[1], arrowArray.length * type->cppSizeInBytes());
+        arrowArray.buffers[1],
+        type->isBoolean() ? bits::nbytes(arrowArray.length)
+                          : arrowArray.length * type->cppSizeInBytes());
 
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         createFlatVector,

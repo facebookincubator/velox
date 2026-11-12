@@ -65,6 +65,9 @@ FlatMapVector::FlatMapVector(
       "Wrong number of map value vectors.");
   VELOX_CHECK_LE(
       inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
+  for (const auto& inMap : inMaps_) {
+    dcheckVectorBufferAlignment(inMap, sizeof(uint64_t));
+  }
 }
 
 void FlatMapVector::setDistinctKeys(VectorPtr distinctKeys, bool sortedKeys) {

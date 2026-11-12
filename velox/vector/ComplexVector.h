@@ -442,6 +442,8 @@ struct ArrayVectorBase : BaseVector {
         offsets_->capacity(), BaseVector::length_ * sizeof(vector_size_t));
     VELOX_CHECK_GE(
         sizes_->capacity(), BaseVector::length_ * sizeof(vector_size_t));
+    dcheckVectorBufferAlignment(offsets_, alignof(vector_size_t));
+    dcheckVectorBufferAlignment(sizes_, alignof(vector_size_t));
   }
 
   void copyRangesImpl(

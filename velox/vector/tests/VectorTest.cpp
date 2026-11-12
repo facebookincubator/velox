@@ -1648,6 +1648,105 @@ TEST_F(VectorTest, makeFlatVectorWithInitializerList) {
   EXPECT_EQ(vector->asFlatVector<int64_t>()->valueAt(0), 803);
 }
 
+DEBUG_ONLY_TEST_F(VectorTest, misalignedBuffers) {
+  // Vectors check in debug builds that their buffers start aligned to the
+  // element width, and bitmaps to 8 bytes.
+  struct NoopReleaser {
+    void addRef() const {}
+    void release() const {}
+  };
+  auto holder = AlignedBuffer::allocate<int64_t>(5, pool());
+  auto view = [&](size_t offset, size_t size) {
+    return BufferView<NoopReleaser>::create(
+        holder->as<uint8_t>() + offset, size, NoopReleaser{});
+  };
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<FlatVector<int64_t>>(
+          pool(),
+          BIGINT(),
+          nullptr,
+          4,
+          view(4, 4 * sizeof(int64_t)),
+          std::vector<BufferPtr>{}),
+      "Vector buffer starts at a misaligned address. Required alignment: 8");
+
+  // Timestamp is 16 bytes wide with 8-byte natural alignment.
+  auto timestamps = AlignedBuffer::allocate<Timestamp>(5, pool());
+  VELOX_ASSERT_THROW(
+      std::make_shared<FlatVector<Timestamp>>(
+          pool(),
+          TIMESTAMP(),
+          nullptr,
+          4,
+          BufferView<NoopReleaser>::create(
+              timestamps->as<uint8_t>() + 8,
+              4 * sizeof(Timestamp),
+              NoopReleaser{}),
+          std::vector<BufferPtr>{}),
+      "Vector buffer starts at a misaligned address. Required alignment: 16");
+
+  auto values = AlignedBuffer::allocate<int64_t>(4, pool());
+  VELOX_ASSERT_THROW(
+      std::make_shared<FlatVector<int64_t>>(
+          pool(), BIGINT(), view(1, 1), 4, values, std::vector<BufferPtr>{}),
+      "Vector buffer starts at a misaligned address. Required alignment: 8");
+
+  auto flat = makeFlatVector<int64_t>({1, 2, 3, 4});
+  VELOX_ASSERT_THROW(
+      flat->unsafeSetValues(view(4, 4 * sizeof(int64_t))),
+      "Vector buffer starts at a misaligned address. Required alignment: 8");
+  VELOX_ASSERT_THROW(
+      flat->setNulls(view(1, 1)),
+      "Vector buffer starts at a misaligned address. Required alignment: 8");
+
+  // Dictionary indices, and array offsets and sizes, are 4 bytes wide.
+  VELOX_ASSERT_THROW(
+      BaseVector::wrapInDictionary(
+          nullptr, view(2, 4 * sizeof(vector_size_t)), 4, flat),
+      "Vector buffer starts at a misaligned address. Required alignment: 4");
+  auto dictionary = BaseVector::wrapInDictionary(
+      nullptr, makeIndices(4, std::identity{}), 4, flat);
+  VELOX_ASSERT_THROW(
+      dictionary->setWrapInfo(view(2, 4 * sizeof(vector_size_t))),
+      "Vector buffer starts at a misaligned address. Required alignment: 4");
+
+  auto offsets = allocateOffsets(4, pool());
+  auto sizes = allocateSizes(4, pool());
+  VELOX_ASSERT_THROW(
+      std::make_shared<ArrayVector>(
+          pool(),
+          ARRAY(BIGINT()),
+          nullptr,
+          4,
+          view(2, 4 * sizeof(vector_size_t)),
+          sizes,
+          flat),
+      "Vector buffer starts at a misaligned address. Required alignment: 4");
+  VELOX_ASSERT_THROW(
+      std::make_shared<ArrayVector>(
+          pool(),
+          ARRAY(BIGINT()),
+          nullptr,
+          4,
+          offsets,
+          view(2, 4 * sizeof(vector_size_t)),
+          flat),
+      "Vector buffer starts at a misaligned address. Required alignment: 4");
+
+  // In-map flags are bitmaps.
+  VELOX_ASSERT_THROW(
+      std::make_shared<FlatMapVector>(
+          pool(),
+          MAP(BIGINT(), BIGINT()),
+          nullptr,
+          4,
+          makeFlatVector<int64_t>({7}),
+          std::vector<VectorPtr>{flat},
+          std::vector<BufferPtr>{view(1, 1)}),
+      "Vector buffer starts at a misaligned address. Required alignment: 8");
+}
+
 TEST_F(VectorTest, wrapConstantInDictionary) {
   // Wrap Constant in Dictionary with no extra nulls. Expect Constant.
   auto indices = makeIndices(10, [](auto row) { return row % 2; });

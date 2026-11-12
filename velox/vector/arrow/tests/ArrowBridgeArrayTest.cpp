@@ -22,6 +22,7 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -2108,6 +2109,30 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     });
   }
 
+  // Imports BOOLEAN values that end right before an unmapped page. The values
+  // buffer covers the bitmap, one bit per row, so copying it reads only the
+  // bitmap.
+  void testImportBooleanValuesSize() {
+    constexpr int64_t kLength = 4'096;
+    common::testutil::PageBeforeGuard page;
+    auto* rawValues = page.end() - bits::nbytes(kLength);
+    for (int64_t i = 0; i < kLength; ++i) {
+      bits::setBit(rawValues, i, i % 3 == 0);
+    }
+
+    const void* buffers[2] = {nullptr, rawValues};
+    auto arrowArray = makeArrowArray(buffers, 2, kLength, 0);
+    auto arrowSchema = makeArrowSchema("b");
+    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+
+    auto* flat = output->asFlatVector<bool>();
+    EXPECT_EQ(flat->values()->size(), bits::nbytes(kLength));
+    auto copy = AlignedBuffer::copy(pool_.get(), flat->values());
+    for (int64_t i = 0; i < kLength; ++i) {
+      EXPECT_EQ(bits::isBitSet(copy->as<uint64_t>(), i), i % 3 == 0) << i;
+    }
+  }
+
   void testImportStringView() {
     arrow::StringViewBuilder sb(arrow::default_memory_pool());
     ASSERT_OK(sb.Append("hello world", 11));
@@ -2387,6 +2412,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, map) {
   testImportMap();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, booleanValuesSize) {
+  testImportBooleanValuesSize();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionary) {
   testImportDictionary();
 }
@@ -2512,6 +2541,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, array) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, map) {
   testImportMap();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, booleanValuesSize) {
+  testImportBooleanValuesSize();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionary) {
