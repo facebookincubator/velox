@@ -24,13 +24,14 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
 #include <libxml/parser.h>
 #include <libxml/xmlerror.h>
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
-#include "velox/functions/sparksql/XPathUtil.h"
+#include "velox/functions/sparksql/XPathEvaluator.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -93,10 +94,7 @@ std::optional<std::string> evalStringDirect(
   if (evaluated.hasError()) {
     VELOX_USER_FAIL("{}", evaluated.error().message());
   }
-  if (!evaluated.value().has_value()) {
-    return std::nullopt;
-  }
-  return std::string(evaluated.value()->view());
+  return std::move(evaluated.value());
 }
 
 class XPathFunctionsTest : public SparkFunctionBaseTest {
@@ -300,6 +298,87 @@ TEST_F(XPathFunctionsTest, xpathNumberStringConversions) {
       xpathString("<a>100000000000000000000</a>", "string(number(a))"),
       "100000000000000000000");
   EXPECT_EQ(xpathString("<a>0.0000001</a>", "string(number(a))"), "0.0000001");
+}
+
+TEST_F(XPathFunctionsTest, correctlyRoundedDecimals) {
+  // Expected results come from JDK XPath, including the exact halfway case.
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"3.97", "3.97"},
+      {"-3.97", "-3.97"},
+      {"123456789012345678", "123456789012345680"},
+      {"9007199254740993", "9007199254740992"},
+      {"1.00000000000000011102230246251565404236316680908203125", "1"},
+      {"1.00000000000000011102230246251565404236316680908203126",
+       "1.0000000000000002"},
+      {".5", "0.5"},
+      {"3.", "3"},
+  };
+  for (int pass = 0; pass < 2; ++pass) {
+    for (const auto& [decimal, expected] : cases) {
+      const auto xml = "<a><b>" + decimal + "</b></a>";
+      for (const auto& path :
+           {decimal,
+            "number('" + decimal + "')",
+            std::string("number(a/b)"),
+            std::string("sum(a/b)"),
+            std::string("a/b + 0"),
+            "string(" + decimal + ")",
+            "concat('', " + decimal + ")"}) {
+        expectBoth(xml, path, expected, true);
+      }
+      expectBoth(xml, "number(a/b) = " + decimal, "true", true);
+    }
+  }
+}
+
+TEST_F(XPathFunctionsTest, decimalRangeAndSignedZero) {
+  const auto overflow = "1" + std::string(309, '0');
+  const auto underflow = "0." + std::string(323, '0') + "1";
+  const auto subnormal = "0." + std::string(323, '0') + "5";
+  for (const auto& decimal : {overflow, "-" + overflow}) {
+    const auto expected = decimal.front() == '-' ? "-Infinity" : "Infinity";
+    expectBoth("<a/>", decimal, expected, true);
+    expectBoth("<a/>", "number('" + decimal + "')", expected, true);
+  }
+  for (const auto& decimal : {std::string("0"), underflow}) {
+    for (const auto& sign : {"", "-"}) {
+      const auto value = sign + decimal;
+      expectBoth("<a/>", value, "0", false);
+      expectBoth("<a/>", "number('" + value + "')", "0", false);
+      const auto expected = value.front() == '-' ? "-Infinity" : "Infinity";
+      expectBoth("<a/>", "1 div " + value, expected, true);
+      expectBoth("<a/>", "1 div number('" + value + "')", expected, true);
+    }
+  }
+  expectBoth("<a/>", subnormal + " > 0", "true", true);
+  expectBoth("<a/>", "number('" + subnormal + "') > 0", "true", true);
+  for (const auto& invalid : {"+3.97", ".", "-", "3.97.1", "0x1"}) {
+    expectBoth("<a/>", fmt::format("number('{}')", invalid), "NaN", false);
+  }
+}
+
+TEST_F(XPathFunctionsTest, prefixTokenBoundaries) {
+  const std::string xml = "<a xmlns:p='urn:p'><b>3.97</b></a>";
+  for (const auto& path :
+       {"-p:a", "1-p:a", ".5 - p:a", "p:*div 2", "p:*mod 2"}) {
+    expectBoth(xml, path, "NaN", false);
+  }
+  expectBoth(xml, "p:*and true()", "false", false);
+  for (const auto& path :
+       {"p:*or true()",
+        "1-p:*or true()",
+        "p-q:*or true()",
+        "p.q:*or true()",
+        "p1:*or true()",
+        "\u03c0:*or true()"}) {
+    expectBoth(xml, path, "true", true);
+  }
+  expectBoth(xml, "a/namespace::*[-p:a]", "", false);
+  expectBoth(xml, "a/namespace::*[p:*or true()]", "urn:p", true);
+  expectBoth(xml, "'p:*or true()'", "p:*or true()", true);
+  expectBoth(xml, "true() or p:f()", "true", true);
+  expectUserErrorBoth(xml, "p:f()", "Invalid XPath");
+  expectUserErrorBoth(xml, "$p:v", "Invalid XPath");
 }
 
 TEST_F(XPathFunctionsTest, numericStringCoercions) {

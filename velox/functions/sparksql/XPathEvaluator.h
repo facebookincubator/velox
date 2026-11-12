@@ -17,7 +17,6 @@
 
 #include <folly/Expected.h>
 
-#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,45 +25,6 @@
 
 namespace facebook::velox::functions::sparksql {
 namespace xpath {
-
-/// Owns the string representation of an XPath result.
-class XPathStringValue {
- public:
-  /// Owns an already-formatted XPath string.
-  explicit XPathStringValue(std::string value);
-
-  /// Releases the owned string.
-  ~XPathStringValue();
-
-  /// Moves an owned XPath string.
-  XPathStringValue(XPathStringValue&& other) noexcept;
-
-  /// Replaces this value with an owned XPath string.
-  XPathStringValue& operator=(XPathStringValue&& other) noexcept;
-
-  XPathStringValue(const XPathStringValue&) = delete;
-  XPathStringValue& operator=(const XPathStringValue&) = delete;
-
-  /// Returns the owned string without copying it.
-  std::string_view view() const;
-
- private:
-  friend folly::Expected<std::optional<XPathStringValue>, Status> evalString(
-      std::string_view xml,
-      std::string_view path);
-
-  // Takes ownership of a libxml2-allocated string.
-  XPathStringValue(void* value, size_t size);
-
-  // Stores a string formatted by Velox.
-  std::string value_;
-
-  // Stores a string allocated by libxml2.
-  void* xmlValue_{nullptr};
-
-  // Number of bytes in 'xmlValue_'.
-  size_t xmlSize_{0};
-};
 
 /// Evaluates a boolean XPath expression on a non-empty UTF-8 XML string.
 /// Returns a user error on malformed XML or XPath syntax/evaluation errors.
@@ -87,7 +47,7 @@ folly::Expected<std::optional<bool>, Status> evalBoolean(
 /// Prefixed element and attribute name tests do not match. Evaluated
 /// unregistered functions or variables return a user error. A no-match
 /// node-set returns an empty string.
-folly::Expected<std::optional<XPathStringValue>, Status> evalString(
+folly::Expected<std::optional<std::string>, Status> evalString(
     std::string_view xml,
     std::string_view path);
 

@@ -16,7 +16,7 @@
 #include "velox/functions/sparksql/XPathFunctions.h"
 
 #include "velox/expression/DecodedArgs.h"
-#include "velox/functions/sparksql/XPathUtil.h"
+#include "velox/functions/sparksql/XPathEvaluator.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -104,7 +104,7 @@ class XPathStringFunction final : public exec::VectorFunction {
         flatResult->setNull(row, true);
         return;
       }
-      const auto value = evaluated.value()->view();
+      const auto& value = evaluated.value().value();
       flatResult->set(row, StringView(value.data(), value.size()));
     });
 

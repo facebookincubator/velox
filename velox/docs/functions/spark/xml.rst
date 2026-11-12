@@ -58,8 +58,11 @@ Compatibility notes
   exponent, including numbers converted inside XPath string functions. As with
   other floating-point operations, the final decimal digits can differ between
   libxml2 and JVM versions.
-  Numeric strings use the JDK's decimal grammar; scientific notation converts
-  to NaN, including in arithmetic, comparisons, and ``sum()``.
+  Numeric literals and strings are rounded to the nearest double, with ties
+  rounded to even. Numeric strings use the JDK's decimal grammar; scientific
+  notation converts to NaN, including in arithmetic, comparisons, and
+  ``sum()``. Decimal overflow produces signed infinity, and underflow
+  preserves the sign of zero.
 * String functions use JDK UTF-16 code-unit indexing, including supplementary
   characters. Unpaired surrogates produced by ``substring()`` are preserved
   inside XPath expressions and replaced with ``?`` in the final UTF-8 result.
