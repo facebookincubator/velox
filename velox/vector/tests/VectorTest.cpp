@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -40,6 +41,8 @@
 #include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
+
+DECLARE_int64(velox_constant_vector_share_string_min_bytes);
 
 namespace facebook::velox {
 namespace {
@@ -1531,6 +1534,175 @@ TEST_F(VectorTest, wrapInConstant) {
   constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
       BaseVector::wrapInConstant(size, 22, lazyOverArray));
   EXPECT_FALSE(constArrayVector->valueVector()->isLazy());
+}
+
+TEST_F(VectorTest, wrapInConstantSharesLargeStrings) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_constant_vector_share_string_min_bytes = 1'000;
+
+  const std::string large(2'000, 'a');
+  const std::string small(100, 'b');
+  auto flat = makeFlatVector<StringView>(
+      {StringView(small), StringView(large), StringView("inline")});
+  ASSERT_EQ(flat->stringBuffers().size(), 1);
+  const Buffer* sourceBuffer = flat->stringBuffers()[0].get();
+
+  auto stringBufferOf = [](const VectorPtr& vector) {
+    return vector->as<ConstantVector<StringView>>()->getStringBuffer().get();
+  };
+  auto valueOf = [](const VectorPtr& vector) {
+    return vector->as<ConstantVector<StringView>>()->valueAt(0).str();
+  };
+
+  // A large value shares the source's string buffer. Wrapping the constant
+  // again and slicing it keep sharing the buffer.
+  {
+    auto constant = BaseVector::wrapInConstant(10, 1, flat);
+    EXPECT_EQ(stringBufferOf(constant), sourceBuffer);
+    EXPECT_EQ(
+        stringBufferOf(BaseVector::wrapInConstant(5, 3, constant)),
+        sourceBuffer);
+    EXPECT_EQ(stringBufferOf(constant->slice(0, 4)), sourceBuffer);
+  }
+
+  // The constant keeps the shared buffer alive after the source is released.
+  {
+    VectorPtr constant;
+    {
+      auto source = makeFlatVector<StringView>({StringView(large)});
+      constant = BaseVector::wrapInConstant(10, 0, source);
+      ASSERT_EQ(stringBufferOf(constant), source->stringBuffers()[0].get());
+    }
+    // The constant and 'buffer' are the only holders.
+    const auto buffer =
+        constant->as<ConstantVector<StringView>>()->getStringBuffer();
+    EXPECT_EQ(buffer->refCount(), 2);
+    EXPECT_EQ(valueOf(constant), large);
+  }
+
+  // Reusing the source for new strings leaves the constant's bytes intact.
+  {
+    VectorPtr source = makeFlatVector<StringView>({StringView(large)});
+    auto constant = BaseVector::wrapInConstant(10, 0, source);
+    BaseVector::prepareForReuse(source, 1);
+    const std::string replacement(large.size(), 'z');
+    source->asFlatVector<StringView>()->set(0, StringView(replacement));
+    EXPECT_EQ(valueOf(constant), large);
+  }
+
+  // A lazy vector that loads into a dictionary or a constant shares the
+  // buffer under the encoding.
+  {
+    auto lazyDictionary = wrapInLazyDictionary(flat);
+    lazyDictionary->loadedVector();
+    auto constant = std::make_shared<ConstantVector<StringView>>(
+        pool(), 10, 1, lazyDictionary);
+    EXPECT_EQ(constant->getStringBuffer().get(), sourceBuffer);
+  }
+  {
+    auto loaded = BaseVector::wrapInConstant(10, 1, flat);
+    auto lazyConstant = std::make_shared<LazyVector>(
+        pool(),
+        VARCHAR(),
+        10,
+        std::make_unique<test::SimpleVectorLoader>(
+            [&](RowSet /*rows*/) { return loaded; }));
+    lazyConstant->loadedVector();
+    auto constant = std::make_shared<ConstantVector<StringView>>(
+        pool(), 10, 1, lazyConstant);
+    EXPECT_EQ(constant->getStringBuffer().get(), sourceBuffer);
+  }
+
+  // A value below the minimum size is copied.
+  {
+    auto constant = BaseVector::wrapInConstant(10, 0, flat);
+    EXPECT_NE(stringBufferOf(constant), sourceBuffer);
+    EXPECT_EQ(valueOf(constant), small);
+  }
+
+  // An inline value needs no buffer.
+  {
+    auto constant = BaseVector::wrapInConstant(10, 2, flat);
+    EXPECT_EQ(stringBufferOf(constant), nullptr);
+    EXPECT_EQ(valueOf(constant), "inline");
+  }
+
+  // A constant in another memory pool copies the value.
+  {
+    auto otherPool = rootPool_->addLeafChild("other");
+    auto constant = std::make_shared<ConstantVector<StringView>>(
+        otherPool.get(), 10, 1, flat);
+    EXPECT_NE(constant->getStringBuffer().get(), sourceBuffer);
+    EXPECT_EQ(constant->getStringBuffer()->pool(), otherPool.get());
+    EXPECT_EQ(constant->valueAt(0).str(), large);
+  }
+
+  // A value outside the source's string buffers is copied.
+  {
+    auto external = makeFlatVector<StringView>(1);
+    external->setNoCopy(0, StringView(large));
+    auto constant = BaseVector::wrapInConstant(10, 0, external);
+    EXPECT_NE(stringBufferOf(constant), nullptr);
+    EXPECT_NE(
+        constant->as<ConstantVector<StringView>>()->valueAt(0).data(),
+        large.data());
+  }
+
+  // A view has no memory pool, so its bytes are copied.
+  {
+    struct NoopReleaser {
+      void addRef() const {}
+      void release() const {}
+    };
+    auto view = BufferView<NoopReleaser>::create(
+        reinterpret_cast<const uint8_t*>(large.data()),
+        large.size(),
+        NoopReleaser{});
+    auto viewed = makeFlatVector<StringView>(1);
+    viewed->setNoCopy(0, StringView(large));
+    viewed->addStringBuffer(view);
+    auto constant = BaseVector::wrapInConstant(10, 0, viewed);
+    EXPECT_NE(stringBufferOf(constant), view.get());
+    EXPECT_EQ(valueOf(constant), large);
+  }
+
+  // A minimum of 0 shares every value that is not inlined.
+  {
+    FLAGS_velox_constant_vector_share_string_min_bytes = 0;
+    EXPECT_EQ(
+        stringBufferOf(BaseVector::wrapInConstant(10, 0, flat)), sourceBuffer);
+    EXPECT_EQ(stringBufferOf(BaseVector::wrapInConstant(10, 2, flat)), nullptr);
+  }
+
+  // A negative minimum disables sharing, so every value is copied.
+  {
+    FLAGS_velox_constant_vector_share_string_min_bytes = -1;
+    auto constant = BaseVector::wrapInConstant(10, 1, flat);
+    EXPECT_NE(stringBufferOf(constant), sourceBuffer);
+    EXPECT_EQ(valueOf(constant), large);
+  }
+}
+
+TEST_F(VectorTest, wrapInConstantLargeStringMemory) {
+  gflags::FlagSaver flagSaver;
+  const std::string large(1 << 20, 'a');
+  auto flat = makeFlatVector<StringView>({StringView(large)});
+  constexpr int kNumConstants = 20;
+
+  auto bytesUsedByConstants = [&](bool share) {
+    FLAGS_velox_constant_vector_share_string_min_bytes =
+        share ? static_cast<int64_t>(large.size()) : -1;
+    const auto before = pool()->usedBytes();
+    std::vector<VectorPtr> constants;
+    constants.reserve(kNumConstants);
+    for (auto i = 0; i < kNumConstants; ++i) {
+      constants.push_back(BaseVector::wrapInConstant(1'000, 0, flat));
+    }
+    return pool()->usedBytes() - before;
+  };
+
+  EXPECT_GE(bytesUsedByConstants(false), kNumConstants * large.size());
+  EXPECT_LT(bytesUsedByConstants(true), large.size());
 }
 
 TEST_F(VectorTest, rowResize) {

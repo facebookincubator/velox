@@ -132,3 +132,12 @@ DEFINE_int32(
     velox_tpch_text_pool_size_mb,
     300,
     "TPC-H DBGen text pool size in MB");
+
+// Used in vector/ConstantVector.cpp
+DEFINE_int64(
+    velox_constant_vector_share_string_min_bytes,
+    -1,
+    "Minimum size in bytes of a string that a constant string vector built "
+    "from another vector shares instead of copying: it holds the source's "
+    "string buffer when the buffer belongs to the constant's memory pool. 0 "
+    "shares every string that is not inlined. Negative disables sharing");

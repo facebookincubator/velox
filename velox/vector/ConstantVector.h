@@ -54,7 +54,8 @@ class ConstantVector final : public SimpleVector<T> {
       T&& val,
       const SimpleVectorStats<T>& stats = {},
       std::optional<ByteCount> representedBytes = std::nullopt,
-      std::optional<ByteCount> storageByteCount = std::nullopt)
+      std::optional<ByteCount> storageByteCount = std::nullopt,
+      [[maybe_unused]] const BufferPtr& stringBuffer = nullptr)
       : SimpleVector<T>(
             pool,
             type,
@@ -80,8 +81,7 @@ class ConstantVector final : public SimpleVector<T> {
     }
     if constexpr (std::is_same_v<T, StringView>) {
       if (!isNull_) {
-        // Copy string value.
-        setValue(value_.str());
+        setStringValue(value_, stringBuffer);
       }
     }
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
@@ -285,7 +285,15 @@ class ConstantVector final : public SimpleVector<T> {
           this->pool_, length, index_, valueVector_);
     } else {
       return std::make_shared<ConstantVector<T>>(
-          this->pool_, length, isNull_, this->type_, T(value_));
+          this->pool_,
+          length,
+          isNull_,
+          this->type_,
+          T(value_),
+          SimpleVectorStats<T>{},
+          std::nullopt,
+          std::nullopt,
+          stringBuffer_);
     }
   }
 
@@ -443,9 +451,7 @@ class ConstantVector final : public SimpleVector<T> {
       if (!isNull_) {
         value_ = simple->valueAt(index_);
         if constexpr (std::is_same_v<T, StringView>) {
-          // Copy string value.
-          StringView* valuePtr = reinterpret_cast<StringView*>(&value_);
-          setValue(std::string(valuePtr->data(), valuePtr->size()));
+          setStringValue(value_, *simple);
 
           auto stringVector = simple->template as<SimpleVector<StringView>>();
           if (auto ascii = stringVector->isAscii(index_)) {
@@ -459,14 +465,12 @@ class ConstantVector final : public SimpleVector<T> {
     initialized_ = true;
   }
 
-  void setValue(const std::string& string) {
-    value_ = velox::to<decltype(value_)>(string);
-#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
-    if constexpr (can_simd) {
-      valueBuffer_ = simd::setAll(value_);
-    }
-#endif
-  }
+  // Sets 'value_' to 'value'. Holds a buffer that already contains the bytes
+  // of 'value' when one qualifies for sharing, and copies the bytes into a
+  // buffer from this vector's pool otherwise. 'source' is the vector 'value'
+  // was read from; 'candidate' is a buffer that may contain the bytes.
+  void setStringValue(StringView value, const BaseVector& source);
+  void setStringValue(StringView value, const BufferPtr& candidate);
 
   void makeNullsBuffer() {
     if (!isNull_) {
@@ -510,13 +514,14 @@ class ConstantVector final : public SimpleVector<T> {
 };
 
 template <>
-void ConstantVector<StringView>::setValue(const std::string& string);
+void ConstantVector<StringView>::setStringValue(
+    StringView value,
+    const BaseVector& source);
 
 template <>
-void ConstantVector<std::shared_ptr<void>>::setValue(const std::string& string);
-
-template <>
-void ConstantVector<ComplexType>::setValue(const std::string& string);
+void ConstantVector<StringView>::setStringValue(
+    StringView value,
+    const BufferPtr& candidate);
 
 template <typename T>
 using ConstantVectorPtr = std::shared_ptr<ConstantVector<T>>;
