@@ -265,10 +265,6 @@ class QueueSplitsStore : public SplitsStore {
     future = makeFuture();
     return false;
   }
-
-  bool allSplitsConsumed() const override {
-    return noMoreSplits_ && splits_.empty();
-  }
 };
 
 // Identifies the split sources consumed by a pipeline, including an index
@@ -1266,6 +1262,18 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
             self->setError(error);
           });
     }
+
+    // A task with no split groups has no grouped driver to trigger completion.
+    // Recheck split notifications received before driver factories were
+    // created.
+    bool allFinished{false};
+    {
+      std::lock_guard<std::timed_mutex> lock(mutex_);
+      allFinished = isRunningLocked() && checkNoMoreSplitGroupsLocked();
+    }
+    if (allFinished) {
+      terminate(TaskState::kFinished);
+    }
   } catch (const std::exception&) {
     if (isRunning()) {
       setError(std::current_exception());
@@ -1818,8 +1826,6 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
             std::move(self->allDriversClosedPromises_));
       }
 
-      allFinished = self->checkIfFinishedLocked();
-
       // Check if a split group is finished.
       if (splitGroupState.numRunningDrivers == 0) {
         if (splitGroupId != kUngroupedGroupId) {
@@ -1832,6 +1838,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
           splitGroupState.clear();
         }
       }
+      allFinished = self->checkIfFinishedLocked();
       foundDriver = true;
       break;
     }
@@ -2626,40 +2633,6 @@ bool Task::hasMixedExecutionGroupJoin(
   return probeAnyGroupedLeaf != buildAnyGroupedLeaf;
 }
 
-bool Task::allSplitsConsumedHelper(const core::PlanNode* planNode) const {
-  if (planNode->sources().empty()) {
-    const auto& planNodeId = planNode->id();
-    VELOX_CHECK_NE(splitsStates_.count(planNodeId), 0);
-    for (const auto& [_, splitsStore] :
-         splitsStates_.at(planNodeId).groupSplitsStores) {
-      if (splitsStore && !splitsStore->allSplitsConsumed()) {
-        return false;
-      }
-    }
-    return splitsStates_.at(planNodeId).noMoreSplits;
-  }
-  for (const auto& upstreamNode : planNode->sources()) {
-    if (!allSplitsConsumedHelper(upstreamNode.get())) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool Task::allSplitsConsumed(const core::PlanNode* planNode) const {
-  std::lock_guard<std::timed_mutex> l(mutex_);
-  return allSplitsConsumedHelper(planNode);
-}
-
-bool Task::isLastSplitGroup(int32_t splitGroupId) const {
-  std::lock_guard<std::timed_mutex> lock(mutex_);
-  return allNodesReceivedNoMoreSplitsMessageLocked() &&
-      std::ranges::all_of(seenSplitGroups_, [&](auto groupId) {
-           return groupId == splitGroupId ||
-               taskStats_.completedSplitGroups.contains(groupId);
-         });
-}
-
 bool Task::isRunning() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
   return isRunningLocked();
@@ -2756,7 +2729,6 @@ bool Task::checkIfFinishedLocked() {
     return false;
   }
 
-  // TODO Add support for terminating processing early in grouped execution.
   bool allFinished = numFinishedDrivers_ == numTotalDrivers_;
   if (!allFinished && isUngroupedExecution()) {
     const auto outputPipelineId = getOutputPipelineId();
@@ -2764,6 +2736,15 @@ bool Task::checkIfFinishedLocked() {
         numDrivers(outputPipelineId)) {
       allFinished = true;
     }
+  } else if (
+      !allFinished && isGroupedExecution() && numDriversPerSplitGroup_ != 0 &&
+      driverFactories_[getOutputPipelineId()]->groupedExecution &&
+      numRunningSplitGroups_ == 0 && queuedSplitGroups_.empty() &&
+      allNodesReceivedNoMoreSplitsMessageLocked()) {
+    // Task termination releases shared build pipelines that outlive the final
+    // probe group. Partitioned output delays termination until downstream
+    // consumers drain it, so those pipelines can retain resources meanwhile.
+    allFinished = true;
   }
 
   if (allFinished) {
