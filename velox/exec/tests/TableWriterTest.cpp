@@ -3807,8 +3807,8 @@ DEBUG_ONLY_TEST_F(
       .queryCtx(queryCtx)
       .maxDrivers(1)
       .spillDirectory(spillDirectory->getPath())
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(core::QueryConfig::kWriterSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kWriterSpillEnabled, true)
       // Set file writer flush threshold of zero to always trigger flush in
       // test.
       .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)

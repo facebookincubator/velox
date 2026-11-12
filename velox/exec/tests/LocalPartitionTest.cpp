@@ -295,10 +295,10 @@ TEST_F(LocalPartitionTest, planNodeStats) {
 
 TEST_F(LocalPartitionTest, partitionBuffering) {
   std::vector<RowVectorPtr> vectors = {
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(53, 100)}),
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(-71, 1000)}),
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(-69, 1000)}),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(0, 100)),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(53, 100)),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(-71, 1000)),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(-69, 1000)),
   };
 
   std::string query{"SELECT c0, count(1) FROM tmp GROUP BY 1"};
@@ -434,10 +434,10 @@ TEST_F(LocalPartitionTest, partitionBufferingWithStringBuffers) {
 
 TEST_F(LocalPartitionTest, partitionBufferingPreserveEncoding) {
   std::vector<RowVectorPtr> vectors = {
-      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
+      makeNamedRowVector("c0", makeConstant<int32_t>(0, 100)),
+      makeNamedRowVector("c0", makeConstant<int32_t>(0, 100)),
+      makeNamedRowVector("c0", makeConstant<int32_t>(1, 100)),
+      makeNamedRowVector("c0", makeConstant<int32_t>(1, 100)),
   };
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -899,8 +899,8 @@ TEST_F(LocalPartitionTest, unionAll) {
 }
 
 TEST_P(LocalPartitionTestParametrized, unionAllLocalExchange) {
-  auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  auto data1 = makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  auto data2 = makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1023,8 +1023,10 @@ class BlockingNodeFactory : public Operator::PlanNodeTranslator {
 } // namespace
 
 TEST_F(LocalPartitionTest, unionAllLocalExchangeWithInterDependency) {
-  const auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  const auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  const auto data1 =
+      makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  const auto data2 =
+      makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
 
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
@@ -1114,8 +1116,10 @@ TEST_F(LocalPartitionTest, unionAllLocalExchangeWithInterDependency) {
 TEST_F(
     LocalPartitionTest,
     taskErrorWithBlockedDriverFutureUnderSerializedExecutionMode) {
-  const auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  const auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  const auto data1 =
+      makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  const auto data2 =
+      makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
 
   Operator::unregisterAllOperators();
 

@@ -111,7 +111,7 @@ TEST_P(IcebergGeospatialBuildGateTest, readDependsOnBuildFlag) {
   const auto& type = GetParam();
   const auto outputDirectory = test::TempDirectoryPath::create();
   const auto dataPath = outputDirectory->getPath();
-  auto data = makeRowVector({"geom"}, {makeWkbVector()});
+  auto data = makeNamedRowVector("geom", makeWkbVector());
   auto dataSink = createDataSinkAndAppendData({data}, dataPath);
   dataSink->close();
 
@@ -151,7 +151,7 @@ TEST_P(IcebergGeospatialBuildGateTest, equalityDeleteDependsOnBuildFlag) {
                VARBINARY())}),
       baseDirectory);
   const auto deleteFilePath = writeParquetFile(
-      makeRowVector({"geom"}, {makeWkbVector()}), deleteDirectory);
+      makeNamedRowVector("geom", makeWkbVector()), deleteDirectory);
 
   // Field id 2 is the second top-level column, "geom".
   IcebergDeleteFile equalityDelete(
@@ -169,7 +169,7 @@ TEST_P(IcebergGeospatialBuildGateTest, equalityDeleteDependsOnBuildFlag) {
 #ifdef VELOX_ENABLE_GEO
   // The delete key is re-encoded like the base rows, so it matches row 1.
   exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
-      makeRowVector({"id"}, {makeFlatVector<int64_t>({2})}));
+      makeNamedRowVector("id", makeFlatVector<int64_t>({2})));
 #else
   // The equality column is read even though it is not projected, so the read
   // must fail and name the flag. Any successful read would mean the delete was
@@ -188,7 +188,7 @@ TEST_P(IcebergGeospatialBuildGateTest, equalityDeleteReaderDependsOnBuildFlag) {
   const auto& type = GetParam();
   const auto deleteDirectory = test::TempDirectoryPath::create();
   const auto deleteFilePath = writeParquetFile(
-      makeRowVector({"geom"}, {makeWkbVector()}), deleteDirectory);
+      makeNamedRowVector("geom", makeWkbVector()), deleteDirectory);
   IcebergDeleteFile equalityDelete(
       FileContent::kEqualityDeletes,
       deleteFilePath,
@@ -239,7 +239,7 @@ TEST_F(IcebergGeometryBuildGateTest, plainBinaryReadWorksInEitherBuild) {
   // back verbatim.
   const auto outputDirectory = test::TempDirectoryPath::create();
   const auto dataPath = outputDirectory->getPath();
-  auto data = makeRowVector({"geom"}, {makeWkbVector()});
+  auto data = makeNamedRowVector("geom", makeWkbVector());
   auto dataSink = createDataSinkAndAppendData({data}, dataPath);
   dataSink->close();
 

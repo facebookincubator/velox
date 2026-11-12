@@ -1670,8 +1670,8 @@ TEST_P(MultiFragmentTest, earlyCompletion) {
     if (i == 0) {
       buildData = makeRowVector(ROW({"u_c0"}, {BIGINT()}), 0);
     } else {
-      buildData = makeRowVector(
-          {"u_c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
+      buildData = makeNamedRowVector(
+          "u_c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}));
     }
 
     auto joinPlan = makeJoinOverExchangePlan(
@@ -1739,8 +1739,8 @@ TEST_P(MultiFragmentTest, earlyCompletionBroadcast) {
     if (i == 0) {
       buildData = makeRowVector(ROW({"u_c0"}, {BIGINT()}), 0);
     } else {
-      buildData = makeRowVector(
-          {"u_c0"}, {makeFlatVector<int64_t>({-7, 10, 12345678})});
+      buildData = makeNamedRowVector(
+          "u_c0", makeFlatVector<int64_t>({-7, 10, 12345678}));
     }
 
     auto joinPlan = makeJoinOverExchangePlan(
@@ -1810,8 +1810,8 @@ TEST_P(MultiFragmentTest, earlyCompletionMerge) {
     if (i == 0) {
       buildData = makeRowVector(ROW({"u_c0"}, {BIGINT()}), 0);
     } else {
-      buildData = makeRowVector(
-          {"u_c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
+      buildData = makeNamedRowVector(
+          "u_c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}));
     }
 
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -2094,8 +2094,8 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, lateNoMoreSplits) {
   // Verify the task finishes when 'no more splits' arrives after driver 0 of an
   // exchange pipeline stopped reading. A null-aware anti join build stops at
   // the first null key, so driver 0 gets the only page, which holds a null.
-  auto data = makeRowVector(
-      {"u_c0"}, {makeNullableFlatVector<int64_t>({1, std::nullopt})});
+  auto data = makeNamedRowVector(
+      "u_c0", makeNullableFlatVector<int64_t>({1, std::nullopt}));
   auto leafTaskId = makeTaskId("leaf", 0);
   auto leafTask = startLeafTask(leafTaskId, {data});
 
@@ -2466,7 +2466,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, terminateWithBadSplit) {
   //
   // Start the task with 2 drivers.
   auto probeData =
-      makeRowVector({"p_c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+      makeNamedRowVector("p_c0", makeFlatVector<int64_t>({1, 2, 3}));
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId exchangeNodeId;
   auto plan =

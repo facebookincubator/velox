@@ -2792,7 +2792,7 @@ TEST_F(TestReader, failToReuseReaderNulls) {
   bits::setNull(c0->mutableRawNulls(), 10);
   auto data = makeRowVector({
       c0,
-      makeRowVector({"c"}, {makeFlatIdentityVector<int64_t>(11)}),
+      makeNamedRowVector("c", makeFlatIdentityVector<int64_t>(11)),
   });
   auto schema = asRowType(data->type());
   auto [writer, reader] =
@@ -2840,7 +2840,7 @@ TEST_F(TestReader, readFlatMapsSomeEmpty) {
   auto values = makeFlatIdentityVector<int64_t>(16);
   auto maps =
       makeMapVector(std::vector<vector_size_t>{0, 6, 9, 12, 16}, keys, values);
-  auto row = makeRowVector({"a"}, {maps});
+  auto row = makeNamedRowVector("a", maps);
 
   // Set up the config so that the maps are flattened.
   std::shared_ptr<dwrf::Config> config = std::make_shared<dwrf::Config>();
@@ -2907,7 +2907,7 @@ TEST_F(TestReader, readFlatMapsWithNullMaps) {
       keys,
       values,
       {1, 3, 5, 7});
-  auto row = makeRowVector({"a"}, {maps});
+  auto row = makeNamedRowVector("a", maps);
 
   // Set up the config so that the maps are flattened.
   std::shared_ptr<dwrf::Config> config = std::make_shared<dwrf::Config>();
@@ -3373,7 +3373,7 @@ TEST_F(TestReader, readStructWithWholeBatchFiltered) {
 
   auto c0 =
       std::make_shared<RowVector>(pool(), rowType, nulls, vectorSize, children);
-  auto row = makeRowVector({"c0"}, {c0});
+  auto row = makeNamedRowVector("c0", c0);
 
   auto [writer, reader] =
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
@@ -3564,7 +3564,7 @@ TEST_F(TestReader, selectiveStringDirect) {
 TEST_F(TestReader, selectiveFlatMapFastPathAllInlinedStringKeys) {
   auto maps = makeMapVector<std::string, int64_t>(
       {{{"a", 0}, {"b", 0}}, {{"a", 1}, {"b", 1}}});
-  auto row = makeRowVector({"c0"}, {maps});
+  auto row = makeNamedRowVector("c0", maps);
   auto config = std::make_shared<dwrf::Config>();
   config->set(dwrf::Config::FLATTEN_MAP, true);
   config->set(dwrf::Config::MAP_FLAT_COLS, {0});
@@ -3748,7 +3748,7 @@ TEST_F(TestReader, mapAsStructAllEmpty) {
   VectorPtr batch = BaseVector::create(outType, 0, pool());
   ASSERT_EQ(rowReader->next(10, batch), 2);
   auto expected = makeRowVector({
-      makeRowVector({"1"}, {makeNullConstant(TypeKind::BIGINT, 2)}),
+      makeNamedRowVector("1", makeNullConstant(TypeKind::BIGINT, 2)),
   });
   assertEqualVectors(expected, batch);
 }
@@ -3914,7 +3914,7 @@ TEST_F(TestReader, extractionTransformMapKeys) {
   auto keys = makeFlatVector<StringView>({"a", "b", "c", "d"});
   auto values = makeFlatVector<int64_t>({1, 2, 3, 4});
   auto mapVector = makeMapVector({0, 2}, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -4047,7 +4047,7 @@ TEST_F(TestReader, extractionTransformSize) {
   auto keys = makeFlatVector<StringView>({"a", "b", "c"});
   auto values = makeFlatVector<int64_t>({1, 2, 3});
   auto mapVector = makeMapVector({0, 1}, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -4090,7 +4090,7 @@ TEST_F(TestReader, extractionMapKeySizeWithSeek) {
     offsets[i] = i * 2;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -4127,7 +4127,7 @@ TEST_F(TestReader, extractionTransformMapValuesStructField) {
       {makeFlatVector<int32_t>({10, 20, 30}),
        makeFlatVector<int32_t>({100, 200, 300})});
   auto mapVector = makeMapVector({0, 2}, keys, structValues);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -4197,7 +4197,7 @@ TEST_F(TestReader, extractionSizeResultVectorReuse) {
     offsets[i] = i * 2;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -4250,7 +4250,7 @@ TEST_F(TestReader, extractionMapKeysMultipleBatches) {
     offsets[i] = i * 3;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -4306,7 +4306,7 @@ TEST_F(TestReader, extractionMapKeysIoReduction) {
     offsets[i] = i * 2;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);

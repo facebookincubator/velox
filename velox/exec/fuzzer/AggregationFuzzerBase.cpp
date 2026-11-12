@@ -502,8 +502,8 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
     if (injectSpill) {
       spillDirectory = TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->getPath())
-          .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kAggregationSpillEnabled, true)
           .config(core::QueryConfig::kMaxSpillRunRows, randInt(32, 1L << 30));
       // Randomized the spill injection with a percentage less than 100.
       spillPct = 20;

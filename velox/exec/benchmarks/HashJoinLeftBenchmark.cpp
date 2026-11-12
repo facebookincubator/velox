@@ -87,15 +87,15 @@ class HashJoinLeftBenchmark : public VectorTestBase {
       int32_t hitPct) {
     auto pattern =
         makeBatches(kProbePatternRows, [&](int64_t row, vector_size_t size) {
-          return makeRowVector(
-              {"t0"}, {makeFlatVector<int64_t>(size, [&](vector_size_t index) {
+          return makeNamedRowVector(
+              "t0", makeFlatVector<int64_t>(size, [&](vector_size_t index) {
                 const auto probeRow = row + index;
                 const auto random = folly::hash::twang_mix64(probeRow);
                 if (random % 100 < hitPct) {
                   return buildKey(random % numBuildRows);
                 }
                 return static_cast<int64_t>(random | uint64_t{1});
-              })});
+              }));
         });
     std::vector<RowVectorPtr> probeVectors;
     for (int32_t repeat = 0; repeat < kProbeRepeats; ++repeat) {

@@ -638,11 +638,11 @@ TEST_F(VectorCompareTest, customComparisonMap) {
 }
 
 TEST_F(VectorCompareTest, customComparisonRow) {
-  auto rowVector = makeRowVector(
-      {"a"},
-      {vectorMaker_.flatVectorNullable<int64_t>(
+  auto rowVector = makeNamedRowVector(
+      "a",
+      vectorMaker_.flatVectorNullable<int64_t>(
           {0, 1, std::nullopt, 256, 257},
-          test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
+          test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()));
 
   testCustomComparison(std::vector<VectorPtr>(5, rowVector), {0, 1, 2, 3, 4});
 }
