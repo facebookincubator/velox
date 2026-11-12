@@ -6328,6 +6328,7 @@ TEST_F(WriterTest, runtimeStatsPublishesEveryCounter) {
           ::testing::Key("nimble.encodingCpuNanos"),
           ::testing::Key("nimble.encodingWallNanos"),
           ::testing::Key("nimble.encodingSelectionCpuNanos"),
+          ::testing::Key("nimble.encodingSelectionWallNanos"),
           ::testing::Key("nimble.rowsPerStripe"),
           ::testing::Key("nimble.chunkSizeBytes"),
           ::testing::Key("nimble.duplicateStreamCount"),
@@ -6356,6 +6357,67 @@ TEST_F(WriterTest, runtimeStatsPublishesEveryCounter) {
   // Column statistics have no RuntimeMetric form, so they are collected by
   // default but read through their own accessor rather than the map.
   EXPECT_FALSE(writer.columnStats().empty());
+}
+
+TEST_F(WriterTest, encodingSelectionCpuNanosRecordsSelectionTime) {
+  using NimbleStats = nimble::Writer::RuntimeStats;
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  constexpr velox::vector_size_t kRows = 4'096;
+  auto vector = vectorMaker.rowVector(
+      {"seq", "lowCardinality", "text", "nullable"},
+      {vectorMaker.flatVector<int64_t>(
+           kRows, [](auto row) { return static_cast<int64_t>(row); }),
+       vectorMaker.flatVector<int32_t>(
+           kRows, [](auto row) { return static_cast<int32_t>(row % 7); }),
+       vectorMaker.flatVector<velox::StringView>(
+           kRows,
+           [](auto row) {
+             thread_local std::string value;
+             value.assign(8 + (row % 5), static_cast<char>('a' + row % 26));
+             return velox::StringView(value);
+           }),
+       vectorMaker.flatVector<int64_t>(
+           kRows,
+           [](auto row) { return static_cast<int64_t>(row % 13); },
+           [](auto row) { return row % 3 == 0; })});
+  const auto type = velox::asRowType(vector->type());
+
+  for (const uint32_t parallelism : {0, 4}) {
+    SCOPED_TRACE(fmt::format("parallelism {}", parallelism));
+    std::shared_ptr<folly::CPUThreadPoolExecutor> executor;
+    nimble::WriterOptions options;
+    options.enableChunking = true;
+    options.minStreamChunkRawSize = 0;
+    options.flushPolicyFactory = chunkAndStripeFlushPolicyFactory(
+        /*chunksPerStripe=*/2);
+    if (parallelism > 0) {
+      executor = std::make_shared<folly::CPUThreadPoolExecutor>(parallelism);
+      options.encodingExecutor = folly::getKeepAliveToken(*executor);
+      options.maxEncodeParallelism = parallelism;
+      options.minStreamsPerEncodingTask = 1;
+    }
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::Writer writer(
+        type, std::move(writeFile), *rootPool_, std::move(options));
+    for (int batch = 0; batch < 4; ++batch) {
+      writer.write(vector);
+    }
+    writer.close();
+
+    const auto metrics = writer.runtimeStats();
+    const auto selectionCpuNanos =
+        nimble::runtimeStat(metrics, NimbleStats::kEncodingSelectionCpuNanos)
+            .sum;
+    EXPECT_GT(selectionCpuNanos, 0);
+    EXPECT_LE(
+        selectionCpuNanos,
+        nimble::runtimeStat(metrics, NimbleStats::kEncodingCpuNanos).sum);
+    EXPECT_GT(
+        nimble::runtimeStat(metrics, NimbleStats::kEncodingSelectionWallNanos)
+            .sum,
+        0);
+  }
 }
 
 TEST_F(WriterTest, parallelEncodeOutputIndependentOfEncodeOrder) {
@@ -6470,6 +6532,52 @@ TEST_F(WriterTest, cachedEncodingLayoutAcrossChunks) {
   for (const auto& layout : cached) {
     EXPECT_EQ(layout.encodingType(), cached.front().encodingType());
   }
+}
+
+TEST_F(WriterTest, cachedEncodingLayoutReducesEncodingSelectionCpuNanos) {
+  constexpr int kChunkCount = 20;
+  constexpr int kRowsPerChunk = 10'000;
+  // Every chunk draws from the same low-cardinality distribution, so the
+  // layout cached from chunk 0 replays onto every later chunk without a
+  // fallback selection.
+  std::mt19937 rng{0xC0FFEE};
+  std::vector<std::vector<int64_t>> chunkData(kChunkCount);
+  for (auto& chunkValues : chunkData) {
+    chunkValues.reserve(kRowsPerChunk);
+    for (int row = 0; row < kRowsPerChunk; ++row) {
+      chunkValues.push_back(static_cast<int64_t>(rng() % 100));
+    }
+  }
+  const auto batches = bigintBatches(chunkData);
+  const auto type = velox::ROW({{"c0", velox::BIGINT()}});
+
+  auto selectionCpuNanos = [&](bool enableEncodingSelectionCache) {
+    nimble::WriterOptions options;
+    options.enableEncodingSelectionCache = enableEncodingSelectionCache;
+    options.enableChunking = true;
+    options.minStreamChunkRawSize = 0;
+    options.flushPolicyFactory =
+        chunkAndStripeFlushPolicyFactory(/*chunksPerStripe=*/5);
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::Writer writer(
+        type, std::move(writeFile), *rootPool_, std::move(options));
+    for (const auto& batch : batches) {
+      writer.write(batch);
+    }
+    writer.close();
+    return nimble::runtimeStat(
+               writer.runtimeStats(),
+               nimble::Writer::RuntimeStats::kEncodingSelectionCpuNanos)
+        .sum;
+  };
+
+  const auto uncached =
+      selectionCpuNanos(/*enableEncodingSelectionCache=*/false);
+  const auto cached = selectionCpuNanos(/*enableEncodingSelectionCache=*/true);
+  EXPECT_GT(cached, 0);
+  constexpr int kMinCachedSelectionSpeedup = 4;
+  EXPECT_LT(cached * kMinCachedSelectionSpeedup, uncached);
 }
 
 TEST_F(WriterTest, cachedEncodingLayoutMultiType) {

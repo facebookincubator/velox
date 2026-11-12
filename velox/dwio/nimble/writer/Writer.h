@@ -138,10 +138,14 @@ class Writer : public velox::dwio::common::Writer {
     /// parallelized via encodingExecutor, so wall < CPU.
     static constexpr std::string_view kEncodingWallNanos =
         "nimble.encodingWallNanos";
-    /// CPU time spent on encoding selection. Subset of the encoding timing.
-    /// Sequential — no wall time needed.
+    /// CPU time spent on encoding selection, summed over encoding threads.
+    /// Subset of the encoding CPU time.
     static constexpr std::string_view kEncodingSelectionCpuNanos =
         "nimble.encodingSelectionCpuNanos";
+    /// Wall clock time spent on encoding selection, summed over encoding
+    /// threads. With parallel encoding it can exceed the encoding wall time.
+    static constexpr std::string_view kEncodingSelectionWallNanos =
+        "nimble.encodingSelectionWallNanos";
     /// Rows per stripe distribution. One value is recorded per stripe, so its
     /// `count` is the number of stripes written and no separate stripe counter
     /// is published.

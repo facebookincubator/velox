@@ -52,6 +52,7 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/selection/TimedEncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/DenseIndexFactory.h"
@@ -162,11 +163,7 @@ class WriterContext : public FieldWriterContext {
     return ingestionTiming_;
   }
 
-  velox::CpuWallTiming& encodingSelectionTiming() {
-    return encodingSelectionTiming_;
-  }
-
-  const velox::CpuWallTiming& encodingSelectionTiming() const {
+  folly::Synchronized<velox::CpuWallTiming>& encodingSelectionTiming() {
     return encodingSelectionTiming_;
   }
 
@@ -285,7 +282,7 @@ class WriterContext : public FieldWriterContext {
   velox::CpuWallTiming encodingTiming_;
   velox::CpuWallTiming writeTiming_;
   velox::CpuWallTiming ingestionTiming_;
-  velox::CpuWallTiming encodingSelectionTiming_;
+  folly::Synchronized<velox::CpuWallTiming> encodingSelectionTiming_;
   std::shared_ptr<MetricsLogger> logger_;
   uint64_t memoryUsed_{0};
   uint64_t bytesWritten_{0};
@@ -1117,14 +1114,17 @@ std::string_view encode(
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::encode", const_cast<bool*>(&hasEncodingLayout));
 
-  auto policy = makeEncodingPolicy<T>(
-      hasEncodingLayout,
-      std::move(encodingLayout),
-      context,
-      buffer,
-      encodingScratchBufferPool,
-      encodingBufferPool,
-      streamData);
+  std::unique_ptr<EncodingSelectionPolicy<T>> policy =
+      std::make_unique<TimedEncodingSelectionPolicy<T>>(
+          makeEncodingPolicy<T>(
+              hasEncodingLayout,
+              std::move(encodingLayout),
+              context,
+              buffer,
+              encodingScratchBufferPool,
+              encodingBufferPool,
+              streamData),
+          context.encodingSelectionTiming());
 
   auto encodingOptions = makeEncodingOptions(
       context.options(), encodingScratchBufferPool, encodingBufferPool);
@@ -2867,6 +2867,7 @@ void Writer::reportRuntimeStats() const {
   reportNanos(Keys::kIngestionCpuNanos);
   reportNanos(Keys::kIngestionWallNanos);
   reportNanos(Keys::kEncodingSelectionCpuNanos);
+  reportNanos(Keys::kEncodingSelectionWallNanos);
 
   // Distributions are published whole, so they replace rather than accumulate.
   velox::setThreadLocalRuntimeStat(
@@ -3803,6 +3804,8 @@ folly::F14FastMap<std::string, velox::RuntimeMetric> Writer::runtimeStats()
     const {
   using Keys = Writer::RuntimeStats;
   const auto& tabletStats = tabletWriter_->stats();
+  const auto encodingSelectionTiming =
+      context_->encodingSelectionTiming().copy();
   return {
       {std::string{Keys::kWrittenBytes}, bytesMetric(context_->bytesWritten())},
       {std::string{Keys::kInputBytes}, bytesMetric(context_->fileRawSize())},
@@ -3819,7 +3822,9 @@ folly::F14FastMap<std::string, velox::RuntimeMetric> Writer::runtimeStats()
       {std::string{Keys::kEncodingWallNanos},
        nanosMetric(context_->encodingTiming().wallNanos)},
       {std::string{Keys::kEncodingSelectionCpuNanos},
-       nanosMetric(context_->encodingSelectionTiming().cpuNanos)},
+       nanosMetric(encodingSelectionTiming.cpuNanos)},
+      {std::string{Keys::kEncodingSelectionWallNanos},
+       nanosMetric(encodingSelectionTiming.wallNanos)},
       // Distributions are already accumulated as metrics, so they are published
       // verbatim rather than collapsed to a single value.
       {std::string{Keys::kRowsPerStripe},
