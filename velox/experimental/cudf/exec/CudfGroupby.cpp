@@ -39,7 +39,6 @@
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/lists/count_elements.hpp>
 #include <cudf/lists/lists_column_view.hpp>
-#include <cudf/lists/stream_compaction.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
@@ -1225,22 +1224,14 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
     auto& request = requests.emplace_back();
     outputIndex_ = requests.size() - 1;
     if (exec::isRawInput(step)) {
-      // Dropping nulls drops the masked rows too once they are made null.
-      // Otherwise the mask is collected beside the values, in the same row
-      // order, and applied to each list in makeOutputColumn.
-      request.values = ignoreNulls_ ? nullMaskedRows(table, stream)
-                                    : table.column(inputIndex);
+      // Masked rows are made null, on the values when nulls are dropped and on
+      // a one-field struct around them otherwise, so EXCLUDE leaves them out.
+      request.values = nullMaskedRows(table, stream);
       request.aggregations.push_back(
           cudf::make_collect_list_aggregation<cudf::groupby_aggregation>(
-              ignoreNulls_ ? cudf::null_policy::EXCLUDE
-                           : cudf::null_policy::INCLUDE));
-      if (maskIndex.has_value() && !ignoreNulls_) {
-        auto& maskRequest = requests.emplace_back();
-        maskRequest.values = table.column(*maskIndex);
-        maskRequest.aggregations.push_back(
-            cudf::make_collect_list_aggregation<cudf::groupby_aggregation>(
-                cudf::null_policy::INCLUDE));
-      }
+              ignoreNulls_ || maskIndex.has_value()
+                  ? cudf::null_policy::EXCLUDE
+                  : cudf::null_policy::INCLUDE));
       return;
     }
     request.values = mergeInput(table.column(inputIndex), stream, mr);
@@ -1254,13 +1245,20 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
       rmm::device_async_resource_ref mr) override {
     auto lists = std::move(results[outputIndex_].results[0]);
     if (maskIndex.has_value() && !ignoreNulls_) {
-      // A null mask element keeps its row out, as a false one does.
-      auto masks = std::move(results[outputIndex_ + 1].results[0]);
-      lists = cudf::lists::apply_retention_mask(
-          cudf::lists_column_view{lists->view()},
-          cudf::lists_column_view{masks->view()},
-          stream,
-          mr);
+      // Unwraps the one-field struct of nullMaskedRows().
+      const auto numGroups = lists->size();
+      auto contents = lists->release();
+      auto fields =
+          contents.children[cudf::lists_column_view::child_column_index]
+              ->release()
+              .children;
+      lists = cudf::make_lists_column(
+          numGroups,
+          std::move(
+              contents.children[cudf::lists_column_view::offsets_column_index]),
+          std::move(fields[0]),
+          0,
+          std::move(*contents.null_mask));
     }
     // A raw-input step leaves a group without elements only when it drops
     // nulls or masked rows; a merge step whenever the group had NULL and empty
@@ -1291,9 +1289,10 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
   }
 
  private:
-  // Returns the input column with its masked-out rows also null. Only a new
-  // null mask is built, which works for every element type, and the view
-  // keeps the input's data and children.
+  // Returns the input column with its masked-out rows made null, on a
+  // one-field struct around the input when nulls are kept and on the input
+  // itself otherwise. Only a new null mask is built, which works for every
+  // element type, and the view keeps the input's data and children.
   cudf::column_view nullMaskedRows(
       cudf::table_view const& table,
       cuda::stream_ref stream) {
@@ -1307,6 +1306,18 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
     auto [rowMask, nullCount] =
         cudf::bools_to_mask(table.column(*maskIndex), stream, get_temp_mr());
     maskedRowNulls_ = std::move(rowMask);
+    if (!ignoreNulls_) {
+      // The child keeps its null values, so EXCLUDE drops the masked rows
+      // alone.
+      return cudf::column_view(
+          cudf::data_type{cudf::type_id::STRUCT},
+          input.size(),
+          nullptr,
+          reinterpret_cast<const cudf::bitmask_type*>(maskedRowNulls_->data()),
+          nullCount,
+          0,
+          {input});
+    }
     if (input.nullable()) {
       const std::vector<const cudf::bitmask_type*> masks{
           reinterpret_cast<const cudf::bitmask_type*>(maskedRowNulls_->data()),
