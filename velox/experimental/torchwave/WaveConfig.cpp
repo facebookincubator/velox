@@ -88,6 +88,7 @@ std::string WaveConfig::toString() const {
   addBool("kernelLineInfo", &WaveConfig::kernelLineInfo);
   addBool("debugSingleOps", &WaveConfig::debugSingleOps);
   addBool("autoAdjustCost", &WaveConfig::autoAdjustCost);
+  addBool("costCountsBarrierWait", &WaveConfig::costCountsBarrierWait);
   addBool("uniformCost", &WaveConfig::uniformCost);
   addBool("launchPerOp", &WaveConfig::launchPerOp);
   addBool("dedupProjectOps", &WaveConfig::dedupProjectOps);
@@ -97,6 +98,11 @@ std::string WaveConfig::toString() const {
   addBool("recognizeDisjointCopies", &WaveConfig::recognizeDisjointCopies);
   addBool("reinplaceScatters", &WaveConfig::reinplaceScatters);
   addBool("disjointWriteOrdering", &WaveConfig::disjointWriteOrdering);
+  addBool("staticLeafIndex", &WaveConfig::staticLeafIndex);
+  addBool("constantSizes", &WaveConfig::constantSizes);
+  addBool("verifyStaticSizes", &WaveConfig::verifyStaticSizes);
+  addBool("fuseThroughViews", &WaveConfig::fuseThroughViews);
+  addBool("fuseRowReductions", &WaveConfig::fuseRowReductions);
   addBool("skipRepeatedWaits", &WaveConfig::skipRepeatedWaits);
   addBool("completionCounters", &WaveConfig::completionCounters);
   addBool("scanOutputReturnBarrier", &WaveConfig::scanOutputReturnBarrier);
