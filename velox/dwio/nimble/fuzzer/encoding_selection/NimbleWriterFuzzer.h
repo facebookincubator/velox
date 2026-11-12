@@ -261,10 +261,11 @@ inline constexpr uint32_t kNumUnfilteredRounds = 10;
 /// Whether an encoding may only be requested for a stream that is not REAL or
 /// DOUBLE. SimdForBitpack and Huffman can be selected for a floating-point
 /// stream because their write-side gate tests physicalType (uint32_t/uint64_t,
-/// hence integral). DeltaBlock's direct gate tests the logical type, but a
-/// Nullable float's nested policy sees the physical type and can select it
-/// there. Every read-side gate rejects all three for float and double,
-/// producing a file no selective reader can decode. See T283330065.
+/// hence integral). DeltaBlock and the Elias-Fano encodings test the logical
+/// type in their direct gates, but a Nullable float's nested policy sees the
+/// physical type and can select them there. Every read-side gate rejects all of
+/// these for float and double, producing a file no selective reader can decode.
+/// See T283330065.
 ///
 /// The restriction is per stream, not per schema: a schema holding one REAL
 /// column alongside integer columns still exercises these encodings on the

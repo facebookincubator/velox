@@ -46,6 +46,8 @@ add_executable(
   EliasFanoEncodingViewTest.cpp
   PartitionedEliasFanoEncodingTest.cpp
   PartitionedEliasFanoEncodingViewTest.cpp
+  ReverseEliasFanoEncodingTest.cpp
+  ReverseEliasFanoEncodingViewTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp

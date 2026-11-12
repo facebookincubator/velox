@@ -36,6 +36,7 @@
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReverseEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
@@ -294,6 +295,20 @@ std::string_view slicePartitionedEliasFano(
           encoded, offset, length, buffer, options));
 }
 
+std::string_view sliceReverseEliasFano(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+      dataType,
+      T,
+      ReverseEliasFanoEncoding<T>::slice(
+          encoded, offset, length, buffer, options));
+}
+
 std::string_view slicePFOR(
     std::string_view encoded,
     DataType dataType,
@@ -424,6 +439,9 @@ std::string_view EncodingSliceFactory::slice(
       return sliceEliasFano(encoded, dataType, offset, length, buffer, options);
     case EncodingType::PartitionedEliasFano:
       return slicePartitionedEliasFano(
+          encoded, dataType, offset, length, buffer, options);
+    case EncodingType::ReverseEliasFano:
+      return sliceReverseEliasFano(
           encoded, dataType, offset, length, buffer, options);
     case EncodingType::PFOR:
       return slicePFOR(encoded, dataType, offset, length, buffer, options);

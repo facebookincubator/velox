@@ -17,6 +17,8 @@
 #include <gtest/gtest.h>
 
 #include <sstream>
+#include <string>
+#include <tuple>
 #include <vector>
 
 #include "velox/common/memory/Memory.h"
@@ -24,6 +26,7 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
+#include "velox/dwio/nimble/encodings/ReverseEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
@@ -508,6 +511,41 @@ TEST_F(EncodingUtilitiesTest, traverseEncodingsPartitionedEliasFanoChildren) {
   EXPECT_EQ(rootType, EncodingType::PartitionedEliasFano);
   const std::vector<std::string> expected{"PartitionOffsets", "PartitionBases"};
   EXPECT_EQ(nestedNames, expected);
+}
+
+// --- ReverseEliasFano nested stream ---
+
+TEST_F(EncodingUtilitiesTest, traverseEncodingsReverseEliasFanoChild) {
+  nimble::Buffer buffer(*pool_);
+  nimble::Vector<int32_t> values(pool_.get());
+  for (const int32_t value : {9, 7, -4, -4}) {
+    values.push_back(value);
+  }
+  const auto stream =
+      nimble::test::Encoder<nimble::ReverseEliasFanoEncoding<int32_t>>::encode(
+          buffer, values);
+
+  using Traversed = std::tuple<uint32_t, EncodingType, DataType, std::string>;
+  std::vector<Traversed> traversed;
+  traverseEncodings(
+      stream,
+      [&](EncodingType encodingType,
+          DataType dataType,
+          uint32_t level,
+          uint32_t /* index */,
+          const std::string& nestedEncodingName,
+          const std::unordered_map<EncodingPropertyType, EncodingProperty>&
+          /* properties */) -> bool {
+        traversed.emplace_back(
+            level, encodingType, dataType, nestedEncodingName);
+        return true;
+      });
+
+  const std::vector<Traversed> expected{
+      {0, EncodingType::ReverseEliasFano, DataType::Int32, ""},
+      {1, EncodingType::EliasFano, DataType::Uint32, "Complements"},
+  };
+  EXPECT_EQ(traversed, expected);
 }
 
 TEST_F(EncodingUtilitiesTest, traverseEncodingsSharedDictionary) {

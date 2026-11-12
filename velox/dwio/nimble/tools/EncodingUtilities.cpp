@@ -73,6 +73,7 @@ void extractCompressionType(
     case EncodingType::Fsst:
     case EncodingType::PFOR:
     case EncodingType::PartitionedEliasFano:
+    case EncodingType::ReverseEliasFano:
     case EncodingType::SimdForBitpack:
     // SubIntSplit integration is disabled; it carries no separate compression
     // byte, so treat it like the other encodings handled here.
@@ -291,6 +292,18 @@ void traverseEncodings(
             useVarintRowCount,
             visitor);
       }
+      break;
+    }
+    case EncodingType::ReverseEliasFano: {
+      // Layout after the common prefix: one nested EliasFano stream of the
+      // complemented values, which runs to the end of the stream.
+      traverseEncodings(
+          stream.substr(dataOffset),
+          level + 1,
+          0,
+          "Complements",
+          useVarintRowCount,
+          visitor);
       break;
     }
     case EncodingType::PFOR: {

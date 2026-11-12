@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <type_traits>
 #include "velox/common/base/SimdUtil.h"
@@ -242,6 +243,26 @@ void Statistics<T, InputType>::populateSignedOrderNonDecreasing()
 }
 
 template <typename T, typename InputType>
+void Statistics<T, InputType>::populatePhysicalOrderNonIncreasing()
+    const noexcept {
+  physicalOrderNonIncreasing_ =
+      std::is_sorted(data_.begin(), data_.end(), std::greater<>{});
+}
+
+template <typename T, typename InputType>
+void Statistics<T, InputType>::populateSignedOrderNonIncreasing()
+    const noexcept {
+  using UnsignedInputType = std::make_unsigned_t<InputType>;
+  constexpr auto signMask = UnsignedInputType{1}
+      << (std::numeric_limits<UnsignedInputType>::digits - 1);
+  signedOrderNonIncreasing_ = std::is_sorted(
+      data_.begin(), data_.end(), [](const auto lhs, const auto rhs) {
+        return (static_cast<UnsignedInputType>(lhs) ^ signMask) >
+            (static_cast<UnsignedInputType>(rhs) ^ signMask);
+      });
+}
+
+template <typename T, typename InputType>
 void Statistics<T, InputType>::populateUniques() const {
   MapType<T, InputType> uniqueCounts;
   if constexpr (nimble::isBoolType<T>()) {
@@ -365,6 +386,8 @@ Statistics<T, InputType> Statistics<T, InputType>::create(
     statistics.max_ = T();
     statistics.physicalOrderNonDecreasing_ = true;
     statistics.signedOrderNonDecreasing_ = true;
+    statistics.physicalOrderNonIncreasing_ = true;
+    statistics.signedOrderNonIncreasing_ = true;
 
     statistics.bucketCounts_ = {};
     statistics.uniqueCounts_ = std::make_optional(
@@ -492,6 +515,35 @@ template void Statistics<uint16_t>::populateSignedOrderNonDecreasing()
 template void Statistics<uint32_t>::populateSignedOrderNonDecreasing()
     const noexcept;
 template void Statistics<uint64_t>::populateSignedOrderNonDecreasing()
+    const noexcept;
+
+// populatePhysicalOrderNonIncreasing works on integral types only.
+template void Statistics<int8_t>::populatePhysicalOrderNonIncreasing()
+    const noexcept;
+template void Statistics<uint8_t>::populatePhysicalOrderNonIncreasing()
+    const noexcept;
+template void Statistics<int16_t>::populatePhysicalOrderNonIncreasing()
+    const noexcept;
+template void Statistics<uint16_t>::populatePhysicalOrderNonIncreasing()
+    const noexcept;
+template void Statistics<int32_t>::populatePhysicalOrderNonIncreasing()
+    const noexcept;
+template void Statistics<uint32_t>::populatePhysicalOrderNonIncreasing()
+    const noexcept;
+template void Statistics<int64_t>::populatePhysicalOrderNonIncreasing()
+    const noexcept;
+template void Statistics<uint64_t>::populatePhysicalOrderNonIncreasing()
+    const noexcept;
+
+// populateSignedOrderNonIncreasing is used when signed logical values are
+// represented by unsigned physical values.
+template void Statistics<uint8_t>::populateSignedOrderNonIncreasing()
+    const noexcept;
+template void Statistics<uint16_t>::populateSignedOrderNonIncreasing()
+    const noexcept;
+template void Statistics<uint32_t>::populateSignedOrderNonIncreasing()
+    const noexcept;
+template void Statistics<uint64_t>::populateSignedOrderNonIncreasing()
     const noexcept;
 
 // populateMinMaxBlocks is used through the estimation path where T is always

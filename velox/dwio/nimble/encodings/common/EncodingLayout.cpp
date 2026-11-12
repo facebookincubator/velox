@@ -205,6 +205,9 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Huffman:
       // Non nested encodings have zero children
       break;
+    case EncodingType::ReverseEliasFano:
+      // The nested stream is always EliasFano and carries no selectable layout.
+      break;
     case EncodingType::Slice:
       // The wrapped encoding is carried verbatim rather than as a nested
       // stream, and the layout tree describes how data is encoded, not how a

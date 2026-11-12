@@ -443,6 +443,24 @@ TEST(EncodingLayoutTests, partitionedEliasFano) {
   EXPECT_TRUE(captured.child(1).has_value());
 }
 
+TEST(EncodingLayoutTests, reverseEliasFano) {
+  // ReverseEliasFano nests one stream, which is always EliasFano, so capture
+  // records no children.
+  nimble::EncodingLayout expected{
+      nimble::EncodingType::ReverseEliasFano,
+      {},
+      nimble::CompressionType::Uncompressed,
+  };
+  testSerialization(expected);
+
+  std::vector<uint32_t> data;
+  data.reserve(1'000);
+  for (uint32_t i = 0; i < 1'000; ++i) {
+    data.push_back(5'000 - i * 3);
+  }
+  testCapture<uint32_t>(expected, std::move(data));
+}
+
 TEST(EncodingLayoutTests, sparseBool) {
   nimble::EncodingLayout expected{
       nimble::EncodingType::SparseBool,

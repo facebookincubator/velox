@@ -193,6 +193,12 @@ enum class EncodingType {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   BlockBitPackingV2 = 28,
+  /// Stores non-increasing integer streams as a nested EliasFano stream of
+  /// complemented values, which ascend. Signed values are complemented in
+  /// their order-preserving form. Rows keep their order.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  ReverseEliasFano = 29,
 };
 
 /// Serialized value of the removed BitRangeSplit encoding. It stays reserved so

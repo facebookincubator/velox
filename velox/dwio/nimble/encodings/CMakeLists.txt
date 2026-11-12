@@ -72,6 +72,7 @@ add_library(
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
   views/PartitionedEliasFanoEncodingView.h
+  views/ReverseEliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
   views/FsstEncodingView.cpp
   views/HuffmanEncodingView.h
@@ -134,6 +135,7 @@ add_library(
   EncodingSliceFactory.h
   EliasFanoEncoding.h
   PartitionedEliasFanoEncoding.h
+  ReverseEliasFanoEncoding.h
   DictionaryEncoding.h
   DeltaEncoding.h
   DeltaBlockEncoding.h

@@ -245,6 +245,30 @@ class Statistics {
     }
   }
 
+  /// Returns whether integral input values are non-increasing when interpreted
+  /// as LogicalType. LogicalType must be explicit for the same reason as in
+  /// isNonDecreasing().
+  template <typename LogicalType>
+  bool isNonIncreasing() const noexcept {
+    static_assert(nimble::isIntegralType<LogicalType>());
+    static_assert(nimble::isIntegralType<InputType>());
+    static_assert(sizeof(LogicalType) == sizeof(InputType));
+    if constexpr (
+        std::is_signed_v<LogicalType> == std::is_signed_v<InputType>) {
+      if (!physicalOrderNonIncreasing_.has_value()) {
+        populatePhysicalOrderNonIncreasing();
+      }
+      return physicalOrderNonIncreasing_.value();
+    } else {
+      static_assert(
+          std::is_signed_v<LogicalType> && std::is_unsigned_v<InputType>);
+      if (!signedOrderNonIncreasing_.has_value()) {
+        populateSignedOrderNonIncreasing();
+      }
+      return signedOrderNonIncreasing_.value();
+    }
+  }
+
   const std::vector<uint64_t>& bucketCounts() const noexcept {
     static_assert(nimble::isIntegralType<T>());
     if (!bucketCounts_.has_value()) {
@@ -320,6 +344,13 @@ class Statistics {
 
   // Checks signed logical order over unsigned physical input values.
   void populateSignedOrderNonDecreasing() const noexcept;
+
+  // Checks the descending order of the physical input values.
+  void populatePhysicalOrderNonIncreasing() const noexcept;
+
+  // Checks descending signed logical order over unsigned physical input
+  // values.
+  void populateSignedOrderNonIncreasing() const noexcept;
   void populateStringLength() const;
 
   mutable std::optional<uint64_t> consecutiveRepeatCount_;
@@ -336,6 +367,13 @@ class Statistics {
 
   // Caches signed logical order for unsigned physical input.
   mutable std::optional<bool> signedOrderNonDecreasing_;
+
+  // Caches the descending physical input order independently from descending
+  // signed logical order.
+  mutable std::optional<bool> physicalOrderNonIncreasing_;
+
+  // Caches descending signed logical order for unsigned physical input.
+  mutable std::optional<bool> signedOrderNonIncreasing_;
   mutable std::optional<std::vector<uint64_t>> bucketCounts_;
   mutable std::optional<std::vector<BlockStats>> minMaxBlocks_;
   mutable uint16_t minMaxBlockSize_{0};

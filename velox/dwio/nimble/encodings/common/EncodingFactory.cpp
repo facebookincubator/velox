@@ -37,6 +37,7 @@
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReverseEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SliceEncoding.h"
@@ -165,6 +166,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::PartitionedEliasFano: {
       RETURN_ENCODING_BY_INTEGER_TYPE(PartitionedEliasFanoEncoding, dataType);
+    }
+    case EncodingType::ReverseEliasFano: {
+      RETURN_ENCODING_BY_INTEGER_TYPE(ReverseEliasFanoEncoding, dataType);
     }
     case EncodingType::ALP: {
       switch (dataType) {
@@ -483,6 +487,15 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "PartitionedEliasFano encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
+    case EncodingType::ReverseEliasFano: {
+      if constexpr (isIntegralType<T>()) {
+        return ReverseEliasFanoEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "ReverseEliasFano encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     }
     case EncodingType::ALP: {
