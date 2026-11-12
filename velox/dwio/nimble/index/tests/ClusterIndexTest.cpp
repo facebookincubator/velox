@@ -53,13 +53,46 @@ IndexLookup::LookupRequest makeRangeScanRequest(std::string_view key) {
   return IndexLookup::LookupRequest::rangeScan({bounds});
 }
 
-// Returns the request for the rows of one key, which is the range from the key
-// to its successor, the key followed by a zero byte.
-IndexLookup::LookupRequest makeKeyRequest(std::string_view key) {
-  velox::serializer::EncodedKeyBounds bounds{
+// Returns the bounds of the rows of one key, which is the range from the key to
+// its successor, the key followed by a zero byte.
+velox::serializer::EncodedKeyBounds makeKeyBounds(std::string_view key) {
+  return {
       .lowerKey = std::string(key),
       .upperKey = std::string(key) + std::string(1, '\0')};
-  return IndexLookup::LookupRequest::rangeScan({bounds});
+}
+
+// Returns the request for the rows of one key, as makeKeyBounds() bounds them.
+IndexLookup::LookupRequest makeKeyRequest(std::string_view key) {
+  return IndexLookup::LookupRequest::rangeScan({makeKeyBounds(key)});
+}
+
+// Reads the keys of 'cursor' through batches of up to 'maxKeys' keys, and
+// checks that only the last batch holds fewer keys, that a short last batch
+// still holds every key left, and that a batch past the end appends nothing
+// and allocates nothing. Copies the keys once all are read, so the keys of a
+// batch must stay valid past later batches and past the chunk they came from.
+std::vector<std::string> readKeyBatches(KeyCursor& cursor, size_t maxKeys) {
+  std::vector<std::unique_ptr<char[]>> buffers;
+  const KeyCursor::BufferAllocator bufferAllocator = [&](size_t size) {
+    return buffers.emplace_back(std::make_unique<char[]>(size)).get();
+  };
+  std::vector<std::string_view> keys;
+  while (cursor.hasNext()) {
+    const auto numKeys = keys.size();
+    cursor.next(maxKeys, keys, bufferAllocator);
+    const auto numRead = keys.size() - numKeys;
+    EXPECT_GT(numRead, 0);
+    EXPECT_LE(numRead, maxKeys);
+    if (cursor.hasNext()) {
+      EXPECT_EQ(numRead, maxKeys);
+    }
+  }
+  const auto numKeys = keys.size();
+  const auto numBuffers = buffers.size();
+  cursor.next(maxKeys, keys, bufferAllocator);
+  EXPECT_EQ(keys.size(), numKeys);
+  EXPECT_EQ(buffers.size(), numBuffers);
+  return {keys.begin(), keys.end()};
 }
 
 class ClusterIndexTest : public ClusterIndexTestBase {
@@ -1487,6 +1520,18 @@ TEST_F(ClusterIndexTest, keyIteratorMultiplePartitionsMultipleChunks) {
   }
   const std::vector<std::string> expectedRange = {"key_d", "key_e", "key_f"};
   EXPECT_EQ(scanned, expectedRange);
+
+  // Batches cross chunk and partition boundaries mid-batch. The larger ones ask
+  // for more keys than the range has left, so their read is short.
+  for (const auto maxKeys : {size_t{1}, size_t{3}, size_t{8}, size_t{100}}) {
+    SCOPED_TRACE(fmt::format("maxKeys={}", maxKeys));
+    EXPECT_EQ(
+        readKeyBatches(*clusterIndex->keyCursor(RowRange{0, 8}), maxKeys),
+        expected);
+    EXPECT_EQ(
+        readKeyBatches(*clusterIndex->keyCursor(RowRange{3, 6}), maxKeys),
+        expectedRange);
+  }
 }
 
 TEST_F(ClusterIndexTest, keyIteratorPrefixEncodedChunks) {
@@ -1540,6 +1585,20 @@ TEST_F(ClusterIndexTest, keyIteratorPrefixEncodedChunks) {
   }
   EXPECT_EQ(
       scanned, std::vector<std::string>(allKeys.begin() + 25, allKeys.end()));
+
+  // Batches cross restart blocks and the chunk boundary, from a chunk start
+  // and from mid-chunk.
+  for (const auto maxKeys : {size_t{7}, size_t{kNumRows}}) {
+    SCOPED_TRACE(fmt::format("maxKeys={}", maxKeys));
+    EXPECT_EQ(
+        readKeyBatches(
+            *clusterIndex->keyCursor(RowRange{0, kNumRows}), maxKeys),
+        allKeys);
+    EXPECT_EQ(
+        readKeyBatches(
+            *clusterIndex->keyCursor(RowRange{25, kNumRows}), maxKeys),
+        std::vector<std::string>(allKeys.begin() + 25, allKeys.end()));
+  }
 }
 
 TEST_F(ClusterIndexTest, keyIteratorDuplicateKeys) {
@@ -1626,6 +1685,87 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, keyIteratorReusesCachedChunk) {
   auto thirdRow = clusterIndex->keyCursor(RowRange{2, 3});
   EXPECT_EQ(thirdRow->next(), "key_c");
   EXPECT_EQ(decodeCount.load(), 2);
+}
+
+// Debug-only: counting decodes relies on a TestValue hook, which is compiled
+// out under NDEBUG.
+DEBUG_ONLY_TEST_F(ClusterIndexTest, seekKeepsTheKeyChunkOfItsFirstRow) {
+  // Without pinIndex, the index keeps one decoded chunk per partition, so a
+  // reader of another chunk evicts the chunk of a lookup before the lookup's
+  // caller reads the keys of its rows. The key cursor of a seek keeps it.
+  std::vector<std::vector<std::string>> keyChunks = {
+      {"key_a", "key_b"}, {"key_c", "key_d"}};
+  auto encoded = encodeKeyStream(keyChunks);
+
+  std::vector<std::string> indexColumns = {"col1"};
+  std::string minKey = "key_0";
+  std::vector<Stripe> stripes = {createStripeWithKeys(
+      {.streamOffset = 0,
+       .streamSize = static_cast<uint32_t>(encoded.data.size()),
+       .stream =
+           {.numChunks = 2,
+            .chunkRows = {2, 2},
+            .chunkOffsets = encoded.chunkOffsets},
+       .chunkKeys = {"key_b", "key_d"}})};
+  std::vector<int> stripeGroups = {1};
+
+  auto indexBuffers =
+      createTestClusterIndex(indexColumns, minKey, stripes, stripeGroups);
+  auto clusterIndex =
+      createClusterIndex(indexBuffers, createKeyStreamFile(encoded.data));
+
+  // Fires only after a cache miss, so it counts decodes rather than reads.
+  std::atomic_uint32_t decodeCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
+      std::function<void(DecodedKeyChunk*)>(
+          [&](DecodedKeyChunk* /*decodedChunk*/) { ++decodeCount; }));
+
+  // Both bounds of the key are in its chunk, which the seek decodes once.
+  auto keyA = clusterIndex->seek(makeKeyBounds("key_a"));
+  EXPECT_EQ(keyA.rows.startRow, 0);
+  EXPECT_EQ(keyA.rows.endRow, 1);
+  ASSERT_NE(keyA.keyCursor, nullptr);
+  EXPECT_EQ(decodeCount.load(), 1);
+
+  // A lookup of the other chunk evicts the first chunk from the index.
+  clusterIndex->lookup(makeKeyRequest("key_c"));
+  EXPECT_EQ(decodeCount.load(), 2);
+
+  // The key cursor of the seek reads the first chunk that it keeps.
+  EXPECT_EQ(keyA.keyCursor->next(), "key_a");
+  EXPECT_FALSE(keyA.keyCursor->hasNext());
+  EXPECT_EQ(decodeCount.load(), 2);
+
+  // A key cursor of the index decodes the first chunk again.
+  EXPECT_EQ(clusterIndex->keyCursor(RowRange{0, 1})->next(), "key_a");
+  EXPECT_EQ(decodeCount.load(), 3);
+
+  // The bounds of a range from the last key of the first chunk are in both
+  // chunks. The index holds the first one, and the seek decodes the other.
+  auto range = clusterIndex->seek(
+      velox::serializer::EncodedKeyBounds{
+          .lowerKey = "key_b", .upperKey = "key_d"});
+  EXPECT_EQ(range.rows.startRow, 1);
+  EXPECT_EQ(range.rows.endRow, 3);
+  ASSERT_NE(range.keyCursor, nullptr);
+  EXPECT_EQ(decodeCount.load(), 4);
+  clusterIndex->lookup(makeKeyRequest("key_a"));
+  EXPECT_EQ(decodeCount.load(), 5);
+
+  // The key cursor reads its first row from the chunk that it keeps, and then
+  // holds only the chunk that it reads, so it decodes the second chunk when it
+  // reaches it.
+  EXPECT_EQ(range.keyCursor->next(), "key_b");
+  EXPECT_EQ(decodeCount.load(), 5);
+  EXPECT_EQ(range.keyCursor->next(), "key_c");
+  EXPECT_EQ(decodeCount.load(), 6);
+  EXPECT_FALSE(range.keyCursor->hasNext());
+
+  // A miss returns no rows and no key cursor.
+  const auto miss = clusterIndex->seek(makeKeyBounds("key_bb"));
+  EXPECT_TRUE(miss.rows.empty());
+  EXPECT_EQ(miss.keyCursor, nullptr);
 }
 
 // Verifies that the index caching mechanism works end-to-end when
@@ -2266,9 +2406,9 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunksDifferentChunksInParallel) {
       rootBuf->asMutable<char>(),
       indexBuffers.rootIndex.data(),
       indexBuffers.rootIndex.size());
-  Section indexSection{MetadataBuffer(
+  Section indexSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
-          std::move(rootBuf), CompressionType::Uncompressed, pool_.get()))};
+          std::move(rootBuf), CompressionType::Uncompressed, pool_.get())))};
   metadataFile_ =
       std::make_shared<velox::InMemoryReadFile>(indexBuffers.indexPartitions);
   ioStats_ = std::make_shared<velox::io::IoStatistics>();

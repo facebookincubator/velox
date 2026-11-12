@@ -224,10 +224,7 @@ struct ReaderFixture {
       const char* name)
       : table{getTable(numColumns, numStripes, numPatterns)},
         pool{velox::memory::memoryManager()->addLeafPool(name)},
-        reader{
-            table.type,
-            pool.get(),
-            Encoding::Options{.bufferPool = &bufferPool}} {}
+        reader{table.type, pool.get()} {}
 
   void resetOutput() {
     output = velox::BaseVector::create(table.outputType, 1, pool.get());
@@ -237,6 +234,8 @@ struct ReaderFixture {
   const Table& table;
   // Allocates the reader's buffers and the output.
   const std::shared_ptr<velox::memory::MemoryPool> pool;
+  // Configures the encodings of the stripes that 'reader' binds.
+  const Encoding::Options options{.bufferPool = &bufferPool};
   // Reuses the scratch buffers of the reader's encoding views.
   velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
   // Decodes the stripes of 'table'.
@@ -283,12 +282,13 @@ void bindStreams(
   folly::BenchmarkSuspender suspender;
   ReaderFixture fixture{numColumns, numStripes, numPatterns, "bind_streams"};
   for (uint32_t i{0}; i < numStripes; ++i) {
-    fixture.reader.setStreams(fixture.table.stripeStreams[i]);
+    fixture.reader.setStreams(fixture.table.stripeStreams[i], fixture.options);
   }
   suspender.dismiss();
 
   for (uint32_t i{0}; i < iters; ++i) {
-    fixture.reader.setStreams(fixture.table.stripeStreams[i % numStripes]);
+    fixture.reader.setStreams(
+        fixture.table.stripeStreams[i % numStripes], fixture.options);
   }
   suspender.rehire();
 }
@@ -311,6 +311,7 @@ void lookupRebindEveryCall(
         fixture.table.stripeStreams[stripe],
         ranges,
         /*outputOffset=*/0,
+        fixture.options,
         fixture.output));
   };
   measureLookups(
@@ -334,7 +335,8 @@ void lookupBindPerStripe(
     const std::array<RowRange, 1> ranges{{{row, row + 1}}};
     const auto stripe = (i / lookupsPerStripe) % numStripes;
     if (boundStripe != stripe) {
-      fixture.reader.setStreams(fixture.table.stripeStreams[stripe]);
+      fixture.reader.setStreams(
+          fixture.table.stripeStreams[stripe], fixture.options);
       boundStripe = stripe;
     }
     folly::coro::blockingWait(

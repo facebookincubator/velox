@@ -59,15 +59,13 @@ class StreamingAggregationTest
       AssertQueryBuilder builder,
       uint32_t outputBatchSize) {
     return builder
-        .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(outputBatchSize))
+        .config(core::QueryConfig::kPreferredOutputBatchRows, outputBatchSize)
         .config(
             core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
-            std::to_string(flushRows()))
+            flushRows())
         .config(
             core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(preferredOutputBatchBytes()));
+            preferredOutputBatchBytes());
   }
 
   void testAggregation(
@@ -212,8 +210,7 @@ class StreamingAggregationTest
               .serialExecution(testData.serialExecution)
               .barrierExecution(testData.hasBarrier)
               .config(
-                  core::QueryConfig::kPreferredOutputBatchRows,
-                  std::to_string(outputBatchSize))
+                  core::QueryConfig::kPreferredOutputBatchRows, outputBatchSize)
               .assertResults(
                   "SELECT c0, max(c1 order by c2), max(c1 order by c2 desc), array_agg(c1 order by c2) FROM tmp GROUP BY c0");
       const auto taskStats = task->taskStats();
@@ -328,7 +325,7 @@ class StreamingAggregationTest
                 .maxDrivers(testData.serialExecution ? 1 : 3)
                 .config(
                     core::QueryConfig::kPreferredOutputBatchRows,
-                    std::to_string(outputBatchSize))
+                    outputBatchSize)
                 .assertResults(
                     "SELECT c0, array_agg(distinct c1), array_agg(c1 order by c2), "
                     "count(distinct c1), array_agg(c2) FROM tmp GROUP BY c0");
@@ -365,7 +362,7 @@ class StreamingAggregationTest
                         .barrierExecution(barrierExecution)
                         .config(
                             core::QueryConfig::kPreferredOutputBatchRows,
-                            std::to_string(outputBatchSize))
+                            outputBatchSize)
                         .assertResults("SELECT distinct c0 FROM tmp");
         const auto taskStats = task->taskStats();
         ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
@@ -469,7 +466,7 @@ class StreamingAggregationTest
 
     // Force partial aggregation flush after every batch of input.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kMaxPartialAggregationMemory, "0")
+        .config(core::QueryConfig::kMaxPartialAggregationMemory, 0)
         .assertResults(sql);
 
     EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
@@ -604,7 +601,7 @@ class StreamingAggregationTest
                         .barrierExecution(testData.hasBarrier)
                         .config(
                             core::QueryConfig::kPreferredOutputBatchRows,
-                            std::to_string(outputBatchSize))
+                            outputBatchSize)
                         .assertResults(sql);
         const auto taskStats = task->taskStats();
         ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
@@ -663,7 +660,7 @@ class StreamingAggregationTest
                         .barrierExecution(testData.hasBarrier)
                         .config(
                             core::QueryConfig::kPreferredOutputBatchRows,
-                            std::to_string(outputBatchSize))
+                            outputBatchSize)
                         .assertResults(sql);
         const auto taskStats = task->taskStats();
         ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
@@ -847,17 +844,84 @@ TEST_P(StreamingAggregationTest, closeUninitialized) {
 
 TEST_P(StreamingAggregationTest, sortedAggregations) {
   const auto size = 512;
-  std::vector<VectorPtr> keys = {
-      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-      makeFlatVector<int32_t>(size, [size](auto row) { return (size + row); }),
-      makeFlatVector<int32_t>(
-          size, [size](auto row) { return (2 * size + row); }),
-      makeFlatVector<int32_t>(
-          78, [size](auto row) { return (3 * size + row); }),
+  {
+    std::vector<VectorPtr> keys = {
+        makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+        makeFlatVector<int32_t>(
+            size, [size](auto row) { return (size + row); }),
+        makeFlatVector<int32_t>(
+            size, [size](auto row) { return (2 * size + row); }),
+        makeFlatVector<int32_t>(
+            78, [size](auto row) { return (3 * size + row); }),
+    };
+
+    testSortedAggregation(keys, 512);
+    testSortedAggregation(keys, 32);
+  }
+
+  // Groups span input batch boundaries.
+  {
+    std::vector<VectorPtr> keys = {
+        makeFlatVector<int32_t>(size, [](auto row) { return row / 5; }),
+        makeFlatVector<int32_t>(
+            size, [size](auto row) { return (size + row) / 5; }),
+        makeFlatVector<int32_t>(
+            size, [size](auto row) { return (2 * size + row) / 5; }),
+        makeFlatVector<int32_t>(
+            78, [size](auto row) { return (3 * size + row) / 5; }),
+    };
+
+    testSortedAggregation(keys, 512);
+    testSortedAggregation(keys, 32);
+  }
+}
+
+TEST_F(StreamingAggregationTest, sortedAggregationsMemoryDoesNotGrowWithInput) {
+  const auto peakMemory = [&](int32_t numBatches) {
+    constexpr int32_t kBatchSize = 1'000;
+    constexpr int32_t kGroupSize = 10;
+    std::vector<RowVectorPtr> data;
+    data.reserve(numBatches);
+    for (auto batch = 0; batch < numBatches; ++batch) {
+      data.push_back(makeRowVector({
+          makeFlatVector<int32_t>(
+              kBatchSize,
+              [batch](auto row) {
+                return batch * (kBatchSize / kGroupSize) + row / kGroupSize;
+              }),
+          makeFlatVector<StringView>(
+              kBatchSize,
+              [](auto /*row*/) {
+                return StringView(
+                    "a value long enough to be stored out of line in a row container");
+              }),
+          makeFlatVector<int32_t>(
+              kBatchSize,
+              [](auto row) { return kGroupSize - row % kGroupSize; }),
+      }));
+    }
+
+    core::PlanNodeId aggregationNodeId;
+    const auto plan = PlanBuilder()
+                          .values(data)
+                          .streamingAggregation(
+                              {"c0"},
+                              {"array_agg(c1 order by c2)"},
+                              {},
+                              core::AggregationNode::Step::kSingle,
+                              /*ignoreNullKeys=*/false)
+                          .capturePlanNodeId(aggregationNodeId)
+                          .planNode();
+    std::shared_ptr<Task> task;
+    AssertQueryBuilder(plan)
+        .config(core::QueryConfig::kStreamingAggregationMinOutputBatchRows, 1)
+        .copyResults(pool(), task);
+    return velox::exec::PlanNodeStats::extract(
+               task->taskStats(), aggregationNodeId)
+        .peakMemoryBytes;
   };
 
-  testSortedAggregation(keys, 512);
-  testSortedAggregation(keys, 32);
+  EXPECT_LT(peakMemory(200), 2 * peakMemory(20));
 }
 
 TEST_P(StreamingAggregationTest, distinctAggregations) {
@@ -1186,7 +1250,7 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
                     .barrierExecution(testData.barrierExecution)
                     .config(
                         core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(testData.batchSize))
+                        testData.batchSize)
                     .assertResults(expected);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
@@ -1324,9 +1388,7 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatchesSingleGroup) {
 
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(
-              core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
-              std::to_string(1))
+          .config(core::QueryConfig::kStreamingAggregationMinOutputBatchRows, 1)
           .assertResults("SELECT c0, count(1), sum(c1) FROM tmp GROUP BY c0");
 
   // Verify the number of output batches matches the number of input batches
@@ -1395,7 +1457,7 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatches) {
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(
                 core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
-                std::to_string(testData.minOutputBatchRows))
+                testData.minOutputBatchRows)
             .assertResults("SELECT c0, count(1), sum(c1) FROM tmp GROUP BY c0");
 
     // Verify the number of output batches.
@@ -1547,8 +1609,7 @@ TEST_P(StreamingAggregationTest, needsInputWhenSplitOutput) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .serialExecution(true)
-          .config(
-              core::QueryConfig::kStreamingAggregationMinOutputBatchRows, "1")
+          .config(core::QueryConfig::kStreamingAggregationMinOutputBatchRows, 1)
           .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY c0");
   const auto taskStats = task->taskStats();
   ASSERT_EQ(

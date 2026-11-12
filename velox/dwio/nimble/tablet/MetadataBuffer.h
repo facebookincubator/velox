@@ -16,13 +16,13 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "velox/buffer/Buffer.h"
-#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/dwio/nimble/common/Types.h"
 
 namespace facebook::nimble {
@@ -31,13 +31,25 @@ namespace test {
 class MetadataBufferTestHelper;
 } // namespace test
 
+/// Read-only bytes kept valid by a shared holder, such as a buffer or a cache
+/// pin. Lets MetadataBuffer hold bytes from any source without knowing its
+/// type.
+struct PinnedBuffer {
+  /// Keeps 'buffer' valid while any copy of it is alive.
+  std::shared_ptr<const void> bufferHolder;
+
+  /// The bytes kept valid by 'bufferHolder'.
+  std::string_view buffer;
+};
+
+/// Returns the bytes of 'buffer'. The bufferHolder holds 'buffer', so the bytes
+/// stay valid while any copy of them is alive.
+PinnedBuffer toPinnedBuffer(velox::BufferPtr buffer);
+
 class MetadataBuffer {
  public:
-  // Creates from decompressed data in a pool-tracked buffer.
-  explicit MetadataBuffer(velox::BufferPtr buffer);
-
-  // Creates from a cache pin with decompressed data.
-  explicit MetadataBuffer(velox::cache::CachePin pin);
+  /// Creates from decompressed bytes kept valid by 'pin.bufferHolder'.
+  explicit MetadataBuffer(PinnedBuffer pin);
 
   ~MetadataBuffer();
   MetadataBuffer(const MetadataBuffer&) = delete;
@@ -45,16 +57,15 @@ class MetadataBuffer {
   MetadataBuffer(MetadataBuffer&&) noexcept;
   MetadataBuffer& operator=(MetadataBuffer&&) noexcept;
 
-  /// Creates a shallow copy sharing the same underlying buffer or cache pin.
+  /// Creates a shallow copy sharing the same underlying bytes.
   MetadataBuffer clone() const;
 
   /// Creates a zero-copy MetadataBuffer viewing a sub-range of this buffer's
-  /// content. Shares the underlying buffer or cache pin.
+  /// content. Shares the underlying bytes.
   std::unique_ptr<MetadataBuffer> slice(uint64_t offset, uint64_t size) const;
 
   std::string_view content() const {
-    const auto data = pin_.empty() ? bufferContent() : cacheContent();
-    return data.substr(offset_, size_);
+    return pin_.buffer.substr(offset_, size_);
   }
 
   /// Decompresses metadata from a pool-tracked buffer. Returns the buffer
@@ -71,24 +82,10 @@ class MetadataBuffer {
       velox::memory::MemoryPool* pool);
 
  private:
-  MetadataBuffer(velox::BufferPtr buffer, uint64_t offset, uint64_t size);
-  MetadataBuffer(velox::cache::CachePin pin, uint64_t offset, uint64_t size);
+  MetadataBuffer(PinnedBuffer pin, uint64_t offset, uint64_t size);
 
-  inline std::string_view bufferContent() const {
-    return {buffer_->as<char>(), buffer_->size()};
-  }
-
-  inline std::string_view cacheContent() const {
-    auto* entry = pin_.checkedEntry();
-    return {entry->contiguousData(), static_cast<size_t>(entry->size())};
-  }
-
-  // Exactly one of buffer_ or pin_ is set.
-  // buffer_: holds decompressed data in a pool-tracked buffer (direct path).
-  // pin_: holds decompressed data in a contiguous AsyncDataCache entry
-  //   (cached path, keeps the cache entry pinned while this buffer is alive).
-  velox::BufferPtr buffer_;
-  velox::cache::CachePin pin_;
+  // Decompressed bytes, kept valid while this buffer is alive.
+  PinnedBuffer pin_;
   // Sub-range within the underlying storage. Default (0, full size) covers
   // the entire content. Set by slice() for sub-range views.
   uint64_t offset_{0};

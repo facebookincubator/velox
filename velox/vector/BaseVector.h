@@ -22,7 +22,6 @@
 #include <utility>
 
 #include <fmt/format.h>
-#include <folly/Format.h>
 #include <folly/Range.h>
 #include <folly/container/F14Map.h>
 
@@ -1172,28 +1171,6 @@ OutputStream& operator<<(
 }
 
 } // namespace facebook::velox
-
-namespace folly {
-
-/// Allow VectorEncoding::Simple to be transparently used by folly::sformat.
-/// e.g: folly::sformat("type: {}", encodingType);
-template <>
-class FormatValue<facebook::velox::VectorEncoding::Simple> {
- public:
-  explicit FormatValue(const facebook::velox::VectorEncoding::Simple& type)
-      : type_(type) {}
-
-  template <typename FormatCallback>
-  void format(FormatArg& arg, FormatCallback& cb) const {
-    return format_value::formatString(
-        facebook::velox::VectorEncoding::mapSimpleToName(type_), arg, cb);
-  }
-
- private:
-  facebook::velox::VectorEncoding::Simple type_;
-};
-
-} // namespace folly
 
 template <>
 struct fmt::formatter<facebook::velox::VectorEncoding::Simple> {

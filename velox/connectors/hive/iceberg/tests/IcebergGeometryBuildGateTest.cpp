@@ -35,7 +35,6 @@
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/SphericalGeographyType.h"
 #include "velox/vector/DecodedVector.h"
@@ -61,9 +60,11 @@ const std::string kOtherPointWkb = {
     '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x44', '\x40' // y = 40
 };
 
+#if defined(VELOX_ENABLE_PARQUET) && !defined(VELOX_ENABLE_GEO)
 // Substring shared by every geospatial-free-build error.
 constexpr std::string_view kBuildFlagMessage{
     "requires a build with geospatial support (VELOX_ENABLE_GEO=ON)"};
+#endif
 
 class IcebergGeometryBuildGateTest : public test::IcebergTestBase {
  protected:
@@ -114,11 +115,7 @@ TEST_P(IcebergGeospatialBuildGateTest, readDependsOnBuildFlag) {
   auto dataSink = createDataSinkAndAppendData({data}, dataPath);
   dataSink->close();
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"geom"}, {type}))
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {type}));
   auto splits = createSplitsForDirectory(dataPath);
 
 #ifdef VELOX_ENABLE_GEO
@@ -166,12 +163,7 @@ TEST_P(IcebergGeospatialBuildGateTest, equalityDeleteDependsOnBuildFlag) {
       /*equalityFieldIds=*/{2});
 
   const auto tableSchema = ROW({"id", "geom"}, {BIGINT(), type});
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"id"}, {BIGINT()}))
-                  .dataColumns(tableSchema)
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"id"}, {BIGINT()}), tableSchema);
   auto splits = makeIcebergSplits(baseFilePath, {equalityDelete});
 
 #ifdef VELOX_ENABLE_GEO
@@ -229,7 +221,8 @@ TEST_P(IcebergGeospatialBuildGateTest, equalityDeleteReaderDependsOnBuildFlag) {
         ioStatistics,
         ioStats,
         runtimeStats,
-        test::kIcebergConnectorId);
+        test::kIcebergConnectorId,
+        /*fileReadOps=*/folly::F14FastMap<std::string, std::string>{});
   };
 
 #ifdef VELOX_ENABLE_GEO
@@ -250,11 +243,7 @@ TEST_F(IcebergGeometryBuildGateTest, plainBinaryReadWorksInEitherBuild) {
   auto dataSink = createDataSinkAndAppendData({data}, dataPath);
   dataSink->close();
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"geom"}, {VARBINARY()}))
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {VARBINARY()}));
   auto result = exec::test::AssertQueryBuilder(plan)
                     .splits(createSplitsForDirectory(dataPath))
                     .copyResults(pool());

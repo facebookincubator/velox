@@ -512,6 +512,16 @@ if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
 
+# C++14 sized deallocation is on by default in GCC but not in Clang before 19.
+# Headers such as s2geometry's port.h call ::operator delete(ptr, size).
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsized-deallocation")
+endif()
+
+# Folly's exception tracer records the stack of a throw inside a coroutine by
+# walking frame pointers, and crashes if a frame on the way omits them.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
+
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
 if("${MAX_HIGH_MEM_JOBS}")
@@ -748,7 +758,7 @@ if(
 endif()
 
 velox_set_source(simdjson)
-velox_resolve_dependency(simdjson 4.1.0)
+velox_resolve_dependency(simdjson 4.3.0)
 
 # libxml2 backs the Spark XPath functions and is only needed when Spark
 # functions are enabled.
@@ -917,7 +927,7 @@ if(
 )
   set(
     CMAKE_CXX_FLAGS
-    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
+    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
   )
   # Skip alignment errors and member access check for now.
   # https://github.com/facebookincubator/velox/issues/15811

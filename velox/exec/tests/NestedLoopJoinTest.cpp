@@ -629,7 +629,7 @@ TEST_F(NestedLoopJoinTest, outputOrderWithMultipleBuildVectors) {
   AssertQueryBuilder(
       makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kInner),
       duckDbQueryRunner_)
-      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .config(core::QueryConfig::kMaxOutputBatchRows, 5)
       .assertResults(
           "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
           "FROM t JOIN u_multi ON l1 < r1 "
@@ -639,7 +639,7 @@ TEST_F(NestedLoopJoinTest, outputOrderWithMultipleBuildVectors) {
   AssertQueryBuilder(
       makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kLeft),
       duckDbQueryRunner_)
-      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .config(core::QueryConfig::kMaxOutputBatchRows, 5)
       .assertResults(
           "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
           "FROM t LEFT JOIN u_multi ON l1 < r1 "
@@ -950,8 +950,8 @@ TEST_F(NestedLoopJoinTest, leftSemiFilterAndProjectEmitOnceOverflow) {
     // Output batch far smaller than the probe batch forces the single
     // short-circuited pass to span multiple output batches.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kPreferredOutputBatchRows, "128")
-        .config(core::QueryConfig::kMaxOutputBatchRows, "128")
+        .config(core::QueryConfig::kPreferredOutputBatchRows, 128)
+        .config(core::QueryConfig::kMaxOutputBatchRows, 128)
         .assertResults(duckDbSql);
   };
 

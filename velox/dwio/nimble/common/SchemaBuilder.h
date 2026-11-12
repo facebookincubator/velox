@@ -315,22 +315,24 @@ class FlatMapTypeBuilder : public TypeBuilder {
 
 class HybridFlatMapTypeBuilder : public TypeBuilder {
  public:
-  /// References key-presence and row-presence streams for one physical group.
-  struct GroupDescriptor {
+  /// Provides a read-only view of one group: its ID, the keys the addGroup()
+  /// caller lends, its key-presence and row-presence streams and its value
+  /// subtree.
+  struct Group {
+    /// Stable group identifier. Default uses HybridFlatMap::kDefaultGroupId.
+    uint32_t groupId;
+    /// The input group keys of addGroup(). For an explicit group, its grouped
+    /// keys, which never change. For the Default group, the vector of its
+    /// schema keys, which its owner appends to with a bitmap and leaves empty
+    /// when batches list their keys.
+    const std::vector<std::string>& groupKeys;
     /// Marks which schema-ordered group keys occur in the physical batch. A
     /// Default group with HybridFlatMap::KeyPresenceMode::kKeyList instead
     /// lists them, typed by the map key kind.
     const StreamDescriptorBuilder& keyPresenceDescriptor;
     /// Stores key-major row-presence bits for the observed keys.
     const StreamDescriptorBuilder& inMapDescriptor;
-  };
-
-  /// Provides a read-only view of one physical group.
-  struct Group {
-    uint32_t groupId;
-    const std::vector<std::string>& groupKeys;
-    const StreamDescriptorBuilder& keyPresenceDescriptor;
-    const StreamDescriptorBuilder& inMapDescriptor;
+    /// Complete value subtree of the group.
     const TypeBuilder& valueType;
   };
 
@@ -347,35 +349,50 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   /// stream. See HybridFlatMap::hasKeyPresenceList().
   bool useKeyPresentList(uint32_t groupId) const;
 
-  /// Registers one physical group and its complete value subtree. Configured
-  /// group keys must be non-empty and strictly ascending. Default keys are kept
-  /// in the given first-seen order, and must be empty with
-  /// HybridFlatMap::KeyPresenceMode::kKeyList. The group ID and every key must
-  /// be unique across all groups.
-  GroupDescriptor addGroup(
+  /// Registers one group and its complete value subtree, and returns the
+  /// group, as groupAt() does. Views `groupKeys`, which the caller keeps alive,
+  /// at the same address, until its last read of this builder (groupAt(),
+  /// SchemaBuilder::schemaNodes()).
+  ///
+  /// An explicit group lends its grouped keys, e.g. from a HybridFlatMap's
+  /// groups(), which its copies share, or from a source schema type's groups.
+  /// Grouped keys never change.
+  ///
+  /// The Default group lends the vector that holds its schema keys:
+  /// - With HybridFlatMap::KeyPresenceMode::kBitmap, its key-presence bits
+  ///   index these keys. Their owner, e.g. a field writer, starts with an
+  ///   empty vector and appends each newly seen key in first-seen order. The
+  ///   schema reads the vector as it grows.
+  /// - With HybridFlatMap::KeyPresenceMode::kKeyList, each batch lists its own
+  ///   Default keys, so the vector stays empty.
+  /// - A Default group that never holds a key, e.g. the placeholder of a
+  ///   projection that selects no group, lends an empty vector.
+  ///
+  /// Group IDs are unique, with at most one Default group. schemaNodes()
+  /// checks the keys: explicit groups non-empty and strictly ascending, no key
+  /// empty, every key unique.
+  Group addGroup(
       uint32_t groupId,
-      std::vector<std::string> groupKeys,
+      const std::vector<std::string>& groupKeys,
       std::shared_ptr<TypeBuilder> valueType);
 
-  /// Appends a newly observed key to the Default group's first-seen catalog.
-  /// Fails when `key` is empty or already belongs to any group, or when
-  /// batches list their Default keys.
-  void appendDefaultGroupKey(std::string key);
-
-  /// Returns the number of physical groups present in this schema.
+  /// Returns the number of groups present in this schema.
   size_t groupCount() const;
 
   /// Returns whether serialization requires the reserved Default group.
   bool requiresDefaultGroup() const;
 
-  /// Returns the group at zero-based schema-order `index`. The returned
-  /// non-owning view is invalidated by a subsequent call to addGroup().
+  /// Returns the group at zero-based schema-order `index`. Reads the keys
+  /// addGroup() views, so the Default keys are the ones found so far.
   Group groupAt(size_t index) const;
 
  private:
+  // Owns what a Group references. The descriptors are allocated one by one,
+  // so references to them stay valid as groups are added.
   struct StoredGroup {
     uint32_t groupId;
-    std::vector<std::string> groupKeys;
+    // See Group::groupKeys.
+    const std::vector<std::string>& groupKeys;
     std::unique_ptr<StreamDescriptorBuilder> keyPresenceDescriptor;
     std::unique_ptr<StreamDescriptorBuilder> inMapDescriptor;
     std::shared_ptr<const TypeBuilder> valueType;
@@ -391,12 +408,10 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   const bool requiresDefaultGroup_;
   const HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode_;
   StreamDescriptorBuilder nullsDescriptor_;
+  // See groupAt().
   std::vector<StoredGroup> groups_;
   // Zero-based schema position of the reserved Default group.
   std::optional<size_t> defaultGroupIndex_{};
-  // Keys of every group, so that each new key is checked for duplicates with
-  // one insert.
-  folly::F14FastSet<std::string> keys_;
 
   friend class SchemaBuilder;
 };

@@ -595,6 +595,16 @@ class RowReaderOptions {
     nimbleScanFastPath_ = value;
   }
 
+  /// Returns whether the FSST decode cache is enabled.
+  bool nimbleFsstDecodeRepeatedPayloads() const {
+    return nimbleFsstDecodeRepeatedPayloads_;
+  }
+
+  /// Enables the FSST decode cache independently of the scan fast path.
+  void setNimbleFsstDecodeRepeatedPayloads(bool value) {
+    nimbleFsstDecodeRepeatedPayloads_ = value;
+  }
+
   bool lazyColumnIo() const {
     return lazyColumnIo_;
   }
@@ -696,6 +706,8 @@ class RowReaderOptions {
   bool nimbleDictionaryAwareReads_{false};
   // Routes Nimble encodings through the scan fast path.
   bool nimbleScanFastPath_{false};
+  // Reuses decoded FSST strings within each encoding read call.
+  bool nimbleFsstDecodeRepeatedPayloads_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;
@@ -1043,9 +1055,9 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   /// Process-wide async data cache for Nimble metadata caching. When both
-  /// fileHandle and cache are set, TabletReader creates a
-  /// CachedMetadataInput that caches decompressed footer, stripes, and
-  /// index metadata across readers on the same file.
+  /// fileHandle and cache are set and cacheMetadata() is true, TabletReader
+  /// caches decompressed footer, stripes, and index metadata across readers on
+  /// the same file, in the block cache that Nimble builds on this cache.
   cache::AsyncDataCache* cache() const {
     return cache_;
   }

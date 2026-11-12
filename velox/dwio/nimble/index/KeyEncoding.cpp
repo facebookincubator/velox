@@ -18,7 +18,10 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <span>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -93,6 +96,39 @@ class TrivialKeyCursor final : public KeyCursor {
     return *position_++;
   }
 
+  void next(
+      size_t maxKeys,
+      std::vector<std::string_view>& keys,
+      const BufferAllocator& bufferAllocator) override {
+    const std::span<const std::string_view> batch{
+        position_,
+        std::min<size_t>(maxKeys, static_cast<size_t>(end_ - position_))};
+    if (batch.empty()) {
+      return;
+    }
+    size_t numBytes{0};
+    for (const auto key : batch) {
+      numBytes += key.size();
+    }
+    auto* const buffer = static_cast<char*>(bufferAllocator(numBytes));
+    NIMBLE_CHECK_NOT_NULL(buffer);
+    keys.reserve(keys.size() + batch.size());
+
+    // TODO: Copy the keys of a batch with one memcpy when they lie back to back
+    // in the string buffer of the chunk, or hand out views into that buffer
+    // instead of copies once the caller can hold it, as TrivialEncoding plans
+    // for its string buffer.
+    size_t offset{0};
+    for (const auto key : batch) {
+      if (!key.empty()) {
+        std::memcpy(buffer + offset, key.data(), key.size());
+      }
+      keys.emplace_back(buffer + offset, key.size());
+      offset += key.size();
+    }
+    position_ += batch.size();
+  }
+
  private:
   const std::string_view* position_;
   const std::string_view* const end_;
@@ -146,6 +182,26 @@ std::unique_ptr<KeyCursor> TrivialKeyEncoding::cursor(uint32_t startRow) const {
 // ---------------------------------------------------------------------------
 // PrefixKeyEncoding
 // ---------------------------------------------------------------------------
+
+namespace {
+
+// Gathers the bytes of the keys of a batch of prefix-encoded keys, and the
+// size of each, before the batch copies them to the caller's memory.
+struct BatchKeyScratch {
+  std::string bytes;
+  std::vector<size_t> sizes;
+};
+
+// Returns the batch scratch of this thread. A batch holds it only within its
+// next() call, and the caller's buffer allocator reads no keys, so the cursors
+// of a thread share it. It keeps its capacity across batches and cursors, so
+// a scan stops allocating once it holds the largest batch.
+BatchKeyScratch& batchKeyScratch() {
+  thread_local BatchKeyScratch scratch;
+  return scratch;
+}
+
+} // namespace
 
 class PrefixKeyEncoding::KeyScratch {
  public:
@@ -212,6 +268,38 @@ class PrefixKeyEncoding::PrefixKeyCursor final : public KeyCursor {
   std::string_view next() override {
     NIMBLE_CHECK(hasNext(), "Key cursor advanced past the last row");
     return decodeEntryAt(position_, end_, row_, scratch_);
+  }
+
+  // Each key builds on the key before in scratch_, so a batch gathers its keys
+  // in the batch scratch of the thread first and then copies them to the
+  // caller's memory with one allocation.
+  void next(
+      size_t maxKeys,
+      std::vector<std::string_view>& keys,
+      const BufferAllocator& bufferAllocator) override {
+    auto& batch = batchKeyScratch();
+    batch.bytes.clear();
+    batch.sizes.clear();
+    for (size_t key = 0; key < maxKeys && hasNext(); ++key) {
+      const auto decoded = decodeEntryAt(position_, end_, row_, scratch_);
+      batch.bytes.append(decoded);
+      batch.sizes.emplace_back(decoded.size());
+    }
+    if (batch.sizes.empty()) {
+      return;
+    }
+    auto* const buffer =
+        static_cast<char*>(bufferAllocator(batch.bytes.size()));
+    NIMBLE_CHECK_NOT_NULL(buffer);
+    if (!batch.bytes.empty()) {
+      std::memcpy(buffer, batch.bytes.data(), batch.bytes.size());
+    }
+    keys.reserve(keys.size() + batch.sizes.size());
+    size_t offset{0};
+    for (const auto size : batch.sizes) {
+      keys.emplace_back(buffer + offset, size);
+      offset += size;
+    }
   }
 
  private:

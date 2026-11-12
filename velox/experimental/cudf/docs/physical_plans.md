@@ -28,7 +28,8 @@ state-layout validator.
 The rewriter preserves supported GPU execution for aggregation, filter/project,
 hash and nested-loop joins, sorting, limits, top-N, top-N row number, window,
 grouping sets, distinct markers, unique IDs, single-row enforcement, and local
-boundaries. GPU scans are recognized through the connector; exchanges are
+boundaries. GPU scans are recognized through the connector and its cuDF data
+source, which turns down table handles it cannot read; exchanges are
 recognized through their explicit transport. Unsupported ordinary operators
 remain CPU operators when fallback is allowed, and the rewriter logs the reason
 for each one.

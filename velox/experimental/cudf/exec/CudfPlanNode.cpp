@@ -107,7 +107,7 @@ CudfPlanNodeTraits cudfPlanNodeTraits(
     return *traits;
   }
   if (auto* scan = dynamic_cast<const core::TableScanNode*>(node.get());
-      scan && isGpuTableScan(*scan)) {
+      scan && isGpuTableScan(*scan, queryCtx)) {
     return deviceTraits(0);
   }
   if (auto* exchange = dynamic_cast<const core::ExchangeNode*>(node.get());

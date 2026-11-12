@@ -71,7 +71,6 @@ void FileInputStream::readNextRange() {
       readBytes = readSize();
       VELOX_CHECK_LT(
           0, readBytes, "Read past end of FileInputStream {}", fileSize_);
-      NanosecondWallTimer timer_2{&readTimeNs};
       file_->pread(fileOffset_, readBytes, buffer()->asMutable<char>());
     }
   }

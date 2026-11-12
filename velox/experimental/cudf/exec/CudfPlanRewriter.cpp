@@ -323,7 +323,7 @@ class Rewriter {
     if (auto scan =
             std::dynamic_pointer_cast<const core::TableScanNode>(node)) {
       std::string reason;
-      if (isGpuTableScan(*scan, &reason)) {
+      if (isGpuTableScan(*scan, *queryCtx_, &reason)) {
         return {node, Mode::kGpu};
       }
       if (gpuEnabled()) {

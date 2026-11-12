@@ -128,6 +128,8 @@ enum class EncodingType {
   // Stores integer data in fixed-size chunks (default 1024 rows), each with
   // its own baseline and bit width. Adapts per-chunk variable bit widths for
   // better compression on data with locally narrow value ranges.
+  // The first block may hold fewer rows than the block size. Superseded by
+  // BlockBitPackingV2.
   // EXPERIMENTAL: Not production-ready. Do not enable for production tables
   // without consulting the Nimble team (oncall: dwios).
   BlockBitPacking = 15,
@@ -185,6 +187,12 @@ enum class EncodingType {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   PartitionedEliasFano = 27,
+  /// Same per-block packing as BlockBitPacking, but every block holds exactly
+  /// the block size rows except the last, so the header stores no first-block
+  /// row count.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  BlockBitPackingV2 = 28,
 };
 
 /// Serialized value of the removed BitRangeSplit encoding. It stays reserved so

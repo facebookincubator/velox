@@ -470,7 +470,8 @@ std::shared_ptr<Task> Task::create(
       std::move(onError),
       nested != nullptr ? nested->state : std::weak_ptr<PersistentState>{},
       nested != nullptr ? nested->statePool : nullptr,
-      nested != nullptr ? nested->ownerDeletionLatch : nullptr));
+      nested != nullptr ? nested->ownerDeletionLatch : nullptr,
+      nested != nullptr ? nested->uniqueRowIdPool : nullptr));
   if (fixedPoint != nullptr) {
     task->fixedPoint_ = std::make_unique<FixedPointLoop>(
         task.get(),
@@ -495,7 +496,8 @@ Task::Task(
     std::function<void(std::exception_ptr)> onError,
     std::weak_ptr<PersistentState> fixedPointState,
     std::shared_ptr<memory::MemoryPool> fixedPointStatePool,
-    std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch)
+    std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch,
+    std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool)
     : uuid_{makeUuid()},
       taskId_(taskId),
       destination_(destination),
@@ -506,6 +508,10 @@ Task::Task(
       firstNodeNotSupportingBarrier_(
           planFragment_.firstNodeNotSupportingBarrier()),
       traceCtx_(maybeMakeTraceCtx()),
+      uniqueRowIdPool_(
+          uniqueRowIdPool != nullptr
+              ? std::move(uniqueRowIdPool)
+              : std::make_shared<std::atomic_int64_t>(0)),
       consumerSupplier_(std::move(consumerSupplier)),
       fixedPointState_(std::move(fixedPointState)),
       fixedPointStatePool_(std::move(fixedPointStatePool)),
@@ -740,7 +746,7 @@ uint64_t Task::timeSinceStartMsLocked() const {
 SplitsState& Task::getPlanNodeSplitsStateLocked(
     const core::PlanNodeId& planNodeId) {
   auto it = splitsStates_.find(planNodeId);
-  if (FOLLY_LIKELY(it != splitsStates_.end())) {
+  if (it != splitsStates_.end()) [[likely]] {
     return it->second;
   }
 
@@ -4194,7 +4200,7 @@ ContinueFuture Task::requestPause() {
 }
 
 bool Task::pauseRequested(ContinueFuture* future) {
-  if (FOLLY_LIKELY(future == nullptr)) {
+  if (future == nullptr) [[likely]] {
     // It is ok to return 'pauseRequested_' without a mutex lock if user doesn't
     // want to wait for task to resume.
     return pauseRequested_;
@@ -4359,7 +4365,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
     uint64_t maxWaitMs,
     memory::MemoryReclaimer::Stats& stats) {
   auto task = ensureTask();
-  if (FOLLY_UNLIKELY(task == nullptr)) {
+  if (task == nullptr) [[unlikely]] {
     return 0;
   }
   VELOX_CHECK_EQ(task->pool()->name(), pool->name());
@@ -4443,7 +4449,7 @@ void Task::MemoryReclaimer::abort(
     memory::MemoryPool* pool,
     const std::exception_ptr& error) {
   auto task = ensureTask();
-  if (FOLLY_UNLIKELY(task == nullptr)) {
+  if (task == nullptr) [[unlikely]] {
     return;
   }
   VELOX_CHECK_EQ(task->pool()->name(), pool->name());

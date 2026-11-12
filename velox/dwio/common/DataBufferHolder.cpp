@@ -57,7 +57,7 @@ bool DataBufferHolder::tryResize(
     uint64_t increment) const {
   auto size = buffer.size();
   // Makes sure size is at least header size
-  if (FOLLY_LIKELY(size >= headerSize)) {
+  if (size >= headerSize) [[likely]] {
     size -= headerSize;
   } else {
     VELOX_CHECK_EQ(size, 0);

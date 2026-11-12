@@ -62,9 +62,10 @@ struct FixedPointOptions {
 
   /// Returns the task id under which this worker creates the producer whose
   /// root is the PartitionedOutput 'planNodeId', in 'iteration' of the loop at
-  /// 'self'.  Required for a fixed point whose plans chain by shuffle.  The id
-  /// MUST encode the iteration: producers are re-created every iteration, and
-  /// an id reused across iterations lets a consumer read a stale producer.
+  /// 'self'.  Required for a fixed point whose stages are joined by shuffle.
+  /// The id MUST encode the iteration: producers are re-created every
+  /// iteration, and an id reused across iterations lets a consumer read a stale
+  /// producer.
   std::function<std::string(
       const LoopAddress& self,
       int32_t iteration,
@@ -85,13 +86,15 @@ struct FixedPointOptions {
       producerSplit;
 
   /// Returns the task id for a sub-task this worker creates that no peer reads
-  /// -- an initial plan, a serial body, or the last plan of a chain -- from
+  /// -- an initial plan, a serial body, or the root of the body's or the
+  /// convergence's stages -- from
   /// the worker's task id and a per-worker counter (for uniqueness).
   /// Required: the fixed point creates no task ids itself.
   std::function<std::string(const std::string& workerTaskId, int64_t counter)>
       subTaskId;
 
-  /// A verdict plan (ConvergenceConfig::verdict) runs only on worker 0, the
+  /// A convergence root that runs on worker 0 alone (see
+  /// ConvergenceConfig::verdictOnWorkerZero()), the verdict plan, runs on the
   /// task whose destination is 0.  Worker 0 reports each iteration's verdict
   /// through 'publishVerdict', and every other worker of the loop receives it
   /// through 'awaitVerdict', so all of them stop on the same iteration.
@@ -135,15 +138,15 @@ struct FixedPointOptions {
   /// the query executor.
   folly::Executor* orchestrationExecutor{nullptr};
 
-  /// Drivers that the plans of one chain share in each iteration of a parallel
-  /// loop: the body plans, or the convergence plans.  The plans of a chain run
-  /// at the same time, and each gets at least one driver, so a chain with more
-  /// plans than this uses more.  Must not exceed the parent task's maxDrivers.
-  /// A loop nested in a plan gets that plan's share as its own
+  /// Drivers that the stages a worker runs share in each iteration of a
+  /// parallel loop: the body's, or the convergence's.  They run at the same
+  /// time, and each gets at least one driver, so a worker running more
+  /// stages than this uses more.  Must not exceed the parent task's
+  /// maxDrivers.  A loop nested in a plan gets that plan's share as its own
   /// iterationMaxDrivers.  With more than one driver these plans follow
   /// ordinary Velox multi-driver semantics, so an aggregation that must see
-  /// every row needs a local exchange in front of it.  The last convergence
-  /// plan runs on one driver of its own, outside this budget, because it must
+  /// every row needs a local exchange in front of it.  The convergence root
+  /// runs on one driver of its own, outside this budget, because it must
   /// produce a single verdict row.  The default of 1 runs all of them
   /// single-driver.
   uint32_t iterationMaxDrivers{1};
@@ -154,10 +157,10 @@ struct FixedPointOptions {
   /// Task::fixedPointExecutionStats() keeps only for the first iterations and
   /// the latest one.  A TaskListener also receives each sub-task's TaskStats,
   /// but for every task in the process, and a sub-task named by 'subTaskId',
-  /// such as the last plan of a chain, carries no iteration.  Only the loop
-  /// joins a sub-task's TaskStats to its iteration, verdict and nesting, in a
-  /// record that it trims and that, for a nested loop, ends with the internal
-  /// sub-task running it.
+  /// such as the root of the body's stages, carries no iteration.  Only the
+  /// loop joins a sub-task's TaskStats to its iteration, verdict and nesting,
+  /// in a record that it trims and that, for a nested loop, ends with the
+  /// internal sub-task running it.
   ///
   /// A loop nested in a plan inherits these options, so 'nesting' tells the
   /// loops of the task apart, as in LoopAddress: empty for the top-level loop.
@@ -166,7 +169,7 @@ struct FixedPointOptions {
   /// orchestration executor, or the caller of next() in serial mode -- outside
   /// the statistics lock, so it may read Task::fixedPointExecutionStats(), and
   /// must not block.  Calls for one loop come in iteration order, but calls
-  /// from different loops -- loops nested in the plans of one chain, or peer
+  /// from different loops -- loops nested in the stages of one body, or peer
   /// tasks whose copies share state -- may overlap, so it must be thread-safe.
   /// It must own, or share ownership of, whatever it captures: a nested loop
   /// runs in an internal sub-task that can outlive the task, and may call it

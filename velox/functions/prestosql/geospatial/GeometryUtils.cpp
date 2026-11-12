@@ -275,12 +275,11 @@ std::optional<std::string> geometryInvalidReason(
 }
 
 Status validateLatitudeLongitude(double latitude, double longitude) {
-  if (FOLLY_UNLIKELY(
-          latitude < common::geospatial::kMinLatitude ||
-          latitude > common::geospatial::kMaxLatitude ||
-          longitude < common::geospatial::kMinLongitude ||
-          longitude > common::geospatial::kMaxLongitude ||
-          std::isnan(latitude) || std::isnan(longitude))) {
+  if (latitude < common::geospatial::kMinLatitude ||
+      latitude > common::geospatial::kMaxLatitude ||
+      longitude < common::geospatial::kMinLongitude ||
+      longitude > common::geospatial::kMaxLongitude || std::isnan(latitude) ||
+      std::isnan(longitude)) [[unlikely]] {
     return Status::UserError(
         fmt::format(
             "Latitude must be in range [{}, {}] and longitude must be in range [{}, {}]. Got latitude: {} and longitude: {}",
@@ -299,18 +298,16 @@ namespace {
 FOLLY_ALWAYS_INLINE void checkLatitudeLongitudeBounds(
     double latitude,
     double longitude) {
-  if (FOLLY_UNLIKELY(
-          latitude > common::geospatial::kMaxBingTileLatitude ||
-          latitude < common::geospatial::kMinBingTileLatitude)) {
+  if (latitude > common::geospatial::kMaxBingTileLatitude ||
+      latitude < common::geospatial::kMinBingTileLatitude) [[unlikely]] {
     VELOX_USER_FAIL(
         fmt::format(
             "Latitude span for the geometry must be in [{:.2f}, {:.2f}] range",
             common::geospatial::kMinBingTileLatitude,
             common::geospatial::kMaxBingTileLatitude));
   }
-  if (FOLLY_UNLIKELY(
-          longitude > common::geospatial::kMaxLongitude ||
-          longitude < common::geospatial::kMinLongitude)) {
+  if (longitude > common::geospatial::kMaxLongitude ||
+      longitude < common::geospatial::kMinLongitude) [[unlikely]] {
     VELOX_USER_FAIL(
         fmt::format(
             "Longitude span for the geometry must be in [{:.2f}, {:.2f}] range",
@@ -329,14 +326,13 @@ std::optional<std::vector<int64_t>> handleTrivialMinimalTileCoveringCases(
   checkLatitudeLongitudeBounds(envelope.getMinY(), envelope.getMinX());
   checkLatitudeLongitudeBounds(envelope.getMaxY(), envelope.getMaxX());
 
-  if (FOLLY_UNLIKELY(zoom == 0)) {
+  if (zoom == 0) [[unlikely]] {
     return std::vector<int64_t>{
         static_cast<int64_t>(BingTileType::bingTileCoordsToInt(0, 0, 0))};
   }
 
-  if (FOLLY_UNLIKELY(
-          envelope.getMaxX() == envelope.getMinX() &&
-          envelope.getMaxY() == envelope.getMinY())) {
+  if (envelope.getMaxX() == envelope.getMinX() &&
+      envelope.getMaxY() == envelope.getMinY()) [[unlikely]] {
     auto res = BingTileType::latitudeLongitudeToTile(
         envelope.getMaxY(), envelope.getMaxX(), zoom);
     if (res.hasError()) {
@@ -431,7 +427,7 @@ std::vector<int64_t> getRawTilesCoveringGeometry(
     } else {
       auto children = BingTileType::bingTileChildren(
           entry.tile, BingTileType::bingTileZoom(entry.tile) + 1, 1);
-      if (FOLLY_UNLIKELY(children.hasError())) {
+      if (children.hasError()) [[unlikely]] {
         VELOX_USER_FAIL(children.error());
       }
       std::for_each(
@@ -459,14 +455,14 @@ std::vector<int64_t> getMinimalTilesCoveringGeometry(
     stack.pop();
     auto expectedChildren =
         BingTileType::bingTileChildren(thisTile, zoom, maxZoomShift);
-    if (FOLLY_UNLIKELY(expectedChildren.hasError())) {
+    if (expectedChildren.hasError()) [[unlikely]] {
       VELOX_USER_FAIL(expectedChildren.error());
     }
     outputTiles.insert(
         outputTiles.end(),
         expectedChildren.value().begin(),
         expectedChildren.value().end());
-    if (FOLLY_UNLIKELY(outputTiles.size() + stack.size() > kMaxCoveringCount)) {
+    if (outputTiles.size() + stack.size() > kMaxCoveringCount) [[unlikely]] {
       VELOX_USER_FAIL(
           "The zoom level is too high or the geometry is too large to compute a set of covering Bing tiles. Please use a lower zoom level, or tile only a section of the geometry.");
     }
@@ -487,13 +483,13 @@ std::vector<int64_t> getMinimalTilesCoveringGeometry(
   // tile x,y goes SE as they increase
   auto seRes = BingTileType::latitudeLongitudeToTile(
       envelope.getMinY(), envelope.getMaxX(), zoom);
-  if (FOLLY_UNLIKELY(seRes.hasError())) {
+  if (seRes.hasError()) [[unlikely]] {
     VELOX_FAIL(seRes.error());
   }
 
   auto nwRes = BingTileType::latitudeLongitudeToTile(
       envelope.getMaxY(), envelope.getMinX(), zoom);
-  if (FOLLY_UNLIKELY(nwRes.hasError())) {
+  if (nwRes.hasError()) [[unlikely]] {
     VELOX_FAIL(nwRes.error());
   }
 

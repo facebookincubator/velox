@@ -56,6 +56,12 @@ class InputTypedExpr : public ITypedExpr {
   folly::dynamic serialize() const override;
 
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  TypedExprPtr withInputsImpl(
+      std::vector<TypedExprPtr> /*inputs*/) const override {
+    return std::make_shared<InputTypedExpr>(*this);
+  }
 };
 
 class ConstantTypedExpr : public ITypedExpr {
@@ -158,6 +164,11 @@ class ConstantTypedExpr : public ITypedExpr {
   static TypedExprPtr makeNull(const TypePtr& type);
 
  private:
+  TypedExprPtr withInputsImpl(
+      std::vector<TypedExprPtr> /*inputs*/) const override {
+    return std::make_shared<ConstantTypedExpr>(*this);
+  }
+
   const Variant value_;
   const VectorPtr valueVector_;
 };
@@ -269,6 +280,10 @@ class CallTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<CallTypedExpr>(type(), std::move(inputs), name_);
+  }
+
   const std::string name_;
 };
 
@@ -346,6 +361,8 @@ class FieldAccessTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override;
+
   const std::string name_;
   const bool isInputColumn_;
 };
@@ -432,6 +449,11 @@ class DereferenceTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<DereferenceTypedExpr>(
+        type(), std::move(inputs[0]), index_);
+  }
+
   const uint32_t index_;
 };
 
@@ -489,6 +511,12 @@ class ConcatTypedExpr : public ITypedExpr {
   folly::dynamic serialize() const override;
 
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<ConcatTypedExpr>(
+        type()->asRow().names(), std::move(inputs));
+  }
 };
 
 using ConcatTypedExprPtr = std::shared_ptr<const ConcatTypedExpr>;
@@ -556,6 +584,12 @@ class LambdaTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(
+      std::vector<TypedExprPtr> /*inputs*/) const override {
+    // The body is not an input, so a lambda has no inputs to replace.
+    return std::make_shared<LambdaTypedExpr>(*this);
+  }
+
   const RowTypePtr signature_;
   const TypedExprPtr body_;
 };
@@ -627,6 +661,11 @@ class CastTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<CastTypedExpr>(
+        type(), std::move(inputs), isTryCast_);
+  }
+
   // Whether this expression is used for `try_cast`. When true, Presto cast
   // suppresses exception and return null on failure to case.
   const bool isTryCast_;
@@ -677,6 +716,11 @@ class NullIfTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<NullIfTypedExpr>(
+        std::move(inputs[0]), std::move(inputs[1]), commonType_);
+  }
+
   // The common supertype used to cast both inputs for comparison.
   const TypePtr commonType_;
 };

@@ -410,10 +410,16 @@ class TableEvolutionFuzzer {
   /// and relies on schema evolution to add them, which a fixed file schema
   /// cannot accommodate.
   ///
+  /// Runs at least one query shape, then stops early once 'deadline' passes.
+  /// Each shape scans the whole file twice, so on a slow file the shapes of a
+  /// single call can otherwise take far longer than the caller's whole budget.
+  ///
   /// Returns false, having done nothing, when the file carries no columns or no
   /// rows. Neither is a finding, and neither becomes one on a retry, so a
   /// caller looping to a deadline should stop rather than call again.
-  bool runOnInputFile(const InputFile& inputFile);
+  bool runOnInputFile(
+      const InputFile& inputFile,
+      std::chrono::steady_clock::time_point deadline);
 
   const CoverageAccumulator& coverageStats() const {
     return coverageStats_;

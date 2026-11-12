@@ -216,15 +216,13 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .maxDrivers(
             2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-        .config(
-            QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+        .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
         .config(
             QueryConfig::kTaskPartitionedWriterCount,
-            std::to_string(numPartitionedTableWriterCount_))
+            numPartitionedTableWriterCount_)
         // Scale writer settings to trigger partition rebalancing.
         .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-        .config(
-            QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+        .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
         .config(
             QueryConfig::
                 kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
@@ -238,19 +236,18 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
       .spillDirectory(spillDirectory->getPath())
       .maxDrivers(
           2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-      .config(
-          QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+      .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
-          std::to_string(numPartitionedTableWriterCount_))
+          numPartitionedTableWriterCount_)
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(QueryConfig::kWriterSpillEnabled, "true")
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
       .config(
           QueryConfig::kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
-          "0")
+          0)
       .splits(splits)
       .assertResults(duckDbSql);
 }
@@ -264,17 +261,15 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .maxDrivers(
             2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-        .config(
-            QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+        .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
         .config(
             QueryConfig::kTaskPartitionedWriterCount,
-            std::to_string(numPartitionedTableWriterCount_))
+            numPartitionedTableWriterCount_)
         .config(core::QueryConfig::kSpillEnabled, "true")
         .config(QueryConfig::kWriterSpillEnabled, "true")
         // Scale writer settings to trigger partition rebalancing.
         .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-        .config(
-            QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+        .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
         .config(
             QueryConfig::
                 kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
@@ -287,19 +282,18 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
       .spillDirectory(spillDirectory->getPath())
       .maxDrivers(
           2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-      .config(
-          QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+      .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
-          std::to_string(numPartitionedTableWriterCount_))
+          numPartitionedTableWriterCount_)
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(QueryConfig::kWriterSpillEnabled, "true")
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
       .config(
           QueryConfig::kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
-          "0")
+          0)
       .assertResults(duckDbSql);
 }
 
@@ -310,15 +304,13 @@ RowVectorPtr TableWriterTestBase::runQueryWithWriterConfigs(
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .maxDrivers(
             2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-        .config(
-            QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+        .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
         .config(
             QueryConfig::kTaskPartitionedWriterCount,
-            std::to_string(numPartitionedTableWriterCount_))
+            numPartitionedTableWriterCount_)
         // Scale writer settings to trigger partition rebalancing.
         .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-        .config(
-            QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+        .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
         .config(
             QueryConfig::
                 kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
@@ -331,19 +323,18 @@ RowVectorPtr TableWriterTestBase::runQueryWithWriterConfigs(
       .spillDirectory(spillDirectory->getPath())
       .maxDrivers(
           2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-      .config(
-          QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+      .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
-          std::to_string(numPartitionedTableWriterCount_))
+          numPartitionedTableWriterCount_)
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(QueryConfig::kWriterSpillEnabled, "true")
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
       .config(
           QueryConfig::kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
-          "0")
+          0)
       .copyResults(pool());
 }
 

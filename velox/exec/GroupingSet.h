@@ -221,8 +221,6 @@ class GroupingSet {
 
   void initializeGlobalAggregation();
 
-  void destroyGlobalAggregations();
-
   void addGlobalAggregationInput(const RowVectorPtr& input, bool mayPushdown);
 
   bool getGlobalAggregationOutput(
@@ -237,6 +235,10 @@ class GroupingSet {
   }
 
   void createHashTable();
+
+  // Sets the offsets and the allocator of the aggregates, the sorted
+  // aggregations and the distinct aggregations to those of 'rows'.
+  void initializeAccumulators(RowContainer& rows);
 
   void populateTempVectors(int32_t aggregateIndex, const RowVectorPtr& input);
 
@@ -404,10 +406,9 @@ class GroupingSet {
   std::unique_ptr<HashLookup> lookup_;
   SelectivityVector activeRows_;
 
-  // Used to allocate memory for a single row accumulating results of global
-  // aggregation
-  HashStringAllocator stringAllocator_;
-  memory::AllocationPool rows_;
+  // Holds the single row accumulating results of global aggregation. Declared
+  // after the aggregates, whose accumulators it frees when destroyed.
+  std::unique_ptr<RowContainer> globalAggregationRows_;
 
   bool noMoreInput_{false};
 

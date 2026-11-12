@@ -17,7 +17,7 @@
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
-#include "velox/connectors/hive/ExtractionUtils.h"
+#include "velox/connectors/common/ExtractionUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -60,6 +60,23 @@ class TextReaderTest : public testing::Test,
     auto spec = std::make_shared<common::ScanSpec>("root");
     spec->addAllChildFields(type);
     options.setScanSpec(spec);
+  }
+
+  std::unique_ptr<dwio::common::Reader> createReader(
+      const RowTypePtr& type,
+      const std::string& fileName) {
+    auto factory =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+    auto path =
+        velox::test::getDataFilePath("velox/dwio/text/tests/reader/", fileName);
+    auto readFile = std::make_shared<LocalReadFile>(path);
+    dwio::common::ReaderOptions readerOptions(pool());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    readerOptions.setFileSchema(type);
+    auto input =
+        std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+    return factory->createReader(std::move(input), readerOptions);
   }
 
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
@@ -129,21 +146,8 @@ TEST_F(TextReaderTest, basic) {
        {"col_int", INTEGER()},
        {"col_float", DOUBLE()},
        {"col_bool", BOOLEAN()}});
-  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-
-  auto path = velox::test::getDataFilePath(
-      "velox/dwio/text/tests/reader/",
-      "examples/simple_types_compressed_file.gz");
-  auto readFile = std::make_shared<LocalReadFile>(path);
-
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(type);
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = factory->createReader(std::move(input), readerOptions);
+  const std::string fileName = "examples/simple_types_compressed_file.gz";
+  auto reader = createReader(type, fileName);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*type, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -163,8 +167,7 @@ TEST_F(TextReaderTest, basic) {
   }
   ASSERT_EQ(rowReader->next(10, result), 0);
 
-  input = std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  reader = factory->createReader(std::move(input), readerOptions);
+  reader = createReader(type, fileName);
   rowReader = reader->createRowReader(rowReaderOptions);
   // Try reading 2, 3, 4, 5 rows at a time.
   ASSERT_EQ(rowReader->next(2, result), 2);
@@ -184,6 +187,32 @@ TEST_F(TextReaderTest, basic) {
     EXPECT_TRUE(result->equalValueAt(expected.get(), i, 9 + i));
   }
   ASSERT_EQ(rowReader->next(10, result), 0);
+}
+
+TEST_F(TextReaderTest, rowReaderOwnsScanSpec) {
+  const auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
+  auto reader = createReader(type, "examples/simple_types_compressed_file.gz");
+
+  // Allocate options on the heap to expose dangling references under ASan.
+  auto rowReaderOptions = std::make_unique<dwio::common::RowReaderOptions>();
+  setScanSpec(*type, *rowReaderOptions);
+  auto rowReader = reader->createRowReader(*rowReaderOptions);
+  rowReaderOptions.reset();
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(1, result), 1);
+  ASSERT_EQ(*result->type(), *type);
+  const auto expected = makeRowVector({
+      makeFlatVector<std::string>({"FOO"}),
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<double>({1.123}),
+      makeFlatVector<bool>({true}),
+  });
+  EXPECT_TRUE(result->equalValueAt(expected.get(), 0, 0));
 }
 
 TEST_F(TextReaderTest, headerAndCustomNullString) {
@@ -2029,10 +2058,10 @@ TEST_F(TextReaderTest, extractionMapKeys) {
   auto* mapSpec = spec->addField("col_map", 0);
   mapSpec->addAllChildFields(*MAP(BIGINT(), BOOLEAN()));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   auto chain = std::vector<ExtractionPathElementPtr>{
       ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
   mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kKeys);
@@ -2097,10 +2126,10 @@ TEST_F(TextReaderTest, extractionMapValues) {
   auto* mapSpec = spec->addField("col_map", 0);
   mapSpec->addAllChildFields(*MAP(BIGINT(), BOOLEAN()));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   auto chain = std::vector<ExtractionPathElementPtr>{
       ExtractionPathElement::simple(ExtractionStep::kMapValues)};
   mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kValues);
@@ -2175,10 +2204,10 @@ TEST_F(TextReaderTest, extractionMapKeyFilter) {
   auto* mapSpec = spec->addField("col_map", 0);
   mapSpec->addAllChildFields(*MAP(VARCHAR(), BIGINT()));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   auto chain = std::vector<ExtractionPathElementPtr>{
       ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"a", "b"})};
   mapSpec->setTransform(
@@ -2243,10 +2272,10 @@ TEST_F(TextReaderTest, extractionTransformOnMapColumn) {
   auto* mapSpec = spec->addField("col_map", 0);
   mapSpec->addAllChildFields(*MAP(BIGINT(), BOOLEAN()));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   auto chain = std::vector<ExtractionPathElementPtr>{
       ExtractionPathElement::simple(ExtractionStep::kSize)};
   mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kSize);

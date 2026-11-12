@@ -25,6 +25,7 @@
 
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/FixedPointPlanNodes.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -150,6 +151,10 @@ class PlanRewriterTest
          {values().topNRowNumber({"c0"}, {"c1"}, 1, true).planNode(),
           "CudfTopNRowNumber",
           "CudfTopNRowNumber"}},
+        {"TopNRank",
+         {values().topNRank("rank", {"c0"}, {"c1"}, 1, true).planNode(),
+          "CudfTopNRowNumber",
+          "CudfTopNRowNumber"}},
         {"Limit",
          {values().limit(0, 2, false).planNode(), "CudfLimit", "CudfLimit"}},
         {"LocalPartition",
@@ -215,6 +220,10 @@ class PlanRewriterTest
         {"c0", "m"},
         {makeFlatVector<int64_t>({3, 1, 2}),
          makeMapVector<int64_t, int64_t>({{{1, 10}}, {{2, 20}}, {{3, 30}}})});
+    auto arrays = makeRowVector(
+        {"c0", "a"},
+        {makeFlatVector<int64_t>({1, 1, 1, 1}),
+         makeArrayVector<int64_t>({{2}, {1}, {2}, {3}})});
 
     return {
         {"NestedLoopJoinCustomComparison",
@@ -275,8 +284,11 @@ class PlanRewriterTest
                   {"c0", "u1"})
               .planNode(),
           "HashProbe"}},
-        {"TopNRank",
-         {values().topNRank("rank", {"c0"}, {"c1"}, 1, true).planNode(),
+        {"TopNRankByArray",
+         {PlanBuilder()
+              .values({arrays})
+              .topNRank("rank", {"c0"}, {"a"}, 2, true)
+              .planNode(),
           "TopNRowNumber"}},
         {"UnsupportedLocalPartition",
          {values()
@@ -706,6 +718,17 @@ TEST_F(PlanRewriterTest, bothGpuConnectorsNeedOutputConversion) {
 class PlanRewriterHiveTest
     : public cudf_velox::exec::test::CudfHiveConnectorTestBase {
  protected:
+  // A scan the cuDF data source turns down reads with the CPU Parquet reader.
+  static void SetUpTestCase() {
+    CudfHiveConnectorTestBase::SetUpTestCase();
+    parquet::registerParquetReaderFactory();
+  }
+
+  static void TearDownTestCase() {
+    parquet::unregisterParquetReaderFactory();
+    CudfHiveConnectorTestBase::TearDownTestCase();
+  }
+
   void SetUp() override {
     savedDriverAdapter_ = CudfConfig::getInstance().enableDriverAdapter;
     CudfConfig::getInstance().enableDriverAdapter = false;
@@ -763,6 +786,44 @@ TEST_F(PlanRewriterHiveTest, gpuScanFeedsGpuNodesDirectly) {
   EXPECT_FALSE(operators.contains("CudfFromVelox"));
   EXPECT_TRUE(operators.contains("CudfFilterProject"));
   EXPECT_TRUE(operators.contains("CudfReduceSINGLE"));
+}
+
+TEST_F(PlanRewriterHiveTest, scanWithUnsupportedRemainingFilterStaysOnCpu) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  auto vectors = makeVectors(rowType, 4, 1'000);
+  auto file = common::testutil::TempFilePath::create();
+  writeToFile(file->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  // The cuDF data source cannot evaluate to_big_endian_64, so the connector
+  // creates the CPU Hive data source for this scan.
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(cudf_velox::exec::test::kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(
+                      ::facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .remainingFilter(
+                      "to_big_endian_64(c0) <> "
+                      "to_big_endian_64(CAST(1 AS BIGINT))")
+                  .endTableScan()
+                  .singleAggregation({}, {"count(c0)", "min(c1)", "max(c1)"})
+                  .planNode();
+  auto physical = rewriteToCudfPlan(plan);
+  ASSERT_TRUE(physical->is<CudfToVeloxNode>());
+  auto aggregation = physical->sources()[0];
+  ASSERT_TRUE(aggregation->is<CudfAggregationNode>());
+  auto conversion = aggregation->sources()[0];
+  ASSERT_TRUE(conversion->is<CudfFromVeloxNode>());
+  EXPECT_TRUE(conversion->sources()[0]->is<core::TableScanNode>());
+
+  ::facebook::velox::exec::test::AssertQueryBuilder(
+      physical, duckDbQueryRunner_)
+      .splits(makeCudfHiveConnectorSplits({file}))
+      .assertResults(
+          "SELECT count(c0), min(c1), max(c1) FROM tmp WHERE c0 <> 1");
 }
 
 } // namespace
