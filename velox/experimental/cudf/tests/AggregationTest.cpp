@@ -2675,7 +2675,8 @@ TEST_F(AggregationTest, arrayAggWithOtherAggregates) {
 // as false, and a group with every row masked out (k = 2) yields NULL at every
 // step. The unmasked array_agg beside it checks that each aggregate reads its
 // own lists. With one Values vector per GPU batch, the steps see several
-// batches. ARRAY and ROW values check the ignore_nulls path on nested types.
+// batches. ARRAY, ROW, VARCHAR and non-null values check both null policies on
+// other column types.
 TEST_F(AggregationTest, arrayAggMask) {
   auto first = makeRowVector(
       {"k", "v", "m", "position"},
@@ -2725,9 +2726,10 @@ TEST_F(AggregationTest, arrayAggMask) {
     }
   }
 
-  // Under ignore_nulls the masked rows of a nested column are made null too.
+  // The masked rows of nested, string and non-null columns are left out under
+  // both null policies.
   auto nested = makeRowVector(
-      {"k", "a", "r", "m"},
+      {"k", "a", "r", "s", "p", "m"},
       {
           makeFlatVector<int64_t>({1, 1, 2, 1, 2}),
           makeArrayVectorFromJson<int64_t>(
@@ -2736,26 +2738,31 @@ TEST_F(AggregationTest, arrayAggMask) {
               {"x"},
               {makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4, 5})},
               [](auto row) { return row == 1; }),
+          makeNullableFlatVector<std::string>(
+              {"a", std::nullopt, "bcd", "", "e"}),
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
           makeNullableFlatVector<bool>({true, true, false, std::nullopt, true}),
       });
-  for (const auto steps : {
-           AggSteps::kSingle,
-           AggSteps::kPartialFinal,
-           AggSteps::kPartialIntermediateFinal,
-       }) {
-    SCOPED_TRACE(static_cast<int>(steps));
-    auto plan = makeAggregationPlan(
-        PlanBuilder().values({nested}),
-        {"k"},
-        {"array_agg(a)", "array_agg(r)"},
-        steps,
-        {"m", "m"});
-    const std::unordered_map<std::string, std::string> ignoreNulls{
+  for (const bool ignoreNulls : {false, true}) {
+    SCOPED_TRACE(fmt::format("ignoreNulls: {}", ignoreNulls));
+    const std::unordered_map<std::string, std::string> configs{
         {PrestoQueryConfig::qualify(PrestoQueryConfig::kArrayAggIgnoreNulls),
-         "true"}};
-    AssertQueryBuilder(plan)
-        .configs(ignoreNulls)
-        .assertResults(cpuResults(plan, ignoreNulls));
+         ignoreNulls ? "true" : "false"}};
+    for (const auto steps : {
+             AggSteps::kSingle,
+             AggSteps::kPartialFinal,
+             AggSteps::kPartialIntermediateFinal,
+         }) {
+      SCOPED_TRACE(static_cast<int>(steps));
+      auto plan = makeAggregationPlan(
+          PlanBuilder().values({nested}),
+          {"k"},
+          {"array_agg(a)", "array_agg(r)", "array_agg(s)", "array_agg(p)"},
+          steps,
+          {"m", "m", "m", "m"});
+      AssertQueryBuilder(plan).configs(configs).assertResults(
+          cpuResults(plan, configs));
+    }
   }
 
   // A partial step alone yields NULL for the group every row of which is
