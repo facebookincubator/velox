@@ -84,22 +84,74 @@ class GroupedExecutionTest : public virtual HiveConnectorTestBase {
     ASSERT_EQ(n, task->numFinishedDrivers());
   }
 
-  // Creates a mixed grouped task with shared spill configuration.
-  std::pair<std::shared_ptr<Task>, std::shared_ptr<TempDirectoryPath>>
-  createMixedGroupedTask(
-      std::string taskId,
-      core::PlanFragment plan,
-      Consumer consumer) {
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideConfigUnsafe({
+  // Holds the plan metadata and configuration shared by mixed grouped tests.
+  struct MixedGroupedPlan {
+    core::PlanFragment fragment;
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId buildScanId;
+    core::PlanNodePtr joinNode;
+    std::unordered_map<std::string, std::string> configs;
+  };
+
+  // Creates a mixed grouped hash join plan and its shared spill configuration.
+  MixedGroupedPlan makeMixedGroupedPlan(
+      const RowTypePtr& probeType,
+      const RowTypePtr& buildType,
+      core::JoinType joinType,
+      bool nullAware,
+      const std::vector<std::string>& outputColumns,
+      uint32_t numGroups) {
+    MixedGroupedPlan mixedPlan;
+    PlanBuilder planBuilder;
+    mixedPlan.fragment = planBuilder.tableScan(probeType)
+                             .capturePlanNodeId(mixedPlan.probeScanId)
+                             .hashJoin(
+                                 {"t0"},
+                                 {"u0"},
+                                 planBuilder.newPlan()
+                                     .tableScan(buildType)
+                                     .capturePlanNodeId(mixedPlan.buildScanId)
+                                     .planNode(),
+                                 "",
+                                 outputColumns,
+                                 joinType,
+                                 nullAware)
+                             .capturePlanNode(mixedPlan.joinNode)
+                             .planFragment();
+    mixedPlan.fragment.executionStrategy = core::ExecutionStrategy::kGrouped;
+    mixedPlan.fragment.groupedExecutionLeafNodeIds = {mixedPlan.probeScanId};
+    mixedPlan.fragment.numSplitGroups = numGroups;
+    mixedPlan.configs = {
         {core::QueryConfig::kSpillEnabled, "true"},
         {core::QueryConfig::kJoinSpillEnabled, "true"},
         {core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, "true"},
-    });
+    };
+    return mixedPlan;
+  }
+
+  // Creates a consumer that counts emitted rows.
+  static Consumer rowCountingConsumer(std::atomic<uint64_t>& numRows) {
+    return [&numRows](RowVectorPtr output, bool, ContinueFuture*) {
+      if (output != nullptr) {
+        numRows += output->size();
+      }
+      return BlockingReason::kNotBlocked;
+    };
+  }
+
+  // Creates a task with the plan's shared spill configuration.
+  std::pair<std::shared_ptr<Task>, std::shared_ptr<TempDirectoryPath>>
+  createMixedGroupedTask(
+      std::string taskId,
+      const MixedGroupedPlan& mixedPlan,
+      Consumer consumer) {
+    auto queryCtx = core::QueryCtx::create(executor_.get());
+    auto configs = mixedPlan.configs;
+    queryCtx->testingOverrideConfigUnsafe(std::move(configs));
     auto spillDirectory = TempDirectoryPath::create();
     auto task = Task::create(
         std::move(taskId),
-        std::move(plan),
+        mixedPlan.fragment,
         0,
         std::move(queryCtx),
         Task::ExecutionMode::kParallel,
@@ -126,24 +178,13 @@ class GroupedExecutionTest : public virtual HiveConnectorTestBase {
     writeToFile(buildFile->getPath(), buildVectors);
     joinFiles_.insert(joinFiles_.end(), {probeFile, buildFile});
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId probeScanId;
-    core::PlanNodeId buildScanId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(probeVectors.front()->rowType())
-                    .capturePlanNodeId(probeScanId)
-                    .hashJoin(
-                        {"t0"},
-                        {"u0"},
-                        PlanBuilder(planNodeIdGenerator)
-                            .tableScan(buildVectors.front()->rowType())
-                            .capturePlanNodeId(buildScanId)
-                            .planNode(),
-                        "",
-                        outputColumns,
-                        joinType,
-                        nullAware)
-                    .planNode();
+    auto mixedPlan = makeMixedGroupedPlan(
+        probeVectors.front()->rowType(),
+        buildVectors.front()->rowType(),
+        joinType,
+        nullAware,
+        outputColumns,
+        numGroups);
 
     std::vector<RowVectorPtr> totalProbeVectors;
     std::vector<Split> probeSplits;
@@ -155,16 +196,15 @@ class GroupedExecutionTest : public virtual HiveConnectorTestBase {
     createDuckDbTable("t", totalProbeVectors);
     createDuckDbTable("u", buildVectors);
 
-    AssertQueryBuilder builder(plan, duckDbQueryRunner_);
+    AssertQueryBuilder builder(mixedPlan.fragment.planNode, duckDbQueryRunner_);
     builder.spillDirectory(joinSpillDirectory_->getPath())
-        .config(core::QueryConfig::kSpillEnabled, true)
-        .config(core::QueryConfig::kJoinSpillEnabled, true)
-        .config(core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, true)
-        .splits(probeScanId, std::move(probeSplits))
-        .split(buildScanId, makeHiveSplit(buildFile->getPath()))
-        .executionStrategy(core::ExecutionStrategy::kGrouped)
-        .groupedExecutionLeafNodeIds({probeScanId})
-        .numSplitGroups(numGroups)
+        .configs(mixedPlan.configs)
+        .splits(mixedPlan.probeScanId, std::move(probeSplits))
+        .split(mixedPlan.buildScanId, makeHiveSplit(buildFile->getPath()))
+        .executionStrategy(mixedPlan.fragment.executionStrategy)
+        .groupedExecutionLeafNodeIds(
+            mixedPlan.fragment.groupedExecutionLeafNodeIds)
+        .numSplitGroups(mixedPlan.fragment.numSplitGroups)
         .numConcurrentSplitGroups(1);
     return builder;
   }
@@ -652,45 +692,26 @@ TEST_F(GroupedExecutionTest, mixedGroupedEmptyBuild) {
 TEST_F(GroupedExecutionTest, mixedGroupedNoProbeGroups) {
   auto build = makeNamedRowVector({{"u0", makeFlatVector<int64_t>({1})}});
   auto buildFile = writeToFile(build);
-
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId probeScanId;
-  core::PlanNodeId buildScanId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(ROW("t0", BIGINT()))
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"t0"},
-                      {"u0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(build->rowType())
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "",
-                      {"t0"},
-                      core::JoinType::kInner)
-                  .planFragment();
-  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
-  plan.groupedExecutionLeafNodeIds = {probeScanId};
-  plan.numSplitGroups = 1;
+  auto mixedPlan = makeMixedGroupedPlan(
+      ROW("t0", BIGINT()),
+      build->rowType(),
+      core::JoinType::kInner,
+      /*nullAware=*/false,
+      {"t0"},
+      /*numGroups=*/1);
   std::atomic<uint64_t> numRows{0};
-  auto consumer = [&](RowVectorPtr output, bool, ContinueFuture*) {
-    if (output != nullptr) {
-      numRows += output->size();
-    }
-    return BlockingReason::kNotBlocked;
-  };
+  auto consumer = rowCountingConsumer(numRows);
   auto [task, spillDirectory] =
-      createMixedGroupedTask("no-probe-groups", std::move(plan), consumer);
+      createMixedGroupedTask("no-probe-groups", mixedPlan, consumer);
   SCOPE_EXIT {
     task->requestCancel().wait();
   };
 
   constexpr uint32_t kNumDrivers = 1;
   // Complete split delivery before startup, with no probe groups to schedule.
-  task->addSplit(buildScanId, makeHiveSplit(buildFile->getPath()));
-  task->noMoreSplits(buildScanId);
-  task->noMoreSplits(probeScanId);
+  task->addSplit(mixedPlan.buildScanId, makeHiveSplit(buildFile->getPath()));
+  task->noMoreSplits(mixedPlan.buildScanId);
+  task->noMoreSplits(mixedPlan.probeScanId);
   ASSERT_EQ(task->state(), TaskState::kRunning);
   task->start(kNumDrivers, 1);
   EXPECT_TRUE(waitForTaskCompletion(task.get(), 2'000'000)) << task->toString();
@@ -706,52 +727,33 @@ TEST_F(GroupedExecutionTest, mixedGroupedDelayedNoMoreSplits) {
   auto buildFile = writeToFile(build);
   constexpr uint32_t kNumGroups = 2;
   constexpr uint32_t kNumDrivers = 2;
+  auto mixedPlan = makeMixedGroupedPlan(
+      probe->rowType(),
+      build->rowType(),
+      core::JoinType::kInner,
+      /*nullAware=*/false,
+      {"t0"},
+      kNumGroups);
 
   for (const bool triggerSpill : {false, true}) {
     SCOPED_TRACE(triggerSpill);
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId probeScanId;
-    core::PlanNodeId buildScanId;
-    core::PlanNodePtr joinNode;
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(probe->rowType())
-                    .capturePlanNodeId(probeScanId)
-                    .hashJoin(
-                        {"t0"},
-                        {"u0"},
-                        PlanBuilder(planNodeIdGenerator)
-                            .tableScan(ROW("u0", BIGINT()))
-                            .capturePlanNodeId(buildScanId)
-                            .planNode(),
-                        "",
-                        {"t0"},
-                        core::JoinType::kInner)
-                    .capturePlanNode(joinNode)
-                    .planFragment();
-    plan.executionStrategy = core::ExecutionStrategy::kGrouped;
-    plan.groupedExecutionLeafNodeIds = {probeScanId};
-    plan.numSplitGroups = kNumGroups;
     std::atomic<uint64_t> numRows{0};
-    auto consumer = [&](RowVectorPtr output, bool, ContinueFuture*) {
-      if (output != nullptr) {
-        numRows += output->size();
-      }
-      return BlockingReason::kNotBlocked;
-    };
+    auto consumer = rowCountingConsumer(numRows);
     TestScopedSpillInjection spillInjection(triggerSpill ? 100 : 0);
-    auto [task, spillDirectory] = createMixedGroupedTask(
-        "delayed-no-more-splits", std::move(plan), consumer);
+    auto [task, spillDirectory] =
+        createMixedGroupedTask("delayed-no-more-splits", mixedPlan, consumer);
     SCOPE_EXIT {
       task->requestCancel().wait();
     };
 
     task->start(kNumDrivers, 1);
-    task->addSplit(buildScanId, makeHiveSplit(buildFile->getPath()));
-    task->noMoreSplits(buildScanId);
+    task->addSplit(mixedPlan.buildScanId, makeHiveSplit(buildFile->getPath()));
+    task->noMoreSplits(mixedPlan.buildScanId);
     for (uint32_t groupId = 0; groupId < kNumGroups; ++groupId) {
       task->addSplit(
-          probeScanId, makeHiveSplitWithGroup(probeFile->getPath(), groupId));
-      task->noMoreSplitsForGroup(probeScanId, groupId);
+          mixedPlan.probeScanId,
+          makeHiveSplitWithGroup(probeFile->getPath(), groupId));
+      task->noMoreSplitsForGroup(mixedPlan.probeScanId, groupId);
       waitForFinishedDrivers(task, (groupId + 1) * kNumDrivers);
       ASSERT_EQ(task->state(), TaskState::kRunning);
     }
@@ -759,11 +761,12 @@ TEST_F(GroupedExecutionTest, mixedGroupedDelayedNoMoreSplits) {
     EXPECT_EQ(numRows.load(), kNumGroups);
 
     // Deliver the final source notification after all groups have finished.
-    task->noMoreSplits(probeScanId);
+    task->noMoreSplits(mixedPlan.probeScanId);
     EXPECT_TRUE(waitForTaskCompletion(task.get(), 2'000'000))
         << task->toString();
     const auto planStats = exec::toPlanStats(task->taskStats());
-    EXPECT_EQ(planStats.at(joinNode->id()).spilledBytes > 0, triggerSpill);
+    EXPECT_EQ(
+        planStats.at(mixedPlan.joinNode->id()).spilledBytes > 0, triggerSpill);
   }
 }
 
