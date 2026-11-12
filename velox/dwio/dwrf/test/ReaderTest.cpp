@@ -3092,8 +3092,10 @@ TEST_F(TestReader, readFlatMapsAsFlatMapsWithFilter) {
   auto config = std::make_shared<dwrf::Config>();
   config->set(dwrf::Config::FLATTEN_MAP, true);
   config->set(dwrf::Config::MAP_FLAT_COLS, {0});
-  auto [writer, reader] = createWriterReader(
+  // Not a structured binding: Clang 15 cannot capture one in the lambda below.
+  auto writerAndReader = createWriterReader(
       {input}, pool(), dataIoStats_, metadataIoStats_, config);
+  auto& reader = writerAndReader.second;
   auto schema = asRowType(input->type());
   std::vector<int64_t> passingIds;
   for (int64_t row = 0; row < kNumRows; ++row) {

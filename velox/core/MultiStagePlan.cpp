@@ -306,4 +306,60 @@ const Stage* MultiStagePlan::consumer(int32_t id) const {
   return index == kNone ? nullptr : &stages_[index];
 }
 
+folly::dynamic MultiStagePlan::serialize() const {
+  folly::dynamic stages = folly::dynamic::array;
+  for (const auto& stage : stages_) {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["id"] = stage.id;
+    obj["type"] = std::string(StageTypeName::toName(stage.type));
+    if (stage.numRemotePartitions.has_value()) {
+      obj["numRemotePartitions"] = stage.numRemotePartitions.value();
+    }
+    obj["plan"] = stage.plan->serialize();
+    folly::dynamic inputs = folly::dynamic::array;
+    for (const auto& input : stage.inputs) {
+      inputs.push_back(
+          folly::dynamic::object("exchangeId", input.exchangeId)(
+              "producerStageId", input.producerStageId));
+    }
+    obj["inputs"] = std::move(inputs);
+    stages.push_back(std::move(obj));
+  }
+  return folly::dynamic::object("stages", std::move(stages));
+}
+
+// static
+MultiStagePlan MultiStagePlan::deserialize(
+    const folly::dynamic& obj,
+    void* context) {
+  return MultiStagePlan(deserializeStages(obj, context));
+}
+
+// static
+std::vector<Stage> MultiStagePlan::deserializeStages(
+    const folly::dynamic& obj,
+    void* context) {
+  std::vector<Stage> stages;
+  for (const auto& stageObj : obj["stages"]) {
+    Stage stage{
+        .id = static_cast<int32_t>(stageObj["id"].asInt()),
+        .type = StageTypeName::toStageType(stageObj["type"].asString()),
+        .plan = ISerializable::deserialize<PlanNode>(stageObj["plan"], context),
+    };
+    if (stageObj.count("numRemotePartitions") != 0u) {
+      stage.numRemotePartitions =
+          static_cast<int32_t>(stageObj["numRemotePartitions"].asInt());
+    }
+    for (const auto& input : stageObj["inputs"]) {
+      stage.inputs.push_back({
+          .exchangeId = input["exchangeId"].asString(),
+          .producerStageId =
+              static_cast<int32_t>(input["producerStageId"].asInt()),
+      });
+    }
+    stages.push_back(std::move(stage));
+  }
+  return stages;
+}
+
 } // namespace facebook::velox::core

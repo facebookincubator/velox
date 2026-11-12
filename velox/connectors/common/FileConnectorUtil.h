@@ -108,6 +108,7 @@ void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr);
 struct SpecialColumnNames {
   std::optional<std::string> rowIndex;
   std::optional<std::string> rowId;
+  std::optional<std::string> readRange;
 };
 
 /// Check that two FileColumnHandle instances are consistent in terms of

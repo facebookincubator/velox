@@ -84,6 +84,25 @@ class ClusterIndexBase : public IndexLookup {
 
   LookupResult lookup(const LookupRequest& request) const override;
 
+  /// The rows of one key range and a cursor over their keys.
+  struct SeekResult {
+    /// The rows whose keys are in the range. Empty on a miss.
+    RowRange rows;
+    /// Reads the keys of 'rows' in row order, or is null on a miss. Starts
+    /// with the decoded key chunk that the lookup found the first row in, and
+    /// loads each later chunk when it reaches it. Holds only the chunk that it
+    /// reads. The index must outlive it.
+    std::unique_ptr<KeyCursor> keyCursor;
+  };
+
+  /// Looks up the rows of 'bounds' as lookup() does, and returns them with a
+  /// cursor over their keys. Without pinIndex, the index keeps one decoded
+  /// chunk per partition for all of its readers, and a reader of another chunk
+  /// of the partition can replace it between the lookup and the read of the
+  /// keys. The cursor keeps the chunk of the first row, so it does not decode
+  /// that chunk again.
+  SeekResult seek(const velox::serializer::EncodedKeyBounds& bounds) const;
+
   /// Returns the minimum key across all partitions.
   std::string_view minKey() const override {
     return firstKey_;
@@ -159,7 +178,7 @@ class ClusterIndexBase : public IndexLookup {
 
  protected:
   // Walks the index's keys a chunk at a time. Reached only through
-  // keyCursor().
+  // keyCursor() and seek().
   class KeyIterator;
 
   // 'keyComparator' is the order of the encoded keys, or null for bytewise
@@ -207,6 +226,35 @@ class ClusterIndexBase : public IndexLookup {
   }
 
  private:
+  // Holds one decoded key chunk of a lookup: of the chunks that the lookup
+  // resolves its key bounds in, the first in the index, which holds the first
+  // row that the lookup finds. The other bound of a key is usually in the same
+  // chunk, so the lookup decodes it once, and the key cursor of seek() starts
+  // with it. Is not thread-safe: use one per lookup.
+  class LookupChunk {
+   public:
+    // Returns the held chunk if it is chunk 'chunkIndex' of partition
+    // 'partitionId', and null otherwise.
+    std::shared_ptr<DecodedKeyChunk> find(
+        uint32_t partitionId,
+        uint32_t chunkIndex) const;
+
+    // Holds 'chunk', chunk 'chunkIndex' of partition 'partitionId', unless it
+    // holds a chunk that comes before it in the index. The bounds of a lookup
+    // can resolve in any order.
+    void add(
+        uint32_t partitionId,
+        uint32_t chunkIndex,
+        std::shared_ptr<DecodedKeyChunk> chunk);
+
+   private:
+    // The position of the held chunk in the index.
+    uint32_t partitionId_{0};
+    uint32_t chunkIndex_{0};
+    // The held chunk, or null.
+    std::shared_ptr<DecodedKeyChunk> data_;
+  };
+
   // Cached decoded chunk. The DecodedKeyChunk owns its own backing buffer
   // (decodeKeyChunk appends it to DecodedKeyChunk::stringBuffers when no
   // external reuse buffer is provided), so each cached entry is fully
@@ -273,14 +321,23 @@ class ClusterIndexBase : public IndexLookup {
         const ChunkLocation& chunkLocation) const;
   };
 
+  // Looks up 'request' as lookup(request) does. Takes the decoded key chunk of
+  // a key bound from 'heldChunk' when it holds it, and offers it the others.
+  // 'heldChunk' can be null.
+  LookupResult lookup(const LookupRequest& request, LookupChunk* heldChunk)
+      const;
+
   // Resolves an encoded key to a file-level row number within a partition.
   // The partition's last key must be >= encodedKey (guaranteed by the caller's
   // binary search on partition keys).
   // @param inclusive true for first row >= key, false for first row > key.
+  // @param heldChunk Is offered the decoded chunk of the key when not null, as
+  //        seekInChunk() does.
   uint32_t resolvePartitionRow(
       const IndexPartition* partition,
       std::string_view encodedKey,
-      bool inclusive) const;
+      bool inclusive,
+      LookupChunk* heldChunk) const;
 
   // Finds the partition index for a key via binary search on partition keys.
   // Returns nullopt if the key is beyond all partitions.
@@ -332,9 +389,12 @@ class ClusterIndexBase : public IndexLookup {
       std::vector<PartitionLookup>& partitionLookups,
       std::vector<RowRange>& partitionRowRanges) const;
 
-  // Resolves all partition lookups grouped by partition.
+  // Resolves all partition lookups grouped by partition. 'heldChunk' is
+  // offered the decoded chunks of the keys when not null, as seekInChunk()
+  // does.
   void resolvePartitionBounds(
-      std::vector<PartitionLookup>& partitionLookups) const;
+      std::vector<PartitionLookup>& partitionLookups,
+      LookupChunk* heldChunk) const;
 
   // Binary searches chunk keys in the partition. The returned ChunkLocation
   // carries the chunkIndex for indexing into per-chunk arrays.
@@ -360,15 +420,26 @@ class ClusterIndexBase : public IndexLookup {
       const IndexPartition* partition,
       const ChunkLocation& chunkLocation) const;
 
+  // Returns the decoded chunk at 'chunkLocation' from 'heldChunk' when it
+  // holds the chunk, and from getDecodedChunk() otherwise. 'heldChunk' can
+  // be null.
+  std::shared_ptr<DecodedKeyChunk> findDecodedChunk(
+      const IndexPartition* partition,
+      const ChunkLocation& chunkLocation,
+      const LookupChunk* heldChunk) const;
+
   // Seeks within a chunk's decoded encoding.
   // @param inclusive true: first key >= encodedKey. false: first key >
   //        encodedKey.
+  // @param heldChunk Supplies the decoded chunk when it holds it, and
+  //        otherwise is offered the chunk. Can be null.
   // Returns the partition-level row offset.
   uint32_t seekInChunk(
       const IndexPartition* partition,
       const ChunkLocation& chunkLocation,
       std::string_view encodedKey,
-      bool inclusive) const;
+      bool inclusive,
+      LookupChunk* heldChunk) const;
 
   // Returns the partition, loading on demand if needed. Never evicted.
   const IndexPartition* loadPartition(uint32_t partitionId) const;

@@ -2281,7 +2281,7 @@ TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
         << leafTask->taskId();
 
     EXPECT_TRUE(hasStat(
-        toPlanStats(task->taskStats()).at(testNodeId),
+        PlanNodeStats::extract(task->taskStats(), testNodeId),
         "testCustomExchangeStat"));
 
     auto planStats = toPlanStats(leafTask->taskStats());
@@ -2981,13 +2981,12 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
     }
     bufferManager_->noMoreData(producerTaskId);
 
-    auto task = test::AssertQueryBuilder(plan)
-                    .split(remoteSplit(producerTaskId))
-                    .destination(17)
-                    .config(
-                        core::QueryConfig::kPreferredOutputBatchBytes,
-                        std::to_string(maxBytes))
-                    .assertResults(expected);
+    auto task =
+        test::AssertQueryBuilder(plan)
+            .split(remoteSplit(producerTaskId))
+            .destination(17)
+            .config(core::QueryConfig::kPreferredOutputBatchBytes, maxBytes)
+            .assertResults(expected);
 
     auto taskStats = exec::toPlanStats(task->taskStats());
     const auto& stats = taskStats.at("0");
@@ -3070,13 +3069,12 @@ TEST_P(MultiFragmentTest, splitLargeCompactRowsInExchange) {
 
     bufferManager_->noMoreData(producerTaskId);
 
-    auto task = test::AssertQueryBuilder(plan)
-                    .split(remoteSplit(producerTaskId))
-                    .destination(0)
-                    .config(
-                        core::QueryConfig::kPreferredOutputBatchBytes,
-                        std::to_string(maxBytes))
-                    .assertResults(expected);
+    auto task =
+        test::AssertQueryBuilder(plan)
+            .split(remoteSplit(producerTaskId))
+            .destination(0)
+            .config(core::QueryConfig::kPreferredOutputBatchBytes, maxBytes)
+            .assertResults(expected);
 
     auto taskStats = exec::toPlanStats(task->taskStats());
     const auto& stats = taskStats.at("0");
@@ -3430,7 +3428,7 @@ TEST_P(MultiFragmentTest, batchBytes) {
                     .split(remoteSplit(leafTaskId))
                     .config(
                         core::QueryConfig::kPreferredOutputBatchBytes,
-                        std::to_string(preferredBatchBytes))
+                        preferredBatchBytes)
                     .assertResults(
                         fmt::format(
                             "SELECT {}, {}, {}",

@@ -1275,11 +1275,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
   ASSERT_EQ(metadata.size(), 2);
 
   const auto makeRootSection = [&]() {
-    return Section{MetadataBuffer(
+    return Section{MetadataBuffer(toPinnedBuffer(
         MetadataBuffer::decompress(
             toBufferPtr(metadata.at(metadata.size() - 1), pool_.get()),
             CompressionType::Uncompressed,
-            pool_.get()))};
+            pool_.get())))};
   };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1301,7 +1301,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     NIMBLE_ASSERT_THROW(
         HierarchicalClusterIndex::create(
             makeRootSection(),
-            NimbleHierarchicalClusterIndexFactory{}.testingKeyCodec(),
+            nimbleKeyCodec(),
             pool_.get(),
             comparatorOptions),
         "Hierarchical cluster index requires bytewise key order");
@@ -1547,11 +1547,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
   writer->flush(writeData, createMetadata);
   ASSERT_TRUE(writer->close(writeData, createMetadata).has_value());
   const auto makeRootSection = [&]() {
-    return Section{MetadataBuffer(
+    return Section{MetadataBuffer(toPinnedBuffer(
         MetadataBuffer::decompress(
             toBufferPtr(metadata.back(), pool_.get()),
             CompressionType::Uncompressed,
-            pool_.get()))};
+            pool_.get())))};
   };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1671,8 +1671,7 @@ encodeBounds(
 TEST_F(ClusterIndexWriterTest, hierarchicalFactoryKeyEncoderWritesNimbleKeys) {
   const auto& factory = clusterIndexFactory(kHierarchicalClusterIndexName);
   ASSERT_NE(
-      dynamic_cast<const NimbleHierarchicalClusterIndexFactory*>(&factory),
-      nullptr);
+      dynamic_cast<const HierarchicalClusterIndexFactory*>(&factory), nullptr);
   EXPECT_EQ(factory.keyComparator(), nullptr);
 
   const std::vector<std::string> keyColumns{"tinyKey", "smallKey", "bigKey"};
@@ -1766,7 +1765,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryKeyEncoderWritesNimbleKeys) {
 // order, which the caller does not pass. Its key encoder writes the keys that
 // the key cursor returns, and lookup bounds that find their rows.
 TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
-  const NimbleHierarchicalClusterIndexFactory factory{
+  const HierarchicalClusterIndexFactory factory{
       "test.inverted_keys", std::make_shared<const InvertedKeyCodec>()};
   EXPECT_NE(factory.keyComparator(), nullptr);
 
@@ -1819,11 +1818,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
   ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
   const auto index = factory.createReader(
-      Section{MetadataBuffer(
+      Section{MetadataBuffer(toPinnedBuffer(
           MetadataBuffer::decompress(
               toBufferPtr(metadata.back(), pool_.get()),
               CompressionType::Uncompressed,
-              pool_.get()))},
+              pool_.get())))},
       pool_.get(),
       IndexLookup::Options{.file = file, .ioOptions = &ioOptions});
   ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 2);
@@ -1950,11 +1949,11 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   ASSERT_EQ(partitionMetadata.size(), 2);
 
   // Load ClusterIndex from serialized data and verify layout.
-  Section rootSection{MetadataBuffer(
+  Section rootSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
           toBufferPtr(rootIndexData, pool_.get()),
           CompressionType::Uncompressed,
-          pool_.get()))};
+          pool_.get())))};
   auto metadataFile =
       std::make_shared<velox::InMemoryReadFile>(partitionMetadata[0]);
   auto ioStats = std::make_shared<velox::io::IoStatistics>();

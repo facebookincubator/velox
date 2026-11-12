@@ -109,7 +109,7 @@ SeekableArrayInputStream::SeekableArrayInputStream(
 }
 
 void SeekableArrayInputStream::loadIfAvailable() {
-  if (FOLLY_LIKELY(dataRead_ == nullptr)) {
+  if (dataRead_ == nullptr) [[likely]] {
     return;
   }
   const auto result = dataRead_();

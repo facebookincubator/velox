@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <fmt/format.h>
+#include <folly/container/F14Set.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -46,6 +47,7 @@
 #include "velox/dwio/nimble/index/VectorIndex.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsGenerated.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
@@ -186,6 +188,7 @@ class TabletTest : public ::testing::TestWithParam<BufferedInputMode> {
   void TearDown() override {
     fileHandle_.reset();
     readerOptions_.reset();
+    nimble::testingResetBlockCache();
     if (cache_) {
       cache_->shutdown();
       cache_.reset();
@@ -237,6 +240,7 @@ class TabletTest : public ::testing::TestWithParam<BufferedInputMode> {
       fileHandle_->uuid = velox::StringIdLease(ids, fileKey);
       fileHandle_->groupId = velox::StringIdLease(ids, "testGroup");
       options.cache = cache_.get();
+      options.blockCache = nimble::getBlockCache(cache_.get());
       options.fileHandle = fileHandle_.get();
       options.cacheMetadata = true;
       options.cacheIndex = true;
@@ -2618,13 +2622,18 @@ TEST_P(TabletTest, stripeGroupEncodingLayouts) {
     }
   }
 
-  // An out-of-range streamId is a programming error: point access check-fails
-  // rather than silently returning 0.
+  // Point access check-fails on an out-of-range streamId rather than silently
+  // returning 0. Location lookups, load() and totalStreamSize() read it as
+  // absent, like a stream added after this stripe group was written.
   for (const auto& tablet : {rawTablet, streamMajorTablet}) {
     auto stripe = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripe);
     EXPECT_ANY_THROW(tablet->streamOffset(stripe, streamCount));
     EXPECT_ANY_THROW(tablet->streamSize(stripe, streamCount));
+    EXPECT_EQ(tablet->streamLocation(stripe, streamCount).size, 0);
+    const std::vector<uint32_t> outOfRangeStreamIds{streamCount};
+    EXPECT_EQ(tablet->load(stripe, outOfRangeStreamIds)[0], nullptr);
+    EXPECT_EQ(tablet->totalStreamSize(stripe, outOfRangeStreamIds), 0);
   }
 
   auto expectAllLocations = [](const std::shared_ptr<nimble::TabletReader>&
@@ -2835,9 +2844,14 @@ TEST_P(TabletTest, stripeGroupEncodingLayoutsMultipleGroups) {
         EXPECT_EQ(
             rawTablet->streamOffset(rawStripe, streamId),
             encodedTablet->streamOffset(encStripe, streamId));
+        const auto rawSize = rawTablet->streamSize(rawStripe, streamId);
+        EXPECT_EQ(rawSize, encodedTablet->streamSize(encStripe, streamId));
+        const nimble::TabletReader::StreamMetadata location =
+            encodedTablet->streamLocation(encStripe, streamId);
+        EXPECT_EQ(location.size, rawSize);
         EXPECT_EQ(
-            rawTablet->streamSize(rawStripe, streamId),
-            encodedTablet->streamSize(encStripe, streamId));
+            location.offset,
+            rawSize == 0 ? 0 : rawTablet->streamOffset(rawStripe, streamId));
       }
 
       std::vector<nimble::TabletReader::StreamMetadata> rawLocations(
@@ -3056,8 +3070,13 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
           /*deduplicate=*/false, flushThreshold, compressionThreshold);
       const auto deduplicatedFile = writeTablet(
           /*deduplicate=*/true, flushThreshold, compressionThreshold);
-      const auto tablet = createTabletReader(file);
-      const auto deduplicatedTablet = createTabletReader(deduplicatedFile);
+      nimble::TabletReader::Options viewDeduplicationOptions;
+      viewDeduplicationOptions.stripeGroupEncodingViewDeduplicationEnabled =
+          true;
+      const auto tablet = createTabletReader(file, viewDeduplicationOptions);
+      const auto deduplicatedTablet =
+          createTabletReader(deduplicatedFile, viewDeduplicationOptions);
+      const auto unsharedViewsTablet = createTabletReader(deduplicatedFile);
       ASSERT_EQ(deduplicatedTablet->stripeCount(), kStripeCount);
       const auto& sections = tablet->stripeGroupsMetadata();
       const auto& deduplicatedSections =
@@ -3068,6 +3087,9 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
       } else {
         EXPECT_EQ(sections.size(), 1);
       }
+
+      // Counts distinct encoded payloads per deduplicated group.
+      std::vector<size_t> numDistinctPayloads(sections.size());
       for (size_t group = 0; group < sections.size(); ++group) {
         EXPECT_LT(
             deduplicatedSections[group].uncompressedSize().value(),
@@ -3093,19 +3115,71 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
         EXPECT_NE(sizes->Get(0), sizes->Get(1));
         EXPECT_EQ(offsets->Get(3), sizes->Get(3));
         EXPECT_EQ(offsets->Get(0), sizes->Get(3));
+        folly::F14FastSet<const void*> payloads;
+        for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
+          payloads.insert(offsets->Get(streamId)->data());
+          payloads.insert(sizes->Get(streamId)->data());
+        }
+        numDistinctPayloads[group] = payloads.size();
       }
       for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
         const auto stripeId = tablet->stripeIdentifier(stripe);
         const auto deduplicatedId =
             deduplicatedTablet->stripeIdentifier(stripe);
+        const auto unsharedViewsId =
+            unsharedViewsTablet->stripeIdentifier(stripe);
+        const auto& deduplicatedGroup = deduplicatedId.stripeGroup();
+        std::vector<nimble::StripeGroup::StreamMetadata> locations(
+            kStreamCount);
+        deduplicatedGroup->streamLocations(stripe, locations);
         for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
           SCOPED_TRACE(fmt::format("stripe={} stream={}", stripe, streamId));
+          const auto expectedOffset = tablet->streamOffset(stripeId, streamId);
           EXPECT_EQ(
               deduplicatedTablet->streamSize(deduplicatedId, streamId),
               streamSize(stripe, streamId));
           EXPECT_EQ(
               deduplicatedTablet->streamOffset(deduplicatedId, streamId),
-              tablet->streamOffset(stripeId, streamId));
+              expectedOffset);
+          EXPECT_EQ(
+              unsharedViewsTablet->streamSize(unsharedViewsId, streamId),
+              streamSize(stripe, streamId));
+          EXPECT_EQ(
+              unsharedViewsTablet->streamOffset(unsharedViewsId, streamId),
+              expectedOffset);
+          EXPECT_EQ(locations[streamId].size, streamSize(stripe, streamId));
+          if (locations[streamId].size != 0) {
+            EXPECT_EQ(locations[streamId].offset, expectedOffset);
+          }
+        }
+
+        // Every stream owns an offsets and a sizes view unless view
+        // deduplication is enabled and its payload is shared, in which case it
+        // reuses the payload's single view.
+        EXPECT_EQ(
+            stripeId.stripeGroup()->testingEncodingViewCount(),
+            2 * kStreamCount);
+        EXPECT_EQ(
+            unsharedViewsId.stripeGroup()->testingEncodingViewCount(),
+            2 * kStreamCount);
+        EXPECT_EQ(
+            deduplicatedGroup->testingEncodingViewCount(),
+            numDistinctPayloads[deduplicatedGroup->index()]);
+        EXPECT_LT(
+            deduplicatedGroup->testingEncodingViewCount(), 2 * kStreamCount);
+
+        // The selected-streams overload reads through the same shared views.
+        const std::vector<uint32_t> selectedStreamIds{0, 3, 4};
+        std::vector<nimble::StripeGroup::StreamMetadata> selectedLocations(
+            selectedStreamIds.size());
+        deduplicatedGroup->streamLocations(
+            stripe, selectedStreamIds, selectedLocations);
+        for (size_t i = 0; i < selectedStreamIds.size(); ++i) {
+          EXPECT_EQ(
+              selectedLocations[i].size, locations[selectedStreamIds[i]].size);
+          EXPECT_EQ(
+              selectedLocations[i].offset,
+              locations[selectedStreamIds[i]].offset);
         }
       }
     }
@@ -3189,11 +3263,11 @@ TEST_P(TabletTest, stripeGroupViewsKeepTheirValues) {
       std::make_shared<velox::InMemoryReadFile>(file), pool_.get());
   ASSERT_EQ(layout.stripeGroups.size(), 1);
   const auto loadSection = [&](const nimble::MetadataSection& section) {
-    return std::make_unique<nimble::MetadataBuffer>(
+    return std::make_unique<nimble::MetadataBuffer>(nimble::toPinnedBuffer(
         nimble::MetadataBuffer::decompress(
             std::string_view{file}.substr(section.offset(), section.size()),
             section.compressionType(),
-            pool_.get()));
+            pool_.get())));
   };
   const auto stripes = loadSection(layout.stripes);
   auto stripeGroup = loadSection(layout.stripeGroups[0]);
@@ -3219,8 +3293,11 @@ TEST_P(TabletTest, stripeGroupViewsKeepTheirValues) {
   viewManagerOptions.trackDefaultUsage = true;
   velox::memory::MemoryManager viewManager{viewManagerOptions};
   const auto viewPool = viewManager.addLeafPool();
-  const nimble::StripeGroup group{
-      /*stripeGroupIndex=*/0, *stripes, std::move(stripeGroup), viewPool.get()};
+  const nimble::StripeGroup group{/*stripeGroupIndex=*/0,
+                                  *stripes,
+                                  std::move(stripeGroup),
+                                  /*encodingViewDeduplicationEnabled=*/false,
+                                  viewPool.get()};
   // A cached Varint view decodes every row into a uint32 vector from its pool,
   // for the offsets and for the sizes of the one stream. An uncached view
   // decodes on each read and keeps nothing, so this pool stays empty. That is
@@ -6660,12 +6737,28 @@ TEST_P(TabletTest, configureOptionsCacheKeyEncodingViews) {
           .cacheKeyEncodingViews);
 }
 
+TEST_P(TabletTest, configureOptionsStripeGroupEncodingViewDeduplication) {
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  EXPECT_FALSE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .stripeGroupEncodingViewDeduplicationEnabled);
+
+  auto nimbleOptions = std::make_shared<nimble::NimbleReaderOptions>();
+  nimbleOptions->stripeGroupEncodingViewDeduplicationEnabled = true;
+  readerOptions.setFormatSpecificOptions(std::move(nimbleOptions));
+  EXPECT_TRUE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .stripeGroupEncodingViewDeduplicationEnabled);
+}
+
 TEST_P(TabletTest, configureOptionsCacheFields) {
-  // Verify configureOptions wires fileHandle and cache from
-  // ReaderOptions into TabletReader::Options, and that a TabletReader
-  // created via this path actually uses CachedMetadataInput (warm path
-  // reads from cache, not file). Guards against accidental removal of
-  // the cache wiring in configureOptions.
+  // Verify that configureOptions wires fileHandle and cache from ReaderOptions
+  // into TabletReader::Options, that it sets blockCache to the block cache
+  // built on 'cache', and that a TabletReader created via this path actually
+  // uses CachedMetadataInput (warm path reads from cache, not file). Guards
+  // against accidental removal of the cache wiring in configureOptions.
 
   // Verify defaults are null.
   {
@@ -6675,6 +6768,7 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
     auto opts = nimble::TabletReader::configureOptions(defaults);
     EXPECT_EQ(opts.fileHandle, nullptr);
     EXPECT_EQ(opts.cache, nullptr);
+    EXPECT_EQ(opts.blockCache, nullptr);
   }
 
   // Write a simple file for the behavioral test.
@@ -6727,6 +6821,20 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
     auto opts = nimble::TabletReader::configureOptions(readerOptions);
     EXPECT_EQ(opts.fileHandle, &fileHandle);
     EXPECT_EQ(opts.cache, cache.get());
+    EXPECT_EQ(opts.blockCache, nimble::getBlockCache(cache.get()));
+  }
+
+  // Block cache entries are keyed by fileHandle->uuid, so a cache without a
+  // handle sets no block cache.
+  {
+    auto readerOptions =
+        makeReaderOptions(std::make_shared<velox::io::IoStatistics>());
+    readerOptions.setFileHandle(nullptr);
+    auto opts = nimble::TabletReader::configureOptions(readerOptions);
+    EXPECT_EQ(opts.cache, cache.get());
+    EXPECT_EQ(opts.blockCache, nullptr);
+    auto tablet = nimble::TabletReader::create(readFile, pool_.get(), opts);
+    EXPECT_EQ(tablet->stripeCount(), 1);
   }
 
   // Cold path: first reader populates cache.
@@ -8055,7 +8163,7 @@ TEST_P(TabletCacheTest, cacheMetadataWithOptionalSections) {
   options.preloadOptionalSections = {"test_section_1", "test_section_2"};
   // Use adaptive mode (maxFooterIoBytes=0) so optional sections are NOT
   // in the speculative buffer and must go through CachedMetadataInput::load(),
-  // which caches them in AsyncDataCache for the warm reader.
+  // which caches them in the block cache for the warm reader.
   options.maxFooterIoBytes = 0;
 
   // Cold reader: preloads optional sections via MetadataInput::load().
@@ -8356,6 +8464,249 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedMultipleStripeGroups) {
 
   auto warmCacheStats = cache_->refreshStats();
   EXPECT_EQ(warmCacheStats.numEvict, 0);
+}
+
+TEST_F(TabletTest, metadataInBlockCache) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  nimble::Buffer buffer(*pool_);
+
+  // A low flush threshold gives each stripe its own stripe group, and a zero
+  // compression threshold compresses it, so stripe groups load and decompress
+  // through MetadataInput::load().
+  auto tabletWriter = nimble::TabletWriter::create(
+      &writeFile,
+      *pool_,
+      {.metadataFlushThreshold = 1,
+       .metadataCompressionThreshold = 0,
+       .streamDeduplicationEnabled = false});
+  constexpr int kNumStripes = 3;
+  constexpr int kNumStreams = 500;
+  for (int i = 0; i < kNumStripes; ++i) {
+    std::vector<nimble::Stream> streams;
+    for (int s = 0; s < kNumStreams; ++s) {
+      const auto size = 50;
+      auto* pos = buffer.reserve(size);
+      std::memset(pos, (i * kNumStreams + s) & 0xFF, size);
+      streams.push_back(
+          {.offset = static_cast<uint32_t>(s),
+           .chunks = {
+               {.rowCount = 100, .content = {std::string_view(pos, size)}}}});
+    }
+    tabletWriter->writeStripe(100, std::move(streams));
+  }
+  tabletWriter->close();
+  writeFile.close();
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+
+  auto openReader = [&](nimble::TabletReader::Options options) {
+    auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+    velox::io::ReaderOptions ioOptions{pool_.get()};
+    ioOptions.setMetadataIoStats(metadataIoStats);
+    options.ioOptions = ioOptions;
+    return std::make_pair(
+        nimble::TabletReader::create(readFile, pool_.get(), options),
+        metadataIoStats);
+  };
+
+  // Returns the offset and size of every stream, read from the stripe groups.
+  auto streamLocations = [](const nimble::TabletReader& reader) {
+    std::vector<std::pair<uint32_t, uint32_t>> result;
+    for (uint32_t i = 0; i < reader.stripeCount(); ++i) {
+      const auto stripe = reader.stripeIdentifier(i);
+      std::vector<nimble::TabletReader::StreamMetadata> locations(
+          reader.streamCount(stripe));
+      reader.streamLocations(stripe, locations);
+      for (const auto& location : locations) {
+        result.emplace_back(location.offset, location.size);
+      }
+    }
+    return result;
+  };
+
+  const auto defaultReader = openReader({}).first;
+  const auto expected = streamLocations(*defaultReader);
+  ASSERT_EQ(expected.size(), kNumStripes * kNumStreams);
+  for (const auto& section : defaultReader->stripeGroupsMetadata()) {
+    ASSERT_EQ(section.compressionType(), nimble::CompressionType::Zstd);
+  }
+
+  velox::filesystems::registerLocalFileSystem();
+  FLAGS_velox_ssd_odirect = false;
+  const auto ssdDirectory =
+      velox::common::testutil::TempDirectoryPath::create();
+  folly::IOThreadPoolExecutor ssdExecutor{1};
+  allocator_ = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{
+          .capacity = 1UL << 30, .reservationByteLimit = 0});
+  cache_ = velox::cache::AsyncDataCache::create(
+      allocator_.get(),
+      std::make_unique<velox::cache::SsdCache>(velox::cache::SsdCache::Config(
+          fmt::format("{}/cache", ssdDirectory->getPath()),
+          /*_maxBytes=*/64UL << 20,
+          /*_numShards=*/1,
+          &ssdExecutor)));
+  velox::FileHandle fileHandle;
+  fileHandle.file = readFile;
+  fileHandle.uuid =
+      velox::StringIdLease(velox::fileIds(), "TabletTest.metadataInBlockCache");
+  nimble::TabletReader::Options cachedOptions;
+  cachedOptions.cacheMetadata = true;
+  cachedOptions.blockCache = nimble::getBlockCache(cache_.get());
+  cachedOptions.fileHandle = &fileHandle;
+  {
+    SCOPED_TRACE("Reader without cacheMetadata does not fill the block cache");
+    auto options = cachedOptions;
+    options.cacheMetadata = false;
+    openReader(options);
+    auto [reader, metadataIoStats] = openReader(options);
+    EXPECT_FALSE(reader->stats().footerCacheHit);
+    EXPECT_EQ(streamLocations(*reader), expected);
+    EXPECT_EQ(metadataIoStats->ramHit().count(), 0);
+  }
+  {
+    SCOPED_TRACE("Cold reader fills the block cache");
+    auto [reader, metadataIoStats] = openReader(cachedOptions);
+    EXPECT_FALSE(reader->stats().footerCacheHit);
+    EXPECT_EQ(streamLocations(*reader), expected);
+  }
+  {
+    SCOPED_TRACE("Warm reader reads no metadata from the file");
+    auto [reader, metadataIoStats] = openReader(cachedOptions);
+    EXPECT_TRUE(reader->stats().footerCacheHit);
+    EXPECT_EQ(streamLocations(*reader), expected);
+    EXPECT_EQ(metadataIoStats->read().sum(), 0);
+    EXPECT_GT(metadataIoStats->ramHit().count(), 0);
+  }
+  {
+    SCOPED_TRACE("Reader reads metadata from SSD once memory is cleared");
+    ASSERT_TRUE(cache_->ssdCache()->startWrite());
+    cache_->saveToSsd(/*saveAll=*/true);
+    cache_->ssdCache()->waitForWriteToFinish();
+    cache_->clear();
+    auto [reader, metadataIoStats] = openReader(cachedOptions);
+    EXPECT_TRUE(reader->stats().footerCacheHit);
+    EXPECT_EQ(streamLocations(*reader), expected);
+    EXPECT_EQ(metadataIoStats->read().sum(), 0);
+    EXPECT_GT(metadataIoStats->ssdRead().count(), 0);
+    EXPECT_EQ(metadataIoStats->ramHit().count(), 0);
+  }
+  {
+    SCOPED_TRACE("Reader keeps the file id after the file handle is destroyed");
+    std::shared_ptr<nimble::TabletReader> reader;
+    std::shared_ptr<velox::io::IoStatistics> metadataIoStats;
+    {
+      // The only lease on its id, so after this scope only the reader can keep
+      // the id registered, which creating cache entries needs.
+      velox::FileHandle destroyedFileHandle;
+      destroyedFileHandle.file = readFile;
+      destroyedFileHandle.uuid = velox::StringIdLease(
+          velox::fileIds(), "TabletTest.metadataInBlockCache.destroyed");
+      auto options = cachedOptions;
+      options.fileHandle = &destroyedFileHandle;
+      std::tie(reader, metadataIoStats) = openReader(options);
+    }
+
+    // The first pass fills the cache, and the second hits it.
+    EXPECT_EQ(streamLocations(*reader), expected);
+    const auto ramHits = metadataIoStats->ramHit().count();
+    EXPECT_EQ(streamLocations(*reader), expected);
+    EXPECT_GT(metadataIoStats->ramHit().count(), ramHits);
+  }
+  {
+    SCOPED_TRACE("Block cache requires a file handle");
+    auto options = cachedOptions;
+    options.fileHandle = nullptr;
+    NIMBLE_ASSERT_USER_THROW(
+        openReader(options), "blockCache requires fileHandle");
+  }
+  {
+    SCOPED_TRACE("Caches reject a file handle of another file");
+    velox::FileHandle otherFileHandle;
+    otherFileHandle.file = std::make_shared<velox::InMemoryReadFile>(file);
+    otherFileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "TabletTest.metadataInBlockCache.otherFile");
+    {
+      auto options = cachedOptions;
+      options.fileHandle = &otherFileHandle;
+      NIMBLE_ASSERT_USER_THROW(
+          openReader(options),
+          "file and fileHandle->file must point to the same file");
+    }
+    {
+      nimble::TabletReader::Options options;
+      options.cacheMetadata = true;
+      options.fileHandle = &otherFileHandle;
+      options.cache = cache_.get();
+      NIMBLE_ASSERT_USER_THROW(
+          openReader(options),
+          "file and fileHandle->file must point to the same file");
+    }
+    {
+      // Without a cache the handle is unused, as when the reader reads an
+      // in-memory copy of a small file.
+      nimble::TabletReader::Options options;
+      options.cacheMetadata = true;
+      options.cacheIndex = true;
+      options.fileHandle = &otherFileHandle;
+      EXPECT_EQ(streamLocations(*openReader(options).first), expected);
+    }
+  }
+  {
+    SCOPED_TRACE("Block cache skips metadata above maxCacheEntrySize");
+    velox::FileHandle smallEntryFileHandle;
+    smallEntryFileHandle.file = readFile;
+    smallEntryFileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "TabletTest.metadataInBlockCache.maxCacheEntrySize");
+    auto options = cachedOptions;
+    options.fileHandle = &smallEntryFileHandle;
+    options.maxCacheEntrySize = 1;
+    openReader(options);
+    auto [reader, metadataIoStats] = openReader(options);
+    EXPECT_FALSE(reader->stats().footerCacheHit);
+    EXPECT_EQ(streamLocations(*reader), expected);
+    EXPECT_EQ(metadataIoStats->ramHit().count(), 0);
+  }
+  {
+    SCOPED_TRACE("Metadata needs blockCache, even with the async data cache");
+    velox::FileHandle asyncFileHandle;
+    asyncFileHandle.file = readFile;
+    asyncFileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "TabletTest.metadataInBlockCache.asyncDataCache");
+    nimble::TabletReader::Options options;
+    options.cacheMetadata = true;
+    options.fileHandle = &asyncFileHandle;
+    options.cache = cache_.get();
+    EXPECT_EQ(streamLocations(*openReader(options).first), expected);
+    auto [reader, metadataIoStats] = openReader(options);
+    EXPECT_FALSE(reader->stats().footerCacheHit);
+    EXPECT_EQ(streamLocations(*reader), expected);
+    EXPECT_GT(metadataIoStats->read().sum(), 0);
+  }
+  {
+    SCOPED_TRACE("Block cache combines with the async data cache");
+
+    // A separate async data cache shows that file metadata goes to blockCache,
+    // not to a block cache built on the async data cache.
+    auto otherAllocator = std::make_shared<velox::memory::MallocAllocator>(
+        velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+    auto otherCache =
+        velox::cache::AsyncDataCache::create(otherAllocator.get());
+    velox::FileHandle combinedFileHandle;
+    combinedFileHandle.file = readFile;
+    combinedFileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "TabletTest.metadataInBlockCache.combined");
+    auto options = cachedOptions;
+    options.fileHandle = &combinedFileHandle;
+    options.cache = otherCache.get();
+    EXPECT_EQ(streamLocations(*openReader(options).first), expected);
+    auto [reader, metadataIoStats] = openReader(options);
+    EXPECT_TRUE(reader->stats().footerCacheHit);
+    EXPECT_EQ(streamLocations(*reader), expected);
+    EXPECT_EQ(metadataIoStats->read().sum(), 0);
+    EXPECT_EQ(otherCache->refreshStats().numEntries, 0);
+    otherCache->shutdown();
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -142,6 +142,7 @@ TopNRowNumber::TopNRowNumber(
       rankFunction_(node->rankFunction()),
       limit_{node->limit()},
       generateRowNumber_{node->generateRowNumber()},
+      partial_{node->isPartial()},
       numPartitionKeys_{node->partitionKeys().size()},
       numSortingKeys_{node->sortingKeys().size()},
       inputChannels_{reorderInputChannels(
@@ -182,15 +183,9 @@ TopNRowNumber::TopNRowNumber(
         [](auto, auto) { VELOX_UNREACHABLE(); },
         [](auto) {}};
 
-    table_ = std::make_unique<HashTable<false>>(
-        createVectorHashers(node->inputType(), keys),
+    table_ = HashTable<false>::createForAggregation(
+        VectorHasher::createForKeys(node->inputType(), keys),
         std::vector<Accumulator>{accumulator},
-        std::vector<TypePtr>{},
-        false, // allowDuplicates
-        false, // isJoinBuild
-        false, // hasProbedFlag
-        false, // hasCountFlag
-        0, // minTableSizeForParallelJoinBuild
         pool());
     partitionOffset_ = table_->rows()->columnAt(numKeys).offset();
     lookup_ = std::make_unique<HashLookup>(table_->hashers(), pool());
@@ -267,7 +262,7 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
 }
 
 bool TopNRowNumber::abandonPartialEarly() const {
-  if (generateRowNumber_ || spiller_ != nullptr) {
+  if (!partial_ || spiller_ != nullptr) {
     return false;
   }
 
@@ -292,7 +287,7 @@ void TopNRowNumber::cleanupNewPartitions() {
   for (auto i = 0; i < lookup_->newGroups.size(); ++i) {
     newRows[i] = lookup_->hits[lookup_->newGroups[i]];
   }
-  table_->erase(folly::Range(newRows.data(), newRows.size()));
+  table_->erase(std::span(newRows.data(), newRows.size()));
   lookup_->newGroups.clear();
 }
 
@@ -582,11 +577,11 @@ TopNRowNumber::TopRows* TopNRowNumber::nextPartition() {
   }
 
   if (!outputPartitionNumber_) {
-    numPartitions_ = table_->listAllRows(
+    numPartitions_ = table_->listRows(
         &partitionIt_,
-        partitions_.size(),
-        RowContainer::kUnlimited,
-        partitions_.data());
+        RowContainer::ProbedFilter::kAll,
+        std::span(partitions_.data(), partitions_.size()),
+        RowContainer::kUnlimited);
     if (numPartitions_ == 0) {
       // No more partitions.
       return nullptr;
@@ -970,11 +965,11 @@ void TopNRowNumber::close() {
 
   partitionIt_.reset();
   partitions_.resize(1'000);
-  while (auto numPartitions = table_->listAllRows(
+  while (auto numPartitions = table_->listRows(
              &partitionIt_,
-             partitions_.size(),
-             RowContainer::kUnlimited,
-             partitions_.data())) {
+             RowContainer::ProbedFilter::kAll,
+             std::span(partitions_.data(), partitions_.size()),
+             RowContainer::kUnlimited)) {
     for (auto i = 0; i < numPartitions; ++i) {
       std::destroy_at(
           reinterpret_cast<TopRows*>(partitions_[i] + partitionOffset_));
@@ -1032,9 +1027,7 @@ void TopNRowNumber::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  auto [freeRows, outOfLineFreeBytes] = data_->freeSpace();
-  const auto outOfLineBytes =
-      data_->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const auto outOfLineBytes = data_->usedVariableWidthBytes();
   const auto outOfLineBytesPerRow = outOfLineBytes / data_->numRows();
 
   const auto currentUsage = pool()->usedBytes();
@@ -1043,15 +1036,13 @@ void TopNRowNumber::ensureInputFits(const RowVectorPtr& input) {
   const auto availableReservationBytes = pool()->availableReservation();
   const auto tableIncrementBytes = table_->hashTableSizeIncrease(input->size());
   const auto incrementBytes =
-      data_->sizeIncrement(
+      data_->maxGrowthBytes(
           input->size(), outOfLineBytesPerRow * input->size()) +
       tableIncrementBytes;
 
   // First to check if we have sufficient minimal memory reservation.
   if (availableReservationBytes >= minReservationBytes) {
-    if ((tableIncrementBytes == 0) && (freeRows > input->size()) &&
-        (outOfLineBytes == 0 ||
-         outOfLineFreeBytes >= outOfLineBytesPerRow * input->size())) {
+    if (incrementBytes == 0) {
       // Enough free rows for input rows and enough variable length free
       // space.
       return;

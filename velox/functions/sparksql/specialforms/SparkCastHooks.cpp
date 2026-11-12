@@ -123,7 +123,7 @@ Expected<int64_t> SparkCastHooks::castTimestampToBigint(
 Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
     double value) const {
   if (allowOverflow_) {
-    if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
+    if (std::isnan(value) || std::isinf(value)) [[unlikely]] {
       return std::nullopt;
     }
 
@@ -132,7 +132,7 @@ Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
     return result.value();
   }
 
-  if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
+  if (std::isnan(value) || std::isinf(value)) [[unlikely]] {
     return folly::makeUnexpected(
         Status::UserError(
             "The value cannot be cast to TIMESTAMP because it is malformed."));

@@ -240,7 +240,168 @@ bool testPartitionKeyFilter(
                     kIsoString));
 }
 
+// A connector sees the session time zone settings but not the session
+// QueryConfig. As a workaround, the remaining filter is folded and compiled
+// against a local QueryCtx with only those settings, and a filter that depends
+// on another setting runs on the CPU data source.
+// TODO: Remove the workaround once ConnectorQueryCtx exposes the session
+// QueryConfig (facebookincubator/velox#19476) and expression::optimize can fold
+// through the session's evaluator (facebookincubator/velox#17898).
+// NOTE: A setting left at its default can still change a fold, such as how
+// TIMESTAMP WITH TIME ZONE renders as VARCHAR.
+std::shared_ptr<core::QueryCtx> makeRemainingFilterQueryCtx(
+    const ConnectorQueryCtx& connectorQueryCtx) {
+  std::unordered_map<std::string, std::string> sessionSettings{
+      {core::QueryConfig::kAdjustTimestampToTimezone,
+       connectorQueryCtx.adjustTimestampToTimezone() ? "true" : "false"}};
+  // An empty time zone is not a valid setting; leaving it unset means UTC.
+  if (!connectorQueryCtx.sessionTimezone().empty()) {
+    sessionSettings.emplace(
+        core::QueryConfig::kSessionTimezone,
+        connectorQueryCtx.sessionTimezone());
+  }
+  return core::QueryCtx::create(
+      nullptr, core::QueryConfig{std::move(sessionSettings)});
+}
+
+// Returns whether the remaining filter depends on a session setting the local
+// QueryCtx lacks. A cast from VARCHAR follows legacy_cast and
+// cast_string_to_floating_point_lenient_inf_nan. A cast from TIMESTAMP to
+// VARCHAR follows legacy_cast and the session time zone, which the data source
+// cannot apply to a column's text.
+// NOTE: A cast from TIMESTAMP to VARCHAR is looked for before folding, which
+// would fold a constant one with the default settings. A cast from VARCHAR is
+// looked for after folding, so that a cast of a VARCHAR constant, the form a
+// plan gives a DECIMAL constant, still folds away.
+bool needsSessionQueryConfig(
+    const core::TypedExprPtr& unfoldedFilter,
+    const core::TypedExprPtr& foldedFilter) {
+  return containsTimestampToVarcharCast(unfoldedFilter) ||
+      containsCastFromVarchar(foldedFilter, /*floatingPointOnly=*/false);
+}
+
+// Filters of a table handle in the form the data source compiles them.
+struct ScanFilters {
+  // Subfield filters, including those extracted from the remaining filter.
+  // They compile into a cuDF AST.
+  common::SubfieldFilters subfieldFilters;
+
+  // Rest of the remaining filter, folded, or null if nothing is left. It
+  // compiles into a cuDF expression.
+  core::TypedExprPtr remainingFilter;
+
+  // Whether the remaining filter must run on the CPU data source, because it
+  // depends on a session setting the local QueryCtx lacks.
+  bool needsSessionQueryConfig{false};
+
+  // Fraction of rows to keep, from the table handle and the remaining filter.
+  double sampleRate{1};
+};
+
+ScanFilters splitAndFoldFilters(
+    const HiveTableHandle& tableHandle,
+    core::ExpressionEvaluator* expressionEvaluator,
+    core::QueryCtx* remainingFilterQueryCtx,
+    memory::MemoryPool* pool) {
+  ScanFilters filters;
+  for (const auto& [subfield, filter] : tableHandle.subfieldFilters()) {
+    filters.subfieldFilters.emplace(subfield.clone(), filter->clone());
+  }
+
+  // Extract single-column filters like "col = 'X'" or "col <> 'Y'" from the
+  // remaining filter into subfield filters, as the CPU data source does.
+  filters.sampleRate = tableHandle.sampleRate();
+  const auto remainingFilter =
+      facebook::velox::connector::extractFiltersFromRemainingFilter(
+          tableHandle.remainingFilter(),
+          expressionEvaluator,
+          filters.subfieldFilters,
+          filters.sampleRate);
+
+  // Optimize (rewrites + constant folding) the remaining filter before
+  // evaluator selection so CudfFunctions never see scalar-only operand sets.
+  if (remainingFilter) {
+    filters.remainingFilter =
+        expression::optimize(remainingFilter, remainingFilterQueryCtx, pool);
+    filters.needsSessionQueryConfig =
+        needsSessionQueryConfig(remainingFilter, filters.remainingFilter);
+  }
+  return filters;
+}
+
+// Returns why the data source cannot scan with 'filters' on the GPU, or
+// std::nullopt if it can. isSupported() and the constructor share it, so that
+// the connectors pick this data source only for a scan the constructor
+// accepts.
+std::optional<std::string> unsupportedFiltersReason(
+    const ScanFilters& filters,
+    core::QueryCtx* remainingFilterQueryCtx) {
+  // The cuDF data source does not sample rows.
+  if (filters.sampleRate < 1) {
+    return fmt::format("Sampling is not supported: {}", filters.sampleRate);
+  }
+  for (const auto& [subfield, filter] : filters.subfieldFilters) {
+    if (!canCreateAstFromSubfieldFilter(subfield, *filter)) {
+      return fmt::format(
+          "Subfield filter is not supported by the cuDF AST: {} {}",
+          subfield.toString(),
+          filter->toString());
+    }
+  }
+  if (filters.needsSessionQueryConfig) {
+    return fmt::format(
+        "Remaining filter that depends on a session setting is not supported: {}",
+        filters.remainingFilter->toString());
+  }
+  if (!filters.remainingFilter) {
+    return std::nullopt;
+  }
+  // The filter is evaluated over the columns read for it, so a filter that
+  // reads none has no rows to be evaluated over. A filter that folds to a
+  // constant needs no evaluation.
+  if (!filters.remainingFilter->isConstantKind() &&
+      referencedInputFields(filters.remainingFilter).empty()) {
+    return fmt::format(
+        "Remaining filter that references no column is not supported: {}",
+        filters.remainingFilter->toString());
+  }
+  // The filter is already folded, so pass no pool to skip folding again.
+  if (!canExprRunOnGpu(
+          filters.remainingFilter, remainingFilterQueryCtx, /*pool=*/nullptr)) {
+    return fmt::format(
+        "Remaining filter is not supported by cuDF: {}",
+        filters.remainingFilter->toString());
+  }
+  return std::nullopt;
+}
+
 } // namespace
+
+bool CudfHiveDataSource::isSupported(
+    const ConnectorTableHandlePtr& tableHandle,
+    const ConnectorQueryCtx& connectorQueryCtx) {
+  return !unsupportedReason(tableHandle, connectorQueryCtx).has_value();
+}
+
+std::optional<std::string> CudfHiveDataSource::unsupportedReason(
+    const ConnectorTableHandlePtr& tableHandle,
+    const ConnectorQueryCtx& connectorQueryCtx) {
+  auto hiveTableHandle =
+      std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
+  if (!hiveTableHandle) {
+    return fmt::format(
+        "Table handle that is not a Hive table handle is not supported: {}",
+        tableHandle->toString());
+  }
+
+  const auto queryCtx = makeRemainingFilterQueryCtx(connectorQueryCtx);
+  const auto filters = splitAndFoldFilters(
+      *hiveTableHandle,
+      connectorQueryCtx.expressionEvaluator(),
+      queryCtx.get(),
+      connectorQueryCtx.memoryPool());
+  return unsupportedFiltersReason(filters, queryCtx.get());
+}
 
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
@@ -357,21 +518,16 @@ CudfHiveDataSource::CudfHiveDataSource(
     readColumnNames_.emplace_back(name);
   }
 
-  // Copy subfield filters.
-  for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
-    subfieldFilters_.emplace(k.clone(), v->clone());
-  }
-
-  // Extract additional simple filters from remainingFilter (same as CPU path).
-  // This extracts single-column filters like "col = 'X'" or "col <> 'Y'" from
-  // complex expressions and adds them to subfieldFilters_ for pushdown.
-  double sampleRate = tableHandle_->sampleRate();
-  auto remainingFilter =
-      facebook::velox::connector::extractFiltersFromRemainingFilter(
-          tableHandle_->remainingFilter(),
-          expressionEvaluator_,
-          subfieldFilters_,
-          sampleRate);
+  optimizeQueryCtx_ = makeRemainingFilterQueryCtx(*connectorQueryCtx);
+  auto filters = splitAndFoldFilters(
+      *tableHandle_, expressionEvaluator_, optimizeQueryCtx_.get(), pool_);
+  const auto reason =
+      unsupportedFiltersReason(filters, optimizeQueryCtx_.get());
+  VELOX_CHECK(
+      !reason.has_value(),
+      "Table scan must run on the CPU data source: {}",
+      *reason);
+  subfieldFilters_ = std::move(filters.subfieldFilters);
 
   // A filter on a partition key decides for the whole split, so it is tested
   // per split instead of being compiled into the reader's filter.
@@ -397,33 +553,7 @@ CudfHiveDataSource::CudfHiveDataSource(
       readColumnNames_.emplace_back(field.toString());
     }
   }
-  // Optimize (rewrites + constant folding) the remaining filter before
-  // evaluator selection so CudfFunctions never see scalar-only operand sets.
-  // ConnectorQueryCtx exposes no session QueryConfig, only the session time
-  // zone and whether to apply it, so folding, and the initialize() of the
-  // evaluators built from the folded filter, run against a local QueryCtx
-  // carrying those two settings and defaults for the rest. Folding touches
-  // only deterministic functions, so start_time, read by current_date, now and
-  // localtime, cannot change a fold; a setting left at its default here, such
-  // as the rendering of TIMESTAMP WITH TIME ZONE as VARCHAR, would.
-  // TODO: Fold through the session's evaluator once expression::optimize has
-  // an ExpressionEvaluator overload (facebookincubator/velox#17898), and take
-  // the config createCudfExpression needs from ConnectorQueryCtx once it
-  // exposes it (facebookincubator/velox#19476).
-  std::unordered_map<std::string, std::string> sessionSettings{
-      {core::QueryConfig::kAdjustTimestampToTimezone,
-       connectorQueryCtx->adjustTimestampToTimezone() ? "true" : "false"}};
-  // An empty time zone is not a valid setting; leaving it unset means UTC.
-  if (!connectorQueryCtx->sessionTimezone().empty()) {
-    sessionSettings.emplace(
-        core::QueryConfig::kSessionTimezone,
-        connectorQueryCtx->sessionTimezone());
-  }
-  optimizeQueryCtx_ = core::QueryCtx::create(
-      nullptr, core::QueryConfig{std::move(sessionSettings)});
-  optimizedRemainingFilter_ = remainingFilter
-      ? expression::optimize(remainingFilter, optimizeQueryCtx_.get(), pool_)
-      : nullptr;
+  optimizedRemainingFilter_ = std::move(filters.remainingFilter);
   if (const auto constantFilter =
           std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
               optimizedRemainingFilter_)) {
@@ -433,31 +563,11 @@ CudfHiveDataSource::CudfHiveDataSource(
     optimizedRemainingFilter_ = nullptr;
   }
   if (optimizedRemainingFilter_) {
-    // The local config above carries no cast setting, so a cast from VARCHAR
-    // compiled against it follows Presto's strict rules in a session that sets
-    // legacy_cast or cast_string_to_floating_point_lenient_inf_nan, and a
-    // TRY_CAST would drop the rows those settings accept.
-    // TODO: Keep such a scan on the CPU data source instead, once the
-    // connector sees the session config and checks the filter the way
-    // canExprRunOnGpu() does before choosing a data source
-    // (facebookincubator/velox#19476, facebookincubator/velox#18238).
-    if (containsCastFromVarchar(
-            optimizedRemainingFilter_, /*floatingPointOnly=*/false)) {
-      VELOX_UNSUPPORTED(
-          "Remaining filter with a cast from VARCHAR is not supported: {}",
-          optimizedRemainingFilter_->toString());
-    }
     // Add fields referenced by the filter to the columns to read. Collect from
     // the optimized expression since folding may drop branches and the columns
     // they reference. Read-column order does not affect results: the data
     // source projects its output to the requested output type.
     const auto filterFields = referencedInputFields(optimizedRemainingFilter_);
-    // The filter is evaluated over the columns read for it, so a filter that
-    // reads none has no rows to be evaluated over.
-    VELOX_USER_CHECK(
-        !filterFields.empty(),
-        "Remaining filter that references no column is not supported: {}",
-        optimizedRemainingFilter_->toString());
     for (const auto& name : filterFields) {
       // A partition key is materialized before the filter runs.
       if (const auto* partitionKey = partitionKeyHandle(name)) {

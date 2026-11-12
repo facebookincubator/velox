@@ -64,6 +64,7 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <functional>
 #include <random>
 
 namespace facebook::nimble {
@@ -2238,7 +2239,7 @@ class ReadWithVisitorTest : public ::testing::Test,
     constexpr vector_size_t kNumRows{257};
     const auto isNullAt = nullEvery(17);
     auto input =
-        makeRowVector({makeFlatVector<int32_t>(kNumRows, folly::identity)});
+        makeRowVector({makeFlatVector<int32_t>(kNumRows, std::identity{})});
     auto rowType = asRowType(input->type());
     auto fileContext = makeFileContext(input);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -2508,7 +2509,7 @@ TEST_F(ReadWithVisitorTest, denseNoFilterNoNulls) {
 TEST_F(ReadWithVisitorTest, denseNoFilterWithNulls) {
   constexpr int kRows = 200;
   auto input = makeRowVector(
-      {makeFlatVector<int64_t>(kRows, folly::identity, nullEvery(7))});
+      {makeFlatVector<int64_t>(kRows, std::identity{}, nullEvery(7))});
   auto rowType = asRowType(input->type());
 
   auto ctx = makeFileContext(input);
@@ -2595,7 +2596,7 @@ TEST_F(ReadWithVisitorTest, sparseWithBigintRange) {
 // ===========================================================================
 TEST_F(ReadWithVisitorTest, rangeFilterWithNulls) {
   constexpr int kRows = 500;
-  auto c0 = makeFlatVector<int64_t>(kRows, folly::identity, nullEvery(7));
+  auto c0 = makeFlatVector<int64_t>(kRows, std::identity{}, nullEvery(7));
   auto input = makeRowVector({c0});
   auto rowType = asRowType(input->type());
 
@@ -2624,7 +2625,7 @@ TEST_F(ReadWithVisitorTest, rangeFilterWithNulls) {
 TEST_F(ReadWithVisitorTest, isNotNullFilter) {
   constexpr int kRows = 300;
   auto input = makeRowVector(
-      {makeFlatVector<int64_t>(kRows, folly::identity, nullEvery(5))});
+      {makeFlatVector<int64_t>(kRows, std::identity{}, nullEvery(5))});
   auto rowType = asRowType(input->type());
 
   auto ctx = makeFileContext(input);
@@ -3053,7 +3054,7 @@ TEST_F(ReadWithVisitorTest, allNullWithIsNotNull) {
 // ===========================================================================
 TEST_F(ReadWithVisitorTest, largeDataRangeFilter) {
   constexpr int kRows = 10000;
-  auto c0 = makeFlatVector<int64_t>(kRows, folly::identity, nullEvery(13));
+  auto c0 = makeFlatVector<int64_t>(kRows, std::identity{}, nullEvery(13));
   auto input = makeRowVector({c0});
   auto rowType = asRowType(input->type());
 
@@ -3321,7 +3322,7 @@ TEST_F(ReadWithVisitorTest, explicitReadWithVisitorBigintRangeSparse) {
 TEST_F(ReadWithVisitorTest, explicitReadWithVisitorIsNotNullNullable) {
   constexpr int kRows = 300;
   auto input = makeRowVector(
-      {makeFlatVector<int64_t>(kRows, folly::identity, nullEvery(5))});
+      {makeFlatVector<int64_t>(kRows, std::identity{}, nullEvery(5))});
   auto rowType = asRowType(input->type());
 
   auto ctx = makeFileContext(input);
@@ -3606,7 +3607,7 @@ TEST_F(
     columnReaderFixedBitWidthGenericHookNeedsScanFastPath) {
   constexpr vector_size_t kNumRows{256};
   auto input =
-      makeRowVector({makeFlatVector<int32_t>(kNumRows, folly::identity)});
+      makeRowVector({makeFlatVector<int32_t>(kNumRows, std::identity{})});
   auto rowType = asRowType(input->type());
   std::vector<vector_size_t> expectedRows;
   std::vector<int64_t> expectedValues;

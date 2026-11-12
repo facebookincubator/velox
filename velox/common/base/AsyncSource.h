@@ -337,7 +337,7 @@ class AsyncSource {
       VELOX_CHECK_NULL(item_);
       VELOX_CHECK_NULL(itemMaker_);
       checkState(state(), State::kMaking);
-      if (FOLLY_LIKELY(exceptionPtr == nullptr)) {
+      if (exceptionPtr == nullptr) [[likely]] {
         item_ = std::move(item);
         setState(State::kPrepared);
       } else {

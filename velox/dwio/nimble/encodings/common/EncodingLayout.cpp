@@ -287,15 +287,15 @@ EncodingLayout EncodingLayoutCapture::capture(
       break;
     }
     case EncodingType::PartitionedEliasFano: {
-      // PartitionedEliasFano nests three directories: partition offsets,
-      // partition bases and partition group offsets. The group streams that
-      // follow are always EliasFano and carry no selectable layout.
+      // PartitionedEliasFano nests two directories: partition offsets and
+      // partition bases. The group streams that follow are always EliasFano
+      // and carry no selectable layout.
       auto body = encoding.substr(prefixSize);
       encoding::readVarint32(body); // numPartitions
       encoding::readVarint32(body); // numGroups
 
-      children.reserve(3);
-      for (uint32_t child = 0; child < 3; ++child) {
+      children.reserve(2);
+      for (uint32_t child = 0; child < 2; ++child) {
         const auto bytes = encoding::readLengthPrefixedBytes(body);
         const char* pos = bytes.data();
         captureChild(

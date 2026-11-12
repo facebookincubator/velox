@@ -17,11 +17,17 @@
 #include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
+#include <exception>
+#include <limits>
 #include <memory>
+#include <mutex>
+#include <numeric>
 #include <tuple>
 
+#include <faiss/Clustering.h>
 #include <faiss/IndexFlat.h>
 #include <faiss/IndexHNSW.h>
 #include <faiss/IndexIDMap.h>
@@ -33,8 +39,9 @@
 #include <faiss/invlists/InvertedLists.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/vectorindex/CallbackWriter.h"
-#include "velox/common/vectorindex/SingleThreadedFaiss.h"
+#include "velox/common/vectorindex/FaissThreads.h"
 
 namespace facebook::velox::common::vectorindex {
 
@@ -86,7 +93,7 @@ std::unique_ptr<faiss::Index> makeIvfIndex(
   // resolveNlist() keeps kMinEmbeddingsPerList per list except for groups too
   // small for two lists, which FAISS would warn about on every build.
   index->cp.min_points_per_centroid = 1;
-  index->nprobe = std::min(options.nprobe.value_or((nlist + 9) / 10), nlist);
+  index->nprobe = std::min<size_t>(options.nprobe.value_or(nlist), nlist);
   return index;
 }
 
@@ -183,7 +190,7 @@ void FaissLocalVectorIndex::build(
   VELOX_USER_CHECK(
       std::find(ids.begin(), ids.end(), kPaddingId) == ids.end(),
       "Local vector index embedding id must not be -1");
-  SingleThreadedFaiss singleThreaded;
+  FaissThreads singleThreaded{1};
   switch (metric) {
     case VectorIndexMetric::kCosine: {
       auto index = makeIndex(
@@ -199,6 +206,158 @@ void FaissLocalVectorIndex::build(
       faiss::write_index(index.get(), &writer);
       return;
     }
+  }
+  VELOX_UNREACHABLE();
+}
+
+namespace {
+
+// Clusters 'numPoints' points of 'dimension' floats at 'points', normalized
+// to length 1, into 'numClusters' clusters, at most 'numPoints', with
+// spherical k-means. Returns the centroids one after another.
+std::vector<float> sphericalKMeans(
+    int32_t dimension,
+    int64_t numClusters,
+    const float* points,
+    int64_t numPoints) {
+  faiss::ClusteringParameters parameters;
+  parameters.spherical = true;
+  // The caller chooses the training points, so FAISS neither samples them nor
+  // warns that there are few per centroid.
+  parameters.min_points_per_centroid = 1;
+  parameters.max_points_per_centroid = std::numeric_limits<int>::max();
+  faiss::Clustering clustering(dimension, numClusters, parameters);
+  faiss::IndexFlatIP index(dimension);
+  clustering.train(numPoints, points, index);
+  return std::move(clustering.centroids);
+}
+
+// Trains 'numClusters' centroids, fewer than 'embeddings', in two levels (see
+// FaissLocalVectorIndex::trainCentroids).
+std::vector<float> twoLevelSphericalKMeans(
+    int64_t numClusters,
+    const Embeddings& embeddings) {
+  const auto dimension = embeddings.dimension();
+  const auto numPoints = embeddings.size();
+  const auto coarse = sphericalKMeans(
+      dimension,
+      static_cast<int64_t>(std::ceil(std::sqrt(numClusters))),
+      embeddings.data(),
+      numPoints);
+  const int64_t numCoarse = coarse.size() / dimension;
+
+  std::vector<faiss::idx_t> assignment(numPoints);
+  {
+    std::vector<float> scores(numPoints);
+    faiss::IndexFlatIP index(dimension);
+    index.add(numCoarse, coarse.data());
+    index.search(
+        numPoints, embeddings.data(), 1, scores.data(), assignment.data());
+  }
+
+  // Groups the embeddings by coarse cluster, in their order within each.
+  std::vector<int64_t> offsets(numCoarse + 1, 0);
+  for (auto cluster : assignment) {
+    ++offsets[cluster + 1];
+  }
+  std::partial_sum(offsets.begin(), offsets.end(), offsets.begin());
+  std::vector<float> grouped(numPoints * dimension);
+  {
+    auto next = offsets;
+    for (int64_t i = 0; i < numPoints; ++i) {
+      std::copy_n(
+          embeddings.data() + i * dimension,
+          dimension,
+          grouped.data() + next[assignment[i]]++ * dimension);
+    }
+  }
+
+  // Coarse cluster i gets floor(c(i + 1)) - floor(c(i)) fine clusters, where
+  // c(i) = numClusters * offsets[i] / numPoints: the shares add up to
+  // 'numClusters', and none exceeds its cluster's embeddings because
+  // 'numClusters' is less than 'numPoints'.
+  const auto boundary = [&](int64_t i) {
+    return numClusters * offsets[i] / numPoints;
+  };
+  // Threads take coarse clusters one at a time because their sizes differ.
+  // An exception must not leave the parallel region, so the first one stops
+  // the others and is rethrown after it.
+  std::vector<std::vector<float>> fine(numCoarse);
+  std::atomic<int64_t> nextCluster{0};
+  std::exception_ptr error;
+  std::mutex errorMutex;
+#pragma omp parallel
+  {
+    // Each thread trains its coarse clusters on itself alone.
+    FaissThreads singleThreaded{1};
+    for (auto i = nextCluster++; i < numCoarse; i = nextCluster++) {
+      const auto share = boundary(i + 1) - boundary(i);
+      if (share == 0) {
+        continue;
+      }
+      try {
+        fine[i] = sphericalKMeans(
+            dimension,
+            share,
+            grouped.data() + offsets[i] * dimension,
+            offsets[i + 1] - offsets[i]);
+      } catch (...) {
+        std::lock_guard<std::mutex> lock(errorMutex);
+        if (!error) {
+          error = std::current_exception();
+        }
+        nextCluster = numCoarse;
+      }
+    }
+  }
+  if (error) {
+    std::rethrow_exception(error);
+  }
+
+  std::vector<float> centroids;
+  centroids.reserve(numClusters * dimension);
+  for (const auto& clusterCentroids : fine) {
+    centroids.insert(
+        centroids.end(), clusterCentroids.begin(), clusterCentroids.end());
+  }
+  return centroids;
+}
+
+} // namespace
+
+// static
+std::vector<float> FaissLocalVectorIndex::trainCentroids(
+    VectorIndexMetric metric,
+    int64_t numClusters,
+    const Embeddings& embeddings,
+    const CodecOptions& options,
+    int32_t numThreads) {
+  VELOX_CHECK_GT(numClusters, 0);
+  VELOX_CHECK_GT(numThreads, 0);
+  if (numClusters >= embeddings.size()) {
+    return {
+        embeddings.data(),
+        embeddings.data() + embeddings.size() * embeddings.dimension()};
+  }
+
+  const bool twoLevel = numClusters > options.maxFlatClusters;
+
+  if (auto* statWriter = getThreadLocalRunTimeStatWriter()) {
+    statWriter->addCount(TrainStats::kEmbeddings, embeddings.size());
+    statWriter->addCount(TrainStats::kThreads, numThreads);
+    statWriter->addCount(TrainStats::kLevels, twoLevel ? 2 : 1);
+  }
+
+  RuntimeStatWallTimer timer{TrainStats::kWallNanos};
+  FaissThreads threads{numThreads};
+  switch (metric) {
+    case VectorIndexMetric::kCosine:
+      return twoLevel ? twoLevelSphericalKMeans(numClusters, embeddings)
+                      : sphericalKMeans(
+                            embeddings.dimension(),
+                            numClusters,
+                            embeddings.data(),
+                            embeddings.size());
   }
   VELOX_UNREACHABLE();
 }
@@ -300,8 +459,38 @@ void FaissLocalVectorIndex::search(
       "Query embedding length must match the vector index's");
   VELOX_CHECK_EQ(ids.size(), queries.size() * k);
   VELOX_CHECK_EQ(scores.size(), queries.size() * k);
-  SingleThreadedFaiss singleThreaded;
-  index_->search(queries.size(), queries.data(), k, scores.data(), ids.data());
+  FaissThreads singleThreaded{1};
+  const auto* ivf = dynamic_cast<const faiss::IndexIVF*>(index_.get());
+  if (ivf == nullptr) {
+    index_->search(
+        queries.size(), queries.data(), k, scores.data(), ids.data());
+    return;
+  }
+  // IndexIVF::search adds its statistics to a process-wide global without
+  // synchronization, so concurrent searches race on it.
+  // IndexIVF::search_preassigned takes the caller's statistics instead.
+  // TODO: Call IndexIVF::search once it can take the caller's statistics.
+  const auto numProbes = static_cast<faiss::idx_t>(ivf->nprobe);
+  std::vector<faiss::idx_t> lists(queries.size() * numProbes);
+  std::vector<float> listScores(queries.size() * numProbes);
+  ivf->quantizer->search(
+      queries.size(),
+      queries.data(),
+      numProbes,
+      listScores.data(),
+      lists.data());
+  faiss::IndexIVFStats stats;
+  ivf->search_preassigned(
+      queries.size(),
+      queries.data(),
+      k,
+      lists.data(),
+      listScores.data(),
+      scores.data(),
+      ids.data(),
+      /*store_pairs=*/false,
+      /*params=*/nullptr,
+      &stats);
 }
 
 namespace {

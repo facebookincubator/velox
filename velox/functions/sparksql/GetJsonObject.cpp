@@ -18,11 +18,13 @@
 
 #include <cstddef>
 #include <cstring>
+#include <string>
 #include <string_view>
 
 #include "folly/Unicode.h"
 
 #include "velox/functions/lib/Utf8Utils.h"
+#include "velox/functions/prestosql/json/JsonStringUtil.h"
 
 namespace facebook::velox::functions::sparksql::detail {
 
@@ -78,6 +80,53 @@ char* escapeSupplementaryCharacters(std::string_view raw, char* out) {
 }
 
 } // namespace
+
+bool compactJson(std::string_view raw, std::string& out) {
+  out.clear();
+  bool inString{false};
+  for (size_t i = 0; i < raw.size(); ++i) {
+    const char c = raw[i];
+    if (!inString) {
+      if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+        out.push_back(c);
+        inString = c == '"';
+      }
+      continue;
+    }
+    if (c == '"') {
+      out.push_back(c);
+      inString = false;
+    } else if (c != '\\') {
+      out.push_back(c);
+    } else if (i + 1 == raw.size()) {
+      return false;
+    } else if (raw[i + 1] == '/') {
+      out.push_back('/');
+      ++i;
+    } else if (raw[i + 1] != 'u') {
+      out.append(raw.data() + i, 2);
+      ++i;
+    } else {
+      uint16_t codeUnit;
+      if (!parseUnicodeEscape(raw, i, codeUnit)) {
+        return false;
+      }
+      char escape[6];
+      char* end = escape;
+      if (codeUnit < 0x80) {
+        encodeAscii(static_cast<int8_t>(codeUnit), end);
+        out.append(escape, end);
+      } else if (codeUnit >= 0xD800 && codeUnit <= 0xDFFF) {
+        writeUtf16Escape(codeUnit, end);
+        out.append(escape, end);
+      } else {
+        out.append(folly::codePointToUtf8(codeUnit));
+      }
+      i += 5;
+    }
+  }
+  return true;
+}
 
 void appendWithSupplementaryEscapes(
     std::string_view raw,

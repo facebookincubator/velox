@@ -194,9 +194,7 @@ std::shared_ptr<Task> HiveConnectorTestBase::assertQuery(
     const std::string& duckDbSql,
     const int32_t numPrefetchSplit) {
   return AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(
-          core::QueryConfig::kMaxSplitPreloadPerDriver,
-          std::to_string(numPrefetchSplit))
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplit)
       .splits(splits)
       .assertResults(duckDbSql);
 }

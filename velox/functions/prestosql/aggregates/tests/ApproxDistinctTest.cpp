@@ -437,7 +437,8 @@ TEST_F(ApproxDistinctTest, memoryLeakInMerge) {
   // Should be significantly smaller than 500KB (the number before the fix),
   // because we should be able to convert to DenseHll in the process.
   ASSERT_LT(
-      toPlanStats(task->taskStats()).at(finalAgg).peakMemoryBytes, 180'000);
+      PlanNodeStats::extract(task->taskStats(), finalAgg).peakMemoryBytes,
+      180'000);
 }
 
 TEST_F(ApproxDistinctTest, mergeWithEmpty) {

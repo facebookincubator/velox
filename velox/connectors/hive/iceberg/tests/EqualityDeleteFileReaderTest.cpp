@@ -312,7 +312,7 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteColumnAddedBySecondSplit) {
   auto result = AssertQueryBuilder(plan)
                     .splits(splits)
                     .maxDrivers(1)
-                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
                     .copyResults(pool());
 
   // Only the second split loses rows, id=6 ('g') and id=8 ('i').

@@ -26,6 +26,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/tablet/IoAlignment.h"
 
 namespace facebook::nimble {
 
@@ -36,20 +37,6 @@ namespace {
 velox::ReadFile* checkedFile(velox::ReadFile* file) {
   NIMBLE_CHECK_NOT_NULL(file);
   return file;
-}
-
-uint64_t readAlignment(const velox::ReadFile& file) {
-  uint64_t alignment{0};
-  return file.directIo(/*alignment=*/alignment) ? alignment : 1;
-}
-
-DataInput::Region alignedRegion(DataInput::Region region, uint64_t alignment) {
-  NIMBLE_DCHECK_GT(alignment, 0);
-  NIMBLE_DCHECK(velox::bits::isPowerOfTwo(alignment));
-  const auto alignedOffset = region.offset & ~(alignment - 1);
-  const auto alignedEnd =
-      (region.offset + region.length + alignment - 1) & ~(alignment - 1);
-  return {alignedOffset, alignedEnd - alignedOffset};
 }
 
 } // namespace
@@ -216,7 +203,8 @@ void DirectDataInput::computeIoGroups(
                 sortedRegions[begin].region.offset,
                 lastEnd - sortedRegions[begin].region.offset,
             },
-            alignment_);
+            alignment_,
+            file_->size());
         group.readOffset = readRegion.offset;
         group.readSize = readRegion.length;
         group.payloadSize = payloadSize;
@@ -274,8 +262,7 @@ std::pair<char*, DataInput::Handle> DirectDataInput::allocateBuffer(
 
 void DirectDataInput::executeIoGroups(
     std::vector<IoGroup>& ioGroups,
-    char* buffer,
-    uint64_t bufferSize) {
+    char* buffer) {
   NIMBLE_CHECK(!ioGroups.empty());
   readRegions_.clear();
   readRegions_.reserve(ioGroups.size());
@@ -291,7 +278,12 @@ void DirectDataInput::executeIoGroups(
           readRegions_.data(), readRegions_.size()),
       folly::Range<const folly::Range<char*>*>(
           readBuffers_.data(), readBuffers_.size()));
-  NIMBLE_CHECK_EQ(bytesRead, bufferSize, "preadv returned a short read");
+  NIMBLE_CHECK_GE(
+      bytesRead,
+      fileReadBytes(readRegions_, file_->size()),
+      "preadv returned a short read. It's worth noting that different "
+      "preadv impls may return read bytes differently. The bottom line is that "
+      "the read bytes should be >= to the before end region sum");
 }
 
 DataInput::Handle DirectDataInput::load(LoadCallback loadCallback) {
@@ -352,7 +344,7 @@ DataInput::Handle DirectDataInput::load(LoadCallback loadCallback) {
   uint64_t ioUs{0};
   {
     velox::MicrosecondTimer ioTimer(&ioUs);
-    executeIoGroups(ioGroups_, buffer, readBytes);
+    executeIoGroups(ioGroups_, buffer);
   }
 
   for (const auto& group : ioGroups_) {
@@ -562,7 +554,6 @@ void CachedDataInput::loadCacheMissGroups(
   std::vector<folly::Range<char*>> readBuffers;
   readRegions.reserve(cacheMissGroups.size());
   readBuffers.reserve(cacheMissGroups.size());
-  uint64_t expectedReadBytes{0};
   for (const auto& cacheMissGroup : cacheMissGroups) {
     readRegions.push_back(cacheMissGroup.readRegion);
     auto& entry = cacheEntries.at(cacheMissGroup.groupIndex);
@@ -570,7 +561,6 @@ void CachedDataInput::loadCacheMissGroups(
         ? entry.data()
         : stagingBuffer + cacheMissGroup.stagingBufferOffset;
     readBuffers.emplace_back(destination, cacheMissGroup.readRegion.length);
-    expectedReadBytes += cacheMissGroup.readRegion.length;
   }
 
   uint64_t storageReadUs{0};
@@ -582,7 +572,10 @@ void CachedDataInput::loadCacheMissGroups(
         folly::Range<const folly::Range<char*>*>(
             readBuffers.data(), readBuffers.size()));
   }
-  NIMBLE_CHECK_EQ(bytesRead, expectedReadBytes, "preadv returned a short read");
+  NIMBLE_CHECK_GE(
+      bytesRead,
+      fileReadBytes(readRegions, file_->size()),
+      "preadv returned a short read");
   ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
   ioStats_->storageReadLatencyUs().increment(storageReadUs);
   ioStats_->incTotalScanTimeNs(static_cast<int64_t>(storageReadUs) * 1'000);
@@ -670,7 +663,8 @@ DataInput::Handle CachedDataInput::load(LoadCallback loadCallback) {
     NIMBLE_CHECK_LE(payloadBytes, group.groupRegion.length);
     ioStats_->incRawBytesRead(static_cast<int64_t>(payloadBytes));
     if (needLoad) {
-      const auto readRegion = alignedRegion(group.groupRegion, alignment_);
+      const auto readRegion =
+          alignedRegion(group.groupRegion, alignment_, file_->size());
       cacheMissGroups.push_back(
           CacheMissGroup{
               .groupIndex = groupIndex,

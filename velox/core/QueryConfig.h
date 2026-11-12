@@ -1361,6 +1361,16 @@ class QueryConfig {
       0,
       "Minimum rows to accumulate before producing streaming aggregation output. 0 uses default.")
 
+  /// The number of threads vector_index_train trains a codec on.
+  VELOX_QUERY_CONFIG(
+      kVectorIndexTrainThreads,
+      vectorIndexTrainThreads,
+      "vector_index_train_threads",
+      int32_t,
+      1,
+      "Number of threads vector_index_train trains a codec on, for both OpenMP "
+      "and MKL. Positive.")
+
   /// TODO: Remove after dependencies are cleaned up.
   VELOX_QUERY_CONFIG(
       kStreamingAggregationEagerFlush,

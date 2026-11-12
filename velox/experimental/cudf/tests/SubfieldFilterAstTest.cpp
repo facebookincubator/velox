@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/type/Filter.h"
@@ -1527,13 +1528,15 @@ TEST_F(SubfieldFilterAstTest, multiRangeMixedFilters) {
 TEST_F(SubfieldFilterAstTest, emptyMultiRangeThrows) {
   auto rowType = ROW({{"c0", DOUBLE()}});
 
-  // MultiRange with empty filter list should throw.
+  // MultiRange with empty filter list should throw, and the GPU scan check
+  // should reject it.
   auto filter = std::make_unique<common::MultiRange>(
       std::vector<std::unique_ptr<common::Filter>>{}, /*nullAllowed*/ false);
 
   common::Subfield subfield("c0");
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  EXPECT_FALSE(canCreateAstFromSubfieldFilter(subfield, *filter));
   EXPECT_THROW(
       createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType),
       VeloxException);
@@ -1542,9 +1545,35 @@ TEST_F(SubfieldFilterAstTest, emptyMultiRangeThrows) {
   children.push_back(std::move(filter));
   children.push_back(std::make_unique<common::IsNull>());
   common::MultiRange nested(std::move(children), /*nullAllowed=*/true);
+  EXPECT_FALSE(canCreateAstFromSubfieldFilter(subfield, nested));
   EXPECT_THROW(
       createAstFromSubfieldFilter(subfield, nested, tree, scalars, rowType),
       VeloxException);
+}
+
+// The GPU scan check and the conversion agree on what converts.
+TEST_F(SubfieldFilterAstTest, unsupportedFilterThrows) {
+  auto rowType = ROW({{"c0", BIGINT()}, {"s", ROW("a", BIGINT())}});
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  {
+    // The cuDF AST has no negated list of values.
+    auto filter = common::createNegatedBigintValues({1, 3}, false);
+    common::Subfield subfield("c0");
+    EXPECT_FALSE(canCreateAstFromSubfieldFilter(subfield, *filter));
+    VELOX_ASSERT_THROW(
+        createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType),
+        "Subfield filter not yet supported for cuDF AST conversion");
+  }
+  {
+    // The conversion reads top-level columns only.
+    common::BigintRange filter(1, 1, false);
+    common::Subfield subfield("s.a");
+    EXPECT_FALSE(canCreateAstFromSubfieldFilter(subfield, filter));
+    VELOX_ASSERT_THROW(
+        createAstFromSubfieldFilter(subfield, filter, tree, scalars, rowType),
+        "Subfield filter not yet supported for cuDF AST conversion");
+  }
 }
 
 // --- kNegatedBigintRange tests ---

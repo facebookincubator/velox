@@ -1383,6 +1383,7 @@ TEST_F(PlanNodeBuilderTest, topNRowNumberNode) {
         EXPECT_EQ(node->sortingOrders(), sortingOrders);
         EXPECT_EQ(node->limit(), limit);
         EXPECT_TRUE(node->generateRowNumber());
+        EXPECT_FALSE(node->isPartial());
         EXPECT_EQ(node->outputType()->names().back(), rowNumberColumnName);
         EXPECT_EQ(node->sources().size(), 1);
         EXPECT_EQ(node->sources()[0], source_);
@@ -1395,6 +1396,7 @@ TEST_F(PlanNodeBuilderTest, topNRowNumberNode) {
                         .sortingOrders(sortingOrders)
                         .rowNumberColumnName(rowNumberColumnName)
                         .limit(limit)
+                        .isPartial(false)
                         .source(source_)
                         .build();
   verify(node);

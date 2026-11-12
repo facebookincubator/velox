@@ -590,28 +590,22 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggTrackRowSize) {
         queryConfig,
         /*constantInputs=*/{});
 
-    HashStringAllocator stringAllocator{pool()};
-    memory::AllocationPool allocationPool{pool()};
-    fn->setAllocator(&stringAllocator);
-
-    int32_t rowSizeOffset = bits::nbytes(1);
-    int32_t offset = rowSizeOffset + sizeof(uint32_t);
-    offset = bits::roundUp(offset, fn->accumulatorAlignmentSize());
-    fn->setOffsets(
-        offset,
-        RowContainer::nullByte(0),
-        RowContainer::nullMask(0),
-        RowContainer::initializedByte(0),
-        RowContainer::initializedMask(0),
-        rowSizeOffset);
+    RowContainer groupRows(
+        /*keyTypes=*/{},
+        {Accumulator{fn.get(), ARRAY(BIGINT())}},
+        /*dependentTypes=*/{},
+        pool(),
+        RowContainer::Options{});
+    fn->setAllocator(&groupRows.stringAllocator());
+    fn->setOffsets(groupRows.columnAt(0), groupRows.rowSizeOffset());
 
     // Make two groups for odd and even rows.
     auto size = input->size();
-    std::vector<char> group1(offset + fn->accumulatorFixedWidthSize());
-    std::vector<char> group2(offset + fn->accumulatorFixedWidthSize());
+    char* group1 = groupRows.newRow();
+    char* group2 = groupRows.newRow();
     std::vector<char*> groups(size);
     for (auto i = 0; i < size; ++i) {
-      groups[i] = i % 2 == 0 ? group1.data() : group2.data();
+      groups[i] = i % 2 == 0 ? group1 : group2;
     }
 
     std::vector<vector_size_t> indices{0, 1};
@@ -620,22 +614,21 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggTrackRowSize) {
     SelectivityVector rows{size};
     if (isRawInput(step)) {
       if (testGlobal) {
-        fn->addSingleGroupRawInput(group1.data(), rows, {input}, false);
+        fn->addSingleGroupRawInput(group1, rows, {input}, false);
       } else {
         fn->addRawInput(groups.data(), rows, {input}, false);
       }
     } else {
       if (testGlobal) {
-        fn->addSingleGroupIntermediateResults(
-            group1.data(), rows, {input}, false);
+        fn->addSingleGroupIntermediateResults(group1, rows, {input}, false);
       } else {
         fn->addIntermediateResults(groups.data(), rows, {input}, false);
       }
     }
 
-    VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[0] + rowSizeOffset), 0);
+    VELOX_CHECK_GT(groupRows.rowSize(group1), groupRows.fixedRowSize());
     if (!testGlobal) {
-      VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[1] + rowSizeOffset), 0);
+      VELOX_CHECK_GT(groupRows.rowSize(group2), groupRows.fixedRowSize());
     }
   };
 

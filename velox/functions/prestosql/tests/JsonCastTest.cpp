@@ -335,6 +335,26 @@ TEST_F(JsonCastTest, fromVarchar) {
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
 }
 
+TEST_F(JsonCastTest, encodeAscii) {
+  const auto encode = [](char value) {
+    std::string out(6, '\0');
+    char* end = out.data();
+    encodeAscii(value, end);
+    out.resize(end - out.data());
+    return out;
+  };
+  EXPECT_EQ(encode('a'), "a");
+  EXPECT_EQ(encode('/'), "/");
+  EXPECT_EQ(encode('\x7f'), "\x7f");
+  EXPECT_EQ(encode('"'), R"(\")");
+  EXPECT_EQ(encode('\\'), R"(\\)");
+  EXPECT_EQ(encode('\b'), R"(\b)");
+  EXPECT_EQ(encode('\n'), R"(\n)");
+  EXPECT_EQ(encode('\t'), R"(\t)");
+  EXPECT_EQ(encode('\x01'), R"(\u0001)");
+  EXPECT_EQ(encode('\x1f'), R"(\u001F)");
+}
+
 TEST_F(JsonCastTest, fromBoolean) {
   testCastToJson<bool>(
       BOOLEAN(),

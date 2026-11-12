@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
 #include <string>
@@ -21,20 +20,23 @@
 
 namespace facebook::velox::aggregate::prestosql {
 
-/// Registers the vector_index_pack aggregate:
+/// Registers the vector_index_train aggregate:
 ///
-///   (cluster_id BIGINT, cluster_centroid ARRAY(REAL), metric VARCHAR)
+///   (embedding ARRAY(REAL), id BIGINT, num_clusters BIGINT, metric VARCHAR)
 ///       -> VECTOR_INDEX
 ///
-/// Packs cluster centroids into a codec: a kFlat local index over the
-/// centroids, with each cluster's id as its centroid's id (see
-/// LocalVectorIndex).
-///  - Cluster ids must be 0 to n - 1, each once.
-///  - Cluster centroids must all have the same, non-zero length.
-///  - Cluster centroids must not contain null, NaN or infinite elements.
-///  - Rows with a null cluster_id or cluster_centroid are ignored.
+/// Clusters the group's embeddings with k-means and returns the codec of the
+/// clusters: a kFlat local index over the centroids, with clusters numbered
+/// from 0 (see FaissLocalVectorIndex::trainCentroids).
+///  - The group gets min(num_clusters, number of embeddings) clusters.
+///  - The ids order the embeddings before the k-means, so the result does not
+///    depend on the order of rows, if the ids are distinct.
+///  - Embeddings must all have the same, non-zero length.
+///  - Embeddings must not contain null, NaN or infinite elements.
+///  - Rows with a null embedding or id are ignored.
+///  - 'num_clusters' is a positive constant.
 ///  - 'metric' is a constant: 'cosine'.
-void registerVectorIndexPackAggregate(
+void registerVectorIndexTrainAggregate(
     const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite);

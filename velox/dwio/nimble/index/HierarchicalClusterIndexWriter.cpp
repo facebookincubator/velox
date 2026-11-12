@@ -562,8 +562,8 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     }
 
     for (auto row = std::max<size_t>(newKeyStart, 1); row < size(); ++row) {
-      if (FOLLY_UNLIKELY(
-              !isKeyOrdered(compareRowKeys(row, row - 1), noDuplicateKey_))) {
+      if (!isKeyOrdered(compareRowKeys(row, row - 1), noDuplicateKey_))
+          [[unlikely]] {
         const auto currentKey = keyColumnsAt(row);
         const auto previousKey = keyColumnsAt(row - 1);
         failKeyOrder(noDuplicateKey_, row, currentKey, row - 1, previousKey);

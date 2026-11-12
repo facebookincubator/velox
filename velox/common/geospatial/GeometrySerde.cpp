@@ -106,9 +106,8 @@ std::unique_ptr<geos::geom::Envelope> GeometryDeserializer::deserializeEnvelope(
   auto xMax = input.read<double>();
   auto yMax = input.read<double>();
 
-  if (FOLLY_UNLIKELY(
-          isEsriNaN(xMin) || isEsriNaN(yMin) || isEsriNaN(xMax) ||
-          isEsriNaN(yMax))) {
+  if (isEsriNaN(xMin) || isEsriNaN(yMin) || isEsriNaN(xMax) || isEsriNaN(yMax))
+      [[unlikely]] {
     return std::make_unique<geos::geom::Envelope>();
   }
 

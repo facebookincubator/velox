@@ -659,6 +659,12 @@ Aggregation
      - In streaming aggregation, wait until we have enough number of output rows
        to produce a batch of size specified by this. If set to 0, then
        Operator::outputBatchRows will be used as the min output batch rows.
+   * - vector_index_train_threads
+     - integer
+     - 1
+     - Number of threads :func:`vector_index_train` trains a codec on, for both
+       OpenMP and MKL. Positive. Training runs on its driver's thread with the
+       default; more threads compete with the other drivers on the host.
 
 Table Scan
 ------------

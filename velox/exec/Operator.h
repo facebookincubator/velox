@@ -30,8 +30,6 @@
 
 namespace facebook::velox::exec {
 
-using facebook::velox::IdentityProjection;
-
 class OperatorCtx {
  public:
   OperatorCtx(

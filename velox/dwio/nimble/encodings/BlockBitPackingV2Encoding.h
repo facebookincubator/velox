@@ -1159,9 +1159,7 @@ std::string_view BlockBitPackingV2Encoding<T>::slice(
     }
   };
   const auto source = parseHeader(encoded, options);
-  NIMBLE_CHECK_LE(offset, source.rowCount);
-  NIMBLE_CHECK_LE(length, source.rowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(source.rowCount, offset, length);
 
   const auto packedData =
       packedDataSource(source, uncompressedSourceData, pool, options);
