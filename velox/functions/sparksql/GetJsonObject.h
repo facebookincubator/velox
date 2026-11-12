@@ -193,6 +193,33 @@ void appendWithSupplementaryEscapes(
 // incomplete escape.
 bool compactJson(std::string_view raw, std::string& out);
 
+// Returns whether `value` is well formed at every nesting level. Spark's
+// Jackson parser reads the whole root value, so an error anywhere in it gives
+// NULL, while text after the root value is never read.
+bool isValidJsonValue(simdjson::ondemand::value value);
+
+// Spark accepts single-quoted JSON strings by default. Detect them cheaply so
+// standard JSON remains allocation-free.
+bool normalizeSingleQuotedJson(std::string_view input, std::string& output);
+
+// Writes `input` to `output` with the control characters inside its strings
+// escaped, since Spark's parser accepts them unescaped, and leaves `output`
+// empty if there are none. Returns false if a bracket inside the root value is
+// closed by a bracket of the other kind, which Spark rejects.
+bool escapeControlCharacters(std::string_view input, std::string& output);
+
+// Returns the scalar at the start of `json` without the text after it, or an
+// empty view if `json` does not start with a scalar.
+std::string_view rootScalar(std::string_view json);
+
+// Returns whether the character is a JSON digit, '0' to '9'.
+inline bool isJsonDigit(char character) {
+  return character >= '0' && character <= '9';
+}
+
+// Validates strict JSON number syntax before using simdjson's looser parser.
+bool isValidJsonNumber(std::string_view input);
+
 } // namespace detail
 
 /// Parses a JSON string and returns the value at the specified path.
@@ -220,25 +247,41 @@ struct GetJsonObjectFunction {
     if (!checkJsonPath(jsonPath)) {
       return false;
     }
+    std::string_view input{json};
+    if (!detail::escapeControlCharacters(input, escapedJson_)) {
+      return false;
+    }
+    if (!escapedJson_.empty()) {
+      input = escapedJson_;
+    }
+    if (detail::normalizeSingleQuotedJson(input, normalizedJson_)) {
+      input = normalizedJson_;
+    }
     // Check if json has invalid escape sequence.
-    if (hasInvalidEscapedChar(json.data(), json.size())) {
+    if (hasInvalidEscapedChar(input.data(), input.size())) {
       return false;
     }
     const auto formattedJsonPath = jsonPath_.has_value()
         ? jsonPath_.value()
         : pathNormalizer_.normalize(jsonPath);
     simdjson::ondemand::document jsonDoc;
-    simdjson::padded_string paddedJson(json.data(), json.size());
+    simdjson::padded_string paddedJson(input.data(), input.size());
     if (simdjsonParseIncomplete(paddedJson).get(jsonDoc)) {
       return false;
     }
     try {
+      simdjson::ondemand::value root;
+      if (jsonDoc.get_value().get(root)) {
+        return formattedJsonPath.empty() && extractRootScalar(input, result);
+      }
+      if (!detail::isValidJsonValue(root)) {
+        return false;
+      }
+      jsonDoc.rewind();
       // jsonPath is "$".
       if (formattedJsonPath.empty()) {
-        simdjson::ondemand::value root;
         if (jsonDoc.get_value().get(root)) {
-          result.append(json);
-          return true;
+          return false;
         }
         return extractStringResult(std::move(root), result);
       }
@@ -267,6 +310,22 @@ struct GetJsonObjectFunction {
   FOLLY_ALWAYS_INLINE bool checkJsonPath(StringView jsonPath) {
     // Spark requires the first char in jsonPath is '$'.
     return std::string_view{jsonPath}.starts_with('$');
+  }
+
+  // Writes the root of 'json', a scalar, to 'result' as Spark does for '$': the
+  // text after the scalar is ignored.
+  bool extractRootScalar(std::string_view json, out_type<Varchar>& result) {
+    const auto scalar = detail::rootScalar(json);
+    if (scalar == "null") {
+      result.append(scalar);
+      return true;
+    }
+    simdjson::padded_string array("[" + std::string(scalar) + "]");
+    simdjson::ondemand::document document;
+    simdjson::ondemand::value value;
+    return !scalar.empty() && !simdjsonParse(array).get(document) &&
+        !document.at(0).get(value) &&
+        extractStringResult(std::move(value), result);
   }
 
   // Extracts a string representation from a simdjson result. Handles various
@@ -424,6 +483,8 @@ struct GetJsonObjectFunction {
 
   // Holds a minified object or array result.
   std::string minified_;
+  std::string escapedJson_;
+  std::string normalizedJson_;
 };
 
 } // namespace facebook::velox::functions::sparksql

@@ -39,6 +39,7 @@
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/JsonStringUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
+#include "velox/functions/sparksql/GetJsonObject.h"
 #include "velox/functions/sparksql/specialforms/JavaFloatingDecimal.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
@@ -47,133 +48,6 @@ using namespace facebook::velox::exec;
 
 namespace facebook::velox::functions::sparksql {
 namespace {
-
-bool isJsonDigit(char character) {
-  return character >= '0' && character <= '9';
-}
-
-// Validates strict JSON number syntax before using simdjson's looser parser.
-bool isValidJsonNumber(std::string_view input) {
-  size_t position{0};
-  if (input.empty()) {
-    return false;
-  }
-  if (input[position] == '-') {
-    if (++position == input.size()) {
-      return false;
-    }
-  }
-
-  if (input[position] == '0') {
-    ++position;
-    if (position < input.size() && isJsonDigit(input[position])) {
-      return false;
-    }
-  } else if (input[position] >= '1' && input[position] <= '9') {
-    while (position < input.size() && isJsonDigit(input[position])) {
-      ++position;
-    }
-  } else {
-    return false;
-  }
-
-  if (position < input.size() && input[position] == '.') {
-    ++position;
-    const auto fractionStart = position;
-    while (position < input.size() && isJsonDigit(input[position])) {
-      ++position;
-    }
-    if (position == fractionStart) {
-      return false;
-    }
-  }
-
-  if (position < input.size() &&
-      (input[position] == 'e' || input[position] == 'E')) {
-    ++position;
-    if (position < input.size() &&
-        (input[position] == '+' || input[position] == '-')) {
-      ++position;
-    }
-    const auto exponentStart = position;
-    while (position < input.size() && isJsonDigit(input[position])) {
-      ++position;
-    }
-    if (position == exponentStart) {
-      return false;
-    }
-  }
-
-  return position == input.size();
-}
-
-// Spark accepts single-quoted JSON strings by default. Detect them cheaply so
-// standard JSON remains allocation-free.
-bool normalizeSingleQuotedJson(std::string_view input, std::string& output) {
-  if (input.find('\'') == std::string_view::npos) {
-    return false;
-  }
-
-  enum class Quote { kNone, kSingle, kDouble };
-
-  Quote quote{Quote::kNone};
-  bool converted{false};
-  output.clear();
-  output.reserve(input.size());
-  for (size_t i = 0; i < input.size(); ++i) {
-    const auto character = input[i];
-    if (quote == Quote::kNone) {
-      if (character == '\'') {
-        output.push_back('"');
-        quote = Quote::kSingle;
-        converted = true;
-      } else {
-        output.push_back(character);
-        if (character == '"') {
-          quote = Quote::kDouble;
-        }
-      }
-      continue;
-    }
-
-    if (quote == Quote::kDouble) {
-      if (character == '\\' && i + 1 < input.size()) {
-        const auto escaped = input[++i];
-        if (escaped == '\'') {
-          output.push_back('\'');
-          converted = true;
-        } else {
-          output.push_back('\\');
-          output.push_back(escaped);
-        }
-      } else {
-        output.push_back(character);
-        if (character == '"') {
-          quote = Quote::kNone;
-        }
-      }
-      continue;
-    }
-
-    if (character == '\\' && i + 1 < input.size()) {
-      const auto escaped = input[++i];
-      if (escaped == '\'') {
-        output.push_back('\'');
-      } else {
-        output.push_back('\\');
-        output.push_back(escaped);
-      }
-    } else if (character == '\'') {
-      output.push_back('"');
-      quote = Quote::kNone;
-    } else if (character == '"') {
-      output.append("\\\"");
-    } else {
-      output.push_back(character);
-    }
-  }
-  return converted && quote == Quote::kNone;
-}
 
 bool isJsonWhitespace(char character) {
   return character == ' ' || character == '\t' || character == '\n' ||
@@ -453,7 +327,7 @@ simdjson::error_code appendSparkJsonValue(
       if (appendSparkSpecialNumber(token, output)) {
         return simdjson::SUCCESS;
       }
-      if (!isValidJsonNumber(token)) {
+      if (!detail::isValidJsonNumber(token)) {
         return kMalformedAtomError;
       }
 
@@ -563,7 +437,7 @@ simdjson::error_code validateJsonValue(JsonInput value) {
       const auto token = trimToken(value.raw_json());
       std::string ignored;
       return appendSparkSpecialNumber(token, ignored) ||
-              isValidJsonNumber(token)
+              detail::isValidJsonNumber(token)
           ? simdjson::SUCCESS
           : kMalformedAtomError;
     }
@@ -754,7 +628,8 @@ bool isSignedDecimalInteger(std::string_view input) {
   if (input.front() == '-' || input.front() == '+') {
     input.remove_prefix(1);
   }
-  return !input.empty() && std::all_of(input.begin(), input.end(), isJsonDigit);
+  return !input.empty() &&
+      std::all_of(input.begin(), input.end(), detail::isJsonDigit);
 }
 
 // Holds the mutable state for one schema node while parsing a JSON object.
@@ -874,7 +749,7 @@ struct ExtractJsonTypeImpl {
     }
     if (type == simdjson::ondemand::json_type::number) {
       const auto token = trimToken(input.raw_json());
-      if (!isValidJsonNumber(token) && !isSparkSpecialNumber(token)) {
+      if (!detail::isValidJsonNumber(token) && !isSparkSpecialNumber(token)) {
         return kMalformedAtomError;
       }
     }
@@ -936,7 +811,7 @@ struct ExtractJsonTypeImpl {
     }
     if (type == simdjson::ondemand::json_type::number) {
       const auto token = trimToken(value.raw_json());
-      if (!isValidJsonNumber(token) && !isSparkSpecialNumber(token)) {
+      if (!detail::isValidJsonNumber(token) && !isSparkSpecialNumber(token)) {
         return kMalformedAtomError;
       }
     }
@@ -1579,8 +1454,9 @@ struct ExtractJsonTypeImpl {
           if (isSparkSpecialNumber(token)) {
             return simdjson::INCORRECT_TYPE;
           }
-          return isValidJsonNumber(token) ? simdjson::NUMBER_OUT_OF_RANGE
-                                          : numberResult.error();
+          return detail::isValidJsonNumber(token)
+              ? simdjson::NUMBER_OUT_OF_RANGE
+              : numberResult.error();
         }
         const auto num = numberResult.value_unsafe();
         switch (num.get_number_type()) {
@@ -1650,7 +1526,7 @@ struct ExtractJsonTypeImpl {
       return simdjson::INCORRECT_TYPE;
     }
     if (type != simdjson::ondemand::json_type::number ||
-        !isValidJsonNumber(token)) {
+        !detail::isValidJsonNumber(token)) {
       return simdjson::NUMBER_ERROR;
     }
 
@@ -1744,7 +1620,7 @@ struct ExtractJsonTypeImpl {
         if (isSparkSpecialNumber(s)) {
           return simdjson::INCORRECT_TYPE;
         }
-        if (!isValidJsonNumber(s)) {
+        if (!detail::isValidJsonNumber(s)) {
           return simdjson::NUMBER_ERROR;
         }
         break;
@@ -1857,7 +1733,7 @@ class FromJsonFunction final : public exec::VectorFunction {
       transformed = true;
     }
 
-    if (normalizeSingleQuotedJson(sparkInput, normalizedInput_)) {
+    if (detail::normalizeSingleQuotedJson(sparkInput, normalizedInput_)) {
       sparkInput = normalizedInput_;
       transformed = true;
     }
