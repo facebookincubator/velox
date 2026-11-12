@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/functions/GpuSfiErrors.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -304,7 +305,12 @@ TEST_F(CudfDecimalTest, mixedWidthDecimalDivision) {
         ASSERT_TRUE(expression->type()->equivalent(*expectedType));
         auto evaluator = createCudfExpression(
             expression, rowType, pool(), queryCtx->queryConfig());
-        auto result = evaluator->eval(evalInputs, stream, mr);
+        // A value case fails no check, which only a collector shows: without
+        // one, a row that failed a check still carries a value.
+        gpu_sfi::GpuSfiErrors errors(stream, mr);
+        auto result = evaluator->eval(
+            evalInputs, stream, mr, /*finalize=*/false, &errors);
+        EXPECT_EQ(errors.resolve(), gpu_sfi::ErrorClass::kNone);
         const auto view = asView(result);
         ASSERT_EQ(view.type(), veloxToCudfDataType(expectedType));
         ASSERT_EQ(view.size(), expected.size());
@@ -365,18 +371,26 @@ TEST_F(CudfDecimalTest, mixedWidthDecimalDivision) {
       DECIMAL(11, 3),
       {0, 0, 0, std::nullopt, 0},
       zeroFreeInputs);
-  // A zero divisor on a row that survives the null stencil fails the whole
-  // expression, as decimal divide does on the CPU.
-  {
-    const std::string sql = "CAST('2.000' AS DECIMAL(20, 3)) / short_decimal";
-    SCOPED_TRACE(sql);
-    auto expression =
-        test_utils::optimizeTypedExpr(sql, rowType, queryCtx.get(), &execCtx);
+  // A zero divisor on a row with no null operand fails Velox's check, as
+  // decimal divide does on the CPU. The device reports the row to the
+  // caller's collector as a user error rather than throwing; the operator that
+  // owns the expression then re-runs the batch on the CPU, which raises
+  // "Division by zero" (CudfFilterProjectTest.deviceChecksRaiseTheCpuError
+  // holds that error to the CPU's). Without a zero divisor nothing is reported.
+  const auto errorClassOf = [&](const std::vector<cudf::column_view>& columns) {
+    auto expression = test_utils::optimizeTypedExpr(
+        "CAST('2.000' AS DECIMAL(20, 3)) / short_decimal",
+        rowType,
+        queryCtx.get(),
+        &execCtx);
     auto evaluator = createCudfExpression(
         expression, rowType, pool(), queryCtx->queryConfig());
-    VELOX_ASSERT_USER_THROW(
-        evaluator->eval(inputs, stream, mr), "Division by zero");
-  }
+    gpu_sfi::GpuSfiErrors errors(stream, mr);
+    evaluator->eval(columns, stream, mr, /*finalize=*/true, &errors);
+    return errors.resolve();
+  };
+  EXPECT_EQ(errorClassOf(inputs), gpu_sfi::ErrorClass::kUserError);
+  EXPECT_EQ(errorClassOf(zeroFreeInputs), gpu_sfi::ErrorClass::kNone);
 }
 
 TEST_F(CudfDecimalTest, decimalAvgDecimalInput) {

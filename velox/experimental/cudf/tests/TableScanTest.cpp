@@ -25,6 +25,7 @@
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
+#include "velox/experimental/cudf/tests/utils/PreferGpuSfi.h"
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -2418,15 +2419,15 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
       data,
       true);
 
-  // Day truncation must use CPU session-timezone semantics when adjustment is
-  // enabled.
+  // With adjustment enabled, day truncation runs on GPU SFI in the session
+  // time zone, as Velox truncates.
   testFilter(
       "date_trunc('day', event_ts) = TIMESTAMP '2026-01-01 18:30:00'",
       true,
       noRows,
-      false);
+      true);
 
-  // Minute truncation is timezone-insensitive and remains eligible. With
+  // Minute truncation runs on GPU SFI with the comparison above it. With
   // adjustment enabled the literal is Asia/Kolkata time, so 01:30 on January 2
   // there is the first row's 20:00 UTC on January 1.
   testFilter(
@@ -3231,4 +3232,38 @@ TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
                {makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
                 makeArrayVector({0, 2, 4}, listElements)})})});
   assertDecimalScanRoundTrip(vector, rowType);
+}
+
+// A device check that fails in a scan's remaining filter raises Velox's error.
+TEST_F(TableScanTest, declinedRowInARemainingFilterRaisesTheCpuError) {
+  cudf_velox::test_utils::PreferGpuSfi preferGpuSfi;
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  auto vector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({100, 200}), makeFlatVector<int64_t>({5, 0})});
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), std::vector<RowVectorPtr>{vector});
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .remainingFilter("c0 / c1 > 1")
+                  .endTableScan()
+                  .planNode();
+
+  // The second row divides by zero; the data source re-runs the remaining
+  // filter through Velox, which raises.
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan)
+          .splits(makeCudfHiveConnectorSplits({filePath}))
+          .copyResults(pool()),
+      "division by zero");
 }

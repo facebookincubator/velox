@@ -57,6 +57,9 @@ struct CudfExpressionEvaluatorEntry {
   int priority;
   CudfExpressionEvaluatorCanEvaluate canEvaluate;
   CudfExpressionEvaluatorCreate create;
+  /// True when the evaluator applies the session time zone to TIMESTAMP
+  /// arguments as Velox does; calls that depend on it go only to these.
+  bool honorsSessionTimeZone;
 };
 
 /// Ensure that built-in expression evaluators are registered.
@@ -73,6 +76,31 @@ bool registerCudfExpressionEvaluator(
     int priority,
     CudfExpressionEvaluatorCanEvaluate canEvaluate,
     CudfExpressionEvaluatorCreate create,
+    bool honorsSessionTimeZone,
     bool overwrite = true);
+
+/// Returns whether a call's result depends on the session time zone. That is
+/// a property of the function, so unlike an evaluator's eligibility predicate
+/// it does not take the session config.
+using CudfSessionTimeZoneSensitivity =
+    std::function<bool(const core::TypedExprPtr& expr)>;
+
+/// Registers, under `name`, a predicate reporting calls whose result depends
+/// on the session time zone, as a set of GPU function registrations declares
+/// it. Replaces a predicate of the same name.
+///
+/// The predicates live apart from the evaluator entries so that the knowledge
+/// outlives the evaluator: which calls read the zone is a property of Velox's
+/// functions, which GPU SFI's registrations mirror, not of the evaluator that
+/// runs them. With that evaluator disabled, the predicate still keeps such a
+/// call away from the evaluators that read TIMESTAMP as UTC, and it stays on
+/// the CPU rather than return a UTC answer.
+void registerSessionTimeZoneSensitivity(
+    const std::string& name,
+    CudfSessionTimeZoneSensitivity predicate);
+
+/// True when a registered predicate reports the call's result to depend on
+/// the session time zone.
+bool isSessionTimeZoneSensitiveCall(const core::TypedExprPtr& expr);
 
 } // namespace facebook::velox::cudf_velox

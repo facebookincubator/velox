@@ -62,18 +62,6 @@ bool DateTruncFunction::canEvaluate(const core::TypedExprPtr& expr) {
   return false;
 }
 
-bool DateTruncFunction::isTimezoneSensitive(const core::TypedExprPtr& expr) {
-  if (!canEvaluate(expr) || !expr->inputs()[1]->type()->isTimestamp()) {
-    return false;
-  }
-
-  const auto unitString = constantVarcharValue(expr->inputs()[0]);
-  const auto unit = functions::fromDateTimeUnitString(*unitString, false);
-  return *unit == DateTimeUnit::kHour || *unit == DateTimeUnit::kDay ||
-      *unit == DateTimeUnit::kWeek || *unit == DateTimeUnit::kMonth ||
-      *unit == DateTimeUnit::kQuarter || *unit == DateTimeUnit::kYear;
-}
-
 DateTruncFunction::DateTruncFunction(
     const core::TypedExprPtr& expr,
     memory::MemoryPool* /*pool*/) {

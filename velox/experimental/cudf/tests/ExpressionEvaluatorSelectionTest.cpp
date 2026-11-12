@@ -20,6 +20,8 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -30,8 +32,13 @@
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
+
+#include <cudf/column/column_factories.hpp>
+#include <cudf/utilities/default_stream.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <folly/ScopeGuard.h>
 #include <gmock/gmock.h>
@@ -67,6 +74,37 @@ class SessionConfigFunction : public CudfFunction {
   const core::QueryConfig config_;
 };
 
+// Stand-ins for a GPU simple function's initialize() that fails a check, which
+// throws the Velox error as on the CPU.
+void initializeThrowsUserError(
+    void* /*instance*/,
+    const std::vector<TypePtr>& /*inputTypes*/,
+    const core::QueryConfig& /*config*/,
+    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
+  VELOX_USER_FAIL("Unknown time zone: Mars/Olympus");
+}
+
+void initializeThrowsRuntimeError(
+    void* /*instance*/,
+    const std::vector<TypePtr>& /*inputTypes*/,
+    const core::QueryConfig& /*config*/,
+    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
+  VELOX_FAIL("Instance state is inconsistent");
+}
+
+// Stands in for a kernel: every row null.
+std::unique_ptr<cudf::column> allNullLaunch(
+    const std::vector<gpu_sfi::GpuArgView>& /*arguments*/,
+    const gpu_sfi::GpuFunctionInstance& /*instance*/,
+    cudf::size_type numRows,
+    cudf::data_type outputType,
+    uint8_t* /*declinedRows*/,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  return cudf::make_fixed_width_column(
+      outputType, numRows, cudf::mask_state::ALL_NULL, stream, mr);
+}
+
 class CudfExpressionSelectionTest : public ::testing::Test {
  protected:
   static void SetUpTestCase() {
@@ -86,6 +124,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
         {"b", BIGINT()},
         {"c", INTEGER()},
         {"name", VARCHAR()},
+        {"d", DOUBLE()},
         {"date", DATE()},
         {"c", INTEGER()},
     });
@@ -243,6 +282,512 @@ TEST_F(CudfExpressionSelectionTest, functionEligibilityUsesSessionConfig) {
       createCudfFunction(
           name, expr, pool_.get(), legacyQueryCtx->queryConfig()),
       nullptr);
+}
+
+// GPU SFI claims a call node only when a registered function binds the
+// argument types exactly: round and truncate register each arity separately,
+// a chained AND arrives flattened as one call that the variadic registration
+// matches at any arity while still checking the element type, and a null
+// literal, which has no element 0 to read, is declined in canEvaluate() so
+// another evaluator can take the node rather than create() throwing.
+TEST_F(CudfExpressionSelectionTest, gpuSfiCanEvaluate) {
+  struct Case {
+    std::string sql;
+    bool claimed;
+  };
+  const std::vector<Case> cases = {
+      {"bitwise_and(a, b)", true},
+      {"d + d", true},
+      // Integral arithmetic binds the Checked* structs, as Presto does on the
+      // CPU.
+      {"a + b", true},
+      {"a - b", true},
+      {"a * b", true},
+      {"a / b", true},
+      {"negate(a)", true},
+      // The decimal-places argument is INTEGER, while an integer literal
+      // parses as BIGINT; a coerced plan carries the cast.
+      {"round(d)", true},
+      {"round(d, cast(2 as integer))", true},
+      {"round(a)", true},
+      {"truncate(d)", true},
+      {"truncate(d, cast(2 as integer))", true},
+      {"a > 1 AND b > 2", true},
+      {"a > 1 AND b > 2 AND c > 3", true},
+      {"a > 1 AND b > 2 AND c > 3 AND a < 9", true},
+      {"a > 1 OR b > 2", true},
+      {"a > 1 OR b > 2 OR c > 3", true},
+      {"not(a > 1)", true},
+      {"bitwise_and(a, cast(null as bigint))", false},
+      {"a + cast(null as bigint)", false},
+  };
+  for (const auto& [sql, claimed] : cases) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_EQ(GpuSfiExpression::canEvaluate(expr), claimed);
+  }
+
+  // Shapes the parser would not produce: truncate is floating point only, as
+  // in Velox, and the and() pack takes booleans, so a bigint pack of the same
+  // shape is not a match.
+  struct HandBuilt {
+    std::string name;
+    TypePtr returnType;
+    std::vector<std::string> fields;
+  };
+  const std::vector<HandBuilt> rejected = {
+      {"truncate", BIGINT(), {"a"}},
+      {"and", BOOLEAN(), {"a", "b"}},
+  };
+  for (const auto& [name, returnType, fields] : rejected) {
+    SCOPED_TRACE(name);
+    std::vector<core::TypedExprPtr> arguments;
+    for (const auto& field : fields) {
+      arguments.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              rowType_->findChild(field), field));
+    }
+    EXPECT_FALSE(
+        GpuSfiExpression::canEvaluate(
+            std::make_shared<core::CallTypedExpr>(
+                returnType, arguments, name)));
+  }
+}
+
+// GPU SFI (priority 75) sits between the function tier (50) and AST (100), so
+// it evaluates a call nothing else implements, AST takes a call both can
+// handle, and roots it never claims, such as a column, a literal or a call with
+// a null literal, still run on the GPU through another evaluator. When only
+// GPU SFI implements the call and it declines, the operator reports itself
+// ineligible at plan time and runs on the CPU.
+TEST_F(CudfExpressionSelectionTest, gpuSfiSelection) {
+  enum class Evaluator { kGpuSfi, kOther, kNone };
+  struct Case {
+    std::string sql;
+    Evaluator evaluator;
+  };
+  const std::vector<Case> cases = {
+      {"bitwise_and(a, b)", Evaluator::kGpuSfi},
+      {"d + d", Evaluator::kOther},
+      {"a", Evaluator::kOther},
+      {"42", Evaluator::kOther},
+      {"a + 1", Evaluator::kOther},
+      {"a + cast(null as bigint)", Evaluator::kOther},
+      {"bitwise_and(a, cast(null as bigint))", Evaluator::kNone},
+  };
+  for (const auto& [sql, evaluator] : cases) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    ASSERT_EQ(
+        canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()),
+        evaluator != Evaluator::kNone);
+    if (evaluator == Evaluator::kNone) {
+      continue;
+    }
+    auto cudfExpr = createCudfExpression(
+        expr, rowType_, pool_.get(), queryCtx_->queryConfig());
+    ASSERT_NE(cudfExpr, nullptr);
+    EXPECT_EQ(
+        dynamic_cast<GpuSfiExpression*>(cudfExpr.get()) != nullptr,
+        evaluator == Evaluator::kGpuSfi);
+  }
+}
+
+// A GPU simple function whose initialize() fails is handled as Velox's
+// SimpleFunctionAdapter handles one: a runtime error fails the call when it is
+// compiled, and any other error is raised on every row the function applies
+// to. Raising it takes an owner that re-evaluates declined rows on the CPU;
+// without one, a nonempty batch raises in its place.
+TEST_F(CudfExpressionSelectionTest, gpuSfiInitializeFailures) {
+  const gpu_sfi::GpuFunctionSignature signature{
+      "bigint",
+      {"bigint"},
+      /*variadicTail=*/false,
+      /*constantArguments=*/{false},
+      /*integerVariables=*/{},
+      /*variableConstraints=*/{},
+      /*argumentKinds=*/{TypeKind::BIGINT},
+      /*returnKind=*/TypeKind::BIGINT};
+  const auto create = [&](const std::string& name,
+                          gpu_sfi::GpuInitializeFn initialize) {
+    gpu_sfi::registerGpuKernel(
+        {name},
+        signature,
+        &allNullLaunch,
+        gpu_sfi::GpuFunctionInstanceSpec{
+            initialize,
+            static_cast<int32_t>(sizeof(int64_t)),
+            static_cast<int32_t>(alignof(int64_t))},
+        /*dependsOnSessionTimeZone=*/false);
+    return GpuSfiExpression::create(
+        std::make_shared<core::CallTypedExpr>(
+            BIGINT(),
+            std::vector<core::TypedExprPtr>{
+                std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")},
+            name),
+        rowType_,
+        pool_.get(),
+        queryCtx_->queryConfig());
+  };
+
+  VELOX_ASSERT_RUNTIME_THROW(
+      create("initialize_throws_runtime_error", &initializeThrowsRuntimeError),
+      "Instance state is inconsistent");
+
+  const auto stream = cudf::get_default_stream();
+  const auto mr = cudf::get_current_device_resource_ref();
+  const auto oneRow = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::INT64},
+      1,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      mr);
+  const auto noRows =
+      cudf::make_empty_column(cudf::data_type{cudf::type_id::INT64});
+  auto expression =
+      create("initialize_throws_user_error", &initializeThrowsUserError);
+  VELOX_ASSERT_USER_THROW(
+      expression->eval({oneRow->view()}, stream, mr),
+      "GPU simple function failed a check in initialize(), and its caller "
+      "cannot re-evaluate the rows on the CPU to raise the error: "
+      "initialize_throws_user_error");
+  // Velox raises nothing on a batch with no rows.
+  expression->eval({noRows->view()}, stream, mr);
+}
+
+// registerCudf() registers GPU SFI at the configured priority.
+TEST_F(CudfExpressionSelectionTest, gpuSfiIsRegisteredAtItsConfiguredPriority) {
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+  const auto it = registry.find(kGpuSfiEvaluatorName);
+  ASSERT_NE(it, registry.end()) << "GPU SFI evaluator was never registered";
+  EXPECT_EQ(
+      it->second.priority, CudfConfig::getInstance().gpuSfiExpressionPriority);
+}
+
+// DATE is INTEGER underneath, so signature matching must compare logical type
+// names, not physical kinds.
+TEST_F(CudfExpressionSelectionTest, gpuSfiExtractsDateFields) {
+  for (const auto& sql :
+       {"year(date)",
+        "month(date)",
+        "day(date)",
+        "quarter(date)",
+        "day_of_year(date)",
+        "day_of_week(date)"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+  }
+
+  // An INTEGER argument must not bind to the DATE overload.
+  auto onInteger = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c")},
+      "year");
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(onInteger));
+}
+
+// TIMESTAMP WITH TIME ZONE reaches cuDF as the int64 that packs UTC millis over
+// a zone key. The evaluators that would read it as a number decline, so GPU
+// SFI, whose kernels unpack it, is the only taker of its functions, and a cast
+// stays on the CPU. TIME WITH TIME ZONE packs an offset the same way and has no
+// GPU SFI function yet, so its expressions stay on the CPU.
+TEST_F(
+    CudfExpressionSelectionTest,
+    timestampWithTimeZoneIsClaimedByGpuSfiAlone) {
+  auto rowType = ROW(
+      {{"tz0", TIMESTAMP_WITH_TIME_ZONE()},
+       {"tz1", TIMESTAMP_WITH_TIME_ZONE()},
+       {"t0", TIME_WITH_TIME_ZONE()},
+       {"t1", TIME_WITH_TIME_ZONE()},
+       {"name", VARCHAR()},
+       {"d", DOUBLE()}});
+  for (const auto& sql :
+       {"tz0 = tz1",
+        "tz0 <> tz1",
+        "tz0 < tz1",
+        "tz0 <= tz1",
+        "tz0 > tz1",
+        "tz0 >= tz1",
+        "tz0 between tz1 and tz1",
+        "year(tz0)",
+        "hour(tz0)",
+        "second(tz0)",
+        "to_unixtime(tz0)",
+        "timezone_hour(tz0)",
+        "timezone_minute(tz0)",
+        "at_timezone(tz0, 'UTC')",
+        "from_unixtime(d, 'UTC')",
+        "from_unixtime(d, 5, 30)",
+        "from_unixtime(d, 'America/Los_Angeles')"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_FALSE(ASTExpression::canEvaluate(expr));
+    EXPECT_FALSE(JitExpression::canEvaluate(expr));
+    EXPECT_FALSE(
+        FunctionExpression::canEvaluate(expr, queryCtx_->queryConfig()));
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+    EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+    auto cudfExpr = createCudfExpression(
+        expr, rowType, pool_.get(), queryCtx_->queryConfig());
+    EXPECT_NE(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
+  }
+
+  for (const auto& sql :
+       {"cast(tz0 as varchar)",
+        "cast(tz0 as timestamp)",
+        "t0 = t1",
+        "t0 < t1"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_FALSE(ASTExpression::canEvaluate(expr));
+    EXPECT_FALSE(JitExpression::canEvaluate(expr));
+    EXPECT_FALSE(
+        FunctionExpression::canEvaluate(expr, queryCtx_->queryConfig()));
+    EXPECT_FALSE(GpuSfiExpression::canEvaluate(expr));
+    EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+
+  // The column itself still reaches the GPU: passing it through reads no bits.
+  auto column =
+      optimizeTypedExpr("tz0", rowType, queryCtx_.get(), execCtx_.get());
+  EXPECT_TRUE(canExprRunOnGpu(column, queryCtx_.get(), pool_.get()));
+}
+
+// Which calls depend on the session time zone comes from the registrations:
+// a struct that runs initialize() over a TIMESTAMP argument reads the zone
+// there. While the zone applies, such a call is GPU SFI's alone, whatever the
+// other evaluators would claim.
+TEST_F(CudfExpressionSelectionTest, sessionTimeZoneSensitivityIsRegistered) {
+  auto rowType = ROW(
+      {{"ts", TIMESTAMP()},
+       {"date", DATE()},
+       {"d", DOUBLE()},
+       {"tz0", TIMESTAMP_WITH_TIME_ZONE()},
+       {"days", INTERVAL_DAY_TIME()}});
+  struct Case {
+    std::string sql;
+    bool dependsOnSessionTimeZone;
+  };
+  const std::vector<Case> cases{
+      {"year(ts)", true},
+      {"week(ts)", true},
+      {"hour(ts)", true},
+      {"minute(ts)", true},
+      {"date_trunc('hour', ts)", true},
+      {"date_trunc('second', ts)", true},
+      {"date_add('day', 1, ts)", true},
+      {"date_diff('day', ts, ts)", true},
+      {"second(ts)", false},
+      {"millisecond(ts)", false},
+      {"to_unixtime(ts)", false},
+      {"year(date)", false},
+      {"date_add('day', 1, date)", false},
+      {"from_unixtime(d)", false},
+      {"year(tz0)", false},
+      {"date_add('day', 1, tz0)", false},
+      // The interval operators read the zone only for a count of months.
+      {"ts + days", false},
+      {"ts + INTERVAL 1 MONTH", true},
+      {"ts - ts", false},
+  };
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.sql);
+    auto expr = optimizeTypedExpr(
+        testCase.sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_EQ(
+        GpuSfiExpression::dependsOnSessionTimeZone(expr),
+        testCase.dependsOnSessionTimeZone);
+  }
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  });
+  for (const auto& testCase : cases) {
+    if (!testCase.dependsOnSessionTimeZone) {
+      continue;
+    }
+    SCOPED_TRACE(testCase.sql);
+    auto expr = optimizeTypedExpr(
+        testCase.sql, rowType, queryCtx_.get(), execCtx_.get());
+    auto cudfExpr = createCudfExpression(
+        expr, rowType, pool_.get(), queryCtx_->queryConfig());
+    EXPECT_NE(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
+  }
+}
+
+// GPU SFI claims date_trunc, date_add, date_diff and the interval operators
+// over TIMESTAMP, DATE and TIMESTAMP WITH TIME ZONE, including the DATE forms
+// the function tier also implements, which it outranks.
+TEST_F(CudfExpressionSelectionTest, gpuSfiClaimsDateArithmetic) {
+  auto rowType = ROW(
+      {{"ts", TIMESTAMP()},
+       {"d", DATE()},
+       {"tz", TIMESTAMP_WITH_TIME_ZONE()},
+       {"days", INTERVAL_DAY_TIME()},
+       {"months", INTERVAL_YEAR_MONTH()},
+       {"n", BIGINT()}});
+  for (const auto& sql :
+       {"date_trunc('day', ts)",
+        "date_trunc('month', d)",
+        "date_trunc('hour', tz)",
+        "date_add('day', n, ts)",
+        "date_add('month', 1, d)",
+        "date_add('year', n, tz)",
+        "date_diff('second', ts, ts)",
+        "date_diff('week', d, d)",
+        "date_diff('quarter', tz, tz)",
+        "ts + days",
+        "days + ts",
+        "ts - days",
+        "ts + months",
+        "months + ts",
+        "ts - months",
+        "ts - ts",
+        "tz + days",
+        "days + tz",
+        "tz - days",
+        "tz + months",
+        "months + tz",
+        "tz - months",
+        "tz - tz"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+    EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+    auto cudfExpr = createCudfExpression(
+        expr, rowType, pool_.get(), queryCtx_->queryConfig());
+    EXPECT_NE(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
+  }
+}
+
+// The function tier implements date_trunc on TIMESTAMP as well, reading UTC.
+// While the session time zone applies, the call is GPU SFI's alone, whatever
+// the priorities say: with GPU SFI demoted below the function tier it still
+// answers, and the function tier takes the call only once the zone no longer
+// applies.
+TEST_F(
+    CudfExpressionSelectionTest,
+    dateTruncOnTimestampFollowsTheSessionTimeZone) {
+  auto rowType = ROW({{"ts", TIMESTAMP()}});
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  });
+  auto expr = optimizeTypedExpr(
+      "date_trunc('day', ts)", rowType, queryCtx_.get(), execCtx_.get());
+  ASSERT_TRUE(FunctionExpression::canEvaluate(expr, queryCtx_->queryConfig()));
+
+  auto& registry = getCudfExpressionEvaluatorRegistry();
+  const auto gpuSfi = registry.at(kGpuSfiEvaluatorName);
+  registry.at(kGpuSfiEvaluatorName).priority =
+      registry.at("function").priority - 1;
+  SCOPE_EXIT {
+    registry.at(kGpuSfiEvaluatorName) = gpuSfi;
+  };
+  EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  EXPECT_NE(
+      dynamic_cast<GpuSfiExpression*>(
+          createCudfExpression(
+              expr, rowType, pool_.get(), queryCtx_->queryConfig())
+              .get()),
+      nullptr);
+
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+  });
+  EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  EXPECT_NE(
+      dynamic_cast<FunctionExpression*>(
+          createCudfExpression(
+              expr, rowType, pool_.get(), queryCtx_->queryConfig())
+              .get()),
+      nullptr);
+}
+
+// Which calls depend on the session time zone is knowledge of the GPU SFI
+// registrations, not of the evaluator: with cudf.gpu_sfi_expression_enabled
+// off no evaluator honours the zone, and a sensitive call must stay on the CPU
+// rather than go to the function tier, which reads TIMESTAMP as UTC. Calls
+// that read no zone still run there.
+TEST_F(CudfExpressionSelectionTest, sensitiveCallsStayOnTheCpuWithoutGpuSfi) {
+  auto& registry = getCudfExpressionEvaluatorRegistry();
+  const auto gpuSfi = registry.at(kGpuSfiEvaluatorName);
+  auto& config = CudfConfig::getInstance();
+  SCOPE_EXIT {
+    config.gpuSfiExpressionEnabled = true;
+    registry[kGpuSfiEvaluatorName] = gpuSfi;
+  };
+  // registerCudf() never takes an evaluator out, so the entry an earlier
+  // registration left is removed before registering with the flag off.
+  registry.erase(kGpuSfiEvaluatorName);
+  config.gpuSfiExpressionEnabled = false;
+  unregisterCudf();
+  registerCudf();
+  ASSERT_EQ(registry.count(kGpuSfiEvaluatorName), 0);
+
+  auto rowType =
+      ROW({{"ts", TIMESTAMP()}, {"d", DATE()}, {"days", INTERVAL_DAY_TIME()}});
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  });
+  for (const auto& sql :
+       {"year(ts)", "date_trunc('day', ts)", "date_add('day', 1, ts)"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+    VELOX_ASSERT_THROW(
+        createCudfExpression(
+            expr, rowType, pool_.get(), queryCtx_->queryConfig()),
+        "No cuDF expression evaluator can handle");
+  }
+  for (const auto& sql : {"year(d)", "d + days", "second(ts)"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+}
+
+// A unit or a zone name is read once in initialize(), so it binds only as a
+// literal; a kernel cannot read a strings column. With a column there no
+// evaluator claims the call and it stays on the CPU.
+TEST_F(CudfExpressionSelectionTest, unitAndZoneColumnsLeaveTheCallToTheCpu) {
+  auto rowType = ROW(
+      {{"ts", TIMESTAMP()},
+       {"d", DATE()},
+       {"tz", TIMESTAMP_WITH_TIME_ZONE()},
+       {"unit", VARCHAR()},
+       {"dbl", DOUBLE()},
+       {"n", BIGINT()}});
+  for (const auto& sql :
+       {"date_trunc(unit, ts)",
+        "date_trunc(unit, d)",
+        "date_trunc(unit, tz)",
+        "date_add(unit, n, ts)",
+        "date_add(unit, n, d)",
+        "date_add(unit, n, tz)",
+        "date_diff(unit, ts, ts)",
+        "date_diff(unit, d, d)",
+        "date_diff(unit, tz, tz)",
+        "at_timezone(tz, unit)",
+        "from_unixtime(dbl, unit)"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_FALSE(GpuSfiExpression::canEvaluate(expr));
+    EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
@@ -565,16 +1110,18 @@ TEST_F(CudfExpressionSelectionTest, signatureUnixtime) {
     ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
   }
 
-  // Stays on the CPU: the forms that take or return TIMESTAMP WITH TIME
-  // ZONE.
-  for (const auto* bad :
+  // The forms that take or return TIMESTAMP WITH TIME ZONE run on the GPU
+  // through GPU SFI, which evaluates Velox's own from_unixtime and
+  // to_unixtime.
+  for (const auto* zoned :
        {"from_unixtime(seconds, 'UTC')",
         "from_unixtime(seconds, 8, 0)",
         "to_unixtime(zoned)"}) {
-    SCOPED_TRACE(bad);
+    SCOPED_TRACE(zoned);
     auto expr = optimizeTypedExpr(
-        bad, unixtimeRowType, queryCtx_.get(), execCtx_.get());
-    ASSERT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+        zoned, unixtimeRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
   }
 }
 
