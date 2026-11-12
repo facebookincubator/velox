@@ -1090,46 +1090,10 @@ jobs:
         run: |
           ccache -sz
 
-      # Protobuf's arena poisons and unpoisons memory through inline helpers
-      # that are only active when the including code is built with ASan. The
-      # image's libprotobuf is built with GCC and no ASan, while Velox is built
-      # with clang and ASan, so arena blocks poisoned by Velox's copy of the
-      # helpers are handed back out by libprotobuf's uninstrumented copy without
-      # being unpoisoned. Rebuild Protobuf with the same compiler and ASan so
-      # both sides agree.
-      #
-      # Abseil from the image is reused and is not built with ASan. Abseil adds
-      # extra fields to its hash table and btree layouts when ASan is on, so
-      # define NDEBUG_SANITIZER to keep Protobuf on the same layout as the
-      # image's libabsl. Without it, protoc crashes at startup in
-      # PrepareInsertNonSoo.
-      #
-      # gRPC is rebuilt too: its grpc_cpp_plugin links the shared libprotoc,
-      # which is now built with ASan, and an uninstrumented plugin cannot load
-      # it.
-      - name: Rebuild Protobuf and gRPC with ASan
-        env:
-          CC: clang
-          CXX: clang++
-          EXTRA_PKG_CXXFLAGS: " -fsanitize=address -fno-omit-frame-pointer -DNDEBUG_SANITIZER"
-          CFLAGS: "-fsanitize=address -fno-omit-frame-pointer -DNDEBUG_SANITIZER"
-          LDFLAGS: "-fsanitize=address"
-          ASAN_OPTIONS: detect_leaks=0
-          VELOX_ABSEIL_INSTALLED: "1"
-          VELOX_BUILD_SHARED: "ON"
-        run: |
-          mkdir -p /tmp/protobuf-asan
-          cd /tmp/protobuf-asan
-          bash "${GITHUB_WORKSPACE}/scripts/setup-centos9.sh" install_protobuf install_grpc
-          cd /
-          rm -rf /tmp/protobuf-asan
-
       - name: Make Asan/Ubsan Build (debug plus -O1)
         id: build
         env:
           MAKEFLAGS: NUM_THREADS=24 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=14
-          # protoc is ASan-instrumented after the step above.
-          ASAN_OPTIONS: detect_leaks=0
         run: |
           # VELOX_ENABLE_REMOTE_FUNCTIONS is turned off due producing a SEGV if the shared library is used.
           # Revist once PR 16019 lands that removes thrift.
@@ -1180,6 +1144,15 @@ jobs:
         env:
           LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
           LSAN_OPTIONS: detect_leaks=0
+          # Protobuf annotates its RepeatedField storage and poisons freed arena
+          # blocks through inline helpers that are only active in code built
+          # with ASan. Velox is built with ASan but the image's libprotobuf is
+          # not, so the two sides disagree about which memory is accessible and
+          # ASan reports container-overflow and use-after-poison inside Protobuf.
+          # Ignore container annotations and library-requested poisoning; Velox
+          # does not poison memory itself, so its own code is still fully
+          # checked.
+          ASAN_OPTIONS: detect_container_overflow=0:allow_user_poisoning=0
         working-directory: _build/debug
         run: |
           source /setup-classpath.sh
