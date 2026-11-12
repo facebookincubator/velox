@@ -885,7 +885,7 @@ T TextRowReader::getFloatingPoint(
 
   T value{};
   const auto* end = input.data() + input.size();
-  const auto [ptr, error] = fast_float::from_chars(
+  const auto [parsedEnd, error] = fast_float::from_chars(
       input.data(),
       end,
       value,
@@ -894,7 +894,7 @@ T TextRowReader::getFloatingPoint(
           fast_float::chars_format::no_infnan);
   // Keep fast_float's signed infinity/zero results on overflow/underflow.
   // Special values are handled above, so suffixed NaN/Infinity stay invalid.
-  if (ptr != end ||
+  if (parsedEnd != end ||
       (error != std::errc{} && error != std::errc::result_out_of_range)) {
     isNull = true;
     return 0;
