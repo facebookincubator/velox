@@ -63,7 +63,8 @@ TabletWriter::TabletWriter(
                             options_.chunkStatsMinAvgChunks,
                         .maxStringStatSize = options_.maxChunkStringStatSize,
                     })
-              : nullptr} {
+              : nullptr},
+      stripeGroupFlushPolicy_{options_.metadataFlushThreshold} {
   if (options_.stripeGroupSparseLayoutEnabled) {
     NIMBLE_USER_CHECK_EQ(
         options_.stripeGroupEncodingLayout,
@@ -396,6 +397,13 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
     }
   }
 
+  if (options_.stripeGroupSparseLayoutEnabled) {
+    numNonEmptyStripeGroupStreams_ += std::count_if(
+        stripeStreamSizes.begin(), stripeStreamSizes.end(), [](uint32_t size) {
+          return size != 0;
+        });
+  }
+
   stripeSizes_.push_back(file_->size() - stripeOffsets_.back());
 
   stripeGroupIndices_.push_back(stripeGroupIndex_);
@@ -482,22 +490,6 @@ void TabletWriter::writeOptionalSection(
       name);
   optionalSections_.try_emplace(
       std::move(name), createMetadataSection(content));
-}
-
-bool TabletWriter::shouldWriteStripeGroup(bool force) const {
-  const auto stripeCount = streamOffsets_.size();
-  if (stripeCount == 0) {
-    return false;
-  }
-
-  // Estimate size
-  // 8 bytes for offsets, 4 for size, 1 for compression type, so 13.
-  const size_t estimatedSize =
-      4 + stripeCount * streamOffsets_.back().size() * 13;
-  if (!force && (estimatedSize < options_.metadataFlushThreshold)) {
-    return false;
-  }
-  return true;
 }
 
 namespace {
@@ -736,7 +728,9 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
       StripeGroup::kStreamMajorLayoutIdentifier.data());
 }
 
-void TabletWriter::writeStripeGroup(size_t streamCount, size_t stripeCount) {
+flatbuffers::FlatBufferBuilder TabletWriter::serializeStripeGroup(
+    size_t streamCount,
+    size_t stripeCount) {
   flatbuffers::FlatBufferBuilder builder(kInitialFooterSize);
 
   switch (options_.stripeGroupEncodingLayout) {
@@ -748,12 +742,10 @@ void TabletWriter::writeStripeGroup(size_t streamCount, size_t stripeCount) {
       break;
     default:
       NIMBLE_UNREACHABLE(
-          fmt::format(
-              "Unknown StripeGroup encoding layout: {}",
-              static_cast<int>(options_.stripeGroupEncodingLayout)));
+          "Unknown StripeGroup encoding layout: {}",
+          options_.stripeGroupEncodingLayout);
   }
-
-  stripeGroups_.emplace_back(createMetadataSection(asView(builder)));
+  return builder;
 }
 
 MetadataSection TabletWriter::writeStripes(size_t stripeCount) {
@@ -806,12 +798,21 @@ TabletWriter::createOptionalMetadataSection(
 }
 
 void TabletWriter::tryWriteStripeGroup(bool force) {
-  if (!shouldWriteStripeGroup(force)) {
+  const auto stripeCount = streamOffsets_.size();
+  if (stripeCount == 0) {
     return;
   }
-
-  const auto stripeCount = streamOffsets_.size();
-  NIMBLE_CHECK_GT(stripeCount, 0);
+  // kRaw and dense kStreamMajor keep the estimate they have always used, so
+  // files written with them are unchanged: an entry for each stream of the last
+  // stripe in every stripe, and no calibration. The sparse layout counts the
+  // entries it stores, one for each stream with data, and calibrates.
+  const bool sparseLayout = options_.stripeGroupSparseLayoutEnabled;
+  const uint64_t numEntries = sparseLayout
+      ? numNonEmptyStripeGroupStreams_
+      : stripeCount * streamOffsets_.back().size();
+  if (!force && !stripeGroupFlushPolicy_.shouldFlush(numEntries)) {
+    return;
+  }
 
   const auto maxStreamCountIt = std::max_element(
       streamOffsets_.begin(),
@@ -823,8 +824,13 @@ void TabletWriter::tryWriteStripeGroup(bool force) {
 
   // Each stripe may have different stream count recorded.
   // We need to pad shorter stripes to the full length of stream count.
-  // Handled by the |transposeStreamMetadata| helper inside writeStripeGroup.
-  writeStripeGroup(streamCount, stripeCount);
+  // Handled by the |transposeStreamMetadata| helper inside
+  // serializeStripeGroup.
+  auto builder = serializeStripeGroup(streamCount, stripeCount);
+  if (sparseLayout) {
+    stripeGroupFlushPolicy_.onFlush(numEntries, builder.GetSize());
+  }
+  stripeGroups_.emplace_back(createMetadataSection(asView(builder)));
 
   writeChunkStatsGroup(streamCount, stripeCount);
 
@@ -836,6 +842,7 @@ void TabletWriter::tryWriteStripeGroup(bool force) {
 void TabletWriter::finishStripeGroup() {
   streamOffsets_.clear();
   streamSizes_.clear();
+  numNonEmptyStripeGroupStreams_ = 0;
   // Move to the next stripe group
   ++stripeGroupIndex_;
 }

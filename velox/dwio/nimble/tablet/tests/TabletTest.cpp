@@ -26,6 +26,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <numeric>
 #include <thread>
 
 #include "folly/FileUtil.h"
@@ -2830,7 +2831,8 @@ TEST_P(TabletTest, writeStripeGroupUnknownLayoutThrows) {
           buffer, {.offset = 0, .chunks = {{.rowCount = 10, .size = 10}}}));
   tabletWriter->writeStripe(10, std::move(streams));
   // close() force-flushes the final stripe group, dispatching on the layout.
-  EXPECT_ANY_THROW(tabletWriter->close());
+  NIMBLE_ASSERT_THROW(
+      tabletWriter->close(), "Unknown StripeGroup encoding layout");
 }
 
 TEST_P(TabletTest, stripeGroupEncodingLayoutsMultipleGroups) {
@@ -2839,23 +2841,26 @@ TEST_P(TabletTest, stripeGroupEncodingLayoutsMultipleGroups) {
   // exercises the encoded formats' per-group encode/reset and the reader's
   // global->local stripe-index mapping across group boundaries, which the
   // single-group tests above cannot reach.
-  constexpr uint32_t kStripeCount = 12;
+  // Enough stripes that the entries of a sparse group outweigh the fixed cost
+  // of its streams, as in production files.
+  constexpr uint32_t kStripeCount = 200;
   constexpr uint32_t kStreamCount = 3;
 
-  auto writeTablet = [&](StripeGroupFormat format) {
+  auto writeTablet = [&](StripeGroupFormat format,
+                         uint32_t metadataFlushThreshold,
+                         uint32_t stripeCount) {
     std::string file;
     velox::InMemoryWriteFile writeFile(&file);
     auto tabletWriter = nimble::TabletWriter::create(
         &writeFile,
         *pool_,
-        {// Small enough to flush a stripe group every few stripes.
-         .metadataFlushThreshold = 100,
+        {.metadataFlushThreshold = metadataFlushThreshold,
          .streamDeduplicationEnabled = false,
          .stripeGroupEncodingLayout = format.layout,
          .stripeGroupSparseLayoutEnabled = format.sparseLayout});
 
     nimble::Buffer buffer{*pool_};
-    for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    for (uint32_t stripe = 0; stripe < stripeCount; ++stripe) {
       std::vector<nimble::Stream> streams;
       for (uint32_t s = 0; s < kStreamCount; ++s) {
         // Vary sizes per (stripe, stream) so the encoded per-group arrays are
@@ -2883,13 +2888,35 @@ TEST_P(TabletTest, stripeGroupEncodingLayoutsMultipleGroups) {
   // Keep the file buffers alive for the whole test: the reader references the
   // InMemoryReadFile's backing string and loads later stripe groups lazily, so
   // a temporary would dangle once the first group is read.
-  const std::string rawFile =
-      writeTablet({nimble::StripeGroup::EncodingLayout::kRaw});
-  const std::string streamMajorFile =
-      writeTablet({nimble::StripeGroup::EncodingLayout::kStreamMajor});
+  // Small enough to flush a stripe group every few stripes, at 13 bytes per
+  // entry. The sparse layout then takes its serialized bytes per entry, and its
+  // metadata exceeds 100 bytes for a single stripe, so its threshold is half
+  // the metadata of the first 64 stripes. 13 bytes per entry overstate that
+  // metadata, so the first group closes within 64 stripes.
+  constexpr uint32_t kDenseThreshold{100};
+  const std::string firstStripesFile = writeTablet(
+      {nimble::StripeGroup::EncodingLayout::kStreamMajor,
+       /*sparseLayout=*/true},
+      std::numeric_limits<uint32_t>::max(),
+      /*stripeCount=*/64);
+  const uint32_t sparseThreshold = readTablet(firstStripesFile)
+                                       ->stripeGroupsMetadata()[0]
+                                       .uncompressedSize()
+                                       .value() /
+      2;
+  const std::string rawFile = writeTablet(
+      {nimble::StripeGroup::EncodingLayout::kRaw},
+      kDenseThreshold,
+      kStripeCount);
+  const std::string streamMajorFile = writeTablet(
+      {nimble::StripeGroup::EncodingLayout::kStreamMajor},
+      kDenseThreshold,
+      kStripeCount);
   const std::string sparseFile = writeTablet(
       {nimble::StripeGroup::EncodingLayout::kStreamMajor,
-       /*sparseLayout=*/true});
+       /*sparseLayout=*/true},
+      sparseThreshold,
+      kStripeCount);
   auto rawTablet = readTablet(rawFile);
   auto streamMajorTablet = readTablet(streamMajorFile);
   auto sparseTablet = readTablet(sparseFile);
@@ -3006,7 +3033,11 @@ void expectLocationsMatchRaw(
     std::vector<nimble::TabletReader::StreamMetadata> expected(streamCount);
     std::vector<nimble::TabletReader::StreamMetadata> actual(streamCount);
     rawTablet.streamLocations(rawStripe, expected);
-    tablet.streamLocations(tablet.stripeIdentifier(stripe), actual);
+    // A group of `tablet` holds only the streams of its own stripes, which can
+    // be fewer, so it is read by stream id.
+    std::vector<uint32_t> streamIds(streamCount);
+    std::iota(streamIds.begin(), streamIds.end(), 0);
+    tablet.streamLocations(tablet.stripeIdentifier(stripe), streamIds, actual);
     for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
       SCOPED_TRACE(fmt::format("streamId={}", streamId));
       EXPECT_EQ(actual[streamId].size, expected[streamId].size);
@@ -3158,9 +3189,9 @@ TEST_P(TabletTest, stripeGroupSparseLayoutRequiresStreamMajor) {
 
 TEST_P(TabletTest, stripeGroupManyStreamStripeLists) {
   // Each of 100 streams appears in its own subset of every 8 consecutive
-  // stripes. The flush threshold splits the 24 stripes into 2 groups. Adjacent
-  // streams have different stripe lists, so a batched lookup cannot reuse the
-  // last search.
+  // stripes. A quarter of the metadata of all 24 stripes splits them into
+  // groups. Adjacent streams have different stripe lists, so a batched lookup
+  // cannot reuse the last search.
   constexpr uint32_t kStripeCount{24};
   constexpr uint32_t kStreamCount{100};
   std::vector<StreamData> streamData;
@@ -3173,11 +3204,21 @@ TEST_P(TabletTest, stripeGroupManyStreamStripeLists) {
   }
   auto rawTablet = createTabletReader(
       writeStreams(*pool_, /*options=*/{}, kStripeCount, streamData));
-  auto options = sparseLayoutOptions();
-  options.metadataFlushThreshold = 16'000;
-  auto sparseTablet = createTabletReader(
-      writeStreams(*pool_, std::move(options), kStripeCount, streamData));
-  ASSERT_EQ(
+  const auto writeSparse = [&](uint32_t threshold) {
+    auto options = sparseLayoutOptions();
+    options.metadataFlushThreshold = threshold;
+    return createTabletReader(
+        writeStreams(*pool_, std::move(options), kStripeCount, streamData));
+  };
+  auto sparseTablet = writeSparse(
+      writeSparse(std::numeric_limits<uint32_t>::max())
+          ->stripeGroupsMetadata()[0]
+          .uncompressedSize()
+          .value() /
+      4);
+  // Groups close near the threshold rather than at it, so the count of groups
+  // can vary. The test needs only more than one.
+  ASSERT_GE(
       nimble::test::TabletReaderTestHelper(sparseTablet.get())
           .numStripeGroups(),
       2);
@@ -3258,6 +3299,234 @@ TEST_P(TabletTest, stripeGroupInterleavedStreamStripeLists) {
               .size,
           expected[i].size);
     }
+  }
+}
+
+TEST_P(TabletTest, stripeGroupFlushThresholdSparseLayout) {
+  // Stream n has data in the stripes whose bit (stripe % 8) of n + 1 is set,
+  // so the stripes add from 0 to 5 entries each, and a group's metadata does
+  // not grow at a steady rate. Each stream has a few hundred entries per group,
+  // which outweigh its fixed cost, as in production files.
+  constexpr uint32_t kStripeCount{2'000};
+  constexpr uint32_t kStreamCount{10};
+  std::vector<StreamData> streamData;
+  for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
+      if (((streamId + 1) >> (stripe % 8)) & 1) {
+        streamData.push_back({stripe, streamId, 1 + streamId * stripe});
+      }
+    }
+  }
+  const auto write = [&](uint32_t threshold) {
+    auto options = sparseLayoutOptions();
+    options.metadataFlushThreshold = threshold;
+    return createTabletReader(
+        writeStreams(*pool_, std::move(options), kStripeCount, streamData));
+  };
+  const uint32_t threshold = write(std::numeric_limits<uint32_t>::max())
+                                 ->stripeGroupsMetadata()[0]
+                                 .uncompressedSize()
+                                 .value() /
+      4;
+
+  // The first group flushes at 13 bytes per entry, which overstate the
+  // serialized entries, so it stays below the threshold. The groups after it,
+  // which the group before calibrates, land within a quarter of the threshold.
+  const auto groups = write(threshold)->stripeGroupsMetadata();
+  ASSERT_GE(groups.size(), 4);
+  EXPECT_LT(groups[0].uncompressedSize().value(), threshold);
+  for (uint32_t group = 1; group + 1 < groups.size(); ++group) {
+    SCOPED_TRACE(fmt::format("group={}", group));
+    EXPECT_GT(groups[group].uncompressedSize().value(), threshold * 0.75);
+    EXPECT_LT(groups[group].uncompressedSize().value(), threshold * 1.25);
+  }
+}
+
+TEST_P(TabletTest, stripeGroupFlushThresholdDenseLayout) {
+  // kRaw and dense kStreamMajor keep 13 bytes per entry and never calibrate, so
+  // every group but the last holds the fewest stripes whose estimate, 4 +
+  // stripes * streams * 13 bytes, reaches the threshold: (10'000 - 4) / 130
+  // rounds up to 77.
+  constexpr uint32_t kStripeCount{1'000};
+  constexpr uint32_t kStreamCount{10};
+  constexpr uint32_t kGroupStripeCount{77};
+  std::vector<StreamData> streamData;
+  for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
+      streamData.push_back({stripe, streamId, 1 + streamId});
+    }
+  }
+  for (const auto& format : kStripeGroupFormats) {
+    if (format.sparseLayout) {
+      continue;
+    }
+    SCOPED_TRACE(format.debugString());
+    auto tablet = createTabletReader(writeStreams(
+        *pool_,
+        {.metadataFlushThreshold = 10'000,
+         .stripeGroupEncodingLayout = format.layout},
+        kStripeCount,
+        streamData));
+
+    const uint32_t numGroups = tablet->stripeGroupsMetadata().size();
+    ASSERT_EQ(
+        numGroups, (kStripeCount + kGroupStripeCount - 1) / kGroupStripeCount);
+    for (uint32_t group = 0; group + 1 < numGroups; ++group) {
+      SCOPED_TRACE(fmt::format("group={}", group));
+      const auto stripe = tablet->stripeIdentifier(group * kGroupStripeCount);
+      EXPECT_EQ(stripe.stripeGroup()->index(), group);
+      EXPECT_EQ(stripe.stripeGroup()->stripeCount(), kGroupStripeCount);
+    }
+  }
+}
+
+namespace {
+
+// The stream count of stripe `stripe` in varyingWidthStreams(): from 0 to 9,
+// so some stripes are narrower than the stripes before them, and every
+// seventh stripe has no streams.
+uint32_t varyingStreamCount(uint32_t stripe) {
+  return stripe % 7 == 6 ? 0 : 1 + (stripe * 5) % 9;
+}
+
+// Streams whose stripes have varyingStreamCount() streams. A stripe stores its
+// last stream id and leaves out some of the others. Streams of a stripe with
+// the same size have the same content, so stream deduplication finds them.
+std::vector<StreamData> varyingWidthStreams(uint32_t stripeCount) {
+  std::vector<StreamData> streamData;
+  for (uint32_t stripe = 0; stripe < stripeCount; ++stripe) {
+    const auto streamCount = varyingStreamCount(stripe);
+    for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+      if (streamId + 1 == streamCount || (streamId + stripe) % 3 != 0) {
+        streamData.push_back({stripe, streamId, 1 + streamId % 4});
+      }
+    }
+  }
+  return streamData;
+}
+
+} // namespace
+
+TEST_P(TabletTest, stripeGroupFlushThresholdDenseLayoutLastStripe) {
+  // kRaw and dense kStreamMajor estimate a group at 4 + stripes * streams * 13
+  // bytes, with the streams of its last stripe, whatever the widths of the
+  // stripes before it.
+  constexpr uint32_t kStripeCount{300};
+  constexpr uint32_t kThreshold{1'000};
+  const auto streamData = varyingWidthStreams(kStripeCount);
+
+  // Returns the group of each stripe when a group is estimated with the stream
+  // count of its last stripe, or of its widest stripe.
+  const auto expectedGroups = [&](bool widest) {
+    std::vector<uint32_t> groups(kStripeCount);
+    uint32_t group{0};
+    uint64_t groupStripeCount{0};
+    uint64_t groupStreamCount{0};
+    for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+      groups[stripe] = group;
+      ++groupStripeCount;
+      groupStreamCount = widest
+          ? std::max<uint64_t>(groupStreamCount, varyingStreamCount(stripe))
+          : varyingStreamCount(stripe);
+      if (4 + groupStripeCount * groupStreamCount * 13 >= kThreshold) {
+        ++group;
+        groupStripeCount = 0;
+        groupStreamCount = 0;
+      }
+    }
+    return groups;
+  };
+  const auto groups = expectedGroups(/*widest=*/false);
+  // The widest stripe would split the stripes differently, so the test tells
+  // the two apart.
+  ASSERT_NE(groups, expectedGroups(/*widest=*/true));
+
+  for (const auto& format : kStripeGroupFormats) {
+    if (format.sparseLayout) {
+      continue;
+    }
+    for (const bool deduplication : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{} deduplication={}", format.debugString(), deduplication));
+      const auto tablet = createTabletReader(writeStreams(
+          *pool_,
+          {.metadataFlushThreshold = kThreshold,
+           .streamDeduplicationEnabled = deduplication,
+           .stripeGroupEncodingLayout = format.layout},
+          kStripeCount,
+          streamData));
+      ASSERT_EQ(tablet->stripeGroupsMetadata().size(), groups.back() + 1);
+      for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+        SCOPED_TRACE(fmt::format("stripe={}", stripe));
+        EXPECT_EQ(
+            tablet->stripeIdentifier(stripe).stripeGroup()->index(),
+            groups[stripe]);
+      }
+    }
+  }
+}
+
+TEST_P(TabletTest, stripeGroupFlushThresholdSparseLayoutFirstGroup) {
+  // The first sparse group closes at 13 bytes per entry. It counts the streams
+  // with data, a stream that deduplication points at its original included.
+  constexpr uint32_t kStripeCount{300};
+  constexpr uint32_t kThreshold{1'000};
+  const auto streamData = varyingWidthStreams(kStripeCount);
+
+  // Returns the stripes of the first group when it counts the streams with
+  // data, or an entry for each stream of the last stripe in every stripe.
+  const auto expectedStripeCount = [&](bool sparseLayout) {
+    uint64_t numEntries{0};
+    for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+      if (sparseLayout) {
+        numEntries += std::count_if(
+            streamData.begin(), streamData.end(), [&](const auto& data) {
+              return data.stripe == stripe;
+            });
+      } else {
+        numEntries = (stripe + 1) * varyingStreamCount(stripe);
+      }
+      if (4 + numEntries * 13 >= kThreshold) {
+        return stripe + 1;
+      }
+    }
+    return kStripeCount;
+  };
+  // The two counts close the first group at different stripes, so the test
+  // tells them apart.
+  ASSERT_NE(
+      expectedStripeCount(/*sparseLayout=*/true),
+      expectedStripeCount(/*sparseLayout=*/false));
+
+  for (const bool deduplication : {false, true}) {
+    SCOPED_TRACE(fmt::format("deduplication={}", deduplication));
+    auto options = sparseLayoutOptions();
+    options.metadataFlushThreshold = kThreshold;
+    options.streamDeduplicationEnabled = deduplication;
+    const auto tablet = createTabletReader(
+        writeStreams(*pool_, std::move(options), kStripeCount, streamData));
+    EXPECT_EQ(
+        tablet->stripeIdentifier(0).stripeGroup()->stripeCount(),
+        expectedStripeCount(/*sparseLayout=*/true));
+  }
+}
+
+TEST_P(TabletTest, stripeGroupFlushThresholdZero) {
+  // A zero threshold closes every group after one stripe, an empty one
+  // included.
+  constexpr uint32_t kStripeCount{30};
+  const auto streamData = varyingWidthStreams(kStripeCount);
+  for (const auto& format : kStripeGroupFormats) {
+    SCOPED_TRACE(format.debugString());
+    const auto tablet = createTabletReader(writeStreams(
+        *pool_,
+        {.metadataFlushThreshold = 0,
+         .stripeGroupEncodingLayout = format.layout,
+         .stripeGroupSparseLayoutEnabled = format.sparseLayout},
+        kStripeCount,
+        streamData));
+    EXPECT_EQ(tablet->stripeGroupsMetadata().size(), kStripeCount);
   }
 }
 
