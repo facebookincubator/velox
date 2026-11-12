@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReverseEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -194,6 +195,20 @@ TEST_F(SliceEncodingTest, slicesEliasFano) {
 
   const std::vector<uint32_t> expected{11, 15, 15, 30};
   EXPECT_EQ(materialize<uint32_t>(*encoding, 4), expected);
+}
+
+TEST_F(SliceEncodingTest, slicesReverseEliasFano) {
+  const auto values = makeVector<int32_t>({100, 30, 15, 15, -11, -100});
+  const auto encoded =
+      nimble::test::Encoder<nimble::ReverseEliasFanoEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  auto encoding = createEncoding(slice(encoded, /*offset=*/1, /*length=*/4));
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::ReverseEliasFano);
+  EXPECT_EQ(encoding->rowCount(), 4);
+
+  const std::vector<int32_t> expected{30, 15, 15, -11};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 4), expected);
 }
 
 TEST_F(SliceEncodingTest, wrapsRle) {

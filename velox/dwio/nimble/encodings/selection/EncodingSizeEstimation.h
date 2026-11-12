@@ -37,6 +37,7 @@
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReverseEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
@@ -251,6 +252,14 @@ struct EncodingSizeEstimation {
       case EncodingType::PartitionedEliasFano: {
         if constexpr (isIntegralType<T>()) {
           return PartitionedEliasFanoEncoding<T>::estimateSize(values, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::ReverseEliasFano: {
+        if constexpr (isIntegralType<T>()) {
+          return ReverseEliasFanoEncoding<T>::estimateSize(
+              values, statistics, options);
         } else {
           return std::nullopt;
         }

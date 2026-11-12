@@ -36,6 +36,7 @@
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReverseEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SentinelEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
@@ -106,6 +107,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::PartitionedEliasFanoEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::PartitionedEliasFano;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::ReverseEliasFanoEncoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::ReverseEliasFano;
 };
 
 template <typename T>

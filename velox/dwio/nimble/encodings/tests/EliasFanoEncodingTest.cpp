@@ -318,6 +318,30 @@ TEST_F(EliasFanoEncodingTest, factoryRoundTripSignedLogicalOrder) {
   EXPECT_EQ(output, input);
 }
 
+TEST_F(EliasFanoEncodingTest, encodeNonDecreasingStoresTransformedValues) {
+  const std::vector<uint32_t> input{100, 90, 90, 40, 7};
+  const auto transform = [](uint32_t value) { return 1'000 - value; };
+  std::vector<uint32_t> transformed;
+  transformed.reserve(input.size());
+  for (const auto value : input) {
+    transformed.push_back(transform(value));
+  }
+
+  const auto encoded = nimble::EliasFanoEncoding<uint32_t>::encodeNonDecreasing(
+      input, *buffer_, /*options=*/{}, transform);
+  nimble::Buffer copyBuffer{*pool_};
+  EXPECT_EQ(
+      encoded,
+      nimble::EliasFanoEncoding<uint32_t>::encodeNonDecreasing(
+          transformed, copyBuffer, /*options=*/{}));
+
+  auto encoding = nimble::EncodingFactory{}.create(
+      *pool_, encoded, /*stringBufferFactory=*/nullptr);
+  std::vector<uint32_t> output(input.size());
+  encoding->materialize(static_cast<uint32_t>(output.size()), output.data());
+  EXPECT_EQ(output, transformed);
+}
+
 TEST_F(EliasFanoEncodingTest, estimateMatchesEncodedSize) {
   for (const uint32_t rowCount : {1, 127, 128, 255, 256, 257}) {
     std::vector<uint64_t> input(rowCount);

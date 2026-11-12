@@ -85,6 +85,37 @@ TYPED_TEST(StatisticsIntegerTests, isNonDecreasing) {
           .template isNonDecreasing<ValueType>());
 }
 
+TYPED_TEST(StatisticsIntegerTests, isNonIncreasing) {
+  using ValueType = typename TypeParam::valueType;
+
+  const std::vector<ValueType> descending{
+      static_cast<ValueType>(3),
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(1),
+  };
+  const std::vector<ValueType> ascending{
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(3),
+  };
+  const std::vector<ValueType> unsorted{
+      static_cast<ValueType>(3),
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(2),
+  };
+
+  const auto statistics = TypeParam::create(descending);
+  EXPECT_TRUE(statistics.template isNonIncreasing<ValueType>());
+  EXPECT_FALSE(statistics.template isNonDecreasing<ValueType>());
+  EXPECT_FALSE(
+      TypeParam::create(ascending).template isNonIncreasing<ValueType>());
+  EXPECT_FALSE(
+      TypeParam::create(unsorted).template isNonIncreasing<ValueType>());
+  EXPECT_TRUE(
+      TypeParam::create(std::span<const ValueType>{})
+          .template isNonIncreasing<ValueType>());
+}
+
 template <typename SignedType>
 void testNaturalAndSignedOrderCachesAreIndependent() {
   using UnsignedType = std::make_unsigned_t<SignedType>;
@@ -118,6 +149,41 @@ TEST(StatisticsTest, naturalAndSignedOrderCachesAreIndependent) {
   testNaturalAndSignedOrderCachesAreIndependent<int16_t>();
   testNaturalAndSignedOrderCachesAreIndependent<int32_t>();
   testNaturalAndSignedOrderCachesAreIndependent<int64_t>();
+}
+
+template <typename SignedType>
+void testDescendingNaturalAndSignedOrderCachesAreIndependent() {
+  using UnsignedType = std::make_unsigned_t<SignedType>;
+  const std::vector<UnsignedType> signedDescending{
+      static_cast<UnsignedType>(std::numeric_limits<SignedType>::max()),
+      static_cast<UnsignedType>(0),
+      static_cast<UnsignedType>(-1),
+      static_cast<UnsignedType>(std::numeric_limits<SignedType>::min()),
+  };
+  const auto signedFirst =
+      nimble::Statistics<UnsignedType>::create(signedDescending);
+  EXPECT_TRUE(signedFirst.template isNonIncreasing<SignedType>());
+  EXPECT_FALSE(signedFirst.template isNonIncreasing<UnsignedType>());
+
+  const auto naturalFirst =
+      nimble::Statistics<UnsignedType>::create(signedDescending);
+  EXPECT_FALSE(naturalFirst.template isNonIncreasing<UnsignedType>());
+  EXPECT_TRUE(naturalFirst.template isNonIncreasing<SignedType>());
+
+  const std::vector<UnsignedType> signedAscending{
+      static_cast<UnsignedType>(-2),
+      static_cast<UnsignedType>(-1),
+  };
+  EXPECT_FALSE(
+      nimble::Statistics<UnsignedType>::create(signedAscending)
+          .template isNonIncreasing<SignedType>());
+}
+
+TEST(StatisticsTest, descendingNaturalAndSignedOrderCachesAreIndependent) {
+  testDescendingNaturalAndSignedOrderCachesAreIndependent<int8_t>();
+  testDescendingNaturalAndSignedOrderCachesAreIndependent<int16_t>();
+  testDescendingNaturalAndSignedOrderCachesAreIndependent<int32_t>();
+  testDescendingNaturalAndSignedOrderCachesAreIndependent<int64_t>();
 }
 
 TEST(StatisticsTest, runValues) {

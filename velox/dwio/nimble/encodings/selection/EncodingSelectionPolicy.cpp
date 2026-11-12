@@ -223,6 +223,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::DeltaBlock,
       EncodingType::EliasFano,
       EncodingType::PartitionedEliasFano,
+      EncodingType::ReverseEliasFano,
       EncodingType::Fsst,
       EncodingType::Huffman,
   };

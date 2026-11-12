@@ -83,6 +83,9 @@ struct ColumnCase {
   // Whether the non-null values never decrease. DeltaBlockEncoding and
   // EliasFanoEncoding refuse anything else.
   bool isNonDecreasing{false};
+  // Whether the non-null values never increase. ReverseEliasFanoEncoding
+  // refuses anything else.
+  bool isNonIncreasing{false};
 };
 
 // The outcome a (column, encoding) pair must produce. Derived from the
@@ -127,11 +130,16 @@ WriteOutcome expectedOutcome(
       !columnCase.isNonDecreasing) {
     return WriteOutcome::kNotApplied;
   }
+  if (encodingType == EncodingType::ReverseEliasFano &&
+      !columnCase.isNonIncreasing) {
+    return WriteOutcome::kNotApplied;
+  }
   // PartitionedEliasFano declines a stream with fewer than two ascending runs,
   // which plain EliasFano covers. The cycling columns have two runs of at
-  // least 64 rows, the minimum average it accepts.
+  // least 64 rows, the minimum average it accepts. A descending column ascends
+  // only within its repeats, whose runs are far shorter.
   if (encodingType == EncodingType::PartitionedEliasFano &&
-      columnCase.isNonDecreasing) {
+      (columnCase.isNonDecreasing || columnCase.isNonIncreasing)) {
     return WriteOutcome::kNotApplied;
   }
   // "Huffman encoding requires at least two symbols" -- a single-symbol
@@ -204,6 +212,20 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
                  [](auto row) { return static_cast<int64_t>(row / 2); })}),
          .dataType = DataType::Int64,
          .isNonDecreasing = true});
+    // Non-increasing: the one shape ReverseEliasFano accepts besides a
+    // single-valued column. It holds the values of monotonic_bigint in reverse,
+    // so the encodings that ignore row order see the same input.
+    cases.push_back(
+        {.name = "descending_bigint",
+         .batch = vectorMaker_->rowVector(
+             {"c0"},
+             {vectorMaker_->flatVector<int64_t>(
+                 kNumRows,
+                 [](auto row) {
+                   return static_cast<int64_t>((kNumRows - 1 - row) / 2);
+                 })}),
+         .dataType = DataType::Int64,
+         .isNonIncreasing = true});
     cases.push_back(
         {.name = "real",
          .batch = makeDecimalLikeColumn<float>(),
@@ -230,7 +252,8 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
                  kNumRows, [](auto /*row*/) { return int64_t{7}; })}),
          .dataType = DataType::Int64,
          .isSingleValued = true,
-         .isNonDecreasing = true});
+         .isNonDecreasing = true,
+         .isNonIncreasing = true});
     // Null-bearing columns. Without them the forcing of Nullable::Data goes
     // untested here: selectNullable puts a Nullable wrapper at the top of the
     // stream and the requested encoding lands one level down, which is the
@@ -267,7 +290,8 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
                  [](auto row) { return row % 3 == 0; })}),
          .dataType = DataType::Int64,
          .isSingleValued = true,
-         .isNonDecreasing = true});
+         .isNonDecreasing = true,
+         .isNonIncreasing = true});
     return cases;
   }
 
@@ -408,8 +432,8 @@ TEST_F(
       if (!isTypeCompatible(encodingType, columnCase.dataType)) {
         continue;
       }
-      // Skip the four whose write-side gate admits floating point but whose
-      // readers reject it -- see isIntegralOnlyEncoding and T283330065.
+      // Skip the encodings whose write-side gate can admit floating point but
+      // whose readers reject it -- see isIntegralOnlyEncoding and T283330065.
       if (isFloatingPoint && isIntegralOnlyEncoding(encodingType)) {
         continue;
       }

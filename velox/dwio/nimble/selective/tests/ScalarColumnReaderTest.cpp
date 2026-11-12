@@ -387,6 +387,25 @@ TEST_F(ScalarColumnReaderTest, integerEliasFanoWithFilter) {
   });
 }
 
+TEST_F(ScalarColumnReaderTest, integerReverseEliasFanoWithFilter) {
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      513, [](auto row) { return int64_t{100} - row / 3; })});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(-50, 50, false));
+
+  auto file = test::createNimbleFile(
+      *rootPool(),
+      input,
+      makeForcedEncodingWriterOptions(EncodingType::ReverseEliasFano));
+  auto readers = makeReaders(input, file, scanSpec);
+  validateWithFilter(*input, *readers.rowReader, 29, [](auto row) {
+    const auto value = int64_t{100} - row / 3;
+    return value >= -50 && value <= 50;
+  });
+}
+
 TEST_F(ScalarColumnReaderTest, bigintWithNulls) {
   auto input = makeRowVector({
       makeFlatVector<int64_t>(

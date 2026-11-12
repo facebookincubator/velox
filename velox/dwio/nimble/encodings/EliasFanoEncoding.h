@@ -117,13 +117,18 @@ class EliasFanoEncoding final
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options = {});
 
-  /// Encodes a non-empty, non-decreasing span with a layout derived from its
-  /// first and last values. Lets another encoding store an ascending sequence
-  /// it computes from its own input, whose statistics it does not have.
+  /// Encodes 'transform(value)' for each value of a non-empty span, with a
+  /// layout derived from the first and last transformed values. Lets another
+  /// encoding store an ascending sequence it computes from its own input, whose
+  /// statistics it does not have, without copying that input. The transformed
+  /// values must be non-decreasing. The default transform stores the values
+  /// unchanged.
+  template <typename Transform = std::identity>
   static std::string_view encodeNonDecreasing(
       std::span<const physicalType> values,
       Buffer& buffer,
-      const Encoding::Options& options);
+      const Encoding::Options& options,
+      Transform&& transform = {});
 
   /// Estimates the encoded size of 'rowCount' non-decreasing values whose last
   /// value exceeds the first by 'range'.
@@ -686,23 +691,25 @@ std::string_view EliasFanoEncoding<T>::encode(
 }
 
 template <typename T>
+template <typename Transform>
 std::string_view EliasFanoEncoding<T>::encodeNonDecreasing(
     std::span<const physicalType> values,
     Buffer& buffer,
-    const Encoding::Options& options) {
+    const Encoding::Options& options,
+    Transform&& transform) {
   NIMBLE_CHECK(!values.empty(), "EliasFano encoding requires values.");
   NIMBLE_CHECK_LE(
       values.size(),
       std::numeric_limits<uint32_t>::max(),
       "EliasFano row count exceeds uint32.");
-  const auto base = toOrdered<T>(values.front());
+  const auto base = toOrdered<T>(transform(values.front()));
   const auto layout = Encoder::Layout::fromUpperBoundAndSize(
-      toOrdered<T>(values.back()) - base, values.size());
+      toOrdered<T>(transform(values.back())) - base, values.size());
   return encode(
       static_cast<uint32_t>(values.size()),
       base,
       layout,
-      [&](uint32_t row) { return toOrdered<T>(values[row]) - base; },
+      [&](uint32_t row) { return toOrdered<T>(transform(values[row])) - base; },
       buffer,
       options);
 }
