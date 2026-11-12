@@ -533,6 +533,26 @@ class ArrowBridgeArrayExportTest : public testing::Test, public VectorTestBase {
     }
   }
 
+  // Exports 'vector', checks the result with Arrow, imports it back and
+  // compares it with 'vector'. Concatenating the result reads every slot, null
+  // or not, as a consumer can. The export allocates from 'exportPool' if set.
+  void testRoundTrip(
+      const VectorPtr& vector,
+      memory::MemoryPool* exportPool = nullptr) {
+    ArrowSchema schema;
+    ArrowArray array;
+    velox::exportToArrow(vector, schema, options_);
+    velox::exportToArrow(
+        vector, array, exportPool ? exportPool : pool(), options_);
+    ASSERT_OK_AND_ASSIGN(auto arrowArray, arrow::ImportArray(&array, &schema));
+    ASSERT_OK(arrowArray->ValidateFull());
+    ASSERT_OK(arrow::Concatenate({arrowArray, arrowArray}).status());
+
+    ASSERT_OK(arrow::ExportArray(*arrowArray, &array, &schema));
+    test::assertEqualVectors(
+        vector, importFromArrowAsOwner(schema, array, pool()));
+  }
+
   ArrowOptions options_;
 
  private:
@@ -1028,27 +1048,91 @@ TEST_F(ArrowBridgeArrayExportTest, timestampUnderNullStructInArray) {
 
 TEST_F(ArrowBridgeArrayExportTest, shorterChildUnderNullStruct) {
   // A child can be shorter than its struct when the struct is null at the rows
-  // past the child's end. This child has 3 rows and a null of its own. The
-  // struct has 1'000 rows and is null from row 3 on.
+  // past the child's end. The children here, of each type and encoding, have 3
+  // rows. The struct has 1'000 rows and is null from row 3 on.
+  const std::vector<VectorPtr> children{
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+      makeNullableFlatVector<bool>({true, std::nullopt, false}),
+      makeNullableFlatVector<int64_t>({100, std::nullopt, 300}, DECIMAL(5, 2)),
+      makeNullableFlatVector<int128_t>(
+          {100, std::nullopt, 300}, DECIMAL(20, 2)),
+      makeNullableFlatVector<int64_t>({1'000, std::nullopt, 3'000}, TIME()),
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(1, 0), std::nullopt, Timestamp(3, 0)}),
+      makeNullableFlatVector<StringView>(
+          {"a", std::nullopt, "a string that is not inlined"}),
+      BaseVector::create(UNKNOWN(), 3, pool()),
+      makeArrayVectorFromJson<int64_t>({"[1, 2]", "null", "[3]"}),
+      makeMapVectorFromJson<int64_t, int64_t>({"{1: 10}", "null", "{3: 30}"}),
+      makeRowVector(
+          {makeFlatVector<int64_t>({1, 2, 3}), makeConstant<int64_t>(4, 3)},
+          [](vector_size_t row) { return row == 1; }),
+      BaseVector::wrapInDictionary(
+          makeNulls({false, true, false}),
+          makeIndices({2, 0, 1}),
+          3,
+          makeFlatVector<int64_t>({10, 20, 30})),
+      makeConstant<int64_t>(5, 3),
+      makeNullConstant(TypeKind::BIGINT, 3),
+  };
   constexpr vector_size_t kSize = 1'000;
-  auto timestamps = makeNullableFlatVector<Timestamp>(
-      {Timestamp(1, 0), std::nullopt, Timestamp(3, 0)});
-  auto vector = std::make_shared<RowVector>(
-      pool(),
-      ROW({"c0"}, {TIMESTAMP()}),
-      makeNulls(kSize, [](vector_size_t row) { return row >= 3; }),
-      kSize,
-      std::vector<VectorPtr>{timestamps});
+  for (const auto& child : children) {
+    SCOPED_TRACE(child->toString());
+    auto structs = std::make_shared<RowVector>(
+        pool(),
+        ROW({"c0"}, {child->type()}),
+        makeNulls(kSize, [](vector_size_t row) { return row >= 3; }),
+        kSize,
+        std::vector<VectorPtr>{child});
+    // As array elements, the structs are exported as a subset of their rows,
+    // in the order 500, 501, 0, 1 and 2.
+    auto arrays = std::make_shared<ArrayVector>(
+        pool(),
+        ARRAY(structs->type()),
+        nullptr,
+        2,
+        makeBuffer<vector_size_t>({500, 0}),
+        makeBuffer<vector_size_t>({2, 3}),
+        structs);
+    for (auto flatten : {false, true}) {
+      for (auto layout :
+           {ArrowOptions::VarTypeLayout::kDefault,
+            ArrowOptions::VarTypeLayout::kStringView}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "flatten: {}, layout: {}", flatten, static_cast<int>(layout)));
+        options_.flattenDictionary = flatten;
+        options_.flattenConstant = flatten;
+        options_.varTypeLayout = layout;
+        testRoundTrip(structs);
+        testRoundTrip(arrays);
+      }
+    }
+  }
+}
 
-  options_.timestampUnit = TimestampUnit::kMicro;
-  auto array = toArrow(vector, options_, pool());
-  ASSERT_OK(array->ValidateFull());
-  const auto& values = static_cast<const arrow::TimestampArray&>(
-      *static_cast<const arrow::StructArray&>(*array).field(0));
-  EXPECT_EQ(kSize, values.length());
-  EXPECT_EQ(kSize - 2, values.null_count());
-  EXPECT_EQ(1'000'000, values.Value(0));
-  EXPECT_EQ(3'000'000, values.Value(2));
+TEST_F(ArrowBridgeArrayExportTest, emptyArrayAtLargeOffset) {
+  // An empty array can have any offset. It selects no struct, so the 3-row
+  // child is not extended to its offset: the export pool has room for far
+  // fewer rows.
+  auto structs = std::make_shared<RowVector>(
+      pool(),
+      ROW({"c0"}, {BIGINT()}),
+      makeNulls(4, [](vector_size_t row) { return row == 3; }),
+      4,
+      std::vector<VectorPtr>{makeFlatVector<int64_t>({1, 2, 3})});
+  auto arrays = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(structs->type()),
+      nullptr,
+      2,
+      makeBuffer<vector_size_t>({0, 10'000'000}),
+      makeBuffer<vector_size_t>({3, 0}),
+      structs);
+
+  auto exportRoot = memory::memoryManager()->addRootPool("", 1 << 20);
+  auto exportPool = exportRoot->addLeafChild("");
+  testRoundTrip(arrays, exportPool.get());
 }
 
 TEST_F(ArrowBridgeArrayExportTest, stringUnderNullStruct) {

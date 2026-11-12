@@ -122,6 +122,12 @@ class VeloxToArrowBridgeHolder {
     return dictionary_.get();
   }
 
+  // Holds a constant that only the array refers to: the export points at its
+  // value without holding a buffer.
+  void setVector(VectorPtr vector) {
+    vector_ = std::move(vector);
+  }
+
  private:
   // Holds the count of total buffers
   size_t numBuffers_ = kMaxBuffers;
@@ -141,6 +147,8 @@ class VeloxToArrowBridgeHolder {
   std::unique_ptr<ArrowArray*[]> children_;
 
   std::unique_ptr<ArrowArray> dictionary_;
+
+  VectorPtr vector_;
 };
 
 // Structure that will hold buffers needed by ArrowSchema. This is opaquely
@@ -501,14 +509,17 @@ struct Selection {
     return ans;
   }
 
-  // Returns one past the last selected row.
+  // Returns one past the last selected row. An empty range selects no row,
+  // whatever its offset: an empty array can have any.
   vector_size_t end() const {
     if (!changed()) {
       return total_;
     }
     vector_size_t ans = 0;
     for (auto [offset, size] : *ranges_) {
-      ans = std::max(ans, offset + size);
+      if (size > 0) {
+        ans = std::max(ans, offset + size);
+      }
     }
     return ans;
   }
@@ -901,17 +912,14 @@ BufferPtr nullsToExport(
     return vec.nulls();
   }
   const auto* rawParentNulls = parentNulls->as<uint64_t>();
-  // A child can be shorter than its struct when the struct is null at the rows
-  // past the child's end, so cover every selected row.
-  const auto size = std::max(vec.size(), rows.end());
-  auto nulls = allocateNulls(size, pool);
+  auto nulls = allocateNulls(vec.size(), pool);
   auto* rawNulls = nulls->asMutable<uint64_t>();
-  if (!rows.changed() && size == vec.size()) {
+  if (!rows.changed()) {
     bits::andBits(rawNulls, rawParentNulls, rawOwnNulls, 0, rows.count());
   } else {
     rows.apply([&](vector_size_t row) {
       if (bits::isBitNull(rawParentNulls, row) ||
-          (row < vec.size() && bits::isBitNull(rawOwnNulls, row))) {
+          bits::isBitNull(rawOwnNulls, row)) {
         bits::setNull(rawNulls, row);
       }
     });
@@ -1232,6 +1240,113 @@ void exportToArrowImpl(
     memory::MemoryPool*,
     const BufferPtr& parentNulls = nullptr);
 
+template <TypeKind kind>
+VectorPtr extendFlat(
+    const BaseVector& vec,
+    vector_size_t size,
+    BufferPtr nulls,
+    memory::MemoryPool* pool) {
+  using T = typename TypeTraits<kind>::NativeType;
+  BufferPtr values;
+  if (vec.values() != nullptr) {
+    // Copies the bytes, not the values: an undefined string points anywhere.
+    values = AlignedBuffer::allocate<T>(size, pool);
+    std::memcpy(
+        values->asMutable<uint8_t>(),
+        vec.values()->as<uint8_t>(),
+        BaseVector::byteSize<T>(vec.size()));
+  }
+  return std::make_shared<FlatVector<T>>(
+      pool,
+      vec.type(),
+      std::move(nulls),
+      size,
+      std::move(values),
+      std::vector<BufferPtr>(
+          vec.asUnchecked<FlatVector<T>>()->stringBuffers()));
+}
+
+// Returns 'vec', a child of a struct, extended to the end of 'rows'. A child
+// can be shorter than its struct when the struct is null at the rows past the
+// child's end, and each type's export reads every row in 'rows'. The encoding
+// stays the same, since the schema export follows it. 'structNulls' are the
+// nulls of the struct to export. The rows past the child's end, the rows they
+// mark and the rows not in 'rows' are null: their values may be undefined, e.g.
+// a dictionary's indices, which debug builds check when one is made.
+VectorPtr extendChild(
+    const BaseVector& vec,
+    const Selection& rows,
+    const BufferPtr& structNulls,
+    memory::MemoryPool* pool) {
+  const auto size = rows.end();
+  if (vec.encoding() == VectorEncoding::Simple::CONSTANT) {
+    // A constant has no rows of its own, so a slice of it can be any length.
+    return vec.slice(0, size);
+  }
+  auto nulls = allocateNulls(size, pool, bits::kNull);
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  const auto* rawStructNulls =
+      structNulls != nullptr ? structNulls->as<uint64_t>() : nullptr;
+  rows.apply([&](vector_size_t row) {
+    if (row < vec.size() && !isNull(rawStructNulls, row) &&
+        !isNull(vec.rawNulls(), row)) {
+      bits::clearNull(rawNulls, row);
+    }
+  });
+  auto extendIndices = [&](const BufferPtr& indices) {
+    auto extended = allocateIndices(size, pool);
+    std::memcpy(
+        extended->asMutable<vector_size_t>(),
+        indices->as<vector_size_t>(),
+        vec.size() * sizeof(vector_size_t));
+    return extended;
+  };
+  switch (vec.encoding()) {
+    case VectorEncoding::Simple::FLAT:
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
+          extendFlat, vec.typeKind(), vec, size, std::move(nulls), pool);
+    case VectorEncoding::Simple::ROW:
+      return std::make_shared<RowVector>(
+          pool,
+          vec.type(),
+          std::move(nulls),
+          size,
+          vec.asUnchecked<RowVector>()->children());
+    case VectorEncoding::Simple::ARRAY: {
+      const auto& arrays = *vec.asUnchecked<ArrayVector>();
+      return std::make_shared<ArrayVector>(
+          pool,
+          vec.type(),
+          std::move(nulls),
+          size,
+          extendIndices(arrays.offsets()),
+          extendIndices(arrays.sizes()),
+          arrays.elements());
+    }
+    case VectorEncoding::Simple::MAP: {
+      const auto& maps = *vec.asUnchecked<MapVector>();
+      return std::make_shared<MapVector>(
+          pool,
+          vec.type(),
+          std::move(nulls),
+          size,
+          extendIndices(maps.offsets()),
+          extendIndices(maps.sizes()),
+          maps.mapKeys(),
+          maps.mapValues());
+    }
+    case VectorEncoding::Simple::DICTIONARY:
+      // An unloaded lazy base can't be wrapped twice.
+      return BaseVector::wrapInDictionary(
+          std::move(nulls),
+          extendIndices(vec.wrapInfo()),
+          size,
+          BaseVector::loadedVectorShared(vec.valueVector()));
+    default:
+      VELOX_NYI("{} cannot be exported to Arrow yet.", vec.encoding());
+  }
+}
+
 // 'nulls' are the nulls to export for 'vec', merged with those of the
 // enclosing structs. Child values are undefined where a struct is null, so
 // they are the children's parent nulls.
@@ -1247,15 +1362,25 @@ void exportRows(
   holder.resizeChildren(vec.childrenSize());
   out.n_children = vec.childrenSize();
   out.children = holder.getChildrenArrays();
+  const auto end = rows.end();
   for (column_index_t i = 0; i < vec.childrenSize(); ++i) {
     try {
-      exportToArrowImpl(
-          *vec.childAt(i)->loadedVector(),
-          rows,
-          options,
-          *holder.allocateChild(i),
-          pool,
-          nulls);
+      // A child shorter than the struct is extended, so that each type's
+      // export reads only rows within the vector.
+      const auto* child = vec.childAt(i)->loadedVector();
+      VectorPtr extended;
+      if (child->size() < end) {
+        extended = extendChild(*child, rows, nulls, pool);
+        child = extended.get();
+      }
+      auto* childArray = holder.allocateChild(i);
+      exportToArrowImpl(*child, rows, options, *childArray, pool, nulls);
+      // The other encodings' buffers are held by the array already.
+      if (extended != nullptr &&
+          extended->encoding() == VectorEncoding::Simple::CONSTANT) {
+        static_cast<VeloxToArrowBridgeHolder*>(childArray->private_data)
+            ->setVector(std::move(extended));
+      }
     } catch (const VeloxException&) {
       for (column_index_t j = 0; j < i; ++j) {
         // When exception is thrown, i th child is guaranteed unset.
@@ -1369,10 +1494,8 @@ void flattenAndExport(
     VeloxToArrowBridgeHolder& holder,
     const uint64_t* nulls) {
   using NativeType = typename velox::TypeTraits<kind>::NativeType;
-  // A child can be shorter than its struct when the struct is null at the rows
-  // past the child's end, so cover every selected row.
-  auto flatVector = BaseVector::create<FlatVector<NativeType>>(
-      vec.type(), std::max(vec.size(), rows.end()), pool);
+  auto flatVector =
+      BaseVector::create<FlatVector<NativeType>>(vec.type(), vec.size(), pool);
 
   // Rows that 'nulls' marks are exported as null without decoding them: under
   // a null struct, a dictionary may have any index.
@@ -1380,7 +1503,7 @@ void flattenAndExport(
   if (nulls != nullptr) {
     rowsToDecode.clearAll();
     rows.apply([&](vector_size_t row) {
-      if (row >= vec.size() || bits::isBitNull(nulls, row)) {
+      if (bits::isBitNull(nulls, row)) {
         flatVector->setNull(row, true);
       } else {
         rowsToDecode.setValid(row, true);
