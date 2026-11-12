@@ -410,11 +410,13 @@ DeletionVectorReader::DeletionVectorReader(
     uint64_t splitOffset,
     memory::MemoryPool* /*pool*/,
     std::shared_ptr<const config::ConfigBase> connectorConfig,
-    folly::F14FastMap<std::string, std::string> fileReadOps)
+    folly::F14FastMap<std::string, std::string> fileReadOps,
+    std::shared_ptr<filesystems::TokenProvider> tokenProvider)
     : dvFile_(dvFile),
       splitOffset_(splitOffset),
       connectorConfig_(std::move(connectorConfig)),
-      fileReadOps_(std::move(fileReadOps)) {
+      fileReadOps_(std::move(fileReadOps)),
+      tokenProvider_(std::move(tokenProvider)) {
   VELOX_CHECK(
       dvFile_.content == FileContent::kDeletionVector,
       "Expected deletion vector file but got content type: {}",
@@ -484,6 +486,7 @@ void DeletionVectorReader::loadBitmap() {
       dvFile_.filePath);
   filesystems::FileOptions options;
   options.fileReadOps = fileReadOps_;
+  options.tokenProvider = tokenProvider_;
   auto readFile = fs->openFileForRead(dvFile_.filePath, options);
   VELOX_CHECK_NOT_NULL(
       readFile, "Failed to open deletion vector file: {}", dvFile_.filePath);

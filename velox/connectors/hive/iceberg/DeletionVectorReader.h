@@ -28,6 +28,10 @@ namespace facebook::velox::config {
 class ConfigBase;
 }
 
+namespace facebook::velox::filesystems {
+class TokenProvider;
+}
+
 namespace facebook::velox::connector::hive::iceberg {
 
 /// Reads an Iceberg V3 deletion vector and applies it to the delete bitmap.
@@ -57,12 +61,14 @@ class DeletionVectorReader {
   ///        Passing nullptr leaves config-requiring filesystems unconfigured.
   /// @param fileReadOps Options forwarded to the FileSystem when the Puffin
   ///        file is opened and on every read from it.
+  /// @param tokenProvider Query token provider for the Puffin file open.
   DeletionVectorReader(
       const IcebergDeleteFile& dvFile,
       uint64_t splitOffset,
       memory::MemoryPool* pool,
       std::shared_ptr<const config::ConfigBase> connectorConfig,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {});
+      folly::F14FastMap<std::string, std::string> fileReadOps = {},
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = nullptr);
 
   /// Reads deleted positions from the DV and sets corresponding bits in the
   /// deleteBitmap for the current batch range. Batches must be read in
@@ -133,6 +139,9 @@ class DeletionVectorReader {
   // Options for the Puffin file's open and reads. Kept because the file is
   // opened lazily in loadBitmap(), after the split reader has returned.
   const folly::F14FastMap<std::string, std::string> fileReadOps_;
+
+  // Query credentials retained until the lazy Puffin open completes.
+  const std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
 
   // Position and size of the roaring bitmap within 'blob_', after removing the
   // deletion-vector-v1 frame.
