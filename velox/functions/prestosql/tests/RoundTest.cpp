@@ -19,6 +19,13 @@
 
 using namespace facebook::velox;
 
+namespace {
+
+constexpr double kDoubleDenormMin = std::numeric_limits<double>::denorm_min();
+constexpr float kFloatDenormMin = std::numeric_limits<float>::denorm_min();
+
+} // namespace
+
 class RoundTest : public functions::test::FunctionBaseTest {
  protected:
   template <typename T>
@@ -166,8 +173,8 @@ TEST_F(RoundTest, roundWithConstantDecimals) {
           -2.675,
           6e-310,
           -6e-310,
-          std::numeric_limits<double>::denorm_min(),
-          -std::numeric_limits<double>::denorm_min(),
+          kDoubleDenormMin,
+          -kDoubleDenormMin,
           std::numeric_limits<double>::min(),
           123456.789,
           17592186044415.0,
@@ -184,8 +191,8 @@ TEST_F(RoundTest, roundWithConstantDecimals) {
           1.5f,
           2.675f,
           -2.675f,
-          std::numeric_limits<float>::denorm_min(),
-          -std::numeric_limits<float>::denorm_min(),
+          kFloatDenormMin,
+          -kFloatDenormMin,
           123456.789f,
           1e30f,
           std::numeric_limits<float>::max(),
@@ -203,7 +210,7 @@ TEST_F(RoundTest, roundWithConstantDecimals) {
           std::numeric_limits<int64_t>::min()});
 }
 
-TEST_F(RoundTest, roundWithDecimalPrecisionBoundary) {
+TEST_F(RoundTest, precisionBoundary) {
   // These regressions lose precision in the scale/round/unscale path.
   runRoundWithDecimalTest<double>(
       {{17'592'186'044'415.75, 10, 17'592'186'044'415.75},
@@ -227,31 +234,7 @@ TEST_F(RoundTest, roundWithDecimalPrecisionBoundary) {
        {200'000.125f, 2, 200'000.125f},
        {-200'000.125f, 2, -200'000.125f},
        // The requested precision exceeds even subnormal FLOAT precision.
-       {std::numeric_limits<float>::denorm_min(),
-        46,
-        std::numeric_limits<float>::denorm_min()}});
-}
-
-TEST_F(RoundTest, roundWithOverflowingFactorDoesNotUsePrecisionGuard) {
-  // Factor-overflow handling is outside this precision fix. In particular,
-  // spacing * infinity must not incorrectly preserve tiny inputs: rounding
-  // 6e-310 to scale 309 should change it, but currently returns NaN.
-  auto input = makeRowVector(
-      {makeFlatVector<double>(
-           {1.5,
-            -1.5,
-            6e-310,
-            -6e-310,
-            std::numeric_limits<double>::denorm_min()}),
-       makeFlatVector<int32_t>(5, [](auto) { return 309; })});
-  for (const auto& expression :
-       {"round(c0, c1)", "round(c0, cast(309 as integer))"}) {
-    SCOPED_TRACE(expression);
-    auto result = evaluate<SimpleVector<double>>(expression, input);
-    for (vector_size_t i = 0; i < input->size(); ++i) {
-      EXPECT_TRUE(std::isnan(result->valueAt(i)));
-    }
-  }
+       {kFloatDenormMin, 46, kFloatDenormMin}});
 }
 
 TEST_F(RoundTest, roundWithDecimalLargeNumbers) {

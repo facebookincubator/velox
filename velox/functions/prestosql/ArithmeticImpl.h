@@ -99,20 +99,12 @@ VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
     // prefilter skips the spacing calculation on common inputs.
     if (std::isfinite(factor) &&
         std::abs(scaled) >= 1 / std::numeric_limits<TNum>::epsilon()) {
-      const auto spacing = [&]() {
-        if constexpr (
-            std::is_same_v<TNum, float> || std::is_same_v<TNum, double>) {
-          using UInt = std::
-              conditional_t<std::is_same_v<TNum, float>, uint32_t, uint64_t>;
-          // For finite, nonzero FLOAT/DOUBLE, decrementing the bits moves one
-          // value toward zero, without a nextafter library call.
-          return std::abs(
-              number -
-              std::bit_cast<TNum>(std::bit_cast<UInt>(number) - UInt{1}));
-        } else {
-          return std::abs(number - std::nextafter(number, TNum{0}));
-        }
-      }();
+      using UInt =
+          std::conditional_t<std::is_same_v<TNum, float>, uint32_t, uint64_t>;
+      // For finite, nonzero FLOAT/DOUBLE, decrementing the bits moves one value
+      // toward zero.
+      const auto spacing = std::abs(
+          number - std::bit_cast<TNum>(std::bit_cast<UInt>(number) - UInt{1}));
       // Avoid a lossy round trip when the decimal quantum is smaller than the
       // spacing toward zero, including the narrower spacing at powers of two.
       if (spacing * factor > 1) {
