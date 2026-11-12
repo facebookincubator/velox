@@ -58,14 +58,30 @@ void tensorsToHost(
     std::vector<at::Tensor>& out,
     facebook::velox::wave::Stream& stream);
 
-/// Debug info pointers for a single kernel launch, linking the pinned (host)
-/// and device copies so that getDebugInfo() can queue D2H transfers.
+/// Where the per-block results of a single kernel launch are: its DebugInfos
+/// in the step's pinned (host) and device buffers, copied back only when the
+/// execution recorded an error, and its clocks in the execution's clock buffer.
 struct LaunchDebugInfo {
-  DebugInfo* pinnedInfo;
-  DebugInfo* deviceInfo;
-  int32_t numBlocks;
-  int32_t sequenceNumber;
-  int32_t stepIdx;
+  DebugInfo* pinnedInfo{nullptr};
+  DebugInfo* deviceInfo{nullptr};
+  int32_t numBlocks{0};
+  int32_t sequenceNumber{0};
+  int32_t stepIdx{0};
+  /// Word offset of the launch's clocks in the clock buffer. Its barrier clocks
+  /// follow, 'numBlocks' words later. -1 for a launch that was not timed.
+  int64_t clockOffset{-1};
+  /// The step's pinned BlockInfo array, which gives each block's op when the
+  /// DebugInfos were not copied back.
+  const BlockInfo* pinnedBlocks{nullptr};
+};
+
+/// One block of a launch, as blockDebugInfos() copies it out.
+struct BlockDebugInfo {
+  int64_t clocks{0};
+  int64_t barrierClocks{0};
+  /// The block's DebugInfo when the execution recorded an error. Otherwise only
+  /// 'op' is set, from the step's block table.
+  DebugInfo info;
 };
 
 /// Device-timeline events bracketing one step's GPU work. Wave events are
@@ -163,7 +179,14 @@ struct LaunchMeta {
 /// Per-thread debug info from the most recent wave execution. Populated by
 /// executeWave when WaveConfig::keepStatsOnThread is true.
 struct WaveThreadInfo {
-  std::vector<std::vector<DebugInfo>> debugInfo;
+  /// The kernel launches of the execution, parallel to launchMeta.
+  std::vector<LaunchDebugInfo> launches;
+  /// The pinned copy of the execution's clock buffer (see BlockClockBuffer).
+  /// Valid until its ExecutionState runs again.
+  const int64_t* clocks{nullptr};
+  /// The blocks that recorded an error. The DebugInfos were copied back to
+  /// their pinned buffers only when this is not 0.
+  int64_t errorCount{0};
   std::vector<LaunchMeta> launchMeta;
   std::string errors;
   /// Standalone execution times, sorted descending. Indices line up with
@@ -207,6 +230,16 @@ struct WaveThreadInfo {
 
 /// Returns the thread-local WaveThreadInfo for the current thread.
 const WaveThreadInfo& waveThreadInfo();
+
+/// The blocks of every launch of the thread's most recent execution, parallel
+/// to WaveThreadInfo::launches, copied out of the pinned buffers. Call before
+/// the ExecutionState that ran it runs again.
+std::vector<std::vector<BlockDebugInfo>> blockDebugInfos();
+
+/// The clocks of launch 'launch' of the thread's most recent execution in the
+/// pinned clock buffer, its barrier clocks following after its numBlocks; null
+/// for a launch that was not timed.
+const int64_t* launchClocks(const WaveThreadInfo& info, size_t launch);
 
 /// Lifecycle of a step's kernel outputs, used to bundle intermediate freeing
 /// with wave-stream syncs (see WaveConfig::freeIntermediates).
@@ -261,6 +294,9 @@ struct StepVectors {
   /// settled before makeGrid runs. Without that, a later size change would
   /// reallocate and move the base out from under params already filled.
   int32_t blockCapacity{0};
+  /// Word offset of the current launch's clocks in the execution's clock
+  /// buffer, as reserveLaunchClocks gave it; -1 before the first launch.
+  int64_t clockOffset{-1};
 
   /// Every frame value this step can read, over ALL of its grid variants:
   /// each kernel launch's KernelOperation::orderingInputs(), each standalone
@@ -530,6 +566,22 @@ struct PendingReturn {
   facebook::velox::wave::Event* waveDone{nullptr};
 };
 
+/// Words of BlockClockBuffer before the first launch's clocks.
+constexpr int64_t kBlockClockHeaderWords = 1;
+
+/// The per-block clocks of every timed launch of an execution, copied back to
+/// the host in one transfer when the execution ends. Word 0 counts the blocks
+/// that recorded an error in their DebugInfo. Then each launch, in issue
+/// order, has its blocks' clocks followed by their barrier clocks.
+struct BlockClockBuffer {
+  facebook::velox::wave::WaveBufferPtr device;
+  facebook::velox::wave::WaveBufferPtr pinned;
+  /// Words in each of the two buffers.
+  int64_t capacity{0};
+  /// Words the current execution's launches have reserved, header included.
+  int64_t fill{kBlockClockHeaderWords};
+};
+
 /// Holds runtime state for executing a WaveGraph.  Pooled by WaveGraph
 /// so that reusable buffers survive across calls.
 struct ExecutionState {
@@ -560,6 +612,9 @@ struct ExecutionState {
 
   /// Per-launch debug info collected during execution.
   std::vector<LaunchDebugInfo> launchDebugInfos;
+
+  /// Clocks of the launches in launchDebugInfos.
+  BlockClockBuffer blockClocks;
 
   /// Counters for reference frame verification (owned by executor).
   int64_t* numRefTensorsChecked{nullptr};
@@ -846,6 +901,12 @@ void addLastUseId(ExecutionState& state, StepVectors& sv, nativert::ValueId id);
 /// releases on a wave-stream wait alone, and under run-ahead an eager
 /// standalone on the torch stream can still be reading one of those buffers.
 bool enforceDelayedFreeLimit(ExecutionState& state);
+
+/// Reserves the clocks and barrier clocks of a launch of 'numBlocks' blocks in
+/// the execution's clock buffer and returns the word offset of its clocks.
+/// When the buffer is full, waits for the launches already issued and moves
+/// what they wrote to the start of a buffer at least twice as large.
+int64_t reserveLaunchClocks(ExecutionState& state, int32_t numBlocks);
 
 /// Returns the process-wide Stream wrapping the CUDA stream that eager
 /// standalones are dispatched to, for recording events on and waiting for it.
