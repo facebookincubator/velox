@@ -234,7 +234,10 @@ struct Int32X32 {
 
 // Thread 0 loads BlockInfo from params (inlined in TorchWaveParams or from a
 // separate device allocation) into shared memory; all threads sync before use.
-// LEAVE records timing into the per-block DebugInfo.
+// LEAVE records the block's timing in params.clocks and params.barrierClocks,
+// and counts the block in params.errorCount when it recorded an error in its
+// DebugInfo. A kDebugNoOp block records its time, so that every block of a
+// timed launch has a clock word, but leaves its DebugInfo alone.
 #define ENTRY                                                                  \
   __shared__ BlockInfo blockInfo;                                              \
   if (threadIdx.x == 0) {                                                      \
@@ -243,8 +246,8 @@ struct Int32X32 {
     blockInfo.debugInfo =                                                      \
         params.debugInfo ? &params.debugInfo[blockIdx.x] : nullptr;            \
     blockInfo.barrierClocks = 0;                                               \
+    blockInfo.start = clock64();                                               \
     if (blockInfo.debugInfo && blockInfo.op != kDebugNoOp) {                   \
-      blockInfo.start = clock64();                                             \
       memset(blockInfo.debugInfo, 0, sizeof(DebugInfo));                       \
     }                                                                          \
   }                                                                            \
@@ -252,10 +255,19 @@ struct Int32X32 {
 
 #define LEAVE()                                                                \
   __syncthreads();                                                             \
-  if (threadIdx.x == 0 && blockInfo.debugInfo && blockInfo.op != kDebugNoOp) { \
-    blockInfo.debugInfo->clocks = clock64() - blockInfo.start;                 \
-    blockInfo.debugInfo->barrierClocks = blockInfo.barrierClocks;              \
-    blockInfo.debugInfo->op = blockInfo.op;                                    \
+  if (threadIdx.x == 0) {                                                      \
+    if (params.clocks) {                                                       \
+      params.clocks[blockIdx.x] = clock64() - blockInfo.start;                 \
+      params.barrierClocks[blockIdx.x] = blockInfo.barrierClocks;              \
+    }                                                                          \
+    if (blockInfo.debugInfo && blockInfo.op != kDebugNoOp) {                   \
+      blockInfo.debugInfo->op = blockInfo.op;                                  \
+      if (params.errorCount &&                                                 \
+          (blockInfo.debugInfo->line != 0 ||                                   \
+           *reinterpret_cast<const int64_t*>(blockInfo.debugInfo->message))) { \
+        atomicAdd(params.errorCount, 1ULL);                                    \
+      }                                                                        \
+    }                                                                          \
   }
 
 #define SET_MSG(info, str)                                   \

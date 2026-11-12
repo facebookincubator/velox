@@ -120,11 +120,14 @@ makeTensorMeta(c10::ScalarType dtype, int64_t rank, int64_t sizeValue = 1) {
 // entry in 'runs' (each a positional CPU-tensor input set by graph user-input
 // order), reusing one executor and its pooled frame/state across runs so a
 // multi-run call exercises state reuse (and grid-choice caching) across
-// executions. Returns the last run's host output tensors.
+// executions. Returns the last run's host output tensors. 'afterRun', if
+// given, is called after each execution while the executor, and so the
+// waveThreadInfo() clocks that point into its buffers, is still alive.
 std::vector<at::Tensor> runWaveProgrammatic(
     std::unique_ptr<nativert::Graph> graph,
     const std::unordered_map<std::string, torch::_export::TensorMeta>& meta,
-    const std::vector<std::vector<at::Tensor>>& runs) {
+    const std::vector<std::vector<at::Tensor>>& runs,
+    const std::function<void()>& afterRun = nullptr) {
   graph->setTensorValuesMeta(meta);
   setGraphDevice(graph.get(), /*isCuda=*/true);
 
@@ -162,6 +165,9 @@ std::vector<at::Tensor> runWaveProgrammatic(
     }
     auto outputs = exec.executeWithPrefilledFrame(*frame);
     exec.returnFrame(std::move(frame));
+    if (afterRun) {
+      afterRun();
+    }
 
     auto host = outputsToHost(outputs, "programmatic");
     hostOutputs.clear();
@@ -400,6 +406,81 @@ TEST_F(ExecutorTest, twoCumsumCgScratchTest) {
       nativert::stringToGraph(kTwoCumsumGraph), twoCumsumMeta(), {{x, y}});
   ASSERT_EQ(outputs.size(), 1);
   auto reference = at::cumsum(x, 0) + at::cumsum(y, 0);
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// The ads candidate list: a scatter into zeros at positions a cumsum computes,
+// sliced and concatenated with a zero. The cat copies the slice in the
+// scatter's own kernel. A scatter writes any destination, so a block's copy
+// range holds elements other blocks scattered, and the copy has to wait for
+// every block of the scatter. The index runs backwards, so every element
+// crosses blocks.
+const char* kScatterSliceCatGraph = R"(graph(%base, %ones, %src):
+%c = torch.ops.aten.cumsum.default(self=%ones, dim=0)
+%idx = torch.ops.aten.rsub.Scalar(self=%c, other=100000)
+%z = torch.ops.aten.new_zeros.default(self=%base, size=[100001])
+%sc = torch.ops.aten.scatter.src(self=%z, dim=0, index=%idx, src=%src)
+%sl = torch.ops.aten.slice.Tensor(self=%sc, dim=0, start=0, end=100000, step=1)
+%one = torch.ops.aten.new_zeros.default(self=%base, size=[1])
+%l[] = prim.ListPack(l0=%sl, l1=%one)
+%cat = torch.ops.aten.cat.default(tensors=%l, dim=0)
+return(%cat)
+)";
+
+std::unordered_map<std::string, torch::_export::TensorMeta>
+scatterSliceCatMeta() {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name :
+       {"base", "ones", "c", "idx", "src", "z", "sc", "sl", "one", "cat"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  return meta;
+}
+
+TEST_F(ExecutorTest, catCopyWaitsForScatterInSameKernelTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().isCg = std::nullopt; });
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kScatterSliceCatGraph),
+      scatterSliceCatMeta(),
+      CompiledPlan::Mode::kCG);
+  const CompiledPlan::KernelView* fused = nullptr;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (kernel.has("tw.scatter") && kernel.has("aten.cat.default")) {
+          fused = &kernel;
+        }
+      }
+    }
+  }
+  ASSERT_NE(fused, nullptr) << plan.describe();
+  const auto scatterAt = fused->code.find("__scatter<");
+  const auto copyAt = fused->code.find("__concatCopy<");
+  ASSERT_NE(scatterAt, std::string::npos) << fused->code;
+  ASSERT_NE(copyAt, std::string::npos) << fused->code;
+  ASSERT_LT(scatterAt, copyAt) << fused->code;
+  EXPECT_NE(
+      fused->code.substr(scatterAt, copyAt - scatterAt).find("opBarrier("),
+      std::string::npos)
+      << fused->code;
+
+  WaveConfig::get().isCg = true;
+  constexpr int64_t kSize = 100'000;
+  auto base = at::zeros({1}, at::kLong);
+  auto ones = at::ones({kSize}, at::kLong);
+  auto src = at::arange(kSize, at::kLong) * 3 + 1;
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kScatterSliceCatGraph),
+      scatterSliceCatMeta(),
+      {{base, ones, src}});
+  auto idx = at::arange(kSize - 1, -1, -1, at::kLong);
+  ASSERT_EQ(outputs.size(), 1);
+  auto scattered = at::zeros({kSize + 1}, at::kLong).scatter(0, idx, src);
+  auto reference =
+      at::cat({scattered.slice(0, 0, kSize), at::zeros({1}, at::kLong)});
   EXPECT_TRUE(tensorsMatch(outputs[0], reference))
       << firstDifference(outputs[0], reference);
 }
@@ -3425,6 +3506,63 @@ TEST_F(ExecutorTest, maskedSelectComposeTest) {
   WaveConfig::get().isCg = std::nullopt;
 }
 
+// cumsum of a masked_select, with the mask an input and computed in the
+// same kernel. The masked_select sets its length on device; a scan reading it
+// in the same kernel would run over the capacity, the mask's length, unless a
+// kernel boundary comes first.
+TEST_F(ExecutorTest, maskedSelectCumsumTest) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().useSingleBlock = std::nullopt;
+    WaveConfig::get().isCg = std::nullopt;
+  });
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"x", "a", "t", "b"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  for (const char* name : {"m", "n"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Bool, 1);
+  }
+  const char* kInputMask = R"(graph(%x, %m):
+%l[] = prim.ListPack(l0=%m)
+%t = torch.ops.aten.index.Tensor(self=%x, indices=%l)
+%b = torch.ops.aten.cumsum.default(self=%t, dim=0)
+return(%b)
+)";
+  const char* kComputedMask = R"(graph(%x, %m):
+%a = torch.ops.aten.mul.Tensor(self=%x, other=%x)
+%n = torch.ops.aten.gt.Scalar(self=%a, other=250000)
+%l[] = prim.ListPack(l0=%n)
+%t = torch.ops.aten.index.Tensor(self=%a, indices=%l)
+%b = torch.ops.aten.cumsum.default(self=%t, dim=0)
+return(%b)
+)";
+  auto x = at::randint(0, 1000, {3000}, at::kLong);
+  auto m = x > 600;
+  auto a = x * x;
+  struct Mode {
+    const char* name;
+    std::optional<bool> singleBlock;
+    std::optional<bool> cg;
+  };
+  for (const auto& mode :
+       {Mode{"multi-block", false, std::nullopt},
+        Mode{"single-block", true, std::nullopt},
+        Mode{"cg", std::nullopt, true}}) {
+    SCOPED_TRACE(mode.name);
+    WaveConfig::get().useSingleBlock = mode.singleBlock;
+    WaveConfig::get().isCg = mode.cg;
+    for (const auto& [graph, expected] :
+         {std::pair{kInputMask, at::cumsum(x.index({m}), 0)},
+          std::pair{kComputedMask, at::cumsum(a.index({a > 250000}), 0)}}) {
+      auto outputs =
+          runWaveProgrammatic(nativert::stringToGraph(graph), meta, {{x, m}});
+      ASSERT_EQ(outputs.size(), 1);
+      EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+          << firstDifference(outputs[0], expected);
+    }
+  }
+}
+
 // Multi-block cat with an empty (null-storage) leading operand. The empty
 // operand arrives as an undefined tensor with null storage; on the device
 // Tensor::init then makes such a rank-0 operand numEl==1 (the empty product),
@@ -3965,18 +4103,21 @@ TEST_F(ExecutorTest, launchSkewTest) {
         continue;
       }
       worst = StepBalance{.meta = step};
-      if (i >= info.debugInfo.size() || info.debugInfo[i].empty()) {
+      const auto* clocks =
+          i < info.launches.size() ? launchClocks(info, i) : nullptr;
+      const auto numBlocks = clocks != nullptr ? info.launches[i].numBlocks : 0;
+      if (numBlocks <= 0) {
         continue;
       }
       int64_t total = 0;
-      for (const auto& block : info.debugInfo[i]) {
-        total += block.clocks;
-        worst.maxClocks = std::max(worst.maxClocks, block.clocks);
+      for (int32_t b = 0; b < numBlocks; ++b) {
+        total += clocks[b];
+        worst.maxClocks = std::max(worst.maxClocks, clocks[b]);
       }
       if (worst.maxClocks > 0) {
         worst.util = static_cast<double>(total) /
             (static_cast<double>(worst.maxClocks) *
-             static_cast<double>(info.debugInfo[i].size()));
+             static_cast<double>(numBlocks));
       }
     }
     return worst;
@@ -4005,11 +4146,14 @@ TEST_F(ExecutorTest, launchSkewTest) {
   };
 
   WaveConfig::get().partitionLaunches = false;
+  StepBalance unsplit;
   checkOutputs(
       runWaveProgrammatic(
-          nativert::stringToGraph(graphStr), meta, {{seed, counts}}),
+          nativert::stringToGraph(graphStr),
+          meta,
+          {{seed, counts}},
+          [&] { unsplit = worstStep(); }),
       "one launch per step");
-  const auto unsplit = worstStep();
 
   // The premise: more ops than the wave has blocks, so the cg trim leaves
   // almost all of them on one block and the step runs many times longer than a
@@ -4019,11 +4163,14 @@ TEST_F(ExecutorTest, launchSkewTest) {
   EXPECT_EQ(unsplit.meta.gridStats.numSegments, 1);
 
   WaveConfig::get().partitionLaunches = true;
+  StepBalance split;
   checkOutputs(
       runWaveProgrammatic(
-          nativert::stringToGraph(graphStr), meta, {{seed, counts}}),
+          nativert::stringToGraph(graphStr),
+          meta,
+          {{seed, counts}},
+          [&] { split = worstStep(); }),
       "partitioned");
-  const auto split = worstStep();
 
   LOG(INFO) << fmt::format(
       "launchSkew: node {} step {} ops={} target={} skew={:.1f} starved={}; "
