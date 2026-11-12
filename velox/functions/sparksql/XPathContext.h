@@ -31,7 +31,8 @@ using XPathObjectPtr =
     std::unique_ptr<xmlXPathObject, decltype(&xmlXPathFreeObject)>;
 using XmlStringPtr = std::unique_ptr<xmlChar, decltype(xmlFree)>;
 
-/// Carries callback failures and cached selectors through libxml2 contexts.
+/// Carries callback failures and cached expression data through libxml2
+/// contexts.
 struct XPathEvaluationState {
   /// Defers C++ exceptions until control returns from libxml2.
   std::exception_ptr error;
@@ -41,6 +42,8 @@ struct XPathEvaluationState {
   const std::vector<CompiledXPathPtr>* namespaceSelectors{nullptr};
   /// Borrows QName prefixes shared by the outer and nested contexts.
   const std::vector<std::string>* prefixes{nullptr};
+  /// Borrows parsed numeric literals owned by the compiled expression.
+  const std::vector<double>* literals{nullptr};
 };
 
 } // namespace facebook::velox::functions::sparksql::xpath

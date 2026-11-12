@@ -60,6 +60,7 @@ struct CompiledXPath {
   CompiledXPathPtr expression{nullptr, xmlXPathFreeCompExpr};
   std::vector<CompiledXPathPtr> namespaceSelectors;
   std::vector<std::string> prefixes;
+  std::vector<double> literals;
 };
 
 struct XmlParserState {
@@ -807,6 +808,7 @@ class XmlXPathEvaluator {
             Status::UserError("Invalid XPath: {}", boundedXPathForError(path)));
       }
       owned->prefixes = std::move(normalized->prefixes);
+      owned->literals = std::move(normalized->literals);
       if (normalized->text != path) {
         owned->expression.reset(xmlXPathCtxtCompile(
             ctx_.get(),
@@ -834,6 +836,7 @@ class XmlXPathEvaluator {
     registerNamespaceUnawarePrefixes(ctx_.get(), compiled->prefixes);
     evaluationState_.namespaceSelectors = &compiled->namespaceSelectors;
     evaluationState_.prefixes = &compiled->prefixes;
+    evaluationState_.literals = &compiled->literals;
     result.reset(xmlXPathCompiledEval(compiled->expression.get(), ctx_.get()));
     if (evaluationState_.error) {
       std::rethrow_exception(evaluationState_.error);

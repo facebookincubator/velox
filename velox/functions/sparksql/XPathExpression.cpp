@@ -30,6 +30,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/sparksql/XPathContext.h"
+#include "velox/functions/sparksql/XPathValue.h"
 
 namespace facebook::velox::functions::sparksql::xpath {
 namespace {
@@ -150,6 +151,7 @@ class NamespaceUnawarePath {
           (tokens_[i].text == "_velox_namespaces" ||
            tokens_[i].text == "_velox_namespace_step" ||
            tokens_[i].text == "_velox_first_step" ||
+           tokens_[i].text == "_velox_literal" ||
            tokens_[i].text == "_velox_numeric")) {
         return true;
       }
@@ -163,6 +165,10 @@ class NamespaceUnawarePath {
 
   const std::vector<std::string>& prefixes() const {
     return prefixes_;
+  }
+
+  const std::vector<double>& literals() const {
+    return literals_;
   }
 
  private:
@@ -624,12 +630,13 @@ class NamespaceUnawarePath {
     } else if (token.kind == TokenKind::kNumber) {
       appendOperation(kNumber);
       operations_.push_back(token.poolIndex);
-      // Route literals through the same correctly rounded conversion as node
-      // and string values, while retaining their JDK operation-map identity.
+      // Parse once while retaining the literal's JDK operation-map identity.
+      const auto index = literals_.size();
+      literals_.push_back(xpathStringNumber(token.text));
       addEdit(
           token.offset,
           token.offset + token.text.size(),
-          fmt::format("number('{}')", token.text));
+          fmt::format("_velox_literal({})", index));
     } else if (token.text == "$") {
       appendOperation(kVariable);
       const auto& name = current();
@@ -869,6 +876,7 @@ class NamespaceUnawarePath {
   std::map<size_t, Edit> edits_;
   std::vector<std::string> namespaceSelectors_;
   std::vector<std::string> prefixes_;
+  std::vector<double> literals_;
   int64_t numPoolTokens_{0};
   size_t position_{0};
 };
@@ -887,7 +895,8 @@ std::optional<XPathExpression> normalizeXPath(std::string_view path) {
   return XPathExpression{
       std::move(*rewritten),
       normalized.namespaceSelectors(),
-      normalized.prefixes()};
+      normalized.prefixes(),
+      normalized.literals()};
 }
 
 } // namespace facebook::velox::functions::sparksql::xpath

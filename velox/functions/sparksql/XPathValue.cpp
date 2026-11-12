@@ -191,40 +191,6 @@ std::u16string xpathString(xmlXPathObjectPtr value) {
   return xpathUtf16(reinterpret_cast<const char*>(text.get()));
 }
 
-double xpathStringNumber(std::string_view value) {
-  while (!value.empty() && static_cast<unsigned char>(value.front()) <= 0x20) {
-    value.remove_prefix(1);
-  }
-  while (!value.empty() && static_cast<unsigned char>(value.back()) <= 0x20) {
-    value.remove_suffix(1);
-  }
-  size_t position = value.starts_with("-") ? 1 : 0;
-  size_t digits = 0;
-  bool point = false;
-  for (; position < value.size(); ++position) {
-    const auto byte = value[position];
-    if (byte >= '0' && byte <= '9') {
-      ++digits;
-    } else if (byte == '.' && !point) {
-      point = true;
-    } else {
-      return std::numeric_limits<double>::quiet_NaN();
-    }
-  }
-  if (digits == 0) {
-    return std::numeric_limits<double>::quiet_NaN();
-  }
-  double result;
-  const auto* end = value.data() + value.size();
-  const auto parsed = fast_float::from_chars(value.data(), end, result);
-  VELOX_CHECK(
-      parsed.ec == std::errc{} || parsed.ec == std::errc::result_out_of_range,
-      "Failed to parse XPath decimal");
-  VELOX_CHECK(parsed.ptr == end, "Failed to parse complete XPath decimal");
-  // fast_float sets signed infinity or zero on overflow or underflow.
-  return result;
-}
-
 double xpathNodeNumber(xmlNodePtr node) {
   XmlStringPtr text{xmlXPathCastNodeToString(node), xmlFree};
   VELOX_CHECK_NOT_NULL(text.get(), "Failed to convert XPath node");
@@ -294,6 +260,23 @@ void strictXPathNumber(xmlXPathParserContextPtr parser, int nargs) {
   } else {
     xmlXPathSetArityError(parser);
   }
+}
+
+void cachedXPathLiteral(xmlXPathParserContextPtr parser, int nargs) {
+  if (nargs != 1) {
+    xmlXPathSetArityError(parser);
+    return;
+  }
+  const auto index = xmlXPathPopNumber(parser);
+  if (parser->error != XPATH_EXPRESSION_OK) {
+    return;
+  }
+  auto* state = static_cast<XPathEvaluationState*>(parser->context->userData);
+  VELOX_CHECK_NOT_NULL(state->literals);
+  const auto& literals = *state->literals;
+  VELOX_CHECK_GE(index, 0);
+  VELOX_CHECK_LT(index, literals.size());
+  pushXPathNumber(parser, literals[static_cast<size_t>(index)]);
 }
 
 template <xmlXPathFunction function>
@@ -605,6 +588,40 @@ void utf16XPathFunction(xmlXPathParserContextPtr parser, int nargs) {
 
 } // namespace
 
+double xpathStringNumber(std::string_view value) {
+  while (!value.empty() && static_cast<unsigned char>(value.front()) <= 0x20) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() && static_cast<unsigned char>(value.back()) <= 0x20) {
+    value.remove_suffix(1);
+  }
+  size_t position = value.starts_with("-") ? 1 : 0;
+  size_t digits = 0;
+  bool point = false;
+  for (; position < value.size(); ++position) {
+    const auto byte = value[position];
+    if (byte >= '0' && byte <= '9') {
+      ++digits;
+    } else if (byte == '.' && !point) {
+      point = true;
+    } else {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+  }
+  if (digits == 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  double result;
+  const auto* end = value.data() + value.size();
+  const auto parsed = fast_float::from_chars(value.data(), end, result);
+  VELOX_CHECK(
+      parsed.ec == std::errc{} || parsed.ec == std::errc::result_out_of_range,
+      "Failed to parse XPath decimal");
+  VELOX_CHECK(parsed.ptr == end, "Failed to parse complete XPath decimal");
+  // fast_float sets signed infinity or zero on overflow or underflow.
+  return result;
+}
+
 xmlXPathFunction lookupXPathValueFunction(
     void*,
     const xmlChar* name,
@@ -613,6 +630,7 @@ xmlXPathFunction lookupXPathValueFunction(
     return nullptr;
   }
   static const std::pair<const char*, xmlXPathFunction> functions[] = {
+      {"_velox_literal", protectXPathFunction<cachedXPathLiteral>},
       {"_velox_numeric", protectXPathFunction<strictXPathOperation>},
       {"number", protectXPathFunction<strictXPathNumber>},
       {"sum", protectXPathFunction<strictXPathSum>},

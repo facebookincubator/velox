@@ -16,10 +16,14 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 #include <libxml/xpath.h>
 
 namespace facebook::velox::functions::sparksql::xpath {
+/// Parses an XPath decimal with JDK-compatible validation and rounding.
+double xpathStringNumber(std::string_view value);
+
 /// Finds JDK-compatible numeric and UTF-16 string function callbacks.
 xmlXPathFunction lookupXPathValueFunction(
     void*,

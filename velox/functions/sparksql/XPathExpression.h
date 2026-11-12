@@ -60,7 +60,7 @@ enum Operation {
   kNodeTest = 1033,
 };
 
-/// Retains the rewritten expression and the names needed by its contexts.
+/// Retains the rewritten expression and data shared by its evaluation contexts.
 struct XPathExpression {
   /// Stores the namespace-unaware expression with strict numeric conversions.
   std::string text;
@@ -68,6 +68,8 @@ struct XPathExpression {
   std::vector<std::string> namespaceSelectors;
   /// Stores prefixes from QName tokens, excluding string literals.
   std::vector<std::string> prefixes;
+  /// Stores correctly rounded literals shared by the expression and selectors.
+  std::vector<double> literals;
 };
 
 /// Normalizes a syntactically valid XPath, rejecting unsupported plans and

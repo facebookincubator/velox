@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -27,11 +28,15 @@
 #include <fmt/format.h>
 #include <libxml/parser.h>
 #include <libxml/xmlerror.h>
+#include <libxml/xpathInternals.h>
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/functions/sparksql/XPathContext.h"
 #include "velox/functions/sparksql/XPathEvaluator.h"
+#include "velox/functions/sparksql/XPathExpression.h"
+#include "velox/functions/sparksql/XPathValue.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -354,6 +359,65 @@ TEST_F(XPathFunctionsTest, decimalRangeAndSignedZero) {
   expectBoth("<a/>", "number('" + subnormal + "') > 0", "true", true);
   for (const auto& invalid : {"+3.97", ".", "-", "3.97.1", "0x1"}) {
     expectBoth("<a/>", fmt::format("number('{}')", invalid), "NaN", false);
+  }
+}
+
+TEST_F(XPathFunctionsTest, numericLiteralsDoNotCallNumber) {
+  xmlInitParser();
+  auto normalized = xpath::normalizeXPath(
+      "concat(3.97, ':', 123456789012345678, ':', 1 div 2, ':', -0)");
+  ASSERT_TRUE(normalized.has_value());
+  xpath::XPathEvaluationState state;
+  state.literals = &normalized->literals;
+  std::unique_ptr<xmlXPathContext, decltype(&xmlXPathFreeContext)> context{
+      xmlXPathNewContext(nullptr), xmlXPathFreeContext};
+  ASSERT_NE(context, nullptr);
+  context->userData = &state;
+  xmlXPathRegisterFuncLookup(
+      context.get(),
+      [](void*,
+         const xmlChar* name,
+         const xmlChar* namespaceUri) -> xmlXPathFunction {
+        // Literal evaluation must not fall back to string-number conversion.
+        if (namespaceUri == nullptr &&
+            xmlStrEqual(name, reinterpret_cast<const xmlChar*>("number"))) {
+          return [](xmlXPathParserContextPtr parser, int) {
+            xmlXPathSetError(parser, XPATH_EXPR_ERROR);
+          };
+        }
+        return xpath::lookupXPathValueFunction(nullptr, name, namespaceUri);
+      },
+      nullptr);
+  xpath::CompiledXPathPtr compiled{
+      xmlXPathCtxtCompile(
+          context.get(),
+          reinterpret_cast<const xmlChar*>(normalized->text.c_str())),
+      xmlXPathFreeCompExpr};
+  ASSERT_NE(compiled, nullptr);
+  for (int pass = 0; pass < 3; ++pass) {
+    xpath::XPathObjectPtr result{
+        xmlXPathCompiledEval(compiled.get(), context.get()),
+        xmlXPathFreeObject};
+    ASSERT_FALSE(state.error);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(
+        xpath::xpathResultString(result.get()),
+        "3.97:123456789012345680:0.5:0");
+  }
+}
+
+TEST_F(XPathFunctionsTest, cachedNumericLiteralsInSelectors) {
+  const std::string xml = "<a xmlns:p='urn:p'><b>3.97</b></a>";
+  for (int pass = 0; pass < 3; ++pass) {
+    expectBoth(xml, "a/b[. = 3.97]", "3.97", true);
+    expectBoth(xml, "a/namespace::*[1 + 0]", "urn:p", true);
+    expectBoth(xml, "a/namespace::*[../b = 3.97]", "urn:p", true);
+    expectBoth(xml, "count(a/namespace::*[3.97 = 3.97])", "2", true);
+    expectBoth(xml, "3.97" + std::string(4'096, ' '), "3.97", true);
+  }
+  for (const auto& path :
+       {"_velox_literal(0)", "false() and _velox_literal(0)"}) {
+    expectUserErrorBoth(xml, path, "Invalid XPath");
   }
 }
 
