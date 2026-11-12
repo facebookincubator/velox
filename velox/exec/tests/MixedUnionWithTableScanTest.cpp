@@ -128,8 +128,7 @@ TEST_F(MixedUnionWithTableScanTest, singleTableScanUnion) {
       makeFlatVector<StringView>({"a", "b", "c"}),
   });
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), data);
+  auto filePath = writeToFile(data);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto rowType = asRowType(data->type());
@@ -169,8 +168,7 @@ TEST_F(MixedUnionWithTableScanTest, multipleTableScanUnion) {
         makeFlatVector<int64_t>({i * 10, i * 10 + 1}),
     });
 
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), data);
+    auto filePath = writeToFile(data);
     filePaths.push_back(filePath);
 
     core::PlanNodeId tableScanId;
@@ -645,8 +643,7 @@ TEST_F(MixedUnionWithTableScanTest, unionWithLargeDataVolume) {
             kRowsPerSource, [](auto row) { return row * 0.1; }),
     });
 
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), data);
+    auto filePath = writeToFile(data);
     filePaths.push_back(filePath);
 
     core::PlanNodeId tableScanId;
@@ -837,8 +834,7 @@ TEST_F(MixedUnionWithTableScanTest, zeroBatchSizeHintUsesDefault) {
       makeFlatIdentityVector<int64_t>(kRows),
   });
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), data);
+  auto filePath = writeToFile(data);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto rowType = ROW({"c0"}, {BIGINT()});
@@ -877,8 +873,7 @@ TEST_F(MixedUnionWithTableScanTest, batchSizeHintDirectlyControlsBatchSize) {
       makeFlatIdentityVector<int64_t>(kRows),
   });
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), data);
+  auto filePath = writeToFile(data);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto rowType = ROW({"c0"}, {BIGINT()});
@@ -940,8 +935,7 @@ TEST_F(
       makeFlatIdentityVector<int64_t>(kRows),
   });
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), data);
+  auto filePath = writeToFile(data);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto rowType = ROW({"c0"}, {BIGINT()});
@@ -1154,8 +1148,7 @@ TEST_F(MixedUnionWithTableScanTest, batchSizeHintWithSmallValue) {
       makeFlatIdentityVector<int64_t>(kRows),
   });
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), data);
+  auto filePath = writeToFile(data);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto rowType = ROW({"c0"}, {BIGINT()});

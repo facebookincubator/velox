@@ -453,8 +453,7 @@ TEST_F(FilterProjectTest, lazyDereference) {
       makeRowVector({expected[0], expected[1]}),
       makeRowVector({makeRowVector({expected[2]})}),
   });
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), vector);
+  auto file = writeToFile(vector);
   CursorParameters params;
   params.copyResult = false;
   params.serialExecution = true;

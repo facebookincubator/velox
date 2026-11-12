@@ -83,8 +83,7 @@ TEST_F(LimitTest, limitOverLocalExchange) {
   auto data = makeRowVector(
       {makeFlatVector<int32_t>(1'000, [](auto row) { return row; })});
 
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), {data});
+  auto file = writeToFile(data);
 
   core::PlanNodeId scanNodeId;
 

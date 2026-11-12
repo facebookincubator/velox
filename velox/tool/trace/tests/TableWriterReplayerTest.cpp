@@ -267,8 +267,7 @@ TEST_F(TableWriterReplayerTest, runner) {
       makeFlatVector<int32_t>(
           size, [](auto row) { return row * 2; }, nullEvery(7)),
   });
-  auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), data);
+  auto sourceFilePath = writeToFile(data);
 
   std::string traceNodeId;
   auto targetDirectoryPath = TempDirectoryPath::create();
@@ -340,8 +339,7 @@ TEST_F(TableWriterReplayerTest, basic) {
       makeFlatVector<int32_t>(
           size, [](auto row) { return row * 2; }, nullEvery(7)),
   });
-  auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), data);
+  auto sourceFilePath = writeToFile(data);
 
   std::string planNodeId;
   auto targetDirectoryPath = TempDirectoryPath::create();
@@ -404,8 +402,7 @@ TEST_F(TableWriterReplayerTest, serdeParametersPreserved) {
       makeFlatVector<int32_t>(
           size, [](auto row) { return row * 2; }, nullEvery(7)),
   });
-  auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), data);
+  auto sourceFilePath = writeToFile(data);
 
   const std::unordered_map<std::string, std::string> serdeParams = {
       {"test.param.one", "value1"},
@@ -502,8 +499,7 @@ TEST_F(TableWriterReplayerTest, notNullConstraintPreserved) {
       makeFlatVector<int32_t>(
           size, [](auto row) { return row * 2; }, nullEvery(7)),
   });
-  auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), data);
+  auto sourceFilePath = writeToFile(data);
 
   auto rowType = asRowType(data->type());
   auto targetDirectoryPath = TempDirectoryPath::create();

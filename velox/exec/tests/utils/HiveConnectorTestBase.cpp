@@ -94,7 +94,12 @@ void HiveConnectorTestBase::writeToFiles(
 
 std::shared_ptr<TempFilePath> HiveConnectorTestBase::writeToFile(
     const RowVectorPtr& data) {
-  const auto file = TempFilePath::create();
+  return writeToFile(std::vector{data});
+}
+
+std::shared_ptr<TempFilePath> HiveConnectorTestBase::writeToFile(
+    const std::vector<RowVectorPtr>& data) {
+  auto file = TempFilePath::create();
   writeToFile(file->getPath(), data);
   return file;
 }
