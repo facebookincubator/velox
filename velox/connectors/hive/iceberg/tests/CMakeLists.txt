@@ -149,6 +149,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_splitreader
     velox_exec_test_lib
     velox_dwio_common_test_utils
+    GTest::gmock
     GTest::gtest
     GTest::gtest_main
   )
