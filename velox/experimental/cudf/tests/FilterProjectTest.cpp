@@ -2497,6 +2497,39 @@ TEST_F(CudfFilterProjectTest, strposNullConstantString) {
   assertProjectMatchesVelox(vectors, projections);
 }
 
+TEST_F(CudfFilterProjectTest, strposAllNullStringColumnSubstring) {
+  // Every string is null and the substring is a column, so every result is
+  // null (https://github.com/NVIDIA/cudf/issues/25231).
+  auto data = makeRowVector(
+      {"s", "sub"},
+      {makeNullableFlatVector<std::string>({std::nullopt, std::nullopt}),
+       makeFlatVector<std::string>({"a", "b"})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{"strpos(s, sub) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposEmptyColumnSubstring) {
+  // Every non-null substring is empty, so the substring column holds no
+  // characters; an empty substring is found at position 1
+  // (https://github.com/NVIDIA/cudf/issues/25231).
+  auto data = makeRowVector(
+      {"s", "empty", "empty_or_null"},
+      {makeNullableFlatVector<std::string>({"abc", "x", "", std::nullopt}),
+       makeFlatVector<std::string>({"", "", "", ""}),
+       makeNullableFlatVector<std::string>({"", std::nullopt, "", ""})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, empty) AS column_string",
+      "strpos(s, empty_or_null) AS with_null_substring",
+      "strpos('caf\xC3\xA9', empty) AS constant_string"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
 TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);

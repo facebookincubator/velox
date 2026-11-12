@@ -2287,16 +2287,19 @@ class StrposFunction : public CudfFunction {
     // determines the output row count even when the string argument is
     // constant.
     const auto outputRowCount = asView(inputColumns[0]).size();
+    const auto makeAllNullPositions = [&]() {
+      const auto nullPosition =
+          cudf::numeric_scalar<int64_t>(0, false, stream, mr);
+      return cudf::make_column_from_scalar(
+          nullPosition, outputRowCount, stream, mr);
+    };
 
     // strpos(NULL, x) and strpos(x, NULL) are NULL for every row;
     // cudf::strings::find has no null-operand overloads, so produce an all-null
     // bigint column directly.
     if ((stringIsConstant_ && stringIsNull_) ||
         (targetIsConstant_ && targetIsNull_)) {
-      const auto nullPosition =
-          cudf::numeric_scalar<int64_t>(0, false, stream, mr);
-      return cudf::make_column_from_scalar(
-          nullPosition, outputRowCount, stream, mr);
+      return makeAllNullPositions();
     }
 
     size_t nextInput = 0;
@@ -2321,6 +2324,26 @@ class StrposFunction : public CudfFunction {
     } else {
       const cudf::strings_column_view targetView(
           asView(inputColumns[nextInput]));
+      // TODO: Remove the next two guards once the pinned cuDF includes the fix
+      // for https://github.com/NVIDIA/cudf/issues/25231.
+      // With a substring column, cudf::strings::find returns rows that are
+      // marked valid and hold uninitialized memory when every string is null.
+      if (stringColumn.null_count() == stringColumn.size()) {
+        return makeAllNullPositions();
+      }
+      // It also reports every substring as not found when the substring column
+      // holds no characters, that is, when every non-null substring is empty.
+      // Presto finds an empty substring at position 1. The check reads the
+      // host-side data pointer, so it needs no device synchronization.
+      if (targetView.chars_begin(stream) == nullptr) {
+        const auto firstPosition =
+            cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+        auto positions = cudf::make_column_from_scalar(
+            firstPosition, outputRowCount, stream, mr);
+        mergeNullSourceNullsIntoResult(
+            *positions, {stringColumn, targetView.parent()}, stream, mr);
+        return positions;
+      }
       found = cudf::strings::find(stringsView, targetView, 0, stream, mr);
     }
 
