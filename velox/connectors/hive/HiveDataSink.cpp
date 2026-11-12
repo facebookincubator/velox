@@ -141,8 +141,8 @@ std::unique_ptr<core::PartitionFunction> createBucketFunction(
     const auto& bucketColumn = bucketedBy[i];
     const auto& bucketType = bucketedTypes[i];
     const auto inputChannel = inputType->getChildIdx(bucketColumn);
-    if (FOLLY_UNLIKELY(
-            !inputType->childAt(inputChannel)->equivalent(*bucketType))) {
+    if (!inputType->childAt(inputChannel)->equivalent(*bucketType))
+        [[unlikely]] {
       VELOX_USER_FAIL(
           "Input column {} type {} doesn't match bucket type {}",
           inputType->nameOf(inputChannel),
@@ -225,9 +225,8 @@ HiveSortingColumn::HiveSortingColumn(
     : sortColumn_(sortColumn), sortOrder_(sortOrder) {
   VELOX_USER_CHECK(!sortColumn_.empty(), "hive sort column must be set");
 
-  if (FOLLY_UNLIKELY(
-          (sortOrder_.isAscending() && !sortOrder_.isNullsFirst()) ||
-          (!sortOrder_.isAscending() && sortOrder_.isNullsFirst()))) {
+  if ((sortOrder_.isAscending() && !sortOrder_.isNullsFirst()) ||
+      (!sortOrder_.isAscending() && sortOrder_.isNullsFirst())) [[unlikely]] {
     VELOX_USER_FAIL("Bad hive sort order: {}", toString());
   }
 }

@@ -364,7 +364,7 @@ inline int RleDecoder::GetSpaced(
     const uint8_t* validBits,
     int64_t validBitsOffset,
     T* out) {
-  if (FOLLY_UNLIKELY(nullCount == batchSize)) {
+  if (nullCount == batchSize) [[unlikely]] {
     converter.FillZero(out, out + batchSize);
     return batchSize;
   }
@@ -380,7 +380,7 @@ inline int RleDecoder::GetSpaced(
       /*length=*/batchSize);
   ::arrow::internal::BitRun validRun = bitReader.NextRun();
   while (valuesRead < batchSize) {
-    if (FOLLY_UNLIKELY(validRun.length == 0)) {
+    if (validRun.length == 0) [[unlikely]] {
       validRun = bitReader.NextRun();
     }
 
@@ -420,7 +420,7 @@ inline int RleDecoder::GetSpaced(
           }
         }
         RunType currentValue = static_cast<RunType>(currentValue_);
-        if (FOLLY_UNLIKELY(!converter.IsValid(currentValue))) {
+        if (!converter.IsValid(currentValue)) [[unlikely]] {
           return valuesRead;
         }
         converter.Fill(out, out + repeatBatch, currentValue);
@@ -435,7 +435,7 @@ inline int RleDecoder::GetSpaced(
         RunType indices[kBufferSize];
         literalBatch = std::min(literalBatch, kBufferSize);
         int actualRead = bitReader_.GetBatch(bitWidth_, indices, literalBatch);
-        if (FOLLY_UNLIKELY(actualRead != literalBatch)) {
+        if (actualRead != literalBatch) [[unlikely]] {
           return valuesRead;
         }
         if (!converter.IsValid(indices, /*length=*/actualRead)) {
@@ -609,7 +609,7 @@ inline int RleDecoder::GetBatchWithDict(
 
     if (repeatCount_ > 0) {
       auto idx = static_cast<IndexType>(currentValue_);
-      if (FOLLY_UNLIKELY(!IndexInRange(idx, dictionaryLength))) {
+      if (!IndexInRange(idx, dictionaryLength)) [[unlikely]] {
         return valuesRead;
       }
       T val = dictionary[idx];
@@ -629,11 +629,10 @@ inline int RleDecoder::GetBatchWithDict(
       literalBatch = std::min(literalBatch, kBufferSize);
 
       int actualRead = bitReader_.GetBatch(bitWidth_, indices, literalBatch);
-      if (FOLLY_UNLIKELY(actualRead != literalBatch)) {
+      if (actualRead != literalBatch) [[unlikely]] {
         return valuesRead;
       }
-      if (FOLLY_UNLIKELY(
-              !converter.IsValid(indices, /*length=*/literalBatch))) {
+      if (!converter.IsValid(indices, /*length=*/literalBatch)) [[unlikely]] {
         return valuesRead;
       }
       converter.Copy(out, indices, literalBatch);
@@ -712,14 +711,13 @@ bool RleDecoder::NextCounts() {
   bool isLiteral = indicatorValue & 1;
   uint32_t count = indicatorValue >> 1;
   if (isLiteral) {
-    if (FOLLY_UNLIKELY(
-            count == 0 || count > static_cast<uint32_t>(INT32_MAX) / 8)) {
+    if (count == 0 || count > static_cast<uint32_t>(INT32_MAX) / 8)
+        [[unlikely]] {
       return false;
     }
     literalCount_ = count * 8;
   } else {
-    if (FOLLY_UNLIKELY(
-            count == 0 || count > static_cast<uint32_t>(INT32_MAX))) {
+    if (count == 0 || count > static_cast<uint32_t>(INT32_MAX)) [[unlikely]] {
       return false;
     }
     repeatCount_ = count;
@@ -738,10 +736,10 @@ bool RleDecoder::NextCounts() {
 /// it decides whether they should be encoded as a literal or repeated run.
 inline bool RleEncoder::Put(uint64_t value) {
   VELOX_DCHECK(bitWidth_ == 64 || value < (1ULL << bitWidth_));
-  if (FOLLY_UNLIKELY(bufferFull_))
+  if (bufferFull_) [[unlikely]]
     return false;
 
-  if (FOLLY_LIKELY(currentValue_ == value)) {
+  if (currentValue_ == value) [[likely]] {
     ++repeatCount_;
     if (repeatCount_ > 8) {
       // This is just a continuation of the current run, no need to buffer the

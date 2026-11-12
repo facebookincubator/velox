@@ -428,7 +428,7 @@ void SpatialJoinProbe::addProbeRowOutput() {
 }
 
 void SpatialJoinProbe::addBuildVectorOutput(const RowVectorPtr& buildVector) {
-  if (FOLLY_UNLIKELY(needsFilterEvaluated_)) {
+  if (needsFilterEvaluated_) [[unlikely]] {
     // Evaluate join filter for the whole vector just once.
     evaluateJoinFilter(buildVector);
     needsFilterEvaluated_ = false;

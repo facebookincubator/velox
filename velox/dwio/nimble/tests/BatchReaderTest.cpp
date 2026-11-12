@@ -54,6 +54,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
 #include "velox/dwio/nimble/serializer/Options.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/tests/SharedDictionaryTestUtils.h"
@@ -588,6 +589,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
       fileHandle_->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle_->groupId = velox::StringIdLease(ids, "testGroup");
       tabletOptions.cache = cache_.get();
+      tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle_.get();
     }
     return nimble::TabletReader::create(readFile, pool, tabletOptions);
@@ -8114,6 +8116,7 @@ TEST_P(MetadataReuseTest, metadataReuseWithSameReader) {
       fileHandle->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle->groupId = velox::StringIdLease(ids, fileIdStr + "_group");
       tabletOptions.cache = cache_.get();
+      tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle.get();
     }
 
@@ -8233,6 +8236,7 @@ TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
             fileHandleOut->uuid = fileId;
             fileHandleOut->groupId = groupId;
             tabletOptions.cache = cache_.get();
+            tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
             tabletOptions.fileHandle = fileHandleOut.get();
           }
           return nimble::TabletReader::create(

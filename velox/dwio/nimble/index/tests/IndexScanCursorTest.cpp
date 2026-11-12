@@ -23,6 +23,7 @@
 #include <future>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -73,7 +74,7 @@ class RecordingMaterializer final
  public:
   folly::coro::Task<std::unique_ptr<Entries>> materialize(
       ProjectedStripe stripe,
-      const index::ClusterIndexBase& /*clusterIndex*/) override {
+      index::KeyCursor& /*keyCursor*/) override {
     numMaterializeCalls_.fetch_add(1, std::memory_order_relaxed);
     if (onMaterialize_ != nullptr) {
       onMaterialize_(stripe);
@@ -85,6 +86,16 @@ class RecordingMaterializer final
     // have had the same address.
     stripes_.wlock()->insert_or_assign(entries.get(), std::move(stripe));
     co_return entries;
+  }
+
+  bool hasLoadedStripe(uint32_t stripeIndex) const override {
+    return keptStripe_ == stripeIndex;
+  }
+
+  // Makes hasLoadedStripe() report that the materializer keeps the streams of
+  // the stripe 'stripeIndex', or of no stripe when it is nullopt.
+  void setKeptStripe(std::optional<uint32_t> stripeIndex) {
+    keptStripe_ = stripeIndex;
   }
 
   // Returns the stripe that 'entries' were materialized from.
@@ -114,6 +125,8 @@ class RecordingMaterializer final
       [](size_t capacity) { return folly::IOBuf::create(capacity); }};
   std::function<void(const ProjectedStripe&)> onMaterialize_;
   std::atomic_uint32_t numMaterializeCalls_{0};
+  // The stripe whose streams hasLoadedStripe() reports as kept.
+  std::optional<uint32_t> keptStripe_;
   // The stripes of the entries that the test has not taken, by entries.
   folly::Synchronized<folly::F14FastMap<const Entries*, ProjectedStripe>>
       stripes_;
@@ -203,6 +216,74 @@ TEST_P(IndexScanCursorTest, loadsSelectedStripesLazily) {
   EXPECT_EQ(stripeIndices, (std::vector<uint32_t>{0, 1, 2}));
   EXPECT_EQ(cursor->stats().numReadStripes, 3);
   EXPECT_EQ(cursor->stats().numOutputRows, 8);
+  cursor->reset();
+}
+
+// The cursor passes the selection of a stripe that the materializer holds
+// alone, and loads the others. A get iterator does not prefetch, also when its
+// options set a prefetch executor.
+TEST_P(IndexScanCursorTest, skipsLoadingAStripeThatTheMaterializerHolds) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  for (const bool prefetchExecutor : {false, true}) {
+    SCOPED_TRACE(prefetchExecutor);
+    auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
+    NimbleIterator::Options options;
+    options.forGet = true;
+    if (prefetchExecutor) {
+      options.prefetchExecutor = folly::getKeepAliveToken(*executor);
+    }
+    auto cursor = makeCursor(std::move(options));
+    materializer_->setKeptStripe(1);
+
+    cursor->seek(makePointLookup(rowType, {"key"}, 5));
+    {
+      const auto stripe = nextStripe(*cursor, 5);
+      EXPECT_EQ(stripe.selection.stripeIndex, 1);
+      EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(5, 6));
+      EXPECT_TRUE(stripe.streams.empty());
+      EXPECT_EQ(stripe.dataHandle, nullptr);
+    }
+    EXPECT_EQ(cursor->stats().numReadStripes, 0);
+    EXPECT_EQ(cursor->stats().numOutputRows, 1);
+
+    // The cursor loads a stripe that the materializer does not hold.
+    cursor->seek(makePointLookup(rowType, {"key"}, 9));
+    {
+      const auto stripe = nextStripe(*cursor, 9);
+      EXPECT_EQ(stripe.selection.stripeIndex, 2);
+      EXPECT_FALSE(stripe.streams.empty());
+    }
+    EXPECT_EQ(cursor->stats().numReadStripes, 1);
+
+    // A range that starts in the held stripe loads only the stripes after it.
+    cursor->seek(makeRangeLookup(rowType, {"key"}, 6, 10));
+    {
+      const auto stripe = nextStripe(*cursor, 6);
+      EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(6, 8));
+      EXPECT_TRUE(stripe.streams.empty());
+    }
+    {
+      const auto stripe = nextStripe(*cursor, 8);
+      EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(8, 10));
+      EXPECT_FALSE(stripe.streams.empty());
+    }
+    EXPECT_EQ(cursor->stats().numReadStripes, 2);
+    EXPECT_EQ(cursor->stats().numOutputRows, 6);
+    cursor->reset();
+  }
+
+  // A cursor that prefetches loads every stripe ahead, so its materializer must
+  // not hold one.
+  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
+  NimbleIterator::Options options;
+  options.prefetchExecutor = folly::getKeepAliveToken(*executor);
+  auto cursor = makeCursor(std::move(options));
+  materializer_->setKeptStripe(1);
+  cursor->seek(makePointLookup(rowType, {"key"}, 5));
+  NIMBLE_ASSERT_THROW(
+      nextStripe(*cursor, 5),
+      "A cursor that prefetches must load every stripe");
   cursor->reset();
 }
 

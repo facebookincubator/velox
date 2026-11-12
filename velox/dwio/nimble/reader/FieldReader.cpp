@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <optional>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
@@ -403,6 +404,25 @@ uint64_t* maybeMutableRawNulls(velox::BaseVector& output, bool hasNulls) {
   return output.mutableRawNulls();
 }
 
+// Returns the output row where 'outputRanges' start when they write dense
+// output rows, one range right after another, so that a read can decode them
+// in place. Returns std::nullopt otherwise. The source rows of the ranges are
+// always dense: they index the decoded rows of the read in order.
+std::optional<velox::vector_size_t> denseStartRow(
+    std::span<const velox::BaseVector::CopyRange> outputRanges) {
+  if (outputRanges.empty()) {
+    return std::nullopt;
+  }
+  for (size_t i{1}; i < outputRanges.size(); ++i) {
+    const auto& prevRange = outputRanges[i - 1];
+    if (outputRanges[i].targetIndex !=
+        prevRange.targetIndex + prevRange.count) {
+      return std::nullopt;
+    }
+  }
+  return outputRanges.front().targetIndex;
+}
+
 // Marks the rows of 'outputRanges' not null in 'rawNulls', unless it is null.
 void setNotNull(
     uint64_t* rawNulls,
@@ -550,18 +570,22 @@ struct VectorInitializer<velox::FlatVector<T>> {
       resetIfNotWritable(output, nulls, values);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
-    ensureBuffer<T>(&values, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
 
-    if (!output) {
-      output = std::make_shared<velox::FlatVector<T>>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          values,
-          std::vector<velox::BufferPtr>());
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<T, /*ShouldAllocate=*/false>(&values, rowCount, pool);
+      return static_cast<velox::FlatVector<T>*>(output.get());
     }
+
+    ensureBuffer<T>(&values, rowCount, pool);
+    output = std::make_shared<velox::FlatVector<T>>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        values,
+        std::vector<velox::BufferPtr>());
 
     return static_cast<velox::FlatVector<T>*>(output.get());
   }
@@ -586,21 +610,28 @@ struct VectorInitializer<velox::ArrayVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
+
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &offsets, rowCount, pool);
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &sizes, rowCount, pool);
+      return static_cast<velox::ArrayVector*>(output.get());
+    }
+
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
-
-    if (!output) {
-      output = std::make_shared<velox::ArrayVector>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          std::move(offsets),
-          std::move(sizes),
-          /* elements */ elements,
-          0 /*nullCount*/);
-    }
+    output = std::make_shared<velox::ArrayVector>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        std::move(offsets),
+        std::move(sizes),
+        /* elements */ elements,
+        0 /*nullCount*/);
 
     return static_cast<velox::ArrayVector*>(output.get());
   }
@@ -626,22 +657,29 @@ struct VectorInitializer<velox::MapVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
+
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &offsets, rowCount, pool);
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &sizes, rowCount, pool);
+      return static_cast<velox::MapVector*>(output.get());
+    }
+
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
-
-    if (!output) {
-      output = std::make_shared<velox::MapVector>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          std::move(offsets),
-          std::move(sizes),
-          /* keys*/ mapKeys,
-          /*values*/ mapValues,
-          0 /*nullCount*/);
-    }
+    output = std::make_shared<velox::MapVector>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        std::move(offsets),
+        std::move(sizes),
+        /* keys*/ mapKeys,
+        /*values*/ mapValues,
+        0 /*nullCount*/);
 
     return static_cast<velox::MapVector*>(output.get());
   }
@@ -908,6 +946,14 @@ class ScalarFieldReader final
     NIMBLE_CHECK_NOT_NULL(vector, "Scattered read requires flat output");
 
     const auto rowCount = countRows(sourceRanges);
+    if constexpr (
+        std::is_same_v<TRequested, TData> && !std::is_same_v<TData, bool>) {
+      if (const auto startRow = denseStartRow(outputRanges)) {
+        denseRead(sourceRanges, outputRanges, *startRow, rowCount, *output);
+        co_return;
+      }
+    }
+
     auto* values = this->ensureBuffer(rowCount);
     velox::BufferPtr nulls;
     std::vector<velox::BufferPtr> stringBuffers;
@@ -1001,6 +1047,41 @@ class ScalarFieldReader final
   }
 
  private:
+  // Decodes 'sourceRanges' straight into the values of 'output' from row
+  // 'startRow', which the output ranges fill densely, instead of decoding into
+  // the scratch buffer and copying each range. The decoder writes nulls from
+  // bit 0, so they still go through a buffer of their own.
+  void denseRead(
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
+      velox::vector_size_t startRow,
+      uint32_t rowCount,
+      velox::BaseVector& output) {
+    auto* outputValues =
+        output.asFlatVector<TRequested>()->mutableRawValues() + startRow;
+    const auto nonNullCount = decoder_->read(
+        sourceRanges,
+        TypeTraits<TData>::dataType,
+        outputValues,
+        [&]() {
+          ensureBuffer<bool>(&denseReadNulls_, rowCount, pool_);
+          return denseReadNulls_->asMutable<void>();
+        },
+        stringBuffers_);
+    if (nonNullCount == rowCount) {
+      setNotNull(
+          maybeMutableRawNulls(output, /*hasNulls=*/false), outputRanges);
+      return;
+    }
+    NIMBLE_CHECK_NOT_NULL(denseReadNulls_);
+    velox::bits::copyBits(
+        denseReadNulls_->as<uint64_t>(),
+        0,
+        maybeMutableRawNulls(output, /*hasNulls=*/true),
+        startRow,
+        rowCount);
+  }
+
   template <typename ReadFunction>
   void
   read(uint32_t rowCount, velox::VectorPtr& output, ReadFunction readFunction) {
@@ -1088,6 +1169,9 @@ class ScalarFieldReader final
       }
     }
   }
+
+  // Holds the nulls that denseRead() decodes, reused across reads.
+  velox::BufferPtr denseReadNulls_;
 };
 
 template <typename T>

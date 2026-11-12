@@ -417,7 +417,7 @@ class MainlyConstantEncodingBase
               begin[scatterRows[selectedRowIndex] - visitor.rowIndex()] =
                   detail::dataToValue(visitor, otherData);
               auto end = selectedRowIndex + 1;
-              if (FOLLY_UNLIKELY(end == numSelected)) {
+              if (end == numSelected) [[unlikely]] {
                 numRows = visitor.numRows() - visitor.rowIndex();
               } else {
                 numRows = scatterRows[end] - visitor.rowIndex();
@@ -585,7 +585,7 @@ class MainlyConstantEncodingBase
       const physicalType currentValue = values[i];
       const bool isCommon = currentValue == commonValue;
       streams.isCommon[i] = isCommon;
-      if (FOLLY_UNLIKELY(!isCommon)) {
+      if (!isCommon) [[unlikely]] {
         streams.otherValues.push_back(currentValue);
       }
     }

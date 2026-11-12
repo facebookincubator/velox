@@ -83,7 +83,7 @@ class ChainedBuffer {
   }
 
   void reserve(uint32_t capacity) {
-    if (FOLLY_LIKELY(capacity <= capacity_)) {
+    if (capacity <= capacity_) [[likely]] {
       return;
     }
     // capacity grow rules

@@ -187,42 +187,17 @@ HybridFlatMap::HybridFlatMap(
   for (auto& group : groups) {
     sortGroupKeys(group.groupKeys);
   }
-  groups_ = std::make_shared<std::vector<Group>>(std::move(groups));
+  groups_ = std::make_shared<const std::vector<Group>>(std::move(groups));
   groupedKeyIndex_ =
       std::make_shared<const folly::F14FastMap<std::string_view, size_t>>(
           buildIndexGroupsByKey(*groups_));
-}
-
-HybridFlatMap::HybridFlatMap(
-    std::vector<Group> groups,
-    KeyPresenceMode defaultGroupKeyPresenceMode)
-    : groups_{std::make_shared<std::vector<Group>>(std::move(groups))},
-      defaultGroupKeyPresenceMode_{defaultGroupKeyPresenceMode} {}
-
-HybridFlatMap HybridFlatMap::fromSchema(
-    std::vector<Group> groups,
-    KeyPresenceMode defaultGroupKeyPresenceMode) {
-  return HybridFlatMap{std::move(groups), defaultGroupKeyPresenceMode};
 }
 
 const std::vector<HybridFlatMap::Group>& HybridFlatMap::groups() const {
   return *groups_;
 }
 
-std::vector<HybridFlatMap::Group> HybridFlatMap::releaseGroups() && {
-  // The grouped-key index views the keys of groups_ and is shared exactly as
-  // groups_ is, so a sole owner may move them out of this expiring
-  // HybridFlatMap.
-  if (groups_.use_count() == 1) {
-    return std::move(*groups_);
-  }
-  return *groups_;
-}
-
 std::optional<size_t> HybridFlatMap::findGroup(std::string_view key) const {
-  NIMBLE_CHECK_NOT_NULL(
-      groupedKeyIndex_,
-      "Hybrid FlatMap has no grouped-key index: schema metadata holds none.");
   const auto it = groupedKeyIndex_->find(key);
   if (it == groupedKeyIndex_->end()) {
     return std::nullopt;
@@ -231,9 +206,6 @@ std::optional<size_t> HybridFlatMap::findGroup(std::string_view key) const {
 }
 
 size_t HybridFlatMap::numGroupedKeys() const {
-  NIMBLE_CHECK_NOT_NULL(
-      groupedKeyIndex_,
-      "Hybrid FlatMap has no grouped-key index: schema metadata holds none.");
   return groupedKeyIndex_->size();
 }
 
@@ -255,18 +227,19 @@ const HybridFlatMap::Group& HybridFlatMap::groupById(uint32_t groupId) const {
   return *iterator;
 }
 
-std::string HybridFlatMap::serialize() const {
+std::string HybridFlatMap::serialize(
+    const std::vector<Group>& groups,
+    KeyPresenceMode defaultGroupKeyPresenceMode) {
   flatbuffers::FlatBufferBuilder builder;
-  // Writes the Default key presence mode even when it is Bitmap, since
-  // deserialize() requires it.
+  // Writes the Default key presence mode even when it is Bitmap, since the
+  // schema constructor requires it.
   builder.ForceDefaults(true);
   std::vector<uint32_t> groupIds;
   std::vector<uint32_t> groupKeyCounts;
   std::vector<flatbuffers::Offset<flatbuffers::String>> groupKeys;
-  const auto& allGroups = groups();
-  groupIds.reserve(allGroups.size());
-  groupKeyCounts.reserve(allGroups.size());
-  for (const auto& group : allGroups) {
+  groupIds.reserve(groups.size());
+  groupKeyCounts.reserve(groups.size());
+  for (const auto& group : groups) {
     NIMBLE_CHECK_LE(
         group.groupKeys.size(),
         std::numeric_limits<uint32_t>::max(),
@@ -285,18 +258,63 @@ std::string HybridFlatMap::serialize() const {
           builder.CreateVector(groupKeyCounts),
           builder.CreateVector(groupKeys),
           static_cast<serialization::HybridFlatMapKeyPresenceMode>(
-              defaultGroupKeyPresenceMode_)));
+              defaultGroupKeyPresenceMode)));
   return {
       reinterpret_cast<const char*>(builder.GetBufferPointer()),
       builder.GetSize()};
 }
 
-HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
+namespace {
+
+// Returns `keyKind`, the key kind of a written schema, once it is checked.
+// Initializes the const HybridFlatMap::keyKind_ in the schema constructor, so
+// the key kind is checked before defaultGroupKeyPresenceMode_'s initializer
+// reads any byte.
+ScalarKind checkRecordedKeyKind(ScalarKind keyKind) {
+  NIMBLE_CHECK(
+      HybridFlatMap::supportedKeyKind(keyKind),
+      "Hybrid FlatMap key kind is unsupported: {}.",
+      keyKind);
+  return keyKind;
+}
+
+// Verifies `serialized` as a HybridFlatMap FlatBuffer table and returns the
+// Default key presence mode it records, which every written schema has.
+// Initializes the const HybridFlatMap::defaultGroupKeyPresenceMode_ in the
+// schema constructor, whose body reads the rest of the table only once this
+// has verified it.
+HybridFlatMap::KeyPresenceMode readDefaultGroupKeyPresenceMode(
+    std::string_view serialized) {
   flatbuffers::Verifier verifier{
       reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size()};
   NIMBLE_CHECK(
       verifier.VerifyBuffer<serialization::HybridFlatMap>(),
       "Hybrid FlatMap metadata attribute is malformed.");
+  const auto* table =
+      flatbuffers::GetRoot<flatbuffers::Table>(serialized.data());
+  NIMBLE_CHECK(
+      table->CheckField(
+          serialization::HybridFlatMap::VT_DEFAULT_GROUP_KEY_PRESENCE_MODE),
+      "Hybrid FlatMap Default key presence is missing.");
+  // The generated accessor converts an unknown value to the enum, which is
+  // undefined behavior, so check the raw byte first.
+  const auto defaultGroupKeyPresenceMode = table->GetField<uint8_t>(
+      serialization::HybridFlatMap::VT_DEFAULT_GROUP_KEY_PRESENCE_MODE, 0);
+  NIMBLE_CHECK_LE(
+      defaultGroupKeyPresenceMode,
+      static_cast<uint8_t>(serialization::HybridFlatMapKeyPresenceMode_MAX),
+      "Hybrid FlatMap Default key presence is unknown.");
+  return static_cast<HybridFlatMap::KeyPresenceMode>(
+      defaultGroupKeyPresenceMode);
+}
+
+} // namespace
+
+HybridFlatMap::HybridFlatMap(ScalarKind keyKind, std::string_view serialized)
+    : keyKind_{checkRecordedKeyKind(keyKind)},
+      defaultGroupKeyPresenceMode_{
+          readDefaultGroupKeyPresenceMode(serialized)} {
+  // readDefaultGroupKeyPresenceMode() has verified the buffer.
   const auto* serializedMetadata =
       flatbuffers::GetRoot<serialization::HybridFlatMap>(serialized.data());
   const auto* groupIds = serializedMetadata->group_ids();
@@ -314,22 +332,6 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
       numGroupIds,
       groupKeyCounts->size(),
       "Hybrid FlatMap group IDs and key counts must have the same size");
-  const auto* table =
-      flatbuffers::GetRoot<flatbuffers::Table>(serialized.data());
-  NIMBLE_CHECK(
-      table->CheckField(
-          serialization::HybridFlatMap::VT_DEFAULT_GROUP_KEY_PRESENCE_MODE),
-      "Hybrid FlatMap Default key presence is missing.");
-  // The generated accessor converts an unknown value to the enum, which is
-  // undefined behavior, so check the raw byte first.
-  const auto defaultGroupKeyPresenceMode = table->GetField<uint8_t>(
-      serialization::HybridFlatMap::VT_DEFAULT_GROUP_KEY_PRESENCE_MODE, 0);
-  NIMBLE_CHECK_LE(
-      defaultGroupKeyPresenceMode,
-      static_cast<uint8_t>(serialization::HybridFlatMapKeyPresenceMode_MAX),
-      "Hybrid FlatMap Default key presence is unknown.");
-  const auto keyPresenceMode =
-      static_cast<KeyPresenceMode>(defaultGroupKeyPresenceMode);
   std::vector<Group> groups;
   groups.reserve(numGroupIds);
   flatbuffers::uoffset_t groupKeyIndex{0};
@@ -355,58 +357,27 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
       group.groupKeys.push_back(key->str());
     }
     detail::checkHybridFlatMapDefaultKeys(
-        keyPresenceMode, group.groupId, group.groupKeys);
+        defaultGroupKeyPresenceMode_, group.groupId, group.groupKeys);
   }
   NIMBLE_CHECK_EQ(
       groupKeyIndex,
       numKeys,
       "Hybrid FlatMap group key counts must match group keys size");
-  return fromSchema(std::move(groups), keyPresenceMode);
-}
 
-void HybridFlatMap::setAttribute(
-    std::vector<std::pair<std::string, std::string>>& attributes) const {
-  const auto isHybridFlatMapAttribute = [](const auto& attribute) {
-    return attribute.first == kAttributeName;
-  };
-  const auto existing = std::find_if(
-      attributes.begin(), attributes.end(), isHybridFlatMapAttribute);
-  auto serialized = serialize();
-  if (existing == attributes.end()) {
-    attributes.emplace_back(kAttributeName, std::move(serialized));
-  } else {
-    existing->second = std::move(serialized);
-  }
-
-  NIMBLE_CHECK_EQ(
-      std::count_if(
-          attributes.begin(), attributes.end(), isHybridFlatMapAttribute),
-      1,
-      "Hybrid FlatMap metadata attribute must be unique.");
-}
-
-HybridFlatMap HybridFlatMap::getAttribute(
-    const std::vector<std::pair<std::string, std::string>>& attributes) {
-  const std::string* serialized{nullptr};
-  for (const auto& attribute : attributes) {
-    if (attribute.first == kAttributeName) {
-      NIMBLE_CHECK_NULL(
-          serialized, "Hybrid FlatMap metadata attribute must be unique.");
-      serialized = &attribute.second;
-    }
-  }
-  NIMBLE_CHECK_NOT_NULL(
-      serialized, "Hybrid FlatMap metadata attribute is missing.");
-  return deserialize(*serialized);
-}
-
-HybridFlatMap HybridFlatMap::extractAttribute(
-    std::vector<std::pair<std::string, std::string>>& attributes) {
-  auto hybridMap = getAttribute(attributes);
-  std::erase_if(attributes, [](const auto& attribute) {
-    return attribute.first == kAttributeName;
-  });
-  return hybridMap;
+  // The index views the keys, so it is built once groups_ holds them.
+  groups_ = std::make_shared<const std::vector<Group>>(std::move(groups));
+  folly::F14FastMap<std::string_view, size_t> groupIndices;
+  detail::validateHybridFlatMapGroups(
+      groups_->size(),
+      /*hasDefault=*/false,
+      [this](size_t index) { return (*groups_)[index].groupId; },
+      [this](size_t index) -> const auto& {
+        return (*groups_)[index].groupKeys;
+      },
+      groupIndices);
+  groupedKeyIndex_ =
+      std::make_shared<const folly::F14FastMap<std::string_view, size_t>>(
+          std::move(groupIndices));
 }
 
 std::string toString(HybridFlatMap::KeyPresenceMode mode) {

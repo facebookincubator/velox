@@ -1735,6 +1735,25 @@ TEST_F(DecodedVectorTest, flatNulls) {
   }
 }
 
+// An entirely null flat vector may carry no values buffer at all.
+TEST_F(DecodedVectorTest, flatAllNullWithoutValues) {
+  constexpr vector_size_t kSize = 100;
+  auto vector = std::make_shared<FlatVector<int64_t>>(
+      pool(),
+      BIGINT(),
+      allocateNulls(kSize, pool(), bits::kNull),
+      kSize,
+      nullptr,
+      std::vector<BufferPtr>{});
+
+  DecodedVector decoded(*vector);
+  EXPECT_EQ(decoded.data<int64_t>(), nullptr);
+  EXPECT_TRUE(decoded.mayHaveNulls());
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    ASSERT_TRUE(decoded.isNullAt(i)) << i;
+  }
+}
+
 TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {
   SelectivityVector rows(100);
   DecodedVector d;

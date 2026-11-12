@@ -162,21 +162,21 @@ class DataBuffer {
 
   void extendAppend(uint64_t offset, const T* src, uint64_t items) {
     auto newSize = offset + items;
-    if (FOLLY_UNLIKELY(newSize > capacity_)) {
+    if (newSize > capacity_) [[unlikely]] {
       reserve(newSize + ((newSize + 1) / 2) + 1);
     }
     unsafeAppend(offset, src, items);
   }
 
   void unsafeAppend(uint64_t offset, const T* src, uint64_t items) {
-    if (FOLLY_LIKELY(items > 0)) {
+    if (items > 0) [[likely]] {
       std::memcpy(data() + offset, src, sizeInBytes(items));
     }
     size_ = (offset + items);
   }
 
   void unsafeAppend(const T* src, uint64_t items) {
-    if (FOLLY_LIKELY(items > 0)) {
+    if (items > 0) [[likely]] {
       std::memcpy(data() + size_, src, sizeInBytes(items));
       size_ += items;
     }
