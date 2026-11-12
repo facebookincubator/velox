@@ -3185,7 +3185,7 @@ TEST_P(SelectiveNimbleReaderTest, mapAsStructAllEmpty) {
   VectorPtr batch = BaseVector::create(outType, 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, batch), 2);
   auto expected = makeRowVector({
-      makeRowVector({"1"}, {makeNullConstant(TypeKind::BIGINT, 2)}),
+      makeNamedRowVector("1", makeNullConstant(TypeKind::BIGINT, 2)),
   });
   velox::test::assertEqualVectors(expected, batch);
 }
@@ -4215,7 +4215,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapKeys) {
   // transform applied via ScanSpec.
   auto mapVector = makeMapVector<StringView, int64_t>(
       {{{"a", 1}, {"b", 2}}, {{"c", 3}}, {{"d", 4}, {"e", 5}, {"f", 6}}});
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4239,7 +4239,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformSize) {
   // Write a MAP(VARCHAR, BIGINT) column, read with a Size extraction.
   auto mapVector = makeMapVector<StringView, int64_t>(
       {{{"a", 1}, {"b", 2}, {"c", 3}}, {{"d", 4}}});
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4269,7 +4269,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapValuesStructField) {
       {makeFlatVector<int32_t>({10, 20, 30}),
        makeFlatVector<int32_t>({100, 200, 300})});
   auto mapVector = makeMapVector({0, 2}, keys, structValues);
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4316,7 +4316,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionSizeResultVectorReuse) {
     offsets[i] = i * 2;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4352,7 +4352,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapValues) {
   // transform applied via ScanSpec.
   auto mapVector = makeMapVector<StringView, int64_t>(
       {{{"a", 10}}, {{"b", 20}, {"c", 30}}, {{"d", 40}}});
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4382,7 +4382,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapKeyFilter) {
   // to keep only selected keys.
   auto mapVector = makeMapVector<StringView, int64_t>(
       {{{"a", 1}, {"b", 2}, {"c", 3}}, {{"a", 10}, {"d", 40}}});
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4414,7 +4414,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformStructField) {
       {"x", "y"},
       {makeFlatVector<int32_t>({10, 20, 30}),
        makeFlatVector<StringView>({"aa", "bb", "cc"})});
-  auto input = makeRowVector({"col"}, {structVector});
+  auto input = makeNamedRowVector("col", structVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4441,7 +4441,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformStructField) {
 TEST_P(SelectiveNimbleReaderTest, extractionTransformArraySize) {
   // Write an ARRAY(BIGINT) column, read with Size extraction.
   auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3}, {4}, {5, 6}});
-  auto input = makeRowVector({"col"}, {arrayVector});
+  auto input = makeNamedRowVector("col", arrayVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4465,7 +4465,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionDeduplicatedArraySize) {
   // Write an ARRAY(BIGINT) column using the deduplicated (ArrayWithOffsets)
   // encoding path, then verify Size extraction works correctly.
   auto arrayVector = makeArrayVector<int64_t>({{1, 2}, {3}, {4, 5, 6}, {1, 2}});
-  auto input = makeRowVector({"col"}, {arrayVector});
+  auto input = makeNamedRowVector("col", arrayVector);
   auto file = test::createNimbleFile(
       *rootPool(), input, {.dictionaryArrayColumns = {"col"}});
 
@@ -4492,7 +4492,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionDeduplicatedMapSize) {
   auto keys = makeFlatVector<int64_t>({1, 2, 3, 4});
   auto values = makeFlatVector<int64_t>({10, 20, 30, 40});
   auto mapVector = makeMapVector({0, 3}, keys, values);
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(
       *rootPool(), input, {.deduplicatedMapColumns = {"col"}});
 

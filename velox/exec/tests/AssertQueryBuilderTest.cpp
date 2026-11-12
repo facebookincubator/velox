@@ -95,7 +95,7 @@ TEST_F(AssertQueryBuilderTest, config) {
 }
 
 TEST_F(AssertQueryBuilderTest, hiveSplits) {
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto data = makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3}));
 
   auto file = TempFilePath::create();
   writeToFile(file->getPath(), {data});

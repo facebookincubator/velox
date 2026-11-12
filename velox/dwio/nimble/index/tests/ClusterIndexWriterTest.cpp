@@ -561,7 +561,7 @@ TEST_F(ClusterIndexWriterTest, multiColumnWithDifferentSortOrders) {
     const auto singleColType = velox::ROW({{"col0", velox::INTEGER()}});
 
     // Create input data.
-    auto batch = makeRowVector({"col0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+    auto batch = makeNamedRowVector("col0", makeFlatVector<int32_t>({1, 2, 3}));
 
     // Write with ascending order.
     auto configAsc = buildIndexConfig(

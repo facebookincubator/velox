@@ -211,7 +211,7 @@ class IcebergGeospatialReadTest : public test::IcebergTestBase {
     // file, so this test stays inside the PR's Parquet-only geometry scope.
     auto deleteDirectory = test::TempDirectoryPath::create();
     auto deleteData =
-        makeRowVector({"geom"}, {makeVarbinaryVector({toWkb(matchWkt)})});
+        makeNamedRowVector("geom", makeVarbinaryVector({toWkb(matchWkt)}));
     auto deleteSink =
         createDataSinkAndAppendData({deleteData}, deleteDirectory->getPath());
     deleteSink->close();
@@ -511,8 +511,8 @@ TEST_F(IcebergGeospatialReadTest, geometryHashJoinWithDynamicFilterPushdown) {
 
   // Build side: the same shape, already in Velox's internal encoding, which is
   // what a GEOMETRY vector anywhere in the plan carries.
-  auto buildData = makeRowVector(
-      {"bgeom"}, {makeGeometryVector({toVeloxGeospatial(matchWkt)})});
+  auto buildData = makeNamedRowVector(
+      "bgeom", makeGeometryVector({toVeloxGeospatial(matchWkt)}));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanId;
@@ -531,7 +531,7 @@ TEST_F(IcebergGeospatialReadTest, geometryHashJoinWithDynamicFilterPushdown) {
                       {"id"})
                   .planNode();
 
-  auto expected = makeRowVector({"id"}, {makeFlatVector<int64_t>({1})});
+  auto expected = makeNamedRowVector("id", makeFlatVector<int64_t>({1}));
 
   std::shared_ptr<exec::Task> task;
   auto result =
@@ -1336,8 +1336,9 @@ TEST_F(IcebergGeospatialReadTest, plainEncodedGeometryColumn) {
     expected.emplace_back(toVeloxGeospatial(wkt.str()));
   }
 
-  auto data = makeRowVector({"geom"}, {makeVarbinaryVector(wkb)});
-  auto expectedVector = makeRowVector({"geom"}, {makeGeometryVector(expected)});
+  auto data = makeNamedRowVector("geom", makeVarbinaryVector(wkb));
+  auto expectedVector =
+      makeNamedRowVector("geom", makeGeometryVector(expected));
   assertScan({data}, ROW({"geom"}, {GEOMETRY()}), {expectedVector});
 }
 
@@ -1348,7 +1349,7 @@ TEST_F(IcebergGeospatialReadTest, genericBinaryColumnIsNotDecoded) {
   for (const auto& wkt : kAllKinds) {
     wkb.emplace_back(toWkb(wkt));
   }
-  auto data = makeRowVector({"payload"}, {makeVarbinaryVector(wkb)});
+  auto data = makeNamedRowVector("payload", makeVarbinaryVector(wkb));
   assertScan({data}, ROW({"payload"}, {VARBINARY()}), {data});
 }
 
@@ -1360,7 +1361,7 @@ TEST_F(IcebergGeospatialReadTest, veloxInternalGeometryBytesAreNotReparsed) {
   for (const auto& wkt : kAllKinds) {
     internalBytes.emplace_back(toVeloxGeospatial(wkt));
   }
-  auto data = makeRowVector({"payload"}, {makeVarbinaryVector(internalBytes)});
+  auto data = makeNamedRowVector("payload", makeVarbinaryVector(internalBytes));
   assertScan({data}, ROW({"payload"}, {VARBINARY()}), {data});
 }
 
@@ -1373,7 +1374,7 @@ TEST_F(IcebergGeospatialReadTest, hiveConnectorDoesNotConvert) {
   for (const auto& wkt : kAllKinds) {
     wkb.emplace_back(toWkb(wkt));
   }
-  auto data = makeRowVector({"geom"}, {makeVarbinaryVector(wkb)});
+  auto data = makeNamedRowVector("geom", makeVarbinaryVector(wkb));
 
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), {data});
@@ -1423,7 +1424,7 @@ TEST_F(IcebergGeospatialReadTest, geometryParquetFileWrittenByAnotherEngine) {
   auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {GEOMETRY()}));
   exec::test::AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(path))
-      .assertResults(makeRowVector({"geom"}, {makeGeometryVector(expected)}));
+      .assertResults(makeNamedRowVector("geom", makeGeometryVector(expected)));
 }
 
 TEST_F(IcebergGeospatialReadTest, geographyParquetFileWrittenByAnotherEngine) {
@@ -1457,7 +1458,7 @@ TEST_F(IcebergGeospatialReadTest, geographyParquetFileWrittenByAnotherEngine) {
   auto plan = makeIcebergTableScanPlan(ROW({"geog"}, {SPHERICAL_GEOGRAPHY()}));
   exec::test::AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(path))
-      .assertResults(makeRowVector({"geog"}, {makeGeographyVector(expected)}));
+      .assertResults(makeNamedRowVector("geog", makeGeographyVector(expected)));
 }
 
 TEST_F(IcebergGeospatialReadTest, tableWithoutGeospatialIsUntouched) {
@@ -1479,7 +1480,7 @@ TEST_F(IcebergGeospatialReadTest, nonParquetGeometryIsRejected) {
   // instead of returning unverified values.
   fileFormat_ = dwio::common::FileFormat::DWRF;
   const auto wkb = toWkb("POINT (1 2)");
-  auto data = makeRowVector({"geom"}, {makeVarbinaryVector({wkb})});
+  auto data = makeNamedRowVector("geom", makeVarbinaryVector({wkb}));
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), {data});
 

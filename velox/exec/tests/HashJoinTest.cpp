@@ -141,11 +141,10 @@ TEST_P(MultiThreadedHashJoinTest, spillEnabledJoinWithPartialLimit) {
     GTEST_SKIP();
   }
 
-  auto probeVector = makeRowVector(
-      {"t_key"},
-      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
-  auto buildVector = makeRowVector(
-      {"u_key"}, {makeFlatVector<int64_t>(999, [](auto row) { return row; })});
+  auto probeVector = makeNamedRowVector(
+      "t_key", makeFlatVector<int64_t>(1'000, [](auto row) { return row; }));
+  auto buildVector = makeNamedRowVector(
+      "u_key", makeFlatVector<int64_t>(999, [](auto row) { return row; }));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
@@ -176,8 +175,8 @@ TEST_P(MultiThreadedHashJoinTest, spillEnabledJoinWithPartialLimit) {
                     .config(core::QueryConfig::kJoinSpillEnabled, "true")
                     .config(core::QueryConfig::kMaxSpillLevel, 2)
                     .config(core::QueryConfig::kSpillWriteBufferSize, 0)
-                    .assertResults(makeRowVector(
-                        {"t_key"}, {makeFlatVector<int64_t>({999})}));
+                    .assertResults(makeNamedRowVector(
+                        "t_key", makeFlatVector<int64_t>({999})));
     if (injectSpill) {
       ASSERT_GT(taskSpilledStats(*task).first.spilledPartitions, 0);
     }
@@ -189,10 +188,9 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesLastProber) {
     GTEST_SKIP();
   }
 
-  auto probeVector = makeRowVector({"t_key"}, {makeFlatVector<int64_t>({-1})});
-  auto buildVector = makeRowVector(
-      {"u_key"},
-      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+  auto probeVector = makeNamedRowVector("t_key", makeFlatVector<int64_t>({-1}));
+  auto buildVector = makeNamedRowVector(
+      "u_key", makeFlatVector<int64_t>(1'000, [](auto row) { return row; }));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
@@ -250,9 +248,9 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
   constexpr vector_size_t kBatchSize = 10;
   constexpr vector_size_t kNumBatches = 100;
   constexpr vector_size_t kNumBuildRows = kBatchSize * kNumBatches;
-  auto buildVector = makeRowVector(
-      {"u_key"},
-      {makeFlatVector<int64_t>(kNumBuildRows, [](auto row) { return row; })});
+  auto buildVector = makeNamedRowVector(
+      "u_key",
+      makeFlatVector<int64_t>(kNumBuildRows, [](auto row) { return row; }));
 
   struct TestParam {
     core::JoinType joinType;
@@ -370,12 +368,10 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBetweenSpillRounds) {
     GTEST_SKIP();
   }
 
-  auto probeVector = makeRowVector(
-      {"t_key"},
-      {makeFlatVector<int64_t>(500, [](auto row) { return row * 2; })});
-  auto buildVector = makeRowVector(
-      {"u_key"},
-      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+  auto probeVector = makeNamedRowVector(
+      "t_key", makeFlatVector<int64_t>(500, [](auto row) { return row * 2; }));
+  auto buildVector = makeNamedRowVector(
+      "u_key", makeFlatVector<int64_t>(1'000, [](auto row) { return row; }));
   createDuckDbTable("t", {probeVector});
   createDuckDbTable("u", {buildVector});
 
@@ -1692,10 +1688,10 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
 TEST_P(HashJoinTest, nullAwareRightAntiJoinIsRejected) {
   // Right anti join supports only the regular (NOT EXISTS) semantic. Requesting
   // the null-aware flag is rejected at plan construction.
-  auto probeVector = makeRowVector(
-      {"t0"}, {makeFlatVector<int32_t>(10, [](auto row) { return row; })});
-  auto buildVector = makeRowVector(
-      {"u0"}, {makeFlatVector<int32_t>(10, [](auto row) { return row; })});
+  auto probeVector = makeNamedRowVector(
+      "t0", makeFlatVector<int32_t>(10, [](auto row) { return row; }));
+  auto buildVector = makeNamedRowVector(
+      "u0", makeFlatVector<int32_t>(10, [](auto row) { return row; }));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   VELOX_ASSERT_THROW(
@@ -2266,12 +2262,12 @@ TEST_P(HashJoinTest, bloomFilterLocalProbe) {
 
   constexpr auto numRows = 10'000 + VectorHasher::kMaxDistinct;
   auto probe =
-      makeRowVector({"t_k0"}, {makeFlatVector<int64_t>(numRows, [](auto row) {
-                      return row * 1'000 + 1;
-                    })});
-  auto build = makeRowVector(
-      {"u_k0"},
-      {makeFlatVector<int64_t>(numRows, [](auto row) { return row * 1'000; })});
+      makeNamedRowVector("t_k0", makeFlatVector<int64_t>(numRows, [](auto row) {
+                           return row * 1'000 + 1;
+                         }));
+  auto build = makeNamedRowVector(
+      "u_k0",
+      makeFlatVector<int64_t>(numRows, [](auto row) { return row * 1'000; }));
 
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.name);
@@ -2420,17 +2416,17 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbe) {
 
   constexpr int32_t kSampleRows = 100;
   constexpr auto numRows = 10'000 + VectorHasher::kMaxDistinct;
-  auto sampleProbe = makeRowVector(
-      {"t_k0"}, {makeFlatVector<int64_t>(kSampleRows, [](auto row) {
+  auto sampleProbe = makeNamedRowVector(
+      "t_k0", makeFlatVector<int64_t>(kSampleRows, [](auto row) {
         return row * 1'000;
-      })});
-  auto remainingProbe = makeRowVector(
-      {"t_k0"}, {makeFlatVector<int64_t>(numRows - kSampleRows, [](auto row) {
+      }));
+  auto remainingProbe = makeNamedRowVector(
+      "t_k0", makeFlatVector<int64_t>(numRows - kSampleRows, [](auto row) {
         return (row + kSampleRows) * 1'000;
-      })});
-  auto build = makeRowVector(
-      {"u_k0"},
-      {makeFlatVector<int64_t>(numRows, [](auto row) { return row * 1'000; })});
+      }));
+  auto build = makeNamedRowVector(
+      "u_k0",
+      makeFlatVector<int64_t>(numRows, [](auto row) { return row * 1'000; }));
 
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.name);
@@ -2476,12 +2472,12 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbe) {
 
 TEST_P(HashJoinTest, bypassBloomFilterLocalProbeWithoutSampling) {
   constexpr auto numRows = 10'000 + VectorHasher::kMaxDistinct;
-  auto probe = makeRowVector(
-      {"t_k0"},
-      {makeFlatVector<int64_t>(numRows, [](auto row) { return row * 1'000; })});
-  auto build = makeRowVector(
-      {"u_k0"},
-      {makeFlatVector<int64_t>(numRows, [](auto row) { return row * 1'000; })});
+  auto probe = makeNamedRowVector(
+      "t_k0",
+      makeFlatVector<int64_t>(numRows, [](auto row) { return row * 1'000; }));
+  auto build = makeNamedRowVector(
+      "u_k0",
+      makeFlatVector<int64_t>(numRows, [](auto row) { return row * 1'000; }));
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(1)

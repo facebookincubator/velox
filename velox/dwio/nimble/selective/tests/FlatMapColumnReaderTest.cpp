@@ -784,7 +784,7 @@ TEST_P(FlatMapColumnReaderTest, asStructAllEmpty) {
   VectorPtr batch = BaseVector::create(outType, 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, batch), 3);
   auto expected = makeRowVector({
-      makeRowVector({"1"}, {makeNullConstant(TypeKind::BIGINT, 3)}),
+      makeNamedRowVector("1", makeNullConstant(TypeKind::BIGINT, 3)),
   });
   velox::test::assertEqualVectors(expected, batch);
 }
@@ -893,7 +893,7 @@ TEST_P(FlatMapColumnReaderTest, asMapKeyFilter) {
 TEST_P(FlatMapColumnReaderTest, asMapComplexValues) {
   // MAP(INT, ROW({BIGINT})) — struct-valued flat map as map.
   auto values =
-      makeRowVector({"val"}, {makeFlatVector<int64_t>({100, 200, 300, 400})});
+      makeNamedRowVector("val", makeFlatVector<int64_t>({100, 200, 300, 400}));
   auto keys = makeFlatVector<int32_t>({1, 2, 1, 2});
   auto mapVector = std::make_shared<MapVector>(
       pool(),

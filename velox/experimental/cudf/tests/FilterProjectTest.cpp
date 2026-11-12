@@ -552,9 +552,8 @@ class CudfFilterProjectTest : public OperatorTestBase {
     for (const auto& batch : input) {
       totalRows += batch->size();
     }
-    auto expected = makeRowVector(
-        {"result"},
-        {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+    auto expected = makeNamedRowVector(
+        "result", BaseVector::createNullConstant(BOOLEAN(), totalRows, pool()));
     AssertQueryBuilder(plan).assertResults(expected);
   }
 
@@ -1201,10 +1200,10 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalNullHandling) {
 // treat it as +0 days (the validity bit was unconditionally set to true), so
 // the row-wise output came back as the input dates instead of NULL.
 TEST_F(CudfFilterProjectTest, datePlusIntervalNullLiteral) {
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeFlatVector<int32_t>(
-          {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE())});
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeFlatVector<int32_t>(
+          {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   auto plan =
@@ -1237,15 +1236,15 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateConstantValue) {
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeNullableFlatVector<int32_t>(
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeNullableFlatVector<int32_t>(
           {toDateDays("2019-02-28"),
            toDateDays("2019-01-30"),
            toDateDays("2019-11-30"),
            toDateDays("2020-02-29"),
            std::nullopt},
-          DATE())});
+          DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -1285,13 +1284,13 @@ TEST_F(CudfFilterProjectTest, dateAddDateColumnValue) {
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralValue) {
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeFlatVector<int32_t>(
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeFlatVector<int32_t>(
           {toDateDays("2020-01-01"),
            toDateDays("2020-06-15"),
            toDateDays("2020-12-31")},
-          DATE())});
+          DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -1302,7 +1301,8 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralValue) {
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
-  auto data = makeRowVector({"amount"}, {makeFlatVector<int64_t>({1, 13, -1})});
+  auto data =
+      makeNamedRowVector("amount", makeFlatVector<int64_t>({1, 13, -1}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -1315,9 +1315,9 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
 TEST_F(CudfFilterProjectTest, dateAddDateLiteralValueOutOfRange) {
   // Literal value that exceeds int32 range; checked at eval time by
   // checkedScaleValue -> checkValueInInt32Range.
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeFlatVector<int32_t>({toDateDays("2020-01-01")}, DATE())});
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeFlatVector<int32_t>({toDateDays("2020-01-01")}, DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   auto plan = PlanBuilder()
@@ -1436,9 +1436,9 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeMatchesVelox) {
   // Whole seconds, fractions that round down and up, the half-millisecond,
   // the fraction that rolls into the next second, negatives, NaN and NULL,
   // under every unit that holds a millisecond.
-  auto input = makeRowVector(
-      {"seconds"},
-      {makeNullableFlatVector<double>({
+  auto input = makeNamedRowVector(
+      "seconds",
+      makeNullableFlatVector<double>({
           0.0,
           1.0,
           -1.0,
@@ -1451,7 +1451,7 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeMatchesVelox) {
           0.0001,
           std::numeric_limits<double>::quiet_NaN(),
           std::nullopt,
-      })});
+      }));
   auto& config = cudf_velox::CudfConfig::getInstance();
   const auto originalUnit = config.timestampUnit;
   SCOPE_EXIT {
@@ -1483,17 +1483,17 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeBeyondRange) {
     config.timestampUnit = originalUnit;
   };
   auto makeInput = [&](const std::vector<double>& seconds) {
-    return makeRowVector({"seconds"}, {makeFlatVector<double>(seconds)});
+    return makeNamedRowVector("seconds", makeFlatVector<double>(seconds));
   };
   // A null row never reaches the kernel, whatever value its slot holds.
   auto nullSlotPastRange = makeFlatVector<double>({1e300, 0.0});
   nullSlotPastRange->setNull(0, true);
-  auto nullRowInput = makeRowVector({"seconds"}, {nullSlotPastRange});
+  auto nullRowInput = makeNamedRowVector("seconds", nullSlotPastRange);
   auto assertOutOfRange = [&](double seconds, std::string_view unitName) {
     SCOPED_TRACE(fmt::format("unit={} seconds={}", unitName, seconds));
-    auto input = makeRowVector(
-        {"seconds"},
-        {makeNullableFlatVector<double>({std::nullopt, 0.0, seconds})});
+    auto input = makeNamedRowVector(
+        "seconds",
+        makeNullableFlatVector<double>({std::nullopt, 0.0, seconds}));
     auto plan = PlanBuilder()
                     .values({input})
                     .project({"from_unixtime(seconds) AS ts"})
@@ -1555,9 +1555,9 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeSecondsUnit) {
   // timestamp, so a fraction is dropped after the rounding and the rollover,
   // and the pinned extremes are Timestamp::kMaxSeconds and kMinSeconds.
   constexpr double kInfinity = std::numeric_limits<double>::infinity();
-  auto input = makeRowVector(
-      {"seconds"},
-      {makeNullableFlatVector<double>({
+  auto input = makeNamedRowVector(
+      "seconds",
+      makeNullableFlatVector<double>({
           0.0,
           1.0,
           -1.0,
@@ -1569,7 +1569,7 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeSecondsUnit) {
           -kInfinity,
           1e300,
           std::nullopt,
-      })});
+      }));
   auto& config = cudf_velox::CudfConfig::getInstance();
   const auto originalUnit = config.timestampUnit;
   SCOPE_EXIT {
@@ -1604,15 +1604,15 @@ TEST_F(CudfFilterProjectTest, toUnixtimeMatchesVelox) {
   };
 
   // Whole seconds, which every unit carries exactly.
-  auto wholeSeconds = makeRowVector(
-      {"event_ts"},
-      {makeNullableFlatVector<Timestamp>(
+  auto wholeSeconds = makeNamedRowVector(
+      "event_ts",
+      makeNullableFlatVector<Timestamp>(
           {Timestamp(-14400, 0),
            Timestamp(-1, 0),
            Timestamp(0, 0),
            Timestamp(1609459200, 0),
            std::nullopt},
-          TIMESTAMP())});
+          TIMESTAMP()));
   for (const auto unit :
        {cudf::type_id::TIMESTAMP_SECONDS,
         cudf::type_id::TIMESTAMP_MILLISECONDS,
@@ -1645,15 +1645,15 @@ TEST_F(CudfFilterProjectTest, toUnixtimeNanosecondFractions) {
     config.timestampUnit = originalUnit;
   };
   config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
-  auto input = makeRowVector(
-      {"ts"},
-      {makeNullableFlatVector<Timestamp>(
+  auto input = makeNamedRowVector(
+      "ts",
+      makeNullableFlatVector<Timestamp>(
           {Timestamp(1, 999'999'999),
            Timestamp(-1, 1),
            Timestamp(0, 1),
            Timestamp(-1, 999'999'999),
            std::nullopt},
-          TIMESTAMP())});
+          TIMESTAMP()));
   assertProjectMatchesVelox({input}, {"to_unixtime(ts) AS seconds"});
 }
 
@@ -1969,8 +1969,8 @@ TEST_F(CudfFilterProjectTest, nullInListDownstreamAggregation) {
                   .singleAggregation({}, {"count(result)"})
                   .planNode();
 
-  auto expected =
-      makeRowVector({"a0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{0})});
+  auto expected = makeNamedRowVector(
+      "a0", makeFlatVector<int64_t>(std::vector<int64_t>{0}));
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
@@ -1988,9 +1988,8 @@ TEST_F(CudfFilterProjectTest, untypedNullInList) {
   for (const auto& batch : vectors) {
     totalRows += batch->size();
   }
-  auto expected = makeRowVector(
-      {"result"},
-      {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+  auto expected = makeNamedRowVector(
+      "result", BaseVector::createNullConstant(BOOLEAN(), totalRows, pool()));
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
@@ -2311,15 +2310,15 @@ TEST_F(CudfFilterProjectTest, replaceConstantSearchAndReplacement) {
   // Column string with constant search and replacement, including the
   // replace(s, '-', '') shape: matches present, absent, repeated, an empty
   // string row, and a null string row.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>(
+  auto data = makeNamedRowVector(
+      "s",
+      makeNullableFlatVector<std::string>(
           {"2021-01-31",
            "no dashes here",
            "a-b-c-d",
            "-leading-and-trailing-",
            "",
-           std::nullopt})});
+           std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -2332,10 +2331,10 @@ TEST_F(CudfFilterProjectTest, replaceConstantSearchAndReplacement) {
 
 TEST_F(CudfFilterProjectTest, replaceTwoArgumentRemovesSearch) {
   // The 2-argument form removes every occurrence of the search.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>(
-          {"a-b-c", "abc", "---", std::nullopt})});
+  auto data = makeNamedRowVector(
+      "s",
+      makeNullableFlatVector<std::string>(
+          {"a-b-c", "abc", "---", std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{"replace(s, '-') AS result"};
@@ -2345,9 +2344,8 @@ TEST_F(CudfFilterProjectTest, replaceTwoArgumentRemovesSearch) {
 
 TEST_F(CudfFilterProjectTest, replaceNullSearchOrReplacement) {
   // A null constant search or replacement yields an all-null result.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>({"a-b-c", "abc", std::nullopt})});
+  auto data = makeNamedRowVector(
+      "s", makeNullableFlatVector<std::string>({"a-b-c", "abc", std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -2361,14 +2359,14 @@ TEST_F(CudfFilterProjectTest, replaceNullSearchOrReplacement) {
 TEST_F(CudfFilterProjectTest, replaceMultiByteUtf8) {
   // Multi-byte (UTF-8) search and replacement, including a replacement that
   // changes the byte length and a null string row.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>(
+  auto data = makeNamedRowVector(
+      "s",
+      makeNullableFlatVector<std::string>(
           {"café-au-lait",
            "a€b€c",
            "naïve",
            "no multibyte here",
-           std::nullopt})});
+           std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -2382,10 +2380,10 @@ TEST_F(CudfFilterProjectTest, replaceMultiByteUtf8) {
 TEST_F(CudfFilterProjectTest, replaceReplacementContainsSearch) {
   // The replacement contains the search: a single left-to-right pass must not
   // re-scan the inserted text.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>(
-          {"aaa", "banana", "a", std::nullopt})});
+  auto data = makeNamedRowVector(
+      "s",
+      makeNullableFlatVector<std::string>(
+          {"aaa", "banana", "a", std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -2679,13 +2677,13 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
 }
 
 TEST_F(CudfFilterProjectTest, datePlusIntervalConstantLiteral) {
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeFlatVector<int32_t>(
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeFlatVector<int32_t>(
           {toDateDays("2025-01-01"),
            toDateDays("2025-02-28"),
            toDateDays("2024-02-29")},
-          DATE())});
+          DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   // Build expression tree programmatically with a constant interval literal,
@@ -3849,7 +3847,7 @@ TEST_F(CudfSimpleFilterProjectTest, nullableStructDereference) {
   auto a = makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4});
   auto b = makeNullableFlatVector<std::string>({"x", std::nullopt, "z", "w"});
   auto nullableStruct = makeRowVector({"a", "b"}, {a, b}, nullEvery(2));
-  auto input = makeRowVector({"r"}, {nullableStruct});
+  auto input = makeNamedRowVector("r", nullableStruct);
 
   assertExpressionMatchesCpu("r.a", input, rowType);
   assertExpressionMatchesCpu("r.b", input, rowType);

@@ -2767,7 +2767,7 @@ TEST_F(FixedPointTest, kMeansTwoWorkers) {
           makeFlatVector<int64_t>({0, 0, 0}),
       });
   auto destinations =
-      makeRowVector({"destination"}, {makeFlatVector<int64_t>({0, 1})});
+      makeNamedRowVector("destination", makeFlatVector<int64_t>({0, 1}));
 
   auto plan =
       PlanBuilder(idGenerator)
@@ -3794,7 +3794,7 @@ TEST_F(FixedPointTest, reportsExecutionStats) {
 
   auto plainTask = makeTask(
       PlanBuilder()
-          .values({makeRowVector({"key"}, {makeFlatVector<int64_t>({0})})})
+          .values({makeNamedRowVector("key", makeFlatVector<int64_t>({0}))})
           .planNode(),
       exec::Task::ExecutionMode::kSerial,
       "plain");
@@ -5259,7 +5259,7 @@ TEST_F(FixedPointTest, nestedInitialPlanTableScan) {
   writeToFile(filePaths[0]->getPath(), makeKeyValueRow(0, 0, schema->names()));
   writeToFile(
       filePaths[1]->getPath(),
-      makeRowVector({"tk"}, {makeFlatVector<int64_t>({0})}));
+      makeNamedRowVector("tk", makeFlatVector<int64_t>({0})));
 
   core::PlanNodeId scanId;
   core::PlanNodeId joinScanId;

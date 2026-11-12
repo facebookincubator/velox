@@ -2741,9 +2741,9 @@ TEST_F(AggregationTest, maskedCountStar) {
 // Global masked count(*) (no GROUP BY) -> reduce count-all branch with a mask,
 // including a null mask entry (treated as false).
 TEST_F(AggregationTest, maskedCountStarGlobal) {
-  auto data = makeRowVector(
-      {"m"},
-      {makeNullableFlatVector<bool>({true, false, std::nullopt, true, false})});
+  auto data = makeNamedRowVector(
+      "m",
+      makeNullableFlatVector<bool>({true, false, std::nullopt, true, false}));
   createDuckDbTable({data});
   auto plan = PlanBuilder()
                   .values({data})
@@ -2755,9 +2755,9 @@ TEST_F(AggregationTest, maskedCountStarGlobal) {
 
 // Global masked count(*), multi-stage (partial + final), no GROUP BY.
 TEST_F(AggregationTest, maskedCountStarGlobalMultiStage) {
-  auto data = makeRowVector(
-      {"m"},
-      {makeNullableFlatVector<bool>({true, false, std::nullopt, true, false})});
+  auto data = makeNamedRowVector(
+      "m",
+      makeNullableFlatVector<bool>({true, false, std::nullopt, true, false}));
   createDuckDbTable({data});
   auto plan = PlanBuilder()
                   .values({data})

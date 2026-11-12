@@ -373,7 +373,7 @@ DEBUG_ONLY_TEST_P(
   newQueryBuilder()
       .queryCtx(queryCtx)
       .spillDirectory(spillDirectory->getPath())
-      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
       .plan(
           PlanBuilder()
               .values(vectors)
@@ -427,7 +427,7 @@ DEBUG_ONLY_TEST_P(
         newQueryBuilder(plan)
             .queryCtx(queryCtx)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
             .copyResults(pool()),
         errorMsg);
   });
@@ -882,7 +882,7 @@ DEBUG_ONLY_TEST_P(
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   newQueryBuilder()
-      .config(core::QueryConfig::kSpillEnabled, "false")
+      .config(core::QueryConfig::kSpillEnabled, false)
       .queryCtx(queryCtx)
       .plan(PlanBuilder(planNodeIdGenerator, pool())
                 .values(vectors)
@@ -961,8 +961,8 @@ DEBUG_ONLY_TEST_P(
         newQueryBuilder()
             .queryCtx(queryCtx)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kJoinSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kJoinSpillEnabled, true)
             .config(core::QueryConfig::kSpillNumPartitionBits, 2)
             .maxDrivers(numDrivers)
             .plan(
@@ -1035,8 +1035,8 @@ DEBUG_ONLY_TEST_P(
     task = newQueryBuilder()
                .queryCtx(queryCtx)
                .spillDirectory(spillDirectory->getPath())
-               .config(core::QueryConfig::kSpillEnabled, "true")
-               .config(core::QueryConfig::kJoinSpillEnabled, "true")
+               .config(core::QueryConfig::kSpillEnabled, true)
+               .config(core::QueryConfig::kJoinSpillEnabled, true)
                .config(core::QueryConfig::kSpillNumPartitionBits, 2)
                .plan(
                    PlanBuilder()
@@ -1118,8 +1118,8 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
             .queryCtx(queryCtx)
             .maxDrivers(1)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kWriterSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kWriterSpillEnabled, true)
             // Set 0 file writer flush threshold to always trigger flush in
             // test.
             .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)

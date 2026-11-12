@@ -1317,8 +1317,8 @@ DEBUG_ONLY_TEST_F(
                         {"a"},
                         {"b"},
                         PlanBuilder(planNodeIdGenerator)
-                            .values({makeRowVector(
-                                {"b"}, {makeFlatVector<int64_t>({1})})})
+                            .values({makeNamedRowVector(
+                                "b", makeFlatVector<int64_t>({1}))})
                             .planNode(),
                         "",
                         {"a"})
@@ -2018,11 +2018,11 @@ TEST_F(TaskTest, serialHashJoin) {
 }
 
 TEST_F(TaskTest, serialCrossJoin) {
-  auto left = makeRowVector({"t_c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto left = makeNamedRowVector("t_c0", makeFlatVector<int64_t>({1, 2, 3}));
   auto leftPath = TempFilePath::create();
   writeToFile(leftPath->getPath(), {left});
 
-  auto right = makeRowVector({"u_c0"}, {makeFlatVector<int64_t>({10, 20})});
+  auto right = makeNamedRowVector("u_c0", makeFlatVector<int64_t>({10, 20}));
   auto rightPath = TempFilePath::create();
   writeToFile(rightPath->getPath(), {right});
 
@@ -3143,10 +3143,10 @@ TEST_F(TaskTest, spillDirNotCreated) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
-  auto probeVector = makeRowVector(
-      {"t_c0"}, {makeFlatVector<int32_t>(10, [](auto row) { return row; })});
-  auto buildVector = makeRowVector(
-      {"u_c0"}, {makeFlatVector<int32_t>(10, [](auto row) { return row; })});
+  auto probeVector = makeNamedRowVector(
+      "t_c0", makeFlatVector<int32_t>(10, [](auto row) { return row; }));
+  auto buildVector = makeNamedRowVector(
+      "u_c0", makeFlatVector<int32_t>(10, [](auto row) { return row; }));
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
       PlanBuilder(planNodeIdGenerator)

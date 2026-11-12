@@ -459,7 +459,8 @@ TEST_F(CudfWindowTest, rowNumberGlobalOrderBy) {
 }
 
 TEST_F(CudfWindowTest, rankGlobalOrderBy) {
-  auto data = makeRowVector({"c1"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+  auto data =
+      makeNamedRowVector("c1", makeFlatVector<int64_t>({1, 1, 1, 2, 2}));
 
   auto plan =
       PlanBuilder()
@@ -652,7 +653,7 @@ TEST_F(CudfWindowTest, rankWithNestedKeysGating) {
       arrayKey, makeRowVector({arrayKey})};
   for (const auto& nestedKey : supportedKeys) {
     SCOPED_TRACE(nestedKey->type()->toString());
-    auto supportedData = makeRowVector({"nested_key"}, {nestedKey});
+    auto supportedData = makeNamedRowVector("nested_key", nestedKey);
     auto plan = PlanBuilder()
                     .values(split(supportedData, 3))
                     .window({
@@ -791,7 +792,7 @@ TEST_F(CudfWindowTest, rankNaNRangeFrameBounds) {
   };
 
   auto expected =
-      makeRowVector({"w0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+      makeNamedRowVector("w0", makeFlatVector<int64_t>({1, 2, 3, 4}));
   for (const auto& frame : makeFrames("rank()")) {
     auto plan =
         PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
@@ -2205,9 +2206,8 @@ TEST_F(CudfWindowTest, emptyFrameCountReturnsZero) {
 }
 
 TEST_F(CudfWindowTest, globalIntegerSumUsesBigintAccumulator) {
-  auto data = makeRowVector(
-      {"v"},
-      {makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max(), 1})});
+  auto data = makeNamedRowVector(
+      "v", makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max(), 1}));
 
   auto plan =
       PlanBuilder().values({data}).window({"sum(v) over () as s"}).planNode();
