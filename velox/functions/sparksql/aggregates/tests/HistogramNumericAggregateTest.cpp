@@ -23,6 +23,7 @@
 #include <string_view>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -366,7 +367,7 @@ TEST_F(HistogramNumericAggregateTest, typedTemporalResults) {
 }
 
 TEST_F(HistogramNumericAggregateTest, timestampCentersAtMicrosecondLimits) {
-  for (const auto& type : {TIMESTAMP(), TIMESTAMP_UTC()}) {
+  for (const auto& type : std::vector<TypePtr>{TIMESTAMP(), TIMESTAMP_UTC()}) {
     for (const auto& value : {
              Timestamp(-9'223'372'036'855, 224'192'000),
              Timestamp(9'223'372'036'854, 775'807'000),
@@ -406,7 +407,7 @@ TEST_F(HistogramNumericAggregateTest, rejectsInvalidTimestampInputs) {
       {Timestamp(9'223'372'036'854, 775'808'000),
        "Could not convert Timestamp(9223372036854, 775808000) to microseconds"},
   };
-  for (const auto& type : {TIMESTAMP(), TIMESTAMP_UTC()}) {
+  for (const auto& type : std::vector<TypePtr>{TIMESTAMP(), TIMESTAMP_UTC()}) {
     for (const auto& [value, message] : cases) {
       const auto input =
           makeRowVector({makeFlatVector<Timestamp>({value}, type)});
