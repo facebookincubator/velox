@@ -1210,18 +1210,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
     } else {
       if (lastProber_ && canSpill()) {
         if (operatorCtx_->task()->hasMixedExecutionGroupJoin(joinNode_.get())) {
-          const bool isLastGroup = allProbeGroupFinished();
           if (isSpillInput()) {
-            // Mixed group mode has triggered spilling, based on if current
-            // group is the last group or not, resetting spill partitions in
-            // join bridge.
-            joinBridge_->probeFinished(!isLastGroup);
-          } else if (isLastGroup) {
-            // Mixed group mode has NOT triggered spilling, and current group is
-            // the last group (unreliable best effort signal), finish probe to
-            // notify build to finish. If last group signal is not present, rely
-            // on task cleanup.
-            joinBridge_->probeFinished();
+            // Reuse the spilled table partitions for the next probe group.
+            joinBridge_->probeFinished(/*restart=*/true);
           }
         } else {
           joinBridge_->probeFinished();
@@ -1978,13 +1969,6 @@ bool HashProbe::isRunning() const {
 
 bool HashProbe::isWaitingForPeers() const {
   return state_ == ProbeOperatorState::kWaitForPeers;
-}
-
-bool HashProbe::allProbeGroupFinished() const {
-  VELOX_CHECK(
-      operatorCtx_->task()->hasMixedExecutionGroupJoin(joinNode_.get()));
-  VELOX_CHECK_EQ(operatorCtx_->task()->concurrentSplitGroups(), 1);
-  return operatorCtx_->task()->allSplitsConsumed(joinNode_.get());
 }
 
 void HashProbe::checkRunning() const {

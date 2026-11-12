@@ -140,12 +140,6 @@ class HashProbe : public Operator {
   bool isRunning() const;
   bool isWaitingForPeers() const;
 
-  // Returns true if all probe groups finished execution. If false, the join
-  // bridge will prepare reprocessing for the next execution group from the
-  // probe side. This is not a reliable signal, but rather a best effort signal.
-  // Applies only for mixed grouped execution mode.
-  bool allProbeGroupFinished() const;
-
   void pushdownDynamicFilters();
 
   // Uses build-side Bloom filters to remove rows from activeRows_ when a
