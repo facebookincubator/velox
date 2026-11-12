@@ -25,6 +25,7 @@
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
+#include <string_view>
 
 /// TODO: Add fuzzer test.
 
@@ -61,7 +62,7 @@ class TextWriterTest : public testing::Test,
 
   std::unique_ptr<dwio::common::Reader> createReader(
       const RowTypePtr& schema,
-      const std::string& filePath,
+      std::string_view filePath,
       const dwio::common::SerDeOptions& serDeOptions =
           dwio::common::SerDeOptions()) {
     auto factory =
