@@ -140,6 +140,13 @@ Generic Configuration
        creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
        (for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
        when 1% of the data size observed so far is accumulated.
+   * - exchange_output_batch_rows
+     - integer
+     - 0
+     - The number of rows the Exchange operator fills each output batch to. When positive, it replaces the target the
+       operator derives from preferred_output_batch_bytes and an estimate of the row size. A batch holds only pages
+       taken from the exchange queue together, at most preferred_output_batch_bytes, so it can have fewer rows. A Presto
+       page is never split, so a batch can exceed this by part of a page. 0 keeps the derived target.
    * - merge_exchange.max_buffer_size
      - integer
      - 128MB
