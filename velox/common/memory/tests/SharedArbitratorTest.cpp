@@ -895,8 +895,8 @@ DEBUG_ONLY_TEST_P(
 }
 
 DEBUG_ONLY_TEST_P(
-    SharedArbitrationTestWithThreadingModes,
-    DISABLED_raceBetweenTaskTerminateAndReclaim) {
+    SharedArbitrationTestWithParallelExecutionModeOnly,
+    raceBetweenTaskTerminateAndReclaim) {
   setupMemory(kMemoryCapacity, 0);
   const int numVectors = 10;
   std::vector<RowVectorPtr> vectors;
@@ -918,16 +918,34 @@ DEBUG_ONLY_TEST_P(
       fakeLeafPool->allocate(fakeAllocationSize),
       fakeAllocationSize};
 
+  // Reclaim skips an operator with no reclaimable memory, so the arbitration
+  // must start only after the aggregation holds input. The hook runs before
+  // each addInput, so its second call means the first batch has been added.
+  std::atomic_int numAggregationInputs{0};
+  folly::EventCount aggregationInputWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "Aggregation") {
+          return;
+        }
+        ++numAggregationInputs;
+        aggregationInputWait.notifyAll();
+      })));
+
   // Set test injection to enforce memory arbitration based on the fake
-  // allocation size and the total available memory.
+  // allocation size and the total available memory. Values has produced two
+  // batches by its third getOutput call.
   std::shared_ptr<Task> task;
-  std::atomic<bool> injectAllocationOnce{true};
+  std::atomic_int numValuesOutputs{0};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Values::getOutput",
       std::function<void(const exec::Values*)>([&](const exec::Values* values) {
-        if (!injectAllocationOnce.exchange(false)) {
+        if (numValuesOutputs++ != 2) {
           return;
         }
+        aggregationInputWait.await(
+            [&]() { return numAggregationInputs.load() >= 2; });
         task = values->operatorCtx()->task();
         memory::MemoryPool* pool = values->pool();
         VELOX_ASSERT_THROW(
