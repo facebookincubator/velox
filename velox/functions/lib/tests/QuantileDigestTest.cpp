@@ -670,6 +670,21 @@ TEST_F(QuantileDigestTest, checkQuantilesAfterSerDe) {
   }
 }
 
+TEST_F(QuantileDigestTest, deserializeWideRange) {
+  // The highest bit of min ^ max is bit 61, which gives a tree height of 63.
+  constexpr int64_t kMax{int64_t{1} << 61};
+  QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.01};
+  digest.add(0, 1);
+  digest.add(kMax, 1);
+  std::string data(digest.serializedByteSize(), '\0');
+  digest.serialize(data.data());
+
+  QuantileDigest<int64_t> deserialized{
+      StlAllocator<int64_t>(allocator()), data.data()};
+  EXPECT_EQ(deserialized.getMin(), 0);
+  EXPECT_EQ(deserialized.getMax(), kMax);
+}
+
 TEST_F(QuantileDigestTest, serializedMatchJava) {
   // Test small input size.
   // Query: SELECT QDIGEST_AGG(CAST(c0 AS BIGINT/DOUBLE), 1, 0.99) FROM
