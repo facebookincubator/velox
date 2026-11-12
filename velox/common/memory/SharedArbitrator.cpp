@@ -519,7 +519,7 @@ std::vector<ArbitrationCandidate> SharedArbitrator::getCandidates(
     if (!candidate.has_value()) {
       continue;
     }
-    candidates.push_back({std::move(candidate.value()), freeCapacityOnly});
+    candidates.emplace_back(std::move(candidate.value()), freeCapacityOnly);
   }
   return candidates;
 }
