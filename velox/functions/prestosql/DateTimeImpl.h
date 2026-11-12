@@ -25,6 +25,8 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
+#include <folly/Conv.h>
+
 namespace facebook::velox::functions {
 
 VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE double toUnixtime(
