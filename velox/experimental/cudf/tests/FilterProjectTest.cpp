@@ -2451,7 +2451,8 @@ TEST_F(CudfFilterProjectTest, strposConstantString) {
 }
 
 TEST_F(CudfFilterProjectTest, strposNullConstantSubstring) {
-  // strpos(x, NULL) is NULL for every row (the all-null-target column path).
+  // Constant NULL substring with a column string: strpos(x, NULL) is NULL for
+  // every row. The row count comes from the string column.
   auto data = makeRowVector(
       {"s"}, {makeFlatVector<std::string>({"anything", "here", "goes"})});
   std::vector<RowVectorPtr> vectors{data};
@@ -2482,10 +2483,31 @@ TEST_F(CudfFilterProjectTest, strposMultibyte) {
   assertProjectMatchesVelox(vectors, projections);
 }
 
+TEST_F(CudfFilterProjectTest, strposLongStrings) {
+  // cudf::strings::find searches with one warp per string when the strings
+  // average more than 64 bytes, and with one thread per string otherwise.
+  const std::string padding(100, 'x');
+  auto data = makeRowVector(
+      {"s", "sub"},
+      {makeNullableFlatVector<std::string>(
+           {padding + "needle" + padding,
+            padding + "caf\xC3\xA9" + padding, // "café"
+            padding,
+            std::nullopt}),
+       makeFlatVector<std::string>({"needle", "\xC3\xA9", "zzz", "x"})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, sub) AS column_substring",
+      "strpos(s, 'needle') AS constant_substring",
+      "strpos(s, '') AS empty_substring"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
 TEST_F(CudfFilterProjectTest, strposNullConstantString) {
   // Constant NULL string with a column substring: strpos(NULL, x) is NULL for
-  // every row. The constant string is materialized as an all-null string
-  // column, so this exercises the GPU path distinct from a null substring.
+  // every row. The row count comes from the substring column.
   auto data = makeRowVector(
       {"sub"},
       {makeNullableFlatVector<std::string>({"world", "hello", std::nullopt})});

@@ -706,6 +706,24 @@ TEST_F(ToCudfSelectionTest, strposColumnStringColumnSubstringUsesCudf) {
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
+TEST_F(ToCudfSelectionTest, strposWithInstanceFallsBack) {
+  // Only the 2-argument strpos is registered for the GPU, so the 3-argument
+  // strpos(string, substring, instance) runs on the CPU.
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"banana", "abc", "xyz"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"strpos(s, 'a', 2) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
 // Test supported aggregation should use CUDF
 TEST_F(ToCudfSelectionTest, supportedAggregationUsesCudf) {
   auto vectors = makeVectors(rowType_, 10, 100);

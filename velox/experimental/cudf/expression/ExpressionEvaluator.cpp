@@ -2306,7 +2306,8 @@ class StrposFunction : public CudfFunction {
     std::unique_ptr<cudf::column> stringHolder;
     cudf::column_view stringColumn;
     if (stringIsConstant_) {
-      cudf::string_scalar stringScalar(string_, !stringIsNull_, stream, mr);
+      // A null constant string returned the all-null result above.
+      cudf::string_scalar stringScalar(string_, true, stream, mr);
       stringHolder = cudf::make_column_from_scalar(
           stringScalar, outputRowCount, stream, mr);
       stringColumn = stringHolder->view();
