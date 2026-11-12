@@ -264,7 +264,7 @@ bool useLogicalTypeForEncoding(
 
 namespace {
 template <typename T, typename S>
-std::unique_ptr<T> unique_ptr_cast(std::unique_ptr<S> src) {
+inline std::unique_ptr<T> unique_ptr_cast(std::unique_ptr<S> src) {
   return std::unique_ptr<T>(static_cast<T*>(src.release()));
 }
 } // namespace
