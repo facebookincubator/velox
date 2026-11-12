@@ -189,11 +189,19 @@ class ChunkStatsWriterImpl final : public ChunkStatsWriter {
     NIMBLE_CHECK_NOT_NULL(groupIndex_);
     NIMBLE_CHECK_EQ(stripeCount, groupIndex_->size());
     NIMBLE_CHECK_GT(stripeCount, 0);
-    NIMBLE_CHECK_GT(streamCount, 0);
 
     SCOPE_EXIT {
       groupIndex_.reset();
     };
+
+    // A group whose stripes wrote no streams has nothing to index, e.g. when
+    // every column is a scalar that is null in every row of those stripes. It
+    // gets an empty section, which readers treat as a group without chunk
+    // stats.
+    if (streamCount == 0) {
+      chunkStatsSections_.emplace_back(0, 0, CompressionType::Uncompressed);
+      return;
+    }
 
     // Compute total number of chunks across all streams and stripes.
     uint32_t totalNumChunks{0};
