@@ -56,6 +56,7 @@ struct WriterOptions {
         .useVarintRowCount = experimentalCompactRowCountEncoding,
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
+        .sortDictionaryAlphabet = sortDictionaryAlphabet,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .sharedDictionaryAlphabet = {},
@@ -285,6 +286,12 @@ struct WriterOptions {
   /// When true, FOR-family payloads use the exact required bit width. When
   /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
   bool fixedBitWidthUseExactBits{false};
+
+  /// When true, integer dictionary alphabets are sorted by value. See
+  /// Encoding::Options::sortDictionaryAlphabet.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  bool sortDictionaryAlphabet{false};
 
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
