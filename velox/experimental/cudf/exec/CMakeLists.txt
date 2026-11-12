@@ -17,6 +17,7 @@ add_library(
   AggregationRegistry.cpp
   CudfAggregation.cpp
   CudfAssignUniqueId.cpp
+  CpuFilterFallback.cpp
   CudfBatchConcat.cpp
   CudfConversion.cpp
   CudfDistinct.cpp
@@ -59,11 +60,13 @@ target_link_libraries(
     velox_arrow_bridge
     velox_common_base
     velox_cudf_expression
+    velox_cudf_gpu_function_bridge
     velox_cudf_hive_connector
     velox_cudf_iceberg_connector
     velox_cudf_vector
     velox_exception
     velox_exec
+    velox_presto_types
     velox_test_util
 )
 
