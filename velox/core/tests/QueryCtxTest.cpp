@@ -18,6 +18,8 @@
 #include <atomic>
 #include <thread>
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 
@@ -287,5 +289,66 @@ TEST_F(QueryCtxTest, builderReleaseCallbacks) {
   // After QueryCtx destruction, all callbacks should have been invoked.
   ASSERT_EQ(callbackCount, 2);
   ASSERT_EQ(capturedQueryId, "builder_test_query_id");
+}
+
+TEST_F(QueryCtxTest, defaultPriority) {
+  EXPECT_EQ(std::nullopt, QueryCtx::Builder().build()->priority());
+  EXPECT_EQ(std::nullopt, QueryCtx::create()->priority());
+}
+
+TEST_F(QueryCtxTest, explicitPriority) {
+  folly::CPUThreadPoolExecutor multiPriorityExecutor(1, 3);
+  EXPECT_EQ(
+      QueryCtx::Builder()
+          .executor(&multiPriorityExecutor, folly::Executor::HI_PRI)
+          .build()
+          ->priority(),
+      std::optional<int8_t>(folly::Executor::HI_PRI));
+  EXPECT_EQ(
+      QueryCtx::Builder()
+          .executor(&multiPriorityExecutor, folly::Executor::LO_PRI)
+          .build()
+          ->priority(),
+      std::optional<int8_t>(folly::Executor::LO_PRI));
+}
+
+TEST_F(QueryCtxTest, priorityRequiresMultiPriorityExecutor) {
+  folly::CPUThreadPoolExecutor singlePriorityExecutor(1);
+  VELOX_ASSERT_THROW(
+      QueryCtx::Builder()
+          .executor(&singlePriorityExecutor, folly::Executor::HI_PRI)
+          .build(),
+      "more than one priority");
+  VELOX_ASSERT_THROW(
+      QueryCtx::Builder().executor(nullptr, folly::Executor::HI_PRI).build(),
+      "must be provided");
+}
+
+TEST_F(QueryCtxTest, replacingExecutorDropsPriority) {
+  folly::CPUThreadPoolExecutor multiPriorityExecutor(1, 3);
+  folly::CPUThreadPoolExecutor singlePriorityExecutor(1);
+  // Setting a new executor without a priority drops the priority set
+  // for the previous executor, even when the replacement could honor it.
+  EXPECT_EQ(
+      std::nullopt,
+      QueryCtx::Builder()
+          .executor(&multiPriorityExecutor, folly::Executor::HI_PRI)
+          .executor(&singlePriorityExecutor)
+          .build()
+          ->priority());
+  EXPECT_EQ(
+      std::nullopt,
+      QueryCtx::Builder()
+          .executor(&multiPriorityExecutor, folly::Executor::HI_PRI)
+          .executor(&multiPriorityExecutor)
+          .build()
+          ->priority());
+  EXPECT_EQ(
+      std::nullopt,
+      QueryCtx::Builder()
+          .executor(&multiPriorityExecutor, folly::Executor::HI_PRI)
+          .executor(nullptr)
+          .build()
+          ->priority());
 }
 } // namespace facebook::velox::core::test

@@ -821,7 +821,8 @@ folly::coro::Task<FixedPointPlanExecutionStats> FixedPointLoop::buildHashTable(
       exec::BaseHashTable::kNoSpillInputStartPartitionBit,
       /*vectorHasherMaxNumDistinct=*/1'000'000,
       /*dropDuplicates=*/false,
-      queryCtx.executor());
+      queryCtx.executor(),
+      queryCtx.priority());
 
   state_->setHashTable(
       declaration.name(),

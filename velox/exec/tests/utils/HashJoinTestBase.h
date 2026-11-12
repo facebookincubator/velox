@@ -281,6 +281,14 @@ class HashJoinBuilder {
     return *this;
   }
 
+  /// Sets the query priority recorded on the QueryCtx. The priority is
+  /// set together with the driver executor through the validated
+  /// executor/priority overload.
+  HashJoinBuilder& priority(int8_t priority) {
+    priority_ = priority;
+    return *this;
+  }
+
   HashJoinBuilder& planNode(core::PlanNodePtr planNode) {
     VELOX_CHECK_NULL(planNode_);
     planNode_ = planNode;
@@ -676,8 +684,13 @@ class HashJoinBuilder {
         builder.splits(splitEntry.first, splitEntry.second);
       }
     }
-    auto queryCtx = core::QueryCtx::Builder()
-                        .executor(executor_)
+    core::QueryCtx::Builder queryCtxBuilder;
+    if (priority_.has_value()) {
+      queryCtxBuilder.executor(executor_, *priority_);
+    } else {
+      queryCtxBuilder.executor(executor_);
+    }
+    auto queryCtx = queryCtxBuilder
                         .pool(
                             memory::MemoryManager::getInstance()->addRootPool(
                                 "query_pool",
@@ -808,6 +821,7 @@ class HashJoinBuilder {
   folly::Executor* executor_;
 
   int32_t numDrivers_{1};
+  std::optional<int8_t> priority_;
   core::JoinType joinType_{core::JoinType::kInner};
   bool nullAware_{false};
   bool nullAsValue_{false};

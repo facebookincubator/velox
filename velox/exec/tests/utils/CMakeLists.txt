@@ -56,6 +56,7 @@ velox_add_test_headers(
   PlanBuilder.h
   PortUtil.h
   QueryAssertions.h
+  RecordingExecutor.h
   RowContainerTestBase.h
   SerializedPageUtil.h
   SumNonPODAggregate.h

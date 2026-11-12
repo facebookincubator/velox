@@ -15,10 +15,15 @@
  */
 
 #include <functional>
+#include <mutex>
+#include <optional>
+#include <vector>
 
 #include <re2/re2.h>
 
 #include <fmt/format.h>
+#include <gmock/gmock.h>
+#include "folly/executors/CPUThreadPoolExecutor.h"
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -36,6 +41,7 @@
 #include "velox/exec/tests/utils/HashJoinTestBase.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/RecordingExecutor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -573,6 +579,57 @@ DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, parallelJoinBuildCheck) {
       })
       .run();
   ASSERT_EQ(numDrivers_ == 1, !isParallelBuild);
+}
+
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    driversAndParallelBuildRunAtQueryPriority) {
+  RecordingExecutor executor(4, 3);
+  std::atomic<bool> isParallelBuild{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashTable::parallelJoinBuild",
+      std::function<void(void*)>([&](void*) { isParallelBuild = true; }));
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, &executor)
+      .numDrivers(4)
+      .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+      .keyTypes({BIGINT(), VARCHAR()})
+      .probeVectors(1600, 5)
+      .buildVectors(1500, 5)
+      .referenceQuery(
+          "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1 = u_k1")
+      .injectSpill(false)
+      .priority(folly::Executor::HI_PRI)
+      .run();
+  ASSERT_TRUE(isParallelBuild);
+  const auto recorded = executor.recordedPriorities();
+  ASSERT_FALSE(recorded.empty());
+  EXPECT_THAT(
+      recorded,
+      testing::Each(testing::Optional(testing::Eq(folly::Executor::HI_PRI))));
+}
+
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    driversAndParallelBuildRunUntaggedWithoutQueryPriority) {
+  RecordingExecutor executor(4, 3);
+  std::atomic<bool> isParallelBuild{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashTable::parallelJoinBuild",
+      std::function<void(void*)>([&](void*) { isParallelBuild = true; }));
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, &executor)
+      .numDrivers(4)
+      .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+      .keyTypes({BIGINT(), VARCHAR()})
+      .probeVectors(1600, 5)
+      .buildVectors(1500, 5)
+      .referenceQuery(
+          "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1 = u_k1")
+      .injectSpill(false)
+      .run();
+  ASSERT_TRUE(isParallelBuild);
+  const auto recorded = executor.recordedPriorities();
+  ASSERT_FALSE(recorded.empty());
+  EXPECT_THAT(recorded, testing::Each(testing::Eq(std::optional<int8_t>{})));
 }
 
 DEBUG_ONLY_TEST_P(

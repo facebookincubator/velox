@@ -929,7 +929,8 @@ bool HashBuild::finishHashBuild() {
         vectorHasherMaxNumDistinct_,
         dropDuplicates_,
         allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                               : nullptr);
+                               : nullptr,
+        operatorCtx_->task()->queryCtx()->priority());
   }
   stats_.wlock()->addRuntimeStat(
       std::string(BaseHashTable::kBuildWallNanos),

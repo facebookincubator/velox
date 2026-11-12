@@ -1046,10 +1046,15 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     if (runInCurrentThread) {
       step->prepare();
     } else {
-      buildExecutor_->add([driverCtx, step]() {
+      folly::Func task = [driverCtx, step]() {
         ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
         step->prepare();
-      });
+      };
+      if (buildPriority_.has_value()) {
+        buildExecutor_->addWithPriority(std::move(task), *buildPriority_);
+      } else {
+        buildExecutor_->add(std::move(task));
+      }
     }
   };
 
@@ -1967,8 +1972,10 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
     int8_t spillInputStartPartitionBit,
     size_t vectorHasherMaxNumDistinct,
     bool dropDuplicates,
-    folly::Executor* executor) {
+    folly::Executor* executor,
+    std::optional<int8_t> priority) {
   buildExecutor_ = executor;
+  buildPriority_ = priority;
   if (dropDuplicates) {
     if (table_ != nullptr) {
       // Reset table_ and capacity_ to trigger rehash.

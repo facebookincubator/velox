@@ -22,6 +22,7 @@
 #include <folly/container/F14Set.h>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <typeindex>
 #include "velox/common/base/Exceptions.h"
@@ -191,6 +192,27 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
    public:
     Builder& executor(folly::Executor* executor) {
       executor_ = executor;
+      // A priority is tied to the executor it was set with; setting a
+      // new executor without a priority drops it.
+      priority_ = std::nullopt;
+      return *this;
+    }
+
+    /// Sets the driver executor and the scheduling priority together, so
+    /// a query cannot carry a priority without an executor that honors
+    /// it. Fails unless 'executor' is non-null and supports more than
+    /// one priority. Driver and hash-join build work is submitted with
+    /// 'addWithPriority' when a priority is set.
+    Builder& executor(folly::Executor* executor, int8_t priority) {
+      VELOX_CHECK_NOT_NULL(
+          executor, "Executor must be provided with a priority");
+      VELOX_CHECK_GT(
+          executor->getNumPriorities(),
+          1,
+          "Executor must support more than one priority when a priority is set: {}",
+          executor->getNumPriorities());
+      executor_ = executor;
+      priority_ = priority;
       return *this;
     }
 
@@ -278,6 +300,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     std::string queryId_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     CredentialKeys credentialKeys_;
+    std::optional<int8_t> priority_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
     std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
@@ -306,6 +329,14 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   folly::Executor* executor() const {
     return executor_;
+  }
+
+  /// Scheduling priority of the query as a folly executor priority, or
+  /// empty when the query has no scheduling priority. Driver work is
+  /// submitted at this priority when set, and without a priority
+  /// otherwise.
+  std::optional<int8_t> priority() const {
+    return priority_;
   }
 
   bool isExecutorSupplied() const {
@@ -508,7 +539,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       const std::string& queryId = "",
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
       TraceCtxProvider traceCtxProvider = nullptr,
-      CredentialKeys credentialKeys = {});
+      CredentialKeys credentialKeys = {},
+      std::optional<int8_t> priority = std::nullopt);
 
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
@@ -568,6 +600,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   void finishArbitration();
 
   const std::string queryId_;
+  // Scheduling priority of the query as a folly executor priority, if set.
+  const std::optional<int8_t> priority_;
   folly::Executor* const executor_{nullptr};
   folly::Executor* const spillExecutor_{nullptr};
   cache::AsyncDataCache* const cache_;

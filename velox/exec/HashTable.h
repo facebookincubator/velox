@@ -447,7 +447,8 @@ class BaseHashTable {
       int8_t spillInputStartPartitionBit,
       size_t vectorHasherMaxNumDistinct,
       bool dropDuplicates = false,
-      folly::Executor* executor = nullptr) = 0;
+      folly::Executor* executor = nullptr,
+      std::optional<int8_t> priority = std::nullopt) = 0;
 
   /// The hash table used for join build in left semi and anti join may not
   /// retain duplicate join keys when allowDuplicates_ is false. This is
@@ -762,7 +763,8 @@ class HashTable : public BaseHashTable {
       int8_t spillInputStartPartitionBit,
       size_t vectorHasherMaxNumDistinct,
       bool dropDuplicates = false,
-      folly::Executor* executor = nullptr) override;
+      folly::Executor* executor = nullptr,
+      std::optional<int8_t> priority = std::nullopt) override;
 
   void prepareForJoinProbe(
       HashLookup& lookup,
@@ -1302,6 +1304,10 @@ class HashTable : public BaseHashTable {
   // other work, the thread of prepareJoinTable() will sequentially
   // execute the parallel build steps.
   folly::Executor* buildExecutor_{nullptr};
+
+  // Scheduling priority of the query whose build 'buildExecutor_' serves,
+  // if set. Parallel build steps run at this priority when set.
+  std::optional<int8_t> buildPriority_;
 
   //  Counts parallel build rows. Used for consistency check.
   std::atomic<int64_t> numParallelBuildRows_{0};
