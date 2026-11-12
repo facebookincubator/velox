@@ -19,7 +19,6 @@
 #include <algorithm>
 #include <numeric>
 #include <shared_mutex>
-#include <tuple>
 
 #include "folly/json/json.h"
 #include "velox/common/testutil/TestValue.h"
@@ -138,35 +137,6 @@ std::vector<uint32_t> getPartitionRows(
 }
 
 } // namespace
-
-// ---------------------------------------------------------------------------
-// ClusterIndexBase::LookupChunk
-// ---------------------------------------------------------------------------
-
-std::shared_ptr<DecodedKeyChunk> ClusterIndexBase::LookupChunk::find(
-    uint32_t partitionId,
-    uint32_t chunkIndex) const {
-  if (data_ == nullptr || partitionId_ != partitionId ||
-      chunkIndex_ != chunkIndex) {
-    return nullptr;
-  }
-  return data_;
-}
-
-void ClusterIndexBase::LookupChunk::add(
-    uint32_t partitionId,
-    uint32_t chunkIndex,
-    std::shared_ptr<DecodedKeyChunk> chunk) {
-  NIMBLE_CHECK_NOT_NULL(chunk);
-  if (data_ != nullptr &&
-      std::tie(partitionId_, chunkIndex_) <=
-          std::tie(partitionId, chunkIndex)) {
-    return;
-  }
-  partitionId_ = partitionId;
-  chunkIndex_ = chunkIndex;
-  data_ = std::move(chunk);
-}
 
 // ---------------------------------------------------------------------------
 // ClusterIndexBase
@@ -320,7 +290,7 @@ uint32_t ClusterIndexBase::partitionRow(uint32_t partitionId, uint32_t row)
 
 void ClusterIndexBase::resolvePartitionBounds(
     std::vector<PartitionLookup>& partitionLookups,
-    LookupChunk* heldChunk) const {
+    LowerBoundChunk* lowerBoundChunk) const {
   std::sort(
       partitionLookups.begin(),
       partitionLookups.end(),
@@ -335,8 +305,8 @@ void ClusterIndexBase::resolvePartitionBounds(
     while (i < partitionLookups.size() &&
            partitionLookups.at(i).partitionId == loadedPartition.id) {
       const auto& entry = partitionLookups.at(i);
-      *velox::checkedNotNull(entry.targetRow) = resolvePartitionRow(
-          partition, entry.encodedKey, entry.inclusive, heldChunk);
+      *velox::checkedNotNull(entry.targetRow) =
+          resolvePartitionRow(partition, entry, lowerBoundChunk);
       ++i;
     }
   }
@@ -394,12 +364,14 @@ void ClusterIndexBase::partitionPointLookups(
         partitionId.value(),
         encodedKey,
         /*inclusive=*/true,
+        /*lowerBound=*/true,
         &partitionRowRanges.at(i).startRow);
     // Upper bound: first row > key (exclusive).
     partitionLookups.emplace_back(
         partitionId.value(),
         encodedKey,
         /*inclusive=*/false,
+        /*lowerBound=*/false,
         &partitionRowRanges.at(i).endRow);
   }
 }
@@ -432,6 +404,7 @@ void ClusterIndexBase::partitionRangeLookups(
           partitionId.value(),
           keyBound.lowerKey.value(),
           /*inclusive=*/true,
+          /*lowerBound=*/true,
           &partitionRowRanges.at(i).startRow);
     }
 
@@ -443,6 +416,7 @@ void ClusterIndexBase::partitionRangeLookups(
             partitionId.value(),
             keyBound.upperKey.value(),
             /*inclusive=*/true,
+            /*lowerBound=*/false,
             &partitionRowRanges.at(i).endRow);
       } else {
         partitionRowRanges.at(i).endRow = numRows_;
@@ -455,31 +429,30 @@ void ClusterIndexBase::partitionRangeLookups(
 
 IndexLookup::LookupResult ClusterIndexBase::lookup(
     const LookupRequest& request) const {
-  return lookup(request, /*heldChunk=*/nullptr);
+  return lookup(request, /*lowerBoundChunk=*/nullptr);
 }
 
 IndexLookup::LookupResult ClusterIndexBase::lookup(
     const LookupRequest& request,
-    LookupChunk* heldChunk) const {
+    LowerBoundChunk* lowerBoundChunk) const {
   std::vector<PartitionLookup> partitionLookups;
   std::vector<RowRange> partitionRowRanges;
   lookupPartitions(request, partitionLookups, partitionRowRanges);
   NIMBLE_CHECK_EQ(partitionRowRanges.size(), request.size());
   NIMBLE_CHECK_LE(partitionLookups.size(), 2 * request.size());
-  resolvePartitionBounds(partitionLookups, heldChunk);
+  resolvePartitionBounds(partitionLookups, lowerBoundChunk);
 
   return buildLookupResult(request.options(), partitionRowRanges);
 }
 
 uint32_t ClusterIndexBase::resolvePartitionRow(
     const IndexPartition* partition,
-    std::string_view encodedKey,
-    bool inclusive,
-    LookupChunk* heldChunk) const {
+    const PartitionLookup& bound,
+    LowerBoundChunk* lowerBoundChunk) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
-  const auto chunkLocation = lookupChunk(partition, encodedKey);
+  const auto chunkLocation = lookupChunk(partition, bound.encodedKey);
   const auto partitionRow =
-      seekInChunk(partition, chunkLocation, encodedKey, inclusive, heldChunk);
+      seekInChunk(partition, chunkLocation, bound, lowerBoundChunk);
   return partitionRows_.at(loadedPartition.id) + partitionRow;
 }
 
@@ -689,34 +662,30 @@ ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
   return slot;
 }
 
-std::shared_ptr<DecodedKeyChunk> ClusterIndexBase::findDecodedChunk(
-    const IndexPartition* partition,
-    const ChunkLocation& chunkLocation,
-    const LookupChunk* heldChunk) const {
-  if (heldChunk != nullptr) {
-    auto chunk = heldChunk->find(
-        velox::checkedNotNull(partition)->id, chunkLocation.chunkIndex);
-    if (chunk != nullptr) {
-      return chunk;
-    }
-  }
-  return getDecodedChunk(partition, chunkLocation).data;
-}
-
 uint32_t ClusterIndexBase::seekInChunk(
     const IndexPartition* partition,
     const ChunkLocation& chunkLocation,
-    std::string_view encodedKey,
-    bool inclusive,
-    LookupChunk* heldChunk) const {
-  const auto chunk = findDecodedChunk(partition, chunkLocation, heldChunk);
-  if (heldChunk != nullptr) {
-    heldChunk->add(
-        velox::checkedNotNull(partition)->id, chunkLocation.chunkIndex, chunk);
+    const PartitionLookup& bound,
+    LowerBoundChunk* lowerBoundChunk) const {
+  // The upper bound of a key is usually in the chunk of its lower bound.
+  const bool inLowerBoundChunk = lowerBoundChunk != nullptr &&
+      lowerBoundChunk->data != nullptr &&
+      lowerBoundChunk->partitionId == velox::checkedNotNull(partition)->id &&
+      lowerBoundChunk->chunkIndex == chunkLocation.chunkIndex;
+  const auto chunk = inLowerBoundChunk
+      ? lowerBoundChunk->data
+      : getDecodedChunk(partition, chunkLocation).data;
+  if (bound.lowerBound && lowerBoundChunk != nullptr) {
+    NIMBLE_CHECK_NULL(lowerBoundChunk->data, "A seek has one lower bound");
+    *lowerBoundChunk = {
+        .partitionId = velox::checkedNotNull(partition)->id,
+        .chunkIndex = chunkLocation.chunkIndex,
+        .data = chunk};
   }
-  const auto rowInChunk = chunk->reader->seek(encodedKey, inclusive);
+  const auto rowInChunk =
+      chunk->reader->seek(bound.encodedKey, bound.inclusive);
   if (!rowInChunk.has_value()) {
-    if (!inclusive) {
+    if (!bound.inclusive) {
       return chunkLocation.rowOffset + chunk->reader->rowCount();
     }
     NIMBLE_CHECK(false, "Key must be found within a matched chunk");
@@ -790,7 +759,7 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
   KeyIterator(
       const ClusterIndexBase& index,
       RowRange rows,
-      const LookupChunk* heldChunk);
+      std::shared_ptr<DecodedKeyChunk> chunk);
 
   bool hasNext() const override {
     return nextRow_ < endRow_;
@@ -806,12 +775,18 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
       std::vector<std::string_view>& keys,
       const BufferAllocator& bufferAllocator) override;
 
+  // Moves past the rows without reading their keys. Opens a key cursor of the
+  // held chunk at the next row when the chunk holds it, which the chunk's
+  // reader does without decoding the chunk again, and otherwise releases the
+  // chunk, so that the next read opens the chunk of its row.
+  void skip(size_t numKeys) override;
+
  private:
   // Loads the chunk holding 'row' and positions the key cursor at it. Runs
   // once per chunk, so the binary searches it performs are amortized over
-  // the chunk's rows. Takes the chunk from 'heldChunk' when it holds it.
-  // 'heldChunk' can be null.
-  void openChunkAt(uint32_t row, const LookupChunk* heldChunk);
+  // the chunk's rows. Opens 'chunk' when it is not null, which must be the
+  // chunk of 'row', and otherwise the chunk that the index caches.
+  void openChunkAt(uint32_t row, std::shared_ptr<DecodedKeyChunk> chunk);
 
   // Index being scanned.
   const ClusterIndexBase& index_;
@@ -826,22 +801,27 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
   // pre-materialized encoding stay valid while the chunk is current.
   std::shared_ptr<DecodedKeyChunk> chunk_;
 
+  // File-level rows of chunk_, the first and the end, exclusive.
+  uint32_t chunkStartRow_{0};
+  uint32_t chunkEndRow_{0};
+
   // Reads keys from chunk_. Exhausted exactly at the chunk boundary, which
   // is what drives the transition to the next chunk. Null until the first
   // read, so that a cursor that is never read loads no chunk, except for the
-  // cursor of seek(), which opens the chunk of its first row from the chunks
-  // that the lookup decoded.
+  // cursor of seek(), which opens the chunk of its first row that the lookup
+  // decoded.
   std::unique_ptr<KeyCursor> cursor_;
 };
 
 std::unique_ptr<KeyCursor> ClusterIndexBase::keyCursor(RowRange rows) const {
-  return std::make_unique<KeyIterator>(*this, rows, /*heldChunk=*/nullptr);
+  return std::make_unique<KeyIterator>(*this, rows, /*chunk=*/nullptr);
 }
 
 ClusterIndexBase::SeekResult ClusterIndexBase::seek(
     const velox::serializer::EncodedKeyBounds& bounds) const {
-  LookupChunk heldChunk;
-  const auto result = lookup(LookupRequest::rangeScan({bounds}), &heldChunk);
+  LowerBoundChunk lowerBoundChunk;
+  const auto result =
+      lookup(LookupRequest::rangeScan({bounds}), &lowerBoundChunk);
   NIMBLE_CHECK_EQ(result.size(), 1);
   const auto& ranges = result[0];
   NIMBLE_CHECK_LE(
@@ -850,15 +830,19 @@ ClusterIndexBase::SeekResult ClusterIndexBase::seek(
     return {};
   }
   const auto rows = ranges.front();
+  // The lower bound resolves to a row in its chunk, and the lookup does not
+  // narrow the range, so the chunk of the lower bound holds the first row. A
+  // range without a lower bound has no chunk.
   return {
       .rows = rows,
-      .keyCursor = std::make_unique<KeyIterator>(*this, rows, &heldChunk)};
+      .keyCursor = std::make_unique<KeyIterator>(
+          *this, rows, std::move(lowerBoundChunk.data))};
 }
 
 ClusterIndexBase::KeyIterator::KeyIterator(
     const ClusterIndexBase& index,
     RowRange rows,
-    const LookupChunk* heldChunk)
+    std::shared_ptr<DecodedKeyChunk> chunk)
     : index_{index}, endRow_{rows.endRow}, nextRow_{rows.startRow} {
   NIMBLE_CHECK_LE(
       rows.startRow,
@@ -871,9 +855,8 @@ ClusterIndexBase::KeyIterator::KeyIterator(
       "Row range {} is beyond file total rows {}",
       rows.toString(),
       index_.numRows_);
-  // Opens the chunk of the first row, which the lookup holds.
-  if (heldChunk != nullptr && hasNext()) {
-    openChunkAt(nextRow_, heldChunk);
+  if (chunk != nullptr && hasNext()) {
+    openChunkAt(nextRow_, std::move(chunk));
   }
 }
 
@@ -883,7 +866,7 @@ std::string_view ClusterIndexBase::KeyIterator::next() {
   // The key cursor runs out exactly at the chunk boundary, so its own
   // exhaustion is what says to move on.
   if (cursor_ == nullptr || !cursor_->hasNext()) {
-    openChunkAt(nextRow_, /*heldChunk=*/nullptr);
+    openChunkAt(nextRow_, /*chunk=*/nullptr);
   }
   // Advance only once the key is in hand: a throwing cursor must not leave
   // nextRow_ claiming a row that was never returned.
@@ -901,7 +884,7 @@ void ClusterIndexBase::KeyIterator::next(
     // cursor_ is null on the first read and exhausted at the end of its chunk.
     // openChunkAt() sets it or throws, so it is not null past this point.
     if (cursor_ == nullptr || !cursor_->hasNext()) {
-      openChunkAt(nextRow_, /*heldChunk=*/nullptr);
+      openChunkAt(nextRow_, /*chunk=*/nullptr);
     }
 
     // The key cursor stops at the end of its chunk, and the iteration may stop
@@ -918,15 +901,35 @@ void ClusterIndexBase::KeyIterator::next(
   }
 }
 
+void ClusterIndexBase::KeyIterator::skip(size_t numKeys) {
+  if (numKeys == 0) {
+    return;
+  }
+  const auto row = static_cast<uint32_t>(
+      std::min<uint64_t>(endRow_, static_cast<uint64_t>(nextRow_) + numKeys));
+  if (chunk_ != nullptr && row >= chunkStartRow_ && row < chunkEndRow_) {
+    // Commit after the cursor, which can throw, as openChunkAt() does.
+    auto cursor = chunk_->reader->cursor(row - chunkStartRow_);
+    cursor_ = std::move(cursor);
+    nextRow_ = row;
+    return;
+  }
+  cursor_.reset();
+  chunk_.reset();
+  nextRow_ = row;
+}
+
 void ClusterIndexBase::KeyIterator::openChunkAt(
     uint32_t row,
-    const LookupChunk* heldChunk) {
+    std::shared_ptr<DecodedKeyChunk> chunk) {
   const auto* partition = index_.lookupPartition(row);
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const auto& partitionIndex = *velox::checkedNotNull(loadedPartition.index);
   const uint32_t partitionRow = index_.partitionRow(loadedPartition.id, row);
   const auto chunkLocation = index_.lookupChunk(partition, partitionRow);
-  auto chunk = index_.findDecodedChunk(partition, chunkLocation, heldChunk);
+  if (chunk == nullptr) {
+    chunk = index_.getDecodedChunk(partition, chunkLocation).data;
+  }
 
   // chunk_rows is a partition-relative prefix sum, so this chunk's entry is
   // the row it ends at and its distance from rowOffset is its row count.
@@ -941,11 +944,15 @@ void ClusterIndexBase::KeyIterator::openChunkAt(
       chunkLocation.chunkIndex);
 
   auto cursor = chunk->reader->cursor(partitionRow - chunkLocation.rowOffset);
+  const uint32_t partitionStartRow =
+      index_.partitionRows_.at(loadedPartition.id);
 
   // Commit after every step that can throw, so a failure leaves the iterator
   // on its previous chunk rather than half-moved onto this one.
   chunk_ = std::move(chunk);
   cursor_ = std::move(cursor);
+  chunkStartRow_ = partitionStartRow + chunkLocation.rowOffset;
+  chunkEndRow_ = partitionStartRow + chunkEndRowInPartition;
 }
 
 } // namespace facebook::nimble::index

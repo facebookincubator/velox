@@ -1768,6 +1768,81 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, seekKeepsTheKeyChunkOfItsFirstRow) {
   EXPECT_EQ(miss.keyCursor, nullptr);
 }
 
+// Debug-only: counting decodes relies on a TestValue hook, which is compiled
+// out under NDEBUG.
+DEBUG_ONLY_TEST_F(ClusterIndexTest, keyCursorSkipsKeysWithoutReadingThem) {
+  std::vector<std::vector<std::string>> keyChunks = {
+      {"key_a", "key_b", "key_c"},
+      {"key_d", "key_e", "key_f"},
+      {"key_g", "key_h", "key_i"}};
+  auto encoded = encodeKeyStream(keyChunks);
+
+  std::vector<std::string> indexColumns = {"col1"};
+  std::string minKey = "key_0";
+  std::vector<Stripe> stripes = {createStripeWithKeys(
+      {.streamOffset = 0,
+       .streamSize = static_cast<uint32_t>(encoded.data.size()),
+       .stream =
+           {.numChunks = 3,
+            .chunkRows = {3, 3, 3},
+            .chunkOffsets = encoded.chunkOffsets},
+       .chunkKeys = {"key_c", "key_f", "key_i"}})};
+  std::vector<int> stripeGroups = {1};
+
+  auto indexBuffers =
+      createTestClusterIndex(indexColumns, minKey, stripes, stripeGroups);
+  auto clusterIndex =
+      createClusterIndex(indexBuffers, createKeyStreamFile(encoded.data));
+
+  // Fires only after a cache miss, so it counts decodes rather than reads.
+  std::atomic_uint32_t decodeCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
+      std::function<void(DecodedKeyChunk*)>(
+          [&](DecodedKeyChunk* /*decodedChunk*/) { ++decodeCount; }));
+
+  auto cursor = clusterIndex->keyCursor(RowRange{0, 9});
+  EXPECT_EQ(cursor->next(), "key_a");
+  EXPECT_EQ(decodeCount.load(), 1);
+
+  // A skip in the chunk that the cursor holds moves in the chunk.
+  cursor->skip(1);
+  EXPECT_EQ(cursor->next(), "key_c");
+  EXPECT_EQ(decodeCount.load(), 1);
+
+  // A skip over the second chunk does not read it.
+  cursor->skip(3);
+  EXPECT_EQ(cursor->next(), "key_g");
+  EXPECT_EQ(decodeCount.load(), 2);
+
+  // A batch reads on from the row after a skip, and a skip stops at the end of
+  // the cursor.
+  cursor->skip(0);
+  EXPECT_EQ(
+      readKeyBatches(*cursor, /*maxKeys=*/1),
+      (std::vector<std::string>{"key_h", "key_i"}));
+  cursor->skip(10);
+  EXPECT_FALSE(cursor->hasNext());
+
+  // A cursor that skips before its first read opens the chunk of the row that
+  // it reads first.
+  auto skipFirst = clusterIndex->keyCursor(RowRange{1, 9});
+  skipFirst->skip(6);
+  EXPECT_EQ(skipFirst->next(), "key_h");
+  EXPECT_EQ(decodeCount.load(), 2);
+  skipFirst->skip(10);
+  EXPECT_FALSE(skipFirst->hasNext());
+
+  // A skip to the end of the held chunk releases it, and the next read opens
+  // the next chunk.
+  auto toChunkEnd = clusterIndex->keyCursor(RowRange{0, 9});
+  EXPECT_EQ(toChunkEnd->next(), "key_a");
+  EXPECT_EQ(decodeCount.load(), 3);
+  toChunkEnd->skip(2);
+  EXPECT_EQ(toChunkEnd->next(), "key_d");
+  EXPECT_EQ(decodeCount.load(), 4);
+}
+
 // Verifies that the index caching mechanism works end-to-end when
 // ClusterIndex is created with IndexLookup::Options containing a cache
 // and fileHandle. The first open reads index data from the file; the

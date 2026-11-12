@@ -79,6 +79,13 @@ class StripeKeyCursor final : public index::KeyCursor {
     numRemaining_ -= static_cast<uint32_t>(keys.size() - numKeys);
   }
 
+  void skip(size_t numKeys) override {
+    const auto numSkipped =
+        static_cast<uint32_t>(std::min<size_t>(numKeys, numRemaining_));
+    scanKeyCursor_->skip(numSkipped);
+    numRemaining_ -= numSkipped;
+  }
+
   // Returns the number of keys of the stripe that were not read.
   uint32_t numRemaining() const {
     return numRemaining_;
@@ -485,11 +492,13 @@ IndexScanCursor::co_nextStripe(uint32_t row) {
   resetKeyCursor.dismiss();
   numOutputRows_ += selectedRows.numRows();
   ++stripeOffset_;
-  // A stripe that left keys unread did not move the key cursor to the next
-  // stripe, and the last stripe releases the key chunk that it holds.
-  if (stripeKeyCursor.numRemaining() > 0 ||
-      stripeOffset_ == stripeSelections_.size()) {
+  if (stripeOffset_ == stripeSelections_.size()) {
+    // The last stripe releases the key chunk that the key cursor holds.
     keyCursor_.reset();
+  } else {
+    // Moves the key cursor of the scan past the keys that the materializer
+    // left unread, to the first row of the next stripe.
+    stripeKeyCursor.skip(stripeKeyCursor.numRemaining());
   }
   co_return entries;
 }
