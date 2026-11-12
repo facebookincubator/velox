@@ -1323,6 +1323,16 @@ class QueryConfig {
       false,
       "Throw exception on duplicate map keys.")
 
+  /// If true, map functions that support it build a flat map when every key is
+  /// constant.
+  VELOX_QUERY_CONFIG(
+      kGenerateConstantMapsAsFlatMaps,
+      generateConstantMapsAsFlatMaps,
+      "generate_constant_maps_as_flat_maps",
+      bool,
+      false,
+      "Build a flat map when every map key is constant.")
+
   /// Max number of input batches to prefetch for index lookup. 0 = disabled.
   VELOX_QUERY_CONFIG(
       kIndexLookupJoinMaxPrefetchBatches,
