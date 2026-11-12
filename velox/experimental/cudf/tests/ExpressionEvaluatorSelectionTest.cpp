@@ -20,6 +20,8 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -30,8 +32,13 @@
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
+
+#include <cudf/column/column_factories.hpp>
+#include <cudf/utilities/default_stream.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <folly/ScopeGuard.h>
 #include <gmock/gmock.h>
@@ -67,6 +74,37 @@ class SessionConfigFunction : public CudfFunction {
   const core::QueryConfig config_;
 };
 
+// Stand-ins for a GPU simple function's initialize() that fails a check, which
+// throws the Velox error as on the CPU.
+void initializeThrowsUserError(
+    void* /*instance*/,
+    const std::vector<TypePtr>& /*inputTypes*/,
+    const core::QueryConfig& /*config*/,
+    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
+  VELOX_USER_FAIL("Unknown time zone: Mars/Olympus");
+}
+
+void initializeThrowsRuntimeError(
+    void* /*instance*/,
+    const std::vector<TypePtr>& /*inputTypes*/,
+    const core::QueryConfig& /*config*/,
+    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
+  VELOX_FAIL("Instance state is inconsistent");
+}
+
+// Stands in for a kernel: every row null.
+std::unique_ptr<cudf::column> allNullLaunch(
+    const std::vector<gpu_sfi::GpuArgView>& /*arguments*/,
+    const gpu_sfi::GpuFunctionInstance& /*instance*/,
+    cudf::size_type numRows,
+    cudf::data_type outputType,
+    uint8_t* /*declinedRows*/,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  return cudf::make_fixed_width_column(
+      outputType, numRows, cudf::mask_state::ALL_NULL, stream, mr);
+}
+
 class CudfExpressionSelectionTest : public ::testing::Test {
  protected:
   static void SetUpTestCase() {
@@ -86,6 +124,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
         {"b", BIGINT()},
         {"c", INTEGER()},
         {"name", VARCHAR()},
+        {"d", DOUBLE()},
         {"date", DATE()},
         {"c", INTEGER()},
     });
@@ -243,6 +282,224 @@ TEST_F(CudfExpressionSelectionTest, functionEligibilityUsesSessionConfig) {
       createCudfFunction(
           name, expr, pool_.get(), legacyQueryCtx->queryConfig()),
       nullptr);
+}
+
+// GPU SFI claims a call node only when a registered function binds the
+// argument types exactly: round and truncate register each arity separately,
+// a chained AND arrives flattened as one call that the variadic registration
+// matches at any arity while still checking the element type, and a null
+// literal, which has no element 0 to read, is declined in canEvaluate() so
+// another evaluator can take the node rather than create() throwing.
+TEST_F(CudfExpressionSelectionTest, gpuSfiCanEvaluate) {
+  struct Case {
+    std::string sql;
+    bool claimed;
+  };
+  const std::vector<Case> cases = {
+      {"bitwise_and(a, b)", true},
+      {"d + d", true},
+      // Integral arithmetic binds the Checked* structs, as Presto does on the
+      // CPU.
+      {"a + b", true},
+      {"a - b", true},
+      {"a * b", true},
+      {"a / b", true},
+      {"negate(a)", true},
+      // The decimal-places argument is INTEGER, while an integer literal
+      // parses as BIGINT; a coerced plan carries the cast.
+      {"round(d)", true},
+      {"round(d, cast(2 as integer))", true},
+      {"round(a)", true},
+      {"truncate(d)", true},
+      {"truncate(d, cast(2 as integer))", true},
+      {"a > 1 AND b > 2", true},
+      {"a > 1 AND b > 2 AND c > 3", true},
+      {"a > 1 AND b > 2 AND c > 3 AND a < 9", true},
+      {"a > 1 OR b > 2", true},
+      {"a > 1 OR b > 2 OR c > 3", true},
+      {"not(a > 1)", true},
+      {"bitwise_and(a, cast(null as bigint))", false},
+      {"a + cast(null as bigint)", false},
+  };
+  for (const auto& [sql, claimed] : cases) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_EQ(GpuSfiExpression::canEvaluate(expr), claimed);
+  }
+
+  // Shapes the parser would not produce: truncate is floating point only, as
+  // in Velox, and the and() pack takes booleans, so a bigint pack of the same
+  // shape is not a match.
+  struct HandBuilt {
+    std::string name;
+    TypePtr returnType;
+    std::vector<std::string> fields;
+  };
+  const std::vector<HandBuilt> rejected = {
+      {"truncate", BIGINT(), {"a"}},
+      {"and", BOOLEAN(), {"a", "b"}},
+  };
+  for (const auto& [name, returnType, fields] : rejected) {
+    SCOPED_TRACE(name);
+    std::vector<core::TypedExprPtr> arguments;
+    for (const auto& field : fields) {
+      arguments.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              rowType_->findChild(field), field));
+    }
+    EXPECT_FALSE(
+        GpuSfiExpression::canEvaluate(
+            std::make_shared<core::CallTypedExpr>(
+                returnType, arguments, name)));
+  }
+}
+
+// GPU SFI (priority 75) sits between the function tier (50) and AST (100), so
+// it evaluates a call nothing else implements, AST takes a call both can
+// handle, and roots it never claims, such as a column, a literal or a call with
+// a null literal, still run on the GPU through another evaluator. When only
+// GPU SFI implements the call and it declines, the operator reports itself
+// ineligible at plan time and runs on the CPU.
+TEST_F(CudfExpressionSelectionTest, gpuSfiSelection) {
+  enum class Evaluator { kGpuSfi, kOther, kNone };
+  struct Case {
+    std::string sql;
+    Evaluator evaluator;
+  };
+  const std::vector<Case> cases = {
+      {"bitwise_and(a, b)", Evaluator::kGpuSfi},
+      {"d + d", Evaluator::kOther},
+      {"a", Evaluator::kOther},
+      {"42", Evaluator::kOther},
+      {"a + 1", Evaluator::kOther},
+      {"a + cast(null as bigint)", Evaluator::kOther},
+      {"bitwise_and(a, cast(null as bigint))", Evaluator::kNone},
+  };
+  for (const auto& [sql, evaluator] : cases) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    ASSERT_EQ(
+        canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()),
+        evaluator != Evaluator::kNone);
+    if (evaluator == Evaluator::kNone) {
+      continue;
+    }
+    auto cudfExpr = createCudfExpression(
+        expr, rowType_, pool_.get(), queryCtx_->queryConfig());
+    ASSERT_NE(cudfExpr, nullptr);
+    EXPECT_EQ(
+        dynamic_cast<GpuSfiExpression*>(cudfExpr.get()) != nullptr,
+        evaluator == Evaluator::kGpuSfi);
+  }
+}
+
+// A GPU simple function whose initialize() fails is handled as Velox's
+// SimpleFunctionAdapter handles one: a runtime error fails the call when it is
+// compiled, and any other error is raised on every row the function applies
+// to. Raising it takes an owner that re-evaluates declined rows on the CPU;
+// without one, a nonempty batch raises in its place.
+TEST_F(CudfExpressionSelectionTest, gpuSfiInitializeFailures) {
+  const gpu_sfi::GpuFunctionSignature signature{
+      "bigint",
+      {"bigint"},
+      /*variadicTail=*/false,
+      /*constantArguments=*/{false},
+      /*integerVariables=*/{},
+      /*variableConstraints=*/{},
+      /*argumentKinds=*/{TypeKind::BIGINT},
+      /*returnKind=*/TypeKind::BIGINT};
+  const auto create = [&](const std::string& name,
+                          gpu_sfi::GpuInitializeFn initialize) {
+    gpu_sfi::registerGpuKernel(
+        {name},
+        signature,
+        &allNullLaunch,
+        gpu_sfi::GpuFunctionInstanceSpec{
+            initialize,
+            static_cast<int32_t>(sizeof(int64_t)),
+            static_cast<int32_t>(alignof(int64_t))});
+    return GpuSfiExpression::create(
+        std::make_shared<core::CallTypedExpr>(
+            BIGINT(),
+            std::vector<core::TypedExprPtr>{
+                std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")},
+            name),
+        rowType_,
+        pool_.get(),
+        queryCtx_->queryConfig());
+  };
+
+  VELOX_ASSERT_RUNTIME_THROW(
+      create("initialize_throws_runtime_error", &initializeThrowsRuntimeError),
+      "Instance state is inconsistent");
+
+  const auto stream = cudf::get_default_stream();
+  const auto mr = cudf::get_current_device_resource_ref();
+  const auto oneRow = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::INT64},
+      1,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      mr);
+  const auto noRows =
+      cudf::make_empty_column(cudf::data_type{cudf::type_id::INT64});
+  auto expression =
+      create("initialize_throws_user_error", &initializeThrowsUserError);
+  VELOX_ASSERT_USER_THROW(
+      expression->eval({oneRow->view()}, stream, mr),
+      "GPU simple function failed a check in initialize(), and its caller "
+      "cannot re-evaluate the rows on the CPU to raise the error: "
+      "initialize_throws_user_error");
+  // Velox raises nothing on a batch with no rows.
+  expression->eval({noRows->view()}, stream, mr);
+}
+
+// registerCudf() registers GPU SFI at the configured priority.
+TEST_F(CudfExpressionSelectionTest, gpuSfiIsRegisteredAtItsConfiguredPriority) {
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+  const auto it = registry.find(kGpuSfiEvaluatorName);
+  ASSERT_NE(it, registry.end()) << "GPU SFI evaluator was never registered";
+  EXPECT_EQ(
+      it->second.priority, CudfConfig::getInstance().gpuSfiExpressionPriority);
+}
+
+// TIMESTAMP WITH TIME ZONE and TIME WITH TIME ZONE reach cuDF as the int64 that
+// packs UTC millis over a zone key or offset. The evaluators that would read
+// the packed bits as a number decline, and with no GPU SFI function over these
+// types yet, the expression stays on the CPU.
+TEST_F(
+    CudfExpressionSelectionTest,
+    customComparisonTypesAreClaimedByNoEvaluator) {
+  auto rowType = ROW(
+      {{"tz0", TIMESTAMP_WITH_TIME_ZONE()},
+       {"tz1", TIMESTAMP_WITH_TIME_ZONE()},
+       {"t0", TIME_WITH_TIME_ZONE()},
+       {"t1", TIME_WITH_TIME_ZONE()}});
+  for (const auto& sql :
+       {"tz0 = tz1",
+        "tz0 < tz1",
+        "tz0 between tz1 and tz1",
+        "cast(tz0 as varchar)",
+        "cast(tz0 as timestamp)",
+        "t0 = t1",
+        "t0 < t1"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_FALSE(ASTExpression::canEvaluate(expr));
+    EXPECT_FALSE(JitExpression::canEvaluate(expr));
+    EXPECT_FALSE(
+        FunctionExpression::canEvaluate(expr, queryCtx_->queryConfig()));
+    EXPECT_FALSE(GpuSfiExpression::canEvaluate(expr));
+    EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+
+  // The column itself still reaches the GPU: passing it through reads no bits.
+  auto column =
+      optimizeTypedExpr("tz0", rowType, queryCtx_.get(), execCtx_.get());
+  EXPECT_TRUE(canExprRunOnGpu(column, queryCtx_.get(), pool_.get()));
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
