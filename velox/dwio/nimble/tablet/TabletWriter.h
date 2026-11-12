@@ -102,9 +102,17 @@ class TabletWriter {
     std::vector<std::pair<EncodingType, float>>
         stripeGroupEncodingLayoutReadFactors{};
     /// When true, identical kStreamMajor offsets or sizes arrays share one
-    /// encoding in the same stripe group.
+    /// encoding in the same stripe group. A group with the sparse layout
+    /// deduplicates its arrays regardless.
     /// Enabling this can increase temporary writer memory.
     bool stripeGroupMetadataDeduplicationEnabled{false};
+    /// When true, kStreamMajor stripe groups use the sparse layout: each stream
+    /// holds its stripe list, the stripes where it has data, and offsets and
+    /// sizes only for those stripes; see StreamMajorStripeGroup in Footer.fbs.
+    /// Requires kStreamMajor. A reader that predates it cannot read such a
+    /// group, except when every stream has data in every stripe, so every
+    /// reader must support it before a writer enables it.
+    bool stripeGroupSparseLayoutEnabled{false};
     // Callback invoked at stripe group flush boundaries. Used by index
     // writers (e.g., ClusterIndexWriter) to write partition data aligned
     // with stripe groups.

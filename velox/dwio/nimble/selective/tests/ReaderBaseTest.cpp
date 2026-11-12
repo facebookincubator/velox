@@ -442,8 +442,22 @@ INSTANTIATE_TEST_CASE_P(
       return info.param == CreationMode::kDirect ? "direct" : "cached";
     });
 
+// A StripeGroup metadata format: a layout, and for kStreamMajor whether it uses
+// the sparse layout.
+struct StripeGroupFormat {
+  StripeGroup::EncodingLayout layout;
+  bool sparseLayout{false};
+
+  std::string debugString() const {
+    if (layout == StripeGroup::EncodingLayout::kRaw) {
+      return "raw";
+    }
+    return sparseLayout ? "streamMajorSparse" : "streamMajor";
+  }
+};
+
 class StripeStreamsMultiStripeTest
-    : public ::testing::TestWithParam<StripeGroup::EncodingLayout> {
+    : public ::testing::TestWithParam<StripeGroupFormat> {
  protected:
   static void SetUpTestSuite() {
     velox::memory::MemoryManager::testingSetInstance({});
@@ -459,7 +473,8 @@ class StripeStreamsMultiStripeTest
     velox::test::VectorMaker vectorMaker(pool_.get());
 
     WriterOptions writerOptions;
-    writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+    writerOptions.experimentalStripeGroupEncodingLayout = GetParam().layout;
+    writerOptions.experimentalStripeGroupSparseLayout = GetParam().sparseLayout;
     writerOptions.flushPolicyFactory = []() {
       return std::make_unique<LambdaFlushPolicy>(
           [](const StripeProgress&) { return true; });
@@ -589,9 +604,11 @@ INSTANTIATE_TEST_CASE_P(
     MetadataFormats,
     StripeStreamsMultiStripeTest,
     ::testing::Values(
-        StripeGroup::EncodingLayout::kRaw,
-        StripeGroup::EncodingLayout::kStreamMajor),
-    [](const ::testing::TestParamInfo<StripeGroup::EncodingLayout>& info) {
-      return info.param == StripeGroup::EncodingLayout::kRaw ? "raw"
-                                                             : "streamMajor";
+        StripeGroupFormat{StripeGroup::EncodingLayout::kRaw},
+        StripeGroupFormat{StripeGroup::EncodingLayout::kStreamMajor},
+        StripeGroupFormat{
+            StripeGroup::EncodingLayout::kStreamMajor,
+            /*sparseLayout=*/true}),
+    [](const ::testing::TestParamInfo<StripeGroupFormat>& info) {
+      return info.param.debugString();
     });
