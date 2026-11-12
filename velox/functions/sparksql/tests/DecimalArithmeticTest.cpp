@@ -358,15 +358,11 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
 };
 
 TEST_F(DecimalArithmeticTest, pmod) {
-  for (const auto* ansiEnabled : {"false", "true"}) {
+  for (const bool ansiEnabled : {false, true}) {
     queryCtx_->testingOverrideConfigUnsafe(
         {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
-          ansiEnabled}});
-    for (const auto* name :
-         {"pmod",
-          "pmod_deny_precision_loss",
-          "checked_pmod",
-          "checked_pmod_deny_precision_loss"}) {
+          ansiEnabled ? "true" : "false"}});
+    for (const auto* name : {"pmod", "pmod_deny_precision_loss"}) {
       SCOPED_TRACE(fmt::format("{} ANSI={}", name, ansiEnabled));
       const auto expression = fmt::format("{}(c0, c1)", name);
       const auto decimal = DECIMAL(6, 2);
@@ -436,50 +432,49 @@ TEST_F(DecimalArithmeticTest, pmod) {
 TEST_F(DecimalArithmeticTest, pmodWideRescaling) {
   const auto maximum = "99999999999999999999999999999999999999";
   const auto negativeMaximum = "-99999999999999999999999999999999999999";
-  for (const auto* name :
-       {"pmod",
-        "pmod_deny_precision_loss",
-        "checked_pmod",
-        "checked_pmod_deny_precision_loss"}) {
-    SCOPED_TRACE(name);
-    const auto expression = fmt::format("{}(c0, c1)", name);
-    // The dividend needs 76 digits after scale alignment. Expected values
-    // are unscaled integers: e.g. 2 represents 0.000...002 at scale 38.
-    assertEqualVectors(
-        makeNullableLongDecimalVector({"2", "5", "-2"}, DECIMAL(38, 38)),
-        evaluate(
-            expression,
-            makeRowVector(
-                {makeNullableLongDecimalVector(
-                     {maximum, negativeMaximum, negativeMaximum},
-                     DECIMAL(38, 0)),
-                 makeNullableLongDecimalVector(
-                     {"7", "7", "-7"}, DECIMAL(38, 38))})));
-    // A large rescaled divisor does not require narrowing before modulo.
-    assertEqualVectors(
-        makeNullableLongDecimalVector({"1", "-1"}, DECIMAL(38, 38)),
-        evaluate(
-            expression,
-            makeRowVector(
-                {makeNullableLongDecimalVector({"1", "-1"}, DECIMAL(38, 38)),
-                 makeNullableLongDecimalVector(
-                     {maximum, negativeMaximum}, DECIMAL(38, 0))})));
+  for (const bool ansiEnabled : {false, true}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          ansiEnabled ? "true" : "false"}});
+    for (const auto* name : {"pmod", "pmod_deny_precision_loss"}) {
+      SCOPED_TRACE(fmt::format("{} ANSI={}", name, ansiEnabled));
+      const auto expression = fmt::format("{}(c0, c1)", name);
+      // The dividend needs 76 digits after scale alignment. Expected values
+      // are unscaled integers: e.g. 2 represents 0.000...002 at scale 38.
+      // These results match SPARK-61050 (Spark 4.3.1 and 4.4.0). Earlier Spark
+      // versions throw ArithmeticException: Division impossible in either ANSI
+      // mode because the integral quotient exceeds their MathContext precision.
+      assertEqualVectors(
+          makeNullableLongDecimalVector({"2", "5", "-2"}, DECIMAL(38, 38)),
+          evaluate(
+              expression,
+              makeRowVector(
+                  {makeNullableLongDecimalVector(
+                       {maximum, negativeMaximum, negativeMaximum},
+                       DECIMAL(38, 0)),
+                   makeNullableLongDecimalVector(
+                       {"7", "7", "-7"}, DECIMAL(38, 38))})));
+      // A large rescaled divisor does not require narrowing before modulo.
+      assertEqualVectors(
+          makeNullableLongDecimalVector({"1", "-1"}, DECIMAL(38, 38)),
+          evaluate(
+              expression,
+              makeRowVector(
+                  {makeNullableLongDecimalVector({"1", "-1"}, DECIMAL(38, 38)),
+                   makeNullableLongDecimalVector(
+                       {maximum, negativeMaximum}, DECIMAL(38, 0))})));
+    }
   }
 }
 
 TEST_F(DecimalArithmeticTest, pmodErrors) {
-  for (const auto* ansiEnabled : {"false", "true"}) {
+  for (const bool ansiEnabled : {false, true}) {
     queryCtx_->testingOverrideConfigUnsafe(
         {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
-          ansiEnabled}});
-    for (const auto* name :
-         {"pmod",
-          "pmod_deny_precision_loss",
-          "checked_pmod",
-          "checked_pmod_deny_precision_loss"}) {
+          ansiEnabled ? "true" : "false"}});
+    for (const auto* name : {"pmod", "pmod_deny_precision_loss"}) {
       SCOPED_TRACE(fmt::format("{} ANSI={}", name, ansiEnabled));
       const auto expression = fmt::format("{}(c0, c1)", name);
-      const bool checked = std::string_view(name).find("checked_") == 0;
       const auto input = makeRowVector(
           {makeNullableFlatVector<int64_t>(
                {-1, 1, 1, std::nullopt}, DECIMAL(1, 0)),
@@ -491,7 +486,7 @@ TEST_F(DecimalArithmeticTest, pmodErrors) {
            makeFlatVector<int64_t>({0}, DECIMAL(3, 0))});
       assertEqualVectors(
           expected, evaluate(fmt::format("try({})", expression), input));
-      if (!checked) {
+      if (!ansiEnabled) {
         assertEqualVectors(expected, evaluate(expression, input));
         assertEqualVectors(
             makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(1, 0)),
@@ -511,7 +506,7 @@ TEST_F(DecimalArithmeticTest, pmodErrors) {
           makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 38));
       assertEqualVectors(
           nullResult, evaluate(fmt::format("try({})", expression), wideInput));
-      if (!checked) {
+      if (!ansiEnabled) {
         assertEqualVectors(nullResult, evaluate(expression, wideInput));
       } else {
         VELOX_ASSERT_USER_THROW(
@@ -526,6 +521,33 @@ TEST_F(DecimalArithmeticTest, pmodErrors) {
                   {makeFlatVector<int64_t>({-1, 1}, DECIMAL(1, 0)),
                    makeFlatVector<int64_t>({100, 3}, DECIMAL(3, 0)),
                    makeFlatVector<bool>({true, false})})));
+    }
+  }
+}
+
+TEST_F(DecimalArithmeticTest, pmodCapturesAnsiMode) {
+  const auto input = makeRowVector(
+      {makeFlatVector<int64_t>({1}, DECIMAL(1, 0)),
+       makeFlatVector<int64_t>({0}, DECIMAL(1, 0))});
+  for (const bool ansiEnabled : {false, true}) {
+    for (const auto* name : {"pmod", "pmod_deny_precision_loss"}) {
+      SCOPED_TRACE(fmt::format("{} ANSI={}", name, ansiEnabled));
+      queryCtx_->testingOverrideConfigUnsafe(
+          {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+            ansiEnabled ? "true" : "false"}});
+      auto expression =
+          compileExpression(fmt::format("{}(c0, c1)", name), input->rowType());
+      queryCtx_->testingOverrideConfigUnsafe(
+          {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+            ansiEnabled ? "false" : "true"}});
+      if (ansiEnabled) {
+        VELOX_ASSERT_USER_THROW(
+            evaluate(*expression, input), "Division by zero");
+      } else {
+        assertEqualVectors(
+            makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(1, 0)),
+            evaluate(*expression, input));
+      }
     }
   }
 }

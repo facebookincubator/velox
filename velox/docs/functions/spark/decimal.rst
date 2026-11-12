@@ -14,7 +14,7 @@ handles both ANSI and non-ANSI behavior, controlled by an ``EvalMode`` flag. In 
 variants are registered as separate functions (e.g., ``checked_add``, ``checked_subtract``)
 to support the TRY evaluation mode (e.g., ``try(checked_add(...))`` returns NULL on overflow).
 
-For addition, subtraction, multiplication, division, and ``pmod``, regular
+For addition, subtraction, multiplication, and division, regular
 functions return NULL on overflow, while checked functions throw an error.
 
 For example, addition of decimal(38, 7) and decimal(10, 0) requires precision of 39 and scale of 7.
@@ -178,15 +178,6 @@ Arithmetic Functions
     Throws an error when the result overflows.
     Corresponds to Spark's operator ``*`` with ``spark.sql.ansi.enabled`` set to true.
 
-.. spark:function:: checked_pmod(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
-
-    Computes decimal positive modulo using the same arithmetic and result type
-    as ``pmod``. Throws an error on a zero divisor or a result outside the
-    calculated precision. Returns NULL if either argument is NULL, including a
-    NULL dividend with a zero divisor. Corresponds to Spark's ``pmod`` with
-    ``spark.sql.ansi.enabled`` set to true. ``checked_pmod_deny_precision_loss``
-    is an alias with identical behavior and result type.
-
 .. spark:function:: checked_subtract(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
 
     Returns the result of subtracting ``y`` from ``x``. The result type is determined
@@ -221,12 +212,21 @@ Arithmetic Functions
     Computes the decimal remainder ``r = x % y`` and returns ``(r + y) % y``
     when ``r`` is negative, or ``r`` otherwise. A positive divisor produces a
     non-negative result. With a negative divisor, the result retains the sign
-    of ``x``. Returns NULL if either argument is NULL.
+    of ``x``. Returns NULL if either argument is NULL, including a NULL dividend
+    with a zero divisor.
 
-    Returns NULL for a zero divisor or a result outside the calculated decimal
-    precision. Corresponds to Spark's ``pmod`` with ``spark.sql.ansi.enabled``
-    set to false. ``pmod_deny_precision_loss`` is an alias with identical
-    behavior and result type. ::
+    For a zero divisor or a result outside the calculated decimal precision,
+    returns NULL when ``spark.ansi_enabled`` is false and throws an error when
+    it is true. The setting is read when the function is initialized.
+    ``pmod_deny_precision_loss`` is an alias with identical behavior and result
+    type.
+
+    Wide-rescaling results match Spark 4.3.1 and 4.4.0 with SPARK-61050. Earlier
+    Spark versions can throw ``java.lang.ArithmeticException: Division impossible``
+    when the integral quotient exceeds their ``MathContext`` precision, even
+    when ANSI mode is disabled.
+
+    Examples with ``spark.ansi_enabled`` set to false: ::
 
         SELECT pmod(CAST(-7.2 AS DECIMAL(3, 1)), CAST(4.1 AS DECIMAL(3, 1))); -- 1.0
         SELECT pmod(CAST(-7.2 AS DECIMAL(3, 1)), CAST(-4.1 AS DECIMAL(3, 1))); -- -3.1

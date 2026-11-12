@@ -122,12 +122,6 @@ int main(int argc, char** argv) {
           {"pmod_deny_precision_loss",
            std::make_shared<
                facebook::velox::exec::test::ModulusArgTypesGenerator>()},
-          {"checked_pmod",
-           std::make_shared<
-               facebook::velox::exec::test::ModulusArgTypesGenerator>()},
-          {"checked_pmod_deny_precision_loss",
-           std::make_shared<
-               facebook::velox::exec::test::ModulusArgTypesGenerator>()},
           {"ceil",
            std::make_shared<
                facebook::velox::exec::test::FloorCeilRoundArgTypesGenerator>()},

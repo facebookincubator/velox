@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/Registerer.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/detail/DecimalArithmeticFunctions.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -29,14 +30,12 @@ static constexpr const char* kDenyPrecisionLoss = "_deny_precision_loss";
 // Computes Spark's decimal positive modulo after aligning operand scales.
 // Correction can exceed the result precision when the dividend has fewer
 // integral digits than the divisor.
-template <typename TExec, bool checked>
+template <typename TExec>
 struct DecimalPmodFunction {
-  using CallResult = std::conditional_t<checked, Status, bool>;
-
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
+      const core::QueryConfig& config,
       const A* /*dividend*/,
       const B* /*divisor*/) {
     const auto [dividendPrecision, dividendScale] =
@@ -53,10 +52,11 @@ struct DecimalPmodFunction {
     divisorFactor_ =
         velox::DecimalUtil::kPowersOfTen[resultScale - divisorScale];
     resultLimit_ = velox::DecimalUtil::kPowersOfTen[resultPrecision];
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   template <typename R, typename A, typename B>
-  CallResult call(R& out, const A& dividend, const B& divisor) {
+  bool call(R& out, const A& dividend, const B& divisor) {
     if (UNLIKELY(divisor == 0)) {
       return error("Division by zero");
     }
@@ -65,20 +65,15 @@ struct DecimalPmodFunction {
       return error("Decimal overflow in pmod");
     }
     out = static_cast<R>(result.value());
-    if constexpr (checked) {
-      return Status::OK();
-    } else {
-      return true;
-    }
+    return true;
   }
 
  private:
-  CallResult error(std::string_view errorMessage) const {
-    if constexpr (checked) {
-      return Status::UserError(errorMessage);
-    } else {
-      return false;
+  bool error(std::string_view errorMessage) const {
+    if (ansiEnabled_) {
+      VELOX_USER_FAIL("{}", errorMessage);
     }
+    return false;
   }
 
   std::optional<int128_t> compute(int128_t dividend, int128_t divisor) const {
@@ -113,13 +108,8 @@ struct DecimalPmodFunction {
   int128_t dividendFactor_;
   int128_t divisorFactor_;
   int128_t resultLimit_;
+  bool ansiEnabled_ = false;
 };
-
-template <typename TExec>
-using PmodFunction = DecimalPmodFunction<TExec, false>;
-
-template <typename TExec>
-using CheckedPmodFunction = DecimalPmodFunction<TExec, true>;
 
 template <template <class> typename Func>
 void registerDecimalBinary(
@@ -429,10 +419,8 @@ void registerDecimalIntegralDivide(const std::string& prefix) {
 }
 
 void registerDecimalPmod(const std::string& prefix) {
-  registerDecimalPmod<PmodFunction>(prefix + "pmod");
-  registerDecimalPmod<PmodFunction>(prefix + "pmod" + kDenyPrecisionLoss);
-  registerDecimalPmod<CheckedPmodFunction>(prefix + "checked_pmod");
-  registerDecimalPmod<CheckedPmodFunction>(
-      prefix + "checked_pmod" + kDenyPrecisionLoss);
+  registerDecimalPmod<DecimalPmodFunction>(prefix + "pmod");
+  registerDecimalPmod<DecimalPmodFunction>(
+      prefix + "pmod" + kDenyPrecisionLoss);
 }
 } // namespace facebook::velox::functions::sparksql

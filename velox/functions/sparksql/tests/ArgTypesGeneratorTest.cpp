@@ -160,11 +160,7 @@ TEST_F(ArgTypesGeneratorTest, divideDenyPrecisionLoss) {
 TEST_F(ArgTypesGeneratorTest, pmod) {
   const auto generator =
       std::make_shared<exec::test::ModulusArgTypesGenerator>();
-  for (const auto& name :
-       {"pmod",
-        "pmod_deny_precision_loss",
-        "checked_pmod",
-        "checked_pmod_deny_precision_loss"}) {
+  for (const auto& name : {"pmod", "pmod_deny_precision_loss"}) {
     SCOPED_TRACE(name);
     const auto& signature = getOnlySignature(name);
     for (const auto& type :
