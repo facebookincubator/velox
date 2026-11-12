@@ -48,7 +48,7 @@ concurrency:
 jobs:
   ubuntu-debug-bundled-deps:
     runs-on: 16-core-ubuntu
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: ${{ !github.event.repository.fork }}
     name: Ubuntu debug with bundled dependencies
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache

@@ -77,7 +77,7 @@ jobs:
     # skipped or failed plan cannot quietly build nothing.
     if: >-
       always() && needs.plan.result != 'cancelled' &&
-      github.repository == 'facebookincubator/velox'
+      !github.event.repository.fork
     name: macos-15-${{ matrix.type }}
     strategy:
       fail-fast: false

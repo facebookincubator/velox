@@ -49,7 +49,7 @@ permissions:
 jobs:
   analyze-and-comment:
     if: >
-      github.repository == 'facebookincubator/velox' &&
+      !github.event.repository.fork &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.event == 'pull_request' &&
         github.event.workflow_run.conclusion == 'failure'))

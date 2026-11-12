@@ -95,7 +95,7 @@ jobs:
   compile:
     name: Build
     # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: ${{ !github.event.repository.fork }}
     runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     timeout-minutes: 120
@@ -141,6 +141,8 @@ jobs:
         working-directory: ${{ github.workspace }}
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
           INPUT_REF: ${{ inputs.ref || 'main' }}
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
@@ -150,11 +152,11 @@ jobs:
           source .github/scripts/gh-api-retry.sh
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
             # get the parent commit of the current one to get the relevant function signatures
-            head_main=$(gh_api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
+            head_main=$(gh_api -q '.parents.[0].sha' "/repos/$REPO/commits/${{ github.sha }}")
           elif [ '${{ github.event_name == 'pull_request' }}' == "true" ]; then
             # Get the merge base from the api
             head_main=$(gh_api -q '.merge_base_commit.sha' \
-              /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
+              /repos/$REPO/compare/$REPO_OWNER:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
           else
             head_main=$INPUT_REF
@@ -466,7 +468,7 @@ jobs:
 
   compile-baseline-local-runner:
     name: Build LocalRunnerService
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: ${{ !github.event.repository.fork }}
     runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     timeout-minutes: 120
@@ -501,6 +503,8 @@ jobs:
         working-directory: ${{ github.workspace }}
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
           INPUT_REF: ${{ inputs.ref || 'main' }}
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
@@ -512,12 +516,12 @@ jobs:
             head_main='${{ github.sha }}'
           elif [ '${{ github.event_name == 'pull_request' }}' == "true" ]; then
             head_main=$(gh_api -q '.merge_base_commit.sha' \
-              /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
+              /repos/$REPO/compare/$REPO_OWNER:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
           else
             # Resolve to an immutable SHA; a branch name would make the cache
             # key mutable and serve a stale baseline forever.
-            head_main=$(gh_api -q '.sha' "/repos/facebookincubator/velox/commits/$INPUT_REF")
+            head_main=$(gh_api -q '.sha' "/repos/$REPO/commits/$INPUT_REF")
           fi
           echo "Determined SHA: $head_main"
           echo "head_main=$head_main" >> $GITHUB_OUTPUT
