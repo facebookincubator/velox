@@ -44,6 +44,7 @@
 #include "arrow/util/ubsan.h"
 #include "arrow/visit_data_inline.h"
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
@@ -52,17 +53,13 @@
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/ByteStreamSplitInternal.h"
 #include "velox/dwio/parquet/writer/arrow/util/Hashing.h"
-#include "velox/dwio/parquet/writer/arrow/util/OverflowUtilInternal.h"
 
 using ::arrow::Buffer;
 using ::arrow::MemoryPool;
 using ::arrow::ResizableBuffer;
 using arrow::Status;
 using arrow::VisitNullBitmapInline;
-using arrow::internal::addWithOverflow;
 using arrow::internal::checked_cast;
-using arrow::internal::multiplyWithOverflow;
-using arrow::internal::SubtractWithOverflow;
 using std::string_view;
 
 template <typename T>
@@ -3089,11 +3086,11 @@ void DeltaLengthByteArrayEncoder<DType>::put(const T* src, int numValues) {
   for (int idx = 0; idx < numValues; idx += kBatchSize) {
     const int batchSize = std::min(kBatchSize, numValues - idx);
     for (int j = 0; j < batchSize; ++j) {
-      const int32_t len = src[idx + j].len;
+      const uint32_t len = src[idx + j].len;
       if (addWithOverflow(totalIncrementSize, len, &totalIncrementSize)) {
         throw ParquetException("excess expansion in DELTA_LENGTH_BYTE_ARRAY");
       }
-      lengths[j] = len;
+      lengths[j] = static_cast<int32_t>(len);
     }
     lengthEncoder_.put(lengths.data(), batchSize);
   }
