@@ -156,6 +156,7 @@ class EqualityDeleteFileReader {
   std::unordered_multimap<uint64_t, DeleteKeyEntry> deleteKeyHashes_;
 
   memory::MemoryPool* const pool_;
+  const std::shared_ptr<IoStats> ioStats_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
@@ -152,7 +153,8 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     const folly::F14FastMap<std::string, std::string>& fileReadOps)
     : equalityColumnNames_(equalityColumnNames),
       equalityColumnTypes_(equalityColumnTypes),
-      pool_(connectorQueryCtx->memoryPool()) {
+      pool_(connectorQueryCtx->memoryPool()),
+      ioStats_(ioStats) {
   VELOX_CHECK(
       deleteFile.content == FileContent::kEqualityDeletes,
       "Expected equality delete file but got content type: {}",
@@ -341,6 +343,7 @@ void EqualityDeleteFileReader::applyDeletes(
   }
 
   auto* bitmap = deleteBitmap->asMutable<uint8_t>();
+  int64_t numDeleted = 0;
 
   // For each row in the output, compute its hash and probe the delete set.
   for (vector_size_t i = 0; i < output->size(); ++i) {
@@ -357,10 +360,12 @@ void EqualityDeleteFileReader::applyDeletes(
       auto& entry = it->second;
       if (equalRows(output, i, deleteRows_[entry.batchIndex], entry.rowIndex)) {
         bits::setBit(bitmap, i);
+        ++numDeleted;
         break;
       }
     }
   }
+  ioStats_->addCounter("icebergDeletedRows", RuntimeCounter(numDeleted));
 }
 
 const std::vector<column_index_t>&

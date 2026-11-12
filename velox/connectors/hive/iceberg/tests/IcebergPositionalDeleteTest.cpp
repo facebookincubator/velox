@@ -190,11 +190,27 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
     }
 
     auto plan = makeIcebergTableScanPlan(ROW({"c0"}, {BIGINT()}));
-    exec::test::AssertQueryBuilder(plan)
-        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplits)
-        .splits(splits)
-        .assertResults(
-            makeRowVector({makeFlatVector<int64_t>(expectedValues)}));
+    auto task =
+        exec::test::AssertQueryBuilder(plan)
+            .config(
+                core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplits)
+            .splits(splits)
+            .assertResults(
+                makeRowVector({makeFlatVector<int64_t>(expectedValues)}));
+    int64_t totalRows = 0;
+    for (const auto& dataFile : dataFiles) {
+      totalRows += std::accumulate(
+          dataFile.rowGroupSizes.begin(),
+          dataFile.rowGroupSizes.end(),
+          int64_t{0});
+    }
+    const auto stats = task->taskStats();
+    const auto& runtimeStats =
+        stats.pipelineStats[0].operatorStats[0].runtimeStats;
+    const auto deletedRows = runtimeStats.find("icebergDeletedRows");
+    EXPECT_EQ(
+        deletedRows == runtimeStats.end() ? 0 : deletedRows->second.sum,
+        totalRows - expectedValues.size());
   }
 
   IcebergDeleteFile makePositionalDeleteFile(
@@ -383,6 +399,16 @@ TEST_F(IcebergPositionalDeleteTest, singleBaseFileSinglePositionalDeleteFile) {
   assertSingleBaseFileSingleDeleteFile({}, sequence(0, kRowCount));
   assertSingleBaseFileSingleDeleteFile(sequence(0, kRowCount), {});
   assertSingleBaseFileSingleDeleteFile({20000, 29999}, sequence(0, kRowCount));
+}
+
+TEST_F(IcebergPositionalDeleteTest, reportsDeletedRowsAcrossSplits) {
+  assertPositionalDeletes(
+      {{"data", {kRowCount / 2, kRowCount / 2}}},
+      {{"delete_1", {{"data", sequence(0, 3 * kRowCount / 4)}}},
+       {"delete_2", {{"data", sequence(kRowCount / 2, kRowCount)}}}},
+      {},
+      1,
+      2);
 }
 
 // Verifies that deletes for one base file do not affect neighboring files.

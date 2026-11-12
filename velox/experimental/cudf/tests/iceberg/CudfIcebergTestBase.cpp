@@ -24,12 +24,25 @@
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::cudf_velox::exec::test {
 
 using namespace facebook::velox::connector::hive::iceberg;
 using namespace facebook::velox::exec::test;
+
+void CudfIcebergTestBase::assertDeletedRows(
+    const std::shared_ptr<facebook::velox::exec::Task>& task,
+    int64_t expected) {
+  const auto stats = facebook::velox::exec::toPlanStats(task->taskStats());
+  const auto scan = stats.find("0");
+  ASSERT_NE(scan, stats.end());
+  const auto& customStats = scan->second.customStats;
+  const auto deletedRows = customStats.find("icebergDeletedRows");
+  ASSERT_NE(deletedRows, customStats.end());
+  EXPECT_EQ(deletedRows->second.sum, expected);
+}
 
 void CudfIcebergTestBase::SetUp() {
   CudfHiveConnectorTestBase::SetUp();
