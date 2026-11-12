@@ -1254,6 +1254,7 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     const nimble::WriterOptions options;
     const auto encodingOptions = options.buildEncodingOptions();
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
+    EXPECT_FALSE(encodingOptions.sortDictionaryAlphabet);
 
     // The delta pre-transform ships disabled. Assert the flag's own default
     // too, so lowering the bar to enabling it fails here rather than silently
@@ -1273,6 +1274,12 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
 
     EXPECT_DOUBLE_EQ(encodingOptions.fsstCompressionTargetRatio, 0.42);
     EXPECT_EQ(encodingOptions.fixedBitWidthUseExactBits, useExactBits);
+  }
+
+  {
+    nimble::WriterOptions options;
+    options.sortDictionaryAlphabet = true;
+    EXPECT_TRUE(options.buildEncodingOptions().sortDictionaryAlphabet);
   }
 }
 

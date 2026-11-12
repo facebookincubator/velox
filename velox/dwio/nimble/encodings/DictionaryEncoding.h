@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
 #include <span>
 #include <utility>
 #include <vector>
@@ -27,6 +28,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -173,6 +175,22 @@ class DictionaryEncoding
           TrivialEncoding<physicalType>::estimateSize(uniqueCount),
           FixedBitWidthEncoding<physicalType>::estimateSize(
               uniqueCount, statistics.min(), statistics.max(), options));
+      if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
+        if (options.sortDictionaryAlphabet && uniqueCount > 1 &&
+            uniqueCount <= std::numeric_limits<uint32_t>::max() &&
+            hasEliasFanoCandidate(alphabetEncodingReadFactors)) {
+          const auto estimate =
+              EliasFanoEncoding<physicalType>::estimateNonDecreasingSize(
+                  static_cast<uint32_t>(uniqueCount),
+                  static_cast<uint64_t>(statistics.max()) -
+                      static_cast<uint64_t>(statistics.min()),
+                  options);
+          if (estimate.has_value()) {
+            alphabetEncodingSize =
+                std::min(alphabetEncodingSize, estimate.value());
+          }
+        }
+      }
       if constexpr (isFloatingPointType<T>()) {
         if (uniqueCount == 0) {
           return alphabetEncodingSize;
@@ -211,6 +229,14 @@ class DictionaryEncoding
       // values without rebuilding Statistics for every dictionary estimate.
       return alphabetEncodingSize;
     }
+  }
+
+  static bool hasEliasFanoCandidate(
+      std::span<const std::pair<EncodingType, float>> candidates) {
+    return std::any_of(
+        candidates.begin(), candidates.end(), [](const auto& candidate) {
+          return candidate.first == EncodingType::EliasFano;
+        });
   }
 
   static std::string_view encodeAlphabet(
@@ -885,10 +911,13 @@ std::string_view DictionaryEncoding<T>::encode(
   // occasionally yield more compressible data, but they're not consistent and
   // can result in storage regression compared to the first two.
   //
-  // The second approach is used in this implementation because it's essentially
-  // free: we don't need to allocate O(m) memory for a sorting buffer and
-  // then do O(m log m) sorting. However, the first approach has a slightly
-  // better distribution curve for storage savings.
+  // The second approach is used by default because it's essentially free: we
+  // don't need to allocate O(m) memory for a sorting buffer and then do
+  // O(m log m) sorting. However, the first approach has a slightly better
+  // distribution curve for storage savings, and Options::sortDictionaryAlphabet
+  // applies it to integer alphabets in step three below. It wins most on wide
+  // values with few repeats, such as 64-bit ids: an unsorted alphabet pays the
+  // full width per value, while a sorted one can be stored by its gaps.
 
   // Step one: fill alphabet and indices until we get a full alphabet mapping.
   for (; alphabetIndex < alphabetCount; ++valuesIt, ++indiciesIndex) {
@@ -918,6 +947,30 @@ std::string_view DictionaryEncoding<T>::encode(
 
   NIMBLE_CHECK_EQ(indices.size(), valueCount, "Indices size mismatch.");
   NIMBLE_CHECK_EQ(alphabet.size(), alphabetCount, "Alphabet size mismatch.");
+
+  // Step three: with Options::sortDictionaryAlphabet, renumbers the alphabet
+  // in ascending physical order. Only integers are sorted: a floating-point
+  // alphabet would sort by bit pattern rather than by value.
+  if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
+    if (options.sortDictionaryAlphabet && alphabetCount > 1) {
+      ScopedVector<uint32_t> order{alphabetCount, pool, options.bufferPool};
+      std::iota(order.begin(), order.end(), 0);
+      std::sort(order.begin(), order.end(), [&](uint32_t lhs, uint32_t rhs) {
+        return alphabet[lhs] < alphabet[rhs];
+      });
+      ScopedVector<uint32_t> rank{alphabetCount, pool, options.bufferPool};
+      ScopedVector<physicalType> sorted{
+          alphabetCount, pool, options.bufferPool};
+      for (uint32_t i = 0; i < alphabetCount; ++i) {
+        rank[order[i]] = i;
+        sorted[i] = alphabet[order[i]];
+      }
+      std::copy(sorted.begin(), sorted.end(), alphabet.begin());
+      for (auto& index : indices) {
+        index = rank[index];
+      }
+    }
+  }
 
   ScopedEncodingBuffer scopedBuffer{
       &buffer.getMemoryPool(), options.encodingBufferPool};
