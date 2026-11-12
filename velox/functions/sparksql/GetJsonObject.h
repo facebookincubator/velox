@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/Likely.h>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -247,6 +248,7 @@ struct GetJsonObjectFunction {
     if (!checkJsonPath(jsonPath)) {
       return false;
     }
+    unconsumedSize_ = 0;
     std::string_view input{json};
     if (!detail::escapeControlCharacters(input, escapedJson_)) {
       return false;
@@ -303,7 +305,7 @@ struct GetJsonObjectFunction {
       return false;
     }
 
-    return isValidEndingCharacter(currentPos);
+    return isValidEndingCharacter(currentPos + unconsumedSize_);
   }
 
  private:
@@ -349,7 +351,20 @@ struct GetJsonObjectFunction {
                       .value());
               return true;
             }
-            return false;
+            const auto token = trimToken(rawResult.raw_json_token());
+            if (!detail::isValidJsonNumber(token)) {
+              return false;
+            }
+            const auto castResult =
+                util::Converter<TypeKind::DOUBLE>::tryCast(token);
+            if (castResult.hasError() || !std::isinf(castResult.value())) {
+              return false;
+            }
+            unconsumedSize_ = token.size();
+            result.append(
+                std::signbit(castResult.value()) ? R"("-Infinity")"
+                                                 : R"("Infinity")");
+            return true;
           }
           default: {
             std::string_view intResult = trimToken(rawResult.raw_json_token());
@@ -485,6 +500,7 @@ struct GetJsonObjectFunction {
   std::string minified_;
   std::string escapedJson_;
   std::string normalizedJson_;
+  size_t unconsumedSize_{0};
 };
 
 } // namespace facebook::velox::functions::sparksql
