@@ -306,6 +306,44 @@ char* RowContainer::newRow() {
   return initializeRow(row, false /* reuse */);
 }
 
+void RowContainer::newRows(int32_t numRows, char** rows) {
+  if (firstFreeRow_ != nullptr || numRows <= 0 || layout_.alignment != 1) {
+    for (int32_t i = 0; i < numRows; ++i) {
+      rows[i] = newRow();
+    }
+    return;
+  }
+  VELOX_DCHECK(mutable_, "Can't add row into an immutable row container");
+  if (newRowProto_.empty()) {
+    newRowProto_.assign(layout_.fixedRowSize, 0);
+    initializeRow(newRowProto_.data(), false);
+  }
+  const uint64_t stride = layout_.fixedRowSize + normalizedKeySize_;
+  const char* proto = newRowProto_.data();
+  for (int32_t start = 0; start < numRows;) {
+    // Allocate only the rows that fit in the current run, or one row if none
+    // does. listRows() walks each run up to its end, so a closed run must not
+    // end with unused space of one row or more.
+    const auto rowsFitInRun = static_cast<int64_t>(
+        rows_.freeBytesInCurrentRun() / static_cast<int64_t>(stride));
+    const auto n = static_cast<int32_t>(
+        std::max<int64_t>(1, std::min<int64_t>(numRows - start, rowsFitInRun)));
+    char* base = rows_.allocateFixed(stride * n, layout_.alignment);
+    const int32_t first = start;
+    start += n;
+    numRows_ += n;
+    numRowsWithNormalizedKey_ += normalizedKeySize_ ? n : 0;
+    for (int32_t i = 0; i < n; ++i) {
+      char* row = base + stride * i + normalizedKeySize_;
+      ::memcpy(row, proto, layout_.fixedRowSize);
+      rows[first + i] = row;
+      if (useListRowIndex_) {
+        rowPointers_.push_back(row);
+      }
+    }
+  }
+}
+
 void RowContainer::setAllNull(char* row) {
   VELOX_CHECK(!bits::isBitSet(row, layout_.freeFlagOffset));
   removeOrUpdateRowColumnStats(row, /*setToNull=*/true);
