@@ -3539,12 +3539,16 @@ void CompositeInvocation::finishStep(
     traceStep(stepIdx, sv, currentGridChoices);
   }
 
-  state.launchDebugInfos.push_back(
-      {reinterpret_cast<DebugInfo*>(pinnedBase + totalPinnedBytes),
-       deviceDebugBase,
-       static_cast<int32_t>(numBlocks),
-       sequenceNumber_,
-       stepIdx});
+  sv.clockOffset = reserveLaunchClocks(state, static_cast<int32_t>(numBlocks));
+  state.launchDebugInfos.push_back({
+      reinterpret_cast<DebugInfo*>(pinnedBase + totalPinnedBytes),
+      deviceDebugBase,
+      static_cast<int32_t>(numBlocks),
+      sequenceNumber_,
+      stepIdx,
+      sv.clockOffset,
+      reinterpret_cast<const BlockInfo*>(pinnedBase + sv.blockInfoOffset),
+  });
 
   auto& stepEvents = newStepEvents(state, sequenceNumber_, stepIdx);
   int64_t standaloneElapsed = 0;
@@ -3725,6 +3729,23 @@ void CompositeInvocation::launch(
   TorchWaveParams params{};
   params.info = reinterpret_cast<BlockInfo*>(deviceBase + sv.blockInfoOffset);
   params.debugInfo = deviceDebugBase;
+  // The step's clocks, then its barrier clocks, in the execution's clock
+  // buffer, whose word 0 is the error count.
+  int64_t* deviceClocks = nullptr;
+  if (auto* executionState = currentExecutionState();
+      executionState != nullptr && sv.clockOffset >= 0) {
+    auto* words = executionState->blockClocks.device->as<int64_t>();
+    deviceClocks = words + sv.clockOffset;
+    params.errorCount = reinterpret_cast<unsigned long long*>(words);
+  }
+  auto setClocks = [&](int32_t firstBlock) {
+    params.clocks =
+        deviceClocks != nullptr ? deviceClocks + firstBlock : nullptr;
+    params.barrierClocks = deviceClocks != nullptr
+        ? deviceClocks + numBlocks + firstBlock
+        : nullptr;
+  };
+  setClocks(0);
   void* args[] = {&params};
 
   // Ops declare their extern __shared__ needs through
@@ -3783,6 +3804,7 @@ void CompositeInvocation::launch(
     params.debugInfo = deviceDebugBase != nullptr
         ? deviceDebugBase + segment.firstBlock
         : nullptr;
+    setClocks(segment.firstBlock);
     // A step that was not split keeps deciding this here, from the block
     // counts as they stand at launch time rather than as makeGrid left them.
     // The two agree, but this one cannot go stale behind a reused grid.
@@ -3823,6 +3845,7 @@ void CompositeInvocation::launch(
       params.info = deviceBlocks + segFirst;
       params.debugInfo =
           deviceDebugBase != nullptr ? deviceDebugBase + segFirst : nullptr;
+      setClocks(segFirst);
       for (int32_t active = segFirst; active < segEnd; ++active) {
         // launchIndices has one entry per block; at() so a short vector fails
         // loudly instead of reading out of bounds.

@@ -1174,9 +1174,11 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
       // Force a kernel boundary so the size is materialized first. The
       // multi-kernel masked_select_final reserves its size from a host scalar
       // (shapeSetOnDevice is false), so it still fuses with the elementwise.
-      bool consumerIsElementwise = meta && meta->elementwise != nullptr;
-      if (isScalarSize ||
-          (consumerIsElementwise && setsSizeOnDevice(producer))) {
+      // The same holds for a scan or reduction over it, whose launch is
+      // sized by the input's extent. Only a 1-D cat reads the length within
+      // the kernel: it patches the following operands' bases once known.
+      bool readsLengthLate = node->target() != "torch.ops.aten.cat.default";
+      if (isScalarSize || (readsLengthLate && setsSizeOnDevice(producer))) {
         pushdownFused(producer);
       } else {
         fusedInputs.push_back(producer);

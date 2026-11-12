@@ -1187,7 +1187,7 @@ RunTiming ExecutorTestBase::runWave(
 
   auto hostOutputs = outputsToHost(waveOutputs, "wave");
   verifyOutputs(hostOutputs, expected, "wave");
-  return {dataMovUs, waveUs, waveThreadInfo().debugInfo};
+  return {dataMovUs, waveUs, blockDebugInfos()};
 }
 
 std::string ExecutorTestBase::runWaveExpectError(
@@ -1392,7 +1392,7 @@ void ExecutorTestBase::runTestWithFixture(
     // Repeated runs: refill inputs and re-execute only.
     int64_t waveMin = INT64_MAX, waveMax = 0, waveSum = 0;
     std::vector<int64_t> waveTimes(repeats);
-    std::vector<std::vector<DebugInfo>> lastDebugInfo;
+    std::vector<std::vector<BlockDebugInfo>> lastDebugInfo;
     for (int i = 0; i < repeats; ++i) {
       refillWaveFrame(waveExec, graph, *pooledFrame, deviceInputs);
 
@@ -1413,7 +1413,7 @@ void ExecutorTestBase::runTestWithFixture(
       waveMax = std::max(waveMax, us);
       waveSum += us;
       if (i == repeats - 1) {
-        lastDebugInfo = waveThreadInfo().debugInfo;
+        lastDebugInfo = blockDebugInfos();
       }
       if (WaveConfig::get().trace & WaveConfig::kTiming) {
         const auto& report = waveThreadInfo().perfReport;
@@ -1443,7 +1443,7 @@ void ExecutorTestBase::runTestWithFixture(
       };
       std::map<int32_t, OpStats> opMap;
       for (const auto& b : blocks) {
-        auto& s = opMap[b.op];
+        auto& s = opMap[b.info.op];
         s.count++;
         s.minClocks = std::min(s.minClocks, b.clocks);
         s.maxClocks = std::max(s.maxClocks, b.clocks);
