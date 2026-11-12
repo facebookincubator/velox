@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/AtTimeZone.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/TimeIntervalYearMonth.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
@@ -405,5 +407,9 @@ void registerDateTimeFunctions(
   registerTimestampWithTimeZoneType();
   registerTimeWithTimezoneType();
   registerSimpleFunctions(prefix, defaultOwner, ignoreTimeZoneLabel);
+  exec::registerFunctionCallToSpecialForm(
+      prefix + "at_timezone",
+      std::make_unique<prestosql::AtTimeZoneCallToSpecialForm>(
+          prefix + "at_timezone"));
 }
 } // namespace facebook::velox::functions
