@@ -203,6 +203,40 @@ class ALPRDEncodingBase {
       const Encoding::Options& options,
       Vector<uint32_t>& positions,
       Vector<uint16_t>& highParts);
+
+  // Combines each low part in 'values' with the high part that its code
+  // selects. Checks the codes and low parts once, after the loop, so the loop
+  // has no branches and vectorizes. The loop selects the 16-bit dictionary
+  // entry by comparing the code with every entry, then shifts it into place.
+  // Selecting before shifting keeps the selection in 16-bit lanes, twice as
+  // many per vector as 32-bit values, and comparing needs no gather. An
+  // invalid code matches no entry until the check rejects it.
+  template <typename PhysicalType>
+  static void combineParts(
+      const Parameters& parameters,
+      const uint16_t* codes,
+      uint32_t count,
+      PhysicalType* values) {
+    uint16_t maxCode{0};
+    PhysicalType lowBits{0};
+    for (uint32_t i = 0; i < count; ++i) {
+      const auto code = codes[i];
+      maxCode = std::max(maxCode, code);
+      lowBits |= values[i];
+      uint16_t highPart{0};
+      for (uint16_t entry = 0; entry < kMaxDictionarySize; ++entry) {
+        highPart |= code == entry ? parameters.dictionary[entry] : uint16_t{0};
+      }
+      values[i] |= static_cast<PhysicalType>(highPart)
+          << parameters.rightBitWidth;
+    }
+    NIMBLE_CHECK_LT(
+        maxCode, parameters.dictionarySize, "Invalid ALPRD dictionary code.");
+    NIMBLE_CHECK_LE(
+        lowBits,
+        (PhysicalType{1} << parameters.rightBitWidth) - 1,
+        "Invalid ALPRD low part.");
+  }
 };
 
 /// Encodes floating-point bit patterns using a small high-part dictionary.
@@ -263,15 +297,7 @@ class ALPRDEncoding final
       const auto count = std::min<uint32_t>(rowCount, codes.size());
       codes_->materialize(count, codes.data());
       rightParts_->materialize(count, output);
-      for (uint32_t i = 0; i < count; ++i) {
-        NIMBLE_CHECK_LT(
-            codes[i],
-            parameters.dictionarySize,
-            "Invalid ALPRD dictionary code.");
-        NIMBLE_CHECK_LE(output[i], mask, "Invalid ALPRD low part.");
-        output[i] |= static_cast<physicalType>(parameters.dictionary[codes[i]])
-            << parameters.rightBitWidth;
-      }
+      combineParts(parameters, codes.data(), count, output);
       while (exceptionIndex_ < metadata_.exceptionCount &&
              exceptionPositions_[exceptionIndex_] < position_ + count) {
         NIMBLE_DCHECK_GE(exceptionPositions_[exceptionIndex_], position_);
@@ -510,9 +536,7 @@ class ALPRDEncoding final
       const Encoding::Options& options = {}) {
     const auto metadata = readMetadata(encoded, options);
     NIMBLE_CHECK_EQ(metadata.dataType, TypeTraits<T>::dataType);
-    NIMBLE_CHECK_LE(offset, metadata.rowCount);
-    NIMBLE_CHECK_LE(length, metadata.rowCount - offset);
-    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+    EncodingPrefix::checkSliceRange(metadata.rowCount, offset, length);
     auto* pool = &buffer.getMemoryPool();
     ScopedEncodingBuffer scratch(pool, options.encodingBufferPool);
     std::array<std::string_view, 4> children;

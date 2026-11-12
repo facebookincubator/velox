@@ -194,9 +194,11 @@ add_library(
   Checkpoint.h
   Chunk.h
   Callbacks.h
+  IoAlignment.h
 )
 target_link_libraries(
   nimble_tablet_common
+  nimble_block_cache
   nimble_checkpoint_fb
   nimble_file_properties_fb
   nimble_footer_fb
@@ -208,7 +210,15 @@ target_link_libraries(
 )
 
 add_library(nimble_block_cache BlockCache.cpp BlockCache.h)
-target_link_libraries(nimble_block_cache nimble_common velox_caching velox_time Folly::folly)
+target_link_libraries(
+  nimble_block_cache
+  nimble_common
+  velox_caching
+  velox_test_util
+  velox_time
+  glog::glog
+  Folly::folly
+)
 
 add_library(nimble_data_input DataInput.cpp DataInput.h)
 target_link_libraries(

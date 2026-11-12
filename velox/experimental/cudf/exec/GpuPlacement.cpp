@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
+#include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/GpuPlacement.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
@@ -158,9 +159,10 @@ bool canRunNestedLoopJoinOnGpu(
 bool canRunTopNRowNumberOnGpu(
     const core::TopNRowNumberNode& node,
     std::string* reason) {
-  if (node.rankFunction() !=
-      core::TopNRowNumberNode::RankFunction::kRowNumber) {
-    return reject(reason, "TopNRowNumber only supports row_number on cuDF");
+  if (!CudfTopNRowNumber::canRunOnGPU(node)) {
+    return reject(
+        reason,
+        "TopNRowNumber ranking function or key types are not supported by cuDF");
   }
   return true;
 }

@@ -127,14 +127,11 @@ class HashJoinLeftBenchmark : public VectorTestBase {
     query.maxDrivers(1)
         .config(
             core::QueryConfig::kHashProbeBloomFilterPushdownMaxSize,
-            std::to_string(kBloomFilterMaxBytes))
+            kBloomFilterMaxBytes)
         .config(
             core::QueryConfig::kBypassHashProbeBloomFilterMinRows,
-            params.enableBloomFilter ? std::to_string(100'000)
-                                     : std::to_string(0))
-        .config(
-            core::QueryConfig::kBypassHashProbeBloomFilterMinPct,
-            std::to_string(85));
+            params.enableBloomFilter ? 100'000 : 0)
+        .config(core::QueryConfig::kBypassHashProbeBloomFilterMinPct, 85);
     auto result = query.copyResults(pool());
     VELOX_CHECK_EQ(result->size(), 1);
     VELOX_CHECK_EQ(

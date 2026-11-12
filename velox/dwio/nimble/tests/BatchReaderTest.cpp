@@ -54,6 +54,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
 #include "velox/dwio/nimble/serializer/Options.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/tests/SharedDictionaryTestUtils.h"
@@ -588,6 +589,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
       fileHandle_->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle_->groupId = velox::StringIdLease(ids, "testGroup");
       tabletOptions.cache = cache_.get();
+      tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle_.get();
     }
     return nimble::TabletReader::create(readFile, pool, tabletOptions);
@@ -7916,6 +7918,38 @@ TEST_P(BatchReaderTest, vectorVectorResetWithBufferReuse) {
   }
 }
 
+TEST_P(BatchReaderTest, nextDoesNotOverwriteSlicedBuffers) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+
+  // Nulls in every batch give the child both a nulls and a values buffer.
+  const auto input = vectorMaker.rowVector({
+      vectorMaker.flatVector<int64_t>(
+          128,
+          [](auto row) { return row; },
+          [](auto row) { return row % 3 == 0; }),
+  });
+  const auto file = nimble::test::createNimbleFile(*rootPool_, input, {});
+  velox::InMemoryReadFile readFile(file);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, /*selector=*/nullptr, createReadParams());
+
+  velox::VectorPtr result;
+  ASSERT_TRUE(reader.next(64, result));
+
+  // The slice views the child's nulls and values buffers without referencing
+  // the child, so the next read reuses the child but must not decode into
+  // those buffers. A byte-aligned offset makes the sliced nulls a view too.
+  constexpr velox::vector_size_t kOffset{48};
+  const auto slice = result->slice(kOffset, 16);
+  ASSERT_TRUE(reader.next(64, result));
+
+  for (velox::vector_size_t row = 0; row < slice->size(); ++row) {
+    ASSERT_TRUE(input->equalValueAt(slice.get(), kOffset + row, row))
+        << "Row " << row << ": expected " << input->toString(kOffset + row)
+        << ", got " << slice->toString(row);
+  }
+}
+
 // Timestamp tests that might not be covered by fuzzer
 TEST_P(BatchReaderTest, timestampAllNulls) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
@@ -8082,6 +8116,7 @@ TEST_P(MetadataReuseTest, metadataReuseWithSameReader) {
       fileHandle->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle->groupId = velox::StringIdLease(ids, fileIdStr + "_group");
       tabletOptions.cache = cache_.get();
+      tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle.get();
     }
 
@@ -8201,6 +8236,7 @@ TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
             fileHandleOut->uuid = fileId;
             fileHandleOut->groupId = groupId;
             tabletOptions.cache = cache_.get();
+            tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
             tabletOptions.fileHandle = fileHandleOut.get();
           }
           return nimble::TabletReader::create(
@@ -8248,8 +8284,8 @@ TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
           << "Cross-reader should not re-read metadata. "
           << "maxReadOffset=" << trackingFile->maxReadOffset()
           << " metadataBoundary=" << metadataBoundary;
-      ASSERT_EQ(metadataIoStats2->rawBytesRead(), 0)
-          << "Cross-reader should not record any metadata IO";
+      ASSERT_EQ(metadataIoStats2->read().sum(), 0)
+          << "Cross-reader should not read any metadata from the file";
     } else {
       ASSERT_GT(trackingFile->maxReadOffset(), metadataBoundary)
           << "Cross-reader should re-read metadata. "

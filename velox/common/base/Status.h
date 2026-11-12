@@ -197,7 +197,7 @@ class [[nodiscard]] Status {
   constexpr Status() noexcept : state_(nullptr) {}
 
   ~Status() noexcept {
-    if (FOLLY_UNLIKELY(state_ != nullptr)) {
+    if (state_ != nullptr) [[unlikely]] {
       deleteState();
     }
   }

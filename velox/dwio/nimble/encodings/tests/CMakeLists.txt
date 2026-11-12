@@ -37,6 +37,7 @@ add_executable(
   ALPEncodingViewTest.cpp
   BufferedEncodingTest.cpp
   BlockBitPackingEncodingViewTest.cpp
+  BlockBitPackingV2EncodingViewTest.cpp
   ConstantEncodingViewTest.cpp
   ConstantEncodingTest.cpp
   DictionaryEncodingTest.cpp

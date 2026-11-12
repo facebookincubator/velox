@@ -283,6 +283,77 @@ TEST_F(ExprOptimizerTest, rewritesWithConstantFolding) {
       type);
 }
 
+// An expression with nothing to fold or rewrite comes back as the same node.
+TEST_F(ExprOptimizerTest, unchanged) {
+  const auto type = ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), ARRAY(BIGINT())});
+  std::vector<core::TypedExprPtr> inputs;
+  for (const auto& sql : {
+           "a + b",
+           "cast(a as varchar)",
+           "transform(c, x -> x + a)",
+           "if(a > b, a, b)",
+           "case when a > b then a when b > a then b else a end",
+           "coalesce(a, b)",
+           "a > b and b > a",
+           "a > b or b > a",
+           "if(a > b, a, b) + if(b > a, b, a)",
+       }) {
+    inputs.push_back(makeTypedExpr(sql, type));
+  }
+  inputs.push_back(
+      std::make_shared<core::NullIfTypedExpr>(
+          makeTypedExpr("a", type), makeTypedExpr("b", type), BIGINT()));
+  const auto row = std::make_shared<core::ConcatTypedExpr>(
+      std::vector<std::string>{"x", "y"},
+      std::vector<core::TypedExprPtr>{
+          makeTypedExpr("a", type), makeTypedExpr("b", type)});
+  inputs.push_back(row);
+  inputs.push_back(
+      std::make_shared<core::DereferenceTypedExpr>(BIGINT(), row, 0));
+
+  const auto queryCtx = core::QueryCtx::create();
+  for (const auto& input : inputs) {
+    SCOPED_TRACE(input->toString());
+    const auto optimized = expression::optimize(input, queryCtx.get(), pool());
+    EXPECT_EQ(optimized.get(), input.get()) << optimized->toString();
+  }
+}
+
+// Optimizing an optimized expression returns the same node, and a fold rebuilds
+// only the path above it.
+TEST_F(ExprOptimizerTest, idempotent) {
+  const auto type = ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), ARRAY(BIGINT())});
+  const auto queryCtx = core::QueryCtx::create();
+
+  // A folded leaf leaves its unchanged sibling in place.
+  {
+    const auto expr =
+        makeTypedExpr("if(a > b, a, b) + if(b > a + (1 + 1), b, a)", type);
+    const auto optimized = expression::optimize(expr, queryCtx.get(), pool());
+    EXPECT_EQ(optimized->inputs()[0].get(), expr->inputs()[0].get());
+    EXPECT_EQ(
+        expression::optimize(optimized, queryCtx.get(), pool()).get(),
+        optimized.get());
+  }
+
+  // Each rewrite changes its input once, then leaves its own output alone.
+  for (const auto& sql : {
+           "case when 1 > 2 then a when a > b then b else a end",
+           "a > b and (b > a and a = b)",
+           "coalesce(a, b, a)",
+           "transform(c, x -> x + (1 + 1))",
+       }) {
+    SCOPED_TRACE(sql);
+    const auto expr = makeTypedExpr(sql, type);
+    const auto optimized = expression::optimize(expr, queryCtx.get(), pool());
+    ASSERT_NE(optimized.get(), expr.get());
+    EXPECT_EQ(
+        expression::optimize(optimized, queryCtx.get(), pool()).get(),
+        optimized.get())
+        << optimized->toString();
+  }
+}
+
 /// Test to ensure session queryCtx is used during expression optimization.
 TEST_F(ExprOptimizerTest, queryCtx) {
   auto testFromUnixtime = [&](const std::string& function,
@@ -348,6 +419,46 @@ TEST_F(ExprOptimizerTest, castExpr) {
       "cast((a = (5 / 1) * abs(-3)) as BOOLEAN) and cast((b = concat('hello', 'world')) as BOOLEAN)",
       "a = 15 and b = 'helloworld'",
       ROW({"a", "b"}, {BIGINT(), VARCHAR()}));
+}
+
+// Inputs of row constructions and field accesses are optimized.
+TEST_F(ExprOptimizerTest, dereferenceAndConcat) {
+  const auto type = ROW("a", BIGINT());
+  const auto onePlusOne = makeTypedExpr("1 + 1", type);
+  const auto two = makeTypedExpr("2", type);
+  const auto a = makeTypedExpr("a", type);
+  auto makeRow = [](const core::TypedExprPtr& x, const core::TypedExprPtr& y) {
+    return std::make_shared<core::ConcatTypedExpr>(
+        std::vector<std::string>{"x", "y"},
+        std::vector<core::TypedExprPtr>{x, y});
+  };
+  auto makeField = [](const core::TypedExprPtr& row) {
+    return std::make_shared<core::DereferenceTypedExpr>(INTEGER(), row, 0);
+  };
+  auto makeFieldByName = [](const core::TypedExprPtr& row) {
+    return std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), row, "x");
+  };
+
+  // A row construction with a foldable input.
+  testExpression(makeRow(onePlusOne, a), makeRow(two, a), type);
+
+  // A field access on that row.
+  testExpression(
+      makeField(makeRow(onePlusOne, a)), makeField(makeRow(two, a)), type);
+
+  // A field access by name on that row.
+  testExpression(
+      makeFieldByName(makeRow(onePlusOne, a)),
+      makeFieldByName(makeRow(two, a)),
+      type);
+
+  // A field access on an all-constant row folds to the field's value.
+  testExpression(
+      makeField(makeRow(onePlusOne, makeTypedExpr("3", type))), two, type);
+  testExpression(
+      makeFieldByName(makeRow(onePlusOne, makeTypedExpr("3", type))),
+      two,
+      type);
 }
 
 /// Test to validate `makeFailExpr` returns an expression that replaces all

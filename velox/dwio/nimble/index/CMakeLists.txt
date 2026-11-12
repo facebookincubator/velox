@@ -25,9 +25,11 @@ add_library(
   ClusterIndexWriterBase.cpp
   DenseIndexFactory.cpp
   DenseIndexRegistry.cpp
+  FlatClusterIndexFactory.cpp
   HashIndex.cpp
   HashIndexWriter.cpp
   HierarchicalClusterIndex.cpp
+  HierarchicalClusterIndexFactory.cpp
   HierarchicalClusterIndexWriter.cpp
   IndexConfig.cpp
   IndexFilter.cpp
@@ -45,6 +47,7 @@ add_library(
   VectorIndexConfig.h
   SortedIndexWriter.h
   HierarchicalClusterIndex.h
+  HierarchicalClusterIndexFactory.h
   HierarchicalClusterIndexWriter.h
   HierarchicalKeyFormat.h
   HierarchicalKeyReader.h
@@ -66,6 +69,7 @@ add_library(
   IndexFactoryRegistry.h
   IndexConstants.h
   IndexConfig.h
+  FlatClusterIndexFactory.h
   HashIndexWriter.h
   HashIndexUtils.h
   HashIndexConfig.h
@@ -86,6 +90,7 @@ add_library(
 
 target_link_libraries(
   nimble_index
+  nimble_block_cache
   nimble_common
   nimble_compression
   nimble_encodings

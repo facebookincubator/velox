@@ -45,13 +45,6 @@ class ArrayAggTest : public AggregationTestBase {
   }
 };
 
-std::unordered_map<std::string, std::string> makeConfig(bool ignoreNulls) {
-  if (ignoreNulls) {
-    return {{"presto.array_agg.ignore_nulls", "true"}};
-  }
-  return {};
-}
-
 TEST_F(ArrayAggTest, groupBy) {
   auto testFunction = [this](
                           const std::string& functionName,
@@ -87,41 +80,34 @@ TEST_F(ArrayAggTest, groupBy) {
 
     createDuckDbTable(batches);
     auto filter = ignoreNulls ? "filter (where a is not null)" : "";
-    testAggregations(
-        batches,
-        {"c0"},
-        {fmt::format("{}(a)", functionName)},
-        {"c0", "array_sort(a0)"},
+    AggregationTester tester(*this);
+    tester.inputs(batches)
+        .groupBy({"c0"})
+        .aggregates({fmt::format("{}(a)", functionName)})
+        .project({"c0", "array_sort(a0)"})
+        .config(
+            "presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false");
+    if (testCompanionFunctions) {
+      tester.withCompanion();
+    }
+    tester.assertResults(
         fmt::format(
             "SELECT c0, array_sort(array_agg(a) {}) FROM tmp GROUP BY c0",
-            filter),
-        makeConfig(ignoreNulls));
-    if (testCompanionFunctions) {
-      testAggregationsWithCompanion(
-          batches,
-          [](auto& /*builder*/) {},
-          {"c0"},
-          {fmt::format("{}(a)", functionName)},
-          {{ARRAY(VARCHAR())}},
-          {"c0", "array_sort(a0)"},
-          fmt::format(
-              "SELECT c0, array_sort(array_agg(a) {}) FROM tmp GROUP BY c0",
-              filter),
-          makeConfig(ignoreNulls));
-    }
+            filter));
 
     // Having one function supporting toIntermediate and one does not, make sure
     // the row container is recreated with only the function without
     // toIntermediate support.
-    testAggregations(
-        batches,
-        {"c0"},
-        {fmt::format("{}(a)", functionName), "max(c0)"},
-        {"c0", "array_sort(a0)", "a1"},
-        fmt::format(
-            "SELECT c0, array_sort(array_agg(a) {}), max(c0) FROM tmp GROUP BY c0",
-            filter),
-        makeConfig(ignoreNulls));
+    AggregationTester(*this)
+        .inputs(batches)
+        .groupBy({"c0"})
+        .aggregates({fmt::format("{}(a)", functionName), "max(c0)"})
+        .project({"c0", "array_sort(a0)", "a1"})
+        .config("presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false")
+        .assertResults(
+            fmt::format(
+                "SELECT c0, array_sort(array_agg(a) {}), max(c0) FROM tmp GROUP BY c0",
+                filter));
   };
 
   testFunction("array_agg", true);
@@ -294,24 +280,17 @@ TEST_F(ArrayAggTest, global) {
 
     createDuckDbTable(vectors);
     auto filter = ignoreNulls ? "filter (where c0 is not null)" : "";
-    testAggregations(
-        vectors,
-        {},
-        {fmt::format("{}(c0)", functionName)},
-        {"array_sort(a0)"},
-        fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
-        makeConfig(ignoreNulls));
+    AggregationTester tester(*this);
+    tester.inputs(vectors)
+        .aggregates({fmt::format("{}(c0)", functionName)})
+        .project({"array_sort(a0)"})
+        .config(
+            "presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false");
     if (testCompanionFunctions) {
-      testAggregationsWithCompanion(
-          vectors,
-          [](auto& /*builder*/) {},
-          {},
-          {fmt::format("{}(c0)", functionName)},
-          {{INTEGER()}},
-          {"array_sort(a0)"},
-          fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
-          makeConfig(ignoreNulls));
+      tester.withCompanion();
     }
+    tester.assertResults(
+        fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter));
   };
 
   testFunction("array_agg", true);
@@ -326,8 +305,10 @@ TEST_F(ArrayAggTest, globalNoData) {
                           bool ignoreNulls,
                           bool testCompanionFunctions = true) {
     auto data = makeRowVector(ROW({"c0"}, {INTEGER()}), 0);
-    testAggregations(
-        {data}, {}, {fmt::format("{}(c0)", functionName)}, "SELECT null");
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({fmt::format("{}(c0)", functionName)})
+        .assertResults("SELECT null");
 
     std::vector<RowVectorPtr> allNulls = {
         makeRowVector({makeFlatVector<int32_t>(
@@ -335,22 +316,22 @@ TEST_F(ArrayAggTest, globalNoData) {
     auto filter = ignoreNulls ? "filter (where c0 is not null)" : "";
 
     createDuckDbTable(allNulls);
-    testAggregations(
-        allNulls,
-        {},
-        {fmt::format("{}(c0)", functionName)},
-        fmt::format("SELECT array_agg(c0) {} FROM tmp", filter),
-        makeConfig(ignoreNulls));
+    AggregationTester(*this)
+        .inputs(allNulls)
+        .aggregates({fmt::format("{}(c0)", functionName)})
+        .config("presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false")
+        .assertResults(fmt::format("SELECT array_agg(c0) {} FROM tmp", filter));
     if (testCompanionFunctions) {
-      testAggregationsWithCompanion(
-          allNulls,
-          [](auto& /*builder*/) {},
-          {},
-          {fmt::format("{}(c0)", functionName)},
-          {{INTEGER()}},
-          {"array_sort(a0)"},
-          fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
-          makeConfig(ignoreNulls));
+      AggregationTester(*this)
+          .inputs(allNulls)
+          .aggregates({fmt::format("{}(c0)", functionName)})
+          .project({"array_sort(a0)"})
+          .config(
+              "presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false")
+          .withCompanion()
+          .assertResults(
+              fmt::format(
+                  "SELECT array_sort(array_agg(c0) {}) FROM tmp", filter));
     }
   };
 
@@ -504,13 +485,12 @@ TEST_F(ArrayAggTest, mask) {
         makeConstant(false, 5),
     });
 
-    // TODO: Add support for FILTER in testAggregationsWithCompanion() and test
-    // queries with companion functions.
-    testAggregations(
-        split(data),
-        {},
-        {fmt::format("{}(c0) FILTER (WHERE c1)", functionName)},
-        "SELECT null");
+    // TODO: Add support for FILTER in AggregationTester::withCompanion() and
+    // test queries with companion functions.
+    AggregationTester(*this)
+        .inputs(split(data))
+        .aggregates({fmt::format("{}(c0) FILTER (WHERE c1)", functionName)})
+        .assertResults("SELECT null");
 
     // Global aggregation with a non-constant mask.
     data = makeRowVector({
@@ -518,12 +498,11 @@ TEST_F(ArrayAggTest, mask) {
         makeFlatVector<bool>({true, false, true, false, true}),
     });
 
-    testAggregations(
-        split(data),
-        {},
-        {fmt::format("{}(c0) FILTER (WHERE c1)", functionName)},
-        {"array_sort(a0)"},
-        "SELECT [1, 3, 5]");
+    AggregationTester(*this)
+        .inputs(split(data))
+        .aggregates({fmt::format("{}(c0) FILTER (WHERE c1)", functionName)})
+        .project({"array_sort(a0)"})
+        .assertResults("SELECT [1, 3, 5]");
 
     // Group-by with all-false mask.
     data = makeRowVector({
@@ -532,11 +511,11 @@ TEST_F(ArrayAggTest, mask) {
         makeConstant(false, 5),
     });
 
-    testAggregations(
-        split(data),
-        {"c0"},
-        {fmt::format("{}(c1) FILTER (WHERE c2)", functionName)},
-        "VALUES (10, null), (20, null)");
+    AggregationTester(*this)
+        .inputs(split(data))
+        .groupBy({"c0"})
+        .aggregates({fmt::format("{}(c1) FILTER (WHERE c2)", functionName)})
+        .assertResults("VALUES (10, null), (20, null)");
 
     // Group-by with a non-constant mask.
     data = makeRowVector({
@@ -545,12 +524,12 @@ TEST_F(ArrayAggTest, mask) {
         makeFlatVector<bool>({true, false, true, false, true}),
     });
 
-    testAggregations(
-        split(data),
-        {"c0"},
-        {fmt::format("{}(c1) FILTER (WHERE c2)", functionName)},
-        {"c0", "array_sort(a0)"},
-        "VALUES (10, [1, 3]), (20, [5])");
+    AggregationTester(*this)
+        .inputs(split(data))
+        .groupBy({"c0"})
+        .aggregates({fmt::format("{}(c1) FILTER (WHERE c2)", functionName)})
+        .project({"c0", "array_sort(a0)"})
+        .assertResults("VALUES (10, [1, 3]), (20, [5])");
   };
 
   testFunction("array_agg");

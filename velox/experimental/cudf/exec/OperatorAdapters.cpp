@@ -132,7 +132,7 @@ class TableScanAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto tableScanNode =
         std::dynamic_pointer_cast<const core::TableScanNode>(planNode);
     if (!tableScanNode) {
@@ -141,8 +141,17 @@ class TableScanAdapter : public OperatorAdapter {
           planNode->id());
       return false;
     }
+    // Ask with the ConnectorQueryCtx the TableScan creates for the connector,
+    // so that this decision matches the data source the connector picks. The
+    // check allocates only from the operator pool, so no connector pool is
+    // needed.
+    const auto connectorQueryCtx = op->operatorCtx()->createConnectorQueryCtx(
+        tableScanNode->tableHandle()->connectorId(),
+        planNode->id(),
+        /*connectorPool=*/nullptr);
     std::string reason;
-    if (!isGpuTableScan(*tableScanNode, &reason)) {
+    if (!isGpuTableScan(
+            *tableScanNode, *connectorQueryCtx, ctx->queryConfig(), &reason)) {
       LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
       return false;
     }

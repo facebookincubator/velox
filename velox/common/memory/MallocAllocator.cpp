@@ -174,7 +174,7 @@ bool MallocAllocator::allocateContiguousImpl(
   numExternalMapped_.fetch_add(numPages);
   const auto maxBytes = AllocationTraits::pageBytes(maxPages);
   void* data = dispatchAllocateContiguous(maxBytes);
-  if (FOLLY_UNLIKELY(data == nullptr)) {
+  if (data == nullptr) [[unlikely]] {
     numAllocated_.fetch_sub(numPages);
     numMapped_.fetch_sub(numPages);
     numExternalMapped_.fetch_sub(numPages);
@@ -309,7 +309,7 @@ void* MallocAllocator::allocateBytesWithoutRetry(
   }
   void* result = (alignment > kMinAlignment) ? ::aligned_alloc(alignment, bytes)
                                              : ::malloc(bytes);
-  if (FOLLY_UNLIKELY(result == nullptr)) {
+  if (result == nullptr) [[unlikely]] {
     VELOX_MEM_LOG(ERROR) << "Failed to allocateBytes " << succinctBytes(bytes)
                          << " with " << alignment << " alignment";
   }
@@ -328,7 +328,7 @@ void* MallocAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
     return nullptr;
   }
   void* result = std::calloc(1, bytes);
-  if (FOLLY_UNLIKELY(result == nullptr)) {
+  if (result == nullptr) [[unlikely]] {
     VELOX_MEM_LOG(ERROR) << "Failed to allocateZeroFilled "
                          << succinctBytes(bytes);
   }

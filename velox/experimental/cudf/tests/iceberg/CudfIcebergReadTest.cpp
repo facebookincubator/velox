@@ -18,21 +18,25 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/tests/utils/IcebergPlanBuilder.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
@@ -56,16 +60,17 @@ using namespace facebook::velox::connector::hive::iceberg;
 using namespace facebook::velox::cudf_velox::iceberg::test;
 using facebook::velox::common::testutil::TempFilePath;
 using facebook::velox::connector::hive::HiveColumnHandle;
+using facebook::velox::connector::hive::iceberg::test::IcebergPlanBuilder;
 
 namespace facebook::velox::cudf_velox::exec::test {
 
 namespace {
 
 class CountingBufferedInputBuilder final
-    : public ::facebook::velox::connector::hive::BufferedInputBuilder {
+    : public ::facebook::velox::connector::BufferedInputBuilder {
  public:
   explicit CountingBufferedInputBuilder(
-      std::shared_ptr<::facebook::velox::connector::hive::BufferedInputBuilder>
+      std::shared_ptr<::facebook::velox::connector::BufferedInputBuilder>
           delegate)
       : delegate_(std::move(delegate)) {}
 
@@ -94,8 +99,7 @@ class CountingBufferedInputBuilder final
   }
 
  private:
-  std::shared_ptr<::facebook::velox::connector::hive::BufferedInputBuilder>
-      delegate_;
+  std::shared_ptr<::facebook::velox::connector::BufferedInputBuilder> delegate_;
   std::atomic_uint64_t createCount_{0};
 };
 
@@ -527,7 +531,7 @@ TEST_F(CudfIcebergReadTest, ignoreMissingFiles) {
                     .splits(splits)
                     .assertResults({data});
     const auto stats =
-        toPlanStats(task->taskStats()).at(plan->id()).customStats;
+        PlanNodeStats::extract(task->taskStats(), plan->id()).customStats;
     EXPECT_EQ(stats.count("skippedSplits"), 0);
     EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
     EXPECT_EQ(stats.at("processedSplits").sum, 1);
@@ -571,13 +575,13 @@ TEST_F(CudfIcebergReadTest, reusesFooterMetadataDuringReaderSetup) {
   writeToFile(dataFile->getPath(), data);
 
   auto originalBuilder =
-      ::facebook::velox::connector::hive::BufferedInputBuilder::getInstance();
+      ::facebook::velox::connector::BufferedInputBuilder::getInstance();
   auto countingBuilder =
       std::make_shared<CountingBufferedInputBuilder>(originalBuilder);
-  ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+  ::facebook::velox::connector::BufferedInputBuilder::registerBuilder(
       countingBuilder);
   SCOPE_EXIT {
-    ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+    ::facebook::velox::connector::BufferedInputBuilder::registerBuilder(
         originalBuilder);
   };
 
@@ -2263,29 +2267,97 @@ TEST_F(CudfIcebergReadTest, partitionTimestampMixedWithFileTimestamp) {
   }
 }
 
-// The Iceberg data source shares the Hive constructor, so it rejects a
-// remaining filter that casts from VARCHAR the same way.
+// The Iceberg connector shares the Hive data source's support check, so a
+// remaining filter that casts from VARCHAR stays on the CPU data source.
 TEST_F(CudfIcebergReadTest, remainingFilterCastFromVarchar) {
-  auto rowType = ROW({"c0"}, {VARCHAR()});
-  auto dataFile = TempFilePath::create();
-  writeToFile(
-      dataFile->getPath(),
-      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}));
+  // The GPU cast from VARCHAR follows Presto's rules and is on in a session
+  // with the Presto functions registered.
+  cudf_velox::registerPrestoFunctions(
+      cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+  // The CPU data source reads Parquet through the Velox reader, which the
+  // other tests in this suite do not need.
+  parquet::registerParquetReaderFactory();
+  SCOPE_EXIT {
+    parquet::unregisterParquetReaderFactory();
+  };
 
-  auto plan = PlanBuilder()
-                  .startTableScan()
-                  .connectorId(kCudfIcebergConnectorId)
-                  .outputType(rowType)
-                  .dataColumns(rowType)
-                  .remainingFilter("try_cast(c0 as double) > 1.0")
-                  .endTableScan()
-                  .planNode();
+  auto rowType = ROW({{"c0", VARCHAR()}, {"c1", BIGINT()}});
+  const auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<std::string>({"1.5", "x", "inf"}),
+       makeFlatVector<int64_t>({1, 2, 3})});
 
-  VELOX_ASSERT_UNSUPPORTED_THROW(
-      AssertQueryBuilder(plan)
-          .splits(makeIcebergSplits(dataFile->getPath()))
-          .copyResults(pool()),
-      "Remaining filter with a cast from VARCHAR is not supported");
+  auto testFilter =
+      [&](const std::string& filter,
+          const std::unordered_map<std::string, std::string>& sessionConfig,
+          const RowVectorPtr& expected,
+          bool expectCudfScan) {
+        SCOPED_TRACE(filter);
+
+        // The CPU Iceberg data source requires an IcebergTableHandle.
+        auto plan = IcebergPlanBuilder()
+                        .startTableScan(kCudfIcebergConnectorId)
+                        .outputType(rowType)
+                        .dataColumns(rowType)
+                        .remainingFilter(filter)
+                        .endTableScan()
+                        .planNode();
+
+        // A file no earlier scan read, since only a read from storage reports
+        // kDwioStorageReadBytes.
+        const auto dataFile = TempFilePath::create();
+        writeToFile(dataFile->getPath(), data);
+
+        auto task = AssertQueryBuilder(plan)
+                        .config(CudfConfig::kCudfEnabled, true)
+                        .configs(sessionConfig)
+                        .splits(makeIcebergSplits(dataFile->getPath()))
+                        .assertResults(expected);
+
+        // The adapter adds a CudfToVelox operator after a GPU scan, and only
+        // the cuDF data source reports kDwioStorageReadBytes, so the two show
+        // that the adapter and the connector agree.
+        const auto planStats = toPlanStats(task->taskStats());
+        const auto& scanStats = planStats.at(plan->id());
+        EXPECT_EQ(
+            scanStats.operatorStats.count("CudfToVelox") > 0, expectCudfScan);
+        EXPECT_EQ(
+            scanStats.customStats.count(
+                std::string(
+                    cudf_velox::connector::hive::CudfHiveDataSource::
+                        kDwioStorageReadBytes)) > 0,
+            expectCudfScan);
+      };
+
+  const std::string tryCastFilter = "try_cast(c0 as double) > 1.0";
+  testFilter(
+      tryCastFilter,
+      {},
+      makeRowVector(
+          {"c0", "c1"},
+          {makeFlatVector<std::string>({"1.5"}), makeFlatVector<int64_t>({1})}),
+      false);
+
+  // The GPU cast would follow Presto's strict rules and drop 'inf', which
+  // this session accepts.
+  testFilter(
+      tryCastFilter,
+      {{core::QueryConfig::kCastStringToFloatingPointLenientInfNan, "true"}},
+      makeRowVector(
+          {"c0", "c1"},
+          {makeFlatVector<std::string>({"1.5", "inf"}),
+           makeFlatVector<int64_t>({1, 3})}),
+      false);
+
+  // A filter without a cast from VARCHAR keeps the scan on the GPU.
+  testFilter(
+      "c1 % 2 = 1",
+      {},
+      makeRowVector(
+          {"c0", "c1"},
+          {makeFlatVector<std::string>({"1.5", "inf"}),
+           makeFlatVector<int64_t>({1, 3})}),
+      true);
 }
 
 /// A remaining filter is allowed with positional deletes

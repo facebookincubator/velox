@@ -44,8 +44,10 @@ velox_add_cudf_test(
     velox_cudf_iceberg_test_lib
     velox_cudf_iceberg_connector
     velox_cudf_exec_test_lib
+    velox_dwio_parquet_reader
     velox_exec
     velox_exec_test_lib
+    velox_hive_iceberg_test_lib
     velox_test_util
     fmt::fmt
     gmock

@@ -203,7 +203,7 @@ class BaseColumnWriter : public ColumnWriter {
   }
 
   uint64_t writeNulls(const VectorPtr& slice, const common::Ranges& ranges) {
-    if (FOLLY_UNLIKELY(ranges.size() == 0)) {
+    if (ranges.size() == 0) [[unlikely]] {
       return 0;
     }
     if (!slice->mayHaveNulls()) {
@@ -219,7 +219,7 @@ class BaseColumnWriter : public ColumnWriter {
   uint64_t writeNulls(
       const DecodedVector& decoded,
       const common::Ranges& ranges) {
-    if (FOLLY_UNLIKELY(ranges.size() == 0)) {
+    if (ranges.size() == 0) [[unlikely]] {
       return 0;
     }
     if (!decoded.mayHaveNulls()) {

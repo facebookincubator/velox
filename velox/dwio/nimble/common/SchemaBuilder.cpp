@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 
 #include <algorithm>
+#include <type_traits>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
@@ -394,14 +395,16 @@ bool HybridFlatMapTypeBuilder::useKeyPresentList(uint32_t groupId) const {
       defaultGroupKeyPresenceMode_, groupId);
 }
 
-HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
+HybridFlatMapTypeBuilder::Group HybridFlatMapTypeBuilder::addGroup(
     uint32_t groupId,
-    std::vector<std::string> groupKeys,
+    const std::vector<std::string>& groupKeys,
     std::shared_ptr<TypeBuilder> valueType) {
   const auto isDefaultGroup = HybridFlatMap::isDefaultGroup(groupId);
-  NIMBLE_CHECK(
-      !isDefaultGroup || !defaultGroupIndex_.has_value(),
-      "Hybrid FlatMap has multiple Default groups.");
+  if (isDefaultGroup) {
+    NIMBLE_CHECK(
+        !defaultGroupIndex_.has_value(),
+        "Hybrid FlatMap has multiple Default groups.");
+  }
   NIMBLE_CHECK(
       std::none_of(
           groups_.begin(),
@@ -409,21 +412,13 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
           [&](const auto& group) { return group.groupId == groupId; }),
       "Duplicate Hybrid FlatMap group ID: {}.",
       groupId);
-  detail::checkHybridFlatMapGroupKeys(groupId, groupKeys);
   detail::checkHybridFlatMapDefaultKeys(
       defaultGroupKeyPresenceMode_, groupId, groupKeys);
-
-  // Inserting also rejects a key repeated within this group, which the sorted
-  // check above does not cover for Default keys in first-seen order.
-  for (const auto& key : groupKeys) {
-    const bool isNewKey = keys_.insert(key).second;
-    NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
-  }
   schemaBuilder_.registerChild(valueType);
-  auto& group = groups_.emplace_back(
+  groups_.push_back(
       StoredGroup{
           .groupId = groupId,
-          .groupKeys = std::move(groupKeys),
+          .groupKeys = groupKeys,
           .keyPresenceDescriptor = std::make_unique<StreamDescriptorBuilder>(
               schemaBuilder_.allocateStreamOffset(),
               useKeyPresentList(groupId) ? keyScalarKind_ : ScalarKind::Bool),
@@ -434,27 +429,7 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
   if (isDefaultGroup) {
     defaultGroupIndex_ = groups_.size() - 1;
   }
-  NIMBLE_CHECK_NOT_NULL(
-      group.keyPresenceDescriptor,
-      "Hybrid FlatMap key-presence descriptor is not initialized.");
-  return {
-      .keyPresenceDescriptor = *group.keyPresenceDescriptor,
-      .inMapDescriptor = *group.inMapDescriptor,
-  };
-}
-
-void HybridFlatMapTypeBuilder::appendDefaultGroupKey(std::string key) {
-  NIMBLE_CHECK(
-      defaultGroupIndex_.has_value(),
-      "Hybrid FlatMap Default group is not initialized.");
-  NIMBLE_CHECK_EQ(
-      defaultGroupKeyPresenceMode_,
-      HybridFlatMap::KeyPresenceMode::kBitmap,
-      "Hybrid FlatMap Default keys are listed per batch, not in the schema.");
-  NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
-  const bool isNewKey = keys_.insert(key).second;
-  NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
-  groups_[*defaultGroupIndex_].groupKeys.push_back(std::move(key));
+  return groupAt(groups_.size() - 1);
 }
 
 size_t HybridFlatMapTypeBuilder::groupCount() const {
@@ -693,29 +668,88 @@ const Type& schemaChild(const std::shared_ptr<const Type>& type) {
 }
 
 void validateForSerialization(const HybridFlatMapTypeBuilder& hybridMap) {
+  folly::F14FastMap<std::string_view, size_t> groupIndices;
   detail::validateHybridFlatMapGroups(
       hybridMap.groupCount(),
       hybridMap.requiresDefaultGroup(),
       [&hybridMap](size_t index) { return hybridMap.groupAt(index).groupId; },
       [&hybridMap](size_t index) -> const auto& {
         return hybridMap.groupAt(index).groupKeys;
-      });
+      },
+      groupIndices);
 
   // Group validation guarantees at least one group, so group 0 is the
   // reference and the comparison starts at 1.
   const auto& expectedValueType = hybridMap.groupAt(0).valueType;
   for (size_t i = 1; i < hybridMap.groupCount(); ++i) {
-    const auto& valueType = hybridMap.groupAt(i).valueType;
-    const bool hasSameLogicalType =
-        detail::sameLogicalType(expectedValueType, valueType);
+    const bool hasSameLogicalType = detail::sameLogicalType(
+        expectedValueType, hybridMap.groupAt(i).valueType);
     NIMBLE_CHECK(
         hasSameLogicalType,
         "Hybrid FlatMap groups must have the same logical value type.");
   }
+
+  // The owner of the Default keys can append to them after addGroup() checked
+  // them, so a Default group that lists its keys per batch is checked again.
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    const auto& group = hybridMap.groupAt(i);
+    detail::checkHybridFlatMapDefaultKeys(
+        hybridMap.defaultGroupKeyPresenceMode(),
+        group.groupId,
+        group.groupKeys);
+  }
 }
 
-// A reader-side type validates its groups in HybridFlatMapType's constructor.
+// A reader-side type validates its groups when its HybridFlatMap is built.
 void validateForSerialization(const HybridFlatMapType&) {}
+
+// Returns the groups a type builder serializes: copies of the IDs and of the
+// keys it views, which a bitmap Default's owner appends to between calls.
+std::vector<HybridFlatMap::Group> serializedGroups(
+    const HybridFlatMapTypeBuilder& hybridMap) {
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(hybridMap.groupCount());
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    const auto group = hybridMap.groupAt(i);
+    groups.push_back(
+        HybridFlatMap::Group{
+            .groupId = group.groupId,
+            .groupKeys = group.groupKeys,
+        });
+  }
+  return groups;
+}
+
+// A reader-side type serializes the groups its HybridFlatMap holds.
+const std::vector<HybridFlatMap::Group>& serializedGroups(
+    const HybridFlatMapType& hybridMap) {
+  return hybridMap.hybridFlatMap().groups();
+}
+
+// Stores `serialized` groups as the reserved Hybrid FlatMap attribute among
+// `attributes`, the attributes of a schema node: appends it when absent, or
+// replaces its stale value in place.
+void setHybridFlatMapAttribute(
+    std::vector<std::pair<std::string, std::string>>& attributes,
+    std::string serialized) {
+  const auto isHybridFlatMapAttribute = [](const auto& attribute) {
+    return attribute.first == HybridFlatMapType::kAttributeName;
+  };
+  const auto existing = std::find_if(
+      attributes.begin(), attributes.end(), isHybridFlatMapAttribute);
+  if (existing == attributes.end()) {
+    attributes.emplace_back(
+        HybridFlatMapType::kAttributeName, std::move(serialized));
+  } else {
+    existing->second = std::move(serialized);
+  }
+
+  NIMBLE_CHECK_EQ(
+      std::count_if(
+          attributes.begin(), attributes.end(), isHybridFlatMapAttribute),
+      1,
+      "Hybrid FlatMap metadata attribute must be unique.");
+}
 
 template <typename TypeLike>
 void addSchemaNode(
@@ -859,20 +893,12 @@ void addSchemaNode(
     case Kind::HybridFlatMap: {
       const auto& hybridMap = type.asHybridFlatMap();
       validateForSerialization(hybridMap);
-      std::vector<HybridFlatMap::Group> groups;
-      groups.reserve(hybridMap.groupCount());
-      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
-        const auto& group = hybridMap.groupAt(i);
-        groups.push_back(
-            HybridFlatMap::Group{
-                .groupId = group.groupId,
-                .groupKeys = group.groupKeys,
-            });
-      }
       auto attributes = type.attributes();
-      HybridFlatMap::fromSchema(
-          std::move(groups), hybridMap.defaultGroupKeyPresenceMode())
-          .setAttribute(attributes);
+      setHybridFlatMapAttribute(
+          attributes,
+          HybridFlatMap::serialize(
+              serializedGroups(hybridMap),
+              hybridMap.defaultGroupKeyPresenceMode()));
       nodes.emplace_back(
           type.kind(),
           hybridMap.nullsDescriptor().offset(),

@@ -478,6 +478,18 @@ folly::Range<const BaseVector::CopyRange*> toChildRanges(
   return clipped;
 }
 
+// Returns true if the row child is a column the reader did not project. Such a
+// child is null and has no values to copy, so it must be null on both sides.
+bool isUnprojectedChild(
+    const VectorPtr& sourceChild,
+    const VectorPtr& targetChild) {
+  VELOX_CHECK_EQ(
+      sourceChild == nullptr,
+      targetChild == nullptr,
+      "Source and target must project the same row children");
+  return sourceChild == nullptr;
+}
+
 VectorPtr newRow(
     const EncodedVectorCopyOptions& options,
     const RowVector& source,
@@ -488,6 +500,9 @@ VectorPtr newRow(
   std::vector<BaseVector::CopyRange> clipped;
   for (column_index_t i = 0; i < children.size(); ++i) {
     const auto& child = source.childAt(i);
+    if (!child) {
+      continue;
+    }
     copyImpl(
         options,
         child,
@@ -747,12 +762,15 @@ void copyIntoRow(
     setSourceNulls(sourceNulls, *target, ranges);
     for (column_index_t i = 0; i < targetRow->childrenSize(); ++i) {
       auto& targetChild = targetRow->childAt(i);
+      const auto& sourceChild = source.childAt(i);
+      if (isUnprojectedChild(sourceChild, targetChild)) {
+        continue;
+      }
       bool targetChildMutable = targetChild.use_count() == 1;
       if (targetChildMutable && targetChild->size() > oldSize) {
         // Shrink the size to allow unreferenced nested rows to be released.
         targetChild->resize(oldSize);
       }
-      const auto& sourceChild = source.childAt(i);
       copyImpl(
           options,
           sourceChild,
@@ -775,6 +793,9 @@ void copyIntoRow(
     auto children = targetRow->children();
     for (column_index_t i = 0; i < children.size(); ++i) {
       const auto& sourceChild = source.childAt(i);
+      if (isUnprojectedChild(sourceChild, children[i])) {
+        continue;
+      }
       copyImpl(
           options,
           sourceChild,

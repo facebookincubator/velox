@@ -16,6 +16,8 @@
 
 #include <gmock/gmock.h>
 
+#include <set>
+
 #include <faiss/IndexHNSW.h>
 #include <faiss/IndexIDMap.h>
 #include <faiss/IndexIVF.h>
@@ -47,7 +49,7 @@ class VectorIndexBuildTest : public AggregationTestBase {
   }
 
   // Runs vector_index_build over 'embeddings' and 'ids' in every plan shape
-  // testAggregations covers and passes each resulting index to 'verify'.
+  // AggregationTester covers and passes each resulting index to 'verify'.
   // 'optionsSql' is the options argument as a SQL expression.
   void testBuild(
       const VectorPtr& embeddings,
@@ -55,14 +57,10 @@ class VectorIndexBuildTest : public AggregationTestBase {
       std::string_view indexType,
       std::string_view optionsSql,
       const std::function<void(const faiss::Index&)>& verify) {
-    testAggregations(
-        [&](PlanBuilder& builder) {
-          builder.values({makeRowVector({embeddings, ids})});
-        },
-        /*groupingKeys=*/{},
-        {aggregate(indexType, optionsSql)},
-        /*postAggregationProjections=*/{},
-        [&](AssertQueryBuilder& builder) {
+    AggregationTester(*this)
+        .inputs(makeRowVector({embeddings, ids}))
+        .aggregates({aggregate(indexType, optionsSql)})
+        .assertResults([&](AssertQueryBuilder& builder) {
           std::shared_ptr<exec::Task> task;
           auto result = builder.copyResults(pool(), task);
           verify(*read(
@@ -77,11 +75,10 @@ class VectorIndexBuildTest : public AggregationTestBase {
       std::string_view indexType,
       std::string_view optionsSql,
       const std::string& expectedMessage) {
-    testFailingAggregations(
-        {makeRowVector({embeddings, ids})},
-        /*groupingKeys=*/{},
-        {aggregate(indexType, optionsSql)},
-        expectedMessage);
+    AggregationTester(*this)
+        .inputs(makeRowVector({embeddings, ids}))
+        .aggregates({aggregate(indexType, optionsSql)})
+        .assertError(expectedMessage);
   }
 
   static std::unique_ptr<faiss::Index> read(const std::string& bytes) {
@@ -133,12 +130,11 @@ TEST_F(VectorIndexBuildTest, groupBy) {
       makeFlatVector<int64_t>({10, 20, 30, 40}),
       makeFlatVector<int64_t>({1, 2, 1, 2}),
   });
-  testAggregations(
-      [&](PlanBuilder& builder) { builder.values({data}); },
-      /*groupingKeys=*/{"c2"},
-      {aggregate("flat", kNoOptions)},
-      /*postAggregationProjections=*/{},
-      [&](AssertQueryBuilder& builder) {
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy(/*groupingKeys=*/{"c2"})
+      .aggregates({aggregate("flat", kNoOptions)})
+      .assertResults([&](AssertQueryBuilder& builder) {
         std::shared_ptr<exec::Task> task;
         auto result = builder.copyResults(pool(), task);
         EXPECT_EQ(2, result->size());
@@ -155,6 +151,31 @@ TEST_F(VectorIndexBuildTest, groupBy) {
         }
         return task;
       });
+}
+
+// A group of more embeddings than one 64KB chunk of the aggregate's state
+// holds gets every embedding with its id. Embedding i is (1, i), with id 10i.
+TEST_F(VectorIndexBuildTest, manyEmbeddings) {
+  constexpr int32_t kSize{20'000};
+  auto embeddings = makeArrayVector<float>(
+      kSize,
+      [](auto) { return 2; },
+      [](auto index) { return index % 2 == 0 ? 1.0f : float(index / 2); });
+  auto ids = makeFlatVector<int64_t>(kSize, [](auto row) { return row * 10; });
+
+  testBuild(embeddings, ids, "flat", kNoOptions, [&](const auto& index) {
+    ASSERT_EQ(kSize, index.ntotal);
+    const auto& idMap = as<faiss::IndexIDMap>(index);
+    std::set<int64_t> seen;
+    std::vector<float> embedding(2);
+    for (int64_t i = 0; i < kSize; ++i) {
+      const auto row = idMap.id_map[i] / 10;
+      seen.insert(row);
+      idMap.index->reconstruct(i, embedding.data());
+      ASSERT_NEAR(embedding[1] / embedding[0], row, 1e-5 * (row + 1));
+    }
+    EXPECT_EQ(kSize, seen.size());
+  });
 }
 
 TEST_F(VectorIndexBuildTest, nullRows) {
@@ -205,19 +226,19 @@ TEST_F(VectorIndexBuildTest, count) {
       makeNullableFlatVector<std::string>(
           {first, std::nullopt, second, std::nullopt}, VECTOR_INDEX()),
   });
-  testAggregations(
-      {counted},
-      /*groupingKeys=*/{},
-      {"vector_count(c1)"},
-      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{4})})});
-  testAggregations(
-      {counted},
-      /*groupingKeys=*/{"c0"},
-      {"vector_count(c1)"},
-      {makeRowVector({
+  AggregationTester(*this)
+      .inputs(counted)
+      .aggregates({"vector_count(c1)"})
+      .assertResults(
+          makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{4})}));
+  AggregationTester(*this)
+      .inputs(counted)
+      .groupBy(/*groupingKeys=*/{"c0"})
+      .aggregates({"vector_count(c1)"})
+      .assertResults(makeRowVector({
           makeFlatVector<int64_t>({1, 2, 3}),
           makeNullableFlatVector<int64_t>({3, 1, std::nullopt}),
-      })});
+      }));
 
   auto invalid = makeRowVector(
       {makeFlatVector<std::string>({"not an index"}, VECTOR_INDEX())});
@@ -264,9 +285,8 @@ TEST_F(VectorIndexBuildTest, options) {
       checkIvf(2, 2));
 
   // The default 'ivf.nlist', 35 for 80 embeddings, is reduced to give each list
-  // at least 39 embeddings. 'ivf.nprobe' defaults to a tenth of the lists,
-  // rounded up.
-  testBuild(embeddings, ids, "ivf_flat", kNoOptions, checkIvf(2, 1));
+  // at least 39 embeddings. 'ivf.nprobe' defaults to all the lists.
+  testBuild(embeddings, ids, "ivf_flat", kNoOptions, checkIvf(2, 2));
 
   // The build reduces 'ivf.nlist' even when set, and caps 'ivf.nprobe' at the
   // number of lists.
@@ -317,16 +337,15 @@ TEST_F(VectorIndexBuildTest, errors) {
   auto testFailingCall = [&](const std::string& call,
                              const std::string& expectedMessage) {
     SCOPED_TRACE(call);
-    testFailingAggregations(
-        {makeRowVector({
+    AggregationTester(*this)
+        .inputs(makeRowVector({
             embeddings,
             ids,
             makeFlatVector<std::string>({"flat", "flat"}),
             makeMapVectorFromJson<std::string, std::string>({"{}", "{}"}),
-        })},
-        /*groupingKeys=*/{},
-        {call},
-        expectedMessage);
+        }))
+        .aggregates({call})
+        .assertError(expectedMessage);
   };
   testFailingCall(
       "vector_index_build(c0, c1, 'flat', 'l2', map()::map(varchar, varchar))",
@@ -464,15 +483,14 @@ TEST_F(VectorIndexBuildTest, mergeExtractErrors) {
                          const std::vector<std::string>& embeddingsJson,
                          const std::string& expectedMessage) {
     SCOPED_TRACE(expectedMessage);
-    testFailingAggregations(
-        {makeRowVector({makeRowVector({
+    AggregationTester(*this)
+        .inputs(makeRowVector({makeRowVector({
             makeArrayVectorFromJson<int32_t>(settingsJson),
             makeArrayVectorFromJson<int64_t>(idsJson),
             makeArrayVectorFromJson<float>(embeddingsJson),
-        })})},
-        /*groupingKeys=*/{},
-        {"vector_index_build_merge_extract(c0)"},
-        expectedMessage);
+        })}))
+        .aggregates({"vector_index_build_merge_extract(c0)"})
+        .assertError(expectedMessage);
   };
 
   const std::string flat{"[0, 0, null, null, null, null, null]"};

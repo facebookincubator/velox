@@ -176,6 +176,44 @@ struct ReduceCountAggregator : ReduceAggregator {
   CountInputKind inputKind_;
 };
 
+// Adds up the sums and the counts of avg states and returns the sum and count
+// totals. Shared by the intermediate and final reduce steps.
+std::pair<std::unique_ptr<cudf::scalar>, std::unique_ptr<cudf::scalar>>
+mergeMeanStates(cudf::column_view const& states, cuda::stream_ref stream) {
+  auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+  auto const sumCol = states.child(0);
+  auto const countCol = states.child(1);
+  auto sumTotal =
+      cudf::reduce(sumCol, *sumAgg, sumCol.type(), stream, get_temp_mr());
+  auto countTotal =
+      cudf::reduce(countCol, *sumAgg, countCol.type(), stream, get_temp_mr());
+  return {std::move(sumTotal), std::move(countTotal)};
+}
+
+// Builds avg's one-row ROW(sum, count) state from one-row sum and count
+// columns. Shared by the partial and intermediate reduce steps.
+std::unique_ptr<cudf::column> makeMeanState(
+    std::unique_ptr<cudf::column> sum,
+    std::unique_ptr<cudf::column> count,
+    bool isNull,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  auto children = std::vector<std::unique_ptr<cudf::column>>();
+  children.push_back(std::move(sum));
+  children.push_back(std::move(count));
+  return cudf::make_structs_column(
+      /*num_rows=*/1,
+      std::move(children),
+      /*null_count=*/isNull ? 1 : 0,
+      cudf::create_null_mask(
+          /*size=*/1,
+          isNull ? cudf::mask_state::ALL_NULL : cudf::mask_state::UNALLOCATED,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()}),
+      stream,
+      mr);
+}
+
 struct ReduceMeanAggregator : ReduceAggregator {
   ReduceMeanAggregator(
       core::AggregationNode::Step step,
@@ -191,18 +229,19 @@ struct ReduceMeanAggregator : ReduceAggregator {
       vector_size_t /* inputRowCount */,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
-    VELOX_CHECK(!maskIndex.has_value(), "avg does not support masks");
+    // Null-inject masked rows so the mean, the sum and the valid-row count
+    // skip them.
+    auto const injected = cudf_velox::materializeMaskedColumn(
+        input, inputIndex, maskIndex, stream, get_temp_mr());
+    cudf::column_view const inputColumn =
+        injected ? injected->view() : input.column(inputIndex);
     switch (step) {
       case core::AggregationNode::Step::kSingle: {
         auto const aggRequest =
             cudf::make_mean_aggregation<cudf::reduce_aggregation>();
         auto const cudfOutputType = cudf_velox::veloxToCudfDataType(outputType);
         auto const resultScalar = cudf::reduce(
-            input.column(inputIndex),
-            *aggRequest,
-            cudfOutputType,
-            stream,
-            get_temp_mr());
+            inputColumn, *aggRequest, cudfOutputType, stream, get_temp_mr());
         return cudf::make_column_from_scalar(*resultScalar, 1, stream, mr);
       }
       case core::AggregationNode::Step::kPartial: {
@@ -217,67 +256,59 @@ struct ReduceMeanAggregator : ReduceAggregator {
         auto const aggRequest =
             cudf::make_sum_aggregation<cudf::reduce_aggregation>();
         auto const sumResultScalar = cudf::reduce(
-            input.column(inputIndex),
-            *aggRequest,
-            cudfSumType,
-            stream,
-            get_temp_mr());
+            inputColumn, *aggRequest, cudfSumType, stream, get_temp_mr());
         auto sumCol =
             cudf::make_column_from_scalar(*sumResultScalar, 1, stream, mr);
 
         // libcudf doesn't have a count agg for reduce. What we want is to
         // count the number of valid rows.
+        auto const numValidRows = inputColumn.size() - inputColumn.null_count();
         auto countCol = cudf::make_column_from_scalar(
             cudf::numeric_scalar<int64_t>(
-                input.column(inputIndex).size() -
-                    input.column(inputIndex).null_count(),
-                true,
-                stream,
-                get_temp_mr()),
-            1,
+                numValidRows, /*is_valid=*/true, stream, get_temp_mr()),
+            /*size=*/1,
             stream,
             mr);
 
-        // Assemble into struct as expected by velox.
-        auto children = std::vector<std::unique_ptr<cudf::column>>();
-        children.push_back(std::move(sumCol));
-        children.push_back(std::move(countCol));
-        return std::make_unique<cudf::column>(
-            cudf::data_type(cudf::type_id::STRUCT),
-            1,
-            rmm::device_buffer{},
-            cudf::create_null_mask(
-                0,
-                cudf::mask_state::UNALLOCATED,
-                stream,
-                cudf::memory_resources{mr, get_temp_mr()}),
-            0,
-            std::move(children));
+        // A state with no valid row is a NULL row, as the CPU partial emits
+        // it; makeSumCountState in CudfGroupby.cpp applies the same rule per
+        // group.
+        return makeMeanState(
+            std::move(sumCol),
+            std::move(countCol),
+            /*isNull=*/numValidRows == 0,
+            stream,
+            mr);
+      }
+      case core::AggregationNode::Step::kIntermediate: {
+        // Returns the merged state instead of dividing. GPU is required to
+        // match CPU results. The CPU returns a NULL state when no rows were
+        // counted.
+        auto [sumTotal, countTotal] =
+            mergeMeanStates(input.column(inputIndex), stream);
+        auto const& count =
+            static_cast<cudf::numeric_scalar<int64_t> const&>(*countTotal);
+        auto const hasCountedRows =
+            count.is_valid(stream) && count.value(stream) > 0;
+
+        return makeMeanState(
+            cudf::make_column_from_scalar(*sumTotal, 1, stream, mr),
+            cudf::make_column_from_scalar(*countTotal, 1, stream, mr),
+            /*isNull=*/!hasCountedRows,
+            stream,
+            mr);
       }
       case core::AggregationNode::Step::kFinal: {
-        // Input column has two children: sum and count
-        auto const sumCol = input.column(inputIndex).child(0);
-        auto const countCol = input.column(inputIndex).child(1);
-
-        // sum the sums
-        auto const sumAggRequest =
-            cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-        auto const sumResultScalar = cudf::reduce(
-            sumCol, *sumAggRequest, sumCol.type(), stream, get_temp_mr());
-        auto sumResultCol =
-            cudf::make_column_from_scalar(*sumResultScalar, 1, stream, mr);
-
-        // sum the counts
-        auto const countAggRequest =
-            cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-        auto const countResultScalar = cudf::reduce(
-            countCol, *countAggRequest, countCol.type(), stream, get_temp_mr());
+        auto [sumTotal, countTotal] =
+            mergeMeanStates(input.column(inputIndex), stream);
+        auto const sumResultCol =
+            cudf::make_column_from_scalar(*sumTotal, 1, stream, mr);
 
         // divide the sums by the counts
         auto const cudfOutputType = cudf_velox::veloxToCudfDataType(outputType);
         return cudf::binary_operation(
             *sumResultCol,
-            *countResultScalar,
+            *countTotal,
             cudf::binary_operator::DIV,
             cudfOutputType,
             stream,
@@ -499,9 +530,9 @@ struct ReduceDecimalAvgAggregator : ReduceAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
-      : ReduceAggregator(step, inputIndex, constant, resultType, std::nullopt) {
-  }
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : ReduceAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
@@ -509,28 +540,48 @@ struct ReduceDecimalAvgAggregator : ReduceAggregator {
       vector_size_t /* inputRowCount */,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
-    // Decimal avg uses a dedicated path that does not honor masks; masked avg
-    // already falls back to CPU (see canReduceBeEvaluatedByCudf).
-    VELOX_CHECK(!maskIndex.has_value(), "decimal avg does not support masks");
-    cudf::column_view inputCol = input.column(inputIndex);
+    // The sum and count behind the average must skip masked rows.
+    auto const injected = cudf_velox::materializeMaskedColumn(
+        input, inputIndex, maskIndex, stream, get_temp_mr());
+    cudf::column_view const inputColumn =
+        injected ? injected->view() : input.column(inputIndex);
     switch (step) {
       case core::AggregationNode::Step::kSingle:
-        return singleDecimalAvgFromRawColumn(inputCol, resultType, stream, mr);
+        return singleDecimalAvgFromRawColumn(
+            inputColumn, resultType, stream, mr);
       case core::AggregationNode::Step::kPartial:
-        return partialDecimalSumCountToSerializedString(inputCol, stream, mr);
+        return partialDecimalSumCountToSerializedString(
+            inputColumn, stream, mr);
       case core::AggregationNode::Step::kIntermediate:
         return reduceIntermediateDecimalFromSerializedColumn(
-            inputCol, outputType, stream, mr);
+            inputColumn, outputType, stream, mr);
       case core::AggregationNode::Step::kFinal:
         VELOX_CHECK(
             *outputType == *resultType, "outputType/resultType mismatch");
         return reduceFinalDecimalAvgFromSerializedColumn(
-            inputCol, outputType, stream, mr);
+            inputColumn, outputType, stream, mr);
       default:
         VELOX_NYI("Unsupported aggregation step for decimal avg reduce");
     }
   }
 };
+
+// Materializes a sketch's estimate as a one-row BIGINT column.
+std::unique_ptr<cudf::column> makeEstimateColumn(
+    const cudf::approx_distinct_count& sketch,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  auto const estimate = sketch.estimate(stream);
+  return cudf::make_column_from_scalar(
+      cudf::numeric_scalar<int64_t>(
+          static_cast<int64_t>(estimate),
+          /*is_valid=*/true,
+          stream,
+          get_temp_mr()),
+      /*size=*/1,
+      stream,
+      mr);
+}
 
 struct ApproxDistinctAggregator : ReduceAggregator {
   static constexpr cudf::null_policy kNullPolicy = cudf::null_policy::EXCLUDE;
@@ -557,10 +608,8 @@ struct ApproxDistinctAggregator : ReduceAggregator {
       vector_size_t /* inputRowCount */,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
-    VELOX_CHECK(
-        !maskIndex.has_value(), "approx_distinct does not support masks");
     if (exec::isRawInput(step)) {
-      return doPartialReduce(input, stream, mr);
+      return doRawReduce(input, stream, mr);
     } else if (step == core::AggregationNode::Step::kIntermediate) {
       return doIntermediateReduce(input, stream, mr);
     } else {
@@ -682,15 +731,25 @@ struct ApproxDistinctAggregator : ReduceAggregator {
     return func(merged_sketch);
   }
 
-  std::unique_ptr<cudf::column> doPartialReduce(
+  // Sketches the raw input. A single step returns the estimate at once; a
+  // partial step ships the sketch.
+  std::unique_ptr<cudf::column> doRawReduce(
       cudf::table_view const& input,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
-    auto inputTable = cudf::table_view({input.column(inputIndex)});
+    // Null-inject masked rows so the sketch skips them. 'inputTable' views
+    // 'injected'.
+    auto const injected = cudf_velox::materializeMaskedColumn(
+        input, inputIndex, maskIndex, stream, get_temp_mr());
+    auto const inputTable = cudf::table_view(
+        {injected ? injected->view() : input.column(inputIndex)});
 
     cudf::approx_distinct_count sketch{
-        inputTable, precision_, kNullPolicy, kNanPolicy, stream, mr};
+        inputTable, precision_, kNullPolicy, kNanPolicy, stream, get_temp_mr()};
 
+    if (step == core::AggregationNode::Step::kSingle) {
+      return makeEstimateColumn(sketch, stream, mr);
+    }
     return makeSketchColumn(sketch.sketch(), stream, mr);
   }
 
@@ -729,13 +788,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
     return mergeSketchesAndApply(
         sketch_column,
         [stream, mr](cudf::approx_distinct_count& sketch) {
-          std::size_t estimate = sketch.estimate(stream);
-          return cudf::make_column_from_scalar(
-              cudf::numeric_scalar<int64_t>(
-                  static_cast<int64_t>(estimate), true, stream, get_temp_mr()),
-              1,
-              stream,
-              mr);
+          return makeEstimateColumn(sketch, stream, mr);
         },
         stream);
   }
@@ -771,7 +824,7 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
     if (p.isDecimalAggregate) {
       return std::make_unique<ReduceDecimalAvgAggregator>(
-          p.companionStep, p.inputIndex, p.constant, p.resultType);
+          p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
     }
     return std::make_unique<ReduceMeanAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
@@ -842,7 +895,7 @@ bool canReduceBeEvaluatedByCudf(
       return false;
     }
 
-    if (!maskSupportedByCudf(aggregate, step)) {
+    if (!maskSupportedByCudf(aggregate, step, getReduceAggregationRegistry())) {
       return false;
     }
 

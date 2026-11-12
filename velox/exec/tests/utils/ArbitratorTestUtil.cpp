@@ -102,7 +102,7 @@ QueryTestResult runHashJoinTask(
                       .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, true)
                       .config(core::QueryConfig::kJoinSpillEnabled, true)
-                      .config(core::QueryConfig::kSpillStartPartitionBit, "29")
+                      .config(core::QueryConfig::kSpillStartPartitionBit, 29)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -337,7 +337,7 @@ QueryTestResult runWriteTask(
             .config(core::QueryConfig::kWriterSpillEnabled, "true")
             // Set 0 file writer flush threshold to always trigger flush in
             // test.
-            .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
+            .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
             // Set stripe size to extreme large to avoid writer internal
             // triggered flush.
             .connectorSessionProperty(

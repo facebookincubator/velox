@@ -147,9 +147,45 @@ latency-gradient reductions. `rpcRateLimiterMinCap` records the low-water
 capacity of the controller the query ran under, which every query on that
 backend with the same policy shares.
 
+Three counters describe the shared controller from a driver's first admission
+request until the stats sample or the driver's close.
+`rpcRateLimiterAttachedNanos` is the length of that span.
+`rpcRateLimiterPacingNanos` is the part of it during which the controller paced
+admission. `rpcRateLimiterLimitMilliUnitSeconds` is the committed window, the
+one `rpcRateLimiterLimitMilli` shows, integrated over the span, in thousandths
+of a unit times seconds; recovery growth counts once the limiter commits it to
+the window. Each driver reports its own counts, so their sums across drivers and
+tasks stay meaningful on Prestissimo and on Presto-on-Spark. The sums are driver
+time, not wall time. Divide the sums to read them. Pacing time over attached
+time is the share of attached time during which the controller paced. It is an
+upper bound on pacing delay, because it includes time a driver was idle or
+waiting on upstream. The window integral over attached seconds is the average
+window, in thousandths of a unit.
+
+`rpcStaleSuccessUnits` counts each driver's successful units whose recovery
+credit the controller discarded because an overload, including one in the same
+completion, arrived after their admission. PER_ROW counts error-free rows; BATCH
+counts the admission units of a flush with at least one successful row as a
+whole, as the controller credits them.
+
 An async-job path returns `kSuccessNoLatency` after a successful unit: its round
 trip is queue and scheduling time, which says nothing about backend load, but
 the success must still recover shared admission capacity.
+
+A transport that retries inside one RPC hides those retries from congestion
+control, which sees only the final outcome. The transport can report in
+`RPCResponse::numOverloadedAttempts` how many attempts before the final one it
+counted as overloaded, such as rate-limited, timed-out or shed attempts. Model
+API also counts errors that carry no error code, which include its load
+shedding. The operator counts them for PER_ROW rows in two stats, which stay
+zero in BATCH mode and for transports that do not report:
+
+- `rpcOverloadedAttempts` sums the reported overloaded attempts, failed rows
+  included.
+- `rpcSuccessesAfterOverload` counts successes that needed at least one.
+
+The counts do not cut the driver window or the shared limiter the way an
+overload error does.
 
 ### Why admission has two scopes
 

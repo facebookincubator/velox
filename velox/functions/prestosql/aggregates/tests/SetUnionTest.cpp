@@ -54,8 +54,11 @@ TEST_F(SetUnionTest, global) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Null inputs.
   data = makeRowVector({
@@ -73,8 +76,11 @@ TEST_F(SetUnionTest, global) {
       makeArrayVectorFromJson<int32_t>({"[1, 2, 3, 4, 5, 6, 7, null]"}),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // All nulls arrays.
   data = makeRowVector({
@@ -86,8 +92,11 @@ TEST_F(SetUnionTest, global) {
       makeArrayVector<int32_t>({{}}),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // All nulls elements.
   data = makeRowVector({
@@ -102,8 +111,11 @@ TEST_F(SetUnionTest, global) {
       makeArrayVectorFromJson<int32_t>({"[null]"}),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetUnionTest, groupBy) {
@@ -133,12 +145,12 @@ TEST_F(SetUnionTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"set_union(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"set_union(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int16_t>({1, 2}),
@@ -148,12 +160,12 @@ TEST_F(SetUnionTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"set_union(c1) filter (where c2)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"set_union(c1) filter (where c2)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 
   // Null inputs.
   data = makeRowVector({
@@ -180,12 +192,12 @@ TEST_F(SetUnionTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"set_union(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"set_union(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 
   // All null arrays for one group.
   std::vector<RowVectorPtr> multiBatchData = {
@@ -222,12 +234,12 @@ TEST_F(SetUnionTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      multiBatchData,
-      {"c0"},
-      {"set_union(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(multiBatchData)
+      .groupBy({"c0"})
+      .aggregates({"set_union(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetUnionTest, inputOrder) {
@@ -353,8 +365,11 @@ TEST_F(SetUnionTest, shortDecimal) {
           type),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with some NULL inputs (short decimals)
   data = makeRowVector({
@@ -383,8 +398,11 @@ TEST_F(SetUnionTest, shortDecimal) {
           ARRAY(type)),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with all NULL inputs (short decimals)
   data = makeRowVector({
@@ -395,8 +413,11 @@ TEST_F(SetUnionTest, shortDecimal) {
       makeArrayVector<int64_t>({{}}, type),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   data = makeRowVector({
       makeNullableArrayVector<int64_t>(
@@ -416,8 +437,11 @@ TEST_F(SetUnionTest, shortDecimal) {
           ARRAY(type)),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetUnionTest, longDecimal) {
@@ -453,8 +477,11 @@ TEST_F(SetUnionTest, longDecimal) {
           type),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with some NULL inputs (long decimals).
   data = makeRowVector({
@@ -486,8 +513,11 @@ TEST_F(SetUnionTest, longDecimal) {
           ARRAY(type)),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with all NULL inputs (long decimals).
   data = makeRowVector({
@@ -498,8 +528,11 @@ TEST_F(SetUnionTest, longDecimal) {
       makeArrayVector<int128_t>({{}}, type),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetUnionTest, nans) {
@@ -524,8 +557,11 @@ TEST_F(SetUnionTest, nans) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Check again with kSNaN as the first NaN element to be encountered.
   data = makeRowVector({
@@ -536,8 +572,11 @@ TEST_F(SetUnionTest, nans) {
       }),
       makeFlatVector<int32_t>({1, 2, 2}),
   });
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Group by aggregation, Primitive type.
   expected = makeRowVector({
@@ -548,8 +587,12 @@ TEST_F(SetUnionTest, nans) {
       makeFlatVector<int32_t>({1, 2}),
   });
 
-  testAggregations(
-      {data}, {"c1"}, {"set_union(c0)"}, {"array_sort(a0)", "c1"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)", "c1"})
+      .assertResults(expected);
 
   // Global aggregation, Complex type.
   data = makeRowVector({
@@ -582,8 +625,11 @@ TEST_F(SetUnionTest, nans) {
            }),
            makeFlatVector<double>({1, 2, kNaN})}))});
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Group by aggregation, Complex type.
   expected = makeRowVector({
@@ -602,8 +648,12 @@ TEST_F(SetUnionTest, nans) {
       makeFlatVector<int32_t>({1, 2}),
   });
 
-  testAggregations(
-      {data}, {"c1"}, {"set_union(c0)"}, {"array_sort(a0)", "c1"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)", "c1"})
+      .assertResults(expected);
 }
 
 TEST_F(SetUnionTest, timestampWithTimeZone) {
@@ -625,8 +675,11 @@ TEST_F(SetUnionTest, timestampWithTimeZone) {
           TIMESTAMP_WITH_TIME_ZONE()),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Group by aggregation, Primitive type.
   expected = makeRowVector({
@@ -639,8 +692,12 @@ TEST_F(SetUnionTest, timestampWithTimeZone) {
       makeFlatVector<int32_t>({1, 2}),
   });
 
-  testAggregations(
-      {data}, {"c1"}, {"set_union(c0)"}, {"array_sort(a0)", "c1"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)", "c1"})
+      .assertResults(expected);
 
   // Global aggregation, wrapped in complex type.
   data = makeRowVector({
@@ -666,8 +723,11 @@ TEST_F(SetUnionTest, timestampWithTimeZone) {
           {pack(0, 0), pack(1, 0), pack(2, 0)},
           TIMESTAMP_WITH_TIME_ZONE())}))});
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Group by aggregation, wrapped in complex type.
   expected = makeRowVector({
@@ -684,8 +744,12 @@ TEST_F(SetUnionTest, timestampWithTimeZone) {
       makeFlatVector<int32_t>({1, 2}),
   });
 
-  testAggregations(
-      {data}, {"c1"}, {"set_union(c0)"}, {"array_sort(a0)", "c1"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)", "c1"})
+      .assertResults(expected);
 }
 
 TEST_F(SetUnionTest, unknownType) {
@@ -700,8 +764,11 @@ TEST_F(SetUnionTest, unknownType) {
       makeArrayVector<int64_t>({{}}, type),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   data = makeRowVector({
       makeNullableArrayVector<int64_t>(
@@ -721,8 +788,11 @@ TEST_F(SetUnionTest, unknownType) {
           ARRAY(type)),
   });
 
-  testAggregations(
-      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_union(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 
 } // namespace

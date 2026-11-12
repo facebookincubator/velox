@@ -613,7 +613,8 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // Creates worker 'destination' from its copy of the plan. A parallel worker
   // ends in a PartitionedOutput, as a distributed worker does, and a cursor
   // over an Exchange reads its rows. A serial loop has no peer reads, so a
-  // cursor drives the worker itself.
+  // cursor drives the worker itself. Each worker's task has its own unique id,
+  // its destination, as tasks of one stage do in a distributed query.
   Worker makeWorker(
       const folly::dynamic& serializedPlan,
       int32_t destination,
@@ -628,16 +629,19 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
           .destination = destination,
           .copyResult = true,
           .serialExecution = true,
+          .taskUniqueId = destination,
           .fixedPointOptions = &options,
       });
       auto task = reader->task();
       return {std::move(task), std::move(reader)};
     }
     const auto outputType = node->outputType();
+    core::PlanFragment fragment{core::PartitionedOutputNode::single(
+        "worker-output", outputType, "Presto", std::move(node))};
+    fragment.taskUniqueId = destination;
     auto task = exec::Task::create(
         workerTaskId(queryCtx->queryId(), destination),
-        core::PlanFragment{core::PartitionedOutputNode::single(
-            "worker-output", outputType, "Presto", std::move(node))},
+        std::move(fragment),
         destination,
         queryCtx,
         exec::Task::ExecutionMode::kParallel,
@@ -1893,6 +1897,201 @@ TEST_F(FixedPointTest, shuffleThenBroadcast) {
       testing::UnorderedElementsAreArray(expected));
 }
 
+// A kFixed stage narrower than the loop: worker 2 runs the first and last
+// stages but not the middle one, which runs on workers 0 and 1.  The middle
+// stage reads all three workers, and the last stage reads the two that run
+// the middle one.  Every worker starts with the same row per key, the middle
+// stage sums each key over the workers, and the last stage holds key k on
+// worker k.
+TEST_F(FixedPointTest, fixedStageOnSomeWorkers) {
+  constexpr int32_t kNumWorkers{3};
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("values", schema)
+                   .partitionedOutput({"key"}, 2)
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(schema, "Presto")
+                   .singleAggregation({"key"}, {"sum(val) AS val"})
+                   .partitionedOutput(
+                       {"key"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       std::make_shared<ModuloPartitionFunctionSpec>())
+                   .planNode(),
+               PlanBuilder(idGenerator).exchange(schema, "Presto").planNode()},
+              ConvergenceConfig::withMaxIterations(1),
+              /*outputStateEntry=*/"values")
+          .planNode();
+  ASSERT_EQ(
+      plan->as<FixedPointNode>()->body().stage(2).type,
+      core::StageType::kFixed);
+  ASSERT_EQ(plan->as<FixedPointNode>()->body().stage(2).numRemotePartitions, 2);
+
+  auto start = makeRowVector(
+      {"key", "val"},
+      {makeFlatVector<int64_t>({0, 1, 2}), makeFlatVector<int64_t>({1, 1, 1})});
+  const auto runs = runOnWorkers(plan, {start, start, start});
+
+  ASSERT_EQ(runs.size(), kNumWorkers);
+  for (int32_t worker = 0; worker < kNumWorkers; ++worker) {
+    SCOPED_TRACE(fmt::format("worker {}", worker));
+    EXPECT_THAT(
+        runs[worker].rows,
+        testing::ElementsAre(std::pair<int64_t, int64_t>{worker, 3}));
+    std::vector<size_t> bodyPlans;
+    for (const auto& planStats : runs[worker].stats.iterations[0].body.plans) {
+      bodyPlans.push_back(planStats.planIndex);
+    }
+    if (worker < 2) {
+      EXPECT_THAT(bodyPlans, testing::UnorderedElementsAre(0, 1, 2));
+    } else {
+      EXPECT_THAT(bodyPlans, testing::UnorderedElementsAre(0, 2));
+    }
+  }
+}
+
+// An AssignUniqueId in a loop body takes its ids from the worker's task, so
+// they do not repeat across stages, iterations or workers.  Each iteration,
+// both stages number every row of the last iteration's delta: the first
+// writes its id as the key, the second as the value.
+TEST_F(FixedPointTest, assignUniqueIdInBody) {
+  constexpr int32_t kNumWorkers{2};
+  constexpr int32_t kNumIterations{3};
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {core::VectorState("rows", schema, /*append=*/true)
+                   .initial(
+                       PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("rows", schema, /*delta=*/true)
+                   .assignUniqueId("id")
+                   .project({"id AS key", "val"})
+                   .partitionedOutput({"key"}, kNumWorkers)
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(schema, "Presto")
+                   .assignUniqueId("id")
+                   .project({"key", "id AS val"})
+                   .planNode()},
+              ConvergenceConfig::withMaxIterations(kNumIterations),
+              /*outputStateEntry=*/"rows")
+          .planNode();
+
+  // Each worker starts with one row, so each iteration numbers two rows in
+  // each stage.
+  constexpr int64_t kSeed{-1};
+  std::vector<int64_t> ids;
+  for (const auto& run : runOnWorkers(
+           plan,
+           {makeKeyValueRow(kSeed, kSeed), makeKeyValueRow(kSeed, kSeed)})) {
+    for (const auto& [key, val] : run.rows) {
+      if (val != kSeed) {
+        ids.push_back(key);
+        ids.push_back(val);
+      }
+    }
+  }
+  ASSERT_THAT(ids, testing::SizeIs(2 * kNumWorkers * kNumIterations));
+  EXPECT_EQ(std::set<int64_t>(ids.begin(), ids.end()).size(), ids.size());
+}
+
+// A step that needs a global value: each key takes its neighbor's value through
+// a shuffle by key, plus the total over every worker.  Every worker reduces its
+// part, worker 0 alone combines the parts, and broadcasts the total to the
+// root, which reads both shuffles -- the general form of PageRank's dangling
+// total.
+TEST_F(FixedPointTest, bodyFragments) {
+  constexpr int32_t kNumWorkers{2};
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Sends each key's value to its neighbor's owner.
+  auto neighbors = PlanBuilder(idGenerator)
+                       .stateSource("values", schema)
+                       .project({"(key + 1) % 2 AS key", "val"})
+                       .partitionedOutput(
+                           {"key"},
+                           kNumWorkers,
+                           /*replicateNullsAndAny=*/false,
+                           std::make_shared<ModuloPartitionFunctionSpec>())
+                       .planNode();
+  // Gathers each worker's partial total to worker 0.
+  auto partialTotals = PlanBuilder(idGenerator)
+                           .stateSource("values", schema)
+                           .singleAggregation({}, {"sum(val) AS total"})
+                           .partitionedOutput({}, 1)
+                           .planNode();
+  core::PlanNodeId partialsExchange;
+  auto total = PlanBuilder(idGenerator)
+                   .exchange(ROW("total", BIGINT()), "Presto")
+                   .capturePlanNodeId(partialsExchange)
+                   .singleAggregation({}, {"sum(total) AS total"})
+                   .partitionedOutputBroadcast()
+                   .planNode();
+  core::PlanNodeId neighborsExchange;
+  core::PlanNodeId totalExchange;
+  auto newValues = PlanBuilder(idGenerator)
+                       .exchange(schema, "Presto")
+                       .capturePlanNodeId(neighborsExchange)
+                       .nestedLoopJoin(
+                           PlanBuilder(idGenerator)
+                               .exchange(ROW("total", BIGINT()), "Presto")
+                               .capturePlanNodeId(totalExchange)
+                               .planNode(),
+                           {"key", "val", "total"})
+                       .project({"key", "val + total AS val"})
+                       .planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              core::MultiStagePlan({
+                  {.id = 1, .plan = neighbors},
+                  {.id = 2, .plan = partialTotals},
+                  {.id = 3,
+                   .type = core::StageType::kSingle,
+                   .plan = total,
+                   .inputs = {{partialsExchange, 2}}},
+                  {.id = 4,
+                   .type = core::StageType::kFixed,
+                   .numRemotePartitions = kNumWorkers,
+                   .plan = newValues,
+                   .inputs = {{neighborsExchange, 1}, {totalExchange, 3}}},
+              }),
+              sumVerdict(idGenerator, schema, "sum(val)", "total >= 81"),
+              /*outputStateEntry=*/"values")
+          .planNode();
+
+  // Each key becomes its neighbor's value plus the total, so the total triples
+  // every iteration: 1 + 2 = 3 -> 5 + 4 = 9 -> 13 + 14 = 27 -> 41 + 40 = 81,
+  // converging after exactly three iterations.
+  std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
+      {0, 41, 3},
+      {1, 40, 3},
+  };
+  EXPECT_THAT(
+      withIterations(
+          runOnWorkers(plan, {makeKeyValueRow(0, 1), makeKeyValueRow(1, 2)})),
+      testing::UnorderedElementsAreArray(expected));
+}
+
 // A convergence criterion that shuffles.  The body here needs no exchange, so
 // each worker's shard stays private and the two workers hold different values;
 // the criterion is a global sum, which neither can evaluate alone.  This is the
@@ -2022,6 +2221,78 @@ TEST_F(FixedPointTest, verdictEndsBeforePeerProducer) {
       testing::UnorderedElementsAreArray(expected));
 }
 
+// A verdict that combines two statistics gathered by separate fragments: a sum
+// and a count of every worker's values.  Worker 0 alone reads both gathers and
+// shares its verdict.
+TEST_F(FixedPointTest, convergenceFragments) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto totals = PlanBuilder(idGenerator)
+                    .stateSource("values", schema)
+                    .singleAggregation({}, {"sum(val) AS total"})
+                    .partitionedOutput({}, 1)
+                    .planNode();
+  auto counts = PlanBuilder(idGenerator)
+                    .stateSource("values", schema)
+                    .singleAggregation({}, {"count(1) AS n"})
+                    .partitionedOutput({}, 1)
+                    .planNode();
+  core::PlanNodeId totalsExchange;
+  core::PlanNodeId countsExchange;
+  auto verdict = PlanBuilder(idGenerator)
+                     .exchange(ROW("total", BIGINT()), "Presto")
+                     .capturePlanNodeId(totalsExchange)
+                     .singleAggregation({}, {"sum(total) AS total"})
+                     .nestedLoopJoin(
+                         PlanBuilder(idGenerator)
+                             .exchange(ROW("n", BIGINT()), "Presto")
+                             .capturePlanNodeId(countsExchange)
+                             .singleAggregation({}, {"sum(n) AS n"})
+                             .planNode(),
+                         {"total", "n"})
+                     .project({"total >= 8 * n AS converged"})
+                     .planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode()),
+              PlanBuilder(idGenerator)
+                  .stateSource("values", schema)
+                  .project({"key", "val + 1 AS val"}),
+              ConvergenceConfig::converging(
+                  core::MultiStagePlan({
+                      {.id = 1, .plan = totals},
+                      {.id = 2, .plan = counts},
+                      {.id = 3,
+                       .type = core::StageType::kSingle,
+                       .plan = verdict,
+                       .inputs = {{totalsExchange, 1}, {countsExchange, 2}}},
+                  }),
+                  /*maxIterations=*/100),
+              /*outputStateEntry=*/"values")
+          .planNode();
+  // Values move 0,10 -> 1,11 -> 2,12 -> 3,13, so the mean of the two reaches 8
+  // on the third iteration.  A count of one worker's rows alone would stop the
+  // loop on the first.
+  std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
+      {0, 3, 3},
+      {1, 13, 3},
+  };
+  const auto runs =
+      runOnWorkers(plan, {makeKeyValueRow(0, 0), makeKeyValueRow(1, 10)});
+  EXPECT_THAT(
+      withIterations(runs), testing::UnorderedElementsAreArray(expected));
+
+  // Only worker 1 waits for the verdict.
+  for (const auto& iteration : runs[0].stats.iterations) {
+    EXPECT_EQ(0, iteration.convergence->verdictWaitNanos);
+  }
+}
+
 // Only worker 0 runs the verdict plan, so a fixed point nested in it runs on
 // worker 0 alone. The nested loop here gathers its own verdict, which it
 // decides without waiting for copies on the other workers.
@@ -2130,7 +2401,8 @@ TEST_F(FixedPointTest, nestedShuffleInVerdict) {
                       .project({"a0 >= val"})
                       .planNode(),
                   /*maxIterations=*/100)),
-      "a fixed point nested in a verdict plan runs on worker 0 alone");
+      "a fixed point nested in convergence plan 1 runs on the 1 worker(s) "
+      "that run it, so it cannot shuffle across 2");
 }
 
 // Both chains shuffle: the body re-partitions each iteration and the
@@ -3722,9 +3994,10 @@ TEST_F(FixedPointTest, executionStatsRecordDrivers) {
 // its nesting, before the outer iteration that ran it.
 TEST_F(FixedPointTest, onIterationStatsFromNestedLoop) {
   const auto plan = nestedCountingNode();
-  const auto& innerId = core::PlanNode::findFirstNode<FixedPointNode>(
-                            plan->as<FixedPointNode>()->plans().front().get())
-                            ->id();
+  const auto& innerId =
+      core::PlanNode::findFirstNode<FixedPointNode>(
+          plan->as<FixedPointNode>()->body().stages().front().plan.get())
+          ->id();
   for (auto mode :
        {exec::Task::ExecutionMode::kSerial,
         exec::Task::ExecutionMode::kParallel}) {
@@ -4600,6 +4873,40 @@ TEST_F(FixedPointTest, fixedPointSplit) {
             .copyResults(pool()),
         "Worker destination out of range of the workers the FixedPointSplit "
         "names");
+  }
+  {
+    SCOPED_TRACE("Worker 0 alone writing every worker's state");
+    // The body gathers before its last plan, so only worker 0 writes state,
+    // and the loop runs as exactly one worker.
+    auto gathering =
+        PlanBuilder(idGenerator)
+            .fixedPoint(
+                std::vector<StateDeclarationPtr>{
+                    core::VectorState("values", schema)
+                        .initial(PlanBuilder(idGenerator)
+                                     .values({makeKeyValueRow(0, 1)})
+                                     .planNode())},
+                std::vector<core::PlanNodePtr>{
+                    PlanBuilder(idGenerator)
+                        .stateSource("values", schema)
+                        .partitionedOutput({}, 1)
+                        .planNode(),
+                    PlanBuilder(idGenerator)
+                        .exchange(schema, "Presto")
+                        .planNode()},
+                ConvergenceConfig::withMaxIterations(1),
+                /*outputStateEntry=*/"values")
+            .planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(gathering)
+            .fixedPointOptions(&options)
+            .beforeTaskStart([&](exec::Task& task) {
+              task.addSplit(
+                  gathering->id(), workersSplit({task.taskId(), "peer"}));
+              task.noMoreSplits(gathering->id());
+            })
+            .copyResults(pool()),
+        "Wrong number of workers in FixedPointSplit");
   }
 }
 
@@ -5557,11 +5864,11 @@ TEST_F(FixedPointTest, validatesPlanStructure) {
                  .project({"id", "val"})
                  .planNode(),
              PlanBuilder(idGen).exchange(schema, "Presto").planNode()}),
-        "must end with a PartitionedOutput");
+        "Expected PartitionedOutputNode at root of producer stage: 1");
   }
 
-  // A non-first plan must start with Exchange: here plan 1 starts with a
-  // StateSource instead of receiving plan 0's shuffle.
+  // A non-first plan reads its predecessor's shuffle: here plan 1 reads a
+  // StateSource instead of plan 0's shuffle.
   {
     VELOX_ASSERT_THROW(
         makeNode(
@@ -5573,7 +5880,8 @@ TEST_F(FixedPointTest, validatesPlanStructure) {
                  .stateSource("s", schema)
                  .project({"id", "val"})
                  .planNode()}),
-        "must start with an Exchange");
+        "every chained plan after the first must read exactly one shuffle, "
+        "the link to its predecessor");
   }
 }
 
@@ -5593,7 +5901,7 @@ TEST_F(FixedPointTest, errorWhenMaxIterationReachedRequiresPlan) {
           .fixedPoint(
               {std::make_shared<VectorStateDeclaration>("s", schema)},
               std::move(plans),
-              ConvergenceConfig{.plans = {}, .maxIterations = 10},
+              ConvergenceConfig{.maxIterations = 10},
               /*outputStateEntry=*/"s")
           .planNode(),
       "errorWhenMaxIterationReached requires a convergence criterion");
@@ -5610,11 +5918,14 @@ TEST_F(FixedPointTest, whenDeltaEmptyRejectsConvergencePlan) {
                                            .project({"id", "val"})
                                            .planNode()};
   auto convergence = ConvergenceConfig::whenDeltaEmpty(10);
-  convergence.plans = {PlanBuilder(idGen)
-                           .stateSource("s", schema)
-                           .singleAggregation({}, {"count(1)"})
-                           .project({"a0 = 0 AS converged"})
-                           .planNode()};
+  convergence.plan = ConvergenceConfig::converging(
+                         PlanBuilder(idGen)
+                             .stateSource("s", schema)
+                             .singleAggregation({}, {"count(1)"})
+                             .project({"a0 = 0 AS converged"})
+                             .planNode(),
+                         10)
+                         .plan;
   VELOX_ASSERT_THROW(
       PlanBuilder(idGen)
           .fixedPoint(
