@@ -179,6 +179,9 @@ void InMemoryExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
       if (!lazyFetching_) {
         // Start fetching data immediately.
         requestSpecs = pickSourcesToRequestLocked();
+        if (!requestSpecs.empty()) {
+          ++numSourceCalls_;
+        }
       }
     }
   }
@@ -186,7 +189,10 @@ void InMemoryExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
   // Outside of lock.
   if (toClose) {
     toClose->close();
-  } else {
+  } else if (!requestSpecs.empty()) {
+    SCOPE_EXIT {
+      endSourceCalls();
+    };
     request(std::move(requestSpecs));
   }
 }
@@ -198,6 +204,25 @@ void InMemoryExchangeClient::noMoreRemoteTasks() {
 void InMemoryExchangeClient::close() {
   closeImpl();
 }
+
+namespace {
+
+// Closes all of 'sources', logging the errors of those that throw.
+void closeSources(const std::vector<std::shared_ptr<ExchangeSource>>& sources) {
+  for (const auto& source : sources) {
+    try {
+      source->close();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to close exchange source " << source->toString()
+                 << ": " << e.what();
+    } catch (...) {
+      LOG(ERROR) << "Failed to close exchange source " << source->toString()
+                 << ": <Unknown exception type>";
+    }
+  }
+}
+
+} // namespace
 
 void InMemoryExchangeClient::closeImpl() {
   std::vector<std::shared_ptr<ExchangeSource>> sources;
@@ -214,16 +239,34 @@ void InMemoryExchangeClient::closeImpl() {
     stats_ = collectStatsLocked();
 
     closed_ = true;
-    sources = std::move(sources_);
+    if (numSourceCalls_ > 0) {
+      sourcesToClose_ = std::move(sources_);
+    } else {
+      sources = std::move(sources_);
+    }
     producingSources = std::move(producingSources_);
     emptySources = std::move(emptySources_);
   }
 
-  // Outside of mutex.
-  for (auto& source : sources) {
-    source->close();
-  }
+  // Outside of mutex. close() must not throw: destructors call it.
+  closeSources(sources);
   queue_->close();
+}
+
+void InMemoryExchangeClient::endSourceCalls() {
+  std::vector<std::shared_ptr<ExchangeSource>> sources;
+  {
+    std::lock_guard<std::mutex> l(queue_->mutex());
+    VELOX_DCHECK_GT(numSourceCalls_, 0);
+    if (--numSourceCalls_ > 0) {
+      return;
+    }
+    sources = std::move(sourcesToClose_);
+  }
+
+  // close() has already returned, so a failure here has no caller to report
+  // to, and this may run while an exception from a source call unwinds.
+  closeSources(sources);
 }
 
 folly::F14FastMap<std::string, RuntimeMetric> InMemoryExchangeClient::stats()
@@ -293,13 +336,21 @@ std::vector<std::unique_ptr<SerializedPageBase>> InMemoryExchangeClient::next(
     }
 
     requestSpecs = pickSourcesToRequestLocked();
+    if (!requestSpecs.empty()) {
+      ++numSourceCalls_;
+    }
   }
 
   // Outside of lock
   if (stalePromise.valid()) {
     stalePromise.setValue();
   }
-  request(std::move(requestSpecs));
+  if (!requestSpecs.empty()) {
+    SCOPE_EXIT {
+      endSourceCalls();
+    };
+    request(std::move(requestSpecs));
+  }
   return pages;
 }
 
@@ -363,7 +414,11 @@ void InMemoryExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
                         [&currentSource](const RequestSpec& spec) -> bool {
                           return spec.source.get() == currentSource.get();
                         }) == requestSpecs.end();
+                ++self->numSourceCalls_;
               }
+              SCOPE_EXIT {
+                self->endSourceCalls();
+              };
               if (pauseCurrentSource) {
                 currentSource->pause();
               }
@@ -474,6 +529,9 @@ InMemoryExchangeClient::pickupSingleSourceToRequestLocked() {
 
 InMemoryExchangeClient::~InMemoryExchangeClient() {
   closeImpl();
+  std::lock_guard<std::mutex> l(queue_->mutex());
+  VELOX_DCHECK_EQ(numSourceCalls_, 0);
+  VELOX_DCHECK(sourcesToClose_.empty());
 }
 
 std::string InMemoryExchangeClient::toString() const {
