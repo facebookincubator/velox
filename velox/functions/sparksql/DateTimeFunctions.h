@@ -592,7 +592,24 @@ struct DateTruncFunction {
     if (!unitOption.has_value()) {
       return false;
     }
-    result = truncateTimestamp(timestamp, unitOption.value(), timeZone_);
+    const auto unit = unitOption.value();
+    if (unit == DateTimeUnit::kMinute && timeZone_ != nullptr) {
+      const int64_t localSeconds = getSeconds(timestamp, timeZone_);
+      const int64_t truncatedLocal =
+          truncateEpochTime({localSeconds, 0}, unit).seconds;
+      const int64_t secondsDelta = localSeconds - truncatedLocal;
+      result = Timestamp(timestamp.getSeconds() - secondsDelta, 0);
+      if (getSeconds(result, timeZone_) != truncatedLocal) {
+        result = Timestamp(
+            timeZone_
+                ->correct_nonexistent_time(std::chrono::seconds(truncatedLocal))
+                .count(),
+            0);
+        result.toGMT(*timeZone_);
+      }
+    } else {
+      result = truncateTimestamp(timestamp, unit, timeZone_);
+    }
     // Spark timestamps are int64 microseconds since the epoch, so truncating
     // the minimum timestamp to a coarser unit cannot be represented.
     if (result < Timestamp::minMicros() || result > Timestamp::maxMicros()) {

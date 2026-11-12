@@ -2426,11 +2426,19 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
       noRows,
       false);
 
-  // Minute truncation is timezone-insensitive and remains eligible. With
-  // adjustment enabled the literal is Asia/Kolkata time, so 01:30 on January 2
-  // there is the first row's 20:00 UTC on January 1.
+  // Minute truncation must use CPU session-timezone semantics when adjustment
+  // is enabled due to historical non-whole-minute offsets. With adjustment
+  // enabled the literal is Asia/Kolkata time, so 01:30 on January 2 there is
+  // the first row's 20:00 UTC on January 1.
   testFilter(
       "date_trunc('minute', event_ts) = TIMESTAMP '2026-01-02 01:30:00'",
+      true,
+      firstRow,
+      false);
+
+  // Second truncation is timezone-insensitive and remains eligible.
+  testFilter(
+      "date_trunc('second', event_ts) = TIMESTAMP '2026-01-02 01:30:00'",
       true,
       firstRow,
       true);
