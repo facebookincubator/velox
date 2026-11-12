@@ -70,6 +70,10 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
     }
     case TypeKind::MAP: {
       auto mapBase = base->as<MapVector>();
+      VELOX_CHECK_NOT_NULL(
+          mapBase,
+          "Unsupported map vector encoding for UnsafeRow: {}",
+          base->encoding());
       children_.push_back(UnsafeRowFast(mapBase->mapKeys()));
       children_.push_back(UnsafeRowFast(mapBase->mapValues()));
       childIsFixedWidth_.push_back(isFixedWidth(mapBase->mapKeys()->type()));
