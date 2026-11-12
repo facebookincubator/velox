@@ -82,9 +82,9 @@ class IndexScanCursor final {
     /// an earlier call, as hasLoadedStripe() reports. 'keyCursor' reads the
     /// keys of the selected rows from the cluster index of the file, in row
     /// order, and the entries can take their keys from it. It reads on from
-    /// the key cursor of the scan, and when the materializer leaves keys of
-    /// the stripe unread, the next stripe starts a new one. Runs on the caller
-    /// of co_nextStripe(), including when prefetch is enabled.
+    /// the key cursor of the scan, which then skips the keys of the stripe
+    /// that the materializer left unread. Runs on the caller of
+    /// co_nextStripe(), including when prefetch is enabled.
     virtual folly::coro::Task<std::unique_ptr<Entries>> materialize(
         ProjectedStripe stripe,
         index::KeyCursor& keyCursor) = 0;
@@ -179,7 +179,7 @@ class IndexScanCursor final {
   // Returns the key cursor of the active scan, at the first selected row of
   // 'selection'. Creates one over the rows from there to the end of the scan
   // when the scan has none: a scan from the first row has no key cursor of a
-  // seek, and a stripe that failed or left keys unread dropped it.
+  // seek, and a stripe that failed dropped it.
   index::KeyCursor* ensureKeyCursor(const StripeSelection& selection);
 
   // Starts bounded stripe prefetch for the active scan, when configured.
@@ -208,8 +208,8 @@ class IndexScanCursor final {
   // holding only the key chunk that it reads. A seek starts it with the chunk
   // of its first row, which other readers of the index can otherwise evict from
   // the index's cache before the scan reads its keys. Null after the last
-  // stripe and after a stripe that did not read all of its keys, and for a
-  // scan from the first row, so that the next stripe creates one.
+  // stripe and after a stripe that failed, and for a scan from the first row,
+  // so that the next stripe creates one.
   std::unique_ptr<index::KeyCursor> keyCursor_;
   // First selected stripe not yet returned to the iterator.
   size_t stripeOffset_{0};
