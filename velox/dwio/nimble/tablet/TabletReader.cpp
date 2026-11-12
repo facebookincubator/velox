@@ -22,6 +22,7 @@
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/VectorIndex.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsGenerated.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
@@ -98,6 +99,12 @@ TabletReader::Options TabletReader::configureOptions(
   tabletOptions.cacheIndex = options.cacheIndex();
   tabletOptions.fileHandle = options.fileHandle();
   tabletOptions.cache = options.cache();
+
+  // Velox reader options carry the async data cache, not a block cache. The
+  // block cache is keyed by fileHandle->uuid, so it needs the handle too.
+  if (options.fileHandle() != nullptr && options.cache() != nullptr) {
+    tabletOptions.blockCache = getBlockCache(options.cache());
+  }
   tabletOptions.ioOptions = options;
   if (const auto& formatOptions = options.formatSpecificOptions()) {
     if (auto nimbleOptions =
@@ -199,6 +206,25 @@ uint64_t decompressedSize(const MetadataSection& section) {
   return section.uncompressedSize().value_or(section.size());
 }
 
+// Both caches key their entries by fileHandle->uuid, so a handle of another
+// file would make the reader serve that file's bytes. Without a cache the
+// handle is unused, and the file may be a copy, such as the in-memory file of a
+// preloaded small file.
+void checkFileHandle(
+    const TabletReader::Options& options,
+    const velox::ReadFile* file) {
+  if (options.fileHandle == nullptr) {
+    return;
+  }
+  if (options.cache == nullptr && options.blockCache == nullptr) {
+    return;
+  }
+  NIMBLE_USER_CHECK_EQ(
+      static_cast<const void*>(file),
+      static_cast<const void*>(options.fileHandle->file.get()),
+      "file and fileHandle->file must point to the same file");
+}
+
 } // namespace
 
 TabletReader::TabletReader(
@@ -214,6 +240,7 @@ TabletReader::TabletReader(
       stripeGroupEncodingViewDeduplicationEnabled_{
           options.stripeGroupEncodingViewDeduplicationEnabled},
       ioOptions_{[&]() {
+        checkFileHandle(options, file_.get());
         NIMBLE_CHECK(options.ioOptions.has_value(), "ioOptions is not set.");
         NIMBLE_CHECK_NOT_NULL(
             options.ioOptions->metadataIoStats(), "metadataIoStats is null.");
@@ -222,11 +249,8 @@ TabletReader::TabletReader(
       fileIoContext_{options.fileIoContext},
       indexOptions_{[&]() {
         // cacheIndex takes effect only when fileHandle and cache are provided.
-        const bool cacheEnabled =
-            options.cacheIndex && options.fileHandle != nullptr;
-        if (cacheEnabled) {
-          NIMBLE_CHECK_NOT_NULL(options.cache, "cacheIndex requires cache");
-        }
+        const bool cacheEnabled = options.cacheIndex &&
+            options.fileHandle != nullptr && options.cache != nullptr;
         return index::IndexLookup::Options{
             .file = file_,
             .ioOptions = &ioOptions_,
@@ -247,14 +271,13 @@ TabletReader::TabletReader(
             .maxCoalesceDistance = ioOptions_.maxCoalesceDistance(),
             .maxCoalesceBytes = ioOptions_.maxCoalesceBytes(),
             .executor = ioOptions_.ioExecutor().get(),
+            .fileHandle = options.fileHandle,
             .fileIoContext = fileIoContext_};
-        // cacheMetadata takes effect only when fileHandle and cache are
-        // provided.
-        if (options.cacheMetadata && options.fileHandle != nullptr) {
-          NIMBLE_CHECK_NOT_NULL(options.cache, "cacheMetadata requires cache");
+
+        // cacheMetadata takes effect only with blockCache.
+        if (options.cacheMetadata) {
           metadataOptions.maxCacheEntrySize = options.maxCacheEntrySize;
-          metadataOptions.fileHandle = options.fileHandle;
-          metadataOptions.cache = options.cache;
+          metadataOptions.blockCache = options.blockCache;
         }
         return MetadataInput::create(file_.get(), metadataOptions);
       }()},

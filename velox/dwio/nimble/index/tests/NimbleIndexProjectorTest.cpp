@@ -304,6 +304,53 @@ TEST_P(NimbleIndexProjectorTest, projectorLooksUpStripeSelections) {
   EXPECT_EQ(dataIoStats_->read().count(), 0);
 }
 
+TEST_P(NimbleIndexProjectorTest, projectorLooksUpAKeyCursor) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  const auto encodeKey = [&](int64_t key) {
+    return makePointLookup(rowType, {"key"}, key).lowerKey.value();
+  };
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  auto projector = createProjector(projectedSubfields);
+
+  // The key cursor of a key range reads the keys of its rows, which span the
+  // three stripes, and returns the selections of lookup(bounds).
+  std::unique_ptr<index::KeyCursor> keyCursor;
+  const auto bounds = makeRangeLookup(rowType, {"key"}, 2, 10);
+  EXPECT_EQ(projector->lookup(bounds, keyCursor), projector->lookup(bounds));
+  ASSERT_NE(keyCursor, nullptr);
+  for (int64_t key{2}; key < 10; ++key) {
+    SCOPED_TRACE(key);
+    ASSERT_TRUE(keyCursor->hasNext());
+    EXPECT_EQ(keyCursor->next(), encodeKey(key));
+  }
+  EXPECT_FALSE(keyCursor->hasNext());
+
+  // The key cursor of a key reads its row.
+  const auto selections = projector->lookup(encodeKey(5), keyCursor);
+  EXPECT_THAT(
+      selections,
+      ::testing::ElementsAre(
+          ::testing::AllOf(
+              ::testing::Field(&StripeSelection::stripeIndex, 1),
+              ::testing::Field(&StripeSelection::rowRange, RowRange(1, 2)))));
+  ASSERT_NE(keyCursor, nullptr);
+  EXPECT_EQ(keyCursor->next(), encodeKey(5));
+  EXPECT_FALSE(keyCursor->hasNext());
+
+  // A miss clears the key cursor.
+  EXPECT_THAT(
+      projector->lookup(makeRangeLookup(rowType, {"key"}, 20, 30), keyCursor),
+      ::testing::IsEmpty());
+  EXPECT_EQ(keyCursor, nullptr);
+  keyCursor = projector->clusterIndex().keyCursor(RowRange{0, 1});
+  EXPECT_THAT(
+      projector->lookup(encodeKey(20), keyCursor), ::testing::IsEmpty());
+  EXPECT_EQ(keyCursor, nullptr);
+  EXPECT_EQ(projector->stats().numReadStripes, 0);
+}
+
 TEST_P(NimbleIndexProjectorTest, collectsNoTimingsWhenDisabled) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});

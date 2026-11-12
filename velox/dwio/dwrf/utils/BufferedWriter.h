@@ -56,7 +56,7 @@ class BufferedWriter {
     VELOX_CHECK(!closed_);
 
     start_[pos_++] = t;
-    if (FOLLY_UNLIKELY(full())) {
+    if (full()) [[unlikely]] {
       flush();
     }
     VELOX_CHECK_LT(pos_, capacity_);

@@ -1242,7 +1242,15 @@ TEST_F(ArrowBridgeArrayExportTest, constants) {
   testConstant((int32_t)1234);
   testConstant((float)44.3);
   testConstant(true);
-  testConstant(StringView("inlined"));
+  for (auto layout :
+       {ArrowOptions::VarTypeLayout::kDefault,
+        ArrowOptions::VarTypeLayout::kLarge,
+        ArrowOptions::VarTypeLayout::kStringView}) {
+    SCOPED_TRACE(fmt::format("varTypeLayout {}", static_cast<int>(layout)));
+    options_.varTypeLayout = layout;
+    testConstant(StringView("inlined"));
+    testConstant(StringView("a string that is not inline"));
+  }
 
   // Null constant.
   VectorPtr vector = makeNullConstant(TypeKind::TINYINT, 2048);

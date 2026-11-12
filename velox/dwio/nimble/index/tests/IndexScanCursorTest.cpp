@@ -74,7 +74,7 @@ class RecordingMaterializer final
  public:
   folly::coro::Task<std::unique_ptr<Entries>> materialize(
       ProjectedStripe stripe,
-      const index::ClusterIndexBase& /*clusterIndex*/) override {
+      index::KeyCursor& /*keyCursor*/) override {
     numMaterializeCalls_.fetch_add(1, std::memory_order_relaxed);
     if (onMaterialize_ != nullptr) {
       onMaterialize_(stripe);

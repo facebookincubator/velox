@@ -14,6 +14,7 @@
 
 velox_add_library(
   velox_test_util
+  PageBeforeGuard.cpp
   ScopedTestTime.cpp
   TestValue.cpp
   RandomSeed.cpp
@@ -21,6 +22,7 @@ velox_add_library(
   TempDirectoryPath.cpp
   HEADERS
   OptionalEmpty.h
+  PageBeforeGuard.h
   RandomSeed.h
   ScopedTestTime.h
   TempDirectoryPath.h
