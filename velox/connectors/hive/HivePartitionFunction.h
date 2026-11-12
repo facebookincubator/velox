@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <limits>
+
 #include "velox/core/PlanNode.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -39,6 +41,12 @@ class HivePartitionFunction : public core::PartitionFunction {
             constValues) {}
 
   ~HivePartitionFunction() override = default;
+
+  /// Returns the bucket, one of 'numBuckets', of a row whose Hive hash is
+  /// 'hash'.
+  static int32_t bucket(uint32_t hash, int32_t numBuckets) {
+    return (hash & std::numeric_limits<int32_t>::max()) % numBuckets;
+  }
 
   std::optional<uint32_t> partition(
       const RowVector& input,

@@ -76,18 +76,15 @@ std::optional<uint32_t> HivePartitionFunction::partition(
     }
   }
 
-  static constexpr int32_t kInt32Max = std::numeric_limits<int32_t>::max();
-
   if (bucketToPartition_.empty()) {
     // NOTE: if bucket to partition mapping is empty, then we do
     // identical mapping.
     for (auto i = 0; i < numRows; ++i) {
-      partitions[i] = (hashes[i] & kInt32Max) % numBuckets_;
+      partitions[i] = bucket(hashes[i], numBuckets_);
     }
   } else {
     for (auto i = 0; i < numRows; ++i) {
-      partitions[i] =
-          bucketToPartition_[((hashes[i] & kInt32Max) % numBuckets_)];
+      partitions[i] = bucketToPartition_[bucket(hashes[i], numBuckets_)];
     }
   }
 
