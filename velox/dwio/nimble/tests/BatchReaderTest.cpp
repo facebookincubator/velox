@@ -1503,11 +1503,25 @@ nimble::EncodingLayout makeFsstEncodingLayout() {
           nimble::CompressionType::Uncompressed}}};
 }
 
+// A StripeGroup metadata format: a layout, and for kStreamMajor whether it uses
+// the sparse layout.
+struct StripeGroupFormat {
+  nimble::StripeGroup::EncodingLayout layout;
+  bool sparseLayout{false};
+
+  std::string debugString() const {
+    if (layout == nimble::StripeGroup::EncodingLayout::kRaw) {
+      return "Raw";
+    }
+    return sparseLayout ? "StreamMajorSparse" : "StreamMajor";
+  }
+};
+
 // Exercises read-path stream-selection across every StripeGroup metadata
 // format. Parameterized on the format alone (independent of BatchReaderTest's
 // cache/pin matrix) because these tests only assert which streams are read.
 class BatchReaderStripeGroupFormatTest
-    : public ::testing::TestWithParam<nimble::StripeGroup::EncodingLayout> {
+    : public ::testing::TestWithParam<StripeGroupFormat> {
  protected:
   static void SetUpTestCase() {
     velox::memory::MemoryManager::testingSetInstance(
@@ -1517,6 +1531,12 @@ class BatchReaderStripeGroupFormatTest
   void SetUp() override {
     rootPool_ = velox::memory::memoryManager()->addRootPool("default_root");
     leafPool_ = rootPool_->addLeafChild("default_leaf");
+  }
+
+  // Sets `options` to write the StripeGroup metadata format under test.
+  void setStripeGroupFormat(nimble::WriterOptions& options) const {
+    options.experimentalStripeGroupEncodingLayout = GetParam().layout;
+    options.experimentalStripeGroupSparseLayout = GetParam().sparseLayout;
   }
 
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
@@ -1545,7 +1565,7 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnselectedColumnsFromFile) {
 
   uint32_t readSize = 1;
   nimble::WriterOptions writerOptions;
-  writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+  setStripeGroupFormat(writerOptions);
   auto file = nimble::test::createNimbleFile(*rootPool_, vector, writerOptions);
   for (auto useChainedBuffers : {false, true}) {
     nimble::testing::InMemoryTrackableReadFile readFile(
@@ -1597,7 +1617,7 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
 
   nimble::WriterOptions writerOptions;
   writerOptions.flatMapColumns["float_features"];
-  writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+  setStripeGroupFormat(writerOptions);
 
   auto file = nimble::test::createNimbleFile(
       *rootPool_, vector, std::move(writerOptions));
@@ -1686,21 +1706,66 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
   }
 }
 
+TEST_P(BatchReaderStripeGroupFormatTest, readsFlatMapKeysMissingFromStripes) {
+  // Each stripe holds keys of its own plus one key every stripe has, so most
+  // key streams have data in some stripes only.
+  constexpr int32_t kStripeCount{4};
+  constexpr int32_t kRowsPerStripe{5};
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  std::vector<velox::VectorPtr> batches;
+  for (int32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    std::vector<velox::vector_size_t> offsets;
+    std::vector<int32_t> keys;
+    std::vector<int64_t> values;
+    for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+      offsets.push_back(static_cast<velox::vector_size_t>(keys.size()));
+      for (const int32_t key : {stripe, stripe + kStripeCount, 100}) {
+        keys.push_back(key);
+        values.push_back(key * 1'000 + row);
+      }
+    }
+    batches.push_back(vectorMaker.rowVector(
+        {"features"},
+        {vectorMaker.mapVector(
+            offsets,
+            vectorMaker.flatVector<int32_t>(keys),
+            vectorMaker.flatVector<int64_t>(values))}));
+  }
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.flatMapColumns["features"];
+  setStripeGroupFormat(writerOptions);
+  // Each vector is flushed into its own stripe.
+  const auto file =
+      nimble::test::createNimbleFile(*rootPool_, batches, writerOptions);
+
+  velox::InMemoryReadFile readFile(file);
+  auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
+      std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type()));
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, std::move(selector), nimble::BatchReadParams{});
+  for (int32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    SCOPED_TRACE(fmt::format("stripe={}", stripe));
+    velox::VectorPtr result;
+    ASSERT_TRUE(reader.next(kRowsPerStripe, result));
+    ASSERT_EQ(result->size(), kRowsPerStripe);
+    for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+      EXPECT_TRUE(batches[stripe]->equalValueAt(result.get(), row, row));
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     BatchReaderStripeGroupFormatTestSuite,
     BatchReaderStripeGroupFormatTest,
     ::testing::Values(
-        nimble::StripeGroup::EncodingLayout::kRaw,
-        nimble::StripeGroup::EncodingLayout::kStreamMajor),
-    [](const ::testing::TestParamInfo<nimble::StripeGroup::EncodingLayout>&
-           info) {
-      switch (info.param) {
-        case nimble::StripeGroup::EncodingLayout::kRaw:
-          return "Raw";
-        case nimble::StripeGroup::EncodingLayout::kStreamMajor:
-          return "StreamMajor";
-      }
-      return "Unknown";
+        StripeGroupFormat{nimble::StripeGroup::EncodingLayout::kRaw},
+        StripeGroupFormat{nimble::StripeGroup::EncodingLayout::kStreamMajor},
+        StripeGroupFormat{
+            nimble::StripeGroup::EncodingLayout::kStreamMajor,
+            /*sparseLayout=*/true}),
+    [](const ::testing::TestParamInfo<StripeGroupFormat>& info) {
+      return info.param.debugString();
     });
 
 TEST_P(BatchReaderTest, sharedDictionary) {
