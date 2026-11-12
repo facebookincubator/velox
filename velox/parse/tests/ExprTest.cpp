@@ -16,6 +16,8 @@
 #include <folly/container/F14Map.h>
 #include <gtest/gtest.h>
 #include "velox/duckdb/conversion/DuckParser.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/IExpr.h"
 
@@ -87,6 +89,70 @@ TEST_F(ExprTest, hashMap) {
     EXPECT_EQ(exprs.at(expr2), 6);
     EXPECT_EQ(exprs.at(expr3), 5);
   }
+}
+
+TEST_F(ExprTest, atTimeZone) {
+  const auto value = parse("a");
+  const auto timeZone = parse("'America/Los_Angeles'");
+  const AtTimeZoneExpr::OperandTypes operandTypes{
+      .timestamp = TIMESTAMP(),
+      .timestampWithTimeZone = TIMESTAMP_WITH_TIME_ZONE(),
+      .time = TIME(),
+      .timeWithTimeZone = TIME_WITH_TIME_ZONE(),
+  };
+  const ExprPtr expr = std::make_shared<AtTimeZoneExpr>(
+      value, timeZone, operandTypes, std::nullopt);
+  const auto* atTimeZone = expr->as<AtTimeZoneExpr>();
+
+  ASSERT_NE(atTimeZone, nullptr);
+  EXPECT_EQ(expr->kind(), IExpr::Kind::kAtTimeZone);
+  EXPECT_EQ(expr->toString(), R"($at_time_zone("a",America/Los_Angeles))");
+  EXPECT_EQ(*atTimeZone->operandTypes().timestamp, *operandTypes.timestamp);
+  EXPECT_EQ(
+      *atTimeZone->operandTypes().timestampWithTimeZone,
+      *operandTypes.timestampWithTimeZone);
+  EXPECT_EQ(*atTimeZone->operandTypes().time, *operandTypes.time);
+  EXPECT_EQ(
+      *atTimeZone->operandTypes().timeWithTimeZone,
+      *operandTypes.timeWithTimeZone);
+
+  const ExprPtr same = std::make_shared<AtTimeZoneExpr>(
+      value, timeZone, operandTypes, std::nullopt);
+  EXPECT_EQ(*expr, *same);
+  EXPECT_EQ(expr->hash(), same->hash());
+  EXPECT_NE(
+      *expr,
+      *std::make_shared<AtTimeZoneExpr>(
+          parse("b"), timeZone, operandTypes, std::nullopt));
+  EXPECT_NE(
+      *expr,
+      *std::make_shared<AtTimeZoneExpr>(
+          value, parse("'UTC'"), operandTypes, std::nullopt));
+  for (const auto member : {
+           &AtTimeZoneExpr::OperandTypes::timestamp,
+           &AtTimeZoneExpr::OperandTypes::timestampWithTimeZone,
+           &AtTimeZoneExpr::OperandTypes::time,
+           &AtTimeZoneExpr::OperandTypes::timeWithTimeZone,
+       }) {
+    auto differentOperandTypes = operandTypes;
+    differentOperandTypes.*member = VARCHAR();
+    EXPECT_NE(
+        *expr,
+        *std::make_shared<AtTimeZoneExpr>(
+            value, timeZone, std::move(differentOperandTypes), std::nullopt));
+  }
+
+  const auto aliased = expr->withAlias("zoned");
+  EXPECT_EQ(
+      aliased->toString(),
+      R"($at_time_zone("a",America/Los_Angeles) AS zoned)");
+  EXPECT_EQ(*aliased->dropAlias(), *expr);
+
+  const auto replaced = expr->replaceInputs({parse("b"), parse("'UTC'")});
+  EXPECT_EQ(
+      *replaced,
+      *std::make_shared<AtTimeZoneExpr>(
+          parse("b"), parse("'UTC'"), operandTypes, std::nullopt));
 }
 
 TEST_F(ExprTest, tryAsRootColumn) {

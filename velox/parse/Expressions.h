@@ -485,6 +485,55 @@ class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {
   const bool isTryCast_;
 };
 
+/// Carries an unresolved SQL AT TIME ZONE expression.
+///
+/// Retains the frontend's temporal operand types so a downstream engine can
+/// validate the value before function overload resolution applies coercions.
+/// The frontend supplies these types because their concrete representations
+/// are dialect-specific.
+class AtTimeZoneExpr final : public IExpr {
+ public:
+  /// Defines the temporal types recognized by the frontend.
+  struct OperandTypes {
+    /// Type used for timestamp values without a time zone.
+    TypePtr timestamp;
+    /// Type used for timestamp values that include a time zone.
+    TypePtr timestampWithTimeZone;
+    /// Type used for time values without a time zone.
+    TypePtr time;
+    /// Type used for time values that include a time zone.
+    TypePtr timeWithTimeZone;
+  };
+
+  AtTimeZoneExpr(
+      ExprPtr value,
+      ExprPtr timeZone,
+      OperandTypes operandTypes,
+      std::optional<std::string> alias);
+
+  std::string toString() const override;
+
+  const OperandTypes& operandTypes() const {
+    return operandTypes_;
+  }
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override;
+
+  ExprPtr withAlias(const std::string& alias) const override;
+
+  ExprPtr dropAlias() const override;
+
+  bool operator==(const IExpr& other) const override;
+
+  size_t localHash() const override;
+
+  VELOX_DEFINE_CLASS_NAME(AtTimeZoneExpr)
+
+ private:
+  // Types used to validate the value before function coercion.
+  const OperandTypes operandTypes_;
+};
+
 /// Represents lambda expression as a list of inputs and the body expression.
 /// For example, the expression
 ///     (k, v) -> k + v
