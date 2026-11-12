@@ -216,11 +216,8 @@ struct BenchmarkState : public velox::test::VectorTestBase {
       scanSpec->childByName("c0")->setFilter(
           std::make_unique<common::BigintRange>(
               filter->first, filter->second, false));
-      // Force c1 to be read eagerly (not lazy) so it receives the
-      // sparse RowSet from c0's filter and goes through the sparse
-      // bulkScan path (V::dense = false).
-      scanSpec->childByName("c1")->setFilter(
-          std::make_unique<common::AlwaysTrue>());
+      // c1 is lazy-loaded with the sparse RowSet that passes c0's filter, so
+      // it goes through the sparse bulkScan path (V::dense = false).
     }
 
     auto us = [](auto d) {

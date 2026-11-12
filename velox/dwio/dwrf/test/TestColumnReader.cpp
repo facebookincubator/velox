@@ -1224,6 +1224,92 @@ TEST_P(TestColumnReader, testIntDictSkipWithNulls) {
   }
 }
 
+// The scan spec drops an AlwaysTrue filter, so the column reads as one without
+// a filter: lazily, and on the bulk path, which reads the IN_DICTIONARY flags
+// one per non-null value. Every row comes back, with the right nulls and the
+// right choice between dictionary entries and literals.
+TEST_P(TestColumnReader, testIntDictWithNullsAlwaysTrueFilter) {
+  if (!useSelectiveReader()) {
+    GTEST_SKIP() << "Scan spec filters apply to the selective reader only";
+  }
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  proto::ColumnEncoding dictEncoding;
+  dictEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
+  dictEncoding.set_dictionarysize(50);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+  EXPECT_CALL(streams_, getEncodingProxy(1))
+      .WillRepeatedly(Return(&dictEncoding));
+
+  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  // Even rows are present, odd rows are null.
+  const unsigned char present[] = {0x16, 0xaa};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(present, std::size(present))));
+
+  // Non-null value i is dictionary index i / 2 when i is even, and the literal
+  // i + 1000 when i is odd.
+  char data[1024];
+  std::vector<uint64_t> values;
+  data[0] = 0x9C; // rle literal, -100
+  for (uint64_t i = 0; i < 100; ++i) {
+    values.push_back(i % 2 == 0 ? i / 2 : i + 1000);
+  }
+  const size_t size = writeVuLongs(data + 1, values);
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(new SeekableArrayInputStream(data, size + 1)));
+
+  // One flag per non-null value: even values are in the dictionary.
+  const unsigned char inDictionary[] = {0x0a, 0xaa};
+  EXPECT_CALL(
+      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(inDictionary, std::size(inDictionary))));
+
+  EXPECT_CALL(streams_, genMockDictDataSetter(1, 0))
+      .WillRepeatedly(Return([&](BufferPtr& buffer, MemoryPool* pool) {
+        buffer = AlignedBuffer::allocate<int32_t>(1024, pool);
+        auto* dictionary = buffer->asMutable<int32_t>();
+        for (int32_t i = 0; i < 50; ++i) {
+          dictionary[i] = i * 2;
+        }
+      }));
+
+  auto rowType = HiveTypeParser().parse("struct<myInt:int>");
+  common::ScanSpec scanSpec("root");
+  scanSpec.addAllChildFields(*rowType);
+  scanSpec.childByName("myInt")->setFilter(
+      std::make_unique<common::AlwaysTrue>());
+  buildReader(rowType, nullptr, {}, &scanSpec);
+
+  ASSERT_EQ(scanSpec.childByName("myInt")->filter(), nullptr);
+
+  constexpr int32_t kNumRows = 90;
+  VectorPtr batch = newBatch(rowType);
+  selectiveColumnReader_->next(kNumRows, batch, nullptr);
+  auto intBatch = getOnlyChild<FlatVector<int32_t>>(batch);
+  ASSERT_EQ(intBatch->size(), kNumRows);
+  for (int32_t row = 0; row < kNumRows; ++row) {
+    SCOPED_TRACE(fmt::format("row={}", row));
+    if (row % 2 == 1) {
+      EXPECT_TRUE(intBatch->isNullAt(row));
+      continue;
+    }
+    const int32_t valueIndex = row / 2;
+    ASSERT_FALSE(intBatch->isNullAt(row));
+    EXPECT_EQ(
+        intBatch->valueAt(row),
+        valueIndex % 2 == 0 ? valueIndex : valueIndex + 1000);
+  }
+}
+
 TEST_P(TestColumnReader, testIntDictBoundary) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
