@@ -1581,6 +1581,146 @@ class ReadWithVisitorTest : public ::testing::Test,
     expectValues(reader, rowNumbers);
   }
 
+  // Reads every 'rowStep'th of 'numSelected * rowStep' BIGINT rows through a
+  // dictionary with 'indicesLayout' indices on the dictionary-aware path, for
+  // every null pattern and every pass/fail pattern of the selected rows, and
+  // checks output rows, values and null bits against a row-by-row reference.
+  // The BigintRange [200, 800] accepts nulls, so the nulls between the first
+  // and last non-null rows go through FusedDictionaryIndicesHook::
+  // mergeBulkNulls. A passing row holds 300 plus its row number and a failing
+  // row holds its row number. With 'singleValue', every non-null row holds 500
+  // or 100 instead, so all indices are 0, as ConstantEncoding needs.
+  template <bool kIsDense>
+  void testDictionaryAwareNullMerge(
+      const EncodingLayout& indicesLayout,
+      bool singleValue,
+      bool scanFastPath,
+      vector_size_t numSelected,
+      vector_size_t rowStep) {
+    constexpr int64_t kFilterMin{200};
+    constexpr int64_t kFilterMax{800};
+    const vector_size_t numRows = numSelected * rowStep;
+    auto input = makeRowVector(
+        {makeFlatVector<int64_t>(numRows, [](auto row) { return row; })});
+    auto rowType = asRowType(input->type());
+    auto context = makeFileContext(input);
+
+    // The bulk paths load a full SIMD batch of row numbers, so the row set
+    // needs padding past its last row.
+    std::vector<vector_size_t> rowNumbers(
+        numSelected + xsimd::batch<int32_t>::size);
+    for (vector_size_t index = 0; index < numSelected; ++index) {
+      rowNumbers[index] = index * rowStep;
+    }
+    const RowSet rows(rowNumbers.data(), numSelected);
+    common::BigintRange filter(kFilterMin, kFilterMax, /*nullAllowed=*/true);
+
+    for (const bool filterOnly : {false, true}) {
+      SCOPED_TRACE(fmt::format("filterOnly={}", filterOnly));
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*rowType);
+      auto* valueSpec = scanSpec->childByName("c0");
+      valueSpec->setFilter(
+          std::make_unique<common::BigintRange>(
+              kFilterMin, kFilterMax, /*nullAllowed=*/true));
+      valueSpec->setProjectOut(!filterOnly);
+      auto root = buildReader(*context, rowType, *scanSpec);
+      auto* structReader =
+          dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+              root.get());
+      auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+          dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+      ASSERT_NE(reader, nullptr);
+
+      for (uint32_t nullMask = 0; nullMask < (1U << numSelected); ++nullMask) {
+        const auto numNonNulls = numSelected - __builtin_popcount(nullMask);
+        const uint32_t numPassMasks = singleValue ? 2 : 1U << numNonNulls;
+        for (uint32_t passMask = 0; passMask < numPassMasks; ++passMask) {
+          SCOPED_TRACE(
+              fmt::format("nullMask={:#x} passMask={:#x}", nullMask, passMask));
+          auto nulls = allocateNulls(numRows, pool(), bits::kNotNull);
+          std::vector<int64_t> nonNullValues;
+          std::vector<vector_size_t> expectedRows;
+          std::vector<std::optional<int64_t>> expectedValues;
+          vector_size_t nonNullIndex{0};
+          for (vector_size_t row = 0; row < numRows; ++row) {
+            const bool selected = row % rowStep == 0;
+            if (selected && ((nullMask >> (row / rowStep)) & 1)) {
+              bits::setNull(nulls->asMutable<uint64_t>(), row);
+              expectedRows.push_back(row);
+              expectedValues.emplace_back(std::nullopt);
+              continue;
+            }
+            const bool passes = singleValue
+                ? passMask == 1
+                : selected && ((passMask >> nonNullIndex++) & 1);
+            const int64_t value =
+                singleValue ? (passes ? 500 : 100) : (passes ? 300 + row : row);
+            nonNullValues.push_back(value);
+            if (selected && passes) {
+              expectedRows.push_back(row);
+              expectedValues.emplace_back(value);
+            }
+          }
+
+          // All-null ranges never reach the encoding.
+          if (nonNullValues.empty()) {
+            continue;
+          }
+
+          const uint64_t* rawNulls =
+              static_cast<vector_size_t>(nonNullValues.size()) < numRows
+              ? nulls->as<uint64_t>()
+              : nullptr;
+          reader->template doPrepareRead<int64_t>(0, rows, rawNulls);
+          Buffer buffer(*pool());
+          auto encoding = createFromCustomLayout<int64_t>(
+              DictionaryEnc{.indices = indicesLayout},
+              nonNullValues,
+              *pool(),
+              buffer);
+          const auto read = [&](auto extractValues) {
+            DecoderVisitor<
+                int64_t,
+                common::BigintRange,
+                decltype(extractValues),
+                kIsDense>
+                visitor(filter, reader, rows, extractValues);
+            auto params = makeReadWithVisitorParams(visitor, rows, pool());
+            params.dictionaryAwareReads = true;
+            params.scanFastPath = scanFastPath;
+            dispatchCallReadWithVisitor(*encoding, visitor, params);
+            EXPECT_EQ(visitor.rowIndex(), rows.size());
+          };
+          if (filterOnly) {
+            read(dwio::common::DropValues{});
+          } else {
+            read(dwio::common::ExtractToReader(reader));
+          }
+
+          const std::vector<vector_size_t> actualRows(
+              reader->outputRows().begin(), reader->outputRows().end());
+          ASSERT_EQ(actualRows, expectedRows);
+          ASSERT_EQ(reader->numValues(), expectedRows.size());
+          if (!filterOnly) {
+            const auto values = getValues<int64_t>(reader);
+            const auto& resultNulls = reader->resultNullsForTest();
+            std::vector<std::optional<int64_t>> actualValues;
+            const auto numValues = static_cast<vector_size_t>(values.size());
+            for (vector_size_t index = 0; index < numValues; ++index) {
+              const bool isNull = resultNulls != nullptr &&
+                  bits::isBitNull(resultNulls->as<uint64_t>(), index);
+              actualValues.push_back(
+                  isNull ? std::nullopt
+                         : std::optional<int64_t>(values[index]));
+            }
+            ASSERT_EQ(actualValues, expectedValues);
+          }
+        }
+      }
+    }
+  }
+
   template <typename FloatType>
   std::unique_ptr<FloatingPointColumnReaderTestAccessor<FloatType>>
   buildFloatingPointReader(
@@ -4582,6 +4722,82 @@ TEST_F(ReadWithVisitorTest, dictionaryAwareReadsDouble) {
   testDictionaryAwareFloatingPointCases<double>();
 }
 
+// A dictionary-aware SMALLINT read must reject an index past the dictionary
+// when the index decoder hands over one index at a time. Varint indices reach
+// FusedDictionaryIndicesHook::addValue(), and the visitor's process() takes a
+// SMALLINT index as uint16_t, so index 65'537 would wrap to the in-range 1.
+TEST_F(ReadWithVisitorTest, dictionaryAwareReadsSmallintIndexOutOfRangeThrows) {
+  const std::vector<int16_t> alphabet{10, 20, 30};
+  const std::vector<uint32_t> indices{0, 65'537, 2};
+  const auto numRows = static_cast<vector_size_t>(indices.size());
+
+  auto input = makeRowVector(
+      {makeFlatVector<int16_t>(numRows, [](auto row) { return row; })});
+  auto rowType = asRowType(input->type());
+  auto context = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  auto root = buildReader(*context, rowType, *scanSpec);
+  auto* structReader =
+      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
+  auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+      dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+  ASSERT_NE(reader, nullptr);
+
+  // The bulk paths load a full SIMD batch of row numbers, so the row set
+  // needs padding past its last row.
+  std::vector<vector_size_t> rowNumbers(numRows + xsimd::batch<int32_t>::size);
+  std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+  const RowSet rows(rowNumbers.data(), numRows);
+  reader->doPrepareRead<int16_t>(0, rows, nullptr);
+
+  // DictionaryEncoding::encode() derives the indices from the values, so
+  // assemble the chunk from its parts: the prefix, the alphabet size, the
+  // alphabet and the indices.
+  const auto nestedPolicy =
+      [](DataType type) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+    UNIQUE_PTR_FACTORY(type, TrivialNestedPolicy);
+  };
+  Buffer alphabetBuffer{*pool()};
+  const auto serializedAlphabet = EncodingFactory::encode<int16_t>(
+      std::make_unique<ReplayedEncodingSelectionPolicy<int16_t>>(
+          TrivialEnc{}, CompressionOptions{}, nestedPolicy),
+      std::span<const int16_t>(alphabet),
+      alphabetBuffer);
+  Buffer indicesBuffer{*pool()};
+  const auto serializedIndices = EncodingFactory::encode<uint32_t>(
+      std::make_unique<ReplayedEncodingSelectionPolicy<uint32_t>>(
+          VarintEnc{}, CompressionOptions{}, nestedPolicy),
+      std::span<const uint32_t>(indices),
+      indicesBuffer);
+  const uint32_t encodingSize = Encoding::kPrefixSize + sizeof(uint32_t) +
+      serializedAlphabet.size() + serializedIndices.size();
+  Buffer buffer{*pool()};
+  char* reserved = buffer.reserve(encodingSize);
+  char* pos = reserved;
+  encoding::writeChar(static_cast<char>(EncodingType::Dictionary), pos);
+  encoding::writeChar(static_cast<char>(TypeTraits<int16_t>::dataType), pos);
+  encoding::writeUint32(numRows, pos);
+  encoding::writeUint32(serializedAlphabet.size(), pos);
+  encoding::writeBytes(serializedAlphabet, pos);
+  encoding::writeBytes(serializedIndices, pos);
+  auto encoding = decodeEncoding({reserved, encodingSize}, *pool());
+
+  common::AlwaysTrue filter;
+  constexpr bool kIsDense = true;
+  DecoderVisitor<
+      int16_t,
+      common::AlwaysTrue,
+      dwio::common::ExtractToReader,
+      kIsDense>
+      visitor(filter, reader, rows, dwio::common::ExtractToReader(reader));
+  auto params = makeReadWithVisitorParams(visitor, rows, pool());
+  params.dictionaryAwareReads = true;
+  NIMBLE_ASSERT_FILE_THROW(
+      dispatchCallReadWithVisitor(*encoding, visitor, params),
+      "Dictionary index must be less than the dictionary size");
+}
+
 TEST_F(ReadWithVisitorTest, encodingLevelDictionaryIntegerRangeSparseNullable) {
   for (const auto nullPeriod : {2, 17}) {
     SCOPED_TRACE(fmt::format("nullPeriod={}", nullPeriod));
@@ -4867,6 +5083,8 @@ TEST_F(
 // dictionary-aware path, each with scanFastPath off and on. A SMALLINT read
 // sizes the values buffer for 2-byte values, so the default path must grow it
 // before the bulk index decode stages 4-byte indices there.
+// RLE and MainlyConstant indices pass each decoded batch to the hook from
+// their own bulkScan instead of processFixedWidthRun.
 TEST_F(ReadWithVisitorTest, encodingLevelDictionaryIndexEncodings) {
   // SubIntSplit needs explicit section boundaries, inclusive at both ends, to
   // replay a layout.
@@ -4886,6 +5104,14 @@ TEST_F(ReadWithVisitorTest, encodingLevelDictionaryIndexEncodings) {
            CompressionType::Uncompressed,
            std::vector<std::optional<const EncodingLayout>>(
                subIntSplitSections.size())}},
+      {"BlockBitPackingV2",
+       EncodingLayout{
+           EncodingType::BlockBitPackingV2,
+           {},
+           CompressionType::Uncompressed,
+           {std::nullopt, std::nullopt, std::nullopt}}},
+      {"RLE", RLEEnc{}},
+      {"MainlyConstant", MainlyConstantEnc{}},
   };
   for (const auto& [name, indicesLayout] : indicesLayouts) {
     for (const bool dictionaryAwareReads : {false, true}) {
@@ -4916,6 +5142,46 @@ TEST_F(ReadWithVisitorTest, encodingLevelDictionaryIndexEncodings) {
             scanFastPath);
       }
     }
+  }
+}
+
+// Checks dictionary-aware reads against a row-by-row reference for every null
+// pattern and every pass/fail pattern of 8 rows, so mergeBulkNulls runs on both
+// branches, including at the threshold between them, with and without earlier
+// output from leading nulls. Trivial indices reach the hook through
+// processFixedWidthRun. RLE, MainlyConstant and Constant indices call it from
+// their own bulkScan, and Constant takes the bulk path only with scanFastPath.
+// The sparse reads select every other row.
+TEST_F(ReadWithVisitorTest, encodingLevelDictionaryAwareNullMergeExhaustive) {
+  constexpr vector_size_t kSelectedRows{8};
+
+  // An index encoding and the read options it needs.
+  struct IndicesCase {
+    std::string name;
+    EncodingLayout layout;
+    bool singleValue;
+    bool scanFastPath;
+  };
+  const std::vector<IndicesCase> indicesCases{
+      {"Trivial", TrivialEnc{}, false, false},
+      {"RLE", RLEEnc{}, false, false},
+      {"MainlyConstant", MainlyConstantEnc{}, false, false},
+      {"Constant", ConstantEnc{}, true, true},
+  };
+  for (const auto& indicesCase : indicesCases) {
+    SCOPED_TRACE(indicesCase.name);
+    testDictionaryAwareNullMerge</*kIsDense=*/true>(
+        indicesCase.layout,
+        indicesCase.singleValue,
+        indicesCase.scanFastPath,
+        kSelectedRows,
+        /*rowStep=*/1);
+    testDictionaryAwareNullMerge</*kIsDense=*/false>(
+        indicesCase.layout,
+        indicesCase.singleValue,
+        indicesCase.scanFastPath,
+        kSelectedRows,
+        /*rowStep=*/2);
   }
 }
 
