@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include <re2/re2.h>
 
 #include <fmt/format.h>
@@ -172,8 +174,8 @@ TEST_P(MultiThreadedHashJoinTest, spillEnabledJoinWithPartialLimit) {
                     .spillDirectory(spillDirectory->getPath())
                     .config(core::QueryConfig::kSpillEnabled, "true")
                     .config(core::QueryConfig::kJoinSpillEnabled, "true")
-                    .config(core::QueryConfig::kMaxSpillLevel, "2")
-                    .config(core::QueryConfig::kSpillWriteBufferSize, "0")
+                    .config(core::QueryConfig::kMaxSpillLevel, 2)
+                    .config(core::QueryConfig::kSpillWriteBufferSize, 0)
                     .assertResults(makeRowVector(
                         {"t_key"}, {makeFlatVector<int64_t>({999})}));
     if (injectSpill) {
@@ -223,8 +225,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesLastProber) {
       queryBuilder.spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kJoinSpillEnabled, "true")
-          .config(core::QueryConfig::kMaxSpillLevel, "2")
-          .config(core::QueryConfig::kSpillWriteBufferSize, "0");
+          .config(core::QueryConfig::kMaxSpillLevel, 2)
+          .config(core::QueryConfig::kSpillWriteBufferSize, 0);
     }
 
     std::shared_ptr<Task> task;
@@ -339,8 +341,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
       queryBuilder.spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kJoinSpillEnabled, "true")
-          .config(core::QueryConfig::kMaxSpillLevel, "2")
-          .config(core::QueryConfig::kSpillWriteBufferSize, "0");
+          .config(core::QueryConfig::kMaxSpillLevel, 2)
+          .config(core::QueryConfig::kSpillWriteBufferSize, 0);
     }
 
     std::shared_ptr<Task> task;
@@ -427,8 +429,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBetweenSpillRounds) {
                       .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, "true")
                       .config(core::QueryConfig::kJoinSpillEnabled, "true")
-                      .config(core::QueryConfig::kMaxSpillLevel, "2")
-                      .config(core::QueryConfig::kSpillWriteBufferSize, "0")
+                      .config(core::QueryConfig::kMaxSpillLevel, 2)
+                      .config(core::QueryConfig::kSpillWriteBufferSize, 0)
                       .copyResults(pool_.get(), task);
     ASSERT_GT(result->size(), 0);
     ASSERT_LE(result->size(), 5 * numDrivers_);
@@ -1936,7 +1938,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {"t0", "t1"},
           {
               makeFlatVector<int32_t>(200, [](auto row) { return row % 11; }),
-              makeFlatVector<int32_t>(200, folly::identity, nullEvery(97)),
+              makeFlatVector<int32_t>(200, std::identity{}, nullEvery(97)),
           });
     });
     auto buildVectors = makeBatches(3, [&](int32_t /*unused*/) {
@@ -1944,7 +1946,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {"u0", "u1"},
           {
               makeFlatVector<int32_t>(234, [](auto row) { return row % 5; }),
-              makeFlatVector<int32_t>(234, folly::identity, nullEvery(91)),
+              makeFlatVector<int32_t>(234, std::identity{}, nullEvery(91)),
           });
     });
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -1986,7 +1988,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {
               makeFlatVector<int32_t>(
                   200, [](auto row) { return row % 11; }, nullEvery(23)),
-              makeFlatVector<int32_t>(200, folly::identity, nullEvery(29)),
+              makeFlatVector<int32_t>(200, std::identity{}, nullEvery(29)),
           });
     });
     auto buildVectors = makeBatches(3, [&](int32_t /*unused*/) {
@@ -1995,7 +1997,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {
               makeFlatVector<int32_t>(
                   234, [](auto row) { return row % 5; }, nullEvery(31)),
-              makeFlatVector<int32_t>(234, folly::identity, nullEvery(37)),
+              makeFlatVector<int32_t>(234, std::identity{}, nullEvery(37)),
           });
     });
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())

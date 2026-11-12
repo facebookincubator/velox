@@ -98,19 +98,22 @@ std::string getOriginalName(const std::string& kind) {
   return kind;
 }
 
-bool aggregationSupportsMask(const std::string& aggregateName) {
+bool aggregationSupportsMask(
+    const std::string& aggregateName,
+    const StepAwareAggregationRegistry& registry) {
   // Mask eligibility is declared at registration (see
-  // maskSupportedAggregations() populated in
-  // registerCommonAggregationFunctions), so no aggregate names are hardcoded
-  // here. getOriginalName strips the _partial/_merge companion suffixes to the
-  // registered name before lookup.
-  const auto& supported = maskSupportedAggregations();
+  // maskSupportedAggregations(), populated per registry by the registration
+  // functions in AggregationRegistry.cpp), so no aggregate names are
+  // hardcoded here. getOriginalName strips the _partial/_merge companion
+  // suffixes to the registered name before lookup.
+  const auto& supported = maskSupportedAggregations(registry);
   return supported.count(getOriginalName(aggregateName)) > 0;
 }
 
 bool maskSupportedByCudf(
     const core::AggregationNode::Aggregate& aggregate,
-    core::AggregationNode::Step step) {
+    core::AggregationNode::Step step,
+    const StepAwareAggregationRegistry& registry) {
   if (!aggregate.mask) {
     return true;
   }
@@ -127,7 +130,7 @@ bool maskSupportedByCudf(
   }
   // Aggregates that ignore the mask must fall back to CPU rather than silently
   // produce an unmasked result.
-  return aggregationSupportsMask(aggregate.call->name());
+  return aggregationSupportsMask(aggregate.call->name(), registry);
 }
 
 bool sortingKeysSupportedByCudf(
@@ -360,7 +363,7 @@ void setupGroupingKeyChannelProjections(
   //
   // NOTE: grouping key output order is specified as 'groupingKeys' in
   // 'aggregationNode_'.
-  std::vector<exec::IdentityProjection> groupingKeyProjections;
+  std::vector<IdentityProjection> groupingKeyProjections;
   groupingKeyProjections.reserve(groupingKeys.size());
   for (auto i = 0; i < groupingKeys.size(); ++i) {
     groupingKeyProjections.emplace_back(

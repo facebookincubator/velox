@@ -67,6 +67,7 @@ uint8_t nestedChildrenCount(nimble::EncodingType encodingType) {
   switch (encodingType) {
     case nimble::EncodingType::Delta:
     case nimble::EncodingType::BlockBitPacking:
+    case nimble::EncodingType::BlockBitPackingV2:
     case nimble::EncodingType::FOR:
       return 3;
     case nimble::EncodingType::RLE:

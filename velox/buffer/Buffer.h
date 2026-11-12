@@ -50,6 +50,20 @@ using BufferPtr = boost::intrusive_ptr<Buffer>;
 // new Buffer should be made if there are other references to the last
 // used Buffer.
 //
+// Buffers held by vectors (nulls, values, indices, offsets and sizes) follow
+// one contract, so that a vector can wrap memory from Arrow and other external
+// sources without a copy:
+// - A buffer starts aligned to its element width. Bitmaps (nulls and boolean
+//   values) start 8-byte aligned.
+// - A buffer may end at its valid bytes rounded up to its alignment, with
+//   nothing addressable after that. Values, indices, offsets and sizes may end
+//   at their last element. A bitmap of n bits spans bits::nwords(n) words, not
+//   just bits::nbytes(n) bytes.
+// - Code may read past the last valid byte only up to that end. Such reads stay
+//   inside the buffer's memory and never cross a page.
+// - Padding is not a property of every buffer. A function that needs it says so
+//   next to its signature, and its callers pass an AlignedBuffer.
+//
 // NOTE: References to sizes represent number of bytes.
 class Buffer {
  public:
@@ -347,6 +361,11 @@ FOLLY_ALWAYS_INLINE void intrusive_ptr_release(Buffer* buffer) noexcept {
 template <typename T>
 class NonPODAlignedBuffer;
 
+// Owns memory from a MemoryPool. The data starts kSizeofAlignedBuffer bytes
+// into the pool's allocation, so it is aligned to the smaller of the pool's
+// alignment and 64 bytes, and followed by at least simd::kPadding addressable
+// bytes past capacity(). Only code that knows it has an AlignedBuffer may rely
+// on that padding: a vector can also hold BufferViews, which have none.
 class AlignedBuffer : public Buffer {
  public:
   static constexpr int16_t kAlignment = 64;
@@ -772,7 +791,9 @@ class NonPODAlignedBuffer : public Buffer {
 };
 
 // Immutable view over externally managed memory. When the last reference is
-// destroyed, release() is called on 'releaser'.
+// destroyed, release() is called on 'releaser'. Has no padding: the memory may
+// end at size() rounded up to the buffer's alignment. A BufferView held by a
+// vector must meet the contract described on Buffer.
 template <typename Releaser>
 class BufferView : public Buffer {
  public:

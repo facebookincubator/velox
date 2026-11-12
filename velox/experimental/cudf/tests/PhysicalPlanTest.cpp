@@ -319,6 +319,7 @@ TEST_F(PhysicalPlanTest, constructTopNRowNumberWithoutCpuCounterpart) {
       "top-n",
       source,
       data->rowType(),
+      core::TopNRowNumberNode::RankFunction::kRowNumber,
       std::vector<core::FieldAccessTypedExprPtr>{
           std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")},
       std::vector<core::FieldAccessTypedExprPtr>{

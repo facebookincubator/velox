@@ -107,7 +107,7 @@ void Exchange::getSplits(ContinueFuture* future) {
     }
 
     if (split.hasConnectorSplit()) {
-      if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+      if (splitTracer_ != nullptr) [[unlikely]] {
         splitTracer_->write(split);
       }
       ++stats_.wlock()->numSplits;

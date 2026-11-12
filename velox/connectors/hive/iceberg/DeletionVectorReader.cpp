@@ -56,12 +56,12 @@ struct BlobLocation {
 };
 
 // Reads the Puffin magic that both opens the file and brackets the footer.
-bool startsWithPuffinMagic(ReadFile& file) {
+bool startsWithPuffinMagic(ReadFile& file, const FileIoContext& ioContext) {
   if (file.size() < kPuffinMagicSize) {
     return false;
   }
   std::string magic(kPuffinMagicSize, '\0');
-  file.pread(0, kPuffinMagicSize, magic.data());
+  file.pread(0, kPuffinMagicSize, magic.data(), ioContext);
   return std::string_view(magic) ==
       std::string_view(kPuffinMagic, kPuffinMagicSize);
 }
@@ -74,7 +74,8 @@ bool startsWithPuffinMagic(ReadFile& file) {
 // vectors for several data files; an empty value requires a single candidate.
 BlobLocation locateBlobFromPuffinFooter(
     ReadFile& file,
-    const std::string& referencedDataFile) {
+    const std::string& referencedDataFile,
+    const FileIoContext& ioContext) {
   // FooterPayloadSize + Flags + trailing Magic.
   constexpr uint64_t kTrailerSize = 4 + 4 + kPuffinMagicSize;
   // Leading Magic and the Magic that opens the footer bracket any payload.
@@ -88,7 +89,7 @@ BlobLocation locateBlobFromPuffinFooter(
       fileSize);
 
   std::string trailer(kTrailerSize, '\0');
-  file.pread(fileSize - kTrailerSize, kTrailerSize, trailer.data());
+  file.pread(fileSize - kTrailerSize, kTrailerSize, trailer.data(), ioContext);
   const std::string_view puffinMagic(kPuffinMagic, kPuffinMagicSize);
   VELOX_CHECK_EQ(
       std::string_view(trailer).substr(8),
@@ -115,14 +116,17 @@ BlobLocation locateBlobFromPuffinFooter(
   const uint64_t payloadOffset = fileSize - kTrailerSize - payloadSize;
   std::string footerMagic(kPuffinMagicSize, '\0');
   file.pread(
-      payloadOffset - kPuffinMagicSize, kPuffinMagicSize, footerMagic.data());
+      payloadOffset - kPuffinMagicSize,
+      kPuffinMagicSize,
+      footerMagic.data(),
+      ioContext);
   VELOX_CHECK_EQ(
       std::string_view(footerMagic),
       puffinMagic,
       "Puffin footer payload is not preceded by the expected magic.");
 
   std::string payload(payloadSize, '\0');
-  file.pread(payloadOffset, payloadSize, payload.data());
+  file.pread(payloadOffset, payloadSize, payload.data(), ioContext);
 
   folly::dynamic footer;
   try {
@@ -405,10 +409,12 @@ DeletionVectorReader::DeletionVectorReader(
     const IcebergDeleteFile& dvFile,
     uint64_t splitOffset,
     memory::MemoryPool* /*pool*/,
-    std::shared_ptr<const config::ConfigBase> connectorConfig)
+    std::shared_ptr<const config::ConfigBase> connectorConfig,
+    folly::F14FastMap<std::string, std::string> fileReadOps)
     : dvFile_(dvFile),
       splitOffset_(splitOffset),
-      connectorConfig_(std::move(connectorConfig)) {
+      connectorConfig_(std::move(connectorConfig)),
+      fileReadOps_(std::move(fileReadOps)) {
   VELOX_CHECK(
       dvFile_.content == FileContent::kDeletionVector,
       "Expected deletion vector file but got content type: {}",
@@ -476,18 +482,21 @@ void DeletionVectorReader::loadBitmap() {
       fs,
       "No filesystem registered for deletion vector file: {}",
       dvFile_.filePath);
-  auto readFile = fs->openFileForRead(dvFile_.filePath);
+  filesystems::FileOptions options;
+  options.fileReadOps = fileReadOps_;
+  auto readFile = fs->openFileForRead(dvFile_.filePath, options);
   VELOX_CHECK_NOT_NULL(
       readFile, "Failed to open deletion vector file: {}", dvFile_.filePath);
 
   auto fileSize = readFile->size();
+  const FileIoContext ioContext(/*stats=*/nullptr, fileReadOps_);
 
   // Nothing in the manifest located the blob. A Puffin file describes its own
   // blobs, so parse the footer rather than guessing. Non-Puffin inputs keep
   // the legacy whole-file behaviour, which is how raw roaring blobs are read.
-  if (!haveBlobLocation && startsWithPuffinMagic(*readFile)) {
-    const auto location =
-        locateBlobFromPuffinFooter(*readFile, dvFile_.referencedDataFile);
+  if (!haveBlobLocation && startsWithPuffinMagic(*readFile, ioContext)) {
+    const auto location = locateBlobFromPuffinFooter(
+        *readFile, dvFile_.referencedDataFile, ioContext);
     blobOffset = location.offset;
     blobLength = location.length;
   }
@@ -507,7 +516,7 @@ void DeletionVectorReader::loadBitmap() {
       fileSize);
 
   blob_.assign(blobLength, '\0');
-  readFile->pread(blobOffset, blobLength, blob_.data());
+  readFile->pread(blobOffset, blobLength, blob_.data(), ioContext);
 
   // Unwrap the Iceberg deletion-vector-v1 frame (validates magic + CRC-32),
   // then parse the inner roaring bitmap. Legacy unframed blobs pass through.

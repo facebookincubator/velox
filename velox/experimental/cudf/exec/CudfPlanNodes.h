@@ -484,12 +484,14 @@ class CudfTopNRowNumberNode : public CudfUnaryPlanNode {
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
       RowTypePtr outputType,
+      core::TopNRowNumberNode::RankFunction rankFunction,
       std::vector<core::FieldAccessTypedExprPtr> partitionKeys,
       std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
       std::vector<core::SortOrder> sortingOrders,
       int32_t limit,
       bool generateRowNumber)
       : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
+        rankFunction_(rankFunction),
         partitionKeys_(std::move(partitionKeys)),
         sortingKeys_(std::move(sortingKeys)),
         sortingOrders_(std::move(sortingOrders)),
@@ -507,6 +509,10 @@ class CudfTopNRowNumberNode : public CudfUnaryPlanNode {
 
   std::string_view name() const override {
     return "CudfTopNRowNumber";
+  }
+
+  core::TopNRowNumberNode::RankFunction rankFunction() const {
+    return rankFunction_;
   }
 
   const std::vector<core::FieldAccessTypedExprPtr>& partitionKeys() const {
@@ -531,9 +537,11 @@ class CudfTopNRowNumberNode : public CudfUnaryPlanNode {
 
  private:
   void addDetails(std::stringstream& stream) const override {
-    stream << "limit=" << limit_ << ", rowNumber=" << generateRowNumber_;
+    stream << core::TopNRowNumberNode::rankFunctionName(rankFunction_)
+           << ", limit=" << limit_ << ", rowNumber=" << generateRowNumber_;
   }
 
+  const core::TopNRowNumberNode::RankFunction rankFunction_;
   const std::vector<core::FieldAccessTypedExprPtr> partitionKeys_;
   const std::vector<core::FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<core::SortOrder> sortingOrders_;

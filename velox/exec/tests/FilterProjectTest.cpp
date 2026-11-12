@@ -421,11 +421,10 @@ TEST_F(FilterProjectTest, barrier) {
     auto task =
         test::AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(
-                core::QueryConfig::kMaxSplitPreloadPerDriver,
-                std::to_string(tempFiles.size()))
+                core::QueryConfig::kMaxSplitPreloadPerDriver, tempFiles.size())
             .config(
                 core::QueryConfig::kPreferredOutputBatchRows,
-                std::to_string(testData.numOutputRows))
+                testData.numOutputRows)
             .splits(makeHiveConnectorSplits(tempFiles))
             .serialExecution(testData.serialExecution)
             .maxDrivers(testData.serialExecution ? 1 : 3)

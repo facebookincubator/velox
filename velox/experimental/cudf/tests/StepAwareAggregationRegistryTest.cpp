@@ -29,6 +29,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <unordered_set>
 
 using namespace facebook::velox;
 
@@ -119,6 +120,29 @@ TEST_F(StepAwareAggregationRegistryTest, allFunctionsAreRegisteredInReduce) {
   // array_agg has no reduce implementation.
   EXPECT_TRUE(registry.find("array_agg") == registry.end())
       << "array_agg should NOT be registered in reduce registry";
+}
+
+// FILTER mask support is declared per registry: the aggregates that honor a
+// mask on the groupby path, those that do on the reduce path, and every one
+// of them has an aggregator on that path. An aggregator added later for a
+// function that is mask-capable on the other path starts without a mask.
+TEST_F(StepAwareAggregationRegistryTest, maskSupportIsDeclaredPerRegistry) {
+  const std::unordered_set<std::string> groupbyNames = {
+      "sum", "count", "min", "max", "avg", "stddev_samp", "stddev"};
+  const std::unordered_set<std::string> reduceNames = {
+      "sum", "count", "min", "max", "avg", "approx_distinct"};
+  EXPECT_EQ(
+      maskSupportedAggregations(getGroupbyAggregationRegistry()), groupbyNames);
+  EXPECT_EQ(
+      maskSupportedAggregations(getReduceAggregationRegistry()), reduceNames);
+  for (const auto& name : groupbyNames) {
+    EXPECT_TRUE(getGroupbyAggregationRegistry().count(name))
+        << name << " honors a mask on the groupby path without an aggregator";
+  }
+  for (const auto& name : reduceNames) {
+    EXPECT_TRUE(getReduceAggregationRegistry().count(name))
+        << name << " honors a mask on the reduce path without an aggregator";
+  }
 }
 
 // array_agg binds any element type at the raw-input steps and an array, not

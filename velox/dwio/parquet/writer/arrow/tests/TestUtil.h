@@ -502,7 +502,6 @@ template <>
 inline std::shared_ptr<Buffer> DictionaryPageBuilder<BooleanType>::writeDict() {
   ParquetException::NYI(
       "only plain encoding currently implemented for boolean");
-  return nullptr;
 }
 
 template <>
@@ -510,7 +509,6 @@ inline std::shared_ptr<Buffer> DictionaryPageBuilder<BooleanType>::appendValues(
     const std::vector<TC>& values) {
   ParquetException::NYI(
       "only plain encoding currently implemented for boolean");
-  return nullptr;
 }
 
 template <typename Type>

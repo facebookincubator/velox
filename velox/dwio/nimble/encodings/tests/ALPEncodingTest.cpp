@@ -1225,6 +1225,71 @@ TYPED_TEST(ALPEncodingTest, roundTripSignedDecimals) {
   }
 }
 
+TYPED_TEST(ALPEncodingTest, selectsExponentByEncodedSize) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  // Returns the (exponent, factor) pair 'values' encode with, after checking
+  // that they decode back.
+  const auto encodedExponentFactor = [&](const nimble::Vector<D>& values) {
+    const auto serialized = encodeWithLayout<D>(
+        *this->buffer_, values, alpWithFixedBitWidthPayloadLayout(), options);
+    std::vector<velox::BufferPtr> stringBuffers;
+    auto encoding =
+        createEncoding(this->pool_.get(), serialized, options, stringBuffers);
+    nimble::Vector<D> decoded{this->pool_.get(), values.size()};
+    encoding->materialize(values.size(), decoded.data());
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      EXPECT_TRUE(nimble::NimbleCompare<D>::equals(decoded[i], values[i]));
+    }
+    const char* pos = serialized.data() +
+        nimble::EncodingPrefix::prefixSize(
+                          serialized, options.useVarintRowCount);
+    const auto header = nimble::detail::alp::readHeader(pos);
+    return std::pair<int, int>{header.exponent, header.factor};
+  };
+
+  constexpr uint32_t kNumRows = 4'096;
+  std::mt19937 random{11};
+  std::uniform_int_distribution<int32_t> digits{0, 99'999};
+  {
+    // Two decimals take 18 bits. Exponent 6 also represents the six-decimal
+    // outliers in every 100th row, but needs 31 bits for every value.
+    nimble::Vector<D> values{this->pool_.get(), kNumRows};
+    for (uint32_t i = 0; i < kNumRows; ++i) {
+      values[i] = i % 100 == 0 ? static_cast<D>(0.123456)
+                               : static_cast<D>(digits(random)) / 100;
+    }
+    EXPECT_EQ(encodedExponentFactor(values), (std::pair<int, int>{2, 0}));
+  }
+  {
+    // One decimal in the first 1,024 rows and three after them. Exponent 1
+    // would make three quarters of the values exceptions.
+    nimble::Vector<D> values{this->pool_.get(), kNumRows};
+    for (uint32_t i = 0; i < kNumRows; ++i) {
+      values[i] = static_cast<D>(digits(random)) / (i < 1'024 ? 10 : 1'000);
+    }
+    EXPECT_EQ(encodedExponentFactor(values), (std::pair<int, int>{3, 0}));
+  }
+  {
+    // Two decimals take 18 bits and three take 21, so exponent 2 is smaller
+    // while its exceptions cost under 3 bits per value. The sample takes one
+    // of every 4 rows, and every 18th (float) or 30th (double) group of 4 rows
+    // holds three decimals: 57 or 35 of the 1,024 sampled values. An exception
+    // costs its raw bits and a position, which FixedBitWidth packs in 16 bits
+    // for 4,096 rows: 2.7 bits per value for both types. A 32-bit position
+    // would make that 3.6 and 3.3 bits, and select exponent 3.
+    const uint32_t groupsPerException = sizeof(D) == sizeof(float) ? 18 : 30;
+    nimble::Vector<D> values{this->pool_.get(), kNumRows};
+    for (uint32_t i = 0; i < kNumRows; ++i) {
+      values[i] = i / 4 % groupsPerException == 0
+          ? static_cast<D>(digits(random) * 10 + 5) / 1'000
+          : static_cast<D>(digits(random)) / 100;
+    }
+    EXPECT_EQ(encodedExponentFactor(values), (std::pair<int, int>{2, 0}));
+  }
+}
+
 TYPED_TEST(ALPEncodingTest, manualSelectionUsesAlpEstimate) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{

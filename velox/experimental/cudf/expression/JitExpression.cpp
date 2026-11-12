@@ -86,7 +86,7 @@ void registerJitEvaluator(int priority) {
   registerCudfExpressionEvaluator(
       kJitEvaluatorName,
       priority,
-      [](const core::TypedExprPtr& expr) {
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return JitExpression::canEvaluate(expr);
       },
       [](const core::TypedExprPtr& expr,

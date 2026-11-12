@@ -289,7 +289,7 @@ std::vector<AbstractOperand*> CompileState::tryExprSet(
     const exec::ExprSet& exprSet,
     int32_t begin,
     int32_t end,
-    const std::vector<exec::IdentityProjection>* resultProjections,
+    const std::vector<IdentityProjection>* resultProjections,
     const RowTypePtr& outputType) {
   auto& exprs = exprSet.exprs();
   std::vector<AbstractOperand*> result;
@@ -316,7 +316,7 @@ std::vector<AbstractOperand*> CompileState::tryExprSet(
 }
 
 std::unordered_map<std::string, std::string> makeRenames(
-    const std::vector<exec::IdentityProjection>& identities,
+    const std::vector<IdentityProjection>& identities,
     const RowTypePtr inputType,
     const RowTypePtr& outputType) {
   std::unordered_map<std::string, std::string> map;

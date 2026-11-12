@@ -109,6 +109,17 @@ class RecoveringFanOutBatchRPCFunction : public FanOutBatchRPCFunction {
   }
 };
 
+// Applies the same overloads, but reports no congestion verdict for the batch.
+class RecoveringNoVerdictBatchRPCFunction
+    : public RecoveringFanOutBatchRPCFunction {
+ public:
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    RecoveringFanOutBatchRPCFunction::evaluateCongestion(responses);
+    return CongestionSignal::kNone;
+  }
+};
+
 class MixedEpochRPCFunction : public DemoAsyncRPCFunction {
  public:
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
@@ -161,6 +172,29 @@ class MixedEpochRPCFunction : public DemoAsyncRPCFunction {
 
  private:
   std::optional<folly::Promise<RPCResponse>> slowResponse_;
+};
+
+// Answers every row with a success whose transport reports
+// kNumOverloadedAttempts overloaded attempts before it.
+class OverloadedAttemptsRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static constexpr int32_t kNumOverloadedAttempts{2};
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        futures;
+    rows.applyToSelected([&](vector_size_t row) {
+      auto response = RPCResponse::ok(
+          0, makeTextPayload("demo: " + prompts->valueAt(row).str()));
+      response.numOverloadedAttempts = kNumOverloadedAttempts;
+      futures.emplace_back(row, folly::makeSemiFuture(std::move(response)));
+    });
+    return futures;
+  }
 };
 
 class InvalidAdmissionBatchRPCFunction : public DemoBatchRPCFunction {
@@ -500,6 +534,42 @@ class BackendErrorBatchRPCFunction : public DemoBatchRPCFunction {
   }
 };
 
+// Rate-limits every row of every flush, and paces down to half a unit.
+class RateLimitedBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  double configuredAdaptiveFloor() const override {
+    return 0.5;
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    return DemoBatchRPCFunction::flushBatch(maxRows).deferValue(
+        [](std::vector<RPCResponse> responses) {
+          for (auto& response : responses) {
+            response.setError(
+                velox::rpc::RPCErrorKind::kRateLimited, "simulated overload");
+          }
+          return responses;
+        });
+  }
+};
+
+// Rate-limits the first row of every flush and serves the rest.
+class PartlyRateLimitedBatchRPCFunction : public RateLimitedBatchRPCFunction {
+ public:
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    return DemoBatchRPCFunction::flushBatch(maxRows).deferValue(
+        [](std::vector<RPCResponse> responses) {
+          if (!responses.empty()) {
+            responses.front().setError(
+                velox::rpc::RPCErrorKind::kRateLimited, "simulated overload");
+          }
+          return responses;
+        });
+  }
+};
+
 // Declares a per-request byte budget and reports a fixed number of rows that
 // fit it, so the operator must chunk a large backlog to keep each request
 // under the cap. Records every flush's row count so the test can assert no
@@ -569,8 +639,18 @@ class RPCOperatorTest : public OperatorTestBase {
         []() { return std::make_shared<RecoveringFanOutBatchRPCFunction>(); },
         DemoBatchRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
+        "recovering_no_verdict_batch_rpc",
+        []() {
+          return std::make_shared<RecoveringNoVerdictBatchRPCFunction>();
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
         "mixed_epoch_rpc",
         []() { return std::make_shared<MixedEpochRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "overloaded_attempts_rpc",
+        []() { return std::make_shared<OverloadedAttemptsRPCFunction>(); },
         DemoAsyncRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
         "invalid_admission_batch_rpc",
@@ -583,6 +663,22 @@ class RPCOperatorTest : public OperatorTestBase {
     AsyncRPCFunctionRegistry::registerFunction(
         "backend_error_batch_rpc",
         []() { return std::make_shared<BackendErrorBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "rate_limited_batch_rpc",
+        []() { return std::make_shared<RateLimitedBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "rate_limited_batch_rpc_held",
+        []() {
+          auto function = std::make_shared<RateLimitedBatchRPCFunction>();
+          function->testingHoldFlushes();
+          return function;
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "partly_rate_limited_batch_rpc",
+        []() { return std::make_shared<PartlyRateLimitedBatchRPCFunction>(); },
         DemoBatchRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
         "demo_batch_rpc",
@@ -819,8 +915,7 @@ class RPCOperatorTest : public OperatorTestBase {
   // own policy rather than the backend's shared limiter.
   static bool ranOnPolicyScopedLimiter(
       const std::shared_ptr<exec::Task>& task) {
-    return toPlanStats(task->taskStats())
-               .at("rpc-0")
+    return PlanNodeStats::extract(task->taskStats(), "rpc-0")
                .customStats.count(RPCOperator::kRpcRateLimiterPolicyScoped) > 0;
   }
 
@@ -944,7 +1039,7 @@ TEST_F(RPCOperatorTest, outputBatchSizeFromConfig) {
 
   std::shared_ptr<exec::Task> task;
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kPreferredOutputBatchRows, "10")
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, 10)
                     .copyResults(pool(), task);
   EXPECT_EQ(result->size(), 50);
 
@@ -1074,8 +1169,7 @@ TEST_F(
   const core::QueryConfig defaults{
       std::unordered_map<std::string, std::string>{}};
   EXPECT_EQ(
-      toPlanStats(task->taskStats())
-          .at("rpc-0")
+      PlanNodeStats::extract(task->taskStats(), "rpc-0")
           .customStats.at(RPCOperator::kRpcRateLimiterHardLimit)
           .max,
       defaults.rpcRateLimiterMaxLimit())
@@ -1107,8 +1201,7 @@ TEST_F(RPCOperatorTest, explicitSessionLimitsAreHonoredOnSealedBackend) {
         .config(core::QueryConfig::kRpcRateLimiterMaxLimit, limit)
         .copyResults(pool(), task);
     return Run{
-        .lowestCap = toPlanStats(task->taskStats())
-                         .at("rpc-0")
+        .lowestCap = PlanNodeStats::extract(task->taskStats(), "rpc-0")
                          .customStats.at(RPCOperator::kRpcRateLimiterCap)
                          .min,
         .policyScoped = ranOnPolicyScopedLimiter(task)};
@@ -1135,8 +1228,8 @@ TEST_F(RPCOperatorTest, defaultQueryDoesNotInheritAnotherQuerysPolicy) {
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
   AssertQueryBuilder(plan)
       .maxDrivers(1)
-      .config(core::QueryConfig::kRpcRateLimiterMinLimit, "25")
-      .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "25")
+      .config(core::QueryConfig::kRpcRateLimiterMinLimit, 25)
+      .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 25)
       .copyResults(pool());
 
   std::shared_ptr<exec::Task> task;
@@ -1170,7 +1263,7 @@ TEST_F(RPCOperatorTest, eagerAdmissionReportsPolicyScopedLimiter) {
         std::shared_ptr<exec::Task> task;
         AssertQueryBuilder(plan).maxDrivers(1).configs(session).copyResults(
             pool(), task);
-        return toPlanStats(task->taskStats()).at("rpc-0").customStats;
+        return PlanNodeStats::extract(task->taskStats(), "rpc-0").customStats;
       };
 
   {
@@ -1214,8 +1307,8 @@ TEST_F(RPCOperatorTest, driversShareTheLimiterForTheirPolicy) {
   std::shared_ptr<exec::Task> task;
   AssertQueryBuilder(plan)
       .maxDrivers(4)
-      .config(core::QueryConfig::kRpcRateLimiterMinLimit, "25")
-      .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "25")
+      .config(core::QueryConfig::kRpcRateLimiterMinLimit, 25)
+      .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 25)
       .copyResults(pool(), task);
   EXPECT_TRUE(ranOnPolicyScopedLimiter(task));
 
@@ -1854,6 +1947,102 @@ TEST_F(RPCOperatorTest, batchSuccessFromStaleEpochDoesNotUndoOverload) {
   ASSERT_EQ(stats.peakPending, kRows);
   EXPECT_EQ(stats.capacity, 2)
       << "success admitted before overload must not recover the new epoch";
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  // The fan-out batch reserves one admission unit per row.
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, kRows);
+}
+
+// No row of a rate-limited batch succeeds, so the batch earns no credit and has
+// no stale success to report, although its own overload cut the window.
+TEST_F(RPCOperatorTest, rateLimitedBatchReportsNoStaleSuccess) {
+  constexpr int64_t kCeiling = 8;
+  const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
+  auto& limiter = sealDefaultBackend(policy);
+
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "rate_limited_batch_rpc");
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .configs(sessionFor(policy))
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), 4);
+  ASSERT_LT(limiter.stats().limitMilli, kCeiling * 1'000);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, 0);
+}
+
+// A flush whose own overload cuts the window still reports its credit as stale
+// success: some of its rows succeeded, and the overload arrived after their
+// admission.
+TEST_F(RPCOperatorTest, partlyRateLimitedBatchReportsStaleSuccess) {
+  constexpr int64_t kCeiling = 8;
+  const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
+  auto& limiter = sealDefaultBackend(policy);
+
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "partly_rate_limited_batch_rpc",
+      /*dispatchBatchSize=*/4);
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .configs(sessionFor(policy))
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), 4);
+  ASSERT_LT(limiter.stats().limitMilli, kCeiling * 1'000);
+
+  // One native flush holds one admission unit.
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, 1);
+}
+
+// Credit follows the rows, not the verdict: a batch whose rows succeed reports
+// its discarded units as stale success even without a success verdict.
+TEST_F(RPCOperatorTest, staleBatchWithoutSuccessVerdictReportsStaleSuccess) {
+  constexpr int64_t kCeiling = 8;
+  constexpr int32_t kRows = 8;
+  std::vector<StringView> prompts(kRows, StringView("prompt"));
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
+  auto& limiter = sealDefaultBackend(policy);
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "recovering_no_verdict_batch_rpc",
+      /*dispatchBatchSize=*/kRows);
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .configs(sessionFor(policy))
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), kRows);
+  // Crediting the batch would have grown the window back above 2.
+  ASSERT_EQ(limiter.stats().capacity, 2);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, kRows);
 }
 
 TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
@@ -1869,7 +2058,7 @@ TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
   std::shared_ptr<exec::Task> task;
   auto result = AssertQueryBuilder(plan)
                     .configs(sessionFor(policy))
-                    .config(core::QueryConfig::kRpcCongestionMaxWindow, "2")
+                    .config(core::QueryConfig::kRpcCongestionMaxWindow, 2)
                     .copyResults(pool(), task);
   expectRanOnSharedLimiter(task);
   ASSERT_EQ(result->size(), 3);
@@ -1878,6 +2067,47 @@ TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
       static_cast<int64_t>(std::llround(std::sqrt(4.0 * 4.0 + 2.0) * 1'000));
   EXPECT_EQ(limiter.stats().limitMilli, expectedLimitMilli)
       << "a current-epoch success must recover after the overload marker";
+  // The slow row was admitted before the overload.
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, 1);
+}
+
+// Successes after overloaded attempts are counted, but neither the driver
+// window nor the shared limiter treats them as an overload.
+TEST_F(RPCOperatorTest, overloadedAttemptsAreCounted) {
+  constexpr int64_t kCeiling = 8;
+  const DefaultBackendPolicy policy{
+      .adaptive = true, .ceiling = kCeiling, .floor = 1};
+  auto& limiter = sealDefaultBackend(policy);
+
+  std::vector<StringView> prompts(kCeiling, StringView("retried"));
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "overloaded_attempts_rpc");
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .configs(sessionFor(policy))
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kCeiling);
+  expectRanOnSharedLimiter(task);
+
+  EXPECT_EQ(limiter.stats().limitMilli, kCeiling * 1'000);
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  auto statSum = [&](const std::string& key) -> int64_t {
+    auto it = customStats.find(key);
+    return it == customStats.end() ? -1 : it->second.sum;
+  };
+  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionOverloadShrinks), -1);
+  EXPECT_EQ(statSum(RPCOperator::kRpcSuccessesAfterOverload), kCeiling);
+  EXPECT_EQ(
+      statSum(RPCOperator::kRpcOverloadedAttempts),
+      OverloadedAttemptsRPCFunction::kNumOverloadedAttempts * kCeiling);
 }
 
 TEST_F(RPCOperatorTest, batchAdmissionRequiresOneUnitForOneRow) {
@@ -1997,7 +2227,7 @@ TEST_F(
       AssertQueryBuilder(plan)
           .configs(sessionFor(policy))
           .maxDrivers(1)
-          .config(core::QueryConfig::kRpcCongestionAsyncGrowthMaxWindow, "64")
+          .config(core::QueryConfig::kRpcCongestionAsyncGrowthMaxWindow, 64)
           .copyResults(pool(), task);
   expectRanOnSharedLimiter(task);
   ASSERT_EQ(result->size(), kRows);
@@ -2119,16 +2349,169 @@ TEST_F(RPCOperatorTest, lowWaterCapacityIsReportedWhenTheBackendStaysHealthy) {
   EXPECT_EQ(customStats.at(RPCOperator::kRpcRateLimiterMinCap).sum, kCeiling);
 }
 
+// The shared limiter outlives the query and paces before the driver's first
+// admission request. The span stats cover none of that pacing, and the limiter
+// holds its ceiling over the whole span; nothing overloaded, so no success
+// went stale.
+TEST_F(RPCOperatorTest, limiterStatsCoverOnlyTheOperatorsSpan) {
+  constexpr int64_t kCeiling = 2;
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})});
+
+  // The policy the query resolves with demo_batch_rpc's floor of 0.25.
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  ASSERT_TRUE(limiter.initializeOrMatch({
+      .adaptive = true,
+      .ceiling = kCeiling,
+      .floor = 0.25,
+      .decreaseFactor = 0.5,
+  }));
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter.stats().limitMilli, 500);
+  // Pace until the limiter has measured some pacing time, which the span must
+  // exclude.
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (limiter.stats().pacingNanos == 0) {
+    ASSERT_LT(std::chrono::steady_clock::now(), deadline);
+  }
+  // Successes with a 1ms service horizon grow the window back to one unit
+  // within a horizon, and then to the ceiling.
+  constexpr int64_t kHorizonNanos{1'000'000};
+  while (limiter.stats().limitMilli < kCeiling * 1'000) {
+    ASSERT_LT(std::chrono::steady_clock::now(), deadline);
+    limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1'000, kHorizonNanos);
+  }
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_batch_rpc");
+  std::shared_ptr<exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
+          .config(core::QueryConfig::kRpcRateLimiterMaxLimit, kCeiling)
+          .maxDrivers(1)
+          .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), 4);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcRateLimiterAttachedNanos), 1);
+  const auto& attached =
+      customStats.at(RPCOperator::kRpcRateLimiterAttachedNanos);
+  EXPECT_EQ(attached.unit, RuntimeCounter::Unit::kNanos);
+  // One driver published it once, whatever the live samples did.
+  EXPECT_EQ(attached.count, 1);
+  EXPECT_GT(attached.sum, 0);
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcRateLimiterPacingNanos), 1);
+  const auto& pacing = customStats.at(RPCOperator::kRpcRateLimiterPacingNanos);
+  EXPECT_EQ(pacing.unit, RuntimeCounter::Unit::kNanos);
+  EXPECT_EQ(pacing.sum, 0);
+  // A constant window integrates to the window times the span.
+  ASSERT_EQ(
+      customStats.count(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds), 1);
+  EXPECT_EQ(
+      customStats.at(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds).sum,
+      std::llround(
+          kCeiling * 1'000 * (static_cast<double>(attached.sum) / 1e9)));
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, 0);
+}
+
+// constant_setup_rpc binds the limiter in initialize(), before any input. The
+// span stats start at a driver's first admission request instead, so a driver
+// that gets no input reports none of them.
+TEST_F(RPCOperatorTest, limiterSpanStartsAtTheFirstAdmissionRequest) {
+  const auto runQuery = [&](const std::vector<StringView>& prompts) {
+    auto plan = makeRPCNode(
+        PlanBuilder()
+            .values({makeRowVector(
+                {"prompt"}, {makeFlatVector<StringView>(prompts)})})
+            .planNode(),
+        {"prompt"},
+        "constant_setup_rpc");
+    std::shared_ptr<exec::Task> task;
+    auto result =
+        AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+    EXPECT_EQ(result->size(), prompts.size());
+    return PlanNodeStats::extract(task->taskStats(), plan->id()).customStats;
+  };
+
+  {
+    const auto customStats = runQuery({});
+    ASSERT_EQ(customStats.count(RPCOperator::kRpcRateLimiterCap), 1);
+    EXPECT_EQ(customStats.count(RPCOperator::kRpcRateLimiterAttachedNanos), 0);
+    EXPECT_EQ(customStats.count(RPCOperator::kRpcRateLimiterPacingNanos), 0);
+    EXPECT_EQ(
+        customStats.count(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds),
+        0);
+  }
+  {
+    const auto customStats = runQuery({"a", "b"});
+    ASSERT_EQ(customStats.count(RPCOperator::kRpcRateLimiterAttachedNanos), 1);
+    EXPECT_GT(customStats.at(RPCOperator::kRpcRateLimiterAttachedNanos).sum, 0);
+    EXPECT_EQ(customStats.count(RPCOperator::kRpcRateLimiterPacingNanos), 1);
+    EXPECT_EQ(
+        customStats.count(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds),
+        1);
+  }
+}
+
+// Each flush is held for 50ms and rate limited. The first overload halves the
+// window from one unit to the 0.5 floor, where the second flush waits for its
+// paced admission. Over the span, the window integral lies strictly between
+// those of the two windows, and part of the span was spent pacing.
+TEST_F(RPCOperatorTest, limiterSpanStatsFollowAMidQueryWindowChange) {
+  // The policy the query resolves with rate_limited_batch_rpc_held's floor.
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  ASSERT_TRUE(limiter.initializeOrMatch(
+      {.adaptive = true, .ceiling = 1, .floor = 0.5, .decreaseFactor = 0.5}));
+
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "rate_limited_batch_rpc_held",
+      /*dispatchBatchSize=*/1);
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 1)
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), 2);
+  ASSERT_EQ(limiter.stats().limitMilli, 500);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  const auto attachedNanos =
+      customStats.at(RPCOperator::kRpcRateLimiterAttachedNanos).sum;
+  const auto pacingNanos =
+      customStats.at(RPCOperator::kRpcRateLimiterPacingNanos).sum;
+  const auto limitMilliSeconds =
+      customStats.at(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds).sum;
+  // Each window held over the whole span bounds the integral, which is rounded
+  // to the nearest milli-unit-second.
+  const double attachedSeconds = static_cast<double>(attachedNanos) / 1e9;
+  EXPECT_GT(limitMilliSeconds, 500 * attachedSeconds + 0.5);
+  EXPECT_LT(limitMilliSeconds, 1'000 * attachedSeconds - 0.5);
+  EXPECT_GT(pacingNanos, 0);
+  EXPECT_LT(pacingNanos, attachedNanos);
+}
+
 TEST_F(RPCOperatorTest, sessionZeroDelegatesToPerLimiterFloor) {
   auto input =
       makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
   auto demoPlan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
-  auto demoResult =
-      AssertQueryBuilder(demoPlan)
-          .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
-          .config(core::QueryConfig::kRpcRateLimiterHardLimit, "2")
-          .copyResults(pool());
+  auto demoResult = AssertQueryBuilder(demoPlan)
+                        .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
+                        .config(core::QueryConfig::kRpcRateLimiterHardLimit, 2)
+                        .copyResults(pool());
   ASSERT_EQ(demoResult->size(), 1);
 
   const auto& demoLimiter = RPCRateLimiterRegistry::global().get("");
@@ -2139,8 +2522,8 @@ TEST_F(RPCOperatorTest, sessionZeroDelegatesToPerLimiterFloor) {
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto cappedResult =
       AssertQueryBuilder(cappedPlan)
-          .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
-          .config(core::QueryConfig::kRpcRateLimiterHardLimit, "2")
+          .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
+          .config(core::QueryConfig::kRpcRateLimiterHardLimit, 2)
           .copyResults(pool());
   ASSERT_EQ(cappedResult->size(), 1);
 
@@ -2156,8 +2539,8 @@ TEST_F(RPCOperatorTest, functionFloorOverridesSessionFloor) {
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, "4")
-                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, "8")
+                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, 4)
+                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, 8)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2189,9 +2572,9 @@ TEST_F(RPCOperatorTest, zeroHardLimitSelectsFunctionBounds) {
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, "0")
-                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, "4")
-                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "128")
+                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, 0)
+                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, 4)
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 128)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2208,8 +2591,8 @@ TEST_F(RPCOperatorTest, sessionBoundsApplyWhenFunctionDeclaresNone) {
       {"prompt"},
       "undeclared_bounds_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, "4")
-                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "128")
+                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, 4)
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 128)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2244,7 +2627,7 @@ TEST_F(RPCOperatorTest, optedInQueryGetsItsOwnLimiterOnASharedKey) {
   AssertQueryBuilder(plan).copyResults(pool());
   // A query that opts in resolves to the function's floor and ceiling.
   AssertQueryBuilder(plan)
-      .config(core::QueryConfig::kRpcRateLimiterHardLimit, "0")
+      .config(core::QueryConfig::kRpcRateLimiterHardLimit, 0)
       .copyResults(pool());
 
   auto& registry = RPCRateLimiterRegistry::global();
@@ -2267,7 +2650,7 @@ TEST_F(RPCOperatorTest, laterFunctionLeavesSharedLimiterPolicyUnchanged) {
         PlanBuilder().values({input}).planNode(), {"prompt"}, functionName);
     std::shared_ptr<exec::Task> task;
     auto result = AssertQueryBuilder(plan)
-                      .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+                      .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
                       .copyResults(pool(), task);
     EXPECT_EQ(result->size(), 1);
     return ranOnPolicyScopedLimiter(task);
@@ -2300,7 +2683,7 @@ TEST_F(RPCOperatorTest, explicitUnboundedAdaptiveLimitUsesSafetyCeiling) {
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, "0")
+                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, 0)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2346,7 +2729,7 @@ TEST_F(RPCOperatorTest, backendErrorsStopPacedRecovery) {
       "backend_error_rpc");
   auto runQuery = [&]() {
     return AssertQueryBuilder(plan)
-        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
         .copyResults(pool());
   };
   // The first query seals the limiter with the function's fractional floor.
@@ -2379,7 +2762,7 @@ TEST_F(RPCOperatorTest, backendErrorBatchesDoNotStartPacedRecovery) {
       "backend_error_batch_rpc");
   auto runQuery = [&]() {
     return AssertQueryBuilder(plan)
-        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
         .copyResults(pool());
   };
   // The first query seals the limiter with the function's fractional floor.
@@ -2418,7 +2801,7 @@ TEST_F(RPCOperatorTest, batchWithASuccessfulRowStartsPacedRecovery) {
       /*dispatchBatchSize=*/2);
   auto runQuery = [&]() {
     return AssertQueryBuilder(plan)
-        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
         .copyResults(pool());
   };
   runQuery();
@@ -2457,7 +2840,7 @@ TEST_F(RPCOperatorTest, maxProbeIntervalReachesLimiter) {
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result =
       AssertQueryBuilder(plan)
-          .config(core::QueryConfig::kRpcRateLimiterMaxProbeIntervalMs, "10000")
+          .config(core::QueryConfig::kRpcRateLimiterMaxProbeIntervalMs, 10'000)
           .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2471,7 +2854,7 @@ TEST_F(RPCOperatorTest, legacySessionLimitPreservesOverrideSemantics) {
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "128")
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 128)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2513,8 +2896,8 @@ TEST_F(RPCOperatorTest, functionAndSessionHardLimitsUseSmallerValue) {
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "32")
-                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, "32")
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 32)
+                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, 32)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 

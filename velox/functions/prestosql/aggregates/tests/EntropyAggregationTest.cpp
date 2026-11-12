@@ -38,7 +38,11 @@ class EntropyAggregationTest : public AggregationTestBase {
     auto partialAgg = fmt::format("entropy({0})", veloxAggKey);
     std::string sql = fmt::format(
         "SELECT c0, entropy({0}) FROM tmp GROUP BY 1", duckDBAggKey);
-    testAggregations(data, {"c0"}, {partialAgg}, sql);
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates({partialAgg})
+        .assertResults(sql);
   }
 
   void testGlobalAgg(
@@ -48,7 +52,10 @@ class EntropyAggregationTest : public AggregationTestBase {
     auto partialAgg = fmt::format("entropy({0})", veloxAggKey);
     std::string sql = fmt::format("SELECT entropy({0}) FROM tmp", duckDBAggKey);
 
-    testAggregations(data, {}, {partialAgg}, sql);
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({partialAgg})
+        .assertResults(sql);
   }
 
   // The input of Velox entropy agg function is value count,
@@ -168,20 +175,33 @@ TEST_F(EntropyAggregationTest, mayHaveNulls) {
            {1, 1, std::nullopt, 1, std::nullopt, 2, std::nullopt, 5, 6})});
   auto expectedResult = makeRowVector(
       {makeFlatVector<double>({1.0, 0.9182958340544898, 0.9940302114769566})});
-  testAggregations({data}, {"c0"}, {"entropy(c1)"}, {"a0"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"entropy(c1)"})
+      .project({"a0"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(EntropyAggregationTest, allNulls) {
   auto data = makeRowVector({makeAllNullFlatVector<int64_t>(10)});
   auto expectedResult = makeRowVector({makeConstant(0.0, 1)});
-  testAggregations({data}, {}, {"entropy(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"entropy(c0)"})
+      .assertResults(expectedResult);
 
   data = makeRowVector(
       {makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
        makeNullableFlatVector<int32_t>(
            {1, 1, std::nullopt, std::nullopt, std::nullopt, std::nullopt})});
   expectedResult = makeRowVector({makeFlatVector<double>({1.0, 0.0})});
-  testAggregations({data}, {"c0"}, {"entropy(c1)"}, {"a0"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"entropy(c1)"})
+      .project({"a0"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(EntropyAggregationTest, largeConstant) {
@@ -190,14 +210,22 @@ TEST_F(EntropyAggregationTest, largeConstant) {
 
   auto expectedResult = makeRowVector(
       {makeFlatVector<double>(std::vector<double>{3.3219280948873693})});
-  testAggregations({data}, {}, {"entropy(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"entropy(c0)"})
+      .assertResults(expectedResult);
 
   data = makeRowVector(
       {makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
        makeConstant(std::numeric_limits<int64_t>::max(), 10)});
   expectedResult = makeRowVector(
       {makeFlatVector<double>({1.5849625007211632, 1.5849625007211632})});
-  testAggregations({data}, {"c0"}, {"entropy(c1)"}, {"a0"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"entropy(c1)"})
+      .project({"a0"})
+      .assertResults(expectedResult);
 }
 
 } // namespace

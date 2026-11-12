@@ -35,14 +35,22 @@ StepAwareAggregationRegistry& getGroupbyAggregationRegistry() {
   return registry;
 }
 
-std::unordered_set<std::string>& maskSupportedAggregations() {
-  static std::unordered_set<std::string> names;
-  return names;
-}
-
 StepAwareAggregationRegistry& getReduceAggregationRegistry() {
   static StepAwareAggregationRegistry registry;
   return registry;
+}
+
+std::unordered_set<std::string>& maskSupportedAggregations(
+    const StepAwareAggregationRegistry& registry) {
+  static std::unordered_set<std::string> groupbyNames;
+  static std::unordered_set<std::string> reduceNames;
+  if (&registry == &getGroupbyAggregationRegistry()) {
+    return groupbyNames;
+  }
+  VELOX_CHECK(
+      &registry == &getReduceAggregationRegistry(),
+      "FILTER mask support is declared for the groupby and reduce registries");
+  return reduceNames;
 }
 
 bool registerAggregationFunctionForStep(
@@ -337,13 +345,19 @@ void registerCommonAggregationFunctions(
       core::AggregationNode::Step::kIntermediate,
       minMaxSignatures);
 
-  // sum/count/min/max honor a FILTER mask (masked rows are null-injected, or
-  // excluded via the validity column for count). Declared here, alongside their
-  // registration, so mask eligibility stays with the function rather than being
-  // duplicated as a name list in the groupby/reduce validators. avg and the
-  // engine-specific aggregates below intentionally do not opt in.
-  maskSupportedAggregations().insert(
-      {prefix + "sum", prefix + "count", prefix + "min", prefix + "max"});
+  // These aggregations honor a FILTER mask: masked rows are null-injected, or
+  // excluded via the validity column for count(*), and cuDF's null-excluding
+  // aggregations skip them. Declared here, alongside their registration and
+  // for the registry being populated, so mask eligibility stays with the
+  // function on its path rather than being duplicated as a name list in the
+  // groupby/reduce validators.
+  maskSupportedAggregations(registry).insert({
+      prefix + "sum",
+      prefix + "count",
+      prefix + "min",
+      prefix + "max",
+      prefix + "avg",
+  });
 
   auto avgSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
@@ -555,6 +569,11 @@ void registerGroupbyOnlyAggregationFunctions(
       prefix + "stddev",
       core::AggregationNode::Step::kFinal,
       stddevSampFinalSignatures);
+
+  // stddev honors a FILTER mask: its masked rows are null-injected, and cuDF's
+  // null-excluding std, count, mean and M2 skip them.
+  maskSupportedAggregations(registry).insert(
+      {prefix + "stddev_samp", prefix + "stddev"});
 }
 
 void registerReduceOnlyAggregationFunctions(
@@ -678,6 +697,10 @@ void registerReduceOnlyAggregationFunctions(
       prefix + "approx_distinct",
       core::AggregationNode::Step::kFinal,
       approxDistinctFinalSignatures);
+
+  // approx_distinct honors a FILTER mask: its masked rows are null-injected,
+  // and the sketch excludes nulls.
+  maskSupportedAggregations(registry).insert({prefix + "approx_distinct"});
 }
 
 void appendGroupbyAggregationFunctionForStep(
@@ -697,9 +720,10 @@ void appendReduceAggregationFunctionForStep(
 }
 
 void unregisterAggregateFunctions() {
+  maskSupportedAggregations(getGroupbyAggregationRegistry()).clear();
+  maskSupportedAggregations(getReduceAggregationRegistry()).clear();
   getGroupbyAggregationRegistry().clear();
   getReduceAggregationRegistry().clear();
-  maskSupportedAggregations().clear();
 }
 
 } // namespace facebook::velox::cudf_velox

@@ -178,21 +178,23 @@ class AggregationTest : public OperatorTestBase {
   }
 
   // Appends the aggregation of 'groupingKeys' and 'aggregates' in 'steps' to
-  // 'builder' and returns the plan.
+  // 'builder' and returns the plan. 'masks' are the aggregates' FILTER masks.
   core::PlanNodePtr makeAggregationPlan(
       PlanBuilder builder,
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
-      AggSteps steps) {
+      AggSteps steps,
+      const std::vector<std::string>& masks = {}) {
     switch (steps) {
       case AggSteps::kSingle:
-        builder.singleAggregation(groupingKeys, aggregates);
+        builder.singleAggregation(groupingKeys, aggregates, masks);
         break;
       case AggSteps::kPartialFinal:
-        builder.partialAggregation(groupingKeys, aggregates).finalAggregation();
+        builder.partialAggregation(groupingKeys, aggregates, masks)
+            .finalAggregation();
         break;
       case AggSteps::kPartialIntermediateFinal:
-        builder.partialAggregation(groupingKeys, aggregates)
+        builder.partialAggregation(groupingKeys, aggregates, masks)
             .intermediateAggregation()
             .finalAggregation();
         break;
@@ -206,10 +208,11 @@ class AggregationTest : public OperatorTestBase {
       const std::vector<std::string>& aggregates,
       const std::string& expectedSql,
       AggSteps steps,
-      const std::unordered_map<std::string, std::string>& configs = {}) {
+      const std::unordered_map<std::string, std::string>& configs = {},
+      const std::vector<std::string>& masks = {}) {
     AssertQueryBuilder(
         makeAggregationPlan(
-            PlanBuilder().values(data), groupingKeys, aggregates, steps),
+            PlanBuilder().values(data), groupingKeys, aggregates, steps, masks),
         duckDbQueryRunner_)
         .configs(configs)
         .assertResults(expectedSql);
@@ -668,6 +671,27 @@ TEST_F(AggregationTest, avgPartialFinalGrouped) {
           "FROM tmp GROUP BY " + keyName);
 }
 
+TEST_F(AggregationTest, avgPartialIntermediateFinalGrouped) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {
+      "avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"};
+
+  std::string keyName = "c0";
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({keyName}, aggregates)
+                .intermediateAggregation()
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(
+      op,
+      "SELECT " + keyName + ", avg(c1), avg(c2), avg(c4), avg(c5) " +
+          "FROM tmp GROUP BY " + keyName);
+}
+
 TEST_F(AggregationTest, avgSingleGlobal) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
@@ -692,6 +716,23 @@ TEST_F(AggregationTest, avgPartialFinalGlobal) {
   auto op = PlanBuilder()
                 .values(vectors)
                 .partialAggregation({}, aggregates)
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
+}
+
+TEST_F(AggregationTest, avgPartialIntermediateFinalGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {
+      "avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"};
+
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({}, aggregates)
+                .intermediateAggregation()
                 .finalAggregation()
                 .planNode();
 
@@ -1048,8 +1089,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
                           .planNode())
                   .assertResults("SELECT distinct c0 FROM tmp");
 
-  auto rowFlushStats = toPlanStats(task->taskStats())
-                           .at(aggNodeId)
+  auto rowFlushStats = PlanNodeStats::extract(task->taskStats(), aggNodeId)
                            .customStats.at("flushRowCount");
   EXPECT_GT(rowFlushStats.sum, 0);
   EXPECT_GT(rowFlushStats.max, 0);
@@ -1066,8 +1106,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
                      .planNode())
              .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
 
-  rowFlushStats = toPlanStats(task->taskStats())
-                      .at(aggNodeId)
+  rowFlushStats = PlanNodeStats::extract(task->taskStats(), aggNodeId)
                       .customStats.at("flushRowCount");
   EXPECT_GT(rowFlushStats.sum, 0);
   EXPECT_GT(rowFlushStats.max, 0);
@@ -1085,8 +1124,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
              .assertResults("SELECT sum(c0) FROM tmp");
   EXPECT_EQ(
       0,
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
+      PlanNodeStats::extract(task->taskStats(), aggNodeId)
           .customStats.count("flushRowCount"));
 }
 
@@ -1876,30 +1914,35 @@ TEST_F(AggregationTest, singleAggregationStreamingIgnoreNullKeysAcrossBatches) {
       "SELECT c0, sum(c1), count(*) FROM tmp WHERE c0 IS NOT NULL GROUP BY c0");
 }
 
+// A single step returns the estimate itself rather than a partial sketch.
 TEST_F(AggregationTest, globalApproxDistinct) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3, 4, 5, 1, 2, 3, 4, 5}),
       makeFlatVector<int32_t>({10, 20, 30, 40, 50, 10, 20, 30, 40, 50}),
   });
+  const std::vector<std::string> aggregates{
+      "approx_distinct(c0)",
+      "approx_distinct(c1)",
+  };
 
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .partialAggregation(
-                      {}, {"approx_distinct(c0)", "approx_distinct(c1)"})
-                  .finalAggregation()
-                  .planNode();
+  for (const bool twoSteps : {false, true}) {
+    SCOPED_TRACE(twoSteps);
+    auto builder = PlanBuilder().values({data});
+    if (twoSteps) {
+      builder.partialAggregation({}, aggregates).finalAggregation();
+    } else {
+      builder.singleAggregation({}, aggregates);
+    }
+    auto result = AssertQueryBuilder(builder.planNode()).copyResults(pool());
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto c0_estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
-  auto c1_estimate = result->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0);
-
-  EXPECT_GE(c0_estimate, 4);
-  EXPECT_LE(c0_estimate, 6);
-
-  EXPECT_GE(c1_estimate, 4);
-  EXPECT_LE(c1_estimate, 6);
+    ASSERT_EQ(result->size(), 1);
+    for (auto column = 0; column < 2; ++column) {
+      auto estimate =
+          result->childAt(column)->as<FlatVector<int64_t>>()->valueAt(0);
+      EXPECT_GE(estimate, 4);
+      EXPECT_LE(estimate, 6);
+    }
+  }
 }
 
 TEST_F(AggregationTest, globalApproxDistinctWithNulls) {
@@ -2837,6 +2880,167 @@ TEST_F(AggregationTest, maskedMinMaxGlobalAllExcluded) {
           "SELECT min(v) FILTER (WHERE m), max(v) FILTER (WHERE m) FROM tmp");
 }
 
+// Masked avg and stddev skip the masked rows, and a null mask entry counts as
+// false. A group left with no row yields NULL, as an all-null group does, and
+// stddev needs two rows for a value.
+TEST_F(AggregationTest, maskedAvgAndStddevGrouped) {
+  auto data = makeRowVector(
+      {"k", "v", "m"},
+      {
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2, 3, 3}),
+          makeFlatVector<double>({10, 20, 30, 40, 50, 60, 70}),
+          makeNullableFlatVector<bool>(
+              {true, true, false, true, std::nullopt, false, false}),
+      });
+  createDuckDbTable({data});
+
+  for (const auto steps : {
+           AggSteps::kSingle,
+           AggSteps::kPartialFinal,
+           AggSteps::kPartialIntermediateFinal,
+       }) {
+    SCOPED_TRACE(static_cast<int>(steps));
+    testAggregation(
+        {data},
+        {"k"},
+        {"avg(v)", "stddev_samp(v)", "avg(v)"},
+        "SELECT k, avg(v) FILTER (WHERE m), stddev_samp(v) FILTER (WHERE m), "
+        "avg(v) FROM tmp GROUP BY k",
+        steps,
+        /*configs=*/{},
+        {"m", "m", ""});
+  }
+}
+
+// Masked avg runs on the reduce path, with and without a surviving row.
+TEST_F(AggregationTest, maskedAvgGlobal) {
+  auto data = makeRowVector(
+      {"v", "m", "noRow"},
+      {
+          makeFlatVector<double>({10, 20, 30}),
+          makeNullableFlatVector<bool>({true, false, std::nullopt}),
+          makeFlatVector<bool>({false, false, false}),
+      });
+  createDuckDbTable({data});
+
+  // The reduce path has no intermediate step for avg.
+  for (const auto steps : {AggSteps::kSingle, AggSteps::kPartialFinal}) {
+    SCOPED_TRACE(static_cast<int>(steps));
+    testAggregation(
+        {data},
+        {},
+        {"avg(v)", "avg(v)", "avg(v)"},
+        "SELECT avg(v) FILTER (WHERE m), avg(v) FILTER (WHERE noRow), avg(v) "
+        "FROM tmp",
+        steps,
+        /*configs=*/{},
+        {"m", "noRow", ""});
+  }
+}
+
+// A partial avg emits a NULL state for a group whose rows are all masked out,
+// as the CPU partial does, so a CPU final adds nothing for it instead of
+// dividing zero by zero. Group 2 and the 'noRow' mask keep no row.
+TEST_F(AggregationTest, maskedAvgPartialNullsEmptyGroup) {
+  auto data = makeRowVector(
+      {"k", "v", "m", "noRow"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2}),
+          makeFlatVector<double>({10, 20, 30}),
+          makeFlatVector<bool>({true, false, false}),
+          makeFlatVector<bool>({false, false, false}),
+      });
+
+  createDuckDbTable({data});
+
+  // The intermediate step rebuilds the state from a flushed partial.
+  for (const bool withIntermediate : {false, true}) {
+    SCOPED_TRACE(withIntermediate);
+    auto builder = PlanBuilder().values({data}).partialAggregation(
+        {"k"}, {"avg(v)"}, {"m"});
+    if (withIntermediate) {
+      builder.intermediateAggregation();
+    }
+    auto grouped = AssertQueryBuilder(builder.planNode()).copyResults(pool());
+    ASSERT_EQ(grouped->size(), 2);
+    auto keys = grouped->childAt(0)->as<FlatVector<int64_t>>();
+    for (auto row = 0; row < grouped->size(); ++row) {
+      EXPECT_EQ(grouped->childAt(1)->isNullAt(row), keys->valueAt(row) == 2);
+    }
+
+    // A CPU final over that state matches the CPU result.
+    cudf_velox::unregisterCudf();
+    AssertQueryBuilder(
+        PlanBuilder()
+            .values({grouped})
+            .finalAggregation({"k"}, {"avg(a0)"}, {{DOUBLE()}})
+            .planNode(),
+        duckDbQueryRunner_)
+        .assertResults("SELECT k, avg(v) FILTER (WHERE m) FROM tmp GROUP BY k");
+    cudf_velox::registerCudf();
+  }
+
+  auto global =
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .partialAggregation({}, {"avg(v)", "avg(v)"}, {"m", "noRow"})
+              .planNode())
+          .copyResults(pool());
+  ASSERT_EQ(global->size(), 1);
+  EXPECT_FALSE(global->childAt(0)->isNullAt(0));
+  EXPECT_TRUE(global->childAt(1)->isNullAt(0));
+
+  cudf_velox::unregisterCudf();
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({global})
+          .finalAggregation(
+              {}, {"avg(a0)", "avg(a1)"}, {{DOUBLE()}, {DOUBLE()}})
+          .planNode(),
+      duckDbQueryRunner_)
+      .assertResults(
+          "SELECT avg(v) FILTER (WHERE m), avg(v) FILTER (WHERE noRow) "
+          "FROM tmp");
+  cudf_velox::registerCudf();
+}
+
+// Masked approx_distinct sketches only the mask-true rows, two distinct values
+// here where the input holds six; a mask that keeps no row leaves the count at
+// zero.
+TEST_F(AggregationTest, maskedApproxDistinctGlobal) {
+  auto data = makeRowVector(
+      {"v", "m", "noRow"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 1, 2}),
+          makeFlatVector<bool>(
+              {true, true, false, false, false, false, true, true}),
+          makeFlatVector<bool>(std::vector<bool>(8, false)),
+      });
+  const std::vector<std::string> aggregates{
+      "approx_distinct(v)",
+      "approx_distinct(v)",
+  };
+  const std::vector<std::string> masks{"m", "noRow"};
+
+  for (const bool twoSteps : {false, true}) {
+    SCOPED_TRACE(twoSteps);
+    auto builder = PlanBuilder().values({data});
+    if (twoSteps) {
+      builder.partialAggregation({}, aggregates, masks).finalAggregation();
+    } else {
+      builder.singleAggregation({}, aggregates, masks);
+    }
+    auto result = AssertQueryBuilder(builder.planNode()).copyResults(pool());
+
+    ASSERT_EQ(result->size(), 1);
+    auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+    EXPECT_GE(estimate, 1);
+    EXPECT_LE(estimate, 3);
+    EXPECT_EQ(result->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0), 0);
+  }
+}
+
 // Test avg with all NULL input (should return NULL, not NaN)
 TEST_F(AggregationTest, avgAllNulls) {
   // Group 0: all NULLs -> avg should return NULL
@@ -2887,6 +3091,107 @@ TEST_F(AggregationTest, avgAllNullsPartialFinal) {
                  .planNode();
 
   assertQuery(op2, "SELECT c0, avg(c2) FROM tmp GROUP BY c0");
+}
+
+// Test avg with all NULL input using partial + intermediate + final
+// aggregation
+TEST_F(AggregationTest, avgAllNullsPartialIntermediateFinal) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 1, 1}),
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt, 4, 6}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt, 4.0, 6.0}),
+  });
+  createDuckDbTable({data});
+
+  auto op = PlanBuilder()
+                .values({data})
+                .partialAggregation({"c0"}, {"avg(c1)"})
+                .intermediateAggregation()
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+
+  auto op2 = PlanBuilder()
+                 .values({data})
+                 .partialAggregation({"c0"}, {"avg(c2)"})
+                 .intermediateAggregation()
+                 .finalAggregation()
+                 .planNode();
+
+  assertQuery(op2, "SELECT c0, avg(c2) FROM tmp GROUP BY c0");
+}
+
+// Test global avg with all NULL input (should return NULL, not NaN)
+TEST_F(AggregationTest, avgAllNullsGlobal) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {},
+      {"avg(c0)", "avg(c1)"},
+      "SELECT avg(c0), avg(c1) FROM tmp",
+      AggSteps::kSingle);
+}
+
+// Test global avg with all NULL input using partial + final aggregation
+TEST_F(AggregationTest, avgAllNullsGlobalPartialFinal) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {},
+      {"avg(c0)", "avg(c1)"},
+      "SELECT avg(c0), avg(c1) FROM tmp",
+      AggSteps::kPartialFinal);
+}
+
+// Test global avg with all NULL input using partial + intermediate + final
+// aggregation
+TEST_F(AggregationTest, avgAllNullsGlobalPartialIntermediateFinal) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {},
+      {"avg(c0)", "avg(c1)"},
+      "SELECT avg(c0), avg(c1) FROM tmp",
+      AggSteps::kPartialIntermediateFinal);
+}
+
+// GPU is required to match CPU results. When every input row is NULL, the CPU
+// intermediate step returns a NULL state.
+TEST_F(AggregationTest, avgAllNullsGlobalIntermediateState) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"avg(c0)", "avg(c1)"})
+                  .intermediateAggregation()
+                  .planNode();
+
+  auto nullState = makeRowVector(
+      {
+          makeNullableFlatVector<double>({std::nullopt}),
+          makeNullableFlatVector<int64_t>({std::nullopt}),
+      },
+      [](vector_size_t /*row*/) { return true; });
+  auto expected = makeRowVector({"a0", "a1"}, {nullState, nullState});
+
+  facebook::velox::test::assertEqualVectors(
+      expected, AssertQueryBuilder(plan).copyResults(pool()));
 }
 
 // Test avg with NaN inputs preserves NaN (does not convert to NULL)

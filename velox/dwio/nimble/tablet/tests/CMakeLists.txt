@@ -17,6 +17,7 @@ add_executable(
   CompressionTest.cpp
   FilePropertiesTest.cpp
   FileLayoutTest.cpp
+  IoAlignmentTest.cpp
   MetadataBufferTest.cpp
   SharedDictionaryReaderTest.cpp
   TabletTest.cpp

@@ -24,6 +24,7 @@
 #include <random>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -84,39 +85,47 @@ class EncodingViewTest : public ::testing::TestWithParam<bool> {
       nimble::Encoding::Options baseOptions = {},
       nimble::CompressionType compressionType =
           nimble::CompressionType::Uncompressed) {
-    using T = typename Encoding::cppDataType;
     for (const auto useVarint : {false, true}) {
-      {
-        SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
-        auto options = baseOptions;
-        options.useVarintRowCount = useVarint;
-        options.cacheEncodingView = cacheEncodingView();
-        auto serialized = nimble::test::Encoder<Encoding>::encode(
-            *buffer_, values, compressionType, options);
-        auto view =
-            nimble::createEncodingView(serialized, pool_.get(), options);
-        ASSERT_NE(view, nullptr);
-        for (const auto position : positions) {
-          SCOPED_TRACE(fmt::format("position={}", position));
-          T value;
-          view->readAt(position, &value);
-          EXPECT_EQ(value, values[position]);
-        }
-        const auto rowCount = static_cast<uint32_t>(values.size());
-        expectRangeRead(*view, values, /*offset=*/0, /*length=*/0);
-        expectRangeRead(*view, values, rowCount, /*length=*/0);
-        expectRangeRead(
-            *view, values, /*offset=*/0, std::min<uint32_t>(rowCount, 3));
-        if (rowCount > 0) {
-          const auto tailLength = std::min<uint32_t>(rowCount, 3);
-          expectRangeRead(*view, values, rowCount - tailLength, tailLength);
-        }
-        expectIndexedRead(*view, values, {});
-        expectIndexedRead(*view, values, positions);
-        expectSelectedRead(*view, values, {});
-        expectSelectedRead(*view, values, positions);
-      }
+      SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
+      auto options = baseOptions;
+      options.useVarintRowCount = useVarint;
+      options.cacheEncodingView = cacheEncodingView();
+      const auto serialized = nimble::test::Encoder<Encoding>::encode(
+          *buffer_, values, compressionType, options);
+      expectEncodedReads(serialized, values, positions, options);
     }
+  }
+
+  // Checks every read of a view over 'encoded', which holds 'values' encoded
+  // with 'options': each row at 'positions', ranges at both ends, and
+  // 'positions' as indexed and as selected rows.
+  template <typename T>
+  void expectEncodedReads(
+      std::string_view encoded,
+      const nimble::Vector<T>& values,
+      const std::vector<uint32_t>& positions,
+      const nimble::Encoding::Options& options) {
+    auto view = nimble::createEncodingView(encoded, pool_.get(), options);
+    ASSERT_NE(view, nullptr);
+    for (const auto position : positions) {
+      SCOPED_TRACE(fmt::format("position={}", position));
+      T value;
+      view->readAt(position, &value);
+      EXPECT_EQ(value, values[position]);
+    }
+    const auto rowCount = static_cast<uint32_t>(values.size());
+    expectRangeRead(*view, values, /*offset=*/0, /*length=*/0);
+    expectRangeRead(*view, values, rowCount, /*length=*/0);
+    expectRangeRead(
+        *view, values, /*offset=*/0, std::min<uint32_t>(rowCount, 3));
+    if (rowCount > 0) {
+      const auto tailLength = std::min<uint32_t>(rowCount, 3);
+      expectRangeRead(*view, values, rowCount - tailLength, tailLength);
+    }
+    expectIndexedRead(*view, values, {});
+    expectIndexedRead(*view, values, positions);
+    expectSelectedRead(*view, values, {});
+    expectSelectedRead(*view, values, positions);
   }
 
   // Runs 'body' on several threads at once, and expects every run to return

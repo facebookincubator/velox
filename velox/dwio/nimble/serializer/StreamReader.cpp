@@ -25,27 +25,15 @@
 #include "velox/common/Casts.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/TypeWithId.h"
-#include "velox/dwio/nimble/common/ChunkedStream.h"
+#include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/dwio/nimble/serializer/EncodingViewDecoder.h"
 
 namespace facebook::nimble {
 namespace {
-
-// Exposes already-loaded bytes through the ChunkedStream interface.
-class StringViewStreamLoader final : public StreamLoader {
- public:
-  explicit StringViewStreamLoader(std::string_view stream) : stream_{stream} {}
-
-  const std::string_view getStream() const override {
-    return stream_;
-  }
-
- private:
-  const std::string_view stream_;
-};
 
 void validateFieldReaderOffsets(
     std::span<const uint32_t> projectionOffsets,
@@ -180,12 +168,10 @@ struct StreamReader::CachedReader {
 
 StreamReader::StreamReader(
     std::shared_ptr<const Type> type,
-    velox::memory::MemoryPool* pool,
-    Encoding::Options options)
+    velox::memory::MemoryPool* pool)
     : type_{std::move(type)},
       outputType_{convertToVeloxType(*velox::checkedNotNull(type_.get()))},
       pool_{velox::checkedNotNull(pool)},
-      options_{std::move(options)},
       cachedKey_{pool_} {
   NIMBLE_CHECK_NOT_NULL(outputType_);
 
@@ -215,11 +201,12 @@ folly::coro::Task<void> StreamReader::co_read(
     std::span<const std::string_view> streams,
     std::span<const RowRange> ranges,
     velox::vector_size_t outputOffset,
+    const Encoding::Options& options,
     velox::VectorPtr& output) {
   checkStreamCount(streams.size(), inputOffsets_.size());
   const auto outputRanges =
       makeOutputRanges(outputType_, ranges, outputOffset, output);
-  prepareRead(streams);
+  prepareRead(streams, options);
 
   // The streams are only valid during this call.
   SCOPE_EXIT {
@@ -237,9 +224,11 @@ folly::coro::Task<void> StreamReader::co_read(
   co_await co_decodeRows(ranges, outputRanges, output);
 }
 
-void StreamReader::setStreams(std::span<const std::string_view> streams) {
+void StreamReader::setStreams(
+    std::span<const std::string_view> streams,
+    const Encoding::Options& options) {
   checkStreamCount(streams.size(), inputOffsets_.size());
-  prepareRead(streams);
+  prepareRead(streams, options);
 }
 
 StreamReader::CachedReader& StreamReader::reader() const {
@@ -269,22 +258,42 @@ void StreamReader::reset() {
     cachedReader_->reset();
   }
   streamsBound_ = false;
-  chunkedStreams_.clear();
+  decompressedChunks_.clear();
 }
 
-std::string_view StreamReader::loadChunk(std::string_view stream) {
-  auto chunkedStream = std::make_unique<InMemoryChunkedStream>(
-      *pool_, std::make_unique<StringViewStreamLoader>(stream));
-  NIMBLE_CHECK(
-      chunkedStream->hasNext(), "StreamReader requires a non-empty stream");
-  const auto encoded = chunkedStream->nextChunk();
+void StreamReader::loadChunks(std::string_view stream) {
+  loadedChunks_.clear();
+  while (!stream.empty()) {
+    NIMBLE_CHECK_FILE_GE(
+        stream.size(), kChunkHeaderSize, "Truncated chunk header in stream");
+    const char* header = stream.data();
+    const auto [length, compressionType] = readChunkHeader(header);
+    stream.remove_prefix(kChunkHeaderSize);
+    NIMBLE_CHECK_FILE_LE(
+        length, stream.size(), "Chunk data exceeds stream boundary");
+    const auto payload = stream.substr(0, length);
+    stream.remove_prefix(length);
+    if (compressionType == CompressionType::Uncompressed) {
+      loadedChunks_.push_back(payload);
+      continue;
+    }
 
-  // TODO: Support multiple encoding chunks per stream.
-  NIMBLE_CHECK(
-      !chunkedStream->hasNext(),
-      "StreamReader requires a single encoding chunk per stream");
-  chunkedStreams_.push_back(std::move(chunkedStream));
-  return encoded;
+    // ChunkedStreamWriter compresses chunks only with Zstd or Lz4.
+    NIMBLE_CHECK_FILE(
+        compressionType == CompressionType::Zstd ||
+            compressionType == CompressionType::Lz4,
+        "Unsupported chunk compression type: {}",
+        compressionType);
+    auto decompressed = Compression::uncompress(
+        // @lint-ignore NULLSAFECLANG nullable-dereference
+        *pool_,
+        compressionType,
+        DataType::String,
+        payload,
+        /*decompressCounter=*/nullptr);
+    loadedChunks_.emplace_back(decompressed->as<char>(), decompressed->size());
+    decompressedChunks_.push_back(std::move(decompressed));
+  }
 }
 
 void StreamReader::rebuildReader(std::span<const std::string_view> streams) {
@@ -303,14 +312,17 @@ void StreamReader::rebuildReader(std::span<const std::string_view> streams) {
     const auto it = cachedReader.decodersByStreamId.find(streamId);
     if (it != cachedReader.decodersByStreamId.end()) {
       auto* decoder = static_cast<EncodingViewDecoder*>(it->second.get());
-      decoder->rebind(loadChunk(streams[i]));
+      loadChunks(streams[i]);
+      // @lint-ignore NULLSAFECLANG nullable-dereference
+      decoder->rebind(loadedChunks_, options_.bufferPool);
       cachedReader.streamDecoders[i] = decoder;
       continue;
     }
 
     // TODO: Support encodings without an EncodingView.
+    loadChunks(streams[i]);
     auto decoder = std::make_unique<EncodingViewDecoder>(
-        loadChunk(streams[i]), pool_, options_.bufferPool, encodingViewFactory);
+        loadedChunks_, pool_, options_.bufferPool, encodingViewFactory);
     cachedReader.streamDecoders[i] = decoder.get();
     cachedReader.decodersByStreamId.emplace(streamId, std::move(decoder));
   }
@@ -318,16 +330,20 @@ void StreamReader::rebuildReader(std::span<const std::string_view> streams) {
       readerFactory_->createReader(cachedReader.decodersByStreamId);
 }
 
-void StreamReader::prepareRead(std::span<const std::string_view> streams) {
+void StreamReader::prepareRead(
+    std::span<const std::string_view> streams,
+    const Encoding::Options& options) {
   reset();
-  chunkedStreams_.reserve(streams.size());
+  options_ = options;
   if (cachedReader_ != nullptr && cachedReader_->root != nullptr &&
       matchesPresenceKey(streams, cachedKey_)) {
     // The reader points to its decoders, so rebinding replaces their views and
     // keeps the reader.
     for (size_t i{0}; i < streams.size(); ++i) {
       if (!streams[i].empty()) {
-        cachedReader_->streamDecoders[i]->rebind(loadChunk(streams[i]));
+        loadChunks(streams[i]);
+        cachedReader_->streamDecoders[i]->rebind(
+            loadedChunks_, options_.bufferPool);
       }
     }
     cachedReader_->root->reset();

@@ -638,7 +638,7 @@ Reader Entry
     init()
     -> initFromCache()
        cached() false?                  -> Cold Path  // no CachedMetadataInput
-       findCachedMetadata(fileSize_) miss? -> Cold Path  // Footer+PS not in AsyncDataCache
+       findCachedMetadata(fileSize_) miss? -> Cold Path  // Footer+PS not in the block cache
        hit                              -> Warm Path
 
     "cold" means the footer is loaded from the file. Other sections, such as
@@ -690,7 +690,7 @@ Cold Path
         pin it
 
     cacheMetadata(buf)                          // no IO
-      decompress -> AsyncDataCache
+      decompress -> block cache
       populates entries for the warm path
 
     Small file: 1 pread
@@ -715,7 +715,7 @@ Warm Path
         RAM hit -> done
         SSD hit -> done
         miss    -> preadv
-      file fallback auto-populates cache through store()
+      file fallback fills the cache entry
 
     initStripes() + initIndexes()               // no IO
       wire up members from loaded FlatBuffers
@@ -743,16 +743,16 @@ Lazy Path
         SSD hit   -> done
         file miss -> coalesced preadv
                      sg + cig are adjacent and use one read
-                     store() -> AsyncDataCache
+                     decompress -> block cache
 
       result stored in stripeGroupCache_ as a weak ptr
 
 8 Cache Write / Read Path Asymmetry
 -----------------------------------
 
-The cache write path ( cacheMetadata ) and read path ( loadFromCache ) use MetadataSection fields differently. Understanding this asymmetry is key to avoiding bugs like the compressed-bytes caching issue (D108389825).
+The cache write path ( cacheMetadata ) and read path ( load ) use MetadataSection fields differently. Understanding this asymmetry is key to avoiding bugs like the compressed-bytes caching issue (D108389825).
 
-cacheSection()
+TabletReader::cacheMetadata()
 
 offset()
 
@@ -778,7 +778,7 @@ section.offset()
 
 // memcpy into cache entry
 
-loadFromCache()
+load()
 
 offset()
 
@@ -794,19 +794,19 @@ Not used — cached data is already decompressed
 
 uncompressedSize()
 
-Required — pre-allocates cache pin at correct decompressed size
+Sizes the cache entry before the read. A section without it is looked up at any size, and cached after the read at the size its compressed bytes start with
 
 uncompressedSize
 
 // if hit → zero-copy MetadataBuffer from cache pin
 
-// if miss → file IO, decompress, promoteCachePin
+// if miss → file IO, decompress into the cache entry, seal
 
 Key Invariant
 
 * The write path must store decompressed data.
-* The read path expects entry- > size() == uncompressedSize .
-* If the write path stores compressed bytes (size S c ) but the read path requests uncompressedSize (S u > S c ): RAM : findOrCreate evicts the stale entry — cache miss on every warm open. SSD : crash via NIMBLE_CHECK_EQ in loadFromSsd() .
+* The read path expects entry- > size() == uncompressedSize when the file records uncompressedSize. A section without it accepts an entry of any size.
+* If the write path stores compressed bytes (size S c ) but the read path requests uncompressedSize (S u > S c ): RAM : findOrCreate evicts the stale entry — cache miss on every warm open. SSD : an entry of another size is a miss.
 
 /visualize
 

@@ -777,7 +777,7 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
                     .config("rpc.ratelimiter.decrease_factor", "0.5")
                     .config("rpc.congestion.max_window", kMaxWindow)
                     .config("rpc.congestion.min_window", 1)
-                    .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
                     .copyResults(pool(), task);
 
   // The query completes end-to-end: every row yields an output row, and exactly
@@ -1054,8 +1054,7 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesKeepRowIdentityAcrossBatches) {
     EXPECT_TRUE(seen.insert(inputs->valueAt(i).str()).second);
   }
   EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at("rpc-0")
+      PlanNodeStats::extract(task->taskStats(), "rpc-0")
           .customStats.at(RPCOperator::kRpcCapacityRetries)
           .sum,
       0);
@@ -1119,7 +1118,7 @@ TEST_F(RPCAimdUnderLoadTest, perRowBackendErrorsDoNotBackOff) {
                     .config("rpc.ratelimiter.decrease_factor", "0.5")
                     .config("rpc.congestion.max_window", kMaxWindow)
                     .config("rpc.congestion.min_window", 1)
-                    .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
                     .copyResults(pool(), task);
 
   ASSERT_EQ(result->size(), kTotalRows);

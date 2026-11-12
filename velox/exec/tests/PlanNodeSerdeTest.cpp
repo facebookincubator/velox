@@ -93,7 +93,7 @@ class PlanNodeSerdeTest : public testing::Test,
   void topNRankSerdeTest(std::string_view function) {
     auto plan = PlanBuilder()
                     .values({data_})
-                    .topNRank(function, {}, {"c0", "c2"}, 10, false)
+                    .topNRankPartial(function, {}, {"c0", "c2"}, 10)
                     .planNode();
     testSerde(plan);
 
@@ -105,9 +105,33 @@ class PlanNodeSerdeTest : public testing::Test,
 
     plan = PlanBuilder()
                .values({data_})
+               .topNRankPartial(function, {"c0"}, {"c1", "c2"}, 10)
+               .planNode();
+    testSerde(plan);
+
+    plan = PlanBuilder()
+               .values({data_})
                .topNRank(function, {"c0"}, {"c1", "c2"}, 10, false)
                .planNode();
     testSerde(plan);
+
+    // A plan serialized without 'partial' is partial when it has no rank
+    // column.
+    for (const bool generateRowNumber : {true, false}) {
+      SCOPED_TRACE(fmt::format("generateRowNumber: {}", generateRowNumber));
+      plan = PlanBuilder()
+                 .values({data_})
+                 .topNRank(function, {"c0"}, {"c1"}, 10, generateRowNumber)
+                 .planNode();
+      auto serialized = plan->serialize();
+      serialized.erase("partial");
+      const auto copy =
+          std::dynamic_pointer_cast<const core::TopNRowNumberNode>(
+              velox::ISerializable::deserialize<core::PlanNode>(
+                  serialized, pool()));
+      ASSERT_NE(copy, nullptr);
+      ASSERT_EQ(copy->isPartial(), !generateRowNumber);
+    }
   }
 
   std::vector<RowVectorPtr> data_;
@@ -648,6 +672,21 @@ TEST_F(PlanNodeSerdeTest, vectorSearchJoin) {
                  "score",
                  core::JoinType::kLeft,
                  {{"ivf.nprobe", "4"}})
+             .planNode();
+  testSerde(plan);
+
+  // The index on the left.
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({build})
+             .vectorSearchJoin(
+                 {"u0"},
+                 {"t0"},
+                 PlanBuilder(planNodeIdGenerator).values({probe}).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/2,
+                 {"cluster_id", "t0", "u2"},
+                 "cluster_id")
              .planNode();
   testSerde(plan);
 }
@@ -1389,6 +1428,62 @@ TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
                     "values",
                     /*outputOnWorkerZero=*/true)
                 .planNode());
+
+  // A hash shuffle to a reader on two workers keeps its width.
+  auto shuffle = PlanBuilder(idGenerator)
+                     .stateSource("values", schema)
+                     .partitionedOutput({"key"}, 2)
+                     .planNode();
+  auto readShuffle =
+      PlanBuilder(idGenerator).exchange(schema, "Presto").planNode();
+  testSerde(PlanBuilder(idGenerator)
+                .fixedPoint(
+                    {core::VectorState("values", schema).initial(seed)},
+                    {shuffle, readShuffle},
+                    core::ConvergenceConfig::withMaxIterations(3),
+                    "values")
+                .planNode());
+}
+
+// deserializeStages() rebuilds the stages without the checks deserialize()
+// makes, for a caller that changes them before building a plan.
+TEST_F(PlanNodeSerdeTest, multiStagePlanStages) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId exchangeId;
+  const core::MultiStagePlan plan({
+      {.id = 1,
+       .plan = PlanBuilder(idGenerator)
+                   .values({makeRowVector({makeFlatVector<int64_t>({1})})})
+                   .partitionedOutput({"c0"}, 2)
+                   .planNode()},
+      {.id = 2,
+       .type = core::StageType::kFixed,
+       .numRemotePartitions = 2,
+       .plan = PlanBuilder(idGenerator)
+                   .exchange(ROW("c0", BIGINT()), "Presto")
+                   .capturePlanNodeId(exchangeId)
+                   .planNode(),
+       .inputs = {{exchangeId, 1}}},
+  });
+  auto serialized = plan.serialize();
+
+  const auto stages =
+      core::MultiStagePlan::deserializeStages(serialized, pool());
+  ASSERT_EQ(stages.size(), 2);
+  EXPECT_EQ(stages[1].type, core::StageType::kFixed);
+  EXPECT_EQ(stages[1].numRemotePartitions, 2);
+  ASSERT_EQ(stages[1].inputs.size(), 1);
+  EXPECT_EQ(stages[1].inputs[0].exchangeId, exchangeId);
+  EXPECT_EQ(stages[1].inputs[0].producerStageId, 1);
+
+  serialized["stages"][1]["numRemotePartitions"] = 3;
+  EXPECT_EQ(
+      core::MultiStagePlan::deserializeStages(serialized, pool())[1]
+          .numRemotePartitions,
+      3);
+  VELOX_ASSERT_USER_THROW(
+      core::MultiStagePlan::deserialize(serialized, pool()),
+      "Partition count mismatch between producer 1 and consumer 2");
 }
 
 TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
@@ -1449,7 +1544,8 @@ TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
   ASSERT_NE(fixedPoint, nullptr);
   EXPECT_EQ(fixedPoint->outputStateEntry(), "reach");
   ASSERT_EQ(fixedPoint->stateDeclarations().size(), 2);
-  ASSERT_EQ(fixedPoint->convergenceConfig().plans.size(), 1);
+  ASSERT_TRUE(fixedPoint->convergenceConfig().plan.has_value());
+  ASSERT_EQ(fixedPoint->convergenceConfig().plan->stages().size(), 1);
 
   const auto& hashTableState =
       dynamic_cast<const core::HashTableStateDeclaration&>(
@@ -1462,9 +1558,9 @@ TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
   ASSERT_NE(vectorState.initialPlan(), nullptr);
 
   // The body's StateHashJoin probe keys and StateSource delta flag survive.
-  ASSERT_EQ(fixedPoint->plans().size(), 1);
-  const auto* project =
-      dynamic_cast<const core::ProjectNode*>(fixedPoint->plans()[0].get());
+  ASSERT_EQ(fixedPoint->body().stages().size(), 1);
+  const auto* project = dynamic_cast<const core::ProjectNode*>(
+      fixedPoint->body().root().plan.get());
   ASSERT_NE(project, nullptr);
   const auto* join =
       dynamic_cast<const core::StateHashJoinNode*>(project->sources()[0].get());

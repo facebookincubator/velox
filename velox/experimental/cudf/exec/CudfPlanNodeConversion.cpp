@@ -141,14 +141,11 @@ core::PlanNodePtr toCudfPlanNode(const core::PlanNodePtr& node) {
 
   if (auto topNRowNumber =
           std::dynamic_pointer_cast<const core::TopNRowNumberNode>(node)) {
-    VELOX_CHECK_EQ(
-        topNRowNumber->rankFunction(),
-        core::TopNRowNumberNode::RankFunction::kRowNumber,
-        "CudfTopNRowNumber only supports row_number");
     return std::make_shared<CudfTopNRowNumberNode>(
         topNRowNumber->id(),
         onlySource(node),
         topNRowNumber->outputType(),
+        topNRowNumber->rankFunction(),
         topNRowNumber->partitionKeys(),
         topNRowNumber->sortingKeys(),
         topNRowNumber->sortingOrders(),

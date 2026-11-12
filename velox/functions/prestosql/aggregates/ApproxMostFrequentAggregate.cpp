@@ -80,10 +80,9 @@ struct Accumulator<StringView> {
       // 1. Total string storage exceeds compactionBytesThreshold, AND
       // 2. Evicted bytes exceed compactionUnusedMemoryRatio of the threshold.
       if (compactionBytesThreshold > 0) {
-        if (FOLLY_UNLIKELY(
-                (evictedBytes_ + activeBytes_ > compactionBytesThreshold) &&
-                (evictedBytes_ >
-                 compactionBytesThreshold * compactionUnusedMemoryRatio))) {
+        if ((evictedBytes_ + activeBytes_ > compactionBytesThreshold) &&
+            (evictedBytes_ > compactionBytesThreshold *
+                 compactionUnusedMemoryRatio)) [[unlikely]] {
           compact();
         }
       }

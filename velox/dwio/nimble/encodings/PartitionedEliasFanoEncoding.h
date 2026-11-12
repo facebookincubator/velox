@@ -40,6 +40,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -148,6 +149,88 @@ inline void checkOffsets(std::span<const uint32_t> offsets, uint32_t limit) {
       offsets.back(), limit, "PartitionedEliasFano directory is out of range.");
 }
 
+// Counts and directories of a PartitionedEliasFano stream, which follow the
+// prefix. The group streams follow them.
+struct Metadata {
+  // P, one partition per ascending run of values.
+  uint32_t numPartitions{0};
+
+  // G, one group per Elias-Fano list of merged partitions.
+  uint32_t numGroups{0};
+
+  // Encoded first row of each partition, P uint32 values.
+  std::string_view partitionOffsets;
+
+  // Encoded first value of each partition, P physical values.
+  std::string_view partitionBases;
+
+  // Reads the metadata from the front of 'body', the bytes after the prefix.
+  // Leaves in 'body' the group streams, one length-prefixed uint64 Elias-Fano
+  // stream per group, back to back, for the caller to read one at a time.
+  static Metadata read(std::string_view& body) {
+    Metadata metadata;
+    metadata.numPartitions = encoding::readVarint32(body);
+    metadata.numGroups = encoding::readVarint32(body);
+    metadata.partitionOffsets = encoding::readLengthPrefixedBytes(body);
+    metadata.partitionBases = encoding::readLengthPrefixedBytes(body);
+    return metadata;
+  }
+};
+
+// Writes a PartitionedEliasFano stream of T: the prefix, 'metadata', then
+// each of 'groupStreams' with a varint length.
+template <typename T>
+std::string_view serialize(
+    uint32_t rowCount,
+    const Metadata& metadata,
+    std::span<const std::string_view> groupStreams,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_CHECK_GT(
+      metadata.numGroups, 0, "PartitionedEliasFano needs at least one group.");
+  NIMBLE_CHECK_EQ(
+      groupStreams.size(),
+      metadata.numGroups,
+      "PartitionedEliasFano needs one stream per group.");
+  const auto lengthPrefixedSize = [](std::string_view stream) -> uint64_t {
+    return varint::varintSize(stream.size()) + stream.size();
+  };
+  // Sums in uint64_t, so a total past uint32 cannot wrap before the check.
+  uint64_t encodingSize =
+      EncodingPrefix::serializedSize(rowCount, options.useVarintRowCount) +
+      varint::varintSize(metadata.numPartitions) +
+      varint::varintSize(metadata.numGroups) +
+      lengthPrefixedSize(metadata.partitionOffsets) +
+      lengthPrefixedSize(metadata.partitionBases);
+  for (const std::string_view stream : groupStreams) {
+    encodingSize += lengthPrefixedSize(stream);
+  }
+  NIMBLE_CHECK_LE(
+      encodingSize,
+      std::numeric_limits<uint32_t>::max(),
+      "PartitionedEliasFano encoding exceeds uint32 size.");
+  char* reserved = buffer.reserve(encodingSize);
+  char* pos = reserved;
+  EncodingPrefix::serialize(
+      EncodingType::PartitionedEliasFano,
+      TypeTraits<T>::dataType,
+      rowCount,
+      options.useVarintRowCount,
+      pos);
+  varint::writeVarint(metadata.numPartitions, &pos);
+  varint::writeVarint(metadata.numGroups, &pos);
+  encoding::writeVarintString(metadata.partitionOffsets, pos);
+  encoding::writeVarintString(metadata.partitionBases, pos);
+  for (const std::string_view stream : groupStreams) {
+    encoding::writeVarintString(stream, pos);
+  }
+  NIMBLE_CHECK_EQ(
+      pos - reserved,
+      encodingSize,
+      "PartitionedEliasFano encoding size mismatch.");
+  return {reserved, encodingSize};
+}
+
 } // namespace detail::partitioned_elias_fano
 
 /// Encodes integers that ascend within partitions, such as sorted runs written
@@ -167,11 +250,10 @@ inline void checkOffsets(std::span<const uint32_t> offsets, uint32_t limit) {
 /// For example, [10, 20, 5, 9] has two partitions, [10, 20] and [5, 9], which
 /// merge into one group:
 ///
-///   partition offsets       : [0, 2]
-///   partition bases         : [10, 5]
-///   partition group offsets : [0]
-///   base shifts             : [0, 10]
-///   group 0 values          : [0, 10, 10, 14]
+///   partition offsets : [0, 2]
+///   partition bases   : [10, 5]
+///   base shifts       : [0, 10]
+///   group 0 values    : [0, 10, 10, 14]
 ///
 /// Row 3 reads stored value 14 and restores 5 + (14 - 10) = 9: the base of its
 /// partition plus the distance from the partition's first stored value.
@@ -182,14 +264,17 @@ inline void checkOffsets(std::span<const uint32_t> offsets, uint32_t limit) {
 ///   varint          : group count G
 ///   varint + bytes  : partition offsets, P uint32 rows (nested encoding)
 ///   varint + bytes  : partition bases, P physical values (nested encoding)
-///   varint + bytes  : partition group offsets, G uint32 partition indexes
-///                     (nested encoding)
 ///   G x (varint + bytes) : one uint64 Elias-Fano stream per group
 ///
-/// A reader rejects a stream unless 1 <= G <= P <= row count, both offset
-/// directories begin at 0 and ascend strictly within their range, each
-/// directory has its declared data type and row count, and each group is an
-/// Elias-Fano stream with the rows of its partitions.
+/// Groups take the partitions in order, each as many rows as its Elias-Fano
+/// stream holds, so the row counts of the streams place the groups without a
+/// directory.
+///
+/// A reader rejects a stream unless 1 <= G <= P <= row count, the partition
+/// offsets begin at 0 and ascend strictly below the row count, each directory
+/// has its declared data type and row count, and each group is an Elias-Fano
+/// stream that ends at a partition boundary, with the groups covering every
+/// row.
 template <typename T>
 class PartitionedEliasFanoEncoding final
     : public TypedEncoding<T, typename TypeTraits<T>::physicalType> {
@@ -252,6 +337,20 @@ class PartitionedEliasFanoEncoding final
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  /// Returns a stream holding rows [offset, offset + length) of 'encoded'.
+  /// Groups inside the range are copied as they are, and the first and last
+  /// group are sliced as Elias-Fano lists. The directories are sliced as they
+  /// are, and the partition offsets are shifted by a SliceEncoding value
+  /// delta, so the result cannot be sliced again. A range that starts inside a
+  /// partition keeps that partition from its first row, so every partition
+  /// base stays valid, and a SliceEncoding skips the leading rows at decode.
+  static std::string_view slice(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
+
   /// Estimates the encoded size, or returns nullopt for oversized input, for
   /// input with fewer than two partitions, which EliasFano stores without a
   /// directory, and for partitions shorter than kMinRowsPerPartition on
@@ -286,6 +385,17 @@ class PartitionedEliasFanoEncoding final
 
   // Returns the index of the partition holding 'row'.
   uint32_t findPartition(uint32_t row) const;
+
+  // Keeps rows [startRow, endRow) of each group in 'groupStreams', the group
+  // section of the stream this encoding reads, and returns one stream per
+  // group the range overlaps. Copies a group the range covers whole and slices
+  // the others.
+  std::vector<std::string_view> sliceGroups(
+      std::string_view groupStreams,
+      uint32_t startRow,
+      uint32_t endRow,
+      Buffer& buffer,
+      const Encoding::Options& options) const;
 
   // Fills 'partitionHints_' and 'hintShift_' from 'partitions_'.
   void buildPartitionHints();
@@ -357,9 +467,11 @@ PartitionedEliasFanoEncoding<T>::PartitionedEliasFanoEncoding(
   const auto rowCount = this->rowCount();
   NIMBLE_CHECK_FILE_GT(
       rowCount, 0, "PartitionedEliasFano encoding requires at least one row.");
-  auto body = data.substr(this->dataOffset());
-  const auto numPartitions = encoding::readVarint32(body);
-  const auto numGroups = encoding::readVarint32(body);
+  std::string_view groupStreams = data.substr(this->dataOffset());
+  const auto metadata =
+      detail::partitioned_elias_fano::Metadata::read(groupStreams);
+  const auto numPartitions = metadata.numPartitions;
+  const auto numGroups = metadata.numGroups;
   NIMBLE_CHECK_FILE_GT(numGroups, 0, "PartitionedEliasFano has no groups.");
   NIMBLE_CHECK_FILE_LE(
       numGroups,
@@ -370,56 +482,46 @@ PartitionedEliasFanoEncoding<T>::PartitionedEliasFanoEncoding(
       rowCount,
       "PartitionedEliasFano has more partitions than rows.");
 
-  const auto readStream = [&]() {
-    return EncodingFactory().create(
-        pool,
-        encoding::readLengthPrefixedBytes(body),
-        stringBufferFactory,
-        options);
+  const auto createStream = [&](std::string_view stream) {
+    return EncodingFactory().create(pool, stream, stringBufferFactory, options);
   };
   // Decodes a directory after checking its type, so a stream of another
   // width cannot write past or short of 'output'.
-  const auto readDirectory = [&]<typename V>(
-                                 Vector<V>& output, uint32_t count) {
-    auto encoding = readStream();
-    NIMBLE_CHECK_FILE_EQ(
-        encoding->dataType(),
-        TypeTraits<V>::dataType,
-        "PartitionedEliasFano directory has the wrong data type.");
-    NIMBLE_CHECK_FILE_EQ(
-        encoding->rowCount(),
-        count,
-        "PartitionedEliasFano directory has the wrong row count.");
-    output.resize(count);
-    encoding->materialize(count, output.data());
-  };
+  const auto readDirectory =
+      [&]<typename V>(
+          std::string_view stream, Vector<V>& output, uint32_t count) {
+        auto encoding = createStream(stream);
+        NIMBLE_CHECK_FILE_EQ(
+            encoding->dataType(),
+            TypeTraits<V>::dataType,
+            "PartitionedEliasFano directory has the wrong data type.");
+        NIMBLE_CHECK_FILE_EQ(
+            encoding->rowCount(),
+            count,
+            "PartitionedEliasFano directory has the wrong row count.");
+        output.resize(count);
+        encoding->materialize(count, output.data());
+      };
 
   // Entry p is the first row of partition p.
   Vector<uint32_t> partitionOffsets{&pool};
-  readDirectory(partitionOffsets, numPartitions);
+  readDirectory(metadata.partitionOffsets, partitionOffsets, numPartitions);
   // Entry p is the first value of partition p.
   Vector<physicalType> partitionBases{&pool};
-  readDirectory(partitionBases, numPartitions);
-  // Entry g is the index of the first partition of group g.
-  Vector<uint32_t> partitionGroupOffsets{&pool};
-  readDirectory(partitionGroupOffsets, numGroups);
+  readDirectory(metadata.partitionBases, partitionBases, numPartitions);
   detail::partitioned_elias_fano::checkOffsets(
       {partitionOffsets.data(), partitionOffsets.size()}, rowCount);
-  detail::partitioned_elias_fano::checkOffsets(
-      {partitionGroupOffsets.data(), partitionGroupOffsets.size()},
-      numPartitions);
-  // Ends the last partition and the last group, so partition p covers rows
-  // [partitionOffsets[p], partitionOffsets[p + 1]) and group g partitions
-  // [partitionGroupOffsets[g], partitionGroupOffsets[g + 1]).
+  // Ends the last partition, so partition p covers rows
+  // [partitionOffsets[p], partitionOffsets[p + 1]).
   partitionOffsets.push_back(rowCount);
-  partitionGroupOffsets.push_back(numPartitions);
 
   partitions_.resize(numPartitions);
+  // Next partition to place. Each group takes the partitions its rows cover.
+  uint32_t partitionIndex{0};
   for (uint32_t groupIndex = 0; groupIndex < numGroups; ++groupIndex) {
-    const auto firstPartition = partitionGroupOffsets[groupIndex];
-    const auto endPartition = partitionGroupOffsets[groupIndex + 1];
-    const auto groupStartRow = partitionOffsets[firstPartition];
-    const auto encoding = readStream();
+    const auto groupStartRow = partitionOffsets[partitionIndex];
+    const auto encoding =
+        createStream(encoding::readLengthPrefixedBytes(groupStreams));
     NIMBLE_CHECK_FILE_EQ(
         encoding->encodingType(),
         EncodingType::EliasFano,
@@ -428,14 +530,14 @@ PartitionedEliasFanoEncoding<T>::PartitionedEliasFanoEncoding(
         encoding->dataType(),
         DataType::Uint64,
         "PartitionedEliasFano group has the wrong data type.");
-    NIMBLE_CHECK_FILE_EQ(
+    NIMBLE_CHECK_FILE_LE(
         encoding->rowCount(),
-        partitionOffsets[endPartition] - groupStartRow,
-        "PartitionedEliasFano group has the wrong row count.");
+        rowCount - groupStartRow,
+        "PartitionedEliasFano group extends past the last row.");
+    const auto groupEndRow = groupStartRow + encoding->rowCount();
     // The list points into 'data', so it outlives the encoding object.
     const auto groupList = static_cast<const GroupEncoding&>(*encoding).list();
-    for (auto partitionIndex = firstPartition; partitionIndex < endPartition;
-         ++partitionIndex) {
+    for (; partitionOffsets[partitionIndex] < groupEndRow; ++partitionIndex) {
       auto& partition = partitions_[partitionIndex];
       partition = {
           .start = partitionOffsets[partitionIndex],
@@ -446,9 +548,18 @@ PartitionedEliasFanoEncoding<T>::PartitionedEliasFanoEncoding(
       };
       partition.shiftedStart = partition.storedAt(partition.start);
     }
+    NIMBLE_CHECK_FILE_EQ(
+        partitionOffsets[partitionIndex],
+        groupEndRow,
+        "PartitionedEliasFano group must end at a partition boundary.");
   }
+  NIMBLE_CHECK_FILE_EQ(
+      partitionIndex,
+      numPartitions,
+      "PartitionedEliasFano groups must cover every row.");
   numGroups_ = numGroups;
-  NIMBLE_CHECK_FILE(body.empty(), "PartitionedEliasFano has trailing bytes.");
+  NIMBLE_CHECK_FILE(
+      groupStreams.empty(), "PartitionedEliasFano has trailing bytes.");
   buildPartitionHints();
 }
 
@@ -673,9 +784,6 @@ std::optional<uint64_t> PartitionedEliasFanoEncoding<T>::estimateSize(
       directorySize(
              FixedBitWidthEncoding<physicalType>::estimateSize(
                  numPartitions, minBase, maxBase, options)) +
-      directorySize(
-             FixedBitWidthEncoding<uint32_t>::estimateSize(
-                 numGroups, /*minValue=*/0, numPartitions - 1, options)) +
       *groupBytes;
 }
 
@@ -728,33 +836,29 @@ std::string_view PartitionedEliasFanoEncoding<T>::encode(
   const auto numGroups = static_cast<uint32_t>(partitionGroupOffsets.size());
 
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
-  // The three directories, then one stream per group.
-  std::vector<std::string_view> streams;
-  streams.reserve(3 + numGroups);
-  streams.push_back(selection.template encodeNested<uint32_t>(
-      EncodingIdentifiers::PartitionedEliasFano::PartitionOffsets,
-      std::span<const uint32_t>(partitionOffsets.data(), numPartitions),
-      scopedBuffer.get(),
-      options));
-  streams.push_back(selection.template encodeNested<physicalType>(
-      EncodingIdentifiers::PartitionedEliasFano::PartitionBases,
-      std::span<const physicalType>(partitionBases.data(), numPartitions),
-      scopedBuffer.get(),
-      options));
-  streams.push_back(selection.template encodeNested<uint32_t>(
-      EncodingIdentifiers::PartitionedEliasFano::PartitionGroupOffsets,
-      std::span<const uint32_t>(partitionGroupOffsets.data(), numGroups),
-      scopedBuffer.get(),
-      options));
-  // Ends the last partition and the last group, after the directories above
-  // were written without them.
+  const std::string_view partitionOffsetsStream =
+      selection.template encodeNested<uint32_t>(
+          EncodingIdentifiers::PartitionedEliasFano::PartitionOffsets,
+          std::span<const uint32_t>(partitionOffsets.data(), numPartitions),
+          scopedBuffer.get(),
+          options);
+  const std::string_view partitionBasesStream =
+      selection.template encodeNested<physicalType>(
+          EncodingIdentifiers::PartitionedEliasFano::PartitionBases,
+          std::span<const physicalType>(partitionBases.data(), numPartitions),
+          scopedBuffer.get(),
+          options);
+  // Ends the last partition and the last group, after the partition
+  // directories above were written without them.
   partitionOffsets->push_back(rowCount);
   partitionGroupOffsets->push_back(numPartitions);
+  std::vector<std::string_view> groupStreams;
+  groupStreams.reserve(numGroups);
   for (uint32_t groupIndex = 0; groupIndex < numGroups; ++groupIndex) {
     const auto groupBegin = partitionOffsets[partitionGroupOffsets[groupIndex]];
     const auto groupEnd =
         partitionOffsets[partitionGroupOffsets[groupIndex + 1]];
-    streams.push_back(
+    groupStreams.push_back(
         GroupEncoding::encodeNonDecreasing(
             std::span<const uint64_t>(
                 shiftedValues.data() + groupBegin, groupEnd - groupBegin),
@@ -762,35 +866,141 @@ std::string_view PartitionedEliasFanoEncoding<T>::encode(
             options));
   }
 
-  // Sums in uint64_t, so a total past uint32 cannot wrap before the check.
-  uint64_t encodingSize =
-      Encoding::serializePrefixSize(rowCount, options.useVarintRowCount) +
-      varint::varintSize(numPartitions) + varint::varintSize(numGroups);
-  for (const auto stream : streams) {
-    encodingSize += varint::varintSize(stream.size()) + stream.size();
-  }
-  NIMBLE_CHECK_LE(
-      encodingSize,
-      std::numeric_limits<uint32_t>::max(),
-      "PartitionedEliasFano encoding exceeds uint32 size.");
-  char* reserved = buffer.reserve(encodingSize);
-  char* pos = reserved;
-  Encoding::serializePrefix(
-      EncodingType::PartitionedEliasFano,
-      TypeTraits<T>::dataType,
+  return detail::partitioned_elias_fano::serialize<T>(
       rowCount,
-      options.useVarintRowCount,
-      pos);
-  varint::writeVarint(numPartitions, &pos);
-  varint::writeVarint(numGroups, &pos);
-  for (const auto stream : streams) {
-    encoding::writeVarintString(stream, pos);
+      {
+          .numPartitions = numPartitions,
+          .numGroups = numGroups,
+          .partitionOffsets = partitionOffsetsStream,
+          .partitionBases = partitionBasesStream,
+      },
+      groupStreams,
+      buffer,
+      options);
+}
+
+template <typename T>
+std::string_view PartitionedEliasFanoEncoding<T>::slice(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  EncodingPrefix::checkSliceRange(
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+      offset,
+      length);
+
+  auto* pool = &buffer.getMemoryPool();
+  const PartitionedEliasFanoEncoding<T> source{*pool, encoded, {}, options};
+  const auto& partitions = source.partitions_;
+  const uint32_t sliceEndRow = offset + length;
+  const uint32_t firstPartition = source.findPartition(offset);
+  const uint32_t lastPartition = source.findPartition(sliceEndRow - 1);
+  const uint32_t numPartitions = lastPartition - firstPartition + 1;
+  // Keeps the first partition from its first row, so its base still restores
+  // every row it keeps.
+  const uint32_t sliceStartRow = partitions[firstPartition].start;
+
+  // The constructor validated the layout, so the metadata parses without
+  // further checks.
+  std::string_view groupStreams = encoded.substr(source.dataOffset());
+  const auto metadata =
+      detail::partitioned_elias_fano::Metadata::read(groupStreams);
+
+  ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
+  const auto slicedGroups = source.sliceGroups(
+      groupStreams, sliceStartRow, sliceEndRow, scopedBuffer.get(), options);
+
+  const std::string_view sliced = detail::partitioned_elias_fano::serialize<T>(
+      sliceEndRow - sliceStartRow,
+      {
+          .numPartitions = numPartitions,
+          .numGroups = static_cast<uint32_t>(slicedGroups.size()),
+          // Rebases the kept partition offsets on the slice's first row.
+          .partitionOffsets = EncodingFactory::slice(
+              metadata.partitionOffsets,
+              firstPartition,
+              numPartitions,
+              /*valueDelta=*/-static_cast<int64_t>(sliceStartRow),
+              scopedBuffer.get(),
+              options),
+          .partitionBases = EncodingFactory::slice(
+              metadata.partitionBases,
+              firstPartition,
+              numPartitions,
+              scopedBuffer.get(),
+              options),
+      },
+      slicedGroups,
+      buffer,
+      options);
+  if (sliceStartRow == offset) {
+    return sliced;
   }
-  NIMBLE_CHECK_EQ(
-      pos - reserved,
-      encodingSize,
-      "PartitionedEliasFano encoding size mismatch.");
-  return {reserved, encodingSize};
+  return SliceEncoding<T>::wrap(
+      sliced,
+      offset - sliceStartRow,
+      length,
+      buffer,
+      /*valueDelta=*/0,
+      options);
+}
+
+template <typename T>
+std::vector<std::string_view> PartitionedEliasFanoEncoding<T>::sliceGroups(
+    std::string_view groupStreams,
+    uint32_t startRow,
+    uint32_t endRow,
+    Buffer& buffer,
+    const Encoding::Options& options) const {
+  std::vector<std::string_view> sliced;
+
+  // Visits the groups in order, reading one Elias-Fano stream for each. A
+  // group starts at the partition whose first row is its group's first row.
+  for (uint32_t partition = 0; partition < numPartitions(); ++partition) {
+    const PartitionInfo& partitionInfo = partitions_[partition];
+
+    // Skips a partition in the middle of a group, whose group was handled at
+    // its first partition.
+    if (partitionInfo.start != partitionInfo.groupStartRow) {
+      continue;
+    }
+
+    // Stops at the first group past the range. Later group streams are left
+    // unread, since nothing after them needs to be found.
+    const uint32_t groupStartRow = partitionInfo.start;
+    if (groupStartRow >= endRow) {
+      break;
+    }
+
+    const uint32_t groupEndRow =
+        groupStartRow + partitionInfo.groupList.rowCount();
+
+    // Consumes a group before the range so the next stream can be read.
+    if (groupEndRow <= startRow) {
+      encoding::readLengthPrefixedBytes(groupStreams);
+      continue;
+    }
+
+    const std::string_view groupStream =
+        encoding::readLengthPrefixedBytes(groupStreams);
+    const uint32_t sliceStartRow = std::max(groupStartRow, startRow);
+    const uint32_t sliceEndRow = std::min(groupEndRow, endRow);
+
+    // Copies a group the range covers whole, and slices the first and last
+    // groups when the range cuts them.
+    sliced.push_back(
+        sliceStartRow == groupStartRow && sliceEndRow == groupEndRow
+            ? groupStream
+            : GroupEncoding::slice(
+                  groupStream,
+                  sliceStartRow - groupStartRow,
+                  sliceEndRow - sliceStartRow,
+                  buffer,
+                  options));
+  }
+  return sliced;
 }
 
 template <typename T>

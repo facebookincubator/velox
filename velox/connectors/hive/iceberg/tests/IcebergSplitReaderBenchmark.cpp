@@ -18,7 +18,10 @@
 #include <filesystem>
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/DeletionVectorWriter.h"
 #include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
+
+#include <fmt/format.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
@@ -124,24 +127,13 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
 
 std::string IcebergSplitReaderBenchmark::writePositionDeleteFile(
     const std::string& dataFilePath,
-    int64_t numDeleteRows) {
+    const std::vector<int64_t>& deleteRows,
+    int32_t fileIndex) {
   facebook::velox::test::VectorMaker vectorMaker{leafPool_.get()};
-  auto filePathVector =
-      vectorMaker.flatVector<StringView>(numDeleteRows, [&](auto row) {
-        if (row < numDeleteRows) {
-          return StringView(dataFilePath);
-        } else {
-          return StringView();
-        }
-      });
-
-  std::vector<int64_t> deleteRowsVec;
-  deleteRowsVec.reserve(numDeleteRows);
-  auto deleteRows = makeRandomDeleteRows(numDeleteRows);
-  deleteRowsVec.insert(
-      deleteRowsVec.end(), deleteRows.begin(), deleteRows.end());
-
-  auto deletePositionsVector = vectorMaker.flatVector<int64_t>(deleteRowsVec);
+  auto filePathVector = vectorMaker.flatVector<StringView>(
+      deleteRows.size(),
+      [&](auto /*row*/) { return StringView(dataFilePath); });
+  auto deletePositionsVector = vectorMaker.flatVector<int64_t>(deleteRows);
 
   std::shared_ptr<IcebergMetadataColumn> pathColumn =
       IcebergMetadataColumn::icebergDeleteFilePathColumn();
@@ -151,39 +143,82 @@ std::string IcebergSplitReaderBenchmark::writePositionDeleteFile(
       {pathColumn->name, posColumn->name},
       {filePathVector, deletePositionsVector});
 
-  auto deleteFilePath = deleteFileFolder_->getPath() + "/" + "posDelete.data";
+  auto deleteFilePath = fmt::format(
+      "{}/posDelete-{}.data", deleteFileFolder_->getPath(), fileIndex);
   writeToPositionDeleteFile(deleteFilePath, std::vector{deleteFileVectors});
 
   return deleteFilePath;
 }
 
+IcebergDeleteFile IcebergSplitReaderBenchmark::writeDeletionVectorFile(
+    const std::string& dataFilePath,
+    const std::vector<int64_t>& deleteRows) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions(deleteRows);
+  const auto blob = writer.serialize();
+
+  const auto puffinPath = deleteFileFolder_->getPath() + "/dv.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = leafPool_.get()});
+  const auto [blobOffset, blobLength] = writePuffinFile(
+      *sink,
+      *leafPool_,
+      blob,
+      dataFilePath,
+      static_cast<int64_t>(deleteRows.size()));
+  sink->close();
+
+  return IcebergDeleteFile(
+      FileContent::kDeletionVector,
+      puffinPath,
+      FileFormat::PUFFIN,
+      deleteRows.size(),
+      LocalReadFile(puffinPath).size(),
+      /*equalityFieldIds=*/{},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/0,
+      static_cast<int64_t>(blobOffset),
+      static_cast<int64_t>(blobLength),
+      dataFilePath);
+}
+
 std::vector<std::shared_ptr<HiveConnectorSplit>>
-IcebergSplitReaderBenchmark::createIcebergSplitsWithPositionalDelete(
+IcebergSplitReaderBenchmark::createIcebergSplitsWithDeletes(
     int32_t deleteRowsPercentage,
-    int32_t deleteFilesCount) {
+    DeleteFileKind deleteFileKind,
+    int32_t numDeleteFiles) {
   std::vector<std::shared_ptr<HiveConnectorSplit>> splits;
+  const int64_t numDeleteRows =
+      kNumBatches * kNumRowsPerBatch * deleteRowsPercentage * 0.01;
 
-  std::vector<std::string> deleteFilePaths;
-  std::vector<std::string> dataFilePaths = listFiles(fileFolder_->getPath());
-
-  for (const auto& dataFilePath : dataFilePaths) {
+  for (const auto& dataFilePath : listFiles(fileFolder_->getPath())) {
     std::vector<IcebergDeleteFile> deleteFiles;
-    int64_t deleteRowsCount =
-        kNumBatches * kNumRowsPerBatch * deleteRowsPercentage * 0.01;
-    deleteFiles.reserve(deleteRowsCount);
-    for (int i = 0; i < deleteFilesCount; i++) {
-      std::string deleteFilePath =
-          writePositionDeleteFile(dataFilePath, deleteRowsCount);
-
-      IcebergDeleteFile deleteFile(
-          FileContent::kPositionalDeletes,
-          deleteFilePath,
-          fileFormat_,
-          deleteRowsCount,
-          testing::internal::GetFileSize(
-              std::fopen(deleteFilePath.c_str(), "r")));
-      deleteFilePaths.emplace_back(deleteFilePath);
-      deleteFiles.emplace_back(deleteFile);
+    // Both kinds delete the same number of distinct rows, so they differ only
+    // in how the positions are stored.
+    const auto deleteRows = makeRandomDeleteRows(numDeleteRows);
+    if (!deleteRows.empty()) {
+      if (deleteFileKind == DeleteFileKind::kDeletionVector) {
+        deleteFiles.push_back(
+            writeDeletionVectorFile(dataFilePath, deleteRows));
+      } else {
+        // Round-robin keeps each file's positions sorted, as the spec
+        // requires.
+        std::vector<std::vector<int64_t>> perFileRows(numDeleteFiles);
+        for (size_t i = 0; i < deleteRows.size(); ++i) {
+          perFileRows[i % numDeleteFiles].push_back(deleteRows[i]);
+        }
+        for (int32_t i = 0; i < numDeleteFiles; ++i) {
+          const auto deleteFilePath =
+              writePositionDeleteFile(dataFilePath, perFileRows[i], i);
+          deleteFiles.emplace_back(
+              FileContent::kPositionalDeletes,
+              deleteFilePath,
+              fileFormat_,
+              perFileRows[i].size(),
+              LocalReadFile(deleteFilePath).size());
+        }
+      }
     }
     splits.emplace_back(makeIcebergSplit(dataFilePath, deleteFiles));
   }
@@ -258,7 +293,9 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
     float startPct,
     float selectPct,
     float deletePct,
-    uint32_t nextSize) {
+    uint32_t nextSize,
+    DeleteFileKind deleteFileKind,
+    int32_t numDeleteFiles) {
   folly::BenchmarkSuspender suspender;
   auto rowType = ROW({columnName}, {type});
 
@@ -279,7 +316,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
       createScanSpec(*batches, rowType, filterSpecs, hitRows, filters);
 
   std::vector<std::shared_ptr<HiveConnectorSplit>> splits =
-      createIcebergSplitsWithPositionalDelete(deletePct, 1);
+      createIcebergSplitsWithDeletes(deletePct, deleteFileKind, numDeleteFiles);
 
   core::TypedExprPtr remainingFilterExpr;
 
@@ -384,11 +421,36 @@ void run(
     float filterRateX100,
     float deleteRateX100,
     uint32_t nextSize) {
-  RowTypePtr rowType = ROW({columnName}, {type});
   IcebergSplitReaderBenchmark benchmark;
-  BIGINT()->toString();
   benchmark.readSingleColumn(
-      columnName, type, 0, filterRateX100, deleteRateX100, nextSize);
+      columnName,
+      type,
+      0,
+      filterRateX100,
+      deleteRateX100,
+      nextSize,
+      DeleteFileKind::kPositional,
+      1);
+}
+
+void runDeletes(
+    uint32_t,
+    const std::string& columnName,
+    const TypePtr& type,
+    float deleteRateX100,
+    DeleteFileKind deleteFileKind,
+    int32_t numDeleteFiles,
+    uint32_t nextSize) {
+  IcebergSplitReaderBenchmark benchmark;
+  benchmark.readSingleColumn(
+      columnName,
+      type,
+      0,
+      100,
+      deleteRateX100,
+      nextSize,
+      deleteFileKind,
+      numDeleteFiles);
 }
 
 } // namespace facebook::velox::iceberg::reader::test

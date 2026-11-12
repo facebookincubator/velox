@@ -18,10 +18,15 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/file/FileInputStream.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
+
+#include <chrono>
+#include <thread>
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -111,4 +116,39 @@ TEST_F(FileInputStreamTest, stats) {
     ASSERT_EQ(byteStream->stats().readBytes, testData.streamSize);
     ASSERT_GT(byteStream->stats().readTimeNs, 0);
   }
+}
+
+TEST_F(FileInputStreamTest, readTimeCountsEachReadOnce) {
+  tests::utils::registerFaultyFileSystem();
+  auto faultyFs = tests::utils::faultyFileSystem();
+  constexpr auto kReadDelay = std::chrono::milliseconds(100);
+  faultyFs->setFileInjectionHook([&](tests::utils::FaultFileOperation* op) {
+    if (op->type == tests::utils::FaultFileOperation::Type::kRead) {
+      std::this_thread::sleep_for(kReadDelay);
+    }
+  });
+  SCOPE_EXIT {
+    faultyFs->setFileInjectionHook(nullptr);
+  };
+
+  const auto filePath =
+      fmt::format("{}/{}", tempDirPath_->getPath(), fileId_++);
+  auto writeFile = fs_->openFileForWrite(filePath);
+  writeFile->append(std::string(1024, 'x'));
+  writeFile->close();
+
+  auto readFile = faultyFs->openFileForRead(fmt::format("faulty:{}", filePath));
+  // The constructor reads the first range synchronously.
+  const auto start = std::chrono::steady_clock::now();
+  common::FileInputStream stream(std::move(readFile), 1024, pool_.get());
+  const uint64_t constructorNs =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - start)
+          .count();
+  ASSERT_EQ(stream.stats().numReads, 1);
+  ASSERT_GE(
+      stream.stats().readTimeNs,
+      std::chrono::duration_cast<std::chrono::nanoseconds>(kReadDelay).count());
+  // Counting the read twice would exceed the time the whole constructor took.
+  ASSERT_LE(stream.stats().readTimeNs, constructorNs);
 }

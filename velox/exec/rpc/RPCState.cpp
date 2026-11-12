@@ -478,6 +478,9 @@ void RPCState::completeRow(
       .admissionEpoch = std::nullopt,
       .rttNs = rttNs,
   };
+  const int64_t numOverloadedAttempts = readyRow.response.numOverloadedAttempts;
+  const bool succeededAfterOverload =
+      !readyRow.response.hasError() && numOverloadedAttempts > 0;
   std::optional<PendingRow> pending;
   bool missingLease = false;
   bool capacityRetryEnabled = false;
@@ -499,6 +502,14 @@ void RPCState::completeRow(
     readyRow.sharedOverloadHandled = completion.sharedOverloadHandled;
     readyRow.admissionEpoch = completion.overloadEpoch;
   }
+
+  // Recorded under mutex_ on both exits below, including a capacity retry.
+  const auto recordFeedbackLocked = [&]() {
+    numOverloadedAttempts_ += numOverloadedAttempts;
+    if (succeededAfterOverload) {
+      ++numSuccessesAfterOverload_;
+    }
+  };
 
   // A capacity rejection with a retry hint goes back for another admission
   // while its budget lasts. Completion already gave back its slot above.
@@ -541,6 +552,7 @@ void RPCState::completeRow(
         if (pastBudget) {
           ++numCapacityRetryFloorRetries_;
         }
+        recordFeedbackLocked();
         if (!closed_) {
           retryRows_.push_back(
               RetryRow{
@@ -605,6 +617,7 @@ void RPCState::completeRow(
       rttMaxNs_ = std::max(rttMaxNs_, rttNs);
       ++numRttSamples_;
     }
+    recordFeedbackLocked();
 
     waiters = takeWaitersLocked();
   }
@@ -1202,6 +1215,8 @@ RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
       .numCompletionsSignaled = numCompletionsSignaled_,
       .numCapacityRetries = numCapacityRetries_,
       .numCapacityRetryFloorRetries = numCapacityRetryFloorRetries_,
+      .numOverloadedAttempts = numOverloadedAttempts_,
+      .numSuccessesAfterOverload = numSuccessesAfterOverload_,
   };
 }
 

@@ -510,10 +510,10 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
     }
 
     if (abandonPartial) {
-      builder.config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
-          .config(core::QueryConfig::kMaxPartialAggregationMemory, "0")
-          .config(core::QueryConfig::kMaxExtendedPartialAggregationMemory, "0");
+      builder.config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
+          .config(core::QueryConfig::kMaxPartialAggregationMemory, 0)
+          .config(core::QueryConfig::kMaxExtendedPartialAggregationMemory, 0);
     }
 
     if (!splits.empty()) {

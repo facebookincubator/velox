@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <atomic>
+#include <thread>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/core/Expressions.h"
@@ -253,6 +257,114 @@ TEST_F(TypedExprHashConsistencyTest, nestedExpressions) {
 
   // Idempotency
   EXPECT_EQ(castExpr->hash(), castExpr->hash());
+}
+
+namespace {
+
+// Returns a new left-deep chain plus(...plus(plus(c0, c1), c2)..., cN).
+TypedExprPtr makePlusChain(int numInputs) {
+  TypedExprPtr chain = std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0");
+  for (int i = 1; i < numInputs; ++i) {
+    chain = std::make_shared<CallTypedExpr>(
+        BIGINT(),
+        std::vector<TypedExprPtr>{
+            chain,
+            std::make_shared<FieldAccessTypedExpr>(
+                BIGINT(), fmt::format("c{}", i))},
+        "plus");
+  }
+  return chain;
+}
+
+// Negates its input and counts the calls to localHash().
+class CountingCallTypedExpr : public CallTypedExpr {
+ public:
+  CountingCallTypedExpr(TypedExprPtr input, int* numLocalHashes)
+      : CallTypedExpr{BIGINT(), "negate", std::move(input)},
+        numLocalHashes_{numLocalHashes} {}
+
+  size_t localHash() const override {
+    ++*numLocalHashes_;
+    return CallTypedExpr::localHash();
+  }
+
+ private:
+  int* numLocalHashes_;
+};
+
+} // namespace
+
+// The hash a node stores matches the hash of an identical tree that was never
+// hashed, however much of the tree was hashed before, and copies keep it.
+TEST_F(TypedExprHashConsistencyTest, cachedHash) {
+  const auto expected = makePlusChain(100)->hash();
+
+  // Hash a subtree first, then the whole tree.
+  {
+    const auto chain = makePlusChain(100);
+    chain->inputs()[0]->inputs()[0]->hash();
+    EXPECT_EQ(chain->hash(), expected);
+  }
+
+  // Copy a node before and after hashing it.
+  {
+    const auto chain = makePlusChain(100);
+    const auto& call = *std::dynamic_pointer_cast<const CallTypedExpr>(chain);
+    const CallTypedExpr copyBeforeHash(call);
+    EXPECT_EQ(chain->hash(), expected);
+    const CallTypedExpr copyAfterHash(call);
+    EXPECT_EQ(copyBeforeHash.hash(), expected);
+    EXPECT_EQ(copyAfterHash.hash(), expected);
+  }
+}
+
+// Hashing every node of a tree computes each node's local hash once, so the
+// cost grows with the number of nodes, not with nodes times depth.
+TEST_F(TypedExprHashConsistencyTest, hashEachNodeOnce) {
+  constexpr int kDepth{1'000};
+  int numLocalHashes{0};
+
+  // Build a chain of kDepth counting nodes over a column, root first.
+  std::vector<TypedExprPtr> nodes{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  for (int i = 0; i < kDepth; ++i) {
+    nodes.insert(
+        nodes.begin(),
+        std::make_shared<CountingCallTypedExpr>(
+            nodes.front(), &numLocalHashes));
+  }
+
+  // Hash every node from the root down, as compiling the tree does.
+  for (const auto& node : nodes) {
+    node->hash();
+  }
+
+  EXPECT_EQ(numLocalHashes, kDepth);
+}
+
+// Threads hashing the same tree at once all get the same hash.
+TEST_F(TypedExprHashConsistencyTest, concurrentHash) {
+  constexpr int kNumThreads{8};
+  const auto expected = makePlusChain(1'000)->hash();
+  const auto chain = makePlusChain(1'000);
+
+  std::atomic<bool> start{false};
+  std::vector<size_t> hashes(kNumThreads);
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i] {
+      while (!start.load()) {
+      }
+      hashes[i] = chain->hash();
+    });
+  }
+  start = true;
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  EXPECT_THAT(hashes, testing::Each(expected));
 }
 
 // Test lambda expressions
