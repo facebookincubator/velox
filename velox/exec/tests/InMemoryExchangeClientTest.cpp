@@ -15,6 +15,8 @@
  */
 #include "velox/exec/InMemoryExchangeClient.h"
 #include <folly/ScopeGuard.h>
+#include <folly/executors/ManualExecutor.h>
+#include <folly/synchronization/Baton.h>
 #include <gtest/gtest.h>
 #include <atomic>
 #include <thread>
@@ -564,6 +566,245 @@ TEST_P(InMemoryExchangeClientTest, callNextAfterClose) {
   EXPECT_FALSE(futureFinal.valid());
 
   client->close();
+}
+
+// close() must not close a source while another thread is still inside a call
+// the client made into it, because the source's close() can free what that
+// call is using. A source that reads data inside request() crashes this way
+// when a driver closes the exchange during the read. The call then enqueues
+// its data into the closed queue, which must free it at once: the client can
+// outlive the memory pool the data came from.
+TEST_P(InMemoryExchangeClientTest, closeDuringSourceCall) {
+  // Parks in its request calls until released, then enqueues a page backed by
+  // its pool. Records a close() that arrives while a call is still running.
+  class ParkingExchangeSource : public ExchangeSource {
+   public:
+    ParkingExchangeSource(
+        const std::string& taskId,
+        int destination,
+        std::shared_ptr<ExchangeQueue> queue,
+        memory::MemoryPool* pool,
+        folly::Baton<>& entered,
+        folly::Baton<>& release)
+        : ExchangeSource(taskId, destination, std::move(queue), pool),
+          entered_(entered),
+          release_(release) {}
+
+    bool shouldRequestLocked() override {
+      return true;
+    }
+
+    folly::SemiFuture<Response> request(
+        uint32_t /*maxBytes*/,
+        std::chrono::microseconds /*maxWait*/) override {
+      return park();
+    }
+
+    folly::SemiFuture<Response> requestDataSizes(
+        std::chrono::microseconds /*maxWait*/) override {
+      return park();
+    }
+
+    void close() override {
+      closedDuringCall_ = inCall_.load();
+      ++numCloses_;
+    }
+
+    folly::F14FastMap<std::string, int64_t> stats() const override {
+      return {};
+    }
+
+    std::atomic_bool closedDuringCall_{false};
+    std::atomic_int32_t numCloses_{0};
+
+   private:
+    folly::SemiFuture<Response> park() {
+      inCall_ = true;
+      entered_.post();
+      release_.wait();
+      auto buffer = AlignedBuffer::allocate<char>(1'024, pool_.get());
+      auto ioBuf = folly::IOBuf::wrapBuffer(buffer->as<char>(), buffer->size());
+      InMemoryExchangeClientTest::enqueue(
+          *queue_,
+          std::make_unique<PrestoSerializedPage>(
+              std::move(ioBuf),
+              [buffer = std::move(buffer)](auto& /*unused*/) {}));
+      inCall_ = false;
+      return folly::makeSemiFuture(Response{0, true, {}});
+    }
+
+    folly::Baton<>& entered_;
+    folly::Baton<>& release_;
+    std::atomic_bool inCall_{false};
+  };
+
+  // Owned here and by the source. Declared first so that it outlives the client
+  // and the source if an assertion below fails.
+  auto clientPool = rootPool_->addLeafChild("closeDuringSourceCall");
+  folly::Baton<> entered;
+  folly::Baton<> release;
+  std::shared_ptr<ParkingExchangeSource> source;
+  ExchangeSource::factories().clear();
+  ExchangeSource::registerFactory(
+      [&](const auto& taskId, auto destination, auto queue, auto pool)
+          -> std::shared_ptr<ExchangeSource> {
+        source = std::make_shared<ParkingExchangeSource>(
+            taskId, destination, queue, pool, entered, release);
+        return source;
+      });
+  SCOPE_EXIT {
+    ExchangeSource::factories().clear();
+    ExchangeSource::registerFactory(test::createLocalExchangeSource);
+  };
+
+  // Runs the client's response callbacks only when drained.
+  folly::ManualExecutor callbackExecutor;
+  auto client = std::make_shared<InMemoryExchangeClient>(
+      "test",
+      0,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
+      1,
+      0,
+      clientPool.get(),
+      &callbackExecutor);
+
+  // addRemoteTaskId() calls into the new source on the calling thread.
+  std::thread requester([&]() { client->addRemoteTaskId("parking://0"); });
+  entered.wait();
+
+  client->close();
+  EXPECT_EQ(source->numCloses_, 0);
+
+  release.post();
+  requester.join();
+  EXPECT_EQ(source->numCloses_, 1);
+  EXPECT_FALSE(source->closedDuringCall_);
+  ASSERT_EQ(clientPool->usedBytes(), 0);
+
+  // Leave the last references to the client's response callbacks and run them
+  // one at a time, as in production: the thenValue() callback destroys the
+  // source, the pool's last owner, then the thenError() callback destroys the
+  // client with its queue.
+  const std::weak_ptr<memory::MemoryPool> weakPool = clientPool;
+  const std::weak_ptr<InMemoryExchangeClient> weakClient = client;
+  client.reset();
+  source.reset();
+  clientPool.reset();
+  ASSERT_FALSE(weakClient.expired());
+  ASSERT_FALSE(weakPool.expired());
+
+  ASSERT_EQ(callbackExecutor.step(), 1);
+  ASSERT_TRUE(weakPool.expired());
+  ASSERT_FALSE(weakClient.expired());
+
+  ASSERT_EQ(callbackExecutor.step(), 1);
+  EXPECT_TRUE(weakClient.expired());
+}
+
+// A source whose close() throws must not stop close() from closing the other
+// sources and the queue, and close() must not throw: destructors call it.
+TEST_P(InMemoryExchangeClientTest, closeWithThrowingSource) {
+  enum class CloseFailure { kNone, kVeloxException, kNonStdException };
+
+  // Counts its close() calls, and throws from close() as 'closeFailure' says.
+  class ClosingSource : public ExchangeSource {
+   public:
+    ClosingSource(
+        const std::string& taskId,
+        int destination,
+        std::shared_ptr<ExchangeQueue> queue,
+        memory::MemoryPool* pool,
+        CloseFailure closeFailure)
+        : ExchangeSource(taskId, destination, std::move(queue), pool),
+          closeFailure_(closeFailure) {}
+
+    bool shouldRequestLocked() override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> request(
+        uint32_t /*maxBytes*/,
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> requestDataSizes(
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    void close() override {
+      ++numCloses;
+      if (closeFailure_ == CloseFailure::kVeloxException) {
+        VELOX_FAIL("Testing close failure");
+      }
+      if (closeFailure_ == CloseFailure::kNonStdException) {
+        throw 1;
+      }
+    }
+
+    folly::F14FastMap<std::string, int64_t> stats() const override {
+      return {};
+    }
+
+    int32_t numCloses{0};
+
+   private:
+    const CloseFailure closeFailure_;
+  };
+
+  // The first source throws a VeloxException from close(), the second a value
+  // that is not a std::exception.
+  const std::vector<CloseFailure> closeFailures{
+      CloseFailure::kVeloxException,
+      CloseFailure::kNonStdException,
+      CloseFailure::kNone};
+  std::vector<std::shared_ptr<ClosingSource>> sources;
+  ExchangeSource::factories().clear();
+  ExchangeSource::registerFactory(
+      [&](const auto& taskId, auto destination, auto queue, auto pool)
+          -> std::shared_ptr<ExchangeSource> {
+        sources.push_back(
+            std::make_shared<ClosingSource>(
+                taskId,
+                destination,
+                queue,
+                pool,
+                closeFailures[sources.size()]));
+        return sources.back();
+      });
+  SCOPE_EXIT {
+    ExchangeSource::factories().clear();
+    ExchangeSource::registerFactory(test::createLocalExchangeSource);
+  };
+
+  // With lazy fetching the client makes no calls into the sources, so close()
+  // closes them itself instead of leaving that to a call in flight.
+  auto client = std::make_shared<InMemoryExchangeClient>(
+      "test",
+      0,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
+      1,
+      0,
+      pool(),
+      executor(),
+      10, // requestDataSizesMaxWaitSec
+      false, // skipRequestDataSizeWithSingleSource
+      true); // lazyFetching
+  for (size_t i = 0; i < closeFailures.size(); ++i) {
+    client->addRemoteTaskId(fmt::format("closing://{}", i));
+  }
+  ASSERT_EQ(sources.size(), closeFailures.size());
+
+  EXPECT_NO_THROW(client->close());
+  for (const auto& source : sources) {
+    EXPECT_EQ(source->numCloses, 1);
+  }
+
+  // A closed queue frees a page as soon as it is enqueued.
+  const auto& queue = client->queue();
+  enqueue(*queue, makePage(1'000));
+  EXPECT_TRUE(queue->empty());
 }
 
 TEST_P(InMemoryExchangeClientTest, acknowledge) {
@@ -1211,6 +1452,93 @@ DEBUG_ONLY_TEST_P(InMemoryExchangeClientTest, requestRacingClose) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   ASSERT_TRUE(source.expired());
+}
+
+// The source below sets 'atEnd_' under the queue mutex, while toString() and
+// toJson() read it under no lock. A TSAN build reports a data race here unless
+// 'atEnd_' is atomic.
+TEST_P(InMemoryExchangeClientTest, atEndReadWhileSet) {
+  class EndingSource : public ExchangeSource {
+   public:
+    EndingSource(std::shared_ptr<ExchangeQueue> queue, memory::MemoryPool* pool)
+        : ExchangeSource("task.0.0.0", 0, std::move(queue), pool) {}
+
+    bool shouldRequestLocked() override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> request(
+        uint32_t /*maxBytes*/,
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> requestDataSizes(
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    void close() override {}
+
+    void end() {
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      atEnd_ = true;
+    }
+  };
+
+  auto queue = std::make_shared<ExchangeQueue>(1, 0);
+  auto source = std::make_shared<EndingSource>(queue, pool());
+  std::thread ender([&] { source->end(); });
+  for (int i = 0; i < 1'000; ++i) {
+    source->toString();
+    source->toJson();
+  }
+  ender.join();
+  ASSERT_TRUE(source->toJson()["atEnd"].asBool());
+}
+
+// The source below advances 'sequence_' under the queue mutex, while toJson()
+// reads it under no lock. A TSAN build reports a data race here unless
+// 'sequence_' is atomic.
+TEST_P(InMemoryExchangeClientTest, sequenceReadWhileSet) {
+  class AdvancingSource : public ExchangeSource {
+   public:
+    AdvancingSource(
+        std::shared_ptr<ExchangeQueue> queue,
+        memory::MemoryPool* pool)
+        : ExchangeSource("task.0.0.0", 0, std::move(queue), pool) {}
+
+    bool shouldRequestLocked() override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> request(
+        uint32_t /*maxBytes*/,
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    folly::SemiFuture<Response> requestDataSizes(
+        std::chrono::microseconds /*maxWait*/) override {
+      VELOX_UNREACHABLE();
+    }
+
+    void close() override {}
+
+    void advance() {
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      ++sequence_;
+    }
+  };
+
+  auto queue = std::make_shared<ExchangeQueue>(1, 0);
+  auto source = std::make_shared<AdvancingSource>(queue, pool());
+  std::thread advancer([&] { source->advance(); });
+  for (int i = 0; i < 1'000; ++i) {
+    source->toJson();
+  }
+  advancer.join();
+  ASSERT_EQ(source->toJson()["sequence"].asInt(), 1);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
