@@ -60,6 +60,10 @@ __device__ T reduce(T input, Func func, void* temp) {
     warpResult =
         facebook::velox::wave::WarpReduce<T, kNumWarps>().reduce(val, func);
   }
+  // The first warp is still reading 'temp' when the others leave. A caller
+  // that reduces again in a loop would otherwise have its other warps store
+  // their next partials over the ones being read.
+  __syncthreads();
   return warpResult;
 }
 

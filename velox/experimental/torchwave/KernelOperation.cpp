@@ -27,6 +27,15 @@
 
 namespace torch::wave {
 
+void KernelOperation::addStaticShape(
+    int32_t offset,
+    std::vector<int64_t> dims,
+    bool contiguous) {
+  auto [it, inserted] =
+      staticShapes_.emplace(offset, StaticShape{std::move(dims), contiguous});
+  it->second.contiguous |= contiguous;
+}
+
 // --- SizeExpr ---
 
 int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
@@ -1625,7 +1634,11 @@ void KernelOperation::setOutputs(
     auto* producer = value->producer();
     if (producer) {
       const auto* am = argMetaForInput(meta, node, i);
-      bool inputInMemory = am && !am->isRegister;
+      // The producer of a view the expression computes through is never
+      // written, but its shape is: leaves below the view index against it.
+      bool inputInMemory = am && !am->isRegister &&
+          !compileCtx_.fusesThroughView(node) &&
+          !compileCtx_.fusesRowReduction(node);
       setOutputs(
           producer,
           subgraphInputs,
