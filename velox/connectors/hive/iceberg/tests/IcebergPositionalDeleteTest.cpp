@@ -63,11 +63,7 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
 
   std::shared_ptr<TempFilePath> writeBigintDataFile(
       const std::vector<int64_t>& values) {
-    auto dataFilePath = TempFilePath::create();
-    writeToFile(
-        dataFilePath->getPath(),
-        {makeRowVector({makeFlatVector<int64_t>(values)})});
-    return dataFilePath;
+    return writeToFile(makeRowVector({makeFlatVector<int64_t>(values)}));
   }
 
   void assertSingleBaseFileSingleDeleteFile(

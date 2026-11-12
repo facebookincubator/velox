@@ -436,8 +436,7 @@ class MixedUnionBarrierTest : public HiveConnectorTestBase {
     std::vector<std::shared_ptr<TempFilePath>> files;
     files.reserve(data.size());
     for (const auto& vector : data) {
-      auto file = TempFilePath::create();
-      writeToFile(file->getPath(), vector);
+      auto file = writeToFile(vector);
       files.push_back(file);
     }
     return files;
@@ -485,10 +484,8 @@ TEST_F(MixedUnionBarrierTest, barrierExecution) {
   });
 
   // Write data to files
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightData);
+  auto leftFile = writeToFile(leftData);
+  auto rightFile = writeToFile(rightData);
 
   // Build plan with MixedUnion
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -550,12 +547,10 @@ TEST_F(MixedUnionBarrierTest, barrierWithMultipleSplits) {
             [i](auto row) { return i * 10000 + row * 10 + 5000; }),
     });
 
-    auto leftFile = TempFilePath::create();
-    writeToFile(leftFile->getPath(), leftData);
+    auto leftFile = writeToFile(leftData);
     leftFiles.push_back(leftFile);
 
-    auto rightFile = TempFilePath::create();
-    writeToFile(rightFile->getPath(), rightData);
+    auto rightFile = writeToFile(rightData);
     rightFiles.push_back(rightFile);
   }
 
@@ -608,10 +603,8 @@ TEST_F(MixedUnionBarrierTest, barrierWithProject) {
       makeFlatVector<int64_t>(50, [](auto row) { return (row + 50) * 2; }),
   });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightData);
+  auto leftFile = writeToFile(leftData);
+  auto rightFile = writeToFile(rightData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanNodeId;
@@ -663,10 +656,8 @@ TEST_F(MixedUnionBarrierTest, barrierWithFilter) {
       makeFlatVector<int64_t>(100, [](auto row) { return row * 10 + 1000; }),
   });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightData);
+  auto leftFile = writeToFile(leftData);
+  auto rightFile = writeToFile(rightData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanNodeId;
@@ -724,12 +715,9 @@ TEST_F(MixedUnionBarrierTest, barrierWithThreeSources) {
       makeFlatVector<int64_t>(100, [](auto row) { return row * 10 + 2000; }),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
-  auto file3 = TempFilePath::create();
-  writeToFile(file3->getPath(), data3);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
+  auto file3 = writeToFile(data3);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanNodeId1;
@@ -779,10 +767,8 @@ TEST_F(MixedUnionBarrierTest, barrierWithEmptySource) {
       makeFlatVector<int64_t>({}),
   });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightData);
+  auto leftFile = writeToFile(leftData);
+  auto rightFile = writeToFile(rightData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanNodeId;
@@ -829,10 +815,8 @@ TEST_F(MixedUnionBarrierTest, barrierWithUnequalSourceSizes) {
       makeFlatVector<int64_t>(10, [](auto row) { return row * 10 + 10000; }),
   });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightData);
+  auto leftFile = writeToFile(leftData);
+  auto rightFile = writeToFile(rightData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanNodeId;
@@ -877,10 +861,8 @@ TEST_F(MixedUnionBarrierTest, barrierTaskStats) {
       makeFlatVector<int64_t>(100, [](auto row) { return row * 10 + 1000; }),
   });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightData);
+  auto leftFile = writeToFile(leftData);
+  auto rightFile = writeToFile(rightData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanNodeId;
@@ -945,12 +927,10 @@ TEST_F(MixedUnionBarrierTest, barrierMultipleBarrierCycles) {
             [i](auto row) { return i * 10000 + row * 10 + 5000; }),
     });
 
-    auto leftFile = TempFilePath::create();
-    writeToFile(leftFile->getPath(), leftData);
+    auto leftFile = writeToFile(leftData);
     leftFiles.push_back(leftFile);
 
-    auto rightFile = TempFilePath::create();
-    writeToFile(rightFile->getPath(), rightData);
+    auto rightFile = writeToFile(rightData);
     rightFiles.push_back(rightFile);
   }
 
@@ -1008,10 +988,8 @@ TEST_F(MixedUnionBarrierTest, barrierWithSourceFinishedBeforeDrain) {
       makeFlatVector<int64_t>(1, [](auto /*row*/) { return 99990; }),
   });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightData);
+  auto leftFile = writeToFile(leftData);
+  auto rightFile = writeToFile(rightData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanNodeId;
@@ -1054,10 +1032,8 @@ TEST_F(MixedUnionBarrierTest, barrierWithAllEmptySources) {
       makeFlatVector<int64_t>({}),
   });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), emptyData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), emptyData);
+  auto leftFile = writeToFile(emptyData);
+  auto rightFile = writeToFile(emptyData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanNodeId;
@@ -1108,12 +1084,9 @@ TEST_F(MixedUnionBarrierTest, barrierWithThreeSourcesOneEmpty) {
       makeFlatVector<int64_t>(50, [](auto row) { return row * 10 + 2000; }),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), emptyData);
-  auto file3 = TempFilePath::create();
-  writeToFile(file3->getPath(), data3);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(emptyData);
+  auto file3 = writeToFile(data3);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanNodeId1;
@@ -1231,10 +1204,8 @@ TEST_F(MixedUnionBarrierTest, drainWithPendingDataOnOneSide) {
       makeFlatVector<int64_t>(50, [](auto row) { return row * 10 + 10000; }),
   });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightData);
+  auto leftFile = writeToFile(leftData);
+  auto rightFile = writeToFile(rightData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanNodeId;
@@ -1298,12 +1269,10 @@ TEST_F(MixedUnionBarrierTest, multipleBarrierCyclesAlternatingCompletion) {
             rightRows, [i](auto row) { return i * 10000 + row * 10 + 5000; }),
     });
 
-    auto leftFile = TempFilePath::create();
-    writeToFile(leftFile->getPath(), leftData);
+    auto leftFile = writeToFile(leftData);
     leftFiles.push_back(leftFile);
 
-    auto rightFile = TempFilePath::create();
-    writeToFile(rightFile->getPath(), rightData);
+    auto rightFile = writeToFile(rightData);
     rightFiles.push_back(rightFile);
   }
 
@@ -1366,12 +1335,9 @@ TEST_F(MixedUnionBarrierTest, drainThreeSourcesMixedStates) {
       makeFlatVector<int64_t>(500, [](auto row) { return row * 10 + 2000; }),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
-  auto file3 = TempFilePath::create();
-  writeToFile(file3->getPath(), data3);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
+  auto file3 = writeToFile(data3);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanNodeId1;
@@ -1435,12 +1401,10 @@ TEST_F(MixedUnionBarrierTest, rapidBarrierCyclesMinimalData) {
             kRowsPerSplit, [i](auto row) { return i * 1000 + row * 10 + 500; }),
     });
 
-    auto leftFile = TempFilePath::create();
-    writeToFile(leftFile->getPath(), leftData);
+    auto leftFile = writeToFile(leftData);
     leftFiles.push_back(leftFile);
 
-    auto rightFile = TempFilePath::create();
-    writeToFile(rightFile->getPath(), rightData);
+    auto rightFile = writeToFile(rightData);
     rightFiles.push_back(rightFile);
   }
 
@@ -1492,10 +1456,8 @@ TEST_F(MixedUnionBarrierTest, barrierWithAggregation) {
       makeFlatVector<int64_t>(100, [](auto row) { return row + 100; }),
   });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftData);
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightData);
+  auto leftFile = writeToFile(leftData);
+  auto rightFile = writeToFile(rightData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanNodeId;
