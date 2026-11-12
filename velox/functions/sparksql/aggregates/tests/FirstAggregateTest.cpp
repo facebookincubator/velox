@@ -641,8 +641,8 @@ TEST_F(FirstAggregateTest, spillingAndSorting) {
 
   exec::TestScopedSpillInjection scopedSpillInjection(100);
   results = AssertQueryBuilder(plan)
-                .config(core::QueryConfig::kSpillEnabled, "true")
-                .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+                .config(core::QueryConfig::kSpillEnabled, true)
+                .config(core::QueryConfig::kAggregationSpillEnabled, true)
                 .spillDirectory(spillDirectory->getPath())
                 .copyResults(pool());
   exec::test::assertEqualResults({expected}, {results});

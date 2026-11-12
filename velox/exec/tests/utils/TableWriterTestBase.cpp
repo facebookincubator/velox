@@ -240,8 +240,8 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
           numPartitionedTableWriterCount_)
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(QueryConfig::kWriterSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kWriterSpillEnabled, true)
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
       .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
@@ -265,8 +265,8 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
         .config(
             QueryConfig::kTaskPartitionedWriterCount,
             numPartitionedTableWriterCount_)
-        .config(core::QueryConfig::kSpillEnabled, "true")
-        .config(QueryConfig::kWriterSpillEnabled, "true")
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(QueryConfig::kWriterSpillEnabled, true)
         // Scale writer settings to trigger partition rebalancing.
         .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
         .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
@@ -286,8 +286,8 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
           numPartitionedTableWriterCount_)
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(QueryConfig::kWriterSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kWriterSpillEnabled, true)
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
       .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
@@ -327,8 +327,8 @@ RowVectorPtr TableWriterTestBase::runQueryWithWriterConfigs(
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
           numPartitionedTableWriterCount_)
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(QueryConfig::kWriterSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kWriterSpillEnabled, true)
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
       .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)

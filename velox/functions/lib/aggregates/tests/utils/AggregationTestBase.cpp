@@ -1306,8 +1306,8 @@ void AggregationTestBase::testAggregationsImpl(
 
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
     queryBuilder.configs(config)
-        .config(core::QueryConfig::kSpillEnabled, "true")
-        .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kAggregationSpillEnabled, true)
         .spillDirectory(spillDirectory->getPath());
 
     exec::TestScopedSpillInjection scopedSpillInjection(100);

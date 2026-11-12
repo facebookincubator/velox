@@ -216,7 +216,7 @@ TEST_P(EqualityDeleteFileReaderTestP, basicSingleColumnDelete) {
       });
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({3, 7})});
+  auto deleteData = makeNamedRowVector("id", makeFlatVector<int64_t>({3, 7}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   auto icebergDeleteFile =
@@ -249,7 +249,7 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityColumnNotInProjection) {
       });
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({3, 7})});
+  auto deleteData = makeNamedRowVector("id", makeFlatVector<int64_t>({3, 7}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   auto icebergDeleteFile =
@@ -259,9 +259,9 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityColumnNotInProjection) {
   auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  auto expected = makeRowVector(
-      {"value"},
-      {makeFlatVector<std::string>({"a", "b", "c", "e", "f", "g", "i", "j"})});
+  auto expected = makeNamedRowVector(
+      "value",
+      makeFlatVector<std::string>({"a", "b", "c", "e", "f", "g", "i", "j"}));
   assertEqualResults({expected}, {result});
 }
 
@@ -273,7 +273,7 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteColumnAddedBySecondSplit) {
   // scan spec.
   auto outputType = ROW("value", VARCHAR());
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({6, 8})});
+  auto deleteData = makeNamedRowVector("id", makeFlatVector<int64_t>({6, 8}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
   auto icebergDeleteFile =
       makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
@@ -316,10 +316,10 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteColumnAddedBySecondSplit) {
                     .copyResults(pool());
 
   // Only the second split loses rows, id=6 ('g') and id=8 ('i').
-  auto expected = makeRowVector(
-      {"value"},
-      {makeFlatVector<std::string>(
-          {"a", "b", "c", "d", "e", "f", "h", "j", "k", "l", "m", "n", "o"})});
+  auto expected = makeNamedRowVector(
+      "value",
+      makeFlatVector<std::string>(
+          {"a", "b", "c", "d", "e", "f", "h", "j", "k", "l", "m", "n", "o"}));
 
   assertEqualResults({expected}, {result});
 }
@@ -338,7 +338,7 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteSplitCoveringNoRows) {
       });
   auto dataFile = writeDataFileP({data}, {1, 2});
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 3})});
+  auto deleteData = makeNamedRowVector("id", makeFlatVector<int64_t>({1, 3}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
   auto icebergDeleteFile =
       makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
@@ -373,12 +373,12 @@ TEST_P(EqualityDeleteFileReaderTestP, multipleDeleteFilesSameMissingColumn) {
       });
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  auto deleteData1 = makeRowVector({"id"}, {makeFlatVector<int64_t>({2, 5})});
+  auto deleteData1 = makeNamedRowVector("id", makeFlatVector<int64_t>({2, 5}));
   auto eqDeleteFile1 = writeDataFileP({deleteData1}, {1});
   auto icebergDeleteFile1 =
       makeDeleteFile(eqDeleteFile1->getPath(), {1}, GetParam().format);
 
-  auto deleteData2 = makeRowVector({"id"}, {makeFlatVector<int64_t>({0, 9})});
+  auto deleteData2 = makeNamedRowVector("id", makeFlatVector<int64_t>({0, 9}));
   auto eqDeleteFile2 = writeDataFileP({deleteData2}, {1});
   auto icebergDeleteFile2 =
       makeDeleteFile(eqDeleteFile2->getPath(), {1}, GetParam().format);
@@ -388,8 +388,8 @@ TEST_P(EqualityDeleteFileReaderTestP, multipleDeleteFilesSameMissingColumn) {
   auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  auto expected = makeRowVector(
-      {"value"}, {makeFlatVector<std::string>({"b", "d", "e", "g", "h", "i"})});
+  auto expected = makeNamedRowVector(
+      "value", makeFlatVector<std::string>({"b", "d", "e", "g", "h", "i"}));
   assertEqualResults({expected}, {result});
 }
 
@@ -447,7 +447,7 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityFilterOnlyColumnNotInProjection) {
       });
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({4, 8})});
+  auto deleteData = makeNamedRowVector("id", makeFlatVector<int64_t>({4, 8}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   auto icebergDeleteFile =
@@ -466,8 +466,8 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityFilterOnlyColumnNotInProjection) {
                   .planNode();
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  auto expected = makeRowVector(
-      {"value"}, {makeFlatVector<std::string>({"d", "f", "g", "h", "j"})});
+  auto expected = makeNamedRowVector(
+      "value", makeFlatVector<std::string>({"d", "f", "g", "h", "j"}));
   assertEqualResults({expected}, {result});
 }
 
@@ -499,8 +499,8 @@ TEST_P(EqualityDeleteFileReaderTestP, multiColumnDelete) {
   auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  auto expected = makeRowVector(
-      {"value"}, {makeFlatVector<std::string>({"a", "b", "d", "e"})});
+  auto expected = makeNamedRowVector(
+      "value", makeFlatVector<std::string>({"a", "b", "d", "e"}));
   assertEqualResults({expected}, {result});
 }
 
@@ -518,12 +518,12 @@ TEST_P(EqualityDeleteFileReaderTestP, twoDeleteFiles) {
       });
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  auto deleteData1 = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 5})});
+  auto deleteData1 = makeNamedRowVector("id", makeFlatVector<int64_t>({1, 5}));
   auto eqDeleteFile1 = writeDataFileP({deleteData1}, {1});
   auto icebergDelete1 =
       makeDeleteFile(eqDeleteFile1->getPath(), {1}, GetParam().format);
 
-  auto deleteData2 = makeRowVector({"id"}, {makeFlatVector<int64_t>({3, 8})});
+  auto deleteData2 = makeNamedRowVector("id", makeFlatVector<int64_t>({3, 8}));
   auto eqDeleteFile2 = writeDataFileP({deleteData2}, {1});
   auto icebergDelete2 =
       makeDeleteFile(eqDeleteFile2->getPath(), {1}, GetParam().format);
@@ -534,8 +534,8 @@ TEST_P(EqualityDeleteFileReaderTestP, twoDeleteFiles) {
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   // Deleted: 1,3,5,8. Surviving: 0,2,4,6,7,9.
-  auto expected = makeRowVector(
-      {"value"}, {makeFlatVector<std::string>({"a", "c", "e", "g", "h", "j"})});
+  auto expected = makeNamedRowVector(
+      "value", makeFlatVector<std::string>({"a", "c", "e", "g", "h", "j"}));
   assertEqualResults({expected}, {result});
 }
 
@@ -543,11 +543,11 @@ TEST_P(EqualityDeleteFileReaderTestP, twoDeleteFiles) {
 TEST_P(EqualityDeleteFileReaderTestP, noMatchingDeletes) {
   auto rowType = ROW({"id"}, {BIGINT()});
 
-  auto baseData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto baseData = makeNamedRowVector("id", makeFlatVector<int64_t>({1, 2, 3}));
   auto dataFile = writeDataFileP({baseData}, {1});
 
   auto deleteData =
-      makeRowVector({"id"}, {makeFlatVector<int64_t>({100, 200})});
+      makeNamedRowVector("id", makeFlatVector<int64_t>({100, 200}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   auto icebergDeleteFile =
@@ -558,17 +558,18 @@ TEST_P(EqualityDeleteFileReaderTestP, noMatchingDeletes) {
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   assertEqualResults(
-      {makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})})}, {result});
+      {makeNamedRowVector("id", makeFlatVector<int64_t>({1, 2, 3}))}, {result});
 }
 
 /// Every row is deleted.
 TEST_P(EqualityDeleteFileReaderTestP, allRowsDeleted) {
   auto rowType = ROW({"id"}, {BIGINT()});
 
-  auto baseData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto baseData = makeNamedRowVector("id", makeFlatVector<int64_t>({1, 2, 3}));
   auto dataFile = writeDataFileP({baseData}, {1});
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto deleteData =
+      makeNamedRowVector("id", makeFlatVector<int64_t>({1, 2, 3}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   auto icebergDeleteFile = makeDeleteFile(
@@ -594,7 +595,7 @@ TEST_P(EqualityDeleteFileReaderTestP, stringColumnDelete) {
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
   auto deleteData =
-      makeRowVector({"name"}, {makeFlatVector<std::string>({"bob", "dave"})});
+      makeNamedRowVector("name", makeFlatVector<std::string>({"bob", "dave"}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   auto icebergDeleteFile =
@@ -733,7 +734,7 @@ TEST_P(EqualityDeleteFileReaderTestP, deleteOnSecondColumn) {
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
   auto deleteData =
-      makeRowVector({"category"}, {makeFlatVector<std::string>({"B"})});
+      makeNamedRowVector("category", makeFlatVector<std::string>({"B"}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {2});
 
   auto icebergDeleteFile = makeDeleteFile(
@@ -764,7 +765,7 @@ TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberDeleteApplies) {
       });
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({2, 4})});
+  auto deleteData = makeNamedRowVector("id", makeFlatVector<int64_t>({2, 4}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   // deleteSeqNum=5 > dataSeqNum=3 => applies.
@@ -797,7 +798,8 @@ TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberDeleteSkipped) {
       });
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto deleteData =
+      makeNamedRowVector("id", makeFlatVector<int64_t>({1, 2, 3}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   // deleteSeqNum=2 <= dataSeqNum=5 => skipped.
@@ -830,7 +832,8 @@ TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberEqualSkipped) {
       });
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto deleteData =
+      makeNamedRowVector("id", makeFlatVector<int64_t>({1, 2, 3}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   // deleteSeqNum=5 == dataSeqNum=5 => skipped.
@@ -855,10 +858,10 @@ TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberEqualSkipped) {
 TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberZeroAlwaysApplies) {
   auto rowType = ROW({"id"}, {BIGINT()});
 
-  auto baseData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto baseData = makeNamedRowVector("id", makeFlatVector<int64_t>({1, 2, 3}));
   auto dataFile = writeDataFileP({baseData}, {1});
 
-  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({2})});
+  auto deleteData = makeNamedRowVector("id", makeFlatVector<int64_t>({2}));
   auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
   // deleteSeqNum=0 => filtering disabled, applies despite dataSeqNum=10.
@@ -871,7 +874,7 @@ TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberZeroAlwaysApplies) {
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   assertEqualResults(
-      {makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 3})})}, {result});
+      {makeNamedRowVector("id", makeFlatVector<int64_t>({1, 3}))}, {result});
 }
 
 /// Only delete files with higher sequence numbers than the data file apply.
@@ -887,13 +890,13 @@ TEST_P(EqualityDeleteFileReaderTestP, mixedSequenceNumbers) {
   auto dataFile = writeDataFileP({baseData}, {1, 2});
 
   // seqNum=10 > dataSeqNum=5 => applied.
-  auto deleteData1 = makeRowVector({"id"}, {makeFlatVector<int64_t>({2})});
+  auto deleteData1 = makeNamedRowVector("id", makeFlatVector<int64_t>({2}));
   auto eqDeleteFile1 = writeDataFileP({deleteData1}, {1});
   auto icebergDeleteFile1 = makeDeleteFile(
       eqDeleteFile1->getPath(), {1}, GetParam().format, 1, /*deleteSeqNum=*/10);
 
   // seqNum=3 <= dataSeqNum=5 => skipped.
-  auto deleteData2 = makeRowVector({"id"}, {makeFlatVector<int64_t>({4})});
+  auto deleteData2 = makeNamedRowVector("id", makeFlatVector<int64_t>({4}));
   auto eqDeleteFile2 = writeDataFileP({deleteData2}, {1});
   auto icebergDeleteFile2 = makeDeleteFile(
       eqDeleteFile2->getPath(), {1}, GetParam().format, 1, /*deleteSeqNum=*/3);
@@ -962,7 +965,7 @@ TEST_F(
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   assertEqualResults(
-      {makeRowVector({"value"}, {makeFlatVector<std::string>({"a", "c"})})},
+      {makeNamedRowVector("value", makeFlatVector<std::string>({"a", "c"}))},
       {result});
 }
 
@@ -1008,8 +1011,8 @@ TEST_F(
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   assertEqualResults(
-      {makeRowVector(
-          {"value"}, {makeFlatVector<std::string>({"a", "b", "c"})})},
+      {makeNamedRowVector(
+          "value", makeFlatVector<std::string>({"a", "b", "c"}))},
       {result});
 }
 
@@ -1057,7 +1060,7 @@ TEST_F(
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   assertEqualResults(
-      {makeRowVector({"value"}, {makeFlatVector<std::string>({"a", "c"})})},
+      {makeNamedRowVector("value", makeFlatVector<std::string>({"a", "c"}))},
       {result});
 }
 
@@ -1106,7 +1109,7 @@ TEST_F(
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   assertEqualResults(
-      {makeRowVector({"value"}, {makeFlatVector<std::string>({"a", "c"})})},
+      {makeNamedRowVector("value", makeFlatVector<std::string>({"a", "c"}))},
       {result});
 }
 

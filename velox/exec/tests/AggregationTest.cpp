@@ -1952,8 +1952,8 @@ TEST_F(AggregationTest, groupingSetsEmptyInput) {
 // set, not one per empty driver. The barrier fires on both the single-step and
 // the partial step.
 TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
-  auto data = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 2, 3, 4})});
+  auto data = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(std::vector<int64_t>{1, 2, 3, 4}));
 
   // One default row: a null for the () set, group_id 1, count 0.
   auto expected = makeRowVector({
@@ -1998,8 +1998,8 @@ TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
 // count==0 default row from the starved drivers, for either the single-step or
 // the partial + final aggregation.
 TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverNonEmpty) {
-  auto data = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1})});
+  auto data = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1}));
 
   // Two rows: per-key (1, 0, 4) and grand total (null, 1, 4). No count==0 row.
   auto expected = makeRowVector({
@@ -2418,10 +2418,10 @@ TEST_F(AggregationTest, distinctWithSpilling) {
        8,
        [](uint32_t spilledFiles) { ASSERT_GE(spilledFiles, 100); }},
 
-      {{makeRowVector(
-           {"c0"},
-           {makeFlatVector<int64_t>(
-               2'000, [](vector_size_t /* unused */) { return 100; })})},
+      {{makeNamedRowVector(
+           "c0",
+           makeFlatVector<int64_t>(
+               2'000, [](vector_size_t /* unused */) { return 100; }))},
        1,
        [](uint32_t spilledFiles) { ASSERT_EQ(spilledFiles, 1); }}};
 

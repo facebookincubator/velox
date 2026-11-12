@@ -88,7 +88,7 @@ TEST_P(UnnestTest, skipArrayElement) {
                   .planNode();
 
   auto expected =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 1, 1, 2, 2}));
   AssertQueryBuilder(plan)
       .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
@@ -263,7 +263,7 @@ TEST_P(UnnestTest, skipArrayOfRowElement) {
                           std::vector<std::optional<std::string>>{std::nullopt})
                       .planNode();
   auto skipExpected =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 1, 1, 2, 2}));
   AssertQueryBuilder(skipPlan)
       .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(skipExpected);

@@ -38,7 +38,7 @@ TEST_F(FromJsonTest, basicStruct) {
   auto expected = makeFlatVector<int64_t>({1, 2, 3});
   auto input = makeFlatVector<std::string>(
       {R"({"Id": 1})", R"({"Id": 2})", R"({"Id": 3})"});
-  testFromJson(input, makeRowVector({"Id"}, {expected}));
+  testFromJson(input, makeNamedRowVector("Id", expected));
 }
 
 TEST_F(FromJsonTest, structFieldMatchingAndDuplicates) {
@@ -51,7 +51,7 @@ TEST_F(FromJsonTest, structFieldMatchingAndDuplicates) {
        R"({"id": 4, "id": null})",
        R"({"id": 4, "id": "x"})",
        R"({"id": "x", "id": 5})"});
-  testFromJson(input, makeRowVector({"id"}, {expected}));
+  testFromJson(input, makeNamedRowVector("id", expected));
 }
 
 TEST_F(FromJsonTest, failedScalarDuplicatesKeepLastSuccessfulValue) {
@@ -99,7 +99,7 @@ TEST_F(FromJsonTest, nestedStructFailure) {
        makeNullableFlatVector<int64_t>(
            {std::nullopt, 3, std::nullopt, std::nullopt, std::nullopt})},
       [](vector_size_t row) { return row != 1; });
-  auto expected = makeRowVector({"s"}, {nested});
+  auto expected = makeNamedRowVector("s", nested);
   auto input = makeFlatVector<std::string>(
       {R"({"s":{"a":1,"b":"x"}})",
        R"({"s":{"a":2,"b":3}})",
@@ -114,7 +114,7 @@ TEST_F(FromJsonTest, duplicateComplexStructFields) {
       {R"({"a":"x","a":"y"})", R"({"a":"x","a":"y"})", R"({"a":"x","a":"y"})"});
   testFromJson(
       stringInput,
-      makeRowVector({"a"}, {makeFlatVector<StringView>({"y", "y", "y"})}));
+      makeNamedRowVector("a", makeFlatVector<StringView>({"y", "y", "y"})));
 
   auto mixedStringInput = makeFlatVector<std::string>(
       {R"({"a":true,"a":"y"})",
@@ -123,10 +123,10 @@ TEST_F(FromJsonTest, duplicateComplexStructFields) {
        R"({"a":"abcdefghijklmnop","a":"qrstuvwxyz0123456789"})"});
   testFromJson(
       mixedStringInput,
-      makeRowVector(
-          {"a"},
-          {makeFlatVector<StringView>(
-              {"y", "false", R"({"b":1})", "qrstuvwxyz0123456789"})}));
+      makeNamedRowVector(
+          "a",
+          makeFlatVector<StringView>(
+              {"y", "false", R"({"b":1})", "qrstuvwxyz0123456789"})));
 
   auto arrayInput = makeFlatVector<std::string>(
       {R"({"a":[1],"a":[2,3]})",
@@ -134,8 +134,8 @@ TEST_F(FromJsonTest, duplicateComplexStructFields) {
        R"({"a":[1],"a":[2,3]})"});
   testFromJson(
       arrayInput,
-      makeRowVector(
-          {"a"}, {makeArrayVector<int64_t>({{2, 3}, {2, 3}, {2, 3}})}));
+      makeNamedRowVector(
+          "a", makeArrayVector<int64_t>({{2, 3}, {2, 3}, {2, 3}})));
 
   auto mapInput = makeFlatVector<std::string>(
       {R"({"a":{"x":1},"a":{"y":2}})",
@@ -143,7 +143,7 @@ TEST_F(FromJsonTest, duplicateComplexStructFields) {
        R"({"a":{"x":1},"a":{"y":2}})"});
   auto maps =
       makeMapVector<std::string, int64_t>({{{"y", 2}}, {{"y", 2}}, {{"y", 2}}});
-  testFromJson(mapInput, makeRowVector({"a"}, {maps}));
+  testFromJson(mapInput, makeNamedRowVector("a", maps));
 }
 
 TEST_F(FromJsonTest, explicitNullReplacesStagedValue) {
@@ -332,8 +332,8 @@ TEST_F(FromJsonTest, booleanStringValues) {
         {R"({"a":true})", R"({"a":false})", R"({"a":true})"});
     testFromJson(
         input,
-        makeRowVector(
-            {"a"}, {makeFlatVector<StringView>({"true", "false", "true"})}));
+        makeNamedRowVector(
+            "a", makeFlatVector<StringView>({"true", "false", "true"})));
   }
   {
     auto input = makeFlatVector<std::string>(
@@ -486,7 +486,7 @@ TEST_F(FromJsonTest, malformedAtomRecoveryAndObjectTruncation) {
 
 TEST_F(FromJsonTest, failedDuplicateStructRetainsPreviousValue) {
   const auto nested =
-      makeRowVector({"a"}, {makeFlatVector<int32_t>({1, 1, 1})});
+      makeNamedRowVector("a", makeFlatVector<int32_t>({1, 1, 1}));
   auto input = makeFlatVector<std::string>(
       {R"({"t":2,"s":{"a":1},"s":{"a":tru},"u":3})",
        R"({"t":2,"s":{"a":1},"s":{"a":fals},"u":3})",
@@ -534,7 +534,7 @@ TEST_F(FromJsonTest, duplicateFieldsUseLastSuccessfulValue) {
 
 TEST_F(FromJsonTest, scalarDuplicateStructRetainsPreviousValue) {
   const auto nested =
-      makeRowVector({"a"}, {makeFlatVector<int32_t>({1, 1, 1})});
+      makeNamedRowVector("a", makeFlatVector<int32_t>({1, 1, 1}));
   auto input = makeFlatVector<std::string>(
       {R"({"s":{"a":1},"s":5,"t":1})",
        R"({"s":{"a":1},"s":"x","t":1})",
@@ -546,8 +546,8 @@ TEST_F(FromJsonTest, scalarDuplicateStructRetainsPreviousValue) {
 
 TEST_F(FromJsonTest, failedDuplicateStructWithCollectionsRetainsPreviousValue) {
   {
-    auto nested = makeRowVector(
-        {"a"}, {makeArrayVector<int32_t>({{1, 2, 3}, {1, 2, 3}, {1, 2, 3}})});
+    auto nested = makeNamedRowVector(
+        "a", makeArrayVector<int32_t>({{1, 2, 3}, {1, 2, 3}, {1, 2, 3}}));
     auto input = makeFlatVector<std::string>(
         {R"({"s":{"a":[1,2,3]},"s":{"a":[4,"x"]},"t":1})",
          R"({"s":{"a":[1,2,3]},"s":{"a":[4,"x"]},"t":1})",
@@ -741,7 +741,7 @@ TEST_F(FromJsonTest, duplicateStructBuffersStayBounded) {
            std::vector<
                std::vector<std::pair<std::string, std::optional<int32_t>>>>(
                40, {{"y", 2}, {"z", 3}}))});
-  testFromJson(input, makeRowVector({"s"}, {expectedNested}));
+  testFromJson(input, makeNamedRowVector("s", expectedNested));
 
   auto result = evaluateFromJson(input, outputType);
   result->validate();
@@ -776,8 +776,8 @@ TEST_F(FromJsonTest, duplicateStructCopyUsesNormalWriterCasts) {
          R"({"s":{"a":[3]}})",
          R"({"s":{"a":[]},"s":{"a":[4]}})"});
     auto nested =
-        makeRowVector({"a"}, {makeArrayVector<int32_t>({{1, 2}, {3}, {4}})});
-    testFromJson(input, makeRowVector({"s"}, {nested}));
+        makeNamedRowVector("a", makeArrayVector<int32_t>({{1, 2}, {3}, {4}}));
+    testFromJson(input, makeNamedRowVector("s", nested));
   }
   {
     auto input = makeFlatVector<std::string>(
@@ -788,7 +788,7 @@ TEST_F(FromJsonTest, duplicateStructCopyUsesNormalWriterCasts) {
         {"m"},
         {makeMapVector<std::string, int32_t>(
             {{{"k", 1}}, {{"j", 2}}, {{"z", 3}}})});
-    testFromJson(input, makeRowVector({"s"}, {nested}));
+    testFromJson(input, makeNamedRowVector("s", nested));
   }
 }
 
@@ -932,7 +932,7 @@ TEST_F(FromJsonTest, rootMapDirectMalformedStructValueIsNull) {
 TEST_F(FromJsonTest, failedComplexStructFieldDoesNotLeak) {
   auto elements = makeFlatVector<int32_t>({2, 3});
   auto arrays = makeArrayVector({0, 0, 1}, elements, {0});
-  auto expected = makeRowVector({"a"}, {arrays});
+  auto expected = makeNamedRowVector("a", arrays);
   auto input = makeFlatVector<std::string>(
       {R"({"a":[1,"x"]})", R"({"a":[2]})", R"({"a":[3]})"});
   testFromJson(input, expected);
@@ -997,7 +997,8 @@ TEST_F(FromJsonTest, invalidUtf8) {
 }
 
 TEST_F(FromJsonTest, documentFraming) {
-  auto expected = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 4, 1})});
+  auto expected =
+      makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2, 4, 1}));
   auto input = makeFlatVector<std::string>(
       {R"({"a":1} trailing)",
        R"({"a":2}{"a":3})",
@@ -1035,7 +1036,7 @@ TEST_F(FromJsonTest, basicBool) {
        R"({"a": 1})",
        R"({"a": 0.0})",
        R"({"a": "true"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicTinyInt) {
@@ -1057,7 +1058,7 @@ TEST_F(FromJsonTest, basicTinyInt) {
        R"({"a": 256})",
        R"({"a": 1.0})",
        R"({"a": "1"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicSmallInt) {
@@ -1069,7 +1070,7 @@ TEST_F(FromJsonTest, basicSmallInt) {
        R"({"a": 32768})",
        R"({"a": 1.0})",
        R"({"a": "1"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicInt) {
@@ -1081,7 +1082,7 @@ TEST_F(FromJsonTest, basicInt) {
        R"({"a": 2147483648})",
        R"({"a": 2.0})",
        R"({"a": "3"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicBigInt) {
@@ -1089,7 +1090,7 @@ TEST_F(FromJsonTest, basicBigInt) {
       makeNullableFlatVector<int32_t>({1, std::nullopt, std::nullopt});
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})", R"({"a": 2.0})", R"({"a": "3"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicFloat) {
@@ -1129,7 +1130,7 @@ TEST_F(FromJsonTest, basicFloat) {
        R"({"a": Infinity})",
        R"({"a": "+INF"})",
        R"({"a": +INF})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, floatDirectRounding) {
@@ -1138,7 +1139,7 @@ TEST_F(FromJsonTest, floatDirectRounding) {
       {R"({"a":1.000000059604644775390625000001})",
        R"({"a":1.000000059604644775390625000001})",
        R"({"a":1.000000059604644775390625000001})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicDouble) {
@@ -1200,7 +1201,7 @@ TEST_F(FromJsonTest, basicDouble) {
        R"({"a": Infinity})",
        R"({"a": "+INF"})",
        R"({"a": +INF})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, malformedFloatingPointNumbers) {
@@ -1208,7 +1209,7 @@ TEST_F(FromJsonTest, malformedFloatingPointNumbers) {
       {std::nullopt, std::nullopt, std::nullopt});
   auto input = makeFlatVector<std::string>(
       {R"({"a": .5})", R"({"a": +1.5})", R"({"a": -01})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, conversionErrorsPreserveSiblingFields) {
@@ -1243,7 +1244,7 @@ TEST_F(FromJsonTest, malformedDecimalNumbers) {
       {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(7, 2));
   auto input = makeFlatVector<std::string>(
       {R"({"a": .5})", R"({"a": +1.5})", R"({"a": -01})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicDate) {
@@ -1274,7 +1275,7 @@ TEST_F(FromJsonTest, basicDate) {
        R"({"a": "AA"})",
        R"({"a": "1999-08 01"})",
        R"({"a": "2020/12/1"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, extendedDateYearsAndWhitespace) {
@@ -1311,7 +1312,7 @@ TEST_F(FromJsonTest, extendedDateYearsAndWhitespace) {
        "{\"a\":\"2021-07-01\\t\"}",
        R"({"a":"٢٠٢١"})",
        R"({"a":"٢٠٢١-٠٧-٠١"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicShortDecimal) {
@@ -1336,7 +1337,7 @@ TEST_F(FromJsonTest, basicShortDecimal) {
        R"({"a": -1})",
        R"({"a": 55555555555555555555.5555})",
        R"({"a": "+1BD"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, unicodeDecimalDigits) {
@@ -1349,7 +1350,7 @@ TEST_F(FromJsonTest, unicodeDecimalDigits) {
        R"({"a":" 1.5"})",
        R"({"a":1.005})",
        R"({"a":"𝟏𝟐"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicLongDecimal) {
@@ -1364,7 +1365,7 @@ TEST_F(FromJsonTest, basicLongDecimal) {
        R"({"a": -1})",
        R"({"a": 12089258196146291747.06175})",
        R"({"a": "+1BD"})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, basicString) {
@@ -1390,7 +1391,7 @@ TEST_F(FromJsonTest, basicString) {
        R"({"a": 1e400})",
        R"({"a": NaN})",
        R"({"a": null})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, stringNumericRendering) {
@@ -1412,7 +1413,7 @@ TEST_F(FromJsonTest, stringNumericRendering) {
        R"({"a":2.1377733147929636e18})",
        R"({"a":5.368083090498098e17})",
        R"({"a":{"b":"\u001f"}})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, supplementaryCharactersInNestedStrings) {
@@ -1424,7 +1425,7 @@ TEST_F(FromJsonTest, supplementaryCharactersInNestedStrings) {
       {R"({"a":{"b":"😀"}})",
        R"({"a":{"b":"\uD83D\uDE00"}})",
        R"({"a":{"b":"😀"}})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, javaDoubleRenderingEdgeCases) {
@@ -1453,7 +1454,7 @@ TEST_F(FromJsonTest, javaDoubleRenderingEdgeCases) {
       R"({"a":5e-323})", // Subnormal, halfway between two doubles.
       R"({"a":3.2329848831414595E25})", // In [2^84, 2^85).
   });
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, malformedNullTokenInStringValue) {
@@ -1461,7 +1462,7 @@ TEST_F(FromJsonTest, malformedNullTokenInStringValue) {
       {R"({"a":{"b":nul}})", R"({"a":{"b":nullx}})", R"({"a":{"b":n}})"});
   auto expected = makeNullableFlatVector<StringView>(
       {std::nullopt, std::nullopt, std::nullopt});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, loneSurrogateStrings) {
@@ -1469,7 +1470,7 @@ TEST_F(FromJsonTest, loneSurrogateStrings) {
       {R"({"a":"\uD800"})", R"({"a":{"x":"\uD800"}})", R"({"a":["\uD800"]})"});
   auto expectedString =
       makeFlatVector<StringView>({"?", R"({"x":"\uD800"})", R"(["\uD800"])"});
-  testFromJson(stringInput, makeRowVector({"a"}, {expectedString}));
+  testFromJson(stringInput, makeNamedRowVector("a", expectedString));
 
   auto mapInput = makeFlatVector<std::string>(
       {R"({"\uD800":1})", R"({"\uD800":1})", R"({"\uD800":1})"});
@@ -1479,10 +1480,10 @@ TEST_F(FromJsonTest, loneSurrogateStrings) {
 
   auto rowInput = makeFlatVector<std::string>(
       {R"({"\uD800":1})", R"({"\uD800":1})", R"({"\uD800":1})"});
-  auto expectedRow = makeRowVector(
-      {"?"},
-      {makeNullableFlatVector<int64_t>(
-          {std::nullopt, std::nullopt, std::nullopt})});
+  auto expectedRow = makeNamedRowVector(
+      "?",
+      makeNullableFlatVector<int64_t>(
+          {std::nullopt, std::nullopt, std::nullopt}));
   testFromJson(rowInput, expectedRow);
 }
 
@@ -1493,7 +1494,7 @@ TEST_F(FromJsonTest, nestedComplexType) {
   offsets.push_back(1);
   offsets.push_back(2);
   auto arrayVector = makeArrayVector(
-      offsets, makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 2})}));
+      offsets, makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2, 2})));
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})", R"([{"a": 2}])", R"([{"a": 2}])"});
   testFromJson(input, arrayVector);
@@ -1514,14 +1515,14 @@ TEST_F(FromJsonTest, nestedComplexType) {
   testFromJson(mapInput, mapVector);
 
   // ROW(ROW(ROW(BIGINT, INTEGER)))
-  auto rowVector = makeRowVector(
-      {"a"},
-      {makeRowVector(
+  auto rowVector = makeNamedRowVector(
+      "a",
+      makeRowVector(
           {"b"},
           {makeRowVector(
               {"d1", "e1"},
               {makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
-               makeNullableFlatVector<int32_t>({4, 4, std::nullopt})})})});
+               makeNullableFlatVector<int32_t>({4, 4, std::nullopt})})}));
   auto rowInput = makeFlatVector<std::string>(
       {R"({"a": {"b": {"d1": 1, "e1": 3, "e1": 4}}})", // Last duplicate wins.
        R"({"a": {"b": {"D1": 2, "e1": 4}}})", // Field names match exactly.
@@ -1558,14 +1559,14 @@ TEST_F(FromJsonTest, nestedComplexType) {
   // ROW(ROW(ROW(BIGINT)), ROW(ROW(BIGINT, BIGINT)))
   auto rowVector3 = makeRowVector(
       {"a", "d"},
-      {makeRowVector(
-           {"b"}, {makeRowVector({"c"}, {makeFlatVector<int64_t>({1, 2, 3})})}),
-       makeRowVector(
-           {"e"},
-           {makeRowVector(
+      {makeNamedRowVector(
+           "b", makeRowVector({"c"}, {makeFlatVector<int64_t>({1, 2, 3})})),
+       makeNamedRowVector(
+           "e",
+           makeRowVector(
                {"f", "g"},
                {makeFlatVector<int64_t>({1, 2, 3}),
-                makeFlatVector<int64_t>({4, 5, 6})})})});
+                makeFlatVector<int64_t>({4, 5, 6})}))});
   auto rowInput3 = makeFlatVector<std::string>(
       {R"({"a": {"b": {"c": 1}}, "d": {"e": {"f": 1, "g": 4}}})",
        R"({"a": {"b": {"c": 2}}, "d": {"e": {"f": 2, "g": 5}}})",
@@ -1579,7 +1580,7 @@ TEST_F(FromJsonTest, nestedComplexType) {
   offsets2.push_back(2);
   auto arrayVector3 = makeArrayVector(
       offsets2,
-      makeRowVector({"c"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
+      makeNamedRowVector("c", makeFlatVector<int64_t>({1, 2, 3, 4, 5})));
   std::vector<vector_size_t> offsets3;
   offsets3.push_back(0);
   offsets3.push_back(1);
@@ -1602,28 +1603,28 @@ TEST_F(FromJsonTest, structEmptyArray) {
   auto expected = makeNullableFlatVector<int64_t>({std::nullopt, 2, 3});
   auto input =
       makeFlatVector<std::string>({R"([])", R"({"a": 2})", R"({"a": 3})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, structEmptyStruct) {
   auto expected = makeNullableFlatVector<int64_t>({std::nullopt, 2, 3});
   auto input =
       makeFlatVector<std::string>({R"({ })", R"({"a": 2})", R"({"a": 3})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, structWrongSchema) {
   auto expected = makeNullableFlatVector<int64_t>({std::nullopt, 2, 3});
   auto input = makeFlatVector<std::string>(
       {R"({"b": 2})", R"({"a": 2})", R"({"a": 3})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, structWrongData) {
   auto expected = makeNullableFlatVector<int64_t>({std::nullopt, 2, 3});
   auto input = makeFlatVector<std::string>(
       {R"({"a": 2.1})", R"({"a": 2})", R"({"a": 3})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 TEST_F(FromJsonTest, invalidType) {
@@ -1660,7 +1661,7 @@ TEST_F(FromJsonTest, invalidJson) {
       {std::nullopt, std::nullopt, std::nullopt});
   auto input =
       makeFlatVector<std::string>({R"("a": 1})", R"({a: 1})", R"({"a" 1})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+  testFromJson(input, makeNamedRowVector("a", expected));
 }
 
 } // namespace
