@@ -21,7 +21,9 @@
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
+#include <folly/synchronization/Baton.h>
 #include <gtest/gtest.h>
+#include <future>
 
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwio::common::test;
@@ -138,4 +140,48 @@ TEST_F(ParallelUnitLoaderTest, performanceComparison) {
 
   // ParallelUnitLoader should be faster
   EXPECT_GT(onDemandDuration.count(), parallelDuration.count());
+}
+
+TEST_F(ParallelUnitLoaderTest, destructionWaitsForRunningLoad) {
+  class BlockingLoadUnit : public LoadUnit {
+   public:
+    BlockingLoadUnit(folly::Baton<>& started, folly::Baton<>& release)
+        : started_(started), release_(release) {}
+    void load() override {
+      started_.post();
+      release_.wait();
+    }
+    void unload() override {}
+    uint64_t getNumRows() override {
+      return 10;
+    }
+    uint64_t getIoSize() override {
+      return 0;
+    }
+
+   private:
+    folly::Baton<>& started_;
+    folly::Baton<>& release_;
+  };
+  folly::Baton<> started;
+  folly::Baton<> release;
+  auto loaded = getUnitsLoadedWithFalse(1);
+  std::vector<std::unique_ptr<LoadUnit>> units;
+  units.push_back(
+      std::make_unique<LoadUnitMock>(
+          10, 0, loaded, 0, std::chrono::milliseconds(0)));
+  units.push_back(std::make_unique<BlockingLoadUnit>(started, release));
+  auto factory = createFactory();
+  auto loader = factory.create(std::move(units), 0);
+  loader->getLoadedUnit(0);
+  started.wait();
+  auto destroy = std::async(
+      std::launch::async,
+      [loader = std::move(loader)]() mutable { loader.reset(); });
+  EXPECT_EQ(
+      destroy.wait_for(std::chrono::milliseconds(100)),
+      std::future_status::timeout);
+  release.post();
+  destroy.get();
+  ioExecutor_->join();
 }
