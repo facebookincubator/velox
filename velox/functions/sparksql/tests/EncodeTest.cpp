@@ -335,14 +335,15 @@ TEST_F(EncodeTest, dynamicCharsetCacheAcrossBatches) {
     auto charsets = makeFlatVector<std::string>({""});
     auto expression =
         compileExpression("try(encode(c0, c1))", ROW({"c0", "c1"}, VARCHAR()));
-    std::string name = "CSISOLATINARABIC";
+    constexpr std::string_view name{"CSISOLATINARABIC"};
     ASSERT_GT(name.size(), StringView::kInlineSize);
+    auto* nameBuffer = charsets->getRawStringBufferWithSpace(name.size());
     const auto testCharset = [&](std::string_view charset,
                                  std::optional<std::string> expected) {
       ASSERT_EQ(charset.size(), name.size());
       // Reuse live name storage to detect a borrowed, stale cache key.
-      std::copy(charset.begin(), charset.end(), name.begin());
-      charsets->setNoCopy(0, StringView(name));
+      std::copy(charset.begin(), charset.end(), nameBuffer);
+      charsets->setNoCopy(0, StringView(nameBuffer, name.size()));
       velox::test::assertEqualVectors(
           makeNullableFlatVector<std::string>({expected}, VARBINARY()),
           evaluate(*expression, makeRowVector({inputs, charsets})));
@@ -355,8 +356,8 @@ TEST_F(EncodeTest, dynamicCharsetCacheAcrossBatches) {
     testCharset(
         "CSISOLATINHEBREW",
         replaceUnmappable ? std::optional<std::string>("?") : std::nullopt);
-    testCharset("not-a-charset!!", std::nullopt);
-    testCharset("not-a-charset!!", std::nullopt);
+    testCharset("not-a-charset!!!", std::nullopt);
+    testCharset("not-a-charset!!!", std::nullopt);
     testCharset("CSISOLATINARABIC", "\xC7");
   }
 }
@@ -698,7 +699,29 @@ TEST_F(EncodeTest, malformedUtf8) {
 }
 
 TEST_F(EncodeTest, malformedUtf8Boundaries) {
-  // Pin JDK UTF-8 replacement grouping independently of the native decoder.
+  struct Golden {
+    const char* charset;
+    std::string asciiPattern;
+    std::string replacement;
+    std::string bom;
+    bool singleByte;
+  };
+  // Pin JDK output bytes and replacement grouping independently of the decoder.
+  const std::vector<Golden> goldens{
+      {"UTF-8", "A", "\xEF\xBF\xBD", "", false},
+      {"UTF-16BE", std::string("\x00\x41", 2), "\xFF\xFD", "", false},
+      {"UTF-16LE", std::string("\x41\x00", 2), "\xFD\xFF", "", false},
+      {"UTF-16", std::string("\x00\x41", 2), "\xFF\xFD", "\xFE\xFF", false},
+      {"UTF-32",
+       std::string("\x00\x00\x00\x41", 4),
+       std::string("\x00\x00\xFF\xFD", 4),
+       "",
+       false},
+      {"US-ASCII", "A", "?", "", true},
+      {"ISO-8859-1", "A", "?", "", true},
+      {"windows-1252", "A", "?", "", true},
+      {"IBM037", "\xC1", "?", "", true},
+  };
   const std::vector<std::pair<std::string, size_t>> malformed{
       {"\xFF", 1},
       {"\x80", 1},
@@ -708,40 +731,50 @@ TEST_F(EncodeTest, malformedUtf8Boundaries) {
       {"\xE2\x82", 1},
       {"\xF0\x9F\x98", 1},
   };
-  for (const size_t length : {11, 12, 13, 63, 64, 65}) {
-    SCOPED_TRACE(length);
-    for (const auto& [bytes, numReplacements] : malformed) {
-      SCOPED_TRACE(::testing::PrintToString(toBytes(bytes)));
-      const auto numAscii = length - bytes.size();
-      const std::string ascii(numAscii, 'A');
-      std::string wideAscii;
-      for (size_t i = 0; i < numAscii; ++i) {
-        wideAscii.append("\x00\x00\x00\x41", 4);
-      }
-      std::string utf8Replacement;
-      std::string utf32Replacement;
-      for (size_t i = 0; i < numReplacements; ++i) {
-        utf8Replacement += "\xEF\xBF\xBD";
-        utf32Replacement.append("\x00\x00\xFF\xFD", 4);
-      }
-      for (const bool asciiLeading : {false, true}) {
-        SCOPED_TRACE(asciiLeading);
-        const auto input = asciiLeading ? ascii + bytes : bytes + ascii;
-        const std::vector<std::pair<std::string, std::string>> goldens{
-            {"UTF-8",
-             asciiLeading ? ascii + utf8Replacement : utf8Replacement + ascii},
-            {"UTF-32",
-             asciiLeading ? wideAscii + utf32Replacement
-                          : utf32Replacement + wideAscii},
-        };
-        for (const auto& [charset, expected] : goldens) {
-          SCOPED_TRACE(charset);
-          EXPECT_EQ(encode(input, charset), expected);
-          EXPECT_EQ(
-              evaluateOnce<std::string>(
-                  fmt::format("encode(c0, '{}')", charset),
-                  std::optional<std::string>(input)),
-              expected);
+  for (const bool replaceUnmappable : {false, true}) {
+    SCOPED_TRACE(replaceUnmappable);
+    enableLegacyCharsets(replaceUnmappable);
+    for (const auto& golden : goldens) {
+      SCOPED_TRACE(golden.charset);
+      const auto expression = fmt::format("encode(c0, '{}')", golden.charset);
+      const auto errorMessage = fmt::format(
+          "encode: input contains a character that cannot be encoded using '{}'",
+          golden.charset);
+      for (const size_t length : {11, 12, 13, 63, 64, 65}) {
+        SCOPED_TRACE(length);
+        for (const auto& [bytes, numReplacements] : malformed) {
+          SCOPED_TRACE(::testing::PrintToString(toBytes(bytes)));
+          const auto numAscii = length - bytes.size();
+          const std::string ascii(numAscii, 'A');
+          std::string encodedAscii;
+          for (size_t i = 0; i < numAscii; ++i) {
+            encodedAscii += golden.asciiPattern;
+          }
+          std::string replacement;
+          for (size_t i = 0; i < numReplacements; ++i) {
+            replacement += golden.replacement;
+          }
+          for (const bool asciiLeading : {false, true}) {
+            SCOPED_TRACE(asciiLeading);
+            const auto input = asciiLeading ? ascii + bytes : bytes + ascii;
+            if (golden.singleByte && !replaceUnmappable) {
+              VELOX_ASSERT_USER_THROW(
+                  encode(input, golden.charset), errorMessage);
+              VELOX_ASSERT_USER_THROW(
+                  evaluateOnce<std::string>(
+                      expression, std::optional<std::string>(input)),
+                  errorMessage);
+              continue;
+            }
+            const auto expected = golden.bom +
+                (asciiLeading ? encodedAscii + replacement
+                              : replacement + encodedAscii);
+            EXPECT_EQ(encode(input, golden.charset), expected);
+            EXPECT_EQ(
+                evaluateOnce<std::string>(
+                    expression, std::optional<std::string>(input)),
+                expected);
+          }
         }
       }
     }
