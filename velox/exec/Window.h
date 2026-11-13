@@ -223,9 +223,11 @@ class Window : public Operator {
   vector_size_t numRows_ = 0;
 
   // Fixed capacity of peer/frame buffers and the WindowBuild batch threshold.
-  vector_size_t numRowsPerOutput_;
+  vector_size_t maxBatchRows_;
 
   // Average row size of the latest output batch with a non-zero estimate.
+  // Output starts with one row while this estimate is unknown. Later batches
+  // can exceed the byte target if their rows are wider than the previous batch.
   std::optional<uint64_t> estimatedOutputRowSize_;
 
   // Number of rows output from the WindowOperator so far. The rows

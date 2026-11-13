@@ -354,9 +354,24 @@ TEST_F(WindowTest, spillUnsupported) {
       1);
 }
 
+// Compares every output row at its expected position across batch boundaries.
+void assertOrderedBatches(
+    const RowVectorPtr& expected,
+    const std::vector<RowVectorPtr>& batches) {
+  vector_size_t offset{0};
+  for (const auto& batch : batches) {
+    ASSERT_LE(offset + batch->size(), expected->size());
+    velox::test::assertEqualVectors(
+        expected->slice(offset, batch->size()), batch);
+    offset += batch->size();
+  }
+  EXPECT_EQ(offset, expected->size());
+}
+
 TEST_F(WindowTest, outputBatchesShrinkForWideWindowResults) {
   const vector_size_t size{192};
   const vector_size_t preferredRows{64};
+  const uint64_t preferredBytes{4'096};
   auto input = makeRowVector(
       {"c0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
   auto plan = PlanBuilder()
@@ -365,19 +380,26 @@ TEST_F(WindowTest, outputBatchesShrinkForWideWindowResults) {
                            "unbounded preceding and unbounded following)"})
                   .planNode();
 
-  auto batches =
-      AssertQueryBuilder(plan)
-          .config(core::QueryConfig::kPreferredOutputBatchRows, preferredRows)
-          .config(core::QueryConfig::kPreferredOutputBatchBytes, 4'096)
-          .copyResultBatches(pool());
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  params.queryCtx->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kPreferredOutputBatchRows,
+       std::to_string(preferredRows)},
+      {core::QueryConfig::kPreferredOutputBatchBytes,
+       std::to_string(preferredBytes)},
+  });
+  auto [cursor, batches] = readCursor(params);
 
   ASSERT_GT(batches.size(), 2);
-  EXPECT_EQ(batches.front()->size(), preferredRows);
-  for (size_t i = 1; i < batches.size(); ++i) {
-    EXPECT_GT(batches[i]->size(), 0);
+  EXPECT_EQ(batches.front()->size(), 1);
+  for (const auto& batch : batches) {
+    EXPECT_GT(batch->size(), 0);
+    // Allow for vector metadata and allocation rounding.
+    EXPECT_LE(batch->estimateFlatSize(), preferredBytes + 1'024);
     // Each row has 1,536 bytes of array elements, so 4,096 bytes fits at most
     // two rows even before accounting for vector overhead.
-    EXPECT_LE(batches[i]->size(), 2);
+    EXPECT_LE(batch->size(), 2);
   }
 
   auto expected = makeRowVector(
@@ -386,13 +408,14 @@ TEST_F(WindowTest, outputBatchesShrinkForWideWindowResults) {
            size,
            [size](auto) { return size; },
            [](auto /*row*/, auto index) { return index; })});
-  assertEqualResults({expected}, batches);
+  assertOrderedBatches(expected, batches);
 }
 
 TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {
   const vector_size_t phaseRows{128};
   const vector_size_t size{3 * phaseRows};
   const vector_size_t preferredRows{64};
+  const uint64_t preferredBytes{2'048};
   const int64_t precedingRows{32};
   const int64_t peerGroupSize{4};
   const auto precedingForRow = [&](vector_size_t row) {
@@ -402,18 +425,21 @@ TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {
     SCOPED_TRACE(frameType);
     const bool isRows = std::string_view(frameType) == "rows";
     auto input = makeRowVector(
-        {"c0", "c1"},
+        {"c0", "c1", "id"},
         {makeFlatVector<int64_t>(
              size, [&](auto row) { return row / peerGroupSize; }),
-         makeFlatVector<int64_t>(size, [&](auto row) {
-           const auto preceding = precedingForRow(row);
-           // RANGE bounds contain precomputed sort-key values; ROWS bounds
-           // contain row offsets.
-           return isRows ? preceding : row / peerGroupSize - preceding;
-         })});
+         makeFlatVector<int64_t>(
+             size,
+             [&](auto row) {
+               const auto preceding = precedingForRow(row);
+               // RANGE bounds contain precomputed sort-key values; ROWS bounds
+               // contain row offsets.
+               return isRows ? preceding : row / peerGroupSize - preceding;
+             }),
+         makeFlatVector<int64_t>(size, [](auto row) { return row; })});
     auto plan = PlanBuilder()
                     .values({input})
-                    .window({fmt::format(
+                    .streamingWindow({fmt::format(
                         "array_agg(c0) over (order by c0 {} between c1 "
                         "preceding and current row)",
                         frameType)})
@@ -421,7 +447,8 @@ TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {
     auto batches =
         AssertQueryBuilder(plan)
             .config(core::QueryConfig::kPreferredOutputBatchRows, preferredRows)
-            .config(core::QueryConfig::kPreferredOutputBatchBytes, 2'048)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchBytes, preferredBytes)
             .copyResultBatches(pool());
 
     ASSERT_FALSE(batches.empty());
@@ -440,7 +467,7 @@ TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {
       offset += batch->size();
     }
     EXPECT_EQ(offset, size);
-    EXPECT_LT(smallestWideBatch, batches.front()->size());
+    EXPECT_LT(smallestWideBatch, preferredRows);
     EXPECT_GT(largestRecoveredBatch, smallestWideBatch);
 
     std::vector<std::vector<int64_t>> expectedArrays;
@@ -461,14 +488,16 @@ TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {
     auto expected = makeRowVector(
         {input->childAt(0),
          input->childAt(1),
+         input->childAt(2),
          makeArrayVector<int64_t>(expectedArrays)});
-    assertEqualResults({expected}, batches);
+    assertOrderedBatches(expected, batches);
   }
 }
 
 TEST_F(WindowTest, outputBatchesRespectMaxRows) {
   const vector_size_t size{100};
   const vector_size_t maxRows{17};
+  const uint64_t preferredBytes{1'048'576};
   auto input = makeRowVector(
       {"c0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
   auto expected = makeRowVector(
@@ -490,7 +519,8 @@ TEST_F(WindowTest, outputBatchesRespectMaxRows) {
         AssertQueryBuilder(builder.planNode())
             .config(core::QueryConfig::kPreferredOutputBatchRows, 128)
             .config(core::QueryConfig::kMaxOutputBatchRows, maxRows)
-            .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'048'576)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchBytes, preferredBytes)
             .copyResultBatches(pool());
 
     ASSERT_FALSE(batches.empty());
@@ -498,7 +528,7 @@ TEST_F(WindowTest, outputBatchesRespectMaxRows) {
       EXPECT_GT(batch->size(), 0);
       EXPECT_LE(batch->size(), maxRows);
     }
-    assertEqualResults({expected}, batches);
+    assertOrderedBatches(expected, batches);
   }
 }
 
