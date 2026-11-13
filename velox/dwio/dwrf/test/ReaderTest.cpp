@@ -19,14 +19,17 @@
 #include "folly/Random.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "folly/executors/IOThreadPoolExecutor.h"
+#include "folly/executors/ManualExecutor.h"
 #include "folly/lang/Assume.h"
 #include "folly/synchronization/Baton.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/tests/TestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/common/ExtractionUtils.h"
 #include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/ParallelUnitLoader.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/DwrfRuntimeStats.h"
@@ -3799,17 +3802,79 @@ TEST_F(TestReader, mapAsStructKeySubsetExtraction) {
   assertEqualVectors(expected, batch);
 }
 
-// Verify DwrfRowReader can be destroyed while ParallelUnitLoader async load()
-// are in progress. This regression test ensures that:
-// 1. ParallelUnitLoader destructor doesn't wait for async load() operations
-// 2. Async load() from DwrfUnit can still function after ParallelUnitLoader
-// destruction and DwrfRowReader destruction, which means all dependencies in
-// DwrfUnit remain valid (eg ReaderBase)
-//
-// If a future change adds an unsafe raw pointer to DwrfUnit's dependencies that
-// would be freed by ParallelUnitLoader or DwrfRowReader's destruction, this
-// test may crash due to use-after-free.
-DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
+TEST_F(TestReader, boundedPrefetchReadsAfterRejectedEstimation) {
+  std::vector<VectorPtr> batches;
+  batches.reserve(4);
+  for (int stripe = 0; stripe < 4; ++stripe) {
+    batches.push_back(makeRowVector({makeFlatVector<int64_t>(
+        100, [stripe](auto row) { return stripe * 100 + row; })}));
+  }
+  auto sink =
+      std::make_unique<MemorySink>(1 << 20, FileSink::Options{.pool = pool()});
+  auto* sinkPtr = sink.get();
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(Config::STRIPE_CACHE_MODE, StripeCacheMode::NA);
+  auto writer = E2EWriterTestUtil::writeData(
+      std::move(sink),
+      asRowType(batches[0]->type()),
+      batches,
+      config,
+      E2EWriterTestUtil::simpleFlushPolicyFactory(true));
+  const std::string data(sinkPtr->data(), sinkPtr->size());
+  for (bool preload : {false, true}) {
+    SCOPED_TRACE(preload);
+    auto readFile =
+        std::make_shared<velox::tests::utils::CountingReadFile>(data);
+    auto input = std::make_unique<BufferedInput>(readFile, *pool());
+    dwio::common::ReaderOptions readerOptions(pool());
+    readerOptions.setFileFormat(FileFormat::DWRF);
+    readerOptions.setFilePreloadThreshold(0);
+    auto reader = DwrfReader::create(std::move(input), readerOptions);
+    folly::ManualExecutor executor;
+    size_t rejections{0};
+    auto factory = std::make_shared<ParallelUnitLoaderFactory>(
+        &executor,
+        3,
+        ParallelUnitLoaderOptions{
+            .maxPrefetchLoads = 1,
+            .maxPrefetchBytes = 1,
+            .metricCallback = [&](auto event, auto) {
+              if (event == UnitLoader::Event::kPrefetchRejected) {
+                ++rejections;
+              }
+            }});
+    RowReaderOptions rowOptions;
+    rowOptions.setPreloadStripe(preload);
+    rowOptions.setUnitLoaderFactory(factory);
+    auto rowReader = reader->createRowReader(rowOptions);
+    for (const auto& expected : batches) {
+      const vector_size_t batchSize = 10;
+      VectorPtr result;
+      ASSERT_EQ(rowReader->next(batchSize, result), batchSize);
+      assertEqualVectors(expected->slice(0, batchSize), result);
+      const auto reads = readFile->numReads();
+      const auto bytes = readFile->bytesRead();
+      const auto rejectionsBefore = rejections;
+      for (vector_size_t offset = batchSize; offset < expected->size();
+           offset += batchSize) {
+        ASSERT_EQ(rowReader->next(batchSize, result), batchSize);
+        assertEqualVectors(expected->slice(offset, batchSize), result);
+        EXPECT_EQ(readFile->numReads(), reads);
+        EXPECT_EQ(readFile->bytesRead(), bytes);
+      }
+      if (expected == batches.front()) {
+        EXPECT_GT(rejections, rejectionsBefore);
+      }
+    }
+    EXPECT_GT(rejections, 0);
+    VectorPtr result;
+    EXPECT_EQ(rowReader->next(100, result), 0);
+    rowReader.reset();
+    executor.drain();
+  }
+}
+
+DEBUG_ONLY_TEST_F(TestReader, queuedLoadCancelledBeforeReaderDestruction) {
   const int kNumStripes = 2;
   const int kRowsPerStripe = 100;
   std::vector<VectorPtr> batches;
@@ -3841,21 +3906,17 @@ DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
       std::make_shared<InMemoryReadFile>(std::move(data)), *pool());
 
   std::atomic<int> asyncLoadsStarted{0};
-  std::atomic<int> asyncLoadsCompleted{0};
-  folly::Baton<> readerDestroyed;
+  std::atomic<int> loadsCompleted{0};
+  folly::Baton<> queuedLoad;
+  folly::Baton<> release;
 
   SCOPED_TESTVALUE_SET(
       "facebook::velox::dwio::common::ParallelUnitLoader::load",
       std::function<void(void*)>([&](void*) {
-        // Only block the second stripe (index 1) - let the first stripe load
-        // normally so rowReader->next() can complete
-        // fetch_add returns the value before increment: 0 for first, 1 for
-        // second, etc.
         if (asyncLoadsStarted.fetch_add(1) == 1) {
-          // Block here until reader is destroyed
-          readerDestroyed.wait();
+          queuedLoad.post();
+          release.wait();
         }
-        asyncLoadsCompleted.fetch_add(1);
       }));
 
   auto ioExecutor = std::make_shared<folly::IOThreadPoolExecutor>(2);
@@ -3868,44 +3929,28 @@ DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
     readerOpts.setFileFormat(FileFormat::DWRF);
     auto reader = DwrfReader::create(std::move(input), readerOpts);
 
-    // Enable parallel unit load
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.setParallelUnitLoadCount(2);
-    rowReaderOpts.setIOExecutor(ioExecutor.get());
+    rowReaderOpts.setUnitLoaderFactory(
+        std::make_shared<ParallelUnitLoaderFactory>(
+            ioExecutor.get(),
+            2,
+            ParallelUnitLoaderOptions{.metricCallback = [&](auto event, auto) {
+              if (event == UnitLoader::Event::kLoadFinished) {
+                ++loadsCompleted;
+              }
+            }}));
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     VectorPtr batch;
-    rowReader->next(50, batch); // Read first stripe
-
-    auto start = std::chrono::steady_clock::now();
+    rowReader->next(50, batch);
+    queuedLoad.wait();
     rowReader.reset();
-    auto duration = std::chrono::steady_clock::now() - start;
-    // Verify destruction was fast (didn't wait for async operations)
-    EXPECT_LT(duration, std::chrono::seconds(1))
-        << "Destruction should not wait for async loads";
+    EXPECT_EQ(loadsCompleted.load(), 1);
   }
 
-  // Now signal that reader is destroyed
-  readerDestroyed.post();
-
-  // Wait for async loads to complete
-  int maxWaitMs = 2000;
-  int waitedMs = 0;
-  while (asyncLoadsCompleted.load() < 2 && waitedMs < maxWaitMs) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    waitedMs += 100;
-  }
-
-  // Verify that both async loads completed successfully after reader
-  // destruction This proves the fix works: async operations can complete even
-  // after DwrfRowReader is destroyed because LoadUnit is captured as shared_ptr
-  EXPECT_EQ(asyncLoadsCompleted.load(), 2)
-      << "Both async loads should complete even after reader destruction. "
-      << "If this fails, it means async operations are being cancelled or "
-      << "crashing after DwrfRowReader destruction, indicating unsafe pointers.";
-
-  // Clean up
+  release.post();
   ioExecutor->join();
+  EXPECT_EQ(loadsCompleted.load(), 1);
 }
 
 TEST_F(TestReader, extractionTransformMapKeys) {

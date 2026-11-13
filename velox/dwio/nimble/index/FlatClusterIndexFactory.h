@@ -37,7 +37,8 @@ class FlatClusterIndexFactory : public ClusterIndexFactory {
   std::unique_ptr<IndexWriter> createWriter(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool) const override;
+      velox::memory::MemoryPool* pool,
+      const Options& options) const override;
 
   std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
       const std::vector<std::string>& columns,

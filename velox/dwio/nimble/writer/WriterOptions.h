@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
+#include "velox/dwio/nimble/index/IndexTypes.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
@@ -162,6 +163,18 @@ struct WriterOptions {
   /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
   bool experimentalOmitClusterIndexKeyColumnStorage{false};
+
+  /// Where the cluster index stores its key chunks. kStripe stores the keys of
+  /// each stripe as one key chunk in the stripe's first stream, so that one
+  /// read can load a stripe's keys together with its data, and ignores the
+  /// maxRowsPerKeyChunk of clusterIndexConfig. Readers that predate kStripe
+  /// read the stripes of its files, but fail to open the cluster index.
+  /// kStripe requires clusterIndexConfig, and a cluster index implementation
+  /// built on ClusterIndexWriterBase.
+  /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
+  /// production tables without consulting the Nimble team (oncall: dwios).
+  index::KeyStreamLayout clusterIndexKeyStreamLayout{
+      index::KeyStreamLayout::kPartition};
 
   /// Enables compact varint row-count encoding for encoded data streams. The
   /// value is persisted in file properties so readers can select the matching

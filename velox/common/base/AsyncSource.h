@@ -348,6 +348,8 @@ class AsyncSource {
     for (auto& promise : promises) {
       promise.setValue();
     }
+    common::testutil::TestValue::adjust(
+        "facebook::velox::AsyncSource::makeItem::afterNotify", this);
   }
 
   inline void setExceptionLocked(std::exception_ptr exception) {

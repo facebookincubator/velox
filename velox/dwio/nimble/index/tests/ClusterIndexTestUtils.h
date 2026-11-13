@@ -228,6 +228,15 @@ class ClusterIndexTestHelper {
     return clusterIndex_->loadPartition(partitionIndex)->keyStreamRegion(0);
   }
 
+  /// Returns the file region of the chunk at 'chunkLocation' in a partition,
+  /// in either key stream layout.
+  velox::common::Region chunkStreamRegion(
+      uint32_t partitionIndex,
+      const ChunkLocation& chunkLocation) const {
+    return clusterIndex_->loadPartition(partitionIndex)
+        ->chunkStreamRegion(chunkLocation);
+  }
+
   /// Returns the number of decoded chunks currently cached for the partition.
   /// Counts populated slots in the per-chunk vector. With pinIndex=true the
   /// vector has numChunks slots, one per chunk. With pinIndex=false the

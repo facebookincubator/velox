@@ -15,13 +15,16 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
+#include "velox/dwio/nimble/index/IndexTypes.h"
 #include "velox/dwio/nimble/index/IndexWriter.h"
 #include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
@@ -33,14 +36,26 @@ class ClusterIndexBase;
 
 class ClusterIndexFactory {
  public:
+  /// Options of the writers that createWriter() creates.
+  struct Options {
+    /// Where the index stores its key chunks.
+    KeyStreamLayout keyStreamLayout{KeyStreamLayout::kPartition};
+    /// In the Stripe layout, the stream of every stripe that holds the
+    /// stripe's key chunk. Unset in the Partition layout.
+    std::optional<uint32_t> keyStreamId{};
+  };
+
   virtual ~ClusterIndexFactory() = default;
 
   virtual std::string_view name() const = 0;
 
+  /// Creates a writer of the index with 'options'. An index that cannot store
+  /// its keys in stripes rejects the Stripe layout.
   virtual std::unique_ptr<IndexWriter> createWriter(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool) const = 0;
+      velox::memory::MemoryPool* pool,
+      const Options& options) const = 0;
 
   virtual std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
       const std::vector<std::string>& columns,
