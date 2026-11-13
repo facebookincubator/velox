@@ -16,6 +16,8 @@
 
 #include "velox/vector/EncodedVectorCopy.h"
 
+#include <folly/CppAttributes.h>
+
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatMapVector.h"
@@ -331,6 +333,18 @@ std::vector<BaseVector::CopyRange> compactNestedRanges(
       vector, folly::Range(&range, 1), 0, newOffsets, newSizes);
 }
 
+// Resizes 'vector' to 'size' rows. A smaller RowVector keeps its children as
+// they are: RowVector::resize would grow the ones shorter than 'size', and
+// growing a dictionary over an empty base makes rows that point past its end.
+void resizeKeepingShortChildren(BaseVector& vector, vector_size_t size) {
+  if (size <= vector.size() &&
+      vector.encoding() == VectorEncoding::Simple::ROW) {
+    vector.asUnchecked<RowVector>()->unsafeResize(size);
+  } else {
+    vector.resize(size);
+  }
+}
+
 void compactNestedVector(
     const EncodedVectorCopyOptions& options,
     const folly::Range<const BaseVector::CopyRange*>& ranges,
@@ -338,12 +352,12 @@ void compactNestedVector(
     bool mutableVector) {
   if (mutableVector) {
     if (ranges.empty()) {
-      vector->resize(0);
+      resizeKeepingShortChildren(*vector, 0);
       return;
     }
     if (ranges.size() == 1 && ranges[0].sourceIndex == 0) {
       VELOX_CHECK_EQ(ranges[0].targetIndex, 0);
-      vector->resize(ranges[0].count);
+      resizeKeepingShortChildren(*vector, ranges[0].count);
       return;
     }
   }
@@ -690,6 +704,42 @@ void copyIntoConstant(
       std::move(nulls), std::move(indices), size, std::move(alphabet));
 }
 
+// Returns true if 'ranges' may skip rows past the end of the target, 'oldSize':
+// rows before the new end that no range copies into. A row child shorter than
+// its parent has such rows when the copy appends past the end of the parent:
+// they sit under the null parent rows past the end of the child. Ranges out of
+// target order can make this return true without skipping any row.
+bool maySkipRows(
+    vector_size_t oldSize,
+    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+  auto end = oldSize;
+  for (const auto& range : ranges) {
+    if (range.targetIndex > end) {
+      return true;
+    }
+    end = std::max(end, range.targetIndex + range.count);
+  }
+  return false;
+}
+
+// Sets the null flags of the rows that 'ranges' copy into from 'sourceNulls',
+// and makes the rows past the end of the target, 'oldSize', that they skip
+// null. A skipped row has no source row to take a value from, such as an index
+// into a dictionary base.
+void setCopiedNulls(
+    vector_size_t oldSize,
+    vector_size_t newSize,
+    const uint64_t* FOLLY_NULLABLE sourceNulls,
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    uint64_t* rawNulls) {
+  bits::fillBits(rawNulls, oldSize, newSize, bits::kNull);
+  if (sourceNulls) {
+    BaseVector::copyNulls(rawNulls, sourceNulls, ranges);
+  } else {
+    BaseVector::setNulls(rawNulls, ranges, false);
+  }
+}
+
 void copyIntoDictionary(
     const EncodedVectorCopyOptions& options,
     const folly::Range<const BaseVector::CopyRange*>& ranges,
@@ -702,12 +752,14 @@ void copyIntoDictionary(
   // DecodedVector::decodeAndGetBase returns a copy of VectorPtr, increasing the
   // reference count of targetBase by 1.
   const bool targetBaseMutable = targetMutable && targetBase.use_count() <= 2;
-  const auto size = targetSize(target->size(), ranges);
+  const auto oldSize = target->size();
+  const auto size = targetSize(oldSize, ranges);
   const auto targetBaseSize = targetBaseMutable ? baseSize(decodedTarget) : -1;
+  const bool skipsRows = maySkipRows(oldSize, ranges);
   BufferPtr nulls;
   auto* targetNulls = decodedTarget.nulls();
   auto* sourceNulls = decodedSource.nulls();
-  if (targetNulls || sourceNulls) {
+  if (targetNulls || sourceNulls || skipsRows) {
     if (targetMutable && target->nulls()) {
       nulls = tryReuse<uint64_t>(target->nulls(), bits::nwords(size));
     }
@@ -718,7 +770,7 @@ void copyIntoDictionary(
     if (targetNulls && rawNulls != targetNulls) {
       std::memcpy(rawNulls, targetNulls, bits::nbytes(decodedTarget.size()));
     }
-    setSourceNulls(sourceNulls, targetNulls, ranges, rawNulls);
+    setCopiedNulls(oldSize, size, sourceNulls, ranges, rawNulls);
   }
   BufferPtr indices;
   if (targetMutable &&
@@ -735,10 +787,15 @@ void copyIntoDictionary(
         decodedTarget.indices(),
         sizeof(vector_size_t) * decodedTarget.size());
   }
+  if (skipsRows) {
+    // A reused buffer holds garbage past the old end of the target, and
+    // 'toBaseRanges' writes only the copied rows.
+    std::fill(rawIndices + oldSize, rawIndices + size, 0);
+  }
   auto baseRanges =
       toBaseRanges(decodedSource, ranges, decodedTarget, rawIndices);
   if (targetBaseMutable) {
-    targetBase->resize(targetBaseSize);
+    resizeKeepingShortChildren(*targetBase, targetBaseSize);
   }
   copyImpl(options, sourceBase, baseRanges, targetBase, targetBaseMutable);
   target = BaseVector::wrapInDictionary(
@@ -759,7 +816,14 @@ void copyIntoRow(
     const auto oldSize = target->size();
     targetRow->unsafeResize(size);
     targetRow->resetDataDependentFlags(nullptr);
-    setSourceNulls(sourceNulls, *target, ranges);
+    if (maySkipRows(oldSize, ranges)) {
+      // A skipped row that is not null needs child values, which the copy
+      // does not write.
+      setCopiedNulls(
+          oldSize, size, sourceNulls, ranges, target->mutableRawNulls());
+    } else {
+      setSourceNulls(sourceNulls, *target, ranges);
+    }
     for (column_index_t i = 0; i < targetRow->childrenSize(); ++i) {
       auto& targetChild = targetRow->childAt(i);
       const auto& sourceChild = source.childAt(i);
@@ -769,7 +833,7 @@ void copyIntoRow(
       bool targetChildMutable = targetChild.use_count() == 1;
       if (targetChildMutable && targetChild->size() > oldSize) {
         // Shrink the size to allow unreferenced nested rows to be released.
-        targetChild->resize(oldSize);
+        resizeKeepingShortChildren(*targetChild, oldSize);
       }
       copyImpl(
           options,
@@ -789,6 +853,17 @@ void copyIntoRow(
           target->size(),
           sourceNulls,
           ranges);
+    }
+    if (maySkipRows(target->size(), ranges)) {
+      if (!nulls) {
+        nulls = allocateNulls(size, options.pool);
+      }
+      setCopiedNulls(
+          target->size(),
+          size,
+          sourceNulls,
+          ranges,
+          nulls->asMutable<uint64_t>());
     }
     auto children = targetRow->children();
     for (column_index_t i = 0; i < children.size(); ++i) {
@@ -1120,21 +1195,31 @@ void copyIntoFlatMap(
     return;
   }
   const auto size = targetSize(target->size(), ranges);
-  BufferPtr nulls;
   auto indices = allocateIndices(size, options.pool);
   auto* rawIndices = indices->asMutable<vector_size_t>();
   std::iota(rawIndices, rawIndices + target->size(), 0);
   BaseVector::CopyRange baseRange;
   baseRange.targetIndex = target->size();
+  const uint64_t* sourceNulls = nullptr;
   if (decodedSource.isConstantMapping()) {
     fillIndices(target->size(), ranges, rawIndices);
     baseRange.sourceIndex = decodedSource.index(0);
     baseRange.count = 1;
   } else {
-    nulls = newNulls(size, options.pool, decodedSource.nulls(), ranges);
+    sourceNulls = decodedSource.nulls();
     copyIndices(decodedSource.indices(), ranges, target->size(), rawIndices);
     baseRange.sourceIndex = 0;
     baseRange.count = sourceBase->size();
+  }
+  BufferPtr nulls;
+  if (sourceNulls || maySkipRows(target->size(), ranges)) {
+    nulls = allocateNulls(size, options.pool);
+    setCopiedNulls(
+        target->size(),
+        size,
+        sourceNulls,
+        ranges,
+        nulls->asMutable<uint64_t>());
   }
   copyImpl(
       options, sourceBase, folly::Range(&baseRange, 1), target, targetMutable);
@@ -1181,21 +1266,31 @@ void copyIntoComplex(
     return;
   }
   const auto size = targetSize(target->size(), ranges);
-  BufferPtr nulls;
   auto indices = allocateIndices(size, options.pool);
   auto* rawIndices = indices->asMutable<vector_size_t>();
   std::iota(rawIndices, rawIndices + target->size(), 0);
   BaseVector::CopyRange baseRange;
   baseRange.targetIndex = target->size();
+  const uint64_t* sourceNulls = nullptr;
   if (decodedSource.isConstantMapping()) {
     fillIndices(target->size(), ranges, rawIndices);
     baseRange.sourceIndex = decodedSource.index(0);
     baseRange.count = 1;
   } else {
-    nulls = newNulls(size, options.pool, decodedSource.nulls(), ranges);
+    sourceNulls = decodedSource.nulls();
     copyIndices(decodedSource.indices(), ranges, target->size(), rawIndices);
     baseRange.sourceIndex = 0;
     baseRange.count = sourceBase->size();
+  }
+  BufferPtr nulls;
+  if (sourceNulls || maySkipRows(target->size(), ranges)) {
+    nulls = allocateNulls(size, options.pool);
+    setCopiedNulls(
+        target->size(),
+        size,
+        sourceNulls,
+        ranges,
+        nulls->asMutable<uint64_t>());
   }
   copyImpl(
       options, sourceBase, folly::Range(&baseRange, 1), target, targetMutable);
