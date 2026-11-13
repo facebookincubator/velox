@@ -85,6 +85,104 @@ class TextReaderTest : public testing::Test,
     return factory->createReader(std::move(input), readerOptions);
   }
 
+  void assertReadsAs(
+      const std::vector<std::string>& inputs,
+      std::optional<float> expectedReal,
+      std::optional<double> expectedDouble) {
+    ASSERT_FALSE(inputs.empty());
+    SCOPED_TRACE(inputs.front());
+    auto textFile = TempFilePath::create();
+    {
+      auto writeFile =
+          std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+      for (const auto& input : inputs) {
+        writeFile->append("7," + input + "," + input + "," + input + ",9\n");
+      }
+      // Verify a malformed field does not prevent reading a later valid row.
+      writeFile->append("7,2.5f,2.5f,2.5f,9\n");
+      writeFile->close();
+    }
+
+    const auto type = ROW(
+        {{"before", INTEGER()},
+         {"real", REAL()},
+         {"double", DOUBLE()},
+         {"widened_real", REAL()},
+         {"after", INTEGER()}});
+    const auto requestedType = ROW(
+        {{"before", INTEGER()},
+         {"real", REAL()},
+         {"double", DOUBLE()},
+         {"widened_real", DOUBLE()},
+         {"after", INTEGER()}});
+    auto reader = createReader(
+        type, textFile->getPath(), dwio::common::SerDeOptions(',', '\2', '\3'));
+    dwio::common::RowReaderOptions rowReaderOptions;
+    setScanSpec(*requestedType, rowReaderOptions);
+    rowReaderOptions.select(
+        std::make_shared<dwio::common::ColumnSelector>(requestedType, type));
+    rowReaderOptions.setProjectSelectedType(true);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    const std::optional<double> expectedWidenedReal = expectedReal
+        ? std::optional<double>{static_cast<double>(*expectedReal)}
+        : std::nullopt;
+    std::vector<std::optional<float>> realValues(inputs.size(), expectedReal);
+    std::vector<std::optional<double>> doubleValues(
+        inputs.size(), expectedDouble);
+    std::vector<std::optional<double>> widenedRealValues(
+        inputs.size(), expectedWidenedReal);
+    realValues.push_back(2.5f);
+    doubleValues.push_back(2.5);
+    widenedRealValues.push_back(2.5);
+    const auto size = realValues.size();
+    auto expected = makeRowVector(
+        {"before", "real", "double", "widened_real", "after"},
+        {
+            makeFlatVector<int32_t>(std::vector<int32_t>(size, 7)),
+            makeNullableFlatVector<float>(realValues),
+            makeNullableFlatVector<double>(doubleValues),
+            makeNullableFlatVector<double>(widenedRealValues),
+            makeFlatVector<int32_t>(std::vector<int32_t>(size, 9)),
+        });
+    VectorPtr result;
+    ASSERT_EQ(rowReader->next(size, result), size);
+    ASSERT_NO_FATAL_FAILURE(assertEqualVectors(expected, result));
+
+    const auto assertBits = [&inputs]<typename T>(
+                                const VectorPtr& values,
+                                const std::optional<T>& expectedValue) {
+      if (!expectedValue ||
+          (!std::isnan(*expectedValue) &&
+           !(*expectedValue == 0 && std::signbit(*expectedValue)))) {
+        return;
+      }
+      using Bits =
+          std::conditional_t<sizeof(T) == sizeof(uint32_t), uint32_t, uint64_t>;
+      for (vector_size_t row = 0; row < inputs.size(); ++row) {
+        SCOPED_TRACE(inputs[row]);
+        EXPECT_EQ(
+            std::bit_cast<Bits>(values->variantAt(row).value<T>()),
+            std::bit_cast<Bits>(*expectedValue));
+      }
+    };
+    auto* rows = result->as<RowVector>();
+    ASSERT_NE(rows, nullptr);
+    ASSERT_NO_FATAL_FAILURE(assertBits(rows->childAt(1), expectedReal));
+    ASSERT_NO_FATAL_FAILURE(assertBits(rows->childAt(2), expectedDouble));
+    ASSERT_NO_FATAL_FAILURE(assertBits(rows->childAt(3), expectedWidenedReal));
+    EXPECT_EQ(rowReader->next(1, result), 0);
+  }
+
+  void assertReadsAs(
+      const std::vector<std::string>& inputs,
+      std::optional<double> expected) {
+    const std::optional<float> expectedReal = expected
+        ? std::optional<float>{static_cast<float>(*expected)}
+        : std::nullopt;
+    ASSERT_NO_FATAL_FAILURE(assertReadsAs(inputs, expectedReal, expected));
+  }
+
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
@@ -1002,29 +1100,12 @@ TEST_F(TextReaderTest, readFloatAsInt) {
 }
 
 TEST_F(TextReaderTest, readFloatingPointValues) {
-  struct TestCase {
-    std::string input;
-    std::optional<float> realValue;
-    std::optional<double> doubleValue;
-  };
-
   const auto doubleNaN = std::numeric_limits<double>::quiet_NaN();
   const auto realInfinity = std::numeric_limits<float>::infinity();
   const auto doubleInfinity = std::numeric_limits<double>::infinity();
   const auto realAboveOne = std::nextafter(1.0f, 2.0f);
-  std::vector<TestCase> testCases;
-  const auto addCases = [&](const std::vector<std::string>& inputs,
-                            std::optional<double> expected) {
-    const std::optional<float> realValue = expected
-        ? std::optional<float>{static_cast<float>(*expected)}
-        : std::nullopt;
-    for (const auto& input : inputs) {
-      testCases.push_back({input, realValue, expected});
-    }
-  };
-
-  addCases({"NaN", "+NaN", "-NaN", " \t-NaN\t "}, doubleNaN);
-  addCases(
+  assertReadsAs({"NaN", "+NaN", "-NaN", " \t-NaN\t "}, doubleNaN);
+  assertReadsAs(
       {"nan",
        "NAN",
        "Nan",
@@ -1039,136 +1120,53 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
        "-NaND"},
       std::nullopt);
 
-  addCases(
+  assertReadsAs(
       {"Infinity", "+Infinity", "Inf", "inf", "INF", "+inf", "inFINITY"},
       doubleInfinity);
-  addCases({"-Infinity", "-Inf", "-inf", " \t-iNfInItY\t "}, -doubleInfinity);
-  addCases({"Infinityf", "+InfinityD", "-Infd"}, std::nullopt);
+  assertReadsAs(
+      {"-Infinity", "-Inf", "-inf", " \t-iNfInItY\t "}, -doubleInfinity);
+  assertReadsAs({"Infinityf", "+InfinityD", "-Infd"}, std::nullopt);
 
-  addCases(
+  assertReadsAs(
       {"1.25", "+1.25", "1.25f", "1.25F", "1.25d", "1.25D", " \t1.25f\t "},
       1.25);
-  addCases({"-1.25", "-1.25f", "-1.25D"}, -1.25);
-  addCases({".5", "+.5", ".5f", "+.5f"}, 0.5);
-  addCases({"-.5", "-.5D"}, -0.5);
-  addCases({"1.", "1.f", "1.F", "1.d", "1.D"}, 1.0);
-  addCases({"1e2", "1E+2", "1e2F", "1e+2d"}, 100.0);
-  addCases({"0", "+0.0", "0e+2D"}, 0.0);
-  addCases({"-0.0", "-0f", "-0e-2D"}, -0.0);
+  assertReadsAs({"-1.25", "-1.25f", "-1.25D"}, -1.25);
+  assertReadsAs({".5", "+.5", ".5f", "+.5f"}, 0.5);
+  assertReadsAs({"-.5", "-.5D"}, -0.5);
+  assertReadsAs({"1.", "1.f", "1.F", "1.d", "1.D"}, 1.0);
+  assertReadsAs({"1e2", "1E+2", "1e2F", "1e+2d"}, 100.0);
+  assertReadsAs({"0", "+0.0", "0e+2D"}, 0.0);
+  assertReadsAs({"-0.0", "-0f", "-0e-2D"}, -0.0);
 
-  addCases({"", " \t ", "+", "-", "f", "+f"}, std::nullopt);
-  addCases({".", ".f", ".F", ".d", ".D", ".e2", ".e2f"}, std::nullopt);
-  addCases({"1e", "1e+", "1e-", "1e+f", "1ef"}, std::nullopt);
-  addCases({"1ff", "1.0fX", "1.0X", "12a", "1L", "1.5%"}, std::nullopt);
-  addCases({"1.0 f", "1.5 d", "1\t2"}, std::nullopt);
-  addCases(
+  assertReadsAs({"", " \t ", "+", "-", "f", "+f"}, std::nullopt);
+  assertReadsAs({".", ".f", ".F", ".d", ".D", ".e2", ".e2f"}, std::nullopt);
+  assertReadsAs({"1e", "1e+", "1e-", "1e+f", "1ef"}, std::nullopt);
+  assertReadsAs({"1ff", "1.0fX", "1.0X", "12a", "1L", "1.5%"}, std::nullopt);
+  assertReadsAs({"1.0 f", "1.5 d", "1\t2"}, std::nullopt);
+  assertReadsAs(
       {"1e5x", "1e400x", "1e-400fX", "1.2.3", "--1d", "1f2"}, std::nullopt);
-  addCases({std::string("1.0\0f", 5)}, std::nullopt);
-  addCases(
+  assertReadsAs({std::string("1.0\0f", 5)}, std::nullopt);
+  assertReadsAs(
       {"0x10", "0x1.8p+1D", "-0X1p2", "0x1f", "0x1d", "0x1p+f"}, std::nullopt);
 
   // Keep distinct REAL and DOUBLE expectations for precision and range.
-  testCases.insert(
-      testCases.end(),
-      {
-          // A suffix does not narrow a DOUBLE value to float precision.
-          {"0.1f", 0.1f, 0.1},
-          {"16777217f", 16'777'216.0f, 16'777'217.0},
-          // Direct float parsing rounds up, but parsing through DOUBLE rounds
-          // to the midpoint between 1.0f and its successor, then down to 1.0f.
-          {"1.0000000596046448f", realAboveOne, 1.0000000596046448},
-          {"1e100f", realInfinity, 1e100},
-          {"-1e100", -realInfinity, -1e100},
-          {"1e400D", realInfinity, doubleInfinity},
-          {"-1e400d", -realInfinity, -doubleInfinity},
-          {"1e-100f", 0.0f, 1e-100},
-          {"-1e-100", -0.0f, -1e-100},
-          {"1.4e-45f", std::numeric_limits<float>::denorm_min(), 1.4e-45},
-          {"4.9e-324D", 0.0f, std::numeric_limits<double>::denorm_min()},
-          {"1e-400D", 0.0f, 0.0},
-          {"-1e-400f", -0.0f, -0.0},
-      });
-  // Verify a malformed field does not prevent reading a later valid row.
-  addCases({"2.5f"}, 2.5);
-
-  const auto assertValue = []<typename T>(
-                               const FlatVector<T>* values,
-                               vector_size_t row,
-                               const std::optional<T>& expected) {
-    ASSERT_EQ(values->isNullAt(row), !expected.has_value());
-    if (!expected.has_value()) {
-      return;
-    }
-    using Bits =
-        std::conditional_t<sizeof(T) == sizeof(uint32_t), uint32_t, uint64_t>;
-    EXPECT_EQ(
-        std::bit_cast<Bits>(values->valueAt(row)),
-        std::bit_cast<Bits>(*expected));
-  };
-
-  auto textFile = TempFilePath::create();
-  {
-    auto writeFile =
-        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
-    for (const auto& testCase : testCases) {
-      writeFile->append(
-          "7," + testCase.input + "," + testCase.input + "," + testCase.input +
-          ",9\n");
-    }
-    writeFile->close();
-  }
-
-  auto type = ROW(
-      {{"before", INTEGER()},
-       {"real", REAL()},
-       {"double", DOUBLE()},
-       {"widened_real", REAL()},
-       {"after", INTEGER()}});
-  const auto requestedType = ROW(
-      {{"before", INTEGER()},
-       {"real", REAL()},
-       {"double", DOUBLE()},
-       {"widened_real", DOUBLE()},
-       {"after", INTEGER()}});
-  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setFileSchema(type);
-  readerOptions.setSerDeOptions(dwio::common::SerDeOptions(',', '\2', '\3'));
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = factory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions;
-  setScanSpec(*requestedType, rowReaderOptions);
-  rowReaderOptions.select(
-      std::make_shared<dwio::common::ColumnSelector>(requestedType, type));
-  rowReaderOptions.setProjectSelectedType(true);
-  auto rowReader = reader->createRowReader(rowReaderOptions);
-  VectorPtr result;
-  ASSERT_EQ(rowReader->next(testCases.size(), result), testCases.size());
-  auto* rows = result->asChecked<RowVector>();
-  ASSERT_EQ(*rows->type(), *requestedType);
-  auto* before = rows->childAt(0)->asChecked<FlatVector<int32_t>>();
-  auto* real = rows->childAt(1)->asChecked<FlatVector<float>>();
-  auto* doubles = rows->childAt(2)->asChecked<FlatVector<double>>();
-  auto* widenedReal = rows->childAt(3)->asChecked<FlatVector<double>>();
-  auto* after = rows->childAt(4)->asChecked<FlatVector<int32_t>>();
-  for (vector_size_t row = 0; row < rows->size(); ++row) {
-    const auto& testCase = testCases[row];
-    SCOPED_TRACE(testCase.input);
-    ASSERT_FALSE(before->isNullAt(row));
-    EXPECT_EQ(before->valueAt(row), 7);
-    ASSERT_FALSE(after->isNullAt(row));
-    EXPECT_EQ(after->valueAt(row), 9);
-    ASSERT_NO_FATAL_FAILURE(assertValue(real, row, testCase.realValue));
-    ASSERT_NO_FATAL_FAILURE(assertValue(doubles, row, testCase.doubleValue));
-    const std::optional<double> widenedValue = testCase.realValue
-        ? std::optional<double>{static_cast<double>(*testCase.realValue)}
-        : std::nullopt;
-    ASSERT_NO_FATAL_FAILURE(assertValue(widenedReal, row, widenedValue));
-  }
-  EXPECT_EQ(rowReader->next(testCases.size(), result), 0);
+  // A suffix does not narrow a DOUBLE value to float precision.
+  assertReadsAs({"0.1f"}, 0.1f, 0.1);
+  assertReadsAs({"16777217f"}, 16'777'216.0f, 16'777'217.0);
+  // Direct float parsing rounds up, but parsing through DOUBLE rounds
+  // to the midpoint between 1.0f and its successor, then down to 1.0f.
+  assertReadsAs({"1.0000000596046448f"}, realAboveOne, 1.0000000596046448);
+  assertReadsAs({"1e100f"}, realInfinity, 1e100);
+  assertReadsAs({"-1e100"}, -realInfinity, -1e100);
+  assertReadsAs({"1e400D"}, realInfinity, doubleInfinity);
+  assertReadsAs({"-1e400d"}, -realInfinity, -doubleInfinity);
+  assertReadsAs({"1e-100f"}, 0.0f, 1e-100);
+  assertReadsAs({"-1e-100"}, -0.0f, -1e-100);
+  assertReadsAs(
+      {"1.4e-45f"}, std::numeric_limits<float>::denorm_min(), 1.4e-45);
+  assertReadsAs({"4.9e-324D"}, 0.0f, std::numeric_limits<double>::denorm_min());
+  assertReadsAs({"1e-400D"}, 0.0f, 0.0);
+  assertReadsAs({"-1e-400f"}, -0.0f, -0.0);
 }
 
 TEST_F(TextReaderTest, simpleTypes) {

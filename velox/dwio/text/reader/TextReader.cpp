@@ -849,7 +849,7 @@ T TextRowReader::getFloatingPoint(
     return 0;
   }
 
-  // Match Java String.trim() without copying the field.
+  // Trim leading and trailing bytes at most 0x20 without copying the field.
   while (!input.empty() && static_cast<unsigned char>(input.front()) <= 0x20) {
     input.remove_prefix(1);
   }
@@ -866,12 +866,10 @@ T TextRowReader::getFloatingPoint(
   if (negative || literal.front() == '+') {
     literal.remove_prefix(1);
   }
-  // Java discards the sign of NaN.
+  // Use a canonical quiet NaN regardless of the input sign.
   if (literal == "NaN") {
     return std::numeric_limits<T>::quiet_NaN();
   }
-  // Preserve case-insensitive infinity aliases for backward compatibility,
-  // even though Hive's Java parser accepts only "Infinity".
   if (boost::algorithm::iequals(literal, "inf", std::locale::classic()) ||
       boost::algorithm::iequals(literal, "infinity", std::locale::classic())) {
     const auto infinity = std::numeric_limits<T>::infinity();

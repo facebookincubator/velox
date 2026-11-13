@@ -3,9 +3,9 @@
 ## REAL and DOUBLE
 
 The reader trims leading and trailing bytes whose unsigned value is at most
-`0x20`, matching Java's `String.trim()`. Parsing is locale-independent and uses
-`.` as the decimal separator. The entire trimmed field must match an accepted
-form; malformed fields read as NULL.
+`0x20`. Parsing is locale-independent and uses `.` as the decimal separator.
+The entire trimmed field must match an accepted form; malformed fields read
+as NULL.
 
 ### Accepted forms
 
@@ -27,9 +27,7 @@ NaN is case-sensitive and does not accept a type suffix or payload.
 
 `inf` and `infinity` are accepted in any ASCII letter case, with an optional
 `+` or `-` sign. Examples include `Infinity`, `+Infinity`, `-Inf`, `INF`, and
-`inFINITY`. These aliases are retained for backward compatibility even though
-Hive's Java parser accepts only `Infinity` with an optional sign. Infinity
-spellings do not accept a type suffix.
+`inFINITY`. Infinity spellings do not accept a type suffix.
 
 Rounding uses the file column's precision, with ties rounded to even. Overflow
 produces signed infinity, underflow can produce signed zero, and representable
@@ -49,9 +47,3 @@ finite in DOUBLE. Negative zero retains its sign.
 - Other trailing characters or embedded whitespace/control bytes, such as
   `1e5x`, `1.2.3`, and an embedded NUL.
 - Hexadecimal forms, such as `0x10` and `0x1.8p+1`.
-
-### Compatibility changes
-
-Non-exact NaN spellings such as `nan` and `NAN`, digitless leading-dot inputs
-such as `.` and `.e2`, incomplete exponents such as `1e+`, and hexadecimal
-forms now read as NULL rather than relying on C-library parsing behavior.
