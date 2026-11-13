@@ -64,6 +64,12 @@ class FunctionBenchmarkBase {
     return compileExpressions({text}, rowType);
   }
 
+  /// Compiles an already typed expression, e.g. one that the SQL parser cannot
+  /// produce.
+  exec::ExprSet compileExpression(const core::TypedExprPtr& expr) {
+    return exec::ExprSet({expr}, &execCtx_);
+  }
+
   void evaluate(
       exec::ExprSet& exprSet,
       const RowVectorPtr& data,
