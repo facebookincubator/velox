@@ -327,6 +327,11 @@ class NimbleReader : public dwio::common::Reader {
 
   std::unique_ptr<dwio::common::RowReader> createRowReader(
       const dwio::common::RowReaderOptions& options) const override {
+    // Only the selective reader honors a split row range. Reading the whole
+    // split instead would return the same rows from every split.
+    VELOX_USER_CHECK(
+        !options.splitRowRange().has_value(),
+        "Split row ranges require the selective Nimble reader");
     facebook::nimble::BatchReadParams params;
     params.fileRangeStartOffset = options.offset();
     params.fileRangeEndOffset = options.limit();
