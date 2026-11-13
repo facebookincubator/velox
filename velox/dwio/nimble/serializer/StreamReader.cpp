@@ -336,8 +336,7 @@ void StreamReader::prepareRead(
     const Encoding::Options& options) {
   reset();
   options_ = options;
-  if (readerParams_.decodeExecutor != nullptr &&
-      readerParams_.maxDecodeParallelism > 1) {
+  if (parallelDecodeEnabled()) {
     // TODO: Make the encoding buffer pool safe for parallel decoding.
     options_.bufferPool = nullptr;
   }

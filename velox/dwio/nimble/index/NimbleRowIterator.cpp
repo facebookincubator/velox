@@ -20,7 +20,6 @@
 #include "velox/dwio/nimble/index/NimbleIterator.h"
 
 #include <atomic>
-#include <chrono>
 #include <memory>
 #include <optional>
 #include <span>
@@ -75,8 +74,16 @@ folly::IOBufFactory createIOBufFactory(velox::memory::MemoryPool& pool) {
   };
 }
 
-// Reuses one stream reader to materialize stripes serially. Gets retain their
-// stripe and output for later reads; scans release both.
+// Decodes a stripe's selected rows into a vector and converts them to entries
+// on the consumer thread. The materializer builds one stream reader for the
+// first stripe and keeps it for its lifetime, so that an iterator that a caller
+// keeps between lookups reuses the reader. A scan decodes each stripe once and
+// releases the stripe and its decoded rows. A point lookup keeps its stripe
+// bound to the reader until another stripe replaces it or the iterator resets,
+// so that the next lookups of a batch, such as a MultiGet, read their rows of
+// the stripe without loading and decompressing it again. The reads of a point
+// lookup leave the reader where it is, so later lookups read any rows of the
+// stripe in any order.
 class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
  public:
   StripeMaterializer(
@@ -268,28 +275,8 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
     }
 
     // Times the decoding of the stripe.
-    const bool parallelDecode = readerParams_.decodeExecutor != nullptr &&
-        readerParams_.maxDecodeParallelism > 1;
-    std::optional<std::chrono::steady_clock::time_point> wallStart;
-    if (collectTimings_ && parallelDecode) {
-      wallStart = std::chrono::steady_clock::now();
-    }
-    SCOPE_EXIT {
-      if (wallStart.has_value()) {
-        decodingTiming_.wlock()->add(
-            velox::CpuWallTiming{
-                1,
-                static_cast<uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now() - *wallStart)
-                        .count()),
-                0});
-      }
-    };
-    // Parallel decode can resume on another thread, whose CPU clock differs.
     velox::OptionalCpuWallTimer timer{
-        collectTimings_ && !parallelDecode,
-        [this](const velox::CpuWallTiming& timing) {
+        collectTimings_, [this](const velox::CpuWallTiming& timing) {
           decodingTiming_.wlock()->add(timing);
         }};
     velox::VectorPtr rows;
@@ -350,6 +337,8 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
   const bool collectTimings_;
   // Keeps the executor borrowed by the stream reader alive.
   const folly::Executor::KeepAlive<> decodeExecutor_;
+  // Configures the stream reader to decode the fields of a stripe in parallel
+  // on 'decodeExecutor_'.
   const FieldReaderParams readerParams_;
   // Allocates the storage of the entries from the pool.
   folly::IOBufFactory iobufFactory_;

@@ -18,7 +18,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -46,7 +45,7 @@ namespace detail {
 
 class ScanPrefetcher;
 
-/// Owns an index scan and its bounded stripe prefetch for one iterator.
+/// Owns an index scan and its bounded stripe-stream prefetch for one iterator.
 /// Is not thread-safe. The owning iterator must serialize cursor calls.
 /// Resets and joins prefetch before using mutable projector APIs on the caller.
 class IndexScanCursor final {
@@ -84,9 +83,8 @@ class IndexScanCursor final {
     /// keys of the selected rows from the cluster index of the file, in row
     /// order, and the entries can take their keys from it. It reads on from
     /// the key cursor of the scan, which then skips the keys of the stripe
-    /// that the materializer left unread.
-    /// Prefetch calls run sequentially on its executor. Without prefetch,
-    /// materialization runs on the caller of co_nextStripe().
+    /// that the materializer left unread. Runs on the caller of
+    /// co_nextStripe(), including when prefetch is enabled.
     virtual folly::coro::Task<std::unique_ptr<Entries>> materialize(
         ProjectedStripe stripe,
         index::KeyCursor& keyCursor) = 0;
@@ -99,7 +97,8 @@ class IndexScanCursor final {
 
   /// Creates a cursor that owns `projector` and materializes loaded stripes
   /// with `materializer`. Neither may be null. When configured, prefetch loads
-  /// and materializes selected stripes in one background task.
+  /// encoded streams ahead; materialization stays on the caller of
+  /// co_nextStripe().
   static std::shared_ptr<IndexScanCursor> create(
       std::unique_ptr<NimbleIndexProjector> projector,
       std::shared_ptr<StripeMaterializer> materializer,
@@ -113,7 +112,7 @@ class IndexScanCursor final {
       bool cacheEncodingView,
       velox::BufferPool* bufferPool);
 
-  /// Requests cancellation and defers prefetch cleanup until its task stops.
+  /// Requests cancellation and defers producer cleanup until its tasks stop.
   /// Joins synchronously if asynchronous cleanup cannot start.
   ~IndexScanCursor();
 
@@ -145,8 +144,8 @@ class IndexScanCursor final {
   /// Must be called without an active scan, such as after reset().
   void setVerifyStreamChecksums(bool verifyStreamChecksums);
 
-  /// Materializes the next selected stripe with a key cursor over its selected
-  /// rows, or waits for its prefetched entries.
+  /// Loads the next selected stripe, or waits for its prefetched streams, then
+  /// materializes it on the caller with a key cursor over its selected rows.
   /// Its selected rows start at the iterator's file-level 'row', and the call
   /// returns its entries. The iterator reads the stripes in order: 'row' is the
   /// first row of the scan, and then the end of the rows of the previous
@@ -189,16 +188,19 @@ class IndexScanCursor final {
   // Returns whether the configured limits allow a non-empty scan to prefetch.
   bool canPrefetch() const;
 
-  // Creates owned cancellation work before clearing the prefetch task.
+  // Creates owned cancellation work before clearing the producer.
   folly::coro::Task<void> co_resetPrefetch();
 
   // Shares the projector with its background prefetch task.
   const ProjectorPtr projector_;
-  // Executor used to load and materialize stripes ahead of the consumer.
+  // Executor used to load encoded stripe streams ahead of the consumer.
   const folly::Executor::KeepAlive<> prefetchExecutor_;
-  // Maximum running or completed stripes awaiting consumer handoff.
+  // Maximum number of prefetched stripes queued ahead of the consumer.
   const uint32_t maxPrefetchStripes_;
-  // Materializes stripes on the caller or on the prefetch executor.
+  // Number of batches that 'maxPrefetchStripes_' is split into, each loaded in
+  // one read.
+  const uint32_t numPrefetchBatches_;
+  // Materializes stripes on the iterator caller.
   const std::shared_ptr<StripeMaterializer> stripeMaterializer_;
   // Contiguous file-row range selected by the active key bounds.
   std::optional<RowRange> range_;
@@ -210,17 +212,13 @@ class IndexScanCursor final {
   // of its first row, which other readers of the index can otherwise evict from
   // the index's cache before the scan reads its keys. Null after the last
   // stripe and after a stripe that failed, and for a scan from the first row,
-  // so that the next stripe creates one. Moves to the prefetch task when
-  // enabled.
+  // so that the next stripe creates one.
   std::unique_ptr<index::KeyCursor> keyCursor_;
   // First selected stripe not yet returned to the iterator.
   size_t stripeOffset_{0};
-  // Keeps encoded stripes from one coalesced read until the consumer
-  // materializes them one at a time.
-  std::deque<ProjectedStripe> stripeBatch_;
   // Rows made available to the iterator from loaded stripe selections.
   uint64_t numOutputRows_{0};
-  // Owns the bounded queue and task that prepares later stripe entries.
+  // Owns the bounded queue and task that load later stripe streams.
   std::shared_ptr<ScanPrefetcher> scanPrefetcher_;
 };
 

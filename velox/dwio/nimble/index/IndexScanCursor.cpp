@@ -20,7 +20,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <deque>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -99,27 +98,27 @@ class StripeKeyCursor final : public index::KeyCursor {
 
 } // namespace
 
-// Loads and materializes selected stripes in one background task.
+// Loads encoded streams in contiguous stripe batches within the configured
+// stripe limit. The consumer materializes them.
 class ScanPrefetcher {
  public:
   using ProjectorPtr = IndexScanCursor::ProjectorPtr;
-  using MaterializerPtr = std::shared_ptr<IndexScanCursor::StripeMaterializer>;
-  using Entries = IndexScanCursor::StripeMaterializer::Entries;
-  using EntriesResult = folly::Try<std::unique_ptr<Entries>>;
 
+  // Starts prefetching the stripes selected for the active scan, in batches of
+  // 'maxPrefetchStripes' / 'numPrefetchBatches' stripes. The cursor checks
+  // that 'numPrefetchBatches' is positive.
   ScanPrefetcher(
       ProjectorPtr projector,
-      MaterializerPtr materializer,
       std::vector<StripeSelection> selections,
-      std::unique_ptr<index::KeyCursor> keyCursor,
       folly::Executor::KeepAlive<> prefetchExecutor,
-      uint32_t maxPrefetchStripes)
+      uint32_t maxPrefetchStripes,
+      uint32_t numPrefetchBatches)
       : projector_{std::move(projector)},
-        materializer_{std::move(materializer)},
         selections_{std::move(selections)},
-        keyCursor_{std::move(keyCursor)},
         prefetchExecutor_{std::move(prefetchExecutor)},
-        maxPrefetchStripes_{maxPrefetchStripes} {
+        maxPrefetchStripes_{maxPrefetchStripes},
+        maxBatchStripes_{
+            std::max<uint32_t>(1, maxPrefetchStripes / numPrefetchBatches)} {
     NIMBLE_CHECK_GT(maxPrefetchStripes_, 0);
     NIMBLE_CHECK(!selections_.empty(), "No stripes are selected to prefetch");
   }
@@ -131,158 +130,181 @@ class ScanPrefetcher {
 
   ~ScanPrefetcher() = default;
 
-  // Stops admission and wakes the producer waiting for capacity.
+  // Stops queue admission and wakes a producer waiting for capacity.
   void requestStop() noexcept {
     stopped_.store(true, std::memory_order_release);
     prefetchBaton_.post();
   }
 
-  // Stops loading before joining the task and its decoding children.
+  // Stops queue admission and waits for the producer to finish.
   folly::coro::Task<void> cancelAndJoin() noexcept {
     requestStop();
     co_await prefetchScope_.cancelAndJoinAsync();
   }
 
+  // Schedules the producer once on the configured executor.
   void start() {
-    prefetchScope_.add(
-        folly::coro::co_withExecutor(
-            prefetchExecutor_, run(std::move(keyCursor_))));
+    if (prefetchStarted_.exchange(true)) {
+      return;
+    }
+    prefetchScope_.add(folly::coro::co_withExecutor(prefetchExecutor_, run()));
   }
 
-  // Canceled waits leave entries available for retry.
-  folly::coro::Task<std::unique_ptr<Entries>> co_nextStripe(
-      uint32_t stripeIndex) {
-    checkLoadError();
-    velox::common::testutil::TestValue::adjust(
-        "facebook::nimble::ScanPrefetcher::co_nextStripe::beforeReady",
-        &stripeIndex);
-    auto entries = co_await loadedStripes_.dequeue();
-    if (entries.hasException()) {
-      loadError_ = entries.exception();
-      checkLoadError();
-    }
-    releaseReservation();
-    co_return std::move(entries).value();
+  // Waits for the next queued stripe, which is 'stripeIndex', and returns its
+  // encoded streams for the consumer to materialize.
+  folly::coro::Task<ProjectedStripe> co_nextStripe(uint32_t stripeIndex) {
+    auto stripe = co_await co_dequeueStripe();
+    NIMBLE_CHECK_EQ(
+        stripe.selection.stripeIndex,
+        stripeIndex,
+        "Loaded stripe index does not match the selected stripe");
+    co_return std::move(stripe);
   }
 
  private:
-  // Makes retries fail promptly after a terminal load or materialization error.
+  // Waits for and returns the next queued stripe.
+  folly::coro::Task<ProjectedStripe> co_dequeueStripe() {
+    checkLoadError();
+    if (currentBatchStripe_ == currentBatch_.size()) {
+      folly::Try<std::vector<ProjectedStripe>> stripesOr;
+      co_await loadedStripes_.dequeue(stripesOr);
+      if (stripesOr.hasException()) {
+        loadError_ = stripesOr.exception();
+        checkLoadError();
+      }
+      currentBatch_ = std::move(stripesOr).value();
+      NIMBLE_CHECK(!currentBatch_.empty(), "Loaded prefetch batch is empty");
+      currentBatchStripe_ = 0;
+    }
+    auto stripe = std::move(currentBatch_.at(currentBatchStripe_++));
+    if (currentBatchStripe_ == currentBatch_.size()) {
+      releaseReservation(static_cast<uint32_t>(currentBatch_.size()));
+    }
+    co_return std::move(stripe);
+  }
+
+  // Makes consumer retries fail promptly after a terminal load failure.
   void checkLoadError() const {
     if (loadError_) {
       loadError_.throw_exception();
     }
   }
 
-  // Reserves a slot before reading or materializing a stripe.
-  folly::coro::Task<bool> acquireReservation() {
+  // Reserves a batch before issuing a coalesced load.
+  folly::coro::Task<uint32_t> acquireReservation(uint32_t maxStripes) {
+    NIMBLE_CHECK_GT(maxStripes, 0);
     while (true) {
       prefetchBaton_.reset();
       if (stopped_.load(std::memory_order_acquire)) {
-        co_return false;
+        co_return 0;
       }
-      const auto outstanding =
-          outstandingStripes_.load(std::memory_order_acquire);
-      NIMBLE_CHECK_LE(outstanding, maxPrefetchStripes_);
-      if (outstanding == maxPrefetchStripes_) {
+      const auto queuedStripes =
+          consumedStripes_.load(std::memory_order_acquire);
+      NIMBLE_CHECK_LE(queuedStripes, maxPrefetchStripes_);
+      if (queuedStripes == maxPrefetchStripes_) {
         co_await prefetchBaton_;
         continue;
       }
-      outstandingStripes_.fetch_add(1, std::memory_order_acq_rel);
-      co_return true;
+      const auto numStripes =
+          std::min(maxStripes, maxPrefetchStripes_ - queuedStripes);
+      consumedStripes_.fetch_add(numStripes, std::memory_order_acq_rel);
+      co_return numStripes;
     }
   }
 
-  void releaseReservation() {
-    NIMBLE_CHECK_GT(outstandingStripes_.load(std::memory_order_acquire), 0);
-    outstandingStripes_.fetch_sub(1, std::memory_order_acq_rel);
+  // Releases a batch's slots after its last stripe is dequeued or loading
+  // stops.
+  void releaseReservation(uint32_t numStripes) {
+    if (numStripes == 0) {
+      return;
+    }
+    NIMBLE_CHECK_GE(
+        consumedStripes_.load(std::memory_order_acquire), numStripes);
+    consumedStripes_.fetch_sub(numStripes, std::memory_order_acq_rel);
     prefetchBaton_.post();
   }
 
-  // Materializes encoded batches serially under the decoded-stripe limit.
-  folly::coro::Task<void> run(std::unique_ptr<index::KeyCursor> keyCursor) {
-    std::deque<ProjectedStripe> stripeBatch;
-    bool reserved{false};
+  // Loads encoded stripe batches for the consumer to materialize.
+  folly::coro::Task<void> run() {
+    // Stripes reserved for a batch that the consumer has not received, which
+    // the producer releases when it stops.
+    uint32_t reservedStripes{0};
     while (nextStripeOffset_ < selections_.size() &&
            !stopped_.load(std::memory_order_acquire)) {
-      const auto& selection = selections_[nextStripeOffset_];
+      std::vector<ProjectedStripe> stripeStreams;
       try {
-        reserved = co_await acquireReservation();
+        const auto numStripes = std::min<uint32_t>(
+            maxBatchStripes_,
+            static_cast<uint32_t>(selections_.size() - nextStripeOffset_));
+        NIMBLE_CHECK_GT(numStripes, 0);
+        reservedStripes = co_await acquireReservation(numStripes);
         velox::common::testutil::TestValue::adjust(
             "facebook::nimble::ScanPrefetcher::run::afterReservation",
             &stopped_);
-        if (!reserved || stopped_.load(std::memory_order_acquire)) {
+        if (reservedStripes == 0 || stopped_.load(std::memory_order_acquire)) {
           break;
         }
         velox::common::testutil::TestValue::adjust(
             "facebook::nimble::ScanPrefetcher::run::beforeLoad", &stopped_);
         if (stopped_.load(std::memory_order_acquire)) {
+          // The consumer can be destroyed before queued cancellation starts.
           break;
         }
-        if (stripeBatch.empty()) {
-          const auto numStripes = std::min(
-              projector_->numStripesToRead(selection.stripeIndex),
-              static_cast<uint32_t>(selections_.size() - nextStripeOffset_));
-          auto stripes =
-              projector_->loadStripeStreams(selection.stripeIndex, numStripes);
-          for (auto& stripe : stripes) {
-            stripeBatch.push_back(std::move(stripe));
-          }
-        }
-        if (stopped_.load(std::memory_order_acquire)) {
-          break;
-        }
-        auto stripe = std::move(stripeBatch.front());
-        stripeBatch.pop_front();
-        stripe.selection = selection;
-        if (keyCursor == nullptr) {
-          keyCursor = projector_->clusterIndex().keyCursor(
-              RowRange{
-                  selection.selectedRowRange().startRow,
-                  selections_.back().selectedRowRange().endRow});
-        }
-        StripeKeyCursor stripeKeyCursor{
-            keyCursor.get(), selection.selectedRowRange().numRows()};
-        auto entries = co_await materializer_->materialize(
-            std::move(stripe), stripeKeyCursor);
-        if (nextStripeOffset_ + 1 == selections_.size()) {
-          keyCursor.reset();
-        } else {
-          stripeKeyCursor.skip(stripeKeyCursor.numRemaining());
-        }
-        loadedStripes_.enqueue(EntriesResult{std::move(entries)});
+        const auto firstStripe =
+            selections_.front().stripeIndex + nextStripeOffset_;
+        stripeStreams =
+            projector_->loadStripeStreams(firstStripe, reservedStripes);
+        NIMBLE_CHECK_EQ(stripeStreams.size(), reservedStripes);
       } catch (...) {
         loadedStripes_.enqueue(
-            EntriesResult{folly::exception_wrapper{std::current_exception()}});
+            folly::Try<std::vector<ProjectedStripe>>{
+                folly::exception_wrapper{std::current_exception()}});
         break;
       }
-      reserved = false;
-      ++nextStripeOffset_;
+      nextStripeOffset_ += reservedStripes;
+      reservedStripes = 0;
+      loadedStripes_.enqueue(
+          folly::Try<std::vector<ProjectedStripe>>{std::move(stripeStreams)});
     }
-    keyCursor.reset();
-    if (reserved) {
-      releaseReservation();
-    }
+    releaseReservation(reservedStripes);
   }
 
+  // Keeps projector resources alive through detached producer cleanup.
   const ProjectorPtr projector_;
-  const MaterializerPtr materializer_;
+  // The stripes selected by the consumer's active scan, which are consecutive.
   const std::vector<StripeSelection> selections_;
-  // Moves the seek cursor into the producer frame when it starts.
-  std::unique_ptr<index::KeyCursor> keyCursor_;
+  // Keeps the background executor alive while this producer is active.
   const folly::Executor::KeepAlive<> prefetchExecutor_;
+  // Maximum stripe streams queued ahead of the consumer.
+  // TODO: Add a limit on projected stripe bytes.
   const uint32_t maxPrefetchStripes_;
+  // Stripes that one batch loads in one read. With two or more batches,
+  // loading can overlap consumption.
+  const uint32_t maxBatchStripes_;
+  // First selected stripe that the producer has not loaded yet.
   uint32_t nextStripeOffset_{0};
-  // Publishes completed stripe entries in file order.
+  // One prefetch coroutine produces batches; serialized iterator calls consume
+  // them.
   folly::coro::UnboundedQueue<
-      EntriesResult,
+      folly::Try<std::vector<ProjectedStripe>>,
       /*SingleProducer=*/true,
       /*SingleConsumer=*/true>
       loadedStripes_;
+  // Holds the current batch until the consumer dequeues its final stripe.
+  std::vector<ProjectedStripe> currentBatch_;
+  // Next stripe to return from the consumer's current batch.
+  size_t currentBatchStripe_{0};
+  // Retains producer failures, including cancellation, across consumer retries.
   folly::exception_wrapper loadError_;
-  // Includes the running stripe and completed entries until consumer handoff.
-  std::atomic_uint32_t outstandingStripes_{0};
+  // Ensures the producer is scheduled only once.
+  std::atomic_bool prefetchStarted_{false};
+  // Stripes reserved by batches that have not been completely dequeued.
+  std::atomic_uint32_t consumedStripes_{0};
+  // Stops the producer while it waits for a queue limit.
   std::atomic_bool stopped_{false};
+  // Wakes the producer when the consumer releases a batch reservation.
   folly::coro::Baton prefetchBaton_;
+  // Owns the producer until cancellation and join complete.
   folly::coro::CancellableAsyncScope prefetchScope_;
 };
 
@@ -320,7 +342,10 @@ IndexScanCursor::IndexScanCursor(
       // A get reads the rows of one key, which a prefetch would not speed up,
       // and reads the stripe that the materializer holds without loading it.
       maxPrefetchStripes_{options.forGet ? 0 : options.maxPrefetchStripes},
+      numPrefetchBatches_{options.numPrefetchBatches},
       stripeMaterializer_{velox::checkedNotNull(std::move(materializer))} {
+  NIMBLE_USER_CHECK_GT(
+      numPrefetchBatches_, 0, "Prefetch batch count must be positive");
   NIMBLE_CHECK_LE(projector_->numRows(), std::numeric_limits<uint32_t>::max());
   projector_->setTimingEnabled(options.collectTimings);
 }
@@ -386,8 +411,6 @@ void IndexScanCursor::reset() {
   if (scanPrefetcher_ != nullptr) {
     folly::coro::blockingWait(co_resetPrefetch());
   }
-  projector_->resetStreamScan();
-  stripeBatch_.clear();
   range_.reset();
   stripeSelections_.clear();
   keyCursor_.reset();
@@ -449,54 +472,42 @@ const StripeSelection& IndexScanCursor::selectStripe(uint32_t row) const {
 folly::coro::Task<std::unique_ptr<IndexScanCursor::StripeMaterializer::Entries>>
 IndexScanCursor::co_nextStripe(uint32_t row) {
   const auto& selection = selectStripe(row);
-  std::unique_ptr<StripeMaterializer::Entries> entries;
-  if (scanPrefetcher_ != nullptr) {
-    entries = co_await scanPrefetcher_->co_nextStripe(selection.stripeIndex);
+  ProjectedStripe stripe;
+  if (stripeMaterializer_->hasLoadedStripe(selection.stripeIndex)) {
+    // The materializer decodes the selected rows from the streams that it
+    // holds. Only a get iterator holds a stripe, and it does not prefetch,
+    // which would load the stripe again.
+    NIMBLE_CHECK_NULL(
+        scanPrefetcher_, "A cursor that prefetches must load every stripe");
+    stripe.selection = selection;
+  } else if (scanPrefetcher_ != nullptr) {
+    stripe = co_await scanPrefetcher_->co_nextStripe(selection.stripeIndex);
   } else {
-    try {
-      ProjectedStripe stripe;
-      // The materializer decodes the selected rows from the streams that it
-      // holds. Only a get iterator holds a stripe, and it does not prefetch,
-      // which would load the stripe again.
-      if (!stripeMaterializer_->hasLoadedStripe(selection.stripeIndex)) {
-        if (stripeBatch_.empty()) {
-          const auto numStripes = std::min(
-              projector_->numStripesToRead(selection.stripeIndex),
-              static_cast<uint32_t>(stripeSelections_.size() - stripeOffset_));
-          auto stripes =
-              projector_->loadStripeStreams(selection.stripeIndex, numStripes);
-          for (auto& projectedStripe : stripes) {
-            stripeBatch_.push_back(std::move(projectedStripe));
-          }
-        }
-        stripe = std::move(stripeBatch_.front());
-        stripeBatch_.pop_front();
-      }
-      stripe.selection = selection;
-      StripeKeyCursor stripeKeyCursor{
-          ensureKeyCursor(selection), selection.selectedRowRange().numRows()};
-      // A failed stripe can stop the key cursor at any row, so a retry of the
-      // stripe starts a new one. Dismissed on success.
-      auto resetKeyCursor = folly::makeGuard([this] { keyCursor_.reset(); });
-      entries = co_await stripeMaterializer_->materialize(
-          std::move(stripe), stripeKeyCursor);
-      if (stripeOffset_ + 1 == stripeSelections_.size()) {
-        // The last stripe releases the key chunk that the key cursor holds.
-        keyCursor_.reset();
-      } else {
-        // Moves the key cursor of the scan past the keys that the materializer
-        // left unread, to the first row of the next stripe.
-        stripeKeyCursor.skip(stripeKeyCursor.numRemaining());
-      }
-      resetKeyCursor.dismiss();
-    } catch (...) {
-      // Materialization can fail after popping the stripe. Reload it on retry.
-      stripeBatch_.clear();
-      throw;
-    }
+    auto stripes =
+        projector_->loadStripeStreams(selection.stripeIndex, /*numStripes=*/1);
+    NIMBLE_CHECK_EQ(stripes.size(), 1);
+    stripe = std::move(stripes.at(0));
   }
-  numOutputRows_ += selection.selectedRowRange().numRows();
+  stripe.selection.rowRange = selection.rowRange;
+  const auto selectedRows = selection.selectedRowRange();
+  StripeKeyCursor stripeKeyCursor{
+      ensureKeyCursor(selection), selectedRows.numRows()};
+  // A failed stripe can stop the key cursor at any row, so a retry of the
+  // stripe starts a new one. Dismissed on success.
+  auto resetKeyCursor = folly::makeGuard([this] { keyCursor_.reset(); });
+  auto entries = co_await stripeMaterializer_->materialize(
+      std::move(stripe), stripeKeyCursor);
+  resetKeyCursor.dismiss();
+  numOutputRows_ += selectedRows.numRows();
   ++stripeOffset_;
+  if (stripeOffset_ == stripeSelections_.size()) {
+    // The last stripe releases the key chunk that the key cursor holds.
+    keyCursor_.reset();
+  } else {
+    // Moves the key cursor of the scan past the keys that the materializer
+    // left unread, to the first row of the next stripe.
+    stripeKeyCursor.skip(stripeKeyCursor.numRemaining());
+  }
   co_return entries;
 }
 
@@ -516,11 +527,10 @@ void IndexScanCursor::startPrefetch() {
   }
   scanPrefetcher_ = std::make_shared<ScanPrefetcher>(
       projector_,
-      stripeMaterializer_,
       stripeSelections_,
-      std::move(keyCursor_),
       prefetchExecutor_,
-      maxPrefetchStripes_);
+      maxPrefetchStripes_,
+      numPrefetchBatches_);
   scanPrefetcher_->start();
 }
 
@@ -533,7 +543,7 @@ folly::coro::Task<void> IndexScanCursor::co_resetPrefetch() {
   if (scanPrefetcher_ == nullptr) {
     return folly::coro::makeTask();
   }
-  // Keep the prefetcher alive through suspension and nested task allocation.
+  // Keep the producer alive through suspension and nested task allocation.
   auto cleanup =
       folly::coro::co_invoke(&ScanPrefetcher::cancelAndJoin, scanPrefetcher_);
   scanPrefetcher_.reset();
