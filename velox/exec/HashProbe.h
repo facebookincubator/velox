@@ -43,6 +43,10 @@ class HashProbe : public Operator {
   /// Number of rows bypassed via dynamic filter replacement.
   static constexpr std::string_view kReplacedWithDynamicFilterRows =
       "replacedWithDynamicFilterRows";
+  /// Number of probe rows with a key match on which a probe-only join filter
+  /// was evaluated once per row instead of once per matching build row.
+  static constexpr std::string_view kPreEvaluatedFilterRows =
+      "preEvaluatedFilterRows";
 
   HashProbe(
       int32_t operatorId,
@@ -176,6 +180,15 @@ class HashProbe : public Operator {
   // input batch.
   void processRightSemiNoFilter(bool emptyBuildSide);
 
+  // Evaluates a deterministic filter that only references probe columns once
+  // per probe row with a key match, and clears 'lookup_->hits' for rows that
+  // do not pass. This avoids evaluating the filter once per matching build
+  // row. If the filter input has lazy columns, loads the columns that must be
+  // loaded for all the rows and evaluates the filter in a reclaimable section
+  // unless 'toSpillOutput' is true. Returns false if the hash table is spilled
+  // meanwhile. See loadLazyInputInReclaimableSection().
+  bool preEvaluateProbeOnlyFilter(bool toSpillOutput);
+
   // Check if output_ can be re-used and if not make a new one.
   void prepareOutput(vector_size_t size);
 
@@ -300,7 +313,18 @@ class HashProbe : public Operator {
   // subsequent non-reclaimable evalFilter/fillOutput does not trigger OOM.
   // Called after listJoinResults() so that atEnd() is known and preloading
   // can be skipped for columns that fillOutput/createFilterInput won't load.
-  void ensureLazyInputLoaded();
+  // Returns false if the hash table is spilled while loading. See
+  // loadLazyInputInReclaimableSection().
+  bool ensureLazyInputLoaded();
+
+  // Runs 'load' to load lazy input vectors in a reclaimable section. 'load'
+  // may also evaluate the probe-only filter, which loads the lazy vectors it
+  // reads. If memory reclaim spills the hash table while loading, abandons the
+  // join results of the current input, as they reference freed hash table
+  // rows, and adds the input again. Returns false in that case, and the caller
+  // must return without output. The next getOutput() call processes the input
+  // rows that are not spilled.
+  bool loadLazyInputInReclaimableSection(const std::function<void()>& load);
 
   // Setups spilled output reader if 'spillOutputPartitionSet_' is not empty.
   void maybeSetupSpillOutputReader();
@@ -509,6 +533,19 @@ class HashProbe : public Operator {
   // Maps from column index in hash table to channel in 'filterInputType_'.
   std::vector<IdentityProjection> filterTableProjections_;
 
+  // True if 'filter_' is deterministic and only references probe columns, and
+  // the join is not null-aware and keeps probe rows without a match. See
+  // preEvaluateProbeOnlyFilter().
+  bool canPreEvaluateProbeOnlyFilter_{false};
+
+  // True if 'filter_' still needs to be pre-evaluated on the current probe
+  // input batch before listing join results.
+  bool probeOnlyFilterPending_{false};
+
+  // True if 'filter_' has already been applied to 'lookup_->hits' for the
+  // current probe input batch.
+  bool probeOnlyFilterPreEvaluated_{false};
+
   // The following six fields are used in null-aware anti join filter
   // processing.
 
@@ -709,9 +746,11 @@ class HashProbe : public Operator {
   // input.
   SelectivityVector passingInputRows_;
 
-  // Set while loading lazy input vectors inside a ReclaimableSectionGuard.
-  // Tells reclaim() to skip spillOutput() for this operator to avoid
-  // re-entering the column reader (which would deadlock on call_once).
+  // Set while loading lazy input vectors inside a ReclaimableSectionGuard,
+  // possibly by evaluating the probe-only filter. Tells reclaim() to skip
+  // spillOutput() for this operator to avoid re-entering the column reader
+  // (which would deadlock on call_once), and clearBuffers() to keep the filter
+  // state that the evaluation uses.
   tsan_atomic<bool> loadingLazyInput_{false};
 
   // Indicates if this hash probe has exceeded max spill limit which is not
