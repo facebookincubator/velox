@@ -24,7 +24,7 @@
 
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
-#include <folly/container/Foreach.h>
+#include <folly/container/irange.h>
 #include <folly/portability/GFlags.h>
 
 #include <iostream>
@@ -98,39 +98,43 @@ class TestStringSearch {
   TestStringSearch(const std::string& heyStack, const std::string& needle)
       : heyStack_(std::move(heyStack)),
         needle_(std::move(needle)),
-        searher_(needle_.begin(), needle_.end()),
+        searcher_(needle_.begin(), needle_.end()),
         kmpSearcher_(needle_) {}
 
   template <ALG alg>
   void runSearching(size_t iters) const {
     if constexpr (alg == SIMD) {
-      FOR_EACH_RANGE (i, 0, iters)
+      for (const auto _ : folly::irange(iters)) {
         doNotOptimizeAway(
             simd::simdStrstr(
                 heyStack_.data(),
                 heyStack_.size(),
                 needle_.data(),
                 needle_.size()));
+      }
     } else if constexpr (alg == STD) {
-      FOR_EACH_RANGE (i, 0, iters)
+      for (const auto _ : folly::irange(iters)) {
         doNotOptimizeAway(
             std::string_view(heyStack_.data(), heyStack_.size())
                 .find(std::string_view(needle_.data(), needle_.size())));
+      }
     } else if constexpr (alg == BOYER_MOORE) {
-      FOR_EACH_RANGE (i, 0, iters)
+      for (const auto _ : folly::irange(iters)) {
         doNotOptimizeAway(
-            std::search(heyStack_.begin(), heyStack_.end(), searher_));
+            std::search(heyStack_.begin(), heyStack_.end(), searcher_));
+      }
     } else if constexpr (alg == KMP) {
-      FOR_EACH_RANGE (i, 0, iters)
+      for (const auto _ : folly::irange(iters)) {
         doNotOptimizeAway(
             kmpSearcher_.search(heyStack_.data(), heyStack_.size()));
+      }
     }
   }
 
  private:
   std::string heyStack_;
   std::string needle_;
-  std::boyer_moore_searcher<std::string::iterator> searher_;
+  std::boyer_moore_searcher<std::string::iterator> searcher_;
   KmpSearcher kmpSearcher_;
 };
 
