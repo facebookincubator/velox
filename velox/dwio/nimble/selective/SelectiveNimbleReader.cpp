@@ -364,6 +364,11 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
     splitStats_.initColumnStatsCollection(
         *readerBase_->fileSchemaWithId(), options);
     initReadRange();
+
+    // initSplitRowRange() must run before initIndexBounds(): it counts rows
+    // from the split's first stripe, and narrowing to the index range moves
+    // startStripe_ and endStripe_.
+    initSplitRowRange();
     initIndexBounds();
     if (options.eagerFirstStripeLoad()) {
       nextRowNumber();
@@ -399,29 +404,39 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   void initReadRange();
 
   // Loads the current stripe by initializing streams and column readers.
-  // Also calls setStripeRowRange() to apply index-based row range filtering.
+  // Also calls setStripeRowRange() to apply rowRange_.
   void loadCurrentStripe();
+
+  // Narrows reading to options_.splitRowRange(), if set.
+  void initSplitRowRange();
 
   // Initializes index bounds for key-based filtering. Performs a single
   // lookup to get the exact file-level row range and derives stripe
   // boundaries from it.
   void initIndexBounds();
 
-  // Returns true if index bounds are active.
-  bool hasIndexBounds() const;
+  // Narrows rowRange_ to 'rows' (file-level) and the stripe range to the
+  // stripes that hold them.
+  void narrowToRows(RowRange rows);
+
+  // Skips all remaining stripes, as when no rows match.
+  void skipRemainingStripes();
+
+  // Returns true if reading is limited to rowRange_.
+  bool hasRowRange() const;
 
   // Advances to the next stripe by incrementing the stripe index and resetting
   // the row position state.
   void advanceToNextStripe();
 
-  // Sets the row range to read within the current stripe based on cluster
-  // index bounds. For the first stripe, adjusts rowInCurrentStripe_ to the
+  // Sets the row range to read within the current stripe based on
+  // rowRange_. For the first stripe, adjusts rowInCurrentStripe_ to the
   // lower bound position. For the last stripe, sets endRowInCurrentStripe_ to
   // the upper bound position. Also skips to the starting row position if
   // needed.
   void setStripeRowRange();
 
-  // Updates the random skip tracker when rows are skipped due to index bounds.
+  // Updates the random skip tracker when rows outside rowRange_ are skipped.
   void maybeUpdateRandomSkip(int64_t rowsSkipped);
 
   // Sets nextRowNumber_ to kAtEnd and restores any filters that were removed
@@ -476,21 +491,22 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
 
   // Index related fields.
   const ClusterIndexBase* clusterIndex_{nullptr};
-  // File-level row range from index lookup, if index bounds are active.
-  std::optional<RowRange> indexRowRange_;
+  // File-level rows to read: the split row range, the index lookup range, or
+  // both intersected. Unset when neither is active.
+  std::optional<RowRange> rowRange_;
 
   // The current stripe being read.
   int32_t currentStripe_{};
   // The current row position within the current stripe (0-based).
   int64_t rowInCurrentStripe_{};
   // Optional end row position for the current stripe, set when reading the
-  // last stripe with upper index bounds.
+  // last stripe of rowRange_.
   std::optional<int64_t> endRowInCurrentStripe_;
   std::optional<int64_t> nextRowNumber_;
 
   int32_t skippedStripes_{0};
-  // Tracks the number of rows from trailing stripes filtered out by upper index
-  // bound. These rows are combined with rows skipped at the end of the last
+  // Tracks the number of rows from trailing stripes past the end of rowRange_.
+  // These rows are combined with rows skipped at the end of the last
   // stripe when updating the random skip tracker.
   int64_t trailingSkippedRows_{0};
 
@@ -553,8 +569,8 @@ int64_t SelectiveNimbleRowReader::nextRowNumber() {
     }
     advanceToNextStripe();
   }
-  // Update random skip tracker for trailing rows that were skipped due to upper
-  // index bound filtering (includes both entire trailing stripes and rows at
+  // Update random skip tracker for trailing rows past the end of rowRange_
+  // (includes both entire trailing stripes and rows at
   // the end of the last stripe).
   maybeUpdateRandomSkip(trailingSkippedRows_);
 
@@ -870,8 +886,39 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
   setStripeRowRange();
 }
 
-bool SelectiveNimbleRowReader::hasIndexBounds() const {
-  return indexRowRange_.has_value();
+bool SelectiveNimbleRowReader::hasRowRange() const {
+  return rowRange_.has_value();
+}
+
+void SelectiveNimbleRowReader::initSplitRowRange() {
+  const auto& splitRowRange = options_.splitRowRange();
+  if (!splitRowRange.has_value() || currentStripe_ >= endStripe_) {
+    return;
+  }
+  const auto& tablet = readerBase_->tablet();
+  const uint64_t splitStartRow = stripeRowOffsets_[startStripe_];
+  const uint64_t splitNumRows = stripeRowOffsets_[endStripe_ - 1] +
+      tablet.stripeRowCount(endStripe_ - 1) - splitStartRow;
+  NIMBLE_CHECK_LE(
+      splitStartRow + splitNumRows,
+      std::numeric_limits<uint32_t>::max(),
+      "Split row ranges need file row numbers that fit in 32 bits.");
+  const auto firstRow = std::min(splitRowRange->firstRow, splitNumRows);
+  const auto numRows =
+      std::min(splitRowRange->numRows, splitNumRows - firstRow);
+  narrowToRows(RowRange(
+      static_cast<uint32_t>(splitStartRow + firstRow),
+      static_cast<uint32_t>(splitStartRow + firstRow + numRows)));
+}
+
+void SelectiveNimbleRowReader::skipRemainingStripes() {
+  int64_t rowsSkipped = 0;
+  for (int stripe = startStripe_; stripe < endStripe_; ++stripe) {
+    rowsSkipped += readerBase_->tablet().stripeRowCount(stripe);
+  }
+  maybeUpdateRandomSkip(rowsSkipped);
+  startStripe_ = endStripe_;
+  currentStripe_ = startStripe_;
 }
 
 void SelectiveNimbleRowReader::initIndexBounds() {
@@ -934,19 +981,24 @@ void SelectiveNimbleRowReader::initIndexBounds() {
       index::IndexLookup::LookupRequest::rangeScan({encodedBounds}));
   const auto rowRanges = lookupResult[0];
   if (rowRanges.empty()) {
-    int64_t rowsSkipped = 0;
-    for (int stripe = startStripe_; stripe < endStripe_; ++stripe) {
-      rowsSkipped += readerBase_->tablet().stripeRowCount(stripe);
-    }
-    maybeUpdateRandomSkip(rowsSkipped);
-    startStripe_ = endStripe_;
-    currentStripe_ = startStripe_;
+    skipRemainingStripes();
     return;
   }
 
   NIMBLE_CHECK_EQ(rowRanges.size(), 1, "Expected single row range per lookup");
-  indexRowRange_ = rowRanges[0];
-  const auto& rowRange = indexRowRange_.value();
+  narrowToRows(rowRanges[0]);
+}
+
+void SelectiveNimbleRowReader::narrowToRows(RowRange rows) {
+  if (rowRange_.has_value()) {
+    rows = rowRange_->intersect(rows);
+  }
+  if (rows.empty()) {
+    skipRemainingStripes();
+    return;
+  }
+  rowRange_ = rows;
+  const auto& rowRange = rowRange_.value();
 
   const auto& tablet = readerBase_->tablet();
   const auto originalStartStripe = startStripe_;
@@ -1009,7 +1061,7 @@ void SelectiveNimbleRowReader::setAtEnd() {
 }
 
 void SelectiveNimbleRowReader::setStripeRowRange() {
-  if (!hasIndexBounds()) {
+  if (!hasRowRange()) {
     return;
   }
   // Only the first and last stripes need row-level narrowing.
@@ -1017,7 +1069,7 @@ void SelectiveNimbleRowReader::setStripeRowRange() {
     return;
   }
 
-  const auto& rowRange = indexRowRange_.value();
+  const auto& rowRange = rowRange_.value();
   const auto stripeStart = stripeRowOffsets_[currentStripe_];
   const auto numStripeRows =
       readerBase_->tablet().stripeRowCount(currentStripe_);

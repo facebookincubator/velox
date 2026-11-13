@@ -219,6 +219,14 @@ void configureRowReaderOptions(
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(fileSplit->start, fileSplit->length);
+  if (fileSplit->splitRowRange.has_value()) {
+    VELOX_CHECK(
+        fileSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
+            fileSplit->fileFormat == dwio::common::FileFormat::DWRF,
+        "Split row ranges are only supported for Nimble and DWRF files: {}",
+        fileSplit->toString());
+    rowReaderOptions.setSplitRowRange(fileSplit->splitRowRange);
+  }
   if (fileConfig && sessionProperties) {
     rowReaderOptions.setTimestampPrecision(
         static_cast<TimestampPrecision>(
