@@ -265,6 +265,7 @@ function install_velox_deps {
   run_and_time install_geos
   run_and_time install_s2geometry
   run_and_time install_faiss
+  run_and_time install_lance_c
 }
 
 function install_apt_deps {

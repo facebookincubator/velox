@@ -48,6 +48,8 @@ S2GEOMETRY_VERSION="0.12.0"
 FAISS_VERSION="1.12.0"
 FAST_FLOAT_VERSION="v8.0.2"
 CCACHE_VERSION="4.11.3"
+# Only needed for VELOX_ENABLE_LANCE_CONNECTOR=ON.
+LANCE_C_VERSION="v0.1.9"
 # Only needed for VELOX_ENABLE_NIMBLE=ON. FSST is vendored under
 # velox/external/fsst, so it has no pin here. OpenZL is pinned to the revision
 # fbcode builds Nimble against rather than to v0.2.0, which predates the

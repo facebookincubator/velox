@@ -216,6 +216,7 @@ function install_velox_deps {
   run_and_time install_geos
   run_and_time install_s2geometry
   run_and_time install_faiss
+  run_and_time install_lance_c
 }
 
 (return 2>/dev/null) && return # If script was sourced, don't run commands.
