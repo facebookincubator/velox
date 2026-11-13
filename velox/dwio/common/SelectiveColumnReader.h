@@ -19,6 +19,7 @@
 #include "velox/common/memory/RawVector.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/common/process/TraceHistory.h"
+#include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/FormatData.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/Mutation.h"
@@ -493,6 +494,12 @@ class SelectiveColumnReader {
     isFlatMapValue_ = value;
   }
 
+  /// Makes this reader and its descendants keep a spare buffer for values and
+  /// nulls, for results that are handed out rather than copied, such as the
+  /// values of a flat map read as a FlatMapVector. A buffer is reused only
+  /// once nothing else holds it.
+  void setKeepsSpareBuffers();
+
   /// Filters 'rows' according to 'isNull'. Only applies to cases where
   /// scanSpec_->readsNullsOnly() is true.
   template <typename T>
@@ -551,6 +558,13 @@ class SelectiveColumnReader {
     if (isFlatMapValue_) {
       if (!nullsInReadRange_) {
         nullsInReadRange_ = std::move(flatMapValueNullsInReadRange_);
+      }
+    } else if (keepsSpareBuffers_) {
+      if (!reuseBufferOrSpare(
+              nullsInReadRange_,
+              spareNullsInReadRange_,
+              bits::nbytes(numRows))) {
+        nullsInReadRange_.reset();
       }
     } else if (nullsInReadRange_ && !nullsInReadRange_->unique()) {
       nullsInReadRange_.reset();
@@ -772,6 +786,18 @@ class SelectiveColumnReader {
   BufferPtr flatMapValueNullsInReadRange_;
   VectorPtr flatMapValueFlatValues_;
   VectorPtr flatMapValueConstantNullValues_;
+
+  // Whether values_, resultNulls_ and nullsInReadRange_ each have a spare
+  // buffer. The previous batch still holds these buffers when the next batch
+  // is read, so without a spare they are allocated again for every batch.
+  bool keepsSpareBuffers_{false};
+  BufferPtr spareValues_;
+  BufferPtr spareResultNulls_;
+  BufferPtr spareNullsInReadRange_;
+
+  // The all-null result when keepsSpareBuffers_ is true, reused once nothing
+  // else holds it.
+  VectorPtr spareNullValues_;
 };
 
 template <>

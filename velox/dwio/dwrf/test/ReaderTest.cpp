@@ -3395,6 +3395,147 @@ TEST_F(TestReader, readFlatMapsAsFlatMapsWithSharedMapValues) {
   assertEqualVectors(makeFlatVector<int64_t>({8, 9}), values);
 }
 
+TEST_F(TestReader, readFlatMapsAsFlatMapsReusingBuffers) {
+  constexpr vector_size_t kNumRows{400};
+  constexpr int32_t kNumKeys{8};
+  std::vector<vector_size_t> offsets;
+  std::vector<int32_t> keys;
+  std::vector<vector_size_t> arrayOffsets;
+  std::vector<int64_t> elements;
+  std::vector<vector_size_t> nullRows;
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    offsets.push_back(keys.size());
+    if (row % 11 == 5) {
+      nullRows.push_back(row);
+      continue;
+    }
+    for (int32_t key = 0; key < kNumKeys; ++key) {
+      if (key == 0 || (row + key) % 3 != 0) {
+        keys.push_back(key);
+        arrayOffsets.push_back(elements.size());
+        for (int32_t i = 0; i < (row + key) % 4; ++i) {
+          elements.push_back(row * 100 + key * 10 + i);
+        }
+      }
+    }
+  }
+  auto input = makeRowVector({
+      makeMapVector(
+          offsets,
+          makeFlatVector(keys),
+          makeArrayVector(arrayOffsets, makeFlatVector(elements)),
+          nullRows),
+      makeMapVector<int32_t, float>(
+          kNumRows,
+          [](auto /*row*/) { return 4; },
+          [](auto index) {
+            return index % 4 == 3 ? 100 : (index / 4 * 7 + index % 4 * 11) % 30;
+          },
+          [](auto index) { return index * 0.5f; },
+          nullptr,
+          [](auto index) { return index % 4 != 3 && index % 5 == 0; }),
+      makeFlatVector<int64_t>(kNumRows, std::identity{}),
+  });
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0, 1});
+  auto [writer, reader] = createWriterReader(
+      {input}, pool(), dataIoStats_, metadataIoStats_, config);
+  auto schema = asRowType(input->type());
+
+  auto makeRowReader = [&](std::unique_ptr<common::Filter> filter) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    scanSpec->addAllChildFields(*schema);
+    if (filter) {
+      scanSpec->childByName("c2")->setFilter(std::move(filter));
+    }
+    RowReaderOptions rowReaderOptions;
+    rowReaderOptions.setScanSpec(scanSpec);
+    rowReaderOptions.setPreserveFlatMapsInMemory(true);
+    return reader->createRowReader(rowReaderOptions);
+  };
+  auto loadFlatMaps = [](const VectorPtr& batch) {
+    auto* row = batch->asUnchecked<RowVector>();
+    for (column_index_t i = 0; i < 2; ++i) {
+      auto& column = row->childAt(i);
+      column = BaseVector::loadedVectorShared(column);
+      VELOX_CHECK_EQ(column->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    }
+  };
+
+  {
+    SCOPED_TRACE("Batches released before the next read");
+    auto rowReader = makeRowReader(nullptr);
+    VectorPtr batch = BaseVector::create(schema, 0, pool());
+    uint64_t numAllocs{0};
+    vector_size_t offset{0};
+    for (int32_t i = 0; rowReader->next(20, batch) > 0; ++i) {
+      const auto numAllocsBefore = pool()->stats().numAllocs;
+      loadFlatMaps(batch);
+      if (i >= 4) {
+        numAllocs += pool()->stats().numAllocs - numAllocsBefore;
+      }
+      for (vector_size_t row = 0; row < batch->size(); ++row) {
+        ASSERT_TRUE(batch->equalValueAt(input.get(), row, offset + row))
+            << "row " << offset + row;
+      }
+      offset += batch->size();
+    }
+    ASSERT_EQ(offset, kNumRows);
+    EXPECT_EQ(numAllocs, 0);
+  }
+
+  {
+    SCOPED_TRACE("Batches and map values held by a consumer");
+    constexpr std::array<vector_size_t, 8> kNumPassingPerBatch{
+        2, 10, 1, 7, 10, 0, 3, 9};
+    std::vector<int64_t> passingIds;
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      if (row % 10 < kNumPassingPerBatch[row / 10 % 8]) {
+        passingIds.push_back(row);
+      }
+    }
+    auto rowReader =
+        makeRowReader(common::createBigintValues(passingIds, false));
+    VectorPtr batch = BaseVector::create(schema, 0, pool());
+    std::vector<std::pair<VectorPtr, vector_size_t>> heldColumns;
+    std::vector<std::pair<VectorPtr, VectorPtr>> heldValues;
+    vector_size_t offset{0};
+    for (int32_t i = 0; rowReader->next(10, batch) > 0; ++i) {
+      if (batch->size() == 0) {
+        continue;
+      }
+      loadFlatMaps(batch);
+      auto* row = batch->asUnchecked<RowVector>();
+      for (column_index_t column = 0; column < 2; ++column) {
+        if (i % 2 == 1) {
+          heldColumns.emplace_back(row->childAt(column), offset);
+        } else {
+          const auto& values =
+              row->childAt(column)->asUnchecked<FlatMapVector>()->mapValuesAt(
+                  0);
+          heldValues.emplace_back(values, BaseVector::copy(*values));
+        }
+      }
+      offset += batch->size();
+    }
+    ASSERT_EQ(offset, passingIds.size());
+    ASSERT_FALSE(heldColumns.empty());
+    for (size_t i = 0; i < heldColumns.size(); ++i) {
+      const auto& [column, columnOffset] = heldColumns[i];
+      const auto& expected = input->childAt(i % 2);
+      for (vector_size_t row = 0; row < column->size(); ++row) {
+        ASSERT_TRUE(column->equalValueAt(
+            expected.get(), row, passingIds[columnOffset + row]))
+            << "row " << passingIds[columnOffset + row];
+      }
+    }
+    for (const auto& [values, copy] : heldValues) {
+      assertEqualVectors(copy, values);
+    }
+  }
+}
+
 TEST_F(TestReader, readStructWithWholeBatchFiltered) {
   // Test reading a struct with a pushdown filter that filters out all rows
   // for a certain batch.

@@ -254,6 +254,7 @@ class FlatMapColumnReader
       children_[i] = keyNodes_[i].reader.get();
       rawKeys[i] = keyNodes_[i].key.get();
     }
+    setKeepsSpareBuffers();
   }
 
   const BufferPtr& inMapBuffer(column_index_t childIndex) const override {
@@ -347,22 +348,6 @@ class FlatMapColumnReader
       child->addParentNulls(offset, mapNulls, rows);
     }
     readOffset_ = offset + rows.back() + 1;
-  }
-
-  void getValues(const RowSet& rows, VectorPtr* result) override {
-    SelectiveFlatMapColumnReader::getValues(rows, result);
-
-    // After reading the flat map streams recursively, need to read the in map
-    // buffers.
-    VELOX_CHECK(result && *result);
-    auto flatMapVector = (*result)->as<FlatMapVector>();
-    VELOX_CHECK(flatMapVector);
-
-    for (int i = 0; i < keyNodes_.size(); ++i) {
-      auto& nimbleData = children_[i]->formatData().template as<NimbleData>();
-      flatMapVector->inMapsAt(i, true) =
-          selectInMap(nimbleData.inMapBuffer(), rows, flatMapVector->pool());
-    }
   }
 
  private:

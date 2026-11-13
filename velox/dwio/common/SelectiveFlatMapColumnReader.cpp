@@ -17,15 +17,19 @@
 #include "velox/dwio/common/SelectiveFlatMapColumnReader.h"
 
 #include "velox/common/base/SimdUtil.h"
+#include "velox/dwio/common/BufferUtil.h"
 
 namespace facebook::velox::dwio::common {
 namespace {
 
-// Check if `result` can be reused to prevent allocation of a new vector.
+// Check if `result` can be reused to prevent allocation of a new vector. Moves
+// the map values that nothing else holds to 'reusableValues', for the child
+// readers to reuse.
 FlatMapVector* tryReuseResult(
     const VectorPtr& result,
     const VectorPtr& distinctKeys,
-    vector_size_t size) {
+    vector_size_t size,
+    std::vector<VectorPtr>& reusableValues) {
   if (result.use_count() != 1) {
     return nullptr;
   }
@@ -33,16 +37,17 @@ FlatMapVector* tryReuseResult(
   if (result->encoding() == VectorEncoding::Simple::FLAT_MAP) {
     auto* flatMap = static_cast<FlatMapVector*>(result.get());
     if (size > flatMap->size()) {
-      for (column_index_t i = 0; i < flatMap->numDistinctKeys(); ++i) {
-        const auto& values = flatMap->mapValuesAt(i);
-        if (values != nullptr && values.use_count() != 1) {
-          return nullptr;
-        }
-      }
       for (const auto& inMap : flatMap->inMaps()) {
         if (inMap != nullptr && !inMap->unique()) {
           return nullptr;
         }
+      }
+    }
+    reusableValues.resize(flatMap->numDistinctKeys());
+    for (column_index_t i = 0; i < flatMap->numDistinctKeys(); ++i) {
+      auto values = std::move(flatMap->mapValuesAt(i));
+      if (values.use_count() == 1) {
+        reusableValues[i] = std::move(values);
       }
     }
     if (flatMap->distinctKeys() != distinctKeys) {
@@ -73,37 +78,52 @@ void SelectiveFlatMapColumnReader::getValues(
   setComplexNulls(rows, *result);
 
   // Loop over column readers
+  spareInMaps_.resize(children_.size());
   for (int i = 0; i < children_.size(); ++i) {
     auto& child = children_[i];
     VectorPtr values;
-    child->getValues(rows, &values);
-    resultFlatMap->mapValuesAt(i) = values;
-
-    if (auto inMap = selectInMap(inMapBuffer(i), rows, resultFlatMap->pool())) {
-      resultFlatMap->inMapsAt(i, true) = std::move(inMap);
+    if (i < reusableValues_.size()) {
+      values = std::move(reusableValues_[i]);
     }
+    child->getValues(rows, &values);
+    resultFlatMap->mapValuesAt(i) = std::move(values);
+    selectInMap(
+        inMapBuffer(i),
+        rows,
+        resultFlatMap->pool(),
+        resultFlatMap->inMapsAt(i, true),
+        spareInMaps_[i]);
   }
+  reusableValues_.clear();
 }
 
 // static
-BufferPtr SelectiveFlatMapColumnReader::selectInMap(
+void SelectiveFlatMapColumnReader::selectInMap(
     const BufferPtr& inMap,
     const RowSet& rows,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    BufferPtr& selected,
+    BufferPtr& spare) {
   if (inMap == nullptr) {
-    return nullptr;
+    selected = nullptr;
+    return;
   }
-  auto selected = AlignedBuffer::allocate<bool>(rows.size(), pool);
+  if (reuseBufferOrSpare(
+          selected, spare, bits::nwords(rows.size()) * sizeof(uint64_t))) {
+    selected->setSize(bits::nbytes(rows.size()));
+  } else {
+    selected = AlignedBuffer::allocate<bool>(rows.size(), pool);
+  }
   simd::gatherBits(
       inMap->as<uint64_t>(), rows, selected->asMutable<uint64_t>());
-  return selected;
 }
 
 FlatMapVector* SelectiveFlatMapColumnReader::prepareResult(
     VectorPtr& result,
     const VectorPtr& distinctKeys,
-    vector_size_t size) const {
-  if (auto reused = tryReuseResult(result, distinctKeys, size)) {
+    vector_size_t size) {
+  if (auto reused =
+          tryReuseResult(result, distinctKeys, size, reusableValues_)) {
     return reused;
   }
 
@@ -120,7 +140,16 @@ FlatMapVector* SelectiveFlatMapColumnReader::prepareResult(
   // previous batch still in use; when it has the same keys, reuse its key index
   // rather than building another one.
   if (result->encoding() == VectorEncoding::Simple::FLAT_MAP) {
-    flatMap->shareKeyIndex(*result->asUnchecked<FlatMapVector>());
+    const auto& previous = *result->asUnchecked<FlatMapVector>();
+    flatMap->shareKeyIndex(previous);
+    // Holds the previous in-map buffers until selectInMap() replaces them, so
+    // that they become spares.
+    const auto& previousInMaps = previous.inMaps();
+    const auto numInMaps =
+        std::min<size_t>(previousInMaps.size(), flatMap->numDistinctKeys());
+    for (column_index_t i = 0; i < numInMaps; ++i) {
+      flatMap->inMapsAt(i, true) = previousInMaps[i];
+    }
   }
   result = flatMap;
   return flatMap.get();

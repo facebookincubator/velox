@@ -46,14 +46,17 @@ class SelectiveFlatMapColumnReader : public SelectiveStructColumnReaderBase {
 
   virtual const BufferPtr& inMapBuffer(column_index_t childIndex) const = 0;
 
-  /// Returns the in-map bits of 'rows', copied from 'inMap', which has a bit
-  /// for every row read rather than every row selected. Returns nullptr if
-  /// 'inMap' is null. The copy also keeps the result from sharing a buffer the
-  /// reader reuses for the next batch.
-  static BufferPtr selectInMap(
+  /// Sets 'selected' to the in-map bits of 'rows', copied from 'inMap', which
+  /// has a bit for every row read rather than every row selected. Sets it to
+  /// nullptr if 'inMap' is null. The copy also keeps the result from sharing a
+  /// buffer the reader reuses for the next batch. Writes into 'selected' or
+  /// 'spare' when nothing else holds them rather than allocating.
+  static void selectInMap(
       const BufferPtr& inMap,
       const RowSet& rows,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      BufferPtr& selected,
+      BufferPtr& spare);
 
   VectorPtr keysVector_;
 
@@ -61,7 +64,14 @@ class SelectiveFlatMapColumnReader : public SelectiveStructColumnReaderBase {
   FlatMapVector* prepareResult(
       VectorPtr& result,
       const VectorPtr& distinctKeys,
-      vector_size_t size) const;
+      vector_size_t size);
+
+  // Map values of the previous result that nothing else holds, by key, for
+  // the child readers to reuse.
+  std::vector<VectorPtr> reusableValues_;
+
+  // Spare in-map buffers, by key, for selectInMap().
+  std::vector<BufferPtr> spareInMaps_;
 };
 
 } // namespace facebook::velox::dwio::common

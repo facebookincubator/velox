@@ -46,6 +46,14 @@ void SelectiveColumnReader::ensureValuesCapacity(
           BaseVector::byteSize<T>(numRows) + simd::kPadding) {
     return;
   }
+  if (keepsSpareBuffers_ && !preserveData &&
+      reuseBufferOrSpare(
+          values_,
+          spareValues_,
+          BaseVector::byteSize<T>(numRows) + simd::kPadding)) {
+    rawValues_ = values_->asMutable<char>();
+    return;
+  }
   auto newValues =
       AlignedBuffer::allocate<T>(numRows + simd::kPadding / sizeof(T), pool_);
   if (preserveData) {
@@ -76,6 +84,9 @@ void SelectiveColumnReader::prepareRead(
   if (nullsInReadRange_ &&
       bits::isAllSet(
           nullsInReadRange_->as<uint64_t>(), 0, numRows, bits::kNotNull)) {
+    if (keepsSpareBuffers_ && nullsInReadRange_->isMutable()) {
+      spareNullsInReadRange_ = std::move(nullsInReadRange_);
+    }
     nullsInReadRange_ = nullptr;
   }
 
@@ -140,6 +151,15 @@ void SelectiveColumnReader::getFlatValues(
                 pool_, rows.size(), true, type, TVector());
       }
       *result = flatMapValueConstantNullValues_;
+    } else if (keepsSpareBuffers_) {
+      if (spareNullValues_.use_count() == 1 &&
+          spareNullValues_->type() == type) {
+        spareNullValues_->resize(rows.size());
+      } else {
+        spareNullValues_ = std::make_shared<ConstantVector<TVector>>(
+            pool_, rows.size(), true, type, TVector());
+      }
+      *result = spareNullValues_;
     } else {
       *result = std::make_shared<ConstantVector<TVector>>(
           pool_, rows.size(), true, type, TVector());
@@ -172,6 +192,16 @@ void SelectiveColumnReader::getFlatValues(
           std::move(stringBuffers_));
     }
     *result = flatMapValueFlatValues_;
+  } else if (
+      keepsSpareBuffers_ && *result && result->use_count() == 1 &&
+      (*result)->encoding() == VectorEncoding::Simple::FLAT &&
+      (*result)->type() == type) {
+    (*result)->resetDataDependentFlags(nullptr);
+    auto* flat = result->get()->asUnchecked<FlatVector<TVector>>();
+    flat->unsafeSetSize(numValues_);
+    flat->setNulls(resultNulls());
+    flat->unsafeSetValues(values_);
+    flat->setStringBuffers(std::move(stringBuffers_));
   } else {
     *result = std::make_shared<FlatVector<TVector>>(
         pool_,

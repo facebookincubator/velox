@@ -329,6 +329,7 @@ class SelectiveFlatMapReader
 
       rawKeys[i] = keyNodes_[i].key.get();
     }
+    setKeepsSpareBuffers();
   }
 
   void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)

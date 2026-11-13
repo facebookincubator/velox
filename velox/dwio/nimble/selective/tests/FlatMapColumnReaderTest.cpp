@@ -1040,6 +1040,211 @@ TEST_P(FlatMapColumnReaderTest, nativeFilter) {
   }
 }
 
+// Reading flat maps as FlatMapVector reuses the previous batch's vectors and
+// buffers once nothing else holds them, and never writes into what a consumer
+// still holds.
+TEST_P(FlatMapColumnReaderTest, nativeReusesBuffers) {
+  constexpr vector_size_t kNumRows{400};
+  constexpr int32_t kNumKeys{8};
+  std::vector<vector_size_t> offsets;
+  std::vector<int32_t> keys;
+  std::vector<vector_size_t> arrayOffsets;
+  std::vector<int64_t> elements;
+  std::vector<vector_size_t> nullRows;
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    offsets.push_back(keys.size());
+    if (row % 11 == 5) {
+      nullRows.push_back(row);
+      continue;
+    }
+    for (int32_t key = 0; key < kNumKeys; ++key) {
+      if (key == 0 || (row + key) % 3 != 0) {
+        keys.push_back(key);
+        arrayOffsets.push_back(elements.size());
+        for (int32_t i = 0; i < (row + key) % 4; ++i) {
+          elements.push_back(row * 100 + key * 10 + i);
+        }
+      }
+    }
+  }
+  auto input = makeRowVector({
+      makeMapVector(
+          offsets,
+          makeFlatVector(keys),
+          makeArrayVector(arrayOffsets, makeFlatVector(elements)),
+          nullRows),
+      makeMapVector<int32_t, float>(
+          kNumRows,
+          [](auto /*row*/) { return 4; },
+          [](auto index) {
+            return index % 4 == 3 ? 100 : (index / 4 * 7 + index % 4 * 11) % 30;
+          },
+          [](auto index) { return index * 0.5f; },
+          nullptr,
+          [](auto index) { return index % 4 != 3 && index % 5 == 0; }),
+      makeFlatVector<int64_t>(kNumRows, std::identity{}),
+  });
+  WriterOptions writerOptions;
+  writerOptions.flatMapColumns = {{"c0", {}}, {"c1", {}}};
+  writerOptions.skipConstantFlatMapInMapStreams = GetParam();
+  const auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+
+  auto makeScanSpec = [&](std::unique_ptr<common::Filter> filter) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*input->type());
+    if (filter != nullptr) {
+      scanSpec->childByName("c2")->setFilter(std::move(filter));
+    }
+    return scanSpec;
+  };
+  auto loadFlatMaps = [](const VectorPtr& batch) {
+    auto* row = batch->asUnchecked<RowVector>();
+    for (column_index_t i = 0; i < 2; ++i) {
+      auto& column = row->childAt(i);
+      column = BaseVector::loadedVectorShared(column);
+      ASSERT_NE(asFlatMapColumn(column), nullptr);
+    }
+  };
+
+  {
+    SCOPED_TRACE("Batches released before the next read");
+    auto readers = makeReaders(
+        input, file, makeScanSpec(nullptr), /*preserveFlatMapsInMemory=*/true);
+    VectorPtr batch = BaseVector::create(input->type(), 0, pool());
+    uint64_t numAllocs{0};
+    vector_size_t offset{0};
+    for (int32_t i = 0; readers.rowReader->next(20, batch) > 0; ++i) {
+      const auto numAllocsBefore = pool()->stats().numAllocs;
+      loadFlatMaps(batch);
+      if (i >= 4) {
+        numAllocs += pool()->stats().numAllocs - numAllocsBefore;
+      }
+      for (vector_size_t row = 0; row < batch->size(); ++row) {
+        ASSERT_TRUE(batch->equalValueAt(input.get(), row, offset + row))
+            << "row " << offset + row;
+      }
+      offset += batch->size();
+    }
+    ASSERT_EQ(offset, kNumRows);
+    EXPECT_EQ(numAllocs, 0);
+  }
+
+  {
+    SCOPED_TRACE("Batches and map values held by a consumer");
+    constexpr std::array<vector_size_t, 8> kNumPassingPerBatch{
+        2, 10, 1, 7, 10, 0, 3, 9};
+    std::vector<int64_t> passingIds;
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      if (row % 10 < kNumPassingPerBatch[row / 10 % 8]) {
+        passingIds.push_back(row);
+      }
+    }
+    auto readers = makeReaders(
+        input,
+        file,
+        makeScanSpec(common::createBigintValues(passingIds, false)),
+        /*preserveFlatMapsInMemory=*/true);
+    VectorPtr batch = BaseVector::create(input->type(), 0, pool());
+    std::vector<std::pair<VectorPtr, vector_size_t>> heldColumns;
+    std::vector<std::pair<VectorPtr, VectorPtr>> heldValues;
+    vector_size_t offset{0};
+    for (int32_t i = 0; readers.rowReader->next(10, batch) > 0; ++i) {
+      if (batch->size() == 0) {
+        continue;
+      }
+      loadFlatMaps(batch);
+      auto* row = batch->asUnchecked<RowVector>();
+      for (column_index_t column = 0; column < 2; ++column) {
+        if (i % 2 == 1) {
+          heldColumns.emplace_back(row->childAt(column), offset);
+        } else {
+          const auto& values =
+              row->childAt(column)->asUnchecked<FlatMapVector>()->mapValuesAt(
+                  0);
+          heldValues.emplace_back(values, BaseVector::copy(*values));
+        }
+      }
+      offset += batch->size();
+    }
+    ASSERT_EQ(offset, passingIds.size());
+    ASSERT_FALSE(heldColumns.empty());
+    for (size_t i = 0; i < heldColumns.size(); ++i) {
+      const auto& [column, columnOffset] = heldColumns[i];
+      const auto& expected = input->childAt(i % 2);
+      for (vector_size_t row = 0; row < column->size(); ++row) {
+        ASSERT_TRUE(column->equalValueAt(
+            expected.get(), row, passingIds[columnOffset + row]))
+            << "row " << passingIds[columnOffset + row];
+      }
+    }
+    for (const auto& [values, copy] : heldValues) {
+      velox::test::assertEqualVectors(copy, values);
+    }
+  }
+}
+
+TEST_P(FlatMapColumnReaderTest, nativeClearsInMapOfKeyInEveryRowOfNextStripe) {
+  const auto firstStripe = makeRowVector({makeMapVector<int32_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{2, 21}},
+      {{1, 12}, {2, 22}},
+      {{2, 23}},
+  })});
+  const auto secondStripe = makeRowVector({makeMapVector<int32_t, int64_t>({
+      {{1, 30}},
+      {{1, 31}, {2, 41}},
+      {{1, 32}},
+      {{1, 33}, {2, 43}},
+  })});
+  const auto file = writeMultiStripeFlatMapFile({firstStripe, secondStripe});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*firstStripe->type());
+
+  auto loadFlatMap = [](const VectorPtr& batch) {
+    auto& column = batch->asUnchecked<RowVector>()->childAt(0);
+    column = BaseVector::loadedVectorShared(column);
+    return asFlatMapColumn(column);
+  };
+
+  for (const bool holdFirstBatch : {false, true}) {
+    SCOPED_TRACE(fmt::format("holdFirstBatch: {}", holdFirstBatch));
+    auto readers = makeReaders(
+        firstStripe, file, scanSpec, /*preserveFlatMapsInMemory=*/true);
+    VectorPtr batch = BaseVector::create(firstStripe->type(), 0, pool());
+
+    ASSERT_EQ(readers.rowReader->next(100, batch), firstStripe->size());
+    auto* firstFlatMap = loadFlatMap(batch);
+    ASSERT_NE(firstFlatMap, nullptr);
+    velox::test::assertEqualVectors(firstStripe, batch);
+    VectorPtr firstColumn;
+    if (holdFirstBatch) {
+      firstColumn = batch->asUnchecked<RowVector>()->childAt(0);
+    }
+
+    ASSERT_EQ(readers.rowReader->next(100, batch), secondStripe->size());
+    auto* flatMap = loadFlatMap(batch);
+    ASSERT_NE(flatMap, nullptr);
+    EXPECT_EQ(flatMap == firstFlatMap, !holdFirstBatch);
+    const auto channel = flatMap->getKeyChannel(int32_t{1});
+    ASSERT_TRUE(channel.has_value());
+    if (GetParam()) {
+      EXPECT_EQ(flatMap->inMapsAt(*channel), nullptr);
+    }
+    for (vector_size_t row = 0; row < flatMap->size(); ++row) {
+      EXPECT_TRUE(flatMap->isInMap(*channel, row)) << "row " << row;
+      EXPECT_EQ(
+          flatMap->sizeAt(row),
+          secondStripe->childAt(0)->asUnchecked<MapVector>()->sizeAt(row))
+          << "row " << row;
+    }
+    velox::test::assertEqualVectors(secondStripe, batch);
+    if (holdFirstBatch) {
+      velox::test::assertEqualVectors(firstStripe->childAt(0), firstColumn);
+    }
+    ASSERT_EQ(readers.rowReader->next(100, batch), 0);
+  }
+}
+
 // Regression: float flat-map value streams with mixed sign bits (-0.0f/+0.0f)
 // must round-trip bit-exactly through the native FlatMapVector path. The value
 // stream is logically constant (all zeros) but physically distinct; without ALP

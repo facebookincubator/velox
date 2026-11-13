@@ -90,6 +90,13 @@ const std::vector<SelectiveColumnReader*>& SelectiveColumnReader::children()
   return empty;
 }
 
+void SelectiveColumnReader::setKeepsSpareBuffers() {
+  keepsSpareBuffers_ = true;
+  for (auto* child : children()) {
+    child->setKeepsSpareBuffers();
+  }
+}
+
 void SelectiveColumnReader::seekTo(int64_t offset, bool readsNullsOnly) {
   if (offset == readOffset_) {
     return;
@@ -157,6 +164,14 @@ void SelectiveColumnReader::prepareNulls(
   if (resultNulls_ && resultNulls_->unique() &&
       resultNulls_->capacity() >= bits::nbytes(numRows) + simd::kPadding) {
     resultNulls_->setSize(bits::nbytes(numRows));
+  } else if (
+      keepsSpareBuffers_ &&
+      reuseBufferOrSpare(
+          resultNulls_,
+          spareResultNulls_,
+          bits::nbytes(numRows) + simd::kPadding)) {
+    resultNulls_->setSize(bits::nbytes(numRows));
+    rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
   } else {
     resultNulls_ =
         AlignedBuffer::allocate<bool>(numRows + (simd::kPadding * 8), pool_);
@@ -178,8 +193,14 @@ const uint64_t* SelectiveColumnReader::shouldMoveNulls(const RowSet& rows) {
   if (returnReaderNulls_) {
     if (!(resultNulls_ && resultNulls_->unique() &&
           resultNulls_->capacity() >= rows.size() + simd::kPadding)) {
-      resultNulls_ = AlignedBuffer::allocate<bool>(
-          rows.size() + (simd::kPadding * 8), pool_);
+      if (!(keepsSpareBuffers_ &&
+            reuseBufferOrSpare(
+                resultNulls_,
+                spareResultNulls_,
+                rows.size() + simd::kPadding))) {
+        resultNulls_ = AlignedBuffer::allocate<bool>(
+            rows.size() + (simd::kPadding * 8), pool_);
+      }
       rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
     }
     moveFrom = nullsInReadRange_->as<uint64_t>();
