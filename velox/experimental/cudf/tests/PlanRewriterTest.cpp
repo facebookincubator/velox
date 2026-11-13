@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeDefinitions.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -379,6 +380,80 @@ TEST_F(PlanRewriterTest, everyAdapterHasPhysicalPlanCoverage) {
         << "Add a physical-plan coverage sample for this adapter";
     auto rewritten = rewriteToCudfPlan(it->second.plan);
     EXPECT_TRUE(containsNode(rewritten, it->second.physicalNode));
+  }
+}
+
+TEST_F(PlanRewriterTest, loweringBuildsOverTheGivenSources) {
+  std::vector<core::PlanNodePtr> nodes;
+  for (const auto& [name, sample] : samples()) {
+    nodes.push_back(sample.plan);
+  }
+  // The samples have neither of these two as their root.
+  nodes.push_back(PlanBuilder().values({input_}).filter("c0 > 1").planNode());
+  nodes.push_back(
+      PlanBuilder().values({input_}).localPartitionRoundRobin().planNode());
+
+  for (const auto& node : nodes) {
+    SCOPED_TRACE(node->toString());
+    const auto* lowering = detail::findCudfPlanNodeLowering(node);
+    ASSERT_NE(lowering, nullptr);
+
+    // Stand-ins for the rewritten sources.
+    const auto originalSources = node->sources();
+    std::vector<core::PlanNodePtr> sources;
+    for (const auto& source : originalSources) {
+      sources.push_back(
+          std::make_shared<CudfFromVeloxNode>(source->id() + "_gpu", source));
+    }
+
+    const auto lowered = lowering->lower(node, sources);
+    EXPECT_TRUE(lowered->name().starts_with("Cudf")) << lowered->name();
+    EXPECT_EQ(lowered->id(), node->id());
+    EXPECT_EQ(*lowered->outputType(), *node->outputType());
+    EXPECT_EQ(lowered->sources(), sources);
+    EXPECT_EQ(node->sources(), originalSources);
+  }
+
+  // A core plan node that cuDF does not run, and a cuDF plan node that has no
+  // core plan node.
+  const auto values = PlanBuilder().values({input_}).planNode();
+  EXPECT_EQ(detail::findCudfPlanNodeLowering(values), nullptr);
+  EXPECT_EQ(
+      detail::findCudfPlanNodeLowering(
+          std::make_shared<CudfFromVeloxNode>("from-velox", values)),
+      nullptr);
+}
+
+TEST_F(PlanRewriterTest, batchConcatGoesBelowAggregationAndJoinProbe) {
+  // TearDown() restores the setting.
+  CudfConfig::getInstance().concatOptimizationEnabled = true;
+  const auto cases = samples();
+
+  const auto aggregation =
+      rewriteToCudfPlan(cases.at("Aggregation").plan)->sources()[0];
+  ASSERT_TRUE(aggregation->is<CudfAggregationNode>());
+  EXPECT_TRUE(aggregation->sources()[0]->is<CudfBatchConcatNode>());
+
+  const auto join =
+      rewriteToCudfPlan(cases.at("HashJoinProbe").plan)->sources()[0];
+  ASSERT_TRUE(join->is<CudfHashJoinNode>());
+  EXPECT_TRUE(join->sources()[0]->is<CudfBatchConcatNode>());
+  EXPECT_FALSE(join->sources()[1]->is<CudfBatchConcatNode>());
+
+  const auto limit = rewriteToCudfPlan(cases.at("Limit").plan)->sources()[0];
+  ASSERT_TRUE(limit->is<CudfLimitNode>());
+  EXPECT_FALSE(limit->sources()[0]->is<CudfBatchConcatNode>());
+
+  // CudfBatchConcatNode has no core plan node, only an operator.
+  for (const auto& name : {"Aggregation", "HashJoinProbe"}) {
+    SCOPED_TRACE(name);
+    const auto& plan = cases.at(name).plan;
+    const auto legacy = execute(plan, true);
+    const auto rewritten = execute(plan, false);
+    EXPECT_TRUE(rewritten.operators.contains("CudfBatchConcat"));
+    EXPECT_TRUE(
+        ::facebook::velox::exec::test::assertEqualResults(
+            {legacy.results}, {rewritten.results}));
   }
 }
 

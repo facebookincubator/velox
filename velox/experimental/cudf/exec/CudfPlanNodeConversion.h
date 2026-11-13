@@ -19,11 +19,17 @@
 
 namespace facebook::velox::cudf_velox {
 
+/// The cuDF driver adapter replaces operators after LocalPlanner has built
+/// them, so it has core plan nodes and keeps their sources. These functions
+/// give it the cuDF plan nodes that the cuDF operators take. The plan rewriter
+/// builds cuDF plan nodes over rewritten sources instead. Both use the
+/// definitions behind CudfPlanNodeDefinitions.h.
+
 /// Returns the cuDF plan node that runs a core plan node on the GPU. The result
-/// keeps the core node's ID and sources. A ProjectNode whose source is a
-/// FilterNode becomes one CudfFilterProjectNode over the filter's source, the
-/// same way LocalPlanner fuses the two into one FilterProject operator. Check
-/// the node against the rules in GpuPlacement.h first.
+/// keeps the core node's ID and sources. Converts 'node' alone: a Filter and a
+/// Project that run as one FilterProject operator go through
+/// toCudfFilterProjectNode(). Check the node against the rules in
+/// GpuPlacement.h first.
 core::PlanNodePtr toCudfPlanNode(const core::PlanNodePtr& node);
 
 template <typename CudfNode>
@@ -35,7 +41,9 @@ std::shared_ptr<const CudfNode> toCudfPlanNode(const core::PlanNodePtr& node) {
 }
 
 /// Returns the CudfFilterProjectNode for a Filter, a Project, or a Filter fused
-/// under a Project.
+/// under a Project, the same way LocalPlanner fuses the two into one
+/// FilterProject operator. The result is over the source of the Filter, or of
+/// the Project if there is no Filter.
 std::shared_ptr<const CudfFilterProjectNode> toCudfFilterProjectNode(
     const std::shared_ptr<const core::FilterNode>& filter,
     const std::shared_ptr<const core::ProjectNode>& project);

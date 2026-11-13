@@ -50,6 +50,38 @@ cuDF plan nodes override it the same way as their core counterparts. The limit
 applies only to physical plans, because the general driver adapter runs after
 LocalPlanner has fixed the driver counts.
 
+## Built-in nodes
+
+`CudfPlanNodeDefinitions.cpp` has one definition for each built-in node. A
+definition says up to three things about its node:
+
+- `canRunOnGpu`: whether cuDF can run a given core plan node, by the rules in
+  `GpuPlacement.h`.
+- `lower`: how to build the cuDF plan node from the core plan node and its
+  sources, which the caller has already rewritten.
+- `createOperator`: how to create the operator from the cuDF plan node.
+
+The rewriter and the cuDF driver adapter start from a core plan node and use
+the first two. `CudfPlanNodeTranslator` starts from a cuDF plan node and uses
+the third, so a plan that an engine builds from cuDF plan nodes never needs a
+core plan node. A definition has only the parts that apply to its node:
+
+- `CudfFromVeloxNode`, `CudfToVeloxNode` and `CudfBatchConcatNode` have no core
+  plan node, so their definitions only create operators.
+- A join becomes a probe operator, a build operator and a bridge, which the
+  join bridge translators create. LocalPlanner creates the operator of a local
+  exchange itself, and `CudfLocalBoundaryAdapter` replaces it. The definitions
+  of these nodes do not create operators.
+
+The list at the end of `CudfPlanNodeDefinitions.cpp` names every definition and
+the parts it has. The rewriter, the conversion functions of the cuDF driver
+adapter and the translator all read that list, so none of them names node
+types. Two cases stay in the rewriter because they involve more than one node:
+a Project over a Filter becomes one `CudfFilterProjectNode`, and a merge
+exchange over UCX becomes an exchange under a `CudfOrderByNode`. The rewriter
+also decides where a `CudfBatchConcatNode` goes; the list marks the nodes that
+get one.
+
 ## Application-owned nodes
 
 The engine selects the implementation of its custom node. This library does
