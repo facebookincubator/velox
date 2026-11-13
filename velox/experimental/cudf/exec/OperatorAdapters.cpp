@@ -1411,7 +1411,7 @@ class GroupIdAdapter : public OperatorAdapter {
 #ifdef VELOX_ENABLE_UCX_EXCHANGE
 
 /// UcxExchangeAdapter - Keeps the operator; describes its GPU capabilities and,
-/// for a merge exchange, the sort that follows it.
+/// for a merge exchange, the CudfOrderBy that merges its pages behind it.
 ///
 /// UcxExchange itself is not a replacement produced here: it is built directly
 /// by the exec::ExchangeTransportEntry registered under
@@ -1420,10 +1420,11 @@ class GroupIdAdapter : public OperatorAdapter {
 /// operator emits CudfVectors and is not a CPU operator, which keeps it from
 /// being wrapped in conversion operators or reported as a failed replacement.
 ///
-/// A core::MergeExchangeNode additionally needs a sort behind the exchange,
-/// because UcxExchangeClient multiplexes every source into one queue and so
-/// destroys the per-source orderings exec::MergeExchange relies on. That sort
-/// is described here rather than built by the transport, so that
+/// A core::MergeExchangeNode additionally needs a CudfOrderBy behind the
+/// exchange, because UcxExchangeClient multiplexes every source into one queue
+/// and so destroys the per-source orderings exec::MergeExchange relies on; it
+/// merges the received pages (see CudfOrderBy.h). That operator is described
+/// here rather than built by the transport, so that
 /// DriverFactory::replaceOperators splices it in and renumbers the driver's
 /// operator ids -- one plan node, two operators, consecutive ids.
 class UcxExchangeAdapter : public OperatorAdapter {
@@ -1459,7 +1460,7 @@ class UcxExchangeAdapter : public OperatorAdapter {
     const auto mergeExchangeNode =
         std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode);
     if (mergeExchangeNode == nullptr) {
-      return {}; // A plain exchange needs no sort.
+      return {}; // A plain exchange needs no merge.
     }
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(
