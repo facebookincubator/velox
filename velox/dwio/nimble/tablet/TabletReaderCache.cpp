@@ -144,8 +144,8 @@ std::shared_ptr<CachedTabletReader> TabletReaderCache::Generator::create(
   auto section = tablet->loadOptionalSection(
       std::string(kSchemaSection), /*keepCache=*/true);
   NIMBLE_CHECK(section.has_value(), "Schema section not found in tablet");
-  auto nimbleSchema =
-      SchemaDeserializer::deserialize(section->content().data());
+  auto nimbleSchema = SchemaDeserializer::deserialize(
+      section->content().data(), *pools_[shardIdx]);
   auto veloxSchema = asRowType(convertToVeloxType(*nimbleSchema));
   auto entry = std::make_shared<CachedTabletReader>(
       std::move(tablet),

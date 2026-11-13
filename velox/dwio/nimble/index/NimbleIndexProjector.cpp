@@ -226,7 +226,9 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
       fileHandle.file, TabletReader::configureOptions(options));
   auto projection =
       std::make_shared<NimbleTypeProjection>(buildProjectedNimbleType(
-          cached->nimbleSchema().get(), projectedSubfields));
+          cached->nimbleSchema().get(),
+          projectedSubfields,
+          &options.memoryPool()));
   // Aliased onto `cached` so the projector owns the cache entry, not just the
   // tablet. The entry holds the IoStatistics the tablet writes its metadata and
   // index reads into, and retiring it hands those totals off and stops watching

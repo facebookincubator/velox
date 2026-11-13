@@ -156,7 +156,8 @@ ChunkMeasurement evaluateCandidateEncodingOnce(
   nimble::SchemaSerializer schemaSerializer;
   const auto serializedSchema =
       schemaSerializer.serialize(serializer.schemaBuilder());
-  auto schema = nimble::SchemaDeserializer::deserialize(serializedSchema);
+  auto schema =
+      nimble::SchemaDeserializer::deserialize(serializedSchema, *pool);
   nimble::DeserializerOptions deserializerOptions{};
   nimble::Deserializer deserializer(schema, pool, deserializerOptions);
 

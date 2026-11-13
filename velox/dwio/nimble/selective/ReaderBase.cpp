@@ -79,10 +79,11 @@ class SeekableStreamLoader final : public StreamLoader {
 };
 
 std::shared_ptr<const facebook::nimble::Type> loadSchema(
-    const TabletReader& tablet) {
+    const TabletReader& tablet,
+    memory::MemoryPool& pool) {
   auto section = tablet.loadOptionalSection(kSchemaSectionString);
   NIMBLE_CHECK(section.has_value());
-  return SchemaDeserializer::deserialize(section->content().data());
+  return SchemaDeserializer::deserialize(section->content().data(), pool);
 }
 
 TypePtr getFileSchema(
@@ -142,7 +143,7 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
   auto* pool = &options.memoryPool();
   const auto& randomSkip = options.randomSkip();
   const auto& scanSpec = options.scanSpec();
-  const auto nimbleSchema = loadSchema(*tablet);
+  const auto nimbleSchema = loadSchema(*tablet, *pool);
   auto fileSchema =
       asRowType(getFileSchema(options, convertToVeloxType(*nimbleSchema)));
 
