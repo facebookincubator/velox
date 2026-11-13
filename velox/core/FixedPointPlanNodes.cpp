@@ -218,11 +218,9 @@ FixedPointNode::FixedPointNode(
         "FixedPointNode: stopWhenDeltaEmpty requires a non-shuffling fixed "
         "point, because the delta is local to a worker");
   }
-  // Worker 0 publishes iteration t+1's verdict only after every worker has
-  // received t's (see FixedPointOptions::publishVerdict).  Gathering every
-  // worker's partial rows ensures that; for a root that reads worker 0's own
-  // state, the body's shuffle does: worker 0's iteration reads rows every peer
-  // produces in the same iteration.
+  // A root that reads worker 0's own state decides for every worker from that
+  // state alone.  The body's shuffle is what brings every worker's rows into
+  // worker 0's state in each iteration.
   if (convergenceConfig_.verdictOnWorkerZero() &&
       convergenceConfig_.plan->root().inputs.empty()) {
     VELOX_USER_CHECK_GT(

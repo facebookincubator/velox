@@ -2218,6 +2218,192 @@ TEST_F(FixedPointTest, verdictEndsBeforePeerProducer) {
       testing::UnorderedElementsAreArray(expected));
 }
 
+// A body that does not shuffle keeps no worker waiting for its peers between
+// verdicts, so one worker can ask for the next iteration's verdict while
+// another has yet to ask for the current one. Here the second request for the
+// first verdict waits until a worker asks for the next, and FixedPointVerdicts
+// answers it "not converged".
+TEST_F(FixedPointTest, verdictRequestOrder) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  PlanBuilder builder;
+  auto plan = builder
+                  .fixedPoint(
+                      std::make_shared<VectorStateDeclaration>(
+                          "values",
+                          schema,
+                          builder.newPlan().tableScan(schema).planNode()),
+                      builder.newPlan()
+                          .stateSource("values", schema)
+                          .project({"key", "val + 1 AS val"}),
+                      ConvergenceConfig::globalVerdict(
+                          {
+                              builder.newPlan()
+                                  .stateSource("values", schema)
+                                  .partitionedOutput({}, 1)
+                                  .planNode(),
+                          },
+                          builder.newPlan()
+                              .exchange(schema, "Presto")
+                              .singleAggregation({}, {"max(val) AS m"})
+                              .project({"m >= 2 AS converged"})
+                              .planNode(),
+                          /*maxIterations=*/10),
+                      /*outputStateEntry=*/"values")
+                  .planNode();
+
+  auto verdicts = std::make_shared<FixedPointVerdicts>();
+  auto options = localOptions();
+  options.publishVerdict = [verdicts](
+                               const FixedPointOptions::LoopAddress& workerZero,
+                               int32_t iteration,
+                               bool converged) {
+    verdicts->publish(workerZero, iteration, converged);
+  };
+
+  // The first verdict's iteration, how many workers have asked for it, and
+  // the promise that releases the held request.
+  struct Requests {
+    std::optional<int32_t> first;
+    int32_t numFirst{0};
+    folly::SharedPromise<folly::Unit> next;
+  };
+  auto requests = std::make_shared<folly::Synchronized<Requests>>();
+  auto reordered = std::make_shared<std::atomic<bool>>(false);
+  options.awaitVerdict = [verdicts, requests, reordered](
+                             const FixedPointOptions::LoopAddress& workerZero,
+                             int32_t iteration,
+                             const folly::CancellationToken& /*cancel*/)
+      -> folly::SemiFuture<bool> {
+    bool hold{false};
+    bool release{false};
+    auto next = folly::SemiFuture<folly::Unit>::makeEmpty();
+    {
+      auto locked = requests->wlock();
+      if (!locked->first.has_value()) {
+        locked->first = iteration;
+      }
+      if (iteration == *locked->first && ++locked->numFirst == 2) {
+        hold = true;
+        next = locked->next.getSemiFuture();
+      }
+      release = iteration == *locked->first + 1 && !locked->next.isFulfilled();
+    }
+    if (hold) {
+      return std::move(next)
+          .within(std::chrono::seconds(30))
+          .defer([verdicts, workerZero, iteration](folly::Try<folly::Unit>&&) {
+            return verdicts->get(workerZero, iteration);
+          });
+    }
+    auto verdict = verdicts->get(workerZero, iteration);
+    if (release) {
+      reordered->store(true);
+      auto locked = requests->wlock();
+      if (!locked->next.isFulfilled()) {
+        locked->next.setValue();
+      }
+    }
+    return verdict;
+  };
+
+  std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
+      {0, 2, 2},
+      {1, 2, 2},
+      {2, 2, 2},
+  };
+  EXPECT_THAT(
+      withIterations(runOnWorkers(
+          plan,
+          {makeKeyValueRow(0, 0), makeKeyValueRow(1, 0), makeKeyValueRow(2, 0)},
+          options)),
+      testing::UnorderedElementsAreArray(expected));
+  EXPECT_TRUE(reordered->load());
+}
+
+// A loop whose verdict plan stops at the first row with val < 5. The body adds
+// 1 to each val and moves no rows between workers.
+core::PlanNodePtr firstUnconvergedRowPlan() {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  PlanBuilder builder;
+  return builder
+      .fixedPoint(
+          std::make_shared<VectorStateDeclaration>(
+              "values", schema, builder.newPlan().tableScan(schema).planNode()),
+          builder.newPlan()
+              .stateSource("values", schema)
+              .project({"key", "val + 1 AS val"}),
+          ConvergenceConfig::globalVerdict(
+              {
+                  builder.newPlan()
+                      .stateSource("values", schema)
+                      .filter("val < 5")
+                      .limit(0, 1, /*isPartial=*/true)
+                      .partitionedOutput({}, 1)
+                      .planNode(),
+              },
+              builder.newPlan()
+                  .exchange(schema, "Presto")
+                  .limit(0, 1, /*isPartial=*/false)
+                  .singleAggregation({}, {"count(1) AS n"})
+                  .project({"n = 0 AS converged"})
+                  .planNode(),
+              /*maxIterations=*/10),
+          /*outputStateEntry=*/"values")
+      .planNode();
+}
+
+// Worker 0 decides each early verdict from its own unconverged row, without
+// waiting for its peers' rows, so it runs ahead: here it publishes the third
+// verdict while a peer has yet to receive the second, and FixedPointVerdicts
+// answers that peer "not converged".
+TEST_F(FixedPointTest, verdictRunAhead) {
+  auto verdicts = std::make_shared<FixedPointVerdicts>();
+  // Releases the first request for iteration 1 once iteration 2 is published.
+  auto published = std::make_shared<folly::SharedPromise<folly::Unit>>();
+  auto held = std::make_shared<std::atomic<bool>>(false);
+  auto ranAhead = std::make_shared<std::atomic<bool>>(false);
+
+  auto options = localOptions();
+  options.publishVerdict = [verdicts, published, held, ranAhead](
+                               const FixedPointOptions::LoopAddress& workerZero,
+                               int32_t iteration,
+                               bool converged) {
+    verdicts->publish(workerZero, iteration, converged);
+    if (iteration == 2) {
+      ranAhead->store(held->load());
+      published->setValue();
+    }
+  };
+  options.awaitVerdict = [verdicts, published, held](
+                             const FixedPointOptions::LoopAddress& workerZero,
+                             int32_t iteration,
+                             const folly::CancellationToken& /*cancel*/)
+      -> folly::SemiFuture<bool> {
+    if (iteration == 1 && !held->exchange(true)) {
+      return published->getSemiFuture()
+          .within(std::chrono::seconds(30))
+          .defer([verdicts, workerZero](folly::Try<folly::Unit>&&) {
+            return verdicts->get(workerZero, 1);
+          });
+    }
+    return verdicts->get(workerZero, iteration);
+  };
+
+  std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
+      {0, 5, 5},
+      {1, 5, 5},
+      {2, 5, 5},
+  };
+  EXPECT_THAT(
+      withIterations(runOnWorkers(
+          firstUnconvergedRowPlan(),
+          {makeKeyValueRow(0, 0), makeKeyValueRow(1, 0), makeKeyValueRow(2, 0)},
+          options)),
+      testing::UnorderedElementsAreArray(expected));
+  EXPECT_TRUE(ranAhead->load());
+}
+
 // A verdict that combines two statistics gathered by separate fragments: a sum
 // and a count of every worker's values.  Worker 0 alone reads both gathers and
 // shares its verdict.
