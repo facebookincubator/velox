@@ -29,14 +29,13 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/reader/Decoder.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::nimble {
 
 class EncodingView;
-class FieldReader;
-class FieldReaderFactory;
 class Type;
 
 /// Decodes selected rows from the streams of one projected Nimble type through
@@ -44,10 +43,12 @@ class Type;
 /// Requires an EncodingView for the encoding of every chunk.
 class StreamReader {
  public:
+  // TODO: Add StreamReader::Options instead of exposing FieldReaderParams.
   /// Binds the projected schema and initializes its reusable reader metadata.
   StreamReader(
       std::shared_ptr<const Type> type,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      FieldReaderParams readerParams = {});
 
   ~StreamReader();
 
@@ -155,6 +156,8 @@ class StreamReader {
 
   // Owns all buffers allocated while decoding.
   velox::memory::MemoryPool* const pool_;
+
+  const FieldReaderParams readerParams_;
 
   // Configures the encodings of the bound stripe. Each binding sets it, and the
   // decoders read it when they create the views of the chunks of the binding.

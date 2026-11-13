@@ -459,6 +459,60 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
   }
 }
 
+TEST_P(NimbleIndexProjectorTest, stripeReadAheadRespectsByteBudget) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto tablet = openSinkTablet();
+  const auto twoStripeBytes =
+      tablet->stripeOffset(1) + tablet->stripeSize(1) - tablet->stripeOffset(0);
+  const auto tailBytes =
+      tablet->stripeOffset(2) + tablet->stripeSize(2) - tablet->stripeOffset(1);
+
+  struct TestCase {
+    uint64_t readAheadBytes;
+    uint32_t firstStripe;
+    uint32_t expectedStripes;
+  };
+  const TestCase testCases[] = {
+      {0, 0, 1},
+      {tablet->stripeSize(0) - 1, 0, 1},
+      {twoStripeBytes - 1, 0, 1},
+      {twoStripeBytes, 0, 2},
+      {tailBytes, 1, 2},
+      {tailBytes, 2, 1},
+  };
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  configureReaderOptions(
+      readerOptions,
+      /*setDataIoStats=*/true,
+      /*setMetadataIoStats=*/true,
+      /*setIndexIoStats=*/true,
+      /*cacheData=*/false,
+      /*verifyStreamChecksums=*/false);
+  readerOptions.setPrefetchMode(velox::io::PrefetchMode::PRELOAD);
+  ensureTabletReaderCache();
+  const auto fileHandle = makeFileHandle();
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "readAheadBytes={}, firstStripe={}",
+            testCase.readAheadBytes,
+            testCase.firstStripe));
+    readerOptions.setAutoPreloadLength(testCase.readAheadBytes);
+    auto projector = NimbleIndexProjector::create(
+        *tabletReaderCache_,
+        fileHandle,
+        projectedSubfields,
+        /*blockCache=*/nullptr,
+        readerOptions);
+    EXPECT_EQ(
+        projector->numStripesToRead(testCase.firstStripe),
+        testCase.expectedStripes);
+  }
+  EXPECT_EQ(dataIoStats_->read().count(), 0);
+}
+
 TEST_P(NimbleIndexProjectorTest, projectorValidatesStripeLoadRange) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   std::vector<Subfield> projectedSubfields;
