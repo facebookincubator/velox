@@ -690,6 +690,41 @@ void copyIntoConstant(
       std::move(nulls), std::move(indices), size, std::move(alphabet));
 }
 
+// Returns the rows past the end of the target, 'oldSize', that 'ranges' do not
+// copy into. A row child shorter than its parent has such rows when the copy
+// appends past the end of the parent: they sit under the null parent rows past
+// the end of the child.
+SelectivityVector skippedRows(
+    vector_size_t oldSize,
+    vector_size_t newSize,
+    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+  SelectivityVector rows(newSize, false);
+  rows.setValidRange(oldSize, newSize, true);
+  for (const auto& range : ranges) {
+    rows.setValidRange(
+        range.targetIndex, range.targetIndex + range.count, false);
+  }
+  rows.updateBounds();
+  return rows;
+}
+
+// Makes the 'skipped' rows of a new dictionary null: no source row gives them
+// an index into its base. Allocates 'nulls' if the dictionary has no nulls
+// otherwise.
+void setSkippedRowsNull(
+    const SelectivityVector& skipped,
+    memory::MemoryPool* pool,
+    BufferPtr& nulls) {
+  if (!skipped.hasSelections()) {
+    return;
+  }
+  if (!nulls) {
+    nulls = allocateNulls(skipped.size(), pool);
+  }
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  skipped.applyToSelected([&](auto row) { bits::setNull(rawNulls, row); });
+}
+
 void copyIntoDictionary(
     const EncodedVectorCopyOptions& options,
     const folly::Range<const BaseVector::CopyRange*>& ranges,
@@ -704,6 +739,7 @@ void copyIntoDictionary(
   const bool targetBaseMutable = targetMutable && targetBase.use_count() <= 2;
   const auto size = targetSize(target->size(), ranges);
   const auto targetBaseSize = targetBaseMutable ? baseSize(decodedTarget) : -1;
+  const auto skipped = skippedRows(target->size(), size, ranges);
   BufferPtr nulls;
   auto* targetNulls = decodedTarget.nulls();
   auto* sourceNulls = decodedSource.nulls();
@@ -720,6 +756,7 @@ void copyIntoDictionary(
     }
     setSourceNulls(sourceNulls, targetNulls, ranges, rawNulls);
   }
+  setSkippedRowsNull(skipped, options.pool, nulls);
   BufferPtr indices;
   if (targetMutable &&
       target->encoding() == VectorEncoding::Simple::DICTIONARY) {
@@ -735,6 +772,8 @@ void copyIntoDictionary(
         decodedTarget.indices(),
         sizeof(vector_size_t) * decodedTarget.size());
   }
+  // A reused buffer holds garbage past the old end of the target.
+  skipped.applyToSelected([&](auto row) { rawIndices[row] = 0; });
   auto baseRanges =
       toBaseRanges(decodedSource, ranges, decodedTarget, rawIndices);
   if (targetBaseMutable) {
@@ -1120,6 +1159,7 @@ void copyIntoFlatMap(
     return;
   }
   const auto size = targetSize(target->size(), ranges);
+  const auto skipped = skippedRows(target->size(), size, ranges);
   BufferPtr nulls;
   auto indices = allocateIndices(size, options.pool);
   auto* rawIndices = indices->asMutable<vector_size_t>();
@@ -1136,6 +1176,7 @@ void copyIntoFlatMap(
     baseRange.sourceIndex = 0;
     baseRange.count = sourceBase->size();
   }
+  setSkippedRowsNull(skipped, options.pool, nulls);
   copyImpl(
       options, sourceBase, folly::Range(&baseRange, 1), target, targetMutable);
   target = BaseVector::wrapInDictionary(
@@ -1181,6 +1222,7 @@ void copyIntoComplex(
     return;
   }
   const auto size = targetSize(target->size(), ranges);
+  const auto skipped = skippedRows(target->size(), size, ranges);
   BufferPtr nulls;
   auto indices = allocateIndices(size, options.pool);
   auto* rawIndices = indices->asMutable<vector_size_t>();
@@ -1197,6 +1239,7 @@ void copyIntoComplex(
     baseRange.sourceIndex = 0;
     baseRange.count = sourceBase->size();
   }
+  setSkippedRowsNull(skipped, options.pool, nulls);
   copyImpl(
       options, sourceBase, folly::Range(&baseRange, 1), target, targetMutable);
   target = BaseVector::wrapInDictionary(
