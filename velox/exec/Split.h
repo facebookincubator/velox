@@ -40,7 +40,8 @@ struct Split {
       int32_t groupId = -1)
       : connectorSplit(std::move(connectorSplit)), groupId(groupId) {}
 
-  /// Called by the task barrier to create a special barrier split.
+  /// Creates a barrier marker. When submitted through Task's split APIs,
+  /// targets source-local driver IDs [0, numDrivers).
   static Split createBarrier(uint32_t numDrivers = 1) {
     Split barrierSplit;
     barrierSplit.barrier = BarrierSplit{numDrivers};

@@ -18,6 +18,7 @@
 
 #include <folly/OperationCancelled.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/ManualExecutor.h>
 #include <folly/synchronization/Baton.h>
 #include <barrier>
 #include <thread>
@@ -167,6 +168,57 @@ TEST_F(CursorTest, producerCountInitialization) {
 
   auto cursor = TaskCursor::create(params);
   EXPECT_EQ(drainAsync(*cursor), 0);
+}
+
+TEST_F(CursorTest, bufferedOutputBeforeEof) {
+  folly::ManualExecutor executor;
+  auto params = makeParams(/*serialExecution=*/false);
+  params.maxDrivers = 4;
+  params.queryCtx = core::QueryCtx::create(&executor);
+  auto cursor = TaskCursor::create(params);
+  auto task = cursor->task();
+  SCOPE_EXIT {
+    auto finished = task->requestAbort();
+    executor.drain();
+    finished.wait();
+  };
+  cursor->start();
+  executor.drain();
+  ASSERT_EQ(task->state(), TaskState::kFinished);
+  ASSERT_EQ(task->numFinishedDrivers(), 4);
+  std::vector<RowVectorPtr> results;
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  while (cursor->moveNext(&future)) {
+    results.push_back(cursor->current());
+  }
+  ASSERT_FALSE(future.valid());
+  assertEqualResults(std::vector<RowVectorPtr>(12, input_), results);
+  ASSERT_FALSE(cursor->moveNext(&future));
+  ASSERT_FALSE(future.valid());
+}
+
+TEST_F(CursorTest, closeWithBlockedProducer) {
+  folly::ManualExecutor executor;
+  auto params = makeParams(/*serialExecution=*/false);
+  params.maxDrivers = 2;
+  params.bufferedBytes = 1;
+  params.queryCtx = core::QueryCtx::create(&executor);
+  auto cursor = TaskCursor::create(params);
+  auto task = cursor->task();
+  SCOPE_EXIT {
+    auto finished = task->requestAbort();
+    executor.drain();
+    finished.wait();
+  };
+  cursor->start();
+  executor.drain();
+  ASSERT_EQ(task->numFinishedDrivers(), 0);
+  // Both drivers are blocked on queue capacity. Closing the cursor must
+  // release their waits without pretending that they drained normally.
+  cursor.reset();
+  executor.drain();
+  ASSERT_TRUE(task->allDriversClosedFuture().wait(std::chrono::seconds(5)));
+  ASSERT_EQ(task->state(), TaskState::kCanceled);
 }
 
 TEST_F(CursorTest, setErrorConcurrentWithMoveNext) {
