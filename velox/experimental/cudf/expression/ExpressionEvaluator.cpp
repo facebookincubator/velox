@@ -3943,53 +3943,6 @@ ColumnOrView FunctionExpression::eval(
             subexpressions_[branch]->eval(
                 branchInputs.back().views, stream, mr));
       }
-    } else if (isConjunctFunction(expr_) && subexpressions_.size() > 1) {
-      // and/or have the same hazard: LogicalFunction folds operands that were
-      // each materialized over every row, so a guard like d <> 0 would not keep
-      // a later q / d off the zero rows. Hand each operand only the rows the
-      // operands before it leave undecided, the rows Velox CPU's ConjunctExpr
-      // evaluates it on. Hiding a decided row cannot change its result: false
-      // AND null is false, and true OR null is true. Constant operands narrow
-      // nothing here; LogicalFunction folds them.
-      const bool isAnd =
-          expr_->asUnchecked<core::CallTypedExpr>()->name() == "and";
-      std::optional<cuda::device_buffer<std::byte>> undecided;
-      branchInputs.reserve(subexpressions_.size() - 1);
-      for (size_t operand = 0; operand < subexpressions_.size(); ++operand) {
-        if (operand == 0) {
-          subexprResults.push_back(
-              subexpressions_[0]->eval(inputColumnViews, stream, mr));
-        } else {
-          branchInputs.push_back(maskInputRows(
-              inputColumnViews,
-              reinterpret_cast<const cudf::bitmask_type*>(undecided->data()),
-              stream,
-              mr));
-          subexprResults.push_back(
-              subexpressions_[operand]->eval(
-                  branchInputs.back().views, stream, mr));
-        }
-        if (operand + 1 == subexpressions_.size()) {
-          break;
-        }
-        // A false decides AND and a true decides OR.
-        const auto result = asView(subexprResults.back());
-        auto stillUndecided =
-            makeRowMaskExcept(result, /*value=*/!isAnd, stream, mr);
-        if (operand == 0) {
-          undecided.emplace(std::move(stillUndecided));
-          continue;
-        }
-        // Rows hidden from this operand may have evaluated to anything, so only
-        // the rows it saw can stay undecided.
-        const std::vector<const cudf::bitmask_type*> masks{
-            reinterpret_cast<const cudf::bitmask_type*>(undecided->data()),
-            reinterpret_cast<const cudf::bitmask_type*>(stillUndecided.data())};
-        const std::vector<cudf::size_type> beginBits{0, 0};
-        undecided.emplace(
-            cudf::bitmask_and(masks, beginBits, result.size(), stream, mr)
-                .first);
-      }
     } else {
       for (const auto& subexpr : subexpressions_) {
         subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
@@ -4015,6 +3968,95 @@ ColumnOrView FunctionExpression::eval(
 void FunctionExpression::close() {
   function_.reset();
   subexpressions_.clear();
+}
+
+std::shared_ptr<ConjunctExpression> ConjunctExpression::create(
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
+  auto node = std::make_shared<ConjunctExpression>();
+  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
+  node->isAnd_ = name == "and";
+  node->function_ = createCudfFunction(name, expr, pool, config);
+  VELOX_CHECK_NOT_NULL(
+      node->function_, "No cuDF function for {}", expr->toString());
+  for (const auto& input : expr->inputs()) {
+    if (!input->isConstantKind()) {
+      node->subexpressions_.push_back(
+          createCudfExpression(input, inputRowSchema, pool, config));
+    }
+  }
+  return node;
+}
+
+ColumnOrView ConjunctExpression::eval(
+    std::vector<cudf::column_view> inputColumnViews,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr,
+    bool /*finalize*/) {
+  std::vector<ColumnOrView> operandResults;
+  operandResults.reserve(subexpressions_.size());
+  // Borrowed by the masked views until after function_->eval.
+  std::vector<MaskedInputs> operandInputs;
+  operandInputs.reserve(subexpressions_.size());
+
+  // Hiding a decided row cannot change its result: false AND null is false,
+  // and true OR null is true.
+  std::optional<cuda::device_buffer<std::byte>> undecided;
+  for (size_t operand = 0; operand < subexpressions_.size(); ++operand) {
+    if (operand == 0) {
+      operandResults.push_back(
+          subexpressions_[0]->eval(inputColumnViews, stream, mr));
+    } else {
+      operandInputs.push_back(maskInputRows(
+          inputColumnViews,
+          reinterpret_cast<const cudf::bitmask_type*>(undecided->data()),
+          stream,
+          mr));
+      operandResults.push_back(
+          subexpressions_[operand]->eval(
+              operandInputs.back().views, stream, mr));
+    }
+    if (operand + 1 == subexpressions_.size()) {
+      break;
+    }
+    // A false decides AND and a true decides OR.
+    const auto result = asView(operandResults.back());
+    auto stillUndecided =
+        makeRowMaskExcept(result, /*value=*/!isAnd_, stream, mr);
+    if (operand == 0) {
+      undecided.emplace(std::move(stillUndecided));
+      continue;
+    }
+    // Rows hidden from this operand may have evaluated to anything, so only
+    // the rows it saw can stay undecided.
+    const std::vector<const cudf::bitmask_type*> masks{
+        reinterpret_cast<const cudf::bitmask_type*>(undecided->data()),
+        reinterpret_cast<const cudf::bitmask_type*>(stillUndecided.data())};
+    const std::vector<cudf::size_type> beginBits{0, 0};
+    undecided.emplace(
+        cudf::bitmask_and(
+            masks,
+            beginBits,
+            result.size(),
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()})
+            .first);
+  }
+  return function_->eval(operandResults, stream, mr);
+}
+
+void ConjunctExpression::close() {
+  function_.reset();
+  subexpressions_.clear();
+}
+
+bool ConjunctExpression::canEvaluate(
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config) {
+  return isConjunctFunction(expr) &&
+      FunctionExpression::canEvaluate(expr, config);
 }
 
 bool FunctionExpression::canEvaluate(

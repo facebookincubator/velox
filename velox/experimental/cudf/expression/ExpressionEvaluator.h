@@ -207,6 +207,42 @@ class FunctionExpression : public CudfExpression {
   RowTypePtr inputRowSchema_;
 };
 
+/// Evaluates AND and OR, handing each operand only the rows the operands
+/// before it leave undecided, the rows Velox CPU's ConjunctExpr evaluates it
+/// on. LogicalFunction folds operands that were each materialized over every
+/// row, so otherwise a guard like d <> 0 would not keep a later q / d off the
+/// zero rows.
+class ConjunctExpression : public CudfExpression {
+ public:
+  /// Builds the function and its operand evaluators with the session config.
+  static std::shared_ptr<ConjunctExpression> create(
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& inputRowSchema,
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
+
+  ColumnOrView eval(
+      std::vector<cudf::column_view> inputColumnViews,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr,
+      bool finalize = false) override;
+
+  void close() override;
+
+  /// True for an AND or OR that FunctionExpression can evaluate. Does not
+  /// recursively check the operands.
+  static bool canEvaluate(
+      const core::TypedExprPtr& expr,
+      const core::QueryConfig& config);
+
+ private:
+  bool isAnd_{false};
+  std::shared_ptr<CudfFunction> function_;
+  // The non-constant operands, in order; LogicalFunction inlines the
+  // constants.
+  std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+};
+
 /// Create a CudfExpression from a TypedExpr, selecting the best evaluator.
 /// Does not apply expression-level optimization; callers that need
 /// optimization should run expression::optimize at the top-level entry point

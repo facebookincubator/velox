@@ -371,7 +371,7 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
       // Precomputed operands are materialized over every row, so an operand
       // after the first would also run on the rows the ones before it decide,
       // e.g. q / d on the zero rows of `d <> 0 AND q / d > 1`. Leave such
-      // conjuncts to FunctionExpression, which narrows each operand's rows.
+      // conjuncts to ConjunctExpression, which narrows each operand's rows.
       if ((name == "and" || name == "or") && len == 2 &&
           std::any_of(
               call->inputs().begin() + 1,
