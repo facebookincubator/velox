@@ -20,6 +20,11 @@
 
 #include "gtest/gtest.h"
 
+#include <sys/mman.h>
+
+#include <iterator>
+#include <string>
+
 namespace facebook::velox::filesystems {
 
 // TODO: Each prefix should be implemented as its own filesystem.
@@ -304,5 +309,72 @@ INSTANTIATE_TEST_SUITE_P(
     S3UtilTest,
     S3UtilProxyTest,
     ::testing::Values(true, false));
+
+TEST(S3UtilTest, responseBufferStream) {
+  char buffer[8];
+  ResponseBufferStream stream(buffer, sizeof(buffer));
+  stream.write("abc", 3);
+  EXPECT_TRUE(stream.good());
+  EXPECT_EQ(static_cast<std::streamoff>(stream.tellp()), 3);
+  EXPECT_EQ(stream.bytesReceived(), 3);
+  // Reads return what was written, from the start.
+  const auto contents = [&]() {
+    stream.clear();
+    stream.seekg(0);
+    return std::string(
+        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>());
+  };
+  EXPECT_EQ(contents(), "abc");
+
+  // A body that exactly fills the buffer still reads back.
+  stream.write("defgh", 5);
+  EXPECT_EQ(static_cast<std::streamoff>(stream.tellp()), 8);
+  EXPECT_EQ(stream.bytesReceived(), 8);
+  EXPECT_EQ(contents(), "abcdefgh");
+
+  // Writes past the buffer are counted and dropped, the stream stays good,
+  // and a cut-off body reads back empty.
+  stream.write("ijkl", 4);
+  EXPECT_TRUE(stream.good());
+  EXPECT_EQ(stream.bytesReceived(), 12);
+  EXPECT_EQ(static_cast<std::streamoff>(stream.tellp()), 8);
+  stream.put('m');
+  stream.flush();
+  EXPECT_TRUE(stream.good());
+  EXPECT_EQ(stream.bytesReceived(), 13);
+  EXPECT_EQ(std::string_view(buffer, sizeof(buffer)), "abcdefgh");
+  EXPECT_EQ(contents(), "");
+}
+
+// The SDK asks for the put position before every chunk it writes, so the
+// position must survive bodies longer than an int holds.
+TEST(S3UtilTest, responseBufferStreamBeyondInt) {
+  const size_t capacity = (size_t{1} << 31) + 16;
+  // Untouched pages of the mapping cost nothing.
+  void* mapping = ::mmap(
+      nullptr,
+      capacity,
+      PROT_READ | PROT_WRITE,
+      MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
+      -1,
+      0);
+  if (mapping == MAP_FAILED) {
+    GTEST_SKIP() << "Cannot map " << capacity << " bytes";
+  }
+  auto* buffer = static_cast<char*>(mapping);
+  {
+    ResponseBufferStream stream(buffer, capacity);
+    const std::streamoff beyondInt = std::streamoff{1} << 31;
+    stream.seekp(beyondInt - 1);
+    stream.write("ab", 2);
+    EXPECT_TRUE(stream.good());
+    EXPECT_EQ(static_cast<std::streamoff>(stream.tellp()), beyondInt + 1);
+    stream.write("c", 1);
+    EXPECT_EQ(static_cast<std::streamoff>(stream.tellp()), beyondInt + 2);
+    EXPECT_EQ(std::string_view(buffer + beyondInt - 1, 3), "abc");
+  }
+  ::munmap(mapping, capacity);
+}
 
 } // namespace facebook::velox::filesystems

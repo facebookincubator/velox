@@ -20,6 +20,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/tests/FakeS3Server.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 
 #include <gtest/gtest.h>
@@ -445,6 +446,89 @@ TEST_F(S3FileSystemTest, registerCredentialProviderFactories) {
             return std::make_shared<MyCredentialsProvider>();
           }),
       "CredentialsProviderFactory 'my-credentials-provider' already registered");
+}
+
+namespace {
+// 'size' bytes that differ from one offset to the next, so a read from the
+// wrong offset shows.
+std::string varyingBytes(size_t size) {
+  std::string bytes(size, '\0');
+  for (size_t i = 0; i < size; ++i) {
+    bytes[i] = 'a' + i % 26;
+  }
+  return bytes;
+}
+} // namespace
+
+// The AWS SDK writes an error response into the same buffer as object data. A
+// 503 whose body is longer than the requested range used to fail that stream
+// and surface as a non-retryable INTERNAL_FAILURE ("Failed to flush response
+// stream"); the SDK now sees the 503 and retries it.
+TEST_F(S3FileSystemTest, retriesThrottledGetObject) {
+  const auto object = varyingBytes(1'000);
+  test::FakeS3Server server(object);
+  server.onGet([&](const test::FakeS3Server::GetRequest& get) {
+    // Three throttled answers, each longer than the range asked for, then
+    // one more before the second read.
+    return get.number <= 3 || get.number == 5
+        ? test::FakeS3Server::slowDown(get.length() + 64)
+        : server.rangeOf(get);
+  });
+  server.start();
+
+  // The legacy retry mode backs off for milliseconds and counts retries, so
+  // 3 allows four attempts.
+  S3FileSystem s3fs(
+      "",
+      server.s3Config({{"s3.retry-mode", "legacy"}, {"s3.max-attempts", "3"}}));
+  auto readFile = s3fs.openFileForRead("s3://bucket/object.txt");
+  char buffer[100];
+  EXPECT_EQ(
+      readFile->pread(10, sizeof(buffer), buffer), object.substr(10, 100));
+  EXPECT_EQ(server.gets(), 4);
+
+  // A range as long as the XML declaration that opens the error body: the
+  // SDK's parser must see none of a cut-off body.
+  EXPECT_EQ(readFile->pread(500, 38, buffer), object.substr(500, 38));
+  EXPECT_EQ(server.gets(), 6);
+
+  // Once the attempts run out, the error is the 503 itself.
+  server.onGet([](const test::FakeS3Server::GetRequest& get) {
+    return test::FakeS3Server::slowDown(get.length() + 64);
+  });
+  S3FileSystem s3fsOneRetry(
+      "",
+      server.s3Config({{"s3.retry-mode", "legacy"}, {"s3.max-attempts", "1"}}));
+  auto throttledFile = s3fsOneRetry.openFileForRead("s3://bucket/object.txt");
+  VELOX_ASSERT_THROW(
+      throttledFile->pread(10, sizeof(buffer), buffer), "HTTP Status Code:503");
+  EXPECT_EQ(server.gets(), 8);
+}
+
+// A successful GET must return exactly the requested range. A server that
+// ignores the range, or sends a short body, fails the read instead of leaving
+// the buffer wrong.
+TEST_F(S3FileSystemTest, readFailsWhenBodyDoesNotMatchRange) {
+  const auto object = varyingBytes(1'000);
+  test::FakeS3Server server(object);
+  server.onGet([&](const test::FakeS3Server::GetRequest&) {
+    return server.wholeObject();
+  });
+  server.start();
+
+  S3FileSystem s3fs("", server.s3Config());
+  auto readFile = s3fs.openFileForRead("s3://bucket/object.txt");
+  char buffer[100];
+  VELOX_ASSERT_THROW(
+      readFile->pread(10, sizeof(buffer), buffer),
+      "returned 1000 bytes for the 100 bytes requested at offset 10");
+
+  server.onGet([&](const test::FakeS3Server::GetRequest& get) {
+    return server.rangeOf({get.number, get.begin, get.begin + 9});
+  });
+  VELOX_ASSERT_THROW(
+      readFile->pread(10, sizeof(buffer), buffer),
+      "returned 10 bytes for the 100 bytes requested at offset 10");
 }
 
 } // namespace facebook::velox::filesystems
