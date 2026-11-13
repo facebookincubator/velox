@@ -40,8 +40,7 @@ std::string toConcatSql(const core::ConcatTypedExpr& concat);
 
 /// Convert a constant expression into a SQL string.
 ///
-/// Constant expressions of complex types, timestamp with timezone, interval,
-/// and decimal types are not supported yet.
+/// Preserves the types of nulls and nested array, map and row values.
 std::string toConstantSql(const core::ConstantTypedExpr& constant);
 
 // Converts aggregate call expression into a SQL string.

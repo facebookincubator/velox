@@ -151,11 +151,40 @@ that require custom result verifiers are left unverified.
 Limitations
 -----------
 
-The Aggregation and Window Fuzzers do not generate constant arguments. They
-pass every argument as a column, including arguments that a signature declares
-constant. Functions that read constant arguments through `setConstantInputs()`
-receive null for them, so these functions are on the fuzzers' skip lists and
-are not tested.
+The Aggregation Fuzzer generates typed literals for arguments that a signature
+declares constant. It selects one value per iteration, using custom input
+generators when available, and reuses it across batches and equivalent plans.
+This includes nulls, binary values, and complex types. Functions with additional
+constraints on literal values may still need a custom input generator.
+
+The Spark aggregation fuzzer includes ``bloom_filter_agg`` with one, two and
+three arguments. Its input generator supplies non-null values and bounded
+positive size literals, reused across batches. Native plans are compared to
+each other; Spark reference comparison is unsupported because the binary
+formats and hash schemes differ. This exercises constant argument binding
+through single and partial/intermediate/final aggregation, masks, and the
+equivalent Values, scan, streaming and exchange plans selected by the fuzzer.
+
+After building the Spark aggregation fuzzer, run a focused campaign against
+an available Spark Connect coordinator:
+
+.. code-block:: bash
+
+    spark_aggregation_fuzzer_test --only=bloom_filter_agg \
+      --seed=123 --steps=0 --duration_sec=1800 \
+      --enable_oom_injection=false --log_signature_stats=true
+
+Record the seed, revision, duration and per-signature statistics from the
+output. With ``--log_signature_stats=true``, statistics include successful
+signatures as well as failures. A successful campaign must complete native
+result comparisons for both signatures with literal size arguments, not only
+choose them or test the one-argument signature. Also run the normal mixed
+function campaign. These commands describe the validation procedure, not
+results from a completed run.
+
+The Window Fuzzer still passes every argument as a column, including arguments
+that a signature declares constant. Functions that require literal arguments
+must remain on its skip list.
 
 How to integrate
 ---------------------------------------

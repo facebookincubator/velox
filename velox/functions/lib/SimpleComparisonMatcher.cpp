@@ -98,21 +98,11 @@ std::optional<int64_t> ComparisonConstantMatcher::asConstant(
     const core::ITypedExpr* expr) {
   if (auto constant = dynamic_cast<const core::ConstantTypedExpr*>(expr)) {
     if (!constant->isNull()) {
-      if (constant->hasValueVector()) {
-        const auto& vector = constant->valueVector();
-        if (constant->type()->isBigint()) {
-          return vector->as<SimpleVector<int64_t>>()->valueAt(0);
-        } else if (constant->type()->isInteger()) {
-          return vector->as<SimpleVector<int32_t>>()->valueAt(0);
-        }
-      } else {
-        if (constant->value().kind() == TypeKind::BIGINT) {
-          return constant->value().value<int64_t>();
-        }
-
-        if (constant->value().kind() == TypeKind::INTEGER) {
-          return constant->value().value<int32_t>();
-        }
+      if (constant->type()->isBigint()) {
+        return constant->toVariant().value<int64_t>();
+      }
+      if (constant->type()->isInteger()) {
+        return constant->toVariant().value<int32_t>();
       }
     }
   }

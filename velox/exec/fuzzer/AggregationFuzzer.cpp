@@ -97,6 +97,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       const std::vector<std::string>& masks,
       const std::vector<RowVectorPtr>& input,
       const std::vector<core::ExprPtr>& projections,
+      const RowVectorPtr& constantInputs,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier);
 
@@ -107,6 +108,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       const std::vector<std::string>& masks,
       const std::vector<RowVectorPtr>& input,
       const std::vector<core::ExprPtr>& projections,
+      const RowVectorPtr& constantInputs,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier);
 
@@ -129,6 +131,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       const std::vector<std::string>& masks,
       const std::vector<RowVectorPtr>& input,
       const std::vector<core::ExprPtr>& projections,
+      const RowVectorPtr& constantInputs,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier);
 
@@ -291,20 +294,21 @@ void AggregationFuzzer::go(const std::string& planPath) {
 }
 
 // Returns true if specified aggregate function can be applied to sorted inputs,
-// i.e. function takes 1 or more arguments (count(1) doesn't qualify) and types
-// of all arguments are orderable (no maps).
+// i.e. function takes at least one non-constant argument and these arguments
+// are orderable (no maps).
 bool canSortInputs(const CallableSignature& signature) {
-  if (signature.args.empty()) {
-    return false;
-  }
-
-  for (const auto& arg : signature.args) {
-    if (!arg->isOrderable()) {
+  bool hasInputColumn = false;
+  for (auto i = 0; i < signature.args.size(); ++i) {
+    if (signature.constantArgs[i]) {
+      continue;
+    }
+    hasInputColumn = true;
+    if (!signature.args[i]->isOrderable()) {
       return false;
     }
   }
 
-  return true;
+  return hasInputColumn;
 }
 
 // Returns true if specified aggregate function can be applied to distinct
@@ -357,7 +361,14 @@ void AggregationFuzzer::go() {
       logVectors(convertedInput);
 
       verifyAggregation(
-          groupingKeys, {}, {}, convertedInput, projections, false, {});
+          groupingKeys,
+          {},
+          {},
+          convertedInput,
+          projections,
+          nullptr,
+          false,
+          {});
     } else {
       // Pick a random signature.
       auto signatureWithStats = pickSignature();
@@ -395,8 +406,22 @@ void AggregationFuzzer::go() {
 
       std::vector<TypePtr> argTypes = signature.args;
       std::vector<std::string> argNames = makeNames(argTypes.size());
+      std::vector<std::string> sortingKeys;
+      auto arguments = argNames;
+      for (auto i = 0; i < arguments.size(); ++i) {
+        if (signature.constantArgs[i]) {
+          arguments[i] = fmt::format("__complex_constant({})", arguments[i]);
+        } else {
+          sortingKeys.push_back(argNames[i]);
+        }
+      }
       auto call = makeFunctionCall(
-          signature.name, argNames, sortedInputs, distinctInputs);
+          signature.name,
+          arguments,
+          sortedInputs,
+          distinctInputs,
+          false,
+          sortingKeys);
 
       // 20% of times use mask.
       std::vector<std::string> masks;
@@ -418,6 +443,7 @@ void AggregationFuzzer::go() {
       }
 
       auto input = generateInputData(argNames, argTypes, signature);
+      const auto constantInputs = generateConstantInputs(signature, input);
       auto [convertedInput, projections] =
           referenceQueryRunner_->inputProjections(input);
 
@@ -438,6 +464,7 @@ void AggregationFuzzer::go() {
             masks,
             convertedInput,
             projections,
+            constantInputs,
             customVerification,
             customVerifier);
         if (failed) {
@@ -451,6 +478,7 @@ void AggregationFuzzer::go() {
             masks,
             convertedInput,
             projections,
+            constantInputs,
             customVerification,
             customVerifier);
         if (failed) {
@@ -463,6 +491,7 @@ void AggregationFuzzer::go() {
             masks,
             convertedInput,
             projections,
+            constantInputs,
             customVerification,
             customVerifier);
         if (failed) {
@@ -495,10 +524,12 @@ void makeAlternativePlansWithValues(
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& inputVectors,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     std::vector<core::PlanNodePtr>& plans) {
   // Partial -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .values(inputVectors)
           .projectExpressions(projections)
           .partialAggregation(groupingKeys, aggregates, masks)
@@ -508,6 +539,7 @@ void makeAlternativePlansWithValues(
   // Partial -> intermediate -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .values(inputVectors)
           .projectExpressions(projections)
           .partialAggregation(groupingKeys, aggregates, masks)
@@ -526,6 +558,7 @@ void makeAlternativePlansWithValues(
   std::vector<core::PlanNodePtr> sources;
   for (const auto& sourceInput : sourceInputs) {
     sources.push_back(PlanBuilder(planNodeIdGenerator)
+                          .setComplexConstants(constantInputs)
                           .values({sourceInput})
                           .projectExpressions(projections)
                           .partialAggregation(groupingKeys, aggregates, masks)
@@ -551,6 +584,7 @@ void makeAlternativePlansWithTableScan(
     const std::vector<std::string>& masks,
     const RowTypePtr& inputRowType,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     std::vector<core::PlanNodePtr>& plans) {
 // There is a known issue where LocalPartition will send DictionaryVectors
 // with the same underlying base Vector to multiple threads.  This triggers
@@ -561,6 +595,7 @@ void makeAlternativePlansWithTableScan(
   // Partial -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .tableScan(inputRowType)
           .projectExpressions(projections)
           .partialAggregation(groupingKeys, aggregates, masks)
@@ -571,6 +606,7 @@ void makeAlternativePlansWithTableScan(
   // Partial -> intermediate -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .tableScan(inputRowType)
           .projectExpressions(projections)
           .partialAggregation(groupingKeys, aggregates, masks)
@@ -587,10 +623,12 @@ void makeStreamingPlansWithValues(
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& inputVectors,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     std::vector<core::PlanNodePtr>& plans) {
   // Single aggregation.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .values(inputVectors)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -605,6 +643,7 @@ void makeStreamingPlansWithValues(
   // Partial -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .values(inputVectors)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -615,6 +654,7 @@ void makeStreamingPlansWithValues(
   // Partial -> intermediate -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .values(inputVectors)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -635,6 +675,7 @@ void makeStreamingPlansWithValues(
   for (const auto& sourceInput : sourceInputs) {
     sources.push_back(
         PlanBuilder(planNodeIdGenerator)
+            .setComplexConstants(constantInputs)
             .values({sourceInput})
             .projectExpressions(projections)
             .orderBy(groupingKeys, false)
@@ -653,10 +694,12 @@ void makeStreamingPlansWithTableScan(
     const std::vector<std::string>& masks,
     const RowTypePtr& inputRowType,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     std::vector<core::PlanNodePtr>& plans) {
   // Single aggregation.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .tableScan(inputRowType)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -671,6 +714,7 @@ void makeStreamingPlansWithTableScan(
   // Partial -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .tableScan(inputRowType)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -681,6 +725,7 @@ void makeStreamingPlansWithTableScan(
   // Partial -> intermediate -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .tableScan(inputRowType)
           .projectExpressions(projections)
           .orderBy(groupingKeys, false)
@@ -692,6 +737,7 @@ void makeStreamingPlansWithTableScan(
   // Partial -> local merge -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .tableScan(inputRowType)
           .projectExpressions(projections)
           .orderBy(groupingKeys, true)
@@ -707,9 +753,11 @@ bool AggregationFuzzer::verifyAggregation(
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& input,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier) {
   auto firstPlan = PlanBuilder()
+                       .setComplexConstants(constantInputs)
                        .values(input)
                        .projectExpressions(projections)
                        .singleAggregation(groupingKeys, aggregates, masks)
@@ -752,6 +800,7 @@ bool AggregationFuzzer::verifyAggregation(
         masks,
         inputRowType,
         projections,
+        constantInputs,
         tableScanPlans);
 
     if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
@@ -762,6 +811,7 @@ bool AggregationFuzzer::verifyAggregation(
           masks,
           inputRowType,
           projections,
+          constantInputs,
           tableScanPlans);
     }
 
@@ -771,7 +821,13 @@ bool AggregationFuzzer::verifyAggregation(
   } else {
     std::vector<core::PlanNodePtr> valuesPlans;
     makeAlternativePlansWithValues(
-        groupingKeys, aggregates, masks, input, projections, valuesPlans);
+        groupingKeys,
+        aggregates,
+        masks,
+        input,
+        projections,
+        constantInputs,
+        valuesPlans);
 
     // Evaluate same plans on flat inputs.
     std::vector<RowVectorPtr> flatInput;
@@ -783,16 +839,34 @@ bool AggregationFuzzer::verifyAggregation(
     }
 
     makeAlternativePlansWithValues(
-        groupingKeys, aggregates, masks, flatInput, projections, valuesPlans);
+        groupingKeys,
+        aggregates,
+        masks,
+        flatInput,
+        projections,
+        constantInputs,
+        valuesPlans);
 
     if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       // Use OrderBy + StreamingAggregation on original input.
       makeStreamingPlansWithValues(
-          groupingKeys, aggregates, masks, input, projections, valuesPlans);
+          groupingKeys,
+          aggregates,
+          masks,
+          input,
+          projections,
+          constantInputs,
+          valuesPlans);
 
       // Use OrderBy + StreamingAggregation on flattened input.
       makeStreamingPlansWithValues(
-          groupingKeys, aggregates, masks, flatInput, projections, valuesPlans);
+          groupingKeys,
+          aggregates,
+          masks,
+          flatInput,
+          projections,
+          constantInputs,
+          valuesPlans);
     }
 
     for (const auto& plan : valuesPlans) {
@@ -814,9 +888,11 @@ bool AggregationFuzzer::verifySortedAggregation(
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& input,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier) {
   auto firstPlan = PlanBuilder()
+                       .setComplexConstants(constantInputs)
                        .values(input)
                        .projectExpressions(projections)
                        .singleAggregation(groupingKeys, {aggregate}, masks)
@@ -855,6 +931,7 @@ bool AggregationFuzzer::verifySortedAggregation(
   if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
     plans.push_back(
         {PlanBuilder()
+             .setComplexConstants(constantInputs)
              .values(input)
              .projectExpressions(projections)
              .orderBy(groupingKeys, false)
@@ -876,6 +953,7 @@ bool AggregationFuzzer::verifySortedAggregation(
 
     plans.push_back(
         {PlanBuilder()
+             .setComplexConstants(constantInputs)
              .tableScan(inputRowType)
              .projectExpressions(projections)
              .singleAggregation(groupingKeys, {aggregate}, masks)
@@ -885,6 +963,7 @@ bool AggregationFuzzer::verifySortedAggregation(
     if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       plans.push_back(
           {PlanBuilder()
+               .setComplexConstants(constantInputs)
                .tableScan(inputRowType)
                .projectExpressions(projections)
                .orderBy(groupingKeys, false)
@@ -1115,10 +1194,12 @@ bool AggregationFuzzer::verifyDistinctAggregation(
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& input,
     const std::vector<core::ExprPtr>& projections,
+    const RowVectorPtr& constantInputs,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier) {
   const auto firstPlan =
       PlanBuilder()
+          .setComplexConstants(constantInputs)
           .values(input)
           .projectExpressions(projections)
           .singleAggregation(groupingKeys, {aggregate}, masks)
@@ -1151,6 +1232,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
   if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
     plans.push_back(
         {PlanBuilder()
+             .setComplexConstants(constantInputs)
              .values(input)
              .projectExpressions(projections)
              .orderBy(groupingKeys, false)
@@ -1174,6 +1256,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
 
     plans.push_back(
         {PlanBuilder()
+             .setComplexConstants(constantInputs)
              .tableScan(inputRowType)
              .projectExpressions(projections)
              .singleAggregation(groupingKeys, {aggregate}, masks)
@@ -1183,6 +1266,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
     if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       plans.push_back(
           {PlanBuilder()
+               .setComplexConstants(constantInputs)
                .tableScan(inputRowType)
                .projectExpressions(projections)
                .orderBy(groupingKeys, false)

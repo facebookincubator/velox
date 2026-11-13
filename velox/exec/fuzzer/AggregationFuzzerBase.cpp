@@ -142,7 +142,7 @@ bool AggregationFuzzerBase::addSignature(
         .args = {},
         .returnType =
             SignatureBinder::tryResolveType(signature->returnType(), {}, {}),
-        .constantArgs = {}};
+        .constantArgs = signature->constantArguments()};
     VELOX_CHECK_NOT_NULL(callable.returnType);
 
     // Process each argument and figure out its type.
@@ -204,6 +204,7 @@ AggregationFuzzerBase::pickSignature() {
         referenceQueryRunner_->supportedScalarTypes());
     VELOX_CHECK(typeFuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs));
     signature.args = typeFuzzer.argumentTypes();
+    signature.constantArgs = signatureTemplate.signature->constantArguments();
   }
 
   return {signature, signatureStats_[idx]};
@@ -315,6 +316,57 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
   }
 
   return input;
+}
+
+RowVectorPtr AggregationFuzzerBase::generateConstantInputs(
+    const CallableSignature& signature,
+    std::vector<RowVectorPtr>& input) {
+  VELOX_CHECK_EQ(signature.constantArgs.size(), signature.args.size());
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  std::vector<VectorPtr> constants;
+  for (auto i = 0; i < signature.args.size(); ++i) {
+    if (!signature.constantArgs[i]) {
+      continue;
+    }
+
+    // Keep custom generators' valid-domain values when a batch has rows.
+    auto constant = !input.empty() && input.front()->size() > 0
+        ? BaseVector::wrapInConstant(1, 0, input.front()->childAt(i))
+        : vectorFuzzer_.fuzzConstant(signature.args[i], 1);
+    names.push_back(fmt::format("c{}", i));
+    types.push_back(signature.args[i]);
+    constants.push_back(std::move(constant));
+  }
+  if (constants.empty()) {
+    return nullptr;
+  }
+  for (auto& batch : input) {
+    std::vector<std::string> inputNames;
+    std::vector<TypePtr> inputTypes;
+    std::vector<VectorPtr> children;
+    const auto& rowType = batch->type()->asRow();
+    for (auto i = 0; i < rowType.size(); ++i) {
+      if (i < signature.constantArgs.size() && signature.constantArgs[i]) {
+        continue;
+      }
+      inputNames.push_back(rowType.nameOf(i));
+      inputTypes.push_back(rowType.childAt(i));
+      children.push_back(batch->childAt(i));
+    }
+    batch = std::make_shared<RowVector>(
+        batch->pool(),
+        ROW(std::move(inputNames), std::move(inputTypes)),
+        batch->nulls(),
+        batch->size(),
+        std::move(children));
+  }
+  return std::make_shared<RowVector>(
+      pool_.get(),
+      ROW(std::move(names), std::move(types)),
+      nullptr,
+      1,
+      std::move(constants));
 }
 
 std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
@@ -460,10 +512,6 @@ void AggregationFuzzerBase::printSignatureStats() {
   for (auto i = 0; i < signatureStats_.size(); ++i) {
     const auto& stats = signatureStats_[i];
     if (stats.numRuns == 0) {
-      continue;
-    }
-
-    if (stats.numFailed * 1.0 / stats.numRuns < 0.5) {
       continue;
     }
 
@@ -710,13 +758,15 @@ std::string makeFunctionCall(
     const std::vector<std::string>& argNames,
     bool sortedInputs,
     bool distinctInputs,
-    bool ignoreNulls) {
+    bool ignoreNulls,
+    const std::vector<std::string>& sortingKeys) {
   std::ostringstream call;
   call << name << "(";
 
   const auto args = folly::join(", ", argNames);
   if (sortedInputs) {
-    call << args << " ORDER BY " << args;
+    call << args << " ORDER BY "
+         << folly::join(", ", sortingKeys.empty() ? argNames : sortingKeys);
   } else if (distinctInputs) {
     call << "distinct " << args;
   } else {

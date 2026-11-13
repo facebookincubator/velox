@@ -231,6 +231,36 @@ TEST_F(ConstantTypedExprTest, null) {
       *makeNull(ROW({"x", "y"}, {INTEGER(), REAL()})));
 }
 
+TEST_F(ConstantTypedExprTest, toVariant) {
+  for (const auto kind : scalarTypes_) {
+    const auto type = createScalarType(kind);
+    auto values = getTestValues(kind);
+    values.nonNullValues.push_back(values.nullValue);
+    for (const auto& value : values.nonNullValues) {
+      SCOPED_TRACE(type->toString());
+      EXPECT_EQ(createVariantExpr(type, value)->toVariant(), value);
+      auto vector = BaseVector::createConstant(type, value, 1, pool_.get());
+      EXPECT_EQ(createVectorExpr(vector)->toVariant(), value);
+    }
+  }
+
+  std::vector<VectorPtr> values{
+      makeArrayVector<int64_t>({{1, 2}, {3}}),
+      makeMapVector<int64_t, int64_t>({{{1, 2}}, {{3, 4}}}),
+      makeRowVector({makeFlatVector<int64_t>({1, 2})}),
+      makeFlatVector<StringView>({"other", StringView("a\0b", 3)}),
+  };
+  for (const auto& value : values) {
+    auto constant = BaseVector::wrapInConstant(1, 1, value);
+    EXPECT_EQ(createVectorExpr(constant)->toVariant(), value->variantAt(1));
+    const auto nullValue = Variant::null(value->typeKind());
+    EXPECT_EQ(createNullVariantExpr(value->type())->toVariant(), nullValue);
+    EXPECT_EQ(
+        createVectorExpr(createNullConstantVector(value->type()))->toVariant(),
+        nullValue);
+  }
+}
+
 TEST_F(ConstantTypedExprTest, hashScalarTypes) {
   // Tests the consistency of the hash value returned by the ConstantTypedExpr
   // between its construction using variant and Velox vectors.

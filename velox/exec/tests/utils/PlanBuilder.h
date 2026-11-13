@@ -124,8 +124,8 @@ class PlanBuilder {
   virtual ~PlanBuilder() = default;
 
   /// Returns an empty PlanBuilder that shares this builder's
-  /// PlanNodeIdGenerator, memory pool and parse options, to build another
-  /// input of the same plan, e.g. a join's build side.
+  /// PlanNodeIdGenerator, memory pool, constant bindings and parse options, to
+  /// build another input of the same plan, e.g. a join's build side.
   PlanBuilder newPlan() const;
 
   static constexpr const std::string_view kHiveDefaultConnectorId{"test-hive"};
@@ -1863,6 +1863,10 @@ class PlanBuilder {
     return *this;
   }
 
+  /// Supplies typed literals when parsing aggregate and projection expressions.
+  /// __complex_constant(name) references the first value of the named column.
+  PlanBuilder& setComplexConstants(RowVectorPtr complexConstants);
+
   /// In a DistributedPlanBuilder, introduces a shuffle boundary. The plan so
   /// far is shuffled and subsequent nodes consume the shuffle. Arguments are as
   /// in partitionedOutput().
@@ -1991,6 +1995,8 @@ class PlanBuilder {
  private:
   std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
   memory::MemoryPool* pool_;
+  // Stores values referenced by __complex_constant expressions.
+  RowVectorPtr complexConstants_;
   bool filtersAsNode_{false};
 };
 } // namespace facebook::velox::exec::test

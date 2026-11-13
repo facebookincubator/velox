@@ -213,6 +213,13 @@ class AggregationFuzzerBase {
       std::vector<TypePtr> types,
       const std::optional<CallableSignature>& signature);
 
+  // Selects one value per constant argument and removes its input column.
+  // Returns named bindings for __complex_constant expressions, or null if the
+  // signature has no constant arguments.
+  RowVectorPtr generateConstantInputs(
+      const CallableSignature& signature,
+      std::vector<RowVectorPtr>& input);
+
   /// Generate a RowVector of the given types of children with an additional
   /// child named "row_number" of INTEGER row numbers that differentiates every
   /// row. Row numbers start from 0. This additional input vector is needed for
@@ -326,12 +333,14 @@ void printStats(const AggregationFuzzerBase::FunctionsStats& stats);
 std::string printPercentageStat(size_t n, size_t total);
 
 // Makes an aggregation call string for the given function name and arguments.
+// Uses 'sortingKeys' for ORDER BY when provided, otherwise uses 'argNames'.
 std::string makeFunctionCall(
     const std::string& name,
     const std::vector<std::string>& argNames,
     bool sortedInputs = false,
     bool distinctInputs = false,
-    bool ignoreNulls = false);
+    bool ignoreNulls = false,
+    const std::vector<std::string>& sortingKeys = {});
 
 // Returns a list of column names from c0 to cn.
 std::vector<std::string> makeNames(size_t n);

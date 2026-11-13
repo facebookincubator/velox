@@ -327,19 +327,10 @@ cudf::size_type constantRowsBoundValue(const core::TypedExprPtr& value) {
       "ROWS frame offset must be INTEGER or BIGINT type, got {}",
       constExpr->type()->toString());
 
-  int64_t offset;
-  if (constExpr->hasValueVector()) {
-    auto vec = constExpr->valueVector();
-    if (vec->type()->kind() == TypeKind::INTEGER) {
-      offset = vec->as<SimpleVector<int32_t>>()->valueAt(0);
-    } else {
-      offset = vec->as<SimpleVector<int64_t>>()->valueAt(0);
-    }
-  } else if (constExpr->type()->kind() == TypeKind::INTEGER) {
-    offset = constExpr->value().value<int32_t>();
-  } else {
-    offset = constExpr->value().value<int64_t>();
-  }
+  const auto constant = constExpr->toVariant();
+  const int64_t offset = constExpr->type()->isInteger()
+      ? constant.value<int32_t>()
+      : constant.value<int64_t>();
 
   VELOX_USER_CHECK_GE(
       offset, 0, "ROWS frame offset must not be negative: {}", offset);
@@ -404,17 +395,11 @@ int64_t constantIntegerOrBigintValue(const core::ConstantTypedExpr& constExpr) {
       constExpr.type()->isInteger() || constExpr.type()->isBigint(),
       "Constant must be INTEGER or BIGINT type, got {}",
       constExpr.type()->toString());
-  if (constExpr.hasValueVector()) {
-    auto vec = constExpr.valueVector();
-    if (vec->type()->kind() == TypeKind::INTEGER) {
-      return vec->as<SimpleVector<int32_t>>()->valueAt(0);
-    }
-    return vec->as<SimpleVector<int64_t>>()->valueAt(0);
-  }
+  const auto constant = constExpr.toVariant();
   if (constExpr.type()->kind() == TypeKind::INTEGER) {
-    return constExpr.value().value<int32_t>();
+    return constant.value<int32_t>();
   }
-  return constExpr.value().value<int64_t>();
+  return constant.value<int64_t>();
 }
 
 std::unique_ptr<cudf::rolling_aggregation> makeRollingAggregation(
@@ -742,17 +727,11 @@ bool CudfWindow::canRunOnGPU(
       if (!constExpr) {
         return std::nullopt;
       }
-      if (constExpr->hasValueVector()) {
-        auto vec = constExpr->valueVector();
-        if (vec->type()->kind() == TypeKind::INTEGER) {
-          return vec->as<SimpleVector<int32_t>>()->valueAt(0);
-        }
-        return vec->as<SimpleVector<int64_t>>()->valueAt(0);
-      }
+      const auto constant = constExpr->toVariant();
       if (constExpr->type()->kind() == TypeKind::INTEGER) {
-        return constExpr->value().value<int32_t>();
+        return constant.value<int32_t>();
       }
-      return constExpr->value().value<int64_t>();
+      return constant.value<int64_t>();
     };
     const auto validateRowsBound = [&](core::WindowNode::BoundType type,
                                        const core::TypedExprPtr& value,
