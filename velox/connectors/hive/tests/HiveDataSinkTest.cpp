@@ -518,6 +518,16 @@ TEST_F(HiveDataSinkTest, hiveBucketProperty) {
         HiveBucketProperty::deserialize(obj, pool());
     ASSERT_EQ(obj, deserializedProperty->serialize());
   }
+
+  EXPECT_EQ(
+      fmt::format("{}", HiveBucketProperty::Kind::kHiveCompatible),
+      "HIVE_COMPATIBLE");
+  EXPECT_EQ(
+      fmt::format("{}", HiveBucketProperty::Kind::kPrestoNative),
+      "PRESTO_NATIVE");
+  EXPECT_EQ(
+      HiveBucketProperty::toKind("PRESTO_NATIVE"),
+      HiveBucketProperty::Kind::kPrestoNative);
 }
 
 TEST_F(HiveDataSinkTest, basic) {

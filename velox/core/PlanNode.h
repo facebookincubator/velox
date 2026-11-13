@@ -6386,9 +6386,7 @@ class TopNRowNumberNode : public PlanNode {
     kDenseRank,
   };
 
-  static const char* rankFunctionName(RankFunction function);
-
-  static RankFunction rankFunctionFromName(std::string_view name);
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(RankFunction);
 
   /// @param rankFunction RanksFunction (row_number, rank, dense_rank) for TopN.
   /// @param partitionKeys Partitioning keys. May be empty.
@@ -7025,42 +7023,17 @@ using RPCNodePtr = std::shared_ptr<RPCNode>;
 
 } // namespace facebook::velox::core
 
-template <>
-struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
-    : formatter<std::string_view> {
-  auto format(
-      facebook::velox::core::PartitionedOutputNode::Kind s,
-      format_context& ctx) const {
-    return formatter<std::string_view>::format(
-        facebook::velox::core::PartitionedOutputNode::toName(s), ctx);
-  }
-};
-
-template <>
-struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
-  auto format(facebook::velox::core::JoinType s, format_context& ctx) const {
-    return formatter<int>::format(static_cast<int>(s), ctx);
-  }
-};
-
-template <>
-struct fmt::formatter<facebook::velox::core::TopNRowNumberNode::RankFunction>
-    : formatter<std::string> {
-  auto format(
-      facebook::velox::core::TopNRowNumberNode::RankFunction f,
-      format_context& ctx) const {
-    return formatter<std::string>::format(
-        facebook::velox::core::TopNRowNumberNode::rankFunctionName(f), ctx);
-  }
-};
-
-template <>
-struct fmt::formatter<facebook::velox::core::AggregationNode::Step>
-    : formatter<std::string_view> {
-  auto format(
-      facebook::velox::core::AggregationNode::Step s,
-      format_context& ctx) const {
-    return formatter<std::string_view>::format(
-        facebook::velox::core::AggregationNode::toName(s), ctx);
-  }
-};
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::AggregationNode, Step);
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::LocalPartitionNode, Type);
+VELOX_EMBEDDED_ENUM_FORMATTER(
+    facebook::velox::core::PartitionedOutputNode,
+    Kind);
+VELOX_ENUM_FORMATTER(facebook::velox::core::JoinType);
+VELOX_EMBEDDED_ENUM_FORMATTER(
+    facebook::velox::core::VectorSearchJoinNode,
+    IndexSide);
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::WindowNode, WindowType);
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::WindowNode, BoundType);
+VELOX_EMBEDDED_ENUM_FORMATTER(
+    facebook::velox::core::TopNRowNumberNode,
+    RankFunction);

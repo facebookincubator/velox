@@ -2790,7 +2790,7 @@ PlanBuilder& PlanBuilder::addTopNRowNumber(
       parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
   planNode_ = std::make_shared<core::TopNRowNumberNode>(
       nextPlanNodeId(),
-      core::TopNRowNumberNode::rankFunctionFromName(function),
+      core::TopNRowNumberNode::toRankFunction(function),
       fields(partitionKeys),
       sortingFields,
       sortingOrders,

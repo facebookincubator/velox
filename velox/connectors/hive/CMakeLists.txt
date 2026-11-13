@@ -32,6 +32,7 @@ velox_add_library(
   OBJECT
   FileDataSink.cpp
   FileIndexReader.cpp
+  HiveBucketProperty.cpp
   HiveConfig.cpp
   HiveConfigProvider.cpp
   HiveConnector.cpp
@@ -51,6 +52,7 @@ velox_add_library(
   FileHandle.h
   FileIndexReader.h
   FileProperties.h
+  HiveBucketProperty.h
   HiveBucketPruning.h
   HiveConfig.h
   HiveConfigProvider.h
