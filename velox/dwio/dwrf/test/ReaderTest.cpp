@@ -2751,6 +2751,146 @@ TEST_F(TestReader, reuseRowNumberColumn) {
   }
 }
 
+// Three stripes of 2,500 rows each, holding values 0-7,499, with a row index
+// stride of 1,000.
+class SplitRowRangeTest : public TestReader {
+ protected:
+  void SetUp() override {
+    std::vector<std::vector<int32_t>> values(3);
+    for (int32_t i = 0; i < 7'500; ++i) {
+      values[i / 2'500].push_back(i);
+    }
+    batches_ = createBatches(values);
+    schema_ = asRowType(batches_[0]->type());
+    auto config = std::make_shared<dwrf::Config>();
+    config->set(dwrf::Config::ROW_INDEX_STRIDE, static_cast<uint32_t>(1'000));
+    std::tie(writer_, reader_) = createWriterReader(
+        batches_, pool(), dataIoStats_, metadataIoStats_, config, [] {
+          return std::make_unique<RowThresholdFlushPolicy>(2'500);
+        });
+    ASSERT_EQ(reader_->getFooter().stripesSize(), 3);
+    for (int i = 0; i < 3; ++i) {
+      ASSERT_EQ(reader_->getFooter().stripes(i).numberOfRows(), 2'500);
+    }
+  }
+
+  RowReaderOptions options(
+      SplitRowRange range,
+      std::unique_ptr<common::Filter> filter = nullptr,
+      bool selective = true) {
+    RowReaderOptions result;
+    if (selective) {
+      auto spec = std::make_shared<common::ScanSpec>("<root>");
+      spec->addAllChildFields(*schema_);
+      if (filter) {
+        spec->childByName("c0")->setFilter(std::move(filter));
+      }
+      result.setScanSpec(spec);
+    }
+    result.setSplitRowRange(range);
+    return result;
+  }
+
+  // Reads all rows in batches of 700 and returns the values.
+  std::vector<int32_t> read(RowReader& rowReader) {
+    std::vector<int32_t> values;
+    auto output = BaseVector::create(schema_, 0, pool());
+    while (rowReader.next(700, output) > 0) {
+      DecodedVector column(*output->as<RowVector>()->childAt(0));
+      for (vector_size_t i = 0; i < output->size(); ++i) {
+        values.push_back(column.valueAt<int32_t>(i));
+      }
+    }
+    return values;
+  }
+
+  std::vector<int32_t> read(const RowReaderOptions& options) {
+    return read(*reader_->createRowReader(options));
+  }
+
+  static std::vector<int32_t> rows(int32_t begin, int32_t end) {
+    std::vector<int32_t> result(end - begin);
+    std::iota(result.begin(), result.end(), begin);
+    return result;
+  }
+
+  static constexpr uint64_t kAll{std::numeric_limits<uint64_t>::max()};
+
+  std::vector<VectorPtr> batches_;
+  RowTypePtr schema_;
+  std::unique_ptr<dwrf::Writer> writer_;
+  std::unique_ptr<DwrfReader> reader_;
+};
+
+TEST_F(SplitRowRangeTest, selective) {
+  EXPECT_EQ(read(options({0, kAll})), rows(0, 7'500));
+  EXPECT_EQ(read(options({1, 2})), rows(1, 3));
+  // Starts past the first stride and crosses a stride boundary.
+  EXPECT_EQ(read(options({1'500, 800})), rows(1'500, 2'300));
+  // Crosses a stripe.
+  EXPECT_EQ(read(options({2'400, 300})), rows(2'400, 2'700));
+  EXPECT_EQ(read(options({7'000, kAll})), rows(7'000, 7'500));
+  EXPECT_EQ(read(options({7'499, 1})), rows(7'499, 7'500));
+  EXPECT_TRUE(read(options({7'500, 1})).empty());
+  EXPECT_TRUE(read(options({3, 0})).empty());
+}
+
+TEST_F(SplitRowRangeTest, nonSelective) {
+  EXPECT_EQ(read(options({1'500, 800}, nullptr, false)), rows(1'500, 2'300));
+  EXPECT_EQ(read(options({2'400, 300}, nullptr, false)), rows(2'400, 2'700));
+}
+
+TEST_F(SplitRowRangeTest, countsRowsFromSplitStart) {
+  // The byte range holds the second and third stripes.
+  const auto offset = reader_->getFooter().stripes(1).offset();
+  auto opts = options({0, 2});
+  opts.range(offset, kAll / 2);
+  EXPECT_EQ(read(opts), rows(2'500, 2'502));
+
+  opts = options({4'000, kAll});
+  opts.range(offset, kAll / 2);
+  EXPECT_EQ(read(opts), rows(6'500, 7'500));
+
+  opts = options({5'000, 1});
+  opts.range(offset, kAll / 2);
+  EXPECT_TRUE(read(opts).empty());
+}
+
+TEST_F(SplitRowRangeTest, filter) {
+  EXPECT_EQ(
+      read(options(
+          {1'400, 3'000},
+          std::make_unique<common::BigintRange>(1'500, 1'700, false))),
+      rows(1'500, 1'701));
+
+  // Starting mid-stride in the first stripe still skips the strides there
+  // that the filter rejects: here, rows 1,000-1,999.
+  auto rowReader = reader_->createRowReader(options(
+      {500, 2'000},
+      std::make_unique<common::BigintRange>(2'000, 7'499, false)));
+  EXPECT_EQ(read(*rowReader), rows(2'000, 2'500));
+  dwio::common::RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_EQ(stats.skippedStrides, 1);
+}
+
+TEST_F(SplitRowRangeTest, rowNumbers) {
+  auto opts = options({2'400, 300});
+  RowNumberColumnInfo rowNumberColumnInfo;
+  rowNumberColumnInfo.insertPosition = 1;
+  rowNumberColumnInfo.name = "";
+  opts.setRowNumberColumnInfo(rowNumberColumnInfo);
+  auto rowReader = reader_->createRowReader(opts);
+  verifyRowNumbers(*rowReader, pool(), 300);
+}
+
+TEST_F(SplitRowRangeTest, seekNotSupported) {
+  auto rowReader = reader_->createDwrfRowReader(options({1, 2}));
+  VELOX_ASSERT_THROW(
+      rowReader->seekToRow(5),
+      "Seeking is not supported with a split row range");
+}
+
 TEST_F(TestReader, explicitRowNumberColumn) {
   const std::vector<std::vector<int32_t>> integerValues{
       {0, 1, 2, 3, 4},

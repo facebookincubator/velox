@@ -304,6 +304,8 @@ DwrfRowReader::DwrfRowReader(
     stripeCeiling_ = firstStripe_;
   }
 
+  initSplitRowRange();
+
   const auto stripeCountCallback = options_.stripeCountCallback();
   if (stripeCountCallback) {
     stripeCountCallback(stripeCeiling_ - firstStripe_);
@@ -390,7 +392,68 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
   return unitLoaderFactory->create(std::move(loadUnits), 0);
 }
 
+void DwrfRowReader::initSplitRowRange() {
+  const auto& splitRowRange = options_.splitRowRange();
+  if (!splitRowRange.has_value() || emptyFile()) {
+    return;
+  }
+  VELOX_USER_CHECK_NULL(
+      getReader().randomSkip(),
+      "Split row ranges can't be combined with random sampling");
+
+  const auto& fileFooter = getReader().footer();
+  const uint64_t splitStartRow = firstRowOfStripe_[firstStripe_];
+  const uint64_t splitNumRows = firstRowOfStripe_[stripeCeiling_ - 1] +
+      fileFooter.stripes(stripeCeiling_ - 1).numberOfRows() - splitStartRow;
+  if (splitRowRange->firstRow >= splitNumRows || splitRowRange->numRows == 0) {
+    firstStripe_ = fileFooter.stripesSize();
+    currentStripe_ = firstStripe_;
+    stripeCeiling_ = firstStripe_;
+    return;
+  }
+
+  const uint64_t startRow = splitStartRow + splitRowRange->firstRow;
+  const uint64_t endRow = startRow +
+      std::min(splitRowRange->numRows, splitNumRows - splitRowRange->firstRow);
+  while (firstStripe_ + 1 < stripeCeiling_ &&
+         firstRowOfStripe_[firstStripe_ + 1] <= startRow) {
+    ++firstStripe_;
+  }
+  while (stripeCeiling_ - 1 > firstStripe_ &&
+         firstRowOfStripe_[stripeCeiling_ - 1] >= endRow) {
+    --stripeCeiling_;
+  }
+  currentStripe_ = firstStripe_;
+  firstStripeStartRow_ = startRow - firstRowOfStripe_[firstStripe_];
+  lastStripeNumRows_ = endRow - firstRowOfStripe_[stripeCeiling_ - 1];
+}
+
+void DwrfRowReader::seekToSplitRowRangeStart(uint64_t strideSize) {
+  auto& selectiveReader = getSelectiveColumnReader();
+  const bool useStrides = selectiveReader != nullptr && strideSize > 0;
+  // checkSkipStrides() computes the strides to skip only at row 0.
+  if (useStrides) {
+    computeStridesToSkip(strideSize);
+  }
+  currentRowInStripe_ = firstStripeStartRow_;
+  if (selectiveReader == nullptr) {
+    getColumnReader()->skip(firstStripeStartRow_);
+    return;
+  }
+  // Jump to the row group only if the stripe has a row index; a file can
+  // record a stride without writing one.
+  const auto startRowGroup = useStrides ? firstStripeStartRow_ / strideSize : 0;
+  if (startRowGroup > 0 && startRowGroup < stridesToSkipSize_) {
+    selectiveReader->seekToRowGroup(startRowGroup);
+  }
+  // Unlike skip(), seekTo() also advances the reader's own read offset.
+  selectiveReader->seekTo(firstStripeStartRow_, /*readsNullsOnly=*/false);
+}
+
 uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
+  VELOX_USER_CHECK(
+      !options_.splitRowRange().has_value(),
+      "Seeking is not supported with a split row range");
   // Empty file
   if (emptyFile()) {
     return 0;
@@ -521,6 +584,19 @@ uint64_t DwrfRowReader::skipRows(uint64_t numberOfRowsToSkip) {
   return previousRow_ - initialRow;
 }
 
+void DwrfRowReader::computeStridesToSkip(uint64_t strideSize) {
+  StatsContext context(getReader().writerName(), getReader().writerVersion());
+  DwrfData::FilterRowGroupsResult res;
+  getSelectiveColumnReader()->filterRowGroups(strideSize, context, res);
+  if (auto& metadataFilter = options_.metadataFilter()) {
+    metadataFilter->eval(res.metadataFilterResults, res.filterResult);
+  }
+  stridesToSkip_ = res.filterResult.data();
+  stridesToSkipSize_ = res.totalCount;
+  stripeStridesToSkip_[currentStripe_] = std::move(res.filterResult);
+  recomputeStridesToSkip_ = false;
+}
+
 void DwrfRowReader::checkSkipStrides(uint64_t strideSize) {
   if (!getSelectiveColumnReader() || strideSize == 0 ||
       currentRowInStripe_ % strideSize != 0) {
@@ -528,21 +604,13 @@ void DwrfRowReader::checkSkipStrides(uint64_t strideSize) {
   }
 
   if (currentRowInStripe_ == 0 || recomputeStridesToSkip_) {
-    StatsContext context(getReader().writerName(), getReader().writerVersion());
-    DwrfData::FilterRowGroupsResult res;
-    getSelectiveColumnReader()->filterRowGroups(strideSize, context, res);
-    if (auto& metadataFilter = options_.metadataFilter()) {
-      metadataFilter->eval(res.metadataFilterResults, res.filterResult);
-    }
-    stridesToSkip_ = res.filterResult.data();
-    stridesToSkipSize_ = res.totalCount;
-    stripeStridesToSkip_[currentStripe_] = std::move(res.filterResult);
-    recomputeStridesToSkip_ = false;
+    computeStridesToSkip(strideSize);
   }
 
   bool foundStridesToSkip = false;
   auto currentStride = currentRowInStripe_ / strideSize;
-  while (currentStride < stridesToSkipSize_ &&
+  while (currentRowInStripe_ < rowsInCurrentStripe_ &&
+         currentStride < stridesToSkipSize_ &&
          bits::isBitSet(stridesToSkip_, currentStride)) {
     foundStridesToSkip = true;
     currentRowInStripe_ =
@@ -618,6 +686,9 @@ int64_t DwrfRowReader::nextRowNumber() {
       }
       loadCurrentStripe();
       VELOX_CHECK_NOT_NULL(currentUnit_);
+      if (currentStripe_ == firstStripe_ && firstStripeStartRow_ > 0) {
+        seekToSplitRowRangeStart(strideSize);
+      }
     }
 
     checkSkipStrides(strideSize);
@@ -719,6 +790,9 @@ void DwrfRowReader::loadCurrentStripe() {
   const auto loadUnitIdx = currentStripe_ - firstStripe_;
   currentUnit_ = castDwrfUnit(&unitLoader_->getLoadedUnit(loadUnitIdx));
   rowsInCurrentStripe_ = currentUnit_->getNumRows();
+  if (lastStripeNumRows_.has_value() && currentStripe_ + 1 == stripeCeiling_) {
+    rowsInCurrentStripe_ = *lastStripeNumRows_;
+  }
 }
 
 size_t DwrfRowReader::estimatedReaderMemory() const {

@@ -171,6 +171,16 @@ class DwrfRowReader : public StrideIndexProvider,
     return stripeCeiling_ == firstStripe_;
   }
 
+  // Narrows the stripes to read to the split row range, if one is set.
+  void initSplitRowRange();
+
+  // Moves from row 0 of 'firstStripe_' to the first row in the split row
+  // range.
+  void seekToSplitRowRangeStart(uint64_t strideSize);
+
+  // Evaluates filters against the stride stats of the current stripe.
+  void computeStridesToSkip(uint64_t strideSize);
+
   void checkSkipStrides(uint64_t strideSize);
 
   void readNext(
@@ -212,8 +222,14 @@ class DwrfRowReader : public StrideIndexProvider,
 
   std::shared_ptr<BitSet> projectedNodes_;
 
-  const uint64_t* stridesToSkip_;
-  int stridesToSkipSize_;
+  // Row in 'firstStripe_' to start reading at. Set by the split row range.
+  uint64_t firstStripeStartRow_{0};
+  // Number of rows to read in the stripe before 'stripeCeiling_'. Set by the
+  // split row range.
+  std::optional<uint64_t> lastStripeNumRows_;
+
+  const uint64_t* stridesToSkip_{nullptr};
+  int stridesToSkipSize_{0};
   // Record of strides to skip in each visited stripe. Used for diagnostics.
   std::unordered_map<uint32_t, std::vector<uint64_t>> stripeStridesToSkip_;
   // Number of skipped strides.
