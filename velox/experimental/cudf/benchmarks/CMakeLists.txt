@@ -47,3 +47,9 @@ target_link_libraries(
   Folly::folly
   Folly::follybenchmark
 )
+
+add_executable(velox_cudf_pinned_memory_benchmark PinnedMemoryAllocatorBenchmark.cpp)
+target_link_libraries(
+  velox_cudf_pinned_memory_benchmark
+  PRIVATE velox_cudf_pinned_memory velox_caching CCCL::CCCL CUDA::cudart CUDA::cuda_driver
+)
