@@ -2093,6 +2093,50 @@ TEST_F(ParquetReaderTest, readComplexTypeWithV2Page) {
       outputRowType, *readerBundle.rowReader, expected, *leafPool_);
 }
 
+// Reads a nullable struct whose fields have definition level 2. Only one field
+// of the struct preloads the rep/defs of the whole column chunk. The other
+// field reads its leaf nulls page by page.
+TEST_F(ParquetReaderTest, nullableStructFields) {
+  constexpr int32_t kNumRows{2'000};
+  const auto rowType = ROW("s", ROW({{"a", BIGINT()}, {"b", VARCHAR()}}));
+  auto data = makeRowVector(
+      rowType->names(),
+      {makeRowVector(
+          {"a", "b"},
+          {makeFlatVector<int64_t>(
+               kNumRows,
+               [](auto row) { return row; },
+               [](auto row) { return row % 11 == 0; }),
+           makeFlatVector<std::string>(
+               kNumRows,
+               [](auto row) {
+                 return fmt::format("{}:{}", row, std::string(row / 100, 'o'));
+               },
+               [](auto row) { return row % 7 == 0; })},
+          [](auto row) { return row % 13 == 0; })});
+
+  for (bool dataPageV2 : {false, true}) {
+    for (bool enableDictionary : {false, true}) {
+      for (int64_t pageSize : {1'024, 1'048'576}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "dataPageV2={}, enableDictionary={}, pageSize={}",
+                dataPageV2,
+                enableDictionary,
+                pageSize));
+        ParquetWriterOptions writerOptions;
+        writerOptions.useParquetDataPageV2 = dataPageV2;
+        writerOptions.enableDictionary = enableDictionary;
+        writerOptions.dataPageSize = pageSize;
+        auto* sink = write(data, writerOptions);
+        auto reader = createReaderInMemory(*sink);
+        auto rowReader = createRowReaderFromReader(*reader, rowType);
+        assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+      }
+    }
+  }
+}
+
 TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyArrayValue) {
   //  The Schema is of type
   //  message hive_schema {
