@@ -275,13 +275,44 @@ TEST_F(ExprToSubfieldFilterTest, gt) {
 }
 
 TEST_F(ExprToSubfieldFilterTest, between) {
-  auto call = parseCallExpr("a between 40 and 42", ROW("a", BIGINT()));
-  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+  for (const auto& [name, type] : std::vector<std::pair<std::string, TypePtr>>{
+           {"tinyint", TINYINT()},
+           {"smallint", SMALLINT()},
+           {"bigint", BIGINT()},
+       }) {
+    SCOPED_TRACE(name);
+    auto call = parseCallExpr("a between 40 and 42", ROW("a", type));
 
-  ASSERT_TRUE(filter);
-  validateSubfield(subfield, {"a"});
+    {
+      auto [subfield, filter] = leafCallToSubfieldFilter(call);
+      ASSERT_TRUE(filter);
+      validateSubfield(subfield, {"a"});
+      VELOX_ASSERT_FILTER(between(40, 42), filter);
+    }
 
-  VELOX_ASSERT_FILTER(between(40, 42), filter);
+    {
+      auto [subfield, filter] =
+          leafCallToSubfieldFilter(call, /*negated=*/true);
+      ASSERT_TRUE(filter);
+      validateSubfield(subfield, {"a"});
+      VELOX_ASSERT_FILTER(notBetween(40, 42), filter);
+    }
+
+    for (const auto& sql : {
+             "a between cast(null as " + name + ") and 42",
+             "a between 40 and cast(null as " + name + ")",
+         }) {
+      SCOPED_TRACE(sql);
+      auto nullCall = parseCallExpr(sql, ROW("a", type));
+      for (bool negated : {false, true}) {
+        SCOPED_TRACE(negated ? "negated" : "not negated");
+        auto [subfield, filter] = leafCallToSubfieldFilter(nullCall, negated);
+        ASSERT_TRUE(filter);
+        validateSubfield(subfield, {"a"});
+        VELOX_ASSERT_FILTER(std::make_unique<common::AlwaysFalse>(), filter);
+      }
+    }
+  }
 }
 
 // IN pushes as a subfield filter in both list encodings: the folded
