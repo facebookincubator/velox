@@ -31,8 +31,11 @@ repos:
         # identify tags *.nimble as Nim package files (text), but Velox's
         # .nimble files are binary Nimble test data.
         exclude_types: [nimble]
+        # Lance datasets (manifests, transactions, data files) are binary.
+        exclude: velox/connectors/lance/tests/data/.*
       - id: end-of-file-fixer
         exclude_types: [nimble]
+        exclude: velox/connectors/lance/tests/data/.*
       - id: check-added-large-files
       - id: check-executables-have-shebangs
       - id: check-shebang-scripts-are-executable

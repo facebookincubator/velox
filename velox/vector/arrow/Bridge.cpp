@@ -1844,6 +1844,41 @@ TypePtr parseDecimalFormat(const std::string_view format) {
   }
 }
 
+// Parses the list width out of a fixed-size-list format string, "+w:123".
+//
+// Velox has no fixed-size list type, so the width cannot be carried in the
+// imported type and is instead used to synthesize the offsets and sizes that
+// ArrayVector needs. Validating it during schema import means a malformed
+// format fails there rather than midway through reading data.
+int32_t parseFixedSizeListWidth(const std::string_view format) {
+  // Shortest valid form is "+w:1".
+  if (format.size() < 4 || format[2] != ':') {
+    VELOX_USER_FAIL(
+        "Unable to convert '{}' ArrowSchema fixed size list format to Velox.",
+        format);
+  }
+  try {
+    std::string_view::size_type sz;
+    const int32_t width = std::stoi(&format[3], &sz);
+    if (width <= 0) {
+      VELOX_USER_FAIL(
+          "Fixed size list width must be positive, got '{}'.", format);
+    }
+    return width;
+  } catch (const std::invalid_argument&) {
+    VELOX_USER_FAIL(
+        "Unable to convert '{}' ArrowSchema fixed size list format to Velox.",
+        format);
+  } catch (const std::out_of_range&) {
+    VELOX_USER_FAIL("Fixed size list width is out of range in '{}'.", format);
+  }
+}
+
+// True for the fixed-size-list format, "+w:<width>".
+bool isFixedSizeList(const char* format) {
+  return format != nullptr && format[0] == '+' && format[1] == 'w';
+}
+
 TypePtr importFromArrowImpl(
     const char* format,
     const ArrowSchema& arrowSchema) {
@@ -1917,6 +1952,16 @@ TypePtr importFromArrowImpl(
         case 'l':
           VELOX_CHECK_EQ(arrowSchema.n_children, 1);
           VELOX_CHECK_NOT_NULL(arrowSchema.children[0]);
+          return ARRAY(importFromArrow(*arrowSchema.children[0]));
+
+        // Fixed size list, "+w:<width>". Imported as a plain ARRAY: Velox has
+        // no fixed-size list type, so the width is not preserved and a
+        // round trip back to Arrow yields "+l". Parsed here only to reject a
+        // malformed width at schema import.
+        case 'w':
+          VELOX_CHECK_EQ(arrowSchema.n_children, 1);
+          VELOX_CHECK_NOT_NULL(arrowSchema.children[0]);
+          parseFixedSizeListWidth(format);
           return ARRAY(importFromArrow(*arrowSchema.children[0]));
 
         // Map.
@@ -2260,12 +2305,34 @@ ArrayVectorPtr createArrayVector(
     bool isViewer,
     WrapInBufferViewFunc wrapInBufferView) {
   static_assert(sizeof(vector_size_t) == sizeof(int32_t));
-  VELOX_CHECK_EQ(arrowArray.n_buffers, 2);
   VELOX_CHECK_EQ(arrowArray.n_children, 1);
-  auto offsets = wrapInBufferView(
-      arrowArray.buffers[1], (arrowArray.length + 1) * sizeof(vector_size_t));
-  auto sizes =
-      computeSizes(offsets->as<vector_size_t>(), arrowArray.length, pool);
+
+  BufferPtr offsets;
+  BufferPtr sizes;
+
+  if (isFixedSizeList(arrowSchema.format)) {
+    // A fixed size list carries only a validity buffer: every element spans
+    // exactly [i * width, (i + 1) * width) in the child, so there are no
+    // offsets to borrow and both buffers have to be built here. This is the
+    // one array layout the import cannot do zero-copy.
+    const int32_t width = parseFixedSizeListWidth(arrowSchema.format);
+    VELOX_CHECK_EQ(arrowArray.n_buffers, 1);
+
+    offsets = AlignedBuffer::allocate<vector_size_t>(arrowArray.length, pool);
+    sizes = AlignedBuffer::allocate<vector_size_t>(arrowArray.length, pool);
+    auto* rawOffsets = offsets->asMutable<vector_size_t>();
+    auto* rawSizes = sizes->asMutable<vector_size_t>();
+    for (int64_t i = 0; i < arrowArray.length; ++i) {
+      rawOffsets[i] = static_cast<vector_size_t>(i * width);
+      rawSizes[i] = width;
+    }
+  } else {
+    VELOX_CHECK_EQ(arrowArray.n_buffers, 2);
+    offsets = wrapInBufferView(
+        arrowArray.buffers[1], (arrowArray.length + 1) * sizeof(vector_size_t));
+    sizes = computeSizes(offsets->as<vector_size_t>(), arrowArray.length, pool);
+  }
+
   auto elements = importFromArrowImpl(
       *arrowSchema.children[0], *arrowArray.children[0], pool, isViewer);
   return std::make_shared<ArrayVector>(
