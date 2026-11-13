@@ -29,9 +29,8 @@ class DirectDecoder : public IntDecoder<isSigned> {
   DirectDecoder(
       std::unique_ptr<dwio::common::SeekableInputStream> input,
       bool useVInts,
-      uint32_t numBytes,
-      bool bigEndian = false)
-      : IntDecoder<isSigned>{std::move(input), useVInts, numBytes, bigEndian} {}
+      uint32_t numBytes)
+      : IntDecoder<isSigned>{std::move(input), useVInts, numBytes} {}
 
   void seekToRowGroup(dwio::common::PositionProvider&) override;
 

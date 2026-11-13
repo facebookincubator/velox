@@ -37,14 +37,12 @@ class IntDecoder {
   IntDecoder(
       std::unique_ptr<dwio::common::SeekableInputStream> input,
       bool useVInts,
-      uint32_t numBytes,
-      bool bigEndian = false)
+      uint32_t numBytes)
       : inputStream_(std::move(input)),
         bufferStart_(nullptr),
         bufferEnd_(bufferStart_),
         useVInts_(useVInts),
-        numBytes_(numBytes),
-        bigEndian_(bigEndian) {}
+        numBytes_(numBytes) {}
 
   /// Constructs for use in Parquet where the buffer is always preloaded.
   IntDecoder(const char* start, const char* end)
@@ -161,9 +159,6 @@ class IntDecoder {
   int64_t readVsLong();
   int64_t readLongLE();
 
-  template <typename cppType>
-  cppType readLittleEndianFromBigEndian();
-
  private:
   uint64_t skipVarintsInBuffer(uint64_t items);
   void skipVarints(uint64_t items);
@@ -199,7 +194,6 @@ class IntDecoder {
   const char* bufferEnd_;
   const bool useVInts_;
   const uint32_t numBytes_;
-  const bool bigEndian_;
   int64_t pendingSkip_{0};
 };
 
@@ -355,62 +349,6 @@ inline int64_t IntDecoder<isSigned>::readLongLE() {
 }
 
 template <bool isSigned>
-template <typename cppType>
-inline cppType IntDecoder<isSigned>::readLittleEndianFromBigEndian() {
-  VELOX_DCHECK_EQ(pendingSkip_, 0);
-
-  cppType bigEndianValue = 0;
-  // Input is in Big Endian layout of size numBytes.
-  if (bufferStart_ && (bufferStart_ + sizeof(int64_t) <= bufferEnd_)) {
-    bufferStart_ += numBytes_;
-    const auto valueOffset = bufferStart_ - numBytes_;
-    // Use first byte to initialize bigEndianValue.
-    bigEndianValue =
-        *(reinterpret_cast<const int8_t*>(valueOffset)) >= 0 ? 0 : -1;
-    // Copy numBytes input to the bigEndianValue.
-    ::memcpy(
-        reinterpret_cast<char*>(&bigEndianValue) +
-            (sizeof(cppType) - numBytes_),
-        reinterpret_cast<const char*>(valueOffset),
-        numBytes_);
-    // Convert bigEndianValue to little endian value and return.
-    if constexpr (sizeof(cppType) == 16) {
-      return bits::builtin_bswap128(bigEndianValue);
-    } else {
-      return __builtin_bswap64(bigEndianValue);
-    }
-  }
-
-  char b;
-  cppType offset = 0;
-  cppType numBytesBigEndian = 0;
-  // Read numBytes input into numBytesBigEndian.
-  for (uint32_t i = 0; i < numBytes_; ++i) {
-    b = readByte();
-    if constexpr (sizeof(cppType) == 16) {
-      numBytesBigEndian |= (b & INT128_BASE_256_MASK) << offset;
-    } else {
-      numBytesBigEndian |= (b & BASE_256_MASK) << offset;
-    }
-    offset += 8;
-  }
-  // Use first byte to initialize bigEndianValue.
-  bigEndianValue =
-      (reinterpret_cast<const int8_t*>(&numBytesBigEndian)[0]) >= 0 ? 0 : -1;
-  // Copy numBytes input to the bigEndianValue.
-  ::memcpy(
-      reinterpret_cast<char*>(&bigEndianValue) + (sizeof(cppType) - numBytes_),
-      reinterpret_cast<const char*>(&numBytesBigEndian),
-      numBytes_);
-  // Convert bigEndianValue to little endian value and return.
-  if constexpr (sizeof(cppType) == 16) {
-    return bits::builtin_bswap128(bigEndianValue);
-  } else {
-    return __builtin_bswap64(bigEndianValue);
-  }
-}
-
-template <bool isSigned>
 inline int128_t IntDecoder<isSigned>::readVsHugeInt() {
   return ZigZag::decode<uint128_t>(readVuHugeInt());
 }
@@ -442,21 +380,17 @@ inline T IntDecoder<isSigned>::readInt() {
   if (useVInts_) {
     return readVInt<T>();
   }
-  if (bigEndian_) {
-    return readLittleEndianFromBigEndian<T>();
-  } else {
-    if constexpr (std::is_same_v<T, int128_t>) {
-      if (numBytes_ == 4 || numBytes_ == 8) {
-        return readLongLE();
-      }
-      if (numBytes_ == 12) {
-        VELOX_DCHECK(!useVInts_, "Int96 should not be VInt encoded.");
-        return readInt96();
-      }
-      VELOX_NYI();
+  if constexpr (std::is_same_v<T, int128_t>) {
+    if (numBytes_ == 4 || numBytes_ == 8) {
+      return readLongLE();
     }
-    return readLongLE();
+    if (numBytes_ == 12) {
+      VELOX_DCHECK(!useVInts_, "Int96 should not be VInt encoded.");
+      return readInt96();
+    }
+    VELOX_NYI();
   }
+  return readLongLE();
 }
 
 template <bool isSigned>
