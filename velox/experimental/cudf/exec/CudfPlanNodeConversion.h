@@ -40,6 +40,13 @@ std::shared_ptr<const CudfFilterProjectNode> toCudfFilterProjectNode(
     const std::shared_ptr<const core::FilterNode>& filter,
     const std::shared_ptr<const core::ProjectNode>& project);
 
+/// Constructs a fused or standalone node directly over an already-rewritten
+/// source.
+std::shared_ptr<const CudfFilterProjectNode> toCudfFilterProjectNode(
+    const std::shared_ptr<const core::FilterNode>& filter,
+    const std::shared_ptr<const core::ProjectNode>& project,
+    core::PlanNodePtr source);
+
 /// Returns a CudfBatchConcatNode with the ID of 'node' over the input of
 /// 'node': its only source, or the probe side of a hash join.
 std::shared_ptr<const CudfBatchConcatNode> toCudfBatchConcatNode(

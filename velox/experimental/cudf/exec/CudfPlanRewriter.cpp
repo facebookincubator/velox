@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfNodeDefinitions.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
@@ -361,101 +362,22 @@ class Rewriter {
   std::optional<RewriteResult> rewriteOnGpu(
       const core::PlanNodePtr& node,
       std::string* reason) {
-    if (auto localPartition =
-            std::dynamic_pointer_cast<const core::LocalPartitionNode>(node)) {
-      // CudfLocalPartitionNode cannot carry scale-writer state.
-      if (localPartition->scaleWriter()) {
-        *reason = "LocalPartition scale writer is unsupported by cuDF";
-        return std::nullopt;
-      }
-      if (!canRunLocalPartitionOnGpu(localPartition, reason)) {
-        return std::nullopt;
-      }
-      return RewriteResult{
-          facebook::velox::cudf_velox::detail::rebuildCudfLocalPartition(
-              *localPartition,
-              rewriteChildren(localPartition->sources(), Mode::kGpu)),
-          Mode::kGpu};
+    const auto* definition = detail::findCudfNodeLowering(node);
+    if (!definition) {
+      *reason = fmt::format("{} has no cuDF implementation", node->name());
+      return std::nullopt;
     }
-
-    if (auto aggregation =
-            std::dynamic_pointer_cast<const core::AggregationNode>(node)) {
-      if (!canRunAggregationOnGpu(
-              *aggregation, queryCtx_.get(), pool_.get(), reason)) {
-        return std::nullopt;
-      }
-      auto source = rewriteNode(aggregation->sources()[0], Mode::kGpu).node;
-      return toGpu(
-          node,
-          {addBatchConcat(
-              newId(node->id() + "_batch_concat"), std::move(source))});
+    if (!definition->canRun(node, queryCtx_.get(), pool_.get(), reason)) {
+      return std::nullopt;
     }
-
-    if (auto project =
-            std::dynamic_pointer_cast<const core::ProjectNode>(node)) {
-      if (!canRunFilterProjectOnGpu(
-              nullptr, project.get(), queryCtx_.get(), pool_.get(), reason)) {
-        return std::nullopt;
-      }
-      return toGpu(node, rewriteChildren(node->sources(), Mode::kGpu));
+    auto sources = rewriteChildren(node->sources(), Mode::kGpu);
+    if (definition->batchFirstInput) {
+      VELOX_CHECK(!sources.empty());
+      sources[0] = addBatchConcat(
+          newId(node->id() + "_batch_concat"), std::move(sources[0]));
     }
-
-    if (auto filter = std::dynamic_pointer_cast<const core::FilterNode>(node)) {
-      if (!canRunFilterProjectOnGpu(
-              filter.get(), nullptr, queryCtx_.get(), pool_.get(), reason)) {
-        return std::nullopt;
-      }
-      return toGpu(node, rewriteChildren(node->sources(), Mode::kGpu));
-    }
-
-    if (auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
-      if (!canRunHashJoinOnGpu(*join, queryCtx_.get(), pool_.get(), reason)) {
-        return std::nullopt;
-      }
-      auto probe = rewriteNode(join->sources()[0], Mode::kGpu).node;
-      auto build = rewriteNode(join->sources()[1], Mode::kGpu).node;
-      return toGpu(
-          node,
-          {addBatchConcat(
-               newId(node->id() + "_batch_concat"), std::move(probe)),
-           std::move(build)});
-    }
-
-    if (auto join =
-            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node)) {
-      if (!canRunNestedLoopJoinOnGpu(
-              *join, queryCtx_.get(), pool_.get(), reason)) {
-        return std::nullopt;
-      }
-      return toGpu(node, rewriteChildren(node->sources(), Mode::kGpu));
-    }
-
-    if (auto topNRowNumber =
-            std::dynamic_pointer_cast<const core::TopNRowNumberNode>(node)) {
-      if (!canRunTopNRowNumberOnGpu(*topNRowNumber, reason)) {
-        return std::nullopt;
-      }
-      return toGpu(node, rewriteChildren(node->sources(), Mode::kGpu));
-    }
-
-    if (auto window = std::dynamic_pointer_cast<const core::WindowNode>(node)) {
-      if (!CudfWindow::canRunOnGPU(*window, reason)) {
-        return std::nullopt;
-      }
-      return toGpu(node, rewriteChildren(node->sources(), Mode::kGpu));
-    }
-
-    if (node->is<core::OrderByNode>() || node->is<core::TopNNode>() ||
-        node->is<core::LimitNode>() || node->is<core::LocalMergeNode>() ||
-        node->is<core::AssignUniqueIdNode>() ||
-        node->is<core::MarkDistinctNode>() ||
-        node->is<core::EnforceSingleRowNode>() ||
-        node->is<core::GroupIdNode>()) {
-      return toGpu(node, rewriteChildren(node->sources(), Mode::kGpu));
-    }
-
-    *reason = fmt::format("{} has no cuDF implementation", node->name());
-    return std::nullopt;
+    return RewriteResult{
+        definition->lower(node, std::move(sources)), Mode::kGpu};
   }
 
   RewriteResult rewriteFilterProject(
@@ -480,9 +402,10 @@ class Rewriter {
             pool_.get(),
             &reason)) {
       return {
-          rebuildCudfNode(
-              toCudfPlanNode(project),
-              rewriteChildren(filter->sources(), Mode::kGpu)),
+          toCudfFilterProjectNode(
+              filter,
+              project,
+              rewriteNode(filter->sources()[0], Mode::kGpu).node),
           Mode::kGpu};
     }
     checkCpuFallback(project, reason);
@@ -493,20 +416,6 @@ class Rewriter {
     return {
         rebuildCpuNode(project, {rebuildCpuNode(filter, filterSources)}),
         Mode::kCpu};
-  }
-
-  RewriteResult toGpu(
-      const core::PlanNodePtr& node,
-      std::vector<core::PlanNodePtr> sources) {
-    return {
-        rebuildCudfNode(toCudfPlanNode(node), std::move(sources)), Mode::kGpu};
-  }
-
-  static core::PlanNodePtr rebuildCudfNode(
-      const core::PlanNodePtr& node,
-      std::vector<core::PlanNodePtr> sources) {
-    return facebook::velox::cudf_velox::detail::rebuildCustomCudfPlanNode(
-        node, std::move(sources));
   }
 
   core::PlanNodePtr addBatchConcat(

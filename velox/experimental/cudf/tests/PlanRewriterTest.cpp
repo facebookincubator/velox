@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
+#include "velox/experimental/cudf/exec/CudfNodeDefinitions.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -380,6 +381,33 @@ TEST_F(PlanRewriterTest, everyAdapterHasPhysicalPlanCoverage) {
     auto rewritten = rewriteToCudfPlan(it->second.plan);
     EXPECT_TRUE(containsNode(rewritten, it->second.physicalNode));
   }
+}
+
+TEST_F(PlanRewriterTest, definitionsLowerDirectlyOverRewrittenSources) {
+  const auto cases = samples();
+  for (const auto& name : {"Limit", "Aggregation", "HashJoinProbe"}) {
+    SCOPED_TRACE(name);
+    const auto& original = cases.at(name).plan;
+    const auto oldSources = original->sources();
+    std::vector<core::PlanNodePtr> sources;
+    for (const auto& source : oldSources) {
+      auto empty = std::dynamic_pointer_cast<RowVector>(
+          BaseVector::create(source->outputType(), 0, pool()));
+      sources.push_back(PlanBuilder().values({empty}).planNode());
+    }
+    const auto* definition = detail::findCudfNodeLowering(original);
+    ASSERT_NE(definition, nullptr);
+    auto lowered = definition->lower(original, sources);
+    EXPECT_EQ(lowered->sources(), sources);
+    EXPECT_EQ(original->sources(), oldSources);
+    EXPECT_EQ(lowered->id(), original->id());
+    EXPECT_EQ(*lowered->outputType(), *original->outputType());
+    EXPECT_EQ(definition->batchFirstInput, std::string(name) != "Limit");
+  }
+  auto upload = std::make_shared<CudfFromVeloxNode>(
+      "upload", PlanBuilder().values({input_}).planNode());
+  // A physical-only node has an operator factory, not a CPU lowering rule.
+  EXPECT_EQ(detail::findCudfNodeLowering(upload), nullptr);
 }
 
 TEST_F(PlanRewriterTest, allSupportedLocalPartitionKindsStayOnGpu) {

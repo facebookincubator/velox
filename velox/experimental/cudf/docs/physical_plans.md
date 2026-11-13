@@ -50,6 +50,25 @@ cuDF plan nodes override it the same way as their core counterparts. The limit
 applies only to physical plans, because the general driver adapter runs after
 LocalPlanner has fixed the driver counts.
 
+## Built-in definitions
+
+Built-in node-specific eligibility, lowering and ordinary operator factories
+live together in `CudfNodeDefinitions.cpp`. Its catalog is immutable and
+internal: a definition may provide lowering, an operator factory, or both.
+Factories for physical-only conversion and batching nodes have no core-node
+mapping. Joins retain their bridge translators, and local boundaries retain
+their special construction path.
+
+The compatibility rewriter owns traversal, fallback, conversion insertion and
+batch-concat insertion. Lowering constructs a node directly over supplied,
+already-rewritten sources; it does not recursively rewrite or change placement.
+The legacy adapter's conversion entry point uses the same lowering with original
+sources. Fused Filter+Project conversion takes the pair and rewritten source
+explicitly, preserving the all-or-nothing placement and custom-contract guard.
+Representation contracts and single-thread restrictions remain on the physical
+nodes rather than being duplicated in the catalog.
+
+
 ## Application-owned nodes
 
 The engine selects the implementation of its custom node. This library does
