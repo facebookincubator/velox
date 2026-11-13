@@ -20,6 +20,7 @@ target_link_libraries(
   velox_core
   velox_arrow_bridge
   velox_vector_test_lib
+  velox_test_util
   arrow
   GTest::gtest
   GTest::gtest_main

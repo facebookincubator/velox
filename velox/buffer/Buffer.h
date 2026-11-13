@@ -214,8 +214,9 @@ class Buffer {
   }
 
   /// Slice a buffer with specific type T.
-  /// For boolean type and if the 'offset' is not multiple of 8, return a
-  /// shifted copy, new buffer is allocated from 'pool'.
+  /// For boolean type and if the 'offset' is not multiple of 64, return a
+  /// shifted copy, new buffer is allocated from 'pool'. This keeps a sliced
+  /// bitmap 8-byte aligned.
   /// Otherwise return a BufferView into the original buffer (with shared
   /// ownership of original buffer).
   ///
@@ -843,6 +844,22 @@ class BufferView : public Buffer {
 
   [[no_unique_address]] const Releaser releaser_;
 };
+
+namespace detail {
+// Checks that 'buffer', if not null, starts aligned to 'alignment'.
+void checkVectorBufferAlignment(const BufferPtr& buffer, size_t alignment);
+} // namespace detail
+
+/// Checks in debug builds that 'buffer', if not null, starts aligned to
+/// 'alignment', as buffers held by vectors must (see Buffer). Compiles to
+/// nothing in release builds, where vectors are built on hot paths.
+inline void dcheckVectorBufferAlignment(
+    [[maybe_unused]] const BufferPtr& buffer,
+    [[maybe_unused]] size_t alignment) {
+#ifndef NDEBUG
+  detail::checkVectorBufferAlignment(buffer, alignment);
+#endif
+}
 
 } // namespace facebook::velox
 

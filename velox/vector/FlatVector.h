@@ -19,6 +19,8 @@
 #include <folly/container/F14Set.h>
 #include <folly/dynamic.h>
 
+#include <bit>
+
 #include "velox/common/base/SimdUtil.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/BuilderTypeUtils.h"
@@ -96,6 +98,7 @@ class FlatVector final : public SimpleVector<T> {
           "FlatVector with null values buffer must have all rows set to null");
       return;
     }
+    dcheckVectorBufferAlignment(values_, kValuesAlignment);
     auto byteSize = BaseVector::byteSize<T>(BaseVector::length_);
     VELOX_CHECK_GE(values_->capacity(), byteSize);
     if (values_->size() < byteSize) {
@@ -542,11 +545,19 @@ class FlatVector final : public SimpleVector<T> {
   }
 
   void unsafeSetValues(BufferPtr values) {
+    dcheckVectorBufferAlignment(values, kValuesAlignment);
     values_ = std::move(values);
     rawValues_ = values_ ? const_cast<T*>(values_->as<T>()) : nullptr;
   }
 
  private:
+  // Alignment the contract asks of 'values_': the element width, which for
+  // StringView and Timestamp is 16 bytes, more than their natural alignment,
+  // and 8 bytes for a bitmap.
+  static constexpr size_t kValuesAlignment = std::is_same_v<T, bool>
+      ? sizeof(uint64_t)
+      : std::has_single_bit(sizeof(T)) ? sizeof(T)
+                                       : alignof(T);
   void ensureValues() {
     if (rawValues_ == nullptr) {
       mutableRawValues();
