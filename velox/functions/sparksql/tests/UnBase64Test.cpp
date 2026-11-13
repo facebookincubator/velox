@@ -24,6 +24,11 @@ class UnBase64Test : public SparkFunctionBaseTest {
   std::optional<std::string> unbase64(const std::optional<std::string>& a) {
     return evaluateOnce<std::string>("unbase64(c0)", a);
   }
+
+  std::optional<std::string> toBinaryBase64(
+      const std::optional<std::string>& a) {
+    return evaluateOnce<std::string>("to_binary_base64(c0)", a);
+  }
 };
 
 TEST_F(UnBase64Test, basic) {
@@ -64,6 +69,55 @@ TEST_F(UnBase64Test, error) {
   VELOX_ASSERT_USER_THROW(
       unbase64("SGVsbG8gV29ybGQgZnJvbSBWZW===xveCE="),
       "Input byte array has incorrect ending");
+}
+
+TEST_F(UnBase64Test, toBinaryBase64) {
+  // Well-formed input decodes like unbase64.
+  EXPECT_EQ(toBinaryBase64(std::nullopt), std::nullopt);
+  EXPECT_EQ(toBinaryBase64(""), "");
+  EXPECT_EQ(toBinaryBase64("TWFu"), "Man");
+  EXPECT_EQ(toBinaryBase64("TWFu\r\nTWFu"), "ManMan");
+  EXPECT_EQ(toBinaryBase64("TWF u"), "Man");
+  EXPECT_EQ(toBinaryBase64("aGVsbG8gd29ybGQ="), "hello world");
+  EXPECT_EQ(toBinaryBase64("U3BhcmsgU1FM"), "Spark SQL");
+  EXPECT_EQ(toBinaryBase64("aA"), "h");
+  EXPECT_EQ(toBinaryBase64("aA=="), "h");
+  EXPECT_EQ(toBinaryBase64("c3d"), "sw");
+  EXPECT_EQ(toBinaryBase64("c3d="), "sw");
+  // Whitespace is what Java's Character.isWhitespace accepts, including the
+  // ASCII unit separator and Unicode spaces such as U+3000.
+  EXPECT_EQ(toBinaryBase64("TW\tFu\x1F"), "Man");
+  EXPECT_EQ(toBinaryBase64("TWFu\u3000TWFu"), "ManMan");
+  EXPECT_EQ(toBinaryBase64("TWFu\u2028"), "Man");
+
+  // Input that unbase64 accepts by skipping characters is an error here.
+  VELOX_ASSERT_USER_THROW(
+      toBinaryBase64("cd@"),
+      "Malformed BASE64 input cannot be converted to BINARY: cd@");
+  const auto kError = "Malformed BASE64 input cannot be converted to BINARY";
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("#"), kError);
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("@@dmVsb3g="), kError);
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("abc?"), kError);
+  // No-break spaces are not whitespace for Java, and neither is malformed
+  // UTF-8.
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("TWFu\u00A0"), kError);
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("TWFu\u202F"), kError);
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("TWFu\xE3\x80"), kError);
+  // The last group needs at least two symbols.
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("a"), kError);
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("abcdA"), kError);
+  // Padding completes the last group to four symbols and ends the string.
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("YQ==="), kError);
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("abcdAE="), kError);
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("ab==tm+1"), kError);
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("ab== "), kError);
+  VELOX_ASSERT_USER_THROW(toBinaryBase64("a==="), kError);
+
+  // try() turns the error into NULL.
+  EXPECT_EQ(
+      evaluateOnce<std::string>(
+          "try(to_binary_base64(c0))", std::optional<std::string>("cd@")),
+      std::nullopt);
 }
 
 } // namespace
