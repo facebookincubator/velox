@@ -257,6 +257,34 @@ TEST(TimeZoneMapTest, timePointBoundary) {
       "Timepoint is outside of supported timestamp seconds since epoch range:");
 }
 
+TEST(TimeZoneMapTest, correctNonexistentTime) {
+  using namespace date;
+
+  const auto* tz = locateZone("America/Los_Angeles");
+  EXPECT_NE(tz, nullptr);
+
+  // 2021-03-14 02:30 doesn't exist in Los Angeles: clocks go from 02:00 to
+  // 03:00. It moves to 03:30. A time that exists is returned as is.
+  const auto gapStart =
+      seconds(sys_days{year(2021) / 3 / 14}.time_since_epoch());
+  EXPECT_EQ(
+      gapStart + hours(3) + minutes(30),
+      tz->correct_nonexistent_time(gapStart + hours(2) + minutes(30)));
+  EXPECT_EQ(
+      gapStart + hours(4), tz->correct_nonexistent_time(gapStart + hours(4)));
+
+  // Out of range time points must throw. Evaluating the DST rules for them
+  // used to run without end.
+  VELOX_ASSERT_THROW(
+      tz->correct_nonexistent_time(
+          seconds{std::numeric_limits<int64_t>::max() / 1000 + 1}),
+      "Timepoint is outside of supported timestamp seconds since epoch range:");
+  VELOX_ASSERT_THROW(
+      tz->correct_nonexistent_time(
+          seconds{std::numeric_limits<int64_t>::min() / 1000 - 1}),
+      "Timepoint is outside of supported timestamp seconds since epoch range:");
+}
+
 TEST(TimeZoneMapTest, getTimeZoneName) {
   EXPECT_EQ("America/Los_Angeles", getTimeZoneName(1825));
   EXPECT_EQ("Europe/Moscow", getTimeZoneName(2079));

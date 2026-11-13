@@ -506,6 +506,10 @@ TimeZone::milliseconds TimeZone::to_local(
 
 TimeZone::seconds TimeZone::correct_nonexistent_time(
     TimeZone::seconds timestamp) const {
+  // Like the conversions above. For a time point outside the supported range,
+  // evaluating the DST rules of the zone can run without end.
+  validateRange(date::sys_time<seconds>{timestamp});
+
   // If this is an offset time zone.
   if (tz_ == nullptr) {
     return timestamp;
