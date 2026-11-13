@@ -104,17 +104,21 @@ class ScanPrefetcher {
  public:
   using ProjectorPtr = IndexScanCursor::ProjectorPtr;
 
-  // Starts prefetching the stripes selected for the active scan.
+  // Starts prefetching the stripes selected for the active scan, in batches of
+  // 'maxPrefetchStripes' / 'numPrefetchBatches' stripes. The cursor checks
+  // that 'numPrefetchBatches' is positive.
   ScanPrefetcher(
       ProjectorPtr projector,
       std::vector<StripeSelection> selections,
       folly::Executor::KeepAlive<> prefetchExecutor,
-      uint32_t maxPrefetchStripes)
+      uint32_t maxPrefetchStripes,
+      uint32_t numPrefetchBatches)
       : projector_{std::move(projector)},
         selections_{std::move(selections)},
         prefetchExecutor_{std::move(prefetchExecutor)},
         maxPrefetchStripes_{maxPrefetchStripes},
-        maxBatchStripes_{std::max<uint32_t>(1, maxPrefetchStripes / 2)} {
+        maxBatchStripes_{
+            std::max<uint32_t>(1, maxPrefetchStripes / numPrefetchBatches)} {
     NIMBLE_CHECK_GT(maxPrefetchStripes_, 0);
     NIMBLE_CHECK(!selections_.empty(), "No stripes are selected to prefetch");
   }
@@ -274,7 +278,8 @@ class ScanPrefetcher {
   // Maximum stripe streams queued ahead of the consumer.
   // TODO: Add a limit on projected stripe bytes.
   const uint32_t maxPrefetchStripes_;
-  // Targets two batches so loading can overlap consumption.
+  // Stripes that one batch loads in one read. With two or more batches,
+  // loading can overlap consumption.
   const uint32_t maxBatchStripes_;
   // First selected stripe that the producer has not loaded yet.
   uint32_t nextStripeOffset_{0};
@@ -337,7 +342,10 @@ IndexScanCursor::IndexScanCursor(
       // A get reads the rows of one key, which a prefetch would not speed up,
       // and reads the stripe that the materializer holds without loading it.
       maxPrefetchStripes_{options.forGet ? 0 : options.maxPrefetchStripes},
+      numPrefetchBatches_{options.numPrefetchBatches},
       stripeMaterializer_{velox::checkedNotNull(std::move(materializer))} {
+  NIMBLE_USER_CHECK_GT(
+      numPrefetchBatches_, 0, "Prefetch batch count must be positive");
   NIMBLE_CHECK_LE(projector_->numRows(), std::numeric_limits<uint32_t>::max());
   projector_->setTimingEnabled(options.collectTimings);
 }
@@ -518,7 +526,11 @@ void IndexScanCursor::startPrefetch() {
     return;
   }
   scanPrefetcher_ = std::make_shared<ScanPrefetcher>(
-      projector_, stripeSelections_, prefetchExecutor_, maxPrefetchStripes_);
+      projector_,
+      stripeSelections_,
+      prefetchExecutor_,
+      maxPrefetchStripes_,
+      numPrefetchBatches_);
   scanPrefetcher_->start();
 }
 

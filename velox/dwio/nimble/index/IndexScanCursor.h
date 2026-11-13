@@ -197,6 +197,9 @@ class IndexScanCursor final {
   const folly::Executor::KeepAlive<> prefetchExecutor_;
   // Maximum number of prefetched stripes queued ahead of the consumer.
   const uint32_t maxPrefetchStripes_;
+  // Number of batches that 'maxPrefetchStripes_' is split into, each loaded in
+  // one read.
+  const uint32_t numPrefetchBatches_;
   // Materializes stripes on the iterator caller.
   const std::shared_ptr<StripeMaterializer> stripeMaterializer_;
   // Contiguous file-row range selected by the active key bounds.
