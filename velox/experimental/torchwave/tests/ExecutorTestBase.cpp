@@ -156,6 +156,26 @@ DEFINE_bool(
     cost_counts_barrier_wait,
     true,
     "With --auto_adjust_cost, count the time blocks wait at grid barriers as part of an op's cost");
+DEFINE_bool(
+    concat_result_slots,
+    true,
+    "Give a concat result the slot its lifetime group plans for it instead of a separate allocation");
+DEFINE_bool(
+    group_unreleased_values,
+    true,
+    "Group values that are never released with the others produced at the same point");
+DEFINE_bool(
+    group_viewed_values,
+    true,
+    "Group a value whose own node takes a table-derived view of it");
+DEFINE_bool(
+    group_arena,
+    true,
+    "Carve lifetime groups out of one persistent buffer laid out from the previous execution");
+DEFINE_int64(
+    group_arena_max_bytes,
+    16 << 20,
+    "Groups of at least this many bytes are allocated on their own, outside the group arena");
 
 DEFINE_bool(
     uniform_cost,
@@ -855,6 +875,11 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
   WaveConfig::get().costCountsBarrierWait = FLAGS_cost_counts_barrier_wait;
+  WaveConfig::get().concatResultSlots = FLAGS_concat_result_slots;
+  WaveConfig::get().groupUnreleasedValues = FLAGS_group_unreleased_values;
+  WaveConfig::get().groupViewedValues = FLAGS_group_viewed_values;
+  WaveConfig::get().groupArena = FLAGS_group_arena;
+  WaveConfig::get().groupArenaMaxBytes = FLAGS_group_arena_max_bytes;
   WaveConfig::get().uniformCost = FLAGS_uniform_cost;
   WaveConfig::get().launchPerOp = FLAGS_launch_per_op;
   WaveConfig::get().dedupProjectOps = FLAGS_dedup_project_ops;

@@ -647,6 +647,14 @@ __nan_to_num(double a1, double nan_val, double posinf_val, double neginf_val) {
   return a1;
 }
 
+// In-place nan_to_num_: writes the replacement into self.
+template <typename T>
+__device__ inline T
+__nan_to_num_(T& a1, double nan_val, double posinf_val, double neginf_val) {
+  a1 = __nan_to_num(a1, nan_val, posinf_val, neginf_val);
+  return a1;
+}
+
 // Min/max.
 
 template <typename T>

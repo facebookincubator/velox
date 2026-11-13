@@ -26,7 +26,9 @@
 #include <tuple>
 #include <utility>
 
+#include "velox/experimental/torchwave/Derive.h"
 #include "velox/experimental/torchwave/Executor.h"
+#include "velox/experimental/torchwave/StepSupport.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
@@ -37,6 +39,22 @@ int64_t alignAllocSize(int64_t bytes) {
 }
 
 namespace {
+
+// The base of the host-side view 'desc' when the step's table derives that view
+// and groups may take its base, else -1. Same test the binder applies when it
+// gives the view a DeriveOp.
+nativert::ValueId derivedViewBase(const OutputDesc& desc) {
+  if (!WaveConfig::get().groupViewedValues ||
+      WaveConfig::get().debugSingleOps) {
+    return -1;
+  }
+  const auto recipe = makeViewRecipe(desc.viewNode);
+  if (recipe == nullptr || !derivable(recipe->launch.standaloneShortcut) ||
+      recipe->data.args.empty() || recipe->data.args[0] == nullptr) {
+    return -1;
+  }
+  return recipe->data.args[0]->id();
+}
 
 int64_t requestBytes(const AllocRequest& request) {
   int64_t numel = 1;
@@ -106,6 +124,12 @@ AllocGroupBuffer allocateAllocGroup(const std::vector<AllocRequest>& requests) {
   return result;
 }
 
+namespace {
+// The release point of a group of never-released values: the frame's end,
+// kept apart from the -1 of graph-output groups.
+constexpr int32_t kUnreleasedFree = -2;
+} // namespace
+
 std::vector<AllocGroup> buildAllocGroups(
     const std::vector<AllocLifetime>& lifetimes,
     std::vector<nativert::ValueId>* ungrouped) {
@@ -133,7 +157,8 @@ std::vector<AllocGroup> buildAllocGroups(
 
   std::map<Key, AllocGroup> byKey;
   for (const auto& lifetime : lifetimes) {
-    if (lifetime.freeStep < 0 && !lifetime.graphOutput) {
+    if (lifetime.freeStep < 0 && !lifetime.graphOutput &&
+        !lifetime.unreleased) {
       // Never released. Grouping it would hold every other slot in the group
       // alive for as long as it lives.
       if (ungrouped != nullptr) {
@@ -142,7 +167,7 @@ std::vector<AllocGroup> buildAllocGroups(
       continue;
     }
     TORCH_CHECK(
-        lifetime.graphOutput ||
+        lifetime.graphOutput || lifetime.unreleased ||
             std::tie(lifetime.freeNode, lifetime.freeStep) >=
                 std::tie(lifetime.allocNode, lifetime.allocStep),
         "Alloc lifetime frees at node ",
@@ -153,17 +178,23 @@ std::vector<AllocGroup> buildAllocGroups(
         lifetime.allocNode,
         " step ",
         lifetime.allocStep);
+    // Never-released values get a release point of their own, so they never
+    // share a group with graph outputs, whose buffers the caller keeps.
+    const int32_t freeNode =
+        lifetime.unreleased ? kUnreleasedFree : lifetime.freeNode;
+    const int32_t freeStep =
+        lifetime.unreleased ? kUnreleasedFree : lifetime.freeStep;
     Key key{
         lifetime.allocNode,
         lifetime.allocStep,
         lifetime.needsSync,
-        lifetime.freeNode,
-        lifetime.freeStep};
+        freeNode,
+        freeStep};
     auto& group = byKey[key];
     group.allocNode = lifetime.allocNode;
     group.allocStep = lifetime.allocStep;
-    group.freeNode = lifetime.freeNode;
-    group.freeStep = lifetime.freeStep;
+    group.freeNode = freeNode;
+    group.freeStep = freeStep;
     group.needsSync = lifetime.needsSync;
     group.actualIds.push_back(lifetime.actualId);
     group.dtypes.push_back(lifetime.dtype);
@@ -315,6 +346,16 @@ std::vector<AllocLifetime> graphAllocLifetimes(
         if (stats != nullptr) {
           ++stats->numGrouped;
           ++stats->numGraphOutputsGrouped;
+        }
+      } else if (
+          WaveConfig::get().groupUnreleasedValues &&
+          (graphOutputs == nullptr || graphOutputs->count(actualId) == 0) &&
+          (firstBorrowIt == firstBorrowNode.end() ||
+           firstBorrowIt->second != entry.at.first)) {
+        lifetime.unreleased = true;
+        if (stats != nullptr) {
+          ++stats->numGrouped;
+          ++stats->numUnreleasedGrouped;
         }
       } else {
         reject(&AllocGroupStats::numEscaping);
@@ -600,11 +641,29 @@ std::vector<AllocGroup> graphConcatGroups(
     }
   };
 
+  // The same holds for an operand placement carved. Its producer writes the
+  // band, and the concat's kernel emits no copy for it, so a concat refused or
+  // an operand left out here would leave that band unwritten.
+  auto checkNoOrphanCarves = [](const ConcatFootprint& concat,
+                                const char* reason) {
+    for (const auto& operand : concat.operands) {
+      TORCH_CHECK(
+          !operand.carve,
+          "Concat %",
+          concat.resultId,
+          " has an operand placement carved (%",
+          operand.valueId,
+          ") but gets no allocation group to bind the band: ",
+          reason);
+    }
+  };
+
   auto refuse = [&](int32_t AllocGroupStats::* counter,
                     const ConcatFootprint& concat,
                     const char* reason) {
     count(counter);
     checkNoOrphanCopies(concat, reason);
+    checkNoOrphanCarves(concat, reason);
     if (WaveConfig::get().trace & WaveConfig::kTiming) {
       std::cout << "  concat %" << concat.resultId << " of "
                 << concat.operands.size() << " operands not placed: " << reason
@@ -887,17 +946,28 @@ std::vector<AllocGroup> graphConcatGroups(
               written,
               ") was carved by placement but no launch of the compiled grid "
               "writes it");
-          if (occurrences[written] != 1) {
-            // cat([x, y, x]): one buffer cannot be two regions of the result.
-            // Placement counts occurrences too, so reaching this means the
-            // operand lists differ between the two.
-            leaveOut("joined at more than one position", operand.valueId);
-            continue;
-          }
-          if (claimed.count(written) != 0) {
-            leaveOut("already claimed by another group", operand.valueId);
-            continue;
-          }
+          // cat([x, y, x]): one buffer cannot be two regions of the result.
+          // Placement counts occurrences too, and gives the value a copy.
+          TORCH_CHECK(
+              occurrences[written] == 1,
+              "Concat %",
+              concat.resultId,
+              " operand %",
+              operand.valueId,
+              " was carved by placement but is joined at more than one "
+              "position");
+          // Placement copies a value an earlier concat carves or whose
+          // result it is, which are the two ways a value is claimed here.
+          TORCH_CHECK(
+              claimed.count(written) == 0,
+              "Concat %",
+              concat.resultId,
+              " operand %",
+              operand.valueId,
+              " (written as %",
+              written,
+              ") was carved by placement but another group already claims "
+              "it");
           // The band is bound to the value a launch writes. For an operand
           // reached through a prim.ListUnpack that is the packed value, not the
           // operand: the unpack aliases it into the operand's slot afterwards,
@@ -1080,9 +1150,18 @@ std::vector<LaunchFootprint> collectLaunchFootprints(
         }
         for (const auto& desc : data.actualOutputDescs) {
           if (desc.viewNode != nullptr) {
+            // A view the table derives reads only its base's entry, which
+            // sizing writes before the carve. The step derives it again once
+            // the base has storage.
+            const auto base = derivedViewBase(desc);
             // Already an actual node, so its operands need no translation.
             for (const auto& input : desc.viewNode->inputs()) {
-              if (input.value != nullptr) {
+              if (input.value == nullptr) {
+                continue;
+              }
+              if (input.value->id() == base) {
+                footprint.reads.push_back(base);
+              } else {
                 addBorrow(input.value->id());
               }
             }
@@ -1312,7 +1391,7 @@ std::string allocGroupPlanReport(const GraphAllocGroupPlan& plan) {
   std::string out = fmt::format(
       "Alloc group plan: {} groups over {} of {} allocated values, "
       "{} fewer allocator calls per execution; {} of the values are graph "
-      "outputs\n"
+      "outputs, {} are never released\n"
       "  not grouped: {} never released, {} borrowed by their own node, "
       "{} written at several points, {} released before allocated, "
       "{} read after released, {} placed by a concat group\n"
@@ -1323,6 +1402,7 @@ std::string allocGroupPlanReport(const GraphAllocGroupPlan& plan) {
       stats.numAllocated,
       stats.numGrouped - stats.numGroups,
       stats.numGraphOutputsGrouped,
+      stats.numUnreleasedGrouped,
       stats.numEscaping,
       stats.numBorrowedInOwnNode,
       stats.numMultiWrite,
