@@ -17,12 +17,12 @@ include_guard(GLOBAL)
 # 4.0 is the minimum version required by cudf
 cmake_minimum_required(VERSION 4.0)
 
-# rapids_cmake commit 037d4c5 from 2026-10-09 (main branch)
+# rapids_cmake commit a11c837 from 2026-11-03 (main branch)
 set(VELOX_rapids_cmake_VERSION 26.12)
-set(VELOX_rapids_cmake_COMMIT 037d4c5489cc13f5b378b54197238a6e2cdbff17)
+set(VELOX_rapids_cmake_COMMIT a11c837f5025b46e2b17507112493732650e7abb)
 set(
   VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-  946ebc43d81dc7359e973df54bc0749f281a0b65b32a299b00ee6a66507b0a04
+  5cff9e667342007c7a62af5c100ab74720d3c74786d6c1665699727ac28ebefa
 )
 set(
   VELOX_rapids_cmake_SOURCE_URL
@@ -30,22 +30,22 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit 7e29fc0 from 2026-10-15 (main branch)
+# rmm commit cd54ddc from 2026-11-03 (main branch)
 set(VELOX_rmm_VERSION 26.12)
-set(VELOX_rmm_COMMIT 7e29fc098edc5d4d8f186c0da2be277410839a05)
+set(VELOX_rmm_COMMIT cd54ddc5a7905df21b02ac88497d6dfda26b4249)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  e1cb8d9f3483bebaea805817182da1b9a2c315a2cd71dd6496d0577381fec5b8
+  6b7bdbdc096014a222c4410394e8e2fa4b19e0a328ff06d7707dbe514dcecbef
 )
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit 90b116c from 2026-10-13 (main branch)
+# kvikio commit 6ddda9a from 2026-11-03 (main branch)
 set(VELOX_kvikio_VERSION 26.12)
-set(VELOX_kvikio_COMMIT 90b116c67316eedd6b561c0ac7bcdfd09e536be9)
+set(VELOX_kvikio_COMMIT 6ddda9a1ad59e105723fab9348b3d4d262a56b76)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  df6e4ad41b956a6fa9378aed901f85daafac7c521d913661da8d7fc477d9e0aa
+  e4869aa236d12e5b151fbeff43e92d2c457505fa030484ce6258ff8db2e1f26e
 )
 set(
   VELOX_kvikio_SOURCE_URL
@@ -53,12 +53,12 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit c9086e0 from 2026-10-15 (main branch)
+# cudf commit 6c7d2bd from 2026-11-05 (6c7d2bd4cad79590c4a586209bd7aa72159d9e86 branch)
 set(VELOX_cudf_VERSION 26.12 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT c9086e0afbf0cb11194a12bb2233b80139eabd09)
+set(VELOX_cudf_COMMIT 6c7d2bd4cad79590c4a586209bd7aa72159d9e86)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  65c4df018b62ced84ebd74235f70abd053fbcae342e2eb720bc0571023dba72f
+  0802aad1c23d5f30497ea2b0bf45b86e519d192a9d1e4758392c1b83080ea228
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
@@ -102,12 +102,12 @@ if(VELOX_ENABLE_UCX_EXCHANGE)
     STATUS
     "UCX exchange enabled with UCX ${ucx_VERSION} from ${ucx_DIR} -- ucxx will be fetched"
   )
-  # ucxx commit f3e85e5 from 2026-10-14 (main branch)
+  # ucxx commit 2bbaa76 from 2026-11-03 (main branch)
   set(VELOX_ucxx_VERSION 0.53)
-  set(VELOX_ucxx_COMMIT f3e85e580fb4349240917f85f5a6260c7f3b94f6)
+  set(VELOX_ucxx_COMMIT 2bbaa76a06e9133989991164d6dc11462906c17a)
   set(
     VELOX_ucxx_BUILD_SHA256_CHECKSUM
-    63c5f8a9e7a84bab932b52d1dad82619c684a0383b3318914eba029d9b2fa9cd
+    3e75db06f047f16720eec264403d1a2beebfbbff24aa45acc695b26cc8b94335
   )
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
