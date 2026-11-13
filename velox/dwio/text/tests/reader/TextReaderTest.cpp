@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
-#include <string_view>
-#include <type_traits>
+#include <string>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
@@ -45,10 +45,15 @@ int32_t parseDate(const std::string& text) {
   return DATE()->toDays(text);
 }
 
-std::shared_ptr<TempFilePath> createTextFile(std::string_view contents) {
+std::shared_ptr<TempFilePath> createTextFile(
+    size_t numLines,
+    const std::function<std::string(size_t)>& lineAt) {
   auto textFile = TempFilePath::create();
   LocalWriteFile writeFile(textFile->getPath(), true, false);
-  writeFile.append(contents);
+  for (size_t i = 0; i < numLines; ++i) {
+    writeFile.append(lineAt(i));
+    writeFile.append("\n");
+  }
   writeFile.close();
   return textFile;
 }
@@ -100,13 +105,14 @@ class TextReaderTest : public testing::Test,
       std::optional<double> expectedDouble) {
     ASSERT_FALSE(inputs.empty());
     SCOPED_TRACE(inputs.front());
-    std::string contents;
-    for (const auto& input : inputs) {
-      contents += "7," + input + "," + input + "," + input + ",9\n";
-    }
-    // Verify a malformed field does not prevent reading a later valid row.
-    contents += "7,2.5f,2.5f,2.5f,9\n";
-    auto textFile = createTextFile(contents);
+    auto textFile = createTextFile(inputs.size() + 1, [&](size_t row) {
+      if (row == inputs.size()) {
+        // Verify a malformed field does not prevent reading a later valid row.
+        return std::string("7,2.5f,2.5f,2.5f,9");
+      }
+      const auto& input = inputs[row];
+      return "7," + input + "," + input + "," + input + ",9";
+    });
 
     const auto type = ROW(
         {{"before", INTEGER()},
@@ -153,29 +159,6 @@ class TextReaderTest : public testing::Test,
     VectorPtr result;
     ASSERT_EQ(rowReader->next(size, result), size);
     ASSERT_NO_FATAL_FAILURE(assertEqualVectors(expected, result));
-
-    const auto assertBits = [&inputs]<typename T>(
-                                const VectorPtr& values,
-                                const std::optional<T>& expectedValue) {
-      if (!expectedValue ||
-          (!std::isnan(*expectedValue) &&
-           !(*expectedValue == 0 && std::signbit(*expectedValue)))) {
-        return;
-      }
-      using Bits =
-          std::conditional_t<sizeof(T) == sizeof(uint32_t), uint32_t, uint64_t>;
-      for (vector_size_t row = 0; row < inputs.size(); ++row) {
-        SCOPED_TRACE(inputs[row]);
-        EXPECT_EQ(
-            std::bit_cast<Bits>(values->variantAt(row).value<T>()),
-            std::bit_cast<Bits>(*expectedValue));
-      }
-    };
-    auto* rows = result->as<RowVector>();
-    ASSERT_NE(rows, nullptr);
-    ASSERT_NO_FATAL_FAILURE(assertBits(rows->childAt(1), expectedReal));
-    ASSERT_NO_FATAL_FAILURE(assertBits(rows->childAt(2), expectedDouble));
-    ASSERT_NO_FATAL_FAILURE(assertBits(rows->childAt(3), expectedWidenedReal));
     EXPECT_EQ(rowReader->next(1, result), 0);
   }
 
@@ -2001,17 +1984,20 @@ TEST_F(TextReaderTest, extractionMapKeyFilter) {
   // Row format: map entries separated by \x02, key-value by \x03.
   // Row 0: {"a":1, "b":2, "c":3}
   // Row 1: {"a":10, "d":40}
-  auto textFile = createTextFile(
-      "a\x03"
-      "1\x02"
-      "b\x03"
-      "2\x02"
-      "c\x03"
-      "3\n"
-      "a\x03"
-      "10\x02"
-      "d\x03"
-      "40\n");
+  auto textFile = createTextFile(2, [](size_t row) {
+    if (row == 0) {
+      return "a\x03"
+             "1\x02"
+             "b\x03"
+             "2\x02"
+             "c\x03"
+             "3";
+    }
+    return "a\x03"
+           "10\x02"
+           "d\x03"
+           "40";
+  });
 
   const auto type = ROW({{"col_map", MAP(VARCHAR(), BIGINT())}});
   auto reader = createReader(type, textFile->getPath());

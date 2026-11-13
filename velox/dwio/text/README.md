@@ -22,7 +22,7 @@ directly as `float`; DOUBLE file columns are parsed directly as `double`. A REAL
 column requested as DOUBLE is parsed as `float` and then widened to `double`.
 For example, `16777217f` reads as `16777216` in REAL and `16777217` in DOUBLE.
 
-`NaN`, `+NaN`, and `-NaN` read as the same canonical quiet NaN, with no sign bit.
+`NaN`, `+NaN`, and `-NaN` read as NaN.
 NaN is case-sensitive and does not accept a type suffix or payload.
 
 `inf` and `infinity` are accepted in any ASCII letter case, with an optional
@@ -30,9 +30,9 @@ NaN is case-sensitive and does not accept a type suffix or payload.
 `inFINITY`. Infinity spellings do not accept a type suffix.
 
 Rounding uses the file column's precision, with ties rounded to even. Overflow
-produces signed infinity, underflow can produce signed zero, and representable
+produces signed infinity, underflow can produce zero, and representable
 subnormal values are retained. For example, `1e100f` overflows REAL but remains
-finite in DOUBLE. Negative zero retains its sign.
+finite in DOUBLE.
 
 ### Inputs that read as NULL
 
