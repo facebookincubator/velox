@@ -53,7 +53,7 @@ class CudfNestedLoopJoinTest : public HiveConnectorTestBase {
 TEST_F(
     CudfNestedLoopJoinTest,
     unsupportedTypeProjectedOutBeforeNestedLoopJoin) {
-  auto probe = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto probe = makeNamedRowVector("p_key", makeFlatVector<int64_t>({1, 2, 3}));
   auto build = makeRowVector(
       {"b_key", "marker"},
       {makeFlatVector<int64_t>({2, 3, 4}),
@@ -73,7 +73,7 @@ TEST_F(
   auto result = AssertQueryBuilder(plan)
                     .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
                     .copyResults(pool(), task);
-  auto expected = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
+  auto expected = makeNamedRowVector("p_key", makeFlatVector<int64_t>({2, 3}));
   facebook::velox::test::assertEqualVectors(expected, result);
 
   const auto operatorStats = toOperatorStats(task->taskStats());
@@ -86,10 +86,10 @@ TEST_F(
 TEST_F(CudfNestedLoopJoinTest, customComparisonConditionFallsBack) {
   const auto customType =
       facebook::velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
-  auto probe = makeRowVector(
-      {"p_key"}, {makeFlatVector<int64_t>({1, 257, 2}, customType)});
+  auto probe = makeNamedRowVector(
+      "p_key", makeFlatVector<int64_t>({1, 257, 2}, customType));
   auto build =
-      makeRowVector({"b_key"}, {makeFlatVector<int64_t>({1}, customType)});
+      makeNamedRowVector("b_key", makeFlatVector<int64_t>({1}, customType));
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(idGenerator)
                   .values({probe})
@@ -104,8 +104,8 @@ TEST_F(CudfNestedLoopJoinTest, customComparisonConditionFallsBack) {
   auto result = AssertQueryBuilder(plan)
                     .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
                     .copyResults(pool(), task);
-  auto expected =
-      makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 257}, customType)});
+  auto expected = makeNamedRowVector(
+      "p_key", makeFlatVector<int64_t>({1, 257}, customType));
   facebook::velox::test::assertEqualVectors(expected, result);
 
   const auto operatorStats = toOperatorStats(task->taskStats());
@@ -1726,12 +1726,12 @@ TEST_F(CudfNestedLoopJoinTest, leftSemiProjectMultiDriver) {
 // ("c0 < u_c0") is AST-representable and takes the useAstFilter_ path, so it
 // never reaches this branch.
 TEST_F(CudfNestedLoopJoinTest, leftSemiProjectLikeConditionSpanningBothSides) {
-  auto probe = makeRowVector(
-      {"t_val"},
-      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
-  auto build = makeRowVector(
-      {"u_pattern"},
-      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  auto probe = makeNamedRowVector(
+      "t_val",
+      makeFlatVector<std::string>({"apple", "banana", "cherry", "date"}));
+  auto build = makeNamedRowVector(
+      "u_pattern",
+      makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"}));
   createDuckDbTable("t", {probe});
   createDuckDbTable("u", {build});
 
@@ -1857,12 +1857,12 @@ TEST_F(CudfNestedLoopJoinTest, emptyBuildConsumeInput) {
 // silent CPU fallback would also produce the correct result and this test
 // would pass without proving the GPU path works.
 TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSides) {
-  auto probe = makeRowVector(
-      {"t_val"},
-      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
-  auto build = makeRowVector(
-      {"u_pattern"},
-      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  auto probe = makeNamedRowVector(
+      "t_val",
+      makeFlatVector<std::string>({"apple", "banana", "cherry", "date"}));
+  auto build = makeNamedRowVector(
+      "u_pattern",
+      makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"}));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
@@ -1898,12 +1898,12 @@ TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSides) {
 // buildMatchedFlags_ mismatch-row emission for left, right, and full outer
 // joins.
 TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSidesOuterJoins) {
-  auto probe = makeRowVector(
-      {"t_val"},
-      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
-  auto build = makeRowVector(
-      {"u_pattern"},
-      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  auto probe = makeNamedRowVector(
+      "t_val",
+      makeFlatVector<std::string>({"apple", "banana", "cherry", "date"}));
+  auto build = makeNamedRowVector(
+      "u_pattern",
+      makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"}));
   createDuckDbTable("t", {probe});
   createDuckDbTable("u", {build});
 
@@ -1956,14 +1956,14 @@ TEST_F(
     CudfNestedLoopJoinTest,
     likeConditionSpanningBothSidesFullJoinMultiBatch) {
   std::vector<RowVectorPtr> probeVectors = {
-      makeRowVector(
-          {"t_val"}, {makeFlatVector<std::string>({"apple", "banana"})}),
-      makeRowVector(
-          {"t_val"}, {makeFlatVector<std::string>({"cherry", "date"})}),
+      makeNamedRowVector(
+          "t_val", makeFlatVector<std::string>({"apple", "banana"})),
+      makeNamedRowVector(
+          "t_val", makeFlatVector<std::string>({"cherry", "date"})),
   };
-  auto build = makeRowVector(
-      {"u_pattern"},
-      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  auto build = makeNamedRowVector(
+      "u_pattern",
+      makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"}));
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", {build});
 
@@ -1996,8 +1996,8 @@ TEST_F(
 }
 
 TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuild) {
-  auto probeData = makeRowVector({"p0"}, {makeFlatVector<int64_t>({4, 5})});
-  auto buildData = makeRowVector({"b0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto probeData = makeNamedRowVector("p0", makeFlatVector<int64_t>({4, 5}));
+  auto buildData = makeNamedRowVector("b0", makeFlatVector<int32_t>({1, 2, 3}));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(planNodeIdGenerator)
@@ -2011,7 +2011,7 @@ TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuild) {
                   .planNode();
 
   auto expected =
-      makeRowVector({"p0"}, {makeFlatVector<int64_t>({4, 4, 4, 5, 5, 5})});
+      makeNamedRowVector("p0", makeFlatVector<int64_t>({4, 4, 4, 5, 5, 5}));
   AssertQueryBuilder(plan).assertResults(expected);
 }
 

@@ -485,7 +485,7 @@ CONTIG
 
     FlatBuffers reads: flatbuffers::GetRoot<Footer>(contiguousData_)
 
-Used by CachedMetadataInput (contiguous=true)
+Used by CachedMetadataInput, through the block cache that getBlockCache() builds on the AsyncDataCache (contiguous=true)
 
 TINY size < 2KB
 
@@ -573,7 +573,9 @@ TabletReader and ReaderBase each own a separate I/O abstraction. They share the 
       │
       └── TabletReader
             └── metadataInput_: CachedMetadataInput   ← owns metadata I/O
-                  │  built internally from ReadFile + cache + fileHandle
+                  │  built internally from ReadFile + blockCache + fileHandle;
+                  │  configureOptions() sets blockCache to the block cache
+                  │  that getBlockCache() builds on the async data cache
                   │  does NOT use CachedBufferedInput
                   │  caches decompressed bytes
                   │  contiguous (flat malloc)

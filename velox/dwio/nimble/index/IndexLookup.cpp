@@ -20,6 +20,7 @@
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 
 namespace facebook::nimble::index {
@@ -58,9 +59,10 @@ std::shared_ptr<MetadataInput> createIndexMetadataInput(
       .maxCoalesceBytes = options.ioOptions->maxCoalesceBytes(),
       .executor = options.ioOptions->ioExecutor().get(),
       .fileHandle = options.fileHandle,
-      .cache = options.cache,
       .maxCacheEntrySize = options.maxCacheEntrySize,
       .fileIoContext = options.fileIoContext,
+      .blockCache =
+          options.cache != nullptr ? getBlockCache(options.cache) : nullptr,
   };
   return MetadataInput::create(options.file.get(), metadataOptions);
 }

@@ -55,9 +55,11 @@ class NimbleIterator {
   /// encoded cluster-index key per row of the stripe. The decoder writes the
   /// bytes of the entries into 'keyStorage' and 'valueStorage', and sets
   /// 'keys' and 'values', which view those storages, to the entries. The
-  /// iterator releases 'rows' after the call, so a decoder whose entries refer
-  /// to 'rows' ties them to a storage, for example with an IOBuf whose free
-  /// function holds them. A non-empty input must produce at least one entry.
+  /// iterator keeps 'rows' after the call and decodes the next rows into them
+  /// when nothing else holds them, so a decoder whose entries refer to 'rows'
+  /// holds them, for example with an IOBuf whose free function holds them,
+  /// which makes the iterator decode the next rows into a new vector. reset()
+  /// frees them. A non-empty input must produce at least one entry.
   /// The iterator calls the decoder on the thread consuming the iterator.
   /// I/O prefetch does not call the decoder.
   using EntryDecoder = std::function<void(
@@ -95,6 +97,14 @@ class NimbleIterator {
     /// stripe and benefits. A point lookup reads one row and does better
     /// without them. See Encoding::Options::cacheEncodingView.
     bool cacheEncodingView{true};
+
+    /// Serves point lookups: the row iterator keeps the stripe of its last
+    /// lookup until it decodes another stripe or resets, so that later lookups
+    /// in the stripe, in any order, decode their rows without loading the
+    /// stripe again. A get iterator does not prefetch, which would load the
+    /// stripes of a lookup ahead instead. A scan iterator decodes each stripe
+    /// once and keeps nothing.
+    bool forGet{false};
   };
 
   /// Creates an iterator over the output entries that 'entryDecoder' decodes
@@ -102,6 +112,8 @@ class NimbleIterator {
   /// nextRow(), key() and value() refer to the current entry, whose key is the
   /// key that the decoder returned and not the cluster-index key. A row of the
   /// file can have any number of entries.
+  /// With Options::forGet, the iterator keeps the stripe of its last
+  /// lookup for the next lookups.
   /// After a prefetched decode failure, reset or seek before reading entries
   /// again. valid() only reports whether the iterator is positioned on an
   /// entry.
@@ -166,8 +178,9 @@ class NimbleIterator {
   /// prefetch of the previous scan stops.
   virtual void seekToFirst() = 0;
 
-  /// Cancels pending prefetch and invalidates the current scan. Blocks until
-  /// the prefetch stops.
+  /// Cancels pending prefetch, invalidates the current scan and releases the
+  /// stripe that the iterator keeps for later lookups. Blocks until the
+  /// prefetch stops.
   virtual void reset() = 0;
 
   /// Turns the verification of stream checksums on or off for the next seeks,

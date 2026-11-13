@@ -60,6 +60,16 @@ HybridFlatMap makeHybridFlatMap(
   return HybridFlatMap{keyKind, std::move(groups), defaultGroupKeyPresenceMode};
 }
 
+// Returns the groups a schema records for keys of `keyKind`, as a schema reader
+// parses them.
+HybridFlatMap schemaGroups(
+    ScalarKind keyKind,
+    const std::vector<HybridFlatMap::Group>& groups,
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode) {
+  return HybridFlatMap{
+      keyKind, HybridFlatMap::serialize(groups, defaultGroupKeyPresenceMode)};
+}
+
 class FieldWriterTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
@@ -561,24 +571,42 @@ TEST_F(FieldWriterTest, rejectsConfigurationForOtherKeys) {
       "Hybrid FlatMap configuration is for keys of another type");
 }
 
-// Schema metadata (HybridFlatMap::fromSchema()) has no key kind, so it is
-// rejected as a configuration when the writer is created.
-TEST_F(FieldWriterTest, rejectsConfigurationWithoutKeyKind) {
+// A writer appends the Default keys it sees, so the groups a schema records are
+// rejected as a configuration when the writer is created if Default lists keys
+// or is left out, as a projection may.
+TEST_F(FieldWriterTest, rejectsSchemaGroupsAsConfiguration) {
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(
           velox::MAP(velox::INTEGER(), velox::BIGINT()));
-  FieldWriterContext context{*pool_};
-  context.addHybridFlatMapNode(
-      typeWithId->id(),
-      HybridFlatMap::fromSchema(
-          {
-              {.groupId = 0, .groupKeys = {"1"}},
-              {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
-          },
-          HybridFlatMap::KeyPresenceMode::kBitmap));
-  NIMBLE_ASSERT_USER_THROW(
-      FieldWriter::create(context, typeWithId),
-      "Hybrid FlatMap configuration must be built for a key type");
+  {
+    SCOPED_TRACE("Default keys");
+    FieldWriterContext context{*pool_};
+    context.addHybridFlatMapNode(
+        typeWithId->id(),
+        schemaGroups(
+            ScalarKind::Int32,
+            {
+                {.groupId = 0, .groupKeys = {"1"}},
+                {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {"2"}},
+            },
+            HybridFlatMap::KeyPresenceMode::kBitmap));
+    NIMBLE_ASSERT_USER_THROW(
+        FieldWriter::create(context, typeWithId),
+        "Hybrid FlatMap configuration cannot list Default keys");
+  }
+  {
+    SCOPED_TRACE("no Default");
+    FieldWriterContext context{*pool_};
+    context.addHybridFlatMapNode(
+        typeWithId->id(),
+        schemaGroups(
+            ScalarKind::Int32,
+            {{.groupId = 0, .groupKeys = {"1"}}},
+            HybridFlatMap::KeyPresenceMode::kBitmap));
+    NIMBLE_ASSERT_USER_THROW(
+        FieldWriter::create(context, typeWithId),
+        "Hybrid FlatMap configuration must have a Default group");
+  }
 }
 
 // A writer's schema views the grouped keys of its HybridFlatMap in the shared

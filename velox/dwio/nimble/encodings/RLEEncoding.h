@@ -1045,7 +1045,7 @@ void RLEEncoding<T>::bulkScan(
         vector_size_t numRows;
         if constexpr (kScatterValues) {
           auto end = selectedRowIndex + numInRun;
-          if (FOLLY_UNLIKELY(end == numSelected)) {
+          if (end == numSelected) [[unlikely]] {
             numRows = visitor.numRows() - visitor.rowIndex();
           } else {
             numRows = scatterRows[end] - visitor.rowIndex();
@@ -1068,7 +1068,7 @@ void RLEEncoding<T>::bulkScan(
       currentRow += consumed;
       selectedRowIndex += numInRun;
     }
-    if (FOLLY_UNLIKELY(selectedRowIndex == numSelected)) {
+    if (selectedRowIndex == numSelected) [[unlikely]] {
       break;
     }
     currentRow += this->copiesRemaining_;

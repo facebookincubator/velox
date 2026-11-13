@@ -296,8 +296,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
   for (const auto& numPrefetchSplit : numPrefetchSplits) {
     SCOPED_TRACE(fmt::format("numPrefetchSplit {}", numPrefetchSplit));
     asyncDataCache_->clear();
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
 
     auto op =
         PlanBuilder()
@@ -471,8 +470,7 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
           {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()})};
   auto vectors = makeVectors(rowType, 10, 10);
 
-  const auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  const auto filePath = writeToFile(vectors);
   const auto writeDir = TempDirectoryPath::create();
 
   auto writePlan = PlanBuilder()

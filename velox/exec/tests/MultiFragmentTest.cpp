@@ -15,6 +15,7 @@
  */
 
 #include <gmock/gmock.h>
+#include <numeric>
 
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1670,8 +1671,8 @@ TEST_P(MultiFragmentTest, earlyCompletion) {
     if (i == 0) {
       buildData = makeRowVector(ROW({"u_c0"}, {BIGINT()}), 0);
     } else {
-      buildData = makeRowVector(
-          {"u_c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
+      buildData = makeNamedRowVector(
+          "u_c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}));
     }
 
     auto joinPlan = makeJoinOverExchangePlan(
@@ -1739,8 +1740,8 @@ TEST_P(MultiFragmentTest, earlyCompletionBroadcast) {
     if (i == 0) {
       buildData = makeRowVector(ROW({"u_c0"}, {BIGINT()}), 0);
     } else {
-      buildData = makeRowVector(
-          {"u_c0"}, {makeFlatVector<int64_t>({-7, 10, 12345678})});
+      buildData = makeNamedRowVector(
+          "u_c0", makeFlatVector<int64_t>({-7, 10, 12345678}));
     }
 
     auto joinPlan = makeJoinOverExchangePlan(
@@ -1810,8 +1811,8 @@ TEST_P(MultiFragmentTest, earlyCompletionMerge) {
     if (i == 0) {
       buildData = makeRowVector(ROW({"u_c0"}, {BIGINT()}), 0);
     } else {
-      buildData = makeRowVector(
-          {"u_c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
+      buildData = makeNamedRowVector(
+          "u_c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}));
     }
 
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -2094,8 +2095,8 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, lateNoMoreSplits) {
   // Verify the task finishes when 'no more splits' arrives after driver 0 of an
   // exchange pipeline stopped reading. A null-aware anti join build stops at
   // the first null key, so driver 0 gets the only page, which holds a null.
-  auto data = makeRowVector(
-      {"u_c0"}, {makeNullableFlatVector<int64_t>({1, std::nullopt})});
+  auto data = makeNamedRowVector(
+      "u_c0", makeNullableFlatVector<int64_t>({1, std::nullopt}));
   auto leafTaskId = makeTaskId("leaf", 0);
   auto leafTask = startLeafTask(leafTaskId, {data});
 
@@ -2466,7 +2467,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, terminateWithBadSplit) {
   //
   // Start the task with 2 drivers.
   auto probeData =
-      makeRowVector({"p_c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+      makeNamedRowVector("p_c0", makeFlatVector<int64_t>({1, 2, 3}));
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId exchangeNodeId;
   auto plan =
@@ -3011,6 +3012,78 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
     test(1'000, 72);
     test(10'000, 8);
     test(100'000, 2);
+  }
+}
+
+// With exchange_output_batch_rows set, the Exchange fills each output batch to
+// that many rows, however small the batches before it were.
+TEST_P(MultiFragmentTest, exchangeOutputBatchRows) {
+  // Pages of 60 rows about 1 KB wide each, as a shuffle to many consumers
+  // sends them.
+  auto page = makeRowVector({
+      makeFlatVector<int64_t>(60, [](auto row) { return row; }),
+      makeArrayVector<float>(
+          60,
+          [](auto /*row*/) { return 256; },
+          [](auto row, auto index) { return row + index * 0.5f; }),
+  });
+  const int32_t numPages = 500;
+  int64_t numBytes{0};
+  // Returns the sizes of the batches the Exchange outputs for 'numPages'
+  // copies of 'page'.
+  const auto exchangeBatchSizes = [&](uint32_t outputBatchRows) {
+    const auto producerTaskId = fmt::format("local://t{}", outputBatchRows);
+    auto producerTask = makeTask(
+        producerTaskId,
+        test::PlanBuilder()
+            .values({page})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode());
+    bufferManager_->initializeTask(
+        producerTask, core::PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+    auto cleanupGuard = folly::makeGuard([&]() {
+      producerTask->requestCancel();
+      bufferManager_->removeTask(producerTaskId);
+    });
+    numBytes = 0;
+    for (auto i = 0; i < numPages; ++i) {
+      numBytes += enqueue(producerTaskId, 0, page);
+    }
+    bufferManager_->noMoreData(producerTaskId);
+
+    std::vector<vector_size_t> sizes;
+    for (const auto& batch :
+         queryBuilder(exchange(asRowType(page->type())).planNode())
+             .split(remoteSplit(producerTaskId))
+             .config(
+                 core::QueryConfig::kExchangeOutputBatchRows,
+                 std::to_string(outputBatchRows))
+             .copyResultBatches(pool())) {
+      sizes.push_back(batch->size());
+    }
+    EXPECT_EQ(
+        std::accumulate(sizes.begin(), sizes.end(), 0),
+        numPages * page->size());
+    return sizes;
+  };
+
+  // With 1,000 rows, each batch has at most 1,000 rows. A Presto batch ends on
+  // a page boundary, so it can also hold the rest of its last page.
+  {
+    const vector_size_t maxRows =
+        1'000 + (GetParam().serdeKind == "Presto" ? page->size() - 1 : 0);
+    EXPECT_THAT(exchangeBatchSizes(1'000), testing::Each(testing::Le(maxRows)));
+  }
+
+  // Each set of pages the Exchange takes from its queue, at most
+  // preferred_output_batch_bytes, fits in one batch. The first set and sets
+  // taken while the queue runs low can be smaller, so the bound is twice the
+  // number of full sets, plus one.
+  {
+    const auto sizes = exchangeBatchSizes(65'536);
+    const auto numSets = bits::divRoundUp(
+        numBytes, core::QueryConfig{{}}.preferredOutputBatchBytes());
+    EXPECT_LE(sizes.size(), 2 * numSets + 1);
   }
 }
 

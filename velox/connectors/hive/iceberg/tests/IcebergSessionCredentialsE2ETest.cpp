@@ -363,7 +363,7 @@ TEST_F(
   const auto deleteFile = common::testutil::TempFilePath::create();
   writeToFile(
       deleteFile->getPath(),
-      {makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 3})})});
+      {makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 3}))});
 
   assertScanDeletesOddRows(
       dataFile->getPath(),
@@ -451,7 +451,7 @@ TEST_F(IcebergSessionCredentialsE2ETest, deleteFileReadOpsAddKeys) {
     const auto deleteFile = common::testutil::TempFilePath::create();
     writeToFile(
         deleteFile->getPath(),
-        {makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 3})})});
+        {makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 3}))});
     assertDeleteFileReadOps(IcebergDeleteFile(
         FileContent::kEqualityDeletes,
         RecordingFileSystem::scheme() + deleteFile->getPath(),

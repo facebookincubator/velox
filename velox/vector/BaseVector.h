@@ -92,6 +92,23 @@ class BaseVector {
     return encoding() == VectorEncoding::Simple::LAZY;
   }
 
+  /// Whether this vector can hold a lazy vector, itself or underneath: a lazy
+  /// vector, a dictionary, sequence or constant wrapper, or a row, whose
+  /// children may be lazy. False means it holds none; true means
+  /// isLazyNotLoaded() has to look.
+  bool mayContainLazy() const {
+    switch (encoding()) {
+      case VectorEncoding::Simple::LAZY:
+      case VectorEncoding::Simple::DICTIONARY:
+      case VectorEncoding::Simple::SEQUENCE:
+      case VectorEncoding::Simple::CONSTANT:
+      case VectorEncoding::Simple::ROW:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   /// Returns false if vector has no nulls. Return true if vector may have
   /// nulls.
   virtual bool mayHaveNulls() const {
@@ -1125,9 +1142,16 @@ inline uint64_t BaseVector::byteSize<UnknownValue>(vector_size_t) {
   return 0;
 }
 
+namespace detail {
+bool isLazyNotLoadedImpl(const BaseVector& vector);
+} // namespace detail
+
 /// Returns true if vector is a Lazy vector, possibly wrapped, that hasn't
-/// been loaded yet.
-bool isLazyNotLoaded(const BaseVector& vector);
+/// been loaded yet. Inline, so that vectors that cannot hold a lazy vector
+/// answer without a call.
+inline bool isLazyNotLoaded(const BaseVector& vector) {
+  return vector.mayContainLazy() && detail::isLazyNotLoadedImpl(vector);
+}
 
 /// Allocates a buffer to fit at least 'size' indices and initializes them to
 /// zero.

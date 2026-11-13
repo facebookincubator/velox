@@ -74,6 +74,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kMaxExchangeBufferSize);
     VELOX_REGISTER_QUERY_CONFIG(kMaxMergeExchangeBufferSize);
     VELOX_REGISTER_QUERY_CONFIG(kMinExchangeOutputBatchBytes);
+    VELOX_REGISTER_QUERY_CONFIG(kExchangeOutputBatchRows);
 
     // Aggregation.
     VELOX_REGISTER_QUERY_CONFIG(kMaxPartialAggregationMemory);
@@ -222,6 +223,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Map.
     VELOX_REGISTER_QUERY_CONFIG(kThrowExceptionOnDuplicateMapKeys);
+    VELOX_REGISTER_QUERY_CONFIG(kGenerateConstantMapsAsFlatMaps);
 
     // Index lookup join.
     VELOX_REGISTER_QUERY_CONFIG(kIndexLookupJoinMaxPrefetchBatches);

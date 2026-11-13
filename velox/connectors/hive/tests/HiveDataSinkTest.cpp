@@ -97,6 +97,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     options.vectorSize = vectorSize;
     VectorFuzzer fuzzer(options, pool());
     std::vector<RowVectorPtr> vectors;
+    vectors.reserve(numVectors);
     for (int i = 0; i < numVectors; ++i) {
       vectors.push_back(fuzzer.fuzzInputRow(rowType_));
     }
@@ -329,87 +330,7 @@ TEST_F(HiveDataSinkTest, hiveBucketProperty) {
     std::string exceptionString;
     std::string expectedToString;
   } testSettings[] = {
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0]},
-       {types[0], types[1]},
-       4,
-       {},
-       true,
-       "The number of hive bucket columns and types do not match",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {types[0]},
-       4,
-       {},
-       true,
-       "The number of hive bucket columns and types do not match",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {},
-       4,
-       {},
-       true,
-       "The number of hive bucket columns and types do not match",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {},
-       {types[0]},
-       4,
-       {},
-       true,
-       "Hive bucket columns must be set",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {types[0], types[1]},
-       0,
-       {},
-       true,
-       "Hive bucket count can't be zero",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {types[0], types[1]},
-       4,
-       {},
-       false,
-       "",
-       "\nHiveBucketProperty[<PRESTO_NATIVE 4>\n"
-       "\tBucket Columns:\n"
-       "\t\ta\n"
-       "\t\tb\n"
-       "\tBucket Types:\n"
-       "\t\tINTEGER\n"
-       "\t\tVARCHAR\n"
-       "]\n"},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0]},
-       {types[0]},
-       4,
-       {},
-       false,
-       "",
-       "\nHiveBucketProperty[<PRESTO_NATIVE 4>\n\tBucket Columns:\n\t\ta\n\tBucket Types:\n\t\tINTEGER\n]\n"},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {types[0], types[1]},
-       4,
-       {{sortedColumns[0]}},
-       false,
-       "",
-       "\nHiveBucketProperty[<PRESTO_NATIVE 4>\n\tBucket Columns:\n\t\ta\n\t\tb\n\tBucket Types:\n\t\tINTEGER\n\t\tVARCHAR\n\tSortedBy Columns:\n\t\t[COLUMN[d] ORDER[DESC NULLS LAST]]\n]\n"},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0]},
-       {types[0]},
-       4,
-       {{sortedColumns[0], sortedColumns[2]}},
-       false,
-       "",
-       "\nHiveBucketProperty[<PRESTO_NATIVE 4>\n\tBucket Columns:\n\t\ta\n\tBucket Types:\n\t\tINTEGER\n\tSortedBy Columns:\n\t\t[COLUMN[d] ORDER[DESC NULLS LAST]]\n\t\t[COLUMN[f] ORDER[ASC NULLS FIRST]]\n]\n"},
-
-      {HiveBucketProperty::Kind::kPrestoNative,
+      {HiveBucketProperty::Kind::kHiveCompatible,
        {columns[0]},
        {types[0], types[1]},
        4,
@@ -605,6 +526,26 @@ TEST_F(HiveDataSinkTest, basicBucket) {
 
   createDuckDbTable(vectors);
   verifyWrittenData(outputDirectory->getPath(), numBuckets);
+}
+
+// The writer hashes rows with Hive's hash, so it rejects other bucket
+// functions.
+TEST_F(HiveDataSinkTest, prestoNativeBucket) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kPrestoNative,
+      4,
+      std::vector<std::string>{"c0"},
+      std::vector<TypePtr>{BIGINT()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          rowType_,
+          outputDirectory->getPath(),
+          dwio::common::FileFormat::DWRF,
+          {},
+          bucketProperty),
+      "(PRESTO_NATIVE vs. HIVE_COMPATIBLE) Unsupported bucket function");
 }
 
 TEST_F(HiveDataSinkTest, close) {
@@ -1352,7 +1293,7 @@ TEST_F(HiveDataSinkTest, ensureFilesUnsupported) {
           rowType_->children(),
           {}, // partitionedBy
           {std::make_shared<HiveBucketProperty>(
-              HiveBucketProperty::Kind::kPrestoNative,
+              HiveBucketProperty::Kind::kHiveCompatible,
               1,
               std::vector<std::string>{rowType_->names()[0]},
               std::vector<TypePtr>{rowType_->children()[0]},

@@ -139,7 +139,7 @@ void Operator::maybeSetTracer() {
 }
 
 bool Operator::traceInput(const RowVectorPtr& input, ContinueFuture* future) {
-  if (FOLLY_UNLIKELY(inputTracer_ != nullptr)) {
+  if (inputTracer_ != nullptr) [[unlikely]] {
     return inputTracer_->write(input, future);
   }
   return false;
@@ -709,7 +709,7 @@ std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
 
 void Operator::MemoryReclaimer::enterArbitration() {
   DriverThreadContext* driverThreadCtx = driverThreadContext();
-  if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
+  if (driverThreadCtx == nullptr) [[unlikely]] {
     // Skips the driver suspension handling if this memory arbitration request
     // is not issued from a driver thread. For example, async streaming shuffle
     // and table scan prefetch execution path might initiate memory arbitration
@@ -742,7 +742,7 @@ void Operator::MemoryReclaimer::enterArbitration() {
 
 void Operator::MemoryReclaimer::leaveArbitration() noexcept {
   DriverThreadContext* driverThreadCtx = driverThreadContext();
-  if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
+  if (driverThreadCtx == nullptr) [[unlikely]] {
     // Skips the driver suspension handling if this memory arbitration request
     // is not issued from a driver thread.
     return;
@@ -764,7 +764,7 @@ bool Operator::MemoryReclaimer::reclaimableBytes(
     uint64_t& reclaimableBytes) const {
   reclaimableBytes = 0;
   std::shared_ptr<Driver> driver = ensureDriver();
-  if (FOLLY_UNLIKELY(driver == nullptr)) {
+  if (driver == nullptr) [[unlikely]] {
     return false;
   }
   VELOX_CHECK_EQ(pool.name(), op_->pool()->name());
@@ -777,7 +777,7 @@ uint64_t Operator::MemoryReclaimer::reclaim(
     uint64_t /*unused*/,
     memory::MemoryReclaimer::Stats& stats) {
   std::shared_ptr<Driver> driver = ensureDriver();
-  if (FOLLY_UNLIKELY(driver == nullptr)) {
+  if (driver == nullptr) [[unlikely]] {
     return 0;
   }
   if (!op_->canReclaim()) {

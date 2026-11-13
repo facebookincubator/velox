@@ -56,6 +56,7 @@ struct WriterOptions {
         .useVarintRowCount = experimentalCompactRowCountEncoding,
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
+        .sortDictionaryAlphabet = sortDictionaryAlphabet,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .sharedDictionaryAlphabet = {},
@@ -136,6 +137,17 @@ struct WriterOptions {
   /// arrays reference the same copy. Existing readers read such files.
   /// Enabling this can increase temporary writer memory.
   bool experimentalStripeGroupMetadataDeduplication{false};
+
+  /// NOTE: !!! This is under experimentation and please do not turn on in
+  /// production use case !!!
+  /// When true, kStreamMajor stripe groups use the sparse layout: each stream
+  /// holds its stripe list, the stripes where it has data, and stripe-group
+  /// offsets and sizes only for those stripes. Streams with identical arrays
+  /// share one copy. Requires experimentalStripeGroupEncodingLayout to be
+  /// kStreamMajor. A reader that predates it cannot read such a file, except
+  /// when every stream has data in every stripe, so every reader must support
+  /// it before a writer enables it.
+  bool experimentalStripeGroupSparseLayout{false};
 
   /// If set, the cluster index on the specified columns will be built during
   /// writing. It is the primary index over key-ordered data and stores
@@ -285,6 +297,12 @@ struct WriterOptions {
   /// When true, FOR-family payloads use the exact required bit width. When
   /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
   bool fixedBitWidthUseExactBits{false};
+
+  /// When true, integer dictionary alphabets are sorted by value. See
+  /// Encoding::Options::sortDictionaryAlphabet.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  bool sortDictionaryAlphabet{false};
 
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.

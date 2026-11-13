@@ -212,8 +212,8 @@ class TabletReader {
     /// NimbleReaderOptions::stripeGroupEncodingViewDeduplicationEnabled.
     bool stripeGroupEncodingViewDeduplicationEnabled{false};
 
-    /// If true, caches file metadata and index metadata in the async data
-    /// cache. Takes effect only when fileHandle and cache are provided.
+    /// If true, caches file metadata, including the index section, in
+    /// blockCache. Takes effect only with blockCache.
     bool cacheMetadata{false};
 
     /// If true, pins parsed index objects in the index cache with strong
@@ -230,10 +230,13 @@ class TabletReader {
     /// this with a NIMBLE_CHECK.
     std::optional<velox::io::ReaderOptions> ioOptions;
 
-    /// File handle and cache for CachedMetadataInput. Both must be set
-    /// together. When set, creates CachedMetadataInput using
-    /// fileHandle->uuid as cache key. When neither is set, creates
-    /// DirectMetadataInput.
+    /// File handle for cache and blockCache, whose entries are keyed by
+    /// fileHandle->uuid. Whenever a cache is set, fileHandle->file must be the
+    /// reader's file. The reader reads the handle only during construction, so
+    /// the handle need not outlive create(). The exception is cacheIndex with
+    /// cache: a vector index reads the handle when it first loads, so the
+    /// handle must then outlive the reader and the vector indexes obtained
+    /// from it.
     ///
     /// FileHandle contains:
     ///   - file: shared_ptr<ReadFile> for IO
@@ -243,12 +246,26 @@ class TabletReader {
     ///     (e.g. directory), used for coarse granularity access tracking
     ///     such as deciding SSD placement
     const velox::FileHandle* fileHandle{nullptr};
+
+    /// Async data cache for cacheIndex. Requires fileHandle.
+    ///
+    /// TODO: Remove cache once the index caches through the block cache.
     velox::cache::AsyncDataCache* cache{nullptr};
 
-    /// When cacheMetadata is enabled, metadata entries above this size in
-    /// bytes bypass the async data cache. Defaults to the largest entry an
-    /// SsdRun can describe, so every cached entry can reach SSD.
+    /// Metadata entries above this size in bytes bypass the cache: file
+    /// metadata with cacheMetadata, and index metadata with cacheIndex.
+    /// Defaults to the largest entry an SsdRun can describe, so every metadata
+    /// entry cached in the async data cache can reach SSD.
     uint32_t maxCacheEntrySize{1U << velox::cache::SsdRun::kSizeBits};
+
+    /// Block cache for file metadata. With cacheMetadata, caches decompressed
+    /// file metadata, read through CachedMetadataInput. configureOptions() sets
+    /// it to the block cache that getBlockCache() builds on the async data
+    /// cache. Must outlive the reader and everything obtained from it that
+    /// holds metadata, such as Sections from loadOptionalSection() and
+    /// StripeIdentifiers, since they pin cache entries. Keyed by
+    /// fileHandle->uuid, so it requires fileHandle.
+    BlockCache* blockCache{nullptr};
 
     /// Resolves External shared integer dictionaries referenced by this file.
     std::shared_ptr<const ExternalDictionaryResolver>
@@ -272,7 +289,9 @@ class TabletReader {
       MemoryPool* pool,
       const Options& options);
 
-  /// Configures TabletReader::Options from Velox ReaderOptions.
+  /// Configures TabletReader::Options from Velox ReaderOptions. With a file
+  /// handle and an async data cache, sets blockCache to the block cache that
+  /// getBlockCache() builds on that cache.
   static Options configureOptions(
       const velox::dwio::common::ReaderOptions& options);
 
@@ -456,14 +475,14 @@ class TabletReader {
   }
 
   /// Returns the byte offset of `streamId` within `stripe` (relative to the
-  /// stripe's start). O(1) point read into the per-stream FBW-encoded blob
-  /// held by the StripeGroup. Callers must ensure
-  /// `streamId < streamCount(stripe)`.
+  /// stripe's start), with the cost of StripeGroup::streamOffset(). Callers
+  /// must ensure `streamId < streamCount(stripe)`.
   uint32_t streamOffset(const StripeIdentifier& stripe, uint32_t streamId)
       const;
 
   /// Returns the byte size of `streamId` within `stripe`. Returns 0 if the
-  /// stream does not exist in this stripe. O(1) point read.
+  /// stream does not exist in this stripe, with the cost of
+  /// StripeGroup::streamSize().
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
 
   /// Relative byte location of one stream within a stripe. A zero size means

@@ -133,6 +133,10 @@ std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
 std::unique_ptr<core::PartitionFunction> createBucketFunction(
     const HiveBucketProperty& bucketProperty,
     const RowTypePtr& inputType) {
+  VELOX_USER_CHECK_EQ(
+      bucketProperty.kind(),
+      HiveBucketProperty::Kind::kHiveCompatible,
+      "Unsupported bucket function");
   const auto& bucketedBy = bucketProperty.bucketedBy();
   const auto& bucketedTypes = bucketProperty.bucketedTypes();
   std::vector<column_index_t> bucketedByChannels;
@@ -141,8 +145,8 @@ std::unique_ptr<core::PartitionFunction> createBucketFunction(
     const auto& bucketColumn = bucketedBy[i];
     const auto& bucketType = bucketedTypes[i];
     const auto inputChannel = inputType->getChildIdx(bucketColumn);
-    if (FOLLY_UNLIKELY(
-            !inputType->childAt(inputChannel)->equivalent(*bucketType))) {
+    if (!inputType->childAt(inputChannel)->equivalent(*bucketType))
+        [[unlikely]] {
       VELOX_USER_FAIL(
           "Input column {} type {} doesn't match bucket type {}",
           inputType->nameOf(inputChannel),
@@ -219,138 +223,11 @@ LocationHandle::TableType LocationHandle::tableTypeFromName(
   return nameTableTypes.at(name);
 }
 
-HiveSortingColumn::HiveSortingColumn(
-    const std::string& sortColumn,
-    const core::SortOrder& sortOrder)
-    : sortColumn_(sortColumn), sortOrder_(sortOrder) {
-  VELOX_USER_CHECK(!sortColumn_.empty(), "hive sort column must be set");
-
-  if (FOLLY_UNLIKELY(
-          (sortOrder_.isAscending() && !sortOrder_.isNullsFirst()) ||
-          (!sortOrder_.isAscending() && sortOrder_.isNullsFirst()))) {
-    VELOX_USER_FAIL("Bad hive sort order: {}", toString());
-  }
-}
-
-folly::dynamic HiveSortingColumn::serialize() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = "HiveSortingColumn";
-  obj["columnName"] = sortColumn_;
-  obj["sortOrder"] = sortOrder_.serialize();
-  return obj;
-}
-
-std::shared_ptr<HiveSortingColumn> HiveSortingColumn::deserialize(
-    const folly::dynamic& obj,
-    void* context) {
-  const std::string columnName = obj["columnName"].asString();
-  const auto sortOrder = core::SortOrder::deserialize(obj["sortOrder"]);
-  return std::make_shared<HiveSortingColumn>(columnName, sortOrder);
-}
-
-std::string HiveSortingColumn::toString() const {
-  return fmt::format(
-      "[COLUMN[{}] ORDER[{}]]", sortColumn_, sortOrder_.toString());
-}
-
-void HiveSortingColumn::registerSerDe() {
-  auto& registry = DeserializationWithContextRegistryForSharedPtr();
-  registry.Register("HiveSortingColumn", HiveSortingColumn::deserialize);
-}
-
-HiveBucketProperty::HiveBucketProperty(
-    Kind kind,
-    int32_t bucketCount,
-    const std::vector<std::string>& bucketedBy,
-    const std::vector<TypePtr>& bucketTypes,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortedBy)
-    : kind_(kind),
-      bucketCount_(bucketCount),
-      bucketedBy_(bucketedBy),
-      bucketTypes_(bucketTypes),
-      sortedBy_(sortedBy) {
-  validate();
-}
-
-void HiveBucketProperty::validate() const {
-  VELOX_USER_CHECK_GT(bucketCount_, 0, "Hive bucket count can't be zero");
-  VELOX_USER_CHECK(!bucketedBy_.empty(), "Hive bucket columns must be set");
-  VELOX_USER_CHECK_EQ(
-      bucketedBy_.size(),
-      bucketTypes_.size(),
-      "The number of hive bucket columns and types do not match {}",
-      toString());
-}
-
-std::string HiveBucketProperty::kindString(Kind kind) {
-  switch (kind) {
-    case Kind::kHiveCompatible:
-      return "HIVE_COMPATIBLE";
-    case Kind::kPrestoNative:
-      return "PRESTO_NATIVE";
-    default:
-      return fmt::format("UNKNOWN {}", static_cast<int>(kind));
-  }
-}
-
-folly::dynamic HiveBucketProperty::serialize() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = "HiveBucketProperty";
-  obj["kind"] = static_cast<int64_t>(kind_);
-  obj["bucketCount"] = bucketCount_;
-  obj["bucketedBy"] = ISerializable::serialize(bucketedBy_);
-  obj["bucketedTypes"] = ISerializable::serialize(bucketTypes_);
-  obj["sortedBy"] = ISerializable::serialize(sortedBy_);
-  return obj;
-}
-
-std::shared_ptr<HiveBucketProperty> HiveBucketProperty::deserialize(
-    const folly::dynamic& obj,
-    void* context) {
-  const Kind kind = static_cast<Kind>(obj["kind"].asInt());
-  const int32_t bucketCount = obj["bucketCount"].asInt();
-  const auto buckectedBy =
-      ISerializable::deserialize<std::vector<std::string>>(obj["bucketedBy"]);
-  const auto bucketedTypes = ISerializable::deserialize<std::vector<Type>>(
-      obj["bucketedTypes"], context);
-  const auto sortedBy =
-      ISerializable::deserialize<std::vector<HiveSortingColumn>>(
-          obj["sortedBy"], context);
-  return std::make_shared<HiveBucketProperty>(
-      kind, bucketCount, buckectedBy, bucketedTypes, sortedBy);
-}
-
-void HiveBucketProperty::registerSerDe() {
-  auto& registry = DeserializationWithContextRegistryForSharedPtr();
-  registry.Register("HiveBucketProperty", HiveBucketProperty::deserialize);
-}
-
-std::string HiveBucketProperty::toString() const {
-  std::stringstream out;
-  out << "\nHiveBucketProperty[<" << kind_ << " " << bucketCount_ << ">\n";
-  out << "\tBucket Columns:\n";
-  for (const auto& column : bucketedBy_) {
-    out << "\t\t" << column << "\n";
-  }
-  out << "\tBucket Types:\n";
-  for (const auto& type : bucketTypes_) {
-    out << "\t\t" << type->toString() << "\n";
-  }
-  if (!sortedBy_.empty()) {
-    out << "\tSortedBy Columns:\n";
-    for (const auto& sortColum : sortedBy_) {
-      out << "\t\t" << sortColum->toString() << "\n";
-    }
-  }
-  out << "]\n";
-  return out.str();
-}
-
 HiveInsertTableHandle::HiveInsertTableHandle(
     std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
     std::shared_ptr<const LocationHandle> locationHandle,
     dwio::common::FileFormat storageFormat,
-    std::shared_ptr<const HiveBucketProperty> bucketProperty,
+    HiveBucketPropertyPtr bucketProperty,
     std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters,
     const std::shared_ptr<dwio::common::WriterOptions>& writerOptions,
@@ -921,7 +798,7 @@ HiveInsertTableHandlePtr HiveInsertTableHandle::create(
         common::stringToCompressionKind(obj["compressionKind"].asString());
   }
 
-  std::shared_ptr<const HiveBucketProperty> bucketProperty;
+  HiveBucketPropertyPtr bucketProperty;
   if (obj.count("bucketProperty") > 0) {
     bucketProperty =
         ISerializable::deserialize<HiveBucketProperty>(obj["bucketProperty"]);

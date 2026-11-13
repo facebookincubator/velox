@@ -472,7 +472,7 @@ TEST_F(ReaderTest, projectColumnsWithSelectionIdentity) {
   // No filter: every input row passes, selectedRows is null to signal
   // identity mapping with input.
   constexpr int kSize = 5;
-  auto input = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(kSize)});
+  auto input = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(kSize));
 
   common::ScanSpec spec("<root>");
   spec.addAllChildFields(*input->type());
@@ -486,7 +486,7 @@ TEST_F(ReaderTest, projectColumnsWithSelectionFiltered) {
   // Filter keeps a subset; selectedRows must list the surviving input
   // indices in order.
   constexpr int kSize = 6;
-  auto input = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(kSize)});
+  auto input = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(kSize));
 
   common::ScanSpec spec("<root>");
   spec.addAllChildFields(*input->type());
@@ -510,7 +510,7 @@ TEST_F(ReaderTest, projectColumnsWithSelectionAllFiltered) {
   // zero-length buffer (non-null) so callers can distinguish "empty after
   // filtering" from "identity mapping".
   constexpr int kSize = 4;
-  auto input = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(kSize)});
+  auto input = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(kSize));
 
   common::ScanSpec spec("<root>");
   spec.addAllChildFields(*input->type());
@@ -526,7 +526,7 @@ TEST_F(ReaderTest, projectColumnsWithSelectionEmptyInput) {
   // Empty input: no rows were dropped, so the identity contract holds and
   // selectedRows must be null. Distinguishes "empty identity" from "all
   // rows filtered out", which returns a non-null zero-length buffer.
-  auto input = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(0)});
+  auto input = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(0));
 
   common::ScanSpec spec("<root>");
   spec.addAllChildFields(*input->type());

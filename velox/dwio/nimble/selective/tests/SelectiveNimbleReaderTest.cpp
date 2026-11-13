@@ -52,6 +52,7 @@
 #include "velox/dwio/nimble/reader/BatchReader.h"
 #include "velox/dwio/nimble/selective/ReaderBase.h"
 #include "velox/dwio/nimble/stats/VectorizedStatistics.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
@@ -268,13 +269,14 @@ class SelectiveNimbleReaderTest
   }
 
   // Writes 'input', which has columns c0 and c1, to a Nimble file with c0
-  // dictionary encoded over FixedBitWidth indices. A small
+  // dictionary encoded over 'indicesEncoding' indices. A small
   // 'maxStreamChunkRawSize' splits c0 into many chunks.
   std::string createDictionaryFile(
       const RowVectorPtr& input,
+      EncodingType indicesEncoding,
       std::optional<uint64_t> maxStreamChunkRawSize) {
     EncodingLayout indicesLayout{
-        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+        indicesEncoding, {}, CompressionType::Uncompressed};
     EncodingLayout dictionaryLayout{
         EncodingType::Dictionary,
         {},
@@ -298,28 +300,37 @@ class SelectiveNimbleReaderTest
     return test::createNimbleFile(*rootPool(), input, writerOptions);
   }
 
-  // Runs the dictionary-aware read cases shared by every numeric type.
+  // Runs the dictionary-aware read cases shared by every numeric type, over
+  // FixedBitWidth indices, which decode in batches, and Varint indices, which
+  // decode one at a time.
   template <typename T>
   void testDictionaryAwareReadsCases() {
-    {
-      SCOPED_TRACE("no nulls");
-      testDictionaryAwareReads<T>(nullptr, 127);
-    }
-    {
-      SCOPED_TRACE("every 17th row null");
-      testDictionaryAwareReads<T>(nullEvery(17), 127);
-    }
-    {
-      SCOPED_TRACE("long leading nulls");
-      testDictionaryAwareReads<T>([](auto row) { return row < 3'073; }, 127);
-    }
-    {
-      SCOPED_TRACE("one batch spanning every chunk");
-      testDictionaryAwareReads<T>(nullEvery(17), /*batchSize=*/4'097);
-    }
-    {
-      SCOPED_TRACE("all null");
-      testDictionaryAwareReads<T>([](auto /*row*/) { return true; }, 127);
+    for (const auto indicesEncoding :
+         {EncodingType::FixedBitWidth, EncodingType::Varint}) {
+      SCOPED_TRACE(toString(indicesEncoding));
+      {
+        SCOPED_TRACE("no nulls");
+        testDictionaryAwareReads<T>(nullptr, indicesEncoding, 127);
+      }
+      {
+        SCOPED_TRACE("every 17th row null");
+        testDictionaryAwareReads<T>(nullEvery(17), indicesEncoding, 127);
+      }
+      {
+        SCOPED_TRACE("long leading nulls");
+        testDictionaryAwareReads<T>(
+            [](auto row) { return row < 3'073; }, indicesEncoding, 127);
+      }
+      {
+        SCOPED_TRACE("one batch spanning every chunk");
+        testDictionaryAwareReads<T>(
+            nullEvery(17), indicesEncoding, /*batchSize=*/4'097);
+      }
+      {
+        SCOPED_TRACE("all null");
+        testDictionaryAwareReads<T>(
+            [](auto /*row*/) { return true; }, indicesEncoding, 127);
+      }
     }
   }
 
@@ -331,6 +342,7 @@ class SelectiveNimbleReaderTest
   template <typename T>
   void testDictionaryAwareReads(
       const std::function<bool(vector_size_t)>& isNullAt,
+      EncodingType indicesEncoding,
       vector_size_t batchSize) {
     constexpr vector_size_t kNumRows{4'097};
     constexpr int64_t kCardinality{1'000};
@@ -345,8 +357,8 @@ class SelectiveNimbleReaderTest
     auto values = makeFlatVector<T>(kNumRows, valueAt, isNullAt);
     auto rowIds = makeFlatVector<int64_t>(kNumRows, std::identity{});
     auto input = makeRowVector({"c0", "c1"}, {values, rowIds});
-    const auto file =
-        createDictionaryFile(input, /*maxStreamChunkRawSize=*/512);
+    const auto file = createDictionaryFile(
+        input, indicesEncoding, /*maxStreamChunkRawSize=*/512);
 
     constexpr T kFilterMin = std::is_floating_point_v<T> ? -75.5 : 200;
     constexpr T kFilterMax = std::is_floating_point_v<T> ? 75.5 : 800;
@@ -1685,8 +1697,10 @@ TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsFilterChange) {
       {"c0", "c1"},
       {makeFlatVector<int64_t>(kNumRows, valueAt),
        makeFlatVector<int64_t>(kNumRows, std::identity{})});
-  const auto file =
-      createDictionaryFile(input, /*maxStreamChunkRawSize=*/std::nullopt);
+  const auto file = createDictionaryFile(
+      input,
+      EncodingType::FixedBitWidth,
+      /*maxStreamChunkRawSize=*/std::nullopt);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
   auto* valueSpec = scanSpec->childByName("c0");
@@ -3171,7 +3185,7 @@ TEST_P(SelectiveNimbleReaderTest, mapAsStructAllEmpty) {
   VectorPtr batch = BaseVector::create(outType, 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, batch), 2);
   auto expected = makeRowVector({
-      makeRowVector({"1"}, {makeNullConstant(TypeKind::BIGINT, 2)}),
+      makeNamedRowVector("1", makeNullConstant(TypeKind::BIGINT, 2)),
   });
   velox::test::assertEqualVectors(expected, batch);
 }
@@ -3495,6 +3509,7 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseWithSameReader) {
       fileHandle->uuid = StringIdLease(ids, fileIdStr);
       fileHandle->groupId = StringIdLease(ids, fileIdStr + "_group");
       tabletOptions.cache = cache_.get();
+      tabletOptions.blockCache = getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle.get();
     }
 
@@ -3621,6 +3636,7 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseCrossReaders) {
             fileHandleOut->uuid = fileId;
             fileHandleOut->groupId = groupId;
             tabletOptions.cache = cache_.get();
+            tabletOptions.blockCache = getBlockCache(cache_.get());
             tabletOptions.fileHandle = fileHandleOut.get();
           }
           return TabletReader::create(trackingFile, pool(), tabletOptions);
@@ -4199,7 +4215,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapKeys) {
   // transform applied via ScanSpec.
   auto mapVector = makeMapVector<StringView, int64_t>(
       {{{"a", 1}, {"b", 2}}, {{"c", 3}}, {{"d", 4}, {"e", 5}, {"f", 6}}});
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4223,7 +4239,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformSize) {
   // Write a MAP(VARCHAR, BIGINT) column, read with a Size extraction.
   auto mapVector = makeMapVector<StringView, int64_t>(
       {{{"a", 1}, {"b", 2}, {"c", 3}}, {{"d", 4}}});
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4253,7 +4269,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapValuesStructField) {
       {makeFlatVector<int32_t>({10, 20, 30}),
        makeFlatVector<int32_t>({100, 200, 300})});
   auto mapVector = makeMapVector({0, 2}, keys, structValues);
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4300,7 +4316,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionSizeResultVectorReuse) {
     offsets[i] = i * 2;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4336,7 +4352,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapValues) {
   // transform applied via ScanSpec.
   auto mapVector = makeMapVector<StringView, int64_t>(
       {{{"a", 10}}, {{"b", 20}, {"c", 30}}, {{"d", 40}}});
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4366,7 +4382,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapKeyFilter) {
   // to keep only selected keys.
   auto mapVector = makeMapVector<StringView, int64_t>(
       {{{"a", 1}, {"b", 2}, {"c", 3}}, {{"a", 10}, {"d", 40}}});
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4398,7 +4414,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformStructField) {
       {"x", "y"},
       {makeFlatVector<int32_t>({10, 20, 30}),
        makeFlatVector<StringView>({"aa", "bb", "cc"})});
-  auto input = makeRowVector({"col"}, {structVector});
+  auto input = makeNamedRowVector("col", structVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4425,7 +4441,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformStructField) {
 TEST_P(SelectiveNimbleReaderTest, extractionTransformArraySize) {
   // Write an ARRAY(BIGINT) column, read with Size extraction.
   auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3}, {4}, {5, 6}});
-  auto input = makeRowVector({"col"}, {arrayVector});
+  auto input = makeNamedRowVector("col", arrayVector);
   auto file = test::createNimbleFile(*rootPool(), input);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4449,7 +4465,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionDeduplicatedArraySize) {
   // Write an ARRAY(BIGINT) column using the deduplicated (ArrayWithOffsets)
   // encoding path, then verify Size extraction works correctly.
   auto arrayVector = makeArrayVector<int64_t>({{1, 2}, {3}, {4, 5, 6}, {1, 2}});
-  auto input = makeRowVector({"col"}, {arrayVector});
+  auto input = makeNamedRowVector("col", arrayVector);
   auto file = test::createNimbleFile(
       *rootPool(), input, {.dictionaryArrayColumns = {"col"}});
 
@@ -4476,7 +4492,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionDeduplicatedMapSize) {
   auto keys = makeFlatVector<int64_t>({1, 2, 3, 4});
   auto values = makeFlatVector<int64_t>({10, 20, 30, 40});
   auto mapVector = makeMapVector({0, 3}, keys, values);
-  auto input = makeRowVector({"col"}, {mapVector});
+  auto input = makeNamedRowVector("col", mapVector);
   auto file = test::createNimbleFile(
       *rootPool(), input, {.deduplicatedMapColumns = {"col"}});
 

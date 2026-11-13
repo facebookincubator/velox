@@ -128,6 +128,11 @@ class VectorTestBase {
   RowVectorPtr makeNamedRowVector(
       const std::vector<std::pair<std::string, VectorPtr>>& children);
 
+  /// Makes a RowVector with a single column.
+  RowVectorPtr makeNamedRowVector(std::string name, VectorPtr child) {
+    return makeRowVector({std::move(name)}, {std::move(child)});
+  }
+
   RowVectorPtr makeRowVector(
       const std::vector<VectorPtr>& children,
       std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {

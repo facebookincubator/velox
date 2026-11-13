@@ -599,7 +599,7 @@ class WriterContext : public CompressionBufferPool {
   }
 
   SelectivityVector& getSharedSelectivityVector(velox::vector_size_t size) {
-    if (FOLLY_UNLIKELY(selectivityVector_ == nullptr)) {
+    if (selectivityVector_ == nullptr) [[unlikely]] {
       selectivityVector_ = std::make_unique<velox::SelectivityVector>(size);
     } else {
       selectivityVector_->resize(size);

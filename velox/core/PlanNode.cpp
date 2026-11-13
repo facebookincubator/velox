@@ -2948,36 +2948,22 @@ PlanNodePtr RowNumberNode::create(const folly::dynamic& obj, void* context) {
 }
 
 namespace {
-std::unordered_map<TopNRowNumberNode::RankFunction, std::string>
-rankFunctionNames() {
-  return {
-      {TopNRowNumberNode::RankFunction::kRowNumber, "row_number"},
-      {TopNRowNumberNode::RankFunction::kRank, "rank"},
-      {TopNRowNumberNode::RankFunction::kDenseRank, "dense_rank"},
-  };
+const auto& rankFunctionNames() {
+  static const folly::
+      F14FastMap<TopNRowNumberNode::RankFunction, std::string_view>
+          kNames = {
+              {TopNRowNumberNode::RankFunction::kRowNumber, "row_number"},
+              {TopNRowNumberNode::RankFunction::kRank, "rank"},
+              {TopNRowNumberNode::RankFunction::kDenseRank, "dense_rank"},
+          };
+  return kNames;
 }
 } // namespace
 
-// static
-const char* TopNRowNumberNode::rankFunctionName(
-    TopNRowNumberNode::RankFunction function) {
-  static const auto kFunctionNames = rankFunctionNames();
-  auto it = kFunctionNames.find(function);
-  VELOX_CHECK(
-      it != kFunctionNames.cend(),
-      "Invalid rank function {}",
-      static_cast<int>(function));
-  return it->second.c_str();
-}
-
-// static
-TopNRowNumberNode::RankFunction TopNRowNumberNode::rankFunctionFromName(
-    std::string_view name) {
-  static const auto kFunctionNames = invertMap(rankFunctionNames());
-  auto it = kFunctionNames.find(name.data());
-  VELOX_CHECK(it != kFunctionNames.cend(), "Invalid rank function {}", name);
-  return it->second;
-}
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(
+    TopNRowNumberNode,
+    RankFunction,
+    rankFunctionNames)
 
 TopNRowNumberNode::TopNRowNumberNode(
     PlanNodeId id,
@@ -3034,7 +3020,7 @@ TopNRowNumberNode::TopNRowNumberNode(
 }
 
 void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
-  stream << rankFunctionName(function_) << " ";
+  stream << toName(function_) << " ";
 
   if (!partitionKeys_.empty()) {
     stream << "partition by (";
@@ -3055,7 +3041,7 @@ void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
 
 folly::dynamic TopNRowNumberNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["function"] = rankFunctionName(function_);
+  obj["function"] = toName(function_);
   obj["partitionKeys"] = ISerializable::serialize(partitionKeys_);
   obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
@@ -3078,7 +3064,7 @@ PlanNodePtr TopNRowNumberNode::create(
     const folly::dynamic& obj,
     void* context) {
   auto source = deserializeSingleSource(obj, context);
-  auto function = rankFunctionFromName(obj["function"].asString());
+  auto function = toRankFunction(obj["function"].asString());
   auto partitionKeys = deserializeFields(obj["partitionKeys"], context);
   auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
 

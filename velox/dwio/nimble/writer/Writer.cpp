@@ -2133,6 +2133,8 @@ Writer::Writer(
                    .experimentalStripeGroupEncodingLayoutReadFactors,
            .stripeGroupMetadataDeduplicationEnabled =
                context_->options().experimentalStripeGroupMetadataDeduplication,
+           .stripeGroupSparseLayoutEnabled =
+               context_->options().experimentalStripeGroupSparseLayout,
            .stripeGroupFlushCallback =
                (clusterIndexWriter_ != nullptr || !denseIndexWriters_.empty())
                ? TabletWriter::StripeGroupFlushCallback(

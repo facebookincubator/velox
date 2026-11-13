@@ -872,7 +872,7 @@ TEST_F(ParquetTableScanTest, legacyArrayOfStructOfArray) {
            makeArrayVector<int64_t>({{}, {11, 22}}),
            makeArrayVector<int64_t>({{9001, 9002}, {9101}})}));
 
-  auto expected = makeRowVector({"ads"}, {adsArray});
+  auto expected = makeNamedRowVector("ads", adsArray);
 
   AssertQueryBuilder(plan)
       .split(makeSplit(
@@ -1490,7 +1490,7 @@ TEST_F(ParquetTableScanTest, structFilterByIndex) {
                             "not(is_null(name)) AND not(is_null(nickname))",
                             dataColumns)
                         .planNode();
-  const auto expected = makeRowVector({"id"}, {makeFlatVector<int64_t>({1})});
+  const auto expected = makeNamedRowVector("id", makeFlatVector<int64_t>({1}));
   AssertQueryBuilder(plan)
       // The null-struct policy is name-mapping-only. Empty child specs under
       // position mapping must preserve the physical structs' nullness.
@@ -1534,7 +1534,7 @@ TEST_F(ParquetTableScanTest, mapStructFilterByIndex) {
           .tableScan(outputType, {}, "not(is_null(name))", vector->rowType())
           .planNode();
   const auto expected =
-      makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 3, 4})});
+      makeNamedRowVector("id", makeFlatVector<int64_t>({1, 3, 4}));
   AssertQueryBuilder(plan)
       .split(makeSplit(file->getPath()))
       .assertResults(expected);
@@ -1625,11 +1625,11 @@ TEST_F(ParquetTableScanTest, structElementsByName) {
 
 TEST_F(ParquetTableScanTest, deltaByteArray) {
   auto a = makeFlatVector<StringView>({"axis", "axle", "babble", "babyhood"});
-  auto expected = makeRowVector({"a"}, {a});
+  auto expected = makeNamedRowVector("a", a);
   createDuckDbTable("expected", {expected});
 
   auto vector = makeFlatVector<StringView>({{}});
-  loadData(ROW({"a"}, {VARCHAR()}), makeRowVector({"a"}, {vector}));
+  loadData(ROW({"a"}, {VARCHAR()}), makeNamedRowVector("a", vector));
   assertSelect(
       {makeSplit(getExampleFilePath("delta_byte_array.parquet"))},
       {"a"},
@@ -1643,9 +1643,9 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedConstantDelta) {
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
 
   constexpr vector_size_t kSize = 1024;
-  auto vector = makeRowVector(
-      {"c"},
-      {makeFlatVector<int64_t>(kSize, [](auto row) { return 100 + 7 * row; })});
+  auto vector = makeNamedRowVector(
+      "c",
+      makeFlatVector<int64_t>(kSize, [](auto row) { return 100 + 7 * row; }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1656,9 +1656,10 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedConstantDelta) {
 TEST_F(ParquetTableScanTest, deltaBinaryPackedNarrowBitWidth) {
   auto run = [&]<typename T>() {
     constexpr vector_size_t kSize = 4096;
-    auto vector = makeRowVector({"c"}, {makeFlatVector<T>(kSize, [](auto row) {
-                                  return static_cast<T>(row + row / 2);
-                                })});
+    auto vector =
+        makeNamedRowVector("c", makeFlatVector<T>(kSize, [](auto row) {
+                             return static_cast<T>(row + row / 2);
+                           }));
 
     for (bool useV2 : {false, true}) {
       SCOPED_TRACE(fmt::format("T=int{} useV2={}", sizeof(T) * 8, useV2));
@@ -1691,10 +1692,10 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth32) {
 
   constexpr vector_size_t kSize = 1024;
   constexpr int64_t kStep = (1LL << 32) - 1;
-  auto vector = makeRowVector(
-      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+  auto vector = makeNamedRowVector(
+      "c", makeFlatVector<int64_t>(kSize, [](auto row) {
         return static_cast<int64_t>((row / 2) * kStep + (row % 2 ? kStep : 0));
-      })});
+      }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1741,10 +1742,10 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth33) {
 
   constexpr vector_size_t kSize = 1024;
   constexpr int64_t kStep = 1LL << 32;
-  auto vector = makeRowVector(
-      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+  auto vector = makeNamedRowVector(
+      "c", makeFlatVector<int64_t>(kSize, [](auto row) {
         return static_cast<int64_t>((row / 2) * kStep + (row % 2 ? kStep : 0));
-      })});
+      }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1760,24 +1761,24 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedMixedMiniblockWidths) {
 
   constexpr vector_size_t kSize = 128;
   auto vector =
-      makeRowVector({"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
-                      auto deltaForRow = [](vector_size_t r) -> int64_t {
-                        const int mb = (r / 32) % 4;
-                        const int parity = r % 2;
-                        if (mb == 0)
-                          return parity;
-                        if (mb == 1)
-                          return parity ? 200LL : 0LL;
-                        if (mb == 2)
-                          return parity ? 50'000LL : 0LL;
-                        return parity ? 12'000'000LL : 0LL;
-                      };
-                      int64_t v = 0;
-                      for (vector_size_t i = 0; i < row; ++i) {
-                        v += deltaForRow(i);
-                      }
-                      return v;
-                    })});
+      makeNamedRowVector("c", makeFlatVector<int64_t>(kSize, [](auto row) {
+                           auto deltaForRow = [](vector_size_t r) -> int64_t {
+                             const int mb = (r / 32) % 4;
+                             const int parity = r % 2;
+                             if (mb == 0)
+                               return parity;
+                             if (mb == 1)
+                               return parity ? 200LL : 0LL;
+                             if (mb == 2)
+                               return parity ? 50'000LL : 0LL;
+                             return parity ? 12'000'000LL : 0LL;
+                           };
+                           int64_t v = 0;
+                           for (vector_size_t i = 0; i < row; ++i) {
+                             v += deltaForRow(i);
+                           }
+                           return v;
+                         }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1819,12 +1820,12 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedWideAndNegative) {
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
 
   constexpr vector_size_t kSize = 1024;
-  auto vector = makeRowVector(
-      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+  auto vector = makeNamedRowVector(
+      "c", makeFlatVector<int64_t>(kSize, [](auto row) {
         const int64_t steps[] = {
             -1'000'000'000LL, 2'000'000'000LL, -500'000LL, 1'500'000'000LL};
         return steps[row % 4] * row;
-      })});
+      }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1944,11 +1945,11 @@ TEST_F(ParquetTableScanTest, singleBooleanRle) {
 
 TEST_F(ParquetTableScanTest, intToBigintRead) {
   vector_size_t kSize = 100;
-  RowVectorPtr intDataFileVectors = makeRowVector(
-      {"c1"}, {makeFlatVector<int32_t>(kSize, [](auto row) { return row; })});
+  RowVectorPtr intDataFileVectors = makeNamedRowVector(
+      "c1", makeFlatVector<int32_t>(kSize, [](auto row) { return row; }));
 
-  RowVectorPtr bigintDataFileVectors = makeRowVector(
-      {"c1"}, {makeFlatVector<int64_t>(kSize, [](auto row) { return row; })});
+  RowVectorPtr bigintDataFileVectors = makeNamedRowVector(
+      "c1", makeFlatVector<int64_t>(kSize, [](auto row) { return row; }));
 
   const std::shared_ptr<TempDirectoryPath> dataFileFolder =
       TempDirectoryPath::create();
@@ -1978,7 +1979,7 @@ TEST_F(ParquetTableScanTest, intNarrowingRejectedByDefault) {
   // type, expecting an exception from convertType.
   auto assertNarrowingThrows = [&](const VectorPtr& sourceVector,
                                    const TypePtr& targetType) {
-    auto vectors = makeRowVector({"c1"}, {sourceVector});
+    auto vectors = makeNamedRowVector("c1", sourceVector);
     auto dataFile = TempFilePath::create();
     writeToParquetFile(dataFile->getPath(), {vectors}, ParquetWriterOptions{});
     auto rowType = ROW({"c1"}, {targetType});

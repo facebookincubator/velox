@@ -143,7 +143,6 @@ TextRowReader::TextRowReader(
     : RowReader(),
       contents_{fileContents},
       schemaWithId_{TypeWithId::create(fileContents->schema)},
-      scanSpec_{opts.scanSpec()},
       selectedSchema_{nullptr},
       options_{opts},
       columnSelector_{
@@ -304,7 +303,7 @@ uint64_t TextRowReader::next(
   // Resize the row vector to the actual number of rows read.
   // Handled here for both cases: pos_ > fileLength_ and pos_ > limit_
   rowVecPtr->resize(rowsRead);
-  result = projectColumns(rowVecPtr, *scanSpec_, mutation);
+  result = projectColumns(rowVecPtr, *options_.scanSpec(), mutation);
 
   return rowsRead;
 }

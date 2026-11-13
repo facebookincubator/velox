@@ -24,11 +24,13 @@
 
 #include <folly/json.h>
 #include <folly/lang/Bits.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <zlib.h>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempFilePath.h"
@@ -589,6 +591,48 @@ std::vector<uint64_t> getSetBits(const BufferPtr& bitmap, uint64_t size) {
   return result;
 }
 
+class MockTokenProvider : public filesystems::TokenProvider {
+ public:
+  MOCK_METHOD(bool, equals, (const TokenProvider&), (const, override));
+  MOCK_METHOD(size_t, hash, (), (const, override));
+  MOCK_METHOD(
+      std::shared_ptr<filesystems::AccessToken>,
+      getToken,
+      (const filesystems::AccessTokenKey&),
+      (const, override));
+};
+
+class MockFileSystem : public filesystems::FileSystem {
+ public:
+  MockFileSystem() : FileSystem(nullptr) {}
+
+  MOCK_METHOD(std::string, name, (), (const, override));
+  MOCK_METHOD(
+      std::unique_ptr<ReadFile>,
+      openFileForRead,
+      (std::string_view, const filesystems::FileOptions&),
+      (override));
+  MOCK_METHOD(
+      std::unique_ptr<WriteFile>,
+      openFileForWrite,
+      (std::string_view, const filesystems::FileOptions&),
+      (override));
+  MOCK_METHOD(void, remove, (std::string_view), (override));
+  MOCK_METHOD(
+      void,
+      rename,
+      (std::string_view, std::string_view, bool),
+      (override));
+  MOCK_METHOD(bool, exists, (std::string_view), (override));
+  MOCK_METHOD(std::vector<std::string>, list, (std::string_view), (override));
+  MOCK_METHOD(
+      void,
+      mkdir,
+      (std::string_view, const filesystems::DirectoryOptions&),
+      (override));
+  MOCK_METHOD(void, rmdir, (std::string_view), (override));
+};
+
 } // namespace
 
 class DeletionVectorReaderTest : public ::testing::Test {
@@ -610,6 +654,41 @@ class DeletionVectorReaderTest : public ::testing::Test {
 
   std::shared_ptr<memory::MemoryPool> pool_;
 };
+
+TEST_F(DeletionVectorReaderTest, forwardsTokenProviderAndFileReadOps) {
+  const std::vector<int64_t> positions{0, 5, 10, 99};
+  const auto bitmapData = serializeRoaringBitmapNoRun(positions);
+  const auto tempFile = writeDvFile(bitmapData);
+  const std::string path = "dv-auth-test:" + tempFile->getPath();
+  const auto tokenProvider =
+      std::make_shared<::testing::StrictMock<MockTokenProvider>>();
+  const auto fileSystem =
+      std::make_shared<::testing::StrictMock<MockFileSystem>>();
+  filesystems::registerFileSystem(
+      [path](std::string_view candidate) { return candidate == path; },
+      [weakFileSystem = std::weak_ptr<filesystems::FileSystem>(fileSystem)](
+          std::shared_ptr<const config::ConfigBase>, std::string_view) {
+        return weakFileSystem.lock();
+      });
+  EXPECT_CALL(*fileSystem, openFileForRead(::testing::Eq(path), ::testing::_))
+      .WillOnce([&](std::string_view, const filesystems::FileOptions& options) {
+        EXPECT_EQ(options.tokenProvider, tokenProvider);
+        EXPECT_THAT(
+            options.fileReadOps,
+            ::testing::UnorderedElementsAre(
+                ::testing::Pair("table", "orders")));
+        return filesystems::getFileSystem(tempFile->getPath(), nullptr)
+            ->openFileForRead(tempFile->getPath(), options);
+      });
+
+  const auto dvFile =
+      makeDvDeleteFile(path, positions.size(), bitmapData.size());
+  DeletionVectorReader reader(
+      dvFile, 0, pool_.get(), nullptr, {{"table", "orders"}}, tokenProvider);
+  const auto bitmap = allocateBitmap(100);
+  reader.readDeletePositions(0, 100, bitmap);
+  EXPECT_EQ(getSetBits(bitmap, 100), (std::vector<uint64_t>{0, 5, 10, 99}));
+}
 
 TEST_F(DeletionVectorReaderTest, basicArrayContainer) {
   // Positions: 0, 5, 10, 99.
