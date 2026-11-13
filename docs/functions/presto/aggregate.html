@@ -1276,6 +1276,33 @@ default. Defaults to 64.</p></li>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="vector_index_pack">
+<span class="sig-name descname"><span class="pre">vector_index_pack</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_centroid</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metric</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_clusters</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dimension</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">vector_index</span></span></span><a class="headerlink" href="#vector_index_pack" title="Link to this definition">¶</a></dt>
+<dd><p>Packs the centroids of <code class="docutils literal notranslate"><span class="pre">n</span></code> clusters into a vector index codec: a
+<code class="docutils literal notranslate"><span class="pre">'flat'</span></code> local index over the centroids, as <a class="reference internal" href="#vector_index_build" title="vector_index_build"><code class="xref py py-func docutils literal notranslate"><span class="pre">vector_index_build()</span></code></a>
+writes it, with each cluster’s id as its centroid’s id.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">cluster_id</span></code> (BIGINT): ids must be 0 to <code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">-</span> <span class="pre">1</span></code>, each once, and
+less than <code class="docutils literal notranslate"><span class="pre">num_clusters</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cluster_centroid</span></code> (ARRAY(REAL)): every centroid must have
+<code class="docutils literal notranslate"><span class="pre">dimension</span></code> elements, must not contain null, NaN or infinite
+elements, and must not be all zeros.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">metric</span></code> (VARCHAR): a constant. Supported values: <code class="docutils literal notranslate"><span class="pre">'cosine'</span></code>, which
+normalizes centroids to length 1 and compares by dot product.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">num_clusters</span></code> and <code class="docutils literal notranslate"><span class="pre">dimension</span></code> (BIGINT): positive constants. A
+codec has at most <code class="docutils literal notranslate"><span class="pre">num_clusters</span></code> clusters.</p></li>
+</ul>
+<p>A null <code class="docutils literal notranslate"><span class="pre">cluster_id</span></code> or <code class="docutils literal notranslate"><span class="pre">cluster_centroid</span></code> fails the aggregation. The
+result does not depend on the order rows arrive in.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ds</span><span class="p">,</span> <span class="n">vector_index_pack</span><span class="p">(</span><span class="n">cluster_id</span><span class="p">,</span> <span class="n">centroid</span><span class="p">,</span> <span class="s1">'cosine'</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="mi">96</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="n">centroids</span>
+<span class="n">GROUP</span> <span class="n">BY</span> <span class="n">ds</span><span class="p">;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="vector_index_train">
 <span class="sig-name descname"><span class="pre">vector_index_train</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">embedding</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_clusters</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metric</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">options</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">vector_index</span></span></span><a class="headerlink" href="#vector_index_train" title="Link to this definition">¶</a></dt>
 <dd><p>Clusters the embeddings with k-means and returns the codec of the
@@ -1437,6 +1464,7 @@ property, 1 by default.</p>
 <li><a class="reference internal" href="#vector-index-aggregate-functions">Vector Index Aggregate Functions</a><ul>
 <li><a class="reference internal" href="#vector_count"><code class="docutils literal notranslate"><span class="pre">vector_count()</span></code></a></li>
 <li><a class="reference internal" href="#vector_index_build"><code class="docutils literal notranslate"><span class="pre">vector_index_build()</span></code></a></li>
+<li><a class="reference internal" href="#vector_index_pack"><code class="docutils literal notranslate"><span class="pre">vector_index_pack()</span></code></a></li>
 <li><a class="reference internal" href="#vector_index_train"><code class="docutils literal notranslate"><span class="pre">vector_index_train()</span></code></a></li>
 </ul>
 </li>
