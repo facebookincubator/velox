@@ -39,4 +39,7 @@ void checkTypeCompatibility(
     const ColumnSelector& selector,
     const std::function<std::string()>& exceptionMessageCreator = nullptr);
 
+// Check type compatibility
+bool isCompatible(TypeKind from, TypeKind to);
+
 } // namespace facebook::velox::dwio::common::typeutils
