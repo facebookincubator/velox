@@ -41,17 +41,19 @@ Compatibility notes
   amplification factor of 5; other versions can differ. Before libxml2 2.13,
   an oversized text node can be reported as an allocation failure, which
   raises an internal error rather than an invalid document error.
-* An invalid document error does not include document text or a system
-  identifier. A parser failure includes a libxml2 code, except when the parser
-  reports no diagnostic or an allocation failure. Inputs rejected before
-  parsing, including an embedded NUL, a leading byte-order mark, or a document
-  larger than the parser can accept, are rejected without echoing the input.
-  An invalid path error includes only a short UTF-8 prefix of the path:
-  control characters, DEL, C1 controls, line and paragraph separators, bidi and
-  zero-width format controls, and invalid UTF-8 bytes are replaced. The prefix
-  is not split inside a code point. Context-associated parse and XPath
-  diagnostics use local handlers; libxml2 may still use process-wide handlers
-  for out-of-context allocation failures.
+* The XPath-generated error reason for an invalid document does not include
+  document text or a system identifier. A parser failure includes a libxml2
+  code, except when the parser reports no diagnostic or an allocation failure.
+  Inputs rejected before parsing, including an embedded NUL, a leading
+  byte-order mark, or a document larger than the parser can accept, are rejected
+  without echoing the input in the error reason. For an invalid path, the
+  reason includes only a short UTF-8 prefix of the path: control characters,
+  DEL, C1 controls, line and paragraph separators, bidi and zero-width format
+  controls, and invalid UTF-8 bytes are replaced. The prefix is not split
+  inside a code point. Normal Velox exception context can still include literal
+  XML and path arguments. Context-associated parse and XPath diagnostics use
+  local handlers; libxml2 may still use process-wide handlers for out-of-context
+  allocation failures.
 * Velox accepts dynamic ``path`` arguments; Spark requires foldable arguments.
   XML or path values containing embedded NUL characters are rejected.
 * Finite numeric results use shortest round-trip decimal notation without an

@@ -793,6 +793,8 @@ class NamespaceUnawarePath {
       return functionProximity(position, active);
     }
     if (code >= kEqual && code <= kGreater) {
+      // Preserve the JDK's opcode-based child lookup for descendant-iterator
+      // selection.
       const auto left = code + 2;
       const auto right = nextOperation(left);
       return innerProximity(left, active) || innerProximity(right, active);

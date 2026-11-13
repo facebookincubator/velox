@@ -247,6 +247,50 @@ TEST_F(XPathFunctionsTest, mixedRowNullsAndErrors) {
       evaluate("try(xpath_boolean(c0, c1))", input));
 }
 
+TEST_F(XPathFunctionsTest, conditionErrorsWithNullResults) {
+  // NULL result fields must not suppress invalid-XML predicate errors in
+  // either evaluation mode.
+  auto assertInvalidXmlErrors =
+      [&](const RowVectorPtr& input,
+          const TypePtr& resultType,
+          const std::vector<std::string>& expressions) {
+        const auto expected =
+            BaseVector::createNullConstant(resultType, input->size(), pool());
+        for (const auto& expression : expressions) {
+          SCOPED_TRACE(expression);
+          VELOX_ASSERT_USER_THROW(
+              evaluate(expression, input), "Invalid XML document");
+          VELOX_ASSERT_USER_THROW(
+              evaluateSimplified<BaseVector>(expression, input),
+              "Invalid XML document");
+          const auto tryExpression = fmt::format("try({})", expression);
+          velox::test::assertEqualVectors(
+              expected, evaluate(tryExpression, input));
+          velox::test::assertEqualVectors(
+              expected, evaluateSimplified<BaseVector>(tryExpression, input));
+        }
+      };
+
+  assertInvalidXmlErrors(
+      makeRowVector({
+          makeFlatVector<std::string>({"<a/>", "<a/>"}),
+          BaseVector::createNullConstant(UNKNOWN(), 2, pool()),
+      }),
+      UNKNOWN(),
+      {"if(xpath_boolean(if(true, 'not xml', c0), 'a'), c1)",
+       "if(xpath_boolean("
+       "xpath_string(if(true, 'not xml', c0), 'a'), 'a'), c1)"});
+  assertInvalidXmlErrors(
+      makeRowVector(
+          {makeNullableFlatVector<std::string>({std::nullopt, std::nullopt})}),
+      VARCHAR(),
+      {"if(xpath_boolean(if(true, 'not xml', c0), 'a'), c0, c0)",
+       "case true when xpath_boolean(if(true, 'not xml', c0), 'a') "
+       "then c0 else c0 end",
+       "case xpath_boolean(if(true, 'not xml', c0), 'a') when true "
+       "then c0 else c0 end"});
+}
+
 TEST_F(XPathFunctionsTest, xpathNumberStringConversions) {
   const std::vector<std::pair<std::string, std::string>> cases = {
       {"0", "0"},
