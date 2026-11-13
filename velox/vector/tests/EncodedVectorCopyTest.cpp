@@ -1311,6 +1311,79 @@ TEST_P(EncodedVectorCopyTest, appendToRowWithEmptyChild) {
   });
 }
 
+TEST_P(EncodedVectorCopyTest, appendToRowWithShortStructChild) {
+  // Row 1 is null, so the struct child 'n' only has row 0.
+  const auto innerType = ROW("g", BIGINT());
+  VectorPtr target = makeRowVector(
+      {"n"},
+      {makeRowVector({"g"}, {makeFlatVector<int64_t>({7})})},
+      [](auto row) { return row == 1; });
+  target->validate({});
+
+  // Every row of the source's 'n' is null, so its child 'g' is empty.
+  auto source = makeRowVector(
+      {"n"},
+      {std::make_shared<RowVector>(
+          pool(),
+          innerType,
+          allocateNulls(2, pool(), bits::kNull),
+          2,
+          std::vector<VectorPtr>{makeFlatVector<int64_t>({})})});
+  source->validate({});
+
+  BaseVector::CopyRange range = {0, 2, 2};
+  copy(source, folly::Range(&range, 1), target);
+  target->validate({});
+
+  auto expected = makeRowVector(
+      {"n"},
+      {makeRowVector(
+          {"g"},
+          {makeFlatVector<int64_t>({7, 0, 0, 0})},
+          [](auto row) { return row > 0; })},
+      [](auto row) { return row == 1; });
+  test::assertEqualVectors(expected, target);
+}
+
+TEST_P(EncodedVectorCopyTest, appendToRowWithLongStructChild) {
+  // The struct child 'n' is longer than the target. Its rows past row 0 are
+  // null, so its dictionary child 'g' only has row 0, which is null and points
+  // into an empty base.
+  const auto innerType = ROW("g", BIGINT());
+  auto innerNulls = allocateNulls(4, pool(), bits::kNull);
+  bits::clearNull(innerNulls->asMutable<uint64_t>(), 0);
+  VectorPtr target = std::make_shared<RowVector>(
+      pool(),
+      ROW("n", innerType),
+      nullptr,
+      2,
+      std::vector<VectorPtr>{std::make_shared<RowVector>(
+          pool(),
+          innerType,
+          std::move(innerNulls),
+          4,
+          std::vector<VectorPtr>{BaseVector::wrapInDictionary(
+              allocateNulls(1, pool(), bits::kNull),
+              allocateIndices(1, pool()),
+              1,
+              makeFlatVector<int64_t>({}))})});
+  target->validate({});
+
+  auto source = makeRowVector(
+      {"n"}, {makeRowVector({"g"}, {makeFlatVector<int64_t>({8, 9})})});
+  BaseVector::CopyRange range = {0, 2, 2};
+  copy(source, folly::Range(&range, 1), target);
+  target->validate({});
+
+  auto expected = makeRowVector(
+      {"n"},
+      {makeRowVector(
+          {"g"},
+          {makeNullableFlatVector<int64_t>({std::nullopt, 0, 8, 9})},
+          [](auto row) { return row == 1; })});
+  test::assertEqualVectors(expected, target);
+}
+
 TEST_P(EncodedVectorCopyTest, rowWithUnprojectedChild) {
   // A null child is a column the reader did not project.
   const auto rowType = ROW({{"a", BIGINT()}, {"b", BIGINT()}});
