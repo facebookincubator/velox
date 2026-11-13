@@ -1083,6 +1083,31 @@ These functions are available when Velox is built with FAISS
         FROM items
         GROUP BY cluster_id;
 
+.. function:: vector_index_pack(cluster_id, cluster_centroid, metric, num_clusters, dimension) -> vector_index
+
+    Packs the centroids of ``n`` clusters into a vector index codec: a
+    ``'flat'`` local index over the centroids, as :func:`vector_index_build`
+    writes it, with each cluster's id as its centroid's id.
+
+    * ``cluster_id`` (BIGINT): ids must be 0 to ``n - 1``, each once, and
+      less than ``num_clusters``.
+    * ``cluster_centroid`` (ARRAY(REAL)): every centroid must have
+      ``dimension`` elements, must not contain null, NaN or infinite
+      elements, and must not be all zeros.
+    * ``metric`` (VARCHAR): a constant. Supported values: ``'cosine'``, which
+      normalizes centroids to length 1 and compares by dot product.
+    * ``num_clusters`` and ``dimension`` (BIGINT): positive constants. A
+      codec has at most ``num_clusters`` clusters.
+
+    A null ``cluster_id`` or ``cluster_centroid`` fails the aggregation. The
+    result does not depend on the order rows arrive in.
+
+    Example::
+
+        SELECT ds, vector_index_pack(cluster_id, centroid, 'cosine', 1000, 96)
+        FROM centroids
+        GROUP BY ds;
+
 .. function:: vector_index_train(embedding, id, num_clusters, metric, options) -> vector_index
 
     Clusters the embeddings with k-means and returns the codec of the
