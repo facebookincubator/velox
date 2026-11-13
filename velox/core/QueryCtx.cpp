@@ -86,7 +86,8 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
       std::move(queryId_),
       std::move(tokenProvider_),
       std::move(traceCtxProvider_),
-      std::move(credentialKeys_)));
+      std::move(credentialKeys_),
+      priority_));
   queryCtx->maybeSetReclaimer();
   for (auto& cb : releaseCallbacks_) {
     queryCtx->addReleaseCallback(std::move(cb));
@@ -108,8 +109,10 @@ QueryCtx::QueryCtx(
     const std::string& queryId,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider,
     TraceCtxProvider traceCtxProvider,
-    CredentialKeys credentialKeys)
+    CredentialKeys credentialKeys,
+    std::optional<int8_t> priority)
     : queryId_(queryId),
+      priority_(priority),
       executor_(executor),
       spillExecutor_(spillExecutor),
       cache_(cache),

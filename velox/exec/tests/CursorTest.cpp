@@ -19,12 +19,17 @@
 #include <folly/OperationCancelled.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/Baton.h>
+#include <gmock/gmock.h>
 #include <barrier>
+#include <mutex>
+#include <optional>
 #include <thread>
+#include <vector>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/RecordingExecutor.h"
 
 using namespace facebook::velox;
 
@@ -152,6 +157,44 @@ TEST_F(CursorTest, asyncDrainParallelMultipleProducers) {
   // multi-producer wakeup path and fail here loudly.
   EXPECT_EQ(cursor->task()->numOutputDrivers(), kNumDrivers);
   EXPECT_EQ(drainAsync(*cursor), kNumDrivers * kRowsPerDriver);
+}
+
+// The plan has no hash join, so every task the recording executor sees
+// is a driver submitted by Driver::enqueue, at the query's priority.
+TEST_F(CursorTest, driversRunAtQueryPriority) {
+  constexpr int32_t kNumDrivers = 4;
+  RecordingExecutor executor(kNumDrivers, 3);
+  auto params = makeParams(/*serialExecution=*/false);
+  params.queryCtx = core::QueryCtx::Builder()
+                        .executor(&executor, folly::Executor::HI_PRI)
+                        .build();
+  params.maxDrivers = kNumDrivers;
+
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+  EXPECT_EQ(cursor->task()->numOutputDrivers(), kNumDrivers);
+  EXPECT_EQ(drainAsync(*cursor), kNumDrivers * 30);
+  const auto recorded = executor.recordedPriorities();
+  ASSERT_GE(recorded.size(), static_cast<size_t>(kNumDrivers));
+  EXPECT_THAT(
+      recorded,
+      testing::Each(testing::Optional(testing::Eq(folly::Executor::HI_PRI))));
+}
+
+TEST_F(CursorTest, driversRunUntaggedWithoutQueryPriority) {
+  constexpr int32_t kNumDrivers = 4;
+  RecordingExecutor executor(kNumDrivers, 3);
+  auto params = makeParams(/*serialExecution=*/false);
+  params.queryCtx = core::QueryCtx::create(&executor);
+  params.maxDrivers = kNumDrivers;
+
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+  EXPECT_EQ(cursor->task()->numOutputDrivers(), kNumDrivers);
+  EXPECT_EQ(drainAsync(*cursor), kNumDrivers * 30);
+  const auto recorded = executor.recordedPriorities();
+  ASSERT_GE(recorded.size(), static_cast<size_t>(kNumDrivers));
+  EXPECT_THAT(recorded, testing::Each(testing::Eq(std::optional<int8_t>{})));
 }
 
 TEST_F(CursorTest, producerCountInitialization) {

@@ -85,8 +85,18 @@ queue.
         if (closed_) {
             return;
         }
-        task()->queryCtx()->executor()->add([driver]() { Driver::run(driver); });
+        auto* queryCtx = task()->queryCtx().get();
+        folly::Func task = [driver]() { Driver::run(driver); };
+        if (const auto priority = queryCtx->priority()) {
+            queryCtx->executor()->addWithPriority(
+                std::move(task), *priority);
+        } else {
+            queryCtx->executor()->add(std::move(task));
+        }
     }
+
+Drivers are submitted with the owning query's priority (QueryCtx::priority())
+when one is set. When a priority is set, drivers are submitted with 'addWithPriority', so a priority-capable driver executor must be provided.
 
 Drivers are added to the executor’s queue from the following places:
 * Task::start - start running

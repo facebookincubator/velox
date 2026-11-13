@@ -321,8 +321,13 @@ void Driver::enqueue(std::shared_ptr<Driver> driver) {
   if (driver->closed_) {
     return;
   }
-  driver->task()->queryCtx()->executor()->add(
-      [driver]() { Driver::run(driver); });
+  auto* queryCtx = driver->task()->queryCtx().get();
+  folly::Func task = [driver]() { Driver::run(driver); };
+  if (const auto priority = queryCtx->priority()) {
+    queryCtx->executor()->addWithPriority(std::move(task), *priority);
+  } else {
+    queryCtx->executor()->add(std::move(task));
+  }
 }
 
 void Driver::init(
