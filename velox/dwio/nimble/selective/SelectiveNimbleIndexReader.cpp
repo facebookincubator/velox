@@ -248,7 +248,7 @@ void SelectiveNimbleIndexReader::resolveRequestStripes() {
 
   // Batch lookup all requests at once.
   const auto result = clusterIndex_->lookup(
-      index::IndexLookup::LookupRequest::rangeScan(encodedKeyBounds_));
+      *index::IndexLookup::LookupRequest::rangeScan(encodedKeyBounds_));
 
   uint64_t numMatchedRows = 0;
   for (size_t requestIdx = 0; requestIdx < numRequests_; ++requestIdx) {
