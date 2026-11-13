@@ -52,6 +52,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kExprDedupNonDeterministic);
     VELOX_REGISTER_QUERY_CONFIG(kExprMaxArraySizeInReduce);
     VELOX_REGISTER_QUERY_CONFIG(kExprMaxCompiledRegexes);
+    VELOX_REGISTER_QUERY_CONFIG(kMinRowsForPeeling);
 
     // Operator.
     VELOX_REGISTER_QUERY_CONFIG(kOperatorTrackCpuUsage);
