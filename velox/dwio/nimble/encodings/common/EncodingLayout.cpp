@@ -200,6 +200,7 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::SimdForBitpack:
     case EncodingType::FrequencyPartition:
     case EncodingType::Huffman:

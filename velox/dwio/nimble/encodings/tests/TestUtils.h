@@ -37,6 +37,7 @@
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SentinelEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
@@ -160,6 +161,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::SentinelEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::Sentinel;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::SequenceEncoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::Sequence;
 };
 
 template <>

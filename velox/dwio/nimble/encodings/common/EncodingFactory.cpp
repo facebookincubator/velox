@@ -37,6 +37,7 @@
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SliceEncoding.h"
@@ -165,6 +166,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::PartitionedEliasFano: {
       RETURN_ENCODING_BY_INTEGER_TYPE(PartitionedEliasFanoEncoding, dataType);
+    }
+    case EncodingType::Sequence: {
+      RETURN_ENCODING_BY_INTEGER_TYPE(SequenceEncoding, dataType);
     }
     case EncodingType::ALP: {
       switch (dataType) {
@@ -483,6 +487,15 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "PartitionedEliasFano encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
+    case EncodingType::Sequence: {
+      if constexpr (isIntegralType<T>()) {
+        return SequenceEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Sequence encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     }
     case EncodingType::ALP: {

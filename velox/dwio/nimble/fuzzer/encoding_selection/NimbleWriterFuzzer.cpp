@@ -212,7 +212,8 @@ constexpr uint64_t kMinPairFiles = 10;
 
 // Encodings EncodingSizeEstimation can decline on the values rather than on
 // the stream type alone: Constant needs a single-valued stream, DeltaBlock a
-// per-block non-decreasing one, Huffman an alphabet of at least two values.
+// per-block non-decreasing one, Sequence an arithmetic progression, Huffman an
+// alphabet of at least two values.
 // Whether they land is therefore a property of the data draw rather than of
 // the schema, so unappliedPairs() reports them but does not demand them.
 bool hasDataPrecondition(EncodingType encodingType) {
@@ -220,6 +221,7 @@ bool hasDataPrecondition(EncodingType encodingType) {
       encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PartitionedEliasFano ||
+      encodingType == EncodingType::Sequence ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -1306,7 +1308,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
   }
   if (encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
-      encodingType == EncodingType::PartitionedEliasFano) {
+      encodingType == EncodingType::PartitionedEliasFano ||
+      encodingType == EncodingType::Sequence) {
     return !isFloatingPointDataType(dataType);
   }
   // Varint's gate is isIntegralType<physicalType>() && sizeof(T) >= 4, so the
@@ -1322,6 +1325,7 @@ bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PartitionedEliasFano ||
+      encodingType == EncodingType::Sequence ||
       encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;

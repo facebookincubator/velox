@@ -57,6 +57,7 @@ TEST_P(
       nimble::EncodingType::DeltaBlock,
       nimble::EncodingType::EliasFano,
       nimble::EncodingType::PartitionedEliasFano,
+      nimble::EncodingType::Sequence,
       nimble::EncodingType::Huffman,
       nimble::EncodingType::PFOR,
       nimble::EncodingType::SimdForBitpack,
