@@ -682,6 +682,78 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
   }
 }
 
+// A cluster index that stores its key chunks in stripes puts each stripe's key
+// stream first, as stream 0, ahead of the column streams. Projections read
+// only the column streams and serve the same rows.
+TEST_P(NimbleIndexProjectorTest, projectsFileWithStripeKeyStreams) {
+  const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  constexpr int kNumBatches{3};
+  constexpr int kRowsPerBatch{100};
+  std::vector<RowVectorPtr> batches;
+  for (int batchIndex{0}; batchIndex < kNumBatches; ++batchIndex) {
+    const auto firstKey = batchIndex * kRowsPerBatch;
+    batches.push_back(vectorMaker_->rowVector(
+        {"key", "value"},
+        {vectorMaker_->flatVector<int64_t>(
+             kRowsPerBatch, [firstKey](auto row) { return firstKey + row; }),
+         vectorMaker_->flatVector<int32_t>(kRowsPerBatch, [firstKey](auto row) {
+           return (firstKey + row) * 10;
+         })}));
+  }
+  WriterOptions options;
+  options.encodingSelectionPolicyCreator = encodingViewSelectionPolicy();
+  options.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  options.clusterIndexKeyStreamLayout = index::KeyStreamLayout::kStripe;
+  // One stripe per batch.
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress& /*progress*/) { return true; });
+  };
+  writeBatches(batches, std::move(options));
+  ASSERT_EQ(openSinkTablet()->stripeCount(), kNumBatches);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  // A key in the second stripe, and a range across the first two stripes.
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makePointLookup(rowType, {"key"}, 150),
+      makeRangeLookup(rowType, {"key"}, 95, 105),
+  };
+  const auto rows = projectRows(*projector, request, {});
+  std::vector<int32_t> expectedValues{1'500};
+  for (int key = 95; key < 105; ++key) {
+    expectedValues.push_back(key * 10);
+  }
+  velox::test::assertEqualVectors(
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int32_t>(expectedValues)}),
+      rows.values);
+
+  // The serialized slices decode with the projected schema.
+  NimbleIndexProjector::Request pointRequest;
+  pointRequest.keyBounds = {makePointLookup(rowType, {"key"}, 150)};
+  const auto streams = projector->projectStreams(pointRequest, {});
+  ASSERT_EQ(streams.responses.size(), 1);
+  ASSERT_EQ(streams.responses[0].slices.size(), 1);
+  const auto coalesced = coalesceChunkSlice(streams.responses[0].slices[0]);
+  Deserializer deserializer(
+      convertToNimbleType(*ROW({"value"}, {INTEGER()})),
+      leafPool_.get(),
+      DeserializerOptions{});
+  VectorPtr deserialized;
+  deserializer.deserialize(
+      std::string_view{
+          reinterpret_cast<const char*>(coalesced.data()), coalesced.length()},
+      deserialized);
+  velox::test::assertEqualVectors(
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int32_t>({1'500})}),
+      deserialized);
+}
+
 TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedData) {
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
   constexpr vector_size_t kNumRows{100};
