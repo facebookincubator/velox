@@ -532,18 +532,27 @@ String Functions
         SELECT startswith('js SQL', 'SQL'); -- false
         SELECT startswith('js SQL', null); -- NULL
 
-.. spark:function:: str_to_map(string, entryDelimiter, keyValueDelimiter) -> map(string, string)
+.. spark:function:: str_to_map(string[, entryDelimiter[, keyValueDelimiter]]) -> map(string, string)
 
-    Returns a map by splitting ``string`` into entries with ``entryDelimiter`` and splitting
-    each entry into key/value with ``keyValueDelimiter``.
-    ``entryDelimiter`` and ``keyValueDelimiter`` must be constant strings with single ascii
-    character. Allows ``keyValueDelimiter`` not found when splitting an entry, in which case the
+    Returns a map by splitting ``string`` into entries with ``entryDelimiter`` (defaults to ``','``)
+    and splitting each entry into key/value with ``keyValueDelimiter`` (defaults to ``':'``).
+    Both ``entryDelimiter`` and ``keyValueDelimiter`` are interpreted as regular
+    expressions (like :spark:func:`split`) and can be empty, multi-character, or
+    Unicode strings. An example pitfall is using an unescaped regex
+    metacharacter such as ``'.'`` or ``'|'``. For delimiters without regex
+    metacharacters, Velox uses literal-matching fast paths that skip regex
+    compilation and do not count toward ``expression.max_compiled_regexes``.
+    Allows ``keyValueDelimiter`` not found when splitting an entry, in which case the
     whole entry is the key and the value is NULL. When a key is repeated within a single row's
     result, the behavior depends on the ``throw_exception_on_duplicate_map_keys`` configuration
     property: if true, throws; otherwise the last value wins and the key keeps the position of its
     first occurrence. ::
 
+        SELECT str_to_map('a:1,b:2,c:3'); -- {"a":"1","b":"2","c":"3"}
+        SELECT str_to_map('a:1_b:2_c:3', '_'); -- {"a":"1","b":"2","c":"3"}
         SELECT str_to_map('a:1,b:2,c:3', ',', ':'); -- {"a":"1","b":"2","c":"3"}
+        SELECT str_to_map('a=1|b=2', '\\|', '='); -- {"a":"1","b":"2"}
+        SELECT str_to_map('a::1__b::2__c::3', '__', '::'); -- {"a":"1","b":"2","c":"3"}
         SELECT str_to_map('a', ',', ':'); -- {"a":NULL}
         SELECT str_to_map('', ',', ':'); -- {"":NULL}
         SELECT str_to_map('a:1,b:2,c:3', ',', ','); -- {"a:1":NULL,"b:2":NULL,"c:3":NULL}
