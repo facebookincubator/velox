@@ -601,10 +601,7 @@ TEST_F(TableWriterReplayerTest, partitionWrite) {
                 }),
         });
   });
-  const auto inputFilePaths = makeFilePaths(numBatches);
-  for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
-  }
+  const auto inputFilePaths = writeToFiles(vectors);
 
   const auto outputDirectory = TempDirectoryPath::create();
   auto inputPlan = PlanBuilder().tableScan(rowType);

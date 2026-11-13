@@ -180,7 +180,7 @@ TableWriterTestBase::TableWriterTestBase(uint64_t testValue)
       testMode_ == TestMode::kOnlyBucketed) {
     std::vector<std::string> bucketedBy = {"c3", "c5"};
     std::vector<TypePtr> bucketedTypes = {REAL(), VARCHAR()};
-    std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
+    std::vector<HiveSortingColumnPtr> sortedBy;
     if (testParam_.bucketSort()) {
       // The sortedBy key shouldn't contain partitionBy key.
       sortedBy = {std::make_shared<const HiveSortingColumn>(
@@ -360,7 +360,7 @@ void TableWriterTestBase::setBucketProperty(
     uint32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
     const std::vector<TypePtr>& bucketedTypes,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortedBy) {
+    const std::vector<HiveSortingColumnPtr>& sortedBy) {
   bucketProperty_ = std::make_shared<HiveBucketProperty>(
       kind, bucketCount, bucketedBy, bucketedTypes, sortedBy);
 }

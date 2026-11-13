@@ -907,8 +907,7 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
   // Write test data to a local temp file.
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto vector = makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3}));
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vector);
+  auto filePath = writeToFile(vector);
 
   // Create a table handle with dbName and tableName set.
   auto tableHandle = std::make_shared<HiveTableHandle>(

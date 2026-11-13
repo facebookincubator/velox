@@ -2467,8 +2467,7 @@ TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
   ParquetWriterOptions parquetOptions;
   writeToParquetFile(parquetFile->getPath(), vectors, parquetOptions);
 
-  auto dwrfFile = TempFilePath::create();
-  writeToFile(dwrfFile->getPath(), vectors);
+  auto dwrfFile = writeToFile(vectors);
 
   // DuckDB reference table with data from both files.
   std::vector<RowVectorPtr> allVectors = {vector, vector};

@@ -293,11 +293,8 @@ class MultiFragmentTest : public HiveConnectorTestBase,
   }
 
   void setupSources(int filePathCount, int rowsPerVector) {
-    filePaths_ = makeFilePaths(filePathCount);
-    vectors_ = makeVectors(filePaths_.size(), rowsPerVector);
-    for (int i = 0; i < filePaths_.size(); i++) {
-      writeToFile(filePaths_[i]->getPath(), vectors_[i]);
-    }
+    vectors_ = makeVectors(filePathCount, rowsPerVector);
+    filePaths_ = writeToFiles(vectors_);
     createDuckDbTable(vectors_);
   }
 
@@ -1493,8 +1490,7 @@ TEST_P(MultiFragmentTest, limit) {
   auto data = makeRowVector({makeFlatVector<int32_t>(
       1'000, [](auto row) { return row; }, nullEvery(7))});
 
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), {data});
+  auto file = writeToFile(data);
 
   // Make leaf task: Values -> PartialLimit(10) -> Repartitioning(0).
   auto leafTaskId = makeTaskId("leaf", 0);
@@ -3304,8 +3300,7 @@ TEST_P(MultiFragmentTest, scaledTableScan) {
   std::vector<RowVectorPtr> splitVectors;
   for (auto i = 0; i < numSplits; ++i) {
     auto vectors = makeVectors(10, 1'000);
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
     splitVectors.insert(splitVectors.end(), vectors.begin(), vectors.end());
   }

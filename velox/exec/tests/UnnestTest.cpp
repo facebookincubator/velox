@@ -1031,7 +1031,6 @@ TEST_P(UnnestTest, batchSize) {
 
 TEST_P(UnnestTest, barrier) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   const int numRowsPerSplit{1'00};
   for (int32_t i = 0; i < 5; ++i) {
@@ -1039,9 +1038,8 @@ TEST_P(UnnestTest, barrier) {
         makeFlatVector<int64_t>(numRowsPerSplit, [](auto row) { return row; }),
     });
     vectors.push_back(vector);
-    tempFiles.push_back(TempFilePath::create());
   }
-  writeToFiles(toFilePaths(tempFiles), vectors);
+  auto tempFiles = writeToFiles(vectors);
   createDuckDbTable(vectors);
 
   // Unnest 1K rows into 3K rows.

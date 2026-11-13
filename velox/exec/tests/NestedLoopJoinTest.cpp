@@ -1222,8 +1222,7 @@ TEST_F(NestedLoopJoinTest, lazyVectorStaleUnderBackpressure) {
       {"t0", "t1"},
       {makeFlatVector<int64_t>(90'000, [](auto i) { return i % 100; }),
        makeFlatVector<int64_t>(90'000, [](auto i) { return i; })});
-  auto probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), {probeVector});
+  auto probeFile = writeToFile(probeVector);
 
   // Small build side: the cross product multiplies each 10k-row probe batch by
   // these rows, so one probe batch yields many output chunks -> a long drain

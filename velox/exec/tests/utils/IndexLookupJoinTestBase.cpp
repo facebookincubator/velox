@@ -545,12 +545,6 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
 std::vector<std::shared_ptr<TempFilePath>>
 IndexLookupJoinTestBase::createProbeFiles(
     const std::vector<RowVectorPtr>& probeVectors) {
-  std::vector<std::shared_ptr<TempFilePath>> probeFiles;
-  probeFiles.reserve(probeVectors.size());
-  for (auto i = 0; i < probeVectors.size(); ++i) {
-    probeFiles.push_back(TempFilePath::create());
-  }
-  writeToFiles(toFilePaths(probeFiles), probeVectors);
-  return probeFiles;
+  return writeToFiles(probeVectors);
 }
 } // namespace facebook::velox::exec::test

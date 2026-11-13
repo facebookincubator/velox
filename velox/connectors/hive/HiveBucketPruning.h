@@ -18,6 +18,7 @@
 #include <optional>
 #include <vector>
 
+#include "velox/connectors/hive/HiveBucketProperty.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 
@@ -72,6 +73,16 @@ class HiveBucketPruning {
       const std::vector<const common::Filter*>& filters,
       const std::vector<TypePtr>& types,
       int32_t numBuckets);
+
+  /// Returns one flag per bucket of 'bucketProperty', true for the buckets
+  /// buckets() returns. Returns std::nullopt when buckets() does, or when the
+  /// bucketing uses a hash other than Hive's.
+  ///
+  /// @param filters The filter on each column of bucketProperty.bucketedBy(),
+  /// in that order, or nullptr for a column with no filter.
+  static std::optional<std::vector<bool>> allowedBuckets(
+      const HiveBucketProperty& bucketProperty,
+      const std::vector<const common::Filter*>& filters);
 };
 
 } // namespace facebook::velox::connector::hive
