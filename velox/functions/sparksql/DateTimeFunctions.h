@@ -497,6 +497,15 @@ template <typename T>
 struct MakeDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int32_t* /*year*/,
+      const int32_t* /*month*/,
+      const int32_t* /*day*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Date>& result,
       const int32_t year,
@@ -504,15 +513,28 @@ struct MakeDateFunction {
       const int32_t day) {
     Expected<int64_t> expected = util::daysSinceEpochFromDate(year, month, day);
     if (expected.hasError()) {
+      // An otherwise valid date whose day count overflows INTEGER always
+      // throws, even with ANSI off.
+      if (year >= -999'999'999 && year <= 999'999'999 && month >= 1 &&
+          month <= 12 && day >= 1 &&
+          day <= util::getMaxDayOfMonth(year, month)) {
+        VELOX_USER_FAIL("Date out of range: {}-{}-{}", year, month, day);
+      }
+      ansiUserFail(ansiEnabled_, "{}", expected.error().message());
       return false;
     }
     int64_t daysSinceEpoch = expected.value();
+    // Always throws, even with ANSI off. Spark itself never returns NULL
+    // for this overflow.
     if (daysSinceEpoch != static_cast<int32_t>(daysSinceEpoch)) {
-      return false;
+      VELOX_USER_FAIL("Date out of range: {}-{}-{}", year, month, day);
     }
     result = daysSinceEpoch;
     return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
