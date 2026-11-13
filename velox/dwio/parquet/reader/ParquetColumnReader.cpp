@@ -24,6 +24,7 @@
 #include "velox/dwio/parquet/reader/BooleanColumnReader.h"
 #include "velox/dwio/parquet/reader/FloatingPointColumnReader.h"
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
+#include "velox/dwio/parquet/reader/PrestoUuidColumnReader.h"
 #include "velox/dwio/parquet/reader/RepeatedColumnReader.h"
 #include "velox/dwio/parquet/reader/StringColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
@@ -33,6 +34,23 @@
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
+
+namespace {
+
+// Returns true if the file was written by Presto's native Parquet writer, whose
+// UUID values need the conversion done by PrestoUuidColumnReader. The writer
+// records itself as "parquet-mr-presto version <version> (build <hash>)".
+bool isPrestoWriter(const FileMetaDataPtr& fileMetaData) {
+  if (!fileMetaData.hasCreatedBy()) {
+    return false;
+  }
+  const std::string_view kPrestoWriter{"parquet-mr-presto"};
+  const auto createdBy = fileMetaData.createdBy();
+  return createdBy == kPrestoWriter ||
+      createdBy.starts_with(fmt::format("{} ", kPrestoWriter));
+}
+
+} // namespace
 
 // static
 std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
@@ -52,6 +70,17 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
         fileType->type()->equivalent(*TIME()) ||
         fileType->type()->equivalent(*TIME_MICRO_UTC()));
     return std::make_unique<TimeColumnReader>(
+        requestedType, fileType, params, scanSpec);
+  }
+
+  // A UUID column written by Presto needs the file bytes reordered; see
+  // PrestoUuidColumnReader. Spec-compliant UUID values already decode to
+  // Velox's UUID representation, so other writers take the plain integer
+  // reader below.
+  if (fileType->type()->kind() == TypeKind::HUGEINT &&
+      std::static_pointer_cast<const ParquetTypeWithId>(fileType)->isUuid() &&
+      isPrestoWriter(params.fileMetaData())) {
+    return std::make_unique<PrestoUuidColumnReader>(
         requestedType, fileType, params, scanSpec);
   }
 

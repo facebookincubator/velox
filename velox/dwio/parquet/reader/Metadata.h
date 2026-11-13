@@ -189,6 +189,9 @@ class FileMetaDataPtr {
   /// Returns the value inside the key/value metadata if the key is present.
   std::string keyValueMetadataValue(const std::string_view key) const;
 
+  /// Returns true if the file records the writer in created_by.
+  bool hasCreatedBy() const;
+
   /// Return the Parquet writer created_by string.
   std::string createdBy() const;
 
