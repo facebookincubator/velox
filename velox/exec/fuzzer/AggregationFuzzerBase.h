@@ -333,6 +333,14 @@ std::string makeFunctionCall(
     bool distinctInputs = false,
     bool ignoreNulls = false);
 
+/// Makes an aggregation call, replacing required constant arguments with
+/// literals from the first input row. Keeps ORDER BY keys as column names.
+std::string makeFunctionCall(
+    const CallableSignature& signature,
+    const RowVectorPtr& input,
+    bool sortedInputs,
+    bool distinctInputs);
+
 // Returns a list of column names from c0 to cn.
 std::vector<std::string> makeNames(size_t n);
 
