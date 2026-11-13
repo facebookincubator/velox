@@ -136,6 +136,11 @@ target_link_libraries(
   Folly::folly
   OpenMP::OpenMP_CXX
 )
+if(VELOX_ENABLE_FAISS_GPU)
+  target_sources(nimble_vector_index PRIVATE VectorIndexGpu.cpp VectorIndexGpu.h)
+  target_link_libraries(nimble_vector_index CUDA::cudart_static)
+  target_compile_definitions(nimble_vector_index PUBLIC VELOX_ENABLE_FAISS_GPU)
+endif()
 
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)

@@ -13,23 +13,41 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_FAISS_BUILD_VERSION 1.12.0)
-set(
-  VELOX_FAISS_BUILD_SHA256_CHECKSUM
-  561376d1a44771bf1230fabeef9c81643468009b45a585382cf38d3a7a94990a
-)
-set(
-  VELOX_FAISS_SOURCE_URL
-  "https://github.com/facebookresearch/faiss/archive/refs/tags/v${VELOX_FAISS_BUILD_VERSION}.tar.gz"
-)
+if(VELOX_ENABLE_FAISS_GPU)
+  # GPU build of the Faiss cloner this tree calls. cuVS stays off; a follow-on
+  # turns it on. faiss commit d4a6548 from 2026-10-27 (main branch)
+  set(VELOX_FAISS_BUILD_VERSION d4a6548c9a354bee366c14f39409d399f75c497f)
+  set(
+    VELOX_FAISS_BUILD_SHA256_CHECKSUM
+    4c6d2355a7ebf777a4c876e803696117946fe4ae72105fa8b4bccff3fe30a589
+  )
+  set(
+    VELOX_FAISS_SOURCE_URL
+    "https://github.com/facebookresearch/faiss/archive/${VELOX_FAISS_BUILD_VERSION}.tar.gz"
+  )
+else()
+  set(VELOX_FAISS_BUILD_VERSION 1.12.0)
+  set(
+    VELOX_FAISS_BUILD_SHA256_CHECKSUM
+    561376d1a44771bf1230fabeef9c81643468009b45a585382cf38d3a7a94990a
+  )
+  set(
+    VELOX_FAISS_SOURCE_URL
+    "https://github.com/facebookresearch/faiss/archive/refs/tags/v${VELOX_FAISS_BUILD_VERSION}.tar.gz"
+  )
+endif()
 
 velox_resolve_dependency_url(FAISS)
 
+# SYSTEM would mark the downloaded headers as system headers. The compiler
+# then searches an older Faiss already installed under INSTALL_PREFIX before
+# this tree, and the two versions cannot be mixed.
 FetchContent_Declare(
   faiss
   URL ${VELOX_FAISS_SOURCE_URL}
   URL_HASH ${VELOX_FAISS_BUILD_SHA256_CHECKSUM}
-  SYSTEM
+  BINARY_DIR
+  ${FETCHCONTENT_BASE_DIR}/faiss-build
   EXCLUDE_FROM_ALL
 )
 
@@ -38,12 +56,30 @@ block()
   set(BUILD_SHARED_LIBS OFF)
   set(BUILD_TESTING OFF)
   set(CMAKE_BUILD_TYPE Release)
-  set(FAISS_ENABLE_GPU OFF)
   set(FAISS_ENABLE_PYTHON OFF)
   set(FAISS_ENABLE_GPU_TESTS OFF)
+  if(VELOX_ENABLE_FAISS_GPU)
+    set(FAISS_ENABLE_GPU ON)
+    set(FAISS_ENABLE_CUVS OFF)
+    set(FAISS_ENABLE_ROCM OFF)
+    set(FAISS_ENABLE_C_API OFF)
+    set(FAISS_ENABLE_EXTRAS OFF)
+  else()
+    set(FAISS_ENABLE_GPU OFF)
+  endif()
   # Make FAISS available
   FetchContent_MakeAvailable(faiss)
   add_library(FAISS::faiss ALIAS faiss)
+  # Ahead of any Faiss headers inherited from the directory include path.
+  if(faiss_SOURCE_DIR)
+    target_include_directories(faiss BEFORE PUBLIC "${faiss_SOURCE_DIR}")
+  endif()
   unset(BUILD_TESTING CACHE)
   unset(BUILD_SHARED_LIBS CACHE)
 endblock()
+
+# Ahead of an older Faiss already installed under INSTALL_PREFIX, for every
+# target compiled after this dependency is resolved.
+if(faiss_SOURCE_DIR)
+  include_directories(BEFORE "${faiss_SOURCE_DIR}")
+endif()
