@@ -538,6 +538,22 @@ TEST_P(KeyEncodingTest, cursorFromMiddleRow) {
   }
 }
 
+TEST_P(KeyEncodingTest, cursorSkipsKeys) {
+  auto [storage, values] = generateSortedKeys(50);
+  auto keyEncoding = createKeyEncoding(values);
+
+  auto cursor = keyEncoding->cursor(0);
+  EXPECT_EQ(cursor->next(), values[0]);
+  cursor->skip(0);
+  EXPECT_EQ(cursor->next(), values[1]);
+  // A skip across prefix restart blocks.
+  cursor->skip(20);
+  EXPECT_EQ(cursor->next(), values[22]);
+  // A skip stops at the end of the cursor.
+  cursor->skip(100);
+  EXPECT_FALSE(cursor->hasNext());
+}
+
 TEST_P(KeyEncodingTest, cursorAcrossRestartBlocks) {
   // Prefix encoding emits a full key every kDefaultRestartInterval rows, so
   // 50 keys span four restart blocks. Start on a block boundary, just after

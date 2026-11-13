@@ -83,20 +83,26 @@ void HiveConnectorTestBase::resetHiveConnector(
       hiveConnector->connectorId(), hiveConnector);
 }
 
-void HiveConnectorTestBase::writeToFiles(
-    const std::vector<std::string>& filePaths,
-    std::vector<RowVectorPtr> vectors) {
-  VELOX_CHECK_EQ(filePaths.size(), vectors.size());
-  for (int i = 0; i < filePaths.size(); ++i) {
-    writeToFile(filePaths[i], std::vector{vectors[i]});
-  }
+std::shared_ptr<TempFilePath> HiveConnectorTestBase::writeToFile(
+    const RowVectorPtr& data) {
+  return writeToFile(std::vector{data});
 }
 
 std::shared_ptr<TempFilePath> HiveConnectorTestBase::writeToFile(
-    const RowVectorPtr& data) {
-  const auto file = TempFilePath::create();
+    const std::vector<RowVectorPtr>& data) {
+  auto file = TempFilePath::create();
   writeToFile(file->getPath(), data);
   return file;
+}
+
+std::vector<std::shared_ptr<TempFilePath>> HiveConnectorTestBase::writeToFiles(
+    const std::vector<RowVectorPtr>& data) {
+  std::vector<std::shared_ptr<TempFilePath>> files;
+  files.reserve(data.size());
+  for (const auto& vector : data) {
+    files.push_back(writeToFile(vector));
+  }
+  return files;
 }
 
 void HiveConnectorTestBase::writeToFile(
@@ -194,9 +200,7 @@ std::shared_ptr<Task> HiveConnectorTestBase::assertQuery(
     const std::string& duckDbSql,
     const int32_t numPrefetchSplit) {
   return AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(
-          core::QueryConfig::kMaxSplitPreloadPerDriver,
-          std::to_string(numPrefetchSplit))
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplit)
       .splits(splits)
       .assertResults(duckDbSql);
 }
@@ -364,8 +368,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       columnHandles;
   std::vector<std::string> bucketedBy;
   std::vector<TypePtr> bucketedTypes;
-  std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
-      sortedBy;
+  std::vector<connector::hive::HiveSortingColumnPtr> sortedBy;
   if (bucketProperty != nullptr) {
     bucketedBy = bucketProperty->bucketedBy();
     bucketedTypes = bucketProperty->bucketedTypes();

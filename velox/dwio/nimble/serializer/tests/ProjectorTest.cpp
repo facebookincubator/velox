@@ -81,7 +81,8 @@ ScalarKind keyKindOf(const velox::Type& keyType) {
 
 HybridFlatMap makeHybridFlatMap(
     ScalarKind keyKind,
-    const std::vector<std::vector<std::string>>& explicitGroups) {
+    const std::vector<std::vector<std::string>>& explicitGroups,
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode) {
   std::vector<HybridFlatMap::Group> groups;
   groups.reserve(explicitGroups.size() + 1);
   for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
@@ -96,7 +97,7 @@ HybridFlatMap makeHybridFlatMap(
           .groupId = HybridFlatMap::kDefaultGroupId,
           .groupKeys = {},
       });
-  return HybridFlatMap{keyKind, std::move(groups)};
+  return HybridFlatMap{keyKind, std::move(groups), defaultGroupKeyPresenceMode};
 }
 
 // Coalesces an IOBuf chain into a single string for test comparisons.
@@ -2035,7 +2036,11 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
 
   auto serializerOptions = inputSerializerOptions();
   serializerOptions.hybridFlatMapColumns = {
-      {"features", makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}, {"3"}})},
+      {"features",
+       makeHybridFlatMap(
+           ScalarKind::Int32,
+           {{"1", "2"}, {"3"}},
+           HybridFlatMap::KeyPresenceMode::kBitmap)},
   };
   Serializer serializer{serializerOptions, type, pool_.get()};
   const std::string serialized{
@@ -2132,7 +2137,11 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionSkipsAbsentKey) {
       makeInput({"{1: 10, 9: 90}", "null", "{}", "{2: null, 1: 11}"});
   auto options = inputSerializerOptions();
   options.hybridFlatMapColumns = {
-      {"features", makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}})},
+      {"features",
+       makeHybridFlatMap(
+           ScalarKind::Int64,
+           {{"1", "2"}},
+           HybridFlatMap::KeyPresenceMode::kBitmap)},
   };
   const auto [serialized, inputSchema] =
       serializeWithSchema(input, input->type(), std::move(options));
@@ -2190,8 +2199,9 @@ TEST_P(ProjectorFormatTest, hybridFlatMapKeyListProjectionSelectsDefault) {
   };
   const auto input =
       makeInput({"{1: 10, 9: 90}", "null", "{}", "{7: 70, 2: null, 1: 11}"});
-  auto hybridMap = makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}});
-  hybridMap.setDefaultGroupKeyPresenceMode(
+  auto hybridMap = makeHybridFlatMap(
+      ScalarKind::Int64,
+      {{"1", "2"}},
       HybridFlatMap::KeyPresenceMode::kKeyList);
   auto options = inputSerializerOptions();
   options.hybridFlatMapColumns = {{"features", std::move(hybridMap)}};
@@ -2263,7 +2273,9 @@ TEST_P(ProjectorFormatTest, hybridFlatMapDefaultOnlyProjectionRoundTrip) {
   const auto input = makeInput(inputMaps);
   auto options = inputSerializerOptions();
   options.hybridFlatMapColumns = {
-      {"features", makeHybridFlatMap(ScalarKind::Int64, {})}};
+      {"features",
+       makeHybridFlatMap(
+           ScalarKind::Int64, {}, HybridFlatMap::KeyPresenceMode::kBitmap)}};
   const auto [serialized, inputSchema] =
       serializeWithSchema(input, input->type(), std::move(options));
   const auto& sourceRow = inputSchema->asRow();
@@ -2386,8 +2398,16 @@ TEST_P(ProjectorFormatTest, hybridFlatMapMultipleColumnsRoundTrip) {
           makeMap({1, 2}, {10, 20}), makeMap({10, 11}, {100, 110})});
   auto options = inputSerializerOptions();
   options.hybridFlatMapColumns = {
-      {"left", makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}})},
-      {"right", makeHybridFlatMap(ScalarKind::Int32, {{"10", "11"}})},
+      {"left",
+       makeHybridFlatMap(
+           ScalarKind::Int32,
+           {{"1", "2"}},
+           HybridFlatMap::KeyPresenceMode::kBitmap)},
+      {"right",
+       makeHybridFlatMap(
+           ScalarKind::Int32,
+           {{"10", "11"}},
+           HybridFlatMap::KeyPresenceMode::kBitmap)},
   };
   auto [serialized, schema] =
       serializeWithSchema(input, type, std::move(options));
@@ -2441,7 +2461,11 @@ TEST_P(ProjectorFormatTest, hybridFlatMapArrayProjectionRoundTrip) {
       pool_.get(), type, nullptr, kRows, std::vector<VectorPtr>{inputMap});
   auto options = inputSerializerOptions();
   options.hybridFlatMapColumns = {
-      {"features", makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}})},
+      {"features",
+       makeHybridFlatMap(
+           ScalarKind::Int32,
+           {{"1", "2"}},
+           HybridFlatMap::KeyPresenceMode::kBitmap)},
   };
   auto [serialized, schema] =
       serializeWithSchema(input, type, std::move(options));
@@ -2630,7 +2654,11 @@ HybridFlatMap makeProjectionGrouping(
   }
   groups.push_back(
       {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
-  return HybridFlatMap{keyKind, std::move(groups)};
+  return HybridFlatMap{
+      keyKind,
+      std::move(groups),
+      HybridFlatMap::KeyPresenceMode::kBitmap,
+  };
 }
 
 // Which keys a projection requests from one Hybrid FlatMap column.
@@ -3059,6 +3087,9 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionFuzz) {
   EXPECT_TRUE(coverage.emptyMap);
 }
 
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
@@ -3071,8 +3102,10 @@ TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
         "old_value", builder.createScalarTypeBuilder(ScalarKind::Int64));
     return value;
   };
-  hybridMap->addGroup(0, {"1"}, makeValueType());
-  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, makeValueType());
+  const std::vector<std::string> groupKeys{"1"};
+  hybridMap->addGroup(0, groupKeys, makeValueType());
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId, kNoGroupKeys, makeValueType());
   root->addChild("features", hybridMap);
   const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
   const auto projectType =
@@ -3106,8 +3139,10 @@ TEST_F(ProjectorTest, hybridFlatMapProjectTypeKeepsKeyList) {
         "old_value", builder.createScalarTypeBuilder(ScalarKind::Int64));
     return value;
   };
-  hybridMap->addGroup(0, {"1"}, makeValueType());
-  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, makeValueType());
+  const std::vector<std::string> groupKeys{"1"};
+  hybridMap->addGroup(0, groupKeys, makeValueType());
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId, kNoGroupKeys, makeValueType());
   root->addChild("features", hybridMap);
   const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
   const auto projectType =
@@ -3206,7 +3241,10 @@ TEST_F(ProjectorTest, hybridFlatMapRejectsEmptyProjectedKey) {
       .version = SerializationVersion::kSerialization,
       .hybridFlatMapColumns =
           {{"features",
-            makeHybridFlatMap(ScalarKind::String, {{"other", "peer"}})}},
+            makeHybridFlatMap(
+                ScalarKind::String,
+                {{"other", "peer"}},
+                HybridFlatMap::KeyPresenceMode::kBitmap)}},
   };
   const auto schema = getNimbleSchema(type, validOptions);
   NIMBLE_ASSERT_THROW(

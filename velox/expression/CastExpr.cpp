@@ -175,7 +175,7 @@ VectorPtr CastExpr::castFromDate(
         // enabled.
         rows.applyToSelected([&](vector_size_t row) {
           const auto date = inputFlatVector->valueAt(row);
-          if (FOLLY_UNLIKELY(hooks_->isDateOverflowForTimestampUtc(date))) {
+          if (hooks_->isDateOverflowForTimestampUtc(date)) [[unlikely]] {
             if (hooks_->truncate()) {
               VELOX_USER_FAIL(
                   makeErrorMessage(input, row, toType) +
@@ -255,7 +255,7 @@ VectorPtr CastExpr::castToDate(
         rows.applyToSelected([&](vector_size_t row) {
           const auto& timestamp = inputVector->valueAt(row);
           const auto days = timestamp.getSeconds() / 86'400;
-          if (FOLLY_UNLIKELY(hooks_->isDateOverflowForTimestampUtc(days))) {
+          if (hooks_->isDateOverflowForTimestampUtc(days)) [[unlikely]] {
             if (hooks_->truncate()) {
               VELOX_USER_FAIL(
                   makeErrorMessage(input, row, DATE()) +

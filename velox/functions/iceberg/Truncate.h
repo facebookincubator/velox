@@ -17,9 +17,14 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 namespace facebook::velox::functions::iceberg {
 
-void registerTruncateFunctions(const std::string& prefix);
+/// Registers the Iceberg truncate function. 'defaultOwner' fills only
+/// functions that do not declare an owner and must outlive the registry.
+void registerTruncateFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions::iceberg

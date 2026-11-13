@@ -647,8 +647,7 @@ class PlanBuilder {
 
     /// @param sortBy Specifies the sort by columns.
     TableWriterBuilder& sortBy(
-        std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
-            sortBy) {
+        std::vector<connector::hive::HiveSortingColumnPtr> sortBy) {
       sortBy_ = std::move(sortBy);
       return *this;
     }
@@ -734,8 +733,7 @@ class PlanBuilder {
     int32_t bucketCount_{0};
     std::vector<std::string> bucketedBy_;
     std::vector<std::string> aggregates_;
-    std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
-        sortBy_;
+    std::vector<connector::hive::HiveSortingColumnPtr> sortBy_;
 
     std::unordered_map<std::string, std::string> serdeParameters_;
     std::unordered_map<std::string, std::string> storageParameters_;
@@ -992,8 +990,7 @@ class PlanBuilder {
       const std::vector<std::string>& partitionBy,
       int32_t bucketCount,
       const std::vector<std::string>& bucketedBy,
-      const std::vector<
-          std::shared_ptr<const connector::hive::HiveSortingColumn>>& sortBy,
+      const std::vector<connector::hive::HiveSortingColumnPtr>& sortBy,
       const dwio::common::FileFormat fileFormat =
           dwio::common::FileFormat::DWRF,
       const std::vector<std::string>& aggregates = {},
@@ -1562,17 +1559,17 @@ class PlanBuilder {
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 
-  /// Adds a VectorSearchJoinNode to search, for each row of the preceding
-  /// plan node, the vector indexes of the matching rows of 'right' (see
-  /// core::VectorSearchJoinNode).
+  /// Adds a VectorSearchJoinNode to join the rows of the preceding plan node
+  /// with the rows of 'right' (see core::VectorSearchJoinNode). The side whose
+  /// columns include 'index' has the index rows, the other the query rows.
   ///
   /// @param leftKeys Join keys from the probe side. May be empty.
   /// @param rightKeys Join keys from the build side, 'right', as many as
   /// 'leftKeys'.
-  /// @param probeEmbedding Probe column with the query embedding.
-  /// @param buildIndex Build column with the packed local index.
+  /// @param embedding Column of the query rows with the query embedding.
+  /// @param index Column of the index rows with the packed local index.
   /// @param k The number of entries to find in each matching index.
-  /// @param outputLayout The output columns, in order: probe and build
+  /// @param outputLayout The output columns, in order: left and right
   /// columns, and the columns named by 'id' and 'score'.
   /// @param id Name of the output column with the id of each embedding found.
   /// @param score Name of the output column with the score of each embedding
@@ -1587,8 +1584,8 @@ class PlanBuilder {
       const std::vector<std::string>& leftKeys,
       const std::vector<std::string>& rightKeys,
       const core::PlanNodePtr& right,
-      const std::string& probeEmbedding,
-      const std::string& buildIndex,
+      const std::string& embedding,
+      const std::string& index,
       int64_t k,
       const std::vector<std::string>& outputLayout,
       const std::optional<std::string>& id,
@@ -1727,6 +1724,14 @@ class PlanBuilder {
       int32_t limit,
       bool generateRowNumber);
 
+  /// Add a partial TopNRowNumberNode for row_number. Same as 'topNRowNumber',
+  /// but does not generate the row number and may skip the limit, leaving it
+  /// to a later final step.
+  PlanBuilder& topNRowNumberPartial(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit);
+
   /// Add a TopNRowNumberNode to compute row_number, rank or dense_rank window
   /// function with a limit applied to sorted partitions.
   PlanBuilder& topNRank(
@@ -1735,6 +1740,15 @@ class PlanBuilder {
       const std::vector<std::string>& sortingKeys,
       int32_t limit,
       bool generateRowNumber);
+
+  /// Add a partial TopNRowNumberNode for row_number, rank or dense_rank. Same
+  /// as 'topNRank', but does not generate the rank and may skip the limit,
+  /// leaving it to a later final step.
+  PlanBuilder& topNRankPartial(
+      std::string_view function,
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit);
 
   /// Add a MarkDistinctNode to compute aggregate mask channel
   /// @param markerName Name of output mask channel
@@ -1896,6 +1910,15 @@ class PlanBuilder {
   }
 
  private:
+  // Adds a TopNRowNumberNode with the given rank column and partial flag.
+  PlanBuilder& addTopNRowNumber(
+      std::string_view function,
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      const std::optional<std::string>& rowNumberColumnName,
+      bool partial);
+
   std::shared_ptr<const core::FieldAccessTypedExpr> field(column_index_t index);
 
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> fields(

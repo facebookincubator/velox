@@ -604,7 +604,7 @@ TEST_P(CudfEqualityDeleteFileReaderTest, subfieldFilter) {
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
-  auto deleteData = makeRowVector({"c0"}, {makeFlatVector<int64_t>({20})});
+  auto deleteData = makeNamedRowVector("c0", makeFlatVector<int64_t>({20}));
   auto deleteFile = TempFilePath::create();
   const auto deleteFileFormat = GetParam();
   writeDeleteFile(deleteFileFormat, deleteFile->getPath(), {deleteData});
@@ -647,7 +647,8 @@ TEST_P(CudfEqualityDeleteFileReaderTest, mixedCaseFileColumnNames) {
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
-  auto deleteData = makeRowVector({"Key_Col"}, {makeFlatVector<int64_t>({30})});
+  auto deleteData =
+      makeNamedRowVector("Key_Col", makeFlatVector<int64_t>({30}));
   auto deleteFile = TempFilePath::create();
   const auto deleteFileFormat = GetParam();
   writeDeleteFile(deleteFileFormat, deleteFile->getPath(), {deleteData});
@@ -672,7 +673,7 @@ TEST_P(CudfEqualityDeleteFileReaderTest, mixedCaseFileColumnNames) {
           .planNode();
 
   auto expected =
-      makeRowVector({"value"}, {makeFlatVector<std::string>({"b", "d", "e"})});
+      makeNamedRowVector("value", makeFlatVector<std::string>({"b", "d", "e"}));
   AssertQueryBuilder(plan)
       .connectorSessionProperty(
           kCudfIcebergConnectorId,

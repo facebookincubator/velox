@@ -60,6 +60,7 @@ const config = {
         logo: {
           alt: 'Velox Logo',
           src: 'img/logo.svg',
+          srcDark: 'img/velox-logo-white.png',
         },
         items: [
           {

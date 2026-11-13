@@ -1097,6 +1097,8 @@ void serializeColumn(
     case VectorEncoding::Simple::MAP:
       serializeMapVectorRanges(vector, ranges, stream, scratch);
       break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      VELOX_NYI("PrestoVectorSerde does not support flat map vectors");
     case VectorEncoding::Simple::LAZY:
       serializeColumn(
           BaseVector::loadedVectorShared(vector), ranges, stream, scratch);
@@ -1141,6 +1143,8 @@ void serializeColumn(
     case VectorEncoding::Simple::MAP:
       serializeMapVector(vector, rows, stream, scratch);
       break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      VELOX_NYI("PrestoVectorSerde does not support flat map vectors");
     case VectorEncoding::Simple::LAZY:
       serializeColumn(
           BaseVector::loadedVectorShared(vector), rows, stream, scratch);

@@ -21,10 +21,12 @@
 
 namespace facebook::velox::functions::iceberg {
 
-void registerFunctions(const std::string& prefix) {
-  registerBucketFunctions(prefix);
-  registerTruncateFunctions(prefix);
-  registerDateTimeFunctions(prefix);
+void registerFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerBucketFunctions(prefix, defaultOwner);
+  registerTruncateFunctions(prefix, defaultOwner);
+  registerDateTimeFunctions(prefix, defaultOwner);
 }
 
 } // namespace facebook::velox::functions::iceberg

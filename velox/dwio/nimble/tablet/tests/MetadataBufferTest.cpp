@@ -113,8 +113,11 @@ TEST_F(MetadataBufferTest, decompressBufferPtr) {
     }
 
     nimble::MetadataBuffer buffer(
-        nimble::MetadataBuffer::decompress(
-            std::move(inputBuffer), testData.compressionType, pool_.get()));
+        nimble::toPinnedBuffer(
+            nimble::MetadataBuffer::decompress(
+                std::move(inputBuffer),
+                testData.compressionType,
+                pool_.get())));
 
     auto content = buffer.content();
     EXPECT_EQ(content, testData.inputData);
@@ -168,8 +171,9 @@ TEST_F(MetadataBufferTest, decompressStringView) {
     }
 
     nimble::MetadataBuffer buffer(
-        nimble::MetadataBuffer::decompress(
-            rawData, testData.compressionType, pool_.get()));
+        nimble::toPinnedBuffer(
+            nimble::MetadataBuffer::decompress(
+                rawData, testData.compressionType, pool_.get())));
 
     auto content = buffer.content();
     EXPECT_EQ(content, testData.inputData);
@@ -178,10 +182,11 @@ TEST_F(MetadataBufferTest, decompressStringView) {
 
 TEST_F(MetadataBufferTest, sectionConstruction) {
   nimble::MetadataBuffer buffer(
-      nimble::MetadataBuffer::decompress(
-          toBufferPtr(kTestData, pool_.get()),
-          nimble::CompressionType::Uncompressed,
-          pool_.get()));
+      nimble::toPinnedBuffer(
+          nimble::MetadataBuffer::decompress(
+              toBufferPtr(kTestData, pool_.get()),
+              nimble::CompressionType::Uncompressed,
+              pool_.get())));
 
   nimble::Section section{std::move(buffer)};
 
@@ -191,10 +196,11 @@ TEST_F(MetadataBufferTest, sectionConstruction) {
 
 TEST_F(MetadataBufferTest, sectionStringViewConversion) {
   nimble::MetadataBuffer buffer(
-      nimble::MetadataBuffer::decompress(
-          toBufferPtr(kTestData, pool_.get()),
-          nimble::CompressionType::Uncompressed,
-          pool_.get()));
+      nimble::toPinnedBuffer(
+          nimble::MetadataBuffer::decompress(
+              toBufferPtr(kTestData, pool_.get()),
+              nimble::CompressionType::Uncompressed,
+              pool_.get())));
 
   nimble::Section section{std::move(buffer)};
 
@@ -204,10 +210,11 @@ TEST_F(MetadataBufferTest, sectionStringViewConversion) {
 
 TEST_F(MetadataBufferTest, sectionBuffer) {
   nimble::MetadataBuffer buffer(
-      nimble::MetadataBuffer::decompress(
-          toBufferPtr(kTestData, pool_.get()),
-          nimble::CompressionType::Uncompressed,
-          pool_.get()));
+      nimble::toPinnedBuffer(
+          nimble::MetadataBuffer::decompress(
+              toBufferPtr(kTestData, pool_.get()),
+              nimble::CompressionType::Uncompressed,
+              pool_.get())));
 
   nimble::Section section{std::move(buffer)};
 
@@ -268,10 +275,11 @@ TEST_F(MetadataBufferTest, metadataBufferMove) {
   // Move construction.
   {
     nimble::MetadataBuffer buffer(
-        nimble::MetadataBuffer::decompress(
-            toBufferPtr(kTestData, pool_.get()),
-            nimble::CompressionType::Uncompressed,
-            pool_.get()));
+        nimble::toPinnedBuffer(
+            nimble::MetadataBuffer::decompress(
+                toBufferPtr(kTestData, pool_.get()),
+                nimble::CompressionType::Uncompressed,
+                pool_.get())));
 
     nimble::MetadataBuffer moved{std::move(buffer)};
     EXPECT_EQ(moved.content(), kTestData);
@@ -280,16 +288,18 @@ TEST_F(MetadataBufferTest, metadataBufferMove) {
   // Move assignment.
   {
     nimble::MetadataBuffer buffer(
-        nimble::MetadataBuffer::decompress(
-            toBufferPtr(kTestData, pool_.get()),
-            nimble::CompressionType::Uncompressed,
-            pool_.get()));
+        nimble::toPinnedBuffer(
+            nimble::MetadataBuffer::decompress(
+                toBufferPtr(kTestData, pool_.get()),
+                nimble::CompressionType::Uncompressed,
+                pool_.get())));
 
     nimble::MetadataBuffer other(
-        nimble::MetadataBuffer::decompress(
-            toBufferPtr("other", pool_.get()),
-            nimble::CompressionType::Uncompressed,
-            pool_.get()));
+        nimble::toPinnedBuffer(
+            nimble::MetadataBuffer::decompress(
+                toBufferPtr("other", pool_.get()),
+                nimble::CompressionType::Uncompressed,
+                pool_.get())));
 
     other = std::move(buffer);
     EXPECT_EQ(other.content(), kTestData);
@@ -349,6 +359,16 @@ class MetadataBufferCacheTest : public ::testing::Test {
     return pin;
   }
 
+  // Returns the bytes of the cache entry 'pin' holds, kept pinned while any
+  // copy of them is alive.
+  static nimble::PinnedBuffer toPinnedBuffer(velox::cache::CachePin pin) {
+    auto* entry = pin.checkedEntry();
+    const std::string_view data{
+        entry->contiguousData(), static_cast<size_t>(entry->size())};
+    return nimble::PinnedBuffer{
+        std::make_shared<velox::cache::CachePin>(std::move(pin)), data};
+  }
+
   std::unique_ptr<velox::memory::MemoryManager> manager_;
   velox::memory::MmapAllocator* allocator_{nullptr};
   std::shared_ptr<velox::cache::AsyncDataCache> cache_;
@@ -362,14 +382,15 @@ TEST_F(MetadataBufferCacheTest, cachePinData) {
     {
       auto pin = makePin(0, data);
       EXPECT_FALSE(pin.empty());
-      nimble::MetadataBuffer pinBuffer{std::move(pin)};
+      nimble::MetadataBuffer pinBuffer{toPinnedBuffer(std::move(pin))};
       EXPECT_EQ(pinBuffer.content(), data);
     }
 
     {
       auto pool = manager_->addLeafPool("bufferTest");
       auto buffer = toBufferPtr(data, pool.get());
-      nimble::MetadataBuffer bufferObj{std::move(buffer)};
+      nimble::MetadataBuffer bufferObj{
+          nimble::toPinnedBuffer(std::move(buffer))};
       EXPECT_EQ(bufferObj.content(), data);
     }
   }
@@ -379,7 +400,7 @@ TEST_F(MetadataBufferCacheTest, metadataBufferMoveWithPin) {
   {
     const std::string data = "move-test";
     auto pin = makePin(100, data);
-    nimble::MetadataBuffer buffer{std::move(pin)};
+    nimble::MetadataBuffer buffer{toPinnedBuffer(std::move(pin))};
     nimble::MetadataBuffer moved{std::move(buffer)};
     EXPECT_EQ(moved.content(), data);
   }
@@ -389,8 +410,8 @@ TEST_F(MetadataBufferCacheTest, metadataBufferMoveWithPin) {
     const std::string data2 = "second";
     auto pin1 = makePin(200, data1);
     auto pin2 = makePin(300, data2);
-    nimble::MetadataBuffer buffer1{std::move(pin1)};
-    nimble::MetadataBuffer buffer2{std::move(pin2)};
+    nimble::MetadataBuffer buffer1{toPinnedBuffer(std::move(pin1))};
+    nimble::MetadataBuffer buffer2{toPinnedBuffer(std::move(pin2))};
     buffer2 = std::move(buffer1);
     EXPECT_EQ(buffer2.content(), data1);
   }
@@ -400,13 +421,14 @@ TEST_F(MetadataBufferCacheTest, cachePinSection) {
   const std::string data = "section-cache-test";
   auto pin = makePin(400, data);
 
-  nimble::Section section{nimble::MetadataBuffer{std::move(pin)}};
+  nimble::Section section{
+      nimble::MetadataBuffer{toPinnedBuffer(std::move(pin))}};
   EXPECT_EQ(section.content(), data);
 }
 
 TEST_F(MetadataBufferTest, cloneBufferPtr) {
   auto buffer = toBufferPtr(kTestData, pool_.get());
-  nimble::MetadataBuffer original{std::move(buffer)};
+  nimble::MetadataBuffer original{nimble::toPinnedBuffer(std::move(buffer))};
   EXPECT_EQ(original.content(), kTestData);
 
   auto cloned = original.clone();
@@ -418,12 +440,38 @@ TEST_F(MetadataBufferTest, cloneBufferPtr) {
 TEST_F(MetadataBufferCacheTest, cloneCachePin) {
   const std::string data = "clone-pin-test";
   auto pin = makePin(500, data);
-  nimble::MetadataBuffer original{std::move(pin)};
+  nimble::MetadataBuffer original{toPinnedBuffer(std::move(pin))};
   EXPECT_EQ(original.content(), data);
 
   auto cloned = original.clone();
   EXPECT_EQ(cloned.content(), data);
   EXPECT_EQ(original.content(), cloned.content());
+}
+
+TEST_F(MetadataBufferTest, pinnedBufferHolderOutlivesCopies) {
+  auto bufferHolder = std::make_shared<std::string>(kTestData);
+  const std::weak_ptr<std::string> weakBufferHolder = bufferHolder;
+  std::unique_ptr<nimble::MetadataBuffer> sliced;
+  {
+    nimble::MetadataBuffer original{
+        nimble::PinnedBuffer{bufferHolder, *bufferHolder}};
+    bufferHolder.reset();
+    auto cloned = original.clone();
+    sliced = cloned.slice(7, 14);
+    EXPECT_EQ(original.content(), kTestData);
+    EXPECT_EQ(cloned.content(), kTestData);
+  }
+
+  EXPECT_FALSE(weakBufferHolder.expired());
+  EXPECT_EQ(sliced->content(), "MetadataBuffer");
+  sliced.reset();
+  EXPECT_TRUE(weakBufferHolder.expired());
+}
+
+TEST_F(MetadataBufferTest, pinnedBufferRequireHolder) {
+  NIMBLE_ASSERT_THROW(
+      nimble::MetadataBuffer(nimble::PinnedBuffer{nullptr, kTestData}),
+      "PinnedBuffer must have a bufferHolder");
 }
 
 TEST_F(MetadataBufferTest, sliceBufferPtr) {
@@ -476,7 +524,7 @@ TEST_F(MetadataBufferTest, sliceBufferPtr) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto buffer = toBufferPtr(testData.data, pool_.get());
-    nimble::MetadataBuffer original{std::move(buffer)};
+    nimble::MetadataBuffer original{nimble::toPinnedBuffer(std::move(buffer))};
     TestHelper::verifySlice(original, 0, testData.data.size(), testData.data);
 
     for (const auto& chain : testData.sliceChains) {
@@ -506,7 +554,7 @@ TEST_F(MetadataBufferTest, sliceBufferPtr) {
 
 TEST_F(MetadataBufferTest, sliceBufferPtrOutOfRange) {
   auto buffer = toBufferPtr(kTestData, pool_.get());
-  nimble::MetadataBuffer original{std::move(buffer)};
+  nimble::MetadataBuffer original{nimble::toPinnedBuffer(std::move(buffer))};
 
   NIMBLE_ASSERT_THROW(
       original.slice(0, kTestData.size() + 1),
@@ -541,7 +589,7 @@ TEST_F(MetadataBufferCacheTest, sliceCachePin) {
 
   const std::string data = "Hello, CacheSlice!";
   auto pin = makePin(600, data);
-  nimble::MetadataBuffer original{std::move(pin)};
+  nimble::MetadataBuffer original{toPinnedBuffer(std::move(pin))};
   TestHelper::verifySlice(original, 0, data.size(), data);
 
   // clang-format off
@@ -582,7 +630,7 @@ TEST_F(MetadataBufferCacheTest, sliceCachePin) {
 TEST_F(MetadataBufferCacheTest, sliceCachePinOutOfRange) {
   const std::string data = "short";
   auto pin = makePin(700, data);
-  nimble::MetadataBuffer original{std::move(pin)};
+  nimble::MetadataBuffer original{toPinnedBuffer(std::move(pin))};
 
   NIMBLE_ASSERT_THROW(
       original.slice(0, data.size() + 1), "Slice range exceeds buffer content");

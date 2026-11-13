@@ -902,5 +902,158 @@ TEST_F(GetFlatValuesTest, dictionarySmallintIndexValidation) {
       testing::ElementsAre(300, 100));
 }
 
+// processBulk() translates int32 indices from a separate buffer without
+// processRun(). Its projection loop must reject an out-of-range index, with
+// and without null gaps between the requested rows. The dictionary size itself
+// is the first out-of-range index. A negative int32 is a uint32 index of 2^31
+// or more.
+TEST_F(GetFlatValuesTest, dictionaryBulkProjectionIndexOutOfRangeThrows) {
+  auto reader = makeReader(INTEGER());
+  BufferPtr dictHolder;
+  loadIntegerDictionary(reader.get(), dictHolder);
+  // Output capacity for the 4 requested rows.
+  reader->stageRawValues<int32_t>({0, 0, 0, 0});
+  std::vector<int32_t> rowsVec(4);
+  std::iota(rowsVec.begin(), rowsVec.end(), 0);
+  const RowSet rows(rowsVec.data(), rowsVec.size());
+  const auto expectThrow = [&](const std::vector<int32_t>& indices,
+                               const std::vector<int32_t>& positions,
+                               const std::string& message) {
+    DictionaryColumnVisitor<
+        int32_t,
+        velox::common::AlwaysTrue,
+        ExtractToReader,
+        true>
+        visitor(
+            dwio::common::alwaysTrue(),
+            reader.get(),
+            rows,
+            ExtractToReader(reader.get()));
+    VELOX_ASSERT_THROW(
+        visitor.processBulk(
+            indices.data(),
+            static_cast<int32_t>(indices.size()),
+            positions.data()),
+        message);
+  };
+
+  {
+    SCOPED_TRACE("contiguous rows");
+    expectThrow(
+        {0, 2, 5'000'000},
+        {0, 1, 2},
+        "Index to dictionary is out of range: 0x4c4b40 >= 3");
+  }
+
+  {
+    SCOPED_TRACE("null gap");
+    expectThrow(
+        {0, 2, 5'000'000},
+        {0, 2, 3},
+        "Index to dictionary is out of range: 0x4c4b40 >= 3");
+  }
+
+  {
+    SCOPED_TRACE("dictionary size");
+    expectThrow(
+        {0, 2, 3}, {0, 1, 2}, "Index to dictionary is out of range: 0x3 >= 3");
+  }
+
+  {
+    SCOPED_TRACE("negative");
+    expectThrow(
+        {0, -1, 2},
+        {0, 1, 2},
+        "Index to dictionary is out of range: 0xffffffff >= 3");
+  }
+}
+
+// processBulk()'s filtered loop gathers filter-cache verdicts by index, so it
+// must reject an out-of-range index before the gather. The cache is sized past
+// the dictionary so the stray byte reads as a known failure, which would
+// otherwise drop the row silently.
+TEST_F(GetFlatValuesTest, dictionaryBulkFilteredIndexOutOfRangeThrows) {
+  constexpr int32_t kOutOfRangeIndex = 1'000;
+  const auto expectThrow = [&](const std::vector<int32_t>& indices,
+                               const std::string& message) {
+    auto reader = makeReader(INTEGER());
+    BufferPtr dictHolder;
+    loadIntegerDictionary(reader.get(), dictHolder);
+    auto& filterCache = reader->scanState().filterCache;
+    filterCache.resize(kOutOfRangeIndex + 1);
+    simd::memset(
+        filterCache.data(), FilterResult::kUnknown, kOutOfRangeIndex + 1);
+    filterCache[kOutOfRangeIndex] = FilterResult::kFailure;
+    reader->scanState().updateRawState();
+    // The filtered loop loads a full SIMD batch of row numbers.
+    std::vector<int32_t> rowsVec(16);
+    std::iota(rowsVec.begin(), rowsVec.end(), 0);
+    const RowSet rows(rowsVec.data(), indices.size());
+    const velox::common::BigintRange filter(0, 100, false);
+    DictionaryColumnVisitor<
+        int32_t,
+        velox::common::BigintRange,
+        DropValues,
+        true>
+        visitor(filter, reader.get(), rows, DropValues());
+    VELOX_ASSERT_THROW(
+        visitor.processBulk(
+            indices.data(),
+            static_cast<int32_t>(indices.size()),
+            rowsVec.data()),
+        message);
+  };
+
+  {
+    SCOPED_TRACE("past the end");
+    expectThrow(
+        {0, 1, 2, kOutOfRangeIndex, 0, 1, 2, 0},
+        "Index to dictionary is out of range: 0x3e8 >= 3");
+  }
+
+  {
+    SCOPED_TRACE("negative");
+    expectThrow(
+        {0, 1, -1, 2, 0, 1, 2, 0},
+        "Index to dictionary is out of range: 0xffffffff >= 3");
+  }
+}
+
+// processBulk() hands reads without a real filter, such as IS NOT NULL, to
+// process() one index at a time, and process() takes a SMALLINT index as
+// uint16_t. Index 65'537 would wrap to the in-range index 1, so processBulk()
+// must check the full int32 index first.
+TEST_F(
+    GetFlatValuesTest,
+    dictionaryBulkSmallintIsNotNullIndexOutOfRangeThrows) {
+  auto reader = makeReader(SMALLINT());
+  BufferPtr dictHolder =
+      AlignedBuffer::allocate<int16_t>(3, reader->memoryPool());
+  auto* dictValues = dictHolder->asMutable<int16_t>();
+  dictValues[0] = 100;
+  dictValues[1] = 200;
+  dictValues[2] = 300;
+  reader->scanState().dictionary.values = dictHolder;
+  reader->scanState().dictionary.numValues = 3;
+  reader->scanState().updateRawState();
+  // Output capacity for the 3 requested rows.
+  reader->stageRawValues<int16_t>({0, 0, 0});
+  std::vector<int32_t> rowsVec(3);
+  std::iota(rowsVec.begin(), rowsVec.end(), 0);
+  const RowSet rows(rowsVec.data(), rowsVec.size());
+  const velox::common::IsNotNull filter;
+  DictionaryColumnVisitor<
+      int16_t,
+      velox::common::IsNotNull,
+      ExtractToReader,
+      true>
+      visitor(filter, reader.get(), rows, ExtractToReader(reader.get()));
+  const std::vector<int32_t> indices{0, 65'537, 2};
+  VELOX_ASSERT_THROW(
+      visitor.processBulk(
+          indices.data(), static_cast<int32_t>(indices.size()), rowsVec.data()),
+      "Index to dictionary is out of range: 0x10001 >= 3");
+}
+
 } // namespace
 } // namespace facebook::velox::dwio::common

@@ -50,7 +50,8 @@ ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
     const std::vector<std::string>& sortOrders,
     const std::string& minKey,
     const std::vector<Stripe>& stripes,
-    const std::vector<int>& stripeGroups) {
+    const std::vector<int>& stripeGroups,
+    KeyStreamLayout keyStreamLayout) {
   NIMBLE_CHECK_EQ(indexColumns.size(), sortOrders.size());
 
   flatbuffers::FlatBufferBuilder builder;
@@ -75,6 +76,9 @@ ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
     std::vector<uint32_t> chunkRows;
     std::vector<uint32_t> chunkOffsets;
     std::vector<flatbuffers::Offset<flatbuffers::String>> chunkKeys;
+    // Stripe layout only: each stripe with its key stream, as the stripe group
+    // metadata gives them to the index.
+    auto& stripeKeyStreams = result.stripeKeyStreams.emplace_back();
 
     // Build standalone ChunkStatsGroup for this group
     flatbuffers::FlatBufferBuilder chunkBuilder;
@@ -99,6 +103,12 @@ ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
       NIMBLE_CHECK_EQ(
           keyStream.stream.numChunks, keyStream.stream.chunkOffsets.size());
       NIMBLE_CHECK_EQ(keyStream.stream.numChunks, keyStream.chunkKeys.size());
+      if (keyStreamLayout == KeyStreamLayout::kStripe) {
+        NIMBLE_CHECK_EQ(
+            keyStream.stream.numChunks,
+            1,
+            "A Stripe layout stripe holds one key chunk");
+      }
 
       // Accumulate chunk data per stripe. Chunk offsets are partition-relative.
       uint32_t stripeRowCount = 0;
@@ -113,6 +123,11 @@ ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
       }
       result.stripeRowCounts.push_back(stripeRowCount);
       keyDataSize += keyStream.streamSize;
+      // The key stream starts its stripe.
+      stripeKeyStreams.push_back(
+          {.offset = keyStream.streamOffset,
+           .numRows = stripeRowCount,
+           .streams = {{.offset = 0, .size = keyStream.streamSize}}});
 
       for (const auto& stream : stripe.streams) {
         accumulatedStreamChunkCount += stream.numChunks;
@@ -129,18 +144,24 @@ ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
         }
       }
     }
-    auto chunkRowsVec = groupBuilder.CreateVector(chunkRows);
-    auto chunkOffsetsVec = groupBuilder.CreateVector(chunkOffsets);
-    auto chunkKeysVec = groupBuilder.CreateVector(chunkKeys);
-
-    groupBuilder.Finish(
-        serialization::CreateClusterIndexPartition(
-            groupBuilder,
-            partitionKeyStreamOffset,
-            keyDataSize,
-            chunkRowsVec,
-            chunkOffsetsVec,
-            chunkKeysVec));
+    if (keyStreamLayout == KeyStreamLayout::kPartition) {
+      auto chunkRowsVec = groupBuilder.CreateVector(chunkRows);
+      auto chunkOffsetsVec = groupBuilder.CreateVector(chunkOffsets);
+      auto chunkKeysVec = groupBuilder.CreateVector(chunkKeys);
+      groupBuilder.Finish(
+          serialization::CreateClusterIndexPartition(
+              groupBuilder,
+              partitionKeyStreamOffset,
+              keyDataSize,
+              chunkRowsVec,
+              chunkOffsetsVec,
+              chunkKeysVec));
+    } else {
+      // Each stripe holds one key chunk, so the chunk keys are the stripe keys.
+      auto stripeKeysVec = groupBuilder.CreateVector(chunkKeys);
+      groupBuilder.Finish(
+          serialization::CreateClusterIndexGroup(groupBuilder, stripeKeysVec));
+    }
 
     uint64_t offset = result.indexPartitions.size();
     uint32_t size = groupBuilder.GetSize();
@@ -217,13 +238,19 @@ ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
   auto partitionKeysVector = builder.CreateVector(subPartitionKeyOffsets);
   auto partitionRowCountsVector = builder.CreateVector(partitionRowCounts);
 
+  // A Stripe layout index locates its groups in index_groups instead.
+  const bool stripeLayout = keyStreamLayout == KeyStreamLayout::kStripe;
+  const decltype(indexPartitionsVector) noSections;
   auto index = serialization::CreateClusterIndex(
       builder,
       indexColumnsVector,
       sortOrdersVector,
-      indexPartitionsVector,
+      stripeLayout ? noSections : indexPartitionsVector,
       partitionKeysVector,
-      partitionRowCountsVector);
+      partitionRowCountsVector,
+      static_cast<uint8_t>(keyStreamLayout),
+      stripeLayout ? kKeyStreamId : 0,
+      stripeLayout ? indexPartitionsVector : noSections);
 
   builder.Finish(index);
 
@@ -238,7 +265,8 @@ ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
     const std::vector<std::string>& indexColumns,
     const std::string& minKey,
     const std::vector<Stripe>& stripes,
-    const std::vector<int>& stripeGroups) {
+    const std::vector<int>& stripeGroups,
+    KeyStreamLayout keyStreamLayout) {
   std::vector<std::string> defaultSortOrders;
   defaultSortOrders.reserve(indexColumns.size());
   for (size_t i = 0; i < indexColumns.size(); ++i) {
@@ -246,7 +274,67 @@ ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
         folly::toJson(velox::core::kAscNullsFirst.serialize()));
   }
   return createTestClusterIndex(
-      indexColumns, defaultSortOrders, minKey, stripes, stripeGroups);
+      indexColumns,
+      defaultSortOrders,
+      minKey,
+      stripes,
+      stripeGroups,
+      keyStreamLayout);
+}
+
+ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createStripeGroupIndex(
+    const StripeGroupIndex& index) {
+  flatbuffers::FlatBufferBuilder groupBuilder;
+  flatbuffers::Offset<
+      flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>>
+      stripeKeys;
+  if (index.stripeKeys.has_value()) {
+    stripeKeys = groupBuilder.CreateVectorOfStrings(index.stripeKeys.value());
+  }
+  groupBuilder.Finish(
+      serialization::CreateClusterIndexGroup(groupBuilder, stripeKeys));
+
+  IndexBuffers result;
+  result.stripeKeyStreams.push_back(index.stripeKeyStreams);
+  const auto groupSize = groupBuilder.GetSize();
+  result.indexPartitions.assign(
+      reinterpret_cast<const char*>(groupBuilder.GetBufferPointer()),
+      groupSize);
+
+  flatbuffers::FlatBufferBuilder rootBuilder;
+  const auto indexColumns =
+      rootBuilder.CreateVectorOfStrings(std::vector<std::string>{"col1"});
+  const auto sortOrders = rootBuilder.CreateVectorOfStrings(
+      std::vector<std::string>{
+          folly::toJson(velox::core::kAscNullsFirst.serialize())});
+  const auto groupSection = serialization::CreateMetadataSection(
+      rootBuilder,
+      /*offset=*/0,
+      groupSize,
+      serialization::CompressionType_Uncompressed,
+      groupSize);
+  const auto groups = rootBuilder.CreateVector(
+      std::vector<flatbuffers::Offset<serialization::MetadataSection>>{
+          groupSection});
+  const auto partitionKeys =
+      rootBuilder.CreateVectorOfStrings(std::vector<std::string>{"b", "d"});
+  const auto partitionRowCounts =
+      rootBuilder.CreateVector(std::vector<uint32_t>{4});
+  rootBuilder.Finish(
+      serialization::CreateClusterIndex(
+          rootBuilder,
+          indexColumns,
+          sortOrders,
+          index.setIndexPartitions ? groups : decltype(groups){},
+          partitionKeys,
+          partitionRowCounts,
+          index.keyStreamLayout,
+          kKeyStreamId,
+          groups));
+  result.rootIndex.assign(
+      reinterpret_cast<const char*>(rootBuilder.GetBufferPointer()),
+      rootBuilder.GetSize());
+  return result;
 }
 
 ClusterIndexTestBase::IndexBuffers
@@ -351,12 +439,15 @@ ClusterIndexTestBase::createChunkOnlyTestClusterIndex(
 
 std::unique_ptr<ClusterIndex> ClusterIndexTestBase::createClusterIndex(
     const IndexBuffers& indexBuffers,
-    velox::ReadFile* keyStreamFile) {
-  Section indexSection{MetadataBuffer(
+    velox::ReadFile* keyStreamFile,
+    bool pinIndex,
+    bool preloadIndex,
+    bool withKeyStreamLocator) {
+  Section indexSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
           toBufferPtr(indexBuffers.rootIndex, pool_.get()),
           CompressionType::Uncompressed,
-          pool_.get()))};
+          pool_.get())))};
 
   metadataFile_ =
       std::make_shared<velox::InMemoryReadFile>(indexBuffers.indexPartitions);
@@ -371,11 +462,27 @@ std::unique_ptr<ClusterIndex> ClusterIndexTestBase::createClusterIndex(
       : metadataFile_;
   auto dataInput = std::make_unique<velox::dwio::common::BufferedInput>(
       std::move(dataFile), *pool_);
+
+  // Stands in for the stripe group metadata, which locates the key stream of
+  // each stripe in the Stripe layout.
+  IndexLookup::KeyStreamLocator keyStreamLocator;
+  if (withKeyStreamLocator) {
+    keyStreamLocator = [stripeKeyStreams = indexBuffers.stripeKeyStreams](
+                           uint32_t stripeGroup,
+                           std::span<const uint32_t> streamIds) {
+      NIMBLE_CHECK_EQ(streamIds.size(), 1);
+      NIMBLE_CHECK_EQ(streamIds[0], kKeyStreamId);
+      return stripeKeyStreams.at(stripeGroup);
+    };
+  }
   return ClusterIndexTestHelper::create(
       std::move(indexSection),
       pool_.get(),
       std::move(metadataInput),
-      std::move(dataInput));
+      std::move(dataInput),
+      pinIndex,
+      preloadIndex,
+      std::move(keyStreamLocator));
 }
 
 std::shared_ptr<ChunkStatsGroup> ClusterIndexTestBase::createChunkStats(
@@ -400,15 +507,15 @@ std::shared_ptr<ChunkStatsGroup> ClusterIndexTestBase::createChunkStats(
     offset += indexBuffers.chunkStatsGroupSizes[g];
   }
 
-  auto chunkStatsBuffer =
-      std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
+  auto chunkStatsBuffer = std::make_unique<MetadataBuffer>(toPinnedBuffer(
+      MetadataBuffer::decompress(
           toBufferPtr(
               std::string_view(
                   indexBuffers.chunkStatsGroups.data() + offset,
                   indexBuffers.chunkStatsGroupSizes[stripeGroupIndex]),
               pool_.get()),
           CompressionType::Uncompressed,
-          pool_.get()));
+          pool_.get())));
 
   return ChunkStatsGroup::create(
       ChunkStatsVersion::kV1,

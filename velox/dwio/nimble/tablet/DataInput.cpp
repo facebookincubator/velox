@@ -26,6 +26,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/tablet/IoAlignment.h"
 
 namespace facebook::nimble {
 
@@ -36,49 +37,6 @@ namespace {
 velox::ReadFile* checkedFile(velox::ReadFile* file) {
   NIMBLE_CHECK_NOT_NULL(file);
   return file;
-}
-
-uint64_t readAlignment(const velox::ReadFile& file) {
-  uint64_t alignment{0};
-  return file.directIo(/*alignment=*/alignment) ? alignment : 1;
-}
-
-// Returns the read of 'region' from a file of 'fileSize' bytes: 'region'
-// widened to multiples of 'alignment'. The read may run past the end of the
-// file, where a direct-I/O read returns no bytes. Rejects a region that starts
-// or ends past the end of the file, since its bytes past the end do not exist.
-DataInput::Region
-alignedRegion(DataInput::Region region, uint64_t alignment, uint64_t fileSize) {
-  NIMBLE_DCHECK_GT(alignment, 0);
-  NIMBLE_DCHECK(velox::bits::isPowerOfTwo(alignment));
-
-  // Compared without adding offset and length, which a corrupt offset can
-  // overflow.
-  NIMBLE_CHECK_FILE_LE(
-      region.offset, fileSize, "Read region starts past the end of the file");
-  NIMBLE_CHECK_FILE_LE(
-      region.length,
-      fileSize - region.offset,
-      "Read region extends past the end of the file: offset {}, file size {}",
-      region.offset,
-      fileSize);
-  const auto alignedOffset = region.offset & ~(alignment - 1);
-  const auto alignedEnd =
-      (region.offset + region.length + alignment - 1) & ~(alignment - 1);
-  return {alignedOffset, alignedEnd - alignedOffset};
-}
-
-// Returns the bytes of 'readRegions' before the end of a file of 'fileSize'
-// bytes, which is all that a direct-I/O read past the end returns. Each read
-// comes from alignedRegion(), so none starts past the end of the file.
-uint64_t fileReadBytes(
-    std::span<const DataInput::Region> readRegions,
-    uint64_t fileSize) {
-  uint64_t bytes{0};
-  for (const auto& region : readRegions) {
-    bytes += std::min(region.length, fileSize - region.offset);
-  }
-  return bytes;
 }
 
 } // namespace

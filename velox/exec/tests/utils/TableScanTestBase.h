@@ -69,13 +69,6 @@ class TableScanTestBase : public HiveConnectorTestBase {
       const std::string& duckDbSql,
       const int32_t numPrefetchSplit);
 
-  // Run query with spill enabled.
-  std::shared_ptr<Task> assertQuery(
-      const core::PlanNodePtr& plan,
-      const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
-      const std::string& spillDirectory,
-      const std::string& duckDbSql);
-
   core::PlanNodePtr tableScanNode();
 
   core::PlanNodePtr tableScanNode(const RowTypePtr& outputType);

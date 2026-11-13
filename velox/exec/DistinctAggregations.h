@@ -46,18 +46,14 @@ class DistinctAggregations {
     allocator_ = allocator;
   }
 
-  void setOffsets(
-      int32_t offset,
-      int32_t nullByte,
-      uint8_t nullMask,
-      int32_t initializedByte,
-      uint8_t initializedMask,
-      int32_t rowSizeOffset) {
-    offset_ = offset;
-    nullByte_ = nullByte;
-    nullMask_ = nullMask;
-    initializedByte_ = initializedByte;
-    initializedMask_ = initializedMask;
+  /// Sets the location of the accumulator in a row: 'column' and the row size
+  /// at 'rowSizeOffset'.
+  void setOffsets(RowColumn column, int32_t rowSizeOffset) {
+    offset_ = column.offset();
+    nullByte_ = column.nullByte();
+    nullMask_ = column.nullMask();
+    initializedByte_ = column.initializedByte();
+    initializedMask_ = column.initializedMask();
     rowSizeOffset_ = rowSizeOffset;
   }
 

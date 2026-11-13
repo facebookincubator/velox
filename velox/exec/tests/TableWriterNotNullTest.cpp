@@ -80,32 +80,32 @@ TEST_F(TableWriterNotNullTest, dictionaryEncoding) {
   auto withNulls = makeNullableFlatVector<int32_t>({0, std::nullopt, 2});
 
   // The wrap adds a null over a null-free base.
-  auto addsNulls = makeRowVector(
-      {"c0"},
-      {BaseVector::wrapInDictionary(
+  auto addsNulls = makeNamedRowVector(
+      "c0",
+      BaseVector::wrapInDictionary(
           makeNulls({false, true, false}),
           makeIndices({0, 1, 2}),
           3,
-          nullFree)});
+          nullFree));
   VELOX_ASSERT_USER_THROW(
       AssertQueryBuilder(writePlan({addsNulls}, {"c0"})).countResults(),
       "NULL value not allowed for NOT NULL column: c0");
 
   // The wrap selects only the base's non-null rows.
-  auto hidesNulls =
-      makeRowVector({"c0"}, {wrapInDictionary(makeIndices({2, 0}), withNulls)});
+  auto hidesNulls = makeNamedRowVector(
+      "c0", wrapInDictionary(makeIndices({2, 0}), withNulls));
   ASSERT_EQ(writtenRows(writePlan({hidesNulls}, {"c0"})), 2);
 
   // The wrap selects some of the base's rows, one of them null.
-  auto keepsNull =
-      makeRowVector({"c0"}, {wrapInDictionary(makeIndices({2, 1}), withNulls)});
+  auto keepsNull = makeNamedRowVector(
+      "c0", wrapInDictionary(makeIndices({2, 1}), withNulls));
   VELOX_ASSERT_USER_THROW(
       AssertQueryBuilder(writePlan({keepsNull}, {"c0"})).countResults(),
       "NULL value not allowed for NOT NULL column: c0");
 }
 
 TEST_F(TableWriterNotNullTest, constantNull) {
-  auto data = makeRowVector({"c0"}, {makeNullConstant(TypeKind::INTEGER, 3)});
+  auto data = makeNamedRowVector("c0", makeNullConstant(TypeKind::INTEGER, 3));
 
   VELOX_ASSERT_USER_THROW(
       AssertQueryBuilder(writePlan({data}, {"c0"})).countResults(),
@@ -178,12 +178,12 @@ TEST_F(TableWriterNotNullTest, renamedColumns) {
 // The reused DecodedVector must not break on a change of batch size or
 // encoding, nor mask a null in a later batch.
 TEST_F(TableWriterNotNullTest, multipleBatches) {
-  auto flat = makeRowVector({"c0"}, {makeFlatVector<int32_t>({0, 1, 2})});
-  auto dictionary = makeRowVector(
-      {"c0"},
-      {wrapInDictionary(makeIndices({1, 0}), makeFlatVector<int32_t>({0, 1}))});
+  auto flat = makeNamedRowVector("c0", makeFlatVector<int32_t>({0, 1, 2}));
+  auto dictionary = makeNamedRowVector(
+      "c0",
+      wrapInDictionary(makeIndices({1, 0}), makeFlatVector<int32_t>({0, 1})));
   auto withNull =
-      makeRowVector({"c0"}, {makeNullableFlatVector<int32_t>({std::nullopt})});
+      makeNamedRowVector("c0", makeNullableFlatVector<int32_t>({std::nullopt}));
 
   ASSERT_EQ(writtenRows(writePlan({flat, dictionary}, {"c0"})), 5);
 

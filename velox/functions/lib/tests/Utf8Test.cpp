@@ -154,5 +154,19 @@ TEST(Utf8Test, decodeCodePointOrReplacement) {
       decode(std::string_view{"\xF4\x90\x80\x80", 4}), std::pair(1, 0xFFFD));
 }
 
+TEST(Utf8Test, parseUnicodeEscape) {
+  uint16_t codeUnit{0};
+  EXPECT_TRUE(parseUnicodeEscape(R"(\u00e9)", 0, codeUnit));
+  EXPECT_EQ(codeUnit, 0x00E9);
+  EXPECT_TRUE(parseUnicodeEscape(R"(ab\uD83Dcd)", 2, codeUnit));
+  EXPECT_EQ(codeUnit, 0xD83D);
+
+  EXPECT_FALSE(parseUnicodeEscape(R"(\u00e)", 0, codeUnit));
+  EXPECT_FALSE(parseUnicodeEscape(R"(\u00eg)", 0, codeUnit));
+  EXPECT_FALSE(parseUnicodeEscape(R"(\x00e9)", 0, codeUnit));
+  EXPECT_FALSE(parseUnicodeEscape(R"(u00e9a)", 0, codeUnit));
+  EXPECT_FALSE(parseUnicodeEscape(R"(\u00e9)", 1, codeUnit));
+}
+
 } // namespace
 } // namespace facebook::velox::functions

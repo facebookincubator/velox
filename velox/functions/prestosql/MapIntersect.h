@@ -48,7 +48,7 @@ struct MapIntersectPrimitiveFunction {
       out_type<Map<Key, Generic<T1>>>& out,
       const arg_type<Map<Key, Generic<T1>>>& inputMap,
       const arg_type<Array<Key>>& keys) {
-    if (FOLLY_UNLIKELY(keys.empty() || inputMap.empty())) {
+    if (keys.empty() || inputMap.empty()) [[unlikely]] {
       return;
     }
 
@@ -60,7 +60,7 @@ struct MapIntersectPrimitiveFunction {
       }
     }
 
-    if (FOLLY_UNLIKELY(searchKeys_.empty())) {
+    if (searchKeys_.empty()) [[unlikely]] {
       return;
     }
 
@@ -126,7 +126,7 @@ struct MapIntersectVarcharFunction {
       out_type<Map<Varchar, Generic<T1>>>& out,
       const arg_type<Map<Varchar, Generic<T1>>>& inputMap,
       const arg_type<Array<Varchar>>& keys) {
-    if (FOLLY_UNLIKELY(keys.empty() || inputMap.empty())) {
+    if (keys.empty() || inputMap.empty()) [[unlikely]] {
       return;
     }
 
@@ -138,7 +138,7 @@ struct MapIntersectVarcharFunction {
       }
     }
 
-    if (FOLLY_UNLIKELY(searchKeys_.empty())) {
+    if (searchKeys_.empty()) [[unlikely]] {
       return;
     }
 
@@ -202,7 +202,7 @@ struct MapIntersectFunction {
       out_type<Map<Generic<T1>, Generic<T2>>>& out,
       const arg_type<Map<Generic<T1>, Generic<T2>>>& inputMap,
       const arg_type<Array<Generic<T1>>>& keys) {
-    if (FOLLY_UNLIKELY(keys.empty() || inputMap.empty())) {
+    if (keys.empty() || inputMap.empty()) [[unlikely]] {
       return;
     }
 
@@ -212,7 +212,7 @@ struct MapIntersectFunction {
       searchKeys_.emplace(key);
     }
 
-    if (FOLLY_UNLIKELY(searchKeys_.empty())) {
+    if (searchKeys_.empty()) [[unlikely]] {
       return;
     }
 

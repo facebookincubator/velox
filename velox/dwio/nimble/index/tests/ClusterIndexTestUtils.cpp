@@ -119,8 +119,12 @@ PartitionStats ClusterIndexTestHelper::partitionStats(
     uint32_t partitionIndex) const {
   PartitionStats stats;
 
+  NIMBLE_CHECK_EQ(
+      clusterIndex_->keyStreamLayout(), KeyStreamLayout::kPartition);
   const auto* partition = clusterIndex_->loadPartition(partitionIndex);
-  const auto* index = partition->index;
+  const auto* index =
+      flatbuffers::GetRoot<serialization::ClusterIndexPartition>(
+          partition->metadata().content().data());
 
   stats.keyStreamOffset = index->key_stream_offset();
   stats.keyStreamSize = index->key_stream_size();

@@ -204,8 +204,8 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
           .config(
               QueryConfig::kTaskWriterCount,
               std::to_string(numTableWriterCount_))
-          .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(QueryConfig::kWriterSpillEnabled, "true")
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(QueryConfig::kWriterSpillEnabled, true)
           // Scale writer settings to trigger partition rebalancing.
           .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
           .config(

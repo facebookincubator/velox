@@ -268,15 +268,34 @@ class NimbleIndexProjector {
   std::vector<StripeSelection> lookup(
       const velox::serializer::EncodedKeyBounds& bounds);
 
+  /// Resolves key bounds as lookup(bounds) does, and sets 'keyCursor' to a
+  /// cursor over the keys of the selected rows, or to null on a miss, as
+  /// ClusterIndexBase::seek() returns.
+  std::vector<StripeSelection> lookup(
+      const velox::serializer::EncodedKeyBounds& bounds,
+      std::unique_ptr<index::KeyCursor>& keyCursor);
+
   /// Resolves the rows whose key equals the encoded key into stripe selections,
   /// in stripe order. Returns an empty vector for a miss. The rows of a key can
   /// span chunks and stripes, so this looks up the range from the key to its
   /// successor, the key followed by a zero byte. The caller owns scan progress.
   std::vector<StripeSelection> lookup(std::string encodedKey);
 
+  /// Resolves the rows of the encoded key as lookup(encodedKey) does, and sets
+  /// 'keyCursor' as lookup(bounds, keyCursor) does.
+  std::vector<StripeSelection> lookup(
+      std::string encodedKey,
+      std::unique_ptr<index::KeyCursor>& keyCursor);
+
   /// Resolves a file-level row range into stripe selections.
   /// Returns an empty vector for an empty range.
   std::vector<StripeSelection> lookup(const RowRange& rowRange);
+
+  /// Returns the number of consecutive file stripes that fit the encoded
+  /// read-ahead budget, stopping at EOF. Includes one stripe even if it exceeds
+  /// the budget. A zero budget selects one stripe. Requires a valid first
+  /// stripe.
+  uint32_t numStripesToRead(uint32_t stripeOffset) const;
 
   /// Loads projected streams for contiguous full stripes in one I/O batch.
   /// Returns one entry per stripe, in stripe order, including stripes whose
@@ -285,6 +304,9 @@ class NimbleIndexProjector {
   std::vector<facebook::nimble::ProjectedStripe> loadStripeStreams(
       uint32_t stripeOffset,
       uint32_t numStripes);
+
+  /// Releases stream-scan resources after all stripe loads have stopped.
+  void resetStreamScan();
 
   /// Returns the projected nimble schema. Preserves encoding-specific types
   /// (ArrayWithOffsets, SlidingWindowMap, FlatMap) from the file schema.
@@ -354,6 +376,12 @@ class NimbleIndexProjector {
   /// values. Enabled by default.
   void setTimingEnabled(bool enabled);
 
+  /// Turns the verification of stream checksums on or off for the next
+  /// requests, as ReaderOptions::verifyStreamChecksums() does at creation. A
+  /// file whose stream trailers carry no checksum stays unverified. Must not
+  /// be called while a request loads stripes.
+  void setVerifyStreamChecksums(bool verifyStreamChecksums);
+
  private:
   // Applies a synchronous counter or timing update under the TSan guard.
   template <typename Update>
@@ -371,6 +399,7 @@ class NimbleIndexProjector {
       std::shared_ptr<const NimbleTypeProjection> projection,
       velox::memory::MemoryPool* pool,
       std::shared_ptr<velox::io::IoStatistics> ioStats,
+      uint64_t readAheadSizeBytes,
       bool verifyStreamChecksums);
 
   // A request index paired with its stripe-relative row range.
@@ -542,9 +571,8 @@ class NimbleIndexProjector {
   // Returns decoding options backed by this projector's scratch pool.
   Encoding::Options encodingOptions(bool cacheEncodingView);
 
-  // Creates the schema-derived reader on first use by co_projectRows(), and
-  // again when 'cacheEncodingView' differs from the current reader's setting.
-  void ensureStreamReader(bool cacheEncodingView);
+  // Creates the schema-derived reader on first use by co_projectRows().
+  void ensureStreamReader();
 
   // Computes per-stripe pack ranges and returns the upper-bound byte estimate
   // used to allocate the sliced-output arena. Returns 0 when no stripe will be
@@ -637,6 +665,9 @@ class NimbleIndexProjector {
   const ClusterIndexBase* const clusterIndex_;
   const uint32_t numStripes_{0};
 
+  // Bounds the physical file span of encoded scan batches.
+  const uint64_t readAheadSizeBytes_{0};
+
   const std::shared_ptr<const NimbleTypeProjection> projection_;
   // True when every emitted slice must preserve a native HFM batch boundary,
   // even if the selected group has no physical stream in a stripe.
@@ -644,8 +675,9 @@ class NimbleIndexProjector {
 
   std::unique_ptr<DataInput> dataInput_;
   // Verifies a stream read from storage against the checksum in its stream
-  // trailer. Built only when ReaderOptions::verifyStreamChecksums() is set and
-  // the file's stream trailers carry a checksum, so null means this projector
+  // trailer. Built only when ReaderOptions::verifyStreamChecksums() or
+  // setVerifyStreamChecksums() turns verification on and the file's stream
+  // trailers carry a checksum, so null means this projector
   // does not verify. Stateful, so it relies on this class being
   // single-threaded.
   std::unique_ptr<Checksum> streamChecksum_;
@@ -660,11 +692,10 @@ class NimbleIndexProjector {
   // projector is single-threaded, matching BufferPool's ownership contract.
   velox::BufferPool encodingBufferPool_{velox::BufferPool::kDefaultCapacity};
 
-  // Decodes projected rows into Velox vectors. The serialized path does not
-  // need this reader, so it is created on the first co_projectRows() call.
+  // Decodes projected rows into Velox vectors with the encoding options of each
+  // request. The serialized path does not need this reader, so it is created
+  // on the first co_projectRows() call.
   std::unique_ptr<StreamReader> streamReader_;
-  // Options::cacheEncodingView of the call that created 'streamReader_'.
-  bool cacheEncodingView_{false};
 
   // Reused across stripes; its raw input format is fixed by the tablet. Only
   // the serialized path slices streams, so the slicer is created on the first

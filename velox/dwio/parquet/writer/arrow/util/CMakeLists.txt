@@ -27,9 +27,7 @@ velox_add_library(
   CompressionInternal.h
   Crc32.h
   Hashing.h
-  OverflowUtilInternal.h
   VisitArrayInline.h
-  safe-math.h
 )
 
 velox_link_libraries(

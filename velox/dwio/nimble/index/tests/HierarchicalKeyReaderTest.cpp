@@ -215,7 +215,7 @@ class HierarchicalKeyReaderTest : public testing::Test {
               CompressionType::Uncompressed,
               static_cast<uint32_t>(metadata.size())};
         };
-    writer->flush(writeDataFn, createMetadataFn);
+    writer->finishStripeGroup(writeDataFn, createMetadataFn);
 
     const char* position = chunkData_.data();
     const auto header = readChunkHeader(position);
@@ -492,8 +492,7 @@ class HierarchicalKeyReaderTest : public testing::Test {
   // Whether readers opened by buildInput() cache their encoding views.
   bool cacheEncodingViews_{false};
   // Defines the keys that the built chunks take and return.
-  std::shared_ptr<const HierarchicalKeyCodec> keyCodec_{
-      NimbleHierarchicalClusterIndexFactory{}.testingKeyCodec()};
+  std::shared_ptr<const HierarchicalKeyCodec> keyCodec_{nimbleKeyCodec()};
 };
 
 // Assembles chunks by hand. 'values0_', 'childOffsets_' and 'values1_' encode

@@ -974,6 +974,7 @@ class DictionaryColumnVisitor
         std::is_same_v<TFilter, velox::common::AlwaysTrue> &&
         std::is_same_v<ExtractValues, ExtractToReader>) {
       if (!inDict()) {
+        validateIndices(input, numInput);
         auto* values = reinterpret_cast<T*>(super::reader_->rawValues()) +
             super::reader_->numValues();
         const auto* dictionary = dict();
@@ -992,6 +993,14 @@ class DictionaryColumnVisitor
       }
     }
     if constexpr (!hasFilter()) {
+      // process() narrows each index to make_index<T>::type. For SMALLINT that
+      // drops the high bits, so check the full indices first. Values outside
+      // inDict() are not dictionary indices.
+      if constexpr (sizeof(typename make_index<T>::type) < sizeof(int32_t)) {
+        if (!inDict()) {
+          validateIndices(input, numInput);
+        }
+      }
       bool atEnd{false};
       for (int32_t i = 0; i < numInput; ++i) {
         super::rowIndex_ = inputRows[i];
@@ -1003,6 +1012,7 @@ class DictionaryColumnVisitor
       return;
     }
 
+    validateIndices(input, numInput);
     constexpr bool kFilterOnly = super::kFilterOnly;
     constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
     const auto numOutputValues = super::reader_->numValues();
@@ -1287,6 +1297,23 @@ class DictionaryColumnVisitor
   }
 
  private:
+  // Throws if any of the 'numInput' indices in 'input' is outside the
+  // dictionary. Negative indices read as uint32 values of 2^31 or more. Checks
+  // the max index first so the check vectorizes and stays out of
+  // processBulk()'s copy loops, which a check per index keeps from unrolling.
+  void validateIndices(const int32_t* input, int32_t numInput) const {
+    uint32_t maxIndex{0};
+    for (int32_t i = 0; i < numInput; ++i) {
+      maxIndex = std::max(maxIndex, static_cast<uint32_t>(input[i]));
+    }
+    if (UNLIKELY(maxIndex >= static_cast<uint32_t>(dictionarySize()))) {
+      for (int32_t i = 0; i < numInput; ++i) {
+        validateDictionaryIndex(
+            static_cast<uint32_t>(input[i]), dictionarySize());
+      }
+    }
+  }
+
   // Checks the in-dictionary lanes of a batch of indices loaded from 'input',
   // before the filter cache and dictionary reads through them. 'indices' holds
   // the low 32 bits of each index; the high bits of 64-bit indices must be 0.

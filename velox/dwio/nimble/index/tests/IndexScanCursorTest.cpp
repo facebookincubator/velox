@@ -23,6 +23,7 @@
 #include <future>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -34,6 +35,7 @@
 #include "folly/ScopeGuard.h"
 #include "folly/Synchronized.h"
 #include "folly/container/F14Map.h"
+#include "folly/coro/Baton.h"
 #include "folly/coro/Timeout.h"
 #include "folly/init/Init.h"
 #include "folly/io/IOBuf.h"
@@ -66,17 +68,21 @@ class RejectNextExecutor final : public folly::CPUThreadPoolExecutor {
 
 // Materializes each stripe into entries that hold only the number of selected
 // rows, and keeps the stripe until the test takes it, so that a test can
-// inspect what the cursor loaded. Materialization always stays on the thread
-// that consumes the cursor, including when I/O prefetch is enabled.
+// inspect what the cursor loaded.
 class RecordingMaterializer final
     : public detail::IndexScanCursor::StripeMaterializer {
  public:
+  folly::coro::Baton* firstStripeGate{nullptr};
+
   folly::coro::Task<std::unique_ptr<Entries>> materialize(
       ProjectedStripe stripe,
-      const index::ClusterIndexBase& /*clusterIndex*/) override {
+      index::KeyCursor& /*keyCursor*/) override {
     numMaterializeCalls_.fetch_add(1, std::memory_order_relaxed);
     if (onMaterialize_ != nullptr) {
       onMaterialize_(stripe);
+    }
+    if (firstStripeGate != nullptr && stripe.selection.stripeIndex == 0) {
+      co_await *firstStripeGate;
     }
     auto entries = std::make_unique<Entries>(iobufFactory_);
     entries->numRows = static_cast<velox::vector_size_t>(
@@ -85,6 +91,16 @@ class RecordingMaterializer final
     // have had the same address.
     stripes_.wlock()->insert_or_assign(entries.get(), std::move(stripe));
     co_return entries;
+  }
+
+  bool hasLoadedStripe(uint32_t stripeIndex) const override {
+    return keptStripe_ == stripeIndex;
+  }
+
+  // Makes hasLoadedStripe() report that the materializer keeps the streams of
+  // the stripe 'stripeIndex', or of no stripe when it is nullopt.
+  void setKeptStripe(std::optional<uint32_t> stripeIndex) {
+    keptStripe_ = stripeIndex;
   }
 
   // Returns the stripe that 'entries' were materialized from.
@@ -114,6 +130,8 @@ class RecordingMaterializer final
       [](size_t capacity) { return folly::IOBuf::create(capacity); }};
   std::function<void(const ProjectedStripe&)> onMaterialize_;
   std::atomic_uint32_t numMaterializeCalls_{0};
+  // The stripe whose streams hasLoadedStripe() reports as kept.
+  std::optional<uint32_t> keptStripe_;
   // The stripes of the entries that the test has not taken, by entries.
   folly::Synchronized<folly::F14FastMap<const Entries*, ProjectedStripe>>
       stripes_;
@@ -203,6 +221,119 @@ TEST_P(IndexScanCursorTest, loadsSelectedStripesLazily) {
   EXPECT_EQ(stripeIndices, (std::vector<uint32_t>{0, 1, 2}));
   EXPECT_EQ(cursor->stats().numReadStripes, 3);
   EXPECT_EQ(cursor->stats().numOutputRows, 8);
+  cursor->reset();
+}
+
+TEST_P(IndexScanCursorTest, readAheadStopsAtSelectedStripes) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/2);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  configureReaderOptions(
+      readerOptions,
+      /*setDataIoStats=*/true,
+      /*setMetadataIoStats=*/true,
+      /*setIndexIoStats=*/true,
+      /*cacheData=*/false,
+      /*verifyStreamChecksums=*/false);
+  readerOptions.setPrefetchMode(velox::io::PrefetchMode::PRELOAD);
+  readerOptions.setAutoPreloadLength(sinkData_.size());
+  ensureTabletReaderCache();
+  const auto fileHandle = makeFileHandle();
+  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
+  for (const bool prefetch : {false, true}) {
+    SCOPED_TRACE(prefetch);
+    auto projector = NimbleIndexProjector::create(
+        *tabletReaderCache_,
+        fileHandle,
+        subfields,
+        /*blockCache=*/nullptr,
+        readerOptions);
+    ASSERT_EQ(projector->numStripesToRead(0), 2);
+    auto materializer = std::make_shared<RecordingMaterializer>();
+    materializer_ = materializer.get();
+    NimbleIterator::Options options;
+    options.cacheEncodingView = GetParam().cacheEncodingView;
+    if (prefetch) {
+      options.prefetchExecutor = folly::getKeepAliveToken(*executor);
+      options.maxPrefetchStripes = 1;
+    }
+    auto cursor = detail::IndexScanCursor::create(
+        std::move(projector), std::move(materializer), std::move(options));
+    cursor->seek(makeRangeLookup(rowType, {"key"}, 1, 3));
+    EXPECT_EQ(
+        nextStripe(*cursor, 1).selection.selectedRowRange(), RowRange(1, 3));
+    cursor->reset();
+    EXPECT_EQ(cursor->stats().numReadStripes, 1);
+  }
+}
+
+// The cursor passes the selection of a stripe that the materializer holds
+// alone, and loads the others. A get iterator does not prefetch, also when its
+// options set a prefetch executor.
+TEST_P(IndexScanCursorTest, skipsLoadingAStripeThatTheMaterializerHolds) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  for (const bool prefetchExecutor : {false, true}) {
+    SCOPED_TRACE(prefetchExecutor);
+    auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
+    NimbleIterator::Options options;
+    options.forGet = true;
+    if (prefetchExecutor) {
+      options.prefetchExecutor = folly::getKeepAliveToken(*executor);
+    }
+    auto cursor = makeCursor(std::move(options));
+    materializer_->setKeptStripe(1);
+
+    cursor->seek(makePointLookup(rowType, {"key"}, 5));
+    {
+      const auto stripe = nextStripe(*cursor, 5);
+      EXPECT_EQ(stripe.selection.stripeIndex, 1);
+      EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(5, 6));
+      EXPECT_TRUE(stripe.streams.empty());
+      EXPECT_EQ(stripe.dataHandle, nullptr);
+    }
+    EXPECT_EQ(cursor->stats().numReadStripes, 0);
+    EXPECT_EQ(cursor->stats().numOutputRows, 1);
+
+    // The cursor loads a stripe that the materializer does not hold.
+    cursor->seek(makePointLookup(rowType, {"key"}, 9));
+    {
+      const auto stripe = nextStripe(*cursor, 9);
+      EXPECT_EQ(stripe.selection.stripeIndex, 2);
+      EXPECT_FALSE(stripe.streams.empty());
+    }
+    EXPECT_EQ(cursor->stats().numReadStripes, 1);
+
+    // A range that starts in the held stripe loads only the stripes after it.
+    cursor->seek(makeRangeLookup(rowType, {"key"}, 6, 10));
+    {
+      const auto stripe = nextStripe(*cursor, 6);
+      EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(6, 8));
+      EXPECT_TRUE(stripe.streams.empty());
+    }
+    {
+      const auto stripe = nextStripe(*cursor, 8);
+      EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(8, 10));
+      EXPECT_FALSE(stripe.streams.empty());
+    }
+    EXPECT_EQ(cursor->stats().numReadStripes, 2);
+    EXPECT_EQ(cursor->stats().numOutputRows, 6);
+    cursor->reset();
+  }
+
+  // Prefetch loads the stripe even when the materializer reports it as held.
+  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
+  NimbleIterator::Options options;
+  options.prefetchExecutor = folly::getKeepAliveToken(*executor);
+  auto cursor = makeCursor(std::move(options));
+  materializer_->setKeptStripe(1);
+  cursor->seek(makePointLookup(rowType, {"key"}, 5));
+  const auto stripe = nextStripe(*cursor, 5);
+  EXPECT_FALSE(stripe.streams.empty());
+  EXPECT_NE(stripe.dataHandle, nullptr);
+  EXPECT_EQ(cursor->stats().numReadStripes, 1);
   cursor->reset();
 }
 
@@ -305,6 +436,25 @@ TEST_P(IndexScanCursorTest, clearsMissesAndSupportsReseek) {
   cursor->reset();
   EXPECT_EQ(cursor->stats().numReadStripes, 3);
   EXPECT_EQ(cursor->stats().numOutputRows, 9);
+}
+
+TEST_P(IndexScanCursorTest, rejectsChecksumVerificationChangeDuringAScan) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  auto cursor = makeCursor();
+  cursor->setVerifyStreamChecksums(true);
+  EXPECT_EQ(cursor->seekToFirst(), std::optional<RowRange>(RowRange{0, 12}));
+  NIMBLE_ASSERT_THROW(
+      cursor->setVerifyStreamChecksums(false),
+      "Stream checksum verification must not change during a scan");
+
+  // The scan goes on, and the setting changes after reset().
+  EXPECT_EQ(
+      nextStripe(*cursor, 0).selection.selectedRowRange(), RowRange(0, 4));
+  cursor->reset();
+  cursor->setVerifyStreamChecksums(false);
+  EXPECT_EQ(cursor->seekToFirst(), std::optional<RowRange>(RowRange{0, 12}));
+  EXPECT_EQ(
+      nextStripe(*cursor, 0).selection.selectedRowRange(), RowRange(0, 4));
 }
 
 TEST_P(IndexScanCursorTest, zeroStripeLimitKeepsLoadsOnDemand) {
@@ -490,32 +640,11 @@ TEST_P(IndexScanCursorTest, boundsPrefetchForAllLimitModes) {
     cursor->seekToFirst();
     std::promise<void> producerPaused;
     auto paused = producerPaused.get_future();
-    executor->add([&] { producerPaused.set_value(); });
-    paused.wait();
+    executor->add([&] { executor->add([&] { producerPaused.set_value(); }); });
+    ASSERT_EQ(
+        paused.wait_for(std::chrono::seconds{5}), std::future_status::ready);
     EXPECT_EQ(cursor->stats().numReadStripes, std::min(limit, 6U));
-    EXPECT_EQ(materializer_->numMaterializeCalls(), 0);
-    if (limit > 0) {
-      const auto maxBatchStripes = std::max(1U, limit / 2);
-      materializer_->setOnMaterialize(
-          [&, maxBatchStripes](const ProjectedStripe& stripe) {
-            if (stripe.selection.stripeIndex >= maxBatchStripes) {
-              return;
-            }
-            auto prefetchReady = std::make_shared<std::promise<void>>();
-            auto prefetchReadyFuture = prefetchReady->get_future();
-            executor->add([prefetchReady] { prefetchReady->set_value(); });
-            ASSERT_EQ(
-                prefetchReadyFuture.wait_for(std::chrono::seconds{5}),
-                std::future_status::ready);
-            const auto releasedStripes =
-                stripe.selection.stripeIndex + 1 == maxBatchStripes
-                ? maxBatchStripes
-                : 0U;
-            EXPECT_EQ(
-                cursor->stats().numReadStripes,
-                std::min(limit + releasedStripes, 6U));
-          });
-    }
+    EXPECT_EQ(materializer_->numMaterializeCalls(), std::min(limit, 6U));
     for (uint32_t row = 0; row < 24; row += 4) {
       SCOPED_TRACE(row);
       const auto& stripe = nextStripe(*cursor, row);
@@ -885,9 +1014,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, retriesAfterCancellationDuringALoad) {
   EXPECT_EQ(cursor->stats().numOutputRows, 8);
 }
 
-DEBUG_ONLY_TEST_P(
-    IndexScanCursorTest,
-    loadsOnPrefetchThreadAndMaterializesOnConsumerThread) {
+DEBUG_ONLY_TEST_P(IndexScanCursorTest, loadsAndMaterializesOnPrefetchThread) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/1);
   const bool wasEnabled = velox::common::testutil::TestValue::enabled();
   velox::common::testutil::TestValue::enable();
@@ -916,7 +1043,7 @@ DEBUG_ONLY_TEST_P(
   EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(0, 4));
   EXPECT_NE(loadThread, std::thread::id{});
   EXPECT_NE(loadThread, consumerThread);
-  EXPECT_EQ(materializeThread, consumerThread);
+  EXPECT_EQ(materializeThread, loadThread);
   cursor->reset();
   cursor.reset();
   executor->join();
@@ -1107,25 +1234,104 @@ TEST_P(IndexScanCursorTest, propagatesMaterializationCancellation) {
   cursor->reset();
 }
 
-TEST_P(IndexScanCursorTest, ioPrefetchDoesNotMaterializeStripes) {
+DEBUG_ONLY_TEST_P(
+    IndexScanCursorTest,
+    materializesStripesSeriallyAndRetainsCancelledHead) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const bool wasEnabled = velox::common::testutil::TestValue::enabled();
+  velox::common::testutil::TestValue::enable();
+  auto restoreTestValue = folly::makeGuard([&] {
+    if (!wasEnabled) {
+      velox::common::testutil::TestValue::disable();
+    }
+  });
   auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
   NimbleIterator::Options options;
   options.prefetchExecutor = folly::getKeepAliveToken(*executor);
-  options.maxPrefetchStripes = 6;
+  options.maxPrefetchStripes = 2;
   auto cursor = makeCursor(std::move(options));
+  std::promise<void> firstStarted;
+  auto first = firstStarted.get_future();
+  std::promise<void> secondStarted;
+  auto second = secondStarted.get_future();
+  folly::coro::Baton resumeFirst;
+  materializer_->firstStripeGate = &resumeFirst;
+  std::promise<void> consumerWaiting;
+  auto waiting = consumerWaiting.get_future();
+  folly::CancellationSource cancellation;
+  std::future<folly::Try<
+      std::unique_ptr<detail::IndexScanCursor::StripeMaterializer::Entries>>>
+      pendingStripe;
+  bool released{false};
+  const auto release = [&] {
+    if (!released) {
+      released = true;
+      resumeFirst.post();
+    }
+  };
+  auto cleanup = folly::makeGuard([&] {
+    cancellation.requestCancellation();
+    release();
+    if (pendingStripe.valid()) {
+      pendingStripe.wait();
+    }
+    cursor->reset();
+    cursor.reset();
+    executor->join();
+  });
+  materializer_->setOnMaterialize([&](const ProjectedStripe& stripe) {
+    if (stripe.selection.stripeIndex == 0) {
+      firstStarted.set_value();
+    } else if (stripe.selection.stripeIndex == 1) {
+      secondStarted.set_value();
+    }
+  });
+  std::atomic_bool observedWait{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::ScanPrefetcher::co_nextStripe::beforeReady",
+      std::function<void(uint32_t*)>([&](uint32_t* stripeIndex) {
+        if (*stripeIndex == 0 && !observedWait.exchange(true)) {
+          consumerWaiting.set_value();
+        }
+      }));
   cursor->seekToFirst();
-  std::promise<void> producerFinished;
-  auto finished = producerFinished.get_future();
-  executor->add([&] { producerFinished.set_value(); });
+  ASSERT_EQ(first.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+  pendingStripe = std::async(std::launch::async, [&] {
+    return folly::coro::blockingWait(
+        folly::coro::co_awaitTry(
+            folly::coro::co_withCancellation(
+                cancellation.getToken(), cursor->co_nextStripe(0))));
+  });
   ASSERT_EQ(
-      finished.wait_for(std::chrono::seconds{5}), std::future_status::ready);
-  EXPECT_EQ(materializer_->numMaterializeCalls(), 0);
-  EXPECT_EQ(cursor->stats().numReadStripes, 3);
+      waiting.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+  std::promise<void> executorDrained;
+  auto drained = executorDrained.get_future();
+  executor->add([&] { executorDrained.set_value(); });
+  ASSERT_EQ(
+      drained.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+  EXPECT_EQ(
+      second.wait_for(std::chrono::seconds{0}), std::future_status::timeout);
+  EXPECT_EQ(materializer_->numMaterializeCalls(), 1);
+  EXPECT_EQ(cursor->stats().numReadStripes, 1);
+  cancellation.requestCancellation();
+  ASSERT_EQ(
+      pendingStripe.wait_for(std::chrono::seconds{5}),
+      std::future_status::ready);
+  const auto result = pendingStripe.get();
+  ASSERT_TRUE(result.hasException());
+  EXPECT_TRUE(
+      result.exception().is_compatible_with<folly::OperationCancelled>());
+  EXPECT_EQ(cursor->stats().numOutputRows, 0);
+  release();
+  ASSERT_EQ(
+      second.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+  for (const uint32_t row : {0, 4, 8}) {
+    const auto& stripe = nextStripe(*cursor, row);
+    EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(row, row + 4));
+  }
   cursor->reset();
-  EXPECT_EQ(materializer_->numMaterializeCalls(), 0);
-  cursor.reset();
-  executor->join();
+  EXPECT_EQ(materializer_->numMaterializeCalls(), 3);
+  EXPECT_EQ(cursor->stats().numReadStripes, 3);
 }
 
 // Fuzzes the failures that the prefetch of a scan hands to the iterator, over

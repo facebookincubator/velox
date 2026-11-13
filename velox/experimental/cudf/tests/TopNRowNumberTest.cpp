@@ -351,7 +351,7 @@ TEST_F(TopNRowNumberTest, partialAndFinal) {
         core::PlanNodeId finalId;
         auto plan = PlanBuilder()
                         .values(split(data, 10))
-                        .topNRank(function, partitionKeys, {"s"}, 99, false)
+                        .topNRankPartial(function, partitionKeys, {"s"}, 99)
                         .capturePlanNodeId(partialId)
                         .topNRank(function, partitionKeys, {"s"}, 99, true)
                         .capturePlanNodeId(finalId)

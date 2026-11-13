@@ -296,6 +296,11 @@ MetadataBuilder& MetadataBuilder::multiBlockReturnBarrier(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::rowReduction(RowReduction reduction) {
+  md_.rowReduction = std::move(reduction);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::scanOutputReturnBarrier(bool val) {
   md_.scanOutputReturnBarrier = val;
   return *this;

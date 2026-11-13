@@ -1089,8 +1089,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
                           .planNode())
                   .assertResults("SELECT distinct c0 FROM tmp");
 
-  auto rowFlushStats = toPlanStats(task->taskStats())
-                           .at(aggNodeId)
+  auto rowFlushStats = PlanNodeStats::extract(task->taskStats(), aggNodeId)
                            .customStats.at("flushRowCount");
   EXPECT_GT(rowFlushStats.sum, 0);
   EXPECT_GT(rowFlushStats.max, 0);
@@ -1107,8 +1106,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
                      .planNode())
              .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
 
-  rowFlushStats = toPlanStats(task->taskStats())
-                      .at(aggNodeId)
+  rowFlushStats = PlanNodeStats::extract(task->taskStats(), aggNodeId)
                       .customStats.at("flushRowCount");
   EXPECT_GT(rowFlushStats.sum, 0);
   EXPECT_GT(rowFlushStats.max, 0);
@@ -1126,8 +1124,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
              .assertResults("SELECT sum(c0) FROM tmp");
   EXPECT_EQ(
       0,
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
+      PlanNodeStats::extract(task->taskStats(), aggNodeId)
           .customStats.count("flushRowCount"));
 }
 
@@ -2744,9 +2741,9 @@ TEST_F(AggregationTest, maskedCountStar) {
 // Global masked count(*) (no GROUP BY) -> reduce count-all branch with a mask,
 // including a null mask entry (treated as false).
 TEST_F(AggregationTest, maskedCountStarGlobal) {
-  auto data = makeRowVector(
-      {"m"},
-      {makeNullableFlatVector<bool>({true, false, std::nullopt, true, false})});
+  auto data = makeNamedRowVector(
+      "m",
+      makeNullableFlatVector<bool>({true, false, std::nullopt, true, false}));
   createDuckDbTable({data});
   auto plan = PlanBuilder()
                   .values({data})
@@ -2758,9 +2755,9 @@ TEST_F(AggregationTest, maskedCountStarGlobal) {
 
 // Global masked count(*), multi-stage (partial + final), no GROUP BY.
 TEST_F(AggregationTest, maskedCountStarGlobalMultiStage) {
-  auto data = makeRowVector(
-      {"m"},
-      {makeNullableFlatVector<bool>({true, false, std::nullopt, true, false})});
+  auto data = makeNamedRowVector(
+      "m",
+      makeNullableFlatVector<bool>({true, false, std::nullopt, true, false}));
   createDuckDbTable({data});
   auto plan = PlanBuilder()
                   .values({data})

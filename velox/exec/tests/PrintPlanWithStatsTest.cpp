@@ -296,8 +296,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
   for (const auto& numPrefetchSplit : numPrefetchSplits) {
     SCOPED_TRACE(fmt::format("numPrefetchSplit {}", numPrefetchSplit));
     asyncDataCache_->clear();
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
 
     auto op =
         PlanBuilder()
@@ -309,8 +308,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
     auto task =
         AssertQueryBuilder(op, duckDbQueryRunner_)
             .config(
-                core::QueryConfig::kMaxSplitPreloadPerDriver,
-                std::to_string(numPrefetchSplit))
+                core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplit)
             .splits(makeHiveConnectorSplits({filePath}))
             .assertResults(
                 "SELECT c5, max(c0), sum(c1), sum(c2), sum(c3), sum(c4) FROM tmp group by c5");
@@ -472,8 +470,7 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
           {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()})};
   auto vectors = makeVectors(rowType, 10, 10);
 
-  const auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  const auto filePath = writeToFile(vectors);
   const auto writeDir = TempDirectoryPath::create();
 
   auto writePlan = PlanBuilder()

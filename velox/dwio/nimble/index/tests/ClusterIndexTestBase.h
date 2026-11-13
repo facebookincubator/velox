@@ -16,6 +16,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,22 +70,54 @@ class ClusterIndexTestBase : public ::testing::Test {
     std::vector<uint32_t> stripeRowCounts;
     /// Per-stripe group indices (which partition each stripe belongs to).
     std::vector<uint32_t> stripeGroupIndices;
+    /// Each stripe with the location of its key stream, by stripe group, as
+    /// the stripe group metadata gives them to an index in the Stripe layout.
+    std::vector<std::vector<StripeMetadata>> stripeKeyStreams;
   };
 
+  /// Id that test indexes in the Stripe layout give the key stream of every
+  /// stripe.
+  static constexpr uint32_t kKeyStreamId{3};
+
   /// Helper function to create a serialized Index flatbuffer for testing.
+  /// Each stripe's keyStream locates that stripe's key chunks in the key
+  /// stream file, with chunk offsets relative to keyStream.streamOffset. In the
+  /// Partition layout, the key streams of a partition's stripes must be
+  /// adjacent, since the partition reads them as one blob. In the Stripe
+  /// layout, each stripe holds one key chunk, and its key stream can be
+  /// anywhere in the file.
   IndexBuffers createTestClusterIndex(
       const std::vector<std::string>& indexColumns,
       const std::vector<std::string>& sortOrders,
       const std::string& minKey,
       const std::vector<Stripe>& stripes,
-      const std::vector<int>& stripeGroups);
+      const std::vector<int>& stripeGroups,
+      KeyStreamLayout keyStreamLayout = KeyStreamLayout::kPartition);
 
   /// Convenience wrapper that uses default ascending sort orders.
   IndexBuffers createTestClusterIndex(
       const std::vector<std::string>& indexColumns,
       const std::string& minKey,
       const std::vector<Stripe>& stripes,
-      const std::vector<int>& stripeGroups);
+      const std::vector<int>& stripeGroups,
+      KeyStreamLayout keyStreamLayout = KeyStreamLayout::kPartition);
+
+  /// Fields of a one-group Stripe layout index. Unset fields are left out.
+  struct StripeGroupIndex {
+    /// stripe_keys of the group: the last key of each stripe.
+    std::optional<std::vector<std::string>> stripeKeys{};
+    /// Each stripe of the group with the location of its key stream, as its
+    /// stripe group metadata gives them.
+    std::vector<StripeMetadata> stripeKeyStreams{};
+    /// Also locates the group in index_partitions.
+    bool setIndexPartitions{false};
+    /// Raw key_stream_layout of the root, which may be a value no layout has.
+    uint8_t keyStreamLayout{static_cast<uint8_t>(KeyStreamLayout::kStripe)};
+  };
+
+  /// Creates an index of one stripe group of 4 rows, with partition keys "b"
+  /// and "d", whose group holds the fields of 'index'.
+  IndexBuffers createStripeGroupIndex(const StripeGroupIndex& index);
 
   /// Creates a chunk-index-only test tablet index (no value index, no stripe
   /// keys).
@@ -99,9 +132,17 @@ class ClusterIndexTestBase : public ::testing::Test {
   /// Creates a ClusterIndex from the serialized IndexBuffers.
   /// @param keyStreamFile ReadFile for key stream data (or nullptr for
   ///        metadata-only tests that don't need key stream access).
+  /// @param pinIndex Keeps every decoded key chunk.
+  /// @param preloadIndex Decodes every key chunk at construction. Requires
+  ///        pinIndex.
+  /// @param withKeyStreamLocator Gives the index a key stream locator
+  ///        that returns indexBuffers.stripeKeyStreams.
   std::unique_ptr<ClusterIndex> createClusterIndex(
       const IndexBuffers& indexBuffers,
-      velox::ReadFile* keyStreamFile = nullptr);
+      velox::ReadFile* keyStreamFile = nullptr,
+      bool pinIndex = false,
+      bool preloadIndex = false,
+      bool withKeyStreamLocator = true);
 
   /// Creates a ChunkStatsGroup from the serialized IndexBuffers.
   std::shared_ptr<ChunkStatsGroup> createChunkStats(

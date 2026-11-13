@@ -160,6 +160,14 @@ class Encoding {
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
 
+    /// When true, DictionaryEncoding orders an integer alphabet by physical
+    /// value instead of by first occurrence. A sorted alphabet ascends, so it
+    /// can be stored with encodings that need ascending input, such as
+    /// DeltaBlock and EliasFano, which store a gap per value instead of the
+    /// full value width. Only the writer reads this option: a reader looks
+    /// indices up in the stored alphabet whatever its order.
+    bool sortDictionaryAlphabet{false};
+
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
     ///
@@ -941,6 +949,20 @@ constexpr bool bulkFastPathByDefault() {
              velox::dwio::common::ExtractToReader> ||
       (V::kHasHook && !V::kHasFilter &&
        hookAllowsBulkFastPath<typename V::HookType>());
+}
+
+// Returns whether DictionaryColumnVisitor's bulk read supports value type 'T'
+// and visitor 'V'. These limits belong to the shared visitor, so DWRF and
+// Parquet bulk dictionary reads have them too. Returns true only when both of
+// these hold:
+//   - T is a 2-, 4- or 8-byte numeric type. The visitor has no dictionary index
+//     type for 1-byte values, and strings use StringDictionaryColumnVisitor.
+//   - V's filter is deterministic. The visitor caches one verdict per
+//     dictionary value.
+template <typename T, typename V>
+constexpr bool dictionaryColumnVisitorSupported() {
+  return isNumericType<T>() && sizeof(T) >= sizeof(int16_t) &&
+      V::FilterType::deterministic;
 }
 
 } // namespace detail

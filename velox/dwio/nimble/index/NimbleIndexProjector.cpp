@@ -105,6 +105,17 @@ void NimbleIndexProjector::setTimingEnabled(bool enabled) {
   timingEnabled_ = enabled;
 }
 
+void NimbleIndexProjector::setVerifyStreamChecksums(
+    bool verifyStreamChecksums) {
+  if (verifyStreamChecksums == (streamChecksum_ != nullptr)) {
+    return;
+  }
+  streamChecksum_.reset();
+  streamTrailerSize_ = 0;
+  streamTrailerChecksumOffset_ = 0;
+  initStreamChecksum(verifyStreamChecksums);
+}
+
 NimbleIndexProjector::Stats NimbleIndexProjector::stats() const {
   velox::tsan_lock_guard<std::mutex> lock(statsLock_);
   return stats_;
@@ -246,6 +257,9 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
       std::move(projection),
       &options.memoryPool(),
       options.dataIoStats(),
+      options.prefetchMode() == velox::io::PrefetchMode::PRELOAD
+          ? options.autoPreloadLength()
+          : 0,
       options.verifyStreamChecksums()));
 }
 
@@ -256,6 +270,7 @@ NimbleIndexProjector::NimbleIndexProjector(
     std::shared_ptr<const NimbleTypeProjection> projection,
     velox::memory::MemoryPool* pool,
     std::shared_ptr<velox::io::IoStatistics> ioStats,
+    uint64_t readAheadSizeBytes,
     bool verifyStreamChecksums)
     : file_{std::move(file)},
       tablet_{std::move(tablet)},
@@ -263,6 +278,7 @@ NimbleIndexProjector::NimbleIndexProjector(
       pool_{pool},
       clusterIndex_{tablet_->clusterIndex()},
       numStripes_{tablet_->stripeCount()},
+      readAheadSizeBytes_{readAheadSizeBytes},
       projection_{std::move(projection)},
       hasProjectedHybridFlatMaps_{hasProjectedHybridFlatMaps(*projection_)},
       dataInput_{std::move(dataInput)} {
@@ -335,7 +351,7 @@ folly::coro::Task<NimbleIndexProjector::RowProjectionResult>
 NimbleIndexProjector::co_projectRows(
     const Request& request,
     const Options& options) {
-  ensureStreamReader(options.cacheEncodingView);
+  ensureStreamReader();
   SCOPE_EXIT {
     clearRequest();
   };
@@ -372,6 +388,7 @@ NimbleIndexProjector::co_projectRows(
   ScopedVector<velox::vector_size_t> stripeOutputRows{
       ctx_.numRequests, pool_, &encodingBufferPool_};
   std::fill(stripeOutputRows.begin(), stripeOutputRows.end(), 0);
+  const auto decodingOptions = encodingOptions(options.cacheEncodingView);
   for (size_t stripeOffset{0}; stripeOffset < ctx_.plan.stripeIndices.size();
        ++stripeOffset) {
     updateStats([numRows = ctx_.plan.numRows[stripeOffset]](Stats& stats) {
@@ -385,7 +402,7 @@ NimbleIndexProjector::co_projectRows(
                               stripeOffset,
                               /*resolveCanonicalStreams=*/false)
                               .streams;
-    streamReader_->setStreams(streams);
+    streamReader_->setStreams(streams, decodingOptions);
     // Release the views before the stripe's streams go away.
     SCOPE_EXIT {
       streamReader_->reset();
@@ -427,24 +444,32 @@ NimbleIndexProjector::co_projectRows(
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     const velox::serializer::EncodedKeyBounds& bounds) {
+  std::unique_ptr<index::KeyCursor> keyCursor;
+  return lookup(bounds, keyCursor);
+}
+
+std::vector<StripeSelection> NimbleIndexProjector::lookup(
+    const velox::serializer::EncodedKeyBounds& bounds,
+    std::unique_ptr<index::KeyCursor>& keyCursor) {
   NIMBLE_CHECK_NULL(ctx_.request, "Cannot look up rows during a projection");
   OptionalCpuWallTimer timer{
       timingEnabled_, [this](const velox::CpuWallTiming& timing) {
         recordStatsTiming(&Stats::lookupTiming, timing);
       }};
-  const auto result = clusterIndex().lookup(
-      index::IndexLookup::LookupRequest::rangeScan({bounds}));
-  NIMBLE_CHECK_EQ(result.size(), 1);
-  const auto& ranges = result[0];
-  NIMBLE_CHECK_LE(
-      ranges.size(),
-      1,
-      "Cluster index returned multiple ranges for one stream scan");
-  return lookup(ranges.empty() ? RowRange{} : ranges.front());
+  auto result = clusterIndex().seek(bounds);
+  keyCursor = std::move(result.keyCursor);
+  return lookup(result.rows);
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     std::string encodedKey) {
+  std::unique_ptr<index::KeyCursor> keyCursor;
+  return lookup(std::move(encodedKey), keyCursor);
+}
+
+std::vector<StripeSelection> NimbleIndexProjector::lookup(
+    std::string encodedKey,
+    std::unique_ptr<index::KeyCursor>& keyCursor) {
   // The successor of a key is the key followed by a zero byte.
   auto successor = encodedKey;
   successor.push_back('\0');
@@ -452,7 +477,8 @@ std::vector<StripeSelection> NimbleIndexProjector::lookup(
       velox::serializer::EncodedKeyBounds{
           .lowerKey = std::move(encodedKey),
           .upperKey = std::move(successor),
-      });
+      },
+      keyCursor);
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
@@ -479,6 +505,24 @@ std::vector<StripeSelection> NimbleIndexProjector::lookup(
         });
   }
   return stripeSelections;
+}
+
+uint32_t NimbleIndexProjector::numStripesToRead(uint32_t stripeOffset) const {
+  uint32_t numStripes{1};
+  if (readAheadSizeBytes_ == 0) {
+    return numStripes;
+  }
+  const auto startOffset = tablet_->stripeOffset(stripeOffset);
+  while (numStripes < numStripes_ - stripeOffset) {
+    const auto stripeIndex = stripeOffset + numStripes;
+    const auto endOffset =
+        tablet_->stripeOffset(stripeIndex) + tablet_->stripeSize(stripeIndex);
+    if (endOffset - startOffset > readAheadSizeBytes_) {
+      break;
+    }
+    ++numStripes;
+  }
+  return numStripes;
 }
 
 std::vector<facebook::nimble::ProjectedStripe>
@@ -550,6 +594,10 @@ NimbleIndexProjector::loadStripeStreams(
   return result;
 }
 
+void NimbleIndexProjector::resetStreamScan() {
+  clearRequest();
+}
+
 Encoding::Options NimbleIndexProjector::encodingOptions(
     bool cacheEncodingView) {
   Encoding::Options options;
@@ -559,14 +607,12 @@ Encoding::Options NimbleIndexProjector::encodingOptions(
   return options;
 }
 
-void NimbleIndexProjector::ensureStreamReader(bool cacheEncodingView) {
-  if (streamReader_ != nullptr && cacheEncodingView_ == cacheEncodingView) {
+void NimbleIndexProjector::ensureStreamReader() {
+  if (streamReader_ != nullptr) {
     return;
   }
-  // The reader fixes its encoding options when it is created.
-  streamReader_ = std::make_unique<StreamReader>(
-      projection_->nimbleType, pool_, encodingOptions(cacheEncodingView));
-  cacheEncodingView_ = cacheEncodingView;
+  streamReader_ =
+      std::make_unique<StreamReader>(projection_->nimbleType, pool_);
 }
 
 void NimbleIndexProjector::setResumeKey(
@@ -1064,7 +1110,7 @@ void NimbleIndexProjector::verifyStreamChecksum(
   const auto expected = encoding::readUint32(checksumPos);
   data = data.substr(0, streamSize);
   const auto computed = streamChecksum_->computeChecksum32(data);
-  if (FOLLY_LIKELY(computed == expected)) {
+  if (computed == expected) [[likely]] {
     return;
   }
 

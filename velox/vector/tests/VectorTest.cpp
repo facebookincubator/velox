@@ -845,7 +845,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
   void testSerialization(VectorPtr source) {
     // Serialization functions expect loaded vectors.
     source = BaseVector::loadedVectorShared(source);
-    auto sourceRow = makeRowVector({"c"}, {source});
+    auto sourceRow = makeNamedRowVector("c", source);
     auto sourceRowType = asRowType(sourceRow->type());
 
     VectorStreamGroup even(pool(), nullptr);
@@ -2614,6 +2614,58 @@ TEST_F(VectorTest, arraySliceMutability) {
 TEST_F(VectorTest, mapSliceMutability) {
   testArrayOrMapSliceMutability(
       std::dynamic_pointer_cast<MapVector>(createMap(vectorSize_, false)));
+}
+
+TEST_F(VectorTest, rowSliceOverShortChild) {
+  // Rows 2 to 5 are null, so the child only covers rows 0 and 1. Its offsets
+  // and sizes buffers have room for 6 rows, and the entries past row 1 point
+  // past its elements, as in a buffer kept after the vector shrank.
+  auto offsets = allocateOffsets(6, pool());
+  auto sizes = allocateSizes(6, pool());
+  auto* rawOffsets = offsets->asMutable<vector_size_t>();
+  auto* rawSizes = sizes->asMutable<vector_size_t>();
+  rawOffsets[1] = 2;
+  rawSizes[0] = 2;
+  rawSizes[1] = 1;
+  std::fill(rawOffsets + 2, rawOffsets + 6, 3);
+  std::fill(rawSizes + 2, rawSizes + 6, 2);
+  auto child = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(BIGINT()),
+      nullptr,
+      2,
+      offsets,
+      sizes,
+      makeFlatVector<int64_t>({1, 2, 3}));
+  auto row = std::make_shared<RowVector>(
+      pool(),
+      ROW("a", ARRAY(BIGINT())),
+      makeNulls({false, false, true, true, true, true}),
+      6,
+      std::vector<VectorPtr>{child});
+  row->validate({});
+
+  {
+    SCOPED_TRACE("Slice that ends past the child");
+    auto slice = row->slice(1, 4);
+    slice->validate({});
+    auto expected = makeRowVector(
+        {"a"}, {makeArrayVector<int64_t>({{3}, {}, {}, {}})}, [](auto index) {
+          return index > 0;
+        });
+    test::assertEqualVectors(expected, slice);
+  }
+
+  {
+    SCOPED_TRACE("Slice that starts past the child");
+    auto slice = row->slice(3, 3);
+    slice->validate({});
+    auto expected = makeRowVector(
+        {"a"}, {makeArrayVector<int64_t>({{}, {}, {}})}, [](auto /*row*/) {
+          return true;
+        });
+    test::assertEqualVectors(expected, slice);
+  }
 }
 
 // Demonstrates incorrect usage of the memory pool. The pool is destroyed

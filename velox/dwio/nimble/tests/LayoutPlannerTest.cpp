@@ -280,6 +280,9 @@ TEST(DefaultLayoutPlannerTests, reorderFlatMap) {
   testStreamLayout(rng, planner, std::move(streams), std::move(expected));
 }
 
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST(DefaultLayoutPlannerTests, hybridFlatMapUsesPhysicalGroups) {
   nimble::SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
@@ -287,11 +290,12 @@ TEST(DefaultLayoutPlannerTests, hybridFlatMapUsesPhysicalGroups) {
       nimble::ScalarKind::Int32,
       nimble::HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
-  const auto groupStreams = hybridMap->addGroup(0, {"1"}, groupValue);
+  const std::vector<std::string> groupKeys{"1"};
+  const auto groupStreams = hybridMap->addGroup(0, groupKeys, groupValue);
   auto defaultValue =
       builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
   const auto defaultStreams = hybridMap->addGroup(
-      nimble::HybridFlatMap::kDefaultGroupId, {}, defaultValue);
+      nimble::HybridFlatMap::kDefaultGroupId, kNoGroupKeys, defaultValue);
   root->addChild("features", hybridMap);
 
   const std::vector<uint32_t> expectedOffsets{
@@ -530,6 +534,40 @@ TEST(DefaultLayoutPlannerTests, sharedDictionaryFollowsValueStream) {
           "r.c2(1).f.feature(0).s",
           "flat map dictionary for c2(1).f.feature(0).s",
           "r.c3(2).s"}));
+}
+
+TEST(DefaultLayoutPlannerTests, clusterIndexKeyStreamLeads) {
+  nimble::SchemaBuilder builder;
+  const auto keyStreamOffset = builder.createClusterIndexKeyStream();
+  NIMBLE_SCHEMA(
+      builder,
+      NIMBLE_ROW({
+          {"c1", NIMBLE_TINYINT()},
+          {"c2", NIMBLE_TINYINT()},
+      }));
+
+  // The key stream comes last, so the planner has to move it.
+  const auto namedTypes = getNamedTypes(*builder.root());
+  std::vector<nimble::Stream> streams;
+  streams.reserve(namedTypes.size() + 1);
+  for (const auto& [offset, name] : namedTypes) {
+    streams.push_back(nimble::Stream{offset, {{.content = {name}}}});
+  }
+  streams.push_back(
+      nimble::Stream{keyStreamOffset, {{.content = {"cluster index keys"}}}});
+
+  nimble::DefaultLayoutPlanner planner{&builder, std::nullopt};
+  streams = planner.getLayout(std::move(streams));
+
+  std::vector<std::string> streamNames;
+  streamNames.reserve(streams.size());
+  for (const auto& stream : streams) {
+    streamNames.emplace_back(stream.chunks.front().content.front());
+  }
+  EXPECT_EQ(
+      streamNames,
+      (std::vector<std::string>{
+          "cluster index keys", "r", "r.c1(0).s", "r.c2(1).s"}));
 }
 
 TEST(DefaultLayoutPlannerTests, nonFlatMapOrdinalsAreIgnored) {

@@ -233,6 +233,8 @@ void configureRowReaderOptions(
         fileConfig->nimbleLazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
+    rowReaderOptions.setNimbleFsstDecodeRepeatedPayloads(
+        fileConfig->nimbleFsstDecodeRepeatedPayloads(sessionProperties));
     rowReaderOptions.setNimblePreserveDictionaryEncoding(
         fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
     rowReaderOptions.setNimbleDictionaryAwareReads(

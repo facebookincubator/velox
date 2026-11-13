@@ -435,7 +435,7 @@ std::string_view DeltaBlockEncoding<T>::encode(
     uint64_t maxDelta{0};
     for (uint32_t i = start + 1; i < end; ++i) {
       const auto curr = toOrdered<T>(values[i]);
-      if (FOLLY_UNLIKELY(curr < prev)) {
+      if (curr < prev) [[unlikely]] {
         NIMBLE_INCOMPATIBLE_ENCODING(
             "DeltaBlock requires non-decreasing values.");
       }

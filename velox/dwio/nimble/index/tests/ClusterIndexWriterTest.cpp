@@ -128,6 +128,8 @@ class ClusterIndexWriterTest : public testing::Test,
   static constexpr std::string_view kCol0{"col0"};
   static constexpr std::string_view kCol1{"col1"};
   static constexpr std::string_view kCol2{"col2"};
+  // Stream of each stripe that holds its key chunks in the Stripe layout.
+  static constexpr uint32_t kKeyStreamId{5};
 
   static std::shared_ptr<const IndexConfig> buildIndexConfig(
       std::vector<std::string> columns,
@@ -176,8 +178,10 @@ class ClusterIndexWriterTest : public testing::Test,
   static std::unique_ptr<IndexWriter> createWriter(
       const std::shared_ptr<const IndexConfig>& config,
       const velox::TypePtr& type,
-      velox::memory::MemoryPool* pool) {
-    return clusterIndexFactory(config->name).createWriter(*config, type, pool);
+      velox::memory::MemoryPool* pool,
+      const ClusterIndexFactory::Options& options = {}) {
+    return clusterIndexFactory(config->name)
+        .createWriter(*config, type, pool, options);
   }
 
   void SetUp() override {
@@ -213,6 +217,29 @@ class ClusterIndexWriterTest : public testing::Test,
         {},
         true,
         noDuplicateKey);
+  }
+
+  // Returns a batch of type_ whose index column holds 'keys'.
+  velox::RowVectorPtr makeKeyBatch(const std::vector<int32_t>& keys) {
+    const auto numRows = static_cast<velox::vector_size_t>(keys.size());
+    return makeRowVector(
+        {std::string(kCol0), std::string(kCol1), std::string(kCol2)},
+        {makeFlatVector<velox::StringView>(
+             numRows, [](auto /*row*/) { return velox::StringView{"a"}; }),
+         makeFlatVector<int32_t>(keys),
+         makeFlatVector<velox::StringView>(
+             numRows, [](auto /*row*/) { return velox::StringView{"b"}; })});
+  }
+
+  // Creates a writer of indexConfig() that stores its keys in the Stripe
+  // layout, in stream kKeyStreamId of each stripe.
+  std::unique_ptr<IndexWriter> createStripeKeyStreamWriter() {
+    return createWriter(
+        indexConfig(),
+        type_,
+        pool_.get(),
+        {.keyStreamLayout = KeyStreamLayout::kStripe,
+         .keyStreamId = kKeyStreamId});
   }
 
   velox::RowTypePtr type_;
@@ -393,7 +420,7 @@ TEST_F(ClusterIndexWriterTest, keyChunkCompressionProducesRequestedChunkCodec) {
     CreateMetadataSectionFn createMetadataFn = [&](std::string_view) {
       return MetadataSection{nextSectionId++, 0, CompressionType::Uncompressed};
     };
-    writer->flush(writeDataFn, createMetadataFn);
+    writer->finishStripeGroup(writeDataFn, createMetadataFn);
 
     // The first chunk's header compression-type byte (the last byte of the
     // 5-byte header) reflects the configured codec.
@@ -561,7 +588,7 @@ TEST_F(ClusterIndexWriterTest, multiColumnWithDifferentSortOrders) {
     const auto singleColType = velox::ROW({{"col0", velox::INTEGER()}});
 
     // Create input data.
-    auto batch = makeRowVector({"col0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+    auto batch = makeNamedRowVector("col0", makeFlatVector<int32_t>({1, 2, 3}));
 
     // Write with ascending order.
     auto configAsc = buildIndexConfig(
@@ -868,6 +895,139 @@ TEST_F(ClusterIndexWriterTest, noDuplicateKey) {
 
     NIMBLE_ASSERT_USER_THROW(
         writer->write(batch), "Encoded keys must be in ascending order");
+  }
+}
+
+TEST_F(ClusterIndexWriterTest, stripeKeyStreams) {
+  // Chunks of up to two rows, which the Stripe layout ignores.
+  auto writer = createWriter(
+      buildIndexConfig(
+          {std::string(kCol1)},
+          EncodingLayout{
+              EncodingType::Prefix, {}, CompressionType::Uncompressed},
+          /*sortOrders=*/{},
+          /*enforceKeyOrder=*/false,
+          /*noDuplicateKey=*/false,
+          /*maxRowsPerKeyChunk=*/2),
+      type_,
+      pool_.get(),
+      {.keyStreamLayout = KeyStreamLayout::kStripe,
+       .keyStreamId = kKeyStreamId});
+
+  // Two stripes in one stripe group. The first stripe's keys arrive in two
+  // batches. Each stripe's keys are one key chunk.
+  Buffer buffer{*pool_};
+  writer->write(makeKeyBatch({1, 2}));
+  writer->write(makeKeyBatch({3, 4, 5}));
+  const auto firstStripe = writer->finishStripe(buffer);
+  writer->write(makeKeyBatch({6, 7}));
+  const auto secondStripe = writer->finishStripe(buffer);
+  ASSERT_EQ(firstStripe.size(), 1);
+  EXPECT_EQ(firstStripe[0].rowCount, 5);
+  ASSERT_EQ(secondStripe.size(), 1);
+  EXPECT_EQ(secondStripe[0].rowCount, 2);
+
+  std::string group;
+  WriteDataFn writeDataFn = [](const std::vector<std::string_view>&)
+      -> std::pair<uint64_t, uint32_t> {
+    ADD_FAILURE() << "A Stripe layout index writes no key stream blob";
+    return {0, 0};
+  };
+  CreateMetadataSectionFn createMetadataFn = [&](std::string_view metadata) {
+    group = std::string(metadata);
+    return MetadataSection{
+        0,
+        static_cast<uint32_t>(metadata.size()),
+        CompressionType::Uncompressed};
+  };
+  writer->finishStripeGroup(writeDataFn, createMetadataFn);
+
+  std::string root;
+  createMetadataFn = [&](std::string_view metadata) {
+    root = std::string(metadata);
+    return MetadataSection{
+        0,
+        static_cast<uint32_t>(metadata.size()),
+        CompressionType::Uncompressed};
+  };
+  ASSERT_TRUE(writer->close(writeDataFn, createMetadataFn).has_value());
+  const auto* indexRoot =
+      flatbuffers::GetRoot<serialization::ClusterIndex>(root.data());
+  EXPECT_EQ(
+      indexRoot->key_stream_layout(), serialization::KeyStreamLayout_Stripe);
+  EXPECT_EQ(indexRoot->key_stream_id(), kKeyStreamId);
+  EXPECT_EQ(indexRoot->index_partitions(), nullptr);
+  ASSERT_NE(indexRoot->index_groups(), nullptr);
+  EXPECT_EQ(indexRoot->index_groups()->size(), 1);
+  EXPECT_THAT(
+      std::vector<uint32_t>(
+          indexRoot->partition_row_counts()->begin(),
+          indexRoot->partition_row_counts()->end()),
+      testing::ElementsAre(7));
+
+  // The group holds the last key of each stripe. The second is the last key
+  // of the group, which the root also holds.
+  const auto* stripeKeys =
+      flatbuffers::GetRoot<serialization::ClusterIndexGroup>(group.data())
+          ->stripe_keys();
+  ASSERT_NE(stripeKeys, nullptr);
+  ASSERT_EQ(stripeKeys->size(), 2);
+  EXPECT_LT(
+      stripeKeys->Get(0)->string_view(), stripeKeys->Get(1)->string_view());
+  ASSERT_EQ(indexRoot->partition_keys()->size(), 2);
+  EXPECT_EQ(
+      stripeKeys->Get(1)->string_view(),
+      indexRoot->partition_keys()->Get(1)->string_view());
+}
+
+// A Partition layout index keeps its keys in one blob per stripe group, so it
+// returns no chunks for the stripes.
+TEST_F(ClusterIndexWriterTest, partitionKeyStreamsStoreNothingInStripes) {
+  auto writer = createWriter(indexConfig(), type_, pool_.get());
+  writer->write(makeKeyBatch({1, 2}));
+  Buffer buffer{*pool_};
+  EXPECT_TRUE(writer->finishStripe(buffer).empty());
+}
+
+TEST_F(ClusterIndexWriterTest, stripeKeyStreamsRejectMisuse) {
+  WriteDataFn writeDataFn = [](const std::vector<std::string_view>&)
+      -> std::pair<uint64_t, uint32_t> { return {0, 0}; };
+  CreateMetadataSectionFn createMetadataFn = [](std::string_view) {
+    return MetadataSection{0, 0, CompressionType::Uncompressed};
+  };
+  Buffer buffer{*pool_};
+  {
+    NIMBLE_ASSERT_THROW(
+        createWriter(
+            indexConfig(),
+            type_,
+            pool_.get(),
+            {.keyStreamLayout = KeyStreamLayout::kStripe}),
+        "Only the Stripe key stream layout has a key stream id, which it needs");
+  }
+  {
+    NIMBLE_ASSERT_THROW(
+        createWriter(
+            indexConfig(),
+            type_,
+            pool_.get(),
+            {.keyStreamLayout = KeyStreamLayout::kPartition,
+             .keyStreamId = kKeyStreamId}),
+        "Only the Stripe key stream layout has a key stream id, which it needs");
+  }
+  {
+    auto writer = createStripeKeyStreamWriter();
+    NIMBLE_ASSERT_THROW(
+        writer->finishStripe(buffer), "A stripe must have keys");
+  }
+  {
+    auto writer = createStripeKeyStreamWriter();
+    writer->write(makeKeyBatch({1, 2}));
+    writer->finishStripe(buffer);
+    writer->write(makeKeyBatch({3, 4}));
+    NIMBLE_ASSERT_THROW(
+        writer->finishStripeGroup(writeDataFn, createMetadataFn),
+        "Keys written after the last finishStripe() belong to no stripe");
   }
 }
 
@@ -1268,18 +1428,18 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
         static_cast<uint32_t>(data.size()),
     };
   };
-  writer->flush(writeData, createMetadata);
+  writer->finishStripeGroup(writeData, createMetadata);
   const auto descriptor = writer->close(writeData, createMetadata);
   ASSERT_TRUE(descriptor.has_value());
   EXPECT_EQ(descriptor->name, kHierarchicalClusterIndexName);
   ASSERT_EQ(metadata.size(), 2);
 
   const auto makeRootSection = [&]() {
-    return Section{MetadataBuffer(
+    return Section{MetadataBuffer(toPinnedBuffer(
         MetadataBuffer::decompress(
             toBufferPtr(metadata.at(metadata.size() - 1), pool_.get()),
             CompressionType::Uncompressed,
-            pool_.get()))};
+            pool_.get())))};
   };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1301,7 +1461,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     NIMBLE_ASSERT_THROW(
         HierarchicalClusterIndex::create(
             makeRootSection(),
-            NimbleHierarchicalClusterIndexFactory{}.testingKeyCodec(),
+            nimbleKeyCodec(),
             pool_.get(),
             comparatorOptions),
         "Hierarchical cluster index requires bytewise key order");
@@ -1544,14 +1704,14 @@ TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
         static_cast<uint32_t>(data.size()),
     };
   };
-  writer->flush(writeData, createMetadata);
+  writer->finishStripeGroup(writeData, createMetadata);
   ASSERT_TRUE(writer->close(writeData, createMetadata).has_value());
   const auto makeRootSection = [&]() {
-    return Section{MetadataBuffer(
+    return Section{MetadataBuffer(toPinnedBuffer(
         MetadataBuffer::decompress(
             toBufferPtr(metadata.back(), pool_.get()),
             CompressionType::Uncompressed,
-            pool_.get()))};
+            pool_.get())))};
   };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1671,8 +1831,7 @@ encodeBounds(
 TEST_F(ClusterIndexWriterTest, hierarchicalFactoryKeyEncoderWritesNimbleKeys) {
   const auto& factory = clusterIndexFactory(kHierarchicalClusterIndexName);
   ASSERT_NE(
-      dynamic_cast<const NimbleHierarchicalClusterIndexFactory*>(&factory),
-      nullptr);
+      dynamic_cast<const HierarchicalClusterIndexFactory*>(&factory), nullptr);
   EXPECT_EQ(factory.keyComparator(), nullptr);
 
   const std::vector<std::string> keyColumns{"tinyKey", "smallKey", "bigKey"};
@@ -1766,7 +1925,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryKeyEncoderWritesNimbleKeys) {
 // order, which the caller does not pass. Its key encoder writes the keys that
 // the key cursor returns, and lookup bounds that find their rows.
 TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
-  const NimbleHierarchicalClusterIndexFactory factory{
+  const HierarchicalClusterIndexFactory factory{
       "test.inverted_keys", std::make_shared<const InvertedKeyCodec>()};
   EXPECT_NE(factory.keyComparator(), nullptr);
 
@@ -1784,7 +1943,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
       keyColumns,
       {makeFlatVector<int64_t>({1, 1, 2, 3}),
        makeFlatVector<int64_t>({10, 20, 5, 1})});
-  auto writer = factory.createWriter(*config, type, pool_.get());
+  auto writer = factory.createWriter(
+      *config,
+      type,
+      pool_.get(),
+      /*options=*/{});
   writer->write(rows);
 
   std::string keyStreamData;
@@ -1811,7 +1974,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
         static_cast<uint32_t>(data.size()),
     };
   };
-  writer->flush(writeData, createMetadata);
+  writer->finishStripeGroup(writeData, createMetadata);
   ASSERT_TRUE(writer->close(writeData, createMetadata).has_value());
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1819,11 +1982,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
   ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
   const auto index = factory.createReader(
-      Section{MetadataBuffer(
+      Section{MetadataBuffer(toPinnedBuffer(
           MetadataBuffer::decompress(
               toBufferPtr(metadata.back(), pool_.get()),
               CompressionType::Uncompressed,
-              pool_.get()))},
+              pool_.get())))},
       pool_.get(),
       IndexLookup::Options{.file = file, .ioOptions = &ioOptions});
   ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 2);
@@ -1937,7 +2100,7 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
     return MetadataSection(
         0, metadataSize, CompressionType::Uncompressed, metadataSize);
   };
-  writer->flush(writeDataFn, createMetadataFn);
+  writer->finishStripeGroup(writeDataFn, createMetadataFn);
 
   // Close the writer and capture the root index payload.
   WriteDataFn noopWriteDataFn2 = [](const std::vector<std::string_view>&)
@@ -1950,11 +2113,11 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   ASSERT_EQ(partitionMetadata.size(), 2);
 
   // Load ClusterIndex from serialized data and verify layout.
-  Section rootSection{MetadataBuffer(
+  Section rootSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
           toBufferPtr(rootIndexData, pool_.get()),
           CompressionType::Uncompressed,
-          pool_.get()))};
+          pool_.get())))};
   auto metadataFile =
       std::make_shared<velox::InMemoryReadFile>(partitionMetadata[0]);
   auto ioStats = std::make_shared<velox::io::IoStatistics>();
@@ -1982,7 +2145,8 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   const auto& partition = layout.partitions[0];
   EXPECT_EQ(partition.numRows, kNumRows);
   EXPECT_GT(partition.metadataSizeBytes, 0);
-  EXPECT_GT(partition.keyStreamRegion.length, 0);
+  ASSERT_EQ(partition.keyStreamRegions.size(), 1);
+  EXPECT_GT(partition.keyStreamRegions[0].length, 0);
 
   // Verify chunk count. encodeKeyChunks absorbs tail when remaining < 2 *
   // maxRows, so expected chunks = floor(numRows / maxRows) when tail is

@@ -106,6 +106,7 @@ void runNimbleWriterFuzzer() {
     fuzzer.logCoverage();
     fuzzer.logPairCoverage();
     fuzzer.logChunkStatsCoverage();
+    fuzzer.logPointLookupCoverage();
   };
 
   // Catch and rethrow rather than a scope guard: an exception that escapes

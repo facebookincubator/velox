@@ -97,6 +97,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     options.vectorSize = vectorSize;
     VectorFuzzer fuzzer(options, pool());
     std::vector<RowVectorPtr> vectors;
+    vectors.reserve(numVectors);
     for (int i = 0; i < numVectors; ++i) {
       vectors.push_back(fuzzer.fuzzInputRow(rowType_));
     }
@@ -315,7 +316,7 @@ TEST_F(HiveDataSinkTest, hiveSortingColumn) {
 TEST_F(HiveDataSinkTest, hiveBucketProperty) {
   const std::vector<std::string> columns = {"a", "b", "c"};
   const std::vector<TypePtr> types = {INTEGER(), VARCHAR(), BIGINT()};
-  const std::vector<std::shared_ptr<const HiveSortingColumn>> sortedColumns = {
+  const std::vector<HiveSortingColumnPtr> sortedColumns = {
       std::make_shared<HiveSortingColumn>("d", core::SortOrder{false, false}),
       std::make_shared<HiveSortingColumn>("e", core::SortOrder{false, false}),
       std::make_shared<HiveSortingColumn>("f", core::SortOrder{true, true})};
@@ -324,92 +325,12 @@ TEST_F(HiveDataSinkTest, hiveBucketProperty) {
     std::vector<std::string> bucketedBy;
     std::vector<TypePtr> bucketedTypes;
     uint32_t bucketCount;
-    std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
+    std::vector<HiveSortingColumnPtr> sortedBy;
     bool badProperty;
     std::string exceptionString;
     std::string expectedToString;
   } testSettings[] = {
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0]},
-       {types[0], types[1]},
-       4,
-       {},
-       true,
-       "The number of hive bucket columns and types do not match",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {types[0]},
-       4,
-       {},
-       true,
-       "The number of hive bucket columns and types do not match",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {},
-       4,
-       {},
-       true,
-       "The number of hive bucket columns and types do not match",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {},
-       {types[0]},
-       4,
-       {},
-       true,
-       "Hive bucket columns must be set",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {types[0], types[1]},
-       0,
-       {},
-       true,
-       "Hive bucket count can't be zero",
-       ""},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {types[0], types[1]},
-       4,
-       {},
-       false,
-       "",
-       "\nHiveBucketProperty[<PRESTO_NATIVE 4>\n"
-       "\tBucket Columns:\n"
-       "\t\ta\n"
-       "\t\tb\n"
-       "\tBucket Types:\n"
-       "\t\tINTEGER\n"
-       "\t\tVARCHAR\n"
-       "]\n"},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0]},
-       {types[0]},
-       4,
-       {},
-       false,
-       "",
-       "\nHiveBucketProperty[<PRESTO_NATIVE 4>\n\tBucket Columns:\n\t\ta\n\tBucket Types:\n\t\tINTEGER\n]\n"},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0], columns[1]},
-       {types[0], types[1]},
-       4,
-       {{sortedColumns[0]}},
-       false,
-       "",
-       "\nHiveBucketProperty[<PRESTO_NATIVE 4>\n\tBucket Columns:\n\t\ta\n\t\tb\n\tBucket Types:\n\t\tINTEGER\n\t\tVARCHAR\n\tSortedBy Columns:\n\t\t[COLUMN[d] ORDER[DESC NULLS LAST]]\n]\n"},
-      {HiveBucketProperty::Kind::kPrestoNative,
-       {columns[0]},
-       {types[0]},
-       4,
-       {{sortedColumns[0], sortedColumns[2]}},
-       false,
-       "",
-       "\nHiveBucketProperty[<PRESTO_NATIVE 4>\n\tBucket Columns:\n\t\ta\n\tBucket Types:\n\t\tINTEGER\n\tSortedBy Columns:\n\t\t[COLUMN[d] ORDER[DESC NULLS LAST]]\n\t\t[COLUMN[f] ORDER[ASC NULLS FIRST]]\n]\n"},
-
-      {HiveBucketProperty::Kind::kPrestoNative,
+      {HiveBucketProperty::Kind::kHiveCompatible,
        {columns[0]},
        {types[0], types[1]},
        4,
@@ -563,9 +484,8 @@ TEST_F(HiveDataSinkTest, basicBucket) {
       numBuckets,
       std::vector<std::string>{"c0"},
       std::vector<TypePtr>{BIGINT()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{
-          std::make_shared<HiveSortingColumn>(
-              "c1", core::SortOrder{false, false})});
+      std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+          "c1", core::SortOrder{false, false})});
   connectorSessionProperties_->set(
       HiveConfig::kSortWriterFinishTimeSliceLimitMsSession, "1");
   auto dataSink = createDataSink(
@@ -605,6 +525,26 @@ TEST_F(HiveDataSinkTest, basicBucket) {
 
   createDuckDbTable(vectors);
   verifyWrittenData(outputDirectory->getPath(), numBuckets);
+}
+
+// The writer hashes rows with Hive's hash, so it rejects other bucket
+// functions.
+TEST_F(HiveDataSinkTest, prestoNativeBucket) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kPrestoNative,
+      4,
+      std::vector<std::string>{"c0"},
+      std::vector<TypePtr>{BIGINT()},
+      std::vector<HiveSortingColumnPtr>{});
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          rowType_,
+          outputDirectory->getPath(),
+          dwio::common::FileFormat::DWRF,
+          {},
+          bucketProperty),
+      "(PRESTO_NATIVE vs. HIVE_COMPATIBLE) Unsupported bucket function");
 }
 
 TEST_F(HiveDataSinkTest, close) {
@@ -741,9 +681,8 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, memoryReclaim) {
           4,
           std::vector<std::string>{"c0"},
           std::vector<TypePtr>{BIGINT()},
-          std::vector<std::shared_ptr<const HiveSortingColumn>>{
-              std::make_shared<HiveSortingColumn>(
-                  "c1", core::SortOrder{false, false})});
+          std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+              "c1", core::SortOrder{false, false})});
     }
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     std::unique_ptr<SpillConfig> spillConfig;
@@ -876,9 +815,8 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
           4,
           std::vector<std::string>{"c0"},
           std::vector<TypePtr>{BIGINT()},
-          std::vector<std::shared_ptr<const HiveSortingColumn>>{
-              std::make_shared<HiveSortingColumn>(
-                  "c1", core::SortOrder{false, false})});
+          std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+              "c1", core::SortOrder{false, false})});
     }
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     std::unique_ptr<SpillConfig> spillConfig;
@@ -964,9 +902,8 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterAbortDuringFinish) {
       numBuckets,
       std::vector<std::string>{"c0"},
       std::vector<TypePtr>{BIGINT()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{
-          std::make_shared<HiveSortingColumn>(
-              "c1", core::SortOrder{false, false})});
+      std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+          "c1", core::SortOrder{false, false})});
   connectorSessionProperties_->set(
       HiveConfig::kSortWriterFinishTimeSliceLimitMsSession, "1");
   connectorSessionProperties_->set(
@@ -1008,9 +945,8 @@ TEST_F(HiveDataSinkTest, sortWriterMemoryReclaimDuringFinish) {
       numBuckets,
       std::vector<std::string>{"c0"},
       std::vector<TypePtr>{BIGINT()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{
-          std::make_shared<HiveSortingColumn>(
-              "c1", core::SortOrder{false, false})});
+      std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+          "c1", core::SortOrder{false, false})});
   std::shared_ptr<TempDirectoryPath> spillDirectory =
       TempDirectoryPath::create();
   std::unique_ptr<SpillConfig> spillConfig =
@@ -1072,9 +1008,8 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
       4,
       std::vector<std::string>{"c0"},
       std::vector<TypePtr>{BIGINT()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{
-          std::make_shared<HiveSortingColumn>(
-              "c1", core::SortOrder{false, false})});
+      std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+          "c1", core::SortOrder{false, false})});
   const std::shared_ptr<TempDirectoryPath> spillDirectory =
       TempDirectoryPath::create();
   std::unique_ptr<SpillConfig> spillConfig =
@@ -1118,9 +1053,8 @@ TEST_F(HiveDataSinkTest, insertTableHandleToString) {
       numBuckets,
       std::vector<std::string>{"c5"},
       std::vector<TypePtr>{VARCHAR()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{
-          std::make_shared<HiveSortingColumn>(
-              "c5", core::SortOrder{false, false})});
+      std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+          "c5", core::SortOrder{false, false})});
   auto insertTableHandle = createHiveInsertTableHandle(
       rowType_,
       "/path/to/test",
@@ -1188,7 +1122,7 @@ TEST_F(
       1,
       std::vector<std::string>{"payload"},
       std::vector<TypePtr>{VARCHAR()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+      std::vector<HiveSortingColumnPtr>{});
 
   const auto outputDirectory = TempDirectoryPath::create();
   auto dataSink = createDataSink(
@@ -1352,11 +1286,11 @@ TEST_F(HiveDataSinkTest, ensureFilesUnsupported) {
           rowType_->children(),
           {}, // partitionedBy
           {std::make_shared<HiveBucketProperty>(
-              HiveBucketProperty::Kind::kPrestoNative,
+              HiveBucketProperty::Kind::kHiveCompatible,
               1,
               std::vector<std::string>{rowType_->names()[0]},
               std::vector<TypePtr>{rowType_->children()[0]},
-              std::vector<std::shared_ptr<const HiveSortingColumn>>{})},
+              std::vector<HiveSortingColumnPtr>{})},
           makeLocationHandle(
               "/path/to/test",
               std::nullopt,
@@ -1459,7 +1393,7 @@ TEST_F(HiveDataSinkTest, fileRotationDisabledForBucketedTables) {
       numBuckets,
       std::vector<std::string>{"c0"},
       std::vector<TypePtr>{BIGINT()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+      std::vector<HiveSortingColumnPtr>{});
 
   auto dataSink = createDataSink(
       rowType_,
@@ -2048,7 +1982,7 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
       numBuckets,
       std::vector<std::string>{"c0"},
       std::vector<TypePtr>{BIGINT()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+      std::vector<HiveSortingColumnPtr>{});
 
   // Create shared writer options (this simulates the scenario where
   // insertTableHandle_->writerOptions() returns a shared object)

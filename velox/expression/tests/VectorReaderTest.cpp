@@ -17,6 +17,7 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -209,6 +210,18 @@ TEST_F(VectorReaderTest, dictionaryEncodedMapContainsNull) {
   ASSERT_TRUE(reader.containsNull(5, 7));
   // Last map is NULL.
   ASSERT_TRUE(reader.containsNull(0, 3));
+}
+
+TEST_F(VectorReaderTest, flatMapUnsupported) {
+  auto vector = makeFlatMapVector<int32_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 11}},
+  });
+  DecodedVector decoded;
+  using Reader = exec::VectorReader<Map<int32_t, int64_t>>;
+  VELOX_ASSERT_THROW(
+      Reader{decode(decoded, *vector)},
+      "Unsupported vector encoding for simple function argument: FLAT_MAP");
 }
 
 TEST_F(VectorReaderTest, arrayContainsNull) {
