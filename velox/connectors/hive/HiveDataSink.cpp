@@ -133,6 +133,10 @@ std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
 std::unique_ptr<core::PartitionFunction> createBucketFunction(
     const HiveBucketProperty& bucketProperty,
     const RowTypePtr& inputType) {
+  VELOX_USER_CHECK_EQ(
+      bucketProperty.kind(),
+      HiveBucketProperty::Kind::kHiveCompatible,
+      "Unsupported bucket function");
   const auto& bucketedBy = bucketProperty.bucketedBy();
   const auto& bucketedTypes = bucketProperty.bucketedTypes();
   std::vector<column_index_t> bucketedByChannels;
