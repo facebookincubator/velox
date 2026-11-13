@@ -108,8 +108,11 @@ struct FixedPointOptions {
   /// Both hooks receive worker 0's address, so an application keys verdicts on
   /// it directly.  An application can rely on:
   ///  - Worker 0 publishes each iteration's verdict once, in order.
-  ///  - It publishes iteration t+1 only after every worker has received t, so
-  ///    holding the latest verdict of each loop is enough.
+  ///  - Worker 0 starts iteration t+1 only when the verdict for t is "not
+  ///    converged".  It can publish later verdicts before every worker has
+  ///    received t, when its own rows decide them, so holding the latest
+  ///    verdict of each loop is enough only if a request for an earlier
+  ///    iteration is answered "not converged" (see FixedPointVerdicts).
   ///  - Both hooks run on the orchestration executor, which serves every loop,
   ///    so neither may block.
   std::function<

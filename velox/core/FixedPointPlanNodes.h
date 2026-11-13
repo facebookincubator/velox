@@ -250,9 +250,8 @@ class HashTableState {
 ///    Alone, it reads worker 0's own state (workerZeroVerdict), for state every
 ///    worker holds in full, such as a replicated one.  Replicas need not be
 ///    identical: workers can compute the same floating-point expression
-///    differently.  A root alone requires a body that shuffles, which keeps
-///    worker 0 from finishing an iteration before every worker has received
-///    the previous verdict.
+///    differently.  A root alone requires a body that shuffles, which brings
+///    every worker's rows into worker 0's state in each iteration.
 ///  - kSource: each worker runs the root itself (converging) over its own
 ///    state, which the body must keep identical on every worker.  Such a root
 ///    reads no stage.
