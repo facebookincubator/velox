@@ -60,6 +60,10 @@ __device__ T reduce(T input, Func func, void* temp) {
     warpResult =
         facebook::velox::wave::WarpReduce<T, kNumWarps>().reduce(val, func);
   }
+  // The first warp is still reading 'temp' when the others leave. A caller
+  // that reduces again in a loop would otherwise have its other warps store
+  // their next partials over the ones being read.
+  __syncthreads();
   return warpResult;
 }
 
@@ -190,8 +194,8 @@ __device__ void masked_select(
   bool* flags = storage<bool>(mask);
   T* in = storage<T>(input);
   masked_select<kBlockSize, T>(
-      idx < size ? in[idx] : T(),
-      idx < size ? flags[idx] : false,
+      idx < size ? in[complexIdx(input->contiguous, input, idx)] : T(),
+      idx < size ? flags[complexIdx(mask->contiguous, mask, idx)] : false,
       output,
       temp,
       counter,
@@ -229,7 +233,9 @@ __device__ void masked_select_head(
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {
-    uint32_t flag = (idx < size) ? static_cast<uint32_t>(flags[idx]) : 0;
+    uint32_t flag = (idx < size)
+        ? static_cast<uint32_t>(flags[complexIdx(mask->contiguous, mask, idx)])
+        : 0;
     auto count = reduce<kBlockSize, uint32_t>(
         flag, [](uint32_t a, uint32_t b) { return a + b; }, temp);
     if (threadIdx.x == 0) {
@@ -328,7 +334,8 @@ __device__ void masked_select_final(
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {
-    bool flag = (idx < size) ? flags[idx] : false;
+    bool flag =
+        (idx < size) ? flags[complexIdx(mask->contiguous, mask, idx)] : false;
     auto base = blockIdx == 0 ? 0 : cnt[blockIdx - 1];
     int32_t val = static_cast<int32_t>(flag);
     if (threadIdx.x == 0) {
@@ -337,7 +344,7 @@ __device__ void masked_select_final(
     int32_t sum = facebook::velox::wave::inclusiveSum<int32_t, kBlockSize>(
         val, nullptr, static_cast<int32_t*>(temp));
     if (flag) {
-      out[sum - 1] = in[idx];
+      out[sum - 1] = in[complexIdx(input->contiguous, input, idx)];
     }
     if (idx == size - 1) {
       output->dims[0] = sum;
@@ -392,10 +399,25 @@ __device__ void cumsum(
   }
 }
 
-// Row-wise inclusive scan of a 2-D input along dim 1. A block takes whole
-// rows, rows striding over the op's blocks, and carries a row's running total
+// The offset in 'tensor' of element 'idx' of its dim 'lastDim' in row 'row',
+// where a row is one index into the dims before 'lastDim'.
+__device__ inline int64_t
+rowOffset(const Tensor* tensor, int32_t lastDim, int64_t row, int64_t idx) {
+  int64_t offset = idx * tensor->strides[lastDim];
+  for (int32_t d = lastDim - 1; d >= 0; --d) {
+    const int64_t dim = tensor->dims[d];
+    offset += (row % dim) * tensor->strides[d];
+    row /= dim;
+  }
+  return offset;
+}
+
+// Row-wise inclusive scan of an input of rank 2 or more along its last dim,
+// a row being one index into the dims before it. A block takes whole rows,
+// rows striding over the op's blocks, and carries a row's running total
 // across block-wide iterations in 'counter', as cumsum does. With kSumOnly
-// only each row's total is written, to output[row].
+// only each row's total is written, to the row's element of an output with
+// the input's dims less the last.
 template <int32_t kBlockSize, typename TIn, typename TOut, bool kSumOnly>
 __device__ void scanRows(
     Tensor* input,
@@ -405,14 +427,47 @@ __device__ void scanRows(
     uint32_t& rounded,
     TOut& counter,
     BlockInfo& block) {
+  const int32_t lastDim = input->rank - 1;
   if (threadIdx.x == 0) {
-    size = input->dims[1];
+    size = input->dims[lastDim];
     rounded = roundUpPwr2(size, kBlockSize);
   }
   __syncthreads();
-  const int64_t numRows = input->dims[0];
+  int64_t numRows = 1;
+  for (int32_t d = 0; d < lastDim; ++d) {
+    numRows *= input->dims[d];
+  }
   TIn* in = storage<TIn>(input);
   TOut* out = storage<TOut>(output);
+  if constexpr (kSumOnly) {
+    // A row of up to kWarpRowMax elements is summed by one warp, rows striding
+    // over the op's warps, as any_rows does. A block per row would run one
+    // block-wide scan per row, which dominates when there are many short rows
+    // and few blocks.
+    constexpr uint32_t kWarpRowMax = 1024;
+    if (size <= kWarpRowMax) {
+      const uint32_t lane = threadIdx.x & 31;
+      const int64_t warpsPerBlock = blockDim.x / 32;
+      for (int64_t row = block.blockInOp * warpsPerBlock + threadIdx.x / 32;
+           row < numRows;
+           row += block.numBlocksInOp * warpsPerBlock) {
+        TOut sum = 0;
+        for (uint32_t i = lane; i < size; i += 32) {
+          sum += static_cast<TOut>(in[rowOffset(input, lastDim, row, i)]);
+        }
+        for (int32_t offset = 16; offset > 0; offset /= 2) {
+          sum += __shfl_xor_sync(0xffffffff, sum, offset);
+        }
+        if (lane == 0) {
+          const int64_t outLast = output->dims[lastDim - 1];
+          out[rowOffset(output, lastDim - 1, row / outLast, row % outLast)] =
+              sum;
+        }
+      }
+      __syncthreads();
+      return;
+    }
+  }
   for (int64_t row = block.blockInOp; row < numRows;
        row += block.numBlocksInOp) {
     if (threadIdx.x == 0) {
@@ -421,8 +476,7 @@ __device__ void scanRows(
     __syncthreads();
     for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
       TOut val = (idx < size)
-          ? static_cast<TOut>(
-                in[row * input->strides[0] + idx * input->strides[1]])
+          ? static_cast<TOut>(in[rowOffset(input, lastDim, row, idx)])
           : TOut(0);
       if (threadIdx.x == 0) {
         val += counter;
@@ -430,7 +484,7 @@ __device__ void scanRows(
       TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
           val, nullptr, static_cast<TOut*>(temp));
       if (!kSumOnly && idx < size) {
-        out[row * output->strides[0] + idx * output->strides[1]] = sum;
+        out[rowOffset(output, lastDim, row, idx)] = sum;
       }
       if (threadIdx.x == blockDim.x - 1) {
         counter = sum;
@@ -438,13 +492,64 @@ __device__ void scanRows(
       __syncthreads();
     }
     if (kSumOnly && threadIdx.x == 0) {
-      out[row * output->strides[0]] = counter;
+      const int64_t outLast = output->dims[lastDim - 1];
+      out[rowOffset(output, lastDim - 1, row / outLast, row % outLast)] =
+          counter;
     }
     __syncthreads();
   }
 }
 
-// cumsum(input, dim=1) of a 2-D input.
+// any() over the dims of 'input' from kKeep on: output[r] is true if any
+// element of row r is, where a row is one index into the first kKeep dims.
+// A row of up to kWarpRowMax elements is taken by one warp, rows striding
+// over the op's warps, and combined with __any_sync. A longer row is taken
+// by a whole block, each thread ORing its share and __syncthreads_or
+// combining them.
+template <int32_t kBlockSize, int32_t kKeep>
+__device__ void any_rows(Tensor* input, Tensor* output, BlockInfo& block) {
+  constexpr uint32_t kWarpRowMax = 1024;
+  int64_t numRows = 1;
+  for (int32_t d = 0; d < kKeep; ++d) {
+    numRows *= input->dims[d];
+  }
+  const uint32_t rowLen =
+      numRows == 0 ? 0 : static_cast<uint32_t>(input->numEl / numRows);
+  const bool* in = storage<bool>(input);
+  bool* out = storage<bool>(output);
+  if (rowLen <= kWarpRowMax) {
+    const uint32_t lane = threadIdx.x & 31;
+    const int64_t warpsPerBlock = blockDim.x / 32;
+    for (int64_t row = block.blockInOp * warpsPerBlock + threadIdx.x / 32;
+         row < numRows;
+         row += block.numBlocksInOp * warpsPerBlock) {
+      bool found = false;
+      const uint32_t first = static_cast<uint32_t>(row) * rowLen;
+      for (uint32_t i = lane; i < rowLen; i += 32) {
+        found |= in[complexIdx(input->contiguous, input, first + i)];
+      }
+      found = __any_sync(0xffffffff, found);
+      if (lane == 0) {
+        out[row] = found;
+      }
+    }
+    return;
+  }
+  for (int64_t row = block.blockInOp; row < numRows;
+       row += block.numBlocksInOp) {
+    int32_t found = 0;
+    const uint32_t first = static_cast<uint32_t>(row) * rowLen;
+    for (uint32_t i = threadIdx.x; i < rowLen; i += blockDim.x) {
+      found |= in[complexIdx(input->contiguous, input, first + i)] ? 1 : 0;
+    }
+    found = __syncthreads_or(found);
+    if (threadIdx.x == 0) {
+      out[row] = found != 0;
+    }
+  }
+}
+
+// cumsum(input, dim=-1) of an input of rank 2 or more.
 template <int32_t kBlockSize, typename TIn, typename TOut>
 __device__ void cumsum_rows(
     Tensor* input,
@@ -458,7 +563,7 @@ __device__ void cumsum_rows(
       input, output, temp, size, rounded, counter, block);
 }
 
-// sum(input, dim=[1]) of a 2-D input.
+// sum(input, dim=[-1]) of an input of rank 2 or more.
 template <int32_t kBlockSize, typename TIn, typename TOut>
 __device__ void sum_rows(
     Tensor* input,
@@ -470,6 +575,109 @@ __device__ void sum_rows(
     BlockInfo& block) {
   scanRows<kBlockSize, TIn, TOut, true>(
       input, output, temp, size, rounded, counter, block);
+}
+
+// Whether 'a' comes before 'b' as a minimum: smaller, with NaN smallest, as
+// aten's min propagates NaN.
+template <typename T>
+__device__ inline bool minBefore(T a, T b) {
+  return a < b;
+}
+
+__device__ inline bool minBefore(float a, float b) {
+  return (isnan(a) && !isnan(b)) || a < b;
+}
+
+__device__ inline bool minBefore(double a, double b) {
+  return (isnan(a) && !isnan(b)) || a < b;
+}
+
+template <typename T>
+__device__ inline T shflDownRow(T value, int32_t offset) {
+  return static_cast<T>(
+      __shfl_down_sync(0xffffffff, static_cast<long long>(value), offset));
+}
+
+__device__ inline float shflDownRow(float value, int32_t offset) {
+  return __shfl_down_sync(0xffffffff, value, offset);
+}
+
+__device__ inline double shflDownRow(double value, int32_t offset) {
+  return __shfl_down_sync(0xffffffff, value, offset);
+}
+
+// Folds the (value, index) pairs of a warp into lane 0. An index of -1 is no
+// candidate; of equal values the lower index wins.
+template <typename T>
+__device__ inline void warpMinWithIndex(T& best, int64_t& bestIdx) {
+  for (int32_t offset = 16; offset > 0; offset >>= 1) {
+    const T value = shflDownRow(best, offset);
+    const int64_t idx = shflDownRow(bestIdx, offset);
+    if (idx >= 0 &&
+        (bestIdx < 0 || minBefore(value, best) ||
+         (!minBefore(best, value) && idx < bestIdx))) {
+      best = value;
+      bestIdx = idx;
+    }
+  }
+}
+
+// min(input, dim=-1) of an input of rank 2 or more, with the index of each
+// row's first minimum. A block takes whole rows, rows striding over the op's
+// blocks: each thread folds its share of the row, then each warp, then the
+// warps' results through 'warpValues' and 'warpIndices'. Both outputs have the
+// input's dims less the last.
+template <int32_t kBlockSize, typename T>
+__device__ void min_rows(
+    Tensor* input,
+    Tensor* values,
+    Tensor* indices,
+    void* warpValues,
+    void* warpIndices,
+    BlockInfo& block) {
+  const int32_t lastDim = input->rank - 1;
+  const int64_t size = input->dims[lastDim];
+  int64_t numRows = 1;
+  for (int32_t d = 0; d < lastDim; ++d) {
+    numRows *= input->dims[d];
+  }
+  const T* in = storage<T>(input);
+  T* sharedValues = static_cast<T*>(warpValues);
+  int64_t* sharedIndices = static_cast<int64_t*>(warpIndices);
+  const auto lane = threadIdx.x & 31;
+  const auto warp = threadIdx.x / 32;
+  const auto numWarps = blockDim.x / 32;
+  for (int64_t row = block.blockInOp; row < numRows;
+       row += block.numBlocksInOp) {
+    T best = T();
+    int64_t bestIdx = -1;
+    for (int64_t idx = threadIdx.x; idx < size; idx += blockDim.x) {
+      const T value = in[rowOffset(input, lastDim, row, idx)];
+      if (bestIdx < 0 || minBefore(value, best)) {
+        best = value;
+        bestIdx = idx;
+      }
+    }
+    warpMinWithIndex(best, bestIdx);
+    if (lane == 0) {
+      sharedValues[warp] = best;
+      sharedIndices[warp] = bestIdx;
+    }
+    __syncthreads();
+    if (warp == 0) {
+      best = lane < numWarps ? sharedValues[lane] : T();
+      bestIdx = lane < numWarps ? sharedIndices[lane] : -1;
+      warpMinWithIndex(best, bestIdx);
+      if (lane == 0) {
+        const int64_t outLast = values->dims[lastDim - 1];
+        storage<T>(values)[rowOffset(
+            values, lastDim - 1, row / outLast, row % outLast)] = best;
+        storage<int64_t>(indices)[rowOffset(
+            indices, lastDim - 1, row / outLast, row % outLast)] = bestIdx;
+      }
+    }
+    __syncthreads();
+  }
 }
 
 // Three-stage cumsum, stage 1: compute per-block sums.
@@ -1074,8 +1282,8 @@ __device__ void tw_reduce_head(
     // Empty input: the loop below runs zero iterations, so this block's partial
     // slot would keep whatever the buffer already held and the final stage
     // would reduce over that. The host reserves the slot expecting this write
-    // (numBlocksShape in Builtins.cpp), so write the identity -- the same guard
-    // masked_select_head needs, for the same reason.
+    // (numBlocksReserve in Builtins.cpp), so write the identity -- the same
+    // guard masked_select_head needs, for the same reason.
     if (threadIdx.x == 0) {
       out[block.blockInOp] = Op::identity();
     }
@@ -1706,7 +1914,8 @@ __device__ void masked_select_1pass_lane(
   for (uint32_t tile = block.blockInOp; tile < numTiles;
        tile += block.numBlocksInOp) {
     const uint32_t idx = tile * kBlockSize + threadIdx.x;
-    const bool flag = idx < size && flags[idx];
+    const bool flag =
+        idx < size && flags[complexIdx(mask->contiguous, mask, idx)];
     const int32_t inclusive =
         facebook::velox::wave::inclusiveSum<int32_t, kBlockSize>(
             static_cast<int32_t>(flag),
@@ -1734,7 +1943,8 @@ __device__ void masked_select_1pass_lane(
     }
     __syncthreads();
     if (flag) {
-      out[tileExclusive + inclusive - 1] = in[idx];
+      out[tileExclusive + inclusive - 1] =
+          in[complexIdx(input->contiguous, input, idx)];
     }
     if (tile == numTiles - 1 && threadIdx.x == 0) {
       output->dims[0] = tileExclusive + tileTotal;
@@ -1790,7 +2000,8 @@ __device__ void masked_select_1pass_shared(
     int32_t threadCount = 0;
 #pragma unroll
     for (int32_t i = 0; i < kItemsPerThread; ++i) {
-      flagItems[i] = (base + i) < size && flags[base + i];
+      flagItems[i] = (base + i) < size &&
+          flags[complexIdx(mask->contiguous, mask, base + i)];
       threadCount += static_cast<int32_t>(flagItems[i]);
     }
     const int32_t threadExclusive =
@@ -1800,7 +2011,7 @@ __device__ void masked_select_1pass_shared(
 #pragma unroll
     for (int32_t i = 0; i < kItemsPerThread; ++i) {
       if (flagItems[i]) {
-        shared[slot++] = in[base + i];
+        shared[slot++] = in[complexIdx(input->contiguous, input, base + i)];
       }
     }
     if (threadIdx.x < kWarpThreads) {

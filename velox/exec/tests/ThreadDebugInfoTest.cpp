@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/common/process/ThreadDebugInfo.h"
+
+#include <folly/CPortability.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -31,25 +33,7 @@ using namespace facebook::velox::exec::test;
 // segfault which should be captured by the signal handler but gets caught by
 // the address sanitizer handler instead which print a different error log.
 
-// For clang
-#ifdef __has_feature
-#define IS_BUILDING_WITH_ASAN() __has_feature(address_sanitizer)
-#define IS_BUILDING_WITH_TSAN() __has_feature(thread_sanitizer)
-#else
-// For GCC
-#if defined(__SANITIZE_ADDRESS__) && __SANITIZE_ADDRESS__
-#define IS_BUILDING_WITH_ASAN() 1
-#else
-#define IS_BUILDING_WITH_ASAN() 0
-#endif
-#if defined(__SANITIZE_THREAD__) && __SANITIZE_THREAD__
-#define IS_BUILDING_WITH_TSAN() 1
-#else
-#define IS_BUILDING_WITH_TSAN() 0
-#endif
-#endif
-
-#if IS_BUILDING_WITH_TSAN() || IS_BUILDING_WITH_ASAN()
+#if defined(FOLLY_SANITIZE_ADDRESS) || defined(FOLLY_SANITIZE_THREAD)
 #define IS_BUILDING_WITH_SAN
 #endif
 

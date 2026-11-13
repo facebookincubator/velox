@@ -16,6 +16,7 @@
 
 #include "velox/dwio/nimble/encodings/tests/EncodingViewTestUtils.h"
 
+#include <span>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -42,6 +43,23 @@ TEST_P(TrivialEncodingViewTest, readsTrivialEncodingForAllLayoutFamilies) {
   expectReads<nimble::TrivialEncoding<std::string_view>>(
       makeVector<std::string_view>({"alpha", "", "beta", "longer-value"}),
       {3, 0, 1, 2});
+}
+
+TEST_P(TrivialEncodingViewTest, readAtRejectsOutOfRangeIndex) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
+  const auto serialized =
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+          *buffer_,
+          makeVector<int32_t>({10, 20, 30}),
+          nimble::CompressionType::Uncompressed,
+          options);
+  auto view = nimble::createEncodingView(serialized, pool_.get(), options);
+  const std::vector<uint32_t> indices{2, 3};
+  std::vector<int32_t> output(indices.size());
+  NIMBLE_ASSERT_THROW(
+      view->readAt(std::span<const uint32_t>{indices}, output.data()),
+      "Read index out of range");
 }
 
 TEST_P(TrivialEncodingViewTest, lowerBoundSearchesRange) {

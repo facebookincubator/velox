@@ -81,17 +81,18 @@ Generic Configuration
        supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
        to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
        since epoch) for "America/Los_Angeles".
-   * - use_session_timezone_for_timestamp_with_timezone
+   * - ignore_time_zone_label
      - bool
      - false
-     - Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, values render the UTC instant in
-       the session time zone, so values that compare equal produce equal results. If false, each value renders in its
-       own embedded time zone. Covers field extraction (except ``timezone_hour`` and ``timezone_minute``, which report
+     - Selects whether to ignore a TIMESTAMP WITH TIME ZONE value's stored time zone label. If true, values render the
+       UTC instant in the session time zone, so values that compare equal produce equal results. If false, each value
+       renders using its stored time zone label. Covers field extraction (except ``timezone_hour`` and
+       ``timezone_minute``, which report
        the offset stored in the value), formatting, date arithmetic, and ``CAST`` to ``VARCHAR``, ``DATE``, ``TIME``
        and ``TIMESTAMP``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO
        SECOND`` operates on milliseconds and never consults a time zone. For ``CAST`` to ``TIMESTAMP``,
        ``adjust_timestamp_to_session_timezone=true`` returns the UTC instant. When that property is false, this
-       property selects the session or embedded time zone.
+       property selects the session or stored time zone.
    * - track_operator_cpu_usage
      - bool
      - true
@@ -139,6 +140,13 @@ Generic Configuration
        creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
        (for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
        when 1% of the data size observed so far is accumulated.
+   * - exchange_output_batch_rows
+     - integer
+     - 0
+     - The number of rows the Exchange operator fills each output batch to. When positive, it replaces the target the
+       operator derives from preferred_output_batch_bytes and an estimate of the row size. A batch holds only pages
+       taken from the exchange queue together, at most preferred_output_batch_bytes, so it can have fewer rows. A Presto
+       page is never split, so a batch can exceed this by part of a page. 0 keeps the derived target.
    * - merge_exchange.max_buffer_size
      - integer
      - 128MB
@@ -256,6 +264,10 @@ Generic Configuration
      - false
      - By default, if a key is found in multiple given maps, that key's value in the resulting map comes from the last one of those maps.
        If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions `CreateMap`, `MapFromArrays`, `MapFromEntries`, `StringToMap`, `MapConcat`, `TransformKeys`.
+   * - generate_constant_maps_as_flat_maps
+     - bool
+     - false
+     - If true, map functions that support it build a flat map when every key is constant. Today only Spark `CreateMap` supports it.
    * - index_lookup_join_max_prefetch_batches
      - integer
      - 0
@@ -658,6 +670,12 @@ Aggregation
      - In streaming aggregation, wait until we have enough number of output rows
        to produce a batch of size specified by this. If set to 0, then
        Operator::outputBatchRows will be used as the min output batch rows.
+   * - vector_index_train_threads
+     - integer
+     - 1
+     - Number of threads :func:`vector_index_train` trains a codec on, for both
+       OpenMP and MKL. Positive. Training runs on its driver's thread with the
+       default; more threads compete with the other drivers on the host.
 
 Table Scan
 ------------
@@ -1192,6 +1210,14 @@ Parquet Options (prefix ``hive.parquet.``)
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.
        Session: ``hive.parquet.writer.enable_page_index``.
+   * - ``writer.size-statistics-level``
+     - string
+     - PAGE_AND_COLUMN_CHUNK
+     - Controls Parquet size statistics written by the Arrow bridge. ``NONE`` disables size
+       statistics; ``COLUMN_CHUNK`` writes only column-chunk statistics; and
+       ``PAGE_AND_COLUMN_CHUNK`` writes both column-chunk and page-level statistics. Page-level
+       statistics require ``writer.enable-page-index`` to be enabled.
+       Session: ``hive.parquet.writer.size_statistics_level``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1221,10 +1247,6 @@ Nimble Options (prefix ``hive.nimble.``)
        not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
        allow lazy IO across stripes. Configure as ``nimble.lazy-column-io``; do not prepend ``hive.``.
        Session: ``nimble_lazy_column_io``.
-   * - ``string-decoder-zero-copy``
-     - bool
-     - false
-     - Enable zero-copy string decoding in Nimble selective reader. Configure as ``nimble.string-decoder-zero-copy``; do not prepend ``hive.``. Session: ``nimble_string_decoder_zero_copy``.
    * - ``preserve-dictionary-encoding``
      - bool
      - false
@@ -1524,6 +1546,13 @@ Spark-specific Configuration
      - integer
      -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.legacy_coding_error_action
+     - bool
+     - false
+     - If true, the Spark ``encode`` function replaces unmappable characters instead of reporting an error.
+       Corresponds to Spark 4.0's ``spark.sql.legacy.codingErrorAction``.
+       Set to true to match Spark 3.x's replacement behavior for the supported charsets.
+       Additional JDK charset names and aliases remain unsupported in either mode.
    * - spark.legacy_date_formatter
      - bool
      - false

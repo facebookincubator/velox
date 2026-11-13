@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_subdirectory(utils)
+
 add_library(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.cpp)
 velox_add_test_headers(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.h)
 target_link_libraries(
@@ -63,6 +65,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   target_link_libraries(
     velox_hive_iceberg_test
+    velox_hive_iceberg_test_lib
     velox_dwio_iceberg_reader_benchmark_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
@@ -96,10 +99,12 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   target_link_libraries(
     velox_hive_iceberg_insert_test
+    velox_hive_iceberg_test_lib
     velox_exec_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_vector_fuzzer
+    GTest::gmock
     GTest::gtest
     GTest::gtest_main
   )
@@ -119,6 +124,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
     target_link_libraries(
       velox_hive_iceberg_geospatial_test
+      velox_hive_iceberg_test_lib
       velox_exec_test_lib
       velox_hive_connector
       velox_hive_iceberg_splitreader
@@ -143,6 +149,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_splitreader
     velox_exec_test_lib
     velox_dwio_common_test_utils
+    GTest::gmock
     GTest::gtest
     GTest::gtest_main
   )
@@ -182,6 +189,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   target_link_libraries(
     velox_hive_iceberg_merge_sink_test
+    velox_hive_iceberg_test_lib
     velox_exec_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
@@ -226,6 +234,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   target_link_libraries(
     velox_hive_iceberg_equality_delete_test
+    velox_hive_iceberg_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_exec_test_lib
@@ -288,6 +297,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_exec_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
+    velox_hive_iceberg_test_lib
     velox_vector_test_lib
     velox_vector_fuzzer
     velox_dwio_common
@@ -360,6 +370,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_exec_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
+    velox_hive_iceberg_test_lib
     velox_vector_test_lib
     velox_vector_fuzzer
     velox_common_base
@@ -397,6 +408,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_exec_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
+    velox_hive_iceberg_test_lib
     velox_vector_test_lib
     velox_vector_fuzzer
     velox_common_base
@@ -425,6 +437,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   target_link_libraries(
     velox_hive_iceberg_changelog_test
+    velox_hive_iceberg_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_exec_test_lib

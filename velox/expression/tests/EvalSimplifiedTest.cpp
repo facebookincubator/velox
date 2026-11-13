@@ -223,7 +223,7 @@ TEST_F(EvalSimplifiedTest, dereference) {
                                       const VectorPtr& nested,
                                       const RowTypePtr& nestedType) {
       SCOPED_TRACE(trace);
-      auto input = makeRowVector({"nested"}, {nested});
+      auto input = makeNamedRowVector("nested", nested);
       auto dereference = std::make_shared<core::DereferenceTypedExpr>(
           BOOLEAN(),
           std::make_shared<core::FieldAccessTypedExpr>(nestedType, "nested"),
@@ -242,7 +242,7 @@ TEST_F(EvalSimplifiedTest, dereference) {
     // common vs simplified parity on the remaining encodings.
     {
       SCOPED_TRACE("flat");
-      auto input = makeRowVector({"nested"}, {nested});
+      auto input = makeNamedRowVector("nested", nested);
       auto dereference = std::make_shared<core::DereferenceTypedExpr>(
           BOOLEAN(),
           std::make_shared<core::FieldAccessTypedExpr>(nestedType, "nested"),

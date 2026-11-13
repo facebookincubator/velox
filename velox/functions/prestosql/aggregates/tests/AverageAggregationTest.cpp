@@ -75,33 +75,34 @@ TEST_F(AverageAggregationTest, avgConst) {
 
     createDuckDbTable(vectors);
 
-    testAggregations(
-        vectors,
-        {},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
-        "SELECT avg(c1), avg(c2) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates(
+            {fmt::format("{}(c1)", functionName),
+             fmt::format("{}(c2)", functionName)})
+        .assertResults("SELECT avg(c1), avg(c2) FROM tmp");
 
-    testAggregations(
-        vectors,
-        {"c0"},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
-        "SELECT c0, avg(c1), avg(c2) FROM tmp group by c0");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates(
+            {fmt::format("{}(c1)", functionName),
+             fmt::format("{}(c2)", functionName)})
+        .assertResults("SELECT c0, avg(c1), avg(c2) FROM tmp group by c0");
 
-    testAggregations(
-        vectors,
-        {},
-        {fmt::format("{}(c0)", functionName)},
-        "SELECT avg(c0) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({fmt::format("{}(c0)", functionName)})
+        .assertResults("SELECT avg(c0) FROM tmp");
 
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors).project({"c0 % 2 AS c0_mod_2", "c0"});
-        },
-        {"c0_mod_2"},
-        {fmt::format("{}(c0)", functionName)},
-        "SELECT c0 % 2, avg(c0) FROM tmp group by 1");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
+          builder.project({"c0 % 2 AS c0_mod_2", "c0"});
+        })
+        .groupBy({"c0_mod_2"})
+        .aggregates({fmt::format("{}(c0)", functionName)})
+        .assertResults("SELECT c0 % 2, avg(c0) FROM tmp group by 1");
   };
 
   testFunction("avg");
@@ -126,25 +127,25 @@ TEST_F(AverageAggregationTest, avgConstNull) {
 
     createDuckDbTable(vectors);
 
-    testAggregations(
-        vectors,
-        {},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
-        "SELECT avg(c1), avg(c2) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates(
+            {fmt::format("{}(c1)", functionName),
+             fmt::format("{}(c2)", functionName)})
+        .assertResults("SELECT avg(c1), avg(c2) FROM tmp");
 
-    testAggregations(
-        vectors,
-        {"c0"},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
-        "SELECT c0, avg(c1), avg(c2) FROM tmp group by c0");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates(
+            {fmt::format("{}(c1)", functionName),
+             fmt::format("{}(c2)", functionName)})
+        .assertResults("SELECT c0, avg(c1), avg(c2) FROM tmp group by c0");
 
-    testAggregations(
-        vectors,
-        {},
-        {fmt::format("{}(c0)", functionName)},
-        "SELECT avg(c0) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({fmt::format("{}(c0)", functionName)})
+        .assertResults("SELECT avg(c0) FROM tmp");
   };
 
   testFunction("avg");
@@ -169,19 +170,20 @@ TEST_F(AverageAggregationTest, avgNulls) {
 
     createDuckDbTable(vectors);
 
-    testAggregations(
-        vectors,
-        {},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
-        "SELECT avg(c1), avg(c2) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates(
+            {fmt::format("{}(c1)", functionName),
+             fmt::format("{}(c2)", functionName)})
+        .assertResults("SELECT avg(c1), avg(c2) FROM tmp");
 
-    testAggregations(
-        vectors,
-        {"c0"},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
-        "SELECT c0, avg(c1), avg(c2) FROM tmp group by c0");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates(
+            {fmt::format("{}(c1)", functionName),
+             fmt::format("{}(c2)", functionName)})
+        .assertResults("SELECT c0, avg(c1), avg(c2) FROM tmp group by c0");
   };
 
   testFunction("avg");
@@ -199,54 +201,29 @@ TEST_F(AverageAggregationTest, avg) {
         fmt::format("{}(c2)", functionName),
         fmt::format("{}(c4)", functionName),
         fmt::format("{}(c5)", functionName)};
-    testAggregations(
-        vectors,
-        {},
-        aggregates,
-        "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
-    testAggregationsWithCompanion(
-        vectors,
-        [](auto& /*builder*/) {},
-        {},
-        aggregates,
-        {{rowType_->childAt(1)},
-         {rowType_->childAt(2)},
-         {rowType_->childAt(4)},
-         {rowType_->childAt(5)}},
-        {},
-        "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates(aggregates)
+        .withCompanion()
+        .assertResults("SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
 
     // global aggregation; no input
     aggregates = {fmt::format("{}(c0)", functionName)};
-    testAggregations(
-        [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 5"); },
-        {},
-        aggregates,
-        "SELECT null");
-    testAggregationsWithCompanion(
-        vectors,
-        [&](auto& builder) { builder.filter("c0 % 2 = 5"); },
-        {},
-        aggregates,
-        {{rowType_->childAt(0)}},
-        {},
-        "SELECT null");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 5"); })
+        .aggregates(aggregates)
+        .withCompanion()
+        .assertResults("SELECT null");
 
     // global aggregation over filter
     aggregates = {fmt::format("{}(c1)", functionName)};
-    testAggregations(
-        [&](auto& builder) { builder.values(vectors).filter("c0 % 5 = 3"); },
-        {},
-        aggregates,
-        "SELECT avg(c1) FROM tmp WHERE c0 % 5 = 3");
-    testAggregationsWithCompanion(
-        vectors,
-        [&](auto& builder) { builder.filter("c0 % 5 = 3"); },
-        {},
-        aggregates,
-        {{rowType_->childAt(1)}},
-        {},
-        "SELECT avg(c1) FROM tmp WHERE c0 % 5 = 3");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) { builder.filter("c0 % 5 = 3"); })
+        .aggregates(aggregates)
+        .withCompanion()
+        .assertResults("SELECT avg(c1) FROM tmp WHERE c0 % 5 = 3");
 
     // group by
     aggregates = {
@@ -255,77 +232,44 @@ TEST_F(AverageAggregationTest, avg) {
         fmt::format("{}(c3)", functionName),
         fmt::format("{}(c4)", functionName),
         fmt::format("{}(c5)", functionName)};
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors).project(
-              {"c0 % 10 AS c0_mod_10", "c1", "c2", "c3", "c4", "c5"});
-        },
-        {"c0_mod_10"},
-        aggregates,
-        "SELECT c0 % 10, avg(c1), avg(c2), avg(c3::DOUBLE), "
-        "avg(c4), avg(c5) FROM tmp GROUP BY 1");
-    testAggregationsWithCompanion(
-        vectors,
-        [&](auto& builder) {
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
           builder.project(
-              {"c0 % 10 AS c0_mod_10", "c1", "c2", "c3", "c4", "c5", "k0"});
-        },
-        {"c0_mod_10"},
-        aggregates,
-        {{rowType_->childAt(1)},
-         {rowType_->childAt(2)},
-         {rowType_->childAt(3)},
-         {rowType_->childAt(4)},
-         {rowType_->childAt(5)}},
-        {},
-        "SELECT c0 % 10, avg(c1), avg(c2), avg(c3::DOUBLE), "
-        "avg(c4), avg(c5) FROM tmp GROUP BY 1");
+              {"c0 % 10 AS c0_mod_10", "c1", "c2", "c3", "c4", "c5"});
+        })
+        .groupBy({"c0_mod_10"})
+        .aggregates(aggregates)
+        .withCompanion()
+        .assertResults(
+            "SELECT c0 % 10, avg(c1), avg(c2), avg(c3::DOUBLE), "
+            "avg(c4), avg(c5) FROM tmp GROUP BY 1");
 
     // group by; no input
     aggregates = {fmt::format("{}(c1)", functionName)};
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors)
-              .project({"c0 % 10 AS c0_mod_10", "c1"})
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
+          builder.project({"c0 % 10 AS c0_mod_10", "c1"})
               .filter("c0_mod_10 > 10");
-        },
-        {"c0_mod_10"},
-        aggregates,
-        "");
-    testAggregationsWithCompanion(
-        vectors,
-        [&](auto& builder) {
-          builder.project({"c0 % 10 AS c0_mod_10", "c1", "k0"})
-              .filter("c0_mod_10 > 10");
-        },
-        {"c0_mod_10"},
-        aggregates,
-        {{rowType_->childAt(1)}},
-        {},
-        "");
+        })
+        .groupBy({"c0_mod_10"})
+        .aggregates(aggregates)
+        .withCompanion()
+        .assertResults("");
 
     // group by over filter
     aggregates = {fmt::format("{}(c1)", functionName)};
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors)
-              .filter("c2 % 5 = 3")
-              .project({"c0 % 10 AS c0_mod_10", "c1"});
-        },
-        {"c0_mod_10"},
-        aggregates,
-        "SELECT c0 % 10, avg(c1) FROM tmp WHERE c2 % 5 = 3 GROUP BY 1");
-    testAggregationsWithCompanion(
-        vectors,
-        [&](auto& builder) {
-          builder.filter("c2 % 5 = 3")
-              .project({"c0 % 10 AS c0_mod_10", "c1", "k0"});
-        },
-        {"c0_mod_10"},
-        aggregates,
-        {{rowType_->childAt(1)}},
-        {},
-        "SELECT c0 % 10, avg(c1) FROM tmp WHERE c2 % 5 = 3 GROUP BY 1");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
+          builder.filter("c2 % 5 = 3").project({"c0 % 10 AS c0_mod_10", "c1"});
+        })
+        .groupBy({"c0_mod_10"})
+        .aggregates(aggregates)
+        .withCompanion()
+        .assertResults(
+            "SELECT c0 % 10, avg(c1) FROM tmp WHERE c2 % 5 = 3 GROUP BY 1");
   };
 
   testFunction("avg");
@@ -440,79 +384,73 @@ TEST_F(AverageAggregationTest, decimalAccumulator) {
 }
 
 TEST_F(AverageAggregationTest, avgDecimal) {
-  // Disable incremental aggregation tests because DecimalAggregate doesn't set
-  // StringView::prefix when extracting accumulators, leaving the prefix field
-  // undefined that fails the test.
-  AggregationTestBase::disableTestIncremental();
-
+  // Each check skips incremental aggregation because DecimalAggregate doesn't
+  // set StringView::prefix when extracting accumulators, leaving the prefix
+  // field undefined that fails the test.
   // Skip testing with TableScan because decimal is not supported in writers.
   auto shortDecimal = makeNullableFlatVector<int64_t>(
       {1'000, 2'000, 3'000, 4'000, 5'000, std::nullopt}, DECIMAL(10, 1));
   // Short decimal aggregation
-  testAggregations(
-      {makeRowVector({shortDecimal})},
-      {},
-      {"avg(c0)"},
-      {},
-      {makeRowVector(
-          {makeNullableFlatVector<int64_t>({3'000}, DECIMAL(10, 1))})});
+  AggregationTester(*this)
+      .inputs(makeRowVector({shortDecimal}))
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(makeRowVector(
+          {makeNullableFlatVector<int64_t>({3'000}, DECIMAL(10, 1))}));
 
   // Long decimal aggregation
-  testAggregations(
-      {makeRowVector({makeNullableFlatVector<int128_t>(
+  AggregationTester(*this)
+      .inputs(makeRowVector({makeNullableFlatVector<int128_t>(
           {HugeInt::build(10, 100),
            HugeInt::build(10, 200),
            HugeInt::build(10, 300),
            HugeInt::build(10, 400),
            HugeInt::build(10, 500),
            std::nullopt},
-          DECIMAL(23, 4))})},
-      {},
-      {"avg(c0)"},
-      {},
-      {makeRowVector({makeFlatVector(
-          std::vector<int128_t>{HugeInt::build(10, 300)}, DECIMAL(23, 4))})});
+          DECIMAL(23, 4))}))
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(makeRowVector({makeFlatVector(
+          std::vector<int128_t>{HugeInt::build(10, 300)}, DECIMAL(23, 4))}));
   // Round-up average.
-  testAggregations(
-      {makeRowVector(
-          {makeFlatVector<int64_t>({100, 400, 510}, DECIMAL(3, 2))})},
-      {},
-      {"avg(c0)"},
-      {},
-      {makeRowVector(
-          {makeFlatVector(std::vector<int64_t>{337}, DECIMAL(3, 2))})});
+  AggregationTester(*this)
+      .inputs(makeRowVector(
+          {makeFlatVector<int64_t>({100, 400, 510}, DECIMAL(3, 2))}))
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(makeRowVector(
+          {makeFlatVector(std::vector<int64_t>{337}, DECIMAL(3, 2))}));
 
   // Round-up average when sum overflows the max int128_t limit.
-  testAggregations(
-      {makeRowVector({makeFlatVector<int128_t>(
+  AggregationTester(*this)
+      .inputs(makeRowVector({makeFlatVector<int128_t>(
           {HugeInt::parse("99999999999999999999999999999999999999"),
            HugeInt::parse("99999999999999999999999999999999999998"),
            HugeInt::parse("99999999999999999999999999999999999997"),
            HugeInt::parse("99999999999999999999999999999999999995"),
            HugeInt::parse("99999999999999999999999999999999999995"),
            HugeInt::parse("99999999999999999999999999999999999995")},
-          DECIMAL(38, 7))})},
-      {},
-      {"avg(c0)"},
-      {},
-      {makeRowVector({makeFlatVector(
+          DECIMAL(38, 7))}))
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(makeRowVector({makeFlatVector(
           std::vector<int128_t>{
               HugeInt::parse("99999999999999999999999999999999999997")},
-          DECIMAL(38, 7))})});
+          DECIMAL(38, 7))}));
 
   // The total sum overflows the max int128_t limit.
   std::vector<int128_t> rawVector;
   for (int i = 0; i < 10; ++i) {
     rawVector.push_back(DecimalUtil::kLongDecimalMax);
   }
-  testAggregations(
-      {makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))})},
-      {},
-      {"avg(c0)"},
-      {},
-      {makeRowVector({makeFlatVector(
+  AggregationTester(*this)
+      .inputs(
+          makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))}))
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(makeRowVector({makeFlatVector(
           std::vector<int128_t>{DecimalUtil::kLongDecimalMax},
-          DECIMAL(38, 0))})});
+          DECIMAL(38, 0))}));
   // The total sum underflows the min int128_t limit.
   rawVector.clear();
   auto underFlowTestResult = makeFlatVector(
@@ -520,12 +458,12 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   for (int i = 0; i < 10; ++i) {
     rawVector.push_back(DecimalUtil::kLongDecimalMin);
   }
-  testAggregations(
-      {makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))})},
-      {},
-      {"avg(c0)"},
-      {},
-      {makeRowVector({underFlowTestResult})});
+  AggregationTester(*this)
+      .inputs(
+          makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))}))
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(makeRowVector({underFlowTestResult}));
 
   // Add more rows to show that average result is still accurate.
   for (int i = 0; i < 10; ++i) {
@@ -539,26 +477,24 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   ASSERT_EQ(actualResult->valueAt(0), underFlowTestResult->valueAt(0));
 
   // Test constant vector.
-  testAggregations(
-      {makeRowVector({makeConstant<int64_t>(100, 10, DECIMAL(3, 2))})},
-      {},
-      {"avg(c0)"},
-      {},
-      {makeRowVector(
-          {makeFlatVector(std::vector<int64_t>{100}, DECIMAL(3, 2))})});
+  AggregationTester(*this)
+      .inputs(makeRowVector({makeConstant<int64_t>(100, 10, DECIMAL(3, 2))}))
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(makeRowVector(
+          {makeFlatVector(std::vector<int64_t>{100}, DECIMAL(3, 2))}));
 
   auto newSize = shortDecimal->size() * 2;
   auto indices = makeIndices(newSize, [&](int row) { return row / 2; });
   auto dictVector =
       VectorTestBase::wrapInDictionary(indices, newSize, shortDecimal);
 
-  testAggregations(
-      {makeRowVector({dictVector})},
-      {},
-      {"avg(c0)"},
-      {},
-      {makeRowVector(
-          {makeFlatVector(std::vector<int64_t>{3'000}, DECIMAL(10, 1))})});
+  AggregationTester(*this)
+      .inputs(makeRowVector({dictVector}))
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(makeRowVector(
+          {makeFlatVector(std::vector<int64_t>{3'000}, DECIMAL(10, 1))}));
 
   // Decimal average aggregation with multiple groups.
   auto inputRows = {
@@ -590,14 +526,15 @@ TEST_F(AverageAggregationTest, avgDecimal) {
           {makeNullableFlatVector<int32_t>({3}),
            makeFlatVector(std::vector<int64_t>{-2498}, DECIMAL(5, 2))})};
 
-  testAggregations(inputRows, {"c0"}, {"avg(c1)"}, expectedResult);
-
-  AggregationTestBase::enableTestIncremental();
+  AggregationTester(*this)
+      .inputs(inputRows)
+      .groupBy({"c0"})
+      .aggregates({"avg(c1)"})
+      .disableIncremental()
+      .assertResults(expectedResult);
 }
 
 TEST_F(AverageAggregationTest, avgDecimalWithMultipleRowVectors) {
-  AggregationTestBase::disableTestIncremental();
-
   auto inputRows = {
       makeRowVector({makeFlatVector<int64_t>({100, 200}, DECIMAL(5, 2))}),
       makeRowVector({makeFlatVector<int64_t>({300, 400}, DECIMAL(5, 2))}),
@@ -607,14 +544,14 @@ TEST_F(AverageAggregationTest, avgDecimalWithMultipleRowVectors) {
   auto expectedResult = {makeRowVector(
       {makeFlatVector(std::vector<int64_t>{350}, DECIMAL(5, 2))})};
 
-  testAggregations(inputRows, {}, {"avg(c0)"}, expectedResult);
-
-  AggregationTestBase::enableTestIncremental();
+  AggregationTester(*this)
+      .inputs(inputRows)
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(expectedResult);
 }
 
 TEST_F(AverageAggregationTest, avgIntervalWithMultipleRowVectors) {
-  AggregationTestBase::disableTestIncremental();
-
   auto inputRows = {
       makeRowVector({makeFlatVector<int64_t>({100, 200}, INTERVAL_DAY_TIME())}),
       makeRowVector({makeFlatVector<int64_t>({300, 400}, INTERVAL_DAY_TIME())}),
@@ -624,9 +561,11 @@ TEST_F(AverageAggregationTest, avgIntervalWithMultipleRowVectors) {
   auto expectedResult = {makeRowVector(
       {makeFlatVector(std::vector<int64_t>{391}, INTERVAL_DAY_TIME())})};
 
-  testAggregations(inputRows, {}, {"avg(c0)"}, expectedResult);
-
-  AggregationTestBase::enableTestIncremental();
+  AggregationTester(*this)
+      .inputs(inputRows)
+      .aggregates({"avg(c0)"})
+      .disableIncremental()
+      .assertResults(expectedResult);
 }
 
 TEST_F(AverageAggregationTest, constantVectorOverflow) {
@@ -675,40 +614,44 @@ TEST_F(AverageAggregationTest, companionFunctionsWithNonFlatAndLazyInputs) {
         {makeFlatVector<bool>({false, true}),
          makeFlatVector<double>({3.0, 3.0}),
          makeFlatVector<double>({3.0, 3.0})});
-    testAggregations(
-        {input},
-        {"c0"},
-        {fmt::format("{}_merge_extract_double(c1)", functionName),
-         fmt::format("{}_merge_extract_double(c2)", functionName)},
-        {expected});
-    testAggregations(
-        {input},
-        {"c0"},
-        {fmt::format("{}_merge(c1)", functionName),
-         fmt::format("{}_merge(c2)", functionName)},
-        {"c0",
-         fmt::format("{}_extract_double(a0)", functionName),
-         fmt::format("{}_extract_double(a1)", functionName)},
-        {expected});
+    AggregationTester(*this)
+        .inputs(input)
+        .groupBy({"c0"})
+        .aggregates(
+            {fmt::format("{}_merge_extract_double(c1)", functionName),
+             fmt::format("{}_merge_extract_double(c2)", functionName)})
+        .assertResults(expected);
+    AggregationTester(*this)
+        .inputs(input)
+        .groupBy({"c0"})
+        .aggregates(
+            {fmt::format("{}_merge(c1)", functionName),
+             fmt::format("{}_merge(c2)", functionName)})
+        .project(
+            {"c0",
+             fmt::format("{}_extract_double(a0)", functionName),
+             fmt::format("{}_extract_double(a1)", functionName)})
+        .assertResults(expected);
 
     // Test global aggregations.
     expected = makeRowVector(
         {makeFlatVector<double>(std::vector<double>{3.0}),
          makeFlatVector<double>(std::vector<double>{3.0})});
-    testAggregations(
-        {input},
-        {},
-        {fmt::format("{}_merge_extract_double(c1)", functionName),
-         fmt::format("{}_merge_extract_double(c2)", functionName)},
-        {expected});
-    testAggregations(
-        {input},
-        {},
-        {fmt::format("{}_merge(c1)", functionName),
-         fmt::format("{}_merge(c2)", functionName)},
-        {fmt::format("{}_extract_double(a0)", functionName),
-         fmt::format("{}_extract_double(a1)", functionName)},
-        {expected});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates(
+            {fmt::format("{}_merge_extract_double(c1)", functionName),
+             fmt::format("{}_merge_extract_double(c2)", functionName)})
+        .assertResults(expected);
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates(
+            {fmt::format("{}_merge(c1)", functionName),
+             fmt::format("{}_merge(c2)", functionName)})
+        .project(
+            {fmt::format("{}_extract_double(a0)", functionName),
+             fmt::format("{}_extract_double(a1)", functionName)})
+        .assertResults(expected);
   };
 
   testFunction("avg");

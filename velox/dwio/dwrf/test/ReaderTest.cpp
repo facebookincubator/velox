@@ -19,14 +19,17 @@
 #include "folly/Random.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "folly/executors/IOThreadPoolExecutor.h"
+#include "folly/executors/ManualExecutor.h"
 #include "folly/lang/Assume.h"
 #include "folly/synchronization/Baton.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/tests/TestUtils.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/ExtractionUtils.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/common/ExtractionUtils.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/ParallelUnitLoader.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/DwrfRuntimeStats.h"
@@ -41,6 +44,7 @@
 
 #include <fmt/core.h>
 #include <array>
+#include <functional>
 #include <future>
 #include <memory>
 #include <numeric>
@@ -956,7 +960,7 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields = makeSubfields({"a", "b.b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfieldsByName = groupSubfields(subfields);
-  auto scanSpec = velox::connector::hive::makeScanSpec(
+  auto scanSpec = velox::connector::makeScanSpec(
       outputType, subfieldsByName, {}, {}, schema, {}, {}, {}, true, pool());
   readerOpts.setScanSpec(scanSpec);
 
@@ -976,7 +980,7 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields2 = makeSubfields({"a", "b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields2ByName = groupSubfields(subfields2);
-  auto scanSpec2 = velox::connector::hive::makeScanSpec(
+  auto scanSpec2 = velox::connector::makeScanSpec(
       outputType, subfields2ByName, {}, {}, schema, {}, {}, {}, true, pool());
   readerOpts2.setScanSpec(scanSpec2);
 
@@ -2594,6 +2598,61 @@ TEST_F(TestReader, resetFilterCachesOnActiveStripe) {
   EXPECT_EQ(rowReader->next(128, output), 0);
 }
 
+TEST_F(TestReader, alwaysTrueFilterKeepsNulls) {
+  constexpr vector_size_t kSize{1'000};
+  const std::vector<VectorPtr> columns = {
+      makeFlatVector<int64_t>(
+          kSize, [](auto row) { return row * 1'000'003; }, nullEvery(7)),
+      makeFlatVector<int64_t>(
+          kSize, [](auto row) { return row % 5; }, nullEvery(7)),
+      makeFlatVector<std::string>(
+          kSize,
+          [](auto row) { return row % 2 == 0 ? "a" : "b"; },
+          nullEvery(7)),
+  };
+  for (const auto& column : columns) {
+    SCOPED_TRACE(column->toString());
+    auto input = makeRowVector({column});
+    auto schema = asRowType(input->type());
+    auto [writer, reader] =
+        createWriterReader({input}, pool(), dataIoStats_, metadataIoStats_);
+    auto spec = std::make_shared<common::ScanSpec>("<root>");
+    spec->addAllChildFields(*schema);
+    spec->childByName("c0")->setFilter(std::make_unique<common::AlwaysTrue>());
+    RowReaderOptions options;
+    options.setScanSpec(spec);
+    auto rowReader = reader->createRowReader(options);
+    auto output = BaseVector::create(schema, 0, pool());
+    ASSERT_EQ(rowReader->next(kSize, output), kSize);
+    assertEqualVectors(input, output);
+  }
+}
+
+TEST_F(TestReader, alwaysTrueFilterWithRangeFilter) {
+  constexpr vector_size_t kSize{1'000};
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          kSize, [](auto row) { return row * 1'000'003; }, nullEvery(7)),
+      makeFlatVector<int64_t>(kSize, std::identity{}),
+  });
+  auto schema = asRowType(input->type());
+  auto [writer, reader] =
+      createWriterReader({input}, pool(), dataIoStats_, metadataIoStats_);
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  spec->childByName("c0")->setFilter(std::make_unique<common::AlwaysTrue>());
+  spec->childByName("c1")->setFilter(
+      std::make_unique<common::BigintRange>(100, 199, false));
+  RowReaderOptions options;
+  options.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(options);
+  auto output = BaseVector::create(schema, 0, pool());
+  // next() returns rows scanned, including those the BigintRange drops.
+  ASSERT_EQ(rowReader->next(kSize, output), kSize);
+  ASSERT_EQ(output->size(), 100);
+  assertEqualVectors(input->slice(100, 100), output);
+}
+
 TEST_F(TestReader, setRowNumberColumnInfo) {
   std::vector<std::vector<int32_t>> integerValues{
       {0, 1, 2, 3, 4},
@@ -2730,13 +2789,13 @@ TEST_F(TestReader, failToReuseReaderNulls) {
       {
           makeFlatIdentityVector<int64_t>(11),
           makeFlatVector<int64_t>(
-              11, folly::identity, [](auto i) { return i % 3 == 0; }),
+              11, std::identity{}, [](auto i) { return i % 3 == 0; }),
       });
   // Set a null so that the children will not be loaded lazily.
   bits::setNull(c0->mutableRawNulls(), 10);
   auto data = makeRowVector({
       c0,
-      makeRowVector({"c"}, {makeFlatIdentityVector<int64_t>(11)}),
+      makeNamedRowVector("c", makeFlatIdentityVector<int64_t>(11)),
   });
   auto schema = asRowType(data->type());
   auto [writer, reader] =
@@ -2784,7 +2843,7 @@ TEST_F(TestReader, readFlatMapsSomeEmpty) {
   auto values = makeFlatIdentityVector<int64_t>(16);
   auto maps =
       makeMapVector(std::vector<vector_size_t>{0, 6, 9, 12, 16}, keys, values);
-  auto row = makeRowVector({"a"}, {maps});
+  auto row = makeNamedRowVector("a", maps);
 
   // Set up the config so that the maps are flattened.
   std::shared_ptr<dwrf::Config> config = std::make_shared<dwrf::Config>();
@@ -2851,7 +2910,7 @@ TEST_F(TestReader, readFlatMapsWithNullMaps) {
       keys,
       values,
       {1, 3, 5, 7});
-  auto row = makeRowVector({"a"}, {maps});
+  auto row = makeNamedRowVector("a", maps);
 
   // Set up the config so that the maps are flattened.
   std::shared_ptr<dwrf::Config> config = std::make_shared<dwrf::Config>();
@@ -3008,6 +3067,100 @@ TEST_F(TestReader, readFlatMapsAsFlatMapsWithKeyFilter) {
       {{1, 9}, {2, 10}},
   });
   assertEqualVectors(expected->toMapVector(), resultFlatMap->toMapVector());
+}
+
+TEST_F(TestReader, readFlatMapsAsFlatMapsWithFilter) {
+  // A filter that drops rows, on the flat map or on another column: the flat
+  // map's in-map bits must follow the selected rows, not the rows read.
+  constexpr vector_size_t kNumRows{100};
+  std::vector<
+      std::optional<std::vector<std::pair<int64_t, std::optional<int64_t>>>>>
+      data(kNumRows);
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    if (row % 5 == 2) {
+      continue;
+    }
+    data[row].emplace();
+    for (int64_t key = 0; key < 5; ++key) {
+      if ((row + key) % 3 == 0) {
+        data[row]->emplace_back(key, row * 10 + key);
+      }
+    }
+  }
+  auto flatMap = makeNullableFlatMapVector<int64_t, int64_t>(data);
+  auto input = makeRowVector({
+      flatMap->toMapVector(),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+  });
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+  // Not a structured binding: Clang 15 cannot capture one in the lambda below.
+  auto writerAndReader = createWriterReader(
+      {input}, pool(), dataIoStats_, metadataIoStats_, config);
+  auto& reader = writerAndReader.second;
+  auto schema = asRowType(input->type());
+  std::vector<int64_t> passingIds;
+  for (int64_t row = 0; row < kNumRows; ++row) {
+    if (row % 4 == 1 || row % 7 == 3) {
+      passingIds.push_back(row);
+    }
+  }
+
+  auto verify = [&](bool filterMap, bool filterOther) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    scanSpec->addAllChildFields(*schema);
+    if (filterMap) {
+      scanSpec->childByName("c0")->setFilter(
+          std::make_unique<common::IsNotNull>());
+    }
+    if (filterOther) {
+      scanSpec->childByName("c1")->setFilter(
+          common::createBigintValues(passingIds, false));
+    }
+    std::vector<vector_size_t> passing;
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      if ((!filterMap || data[row].has_value()) &&
+          (!filterOther ||
+           std::find(passingIds.begin(), passingIds.end(), row) !=
+               passingIds.end())) {
+        passing.push_back(row);
+      }
+    }
+    ASSERT_LT(passing.size(), static_cast<size_t>(kNumRows));
+    RowReaderOptions rowReaderOptions;
+    rowReaderOptions.setScanSpec(scanSpec);
+    rowReaderOptions.setPreserveFlatMapsInMemory(true);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    VectorPtr batch = BaseVector::create(schema, 0, pool());
+    size_t numPassing{0};
+    while (rowReader->next(16, batch) > 0) {
+      auto column = batch->as<RowVector>()->childAt(0)->loadedVector();
+      ASSERT_EQ(column->encoding(), VectorEncoding::Simple::FLAT_MAP);
+      for (vector_size_t i = 0; i < batch->size(); ++i) {
+        ASSERT_LT(numPassing, passing.size());
+        const auto row = passing[numPassing++];
+        ASSERT_TRUE(column->equalValueAt(flatMap.get(), i, row))
+            << "row " << row << ": expected " << flatMap->toString(row)
+            << " got " << column->toString(i);
+      }
+    }
+    EXPECT_EQ(numPassing, passing.size());
+  };
+
+  {
+    SCOPED_TRACE("filter on another column");
+    verify(false, true);
+  }
+  {
+    SCOPED_TRACE("filter on the flat map");
+    verify(true, false);
+  }
+  {
+    SCOPED_TRACE("filters on both");
+    verify(true, true);
+  }
 }
 
 TEST_F(TestReader, readFlatMapsAsFlatMapsWithStringKeyFilter) {
@@ -3209,7 +3362,7 @@ TEST_F(TestReader, readStructWithWholeBatchFiltered) {
   const vector_size_t batchSize = 10;
   std::vector<VectorPtr> children{makeFlatVector<int64_t>(
       vectorSize,
-      folly::identity,
+      std::identity{},
       // In the first batch, the parent Rows will all be null.
       [&](auto i) { return i < batchSize; })};
 
@@ -3223,7 +3376,7 @@ TEST_F(TestReader, readStructWithWholeBatchFiltered) {
 
   auto c0 =
       std::make_shared<RowVector>(pool(), rowType, nulls, vectorSize, children);
-  auto row = makeRowVector({"c0"}, {c0});
+  auto row = makeNamedRowVector("c0", c0);
 
   auto [writer, reader] =
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
@@ -3414,7 +3567,7 @@ TEST_F(TestReader, selectiveStringDirect) {
 TEST_F(TestReader, selectiveFlatMapFastPathAllInlinedStringKeys) {
   auto maps = makeMapVector<std::string, int64_t>(
       {{{"a", 0}, {"b", 0}}, {{"a", 1}, {"b", 1}}});
-  auto row = makeRowVector({"c0"}, {maps});
+  auto row = makeNamedRowVector("c0", maps);
   auto config = std::make_shared<dwrf::Config>();
   config->set(dwrf::Config::FLATTEN_MAP, true);
   config->set(dwrf::Config::MAP_FLAT_COLS, {0});
@@ -3598,7 +3751,7 @@ TEST_F(TestReader, mapAsStructAllEmpty) {
   VectorPtr batch = BaseVector::create(outType, 0, pool());
   ASSERT_EQ(rowReader->next(10, batch), 2);
   auto expected = makeRowVector({
-      makeRowVector({"1"}, {makeNullConstant(TypeKind::BIGINT, 2)}),
+      makeNamedRowVector("1", makeNullConstant(TypeKind::BIGINT, 2)),
   });
   assertEqualVectors(expected, batch);
 }
@@ -3649,17 +3802,79 @@ TEST_F(TestReader, mapAsStructKeySubsetExtraction) {
   assertEqualVectors(expected, batch);
 }
 
-// Verify DwrfRowReader can be destroyed while ParallelUnitLoader async load()
-// are in progress. This regression test ensures that:
-// 1. ParallelUnitLoader destructor doesn't wait for async load() operations
-// 2. Async load() from DwrfUnit can still function after ParallelUnitLoader
-// destruction and DwrfRowReader destruction, which means all dependencies in
-// DwrfUnit remain valid (eg ReaderBase)
-//
-// If a future change adds an unsafe raw pointer to DwrfUnit's dependencies that
-// would be freed by ParallelUnitLoader or DwrfRowReader's destruction, this
-// test may crash due to use-after-free.
-DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
+TEST_F(TestReader, boundedPrefetchReadsAfterRejectedEstimation) {
+  std::vector<VectorPtr> batches;
+  batches.reserve(4);
+  for (int stripe = 0; stripe < 4; ++stripe) {
+    batches.push_back(makeRowVector({makeFlatVector<int64_t>(
+        100, [stripe](auto row) { return stripe * 100 + row; })}));
+  }
+  auto sink =
+      std::make_unique<MemorySink>(1 << 20, FileSink::Options{.pool = pool()});
+  auto* sinkPtr = sink.get();
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(Config::STRIPE_CACHE_MODE, StripeCacheMode::NA);
+  auto writer = E2EWriterTestUtil::writeData(
+      std::move(sink),
+      asRowType(batches[0]->type()),
+      batches,
+      config,
+      E2EWriterTestUtil::simpleFlushPolicyFactory(true));
+  const std::string data(sinkPtr->data(), sinkPtr->size());
+  for (bool preload : {false, true}) {
+    SCOPED_TRACE(preload);
+    auto readFile =
+        std::make_shared<velox::tests::utils::CountingReadFile>(data);
+    auto input = std::make_unique<BufferedInput>(readFile, *pool());
+    dwio::common::ReaderOptions readerOptions(pool());
+    readerOptions.setFileFormat(FileFormat::DWRF);
+    readerOptions.setFilePreloadThreshold(0);
+    auto reader = DwrfReader::create(std::move(input), readerOptions);
+    folly::ManualExecutor executor;
+    size_t rejections{0};
+    auto factory = std::make_shared<ParallelUnitLoaderFactory>(
+        &executor,
+        3,
+        ParallelUnitLoaderOptions{
+            .maxPrefetchLoads = 1,
+            .maxPrefetchBytes = 1,
+            .metricCallback = [&](auto event, auto) {
+              if (event == UnitLoader::Event::kPrefetchRejected) {
+                ++rejections;
+              }
+            }});
+    RowReaderOptions rowOptions;
+    rowOptions.setPreloadStripe(preload);
+    rowOptions.setUnitLoaderFactory(factory);
+    auto rowReader = reader->createRowReader(rowOptions);
+    for (const auto& expected : batches) {
+      const vector_size_t batchSize = 10;
+      VectorPtr result;
+      ASSERT_EQ(rowReader->next(batchSize, result), batchSize);
+      assertEqualVectors(expected->slice(0, batchSize), result);
+      const auto reads = readFile->numReads();
+      const auto bytes = readFile->bytesRead();
+      const auto rejectionsBefore = rejections;
+      for (vector_size_t offset = batchSize; offset < expected->size();
+           offset += batchSize) {
+        ASSERT_EQ(rowReader->next(batchSize, result), batchSize);
+        assertEqualVectors(expected->slice(offset, batchSize), result);
+        EXPECT_EQ(readFile->numReads(), reads);
+        EXPECT_EQ(readFile->bytesRead(), bytes);
+      }
+      if (expected == batches.front()) {
+        EXPECT_GT(rejections, rejectionsBefore);
+      }
+    }
+    EXPECT_GT(rejections, 0);
+    VectorPtr result;
+    EXPECT_EQ(rowReader->next(100, result), 0);
+    rowReader.reset();
+    executor.drain();
+  }
+}
+
+DEBUG_ONLY_TEST_F(TestReader, queuedLoadCancelledBeforeReaderDestruction) {
   const int kNumStripes = 2;
   const int kRowsPerStripe = 100;
   std::vector<VectorPtr> batches;
@@ -3691,21 +3906,17 @@ DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
       std::make_shared<InMemoryReadFile>(std::move(data)), *pool());
 
   std::atomic<int> asyncLoadsStarted{0};
-  std::atomic<int> asyncLoadsCompleted{0};
-  folly::Baton<> readerDestroyed;
+  std::atomic<int> loadsCompleted{0};
+  folly::Baton<> queuedLoad;
+  folly::Baton<> release;
 
   SCOPED_TESTVALUE_SET(
       "facebook::velox::dwio::common::ParallelUnitLoader::load",
       std::function<void(void*)>([&](void*) {
-        // Only block the second stripe (index 1) - let the first stripe load
-        // normally so rowReader->next() can complete
-        // fetch_add returns the value before increment: 0 for first, 1 for
-        // second, etc.
         if (asyncLoadsStarted.fetch_add(1) == 1) {
-          // Block here until reader is destroyed
-          readerDestroyed.wait();
+          queuedLoad.post();
+          release.wait();
         }
-        asyncLoadsCompleted.fetch_add(1);
       }));
 
   auto ioExecutor = std::make_shared<folly::IOThreadPoolExecutor>(2);
@@ -3718,44 +3929,28 @@ DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
     readerOpts.setFileFormat(FileFormat::DWRF);
     auto reader = DwrfReader::create(std::move(input), readerOpts);
 
-    // Enable parallel unit load
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.setParallelUnitLoadCount(2);
-    rowReaderOpts.setIOExecutor(ioExecutor.get());
+    rowReaderOpts.setUnitLoaderFactory(
+        std::make_shared<ParallelUnitLoaderFactory>(
+            ioExecutor.get(),
+            2,
+            ParallelUnitLoaderOptions{.metricCallback = [&](auto event, auto) {
+              if (event == UnitLoader::Event::kLoadFinished) {
+                ++loadsCompleted;
+              }
+            }}));
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     VectorPtr batch;
-    rowReader->next(50, batch); // Read first stripe
-
-    auto start = std::chrono::steady_clock::now();
+    rowReader->next(50, batch);
+    queuedLoad.wait();
     rowReader.reset();
-    auto duration = std::chrono::steady_clock::now() - start;
-    // Verify destruction was fast (didn't wait for async operations)
-    EXPECT_LT(duration, std::chrono::seconds(1))
-        << "Destruction should not wait for async loads";
+    EXPECT_EQ(loadsCompleted.load(), 1);
   }
 
-  // Now signal that reader is destroyed
-  readerDestroyed.post();
-
-  // Wait for async loads to complete
-  int maxWaitMs = 2000;
-  int waitedMs = 0;
-  while (asyncLoadsCompleted.load() < 2 && waitedMs < maxWaitMs) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    waitedMs += 100;
-  }
-
-  // Verify that both async loads completed successfully after reader
-  // destruction This proves the fix works: async operations can complete even
-  // after DwrfRowReader is destroyed because LoadUnit is captured as shared_ptr
-  EXPECT_EQ(asyncLoadsCompleted.load(), 2)
-      << "Both async loads should complete even after reader destruction. "
-      << "If this fails, it means async operations are being cancelled or "
-      << "crashing after DwrfRowReader destruction, indicating unsafe pointers.";
-
-  // Clean up
+  release.post();
   ioExecutor->join();
+  EXPECT_EQ(loadsCompleted.load(), 1);
 }
 
 TEST_F(TestReader, extractionTransformMapKeys) {
@@ -3764,7 +3959,7 @@ TEST_F(TestReader, extractionTransformMapKeys) {
   auto keys = makeFlatVector<StringView>({"a", "b", "c", "d"});
   auto values = makeFlatVector<int64_t>({1, 2, 3, 4});
   auto mapVector = makeMapVector({0, 2}, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -3812,10 +4007,10 @@ TEST_F(TestReader, extractionTransformAfterScanSpecReorder) {
   spec->childByName("id")->setFilter(
       std::make_unique<common::BigintRange>(1, 10, false));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   const std::vector<ExtractionPathElementPtr> keysChain = {
       ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
   const std::vector<ExtractionPathElementPtr> sizeChain = {
@@ -3897,7 +4092,7 @@ TEST_F(TestReader, extractionTransformSize) {
   auto keys = makeFlatVector<StringView>({"a", "b", "c"});
   auto values = makeFlatVector<int64_t>({1, 2, 3});
   auto mapVector = makeMapVector({0, 1}, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -3940,7 +4135,7 @@ TEST_F(TestReader, extractionMapKeySizeWithSeek) {
     offsets[i] = i * 2;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -3977,7 +4172,7 @@ TEST_F(TestReader, extractionTransformMapValuesStructField) {
       {makeFlatVector<int32_t>({10, 20, 30}),
        makeFlatVector<int32_t>({100, 200, 300})});
   auto mapVector = makeMapVector({0, 2}, keys, structValues);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -3985,12 +4180,12 @@ TEST_F(TestReader, extractionTransformMapValuesStructField) {
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::configureExtractionScanSpec;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
-  using connector::hive::NamedExtraction;
+  using connector::applyExtractionChain;
+  using connector::configureExtractionScanSpec;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
+  using connector::NamedExtraction;
 
   // Configure extraction on the "col" spec with the sub-chain starting
   // from the MAP type: [MapValues, ArrayElements, StructField("x")].
@@ -4047,7 +4242,7 @@ TEST_F(TestReader, extractionSizeResultVectorReuse) {
     offsets[i] = i * 2;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -4100,7 +4295,7 @@ TEST_F(TestReader, extractionMapKeysMultipleBatches) {
     offsets[i] = i * 3;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -4156,7 +4351,7 @@ TEST_F(TestReader, extractionMapKeysIoReduction) {
     offsets[i] = i * 2;
   }
   auto mapVector = makeMapVector(offsets, keys, values);
-  auto data = makeRowVector({"col"}, {mapVector});
+  auto data = makeNamedRowVector("col", mapVector);
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
@@ -4261,11 +4456,11 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
   spec->addAllChildFields(*schema);
 
   // Build extraction.
-  using connector::hive::configureExtractionScanSpec;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
-  using connector::hive::NamedExtraction;
+  using connector::configureExtractionScanSpec;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
+  using connector::NamedExtraction;
 
   std::vector<NamedExtraction> extractions = {
       {"out",
@@ -4348,7 +4543,7 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
   // Configure the ScanSpec for reading.  In production, the extraction is
   // applied to the column's spec (not the root), so we configure "a"'s
   // spec directly with the sub-chain after StructField("a").
-  using connector::hive::applyExtractionChain;
+  using connector::applyExtractionChain;
   auto readSpec = std::make_shared<common::ScanSpec>("<root>");
   readSpec->addAllChildFields(*schema);
   auto* readASpec = readSpec->childByName("a");

@@ -271,7 +271,12 @@ namespace detail {
 template <typename TOut>
 const TOut& getDecoded(const DecodedVector& decoded) {
   auto base = decoded.base();
-  return *base->template as<TOut>();
+  auto* typed = base->template as<TOut>();
+  VELOX_CHECK_NOT_NULL(
+      typed,
+      "Unsupported vector encoding for simple function argument: {}",
+      base->encoding());
+  return *typed;
 }
 
 inline DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {

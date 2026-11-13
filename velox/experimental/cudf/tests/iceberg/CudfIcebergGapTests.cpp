@@ -563,7 +563,7 @@ TEST_F(CudfIcebergGapTests, multipleEqualityDeletesDifferentKeyColumns) {
       getFileSize(eqDelFile1->getPath()),
       /*equalityFieldIds=*/{1});
 
-  auto eqDel2 = makeRowVector({"c1"}, {makeFlatVector<int64_t>({40})});
+  auto eqDel2 = makeNamedRowVector("c1", makeFlatVector<int64_t>({40}));
   auto eqDelFile2 = TempFilePath::create();
   writeDeleteFile(DeleteFileFormat::PARQUET, eqDelFile2->getPath(), {eqDel2});
 

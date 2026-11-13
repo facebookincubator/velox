@@ -17,6 +17,7 @@ add_executable(
   FileConfigTest.cpp
   FileDataSourceTest.cpp
   HiveIndexSourceUtilsTest.cpp
+  HiveBucketPruningTest.cpp
   FileConnectorSplitTest.cpp
   FileConnectorUtilTest.cpp
   FileHandleTest.cpp
@@ -30,6 +31,7 @@ add_executable(
   HiveSplitTest.cpp
   PartitionIdGeneratorTest.cpp
   PartitionValueTest.cpp
+  SortingWriterTest.cpp
   TableHandleTest.cpp
 )
 add_test(velox_hive_connector_test velox_hive_connector_test)

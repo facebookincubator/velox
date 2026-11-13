@@ -73,3 +73,35 @@
   static std::string_view toName(EnumType value);      \
   static EnumType to##EnumType(std::string_view name); \
   static std::optional<EnumType> tryTo##EnumType(std::string_view name);
+
+/// Defines an fmt formatter that prints an enum as its name. Write it in the
+/// global namespace after VELOX_DECLARE_ENUM_NAME, with the enum's fully
+/// qualified name:
+///
+/// VELOX_ENUM_FORMATTER(facebook::velox::Foo);
+///
+/// Use VELOX_EMBEDDED_ENUM_FORMATTER for an enum embedded in a class:
+///
+/// VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::Bar, Kind);
+///
+/// The file that uses either macro must include fmt/format.h.
+
+#define VELOX_ENUM_FORMATTER(enum)                                   \
+  template <>                                                        \
+  struct fmt::formatter<::enum> : fmt::formatter<std::string_view> { \
+    template <typename FormatContext>                                \
+    auto format(::enum value, FormatContext& ctx) const {            \
+      return fmt::formatter<std::string_view>::format(               \
+          ::enum##Name::toName(value), ctx);                         \
+    }                                                                \
+  }
+
+#define VELOX_EMBEDDED_ENUM_FORMATTER(class, enum)                           \
+  template <>                                                                \
+  struct fmt::formatter<::class ::enum> : fmt::formatter<std::string_view> { \
+    template <typename FormatContext>                                        \
+    auto format(::class ::enum value, FormatContext& ctx) const {            \
+      return fmt::formatter<std::string_view>::format(                       \
+          ::class ::toName(value), ctx);                                     \
+    }                                                                        \
+  }

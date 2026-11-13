@@ -87,14 +87,23 @@ struct HoursFunction {
   }
 };
 
-void registerDateTimeFunctions(const std::string& prefix) {
-  registerFunction<YearsFunction, int32_t, Timestamp>({prefix + "years"});
-  registerFunction<YearsFunction, int32_t, Date>({prefix + "years"});
-  registerFunction<MonthsFunction, int32_t, Timestamp>({prefix + "months"});
-  registerFunction<MonthsFunction, int32_t, Date>({prefix + "months"});
-  registerFunction<DaysFunction, Date, Timestamp>({prefix + "days"});
-  registerFunction<DaysFunction, Date, Date>({prefix + "days"});
-  registerFunction<HoursFunction, int32_t, Timestamp>({prefix + "hours"});
+void registerDateTimeFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerFunction<YearsFunction, int32_t, Timestamp>(
+      {prefix + "years"}, {}, true, defaultOwner);
+  registerFunction<YearsFunction, int32_t, Date>(
+      {prefix + "years"}, {}, true, defaultOwner);
+  registerFunction<MonthsFunction, int32_t, Timestamp>(
+      {prefix + "months"}, {}, true, defaultOwner);
+  registerFunction<MonthsFunction, int32_t, Date>(
+      {prefix + "months"}, {}, true, defaultOwner);
+  registerFunction<DaysFunction, Date, Timestamp>(
+      {prefix + "days"}, {}, true, defaultOwner);
+  registerFunction<DaysFunction, Date, Date>(
+      {prefix + "days"}, {}, true, defaultOwner);
+  registerFunction<HoursFunction, int32_t, Timestamp>(
+      {prefix + "hours"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions::iceberg

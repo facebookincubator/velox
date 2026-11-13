@@ -697,7 +697,7 @@ inline void unpack<uint8_t>(
 
 #if XSIMD_WITH_AVX2
 
-  if (FOLLY_LIKELY(process::hasBmi2())) {
+  if (process::hasBmi2()) [[likely]] {
     uint64_t mask = kPdepMask8[bitWidth];
     // Precompute how many 8-value iterations can safely read 8 bytes.
     // At iteration i, we read 8 bytes starting at inputBits + i*bitWidth.
@@ -771,7 +771,7 @@ inline void unpack<uint16_t>(
 
 #if XSIMD_WITH_AVX2
 
-  if (FOLLY_UNLIKELY(!process::hasBmi2())) {
+  if (!process::hasBmi2()) [[unlikely]] {
     unpackNaive<uint16_t>(
         inputBits, inputBufferLen, numValues, bitWidth, result);
     return;
@@ -826,7 +826,7 @@ inline void unpack<uint32_t>(
 
 #if XSIMD_WITH_AVX2
 
-  if (FOLLY_UNLIKELY(!process::hasBmi2())) {
+  if (!process::hasBmi2()) [[unlikely]] {
     unpackNaive<uint32_t>(
         inputBits, inputBufferLen, numValues, bitWidth, result);
     return;

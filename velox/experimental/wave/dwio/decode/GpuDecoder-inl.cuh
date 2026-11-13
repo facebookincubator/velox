@@ -877,6 +877,9 @@ __device__ void decodeSelective(GpuDecode* op) {
             }
           }
         }
+        // nonNullIndex256() has just been read out of state->temp, which
+        // makeResult() reuses as scan storage.
+        __syncthreads();
         makeResult<
             T,
             IndexT,
@@ -936,6 +939,9 @@ __device__ void decodeSelective(GpuDecode* op) {
               filterPass = testFilter<IndexT, kFilterKind, true>(op, data);
             }
           }
+          // state->temp is shared between nonNullIndex256Sparse() and the
+          // scan in makeResult(), in both directions across iterations.
+          __syncthreads();
           makeResult<
               T,
               IndexT,
@@ -950,6 +956,7 @@ __device__ void decodeSelective(GpuDecode* op) {
               nthLoop,
               dataIdx == -1 ? kNull : kNotNull,
               state->temp);
+          __syncthreads();
         }
       } while (++nthLoop < op->numRowsPerThread);
       break;

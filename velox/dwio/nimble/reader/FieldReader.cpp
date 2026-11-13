@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <optional>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
@@ -28,8 +29,6 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
-#include "velox/dwio/nimble/encodings/legacy/NullableEncoding.h"
-#include "velox/dwio/nimble/encodings/legacy/TrivialEncoding.h"
 #include "velox/dwio/nimble/serializer/Options.h"
 
 #include <folly/Conv.h>
@@ -394,6 +393,52 @@ void validateCopyRanges(
     velox::vector_size_t /*outputSize*/) {}
 #endif
 
+// Returns the nulls of 'output' for a read to write, or null when the read has
+// no null rows and 'output' has no nulls. An output without nulls has no null
+// rows, so such a read leaves it without them instead of allocating them only
+// to mark its rows not null.
+uint64_t* maybeMutableRawNulls(velox::BaseVector& output, bool hasNulls) {
+  if (!hasNulls && output.rawNulls() == nullptr) {
+    return nullptr;
+  }
+  return output.mutableRawNulls();
+}
+
+// Returns the output row where 'outputRanges' start when they write dense
+// output rows, one range right after another, so that a read can decode them
+// in place. Returns std::nullopt otherwise. The source rows of the ranges are
+// always dense: they index the decoded rows of the read in order.
+std::optional<velox::vector_size_t> denseStartRow(
+    std::span<const velox::BaseVector::CopyRange> outputRanges) {
+  if (outputRanges.empty()) {
+    return std::nullopt;
+  }
+  for (size_t i{1}; i < outputRanges.size(); ++i) {
+    const auto& prevRange = outputRanges[i - 1];
+    if (outputRanges[i].targetIndex !=
+        prevRange.targetIndex + prevRange.count) {
+      return std::nullopt;
+    }
+  }
+  return outputRanges.front().targetIndex;
+}
+
+// Marks the rows of 'outputRanges' not null in 'rawNulls', unless it is null.
+void setNotNull(
+    uint64_t* rawNulls,
+    std::span<const velox::BaseVector::CopyRange> outputRanges) {
+  if (rawNulls == nullptr) {
+    return;
+  }
+  for (const auto& range : outputRanges) {
+    velox::bits::fillBits(
+        rawNulls,
+        range.targetIndex,
+        range.targetIndex + range.count,
+        velox::bits::kNotNull);
+  }
+}
+
 // Validates the selected ranges against 'output' and returns it as 'T', ready
 // for a scattered write. The caller owns 'output' and picks where each range
 // lands, so the vector is never re-initialized here; resizing to the row count
@@ -460,7 +505,11 @@ inline void resetIfNotWritable(velox::VectorPtr& vector, T&... buffer) {
     return reset;
   };
 
-  if ((... || resetIfShared(buffer))) {
+  // Reset every shared buffer, not just the first one found. The next read
+  // decodes into each kept buffer in place.
+  bool anyShared{false};
+  ((anyShared |= resetIfShared(buffer)), ...);
+  if (anyShared) {
     vector.reset();
   }
 }
@@ -521,18 +570,22 @@ struct VectorInitializer<velox::FlatVector<T>> {
       resetIfNotWritable(output, nulls, values);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
-    ensureBuffer<T>(&values, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
 
-    if (!output) {
-      output = std::make_shared<velox::FlatVector<T>>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          values,
-          std::vector<velox::BufferPtr>());
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<T, /*ShouldAllocate=*/false>(&values, rowCount, pool);
+      return static_cast<velox::FlatVector<T>*>(output.get());
     }
+
+    ensureBuffer<T>(&values, rowCount, pool);
+    output = std::make_shared<velox::FlatVector<T>>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        values,
+        std::vector<velox::BufferPtr>());
 
     return static_cast<velox::FlatVector<T>*>(output.get());
   }
@@ -557,21 +610,28 @@ struct VectorInitializer<velox::ArrayVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
+
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &offsets, rowCount, pool);
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &sizes, rowCount, pool);
+      return static_cast<velox::ArrayVector*>(output.get());
+    }
+
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
-
-    if (!output) {
-      output = std::make_shared<velox::ArrayVector>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          std::move(offsets),
-          std::move(sizes),
-          /* elements */ elements,
-          0 /*nullCount*/);
-    }
+    output = std::make_shared<velox::ArrayVector>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        std::move(offsets),
+        std::move(sizes),
+        /* elements */ elements,
+        0 /*nullCount*/);
 
     return static_cast<velox::ArrayVector*>(output.get());
   }
@@ -597,22 +657,29 @@ struct VectorInitializer<velox::MapVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
+
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &offsets, rowCount, pool);
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &sizes, rowCount, pool);
+      return static_cast<velox::MapVector*>(output.get());
+    }
+
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
-
-    if (!output) {
-      output = std::make_shared<velox::MapVector>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          std::move(offsets),
-          std::move(sizes),
-          /* keys*/ mapKeys,
-          /*values*/ mapValues,
-          0 /*nullCount*/);
-    }
+    output = std::make_shared<velox::MapVector>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        std::move(offsets),
+        std::move(sizes),
+        /* keys*/ mapKeys,
+        /*values*/ mapValues,
+        0 /*nullCount*/);
 
     return static_cast<velox::MapVector*>(output.get());
   }
@@ -879,6 +946,14 @@ class ScalarFieldReader final
     NIMBLE_CHECK_NOT_NULL(vector, "Scattered read requires flat output");
 
     const auto rowCount = countRows(sourceRanges);
+    if constexpr (
+        std::is_same_v<TRequested, TData> && !std::is_same_v<TData, bool>) {
+      if (const auto startRow = denseStartRow(outputRanges)) {
+        denseRead(sourceRanges, outputRanges, *startRow, rowCount, *output);
+        co_return;
+      }
+    }
+
     auto* values = this->ensureBuffer(rowCount);
     velox::BufferPtr nulls;
     std::vector<velox::BufferPtr> stringBuffers;
@@ -896,17 +971,13 @@ class ScalarFieldReader final
       NIMBLE_CHECK_NOT_NULL(nulls);
       nullBits = nulls->as<uint64_t>();
     }
-    auto* rawOutputNulls = output->mutableRawNulls();
+    auto* rawOutputNulls = maybeMutableRawNulls(*output, nullBits != nullptr);
 
     if constexpr (std::is_same_v<TRequested, bool>) {
       auto* outputValues = vector->template mutableRawValues<uint64_t>();
       if (nullBits == nullptr) {
+        setNotNull(rawOutputNulls, outputRanges);
         for (const auto& range : outputRanges) {
-          velox::bits::fillBits(
-              rawOutputNulls,
-              range.targetIndex,
-              range.targetIndex + range.count,
-              velox::bits::kNotNull);
           for (velox::vector_size_t i{0}; i < range.count; ++i) {
             velox::bits::setBit(
                 outputValues,
@@ -934,12 +1005,8 @@ class ScalarFieldReader final
     } else {
       auto* outputValues = vector->mutableRawValues();
       if (nullBits == nullptr) {
+        setNotNull(rawOutputNulls, outputRanges);
         for (const auto& range : outputRanges) {
-          velox::bits::fillBits(
-              rawOutputNulls,
-              range.targetIndex,
-              range.targetIndex + range.count,
-              velox::bits::kNotNull);
           if constexpr (std::is_same_v<TRequested, TData>) {
             std::copy_n(
                 values + range.sourceIndex,
@@ -980,6 +1047,41 @@ class ScalarFieldReader final
   }
 
  private:
+  // Decodes 'sourceRanges' straight into the values of 'output' from row
+  // 'startRow', which the output ranges fill densely, instead of decoding into
+  // the scratch buffer and copying each range. The decoder writes nulls from
+  // bit 0, so they still go through a buffer of their own.
+  void denseRead(
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
+      velox::vector_size_t startRow,
+      uint32_t rowCount,
+      velox::BaseVector& output) {
+    auto* outputValues =
+        output.asFlatVector<TRequested>()->mutableRawValues() + startRow;
+    const auto nonNullCount = decoder_->read(
+        sourceRanges,
+        TypeTraits<TData>::dataType,
+        outputValues,
+        [&]() {
+          ensureBuffer<bool>(&denseReadNulls_, rowCount, pool_);
+          return denseReadNulls_->asMutable<void>();
+        },
+        stringBuffers_);
+    if (nonNullCount == rowCount) {
+      setNotNull(
+          maybeMutableRawNulls(output, /*hasNulls=*/false), outputRanges);
+      return;
+    }
+    NIMBLE_CHECK_NOT_NULL(denseReadNulls_);
+    velox::bits::copyBits(
+        denseReadNulls_->as<uint64_t>(),
+        0,
+        maybeMutableRawNulls(output, /*hasNulls=*/true),
+        startRow,
+        rowCount);
+  }
+
   template <typename ReadFunction>
   void
   read(uint32_t rowCount, velox::VectorPtr& output, ReadFunction readFunction) {
@@ -1067,6 +1169,9 @@ class ScalarFieldReader final
       }
     }
   }
+
+  // Holds the nulls that denseRead() decodes, reused across reads.
+  velox::BufferPtr denseReadNulls_;
 };
 
 template <typename T>
@@ -1240,16 +1345,12 @@ class StringFieldReader final : public FieldReader {
     for (const auto& stringBuffer : stringBuffers) {
       vector->addStringBuffer(stringBuffer);
     }
-    auto* rawOutputNulls = output->mutableRawNulls();
+    auto* rawOutputNulls = maybeMutableRawNulls(*output, nullBits != nullptr);
     auto* outputValues = vector->mutableRawValues();
 
     if (nullBits == nullptr) {
+      setNotNull(rawOutputNulls, outputRanges);
       for (const auto& range : outputRanges) {
-        velox::bits::fillBits(
-            rawOutputNulls,
-            range.targetIndex,
-            range.targetIndex + range.count,
-            velox::bits::kNotNull);
         for (velox::vector_size_t i{0}; i < range.count; ++i) {
           const auto& value = values[range.sourceIndex + i];
           outputValues[range.targetIndex + i] = velox::StringView{
@@ -1330,168 +1431,23 @@ class StringFieldReader final : public FieldReader {
   std::vector<std::string_view>& buffer_;
 };
 
-// This is the legacy string reader that is used for the legacy encodings.
-class LegacyStringFieldReader final : public FieldReader {
- public:
-  LegacyStringFieldReader(
-      velox::memory::MemoryPool& pool,
-      velox::TypePtr type,
-      Decoder* decoder,
-      std::vector<std::string_view>& buffer)
-      : FieldReader{pool, std::move(type), decoder}, buffer_{buffer} {}
-
-  std::optional<std::pair<uint32_t, uint64_t>> estimatedRowSize() const final {
-    uint64_t totalBytes{0};
-    const auto* encoding = decoder_->encoding();
-    NIMBLE_CHECK_NOT_NULL(
-        encoding, "Decoder must be loaded for output size estimation.");
-    const auto* innerEncoding = encoding;
-    const auto rowCount = encoding->rowCount();
-
-    if (encoding->isNullable()) {
-      // Adding memory for velox::BaseVector::nulls_
-      totalBytes += rowCount / 8;
-      const auto* nullableEncoding =
-          dynamic_cast<const legacy::NullableEncoding<std::string_view>*>(
-              encoding);
-      NIMBLE_CHECK_NOT_NULL(
-          nullableEncoding,
-          "NullableEncoding is not used for nullable string field.");
-      innerEncoding = nullableEncoding->nonNulls();
-    }
-
-    // TODO: support more encodings (or do encoding traversal), DICT, RLE, etc.
-    // We currently only estimate trivial encoded string field.
-    if (const auto* trivialEncoding =
-            dynamic_cast<const legacy::TrivialEncoding<std::string_view>*>(
-                innerEncoding)) {
-      // Adding overhead for velox::StringView. 4 bytes for inline, 16 bytes for
-      // non-inline
-      const auto nonNullCount = trivialEncoding->rowCount();
-      const auto payloadBytes = trivialEncoding->uncompressedDataBytes();
-      // Non-null entries overhead
-      totalBytes +=
-          ((payloadBytes / nonNullCount) > velox::StringView::kInlineSize ? 16
-                                                                          : 4) *
-          nonNullCount;
-      // Null entries overhead
-      totalBytes += (rowCount - nonNullCount) * 16;
-
-      // Adding actual string content payload size
-      totalBytes += payloadBytes;
-    } else {
-      return std::nullopt;
-    }
-
-    return rowCount == 0 ? std::optional<std::pair<uint32_t, uint64_t>>({0, 0})
-                         : std::optional<std::pair<uint32_t, uint64_t>>(
-                               {rowCount, totalBytes / rowCount});
-  }
-
-  folly::coro::Task<void> co_next(
-      uint32_t count,
-      velox::VectorPtr& output,
-      const velox::bits::Bitmap* scatterBitmap) final {
-    auto rowCount = scatterCount(count, scatterBitmap);
-    auto vector =
-        VectorInitializer<velox::FlatVector<velox::StringView>>::initialize(
-            type_, rowCount, pool_, output);
-    vector->resize(rowCount);
-    buffer_.resize(rowCount);
-
-    // Unused place holder for api.
-    std::vector<velox::BufferPtr> stringBuffers;
-    auto nonNullCount = decoder_->next(
-        count,
-        buffer_.data(),
-        [&]() { return ensureNulls(vector, rowCount); },
-        stringBuffers,
-        scatterBitmap);
-    size_t totalLength = 0;
-    const bool hasNulls = (nonNullCount != rowCount);
-    // A column that is entirely null over this batch would make both passes
-    // over |rowCount| below run only to move nothing.
-    const bool allNull = (nonNullCount == 0);
-    if (!hasNulls) {
-      vector->resetNulls();
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        totalLength += buffer_[i].length();
-      }
-    } else {
-      vector->setNullCount(rowCount - nonNullCount);
-      if (!allNull) {
-        for (uint32_t i = 0; i < rowCount; ++i) {
-          if (!vector->isNullAt(i)) {
-            totalLength += buffer_[i].length();
-          }
-        }
-      }
-    }
-    // Copy the strings into a single string buffer.
-    velox::BufferPtr data =
-        velox::AlignedBuffer::allocate<char>(totalLength, pool_);
-    char* dataPtr = data->asMutable<char>();
-    auto* valuesPtr = vector->mutableValues()->asMutable<velox::StringView>();
-    size_t currentOffset = 0;
-    if (!hasNulls) {
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        std::copy(
-            buffer_[i].begin(), buffer_[i].end(), dataPtr + currentOffset);
-        valuesPtr[i] =
-            velox::StringView(dataPtr + currentOffset, buffer_[i].length());
-        currentOffset += buffer_[i].length();
-      }
-    } else if (!allNull) {
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        if (!vector->isNullAt(i)) {
-          std::copy(
-              buffer_[i].begin(), buffer_[i].end(), dataPtr + currentOffset);
-          valuesPtr[i] =
-              velox::StringView(dataPtr + currentOffset, buffer_[i].length());
-          currentOffset += buffer_[i].length();
-        }
-      }
-    }
-    vector->setStringBuffers({data});
-    co_return;
-  }
-
-  folly::coro::Task<void> co_skip(uint32_t count) final {
-    decoder_->skip(count);
-    co_return;
-  }
-
- private:
-  std::vector<std::string_view>& buffer_;
-};
-
 class StringFieldReaderFactory final : public FieldReaderFactory {
  public:
   StringFieldReaderFactory(
       velox::TypePtr veloxType,
       const Type* type,
-      bool optimizeStringBufferHandling,
       velox::memory::MemoryPool* pool)
-      : FieldReaderFactory{std::move(veloxType), type, pool},
-        optimizeStringBufferHandling_{optimizeStringBufferHandling} {}
+      : FieldReaderFactory{std::move(veloxType), type, pool} {}
 
   std::unique_ptr<FieldReader> createReader(
       const folly::F14FastMap<offset_size, std::unique_ptr<Decoder>>& decoders)
       final {
-    return optimizeStringBufferHandling_
-        ? createReaderImpl<StringFieldReader>(
-              decoders,
-              nimbleType_->asScalar().scalarDescriptor(),
-              wrap(buffer_))
-        : createReaderImpl<LegacyStringFieldReader>(
-              decoders,
-              nimbleType_->asScalar().scalarDescriptor(),
-              wrap(buffer_));
+    return createReaderImpl<StringFieldReader>(
+        decoders, nimbleType_->asScalar().scalarDescriptor(), wrap(buffer_));
   }
 
  private:
   std::vector<std::string_view> buffer_;
-  bool optimizeStringBufferHandling_;
 };
 
 class TimestampMicroNanoFieldReader final : public FieldReader {
@@ -1627,7 +1583,8 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
           "Timestamp nanosecond streams must not contain nulls");
     }
 
-    auto* rawOutputNulls = output->mutableRawNulls();
+    auto* rawOutputNulls =
+        maybeMutableRawNulls(*output, rawMicrosNulls != nullptr);
     auto* rawValues = vector->mutableRawValues();
     uint32_t selectedNanosRow{0};
     for (size_t rangeIndex{0}; rangeIndex < sourceRanges.size(); ++rangeIndex) {
@@ -1646,11 +1603,7 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
         }
       };
       if (rawMicrosNulls == nullptr) {
-        velox::bits::fillBits(
-            rawOutputNulls,
-            outputRange.targetIndex,
-            outputRange.targetIndex + outputRange.count,
-            velox::bits::kNotNull);
+        setNotNull(rawOutputNulls, std::span{&outputRange, 1});
         convertRows(sourceRange.startRow, sourceRange.endRow);
         continue;
       }
@@ -3955,14 +3908,8 @@ class RowFieldReader final : public FieldReader {
       prepareNullableRead(
           sourceRanges, outputRanges, vector->mutableRawNulls());
     } else {
-      auto* rawOutputNulls = output->mutableRawNulls();
-      for (const auto& range : outputRanges) {
-        velox::bits::fillBits(
-            rawOutputNulls,
-            range.targetIndex,
-            range.targetIndex + range.count,
-            velox::bits::kNotNull);
-      }
+      setNotNull(
+          maybeMutableRawNulls(*output, /*hasNulls=*/false), outputRanges);
     }
     return vector;
   }
@@ -4444,16 +4391,10 @@ class FlatMapFieldReaderBase : public FieldReader {
     NIMBLE_CHECK(!sourceRanges.empty(), "Source ranges must not be empty");
     NIMBLE_CHECK_EQ(sourceRanges.size(), outputRanges.size());
     output->resetDataDependentFlags(nullptr);
-    auto* rawOutputNulls = output->mutableRawNulls();
 
     if constexpr (!hasNull) {
-      for (const auto& range : outputRanges) {
-        velox::bits::fillBits(
-            rawOutputNulls,
-            range.targetIndex,
-            range.targetIndex + range.count,
-            velox::bits::kNotNull);
-      }
+      setNotNull(
+          maybeMutableRawNulls(*output, /*hasNulls=*/false), outputRanges);
       parentSourceRanges_.assign(sourceRanges.begin(), sourceRanges.end());
       parentOutputRanges_.assign(outputRanges.begin(), outputRanges.end());
       return;
@@ -4477,7 +4418,7 @@ class FlatMapFieldReaderBase : public FieldReader {
         sourceRanges,
         outputRanges,
         this->boolBuffer_.data(),
-        rawOutputNulls,
+        output->mutableRawNulls(),
         parentSourceRanges_,
         parentOutputRanges_);
   }
@@ -5425,6 +5366,12 @@ struct HybridFlatMapGroupReaderParams {
 
   // Interprets selectedKeys as an inclusion or exclusion set.
   SelectionMode selectionMode{SelectionMode::Exclude};
+
+  // Whether the key-presence stream is a bitmap over schema keys or the
+  // batch's key list. kKeyList only for Default with
+  // HybridFlatMap::KeyPresenceMode::kKeyList.
+  HybridFlatMap::KeyPresenceMode keyPresenceMode{
+      HybridFlatMap::KeyPresenceMode::kBitmap};
 };
 
 template <typename T>
@@ -5454,9 +5401,11 @@ class HybridFlatMapGroupReader {
         hasValueStreams_{std::move(hasValueStreams)},
         selectedKeys_{parameters.selectedKeys},
         selectionMode_{parameters.selectionMode},
+        keyPresenceMode_{parameters.keyPresenceMode},
         keys_{schemaKeys(group, pool)},
         valueReader_{std::move(valueReader)},
-        keyPresence_{pool},
+        keyPresenceBits_{pool},
+        keyPresenceList_{pool},
         inMap_{pool} {}
 
   // Serializer Hybrid FlatMap batches are decode barriers, so each metadata
@@ -5492,9 +5441,16 @@ class HybridFlatMapGroupReader {
               streamName);
         };
 
-    keyPresence_.clear();
+    keyPresenceBits_.clear();
+    keyPresenceList_.clear();
     if (keyPresenceDecoder_ != nullptr) {
-      readMetadataChunk(keyPresenceDecoder_, keyPresence_, "key-presence");
+      if (hasKeyPresenceList()) {
+        readMetadataChunk(
+            keyPresenceDecoder_, keyPresenceList_, "key-presence-list");
+      } else {
+        readMetadataChunk(
+            keyPresenceDecoder_, keyPresenceBits_, "key-presence-bits");
+      }
     }
 
     inMap_.clear();
@@ -5508,22 +5464,26 @@ class HybridFlatMapGroupReader {
     // group therefore has no entries in this batch, even if key presence was
     // retained to preserve the schema prefix.
     if (inMap_.empty() && !hasValueStreams) {
-      keyPresence_.clear();
+      NIMBLE_CHECK_FILE(
+          keyPresenceList_.empty(),
+          "Hybrid FlatMap group lists keys without in-map rows.");
+      keyPresenceBits_.clear();
       co_return;
     }
 
-    if (keyPresence_.empty()) {
-      // An omitted key-presence stream with in-map rows applies to all schema
+    if (keyPresenceBits_.empty()) {
+      // A key list carries no presence bits; every listed key is present. An
+      // omitted key-presence bitmap with in-map rows applies to all schema
       // keys. All-false metadata is omitted only when the group is empty.
-      keyPresence_.resize(keys_.size(), true);
+      keyPresenceBits_.resize(keys().size(), true);
     }
 
     NIMBLE_CHECK_FILE_LE(
-        keyPresence_.size(),
-        keys_.size(),
+        keyPresenceBits_.size(),
+        keys().size(),
         "Hybrid FlatMap key-presence count exceeds schema key count.");
     const auto numPresentKeys = static_cast<uint32_t>(
-        std::count(keyPresence_.begin(), keyPresence_.end(), true));
+        std::count(keyPresenceBits_.begin(), keyPresenceBits_.end(), true));
     if (numPresentKeys == 0) {
       NIMBLE_CHECK_FILE(
           inMap_.empty(),
@@ -5531,7 +5491,7 @@ class HybridFlatMapGroupReader {
       NIMBLE_CHECK_FILE(
           !hasValueStreams,
           "Hybrid FlatMap group has value streams without present keys.");
-      keyPresence_.clear();
+      keyPresenceBits_.clear();
       co_return;
     }
     NIMBLE_CHECK_FILE(
@@ -5551,15 +5511,12 @@ class HybridFlatMapGroupReader {
                                                  : numPresentKeys);
     velox::vector_size_t numValues{0};
     uint32_t presentKeyIndex{0};
-    for (uint32_t schemaKeyIndex = 0; schemaKeyIndex < keyPresence_.size();
+    for (uint32_t schemaKeyIndex = 0; schemaKeyIndex < keyPresenceBits_.size();
          ++schemaKeyIndex) {
-      if (!keyPresence_[schemaKeyIndex]) {
+      if (!keyPresenceBits_[schemaKeyIndex]) {
         continue;
       }
-      const auto keyName = keyNameAt(schemaKeyIndex);
-      const bool selected = selectionMode_ == SelectionMode::Include
-          ? selectedKeys_.contains(keyName)
-          : !selectedKeys_.contains(keyName);
+      const bool selected = isSelected(schemaKeyIndex);
       const auto keyOffset = presentKeyIndex * nonNullRowCount_;
       bool hasPresentValue{false};
       if (selected) {
@@ -5584,7 +5541,7 @@ class HybridFlatMapGroupReader {
       NIMBLE_CHECK_FILE(
           hasPresentValue,
           "Hybrid FlatMap key '{}' has no present rows.",
-          keyName);
+          keyNameAt(schemaKeyIndex));
       ++presentKeyIndex;
     }
     NIMBLE_CHECK_FILE_EQ(presentKeyIndex, numPresentKeys);
@@ -5612,7 +5569,7 @@ class HybridFlatMapGroupReader {
       return;
     }
     // Missing key-presence and in-map streams represent an empty group.
-    if (keyPresence_.empty()) {
+    if (keyPresenceBits_.empty()) {
       nextNonNullRow_ += count;
       return;
     }
@@ -5634,7 +5591,7 @@ class HybridFlatMapGroupReader {
     if (count == 0) {
       return;
     }
-    if (!keyPresence_.empty()) {
+    if (!keyPresenceBits_.empty()) {
       NIMBLE_CHECK_LE(
           nextNonNullRow_ + count,
           nonNullRowCount_,
@@ -5661,8 +5618,9 @@ class HybridFlatMapGroupReader {
     selectedKeyIndices_.clear();
     valueIndices_.clear();
     values_.reset();
+    keyPresenceList_.clear();
     scratchBuffers_.clear();
-    keyPresence_.clear();
+    keyPresenceBits_.clear();
     inMap_.clear();
   }
 
@@ -5670,7 +5628,7 @@ class HybridFlatMapGroupReader {
   // Identifies a selected key in both the schema catalog and the compact set
   // of keys present in the current batch.
   struct SelectedKeyIndex {
-    // Locates the key in keys_.
+    // Locates the key in keys().
     uint32_t schemaKeyIndex;
     // Locates the key's row-presence bits in inMap_.
     uint32_t presentKeyIndex;
@@ -5686,35 +5644,55 @@ class HybridFlatMapGroupReader {
       if constexpr (std::is_same_v<T, velox::StringView>) {
         keys.emplace_back(key);
       } else {
-        const auto parsed = folly::tryTo<T>(key);
-        NIMBLE_CHECK_FILE(
-            parsed.hasValue(), "Invalid Hybrid FlatMap schema key '{}'.", key);
-        NIMBLE_CHECK_FILE_EQ(
-            folly::to<std::string>(parsed.value()),
-            key,
-            "Hybrid FlatMap schema key is not canonical: '{}'.",
-            key);
-        keys.push_back(parsed.value());
+        // Callers that build a reader for every serialized value parse these
+        // keys for every batch, so canonical keys take the allocation-free
+        // path. Any other key throws an error that names its problem.
+        keys.push_back(HybridFlatMap::parseCanonicalIntegerKey<T>(key));
       }
     }
     return keys;
   }
 
+  // Returns whether this group's key-presence stream is a key list rather
+  // than a bitmap. Fixed by the schema when the reader is built, so it never
+  // depends on batch data and never throws.
+  bool hasKeyPresenceList() const {
+    return keyPresenceMode_ == HybridFlatMap::KeyPresenceMode::kKeyList;
+  }
+
+  // Returns the keys that key-presence bits index: the batch's listed keys,
+  // or the schema keys.
+  const Vector<DecodedKey>& keys() const {
+    return hasKeyPresenceList() ? keyPresenceList_ : keys_;
+  }
+
   std::string keyNameAt(size_t index) const {
     if constexpr (std::is_same_v<T, velox::StringView>) {
-      return std::string(keys_[index]);
+      return std::string(keys()[index]);
     } else {
-      return folly::to<std::string>(keys_[index]);
+      return folly::to<std::string>(keys()[index]);
     }
   }
 
   DecodedKey keyAt(size_t index) const {
-    return keys_[index];
+    return keys()[index];
+  }
+
+  // Returns whether the feature selection keeps the key at `index`. An empty
+  // selection decides without the key, so this skips building its name for
+  // every present key of every batch.
+  bool isSelected(size_t index) const {
+    if (selectedKeys_.empty()) {
+      return selectionMode_ == SelectionMode::Exclude;
+    }
+    const bool listed = selectedKeys_.contains(keyNameAt(index));
+    return selectionMode_ == SelectionMode::Include ? listed : !listed;
   }
 
   // Allocates implicit null values for metadata-only groups.
   velox::memory::MemoryPool* const pool_;
-  // Non-owning decoder for the schema-ordered key-presence bitmap.
+  // Non-owning decoder for the schema-ordered key-presence bitmap, or for the
+  // batch's listed keys.
   Decoder* const keyPresenceDecoder_;
   // Non-owning decoder for key-major row-presence bits.
   Decoder* const inMapDecoder_;
@@ -5725,13 +5703,25 @@ class HybridFlatMapGroupReader {
   // Controls whether selectedKeys_ is an inclusion or exclusion set. An empty
   // exclusion set selects every key.
   const SelectionMode selectionMode_;
+  // Whether the key-presence stream is a bitmap over schema keys or the
+  // batch's key list.
+  const HybridFlatMap::KeyPresenceMode keyPresenceMode_;
   // Keeps the typed schema-key catalog in tracked memory and bitmap order.
+  // Empty for a KeyList Default, whose keys are listed per batch in
+  // keyPresenceList_.
   const Vector<DecodedKey> keys_;
   // Owns the reader for values shared by every key in this group.
   std::unique_ptr<FieldReader> valueReader_;
-  // One decoded bit per schema key. A shorter bitmap omits trailing keys that
-  // were added to the accumulated schema by later batches.
-  Vector<bool> keyPresence_;
+  // One presence bit per key in keys(), or empty when the group has no keys in
+  // this batch. Decoded from the key-presence bitmap, where a shorter bitmap
+  // omits trailing keys that were added to the accumulated schema by later
+  // batches. All set over a key-presence list.
+  Vector<bool> keyPresenceBits_;
+  // The batch's present keys, listed only by a Default group with
+  // HybridFlatMap::KeyPresenceMode::kKeyList; empty for bitmap groups. The
+  // list is the sole record of the group's keys: keys_ is empty and
+  // keyPresenceBits_ is all set. String keys view scratchBuffers_.
+  Vector<DecodedKey> keyPresenceList_;
   // Decoded key-major row-presence bits. Cell (present key, row) is at
   // key * nonNullRowCount_ + row.
   Vector<bool> inMap_;
@@ -5752,6 +5742,31 @@ class HybridFlatMapGroupReader {
   std::vector<velox::BufferPtr> scratchBuffers_;
 };
 
+// Adds a one-entry copy from `sourceIndex` to `targetIndex` to `ranges`,
+// extending the last range when the entry continues it in both vectors. A
+// CopyRange copies `count` consecutive source values to `count` consecutive
+// target positions. For example, the last range {.sourceIndex = 2,
+// .targetIndex = 1, .count = 1} grows to count 2 for sourceIndex 3 and
+// targetIndex 2. From the same range, sourceIndex 4 with targetIndex 2 starts
+// a new range instead, because extending it would copy source value 3 to
+// target 2.
+void appendCopyRange(
+    std::vector<velox::BaseVector::CopyRange>& ranges,
+    velox::vector_size_t sourceIndex,
+    velox::vector_size_t targetIndex) {
+  const velox::BaseVector::CopyRange range{sourceIndex, targetIndex, 1};
+  if (!ranges.empty() && ranges.back().mergeable(range)) {
+    ++ranges.back().count;
+    return;
+  }
+  ranges.push_back(range);
+}
+
+// Reads a Hybrid FlatMap column into a MapVector. Each group reader decodes
+// its group's values into one vector, key by key: the first present key's
+// values for the rows that have it, then the next key's. The MapVector's keys
+// and values children list entries row by row. co_next() transposes the
+// selected entries from each group's key-major order into row-major order.
 template <typename T, bool hasNull>
 class HybridFlatMapFieldReader final : public FieldReader {
   using SourceKey = HybridFlatMapKey<T>;
@@ -5790,44 +5805,89 @@ class HybridFlatMapFieldReader final : public FieldReader {
     vector->resize(rowCount);
     const auto nonNullCount = loadNulls(rowCount, vector);
 
-    // Normalize selected keys from every group into key-major sources. Each
-    // rowValueIndices maps each compact non-null-row ordinal to an index in
-    // the source's decoded values vector.
-    struct KeySource {
-      SourceKey key;
-      velox::VectorPtr values;
-      std::vector<velox::vector_size_t> rowValueIndices;
-    };
-    std::vector<KeySource> sources;
+    // Normalize selected keys from every group into key-major sources. A
+    // source is one selected key that is present in its group's payload.
+    // Sources are numbered across groups in group order. sourceKeys_[s] is the
+    // key of source s. For compact non-null row r,
+    // sourceValueIndices_[s * nonNullCount + r] is the position of source
+    // s's value in its group's values vector, or kAbsentHybridFlatMapValueIndex
+    // when row r lacks the key. Null rows have no compact row. The buffers are
+    // members so that their capacity is reused across co_next() calls.
+    //
+    // For example, take groups {1, 2, 3} and {5}, with every key selected, and
+    // a payload of three rows that one co_next() reads in full:
+    //   row 0: {1: a0, 2: b0, 3: c0, 5: e0}
+    //   row 1: null
+    //   row 2: {1: a2, 3: c2, 5: e2}
+    // nonNullCount is 2, and row 2 is compact row 1. The groups decode these
+    // values:
+    //   group 0 values: [a0, a2, b0, c0, c2]
+    //   group 1 values: [e0, e2]
+    // The sources are:
+    //   source  key  group  r = 0  r = 1
+    //   0       1    0      0      1
+    //   1       2    0      2      absent
+    //   2       3    0      3      4
+    //   3       5    1      0      1
+    // So sourceKeys_ is [1, 2, 3, 5], and sourceValueIndices_ is
+    // [0, 1, 2, absent, 3, 4, 0, 1]. groupSources_ holds {.endKeyOffset = 3}
+    // with group 0's values and {.endKeyOffset = 4} with group 1's. Source 3's
+    // value index 0 refers to e0 in group 1's values, not to a0 in group 0's.
+    sourceKeys_.clear();
+    sourceValueIndices_.clear();
+    groupSources_.clear();
 
     // co_load() decodes a group's complete payload once. The append call then
     // advances only the window of non-null rows requested by this co_next().
     for (auto& group : hybridGroupReaders_) {
       co_await group->co_load();
+      const auto groupKeyOffset = sourceKeys_.size();
+      const velox::BaseVector* groupValues{nullptr};
       group->appendSources(
           nonNullCount,
           [&](SourceKey key,
               const velox::VectorPtr& values,
               const auto& valueAt) {
-            KeySource source{
-                .key = key,
-                .values = values,
-                .rowValueIndices =
-                    std::vector<velox::vector_size_t>(nonNullCount),
-            };
-            for (uint32_t row = 0; row < nonNullCount; ++row) {
-              source.rowValueIndices[row] = valueAt(row);
+            sourceKeys_.push_back(key);
+
+            // appendSources() passes the same values vector with every key of
+            // the group.
+            if (groupValues != nullptr) {
+              // fmt formats only void pointers.
+              NIMBLE_CHECK_EQ(
+                  static_cast<const void*>(groupValues),
+                  static_cast<const void*>(values.get()),
+                  "Keys of one group must share a values vector");
             }
-            sources.push_back(std::move(source));
+            groupValues = values.get();
+            const auto groupValueIndex = sourceValueIndices_.size();
+            sourceValueIndices_.resize(groupValueIndex + nonNullCount);
+            for (uint32_t row = 0; row < nonNullCount; ++row) {
+              sourceValueIndices_[groupValueIndex + row] = valueAt(row);
+            }
           });
+
+      // A group adds no sources when none of the keys present in its payload
+      // is selected, or when this window has no non-null rows. It then has
+      // nothing to copy.
+      if (sourceKeys_.size() > groupKeyOffset) {
+        groupSources_.push_back(
+            GroupSource{
+                .endKeyOffset = sourceKeys_.size(),
+                .groupValues = groupValues,
+            });
+      }
     }
 
     // First transpose pass: count present key sources per output row to derive
-    // row-major offsets and the total flattened child cardinality.
+    // row-major offsets and the total flattened child cardinality. In the
+    // example, the sizes are [4, 0, 3], the offsets are [0, 4, 4], and
+    // totalEntries is 7.
     auto* rawSizes =
         vector->sizes()->template asMutable<velox::vector_size_t>();
     auto* rawOffsets =
         vector->offsets()->template asMutable<velox::vector_size_t>();
+    const auto numKeys = sourceKeys_.size();
     velox::vector_size_t totalEntries{0};
     uint32_t nonNullRow{0};
     for (uint32_t row = 0; row < rowCount; ++row) {
@@ -5836,13 +5896,14 @@ class HybridFlatMapFieldReader final : public FieldReader {
         rawSizes[row] = 0;
         continue;
       }
-      velox::vector_size_t size{0};
-      for (const auto& source : sources) {
-        size += source.rowValueIndices[nonNullRow] !=
+      velox::vector_size_t numValues{0};
+      for (size_t keyOffset = 0; keyOffset < numKeys; ++keyOffset) {
+        numValues +=
+            sourceValueIndices_[keyOffset * nonNullCount + nonNullRow] !=
             kAbsentHybridFlatMapValueIndex;
       }
-      rawSizes[row] = size;
-      totalEntries += size;
+      rawSizes[row] = numValues;
+      totalEntries += numValues;
       ++nonNullRow;
     }
     NIMBLE_CHECK_EQ(nonNullRow, nonNullCount);
@@ -5862,35 +5923,63 @@ class HybridFlatMapFieldReader final : public FieldReader {
     auto& valuesVector = vector->mapValues();
     velox::BaseVector::prepareForReuse(valuesVector, totalEntries);
     mapWritePositions_.assign(rawOffsets, rawOffsets + rowCount);
-    // Second transpose pass: place key-major sources into row-major map slots
-    // and bulk-copy each source's selected values into the same positions.
-    for (const auto& source : sources) {
+
+    // Second transpose pass: place each group's sources into row-major map
+    // slots, then copy the group's selected values with one copyRanges call.
+    // Each entry copies from groupValueIndex, its position in the group's
+    // values vector, to target, its position in the keys and values children.
+    // A groupValueIndex is only meaningful within its group's values vector,
+    // so ranges are built and copied per group. mapWritePositions_ carries over
+    // from one group to the next. Each row therefore lists its keys group by
+    // group, and within a group in the order appendSources() emits them.
+    // Walking a group's sources row by row appends each row's entries in
+    // target order, so appendCopyRange() merges entries that are also adjacent
+    // in the source. When the group's payload has one non-null row and every
+    // present key is selected, all of the group's entries form one range.
+    //
+    // In the example, the ranges as {sourceIndex, targetIndex, count} are:
+    //   group 0: {0, 0, 1}, {2, 1, 2}, {1, 4, 1}, {4, 5, 1}
+    //   group 1: {0, 3, 1}, {1, 6, 1}
+    // b0 and c0 share a range because they are adjacent in group 0's values
+    // and fill targets 1 and 2. The keys child becomes [1, 2, 3, 5, 1, 3, 5].
+    // The values child becomes [a0, b0, c0, e0, a2, c2, e2].
+    size_t keyOffset{0};
+    for (const auto& group : groupSources_) {
       copyRanges_.clear();
       nonNullRow = 0;
       for (uint32_t row = 0; row < rowCount; ++row) {
         if (isNullRow(row)) {
           continue;
         }
-        const auto sourceIndex = source.rowValueIndices[nonNullRow++];
-        if (sourceIndex == kAbsentHybridFlatMapValueIndex) {
-          continue;
+        for (auto groupKeyOffset = keyOffset;
+             groupKeyOffset < group.endKeyOffset;
+             ++groupKeyOffset) {
+          const auto groupValueIndex =
+              sourceValueIndices_[groupKeyOffset * nonNullCount + nonNullRow];
+          if (groupValueIndex == kAbsentHybridFlatMapValueIndex) {
+            continue;
+          }
+          const auto target = mapWritePositions_[row]++;
+          if constexpr (std::is_same_v<T, velox::StringView>) {
+            flatKeys->set(
+                target, velox::StringView{sourceKeys_[groupKeyOffset]});
+          } else {
+            flatKeys->set(target, sourceKeys_[groupKeyOffset]);
+          }
+          appendCopyRange(copyRanges_, groupValueIndex, target);
         }
-        const auto target = mapWritePositions_[row]++;
-        if constexpr (std::is_same_v<T, velox::StringView>) {
-          flatKeys->set(target, velox::StringView{source.key});
-        } else {
-          flatKeys->set(target, source.key);
-        }
-        copyRanges_.push_back({sourceIndex, target, 1});
+        ++nonNullRow;
       }
       NIMBLE_DCHECK_EQ(nonNullRow, nonNullCount);
-      // A key present in the group payload can be absent from every row in the
-      // current window, leaving this source with no ranges to copy.
+      keyOffset = group.endKeyOffset;
+
+      // Keys present in the group payload can be absent from every row in the
+      // current window, leaving the group with no ranges to copy.
       if (copyRanges_.empty()) {
         continue;
       }
-      NIMBLE_CHECK_NOT_NULL(source.values);
-      valuesVector->copyRanges(source.values.get(), copyRanges_);
+      NIMBLE_CHECK_NOT_NULL(group.groupValues);
+      valuesVector->copyRanges(group.groupValues, copyRanges_);
     }
 
     // Publish the populated children only after all source ranges are copied.
@@ -5924,6 +6013,18 @@ class HybridFlatMapFieldReader final : public FieldReader {
   }
 
  private:
+  // Locates one group's sources in sourceKeys_ and the values they index.
+  struct GroupSource {
+    // One past the group's last source in sourceKeys_. The group's first
+    // source is the previous group's endKeyOffset, or 0.
+    size_t endKeyOffset;
+    // The group's decoded values, shared by all of its sources. The group
+    // reader owns them until reset(). Each group reader decodes into its own
+    // vector, so loading a later group leaves them intact for the rest of
+    // co_next().
+    const velox::BaseVector* groupValues;
+  };
+
   // boolBuffer_ is populated only for nullable readers. This compile-time
   // branch prevents non-nullable readers from accessing it and adds no
   // runtime branch to either specialization.
@@ -5957,8 +6058,20 @@ class HybridFlatMapFieldReader final : public FieldReader {
 
   std::vector<std::unique_ptr<HybridFlatMapGroupReader<T>>> hybridGroupReaders_;
   Vector<bool>& boolBuffer_;
+  // Next free position of each output row in the map's keys and values
+  // children.
   std::vector<velox::vector_size_t> mapWritePositions_;
+  // Ranges that appendCopyRange() builds for the current group in the second
+  // transpose pass, from the group's values vector into the values child.
+  // Cleared for each group.
   std::vector<velox::BaseVector::CopyRange> copyRanges_;
+  // Selected keys of the current co_next(), one per source, in group order.
+  std::vector<SourceKey> sourceKeys_;
+  // Decoded value index of each source for each compact non-null row, or
+  // kAbsentHybridFlatMapValueIndex, source-major.
+  std::vector<velox::vector_size_t> sourceValueIndices_;
+  // Groups with at least one source in the current co_next(), in group order.
+  std::vector<GroupSource> groupSources_;
 };
 
 template <typename T>
@@ -6237,10 +6350,7 @@ std::unique_ptr<FieldReaderFactory> createFieldReaderFactory(
           "Provided schema doesn't match file schema.");
       offsets.emplace_back(nimbleType->asScalar().scalarDescriptor().offset());
       return std::make_unique<StringFieldReaderFactory>(
-          veloxType->type(),
-          nimbleType.get(),
-          parameters.optimizeStringBufferHandling,
-          pool);
+          veloxType->type(), nimbleType.get(), pool);
     }
     case velox::TypeKind::TIMESTAMP: {
       NIMBLE_CHECK(
@@ -6678,6 +6788,14 @@ std::unique_ptr<FieldReaderFactory> createHybridFlatMapFieldReaderFactory(
             return !selectedKeys.contains(key);
           });
     }
+    // A Default group that lists its keys may hold any key in no configured
+    // group.
+    if (hybridMap.useKeyPresentList(group.groupId)) {
+      return std::any_of(
+          selectedKeys.begin(), selectedKeys.end(), [&](const auto& key) {
+            return !hybridMap.findGroup(key).has_value();
+          });
+    }
     return std::any_of(
         group.groupKeys.begin(), group.groupKeys.end(), [&](const auto& key) {
           return selectedKeys.contains(key);
@@ -6714,6 +6832,9 @@ std::unique_ptr<FieldReaderFactory> createHybridFlatMapFieldReaderFactory(
             .hasValueStreams = std::move(hasValueStreams),
             .selectedKeys = selectedKeys,
             .selectionMode = selectionMode,
+            .keyPresenceMode = hybridMap.useKeyPresentList(group.groupId)
+                ? HybridFlatMap::KeyPresenceMode::kKeyList
+                : HybridFlatMap::KeyPresenceMode::kBitmap,
         });
   }
   return createHybridFlatMapReaderFactory(

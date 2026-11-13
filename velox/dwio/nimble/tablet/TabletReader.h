@@ -47,6 +47,7 @@
 #include "velox/dwio/nimble/tablet/MetadataCache.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
+#include "velox/dwio/nimble/tablet/StripeMetadata.h"
 
 /// The TabletReader class is the on-disk layout for nimble.
 ///
@@ -79,6 +80,15 @@ class NimbleReaderOptions : public velox::dwio::common::FormatSpecificOptions {
  public:
   /// Resolves External shared integer dictionaries referenced by this file.
   std::shared_ptr<const ExternalDictionaryResolver> externalDictionaryResolver;
+
+  /// Whether key chunk readers cache their encoding views. See
+  /// TabletReader::Options::cacheKeyEncodingViews.
+  bool cacheKeyEncodingViews{false};
+
+  /// When true, kStreamMajor stripe groups share one EncodingView among streams
+  /// whose offsets or sizes arrays reference the same encoded payload, which
+  /// files written with experimentalStripeGroupMetadataDeduplication contain.
+  bool stripeGroupEncodingViewDeduplicationEnabled{false};
 };
 
 namespace test {
@@ -178,6 +188,10 @@ class TabletReader {
     /// Default false.
     bool preloadIndex{false};
 
+    /// Whether key chunk readers cache their encoding views. See
+    /// index::IndexLookup::Options::cacheKeyEncodingViews. Default false.
+    bool cacheKeyEncodingViews{false};
+
     /// Whether to load the chunk stats during initialization. Default true.
     bool loadChunkStats{true};
 
@@ -191,8 +205,16 @@ class TabletReader {
     /// independently of cacheMetadata.
     bool pinMetadata{false};
 
-    /// If true, caches file metadata and index metadata in the async data
-    /// cache. Takes effect only when fileHandle and cache are provided.
+    /// If true, kStreamMajor stripe groups build one EncodingView per distinct
+    /// encoded offsets or sizes payload instead of one per stream, so streams
+    /// whose arrays TabletWriter deduplicated share a view. Reduces resident
+    /// stripe-group metadata for files written with stripe-group metadata
+    /// deduplication. Set from
+    /// NimbleReaderOptions::stripeGroupEncodingViewDeduplicationEnabled.
+    bool stripeGroupEncodingViewDeduplicationEnabled{false};
+
+    /// If true, caches file metadata, including the index section, in
+    /// blockCache. Takes effect only with blockCache.
     bool cacheMetadata{false};
 
     /// If true, pins parsed index objects in the index cache with strong
@@ -209,10 +231,13 @@ class TabletReader {
     /// this with a NIMBLE_CHECK.
     std::optional<velox::io::ReaderOptions> ioOptions;
 
-    /// File handle and cache for CachedMetadataInput. Both must be set
-    /// together. When set, creates CachedMetadataInput using
-    /// fileHandle->uuid as cache key. When neither is set, creates
-    /// DirectMetadataInput.
+    /// File handle for cache and blockCache, whose entries are keyed by
+    /// fileHandle->uuid. Whenever a cache is set, fileHandle->file must be the
+    /// reader's file. The reader reads the handle only during construction, so
+    /// the handle need not outlive create(). The exception is cacheIndex with
+    /// cache: a vector index reads the handle when it first loads, so the
+    /// handle must then outlive the reader and the vector indexes obtained
+    /// from it.
     ///
     /// FileHandle contains:
     ///   - file: shared_ptr<ReadFile> for IO
@@ -222,16 +247,33 @@ class TabletReader {
     ///     (e.g. directory), used for coarse granularity access tracking
     ///     such as deciding SSD placement
     const velox::FileHandle* fileHandle{nullptr};
+
+    /// Async data cache for cacheIndex. Requires fileHandle.
+    ///
+    /// TODO: Remove cache once the index caches through the block cache.
     velox::cache::AsyncDataCache* cache{nullptr};
 
-    /// When cacheMetadata is enabled, metadata entries above this size in
-    /// bytes bypass the async data cache. Defaults to the largest entry an
-    /// SsdRun can describe, so every cached entry can reach SSD.
+    /// Metadata entries above this size in bytes bypass the cache: file
+    /// metadata with cacheMetadata, and index metadata with cacheIndex.
+    /// Defaults to the largest entry an SsdRun can describe, so every metadata
+    /// entry cached in the async data cache can reach SSD.
     uint32_t maxCacheEntrySize{1U << velox::cache::SsdRun::kSizeBits};
+
+    /// Block cache for file metadata. With cacheMetadata, caches decompressed
+    /// file metadata, read through CachedMetadataInput. configureOptions() sets
+    /// it to the block cache that getBlockCache() builds on the async data
+    /// cache. Must outlive the reader and everything obtained from it that
+    /// holds metadata, such as Sections from loadOptionalSection() and
+    /// StripeIdentifiers, since they pin cache entries. Keyed by
+    /// fileHandle->uuid, so it requires fileHandle.
+    BlockCache* blockCache{nullptr};
 
     /// Resolves External shared integer dictionaries referenced by this file.
     std::shared_ptr<const ExternalDictionaryResolver>
         externalDictionaryResolver;
+
+    /// The stats and pool inside this context must outlive this tablet.
+    velox::FileIoContext fileIoContext;
   };
 
   /// Compute checksum from the beginning of the file all the way to footer
@@ -248,7 +290,9 @@ class TabletReader {
       MemoryPool* pool,
       const Options& options);
 
-  /// Configures TabletReader::Options from Velox ReaderOptions.
+  /// Configures TabletReader::Options from Velox ReaderOptions. With a file
+  /// handle and an async data cache, sets blockCache to the block cache that
+  /// getBlockCache() builds on that cache.
   static Options configureOptions(
       const velox::dwio::common::ReaderOptions& options);
 
@@ -432,14 +476,14 @@ class TabletReader {
   }
 
   /// Returns the byte offset of `streamId` within `stripe` (relative to the
-  /// stripe's start). O(1) point read into the per-stream FBW-encoded blob
-  /// held by the StripeGroup. Callers must ensure
-  /// `streamId < streamCount(stripe)`.
+  /// stripe's start), with the cost of StripeGroup::streamOffset(). Callers
+  /// must ensure `streamId < streamCount(stripe)`.
   uint32_t streamOffset(const StripeIdentifier& stripe, uint32_t streamId)
       const;
 
   /// Returns the byte size of `streamId` within `stripe`. Returns 0 if the
-  /// stream does not exist in this stripe. O(1) point read.
+  /// stream does not exist in this stripe, with the cost of
+  /// StripeGroup::streamSize().
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
 
   /// Relative byte location of one stream within a stripe. A zero size means
@@ -458,6 +502,13 @@ class TabletReader {
       const StripeIdentifier& stripe,
       std::span<const uint32_t> streamIds,
       std::span<StreamMetadata> locations) const;
+
+  /// Returns the location of `streamId` in `stripe`, absent when the stream has
+  /// no data there or `streamId >= streamCount(stripe)`. One lookup, unlike
+  /// streamOffset() plus streamSize().
+  StreamMetadata streamLocation(
+      const StripeIdentifier& stripe,
+      uint32_t streamId) const;
 
   /// Returns the schema's leaf-stream count at the time `stripe`'s stripe
   /// group was written. May be less than the final schema's node count.
@@ -590,6 +641,15 @@ class TabletReader {
 
   std::shared_ptr<StripeGroup> stripeGroup(uint32_t stripeGroupIndex) const;
 
+  // Returns the metadata of each stripe of stripe group 'stripeGroupIndex',
+  // with the location of each of 'streamIds' in the stripe, in the order of
+  // 'streamIds': absent (size 0) for a stream that the stripe lacks or that is
+  // beyond the stream count of the group. For example, a cluster index that
+  // stores its key chunks in stripes locates their key streams with it.
+  std::vector<StripeMetadata> stripeMetadata(
+      uint32_t stripeGroupIndex,
+      std::span<const uint32_t> streamIds) const;
+
   std::shared_ptr<StripeGroup> loadStripeGroup(uint32_t stripeGroupIndex) const;
 
   // Parses the shared index section and caches its runtime descriptors.
@@ -679,9 +739,12 @@ class TabletReader {
   const std::string clusterIndexName_;
   const bool loadChunkStats_;
   const bool loadDenseIndexes_;
+  // Copied from Options::stripeGroupEncodingViewDeduplicationEnabled.
+  const bool stripeGroupEncodingViewDeduplicationEnabled_;
   // IO options copied from Options.ioOptions (required, with non-null
   // metadataIoStats).
   const velox::io::ReaderOptions ioOptions_;
+  const velox::FileIoContext fileIoContext_;
   // IO config for index creation — indexes create their own MetadataInput
   // with index-specific IO stats.
   const index::IndexLookup::Options indexOptions_;

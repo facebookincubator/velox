@@ -1254,6 +1254,7 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     const nimble::WriterOptions options;
     const auto encodingOptions = options.buildEncodingOptions();
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
+    EXPECT_FALSE(encodingOptions.sortDictionaryAlphabet);
 
     // The delta pre-transform ships disabled. Assert the flag's own default
     // too, so lowering the bar to enabling it fails here rather than silently
@@ -1273,6 +1274,12 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
 
     EXPECT_DOUBLE_EQ(encodingOptions.fsstCompressionTargetRatio, 0.42);
     EXPECT_EQ(encodingOptions.fixedBitWidthUseExactBits, useExactBits);
+  }
+
+  {
+    nimble::WriterOptions options;
+    options.sortDictionaryAlphabet = true;
+    EXPECT_TRUE(options.buildEncodingOptions().sortDictionaryAlphabet);
   }
 }
 
@@ -4159,15 +4166,17 @@ TEST_F(WriterTest, chunkedStreamsRowSomeNullsWithChunksMinSizeZero) {
 TEST_F(WriterTest, chunkNullCountsForStructNullStream) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
-  // Batch 1: 5 rows, the entire struct is null.
-  auto nullsVector =
+  // Batch 1: 5 rows, struct column 's' is null in every row.
+  auto nullStructs =
       vectorMaker.rowVector({"c1"}, {vectorMaker.flatVector<int32_t>({})});
-  nullsVector->appendNulls(5);
+  nullStructs->appendNulls(5);
+  auto nullsVector = vectorMaker.rowVector({"s"}, {nullStructs});
 
-  // Batch 2: 3 rows, struct null at row 1 (child values otherwise present).
-  auto someNullsVector = vectorMaker.rowVector(
+  // Batch 2: 3 rows, 's' is null at row 1 (child values otherwise present).
+  auto someNullStructs = vectorMaker.rowVector(
       {"c1"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
-  someNullsVector->setNull(1, /*isNull=*/true);
+  someNullStructs->setNull(1, /*isNull=*/true);
+  auto someNullsVector = vectorMaker.rowVector({"s"}, {someNullStructs});
 
   const auto& type = nullsVector->type();
 
@@ -4209,7 +4218,7 @@ TEST_F(WriterTest, chunkNullCountsForStructNullStream) {
   ASSERT_NE(chunkStats, nullptr)
       << "columnar.chunk.stats section should be present";
 
-  // The root struct null stream is the only source of nulls: 5 (batch 1) + 1
+  // The null stream of 's' is the only source of nulls: 5 (batch 1) + 1
   // (batch 2) = 6. Sum per-chunk null counts across every indexed stream; the
   // int child stream has no nulls of its own and is single-chunk (not indexed).
   const uint32_t streamCount = tablet->streamCount(stripeIdentifier);
@@ -4654,6 +4663,33 @@ TEST_F(WriterTest, canonicalChunkStatsWritesV2Section) {
       tablet->hasOptionalSection(std::string(nimble::kChunkStatsSection)));
   EXPECT_TRUE(
       tablet->hasOptionalSection(std::string(nimble::kChunkStatsV2Section)));
+}
+
+TEST_F(WriterTest, chunkStatsWrittenForSingleChunkStreamsByDefault) {
+  // One stripe with one chunk per stream still gets chunk stats, so readers
+  // can prune the whole stripe with them.
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"c1"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  nimble::Writer writer(
+      vector->type(),
+      std::move(writeFile),
+      *rootPool_,
+      {
+          .enableChunkStats = true,
+          .enableChunking = true,
+      });
+  writer.write(vector);
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  ASSERT_EQ(tablet->stripeCount(), 1);
+  EXPECT_NE(tablet->stripeIdentifier(0).chunkStats(), nullptr);
 }
 
 TEST_F(WriterTest, conflictingChunkStatsVersionsFail) {
@@ -5709,6 +5745,30 @@ TEST_F(WriterTest, clusterIndexRejectsTopLevelNulls) {
     NIMBLE_ASSERT_THROW(
         writer.write(input),
         "Cluster-indexed Nimble files cannot contain top-level null rows");
+  }
+}
+
+TEST_F(WriterTest, chunkStatsRejectsTopLevelNulls) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto input =
+      vectorMaker.rowVector({"c1"}, {vectorMaker.flatVector<int32_t>({1, 2})});
+  input->setNull(1, true);
+
+  for (const bool ignoreTopLevelNulls : {false, true}) {
+    SCOPED_TRACE(ignoreTopLevelNulls);
+    std::string file;
+    nimble::Writer writer(
+        input->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        {
+            .enableChunkStats = true,
+            .enableChunking = true,
+            .ignoreTopLevelNulls = ignoreTopLevelNulls,
+        });
+    NIMBLE_ASSERT_USER_THROW(
+        writer.write(input),
+        "Nimble files with chunk stats cannot contain top-level null rows");
   }
 }
 
@@ -7644,6 +7704,8 @@ struct IndexTestParams {
   bool enableChunking;
   nimble::EncodingType encodingType;
   std::optional<uint32_t> prefixRestartInterval;
+  nimble::index::KeyStreamLayout keyStreamLayout{
+      nimble::index::KeyStreamLayout::kPartition};
 
   std::string toString() const {
     std::string name =
@@ -7652,6 +7714,9 @@ struct IndexTestParams {
       name += "_restart" + std::to_string(prefixRestartInterval.value());
     }
     name += enableChunking ? "_WithKeyChunking" : "_NoKeyChunking";
+    if (keyStreamLayout == nimble::index::KeyStreamLayout::kStripe) {
+      name += "_StripeKeyStreams";
+    }
     return name;
   }
 };
@@ -7669,6 +7734,10 @@ class WriterIndexTest : public WriterTest,
 
   std::optional<uint32_t> prefixRestartInterval() const {
     return GetParam().prefixRestartInterval;
+  }
+
+  nimble::index::KeyStreamLayout keyStreamLayout() const {
+    return GetParam().keyStreamLayout;
   }
 
   // Default type with integer key column and multiple scalar/complex non-key
@@ -7794,6 +7863,7 @@ class WriterIndexTest : public WriterTest,
           flushPolicyFactory = nullptr) {
     nimble::WriterOptions options{
         .clusterIndexConfig = clusterIndexConfig,
+        .clusterIndexKeyStreamLayout = keyStreamLayout(),
     };
     if (enableChunking()) {
       options.minStreamChunkRawSize = 1 << 10; // 1KB
@@ -8091,13 +8161,10 @@ class WriterIndexTest : public WriterTest,
         const auto chunkLocation =
             indexHelper.lookupChunk(kPartitionIndex, encodedKeyView);
 
-        // Get key stream region for this partition
-        const auto keyStreamRegion =
-            indexHelper.keyStreamRegion(kPartitionIndex);
-
         // Cache key: chunk file offset (unique across all stripes)
         const uint64_t chunkFileOffset =
-            keyStreamRegion.offset + chunkLocation.chunkOffset;
+            indexHelper.chunkStreamRegion(kPartitionIndex, chunkLocation)
+                .offset;
 
         // Load and decode key chunk if not cached
         if (keyStreamCache.find(chunkFileOffset) == keyStreamCache.end()) {
@@ -8525,6 +8592,227 @@ TEST_P(WriterIndexTest, multipleGroups) {
 
   // Verify value index maps each key to correct row position
   verifyValueIndex(*tablet, readFile.get(), type, batches, {"key_col"});
+}
+
+TEST_P(WriterIndexTest, keyStreamLayout) {
+  // One stripe per batch, with either one stripe per stripe group or one
+  // stripe group for all stripes.
+  const auto type = defaultType();
+  constexpr int kNumBatches = 6;
+  constexpr int kBatchSize = 100;
+  const auto batches =
+      generateFuzzedSortedBatches(type, kNumBatches, kBatchSize);
+
+  // The encoded key of each row, and the first row of each key.
+  auto keyEncoder = velox::serializer::KeyEncoder::create(
+      {"key_col"},
+      type,
+      {velox::core::SortOrder(true, false)},
+      leafPool_.get());
+  std::vector<std::string> keys;
+  std::map<std::string, uint32_t> firstRows;
+  for (const auto& batch : batches) {
+    velox::HashStringAllocator allocator(leafPool_.get());
+    std::vector<std::string_view> encodedKeys;
+    keyEncoder->encode(batch, encodedKeys, [&allocator](size_t size) {
+      return allocator.allocate(static_cast<int32_t>(size))->begin();
+    });
+    for (const auto encodedKey : encodedKeys) {
+      firstRows.try_emplace(
+          std::string(encodedKey), static_cast<uint32_t>(keys.size()));
+      keys.emplace_back(encodedKey);
+    }
+  }
+
+  for (const uint32_t metadataFlushThreshold :
+       {1u, nimble::kMetadataFlushThreshold}) {
+    SCOPED_TRACE(
+        fmt::format("metadataFlushThreshold {}", metadataFlushThreshold));
+    std::string file;
+    auto options = createWriterOptions(createIndexConfig({"key_col"}), [] {
+      return std::make_unique<nimble::LambdaFlushPolicy>(
+          [](auto) { return true; }, [](auto) { return false; });
+    });
+    options.metadataFlushThreshold = metadataFlushThreshold;
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        std::move(options));
+    for (const auto& batch : batches) {
+      writer.write(batch);
+    }
+    writer.close();
+
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    auto tablet = nimble::TabletReader::create(
+        readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+    ASSERT_EQ(tablet->stripeCount(), kNumBatches);
+    const auto* index = tablet->clusterIndex();
+    ASSERT_NE(index, nullptr);
+    EXPECT_EQ(index->keyStreamLayout(), keyStreamLayout());
+    const auto layout = index->layout();
+    EXPECT_EQ(
+        layout.partitions.size(),
+        metadataFlushThreshold == 1 ? kNumBatches : 1);
+
+    // Neither layout needs a reader feature.
+    EXPECT_THAT(tablet->properties().requiredFeatures(), testing::IsEmpty());
+    if (keyStreamLayout() == nimble::index::KeyStreamLayout::kStripe) {
+      // Each stripe leads with its key stream, stream 0, where the index finds
+      // it.
+      uint32_t stripeIndex{0};
+      for (const auto& partition : layout.partitions) {
+        for (const auto& region : partition.keyStreamRegions) {
+          ASSERT_LT(stripeIndex, tablet->stripeCount());
+          SCOPED_TRACE(fmt::format("stripe {}", stripeIndex));
+          const auto stripe = tablet->stripeIdentifier(stripeIndex);
+          EXPECT_EQ(tablet->streamOffset(stripe, 0), 0);
+          EXPECT_EQ(region.offset, tablet->stripeOffset(stripeIndex));
+          EXPECT_EQ(region.length, tablet->streamSize(stripe, 0));
+          ++stripeIndex;
+        }
+      }
+      EXPECT_EQ(stripeIndex, tablet->stripeCount());
+    }
+
+    const auto cursor = index->keyCursor(
+        nimble::RowRange(0, static_cast<uint32_t>(keys.size())));
+    for (uint32_t row = 0; row < keys.size(); ++row) {
+      SCOPED_TRACE(fmt::format("row {}", row));
+      ASSERT_TRUE(cursor->hasNext());
+      EXPECT_EQ(cursor->next(), keys[row]);
+      EXPECT_EQ(index->keyAtRow(row), keys[row]);
+      const auto result = index->lookup(
+          nimble::index::IndexLookup::LookupRequest::rangeScan(
+              {{.lowerKey = keys[row], .upperKey = keys[row] + '\0'}}));
+      ASSERT_EQ(result[0].size(), 1);
+      EXPECT_EQ(result[0][0].startRow, firstRows.at(keys[row]));
+      EXPECT_GT(result[0][0].endRow, row);
+    }
+    verifyFileData(file, type, batches);
+  }
+}
+
+// A hierarchical cluster index reads the same keys and finds the same rows
+// whether it stores its key chunks in stripes or after them.
+TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
+  constexpr int kNumBatches = 4;
+  constexpr int kBatchSize = 100;
+  const auto type = velox::ROW(
+      {{"key_col", velox::BIGINT()}, {"data_col", velox::INTEGER()}});
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  std::vector<velox::RowVectorPtr> batches;
+  batches.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    batches.push_back(vectorMaker.rowVector(
+        {"key_col", "data_col"},
+        {vectorMaker.flatVector<int64_t>(
+             kBatchSize,
+             [batch](auto row) { return 3 * (batch * kBatchSize + row); }),
+         vectorMaker.flatVector<int32_t>(
+             kBatchSize, [](auto row) { return row; })}));
+  }
+
+  // One stripe per batch and one stripe group per stripe.
+  const auto writeFile = [&](nimble::index::KeyStreamLayout layout) {
+    std::string file;
+    nimble::WriterOptions options;
+    options.flushPolicyFactory = [] {
+      return std::make_unique<nimble::LambdaFlushPolicy>(
+          [](auto) { return true; }, [](auto) { return false; });
+    };
+    options.metadataFlushThreshold = 1;
+    options.clusterIndexConfig =
+        nimble::index::ClusterIndexConfigBuilder{
+            nimble::index::kHierarchicalClusterIndexName}
+            .withKeyColumns({"key_col"})
+            .withEnforceKeyOrder(true)
+            .withMaxRowsPerKeyChunk(64)
+            .build();
+    options.clusterIndexKeyStreamLayout = layout;
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        std::move(options));
+    for (const auto& batch : batches) {
+      writer.write(batch);
+    }
+    writer.close();
+    return file;
+  };
+  const auto openTablet = [&](const std::string& file) {
+    auto options = makeTestTabletOptions(leafPool_.get());
+    options.clusterIndexName = nimble::index::kHierarchicalClusterIndexName;
+    return nimble::TabletReader::create(
+        std::make_shared<velox::InMemoryReadFile>(file),
+        leafPool_.get(),
+        options);
+  };
+  const auto partitionTablet =
+      openTablet(writeFile(nimble::index::KeyStreamLayout::kPartition));
+  const auto stripeTablet =
+      openTablet(writeFile(nimble::index::KeyStreamLayout::kStripe));
+  const auto* expectedIndex = partitionTablet->clusterIndex();
+  const auto* index = stripeTablet->clusterIndex();
+  ASSERT_NE(expectedIndex, nullptr);
+  ASSERT_NE(index, nullptr);
+  EXPECT_EQ(index->keyStreamLayout(), nimble::index::KeyStreamLayout::kStripe);
+  EXPECT_EQ(index->numPartitions(), kNumBatches);
+
+  for (uint32_t row = 0; row < kNumBatches * kBatchSize; ++row) {
+    SCOPED_TRACE(fmt::format("row {}", row));
+    const auto key = expectedIndex->keyAtRow(row);
+    EXPECT_EQ(index->keyAtRow(row), key);
+    // Hierarchical keys must be complete, so a key's successor cannot bound a
+    // range scan; a point lookup finds the rows of the key.
+    const auto request =
+        nimble::index::IndexLookup::LookupRequest::pointLookup({key});
+    const auto expected = expectedIndex->lookup(request);
+    const auto actual = index->lookup(request);
+    ASSERT_EQ(actual[0].size(), 1);
+    ASSERT_EQ(expected[0].size(), 1);
+    EXPECT_EQ(actual[0][0], expected[0][0]);
+  }
+}
+
+// A file without rows has no stripes, so it writes no stripe key stream and no
+// cluster index.
+TEST_F(WriterTest, stripeKeyStreamLayoutWithoutRows) {
+  std::string file;
+  nimble::WriterOptions options;
+  options.clusterIndexConfig = nimble::index::ClusterIndexConfigBuilder{}
+                                   .withKeyColumns({"c0"})
+                                   .withEnforceKeyOrder(true)
+                                   .build();
+  options.clusterIndexKeyStreamLayout = nimble::index::KeyStreamLayout::kStripe;
+  nimble::Writer writer(
+      velox::ROW({{"c0", velox::BIGINT()}}),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(options));
+  writer.close();
+
+  auto tablet = nimble::TabletReader::create(
+      std::make_shared<velox::InMemoryReadFile>(file),
+      leafPool_.get(),
+      makeTestTabletOptions(leafPool_.get()));
+  EXPECT_EQ(tablet->stripeCount(), 0);
+  EXPECT_EQ(tablet->clusterIndex(), nullptr);
+}
+
+TEST_F(WriterTest, stripeKeyStreamLayoutRequiresClusterIndex) {
+  std::string file;
+  nimble::WriterOptions options;
+  options.clusterIndexKeyStreamLayout = nimble::index::KeyStreamLayout::kStripe;
+  NIMBLE_ASSERT_USER_THROW(
+      nimble::Writer(
+          velox::ROW({{"c0", velox::BIGINT()}}),
+          std::make_unique<velox::InMemoryWriteFile>(&file),
+          *rootPool_,
+          std::move(options)),
+      "The Stripe cluster index key stream layout requires a cluster index");
 }
 
 TEST_F(WriterTest, compactRowCountEncodingIsPersistedAsFileFeature) {
@@ -9459,7 +9747,22 @@ INSTANTIATE_TEST_SUITE_P(
         IndexTestParams{true, nimble::EncodingType::Prefix, 1},
         IndexTestParams{true, nimble::EncodingType::Prefix, 1024},
         IndexTestParams{false, nimble::EncodingType::Trivial, std::nullopt},
-        IndexTestParams{true, nimble::EncodingType::Trivial, std::nullopt}),
+        IndexTestParams{true, nimble::EncodingType::Trivial, std::nullopt},
+        IndexTestParams{
+            false,
+            nimble::EncodingType::Prefix,
+            std::nullopt,
+            nimble::index::KeyStreamLayout::kStripe},
+        IndexTestParams{
+            true,
+            nimble::EncodingType::Prefix,
+            std::nullopt,
+            nimble::index::KeyStreamLayout::kStripe},
+        IndexTestParams{
+            true,
+            nimble::EncodingType::Trivial,
+            std::nullopt,
+            nimble::index::KeyStreamLayout::kStripe}),
     [](const ::testing::TestParamInfo<IndexTestParams>& info) {
       return info.param.toString();
     });

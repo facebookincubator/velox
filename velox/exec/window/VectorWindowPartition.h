@@ -75,7 +75,7 @@ class VectorWindowPartition : public WindowPartition {
       const VectorPtr& result) const override;
 
   /// Extracts null positions from a retained input vector column.
-  void extractNulls(
+  vector_size_t extractNulls(
       int32_t columnIndex,
       vector_size_t partitionOffset,
       vector_size_t numRows,

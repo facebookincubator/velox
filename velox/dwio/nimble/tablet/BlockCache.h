@@ -28,8 +28,9 @@ class AsyncDataCache;
 
 namespace facebook::nimble {
 
-/// Stores contiguous byte ranges keyed by (fileId, offset), one entry per
-/// CachedDataInput load group.
+/// Stores contiguous byte ranges keyed by (fileId, offset): one entry per
+/// CachedDataInput load group, and one per metadata section or footer that
+/// CachedMetadataInput caches.
 ///
 /// Exists so the same Input can run over velox's AsyncDataCache or a foreign
 /// cache such as RocksDB's block cache, which differ in who allocates the
@@ -47,13 +48,20 @@ class BlockCache {
     Entry() = default;
 
     /// Constructed by BlockCache implementations. 'handle' is opaque and is
-    /// passed back to BlockCache::release(). 'sealed' is false when this
-    /// lookup created the entry, so the caller owns filling data() and calling
-    /// BlockCache::seal() to make it visible to other readers.
-    Entry(BlockCache* cache, void* handle, char* data, bool sealed)
+    /// passed back to BlockCache::release(). 'data' points at the entry's
+    /// 'size' bytes. 'sealed' is false when this lookup created the entry, so
+    /// the caller owns filling data() and calling BlockCache::seal() to make
+    /// it visible to other readers.
+    Entry(
+        BlockCache* cache,
+        void* handle,
+        char* data,
+        uint32_t size,
+        bool sealed)
         : cache_{velox::checkedNotNull(cache)},
           handle_{handle},
           data_{data},
+          size_{size},
           sealed_{sealed} {}
 
     Entry(Entry&& other) noexcept {
@@ -75,6 +83,12 @@ class BlockCache {
       return data_;
     }
 
+    /// Number of bytes at data(). On a cache hit this is the size the entry was
+    /// created with, which can differ from the size requested.
+    uint32_t size() const {
+      return size_;
+    }
+
     /// False when this lookup created the entry, so the caller owns filling it
     /// and sealing it. An entry left unsealed is discarded rather than cached.
     bool sealed() const {
@@ -82,7 +96,8 @@ class BlockCache {
     }
 
     /// True on a default-constructed or moved-from Entry. An empty Entry holds
-    /// no cache pin; data(), handle(), and sealed() are not meaningful on it.
+    /// no cache pin; data(), size(), handle(), and sealed() are not meaningful
+    /// on it.
     bool empty() const {
       return cache_ == nullptr;
     }
@@ -105,6 +120,7 @@ class BlockCache {
     BlockCache* cache_{nullptr};
     void* handle_{nullptr};
     char* data_{nullptr};
+    uint32_t size_{0};
     // True once this entry's bytes are complete and visible to other readers.
     // Fresh entries returned by a cache miss start out false; a sealed entry
     // moves between an exclusive filler and shared readers.
@@ -113,17 +129,31 @@ class BlockCache {
 
   virtual ~BlockCache() = default;
 
-  /// Returns a pinned entry of exactly 'size' bytes for (fileId, offset). On a
-  /// hit the bytes are valid and sealed() is true. On a miss sealed() is false
-  /// and the caller must fill data() and then seal(). May block while another
-  /// thread fills the same entry, depending on the implementation.
+  /// Returns a pinned entry for (fileId, offset). On a miss the entry holds
+  /// 'size' bytes, sealed() is false, and the caller must fill data() and then
+  /// seal(). On a hit the bytes are valid, sealed() is true, and size() is at
+  /// least 'size': a longer entry cached at the offset is returned as is. A
+  /// shorter one is never returned; an implementation replaces it with a new
+  /// entry, as on a miss, or rejects it. An implementation may reject a longer
+  /// entry too. May block while another thread fills the same entry, depending
+  /// on the implementation.
   /// 'ioStats' receives the request's ramHit counter, plus cache-wait counters
-  /// for implementations that block on concurrent fills.
+  /// for implementations that block on concurrent fills, and SSD read counters
+  /// for implementations that load entries from SSD.
   virtual Entry getOrCreate(
       uint64_t fileId,
       uint64_t offset,
       uint32_t size,
       velox::io::IoStatistics& ioStats) = 0;
+
+  /// Returns the sealed entry for (fileId, offset), or an empty Entry when none
+  /// is cached. Unlike getOrCreate(), never returns an entry for the caller to
+  /// fill, so callers can probe a key whose size they do not know and read it
+  /// from Entry::size().
+  /// May block while another thread fills the same entry, depending on the
+  /// implementation. 'ioStats' receives the same counters as getOrCreate().
+  virtual Entry
+  find(uint64_t fileId, uint64_t offset, velox::io::IoStatistics& ioStats) = 0;
 
   /// Seals a filled entry so it is visible to other readers. Call exactly once
   /// per entry whose sealed() is false, after its bytes are written. Sealing
@@ -138,22 +168,24 @@ class BlockCache {
   virtual void release(void* pin) noexcept = 0;
 };
 
-/// Returns the process-wide singleton BlockCache backed by velox's
-/// AsyncDataCache. The first call constructs the singleton; every subsequent
-/// call returns the same pointer and ignores `cache`. When `cache` is null the
-/// first call falls back to `velox::cache::AsyncDataCache::getInstance()`,
-/// which is the production path; passing a non-null `cache` is the test seam
-/// that lets a fixture inject its own AsyncDataCache. Thread-safe. The
-/// returned pointer is owned by the singleton and must not be deleted; the
-/// backing AsyncDataCache must outlive it. Entries are contiguous and never
-/// saved to the SSD tier. getOrCreate() blocks while another thread fills the
-/// same entry, so concurrent misses on one key cost a single read.
+/// Returns the BlockCache backed by velox's AsyncDataCache `cache`. Each
+/// AsyncDataCache gets one BlockCache: the first call for it constructs the
+/// BlockCache, and every later call returns the same pointer. When `cache` is
+/// null, uses `velox::cache::AsyncDataCache::getInstance()`, which is the
+/// production path. Thread-safe. The returned pointer is owned by a
+/// process-wide registry and must not be deleted; the backing AsyncDataCache
+/// must outlive every entry it hands out. Entries are contiguous. When the
+/// AsyncDataCache has an SSD cache, entries up to 8 MiB, the largest an SsdRun
+/// can describe, are saved to it. A lookup that misses memory then loads the
+/// entry from SSD: getOrCreate() only an entry of the requested size, and
+/// find() an entry of any size. getOrCreate() and find() block while another
+/// thread fills the same entry, so concurrent misses on one key cost a single
+/// read.
 BlockCache* getBlockCache(velox::cache::AsyncDataCache* cache = nullptr);
 
-/// Resets the singleton returned by getBlockCache() so the next call rebuilds
-/// it from the supplied (or global) AsyncDataCache. Intended for test fixtures
-/// that construct a fresh AsyncDataCache per test; production code should not
-/// call this.
+/// Destroys the BlockCaches that getBlockCache() returned, so the next call
+/// rebuilds them. Intended for test fixtures that construct a fresh
+/// AsyncDataCache per test; production code should not call this.
 void testingResetBlockCache();
 
 } // namespace facebook::nimble

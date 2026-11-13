@@ -219,9 +219,12 @@ TEST_F(TensorTest, initAndIndexCalculator) {
   ptrs->linearIndices = linearIndices.get();
   ptrs->offsets = offsets.get();
 
-  // Allocate DebugInfo for ENTRY/LEAVE timing.
+  // DebugInfo for kernel-side errors, and the block's clocks and barrier
+  // clocks for ENTRY/LEAVE timing.
   auto debugInfo = allocateManagedArray<DebugInfo>(1);
   memset(debugInfo.get(), 0, sizeof(DebugInfo));
+  auto clocks = allocateManagedArray<int64_t>(2);
+  memset(clocks.get(), 0, 2 * sizeof(int64_t));
 
   // Prefetch all managed memory to device before launching the kernel.
   int device;
@@ -239,6 +242,8 @@ TEST_F(TensorTest, initAndIndexCalculator) {
   TorchWaveParams twParams;
   memset(&twParams, 0, sizeof(twParams));
   twParams.debugInfo = debugInfo.get();
+  twParams.clocks = clocks.get();
+  twParams.barrierClocks = clocks.get() + 1;
   auto& bi = twParams.inlineInfo[0];
   bi.numBlocksInOp = 1;
   bi.params = paramsBuffer.get();
@@ -285,10 +290,7 @@ TEST_F(TensorTest, initAndIndexCalculator) {
     }
   }
 
-  // Print timing from DebugInfo.
-  printf(
-      "tensorInitKernel: %ld GPU clocks\n",
-      static_cast<long>(debugInfo[0].clocks));
+  printf("tensorInitKernel: %ld GPU clocks\n", static_cast<long>(clocks[0]));
 }
 
 // Broadcast test: tensors[0] is the output (full shape), tensors[1..N] are

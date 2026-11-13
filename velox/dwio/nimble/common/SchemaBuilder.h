@@ -22,6 +22,7 @@
 #include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaTypes.h"
 
 // SchemaBuilder is used to construct a tablet compatible schema.
@@ -314,20 +315,24 @@ class FlatMapTypeBuilder : public TypeBuilder {
 
 class HybridFlatMapTypeBuilder : public TypeBuilder {
  public:
-  /// References key-presence and row-presence streams for one physical group.
-  struct GroupDescriptor {
-    /// Marks which schema-ordered group keys occur in the physical batch.
+  /// Provides a read-only view of one group: its ID, the keys the addGroup()
+  /// caller lends, its key-presence and row-presence streams and its value
+  /// subtree.
+  struct Group {
+    /// Stable group identifier. Default uses HybridFlatMap::kDefaultGroupId.
+    uint32_t groupId;
+    /// The input group keys of addGroup(). For an explicit group, its grouped
+    /// keys, which never change. For the Default group, the vector of its
+    /// schema keys, which its owner appends to with a bitmap and leaves empty
+    /// when batches list their keys.
+    const std::vector<std::string>& groupKeys;
+    /// Marks which schema-ordered group keys occur in the physical batch. A
+    /// Default group with HybridFlatMap::KeyPresenceMode::kKeyList instead
+    /// lists them, typed by the map key kind.
     const StreamDescriptorBuilder& keyPresenceDescriptor;
     /// Stores key-major row-presence bits for the observed keys.
     const StreamDescriptorBuilder& inMapDescriptor;
-  };
-
-  /// Provides a read-only view of one physical group.
-  struct Group {
-    uint32_t groupId;
-    const std::vector<std::string>& groupKeys;
-    const StreamDescriptorBuilder& keyPresenceDescriptor;
-    const StreamDescriptorBuilder& inMapDescriptor;
+    /// Complete value subtree of the group.
     const TypeBuilder& valueType;
   };
 
@@ -337,34 +342,57 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   /// Returns the logical scalar type used by map keys.
   ScalarKind keyScalarKind() const;
 
-  /// Registers one physical group and its complete value subtree. Configured
-  /// group keys must be non-empty and strictly ascending. Default keys are kept
-  /// in the given first-seen order. The group ID and every key must be unique
-  /// across all groups.
-  GroupDescriptor addGroup(
+  /// Returns how batches record their Default keys.
+  HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode() const;
+
+  /// Returns whether group `groupId` lists its keys in its key-presence
+  /// stream. See HybridFlatMap::hasKeyPresenceList().
+  bool useKeyPresentList(uint32_t groupId) const;
+
+  /// Registers one group and its complete value subtree, and returns the
+  /// group, as groupAt() does. Views `groupKeys`, which the caller keeps alive,
+  /// at the same address, until its last read of this builder (groupAt(),
+  /// SchemaBuilder::schemaNodes()).
+  ///
+  /// An explicit group lends its grouped keys, e.g. from a HybridFlatMap's
+  /// groups(), which its copies share, or from a source schema type's groups.
+  /// Grouped keys never change.
+  ///
+  /// The Default group lends the vector that holds its schema keys:
+  /// - With HybridFlatMap::KeyPresenceMode::kBitmap, its key-presence bits
+  ///   index these keys. Their owner, e.g. a field writer, starts with an
+  ///   empty vector and appends each newly seen key in first-seen order. The
+  ///   schema reads the vector as it grows.
+  /// - With HybridFlatMap::KeyPresenceMode::kKeyList, each batch lists its own
+  ///   Default keys, so the vector stays empty.
+  /// - A Default group that never holds a key, e.g. the placeholder of a
+  ///   projection that selects no group, lends an empty vector.
+  ///
+  /// Group IDs are unique, with at most one Default group. schemaNodes()
+  /// checks the keys: explicit groups non-empty and strictly ascending, no key
+  /// empty, every key unique.
+  Group addGroup(
       uint32_t groupId,
-      std::vector<std::string> groupKeys,
+      const std::vector<std::string>& groupKeys,
       std::shared_ptr<TypeBuilder> valueType);
 
-  /// Appends a newly observed key to the Default group's first-seen catalog.
-  /// Fails when `key` is empty or already belongs to any group. Configured
-  /// groups are binary searched and Default keys are checked in a hash set.
-  void appendDefaultGroupKey(std::string key);
-
-  /// Returns the number of physical groups present in this schema.
+  /// Returns the number of groups present in this schema.
   size_t groupCount() const;
 
   /// Returns whether serialization requires the reserved Default group.
   bool requiresDefaultGroup() const;
 
-  /// Returns the group at zero-based schema-order `index`. The returned
-  /// non-owning view is invalidated by a subsequent call to addGroup().
+  /// Returns the group at zero-based schema-order `index`. Reads the keys
+  /// addGroup() views, so the Default keys are the ones found so far.
   Group groupAt(size_t index) const;
 
  private:
+  // Owns what a Group references. The descriptors are allocated one by one,
+  // so references to them stay valid as groups are added.
   struct StoredGroup {
     uint32_t groupId;
-    std::vector<std::string> groupKeys;
+    // See Group::groupKeys.
+    const std::vector<std::string>& groupKeys;
     std::unique_ptr<StreamDescriptorBuilder> keyPresenceDescriptor;
     std::unique_ptr<StreamDescriptorBuilder> inMapDescriptor;
     std::shared_ptr<const TypeBuilder> valueType;
@@ -373,20 +401,17 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   HybridFlatMapTypeBuilder(
       SchemaBuilder& schemaBuilder,
       ScalarKind keyScalarKind,
+      HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
       bool requiresDefaultGroup);
-
-  // Returns whether any group holds `key`. Binary searches configured groups
-  // and checks the Default keys in defaultGroupKeys_.
-  bool containsKey(std::string_view key) const;
 
   const ScalarKind keyScalarKind_;
   const bool requiresDefaultGroup_;
+  const HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode_;
   StreamDescriptorBuilder nullsDescriptor_;
+  // See groupAt().
   std::vector<StoredGroup> groups_;
   // Zero-based schema position of the reserved Default group.
   std::optional<size_t> defaultGroupIndex_{};
-  // Keys of the Default group's catalog, for containsKey().
-  folly::F14FastSet<std::string> defaultGroupKeys_;
 
   friend class SchemaBuilder;
 };
@@ -446,8 +471,10 @@ class SchemaBuilder {
   /// value subtree, following FlatMap's child-type model. A complete schema
   /// requires the reserved Default group, which may be its only group. A
   /// projection may omit Default but keeps at least one group.
+  /// `defaultGroupKeyPresenceMode` selects how batches record Default keys.
   std::shared_ptr<HybridFlatMapTypeBuilder> createHybridFlatMapTypeBuilder(
       ScalarKind keyScalarKind,
+      HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
       bool projection = false);
 
   // Retrieves all the nodes CURRENTLY known to the schema builder.
@@ -468,6 +495,17 @@ class SchemaBuilder {
   /// Returns the stripe dictionary stream associated with a value stream.
   std::optional<offset_size> sharedDictionaryStreamOffset(
       offset_size valueStreamOffset) const;
+
+  /// Allocates the stream that holds the cluster index key chunk of each
+  /// stripe. No schema node references it. Must be the first allocation, so
+  /// the stream is id 0 whatever streams the schema adds later.
+  offset_size createClusterIndexKeyStream();
+
+  /// Returns the stream allocated by createClusterIndexKeyStream(), or nullopt
+  /// when there is none.
+  std::optional<offset_size> clusterIndexKeyStreamOffset() const {
+    return clusterIndexKeyStreamOffset_;
+  }
 
   const std::shared_ptr<const TypeBuilder>& root() const;
 
@@ -490,6 +528,9 @@ class SchemaBuilder {
   // Used by the physical layout planner to colocate stripe dictionaries with
   // their value streams. File and external dictionaries have no stream here.
   folly::F14FastMap<offset_size, offset_size> sharedDictionaryStreamOffsets_;
+  // Used by the physical layout planner to put the cluster index key stream
+  // first in each stripe.
+  std::optional<offset_size> clusterIndexKeyStreamOffset_;
   offset_size currentOffset_{0};
 
   friend class ScalarTypeBuilder;

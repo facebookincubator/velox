@@ -26,7 +26,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -153,16 +153,17 @@ class IcebergReadTest : public test::IcebergTestBase {
       const std::vector<FieldIdColumnSpec>& columns,
       const std::vector<RowVectorPtr>& expected,
       const std::optional<std::string>& subfieldFilter = std::nullopt) {
-    exec::test::PlanBuilder planBuilder;
-    auto& tableScanBuilder = planBuilder.startTableScan()
-                                 .connectorId(test::kIcebergConnectorId)
-                                 .outputType(outputType)
-                                 .dataColumns(scanSpecType)
-                                 .assignments(makeFieldIdAssignments(columns));
-    if (subfieldFilter.has_value()) {
-      tableScanBuilder.subfieldFilter(*subfieldFilter);
-    }
-    auto plan = tableScanBuilder.endTableScan().planNode();
+    test::IcebergPlanBuilder planBuilder;
+    auto plan = planBuilder.startTableScan()
+                    .outputType(outputType)
+                    .dataColumns(scanSpecType)
+                    .subfieldFilters(
+                        subfieldFilter.has_value()
+                            ? std::vector<std::string>{*subfieldFilter}
+                            : std::vector<std::string>{})
+                    .assignments(makeFieldIdAssignments(columns))
+                    .endTableScan()
+                    .planNode();
 
     exec::test::AssertQueryBuilder(plan)
         .splits(createSplitsForDirectory(outputDirectory))
@@ -204,10 +205,9 @@ class IcebergReadTest : public test::IcebergTestBase {
       const std::vector<RowVectorPtr>& expected,
       const std::unordered_map<std::string, std::string>& sessionProperties =
           {}) {
-    auto dataFilePath = TempFilePath::create();
-    writeToFile(dataFilePath->getPath(), data);
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    auto dataFilePath = writeToFile(data);
+    test::IcebergPlanBuilder planBuilder;
+    auto plan = planBuilder.startTableScan()
                     .outputType(outputType)
                     .dataColumns(scanSpecType)
                     .assignments(assignments)
@@ -326,8 +326,7 @@ class IcebergReadTest : public test::IcebergTestBase {
           })};
     }
 
-    auto dataFilePath = TempFilePath::create();
-    writeToFile(dataFilePath->getPath(), inputVectors);
+    auto dataFilePath = writeToFile(inputVectors);
 
     std::vector<IcebergDeleteFile> deleteFiles;
     std::shared_ptr<TempFilePath> deleteFilePath;
@@ -369,11 +368,10 @@ class IcebergReadTest : public test::IcebergTestBase {
         ROW({"c0", "_row_id", "_last_updated_sequence_number"},
             {BIGINT(), BIGINT(), BIGINT()});
     const auto tableDataColumns = ROW({"c0"}, {BIGINT()});
-    exec::test::PlanBuilder planBuilder;
-    auto& tableScanBuilder =
-        planBuilder.startTableScan(test::kIcebergConnectorId)
-            .outputType(outputType)
-            .dataColumns(tableDataColumns);
+    test::IcebergPlanBuilder planBuilder;
+    auto& tableScanBuilder = planBuilder.startTableScan()
+                                 .outputType(outputType)
+                                 .dataColumns(tableDataColumns);
     if (!tc.subfieldFilter.empty()) {
       tableScanBuilder.subfieldFilter(tc.subfieldFilter);
     }
@@ -428,8 +426,8 @@ class IcebergReadTest : public test::IcebergTestBase {
             kMultiBatchFirstRowId + lastSelected,
             false));
     core::PlanNodeId scanId;
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    auto plan = test::IcebergPlanBuilder()
+                    .startTableScan()
                     .outputType(ROW(kRowLineageOutputNames, BIGINT()))
                     .dataColumns(ROW("c0", BIGINT()))
                     .subfieldFiltersMap(directFilters)
@@ -443,10 +441,8 @@ class IcebergReadTest : public test::IcebergTestBase {
     queryBuilder.maxDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(kMultiBatchRowsPerBatch))
-        .config(
-            core::QueryConfig::kMaxOutputBatchRows,
-            std::to_string(kMultiBatchRowsPerBatch))
+            kMultiBatchRowsPerBatch)
+        .config(core::QueryConfig::kMaxOutputBatchRows, kMultiBatchRowsPerBatch)
         .splits({makeIcebergSplitWithInfoColumns(
             dataFilePath->getPath(), infoColumns)});
     auto task = numSelected == 0
@@ -481,18 +477,14 @@ class IcebergReadTest : public test::IcebergTestBase {
       const common::FilterPtr& rowIdFilter,
       std::optional<int64_t> secondFirstRowId,
       const RowVectorPtr& expected) {
-    auto firstFile = TempFilePath::create();
-    writeToFile(
-        firstFile->getPath(),
-        {makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
+    auto firstFile =
+        writeToFile(makeRowVector({makeFlatVector<int64_t>({10, 20, 30})}));
     const std::unordered_map<std::string, std::string> firstInfoColumns{
         {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
         {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
 
-    auto secondFile = TempFilePath::create();
-    writeToFile(
-        secondFile->getPath(),
-        {makeRowVector({makeFlatVector<int64_t>({40, 50, 60})})});
+    auto secondFile =
+        writeToFile(makeRowVector({makeFlatVector<int64_t>({40, 50, 60})}));
     std::unordered_map<std::string, std::string> secondInfoColumns{
         {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "9"}};
     if (secondFirstRowId.has_value()) {
@@ -503,8 +495,8 @@ class IcebergReadTest : public test::IcebergTestBase {
     common::SubfieldFilters directFilters;
     directFilters.emplace(
         common::Subfield(IcebergMetadataColumn::kRowIdColumnName), rowIdFilter);
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    auto plan = test::IcebergPlanBuilder()
+                    .startTableScan()
                     .outputType(ROW(kRowLineageOutputNames, BIGINT()))
                     .dataColumns(ROW("c0", BIGINT()))
                     .subfieldFiltersMap(directFilters)
@@ -547,10 +539,8 @@ class IcebergReadTest : public test::IcebergTestBase {
             fmt::join(deletePositions, ", ")));
     VELOX_CHECK_EQ(expectedValues.size(), expectedPositions.size());
 
-    auto dataFilePath = TempFilePath::create();
-    writeToFile(
-        dataFilePath->getPath(),
-        {makeRowVector({"c0"}, {makeFlatVector<int64_t>(values)})});
+    auto dataFilePath =
+        writeToFile(makeRowVector({"c0"}, {makeFlatVector<int64_t>(values)}));
 
     std::vector<IcebergDeleteFile> deleteFiles;
     std::shared_ptr<TempFilePath> deleteFilePath;
@@ -566,9 +556,9 @@ class IcebergReadTest : public test::IcebergTestBase {
          {"row_position", BIGINT()},
          {"spec_id", INTEGER()},
          {"partition_data", VARCHAR()}});
-    exec::test::PlanBuilder planBuilder;
+    test::IcebergPlanBuilder planBuilder;
     auto& tableScanBuilder =
-        planBuilder.startTableScan(test::kIcebergConnectorId)
+        planBuilder.startTableScan()
             .outputType(ROW(
                 {{"c0", BIGINT()},
                  {IcebergMetadataColumn::kTargetTableRowIdColumnName,
@@ -632,19 +622,14 @@ TEST_F(IcebergReadTest, schemaEvolutionRemoveColumn) {
           makeFlatVector<int32_t>({10, 20, 30, 40, 50}),
           makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
       })};
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   std::vector<RowVectorPtr> expectedVectors = {makeRowVector(
       newRowType->names(),
       {dataVectors[0]->childAt(0), dataVectors[0]->childAt(2)})};
 
   // Read with new schema (c0 and c2 only, c1 removed).
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(newRowType)
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(newRowType, /*dataColumns=*/oldRowType);
   exec::test::AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(dataFilePath->getPath()))
       .assertResults(expectedVectors);
@@ -657,8 +642,7 @@ TEST_F(IcebergReadTest, schemaEvolutionAddColumns) {
 
   std::vector<RowVectorPtr> dataVectors = {
       makeRowVector({makeFlatVector<int64_t>({100, 200, 300})})};
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   std::vector<RowVectorPtr> expectedVectors = {makeRowVector(
       {dataVectors[0]->childAt(0),
@@ -666,12 +650,7 @@ TEST_F(IcebergReadTest, schemaEvolutionAddColumns) {
        makeNullConstant(TypeKind::VARCHAR, 3)})};
 
   // Read with new schema (c0, c1, and c2).
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(newRowType)
-                  .dataColumns(newRowType)
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(newRowType);
   exec::test::AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(dataFilePath->getPath()))
       .assertResults(expectedVectors);
@@ -702,7 +681,14 @@ TEST_F(IcebergReadTest, identityPartitionColumnsUseSplitValues) {
       /*identityPartitionKeys=*/
       {{1, "2"}, {2, std::to_string(kPartitionDays)}});
 
-  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+  exec::test::AssertQueryBuilder(
+      test::IcebergPlanBuilder()
+          .startTableScan()
+          .outputType(tableType)
+          .dataColumns(tableType)
+          .dataColumnFieldIds({1, 2, 3})
+          .endTableScan()
+          .planNode())
       .splits(splits)
       .assertResults(makeRowVector(
           tableType->names(),
@@ -736,16 +722,28 @@ TEST_F(IcebergReadTest, identityPartitionFilterOnlyColumnUsesSplitValue) {
   };
 
   {
-    const auto plan = makeIcebergTableScanPlan(
-        outputType, tableType, /*dataColumnFieldIds=*/{}, {"part = 2"});
+    const auto plan = test::IcebergPlanBuilder()
+                          .startTableScan()
+                          .outputType(outputType)
+                          .dataColumns(tableType)
+                          .dataColumnFieldIds({1, 2})
+                          .subfieldFilter("part = 2")
+                          .endTableScan()
+                          .planNode();
     exec::test::AssertQueryBuilder(plan)
         .splits(makeIdentitySplits())
         .assertResults(makeRowVector(
             {"value"}, {makeFlatVector<std::string>({"a", "b", "c"})}));
   }
   {
-    const auto plan = makeIcebergTableScanPlan(
-        outputType, tableType, /*dataColumnFieldIds=*/{}, {"part = 1"});
+    const auto plan = test::IcebergPlanBuilder()
+                          .startTableScan()
+                          .outputType(outputType)
+                          .dataColumns(tableType)
+                          .dataColumnFieldIds({1, 2})
+                          .subfieldFilter("part = 1")
+                          .endTableScan()
+                          .planNode();
     exec::test::AssertQueryBuilder(plan)
         .splits(makeIdentitySplits())
         .assertResults(
@@ -782,12 +780,18 @@ TEST_F(IcebergReadTest, identityPartitionFilterOnlyConstantDoesNotLeak) {
   const auto plainSplits = makeIcebergSplits(plainFile->getPath());
   splits.insert(splits.end(), plainSplits.begin(), plainSplits.end());
 
-  const auto plan = makeIcebergTableScanPlan(
-      outputType, tableType, /*dataColumnFieldIds=*/{}, {"part = 5"});
+  const auto plan = test::IcebergPlanBuilder()
+                        .startTableScan()
+                        .outputType(outputType)
+                        .dataColumns(tableType)
+                        .dataColumnFieldIds({1, 2})
+                        .subfieldFilter("part = 5")
+                        .endTableScan()
+                        .planNode();
   // Without preloading, both splits share the driver's scan spec.
   exec::test::AssertQueryBuilder(plan)
       .maxDrivers(1)
-      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
       .splits(splits)
       .assertResults(
           makeRowVector({"value"}, {makeFlatVector<std::string>({"c", "d"})}));
@@ -818,7 +822,14 @@ TEST_F(
   const auto oldSplits = makeIcebergSplits(oldFile->getPath());
   splits.insert(splits.end(), oldSplits.begin(), oldSplits.end());
 
-  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+  exec::test::AssertQueryBuilder(
+      test::IcebergPlanBuilder()
+          .startTableScan()
+          .outputType(tableType)
+          .dataColumns(tableType)
+          .dataColumnFieldIds({1, 2})
+          .endTableScan()
+          .planNode())
       .maxDrivers(1)
       .splits(splits)
       .assertResults(makeRowVector(
@@ -850,8 +861,14 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterIsSkipped) {
         }
         return splits;
       };
-  const auto plan = makeIcebergTableScanPlan(
-      outputType, tableType, /*dataColumnFieldIds=*/{}, {"part = 2"});
+  const auto plan = test::IcebergPlanBuilder()
+                        .startTableScan()
+                        .outputType(outputType)
+                        .dataColumns(tableType)
+                        .dataColumnFieldIds({1, 2})
+                        .subfieldFilter("part = 2")
+                        .endTableScan()
+                        .planNode();
 
   exec::test::AssertQueryBuilder(plan)
       .splits(makeSplits({1}))
@@ -893,13 +910,17 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterReenabledForNextSplit) {
   splits.insert(splits.end(), plainSplits.begin(), plainSplits.end());
 
   // Without preloading, both splits share the driver's scan spec.
-  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(
-                                     outputType,
-                                     tableType,
-                                     /*dataColumnFieldIds=*/{},
-                                     {"part = 2"}))
+  exec::test::AssertQueryBuilder(
+      test::IcebergPlanBuilder()
+          .startTableScan()
+          .outputType(outputType)
+          .dataColumns(tableType)
+          .dataColumnFieldIds({1, 2})
+          .subfieldFilter("part = 2")
+          .endTableScan()
+          .planNode())
       .maxDrivers(1)
-      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
       .splits(splits)
       .assertResults(
           makeRowVector({"value"}, {makeFlatVector<std::string>({"a", "b"})}));
@@ -917,33 +938,17 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterKeptForDynamicFilter) {
           makeFlatVector<int32_t>({1, 1, 1}),
           makeFlatVector<std::string>({"a", "b", "c"}),
       })});
-  connector::ColumnHandleMap assignments;
-  assignments.emplace(
-      "part",
-      std::make_shared<IcebergColumnHandle>(
-          "part",
-          FileColumnHandle::ColumnType::kRegular,
-          INTEGER(),
-          parquet::ParquetFieldId{1, {}}));
-  assignments.emplace(
-      "value",
-      std::make_shared<IcebergColumnHandle>(
-          "value",
-          FileColumnHandle::ColumnType::kRegular,
-          VARCHAR(),
-          parquet::ParquetFieldId{2, {}}));
-
   const auto joinWithBuildKey = [&](int32_t buildKey,
                                     std::shared_ptr<exec::Task>& task) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId scanId;
     const auto plan =
-        exec::test::PlanBuilder(planNodeIdGenerator)
-            .startTableScan(test::kIcebergConnectorId)
+        test::IcebergPlanBuilder(planNodeIdGenerator)
+            .startTableScan()
             .outputType(tableType)
             .dataColumns(tableType)
+            .dataColumnFieldIds({1, 2})
             .subfieldFilters({"part = 1"})
-            .assignments(assignments)
             .endTableScan()
             .capturePlanNodeId(scanId)
             .hashJoin(
@@ -1008,8 +1013,14 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterKeptForDynamicFilterOnAdoption) {
   auto split = makeIcebergSplits(dataFile->getPath()).front();
   std::dynamic_pointer_cast<HiveIcebergSplit>(split)
       ->partitionEnforcedFieldIds = {1};
-  const auto plan = makeIcebergTableScanPlan(
-      tableType, tableType, /*dataColumnFieldIds=*/{}, {"part = 1"});
+  const auto plan = test::IcebergPlanBuilder()
+                        .startTableScan()
+                        .outputType(tableType)
+                        .dataColumns(tableType)
+                        .dataColumnFieldIds({1, 2})
+                        .subfieldFilter("part = 1")
+                        .endTableScan()
+                        .planNode();
 
   auto dataSource = makeDataSource(plan);
   auto preloadedDataSource = makeDataSource(plan);
@@ -1041,7 +1052,7 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterOnlyColumnIsNotRead) {
           test::kIcebergConnectorId,
           std::make_shared<config::ConfigBase>(
               std::unordered_map<std::string, std::string>{
-                  {FileConfig::kFilePreloadThreshold, "0"}}),
+                  {connector::FileConfig::kFilePreloadThreshold, "0"}}),
           ioExecutor_.get()));
 
   // Incompressible 'part' values make up nearly all of the file.
@@ -1057,26 +1068,30 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterOnlyColumnIsNotRead) {
               }),
           makeFlatVector<std::string>(kNumRows, [](auto) { return "a"; }),
       })});
-  const auto plan = makeIcebergTableScanPlan(
-      ROW({"value"}, {VARCHAR()}),
-      tableType,
-      /*dataColumnFieldIds=*/{},
-      {"part >= 0"});
+  const auto plan = test::IcebergPlanBuilder()
+                        .startTableScan()
+                        .outputType(ROW({"value"}, {VARCHAR()}))
+                        .dataColumns(tableType)
+                        .dataColumnFieldIds({1, 2})
+                        .subfieldFilter("part >= 0")
+                        .endTableScan()
+                        .planNode();
 
-  const auto readBytes = [&](const std::unordered_set<int32_t>&
-                                 enforcedFieldIds) {
-    auto splits = makeIcebergSplits(dataFile->getPath());
-    for (auto& split : splits) {
-      std::dynamic_pointer_cast<HiveIcebergSplit>(split)
-          ->partitionEnforcedFieldIds = enforcedFieldIds;
-    }
-    std::shared_ptr<exec::Task> task;
-    const auto result =
-        exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(
-            pool(), task);
-    EXPECT_EQ(result->size(), kNumRows);
-    return exec::toPlanStats(task->taskStats()).at(plan->id()).rawInputBytes;
-  };
+  const auto readBytes =
+      [&](const std::unordered_set<int32_t>& enforcedFieldIds) {
+        auto splits = makeIcebergSplits(dataFile->getPath());
+        for (auto& split : splits) {
+          std::dynamic_pointer_cast<HiveIcebergSplit>(split)
+              ->partitionEnforcedFieldIds = enforcedFieldIds;
+        }
+        std::shared_ptr<exec::Task> task;
+        const auto result =
+            exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(
+                pool(), task);
+        EXPECT_EQ(result->size(), kNumRows);
+        return exec::PlanNodeStats::extract(task->taskStats(), plan->id())
+            .rawInputBytes;
+      };
 
   const auto enforcedBytes = readBytes({1});
   const auto filteredBytes = readBytes({});
@@ -1134,7 +1149,14 @@ TEST_F(IcebergReadTest, identityPartitionScalarTypesUseSplitValues) {
       /*identityPartitionKeys=*/
       {{1, "true"}, {2, "9000000000"}, {3, "2026-10-09+18:00:99"}});
 
-  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+  exec::test::AssertQueryBuilder(
+      test::IcebergPlanBuilder()
+          .startTableScan()
+          .outputType(tableType)
+          .dataColumns(tableType)
+          .dataColumnFieldIds({1, 2, 3, 4})
+          .endTableScan()
+          .planNode())
       .splits(splits)
       .assertResults(makeRowVector(
           tableType->names(),
@@ -1168,16 +1190,28 @@ TEST_F(IcebergReadTest, identityPartitionNullValue) {
   };
 
   {
-    const auto plan = makeIcebergTableScanPlan(
-        outputType, tableType, /*dataColumnFieldIds=*/{}, {"part is null"});
+    const auto plan = test::IcebergPlanBuilder()
+                          .startTableScan()
+                          .outputType(outputType)
+                          .dataColumns(tableType)
+                          .dataColumnFieldIds({1, 2})
+                          .subfieldFilter("part is null")
+                          .endTableScan()
+                          .planNode();
     exec::test::AssertQueryBuilder(plan)
         .splits(makeNullPartitionSplits())
         .assertResults(makeRowVector(
             {"value"}, {makeFlatVector<std::string>({"a", "b"})}));
   }
   {
-    const auto plan = makeIcebergTableScanPlan(
-        outputType, tableType, /*dataColumnFieldIds=*/{}, {"part = 1"});
+    const auto plan = test::IcebergPlanBuilder()
+                          .startTableScan()
+                          .outputType(outputType)
+                          .dataColumns(tableType)
+                          .dataColumnFieldIds({1, 2})
+                          .subfieldFilter("part = 1")
+                          .endTableScan()
+                          .planNode();
     exec::test::AssertQueryBuilder(plan)
         .splits(makeNullPartitionSplits())
         .assertResults(
@@ -1209,7 +1243,14 @@ TEST_F(IcebergReadTest, identityPartitionUnsupportedTypesReadFromFile) {
       /*dataSequenceNumber=*/0,
       /*identityPartitionKeys=*/{{1, "1000000"}, {2, "YWI="}});
 
-  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+  exec::test::AssertQueryBuilder(
+      test::IcebergPlanBuilder()
+          .startTableScan()
+          .outputType(tableType)
+          .dataColumns(tableType)
+          .dataColumnFieldIds({1, 2, 3})
+          .endTableScan()
+          .planNode())
       .splits(splits)
       .assertResults(data);
 }
@@ -1241,7 +1282,14 @@ TEST_F(IcebergReadTest, identityPartitionConstantDoesNotLeakToNextSplit) {
   splits.insert(splits.end(), plainSplits.begin(), plainSplits.end());
 
   // One driver reads both splits, so they share a scan spec.
-  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+  exec::test::AssertQueryBuilder(
+      test::IcebergPlanBuilder()
+          .startTableScan()
+          .outputType(tableType)
+          .dataColumns(tableType)
+          .dataColumnFieldIds({1, 2})
+          .endTableScan()
+          .planNode())
       .maxDrivers(1)
       .splits(splits)
       .assertResults(makeRowVector(
@@ -1353,18 +1401,16 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
 TEST_F(IcebergReadTest, readParquetFilterOnlyColumnByFieldId) {
   const auto testData = writeFlatParquetFieldIdData();
 
+  test::IcebergPlanBuilder planBuilder;
   auto filterOnlyColumnPlan =
-      exec::test::PlanBuilder()
-          .startTableScan(test::kIcebergConnectorId)
+      planBuilder.startTableScan()
           .outputType(ROW({"id"}, {BIGINT()}))
           .dataColumns(testData.writeType)
-          .assignments(makeFieldIdAssignments({
-              {"id", "id", BIGINT(), makeFieldId(1), {}},
-          }))
-          .filterColumnHandles({
-              makeIcebergHandle("status", VARCHAR(), makeFieldId(3)),
-          })
           .remainingFilter("status = 'old-b'")
+          .assignments(makeFieldIdAssignments(
+              {{"id", "id", BIGINT(), makeFieldId(1), {}}}))
+          .filterColumnHandles(
+              {makeIcebergHandle("status", VARCHAR(), makeFieldId(3))})
           .endTableScan()
           .planNode();
   exec::test::AssertQueryBuilder(filterOnlyColumnPlan)
@@ -1396,8 +1442,8 @@ TEST_F(IcebergReadTest, testNoFieldIdMappingWithSentinelHandles) {
   assignments["c0"] = makeIcebergHandle("c0", BIGINT(), /*fieldId=*/-1);
   assignments["c1"] = makeIcebergHandle("c1", VARCHAR(), /*fieldId=*/-1);
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  test::IcebergPlanBuilder planBuilder;
+  auto plan = planBuilder.startTableScan()
                   .outputType(rowType)
                   .dataColumns(rowType)
                   .assignments(assignments)
@@ -1432,10 +1478,9 @@ TEST_F(IcebergReadTest, readParquetNestedStructByFieldId) {
       common::Subfield("profile.address.zip"),
       std::make_shared<common::BytesRange>(
           "10001", false, false, "10001", false, false, false));
-  exec::test::PlanBuilder profilePlanBuilder;
+  test::IcebergPlanBuilder profilePlanBuilder;
   auto& profileTableScanBuilder =
       profilePlanBuilder.startTableScan()
-          .connectorId(test::kIcebergConnectorId)
           .outputType(profileTableType)
           .dataColumns(profileTableType)
           .assignments(makeFieldIdAssignments({
@@ -1737,22 +1782,20 @@ TEST_F(IcebergReadTest, addColumnWithInvalidDefault) {
 
   std::vector<RowVectorPtr> dataVectors = {
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   ColumnHandleMap assignments;
   assignments["c0"] = makeIcebergHandle("c0", BIGINT(), 1);
   assignments["age"] = makeIcebergHandle("age", INTEGER(), 2, "IN");
 
+  test::IcebergPlanBuilder planBuilder;
   VELOX_ASSERT_THROW(
-      exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .startTableScan(test::kIcebergConnectorId)
-              .outputType(newRowType)
-              .dataColumns(newRowType)
-              .assignments(assignments)
-              .endTableScan()
-              .planNode())
+      exec::test::AssertQueryBuilder(planBuilder.startTableScan()
+                                         .outputType(newRowType)
+                                         .dataColumns(newRowType)
+                                         .assignments(assignments)
+                                         .endTableScan()
+                                         .planNode())
           .splits(makeIcebergSplits(dataFilePath->getPath()))
           .assertResults(std::vector<RowVectorPtr>{}),
       "Invalid");
@@ -1774,9 +1817,8 @@ TEST_F(IcebergReadTest, defaultValueWithDeletesAndFilters) {
   auto newRowType = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})})};
-  auto dataFilePath = TempFilePath::create();
   // Write data file with old schema (only c0) containing rows 1-10.
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   auto deleteFilePath = TempFilePath::create();
   // Create delete file that deletes positions 1, 3, 5 (rows 2, 4, 6).
@@ -1817,8 +1859,8 @@ TEST_F(IcebergReadTest, defaultValueWithDeletesAndFilters) {
 
   {
     // Test 1: No filter. After deletes, rows 1, 3, 5, 7, 8, 9, 10 remain.
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    test::IcebergPlanBuilder planBuilder;
+    auto plan = planBuilder.startTableScan()
                     .outputType(newRowType)
                     .dataColumns(newRowType)
                     .assignments(assignments)
@@ -1830,8 +1872,8 @@ TEST_F(IcebergReadTest, defaultValueWithDeletesAndFilters) {
   }
   {
     // Test 2: Filter on file column (c0 > 5) with deletes.
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    test::IcebergPlanBuilder planBuilder;
+    auto plan = planBuilder.startTableScan()
                     .outputType(newRowType)
                     .dataColumns(newRowType)
                     .assignments(assignments)
@@ -1844,8 +1886,8 @@ TEST_F(IcebergReadTest, defaultValueWithDeletesAndFilters) {
   }
   {
     // Test 3: Filter on default value column (country = 'IN') with deletes.
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    test::IcebergPlanBuilder planBuilder;
+    auto plan = planBuilder.startTableScan()
                     .outputType(newRowType)
                     .dataColumns(newRowType)
                     .assignments(assignments)
@@ -1858,8 +1900,8 @@ TEST_F(IcebergReadTest, defaultValueWithDeletesAndFilters) {
   }
   {
     // Test 4: Combined filter (c0 > 3 AND country = 'IN') with deletes.
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    test::IcebergPlanBuilder planBuilder;
+    auto plan = planBuilder.startTableScan()
                     .outputType(newRowType)
                     .dataColumns(newRowType)
                     .assignments(assignments)
@@ -1884,8 +1926,7 @@ TEST_F(IcebergReadTest, filterPushdownWithInitialDefault) {
   std::vector<RowVectorPtr> dataVectors;
   dataVectors.push_back(
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   ColumnHandleMap assignments;
   assignments["c0"] = makeIcebergHandle("c0", BIGINT(), 1);
@@ -1917,13 +1958,12 @@ TEST_F(IcebergReadTest, filterPushdownWithInitialDefault) {
   auto assertFilter = [&](const std::string& filter,
                           const std::vector<RowVectorPtr>& expected,
                           int32_t numSplitsSkipped = 0) {
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
+    test::IcebergPlanBuilder planBuilder;
+    auto plan = planBuilder.startTableScan()
                     .outputType(newRowType)
                     .dataColumns(newRowType)
-                    .assignments(assignments)
                     .remainingFilter(filter)
+                    .assignments(assignments)
                     .endTableScan()
                     .planNode();
     auto task = exec::test::AssertQueryBuilder(plan)
@@ -1956,8 +1996,7 @@ TEST_F(IcebergReadTest, filterPushdownWithNumericInitialDefaults) {
   std::vector<RowVectorPtr> dataVectors;
   dataVectors.push_back(
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   ColumnHandleMap assignments;
   assignments["c0"] = makeIcebergHandle("c0", BIGINT(), 1);
@@ -1974,13 +2013,12 @@ TEST_F(IcebergReadTest, filterPushdownWithNumericInitialDefaults) {
   auto assertFilter = [&](const std::string& filter,
                           const std::vector<RowVectorPtr>& expected,
                           int32_t numSplitsSkipped = 0) {
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
+    test::IcebergPlanBuilder planBuilder;
+    auto plan = planBuilder.startTableScan()
                     .outputType(newRowType)
                     .dataColumns(newRowType)
-                    .assignments(assignments)
                     .remainingFilter(filter)
+                    .assignments(assignments)
                     .endTableScan()
                     .planNode();
     auto task = exec::test::AssertQueryBuilder(plan)
@@ -2021,9 +2059,8 @@ TEST_F(IcebergReadTest, partitionColumnsFromHive) {
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {makeFlatVector<int64_t>({1, 2, 3}),
        makeFlatVector<int32_t>({10, 20, 30})})};
-  auto dataFilePath = TempFilePath::create();
   // Write data file with only non-partition columns (c0, c1).
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   // Set partition keys for region and year.
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys = {
@@ -2040,8 +2077,8 @@ TEST_F(IcebergReadTest, partitionColumnsFromHive) {
           makeFlatVector<int32_t>({2025, 2025, 2025}),
       })};
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  test::IcebergPlanBuilder planBuilder;
+  auto plan = planBuilder.startTableScan()
                   .outputType(tableRowType)
                   .dataColumns(tableRowType)
                   .assignments(makeColumnHandles(tableRowType, {2, 3}))
@@ -2357,10 +2394,8 @@ TEST_F(IcebergReadTest, rowLineageWithFilter) {
 // An unselected lineage column has no reader output slot to synthesize into
 // until the split reader appends one.
 TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumn) {
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
+  auto dataFilePath =
+      writeToFile(makeRowVector({makeFlatVector<int64_t>({10, 20, 30})}));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
@@ -2373,8 +2408,8 @@ TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumn) {
     SCOPED_TRACE(fmt::format("{}: {}", columnName, filter->toString()));
     common::SubfieldFilters filters;
     filters.emplace(common::Subfield(columnName), filter);
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    auto plan = test::IcebergPlanBuilder()
+                    .startTableScan()
                     .outputType(ROW("c0", BIGINT()))
                     .dataColumns(dataColumns)
                     .subfieldFiltersMap(filters)
@@ -2410,13 +2445,11 @@ TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumn) {
 // 'readerProducedType_', which has to grow with the appended filter-only
 // column too.
 TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumnWithExtraction) {
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector({makeMapVector<StringView, int64_t>(
+  auto dataFilePath =
+      writeToFile(makeRowVector({makeMapVector<StringView, int64_t>(
           {{{"a", 1}},
            {{"b", 2}, {"c", 3}},
-           {{"d", 4}, {"e", 5}, {"f", 6}}})})});
+           {{"d", 4}, {"e", 5}, {"f", 6}}})}));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
@@ -2424,9 +2457,10 @@ TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumnWithExtraction) {
   const auto mapType = MAP(VARCHAR(), BIGINT());
   const auto keysType = ARRAY(VARCHAR());
   // Reading only the keys is what makes 'readerProducedType_' differ.
-  std::vector<NamedExtraction> extractions{
+  std::vector<connector::NamedExtraction> extractions{
       {"c0",
-       {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kMapKeys)},
        keysType}};
   auto handle = std::make_shared<HiveColumnHandle>(
       "c0",
@@ -2442,8 +2476,8 @@ TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumnWithExtraction) {
       common::Subfield(IcebergMetadataColumn::kRowIdColumnName),
       std::make_shared<common::BigintRange>(101, 102, false));
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(ROW("c0", keysType))
                   .dataColumns(ROW(
                       {{"c0", mapType},
@@ -2467,24 +2501,20 @@ TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumnWithExtraction) {
 TEST_F(IcebergReadTest, rowLineageFilterFromRemainingFilter) {
   // Stored {null, 555, null} synthesizes {100, 555, 102}; filtered before
   // synthesis only 555 survives.
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector(
-          kRowLineageOutputNames,
-          {
-              makeFlatVector<int64_t>({10, 20, 30}),
-              makeNullableFlatVector<int64_t>(
-                  {std::nullopt, 555, std::nullopt}),
-              makeNullableFlatVector<int64_t>({std::nullopt, 3, std::nullopt}),
-          })});
+  auto dataFilePath = writeToFile(makeRowVector(
+      kRowLineageOutputNames,
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 555, std::nullopt}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 3, std::nullopt}),
+      }));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
 
   // A single-column comparison is the shape extraction pushes down.
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(ROW({"c0", "_row_id"}, BIGINT()))
                   .dataColumns(ROW(kRowLineageOutputNames, BIGINT()))
                   .remainingFilter("_row_id >= 102")
@@ -2505,18 +2535,15 @@ TEST_F(IcebergReadTest, rowLineageFilterFromRemainingFilter) {
 TEST_F(IcebergReadTest, rowLineageFilterPushdownParity) {
   // _row_id synthesizes to {100, 555, 102, 103}, _last_updated_sequence_number
   // to {7, 3, 7, 7}.
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector(
-          kRowLineageOutputNames,
-          {
-              makeFlatVector<int64_t>({10, 20, 30, 40}),
-              makeNullableFlatVector<int64_t>(
-                  {std::nullopt, 555, std::nullopt, std::nullopt}),
-              makeNullableFlatVector<int64_t>(
-                  {std::nullopt, 3, std::nullopt, std::nullopt}),
-          })});
+  auto dataFilePath = writeToFile(makeRowVector(
+      kRowLineageOutputNames,
+      {
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 555, std::nullopt, std::nullopt}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 3, std::nullopt, std::nullopt}),
+      }));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
@@ -2559,8 +2586,8 @@ TEST_F(IcebergReadTest, rowLineageFilterPushdownParity) {
       };
 
       // The predicate above the scan sees the filled-in values.
-      auto unpushedPlan = exec::test::PlanBuilder(pool_.get())
-                              .startTableScan(test::kIcebergConnectorId)
+      auto unpushedPlan = test::IcebergPlanBuilder(pool_.get())
+                              .startTableScan()
                               .outputType(ROW(kRowLineageOutputNames, BIGINT()))
                               .dataColumns(dataColumns)
                               .endTableScan()
@@ -2571,8 +2598,8 @@ TEST_F(IcebergReadTest, rowLineageFilterPushdownParity) {
                           .split(makeSplit())
                           .copyResults(pool_.get());
 
-      auto remainingFilterPlan = exec::test::PlanBuilder(pool_.get())
-                                     .startTableScan(test::kIcebergConnectorId)
+      auto remainingFilterPlan = test::IcebergPlanBuilder(pool_.get())
+                                     .startTableScan()
                                      .outputType(outputType)
                                      .dataColumns(dataColumns)
                                      .remainingFilter(pushdownCase.predicate)
@@ -2587,8 +2614,8 @@ TEST_F(IcebergReadTest, rowLineageFilterPushdownParity) {
         filters.emplace(
             common::Subfield(pushdownCase.subfieldFilter->first),
             pushdownCase.subfieldFilter->second->clone());
-        auto subfieldFilterPlan = exec::test::PlanBuilder(pool_.get())
-                                      .startTableScan(test::kIcebergConnectorId)
+        auto subfieldFilterPlan = test::IcebergPlanBuilder(pool_.get())
+                                      .startTableScan()
                                       .outputType(outputType)
                                       .dataColumns(dataColumns)
                                       .subfieldFiltersMap(filters)
@@ -2606,25 +2633,21 @@ TEST_F(IcebergReadTest, rowLineageFilterPushdownParity) {
 // which say nothing about the synthesized values.
 TEST_F(IcebergReadTest, rowLineageMetadataFilterPruning) {
   // Synthesizes {101, 10001, 10002} against statistics of min = max = 101.
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector(
-          kRowLineageOutputNames,
-          {
-              makeFlatVector<int64_t>({10, 20, 30}),
-              makeNullableFlatVector<int64_t>(
-                  {101, std::nullopt, std::nullopt}),
-              makeNullableFlatVector<int64_t>({3, std::nullopt, std::nullopt}),
-          })});
+  auto dataFilePath = writeToFile(makeRowVector(
+      kRowLineageOutputNames,
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeNullableFlatVector<int64_t>({101, std::nullopt, std::nullopt}),
+          makeNullableFlatVector<int64_t>({3, std::nullopt, std::nullopt}),
+      }));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "10000"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
 
   // The disjunction keeps extraction from pushing the predicate down; 'c0 < 0'
   // matches nothing.
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(ROW({"c0", "_row_id"}, BIGINT()))
                   .dataColumns(ROW(kRowLineageOutputNames, BIGINT()))
                   .remainingFilter("_row_id > 9999 OR c0 < 0")
@@ -2656,8 +2679,8 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
         auto planNodeIdGenerator =
             std::make_shared<core::PlanNodeIdGenerator>();
         auto plan =
-            exec::test::PlanBuilder(planNodeIdGenerator)
-                .startTableScan(test::kIcebergConnectorId)
+            test::IcebergPlanBuilder(planNodeIdGenerator)
+                .startTableScan()
                 .outputType(ROW({"c0", "_row_id"}, BIGINT()))
                 .dataColumns(ROW("c0", BIGINT()))
                 .endTableScan()
@@ -2673,17 +2696,16 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
                     {"c0", "_row_id"})
                 .planNode();
 
-        auto task =
-            exec::test::AssertQueryBuilder(plan)
-                .maxDrivers(1)
-                .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "2")
-                .splits(scanId, splits)
-                .assertResults(makeRowVector(
-                    {"c0", "_row_id"},
-                    {
-                        makeFlatVector<int64_t>(expectedValues),
-                        makeFlatVector<int64_t>(expectedRowIds),
-                    }));
+        auto task = exec::test::AssertQueryBuilder(plan)
+                        .maxDrivers(1)
+                        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 2)
+                        .splits(scanId, splits)
+                        .assertResults(makeRowVector(
+                            {"c0", "_row_id"},
+                            {
+                                makeFlatVector<int64_t>(expectedValues),
+                                makeFlatVector<int64_t>(expectedRowIds),
+                            }));
 
         const auto planStats = exec::toPlanStats(task->taskStats());
         const auto& scanStats = planStats.at(scanId);
@@ -2693,17 +2715,13 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
       };
 
   // Synthesizes {100, 555, 102}; key 102 has a null stored value.
-  auto storedFile = TempFilePath::create();
-  writeToFile(
-      storedFile->getPath(),
-      {makeRowVector(
-          {"c0", "_row_id", "_last_updated_sequence_number"},
-          {
-              makeFlatVector<int64_t>({10, 20, 30}),
-              makeNullableFlatVector<int64_t>(
-                  {std::nullopt, 555, std::nullopt}),
-              makeNullableFlatVector<int64_t>({std::nullopt, 3, std::nullopt}),
-          })});
+  auto storedFile = writeToFile(makeRowVector(
+      {"c0", "_row_id", "_last_updated_sequence_number"},
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 555, std::nullopt}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 3, std::nullopt}),
+      }));
   auto splitAt = [&](const std::string& path, const std::string& firstRowId) {
     return makeIcebergSplitWithInfoColumns(
         path,
@@ -2715,14 +2733,10 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
 
   // '_row_id' is a null constant here, which the reader never filters. Both
   // splits are preloaded, synthesizing {100, 101, 102} and {200, 201, 202}.
-  auto firstFile = TempFilePath::create();
-  writeToFile(
-      firstFile->getPath(),
-      {makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
-  auto secondFile = TempFilePath::create();
-  writeToFile(
-      secondFile->getPath(),
-      {makeRowVector({makeFlatVector<int64_t>({40, 50, 60})})});
+  auto firstFile =
+      writeToFile(makeRowVector({makeFlatVector<int64_t>({10, 20, 30})}));
+  auto secondFile =
+      writeToFile(makeRowVector({makeFlatVector<int64_t>({40, 50, 60})}));
   auto task = assertJoinOnRowId(
       {splitAt(firstFile->getPath(), "100"),
        splitAt(secondFile->getPath(), "200")},
@@ -2743,8 +2757,8 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterMidSplit) {
           kMultiBatchNumRows, [](vector_size_t row) { return row; })})});
 
   auto dataSource = makeDataSource(
-      exec::test::PlanBuilder()
-          .startTableScan(test::kIcebergConnectorId)
+      test::IcebergPlanBuilder()
+          .startTableScan()
           .outputType(ROW({"c0", "_row_id"}, BIGINT()))
           .dataColumns(ROW("c0", BIGINT()))
           .endTableScan()
@@ -2886,10 +2900,8 @@ TEST_F(IcebergReadTest, targetTableRowIdSynthesis) {
 
 // The composite is as long as the batch, not as the rows the reader read.
 TEST_F(IcebergReadTest, targetTableRowIdWithDroppedRows) {
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30, 40, 50})})});
+  auto dataFilePath = writeToFile(
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30, 40, 50})}));
   auto [deleteFilePath, deleteFile] =
       makePositionalDeleteFile(dataFilePath->getPath(), {3});
 
@@ -2899,8 +2911,8 @@ TEST_F(IcebergReadTest, targetTableRowIdWithDroppedRows) {
        {"spec_id", INTEGER()},
        {"partition_data", VARCHAR()}});
   auto dataSource = makeDataSource(
-      exec::test::PlanBuilder()
-          .startTableScan(test::kIcebergConnectorId)
+      test::IcebergPlanBuilder()
+          .startTableScan()
           .outputType(ROW(
               {{"c0", BIGINT()},
                {IcebergMetadataColumn::kTargetTableRowIdColumnName,
@@ -2945,15 +2957,11 @@ class IcebergInfoColumnValidationTest : public IcebergReadTest {
       const std::string& expectedMessage) {
     std::vector<RowVectorPtr> inputVectors = {
         makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30})})};
-    auto dataFilePath = TempFilePath::create();
-    writeToFile(dataFilePath->getPath(), inputVectors);
+    auto dataFilePath = writeToFile(inputVectors);
 
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(outputType)
-                    .dataColumns(ROW({"c0"}, {BIGINT()}))
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(
+        /*outputType=*/outputType,
+        /*dataColumns=*/ROW({"c0"}, {BIGINT()}));
 
     VELOX_ASSERT_THROW(
         exec::test::AssertQueryBuilder(plan)
@@ -3022,17 +3030,13 @@ TEST_F(IcebergReadTest, flatMapAsStruct) {
   auto mapType = MAP(BIGINT(), DOUBLE());
   auto dataSchema = ROW({"id", "features"}, {BIGINT(), mapType});
 
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector(
-          {"id", "features"},
-          {makeFlatVector<int64_t>({1, 2}),
-           makeMapVector(
-               {0, 3},
-               makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
-               makeFlatVector<double>(
-                   {10.0, 20.0, 30.0, 100.0, 200.0, 300.0}))})});
+  auto dataFilePath = writeToFile(makeRowVector(
+      {"id", "features"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeMapVector(
+           {0, 3},
+           makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
+           makeFlatVector<double>({10.0, 20.0, 30.0, 100.0, 200.0, 300.0}))}));
 
   // Build struct-encoded column handle for "features": keys {1, 2} as
   // struct fields {"1", "2"}.
@@ -3059,8 +3063,8 @@ TEST_F(IcebergReadTest, flatMapAsStruct) {
             makeFlatVector<double>({20.0, 200.0})})});
 
   // Output type has ROW for the struct-encoded column.
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  test::IcebergPlanBuilder planBuilder;
+  auto plan = planBuilder.startTableScan()
                   .outputType(ROW({"id", "features"}, {BIGINT(), structType}))
                   .dataColumns(dataSchema)
                   .assignments(assignments)
@@ -3083,8 +3087,7 @@ TEST_F(IcebergReadTest, filterPushdownWithInitialDefaultInFilterColumnHandles) {
   // Old data file: only the 'id' column present.
   std::vector<RowVectorPtr> dataVectors = {
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   auto outputType = ROW({"id"}, {BIGINT()});
 
@@ -3092,7 +3095,7 @@ TEST_F(IcebergReadTest, filterPushdownWithInitialDefaultInFilterColumnHandles) {
   assignments["id"] = makeIcebergHandle("id", BIGINT(), 1);
 
   // filterColumnHandles carries country WITH initialDefaultValue="IN".
-  std::vector<HiveColumnHandlePtr> filterHandles = {
+  std::vector<IcebergColumnHandlePtr> filterHandles = {
       makeIcebergHandle("country", VARCHAR(), 2, "IN")};
 
   // Expected: all 3 rows (country filter passes via default constant).
@@ -3108,14 +3111,14 @@ TEST_F(IcebergReadTest, filterPushdownWithInitialDefaultInFilterColumnHandles) {
           const std::vector<RowVectorPtr>& expected,
           const std::vector<std::shared_ptr<ConnectorSplit>>& splits,
           int32_t numSplitsSkipped = 0) {
-        auto plan = exec::test::PlanBuilder()
-                        .startTableScan()
-                        .connectorId(test::kIcebergConnectorId)
+        test::IcebergPlanBuilder planBuilder;
+        auto plan = planBuilder.startTableScan()
                         .outputType(outputType)
                         .dataColumns(fullSchema)
+                        .subfieldFilters({subfieldFilter})
                         .assignments(assignments)
-                        .filterColumnHandles(filterHandles)
-                        .subfieldFilter(subfieldFilter)
+                        .filterColumnHandles(
+                            {filterHandles.begin(), filterHandles.end()})
                         .endTableScan()
                         .planNode();
         auto task =
@@ -3157,8 +3160,7 @@ TEST_F(IcebergReadTest, filterPushdownWithInitialDefaultInFilterColumnHandles) {
       {"id", "country"},
       {makeFlatVector<int64_t>({4, 5}),
        makeFlatVector<std::string>({"US", "US"})})};
-  auto newFilePath = TempFilePath::create();
-  writeToFile(newFilePath->getPath(), newData);
+  auto newFilePath = writeToFile(newData);
 
   auto makeTwoSplits = [&]() {
     auto s1 = makeIcebergSplits(dataFilePath->getPath());

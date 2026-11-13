@@ -21,7 +21,11 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/MemoryPool.h"
 
+#include <gflags/gflags.h>
+
 #include <type_traits>
+
+DECLARE_int32(velox_shared_iota_size);
 
 namespace facebook::velox {
 
@@ -285,8 +289,9 @@ class raw_vector {
 /// Returns a pointer to 'size' int32_t's with consecutive values starting at
 /// 'offset'. There are at least kPadding / sizeof(int32_t) values past 'size',
 /// so that it is safe to access the returned pointer at maximum SIMD width.
-/// Returns pre-allocated memory if it is large enough, otherwise resizes and
-/// initializes 'storage' to the requested size and 'returns storage.data()'.
+/// Returns memory from a process-wide table if 'offset' + 'size' is at most
+/// FLAGS_velox_shared_iota_size, otherwise resizes and initializes 'storage' to
+/// the requested size and returns 'storage.data()'.
 const int32_t*
 iota(int32_t size, raw_vector<int32_t>& storage, int32_t offset = 0);
 

@@ -285,13 +285,13 @@ TEST_F(CudfDecimalTest, decimalMultiplyPromotesToLong) {
 
   const int128_t expected0 = static_cast<int128_t>(9'999'999'999LL) *
       static_cast<int128_t>(9'999'999'999LL);
-  auto expected = makeRowVector(
-      {"prod"},
-      {makeFlatVector<int128_t>(
+  auto expected = makeNamedRowVector(
+      "prod",
+      makeFlatVector<int128_t>(
           {expected0,
            static_cast<int128_t>(-2'469'135'780LL),
            static_cast<int128_t>(-8'000'000'000LL)},
-          DECIMAL(20, 0))});
+          DECIMAL(20, 0)));
 
   // CPU (no cuDF adapter registered).
   unregisterCudf();
@@ -339,13 +339,13 @@ TEST_F(CudfDecimalTest, decimalAddPromotesToLong) {
                   .project({"a + b AS sum"})
                   .planNode();
 
-  auto expected = makeRowVector(
-      {"sum"},
-      {makeFlatVector<int128_t>(
+  auto expected = makeNamedRowVector(
+      "sum",
+      makeFlatVector<int128_t>(
           {static_cast<int128_t>(1'999'999'999'999'999'998LL),
            static_cast<int128_t>(-1'800'000'000'000'000'000LL),
            static_cast<int128_t>(0)},
-          DECIMAL(19, 0))});
+          DECIMAL(19, 0)));
 
   // CPU (no cuDF adapter registered).
   unregisterCudf();
@@ -434,15 +434,15 @@ TEST_F(CudfDecimalTest, decimalMultiplyDifferentScales) {
                   .project({"a * b AS prod"})
                   .planNode();
 
-  auto expected = makeRowVector(
-      {"prod"},
-      {makeFlatVector<int128_t>(
+  auto expected = makeNamedRowVector(
+      "prod",
+      makeFlatVector<int128_t>(
           {
               static_cast<int128_t>(12345) * static_cast<int128_t>(10),
               static_cast<int128_t>(-2500) * static_cast<int128_t>(-25),
               static_cast<int128_t>(100) * static_cast<int128_t>(3),
           },
-          DECIMAL(20, 3))});
+          DECIMAL(20, 3)));
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -497,10 +497,10 @@ TEST_F(CudfDecimalTest, decimalCompareWithLiteral) {
       {"a", DECIMAL(10, 2)},
   });
 
-  auto input = makeRowVector(
-      {"a"},
-      {makeNullableFlatVector<int64_t>(
-          {120, 110, 130, std::nullopt}, DECIMAL(10, 2))});
+  auto input = makeNamedRowVector(
+      "a",
+      makeNullableFlatVector<int64_t>(
+          {120, 110, 130, std::nullopt}, DECIMAL(10, 2)));
 
   std::vector<RowVectorPtr> vectors = {input};
 
@@ -710,7 +710,7 @@ TEST_F(CudfDecimalTest, decimalMultiplyDoubleCast) {
   std::vector<RowVectorPtr> vectors = {input};
 
   auto expected =
-      makeRowVector({"prod"}, {makeFlatVector<double>({2.5, 10.0, 0.0})});
+      makeNamedRowVector("prod", makeFlatVector<double>({2.5, 10.0, 0.0}));
 
   auto runAndAssert = [&](bool useCudf) {
     if (!useCudf) {
@@ -746,7 +746,7 @@ TEST_F(CudfDecimalTest, decimalMultiplyDoubleCastRight) {
   std::vector<RowVectorPtr> vectors = {input};
 
   auto expected =
-      makeRowVector({"prod"}, {makeFlatVector<double>({2.5, 10.0, 0.0})});
+      makeNamedRowVector("prod", makeFlatVector<double>({2.5, 10.0, 0.0}));
 
   auto runAndAssert = [&](bool useCudf) {
     if (!useCudf) {
@@ -784,7 +784,7 @@ TEST_F(CudfDecimalTest, decimalAstRecursiveMixedScaleAdd) {
   std::vector<RowVectorPtr> vectors = {input};
 
   auto expected =
-      makeRowVector({"prod"}, {makeFlatVector<double>({126.45, -31.5, 1.3})});
+      makeNamedRowVector("prod", makeFlatVector<double>({126.45, -31.5, 1.3}));
 
   auto plan = exec::test::PlanBuilder()
                   .values(vectors)
@@ -801,13 +801,13 @@ TEST_F(CudfDecimalTest, decimalCastToDoubleProjection) {
       {"d", DECIMAL(10, 2)},
   });
 
-  auto input = makeRowVector(
-      {"d"}, {makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2))});
+  auto input = makeNamedRowVector(
+      "d", makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2)));
 
   std::vector<RowVectorPtr> vectors = {input};
 
   auto expected =
-      makeRowVector({"d_double"}, {makeFlatVector<double>({1.25, -2.5, 0.5})});
+      makeNamedRowVector("d_double", makeFlatVector<double>({1.25, -2.5, 0.5}));
 
   auto runAndAssert = [&](bool useCudf) {
     if (!useCudf) {
@@ -832,13 +832,13 @@ TEST_F(CudfDecimalTest, decimalCastToRealProjection) {
       {"d", DECIMAL(10, 2)},
   });
 
-  auto input = makeRowVector(
-      {"d"}, {makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2))});
+  auto input = makeNamedRowVector(
+      "d", makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2)));
 
   std::vector<RowVectorPtr> vectors = {input};
 
   auto expected =
-      makeRowVector({"d_real"}, {makeFlatVector<float>({1.25f, -2.5f, 0.5f})});
+      makeNamedRowVector("d_real", makeFlatVector<float>({1.25f, -2.5f, 0.5f}));
 
   auto runAndAssert = [&](bool useCudf) {
     if (!useCudf) {
@@ -1053,11 +1053,11 @@ TEST_F(CudfDecimalTest, decimalDivideRounds) {
     return static_cast<int64_t>(out);
   };
 
-  auto expected = makeRowVector(
-      {"div"},
-      {makeFlatVector<int64_t>(
+  auto expected = makeNamedRowVector(
+      "div",
+      makeFlatVector<int64_t>(
           {computeDiv(200, 300), computeDiv(100, 300), computeDiv(-200, 300)},
-          DECIMAL(12, 2))});
+          DECIMAL(12, 2)));
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -1093,8 +1093,8 @@ TEST_F(CudfDecimalTest, decimalDivideByZero) {
                               .planNode();
   assertCpuAndGpuDivideByZero(columnColumnPlan);
 
-  auto colOnly = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2))});
+  auto colOnly = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2)));
   std::vector<RowVectorPtr> colVectors = {colOnly};
 
   // Column / zero scalar (rhs-scalar path).
@@ -1403,13 +1403,13 @@ TEST_F(CudfDecimalTest, decimalSubtractPromotesToLong) {
                   .project({"a - b AS diff"})
                   .planNode();
 
-  auto expected = makeRowVector(
-      {"diff"},
-      {makeFlatVector<int128_t>(
+  auto expected = makeNamedRowVector(
+      "diff",
+      makeFlatVector<int128_t>(
           {static_cast<int128_t>(1'999'999'999'999'999'998LL),
            static_cast<int128_t>(-1'800'000'000'000'000'000LL),
            static_cast<int128_t>(0)},
-          DECIMAL(19, 0))});
+          DECIMAL(19, 0)));
 
   unregisterCudf();
   auto cpuResult =
@@ -1610,48 +1610,6 @@ TEST_F(CudfDecimalTest, decimalArithmeticNullScalar) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
-// Velox comparison functions require both arguments to have the same type
-// (Generic<T1>, Generic<T1>), so raw different-scale comparisons fail at the
-// type-resolution stage before cuDF evaluation.
-TEST_F(CudfDecimalTest, DISABLED_decimalCompareDifferentScales) {
-  auto input = makeRowVector(
-      {"a", "b"},
-      {
-          makeFlatVector<int64_t>({120, 150, 100}, DECIMAL(10, 2)),
-          makeFlatVector<int64_t>({12, 10, 20}, DECIMAL(10, 1)),
-      });
-
-  std::vector<RowVectorPtr> vectors = {input};
-
-  auto plan = exec::test::PlanBuilder()
-                  .values(vectors)
-                  .project({
-                      "a = b AS eq",
-                      "a != b AS neq",
-                      "a < b AS lt",
-                      "a <= b AS lte",
-                      "a > b AS gt",
-                      "a >= b AS gte",
-                  })
-                  .planNode();
-
-  // 1.20 == 1.2, 1.50 > 1.0, 1.00 < 2.0
-  auto expected = makeRowVector(
-      {"eq", "neq", "lt", "lte", "gt", "gte"},
-      {
-          makeNullableFlatVector<bool>({true, false, false}, BOOLEAN()),
-          makeNullableFlatVector<bool>({false, true, true}, BOOLEAN()),
-          makeNullableFlatVector<bool>({false, false, true}, BOOLEAN()),
-          makeNullableFlatVector<bool>({true, false, true}, BOOLEAN()),
-          makeNullableFlatVector<bool>({false, true, false}, BOOLEAN()),
-          makeNullableFlatVector<bool>({true, true, false}, BOOLEAN()),
-      });
-
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
-  facebook::velox::test::assertEqualVectors(expected, result);
-}
-
 TEST_F(CudfDecimalTest, decimalCompareDifferentScalesWithCast) {
   auto input = makeRowVector(
       {"a", "b"},
@@ -1774,8 +1732,8 @@ TEST_F(CudfDecimalTest, decimalGreatestLeastWithNulls) {
 }
 
 TEST_F(CudfDecimalTest, decimalBetween) {
-  auto input = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>({-100, 50, 150, 300}, DECIMAL(10, 2))});
+  auto input = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>({-100, 50, 150, 300}, DECIMAL(10, 2)));
   std::vector<RowVectorPtr> vectors = {input};
   auto plan = exec::test::PlanBuilder()
                   .values(vectors)
@@ -1793,10 +1751,10 @@ TEST_F(CudfDecimalTest, decimalBetween) {
 }
 
 TEST_F(CudfDecimalTest, decimalCoalesceColumnWithLiteral) {
-  auto input = makeRowVector(
-      {"a"},
-      {makeNullableFlatVector<int64_t>(
-          {100, std::nullopt, 300, std::nullopt, 500}, DECIMAL(10, 2))});
+  auto input = makeNamedRowVector(
+      "a",
+      makeNullableFlatVector<int64_t>(
+          {100, std::nullopt, 300, std::nullopt, 500}, DECIMAL(10, 2)));
   std::vector<RowVectorPtr> vectors = {input};
   auto plan =
       exec::test::PlanBuilder()
@@ -1813,13 +1771,14 @@ TEST_F(CudfDecimalTest, decimalCoalesceColumnWithLiteral) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
-// Disabled: a non-null literal in the first position makes the entire coalesce
-// trivially constant. For simple types Velox folds this away before it reaches
-// cuDF, but the CAST wrapper needed for decimal literals prevents that folding,
-// causing the cuDF compiler to reject the expression.
+// Disabled: expression optimization folds this coalesce into a bare DECIMAL
+// constant. No cuDF evaluator accepts a DECIMAL constant as a whole
+// projection, so the project stays on the CPU.
+// TODO: Re-enable once https://github.com/facebookincubator/velox/issues/20008
+// is fixed.
 TEST_F(CudfDecimalTest, DISABLED_decimalCoalesceLiteralFirst) {
-  auto input = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2))});
+  auto input = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2)));
   std::vector<RowVectorPtr> vectors = {input};
   auto plan =
       exec::test::PlanBuilder()
@@ -2191,11 +2150,11 @@ TEST_F(CudfDecimalTest, decimalMultiplyScaledPromotesToLong) {
   // fills precision 36 without overflowing.
   const auto squared =
       static_cast<int128_t>(kMaxShort) * static_cast<int128_t>(kMaxShort);
-  auto expected = makeRowVector(
-      {"result"},
-      {makeFlatVector<int128_t>(
+  auto expected = makeNamedRowVector(
+      "result",
+      makeFlatVector<int128_t>(
           {squared, -squared, static_cast<int128_t>(-3'703'500)},
-          DECIMAL(36, 4))});
+          DECIMAL(36, 4)));
   facebook::velox::test::assertEqualVectors(expected, cpuResult);
   facebook::velox::test::assertEqualVectors(expected, gpuResult);
 }
@@ -2282,8 +2241,8 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
       "Decimal overflow in subtract");
 
   // 1e19 * 1e19 = 1e38 needs 39 digits, exceeding output precision 38.
-  auto mulInput = makeRowVector(
-      {"a"}, {makeFlatVector<int128_t>({nineteenE18}, DECIMAL(38, 0))});
+  auto mulInput = makeNamedRowVector(
+      "a", makeFlatVector<int128_t>({nineteenE18}, DECIMAL(38, 0)));
   std::vector<RowVectorPtr> mulVectors = {mulInput};
 
   VELOX_ASSERT_THROW(
@@ -2307,8 +2266,8 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
       "Decimal overflow in multiply");
 
   // Divide rhs-scalar: dividend rescale overflows int128 (9e37 * 1e6).
-  auto divRescaleInput = makeRowVector(
-      {"a"}, {makeFlatVector<int128_t>({nineE37}, DECIMAL(38, 6))});
+  auto divRescaleInput = makeNamedRowVector(
+      "a", makeFlatVector<int128_t>({nineE37}, DECIMAL(38, 6)));
   std::vector<RowVectorPtr> divRescaleVectors = {divRescaleInput};
 
   VELOX_ASSERT_THROW(
@@ -2322,7 +2281,7 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
 
   // Divide lhs-scalar: quotient exceeds output precision 38.
   auto divPrecisionInput =
-      makeRowVector({"a"}, {makeFlatVector<int128_t>({1}, DECIMAL(38, 2))});
+      makeNamedRowVector("a", makeFlatVector<int128_t>({1}, DECIMAL(38, 2)));
   std::vector<RowVectorPtr> divPrecisionVectors = {divPrecisionInput};
 
   VELOX_ASSERT_THROW(
@@ -2354,7 +2313,7 @@ TEST_F(CudfDecimalTest, decimalMixedScaleOverflowCpuGpuParity) {
           makeFlatVector<int128_t>({1}, DECIMAL(38, 10)),
       });
   auto colOnly =
-      makeRowVector({"a"}, {makeFlatVector<int128_t>({1}, DECIMAL(38, 10))});
+      makeNamedRowVector("a", makeFlatVector<int128_t>({1}, DECIMAL(38, 10)));
 
   struct Case {
     RowVectorPtr input;
@@ -2432,8 +2391,8 @@ TEST_F(CudfDecimalTest, decimalModuloByZero) {
           .project({"a % b AS result"})
           .planNode());
 
-  auto colOnly = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>({700, 100, 500}, DECIMAL(10, 2))});
+  auto colOnly = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>({700, 100, 500}, DECIMAL(10, 2)));
   std::vector<RowVectorPtr> colVectors = {colOnly};
 
   // Column % zero scalar (rhs-scalar path).
@@ -2537,13 +2496,13 @@ TEST_F(CudfDecimalTest, decimalNullRowOverflowNotFlagged) {
   auto input = makeRowVector({"a", "b"}, {a, b});
 
   // Expected: null where suppressed, 1 + 1 = 2 (DECIMAL(38, 0)) elsewhere.
-  auto expected = makeRowVector(
-      {"result"},
-      {makeFlatVector<int128_t>(
+  auto expected = makeNamedRowVector(
+      "result",
+      makeFlatVector<int128_t>(
           kRows,
           [&](auto /*row*/) { return int128_t{2}; },
           [&](auto row) { return isNullRow(row); },
-          DECIMAL(38, 0))});
+          DECIMAL(38, 0)));
 
   auto plan = exec::test::PlanBuilder()
                   .values({input})
@@ -2646,8 +2605,8 @@ TEST_F(CudfDecimalTest, decimalModuloByNegativeOneNoOverflow) {
           .planNode());
 
   // Column % -1 scalar (rhs-scalar path).
-  auto colOnly = makeRowVector(
-      {"a"}, {makeFlatVector<int128_t>({int128Min}, DECIMAL(38, 0))});
+  auto colOnly = makeNamedRowVector(
+      "a", makeFlatVector<int128_t>({int128Min}, DECIMAL(38, 0)));
   assertCpuGpuEqual(
       exec::test::PlanBuilder()
           .values({colOnly})
@@ -2707,14 +2666,14 @@ TEST_F(CudfDecimalTest, decimalModuloMixedStorageWidths) {
 
   // Scalar operand paths: the scalar is decoded at its own storage width while
   // the column and result widths differ from it.
-  auto wideOnly = makeRowVector({"wide"}, {wide});
+  auto wideOnly = makeNamedRowVector("wide", wide);
   assertCpuGpuEqual("wide % CAST('1.07' AS DECIMAL(5, 2)) AS result", wideOnly);
 
   // The literal is DECIMAL128 by its declared precision, but its magnitude has
   // to stay under (2^63 - 1) / 10^2: Velox CPU rescales the dividend by the
   // scale difference in the narrow *result* type, so a larger dividend is a
   // genuine overflow on both paths and would not exercise the widths.
-  auto narrowOnly = makeRowVector({"narrow"}, {narrow});
+  auto narrowOnly = makeNamedRowVector("narrow", narrow);
   assertCpuGpuEqual(
       "CAST('1234567890123456' AS DECIMAL(20, 0)) % narrow AS result",
       narrowOnly);

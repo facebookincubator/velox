@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <functional>
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -63,7 +64,7 @@ class MapTest : public FunctionBaseTest {
     // Case 4: Check for duplicate NaNs when the keys vector wrapped in a
     // dictionary.
     VectorPtr keysInDictionary =
-        wrapInDictionary(makeIndices(1, folly::identity), keysDifferentNaNs);
+        wrapInDictionary(makeIndices(1, std::identity{}), keysDifferentNaNs);
     checkDuplicate(
         keysInDictionary, "Duplicate map keys (NaN) are not allowed");
     // Case 5: Check for equality of +0.0 and -0.0.
@@ -223,6 +224,25 @@ TEST_F(MapTest, nullKeys) {
           std::nullopt,
       }),
       result);
+}
+
+TEST_F(MapTest, constantKeysBuildFlatMap) {
+  const auto data = makeRowVector({
+      makeArrayVector<int64_t>({{10, 20}, {11, 21}}),
+  });
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kGenerateConstantMapsAsFlatMaps, "true"},
+  });
+  VELOX_ASSERT_THROW(
+      evaluate("map(array[1, 2], c0)", data),
+      "Flat maps for constant map keys are not implemented in map()");
+  functions::prestosql::registerMapAllowingDuplicates("map2");
+  assertEqualVectors(
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:20}",
+          "{1:11, 2:21}",
+      }),
+      evaluate("map2(array[1, 2], c0)", data));
 }
 
 TEST_F(MapTest, duplicateKeys) {
@@ -567,7 +587,7 @@ TEST_F(MapTest, timestampWithTimeZone) {
 
   // Check for duplicate keys when the keys vector wrapped in a dictionary.
   VectorPtr keysInDictionary =
-      wrapInDictionary(makeIndices(1, folly::identity), keysDifferentTimeZones);
+      wrapInDictionary(makeIndices(1, std::identity{}), keysDifferentTimeZones);
   checkDuplicate(
       keysInDictionary, "Duplicate map keys (12294) are not allowed");
 

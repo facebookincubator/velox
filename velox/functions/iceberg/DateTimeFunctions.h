@@ -17,9 +17,14 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 namespace facebook::velox::functions::iceberg {
 
-void registerDateTimeFunctions(const std::string& prefix);
+/// Registers Iceberg date and time partition transforms. 'defaultOwner' fills
+/// only functions that do not declare an owner and must outlive the registry.
+void registerDateTimeFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions::iceberg

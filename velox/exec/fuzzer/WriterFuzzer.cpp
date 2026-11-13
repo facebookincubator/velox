@@ -154,7 +154,7 @@ class WriterFuzzer {
       int32_t bucketCount,
       const std::vector<std::string>& bucketColumns,
       int32_t sortColumnOffset,
-      const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+      const std::vector<HiveSortingColumnPtr>& sortBy,
       const std::shared_ptr<TempDirectoryPath>& outputDirectoryPath);
 
   // Verifies file rotation by writing with a small max target file size.
@@ -215,7 +215,7 @@ class WriterFuzzer {
       const std::vector<TypePtr>& types,
       int32_t partitionOffset,
       const std::vector<std::string>& partitionKeys,
-      const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy);
+      const std::vector<HiveSortingColumnPtr>& sortBy);
 
   // When concatenating a partition value, if it's non-varchar, no change, eg:
   // age = 10
@@ -379,7 +379,7 @@ void WriterFuzzer::go() {
     int32_t bucketCount = 0;
     std::vector<std::string> bucketColumns;
     int32_t sortColumnOffset = 0;
-    std::vector<std::shared_ptr<const HiveSortingColumn>> sortBy;
+    std::vector<HiveSortingColumnPtr> sortBy;
 
     // Regular table columns
     generateColumns(5, "c", kRegularColumnTypes_, 2, names, types);
@@ -552,7 +552,7 @@ void WriterFuzzer::verifyWriter(
     const int32_t bucketCount,
     const std::vector<std::string>& bucketColumns,
     const int32_t sortColumnOffset,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+    const std::vector<HiveSortingColumnPtr>& sortBy,
     const std::shared_ptr<TempDirectoryPath>& outputDirectoryPath) {
   const auto plan = PlanBuilder()
                         .values(input)
@@ -825,11 +825,11 @@ connector::ColumnHandleMap WriterFuzzer::getTableColumnHandles(
     const int32_t bucketCount) {
   connector::ColumnHandleMap columnHandle;
   for (int i = 0; i < names.size(); ++i) {
-    FileColumnHandle::ColumnType columnType;
+    connector::FileColumnHandle::ColumnType columnType;
     if (i < partitionOffset) {
-      columnType = FileColumnHandle::ColumnType::kRegular;
+      columnType = connector::FileColumnHandle::ColumnType::kRegular;
     } else {
-      columnType = FileColumnHandle::ColumnType::kPartitionKey;
+      columnType = connector::FileColumnHandle::ColumnType::kPartitionKey;
     }
     columnHandle.insert(
         {names.at(i),
@@ -842,7 +842,7 @@ connector::ColumnHandleMap WriterFuzzer::getTableColumnHandles(
         {"$bucket",
          std::make_shared<HiveColumnHandle>(
              "$bucket",
-             FileColumnHandle::ColumnType::kSynthesized,
+             connector::FileColumnHandle::ColumnType::kSynthesized,
              INTEGER(),
              INTEGER())});
   }
@@ -1017,7 +1017,7 @@ std::string WriterFuzzer::sortSql(
     const std::vector<TypePtr>& types,
     int32_t partitionOffset,
     const std::vector<std::string>& partitionKeys,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy) {
+    const std::vector<HiveSortingColumnPtr>& sortBy) {
   // For a split, extract the partition filters and bucket filters.
   std::stringstream whereSql;
   whereSql << "WHERE ";

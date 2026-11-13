@@ -16,9 +16,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -31,10 +33,12 @@
 
 #include "velox/common/Casts.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/file/File.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/KeyCursor.h"
+#include "velox/dwio/nimble/tablet/StripeMetadata.h"
 #include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::nimble {
@@ -42,7 +46,6 @@ class MetadataInput;
 } // namespace facebook::nimble
 
 namespace facebook::velox {
-class ReadFile;
 struct FileHandle;
 namespace cache {
 class AsyncDataCache;
@@ -86,6 +89,14 @@ std::ostream& operator<<(std::ostream& out, IndexType indexType);
 ///   bound. Only supported on cluster index.
 class IndexLookup {
  public:
+  /// Returns the metadata of each stripe of stripe group 'stripeGroup', in
+  /// stripe order, with the location of each of 'keyStreamIds' in the
+  /// stripe, in the order of 'keyStreamIds'. Reads the metadata of the stripe
+  /// group.
+  using KeyStreamLocator = std::function<std::vector<StripeMetadata>(
+      uint32_t stripeGroup,
+      std::span<const uint32_t> keyStreamIds)>;
+
   /// IO options for index lookup creation. fileHandle and cache must
   /// both be set (cached path) or both null (direct path).
   struct Options {
@@ -109,10 +120,23 @@ class IndexLookup {
     /// first lookup.
     bool preloadIndex{false};
 
+    /// If true, key chunk readers build their encoding views with
+    /// Encoding::Options::cacheEncodingView, trading memory for faster repeated
+    /// seeks into chunks that stay resident. Only hierarchical key chunks read
+    /// through encoding views.
+    bool cacheKeyEncodingViews{false};
+
     /// Order of the encoded keys of a cluster index, or null for bytewise
     /// order. The cluster index factory sets it from
     /// ClusterIndexFactory::keyComparator(), which owns the comparator.
     const KeyComparator* keyComparator{nullptr};
+
+    /// The stats and pool inside this context must outlive this index.
+    velox::FileIoContext fileIoContext{};
+
+    /// Locates the key streams of the file's stripes. A cluster index whose key
+    /// chunks are in a stream of each stripe needs it. TabletReader sets it.
+    KeyStreamLocator keyStreamLocator{};
 
     /// Validates options consistency.
     void validate() const;

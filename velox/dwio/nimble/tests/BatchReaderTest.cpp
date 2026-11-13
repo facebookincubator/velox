@@ -30,6 +30,7 @@
 #include "folly/FileUtil.h"
 #include "folly/Random.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
+#include "folly/executors/ManualExecutor.h"
 #include "velox/common/Casts.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/caching/AsyncDataCache.h"
@@ -41,6 +42,9 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/ColumnSelector.h"
+#include "velox/dwio/common/OnDemandUnitLoader.h"
+#include "velox/dwio/common/ParallelUnitLoader.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
@@ -53,7 +57,9 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/serializer/Options.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/tests/SharedDictionaryTestUtils.h"
@@ -466,15 +472,13 @@ std::unordered_set<nimble::offset_size> existingStreamOffsets(
 } // namespace
 
 struct TestParam {
-  bool optimizeStringBufferHandling;
   bool skipConstantFlatMapInMapStreams;
   bool enableCache{false};
   bool pinMetadata{false};
 
   std::string debugString() const {
     return fmt::format(
-        "optimizeStringBuffer_{}_skipConstantInMap_{}_cache_{}_pinMetadata_{}",
-        optimizeStringBufferHandling,
+        "skipConstantInMap_{}_cache_{}_pinMetadata_{}",
         skipConstantFlatMapInMapStreams,
         enableCache,
         pinMetadata);
@@ -487,18 +491,8 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
     std::vector<TestParam> params;
     for (bool cache : {false, true}) {
       for (bool pin : {false, true}) {
-        if (!cache && !pin) {
-          // Base case: test all combinations of the first two bools.
-          for (bool optimize : {false, true}) {
-            for (bool skip : {false, true}) {
-              params.emplace_back(TestParam{optimize, skip, cache, pin});
-            }
-          }
-        } else {
-          // Cache/pin modes: test with both false and both true for the
-          // first two bools to keep the test matrix manageable.
-          params.emplace_back(TestParam{false, false, cache, pin});
-          params.emplace_back(TestParam{true, true, cache, pin});
+        for (bool skip : {false, true}) {
+          params.emplace_back(TestParam{skip, cache, pin});
         }
       }
     }
@@ -506,13 +500,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
   }
 
   static std::vector<TestParam> getFsstTestParams() {
-    std::vector<TestParam> params;
-    for (const auto& param : getTestParams()) {
-      if (param.optimizeStringBufferHandling) {
-        params.push_back(param);
-      }
-    }
-    return params;
+    return getTestParams();
   }
 
   // Pruned set for the chunked rerun. Chunking is a writer-side concern and
@@ -524,8 +512,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
     std::vector<TestParam> params;
     for (const bool skip : {false, true}) {
       params.emplace_back(
-          TestParam{/*optimizeStringBufferHandling=*/false,
-                    /*skipConstantFlatMapInMapStreams=*/skip,
+          TestParam{/*skipConstantFlatMapInMapStreams=*/skip,
                     /*enableCache=*/false,
                     /*pinMetadata=*/false});
     }
@@ -571,10 +558,6 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
     allocator_.reset();
   }
 
-  bool optimizeStringBufferHandling() const {
-    return GetParam().optimizeStringBufferHandling;
-  }
-
   bool skipConstantFlatMapInMapStreams() const {
     return GetParam().skipConstantFlatMapInMapStreams;
   }
@@ -611,6 +594,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
       fileHandle_->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle_->groupId = velox::StringIdLease(ids, "testGroup");
       tabletOptions.cache = cache_.get();
+      tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle_.get();
     }
     return nimble::TabletReader::create(readFile, pool, tabletOptions);
@@ -658,32 +642,17 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
 
   nimble::BatchReadParams configureWithTestParam(
       nimble::BatchReadParams params) const {
-    params.optimizeStringBufferHandling = optimizeStringBufferHandling();
-    if (params.optimizeStringBufferHandling) {
-      params.encodingFactory =
-          [](velox::memory::MemoryPool& pool,
-             std::string_view data,
-             std::function<void*(uint32_t)> stringBufferFactory)
-          -> std::unique_ptr<nimble::Encoding> {
-        return nimble::EncodingFactory().create(
-            pool,
-            data,
-            std::move(stringBufferFactory),
-            nimble::Encoding::Options{});
-      };
-    } else {
-      params.encodingFactory =
-          [](velox::memory::MemoryPool& pool,
-             std::string_view data,
-             std::function<void*(uint32_t)> stringBufferFactory)
-          -> std::unique_ptr<nimble::Encoding> {
-        return nimble::legacy::EncodingFactory().create(
-            pool,
-            data,
-            std::move(stringBufferFactory),
-            nimble::Encoding::Options{});
-      };
-    }
+    params.encodingFactory =
+        [](velox::memory::MemoryPool& pool,
+           std::string_view data,
+           std::function<void*(uint32_t)> stringBufferFactory)
+        -> std::unique_ptr<nimble::Encoding> {
+      return nimble::EncodingFactory().create(
+          pool,
+          data,
+          std::move(stringBufferFactory),
+          nimble::Encoding::Options{});
+    };
     return params;
   }
 
@@ -954,8 +923,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
       std::function<void(const velox::VectorPtr&)> comparator = nullptr,
       bool multiSkip = false,
       bool checkMemoryLeak = false) {
-    // Merge the base parameter (optimizeStringBufferHandling) with any
-    // additional params
+    // Merge the base parameters with any additional params
     readParams = configureWithTestParam(std::move(readParams));
 
     std::string file;
@@ -1062,7 +1030,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
       std::mt19937& rng,
       nimble::WriterOptions writerOptions = {},
       nimble::BatchReadParams readParams = {}) {
-    // Merge the base parameter (optimizeStringBufferHandling)
+    // Merge the base parameters
     readParams = configureWithTestParam(std::move(readParams));
 
     velox::VectorFuzzer fuzzer(
@@ -1105,7 +1073,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
           generators,
       int& decodeCounter) {
     nimble::WriterOptions writerOptions;
-    // Merge the base parameter (optimizeStringBufferHandling)
+    // Merge the base parameters
     nimble::BatchReadParams readParams = createReadParams();
 
     std::string file;
@@ -1540,11 +1508,25 @@ nimble::EncodingLayout makeFsstEncodingLayout() {
           nimble::CompressionType::Uncompressed}}};
 }
 
+// A StripeGroup metadata format: a layout, and for kStreamMajor whether it uses
+// the sparse layout.
+struct StripeGroupFormat {
+  nimble::StripeGroup::EncodingLayout layout;
+  bool sparseLayout{false};
+
+  std::string debugString() const {
+    if (layout == nimble::StripeGroup::EncodingLayout::kRaw) {
+      return "Raw";
+    }
+    return sparseLayout ? "StreamMajorSparse" : "StreamMajor";
+  }
+};
+
 // Exercises read-path stream-selection across every StripeGroup metadata
 // format. Parameterized on the format alone (independent of BatchReaderTest's
 // cache/pin matrix) because these tests only assert which streams are read.
 class BatchReaderStripeGroupFormatTest
-    : public ::testing::TestWithParam<nimble::StripeGroup::EncodingLayout> {
+    : public ::testing::TestWithParam<StripeGroupFormat> {
  protected:
   static void SetUpTestCase() {
     velox::memory::MemoryManager::testingSetInstance(
@@ -1554,6 +1536,12 @@ class BatchReaderStripeGroupFormatTest
   void SetUp() override {
     rootPool_ = velox::memory::memoryManager()->addRootPool("default_root");
     leafPool_ = rootPool_->addLeafChild("default_leaf");
+  }
+
+  // Sets `options` to write the StripeGroup metadata format under test.
+  void setStripeGroupFormat(nimble::WriterOptions& options) const {
+    options.experimentalStripeGroupEncodingLayout = GetParam().layout;
+    options.experimentalStripeGroupSparseLayout = GetParam().sparseLayout;
   }
 
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
@@ -1582,7 +1570,7 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnselectedColumnsFromFile) {
 
   uint32_t readSize = 1;
   nimble::WriterOptions writerOptions;
-  writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+  setStripeGroupFormat(writerOptions);
   auto file = nimble::test::createNimbleFile(*rootPool_, vector, writerOptions);
   for (auto useChainedBuffers : {false, true}) {
     nimble::testing::InMemoryTrackableReadFile readFile(
@@ -1634,7 +1622,7 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
 
   nimble::WriterOptions writerOptions;
   writerOptions.flatMapColumns["float_features"];
-  writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+  setStripeGroupFormat(writerOptions);
 
   auto file = nimble::test::createNimbleFile(
       *rootPool_, vector, std::move(writerOptions));
@@ -1723,21 +1711,66 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
   }
 }
 
+TEST_P(BatchReaderStripeGroupFormatTest, readsFlatMapKeysMissingFromStripes) {
+  // Each stripe holds keys of its own plus one key every stripe has, so most
+  // key streams have data in some stripes only.
+  constexpr int32_t kStripeCount{4};
+  constexpr int32_t kRowsPerStripe{5};
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  std::vector<velox::VectorPtr> batches;
+  for (int32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    std::vector<velox::vector_size_t> offsets;
+    std::vector<int32_t> keys;
+    std::vector<int64_t> values;
+    for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+      offsets.push_back(static_cast<velox::vector_size_t>(keys.size()));
+      for (const int32_t key : {stripe, stripe + kStripeCount, 100}) {
+        keys.push_back(key);
+        values.push_back(key * 1'000 + row);
+      }
+    }
+    batches.push_back(vectorMaker.rowVector(
+        {"features"},
+        {vectorMaker.mapVector(
+            offsets,
+            vectorMaker.flatVector<int32_t>(keys),
+            vectorMaker.flatVector<int64_t>(values))}));
+  }
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.flatMapColumns["features"];
+  setStripeGroupFormat(writerOptions);
+  // Each vector is flushed into its own stripe.
+  const auto file =
+      nimble::test::createNimbleFile(*rootPool_, batches, writerOptions);
+
+  velox::InMemoryReadFile readFile(file);
+  auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
+      std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type()));
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, std::move(selector), nimble::BatchReadParams{});
+  for (int32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    SCOPED_TRACE(fmt::format("stripe={}", stripe));
+    velox::VectorPtr result;
+    ASSERT_TRUE(reader.next(kRowsPerStripe, result));
+    ASSERT_EQ(result->size(), kRowsPerStripe);
+    for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+      EXPECT_TRUE(batches[stripe]->equalValueAt(result.get(), row, row));
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     BatchReaderStripeGroupFormatTestSuite,
     BatchReaderStripeGroupFormatTest,
     ::testing::Values(
-        nimble::StripeGroup::EncodingLayout::kRaw,
-        nimble::StripeGroup::EncodingLayout::kStreamMajor),
-    [](const ::testing::TestParamInfo<nimble::StripeGroup::EncodingLayout>&
-           info) {
-      switch (info.param) {
-        case nimble::StripeGroup::EncodingLayout::kRaw:
-          return "Raw";
-        case nimble::StripeGroup::EncodingLayout::kStreamMajor:
-          return "StreamMajor";
-      }
-      return "Unknown";
+        StripeGroupFormat{nimble::StripeGroup::EncodingLayout::kRaw},
+        StripeGroupFormat{nimble::StripeGroup::EncodingLayout::kStreamMajor},
+        StripeGroupFormat{
+            nimble::StripeGroup::EncodingLayout::kStreamMajor,
+            /*sparseLayout=*/true}),
+    [](const ::testing::TestParamInfo<StripeGroupFormat>& info) {
+      return info.param.debugString();
     });
 
 TEST_P(BatchReaderTest, sharedDictionary) {
@@ -7955,6 +7988,38 @@ TEST_P(BatchReaderTest, vectorVectorResetWithBufferReuse) {
   }
 }
 
+TEST_P(BatchReaderTest, nextDoesNotOverwriteSlicedBuffers) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+
+  // Nulls in every batch give the child both a nulls and a values buffer.
+  const auto input = vectorMaker.rowVector({
+      vectorMaker.flatVector<int64_t>(
+          128,
+          [](auto row) { return row; },
+          [](auto row) { return row % 3 == 0; }),
+  });
+  const auto file = nimble::test::createNimbleFile(*rootPool_, input, {});
+  velox::InMemoryReadFile readFile(file);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, /*selector=*/nullptr, createReadParams());
+
+  velox::VectorPtr result;
+  ASSERT_TRUE(reader.next(64, result));
+
+  // The slice views the child's nulls and values buffers without referencing
+  // the child, so the next read reuses the child but must not decode into
+  // those buffers. A byte-aligned offset makes the sliced nulls a view too.
+  constexpr velox::vector_size_t kOffset{48};
+  const auto slice = result->slice(kOffset, 16);
+  ASSERT_TRUE(reader.next(64, result));
+
+  for (velox::vector_size_t row = 0; row < slice->size(); ++row) {
+    ASSERT_TRUE(input->equalValueAt(slice.get(), kOffset + row, row))
+        << "Row " << row << ": expected " << input->toString(kOffset + row)
+        << ", got " << slice->toString(row);
+  }
+}
+
 // Timestamp tests that might not be covered by fuzzer
 TEST_P(BatchReaderTest, timestampAllNulls) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
@@ -8121,6 +8186,7 @@ TEST_P(MetadataReuseTest, metadataReuseWithSameReader) {
       fileHandle->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle->groupId = velox::StringIdLease(ids, fileIdStr + "_group");
       tabletOptions.cache = cache_.get();
+      tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle.get();
     }
 
@@ -8240,6 +8306,7 @@ TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
             fileHandleOut->uuid = fileId;
             fileHandleOut->groupId = groupId;
             tabletOptions.cache = cache_.get();
+            tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
             tabletOptions.fileHandle = fileHandleOut.get();
           }
           return nimble::TabletReader::create(
@@ -8287,8 +8354,8 @@ TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
           << "Cross-reader should not re-read metadata. "
           << "maxReadOffset=" << trackingFile->maxReadOffset()
           << " metadataBoundary=" << metadataBoundary;
-      ASSERT_EQ(metadataIoStats2->rawBytesRead(), 0)
-          << "Cross-reader should not record any metadata IO";
+      ASSERT_EQ(metadataIoStats2->read().sum(), 0)
+          << "Cross-reader should not read any metadata from the file";
     } else {
       ASSERT_GT(trackingFile->maxReadOffset(), metadataBoundary)
           << "Cross-reader should re-read metadata. "
@@ -8749,3 +8816,102 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<TestParam>& info) {
       return info.param.debugString();
     });
+
+namespace {
+
+template <typename Factory>
+class RecordingUnitLoaderFactory : public Factory {
+ public:
+  RecordingUnitLoaderFactory() : Factory(nullptr) {}
+
+  std::unique_ptr<velox::dwio::common::UnitLoader> create(
+      std::vector<std::unique_ptr<velox::dwio::common::LoadUnit>> units,
+      uint64_t rowsToSkip) override {
+    ++numCreates;
+    return Factory::create(std::move(units), rowsToSkip);
+  }
+
+  int numCreates{0};
+};
+
+} // namespace
+
+TEST_P(BatchReaderTest, projectedStripePrefetchMatchesOnDemand) {
+  auto vectors = createSkipSeekVectors(*leafPool_, {80, 83, 81, 73});
+  auto file = std::make_shared<velox::InMemoryReadFile>(
+      nimble::test::createNimbleFile(*rootPool_, vectors));
+  auto executor = std::make_shared<folly::ManualExecutor>();
+  enum class FactoryKind { kDefault, kOnDemand, kParallel };
+  for (auto factoryKind :
+       {FactoryKind::kDefault,
+        FactoryKind::kOnDemand,
+        FactoryKind::kParallel}) {
+    SCOPED_TRACE(static_cast<int>(factoryKind));
+    const bool prefetch = factoryKind == FactoryKind::kParallel;
+    velox::dwio::common::ReaderOptions options(leafPool_.get());
+    auto reader = velox::nimble::detail::createBatchReader(options, file, {});
+    size_t numPrefetchScheduled{0};
+    size_t numBlockedOnIoCallbacks{0};
+    auto factory =
+        std::make_shared<velox::dwio::common::ParallelUnitLoaderFactory>(
+            executor.get(),
+            2,
+            velox::dwio::common::ParallelUnitLoaderOptions{
+                .metricCallback =
+                    [&](auto event, auto) {
+                      if (event ==
+                          velox::dwio::common::UnitLoader::Event::
+                              kPrefetchScheduled) {
+                        ++numPrefetchScheduled;
+                      }
+                    },
+                .blockedOnIoCallback =
+                    [&](auto) { ++numBlockedOnIoCallbacks; }});
+    auto onDemandFactory = std::make_shared<RecordingUnitLoaderFactory<
+        velox::dwio::common::OnDemandUnitLoaderFactory>>();
+    auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
+        velox::checkedPointerCast<const velox::RowType>(vectors[0]->type()),
+        std::vector<std::string>{"a", "b"});
+    velox::dwio::common::RowReaderOptions rowOptions;
+    auto scanSpec = std::make_shared<velox::common::ScanSpec>("root");
+    for (int column = 0; column < 2; ++column) {
+      auto* field = scanSpec->getOrCreateChild(
+          velox::common::Subfield(column == 0 ? "a" : "b"));
+      field->setProjectOut(true);
+      field->setChannel(column);
+    }
+    rowOptions.setScanSpec(scanSpec);
+    rowOptions.select(selector);
+    size_t numStripeCountCallbacks{0};
+    rowOptions.setStripeCountCallback([&](auto) { ++numStripeCountCallbacks; });
+    if (prefetch) {
+      rowOptions.setUnitLoaderFactory(factory);
+    } else if (factoryKind == FactoryKind::kOnDemand) {
+      rowOptions.setUnitLoaderFactory(onDemandFactory);
+    }
+    auto rowReader = reader->createRowReader(rowOptions);
+    EXPECT_EQ(
+        onDemandFactory->numCreates,
+        factoryKind == FactoryKind::kOnDemand ? 1 : 0);
+    EXPECT_EQ(numStripeCountCallbacks, 1);
+    for (const auto& expected : vectors) {
+      velox::VectorPtr result;
+      ASSERT_EQ(rowReader->next(128, result), expected->size());
+      ASSERT_NE(result, nullptr);
+      ASSERT_EQ(result->size(), expected->size());
+      const auto* expectedRow = expected->as<velox::RowVector>();
+      const auto* actualRow = result->as<velox::RowVector>();
+      ASSERT_EQ(actualRow->childrenSize(), 2);
+      for (int column = 0; column < 2; ++column) {
+        for (velox::vector_size_t row = 0; row < result->size(); ++row) {
+          ASSERT_TRUE(expectedRow->childAt(column)->equalValueAt(
+              actualRow->childAt(column).get(), row, row));
+        }
+      }
+    }
+    velox::VectorPtr result;
+    EXPECT_EQ(rowReader->next(128, result), 0);
+    EXPECT_EQ(numBlockedOnIoCallbacks, prefetch ? vectors.size() : 0);
+    EXPECT_EQ(numPrefetchScheduled, prefetch ? vectors.size() - 1 : 0);
+  }
+}

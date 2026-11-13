@@ -22,8 +22,8 @@
 #include <utility>
 #include <vector>
 
-#include "folly/container/F14Map.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaTypes.h"
 
 // Schema reader provides a strongly typed, tree like, reader friendly facade on
@@ -245,27 +245,48 @@ class FlatMapType : public Type {
 
 class HybridFlatMapType : public Type {
  public:
+  /// Describes one group: its ID and keys, which it borrows from
+  /// hybridFlatMap(), its key-presence and in-map streams and its value
+  /// subtree.
   struct Group {
     /// Stable group identifier. Default uses HybridFlatMap::kDefaultGroupId.
     uint32_t groupId;
     /// Feature keys in key-presence bitmap order. Default keys are accumulated
-    /// in first-seen order and may be empty before any are observed. A
-    /// projection whose requested keys are all absent also holds a keyless
-    /// Default group.
-    std::vector<std::string> groupKeys;
-    /// One bit per schema key; trailing omitted bits are absent.
+    /// in first-seen order and may be empty before any are observed. With
+    /// HybridFlatMap::KeyPresenceMode::kKeyList, Default lists no keys; each
+    /// batch lists its own. A projection whose requested keys are all absent
+    /// also holds a keyless Default group.
+    const std::vector<std::string>& groupKeys;
+    /// One bit per schema key; trailing omitted bits are absent. With
+    /// HybridFlatMap::KeyPresenceMode::kKeyList, Default's stream instead lists
+    /// the batch's keys, typed by the map key kind and in first-seen order.
     StreamDescriptor keyPresenceDescriptor;
     /// Key-major row-presence stream.
     StreamDescriptor inMapDescriptor;
-    /// Complete value subtree owned by this physical group.
+    /// Complete value subtree owned by this group.
     std::shared_ptr<const Type> valueType;
   };
 
+  /// Reserved schema attribute holding the groups, as
+  /// HybridFlatMap::serialize() writes them. Schema builders store it, and the
+  /// schema reader parses it into hybridFlatMap(). attributes() leaves it out.
+  static constexpr std::string_view kAttributeName{"hybridFlatMap"};
+
+  /// Builds the type of a schema node from `hybridFlatMap`, which holds the
+  /// key kind, each group's ID and keys, the Default key presence mode and the
+  /// key index: parsed from the node's kAttributeName attribute, or shared with
+  /// another type of the same groups. `groups` holds each group of
+  /// `hybridFlatMap`, in the same order, with its ID and the keys of that
+  /// group in `hybridFlatMap.groups()`, which copies of `hybridFlatMap` share.
+  /// attributes() holds `attributes`, which leave out kAttributeName. Every
+  /// key-presence stream is boolean, except that a Default group with
+  /// HybridFlatMap::KeyPresenceMode::kKeyList lists its keys with the map key
+  /// kind.
   HybridFlatMapType(
       StreamDescriptor nullsDescriptor,
-      ScalarKind keyScalarKind,
+      HybridFlatMap hybridFlatMap,
       std::vector<Group> groups,
-      std::vector<std::pair<std::string, std::string>> attributes = {});
+      std::vector<std::pair<std::string, std::string>> attributes);
 
   /// Returns the map-level null stream descriptor.
   const StreamDescriptor& nullsDescriptor() const;
@@ -273,8 +294,20 @@ class HybridFlatMapType : public Type {
   /// Returns the logical scalar type used by map keys.
   ScalarKind keyScalarKind() const;
 
-  /// Returns the number of physical groups present in this schema. Complete
-  /// writer schemas include Default; projected schemas may omit it.
+  /// Returns the key kind, each group's ID and keys, the Default key presence
+  /// mode and the key index, as the schema records them. Its copies share
+  /// them.
+  const HybridFlatMap& hybridFlatMap() const;
+
+  /// Returns how batches record their Default keys.
+  HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode() const;
+
+  /// Returns whether group `groupId` lists its keys in its key-presence
+  /// stream. See HybridFlatMap::hasKeyPresenceList().
+  bool useKeyPresentList(uint32_t groupId) const;
+
+  /// Returns the number of groups present in this schema. Complete writer
+  /// schemas include Default; projected schemas may omit it.
   size_t groupCount() const;
 
   /// Returns the group at zero-based schema-order `index`. The index is an
@@ -286,20 +319,35 @@ class HybridFlatMapType : public Type {
   /// absent, returns a keyless Default group that carries no data.
   const Group& defaultGroup() const;
 
+  /// Returns the schema-order index of the Default group, or `std::nullopt`
+  /// when a projected schema kept only configured groups.
+  std::optional<size_t> defaultGroupIndex() const;
+
   /// Returns the schema-order index of the group containing `key`, including
-  /// Default. Returns `std::nullopt` when the schema has not observed it.
+  /// Default with HybridFlatMap::KeyPresenceMode::kBitmap. Returns
+  /// `std::nullopt` when the schema has not observed it, or, with
+  /// HybridFlatMap::KeyPresenceMode::kKeyList, when no configured group lists
+  /// it.
   std::optional<size_t> findGroup(std::string_view key) const;
+
+  /// Returns the schema-order index of the group that a projection of `key`
+  /// selects. Same as findGroup(), except that with
+  /// HybridFlatMap::KeyPresenceMode::kKeyList a key in no configured group
+  /// selects Default, since any batch's Default may hold it. Returns
+  /// `std::nullopt` when no group can hold `key`.
+  std::optional<size_t> findProjectionGroup(std::string_view key) const;
 
   /// Returns the common logical value type from the first group.
   const Type& valueType() const;
 
  private:
   StreamDescriptor nullsDescriptor_;
-  const ScalarKind keyScalarKind_;
+  // See hybridFlatMap().
+  const HybridFlatMap hybridFlatMap_;
+  // See groupAt(). Views the keys of hybridFlatMap_, so it is declared after
+  // hybridFlatMap_. Never changes after construction, so references from
+  // groupAt() stay valid.
   std::vector<Group> groups_;
-  // Maps views into groups_' keys to schema-order group indices. groups_ never
-  // changes after construction.
-  folly::F14FastMap<std::string_view, size_t> groupIndices_;
 };
 
 class ArrayWithOffsetsType : public Type {

@@ -448,6 +448,48 @@ VectorPtr newFlat(
   }
 }
 
+// Returns the part of 'ranges' that falls within the first 'childSize' rows. A
+// row vector child may be shorter than its parent when the parent rows past its
+// end are null, and those rows need no child values. Returns 'ranges' itself
+// when no clipping is needed, else fills and returns 'clipped'.
+folly::Range<const BaseVector::CopyRange*> toChildRanges(
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    vector_size_t childSize,
+    std::vector<BaseVector::CopyRange>& clipped) {
+  // Most children are as long as their parent: copy the ranges as they are.
+  const bool fitsChild =
+      std::all_of(ranges.begin(), ranges.end(), [&](const auto& range) {
+        return range.sourceIndex + range.count <= childSize;
+      });
+  if (fitsChild) {
+    return ranges;
+  }
+
+  // Drop the rows past the end of the child.
+  clipped.clear();
+  for (const auto& range : ranges) {
+    if (range.sourceIndex < childSize) {
+      clipped.push_back(
+          {range.sourceIndex,
+           range.targetIndex,
+           std::min(range.count, childSize - range.sourceIndex)});
+    }
+  }
+  return clipped;
+}
+
+// Returns true if the row child is a column the reader did not project. Such a
+// child is null and has no values to copy, so it must be null on both sides.
+bool isUnprojectedChild(
+    const VectorPtr& sourceChild,
+    const VectorPtr& targetChild) {
+  VELOX_CHECK_EQ(
+      sourceChild == nullptr,
+      targetChild == nullptr,
+      "Source and target must project the same row children");
+  return sourceChild == nullptr;
+}
+
 VectorPtr newRow(
     const EncodedVectorCopyOptions& options,
     const RowVector& source,
@@ -455,8 +497,18 @@ VectorPtr newRow(
   auto size = newTargetSize(ranges);
   auto nulls = newNulls(size, options.pool, source.rawNulls(), ranges);
   std::vector<VectorPtr> children(source.childrenSize());
+  std::vector<BaseVector::CopyRange> clipped;
   for (column_index_t i = 0; i < children.size(); ++i) {
-    copyImpl(options, source.childAt(i), ranges, children[i], false);
+    const auto& child = source.childAt(i);
+    if (!child) {
+      continue;
+    }
+    copyImpl(
+        options,
+        child,
+        toChildRanges(ranges, child->size(), clipped),
+        children[i],
+        false);
   }
   return std::make_shared<RowVector>(
       options.pool, source.type(), std::move(nulls), size, std::move(children));
@@ -702,6 +754,7 @@ void copyIntoRow(
   const auto size = targetSize(target->size(), ranges);
   auto* targetRow = target->asUnchecked<RowVector>();
   auto* sourceNulls = source.rawNulls();
+  std::vector<BaseVector::CopyRange> clipped;
   if (targetMutable) {
     const auto oldSize = target->size();
     targetRow->unsafeResize(size);
@@ -709,13 +762,21 @@ void copyIntoRow(
     setSourceNulls(sourceNulls, *target, ranges);
     for (column_index_t i = 0; i < targetRow->childrenSize(); ++i) {
       auto& targetChild = targetRow->childAt(i);
+      const auto& sourceChild = source.childAt(i);
+      if (isUnprojectedChild(sourceChild, targetChild)) {
+        continue;
+      }
       bool targetChildMutable = targetChild.use_count() == 1;
       if (targetChildMutable && targetChild->size() > oldSize) {
         // Shrink the size to allow unreferenced nested rows to be released.
         targetChild->resize(oldSize);
       }
       copyImpl(
-          options, source.childAt(i), ranges, targetChild, targetChildMutable);
+          options,
+          sourceChild,
+          toChildRanges(ranges, sourceChild->size(), clipped),
+          targetChild,
+          targetChildMutable);
     }
     targetRow->invalidateContainsLazyNotLoaded();
   } else {
@@ -731,7 +792,16 @@ void copyIntoRow(
     }
     auto children = targetRow->children();
     for (column_index_t i = 0; i < children.size(); ++i) {
-      copyImpl(options, source.childAt(i), ranges, children[i], false);
+      const auto& sourceChild = source.childAt(i);
+      if (isUnprojectedChild(sourceChild, children[i])) {
+        continue;
+      }
+      copyImpl(
+          options,
+          sourceChild,
+          toChildRanges(ranges, sourceChild->size(), clipped),
+          children[i],
+          false);
     }
     target = std::make_shared<RowVector>(
         options.pool,

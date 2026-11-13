@@ -88,7 +88,8 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
   std::unique_ptr<IndexWriter> createWriter(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool) const override {
+      velox::memory::MemoryPool* pool,
+      const Options& writerOptions) const override {
     const auto& options = checkedIndexConfig<TestIndexConfig>(config);
     const ClusterIndexConfig builtInConfig{
         std::string{name()},
@@ -98,8 +99,10 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
         false,
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         10'000,
-        CompressionType::Uncompressed};
-    return ClusterIndexWriter::create(builtInConfig, inputType, pool);
+        CompressionType::Uncompressed,
+        /*hierarchicalKeyEncodingReadFactors=*/{}};
+    return ClusterIndexWriter::create(
+        builtInConfig, inputType, pool, writerOptions);
   }
 
   std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
@@ -140,7 +143,8 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
   std::unique_ptr<IndexWriter> createWriter(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool) const override {
+      velox::memory::MemoryPool* pool,
+      const Options& writerOptions) const override {
     const auto& options = checkedIndexConfig<TestIndexConfig>(config);
     const ClusterIndexConfig builtInConfig{
         std::string{name()},
@@ -150,8 +154,10 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
         /*noDuplicateKey=*/true,
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         /*maxRowsPerKeyChunk=*/4,
-        CompressionType::Uncompressed};
-    return ClusterIndexWriter::create(builtInConfig, inputType, pool);
+        CompressionType::Uncompressed,
+        /*hierarchicalKeyEncodingReadFactors=*/{}};
+    return ClusterIndexWriter::create(
+        builtInConfig, inputType, pool, writerOptions);
   }
 
   std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
@@ -189,10 +195,14 @@ class NamedIndexWriter final : public IndexWriter {
     writer_->write(input);
   }
 
-  void flush(
+  std::vector<Chunk> finishStripe(Buffer& buffer) override {
+    return writer_->finishStripe(buffer);
+  }
+
+  void finishStripeGroup(
       const WriteDataFn& writeDataFn,
       const CreateMetadataSectionFn& createMetadataFn) override {
-    writer_->flush(writeDataFn, createMetadataFn);
+    writer_->finishStripeGroup(writeDataFn, createMetadataFn);
   }
 
   std::optional<IndexDescriptor> close(
@@ -296,7 +306,8 @@ class FailingIndexWriter final : public IndexWriter {
     NIMBLE_FAIL("Injected index write failure");
   }
 
-  void flush(const WriteDataFn&, const CreateMetadataSectionFn&) override {}
+  void finishStripeGroup(const WriteDataFn&, const CreateMetadataSectionFn&)
+      override {}
 
   std::optional<IndexDescriptor> close(
       const WriteDataFn&,
@@ -309,7 +320,8 @@ class InvalidDescriptorIndexWriter final : public IndexWriter {
  public:
   void write(const velox::VectorPtr&) override {}
 
-  void flush(const WriteDataFn&, const CreateMetadataSectionFn&) override {}
+  void finishStripeGroup(const WriteDataFn&, const CreateMetadataSectionFn&)
+      override {}
 
   std::optional<IndexDescriptor> close(
       const WriteDataFn&,
@@ -330,8 +342,9 @@ class LifecycleIndexWriter final : public IndexWriter {
     lifecycleEvents.wlock()->emplace_back("write");
   }
 
-  void flush(const WriteDataFn&, const CreateMetadataSectionFn&) override {
-    lifecycleEvents.wlock()->emplace_back("flush");
+  void finishStripeGroup(const WriteDataFn&, const CreateMetadataSectionFn&)
+      override {
+    lifecycleEvents.wlock()->emplace_back("finishStripeGroup");
     if (failureStage_ == FailureStage::kFlush) {
       NIMBLE_FAIL("Injected index flush failure");
     }
@@ -670,8 +683,8 @@ TEST_F(IndexFactoryTest, rejectDuplicateDenseIndex) {
   IndexLookup::Options options{.file = file, .ioOptions = &ioOptions};
 
   auto makeSection = [&] {
-    return Section{MetadataBuffer{
-        velox::AlignedBuffer::allocate<char>(1, leafPool_.get())}};
+    return Section{MetadataBuffer{toPinnedBuffer(
+        velox::AlignedBuffer::allocate<char>(1, leafPool_.get()))}};
   };
   std::vector<DenseIndexRegistry::Entry> entries;
   entries.emplace_back(
@@ -835,9 +848,9 @@ TEST_F(IndexFactoryTest, indexWriterLifecycle) {
     std::vector<std::string> expectedEvents;
   };
   const std::vector<TestCase> testCases{
-      {"success", "", {"write", "flush", "close"}},
-      {"flush_failure", "flush", {"write", "flush"}},
-      {"close_failure", "close", {"write", "flush", "close"}},
+      {"success", "", {"write", "finishStripeGroup", "close"}},
+      {"flush_failure", "flush", {"write", "finishStripeGroup"}},
+      {"close_failure", "close", {"write", "finishStripeGroup", "close"}},
   };
 
   for (const auto& testCase : testCases) {

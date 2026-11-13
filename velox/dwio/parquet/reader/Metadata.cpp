@@ -18,6 +18,7 @@
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 #include <thrift/lib/cpp2/FieldRef.h>
+#include <limits>
 
 namespace facebook::velox::parquet {
 
@@ -232,12 +233,21 @@ inline std::optional<std::string> getMax(
       : columnChunkStats.max().to_optional();
 }
 
-std::optional<Timestamp> int64ToTimestamp(
+std::optional<Timestamp> integerToTimestamp(
     std::optional<int64_t> value,
     std::optional<thrift::ConvertedType> convertedType,
     const std::optional<thrift::LogicalType>& logicalType) {
   if (!value.has_value()) {
     return std::nullopt;
+  }
+  if (convertedType == thrift::ConvertedType::DATE) {
+    constexpr int64_t kMicrosecondsInDay =
+        Timestamp::kSecondsInDay * Timestamp::kMicrosecondsInSecond;
+    if (*value < std::numeric_limits<int64_t>::min() / kMicrosecondsInDay ||
+        *value > std::numeric_limits<int64_t>::max() / kMicrosecondsInDay) {
+      return std::nullopt;
+    }
+    return Timestamp::fromDate(static_cast<int32_t>(value.value()));
   }
   if (logicalType.has_value() &&
       logicalType->getType() == thrift::LogicalType::Type::TIMESTAMP) {
@@ -341,17 +351,23 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMax<std::string>(columnChunkStats),
           std::nullopt);
     case TypeKind::TIMESTAMP:
-      if (physicalType == thrift::Type::INT64 &&
-          (convertedType.has_value() || logicalType.has_value())) {
+      if ((physicalType == thrift::Type::INT32 &&
+           convertedType == thrift::ConvertedType::DATE) ||
+          (physicalType == thrift::Type::INT64 &&
+           (convertedType.has_value() || logicalType.has_value()))) {
+        auto minimum = integerToTimestamp(
+            getMin<int64_t>(columnChunkStats), convertedType, logicalType);
+        auto maximum = integerToTimestamp(
+            getMax<int64_t>(columnChunkStats), convertedType, logicalType);
+        if (convertedType == thrift::ConvertedType::DATE &&
+            (!minimum || !maximum)) {
+          // Pruning must not hide overflows when the date range is unknown
+          // or exceeds the microsecond timestamp range.
+          minimum.reset();
+          maximum.reset();
+        }
         return std::make_unique<dwio::common::TimestampColumnStatistics>(
-            valueCount,
-            hasNull,
-            std::nullopt,
-            std::nullopt,
-            int64ToTimestamp(
-                getMin<int64_t>(columnChunkStats), convertedType, logicalType),
-            int64ToTimestamp(
-                getMax<int64_t>(columnChunkStats), convertedType, logicalType));
+            valueCount, hasNull, std::nullopt, std::nullopt, minimum, maximum);
       }
       return std::make_unique<dwio::common::ColumnStatistics>(
           valueCount, hasNull, std::nullopt, std::nullopt);

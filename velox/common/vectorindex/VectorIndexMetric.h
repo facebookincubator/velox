@@ -16,17 +16,47 @@
 
 #pragma once
 
+#include <cstdint>
+#include <string_view>
+
+#include <fmt/format.h>
+
 #include "velox/common/EnumDeclare.h"
 
 namespace facebook::velox::common::vectorindex {
 
-/// Distance metric of a vector index.
+/// Distance metric of a vector index: how the index compares embeddings. The
+/// values are stored in intermediate results, so new metrics take new values.
 enum class VectorIndexMetric {
-  /// The angle between vectors, ignoring their length. Vectors are normalized
-  /// to length 1 and compared by dot product.
-  kCosine,
+  /// The angle between embeddings, ignoring their length. Embeddings are
+  /// normalized to length 1 and compared by dot product.
+  kCosine = 0,
 };
 
 VELOX_DECLARE_ENUM_NAME(VectorIndexMetric);
 
+/// The integer form of VectorIndexMetric, stored in intermediate results.
+class VectorIndexMetricValue {
+ public:
+  static int32_t toValue(VectorIndexMetric metric) {
+    return static_cast<int32_t>(metric);
+  }
+
+  /// Throws a user error for a value that names no metric.
+  static VectorIndexMetric fromValue(int32_t value);
+};
+
 } // namespace facebook::velox::common::vectorindex
+
+template <>
+struct fmt::formatter<facebook::velox::common::vectorindex::VectorIndexMetric>
+    : fmt::formatter<std::string_view> {
+  auto format(
+      facebook::velox::common::vectorindex::VectorIndexMetric metric,
+      fmt::format_context& ctx) const {
+    return fmt::formatter<std::string_view>::format(
+        facebook::velox::common::vectorindex::VectorIndexMetricName::toName(
+            metric),
+        ctx);
+  }
+};

@@ -443,8 +443,7 @@ TEST_F(OrderByTest, outputBatchRows) {
 
     EXPECT_EQ(
         testData.expectedOutputVectors,
-        toPlanStats(task->taskStats())
-            .at(orderById)
+        PlanNodeStats::extract(task->taskStats(), orderById)
             .operatorStats.at("CudfToVelox")
             ->outputVectors);
   }

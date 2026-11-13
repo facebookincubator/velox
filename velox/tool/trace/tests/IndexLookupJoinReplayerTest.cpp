@@ -118,12 +118,9 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
     // Create the table.
     auto table = HashTable<false>::createForJoin(
         std::move(hashers),
-        /*dependentTypes=*/dependentTypes,
-        /*allowDuplicates=*/true,
-        /*hasProbedFlag=*/false,
-        /*hasCountFlag=*/false,
-        /*minTableSizeForParallelJoinBuild=*/1,
-        pool_.get());
+        dependentTypes,
+        pool_.get(),
+        {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1});
 
     // Insert data into the row container.
     auto* rowContainer = table->rows();
@@ -285,8 +282,7 @@ TEST_F(IndexLookupJoinReplayerTest, test) {
   std::shared_ptr<Task> task;
 
   // Create a file for the probe data
-  const auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), probeInput_);
+  const auto sourceFilePath = writeToFile(probeInput_);
 
   // Run the query with tracing enabled
   auto results =
@@ -367,8 +363,7 @@ TEST_F(IndexLookupJoinReplayerTest, testWithIndexSplits) {
   const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
   std::shared_ptr<Task> task;
 
-  const auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), probeInput_);
+  const auto sourceFilePath = writeToFile(probeInput_);
 
   // Provide index splits to the original query.
   auto results =

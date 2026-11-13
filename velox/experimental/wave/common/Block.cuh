@@ -267,6 +267,9 @@ void __device__ partitionRows(
       // The sum of the previous round is carried over as start of this.
       localCount[0] += *aggregate;
     }
+    // With one round 'counters' is the scan's storage, which the scan
+    // overwrites before its first barrier.
+    __syncthreads();
     Scan(*temp).InclusiveSum(localCount, localCount);
     if (start + threadIdx.x < numPartitions) {
       partitionStarts[start + threadIdx.x] = localCount[0];

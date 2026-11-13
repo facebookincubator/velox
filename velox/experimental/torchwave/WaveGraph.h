@@ -17,6 +17,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -81,6 +82,10 @@ struct ValueConstraint {
   bool externallyOwned{false};
   /// True when the value is a graph output.
   bool graphOutput{false};
+  /// Sizes the graph fixes for this value, one per dim, -1 for a dim known
+  /// only at run time. Valid only when its size equals 'rank'. Computed by
+  /// inferStaticDims (StaticDims.h) after the other fields.
+  std::vector<int64_t> dims{};
 };
 
 /// Per-value tensor metadata and constraints for a WaveGraph.
@@ -251,6 +256,11 @@ class WaveGraph {
 
   /// Returns 'state' to the pool for reuse.
   void returnState(std::unique_ptr<ExecutionState> state);
+
+  /// The sizes of value 'id' in the most recent execution's value table, or
+  /// empty if that execution did not produce it as a tensor. For debugging and
+  /// tests: a value only kernels read has no frame tensor to inspect.
+  std::vector<int64_t> lastValueSizes(nativert::ValueId id);
 
   const std::vector<std::unique_ptr<CompiledNode>>& nodes() const {
     return nodes_;

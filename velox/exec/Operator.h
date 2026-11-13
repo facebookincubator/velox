@@ -19,6 +19,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include "velox/common/base/IdentityProjection.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -28,18 +29,6 @@
 #include "velox/exec/trace/TraceWriter.h"
 
 namespace facebook::velox::exec {
-
-/// Represents a column that is copied from input to output, possibly
-/// with cardinality change, i.e. values removed or duplicated.
-struct IdentityProjection {
-  IdentityProjection(
-      column_index_t _inputChannel,
-      column_index_t _outputChannel)
-      : inputChannel(_inputChannel), outputChannel(_outputChannel) {}
-
-  column_index_t inputChannel;
-  column_index_t outputChannel;
-};
 
 class OperatorCtx {
  public:

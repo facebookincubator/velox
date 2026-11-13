@@ -82,7 +82,6 @@ void TopN::addInput(RowVectorPtr input) {
       newRow = data_->initializeRow(topRow, true /* reuse */);
     }
 
-    data_->initializeFields(newRow);
     for (const auto col : sortingKeyColumns_) {
       data_->store(decodedVectors_[col], row, newRow, col);
     }

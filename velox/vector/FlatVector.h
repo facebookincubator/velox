@@ -463,7 +463,7 @@ class FlatVector final : public SimpleVector<T> {
   bool addStringBuffer(const BufferPtr& buffer) {
     VELOX_DCHECK_GE(stringBuffers_.size(), stringBufferSet_.size());
 
-    if (FOLLY_UNLIKELY(!stringBufferSet_.insert(buffer.get()).second)) {
+    if (!stringBufferSet_.insert(buffer.get()).second) [[unlikely]] {
       return false;
     }
     stringBuffers_.push_back(buffer);

@@ -41,15 +41,20 @@ class HiveConnectorTestBase : public OperatorTestBase {
           std::make_shared<config::ConfigBase>(
               std::unordered_map<std::string, std::string>()));
 
-  void writeToFiles(
-      const std::vector<std::string>& filePaths,
-      std::vector<RowVectorPtr> vectors);
-
   void writeToFile(const std::string& filePath, RowVectorPtr vector);
 
   /// Writes 'data' to a temporary DWRF file and returns its handle. Keep the
   /// handle alive while reading the file.
   std::shared_ptr<TempFilePath> writeToFile(const RowVectorPtr& data);
+
+  /// Writes 'data' batches to one temporary DWRF file and returns its handle.
+  std::shared_ptr<TempFilePath> writeToFile(
+      const std::vector<RowVectorPtr>& data);
+
+  /// Writes each of 'data' to its own temporary DWRF file and returns the
+  /// handles, in the order of 'data'.
+  std::vector<std::shared_ptr<TempFilePath>> writeToFiles(
+      const std::vector<RowVectorPtr>& data);
 
   void writeToFile(
       const std::string& filePath,
@@ -141,7 +146,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::vector<std::string>& indexColumns = {},
       const std::unordered_map<std::string, std::string>& storageParameters =
           {},
-      std::string dbName = "") {
+      std::string dbName = "",
+      connector::hive::HiveBucketPropertyPtr bucketProperty = nullptr) {
     return std::make_shared<connector::hive::HiveTableHandle>(
         kHiveConnectorId,
         tableName,
@@ -152,7 +158,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
         storageParameters,
         std::vector<connector::hive::HiveColumnHandlePtr>{},
         /*sampleRate=*/1.0,
-        std::move(dbName));
+        std::move(dbName),
+        /*dataColumnFieldIds=*/std::vector<int32_t>{},
+        std::move(bucketProperty));
   }
 
   /// @param name Column name.
@@ -172,8 +180,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const TypePtr& dataType,
       const TypePtr& hiveType,
       const std::vector<std::string>& requiredSubfields,
-      connector::hive::FileColumnHandle::ColumnType columnType =
-          connector::hive::FileColumnHandle::ColumnType::kRegular);
+      connector::FileColumnHandle::ColumnType columnType =
+          connector::FileColumnHandle::ColumnType::kRegular);
 
   /// @param targetDirectory Final directory of the target table after commit.
   /// @param writeDirectory Write directory of the target table before commit.

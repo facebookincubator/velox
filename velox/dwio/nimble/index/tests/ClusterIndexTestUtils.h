@@ -184,11 +184,13 @@ class ClusterIndexTestHelper {
       std::shared_ptr<MetadataInput> metadataInput,
       std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
       bool pinIndex = false,
-      bool preloadIndex = false) {
+      bool preloadIndex = false,
+      IndexLookup::KeyStreamLocator keyStreamLocator = nullptr) {
     return std::unique_ptr<ClusterIndex>(new ClusterIndex(
         std::move(rootSection),
         std::move(metadataInput),
         std::move(dataInput),
+        std::move(keyStreamLocator),
         /*keyComparator=*/nullptr,
         pinIndex,
         preloadIndex,
@@ -218,11 +220,21 @@ class ClusterIndexTestHelper {
     return clusterIndex_->partitionSection(partitionIndex);
   }
 
+  /// Returns the region of the key stream of a Partition layout partition.
   velox::common::Region keyStreamRegion(uint32_t partitionIndex) const {
-    const auto* partition = clusterIndex_->loadPartition(partitionIndex);
-    return velox::common::Region{
-        partition->index->key_stream_offset(),
-        partition->index->key_stream_size()};
+    NIMBLE_CHECK_EQ(
+        clusterIndex_->keyStreamLayout(), KeyStreamLayout::kPartition);
+    // Every chunk of a Partition layout partition is in its one key stream.
+    return clusterIndex_->loadPartition(partitionIndex)->keyStreamRegion(0);
+  }
+
+  /// Returns the file region of the chunk at 'chunkLocation' in a partition,
+  /// in either key stream layout.
+  velox::common::Region chunkStreamRegion(
+      uint32_t partitionIndex,
+      const ChunkLocation& chunkLocation) const {
+    return clusterIndex_->loadPartition(partitionIndex)
+        ->chunkStreamRegion(chunkLocation);
   }
 
   /// Returns the number of decoded chunks currently cached for the partition.
@@ -231,7 +243,7 @@ class ClusterIndexTestHelper {
   /// vector has a single shared scratch slot, so the count is at most 1.
   size_t decodedChunkCount(uint32_t partitionIndex) const {
     const auto& decodedChunks =
-        clusterIndex_->loadPartition(partitionIndex)->decodedChunks;
+        clusterIndex_->loadPartition(partitionIndex)->decodedChunks();
     return std::count_if(
         decodedChunks.begin(), decodedChunks.end(), [](const auto& c) {
           return c.data != nullptr;
@@ -244,7 +256,7 @@ class ClusterIndexTestHelper {
       uint32_t partitionIndex,
       uint32_t chunkIndex) const {
     const auto& decodedChunks =
-        clusterIndex_->loadPartition(partitionIndex)->decodedChunks;
+        clusterIndex_->loadPartition(partitionIndex)->decodedChunks();
     NIMBLE_CHECK_LT(chunkIndex, decodedChunks.size());
     return decodedChunks[chunkIndex].data.get();
   }

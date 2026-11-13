@@ -590,7 +590,7 @@ TEST_F(MarkDistinctTest, memoryUsage) {
           .config(core::QueryConfig::kSpillEnabled, spillEnableConfig)
           .config(
               core::QueryConfig::kMarkDistinctSpillEnabled, spillEnableConfig)
-          .config(core::QueryConfig::kAggregationSpillEnabled, "false")
+          .config(core::QueryConfig::kAggregationSpillEnabled, false)
           .copyResults(pool_.get(), task);
 
       if (spillEnable) {

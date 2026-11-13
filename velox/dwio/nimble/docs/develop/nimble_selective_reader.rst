@@ -471,6 +471,10 @@ Decodes values, applies filter via visitor. Loads chunks transparently.
 
 while rows remaining
 
+⊚ decoder\_.skipToNextRowChunk() (sparse rows, stream index)
+
+next kept row past this chunk? yes → decoder\_.skipWithIndex() to its chunk
+
 ⊚ decoder\_.remainingValues\_ == 0?
 
 yes → decoder\_.loadNextChunk()

@@ -218,7 +218,7 @@ void DeltaEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
     const uint16_t chunk = bitmapChunks[c];
     const uint32_t count = std::min<uint32_t>(16, remaining);
 
-    if (FOLLY_LIKELY(chunk == 0)) {
+    if (chunk == 0) [[likely]] {
       for (uint32_t i = 0; i < count; ++i) {
         currentValue_ += *nextDelta++;
         *output++ = currentValue_;
@@ -226,7 +226,7 @@ void DeltaEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
     } else {
       uint16_t restatementBits = chunk;
       for (uint32_t i = 0; i < count; ++i) {
-        if (FOLLY_LIKELY(!(restatementBits & 1))) {
+        if (!(restatementBits & 1)) [[likely]] {
           currentValue_ += *nextDelta++;
         } else {
           currentValue_ = *nextRestatement++;
@@ -275,7 +275,7 @@ void computeDeltas(
   if constexpr (isSignedIntegralType<physicalType>()) {
     for (uint32_t i = 1; i < values.size(); ++i) {
       const bool crossesZero = values[i] > 0 && values[i - 1] < 0;
-      if (FOLLY_LIKELY(values[i] >= values[i - 1] && !crossesZero)) {
+      if (values[i] >= values[i - 1] && !crossesZero) [[likely]] {
         isRestatements->emplace_back(false);
         deltas->emplace_back(values[i] - values[i - 1]);
       } else {
@@ -285,7 +285,7 @@ void computeDeltas(
     }
   } else {
     for (uint32_t i = 1; i < values.size(); ++i) {
-      if (FOLLY_LIKELY(values[i] >= values[i - 1])) {
+      if (values[i] >= values[i - 1]) [[likely]] {
         isRestatements->emplace_back(false);
         deltas->emplace_back(values[i] - values[i - 1]);
       } else {

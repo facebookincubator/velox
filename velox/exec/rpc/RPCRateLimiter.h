@@ -155,6 +155,26 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
 
     /// True while a paced window grows with time after a success.
     bool recovering{false};
+
+    /// Time the window has spent below one admission unit, where admission is
+    /// paced, including the stretch in progress.
+    ///
+    /// Like lowWaterCapacity, scoped to the backend's lifetime in this
+    /// process, not to one query. The difference between two snapshots is the
+    /// pacing time between them.
+    int64_t pacingNanos{0};
+
+    /// Time integral of the committed adaptive congestion window, the one
+    /// limitMilli shows, in admission-unit seconds, scoped to the backend's
+    /// lifetime like pacingNanos. Recovery growth counts once the limiter
+    /// commits it to the window. The difference between two snapshots,
+    /// divided by the time between them, is the time-weighted average window
+    /// over that interval.
+    double windowUnitSeconds{0.0};
+
+    /// The limiter's clock at this snapshot, for timing the interval between
+    /// two snapshots.
+    int64_t clockNanos{0};
   };
 
   /// One in-flight request slot, released on destruction so a slot is returned
@@ -336,7 +356,9 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// only if `overloadEpoch` is still current. This prevents late successes
   /// admitted before an overload from immediately undoing its multiplicative
   /// decrease without discarding their valid service-duration evidence.
-  void onSuccessForEpoch(uint64_t overloadEpoch, int64_t units, int64_t rttNs);
+  /// Returns false when `units` would have earned recovery credit and were
+  /// discarded because `overloadEpoch` is no longer current, true otherwise.
+  bool onSuccessForEpoch(uint64_t overloadEpoch, int64_t units, int64_t rttNs);
 
   Stats stats() const;
 
@@ -395,6 +417,13 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Commits recovery growth, so a cut or a schedule change starts from the
   // grown window. Caller holds mutex_.
   void commitGrowthLocked();
+
+  // Adds the time since the last accrual to pacingTime_ and
+  // windowUnitSeconds_ at the window that held over it, so it must run before
+  // anything that changes limit_, config_ or the service horizon, which sets
+  // the probe floor. Recovery growth counts once committed. Caller holds
+  // mutex_.
+  void accrueLocked();
 
   // Changes the adaptive window and reschedules fractional pacing. Zero means
   // the configured ceiling governs. Caller holds mutex_.
@@ -455,6 +484,12 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Applies success recovery with mutex_ held.
   void applySuccessLocked(int64_t units, int64_t rttNs);
 
+  // True when a success would grow the window: adaptation is on and the window
+  // is below the ceiling. Only the stale-success verdict uses it: a success at
+  // the ceiling still runs applySuccessLocked(), which hands the window back to
+  // the ceiling without growing it. Caller holds mutex_.
+  bool successEarnsCreditLocked() const;
+
   // Called by Token on destruction; releases the slot and hands it to the
   // longest-waiting parked driver, if any.
   void release() noexcept;
@@ -503,6 +538,12 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Lowest initialized adaptive limit. Zero means no adaptive low-water mark
   // has been recorded.
   double lowWaterLimit_{0.0};
+
+  // Pacing time and window-time integral accrued up to lastAccrual_. stats()
+  // adds the interval since then without accruing it.
+  std::chrono::steady_clock::duration pacingTime_{0};
+  double windowUnitSeconds_{0.0};
+  std::chrono::steady_clock::time_point lastAccrual_;
 
   // Successful service-duration EWMA used as the pacing horizon. Starts at a
   // conservative internal bootstrap until the first successful sample.

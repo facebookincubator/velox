@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
@@ -28,8 +29,12 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
+
+#include <cudf/table/table.hpp>
+#include <cudf/unary.hpp>
 
 #include <fmt/format.h>
 #include <folly/ScopeGuard.h>
@@ -547,9 +552,8 @@ class CudfFilterProjectTest : public OperatorTestBase {
     for (const auto& batch : input) {
       totalRows += batch->size();
     }
-    auto expected = makeRowVector(
-        {"result"},
-        {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+    auto expected = makeNamedRowVector(
+        "result", BaseVector::createNullConstant(BOOLEAN(), totalRows, pool()));
     AssertQueryBuilder(plan).assertResults(expected);
   }
 
@@ -1034,11 +1038,7 @@ TEST_F(CudfFilterProjectTest, dateLiteralComparisons) {
   }
 }
 
-// TODO: Re-enable once https://github.com/facebookincubator/velox/pull/17314
-// (NotFunction, IsNullFunction, IsNotNullFunction) lands. AST/JIT cannot
-// evaluate timestamp expressions, so IS [NOT] NULL and NOT BETWEEN over
-// TIMESTAMP rely on the function-registry path provided by that PR.
-TEST_F(CudfFilterProjectTest, DISABLED_timestampBetweenAndNullSemantics) {
+TEST_F(CudfFilterProjectTest, timestampBetweenAndNullSemantics) {
   std::vector<std::optional<Timestamp>> timestamps = {
       Timestamp(1735689599, 0), // 2024-12-31 23:59:59
       std::nullopt,
@@ -1200,10 +1200,10 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalNullHandling) {
 // treat it as +0 days (the validity bit was unconditionally set to true), so
 // the row-wise output came back as the input dates instead of NULL.
 TEST_F(CudfFilterProjectTest, datePlusIntervalNullLiteral) {
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeFlatVector<int32_t>(
-          {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE())});
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeFlatVector<int32_t>(
+          {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   auto plan =
@@ -1236,15 +1236,15 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateConstantValue) {
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeNullableFlatVector<int32_t>(
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeNullableFlatVector<int32_t>(
           {toDateDays("2019-02-28"),
            toDateDays("2019-01-30"),
            toDateDays("2019-11-30"),
            toDateDays("2020-02-29"),
            std::nullopt},
-          DATE())});
+          DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -1284,13 +1284,13 @@ TEST_F(CudfFilterProjectTest, dateAddDateColumnValue) {
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralValue) {
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeFlatVector<int32_t>(
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeFlatVector<int32_t>(
           {toDateDays("2020-01-01"),
            toDateDays("2020-06-15"),
            toDateDays("2020-12-31")},
-          DATE())});
+          DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -1301,7 +1301,8 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralValue) {
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
-  auto data = makeRowVector({"amount"}, {makeFlatVector<int64_t>({1, 13, -1})});
+  auto data =
+      makeNamedRowVector("amount", makeFlatVector<int64_t>({1, 13, -1}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -1314,9 +1315,9 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
 TEST_F(CudfFilterProjectTest, dateAddDateLiteralValueOutOfRange) {
   // Literal value that exceeds int32 range; checked at eval time by
   // checkedScaleValue -> checkValueInInt32Range.
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeFlatVector<int32_t>({toDateDays("2020-01-01")}, DATE())});
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeFlatVector<int32_t>({toDateDays("2020-01-01")}, DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   auto plan = PlanBuilder()
@@ -1435,9 +1436,9 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeMatchesVelox) {
   // Whole seconds, fractions that round down and up, the half-millisecond,
   // the fraction that rolls into the next second, negatives, NaN and NULL,
   // under every unit that holds a millisecond.
-  auto input = makeRowVector(
-      {"seconds"},
-      {makeNullableFlatVector<double>({
+  auto input = makeNamedRowVector(
+      "seconds",
+      makeNullableFlatVector<double>({
           0.0,
           1.0,
           -1.0,
@@ -1450,7 +1451,7 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeMatchesVelox) {
           0.0001,
           std::numeric_limits<double>::quiet_NaN(),
           std::nullopt,
-      })});
+      }));
   auto& config = cudf_velox::CudfConfig::getInstance();
   const auto originalUnit = config.timestampUnit;
   SCOPE_EXIT {
@@ -1482,17 +1483,17 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeBeyondRange) {
     config.timestampUnit = originalUnit;
   };
   auto makeInput = [&](const std::vector<double>& seconds) {
-    return makeRowVector({"seconds"}, {makeFlatVector<double>(seconds)});
+    return makeNamedRowVector("seconds", makeFlatVector<double>(seconds));
   };
   // A null row never reaches the kernel, whatever value its slot holds.
   auto nullSlotPastRange = makeFlatVector<double>({1e300, 0.0});
   nullSlotPastRange->setNull(0, true);
-  auto nullRowInput = makeRowVector({"seconds"}, {nullSlotPastRange});
+  auto nullRowInput = makeNamedRowVector("seconds", nullSlotPastRange);
   auto assertOutOfRange = [&](double seconds, std::string_view unitName) {
     SCOPED_TRACE(fmt::format("unit={} seconds={}", unitName, seconds));
-    auto input = makeRowVector(
-        {"seconds"},
-        {makeNullableFlatVector<double>({std::nullopt, 0.0, seconds})});
+    auto input = makeNamedRowVector(
+        "seconds",
+        makeNullableFlatVector<double>({std::nullopt, 0.0, seconds}));
     auto plan = PlanBuilder()
                     .values({input})
                     .project({"from_unixtime(seconds) AS ts"})
@@ -1554,9 +1555,9 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeSecondsUnit) {
   // timestamp, so a fraction is dropped after the rounding and the rollover,
   // and the pinned extremes are Timestamp::kMaxSeconds and kMinSeconds.
   constexpr double kInfinity = std::numeric_limits<double>::infinity();
-  auto input = makeRowVector(
-      {"seconds"},
-      {makeNullableFlatVector<double>({
+  auto input = makeNamedRowVector(
+      "seconds",
+      makeNullableFlatVector<double>({
           0.0,
           1.0,
           -1.0,
@@ -1568,7 +1569,7 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeSecondsUnit) {
           -kInfinity,
           1e300,
           std::nullopt,
-      })});
+      }));
   auto& config = cudf_velox::CudfConfig::getInstance();
   const auto originalUnit = config.timestampUnit;
   SCOPE_EXIT {
@@ -1603,15 +1604,15 @@ TEST_F(CudfFilterProjectTest, toUnixtimeMatchesVelox) {
   };
 
   // Whole seconds, which every unit carries exactly.
-  auto wholeSeconds = makeRowVector(
-      {"event_ts"},
-      {makeNullableFlatVector<Timestamp>(
+  auto wholeSeconds = makeNamedRowVector(
+      "event_ts",
+      makeNullableFlatVector<Timestamp>(
           {Timestamp(-14400, 0),
            Timestamp(-1, 0),
            Timestamp(0, 0),
            Timestamp(1609459200, 0),
            std::nullopt},
-          TIMESTAMP())});
+          TIMESTAMP()));
   for (const auto unit :
        {cudf::type_id::TIMESTAMP_SECONDS,
         cudf::type_id::TIMESTAMP_MILLISECONDS,
@@ -1644,15 +1645,15 @@ TEST_F(CudfFilterProjectTest, toUnixtimeNanosecondFractions) {
     config.timestampUnit = originalUnit;
   };
   config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
-  auto input = makeRowVector(
-      {"ts"},
-      {makeNullableFlatVector<Timestamp>(
+  auto input = makeNamedRowVector(
+      "ts",
+      makeNullableFlatVector<Timestamp>(
           {Timestamp(1, 999'999'999),
            Timestamp(-1, 1),
            Timestamp(0, 1),
            Timestamp(-1, 999'999'999),
            std::nullopt},
-          TIMESTAMP())});
+          TIMESTAMP()));
   assertProjectMatchesVelox({input}, {"to_unixtime(ts) AS seconds"});
 }
 
@@ -1968,8 +1969,8 @@ TEST_F(CudfFilterProjectTest, nullInListDownstreamAggregation) {
                   .singleAggregation({}, {"count(result)"})
                   .planNode();
 
-  auto expected =
-      makeRowVector({"a0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{0})});
+  auto expected = makeNamedRowVector(
+      "a0", makeFlatVector<int64_t>(std::vector<int64_t>{0}));
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
@@ -1987,9 +1988,8 @@ TEST_F(CudfFilterProjectTest, untypedNullInList) {
   for (const auto& batch : vectors) {
     totalRows += batch->size();
   }
-  auto expected = makeRowVector(
-      {"result"},
-      {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+  auto expected = makeNamedRowVector(
+      "result", BaseVector::createNullConstant(BOOLEAN(), totalRows, pool()));
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
@@ -2310,15 +2310,15 @@ TEST_F(CudfFilterProjectTest, replaceConstantSearchAndReplacement) {
   // Column string with constant search and replacement, including the
   // replace(s, '-', '') shape: matches present, absent, repeated, an empty
   // string row, and a null string row.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>(
+  auto data = makeNamedRowVector(
+      "s",
+      makeNullableFlatVector<std::string>(
           {"2021-01-31",
            "no dashes here",
            "a-b-c-d",
            "-leading-and-trailing-",
            "",
-           std::nullopt})});
+           std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -2331,10 +2331,10 @@ TEST_F(CudfFilterProjectTest, replaceConstantSearchAndReplacement) {
 
 TEST_F(CudfFilterProjectTest, replaceTwoArgumentRemovesSearch) {
   // The 2-argument form removes every occurrence of the search.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>(
-          {"a-b-c", "abc", "---", std::nullopt})});
+  auto data = makeNamedRowVector(
+      "s",
+      makeNullableFlatVector<std::string>(
+          {"a-b-c", "abc", "---", std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{"replace(s, '-') AS result"};
@@ -2344,9 +2344,8 @@ TEST_F(CudfFilterProjectTest, replaceTwoArgumentRemovesSearch) {
 
 TEST_F(CudfFilterProjectTest, replaceNullSearchOrReplacement) {
   // A null constant search or replacement yields an all-null result.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>({"a-b-c", "abc", std::nullopt})});
+  auto data = makeNamedRowVector(
+      "s", makeNullableFlatVector<std::string>({"a-b-c", "abc", std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -2360,14 +2359,14 @@ TEST_F(CudfFilterProjectTest, replaceNullSearchOrReplacement) {
 TEST_F(CudfFilterProjectTest, replaceMultiByteUtf8) {
   // Multi-byte (UTF-8) search and replacement, including a replacement that
   // changes the byte length and a null string row.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>(
+  auto data = makeNamedRowVector(
+      "s",
+      makeNullableFlatVector<std::string>(
           {"café-au-lait",
            "a€b€c",
            "naïve",
            "no multibyte here",
-           std::nullopt})});
+           std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -2381,10 +2380,10 @@ TEST_F(CudfFilterProjectTest, replaceMultiByteUtf8) {
 TEST_F(CudfFilterProjectTest, replaceReplacementContainsSearch) {
   // The replacement contains the search: a single left-to-right pass must not
   // re-scan the inserted text.
-  auto data = makeRowVector(
-      {"s"},
-      {makeNullableFlatVector<std::string>(
-          {"aaa", "banana", "a", std::nullopt})});
+  auto data = makeNamedRowVector(
+      "s",
+      makeNullableFlatVector<std::string>(
+          {"aaa", "banana", "a", std::nullopt}));
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -2678,13 +2677,13 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
 }
 
 TEST_F(CudfFilterProjectTest, datePlusIntervalConstantLiteral) {
-  auto data = makeRowVector(
-      {"event_date"},
-      {makeFlatVector<int32_t>(
+  auto data = makeNamedRowVector(
+      "event_date",
+      makeFlatVector<int32_t>(
           {toDateDays("2025-01-01"),
            toDateDays("2025-02-28"),
            toDateDays("2024-02-29")},
-          DATE())});
+          DATE()));
   std::vector<RowVectorPtr> vectors{data};
 
   // Build expression tree programmatically with a constant interval literal,
@@ -2950,6 +2949,34 @@ TEST_F(CudfFilterProjectTest, betweenDouble) {
   assertQuery(plan, "SELECT c0 BETWEEN 0.0 AND 2.0 AS result FROM tmp");
 }
 
+// The AST has no 32-bit cast, so a cast to INTEGER must keep INTEGER type
+// next to INTEGER literals and columns.
+TEST_F(CudfFilterProjectTest, castToIntegerInAst) {
+  auto data = makeRowVector(
+      {"event_id", "c_bigint", "c_smallint", "c_int"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+       makeNullableFlatVector<int64_t>({5, std::nullopt, -5, 5, 7}),
+       makeNullableFlatVector<int16_t>({1, 2, std::nullopt, -3, 4}),
+       makeNullableFlatVector<int32_t>({1, 4, 2, std::nullopt, 0})});
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  assertPlanMatchesVelox(
+      PlanBuilder()
+          .setParseOptions(options)
+          .values({data})
+          .filter("cast(c_bigint AS INTEGER) = 5")
+          .project({"event_id"})
+          .planNode());
+  assertPlanMatchesVelox(
+      PlanBuilder()
+          .setParseOptions(options)
+          .values({data})
+          .project(
+              {"cast(c_smallint AS INTEGER) + 1 AS a",
+               "cast(c_smallint AS INTEGER) + 1 > c_int AS b"})
+          .planNode());
+}
+
 class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
@@ -3073,20 +3100,340 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   EXPECT_EQ(tryCast, -214);
 }
 
-// The GPU cast from VARCHAR follows Presto's rules and is on in a session
-// with the Presto functions registered.
-class CudfVarcharCastTest : public CudfSimpleFilterProjectTest {
+// The GPU casts that follow Presto's rules, from VARCHAR and from TIMESTAMP to
+// VARCHAR, are on in a session with the Presto functions registered, and off
+// again for the suites that follow once this one unregisters them.
+class CudfPrestoCastTest : public CudfSimpleFilterProjectTest {
  protected:
-  void SetUp() override {
-    CudfSimpleFilterProjectTest::SetUp();
+  static void SetUpTestCase() {
+    CudfSimpleFilterProjectTest::SetUpTestCase();
     cudf_velox::registerPrestoFunctions(
         cudf_velox::CudfConfig::getInstance().functionNamePrefix);
   }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
+    CudfSimpleFilterProjectTest::TearDownTestCase();
+  }
+
+  // Evaluates 'expr' over 'input', a TIMESTAMP column, with the column stored
+  // at day resolution, cuDF's TIMESTAMP_DAYS, the way a reader set to that
+  // unit stores it.
+  VectorPtr evaluateOverDays(
+      const std::string& expr,
+      const RowVectorPtr& input) {
+    auto& config = cudf_velox::CudfConfig::getInstance();
+    const auto originalUnit = config.timestampUnit;
+    SCOPE_EXIT {
+      config.timestampUnit = originalUnit;
+    };
+    config.timestampUnit = cudf::type_id::TIMESTAMP_SECONDS;
+    auto stream = cudf_velox::cudfGlobalStreamPool().get_stream();
+    auto mr = cudf_velox::get_output_mr();
+    auto columns =
+        cudf_velox::with_arrow::toCudfTable(input, pool_.get(), stream, mr)
+            ->release();
+    columns.front() = cudf::cast(
+        columns.front()->view(),
+        cudf::data_type{cudf::type_id::TIMESTAMP_DAYS},
+        stream,
+        mr);
+    return evaluate(
+        makeTypedExpr(expr, input->rowType()),
+        input->rowType(),
+        std::make_unique<cudf::table>(std::move(columns)),
+        stream);
+  }
 };
+
+// A DATE or TIMESTAMP cast to VARCHAR prints as the CPU prints it. cuDF's %Y
+// covers the years 0 to 9999, so a batch holding a year outside that range,
+// negative or five digits long, takes the path that formats the year apart,
+// and a day past the calendar cuDF places a day on fails the cast.
+TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
+  const auto check = [&](const VectorPtr& values) {
+    const auto rowType = ROW("c0", values->type());
+    for (const auto* expr :
+         {"cast(c0 as varchar)", "try_cast(c0 as varchar)"}) {
+      SCOPED_TRACE(expr);
+      assertExpressionMatchesCpu(expr, makeRowVector({values}), rowType);
+    }
+  };
+
+  // Under the default nanosecond unit: 1970-01-01 00:00:00.000, 1969-12-31
+  // 23:59:59.999 and 2026-01-02 00:45:00.123, the fraction cut to
+  // milliseconds.
+  check(
+      makeNullableFlatVector<Timestamp>(
+          {
+              Timestamp(0, 0),
+              Timestamp(-1, 999'999'999),
+              Timestamp(1'767'314'700, 123'456'789),
+              std::nullopt,
+          },
+          TIMESTAMP()));
+
+  // The years past the nanosecond range take the coarser units the cuDF
+  // Parquet reader and cudf.timestamp_unit produce.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  for (const auto unit : {
+           cudf::type_id::TIMESTAMP_SECONDS,
+           cudf::type_id::TIMESTAMP_MILLISECONDS,
+           cudf::type_id::TIMESTAMP_MICROSECONDS,
+       }) {
+    SCOPED_TRACE(static_cast<int>(unit));
+    config.timestampUnit = unit;
+    // 0000-01-01, 0001-01-01 and 9999-12-31 23:59:59 all fit %Y.
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(-62'167'219'200, 0),
+                Timestamp(-62'135'596'800, 0),
+                std::nullopt,
+                Timestamp(253'402'300'799, 0),
+            },
+            TIMESTAMP()));
+    // 10000-01-01 and -0001-01-01 beside an ordinary row.
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(253'402'300'800, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+                Timestamp(-62'198'755'200, 0),
+            },
+            TIMESTAMP()));
+    // 10000-01-01 beside 0001-01-01 leaves the %Y range at the top alone, and
+    // -0001-12-31 23:59:59 beside an ordinary row at the bottom alone.
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(253'402'300'800, 0),
+                Timestamp(-62'135'596'800, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+            },
+            TIMESTAMP()));
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(-62'167'219'201, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+            },
+            TIMESTAMP()));
+    // -32768-01-01 and 32767-12-31 are the first and last days of cuDF's
+    // 16-bit calendar year; -32769-12-31 23:59:59 and 32768-01-01 lie past it.
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(-1'096'225'401'600, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+                Timestamp(971'890'876'800, 0),
+                Timestamp(-1'096'225'401'601, 0),
+                Timestamp(971'890'963'200, 0),
+            },
+            TIMESTAMP()));
+  }
+
+  // The seconds and milliseconds units reach the edges of the calendar cuDF
+  // places a day on: -5877641-06-23, day -2^31, and 5879610-09-09 23:59:59,
+  // the last second of day 2^31 - 719469, print as on the CPU, and the second
+  // before the first and the day after the last fail the cast.
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_SECONDS,
+        cudf::type_id::TIMESTAMP_MILLISECONDS}) {
+    SCOPED_TRACE(static_cast<int>(unit));
+    config.timestampUnit = unit;
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(-185'542'587'187'200, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+                Timestamp(185'480'425'151'999, 0),
+            },
+            TIMESTAMP()));
+    for (const int64_t seconds : {-185'542'587'187'201, 185'480'425'152'000}) {
+      SCOPED_TRACE(seconds);
+      VELOX_ASSERT_UNSUPPORTED_THROW(
+          evaluate(
+              makeTypedExpr("cast(c0 as varchar)", ROW("c0", TIMESTAMP())),
+              makeRowVector({makeFlatVector<Timestamp>(
+                  {Timestamp(seconds, 0), Timestamp(0, 0)})})),
+          "Cast to VARCHAR of a TIMESTAMP before day -2147483648 or after "
+          "day 2146764179 of 1970-01-01 is not supported on the GPU "
+          "(https://github.com/facebookincubator/velox/issues/19785)");
+    }
+  }
+
+  // Under the microsecond unit the fraction is cut to milliseconds as well:
+  // 2026-01-02 00:45:00.123 and 1970-01-01 00:00:00.999.
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  check(
+      makeNullableFlatVector<Timestamp>(
+          {
+              Timestamp(1'767'314'700, 123'456'000),
+              Timestamp(0, 999'999'000),
+              std::nullopt,
+          },
+          TIMESTAMP()));
+
+  // 1970-01-01, 1969-12-31, 2026-01-02, 0000-01-01, 0001-01-01 and 9999-12-31.
+  const auto dates = makeNullableFlatVector<int32_t>(
+      {
+          0,
+          -1,
+          DATE()->toDays("2026-01-02"),
+          std::nullopt,
+          -719'528,
+          -719'162,
+          2'932'896,
+      },
+      DATE());
+  check(dates);
+  // A batch of nulls spans no year.
+  check(makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}, DATE()));
+  // 10000-01-01 and -0001-01-01 beside an ordinary row.
+  check(
+      makeNullableFlatVector<int32_t>(
+          {
+              2'932'897,
+              0,
+              std::nullopt,
+              -719'893,
+          },
+          DATE()));
+  // 10000-01-01 beside 0001-01-01 leaves the %Y range at the top alone, and
+  // -0001-12-31 beside an ordinary row at the bottom alone.
+  check(
+      makeNullableFlatVector<int32_t>(
+          {2'932'897, -719'162, 0, std::nullopt}, DATE()));
+  check(makeNullableFlatVector<int32_t>({-719'529, 0, std::nullopt}, DATE()));
+  // -32768-01-01 and 32767-12-31 are the first and last days of cuDF's 16-bit
+  // calendar year; -32769-12-31, 32768-01-01 and 33000-01-01 lie past it.
+  check(
+      makeNullableFlatVector<int32_t>(
+          {
+              -12'687'794,
+              0,
+              std::nullopt,
+              11'248'737,
+              -12'687'795,
+              11'248'738,
+              11'333'475,
+          },
+          DATE()));
+  // The first day a DATE can hold, -5877641-06-23, and the last day cuDF
+  // places on the calendar, 5879610-09-09, print as on the CPU; the day after
+  // the latter and the last day a DATE can hold fail the cast.
+  check(
+      makeNullableFlatVector<int32_t>(
+          {
+              std::numeric_limits<int32_t>::min(),
+              0,
+              std::nullopt,
+              2'146'764'179,
+          },
+          DATE()));
+  for (const int32_t day :
+       {2'146'764'180, std::numeric_limits<int32_t>::max()}) {
+    SCOPED_TRACE(day);
+    VELOX_ASSERT_UNSUPPORTED_THROW(
+        evaluate(
+            makeTypedExpr("cast(c0 as varchar)", ROW("c0", DATE())),
+            makeRowVector({makeFlatVector<int32_t>({day, 0}, DATE())})),
+        "Cast to VARCHAR of a DATE before day -2147483648 or after day "
+        "2146764179 of 1970-01-01 is not supported on the GPU "
+        "(https://github.com/facebookincubator/velox/issues/19785)");
+  }
+
+  // A DATE prints the same under legacy_cast and under a session time zone.
+  setLegacyCast(true);
+  check(dates);
+  setTimezone("Asia/Kolkata");
+  check(dates);
+}
+
+// A TIMESTAMP column a reader stores at day resolution shares cuDF's
+// TIMESTAMP_DAYS with DATE and still prints as a TIMESTAMP.
+TEST_F(CudfPrestoCastTest, castTimestampStoredAsDaysToVarchar) {
+  // 2026-01-02, 1969-12-31, 0000-01-01 and 10000-01-01 at midnight: whole
+  // days, which day resolution holds exactly.
+  const auto input = makeRowVector({makeNullableFlatVector<Timestamp>(
+      {Timestamp(1'767'312'000, 0),
+       Timestamp(-86'400, 0),
+       std::nullopt,
+       Timestamp(-62'167'219'200, 0),
+       Timestamp(253'402'300'800, 0)},
+      TIMESTAMP())});
+  for (const auto* expr : {"cast(c0 as varchar)", "try_cast(c0 as varchar)"}) {
+    SCOPED_TRACE(expr);
+    auto exprSet = compileExpression(expr, input->rowType());
+    facebook::velox::test::assertEqualVectors(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input),
+        evaluateOverDays(expr, input));
+  }
+}
+
+// The DATE and TIMESTAMP casts to VARCHAR run on the GPU unless the session
+// changes the TIMESTAMP's text: legacy_cast prints it with a 'T' separator and
+// an unpadded year, and adjust_timestamp_to_session_timezone with a session
+// time zone prints it in that zone. A DATE prints the same under both.
+TEST_F(CudfPrestoCastTest, castTemporalToVarcharRunsOnGpu) {
+  const auto rowType = ROW(
+      {{"ts", TIMESTAMP()},
+       {"d", DATE()},
+       {"zoned", TIMESTAMP_WITH_TIME_ZONE()}});
+  const auto runsOnGpu = [&](const std::string& expr,
+                             core::QueryCtx* queryCtx) {
+    return cudf_velox::canExprRunOnGpu(
+        makeTypedExpr(expr, rowType), queryCtx, execCtx_.pool());
+  };
+
+  auto* defaults = execCtx_.queryCtx();
+  EXPECT_TRUE(runsOnGpu("cast(ts as varchar)", defaults));
+  EXPECT_TRUE(runsOnGpu("try_cast(ts as varchar)", defaults));
+  EXPECT_TRUE(runsOnGpu("cast(d as varchar)", defaults));
+  EXPECT_TRUE(runsOnGpu("length(cast(ts as varchar)) = 23", defaults));
+  // JSON is a VARCHAR under another name with its own cast, which quotes the
+  // text.
+  EXPECT_FALSE(runsOnGpu("cast(ts as json)", defaults));
+  EXPECT_FALSE(runsOnGpu("cast(d as json)", defaults));
+  // TIMESTAMP WITH TIME ZONE has no cuDF type, so its cast stays on the CPU
+  // before any rule below applies.
+  EXPECT_FALSE(runsOnGpu("cast(zoned as varchar)", defaults));
+
+  const auto legacy = core::QueryCtx::create(
+      nullptr, core::QueryConfig({{core::QueryConfig::kLegacyCast, "true"}}));
+  EXPECT_FALSE(runsOnGpu("cast(ts as varchar)", legacy.get()));
+  EXPECT_FALSE(runsOnGpu("length(cast(ts as varchar)) = 23", legacy.get()));
+  EXPECT_TRUE(runsOnGpu("cast(d as varchar)", legacy.get()));
+
+  const auto zoned = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig(
+          {{core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+           {core::QueryConfig::kSessionTimezone, "Asia/Kolkata"}}));
+  EXPECT_FALSE(runsOnGpu("cast(ts as varchar)", zoned.get()));
+  EXPECT_TRUE(runsOnGpu("cast(d as varchar)", zoned.get()));
+
+  // Without a session time zone there is nothing to adjust to.
+  const auto unzoned = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig(
+          {{core::QueryConfig::kAdjustTimestampToTimezone, "true"}}));
+  EXPECT_TRUE(runsOnGpu("cast(ts as varchar)", unzoned.get()));
+}
 
 // A cast from VARCHAR runs on the GPU for the targets CastFunction parses and
 // stays on the CPU for the others.
-TEST_F(CudfVarcharCastTest, castFromVarcharRunsOnGpu) {
+TEST_F(CudfPrestoCastTest, castFromVarcharRunsOnGpu) {
   const auto rowType = ROW({{"c0", VARCHAR()}});
   const auto runsOnGpu = [&](const std::string& expr) {
     return cudf_velox::canExprRunOnGpu(
@@ -3210,7 +3557,7 @@ TEST_F(CudfVarcharCastTest, castFromVarcharRunsOnGpu) {
   EXPECT_TRUE(runsOnGpuLenient("try_cast(c0 as boolean)"));
 }
 
-TEST_F(CudfVarcharCastTest, castFromVarcharToIntegral) {
+TEST_F(CudfPrestoCastTest, castFromVarcharToIntegral) {
   // An optional sign and digits, around which Velox trims ASCII whitespace and
   // control characters.
   const std::vector<std::optional<std::string>> values = {
@@ -3282,7 +3629,7 @@ TEST_F(CudfVarcharCastTest, castFromVarcharToIntegral) {
       {"9223372036854775808", "-9223372036854775809", "-92233720368547758081"});
 }
 
-TEST_F(CudfVarcharCastTest, castFromVarcharToFloatingPoint) {
+TEST_F(CudfPrestoCastTest, castFromVarcharToFloatingPoint) {
   // Decimal and scientific literals with the ASCII whitespace Presto skips
   // around them, the exact spellings Infinity and NaN, and values beyond the
   // range of the type.
@@ -3371,7 +3718,7 @@ TEST_F(CudfVarcharCastTest, castFromVarcharToFloatingPoint) {
 }
 
 // CAST names the first string, in row order, that spells no value.
-TEST_F(CudfVarcharCastTest, castFromVarcharNamesFirstOffendingRow) {
+TEST_F(CudfPrestoCastTest, castFromVarcharNamesFirstOffendingRow) {
   const auto rowType = ROW({{"c0", VARCHAR()}});
   const auto input = makeRowVector({makeNullableFlatVector<std::string>(
       {"1", std::nullopt, "abc", "xyz", "0"})});
@@ -3394,7 +3741,7 @@ TEST_F(CudfVarcharCastTest, castFromVarcharNamesFirstOffendingRow) {
 // a cast of a column in a branch raises on no string the condition excludes.
 // The validator keeps such an if on the CPU all the same, see
 // castFromVarcharRunsOnGpu.
-TEST_F(CudfVarcharCastTest, castFromVarcharUnderIf) {
+TEST_F(CudfPrestoCastTest, castFromVarcharUnderIf) {
   const auto rowType = ROW({{"c0", VARCHAR()}});
   const auto input = makeRowVector(
       {makeNullableFlatVector<std::string>({"1", "x", std::nullopt, "3", ""})});
@@ -3404,7 +3751,7 @@ TEST_F(CudfVarcharCastTest, castFromVarcharUnderIf) {
       "if(c0 = 'x' or c0 = '', 0, cast(c0 as bigint))", input, rowType);
 }
 
-TEST_F(CudfVarcharCastTest, castFromVarcharToBoolean) {
+TEST_F(CudfPrestoCastTest, castFromVarcharToBoolean) {
   // t, f, 1, 0, true and false in any case; nothing is trimmed.
   assertCastFromVarcharMatchesCpu(
       "boolean",
@@ -3443,7 +3790,7 @@ TEST_F(CudfVarcharCastTest, castFromVarcharToBoolean) {
 
 // A cast from VARCHAR inside an expression the AST evaluates is precomputed by
 // CastFunction, since the AST has no cast from strings.
-TEST_F(CudfVarcharCastTest, castFromVarcharInsideAstExpression) {
+TEST_F(CudfPrestoCastTest, castFromVarcharInsideAstExpression) {
   const auto rowType = ROW({{"c0", VARCHAR()}, {"c1", DOUBLE()}});
   const auto input = makeRowVector(
       {makeNullableFlatVector<std::string>(
@@ -3500,7 +3847,7 @@ TEST_F(CudfSimpleFilterProjectTest, nullableStructDereference) {
   auto a = makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4});
   auto b = makeNullableFlatVector<std::string>({"x", std::nullopt, "z", "w"});
   auto nullableStruct = makeRowVector({"a", "b"}, {a, b}, nullEvery(2));
-  auto input = makeRowVector({"r"}, {nullableStruct});
+  auto input = makeNamedRowVector("r", nullableStruct);
 
   assertExpressionMatchesCpu("r.a", input, rowType);
   assertExpressionMatchesCpu("r.b", input, rowType);
@@ -3900,6 +4247,54 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       999999999999999.5,
   })});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Constant projections over a zero-column input are filled to the row count of
+// each batch: here the first and third batches, which the filter cuts to 3 and
+// 2 rows. The second batch, which the filter empties, never reaches the
+// projection.
+TEST_F(CudfFilterProjectTest, constantProjectionsOverZeroColumns) {
+  const std::vector<RowVectorPtr> batches = {
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})}),
+      makeRowVector({makeFlatVector<int64_t>({0, 1})}),
+      makeRowVector({makeFlatVector<int64_t>({5, 0, 6})}),
+  };
+  const auto constant = [](const TypePtr& type,
+                           const Variant& value) -> core::TypedExprPtr {
+    return std::make_shared<core::ConstantTypedExpr>(type, value);
+  };
+  auto plan =
+      PlanBuilder()
+          .values(batches)
+          .filter("c0 > 1")
+          .project({})
+          .projectExpressions(
+              {constant(VARCHAR(), "abc"),
+               constant(BIGINT(), int64_t(42)),
+               constant(DOUBLE(), 1.5),
+               constant(BOOLEAN(), true),
+               constant(DATE(), int32_t(20'454)),
+               constant(INTERVAL_DAY_TIME(), int64_t(86'400'000)),
+               constant(BIGINT(), Variant::null(TypeKind::BIGINT)),
+               constant(VARCHAR(), Variant::null(TypeKind::VARCHAR)),
+               constant(INTERVAL_DAY_TIME(), Variant::null(TypeKind::BIGINT))})
+          .planNode();
+
+  const vector_size_t numRows = 5;
+  auto expected = makeRowVector(
+      {makeConstant(StringView("abc"), numRows),
+       makeConstant<int64_t>(42, numRows),
+       makeConstant(1.5, numRows),
+       makeConstant(true, numRows),
+       makeConstant<int32_t>(20'454, numRows, DATE()),
+       makeConstant<int64_t>(86'400'000, numRows, INTERVAL_DAY_TIME()),
+       makeNullConstant(TypeKind::BIGINT, numRows),
+       makeNullConstant(TypeKind::VARCHAR, numRows),
+       BaseVector::createNullConstant(INTERVAL_DAY_TIME(), numRows, pool())});
+  // Each Values batch reaches the GPU on its own.
+  AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+      .assertResults(expected);
 }
 
 } // namespace

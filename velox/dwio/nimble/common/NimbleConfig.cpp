@@ -460,7 +460,7 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 
 /* static */ Config::Entry<double> Config::CHUNK_STATS_MIN_AVG_CHUNKS(
     "nimble.chunk.stats.min_avg_chunks",
-    2);
+    0);
 
 /* static */ Config::Entry<uint32_t> Config::MAX_ENCODE_PARALLELISM(
     "nimble.encoding.max_parallelism",
@@ -481,6 +481,10 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 
 /* static */ Config::Entry<bool> Config::FIXED_BIT_WIDTH_USE_EXACT_BITS(
     "nimble.fixedbitwidth.use_exact_bits",
+    false);
+
+/* static */ Config::Entry<bool> Config::SORT_DICTIONARY_ALPHABET(
+    "nimble.dictionary.sort_alphabet",
     false);
 
 /* static */ Config::Entry<bool> Config::SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS(

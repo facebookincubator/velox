@@ -532,16 +532,14 @@ TEST_P(MemoryPoolTest, reportExternalAllocationRejectsNonPositiveSize) {
   ASSERT_EQ(child->reservedBytes(), 0);
 }
 
-TEST_P(MemoryPoolTest, DISABLED_memoryLeakCheck) {
-  gflags::FlagSaver flagSaver;
-  testing::FLAGS_gtest_death_test_style = "fast";
+DEBUG_ONLY_TEST_P(MemoryPoolTest, memoryLeakCheck) {
   auto manager = getMemoryManager();
   auto root = manager->addRootPool();
 
   auto child = root->addLeafChild("elastic_quota", isLeafThreadSafe_);
   const int64_t kChunkSize{32L * MB};
   void* oneChunk = child->allocate(kChunkSize);
-  ASSERT_DEATH(child.reset(), "");
+  ASSERT_DEATH(child.reset(), "Bad memory usage track state");
   child->free(oneChunk, kChunkSize);
 }
 

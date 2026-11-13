@@ -53,6 +53,14 @@ class TabletReaderTestHelper {
     return tabletReader_->stripeGroupsMetadata().size();
   }
 
+  /// Returns the metadata of each stripe of a stripe group with the locations
+  /// of 'streamIds', as the reader gives them to a cluster index.
+  std::vector<StripeMetadata> stripeMetadata(
+      uint32_t stripeGroupIndex,
+      std::span<const uint32_t> streamIds) const {
+    return tabletReader_->stripeMetadata(stripeGroupIndex, streamIds);
+  }
+
   /// Returns the number of cached stripe groups.
   size_t cachedStripeGroupCount() const {
     return tabletReader_->stripeGroupCache_.testingCacheCount();

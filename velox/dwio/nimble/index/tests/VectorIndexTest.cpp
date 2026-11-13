@@ -233,7 +233,8 @@ class VectorIndexTest : public ::testing::Test {
         .ioOptions = &ioOptions,
     };
     return VectorIndexDirectory::create(
-        Section{MetadataBuffer{std::move(directoryBuffer)}}, indexOptions);
+        Section{MetadataBuffer{toPinnedBuffer(std::move(directoryBuffer))}},
+        indexOptions);
   }
 
   // Materializes the single index expected by most focused tests.
@@ -2043,7 +2044,8 @@ TEST_F(VectorIndexTest, missingIoStatsDeferredUntilLoad) {
   };
 
   const auto directory = VectorIndexDirectory::create(
-      Section{MetadataBuffer{std::move(directoryBuffer)}}, indexOptions);
+      Section{MetadataBuffer{toPinnedBuffer(std::move(directoryBuffer))}},
+      indexOptions);
   EXPECT_TRUE(directory.contains("embedding"));
   NIMBLE_ASSERT_THROW(directory.load("embedding"), "indexIoStats must be set");
 }

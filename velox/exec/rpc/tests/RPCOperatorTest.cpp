@@ -109,6 +109,17 @@ class RecoveringFanOutBatchRPCFunction : public FanOutBatchRPCFunction {
   }
 };
 
+// Applies the same overloads, but reports no congestion verdict for the batch.
+class RecoveringNoVerdictBatchRPCFunction
+    : public RecoveringFanOutBatchRPCFunction {
+ public:
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    RecoveringFanOutBatchRPCFunction::evaluateCongestion(responses);
+    return CongestionSignal::kNone;
+  }
+};
+
 class MixedEpochRPCFunction : public DemoAsyncRPCFunction {
  public:
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
@@ -161,6 +172,29 @@ class MixedEpochRPCFunction : public DemoAsyncRPCFunction {
 
  private:
   std::optional<folly::Promise<RPCResponse>> slowResponse_;
+};
+
+// Answers every row with a success whose transport reports
+// kNumOverloadedAttempts overloaded attempts before it.
+class OverloadedAttemptsRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static constexpr int32_t kNumOverloadedAttempts{2};
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        futures;
+    rows.applyToSelected([&](vector_size_t row) {
+      auto response = RPCResponse::ok(
+          0, makeTextPayload("demo: " + prompts->valueAt(row).str()));
+      response.numOverloadedAttempts = kNumOverloadedAttempts;
+      futures.emplace_back(row, folly::makeSemiFuture(std::move(response)));
+    });
+    return futures;
+  }
 };
 
 class InvalidAdmissionBatchRPCFunction : public DemoBatchRPCFunction {
@@ -500,6 +534,42 @@ class BackendErrorBatchRPCFunction : public DemoBatchRPCFunction {
   }
 };
 
+// Rate-limits every row of every flush, and paces down to half a unit.
+class RateLimitedBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  double configuredAdaptiveFloor() const override {
+    return 0.5;
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    return DemoBatchRPCFunction::flushBatch(maxRows).deferValue(
+        [](std::vector<RPCResponse> responses) {
+          for (auto& response : responses) {
+            response.setError(
+                velox::rpc::RPCErrorKind::kRateLimited, "simulated overload");
+          }
+          return responses;
+        });
+  }
+};
+
+// Rate-limits the first row of every flush and serves the rest.
+class PartlyRateLimitedBatchRPCFunction : public RateLimitedBatchRPCFunction {
+ public:
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    return DemoBatchRPCFunction::flushBatch(maxRows).deferValue(
+        [](std::vector<RPCResponse> responses) {
+          if (!responses.empty()) {
+            responses.front().setError(
+                velox::rpc::RPCErrorKind::kRateLimited, "simulated overload");
+          }
+          return responses;
+        });
+  }
+};
+
 // Declares a per-request byte budget and reports a fixed number of rows that
 // fit it, so the operator must chunk a large backlog to keep each request
 // under the cap. Records every flush's row count so the test can assert no
@@ -569,8 +639,18 @@ class RPCOperatorTest : public OperatorTestBase {
         []() { return std::make_shared<RecoveringFanOutBatchRPCFunction>(); },
         DemoBatchRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
+        "recovering_no_verdict_batch_rpc",
+        []() {
+          return std::make_shared<RecoveringNoVerdictBatchRPCFunction>();
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
         "mixed_epoch_rpc",
         []() { return std::make_shared<MixedEpochRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "overloaded_attempts_rpc",
+        []() { return std::make_shared<OverloadedAttemptsRPCFunction>(); },
         DemoAsyncRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
         "invalid_admission_batch_rpc",
@@ -583,6 +663,22 @@ class RPCOperatorTest : public OperatorTestBase {
     AsyncRPCFunctionRegistry::registerFunction(
         "backend_error_batch_rpc",
         []() { return std::make_shared<BackendErrorBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "rate_limited_batch_rpc",
+        []() { return std::make_shared<RateLimitedBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "rate_limited_batch_rpc_held",
+        []() {
+          auto function = std::make_shared<RateLimitedBatchRPCFunction>();
+          function->testingHoldFlushes();
+          return function;
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "partly_rate_limited_batch_rpc",
+        []() { return std::make_shared<PartlyRateLimitedBatchRPCFunction>(); },
         DemoBatchRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
         "demo_batch_rpc",
@@ -819,8 +915,7 @@ class RPCOperatorTest : public OperatorTestBase {
   // own policy rather than the backend's shared limiter.
   static bool ranOnPolicyScopedLimiter(
       const std::shared_ptr<exec::Task>& task) {
-    return toPlanStats(task->taskStats())
-               .at("rpc-0")
+    return PlanNodeStats::extract(task->taskStats(), "rpc-0")
                .customStats.count(RPCOperator::kRpcRateLimiterPolicyScoped) > 0;
   }
 
@@ -907,10 +1002,9 @@ class RPCOperatorTest : public OperatorTestBase {
 
 /// Runs Values(3 rows) → RPCNode → verifies passthrough + RPC result.
 TEST_F(RPCOperatorTest, basicPerRow) {
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>(
-          {"hello world", "test prompt", "third row"})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>({"hello world", "test prompt", "third row"}));
 
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
 
@@ -936,15 +1030,15 @@ TEST_F(RPCOperatorTest, basicPerRow) {
 // kPerRow output is sized from QueryConfig::preferredOutputBatchRows: 50 rows
 // with a cap of 10 emit at least 5 output vectors.
 TEST_F(RPCOperatorTest, outputBatchSizeFromConfig) {
-  auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<std::string>(50, [](auto row) {
-                      return fmt::format("row {}", row);
-                    })});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<std::string>(50, [](auto row) {
+        return fmt::format("row {}", row);
+      }));
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
 
   std::shared_ptr<exec::Task> task;
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kPreferredOutputBatchRows, "10")
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, 10)
                     .copyResults(pool(), task);
   EXPECT_EQ(result->size(), 50);
 
@@ -957,7 +1051,7 @@ TEST_F(RPCOperatorTest, outputBatchSizeFromConfig) {
 TEST_F(RPCOperatorTest, nullInput) {
   auto promptVector =
       makeNullableFlatVector<StringView>({"valid prompt", std::nullopt});
-  auto input = makeRowVector({"prompt"}, {promptVector});
+  auto input = makeNamedRowVector("prompt", promptVector);
 
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
 
@@ -1025,8 +1119,8 @@ TEST_F(RPCOperatorTest, multipleColumns) {
 
 // Basic batch mode: responses in order, verify passthrough + result.
 TEST_F(RPCOperatorTest, batchBasic) {
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"hello", "world", "batch"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"hello", "world", "batch"}));
 
   auto plan =
       makeBatchRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
@@ -1056,7 +1150,7 @@ TEST_F(
     RPCOperatorTest,
     laterQueryWithAnotherPolicyLeavesSharedPolicyUnchanged) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
   auto& limiter = RPCRateLimiterRegistry::global().get("");
 
   // First query: a deliberate policy, as a small-entitlement pipeline sets.
@@ -1074,8 +1168,7 @@ TEST_F(
   const core::QueryConfig defaults{
       std::unordered_map<std::string, std::string>{}};
   EXPECT_EQ(
-      toPlanStats(task->taskStats())
-          .at("rpc-0")
+      PlanNodeStats::extract(task->taskStats(), "rpc-0")
           .customStats.at(RPCOperator::kRpcRateLimiterHardLimit)
           .max,
       defaults.rpcRateLimiterMaxLimit())
@@ -1092,7 +1185,7 @@ TEST_F(
 // first query's limits still hold for later queries that ask for them.
 TEST_F(RPCOperatorTest, explicitSessionLimitsAreHonoredOnSealedBackend) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
   struct Run {
     int64_t lowestCap;
     bool policyScoped;
@@ -1107,8 +1200,7 @@ TEST_F(RPCOperatorTest, explicitSessionLimitsAreHonoredOnSealedBackend) {
         .config(core::QueryConfig::kRpcRateLimiterMaxLimit, limit)
         .copyResults(pool(), task);
     return Run{
-        .lowestCap = toPlanStats(task->taskStats())
-                         .at("rpc-0")
+        .lowestCap = PlanNodeStats::extract(task->taskStats(), "rpc-0")
                          .customStats.at(RPCOperator::kRpcRateLimiterCap)
                          .min,
         .policyScoped = ranOnPolicyScopedLimiter(task)};
@@ -1131,12 +1223,12 @@ TEST_F(RPCOperatorTest, explicitSessionLimitsAreHonoredOnSealedBackend) {
 // that set its own limits sealed the backend's shared limiter first.
 TEST_F(RPCOperatorTest, defaultQueryDoesNotInheritAnotherQuerysPolicy) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
   AssertQueryBuilder(plan)
       .maxDrivers(1)
-      .config(core::QueryConfig::kRpcRateLimiterMinLimit, "25")
-      .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "25")
+      .config(core::QueryConfig::kRpcRateLimiterMinLimit, 25)
+      .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 25)
       .copyResults(pool());
 
   std::shared_ptr<exec::Task> task;
@@ -1158,8 +1250,8 @@ TEST_F(RPCOperatorTest, defaultQueryDoesNotInheritAnotherQuerysPolicy) {
 TEST_F(RPCOperatorTest, eagerAdmissionReportsPolicyScopedLimiter) {
   const DefaultBackendPolicy policy{.ceiling = 25};
   sealDefaultBackend(policy);
-  auto noRows = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>(std::vector<StringView>{})});
+  auto noRows = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>(std::vector<StringView>{}));
   auto runtimeStats =
       [&](const std::string& functionName,
           const std::unordered_map<std::string, std::string>& session) {
@@ -1170,7 +1262,7 @@ TEST_F(RPCOperatorTest, eagerAdmissionReportsPolicyScopedLimiter) {
         std::shared_ptr<exec::Task> task;
         AssertQueryBuilder(plan).maxDrivers(1).configs(session).copyResults(
             pool(), task);
-        return toPlanStats(task->taskStats()).at("rpc-0").customStats;
+        return PlanNodeStats::extract(task->taskStats(), "rpc-0").customStats;
       };
 
   {
@@ -1205,8 +1297,8 @@ TEST_F(RPCOperatorTest, driversShareTheLimiterForTheirPolicy) {
   std::vector<RowVectorPtr> inputs;
   inputs.reserve(8);
   for (int i = 0; i < 8; ++i) {
-    inputs.push_back(makeRowVector(
-        {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})}));
+    inputs.push_back(makeNamedRowVector(
+        "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"})));
   }
   auto plan = makeRPCNode(
       PlanBuilder().values(inputs, /*parallelizable=*/true).planNode(),
@@ -1214,8 +1306,8 @@ TEST_F(RPCOperatorTest, driversShareTheLimiterForTheirPolicy) {
   std::shared_ptr<exec::Task> task;
   AssertQueryBuilder(plan)
       .maxDrivers(4)
-      .config(core::QueryConfig::kRpcRateLimiterMinLimit, "25")
-      .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "25")
+      .config(core::QueryConfig::kRpcRateLimiterMinLimit, 25)
+      .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 25)
       .copyResults(pool(), task);
   EXPECT_TRUE(ranOnPolicyScopedLimiter(task));
 
@@ -1236,7 +1328,7 @@ TEST_F(RPCOperatorTest, driversShareTheLimiterForTheirPolicy) {
 TEST_F(RPCOperatorTest, resolvesAdmissionKeyBeforeDispatch) {
   PreAdmissionKeyRPCFunction::reset();
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"hello"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"hello"}));
 
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -1260,8 +1352,9 @@ TEST_F(RPCOperatorTest, resolvesAdmissionKeyBeforeDispatch) {
 TEST_F(RPCOperatorTest, constantSetupSkipsInputPreparation) {
   ConstantSetupRPCFunction::reset();
   std::vector<RowVectorPtr> inputs{
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"first input"})}),
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"second input"})}),
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"first input"})),
+      makeNamedRowVector(
+          "prompt", makeFlatVector<StringView>({"second input"})),
   };
 
   auto plan = makeRPCNode(
@@ -1277,10 +1370,10 @@ TEST_F(RPCOperatorTest, constantSetupSkipsInputPreparation) {
 TEST_F(RPCOperatorTest, localOnlyInputsBypassAdmissionAndCongestion) {
   DeferredAdmissionRPCFunction::reset();
   std::vector<RowVectorPtr> inputs{
-      makeRowVector(
-          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"live prompt"})}),
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"local error"})}),
+      makeNamedRowVector(
+          "prompt", makeNullableFlatVector<StringView>({std::nullopt})),
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"live prompt"})),
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"local error"})),
   };
 
   auto plan = makeRPCNode(
@@ -1326,10 +1419,10 @@ TEST_F(RPCOperatorTest, localOnlyInputsBypassAdmissionAndCongestion) {
 
 TEST_F(RPCOperatorTest, localOnlyPerRowPayloadMemoryIsAccounted) {
   DeferredAdmissionRPCFunction::reset();
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeNullableFlatVector<StringView>(
-          {std::nullopt, StringView("local error")})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeNullableFlatVector<StringView>(
+          {std::nullopt, StringView("local error")}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1350,8 +1443,8 @@ TEST_F(RPCOperatorTest, localOnlyPerRowPayloadMemoryIsAccounted) {
 
 TEST_F(RPCOperatorTest, invalidRequestRowsAreCountedByErrorKind) {
   DeferredAdmissionRPCFunction::reset();
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"live prompt", "local error"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"live prompt", "local error"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1369,11 +1462,11 @@ TEST_F(RPCOperatorTest, invalidRequestRowsAreCountedByErrorKind) {
 TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
   DeferredAdmissionBatchRPCFunction::reset();
   std::vector<RowVectorPtr> inputs{
-      makeRowVector(
-          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"live prompt"})}),
-      makeRowVector(
-          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
+      makeNamedRowVector(
+          "prompt", makeNullableFlatVector<StringView>({std::nullopt})),
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"live prompt"})),
+      makeNamedRowVector(
+          "prompt", makeNullableFlatVector<StringView>({std::nullopt})),
   };
 
   auto plan = makeBatchRPCNode(
@@ -1420,9 +1513,9 @@ TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
 
 TEST_F(RPCOperatorTest, localOnlyBatchPayloadMemoryIsAccounted) {
   DeferredAdmissionBatchRPCFunction::reset();
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeNullableFlatVector<StringView>({std::nullopt, std::nullopt})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeNullableFlatVector<StringView>({std::nullopt, std::nullopt}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1470,7 +1563,7 @@ TEST_F(RPCOperatorTest, batchMakesProgressWhenIntakeIsThrottled) {
       prompts.emplace_back(storage.back());
     }
     inputs.push_back(
-        makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)}));
+        makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts)));
   }
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
@@ -1503,7 +1596,8 @@ TEST_F(RPCOperatorTest, perRowReadyResponseReleasesAdmissionBeforeDrain) {
     storage.push_back(fmt::format("single-flight-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = 1};
   auto& limiter = sealDefaultBackend(policy);
@@ -1544,7 +1638,8 @@ void RPCOperatorTest::runContendedDrain(bool batchMode) {
     storage.push_back(fmt::format("contended-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
@@ -1601,7 +1696,7 @@ TEST_F(RPCOperatorTest, batchDrainCompletesWhileTheBackendIsHeld) {
 // guard the process dies instead.
 TEST_F(RPCOperatorTest, closeWithoutInitializeDoesNotCrash) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -1619,7 +1714,7 @@ TEST_F(RPCOperatorTest, closeWithoutInitializeDoesNotCrash) {
 // operator would otherwise still be holding at ~Task.
 TEST_F(RPCOperatorTest, retainedInputIsReleasedWhenCloseNeverRuns) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
   auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
   ASSERT_TRUE(rpcNode != nullptr);
@@ -1666,7 +1761,7 @@ TEST_F(RPCOperatorTest, retainedInputIsReleasedWhenCloseNeverRuns) {
 // worker down with SIGABRT.
 TEST_F(RPCOperatorTest, retainedInputReleasesTheTaskPoolReservation) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
   auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
   ASSERT_TRUE(rpcNode != nullptr);
@@ -1753,7 +1848,7 @@ TEST_F(RPCOperatorTest, resultColumnTypeMustMatchTheFunction) {
       []() { return std::make_shared<MismatchedResultTypeRPCFunction>(); },
       DemoAsyncRPCFunction::signatures());
 
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a"})});
+  auto input = makeNamedRowVector("prompt", makeFlatVector<StringView>({"a"}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1775,7 +1870,8 @@ TEST_F(RPCOperatorTest, batchDispatchRespectsTheBackendCap) {
     storage.push_back(fmt::format("row-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
@@ -1803,7 +1899,8 @@ TEST_F(RPCOperatorTest, batchFanOutIsClippedToGrantedAdmissionUnits) {
   FanOutBatchRPCFunction::flushSizes().clear();
 
   std::vector<StringView> prompts(kRows, StringView("prompt"));
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
   sealDefaultBackend(policy);
@@ -1832,7 +1929,8 @@ TEST_F(RPCOperatorTest, batchSuccessFromStaleEpochDoesNotUndoOverload) {
   constexpr int32_t kRows = 8;
 
   std::vector<StringView> prompts(kRows, StringView("prompt"));
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
@@ -1854,6 +1952,103 @@ TEST_F(RPCOperatorTest, batchSuccessFromStaleEpochDoesNotUndoOverload) {
   ASSERT_EQ(stats.peakPending, kRows);
   EXPECT_EQ(stats.capacity, 2)
       << "success admitted before overload must not recover the new epoch";
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  // The fan-out batch reserves one admission unit per row.
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, kRows);
+}
+
+// No row of a rate-limited batch succeeds, so the batch earns no credit and has
+// no stale success to report, although its own overload cut the window.
+TEST_F(RPCOperatorTest, rateLimitedBatchReportsNoStaleSuccess) {
+  constexpr int64_t kCeiling = 8;
+  const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
+  auto& limiter = sealDefaultBackend(policy);
+
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"}));
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "rate_limited_batch_rpc");
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .configs(sessionFor(policy))
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), 4);
+  ASSERT_LT(limiter.stats().limitMilli, kCeiling * 1'000);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, 0);
+}
+
+// A flush whose own overload cuts the window still reports its credit as stale
+// success: some of its rows succeeded, and the overload arrived after their
+// admission.
+TEST_F(RPCOperatorTest, partlyRateLimitedBatchReportsStaleSuccess) {
+  constexpr int64_t kCeiling = 8;
+  const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
+  auto& limiter = sealDefaultBackend(policy);
+
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"}));
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "partly_rate_limited_batch_rpc",
+      /*dispatchBatchSize=*/4);
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .configs(sessionFor(policy))
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), 4);
+  ASSERT_LT(limiter.stats().limitMilli, kCeiling * 1'000);
+
+  // One native flush holds one admission unit.
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, 1);
+}
+
+// Credit follows the rows, not the verdict: a batch whose rows succeed reports
+// its discarded units as stale success even without a success verdict.
+TEST_F(RPCOperatorTest, staleBatchWithoutSuccessVerdictReportsStaleSuccess) {
+  constexpr int64_t kCeiling = 8;
+  constexpr int32_t kRows = 8;
+  std::vector<StringView> prompts(kRows, StringView("prompt"));
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
+
+  const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
+  auto& limiter = sealDefaultBackend(policy);
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "recovering_no_verdict_batch_rpc",
+      /*dispatchBatchSize=*/kRows);
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .configs(sessionFor(policy))
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), kRows);
+  // Crediting the batch would have grown the window back above 2.
+  ASSERT_EQ(limiter.stats().capacity, 2);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, kRows);
 }
 
 TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
@@ -1861,15 +2056,14 @@ TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
   const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
 
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>({"slow", "overload", "recover"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"slow", "overload", "recover"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "mixed_epoch_rpc");
   std::shared_ptr<exec::Task> task;
   auto result = AssertQueryBuilder(plan)
                     .configs(sessionFor(policy))
-                    .config(core::QueryConfig::kRpcCongestionMaxWindow, "2")
+                    .config(core::QueryConfig::kRpcCongestionMaxWindow, 2)
                     .copyResults(pool(), task);
   expectRanOnSharedLimiter(task);
   ASSERT_EQ(result->size(), 3);
@@ -1878,11 +2072,53 @@ TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
       static_cast<int64_t>(std::llround(std::sqrt(4.0 * 4.0 + 2.0) * 1'000));
   EXPECT_EQ(limiter.stats().limitMilli, expectedLimitMilli)
       << "a current-epoch success must recover after the overload marker";
+  // The slow row was admitted before the overload.
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, 1);
+}
+
+// Successes after overloaded attempts are counted, but neither the driver
+// window nor the shared limiter treats them as an overload.
+TEST_F(RPCOperatorTest, overloadedAttemptsAreCounted) {
+  constexpr int64_t kCeiling = 8;
+  const DefaultBackendPolicy policy{
+      .adaptive = true, .ceiling = kCeiling, .floor = 1};
+  auto& limiter = sealDefaultBackend(policy);
+
+  std::vector<StringView> prompts(kCeiling, StringView("retried"));
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "overloaded_attempts_rpc");
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .configs(sessionFor(policy))
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kCeiling);
+  expectRanOnSharedLimiter(task);
+
+  EXPECT_EQ(limiter.stats().limitMilli, kCeiling * 1'000);
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  auto statSum = [&](const std::string& key) -> int64_t {
+    auto it = customStats.find(key);
+    return it == customStats.end() ? -1 : it->second.sum;
+  };
+  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionOverloadShrinks), -1);
+  EXPECT_EQ(statSum(RPCOperator::kRpcSuccessesAfterOverload), kCeiling);
+  EXPECT_EQ(
+      statSum(RPCOperator::kRpcOverloadedAttempts),
+      OverloadedAttemptsRPCFunction::kNumOverloadedAttempts * kCeiling);
 }
 
 TEST_F(RPCOperatorTest, batchAdmissionRequiresOneUnitForOneRow) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"prompt"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"prompt"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -1918,7 +2154,8 @@ TEST_F(RPCOperatorTest, batchAimdRecoversPerBatchNotPerRow) {
     storage.push_back(fmt::format("row-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   // Below the built-in floor of 50, so capacity can be driven low enough
   // for the two crediting schemes to separate.
@@ -1967,9 +2204,9 @@ TEST_F(
   limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, /*units=*/0);
   ASSERT_EQ(limiter.stats().capacity, 4);
 
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>({
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>({
           "0",
           "1",
           "2",
@@ -1986,7 +2223,7 @@ TEST_F(
           "13",
           "14",
           "15",
-      })});
+      }));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1997,7 +2234,7 @@ TEST_F(
       AssertQueryBuilder(plan)
           .configs(sessionFor(policy))
           .maxDrivers(1)
-          .config(core::QueryConfig::kRpcCongestionAsyncGrowthMaxWindow, "64")
+          .config(core::QueryConfig::kRpcCongestionAsyncGrowthMaxWindow, 64)
           .copyResults(pool(), task);
   expectRanOnSharedLimiter(task);
   ASSERT_EQ(result->size(), kRows);
@@ -2032,9 +2269,9 @@ TEST_F(
   limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, /*units=*/0);
   ASSERT_EQ(limiter.stats().capacity, 4);
 
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>({
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>({
           "0",
           "1",
           "2",
@@ -2051,7 +2288,7 @@ TEST_F(
           "13",
           "14",
           "15",
-      })});
+      }));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2094,7 +2331,8 @@ TEST_F(RPCOperatorTest, lowWaterCapacityIsReportedWhenTheBackendStaysHealthy) {
     storage.push_back(fmt::format("healthy-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
@@ -2119,16 +2357,169 @@ TEST_F(RPCOperatorTest, lowWaterCapacityIsReportedWhenTheBackendStaysHealthy) {
   EXPECT_EQ(customStats.at(RPCOperator::kRpcRateLimiterMinCap).sum, kCeiling);
 }
 
+// The shared limiter outlives the query and paces before the driver's first
+// admission request. The span stats cover none of that pacing, and the limiter
+// holds its ceiling over the whole span; nothing overloaded, so no success
+// went stale.
+TEST_F(RPCOperatorTest, limiterStatsCoverOnlyTheOperatorsSpan) {
+  constexpr int64_t kCeiling = 2;
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"}));
+
+  // The policy the query resolves with demo_batch_rpc's floor of 0.25.
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  ASSERT_TRUE(limiter.initializeOrMatch({
+      .adaptive = true,
+      .ceiling = kCeiling,
+      .floor = 0.25,
+      .decreaseFactor = 0.5,
+  }));
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter.stats().limitMilli, 500);
+  // Pace until the limiter has measured some pacing time, which the span must
+  // exclude.
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (limiter.stats().pacingNanos == 0) {
+    ASSERT_LT(std::chrono::steady_clock::now(), deadline);
+  }
+  // Successes with a 1ms service horizon grow the window back to one unit
+  // within a horizon, and then to the ceiling.
+  constexpr int64_t kHorizonNanos{1'000'000};
+  while (limiter.stats().limitMilli < kCeiling * 1'000) {
+    ASSERT_LT(std::chrono::steady_clock::now(), deadline);
+    limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1'000, kHorizonNanos);
+  }
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_batch_rpc");
+  std::shared_ptr<exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
+          .config(core::QueryConfig::kRpcRateLimiterMaxLimit, kCeiling)
+          .maxDrivers(1)
+          .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), 4);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcRateLimiterAttachedNanos), 1);
+  const auto& attached =
+      customStats.at(RPCOperator::kRpcRateLimiterAttachedNanos);
+  EXPECT_EQ(attached.unit, RuntimeCounter::Unit::kNanos);
+  // One driver published it once, whatever the live samples did.
+  EXPECT_EQ(attached.count, 1);
+  EXPECT_GT(attached.sum, 0);
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcRateLimiterPacingNanos), 1);
+  const auto& pacing = customStats.at(RPCOperator::kRpcRateLimiterPacingNanos);
+  EXPECT_EQ(pacing.unit, RuntimeCounter::Unit::kNanos);
+  EXPECT_EQ(pacing.sum, 0);
+  // A constant window integrates to the window times the span.
+  ASSERT_EQ(
+      customStats.count(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds), 1);
+  EXPECT_EQ(
+      customStats.at(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds).sum,
+      std::llround(
+          kCeiling * 1'000 * (static_cast<double>(attached.sum) / 1e9)));
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, 0);
+}
+
+// constant_setup_rpc binds the limiter in initialize(), before any input. The
+// span stats start at a driver's first admission request instead, so a driver
+// that gets no input reports none of them.
+TEST_F(RPCOperatorTest, limiterSpanStartsAtTheFirstAdmissionRequest) {
+  const auto runQuery = [&](const std::vector<StringView>& prompts) {
+    auto plan = makeRPCNode(
+        PlanBuilder()
+            .values({makeNamedRowVector(
+                "prompt", makeFlatVector<StringView>(prompts))})
+            .planNode(),
+        {"prompt"},
+        "constant_setup_rpc");
+    std::shared_ptr<exec::Task> task;
+    auto result =
+        AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+    EXPECT_EQ(result->size(), prompts.size());
+    return PlanNodeStats::extract(task->taskStats(), plan->id()).customStats;
+  };
+
+  {
+    const auto customStats = runQuery({});
+    ASSERT_EQ(customStats.count(RPCOperator::kRpcRateLimiterCap), 1);
+    EXPECT_EQ(customStats.count(RPCOperator::kRpcRateLimiterAttachedNanos), 0);
+    EXPECT_EQ(customStats.count(RPCOperator::kRpcRateLimiterPacingNanos), 0);
+    EXPECT_EQ(
+        customStats.count(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds),
+        0);
+  }
+  {
+    const auto customStats = runQuery({"a", "b"});
+    ASSERT_EQ(customStats.count(RPCOperator::kRpcRateLimiterAttachedNanos), 1);
+    EXPECT_GT(customStats.at(RPCOperator::kRpcRateLimiterAttachedNanos).sum, 0);
+    EXPECT_EQ(customStats.count(RPCOperator::kRpcRateLimiterPacingNanos), 1);
+    EXPECT_EQ(
+        customStats.count(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds),
+        1);
+  }
+}
+
+// Each flush is held for 50ms and rate limited. The first overload halves the
+// window from one unit to the 0.5 floor, where the second flush waits for its
+// paced admission. Over the span, the window integral lies strictly between
+// those of the two windows, and part of the span was spent pacing.
+TEST_F(RPCOperatorTest, limiterSpanStatsFollowAMidQueryWindowChange) {
+  // The policy the query resolves with rate_limited_batch_rpc_held's floor.
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  ASSERT_TRUE(limiter.initializeOrMatch(
+      {.adaptive = true, .ceiling = 1, .floor = 0.5, .decreaseFactor = 0.5}));
+
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "rate_limited_batch_rpc_held",
+      /*dispatchBatchSize=*/1);
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 1)
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  expectRanOnSharedLimiter(task);
+  ASSERT_EQ(result->size(), 2);
+  ASSERT_EQ(limiter.stats().limitMilli, 500);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  const auto attachedNanos =
+      customStats.at(RPCOperator::kRpcRateLimiterAttachedNanos).sum;
+  const auto pacingNanos =
+      customStats.at(RPCOperator::kRpcRateLimiterPacingNanos).sum;
+  const auto limitMilliSeconds =
+      customStats.at(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds).sum;
+  // Each window held over the whole span bounds the integral, which is rounded
+  // to the nearest milli-unit-second.
+  const double attachedSeconds = static_cast<double>(attachedNanos) / 1e9;
+  EXPECT_GT(limitMilliSeconds, 500 * attachedSeconds + 0.5);
+  EXPECT_LT(limitMilliSeconds, 1'000 * attachedSeconds - 0.5);
+  EXPECT_GT(pacingNanos, 0);
+  EXPECT_LT(pacingNanos, attachedNanos);
+}
+
 TEST_F(RPCOperatorTest, sessionZeroDelegatesToPerLimiterFloor) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto demoPlan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
-  auto demoResult =
-      AssertQueryBuilder(demoPlan)
-          .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
-          .config(core::QueryConfig::kRpcRateLimiterHardLimit, "2")
-          .copyResults(pool());
+  auto demoResult = AssertQueryBuilder(demoPlan)
+                        .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
+                        .config(core::QueryConfig::kRpcRateLimiterHardLimit, 2)
+                        .copyResults(pool());
   ASSERT_EQ(demoResult->size(), 1);
 
   const auto& demoLimiter = RPCRateLimiterRegistry::global().get("");
@@ -2139,8 +2530,8 @@ TEST_F(RPCOperatorTest, sessionZeroDelegatesToPerLimiterFloor) {
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto cappedResult =
       AssertQueryBuilder(cappedPlan)
-          .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
-          .config(core::QueryConfig::kRpcRateLimiterHardLimit, "2")
+          .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
+          .config(core::QueryConfig::kRpcRateLimiterHardLimit, 2)
           .copyResults(pool());
   ASSERT_EQ(cappedResult->size(), 1);
 
@@ -2152,12 +2543,12 @@ TEST_F(RPCOperatorTest, sessionZeroDelegatesToPerLimiterFloor) {
 
 TEST_F(RPCOperatorTest, functionFloorOverridesSessionFloor) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, "4")
-                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, "8")
+                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, 4)
+                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, 8)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2170,7 +2561,7 @@ TEST_F(RPCOperatorTest, functionFloorOverridesSessionFloor) {
 
 TEST_F(RPCOperatorTest, defaultHardLimitKeepsSessionPrecedence) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -2185,13 +2576,13 @@ TEST_F(RPCOperatorTest, defaultHardLimitKeepsSessionPrecedence) {
 
 TEST_F(RPCOperatorTest, zeroHardLimitSelectsFunctionBounds) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, "0")
-                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, "4")
-                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "128")
+                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, 0)
+                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, 4)
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 128)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2202,14 +2593,14 @@ TEST_F(RPCOperatorTest, zeroHardLimitSelectsFunctionBounds) {
 
 TEST_F(RPCOperatorTest, sessionBoundsApplyWhenFunctionDeclaresNone) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
       "undeclared_bounds_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, "4")
-                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "128")
+                    .config(core::QueryConfig::kRpcRateLimiterMinLimit, 4)
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 128)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2221,7 +2612,7 @@ TEST_F(RPCOperatorTest, sessionBoundsApplyWhenFunctionDeclaresNone) {
 
 TEST_F(RPCOperatorTest, defaultBoundsApplyWhenNeitherDeclares) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2237,14 +2628,14 @@ TEST_F(RPCOperatorTest, defaultBoundsApplyWhenNeitherDeclares) {
 
 TEST_F(RPCOperatorTest, optedInQueryGetsItsOwnLimiterOnASharedKey) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   // The default query seals the shared limiter with the session's bounds.
   AssertQueryBuilder(plan).copyResults(pool());
   // A query that opts in resolves to the function's floor and ceiling.
   AssertQueryBuilder(plan)
-      .config(core::QueryConfig::kRpcRateLimiterHardLimit, "0")
+      .config(core::QueryConfig::kRpcRateLimiterHardLimit, 0)
       .copyResults(pool());
 
   auto& registry = RPCRateLimiterRegistry::global();
@@ -2261,13 +2652,13 @@ TEST_F(RPCOperatorTest, optedInQueryGetsItsOwnLimiterOnASharedKey) {
 // and leaves the shared policy as the first set it.
 TEST_F(RPCOperatorTest, laterFunctionLeavesSharedLimiterPolicyUnchanged) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto runFunction = [&](const std::string& functionName) {
     auto plan = makeRPCNode(
         PlanBuilder().values({input}).planNode(), {"prompt"}, functionName);
     std::shared_ptr<exec::Task> task;
     auto result = AssertQueryBuilder(plan)
-                      .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+                      .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
                       .copyResults(pool(), task);
     EXPECT_EQ(result->size(), 1);
     return ranOnPolicyScopedLimiter(task);
@@ -2296,11 +2687,11 @@ TEST_F(RPCOperatorTest, laterFunctionLeavesSharedLimiterPolicyUnchanged) {
 
 TEST_F(RPCOperatorTest, explicitUnboundedAdaptiveLimitUsesSafetyCeiling) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, "0")
+                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, 0)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2311,7 +2702,7 @@ TEST_F(RPCOperatorTest, explicitUnboundedAdaptiveLimitUsesSafetyCeiling) {
 
 TEST_F(RPCOperatorTest, defaultFixedLimitPreservesLegacyCapacity) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
   auto result =
@@ -2327,7 +2718,7 @@ TEST_F(RPCOperatorTest, defaultFixedLimitPreservesLegacyCapacity) {
 
 TEST_F(RPCOperatorTest, defaultAdaptiveLimitPreservesLegacyCeiling) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -2339,14 +2730,14 @@ TEST_F(RPCOperatorTest, defaultAdaptiveLimitPreservesLegacyCeiling) {
 
 TEST_F(RPCOperatorTest, backendErrorsStopPacedRecovery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"fails"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"fails"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
       "backend_error_rpc");
   auto runQuery = [&]() {
     return AssertQueryBuilder(plan)
-        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
         .copyResults(pool());
   };
   // The first query seals the limiter with the function's fractional floor.
@@ -2372,14 +2763,14 @@ TEST_F(RPCOperatorTest, backendErrorsStopPacedRecovery) {
 
 TEST_F(RPCOperatorTest, backendErrorBatchesDoNotStartPacedRecovery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"fails"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"fails"}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
       "backend_error_batch_rpc");
   auto runQuery = [&]() {
     return AssertQueryBuilder(plan)
-        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
         .copyResults(pool());
   };
   // The first query seals the limiter with the function's fractional floor.
@@ -2409,8 +2800,8 @@ TEST_F(RPCOperatorTest, backendErrorBatchesDoNotStartPacedRecovery) {
 TEST_F(RPCOperatorTest, batchWithASuccessfulRowStartsPacedRecovery) {
   // Both rows go in one flush; the function fails the first and serves the
   // second.
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"fails", "served"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"fails", "served"}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2418,7 +2809,7 @@ TEST_F(RPCOperatorTest, batchWithASuccessfulRowStartsPacedRecovery) {
       /*dispatchBatchSize=*/2);
   auto runQuery = [&]() {
     return AssertQueryBuilder(plan)
-        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
         .copyResults(pool());
   };
   runQuery();
@@ -2440,7 +2831,7 @@ TEST_F(RPCOperatorTest, batchWithASuccessfulRowStartsPacedRecovery) {
 
 TEST_F(RPCOperatorTest, maxProbeIntervalDefaultsToOneMinute) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -2452,12 +2843,12 @@ TEST_F(RPCOperatorTest, maxProbeIntervalDefaultsToOneMinute) {
 
 TEST_F(RPCOperatorTest, maxProbeIntervalReachesLimiter) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result =
       AssertQueryBuilder(plan)
-          .config(core::QueryConfig::kRpcRateLimiterMaxProbeIntervalMs, "10000")
+          .config(core::QueryConfig::kRpcRateLimiterMaxProbeIntervalMs, 10'000)
           .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2467,11 +2858,11 @@ TEST_F(RPCOperatorTest, maxProbeIntervalReachesLimiter) {
 
 TEST_F(RPCOperatorTest, legacySessionLimitPreservesOverrideSemantics) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"bounded"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"bounded"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "128")
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 128)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2482,7 +2873,7 @@ TEST_F(RPCOperatorTest, legacySessionLimitPreservesOverrideSemantics) {
 
 TEST_F(RPCOperatorTest, negativeRateLimiterBoundsAreRejected) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
 
   for (const auto& [property, message] :
        std::vector<std::pair<std::string, std::string>>{
@@ -2509,12 +2900,12 @@ TEST_F(RPCOperatorTest, negativeRateLimiterBoundsAreRejected) {
 
 TEST_F(RPCOperatorTest, functionAndSessionHardLimitsUseSmallerValue) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"bounded"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"bounded"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "32")
-                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, "32")
+                    .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 32)
+                    .config(core::QueryConfig::kRpcRateLimiterHardLimit, 32)
                     .copyResults(pool());
   ASSERT_EQ(result->size(), 1);
 
@@ -2566,10 +2957,10 @@ TEST_F(RPCOperatorTest, batchReversedResponseOrder) {
 // Verifies that failed rows produce NULL results while successful rows
 // are correctly mapped to their prompts.
 TEST_F(RPCOperatorTest, batchPartialFailure) {
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>(
-          {"row0", "row1_fail", "row2", "row3_fail", "row4"})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>(
+          {"row0", "row1_fail", "row2", "row3_fail", "row4"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -2607,7 +2998,7 @@ TEST_F(RPCOperatorTest, batchPartialFailure) {
 // should complete.
 TEST_F(RPCOperatorTest, batchWholeBatchFailureDegradesToNull) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -2630,7 +3021,7 @@ TEST_F(RPCOperatorTest, batchWholeBatchFailureDegradesToNull) {
 // the operator flow to the function's buildOutput, which fails the query.
 TEST_F(RPCOperatorTest, batchWholeBatchFailureWithFailPolicyThrows) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -2647,7 +3038,7 @@ TEST_F(RPCOperatorTest, batchWholeBatchFailureWithFailPolicyThrows) {
 // before the function's row-error policy can run.
 TEST_F(RPCOperatorTest, batchWrongResponseCountFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   for (const auto& functionName :
        {"demo_batch_rpc_wrong_count", "demo_batch_rpc_wrong_count_strict"}) {
@@ -2662,7 +3053,7 @@ TEST_F(RPCOperatorTest, batchWrongResponseCountFailsQuery) {
 
 TEST_F(RPCOperatorTest, batchDuplicateRowIdFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   for (const auto& functionName :
        {"demo_batch_rpc_duplicate_row_id",
@@ -2678,7 +3069,7 @@ TEST_F(RPCOperatorTest, batchDuplicateRowIdFailsQuery) {
 
 TEST_F(RPCOperatorTest, batchOutOfRangeRowIdFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   for (const auto& functionName :
        {"demo_batch_rpc_out_of_range_row_id",
@@ -2694,7 +3085,7 @@ TEST_F(RPCOperatorTest, batchOutOfRangeRowIdFailsQuery) {
 
 TEST_F(RPCOperatorTest, batchUnsetResponseFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   for (const auto& functionName :
        {"demo_batch_rpc_unset_response",
@@ -2709,7 +3100,7 @@ TEST_F(RPCOperatorTest, batchUnsetResponseFailsQuery) {
 }
 
 TEST_F(RPCOperatorTest, perRowUnsetResponseFailsQuery) {
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a"})});
+  auto input = makeNamedRowVector("prompt", makeFlatVector<StringView>({"a"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2722,7 +3113,7 @@ TEST_F(RPCOperatorTest, perRowUnsetResponseFailsQuery) {
 
 TEST_F(RPCOperatorTest, perRowAsyncInternalFailureFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
 
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc_fatal");
@@ -2734,7 +3125,7 @@ TEST_F(RPCOperatorTest, perRowAsyncInternalFailureFailsQuery) {
 
 TEST_F(RPCOperatorTest, batchAsyncInternalFailureFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -2748,10 +3139,10 @@ TEST_F(RPCOperatorTest, batchAsyncInternalFailureFailsQuery) {
 
 // Null inputs in batch mode produce null results.
 TEST_F(RPCOperatorTest, batchNullInput) {
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeNullableFlatVector<StringView>(
-          {"valid1"_sv, std::nullopt, "valid2"_sv, std::nullopt})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeNullableFlatVector<StringView>(
+          {"valid1"_sv, std::nullopt, "valid2"_sv, std::nullopt}));
 
   auto plan =
       makeBatchRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
@@ -2778,9 +3169,9 @@ TEST_F(RPCOperatorTest, batchNullInput) {
 // correctly in batch mode.
 TEST_F(RPCOperatorTest, batchMultipleInputBatches) {
   auto batch1 =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
   auto batch2 =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"d", "e"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"d", "e"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({batch1, batch2}).planNode(), {"prompt"});
@@ -2808,9 +3199,9 @@ TEST_F(RPCOperatorTest, batchMultipleInputBatches) {
 // mid-addInput() instead of waiting for noMoreInput(). Verifies all rows
 // are still accounted for.
 TEST_F(RPCOperatorTest, batchPipelinedDispatch) {
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>({"p1", "p2", "p3", "p4", "p5", "p6", "p7"})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>({"p1", "p2", "p3", "p4", "p5", "p6", "p7"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -3006,8 +3397,8 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
   std::vector<RowVectorPtr> inputs;
   inputs.reserve(kRows);
   for (int i = 0; i < kRows; ++i) {
-    inputs.push_back(makeRowVector(
-        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+    inputs.push_back(makeNamedRowVector(
+        "prompt", makeFlatVector<StringView>({StringView("hi")})));
   }
 
   auto plan = makeBatchRPCNode(
@@ -3063,8 +3454,8 @@ TEST_F(RPCOperatorTest, rpcLivenessStatsVisibleWhileDriverIsParked) {
   std::vector<RowVectorPtr> inputs;
   inputs.reserve(kRows);
   for (int i = 0; i < kRows; ++i) {
-    inputs.push_back(makeRowVector(
-        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+    inputs.push_back(makeNamedRowVector(
+        "prompt", makeFlatVector<StringView>({StringView("hi")})));
   }
 
   CursorParameters params;
@@ -3170,8 +3561,8 @@ TEST_F(RPCOperatorTest, rpcRetriesAttemptedAdvancesWhileDriverIsParked) {
   std::vector<RowVectorPtr> inputs;
   inputs.reserve(kRows);
   for (int i = 0; i < kRows; ++i) {
-    inputs.push_back(makeRowVector(
-        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+    inputs.push_back(makeNamedRowVector(
+        "prompt", makeFlatVector<StringView>({StringView("hi")})));
   }
 
   CursorParameters params;
@@ -3295,10 +3686,10 @@ TEST_F(RPCOperatorTest, demoBatchBackendErrorIsNotOverload) {
 TEST_F(RPCOperatorTest, batchClampedByByteBudget) {
   ByteBudgetedBatchRPCFunction::flushChunks().clear();
 
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>(
-          {"r0", "r1", "r2", "r3", "r4", "r5", "r6"})}); // 7 rows
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>(
+          {"r0", "r1", "r2", "r3", "r4", "r5", "r6"})); // 7 rows
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -3319,7 +3710,7 @@ TEST_F(RPCOperatorTest, batchClampedByByteBudget) {
 
 TEST_F(RPCOperatorTest, rejectsInvalidMaxRowsPerFlush) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"r0", "r1"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"r0", "r1"}));
 
   for (const auto& functionName : {
            "demo_batch_rpc_zero_flush_limit",
@@ -3349,10 +3740,10 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
   // DemoAsyncRPCFunction::evaluateCongestion returns kOverloaded when a
   // response result contains "OVERLOAD" (the mock echoes the prompt into the
   // result).
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>(
-          {"OVERLOAD one", "OVERLOAD two", "normal three"})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>(
+          {"OVERLOAD one", "OVERLOAD two", "normal three"}));
 
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
 
@@ -3384,8 +3775,8 @@ TEST_F(RPCOperatorTest, batchExecutionModeReachesTheFunction) {
       },
       DemoBatchRPCFunction::signatures());
 
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({StringView("hi")}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},

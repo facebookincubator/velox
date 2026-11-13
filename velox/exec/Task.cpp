@@ -49,6 +49,7 @@
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/VectorSearchJoinBridge.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -468,10 +469,16 @@ std::shared_ptr<Task> Task::create(
       memoryArbitrationPriority,
       std::move(onError),
       nested != nullptr ? nested->state : std::weak_ptr<PersistentState>{},
-      nested != nullptr ? nested->statePool : nullptr));
+      nested != nullptr ? nested->statePool : nullptr,
+      nested != nullptr ? nested->ownerDeletionLatch : nullptr,
+      nested != nullptr ? nested->uniqueRowIdPool : nullptr));
   if (fixedPoint != nullptr) {
     task->fixedPoint_ = std::make_unique<FixedPointLoop>(
-        task.get(), *fixedPoint, fixedPointOptions, nested);
+        task.get(),
+        task->deletionLatch_,
+        *fixedPoint,
+        fixedPointOptions,
+        nested);
   }
   task->init(std::move(spillDiskOpts));
   task->addToTaskList();
@@ -488,7 +495,9 @@ Task::Task(
     int32_t memoryArbitrationPriority,
     std::function<void(std::exception_ptr)> onError,
     std::weak_ptr<PersistentState> fixedPointState,
-    std::shared_ptr<memory::MemoryPool> fixedPointStatePool)
+    std::shared_ptr<memory::MemoryPool> fixedPointStatePool,
+    std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch,
+    std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool)
     : uuid_{makeUuid()},
       taskId_(taskId),
       destination_(destination),
@@ -499,9 +508,15 @@ Task::Task(
       firstNodeNotSupportingBarrier_(
           planFragment_.firstNodeNotSupportingBarrier()),
       traceCtx_(maybeMakeTraceCtx()),
+      uniqueRowIdPool_(
+          uniqueRowIdPool != nullptr
+              ? std::move(uniqueRowIdPool)
+              : std::make_shared<std::atomic_int64_t>(0)),
       consumerSupplier_(std::move(consumerSupplier)),
       fixedPointState_(std::move(fixedPointState)),
       fixedPointStatePool_(std::move(fixedPointStatePool)),
+      deletionLatch_(
+          std::make_shared<TaskDeletionLatch>(std::move(ownerDeletionLatch))),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)) {
   ++numCreatedTasks_;
@@ -580,9 +595,14 @@ Task::~Task() {
   CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
 
-  // Ful-fill the task deletion promises at the end.
-  auto taskDeletionPromises = std::move(taskDeletionPromises_);
-  for (auto& promise : taskDeletionPromises) {
+  // Hand the deletion promises to the latch, which runs them now or, if a
+  // fixed-point sub-task of this task is still alive, once the last one goes.
+  deletionLatch_->promises = std::move(taskDeletionPromises_);
+  deletionLatch_.reset();
+}
+
+TaskDeletionLatch::~TaskDeletionLatch() {
+  for (auto& promise : promises) {
     promise.setValue();
   }
 }
@@ -726,7 +746,7 @@ uint64_t Task::timeSinceStartMsLocked() const {
 SplitsState& Task::getPlanNodeSplitsStateLocked(
     const core::PlanNodeId& planNodeId) {
   auto it = splitsStates_.find(planNodeId);
-  if (FOLLY_LIKELY(it != splitsStates_.end())) {
+  if (it != splitsStates_.end()) [[likely]] {
     return it->second;
   }
 
@@ -1667,12 +1687,15 @@ void Task::createSplitGroupStateLocked(uint32_t splitGroupId) {
       createLocalExchangeQueuesLocked(
           splitGroupId, partitionNode, factory->numDrivers);
     }
-    addHashJoinBridgesLocked(splitGroupId, factory->needsHashJoinBridges());
-    addNestedLoopJoinBridgesLocked(
+    addJoinBridgesLocked<HashJoinBridge>(
+        splitGroupId, factory->needsHashJoinBridges());
+    addJoinBridgesLocked<NestedLoopJoinBridge>(
         splitGroupId, factory->needsNestedLoopJoinBridges());
-    addSpatialJoinBridgesLocked(
+    addJoinBridgesLocked<SpatialJoinBridge>(
         splitGroupId, factory->needsSpatialJoinBridges());
-    addIndexLookupJoinBridgesLocked(
+    addJoinBridgesLocked<VectorSearchJoinBridge>(
+        splitGroupId, factory->needsVectorSearchJoinBridges());
+    addJoinBridgesLocked<IndexLookupJoinBridge>(
         splitGroupId, factory->needsIndexLookupJoinBridges());
     addCustomJoinBridgesLocked(splitGroupId, factory->needsCustomJoinBridges());
 
@@ -2906,14 +2929,14 @@ void Task::finishPeerFromBarrier(
   ++numFinishedPeers;
 }
 
-void Task::addHashJoinBridgesLocked(
+template <typename TBridge>
+void Task::addJoinBridgesLocked(
     uint32_t splitGroupId,
     const std::vector<core::PlanNodeId>& planNodeIds) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNodeId : planNodeIds) {
     auto const inserted =
-        splitGroupState.bridges
-            .emplace(planNodeId, std::make_shared<HashJoinBridge>())
+        splitGroupState.bridges.emplace(planNodeId, std::make_shared<TBridge>())
             .second;
     VELOX_CHECK(
         inserted, "Join bridge for node {} is already present", planNodeId);
@@ -2959,48 +2982,6 @@ std::shared_ptr<JoinBridge> Task::getCustomJoinBridge(
   return getCustomJoinBridgeInternal(splitGroupId, planNodeId);
 }
 
-void Task::addNestedLoopJoinBridgesLocked(
-    uint32_t splitGroupId,
-    const std::vector<core::PlanNodeId>& planNodeIds) {
-  auto& splitGroupState = splitGroupStates_[splitGroupId];
-  for (const auto& planNodeId : planNodeIds) {
-    auto const inserted =
-        splitGroupState.bridges
-            .emplace(planNodeId, std::make_shared<NestedLoopJoinBridge>())
-            .second;
-    VELOX_CHECK(
-        inserted, "Join bridge for node {} is already present", planNodeId);
-  }
-}
-
-void Task::addSpatialJoinBridgesLocked(
-    uint32_t splitGroupId,
-    const std::vector<core::PlanNodeId>& planNodeIds) {
-  auto& splitGroupState = splitGroupStates_[splitGroupId];
-  for (const auto& planNodeId : planNodeIds) {
-    auto const inserted =
-        splitGroupState.bridges
-            .emplace(planNodeId, std::make_shared<SpatialJoinBridge>())
-            .second;
-    VELOX_CHECK(
-        inserted, "Join bridge for node {} is already present", planNodeId);
-  }
-}
-
-void Task::addIndexLookupJoinBridgesLocked(
-    uint32_t splitGroupId,
-    const std::vector<core::PlanNodeId>& planNodeIds) {
-  auto& splitGroupState = splitGroupStates_[splitGroupId];
-  for (const auto& planNodeId : planNodeIds) {
-    auto const inserted =
-        splitGroupState.bridges
-            .emplace(planNodeId, std::make_shared<IndexLookupJoinBridge>())
-            .second;
-    VELOX_CHECK(
-        inserted, "Join bridge for node {} is already present", planNodeId);
-  }
-}
-
 std::shared_ptr<IndexLookupJoinBridge> Task::getIndexLookupJoinBridge(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
@@ -3030,6 +3011,13 @@ std::shared_ptr<SpatialJoinBridge> Task::getSpatialJoinBridge(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
   return getJoinBridgeInternal<SpatialJoinBridge>(splitGroupId, planNodeId);
+}
+
+std::shared_ptr<VectorSearchJoinBridge> Task::getVectorSearchJoinBridge(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId) {
+  return getJoinBridgeInternal<VectorSearchJoinBridge>(
+      splitGroupId, planNodeId);
 }
 
 template <class TBridgeType>
@@ -4212,7 +4200,7 @@ ContinueFuture Task::requestPause() {
 }
 
 bool Task::pauseRequested(ContinueFuture* future) {
-  if (FOLLY_LIKELY(future == nullptr)) {
+  if (future == nullptr) [[likely]] {
     // It is ok to return 'pauseRequested_' without a mutex lock if user doesn't
     // want to wait for task to resume.
     return pauseRequested_;
@@ -4377,7 +4365,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
     uint64_t maxWaitMs,
     memory::MemoryReclaimer::Stats& stats) {
   auto task = ensureTask();
-  if (FOLLY_UNLIKELY(task == nullptr)) {
+  if (task == nullptr) [[unlikely]] {
     return 0;
   }
   VELOX_CHECK_EQ(task->pool()->name(), pool->name());
@@ -4461,7 +4449,7 @@ void Task::MemoryReclaimer::abort(
     memory::MemoryPool* pool,
     const std::exception_ptr& error) {
   auto task = ensureTask();
-  if (FOLLY_UNLIKELY(task == nullptr)) {
+  if (task == nullptr) [[unlikely]] {
     return;
   }
   VELOX_CHECK_EQ(task->pool()->name(), pool->name());

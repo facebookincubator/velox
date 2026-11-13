@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 
 namespace facebook::nimble {
@@ -126,6 +127,19 @@ class EncodingView {
     NIMBLE_CHECK_LE(length, rowCount_ - offset);
   }
 
+  // Checks that every index is a row of the view and returns the largest.
+  // 'indices' must not be empty. Reduces the values instead of tracking a
+  // position as std::max_element does, so the loop vectorizes.
+  uint32_t checkReadIndices(std::span<const uint32_t> indices) const {
+    NIMBLE_DCHECK(!indices.empty(), "Read indices must not be empty");
+    uint32_t maxIndex{0};
+    for (const auto index : indices) {
+      maxIndex = std::max(maxIndex, index);
+    }
+    NIMBLE_CHECK_LT(maxIndex, rowCount_, "Read index out of range");
+    return maxIndex;
+  }
+
   uint32_t checkReadRanges(std::span<const RowRange> ranges) const {
     uint32_t numRows{0};
     for (size_t i{0}; i < ranges.size(); ++i) {
@@ -149,6 +163,26 @@ class EncodingView {
       CompressionType compressionType,
       DataType dataType,
       std::string_view payload);
+
+  // Bytes of the encoding from 'pos' to its end. 'pos' must lie inside it.
+  size_t remainingBytes(const char* pos) const {
+    return static_cast<size_t>(data_.data() + data_.size() - pos);
+  }
+
+  // Reads a uint32 size and the bytes it covers from 'pos', advancing 'pos'
+  // past them. 'description' names the bytes in errors.
+  std::string_view readSizedBytes(
+      const char*& pos,
+      std::string_view description) const {
+    NIMBLE_CHECK_FILE_GE(
+        remainingBytes(pos), sizeof(uint32_t), "Truncated {}.", description);
+    const auto size = encoding::readUint32(pos);
+    NIMBLE_CHECK_FILE_LE(
+        size, remainingBytes(pos), "Truncated {}.", description);
+    const std::string_view bytes{pos, size};
+    pos += size;
+    return bytes;
+  }
 
   std::string_view data_;
   velox::memory::MemoryPool* pool_;

@@ -579,7 +579,7 @@ TEST_F(CudfBatchConcatTest, concatBeforeHashJoinProbe) {
 
   // Build side: small dimension table.
   auto buildVector =
-      makeRowVector({"u_c0"}, {makeFlatVector<int64_t>({0, 1, 2})});
+      makeNamedRowVector("u_c0", makeFlatVector<int64_t>({0, 1, 2}));
 
   createDuckDbTable("probe", probeVectors);
   createDuckDbTable("build", {buildVector});
@@ -631,8 +631,8 @@ TEST_F(CudfBatchConcatTest, rightJoinCollectsMatchedRowsFromPeerProbes) {
         {"c0", "c1"},
         {makeConstant<int64_t>(i, 10), makeFlatSequence<int64_t>(i * 10, 10)}));
   }
-  auto buildVector = makeRowVector(
-      {"u_c0"}, {makeFlatSequence<int64_t>(0, probeVectors.size())});
+  auto buildVector = makeNamedRowVector(
+      "u_c0", makeFlatSequence<int64_t>(0, probeVectors.size()));
 
   createDuckDbTable("probe", probeVectors);
   createDuckDbTable("build", {buildVector});

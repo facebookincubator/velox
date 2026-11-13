@@ -128,7 +128,9 @@ void DwrfUnit::load() {
 }
 
 void DwrfUnit::unload() {
-  cachedIoSize_.reset();
+  // Keep cachedIoSize_: it depends only on the stripe and projection. Prefetch
+  // admission unloads rejected units and calls getIoSize() again on every
+  // retry; a cached size avoids repeating fetchStripe() on the reader thread.
   stripeStreams_.reset();
   columnReader_.reset();
   selectiveColumnReader_.reset();

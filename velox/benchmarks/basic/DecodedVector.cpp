@@ -18,6 +18,9 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 
+#include <string_view>
+#include <unordered_map>
+
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -37,6 +40,7 @@ class DecodedVectorBenchmark : public functions::test::FunctionBenchmarkBase {
     makeVectors();
     makeNullableVectors();
     makeRowSelections();
+    makeSmallVectors();
   }
 
   // Runs a fast path over a flat vector (no decoding).
@@ -165,6 +169,23 @@ class DecodedVectorBenchmark : public functions::test::FunctionBenchmarkBase {
     decodeAndNulls(dictionaryBaseNullsVector_, &halfRows_);
   }
 
+  // Decodes each of the kNumSmallVectors small vectors of `shape` in turn with
+  // one reused DecodedVector, after evicting the caches if `cold`. Returns the
+  // number of vectors, so folly reports time per vector.
+  unsigned decodeSmall(std::string_view shape, bool cold) {
+    const auto& vectors = smallVectors_.at(std::string(shape));
+    if (cold) {
+      folly::BenchmarkSuspender suspender;
+      evictCaches();
+    }
+    DecodedVector decodedVector;
+    for (const auto& vector : vectors) {
+      decodedVector.decode(*vector);
+      folly::doNotOptimizeAway(decodedVector.data<int64_t>());
+    }
+    return vectors.size();
+  }
+
  private:
   // Decodes 'vector', over the rows in 'rows', or over every row when 'rows' is
   // null.
@@ -189,6 +210,9 @@ class DecodedVectorBenchmark : public functions::test::FunctionBenchmarkBase {
       folly::doNotOptimizeAway(decodedVector.nulls());
     }
   }
+
+  static constexpr int kNumSmallVectors = 10'000;
+  static constexpr vector_size_t kSmallVectorSize = 64;
 
   // The vectors the scan and decode benchmarks read: no nulls anywhere.
   void makeVectors() {
@@ -234,6 +258,40 @@ class DecodedVectorBenchmark : public functions::test::FunctionBenchmarkBase {
     }
   }
 
+  // kNumSmallVectors distinct vectors of each shape the small-vector
+  // benchmarks decode, kSmallVectorSize rows each: flat without nulls and
+  // with nulls in about 1 of 10 rows, entirely null with no values buffer, a
+  // dictionary over a flat vector, and a constant.
+  void makeSmallVectors() {
+    auto fuzzer = makeFuzzer(/*nullRatio=*/0, kSmallVectorSize);
+    auto nullableFuzzer = makeFuzzer(/*nullRatio=*/0.1, kSmallVectorSize);
+    for (int i = 0; i < kNumSmallVectors; ++i) {
+      smallVectors_["flat"].push_back(fuzzer.fuzzFlat(BIGINT()));
+      smallVectors_["flatWithNulls"].push_back(
+          nullableFuzzer.fuzzFlat(BIGINT()));
+      smallVectors_["flatAllNull"].push_back(
+          std::make_shared<FlatVector<int64_t>>(
+              pool(),
+              BIGINT(),
+              allocateNulls(kSmallVectorSize, pool(), bits::kNull),
+              kSmallVectorSize,
+              /*values=*/nullptr,
+              std::vector<BufferPtr>{}));
+      smallVectors_["dictionary"].push_back(
+          fuzzer.fuzzDictionary(fuzzer.fuzzFlat(BIGINT())));
+      smallVectors_["constant"].push_back(fuzzer.fuzzConstant(BIGINT()));
+    }
+  }
+
+  // Writes a buffer larger than the last-level cache, so the next decodes read
+  // every vector's metadata from memory.
+  static void evictCaches() {
+    static std::vector<char> buffer(256 << 20);
+    for (size_t i = 0; i < buffer.size(); i += 64) {
+      ++buffer[i];
+    }
+  }
+
   // A random half of the rows, so most words are partly selected.
   void makeRowSelections() {
     auto fuzzer = makeFuzzer(/*nullRatio=*/0.5);
@@ -248,8 +306,12 @@ class DecodedVectorBenchmark : public functions::test::FunctionBenchmarkBase {
   }
 
   VectorFuzzer makeFuzzer(double nullRatio) {
+    return makeFuzzer(nullRatio, vectorSize_);
+  }
+
+  VectorFuzzer makeFuzzer(double nullRatio, size_t vectorSize) {
     VectorFuzzer::Options opts;
-    opts.vectorSize = vectorSize_;
+    opts.vectorSize = vectorSize;
     opts.nullRatio = nullRatio;
     return VectorFuzzer(opts, pool(), FLAGS_fuzzer_seed);
   }
@@ -277,6 +339,8 @@ class DecodedVectorBenchmark : public functions::test::FunctionBenchmarkBase {
 
   SelectivityVector rows_;
   SelectivityVector halfRows_;
+
+  std::unordered_map<std::string, std::vector<VectorPtr>> smallVectors_;
 };
 
 std::unique_ptr<DecodedVectorBenchmark> benchmark;
@@ -389,6 +453,28 @@ BENCHMARK(decodeDictionaryBaseNullsHalfSelected) {
 BENCHMARK(nullsDictionaryBaseNullsHalfSelected) {
   run([&] { benchmark->nullsDictionaryBaseNullsHalfSelected(); });
 }
+
+BENCHMARK_DRAW_LINE();
+
+// Decoding many distinct small vectors, one after another, as when reading the
+// children of a wide ROW a few rows at a time. The fixed cost of decode()
+// dominates there, and the benchmarks above, which decode one large vector
+// over and over, hide it. Reported per vector. The "Cold" variants evict the
+// caches first, so every vector's metadata comes from memory, as it does when
+// other work runs between decodes.
+#define DECODE_SMALL_BENCHMARKS(name, shape)     \
+  BENCHMARK_MULTI(decodeSmall##name) {           \
+    return benchmark->decodeSmall(shape, false); \
+  }                                              \
+  BENCHMARK_MULTI(decodeSmall##name##Cold) {     \
+    return benchmark->decodeSmall(shape, true);  \
+  }
+
+DECODE_SMALL_BENCHMARKS(Flat, "flat")
+DECODE_SMALL_BENCHMARKS(FlatWithNulls, "flatWithNulls")
+DECODE_SMALL_BENCHMARKS(FlatAllNull, "flatAllNull")
+DECODE_SMALL_BENCHMARKS(Dictionary, "dictionary")
+DECODE_SMALL_BENCHMARKS(Constant, "constant")
 
 } // namespace
 

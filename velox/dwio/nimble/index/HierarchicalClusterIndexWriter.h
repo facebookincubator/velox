@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/dwio/nimble/index/ClusterIndexWriterBase.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndexFactory.h"
 
 namespace facebook::nimble::index {
 
@@ -24,10 +25,15 @@ struct ClusterIndexConfig;
 /// Writes a cluster index backed by hierarchical integral key chunks.
 class HierarchicalClusterIndexWriter final : public ClusterIndexWriterBase {
  public:
+  /// Creates the writer. 'keyCodec' writes the keys that bound the partitions
+  /// and the chunks of the index, the keys that its readers take and return.
+  /// 'options' are as in ClusterIndexFactory::createWriter().
   static std::unique_ptr<HierarchicalClusterIndexWriter> create(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool);
+      std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+      velox::memory::MemoryPool* pool,
+      const ClusterIndexFactory::Options& options = {});
 
   ~HierarchicalClusterIndexWriter() override;
 
@@ -36,7 +42,9 @@ class HierarchicalClusterIndexWriter final : public ClusterIndexWriterBase {
       const ClusterIndexConfig& config,
       const velox::RowTypePtr& inputType,
       std::vector<SortOrder> sortOrders,
-      velox::memory::MemoryPool* pool);
+      std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+      velox::memory::MemoryPool* pool,
+      const ClusterIndexFactory::Options& options);
 };
 
 } // namespace facebook::nimble::index

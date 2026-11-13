@@ -15,7 +15,6 @@
  */
 
 #include "velox/exec/tests/utils/TableScanTestBase.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -86,20 +85,6 @@ std::shared_ptr<Task> TableScanTestBase::assertQuery(
     const int32_t numPrefetchSplit) {
   return HiveConnectorTestBase::assertQuery(
       plan, makeHiveConnectorSplits(filePaths), duckDbSql, numPrefetchSplit);
-}
-
-// Run query with spill enabled.
-std::shared_ptr<Task> TableScanTestBase::assertQuery(
-    const core::PlanNodePtr& plan,
-    const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
-    const std::string& spillDirectory,
-    const std::string& duckDbSql) {
-  return AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .spillDirectory(spillDirectory)
-      .config(core::QueryConfig::kSpillEnabled, true)
-      .config(core::QueryConfig::kAggregationSpillEnabled, true)
-      .splits(makeHiveConnectorSplits(filePaths))
-      .assertResults(duckDbSql);
 }
 
 core::PlanNodePtr TableScanTestBase::tableScanNode() {

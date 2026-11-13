@@ -20,6 +20,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/HashBitRange.h"
 #include "velox/exec/RowContainer.h"
+#include "velox/exec/Spill.h"
 
 namespace facebook::velox::exec {
 namespace test {

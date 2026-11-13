@@ -38,6 +38,7 @@ velox_add_library(
   DecimalCeil.cpp
   DecimalCompare.cpp
   Elt.cpp
+  EncodeFunction.cpp
   FilterFunction.cpp
   FormatNumber.cpp
   FormatString.cpp
@@ -68,6 +69,7 @@ velox_add_library(
   ArrayMinMaxFunction.h
   ArrayPrepend.h
   ArraySort.h
+  ArraysOverlap.h
   AssertNotNull.h
   Base64Function.h
   Bitwise.h
@@ -83,6 +85,7 @@ velox_add_library(
   detail/DecimalArithmeticFunctions.h
   detail/DecimalCeilFunction.h
   Elt.h
+  EncodeFunction.h
   Factorial.h
   FormatNumber.h
   FormatString.h
@@ -90,6 +93,7 @@ velox_add_library(
   Hash.h
   In.h
   InitcapFunction.h
+  JavaFloatingPoint.h
   JsonObjectKeys.h
   LambdaIndexUtil.h
   LastWin.h

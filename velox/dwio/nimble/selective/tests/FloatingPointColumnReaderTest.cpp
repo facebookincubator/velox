@@ -65,8 +65,7 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
   Readers makeReaders(
       const RowVectorPtr& expected,
       const std::string& file,
-      const std::shared_ptr<common::ScanSpec>& scanSpec,
-      bool zeroCopy) {
+      const std::shared_ptr<common::ScanSpec>& scanSpec) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -83,7 +82,6 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
     dwio::common::RowReaderOptions rowOptions;
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(asRowType(expected->type()));
-    rowOptions.setStringDecoderZeroCopy(zeroCopy);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;
   }
@@ -172,7 +170,7 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
         input,
         makeSingleScalarColumnWriterOptions(EncodingType::ALP));
 
-    auto readers = makeReaders(input, file, scanSpec, true);
+    auto readers = makeReaders(input, file, scanSpec);
     validate(*input, *readers.rowReader, batchSize);
   }
 
@@ -193,7 +191,7 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
         input,
         makeSingleScalarColumnWriterOptions(EncodingType::ALP));
 
-    auto readers = makeReaders(input, file, scanSpec, true);
+    auto readers = makeReaders(input, file, scanSpec);
     validateWithFilter(*input, *readers.rowReader, batchSize, [](auto row) {
       const auto value = static_cast<T>((static_cast<int32_t>(row % 67) - 33)) /
           static_cast<T>(4);
@@ -231,7 +229,7 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
         input,
         makeSingleScalarColumnWriterOptions(EncodingType::ALP));
 
-    auto readers = makeReaders(input, file, scanSpec, true);
+    auto readers = makeReaders(input, file, scanSpec);
     validateWithFilter(*input, *readers.rowReader, batchSize, [&](auto row) {
       return data[row] >= lower && data[row] <= upper;
     });
@@ -282,7 +280,6 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
       bool nullable,
       bool filtered,
       bool cache,
-      bool zeroCopy,
       bool automaticSelection) {
     using Physical = typename TypeTraits<T>::physicalType;
     constexpr auto shift = sizeof(T) * 8 - 16;
@@ -324,13 +321,13 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
       scanSpec->childByName("c0")->setFilter(
           std::make_unique<common::FloatingPointRange<T>>(
               T{0}, false, false, static_cast<T>(1.1), false, false, true));
-      auto readers = makeReaders(input, file, scanSpec, zeroCopy);
+      auto readers = makeReaders(input, file, scanSpec);
       validateWithFilter(*input, *readers.rowReader, 37, [&](auto row) {
         return nullAt(row) ||
             (valueAt(row) >= T{0} && valueAt(row) <= static_cast<T>(1.1));
       });
     } else {
-      auto readers = makeReaders(input, file, scanSpec, zeroCopy);
+      auto readers = makeReaders(input, file, scanSpec);
       validate(*input, *readers.rowReader, 113);
     }
   }
@@ -383,12 +380,12 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
     checkFileEncoding<T>(file, EncodingType::ALPRD, false, true);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, file, scanSpec, true);
+    auto readers = makeReaders(input, file, scanSpec);
     validate(*input, *readers.rowReader, 113);
   }
 
   template <typename T>
-  void testNullableAlp(bool zeroCopy) {
+  void testNullableAlp() {
     auto input = makeRowVector({makeFlatVector<T>(
         257,
         [](auto row) { return static_cast<T>(row % 67) / 4; },
@@ -400,12 +397,12 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
     checkFileEncoding<T>(file, EncodingType::ALP, false, true);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, file, scanSpec, zeroCopy);
+    auto readers = makeReaders(input, file, scanSpec);
     validate(*input, *readers.rowReader, 19);
   }
 
   template <typename T>
-  void testAllNullAlprd(bool zeroCopy) {
+  void testAllNullAlprd() {
     auto input = makeRowVector({makeFlatVector<T>(
         257, [](auto) { return T{0}; }, [](auto) { return true; })});
     const auto file = test::createNimbleFile(
@@ -414,7 +411,7 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
         makeSingleScalarColumnWriterOptions(EncodingType::ALPRD));
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, file, scanSpec, zeroCopy);
+    auto readers = makeReaders(input, file, scanSpec);
     validate(*input, *readers.rowReader, 31);
   }
 
@@ -474,34 +471,32 @@ TEST_F(FloatingPointColumnReaderTest, alpFloatAndDoubleRead) {
 
 class ALPRDColumnReaderTest
     : public FloatingPointColumnReaderTest,
-      public ::testing::WithParamInterface<std::tuple<bool, bool, bool, bool>> {
-};
+      public ::testing::WithParamInterface<std::tuple<bool, bool, bool>> {};
 
 TEST_P(ALPRDColumnReaderTest, floatRead) {
-  const auto [nullable, filtered, cache, zeroCopy] = GetParam();
-  testAlprdRead<float>(nullable, filtered, cache, zeroCopy, false);
+  const auto [nullable, filtered, cache] = GetParam();
+  testAlprdRead<float>(nullable, filtered, cache, false);
 }
 
 TEST_P(ALPRDColumnReaderTest, doubleRead) {
-  const auto [nullable, filtered, cache, zeroCopy] = GetParam();
-  testAlprdRead<double>(nullable, filtered, cache, zeroCopy, false);
+  const auto [nullable, filtered, cache] = GetParam();
+  testAlprdRead<double>(nullable, filtered, cache, false);
 }
 
 TEST_P(ALPRDColumnReaderTest, automaticFloatRead) {
-  const auto [nullable, filtered, cache, zeroCopy] = GetParam();
-  testAlprdRead<float>(nullable, filtered, cache, zeroCopy, true);
+  const auto [nullable, filtered, cache] = GetParam();
+  testAlprdRead<float>(nullable, filtered, cache, true);
 }
 
 TEST_P(ALPRDColumnReaderTest, automaticDoubleRead) {
-  const auto [nullable, filtered, cache, zeroCopy] = GetParam();
-  testAlprdRead<double>(nullable, filtered, cache, zeroCopy, true);
+  const auto [nullable, filtered, cache] = GetParam();
+  testAlprdRead<double>(nullable, filtered, cache, true);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     ALPRD,
     ALPRDColumnReaderTest,
     ::testing::Combine(
-        ::testing::Bool(),
         ::testing::Bool(),
         ::testing::Bool(),
         ::testing::Bool()));
@@ -512,12 +507,11 @@ TEST_F(FloatingPointColumnReaderTest, alprdIncompatibleChildLayout) {
 }
 
 TEST_F(FloatingPointColumnReaderTest, floatingPointCodecsWithNulls) {
-  for (auto zeroCopy : {false, true}) {
-    SCOPED_TRACE(zeroCopy);
-    testNullableAlp<float>(zeroCopy);
-    testNullableAlp<double>(zeroCopy);
-    testAllNullAlprd<float>(zeroCopy);
-    testAllNullAlprd<double>(zeroCopy);
+  {
+    testNullableAlp<float>();
+    testNullableAlp<double>();
+    testAllNullAlprd<float>();
+    testAllNullAlprd<double>();
   }
 }
 

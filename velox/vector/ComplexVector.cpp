@@ -451,7 +451,12 @@ VectorPtr RowVector::slice(vector_size_t offset, vector_size_t length) const {
   std::vector<VectorPtr> children(children_.size());
   for (int i = 0; i < children_.size(); ++i) {
     if (children_[i]) {
-      children[i] = children_[i]->slice(offset, length);
+      // A child can be shorter than this vector when the trailing rows are
+      // null. Slicing it past its end would read past its size.
+      const auto childSize = children_[i]->size();
+      const auto childOffset = std::min(offset, childSize);
+      children[i] = children_[i]->slice(
+          childOffset, std::min(length, childSize - childOffset));
     }
   }
   return std::make_shared<RowVector>(

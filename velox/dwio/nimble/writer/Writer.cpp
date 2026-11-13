@@ -42,7 +42,6 @@
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/MetadataGenerated.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/common/SchemaReader.h"
@@ -56,7 +55,6 @@
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/DenseIndexFactory.h"
-#include "velox/dwio/nimble/index/HashIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
@@ -112,9 +110,6 @@ class WriterContext : public FieldWriterContext {
         fsstEncodingNodeIds_{std::move(options.fsstEncodingNodeIds)},
         subIntSplitEncodingNodeIds_{std::move(options.subIntSplitEncodingNodeIds)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
-        stripeStatsWriteEnabled_{featureGate()->enabled(
-            FeatureGate::FeatureSet::kStripeStatsWrite,
-            /*defaultValue=*/false)},
         logger_{
             this->options_.metricsLogger == nullptr
                 ? std::make_shared<MetricsLogger>()
@@ -136,12 +131,6 @@ class WriterContext : public FieldWriterContext {
 
   const EncodingNodeIds& subIntSplitEncodingNodeIds() const {
     return subIntSplitEncodingNodeIds_;
-  }
-
-  // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
-  // is enabled. Resolved once at construction so it cannot flip mid-file.
-  bool stripeStatsWriteEnabled() const {
-    return stripeStatsWriteEnabled_;
   }
 
   bool hasStripeDictionaryConfig() const {
@@ -292,7 +281,6 @@ class WriterContext : public FieldWriterContext {
   const EncodingNodeIds fsstEncodingNodeIds_;
   const EncodingNodeIds subIntSplitEncodingNodeIds_;
   const bool hasStripeDictionaryConfig_;
-  const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
   velox::CpuWallTiming writeTiming_;
   velox::CpuWallTiming ingestionTiming_;
@@ -1994,8 +1982,14 @@ std::unique_ptr<index::VectorIndexWriter> createVectorIndexWriter(
 std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
     const WriterOptions& options,
     const velox::TypePtr& type,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    SchemaBuilder& schemaBuilder) {
+  const auto keyStreamLayout = options.clusterIndexKeyStreamLayout;
   if (options.clusterIndexConfig == nullptr) {
+    NIMBLE_USER_CHECK_NE(
+        keyStreamLayout,
+        index::KeyStreamLayout::kStripe,
+        "The Stripe cluster index key stream layout requires a cluster index");
     return nullptr;
   }
   const auto& config = *options.clusterIndexConfig;
@@ -2004,8 +1998,13 @@ std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
       index::IndexFamily::Cluster,
       "Cluster index configuration must use the cluster family: {}",
       config.name);
-  auto writer =
-      index::clusterIndexFactory(config.name).createWriter(config, type, pool);
+  index::ClusterIndexFactory::Options writerOptions{
+      .keyStreamLayout = keyStreamLayout};
+  if (keyStreamLayout == index::KeyStreamLayout::kStripe) {
+    writerOptions.keyStreamId = schemaBuilder.createClusterIndexKeyStream();
+  }
+  auto writer = index::clusterIndexFactory(config.name)
+                    .createWriter(config, type, pool, writerOptions);
   NIMBLE_CHECK_NOT_NULL(
       writer, "Cluster index factory returned a null writer: {}", config.name);
   return writer;
@@ -2109,7 +2108,8 @@ Writer::Writer(
       clusterIndexWriter_{createClusterIndexWriter(
           context_->options(),
           type,
-          &(*context_->bufferMemoryPool()))},
+          &(*context_->bufferMemoryPool()),
+          context_->schemaBuilder())},
       denseIndexWriters_{createDenseIndexWriters(
           context_->options(),
           type,
@@ -2144,6 +2144,8 @@ Writer::Writer(
                    .experimentalStripeGroupEncodingLayoutReadFactors,
            .stripeGroupMetadataDeduplicationEnabled =
                context_->options().experimentalStripeGroupMetadataDeduplication,
+           .stripeGroupSparseLayoutEnabled =
+               context_->options().experimentalStripeGroupSparseLayout,
            .stripeGroupFlushCallback =
                (clusterIndexWriter_ != nullptr || !denseIndexWriters_.empty())
                ? TabletWriter::StripeGroupFlushCallback(
@@ -2151,11 +2153,11 @@ Writer::Writer(
                          const WriteDataFn& writeDataFn,
                          const CreateMetadataSectionFn& createMetadataFn) {
                        if (clusterIndexWriter_ != nullptr) {
-                         clusterIndexWriter_->flush(
+                         clusterIndexWriter_->finishStripeGroup(
                              writeDataFn, createMetadataFn);
                        }
                        for (const auto& denseIndex : denseIndexWriters_) {
-                         denseIndex.writer->flush(
+                         denseIndex.writer->finishStripeGroup(
                              writeDataFn, createMetadataFn);
                        }
                      })
@@ -2274,6 +2276,7 @@ void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
   const auto numRows = input->size();
   bool batchHasTopLevelNulls{false};
   const bool mustCheckTopLevelNulls = clusterIndexWriter_ != nullptr ||
+      context_->options().enableChunkStats ||
       !context_->options().ignoreTopLevelNulls;
   if (mustCheckTopLevelNulls && input->mayHaveNulls()) {
     for (velox::vector_size_t row = 0; row < numRows; ++row) {
@@ -2286,6 +2289,11 @@ void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
   NIMBLE_USER_CHECK(
       clusterIndexWriter_ == nullptr || !batchHasTopLevelNulls,
       "Cluster-indexed Nimble files cannot contain top-level null rows");
+  if (context_->options().enableChunkStats) {
+    NIMBLE_USER_CHECK(
+        !batchHasTopLevelNulls,
+        "Nimble files with chunk stats cannot contain top-level null rows");
+  }
   hasTopLevelNulls_ = hasTopLevelNulls_ || batchHasTopLevelNulls;
 }
 
@@ -2370,7 +2378,7 @@ void Writer::writeMetadata() {
 }
 
 void Writer::writeColumnStats() {
-  context_->finalizeFileStatsFromStripes();
+  context_->finalizeFileStats();
   // Raw size now comes from the column statistics rather than a second pass
   // over the input with RawSizeUtils. The consistency check that validated the
   // two against each other has served its purpose and is gone, along with the
@@ -2389,14 +2397,6 @@ void Writer::writeColumnStats() {
     Buffer buffer{*encodingMemoryPool_};
     tabletWriter_->writeOptionalSection(
         std::string(kVectorizedStatsSection), fileStats.serialize(buffer));
-    if (context_->stripeStatsWriteEnabled()) {
-      VectorizedStripeStats stripeStats{
-          context_->stripeStats(), encodingMemoryPool_.get(), statsOptions};
-      Buffer stripeStatsBuffer{*encodingMemoryPool_};
-      tabletWriter_->writeOptionalSection(
-          std::string(kStripeStatsSection),
-          stripeStats.serialize(stripeStatsBuffer));
-    }
   } else {
     flatbuffers::FlatBufferBuilder builder;
     builder.Finish(
@@ -2523,6 +2523,31 @@ void Writer::writeDictionarySection(
           fileDictionaryReferences,
           externalDictionaryReferences,
           fileDictionaries));
+}
+
+void Writer::writeStripeKeyStream() {
+  if (clusterIndexWriter_ == nullptr) {
+    return;
+  }
+  ensureEncodingBuffer();
+  auto chunks = clusterIndexWriter_->finishStripe(*encodingBuffer_);
+  const auto keyStreamOffset =
+      context_->schemaBuilder().clusterIndexKeyStreamOffset();
+  if (!keyStreamOffset.has_value()) {
+    NIMBLE_CHECK(
+        chunks.empty(),
+        "A cluster index without a key stream stores nothing in stripes");
+    return;
+  }
+  // The ClusterIndexGroup records the last key of one key chunk per stripe.
+  NIMBLE_CHECK_EQ(
+      chunks.size(), 1, "The key stream of a stripe must be one key chunk");
+  NIMBLE_CHECK_LT(keyStreamOffset.value(), encodedStreams_.size());
+  auto& keyStream = encodedStreams_[keyStreamOffset.value()];
+  NIMBLE_CHECK(keyStream.chunks.empty());
+  const uint64_t keyStreamBytes = chunks.front().contentSize();
+  keyStream.chunks = std::move(chunks);
+  context_->updateStripeEncodedPhysicalSize(keyStreamBytes);
 }
 
 void Writer::addIndexKey(const velox::VectorPtr& input) {
@@ -3661,14 +3686,7 @@ bool Writer::writeStripe() {
     writeStreams();
   }
   writeStripeDictionaryStreams();
-
-  // Must run after writeStripeDictionaryStreams(), which still charges the
-  // stripe's alphabet bytes to the stats collectors: snapshotting first would
-  // shift those bytes into the next stripe and drop them for the last one.
-  if (context_->options().enableStatsCollection &&
-      context_->stripeStatsWriteEnabled()) {
-    context_->finalizeStripeStatsCollectors();
-  }
+  writeStripeKeyStream();
 
   uint64_t stripeSize{0};
   {

@@ -17,10 +17,10 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/hive/iceberg/tests/utils/IcebergPlanBuilder.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -53,8 +53,8 @@ class IcebergDwrfInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    auto plan = test::IcebergPlanBuilder()
+                    .startTableScan()
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -232,8 +232,8 @@ TEST_F(IcebergDwrfInsertTest, partitioned) {
 
   auto splits = createSplitsForDirectory(dataPath);
   ASSERT_EQ(splits.size(), commitTasks.size());
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(rowType)
                   .endTableScan()
                   .planNode();
@@ -299,8 +299,8 @@ TEST_F(IcebergDwrfInsertTest, writerRotationProducesMultipleFiles) {
   // The rotated files still read back as the original data.
   auto splits = createSplitsForDirectory(dataPath);
   ASSERT_EQ(splits.size(), commitTasks.size());
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(rowType)
                   .endTableScan()
                   .planNode();
@@ -392,7 +392,7 @@ std::shared_ptr<const connector::ColumnHandle> makeIcebergColumnHandle(
     const TypePtr& type,
     const parquet::ParquetFieldId& field) {
   return std::make_shared<const IcebergColumnHandle>(
-      name, FileColumnHandle::ColumnType::kRegular, type, field);
+      name, connector::FileColumnHandle::ColumnType::kRegular, type, field);
 }
 
 // Schema evolution: a top-level column is renamed (c -> c2, id 3) and
@@ -421,9 +421,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdRenameReorderDropAdd) {
               {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
               {"d", makeIcebergColumnHandle("d", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -442,7 +441,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdRenameReorderDropAdd) {
 // name c (id 9) is added. The stale file column must NOT bind to the new c by
 // name; the new c must read as null.
 TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
-  auto writeVector = makeRowVector({"c"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto writeVector =
+      makeNamedRowVector("c", makeFlatVector<int32_t>({1, 2, 3}));
 
   const auto dir = TempDirectoryPath::create();
   const auto path = dir->getPath();
@@ -455,9 +455,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
       unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
           assignments{{"c", makeIcebergColumnHandle("c", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -465,7 +464,7 @@ TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
                   .planNode();
 
   auto expected =
-      makeRowVector({"c"}, {makeNullConstant(TypeKind::INTEGER, 3)});
+      makeNamedRowVector("c", makeNullConstant(TypeKind::INTEGER, 3));
   exec::test::AssertQueryBuilder(plan).splits(splits).assertResults({expected});
 }
 
@@ -473,13 +472,13 @@ TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
 // remaining nested fields are reordered (z before x). Field-id resolution must
 // match nested columns by id, not position.
 TEST_F(IcebergDwrfInsertTest, fieldIdNestedStructReorderDrop) {
-  auto writeVector = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto writeVector = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"x", "y", "z"},
           {makeFlatVector<int32_t>({1, 2, 3}),
            makeFlatVector<int32_t>({4, 5, 6}),
-           makeFlatVector<int32_t>({7, 8, 9})})});
+           makeFlatVector<int32_t>({7, 8, 9})}));
 
   const auto dir = TempDirectoryPath::create();
   const auto path = dir->getPath();
@@ -497,21 +496,20 @@ TEST_F(IcebergDwrfInsertTest, fieldIdNestedStructReorderDrop) {
                    ROW({"z", "x"}, {INTEGER(), INTEGER()}),
                    {1, {{4, {}}, {2, {}}}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
                   .endTableScan()
                   .planNode();
 
-  auto expected = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto expected = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"z", "x"},
           {makeFlatVector<int32_t>({7, 8, 9}),
-           makeFlatVector<int32_t>({1, 2, 3})})});
+           makeFlatVector<int32_t>({1, 2, 3})}));
   exec::test::AssertQueryBuilder(plan).splits(splits).assertResults({expected});
 }
 
@@ -536,9 +534,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdTypePromotion) {
               {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
               {"b", makeIcebergColumnHandle("b", DOUBLE(), {2, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
