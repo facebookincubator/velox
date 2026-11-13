@@ -66,6 +66,10 @@ class OperatorAdapter {
     return {};
   }
 
+  /// Returns whether any of comparisonKeys() has a type, or a nested type,
+  /// that provides custom comparison.
+  bool needsCustomComparison(const core::PlanNodePtr& planNode) const;
+
   /// Bundled GPU capability properties for an operator.
   struct Properties {
     bool canRunOnGPU = false;
@@ -141,10 +145,6 @@ class OperatorAdapterRegistry {
   OperatorAdapterRegistry() = default;
   std::vector<std::unique_ptr<OperatorAdapter>> adapters_;
 };
-
-/// Returns whether 'expression' or any of its inputs has a type, or a nested
-/// type, that provides custom comparison.
-bool containsCustomComparison(const core::TypedExprPtr& expression);
 
 /// Register all operator adapters.
 ///

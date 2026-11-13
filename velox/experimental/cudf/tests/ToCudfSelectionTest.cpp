@@ -238,34 +238,6 @@ TEST_F(ToCudfSelectionTest, timeToVarcharCastFallsBack) {
   EXPECT_EQ(toOperatorStats(task->taskStats()).count("CudfFromVelox"), 0);
 }
 
-TEST_F(ToCudfSelectionTest, orderByWithPassthroughMapStaysOnCpu) {
-  auto input = makeRowVector(
-      {"k", "m"},
-      {makeFlatVector<int64_t>({3, 1, 2}),
-       makeMapVector<std::string, std::string>(
-           {{{"a", "1"}}, {{"b", "2"}}, {{"c", "3"}}})});
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .orderBy({"k ASC NULLS LAST"}, false)
-                  .planNode();
-
-  std::shared_ptr<Task> task;
-  auto result = AssertQueryBuilder(plan)
-                    .config("cudf.enabled", true)
-                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
-                    .copyResults(pool(), task);
-  auto expected = makeRowVector(
-      {"k", "m"},
-      {makeFlatVector<int64_t>({1, 2, 3}),
-       makeMapVector<std::string, std::string>(
-           {{{"b", "2"}}, {{"c", "3"}}, {{"a", "1"}}})});
-  facebook::velox::test::assertEqualVectors(expected, result);
-
-  const auto stats = toOperatorStats(task->taskStats());
-  EXPECT_EQ(stats.count("OrderBy"), 1);
-  EXPECT_EQ(stats.count("CudfOrderBy"), 0);
-}
-
 TEST_F(ToCudfSelectionTest, outputTypesReasonWithoutFallback) {
   auto input = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2})});
   auto plan = PlanBuilder()

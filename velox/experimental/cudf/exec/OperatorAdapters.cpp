@@ -90,8 +90,6 @@ bool containsCustomComparison(const TypePtr& type) {
   return false;
 }
 
-} // namespace
-
 bool containsCustomComparison(const core::TypedExprPtr& expression) {
   if (containsCustomComparison(expression->type())) {
     return true;
@@ -101,8 +99,6 @@ bool containsCustomComparison(const core::TypedExprPtr& expression) {
       expression->inputs().end(),
       [](const auto& input) { return containsCustomComparison(input); });
 }
-
-namespace {
 
 bool subtreeHasUnsupportedType(const core::PlanNodePtr& root) {
   return core::PlanNode::findFirstNode(root.get(), [](const auto* node) {
@@ -119,6 +115,14 @@ std::vector<core::TypedExprPtr> toComparisonKeys(
 }
 
 } // namespace
+
+bool OperatorAdapter::needsCustomComparison(
+    const core::PlanNodePtr& planNode) const {
+  const auto keys = comparisonKeys(planNode);
+  return std::any_of(keys.begin(), keys.end(), [](const auto& key) {
+    return containsCustomComparison(key);
+  });
+}
 
 /// OperatorAdapterRegistry Implementation
 OperatorAdapterRegistry& OperatorAdapterRegistry::getInstance() {
@@ -563,7 +567,11 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     if (!node) {
       return {};
     }
-    return toComparisonKeys(node->leftKeys(), node->rightKeys());
+    auto keys = toComparisonKeys(node->leftKeys(), node->rightKeys());
+    if (node->filter()) {
+      keys.push_back(node->filter());
+    }
+    return keys;
   }
 };
 

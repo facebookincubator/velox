@@ -241,18 +241,6 @@ std::unique_ptr<cudf::column> computeGlobalAggregate(
   return cudf::make_column_from_scalar(*resultScalar, numRows, stream, mr);
 }
 
-bool containsCustomComparison(const TypePtr& type) {
-  if (type->providesCustomComparison()) {
-    return true;
-  }
-  for (uint32_t i = 0; i < type->size(); ++i) {
-    if (containsCustomComparison(type->childAt(i))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 cudf::size_type constantRowsBoundValue(const core::TypedExprPtr& value) {
   VELOX_USER_CHECK_NOT_NULL(value, "ROWS frame offset must be specified");
 
@@ -419,30 +407,6 @@ bool CudfWindow::canRunOnGPU(
       *reason = "Multi-column ORDER BY requires a cuDF upgrade (follow-on PR)";
     }
     return false;
-  }
-
-  for (const auto& key : windowNode.partitionKeys()) {
-    if (containsCustomComparison(key->type())) {
-      if (reason) {
-        *reason = fmt::format(
-            "PARTITION BY key {} uses custom comparison type {}",
-            key->name(),
-            key->type()->toString());
-      }
-      return false;
-    }
-  }
-
-  for (const auto& key : windowNode.sortingKeys()) {
-    if (containsCustomComparison(key->type())) {
-      if (reason) {
-        *reason = fmt::format(
-            "ORDER BY key {} uses custom comparison type {}",
-            key->name(),
-            key->type()->toString());
-      }
-      return false;
-    }
   }
 
   const auto& prefix = CudfConfig::getInstance().functionNamePrefix;

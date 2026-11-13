@@ -125,11 +125,8 @@ bool CompileState::compile(bool allowCpuFallback) {
         if (adapter && props.planNode) {
           static_cast<OperatorAdapter::Properties&>(props) =
               adapter->properties(op, props.planNode, ctx);
-          const auto keys = adapter->comparisonKeys(props.planNode);
           props.keysNeedCustomComparison =
-              std::any_of(keys.begin(), keys.end(), [](const auto& key) {
-                return containsCustomComparison(key);
-              });
+              adapter->needsCustomComparison(props.planNode);
         }
         if (isAnyOf<CudfOperator>(op)) {
           // CudfOperator is always fully GPU compatible
