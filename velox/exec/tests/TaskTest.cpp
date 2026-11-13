@@ -17,6 +17,7 @@
 #include "velox/exec/Task.h"
 
 #include <functional>
+#include <stdexcept>
 
 #include <gmock/gmock.h>
 
@@ -3923,6 +3924,183 @@ TEST_F(TaskTest, allDriversClosedFutureWithQueuedSplitGroup) {
   // The total counts the drivers of group 1, which the task never creates.
   ASSERT_EQ(task->numTotalDrivers(), 2);
   ASSERT_EQ(task->numFinishedDrivers(), 1);
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, preloadCloseFailureDoesNotInterruptCancellation) {
+  for (const bool standardException : {false, true}) {
+    SCOPED_TRACE(standardException);
+    auto task = Task::create(
+        "preload-close-failure",
+        PlanBuilder().tableScan(ROW("c0", INTEGER())).planFragment(),
+        0,
+        core::QueryCtx::create(),
+        Task::ExecutionMode::kSerial,
+        exec::Consumer{});
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    for (int i{0}; i < 4; ++i) {
+      auto split = makeHiveConnectorSplit("unused");
+      splits.push_back(split);
+      task->addSplit("0", exec::Split(split));
+    }
+    SCOPE_EXIT {
+      for (const auto& split : splits) {
+        if (split->dataSource) {
+          split->dataSource->close();
+        }
+      }
+    };
+
+    std::vector<std::weak_ptr<memory::MemoryPool>> preloadPools;
+    exec::Split acquired;
+    ContinueFuture splitFuture = ContinueFuture::makeEmpty();
+    ASSERT_EQ(
+        task->getSplitOrFuture(
+            0,
+            kUngroupedGroupId,
+            "0",
+            4,
+            [&](const std::shared_ptr<connector::ConnectorSplit>& split) {
+              auto pool = task->pool()->addLeafChild(
+                  fmt::format("preload-{}", preloadPools.size()));
+              preloadPools.push_back(pool);
+              split->dataSource =
+                  std::make_unique<AsyncSource<connector::DataSource>>(
+                      [pool]() -> std::unique_ptr<connector::DataSource> {
+                        ADD_FAILURE()
+                            << "Unexpected preparation: " << pool->name();
+                        return nullptr;
+                      });
+            },
+            acquired,
+            splitFuture),
+        BlockingReason::kNotBlocked);
+    ASSERT_EQ(preloadPools.size(), 4);
+
+    size_t numCloseAttempts{0};
+    ContinueFuture finishFuture = ContinueFuture::makeEmpty();
+    {
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::exec::Task::closePreloadedSplit",
+          std::function<void(AsyncSource<connector::DataSource>*)>(
+              [&](AsyncSource<connector::DataSource>* /*source*/) {
+                if (numCloseAttempts++ == 0) {
+                  if (standardException) {
+                    throw std::runtime_error("Injected preload close failure");
+                  }
+                  throw 1;
+                }
+              }));
+      EXPECT_NO_THROW(finishFuture = task->requestCancel());
+    }
+    EXPECT_TRUE(finishFuture.valid());
+    if (finishFuture.valid()) {
+      EXPECT_TRUE(finishFuture.isReady());
+    }
+    EXPECT_EQ(numCloseAttempts, 4);
+    EXPECT_THAT(
+        preloadPools, testing::Each(testing::Truly([](const auto& pool) {
+          return pool.expired();
+        })));
+    EXPECT_NO_THROW(task->requestCancel().wait());
+  }
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, concurrentCancellationClosesPreloadsOnce) {
+  auto task = Task::create(
+      "concurrent-preload-cancellation",
+      PlanBuilder().tableScan(ROW("c0", INTEGER())).planFragment(),
+      0,
+      core::QueryCtx::create(),
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+  for (int32_t i{0}; i < 4; ++i) {
+    auto split = makeHiveConnectorSplit("unused");
+    splits.push_back(split);
+    task->addSplit("0", exec::Split(split));
+  }
+  SCOPE_EXIT {
+    for (const auto& split : splits) {
+      if (split->dataSource) {
+        split->dataSource->close();
+      }
+    }
+  };
+
+  std::vector<std::weak_ptr<memory::MemoryPool>> preloadPools;
+  exec::Split acquired;
+  ContinueFuture splitFuture = ContinueFuture::makeEmpty();
+  // Acquire every split without consuming its preload, leaving no queued
+  // splits for driver closure to discard before task cleanup.
+  for (int32_t i{0}; i < 4; ++i) {
+    ASSERT_EQ(
+        task->getSplitOrFuture(
+            0,
+            kUngroupedGroupId,
+            "0",
+            4,
+            [&](const std::shared_ptr<connector::ConnectorSplit>& split) {
+              auto pool = task->pool()->addLeafChild(
+                  fmt::format("preload-{}", preloadPools.size()));
+              preloadPools.push_back(pool);
+              split->dataSource =
+                  std::make_unique<AsyncSource<connector::DataSource>>(
+                      [pool]() -> std::unique_ptr<connector::DataSource> {
+                        ADD_FAILURE()
+                            << "Unexpected preparation: " << pool->name();
+                        return nullptr;
+                      });
+            },
+            acquired,
+            splitFuture),
+        BlockingReason::kNotBlocked);
+  }
+  ASSERT_EQ(preloadPools.size(), 4);
+
+  folly::Baton<> cleanupStarted;
+  folly::Baton<> cleanupAllowed;
+  std::atomic<size_t> numCloseAttempts{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::terminate",
+      std::function<void(const Task*)>([&](const Task* /*task*/) {
+        cleanupStarted.post();
+        cleanupAllowed.wait();
+      }));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::closePreloadedSplit",
+      std::function<void(AsyncSource<connector::DataSource>*)>(
+          [&](AsyncSource<connector::DataSource>* /*source*/) {
+            ++numCloseAttempts;
+          }));
+  ContinueFuture firstFuture = ContinueFuture::makeEmpty();
+  std::thread firstCancel(
+      [&]() { EXPECT_NO_THROW(firstFuture = task->requestCancel()); });
+  SCOPE_EXIT {
+    if (firstCancel.joinable()) {
+      cleanupAllowed.post();
+      firstCancel.join();
+    }
+  };
+
+  ASSERT_TRUE(cleanupStarted.try_wait_for(std::chrono::seconds(10)));
+  ASSERT_TRUE(task->isCancelled());
+  auto secondFuture = task->requestCancel();
+  EXPECT_TRUE(secondFuture.valid());
+  EXPECT_TRUE(std::move(secondFuture).wait(std::chrono::seconds(10)));
+  // The second cancellation must not close preloads claimed by the first.
+  EXPECT_EQ(numCloseAttempts.load(), 0);
+  EXPECT_THAT(preloadPools, testing::Each(testing::Truly([](const auto& pool) {
+                return !pool.expired();
+              })));
+
+  cleanupAllowed.post();
+  firstCancel.join();
+  EXPECT_TRUE(firstFuture.valid());
+  EXPECT_TRUE(std::move(firstFuture).wait(std::chrono::seconds(10)));
+  EXPECT_EQ(numCloseAttempts.load(), 4);
+  EXPECT_THAT(preloadPools, testing::Each(testing::Truly([](const auto& pool) {
+                return pool.expired();
+              })));
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
