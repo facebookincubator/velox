@@ -389,7 +389,7 @@ TEST_F(TryExprTest, branchingSpecialForm) {
   assertEqualVectors(expected, result);
 
   result = evaluate(
-      "try(switch(always_throws(c0) or always_throws(c3), is_nan(c2) or is_finite(c1), is_nan(c1) or is_finite(c2)))",
+      "try(switch(always_throws(c0) or always_throws(c3), is_nan(c2) or is_infinite(c1), is_nan(c1) or is_finite(c2)))",
       data);
   assertEqualVectors(switchExpected, result);
 
@@ -405,7 +405,7 @@ TEST_F(TryExprTest, branchingSpecialForm) {
 
   // Test Switch where the condition has errors on all rows.
   result = evaluate(
-      "try(switch(always_throws(c5), is_finite(c1), is_finite(c2)))", data);
+      "try(switch(always_throws(c5), is_finite(c1), is_nan(c2)))", data);
   expected =
       makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt});
   assertEqualVectors(expected, result);
@@ -413,7 +413,7 @@ TEST_F(TryExprTest, branchingSpecialForm) {
   // Test Switch where then and else clauses only evaluate on the first two
   // rows.
   result = evaluate(
-      "try(switch(always_throws(c6), is_finite(c1), is_finite(c7)))", data);
+      "try(switch(always_throws(c6), is_nan(c1), is_finite(c7)))", data);
   expected = makeNullableFlatVector<bool>({true, true, std::nullopt});
   assertEqualVectors(expected, result);
 }
@@ -429,7 +429,7 @@ TEST_F(TryExprTest, earlyTerminationWithEmptyRows) {
       makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt});
 
   auto result =
-      evaluate("try(switch(always_throws(c0), is_finite(c2), c0))", data);
+      evaluate("try(switch(always_throws(c0), is_nan(c2), c0))", data);
   assertEqualVectors(expected, result);
 
   result = evaluate("try(switch(c0, always_throws(c0), c0))", data);
@@ -447,8 +447,7 @@ TEST_F(TryExprTest, earlyTerminationWithEmptyRows) {
   // ensures that the evaluation of the second then clause doesn't overwrite the
   // existing partial results from the first case.
   result = evaluate(
-      "try(switch(c1, is_nan(c2), always_throws(c0), is_finite(c2), c0))",
-      data);
+      "try(switch(c1, is_nan(c2), always_throws(c0), is_nan(c2), c0))", data);
   assertEqualVectors(
       makeNullableFlatVector<bool>({false, false, std::nullopt}), result);
 }
