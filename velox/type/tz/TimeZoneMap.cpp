@@ -511,7 +511,8 @@ TimeZone::seconds TimeZone::correct_nonexistent_time(
     return timestamp;
   }
 
-  const auto localInfo = tz_->get_info(date::local_time<seconds>{timestamp});
+  const auto localInfo =
+      tz_->get_info_for_conversion(date::local_time<seconds>{timestamp});
 
   if (localInfo.result != tzdb::local_info::nonexistent) {
     return timestamp;
