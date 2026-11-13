@@ -637,7 +637,6 @@ uint64_t VectorHasher::valueId(int128_t value) {
     return iterator->second;
   }
 
-  hasHugeintValue_ = true;
   if (uniqueHugeintValues_.size() >= rangeSize_) {
     return kUnmappable;
   }
@@ -657,7 +656,6 @@ uint64_t VectorHasher::lookupValueId(int128_t value) const {
 }
 
 void VectorHasher::analyzeValue(int128_t value) {
-  hasHugeintValue_ = true;
   if (!distinctOverflow_) {
     auto nextId = uniqueHugeintValues_.size() + 1;
     if (uniqueHugeintValues_.emplace(value, nextId).second &&
@@ -948,7 +946,6 @@ uint64_t VectorHasher::enableValueRange(
 
 void VectorHasher::copyStatsFrom(const VectorHasher& other) {
   hasRange_ = other.hasRange_;
-  hasHugeintValue_ = other.hasHugeintValue_;
   rangeOverflow_ = other.rangeOverflow_;
   distinctOverflow_ = other.distinctOverflow_;
 
@@ -984,8 +981,6 @@ void VectorHasher::merge(const VectorHasher& other, size_t maxNumDistinct) {
     return;
   }
   if (typeKind_ == TypeKind::HUGEINT) {
-    hasHugeintValue_ |= other.hasHugeintValue_;
-
     for (const auto& entry : other.uniqueHugeintValues_) {
       auto nextId = uniqueHugeintValues_.size() + 1;
       if (uniqueHugeintValues_.emplace(entry.first, nextId).second &&
