@@ -33,7 +33,7 @@ namespace {
 class TopNRowNumberTest : public OperatorTestBase {
  protected:
   explicit TopNRowNumberTest(core::TopNRowNumberNode::RankFunction function)
-      : functionName_(core::TopNRowNumberNode::rankFunctionName(function)) {}
+      : functionName_(core::TopNRowNumberNode::toName(function)) {}
 
   void SetUp() override {
     exec::test::OperatorTestBase::SetUp();
@@ -655,7 +655,7 @@ TEST_P(MultiTopNRowNumberTest, planNodeValidation) {
   VELOX_ASSERT_THROW(
       std::make_shared<core::TopNRowNumberNode>(
           "1",
-          core::TopNRowNumberNode::rankFunctionFromName(functionName_),
+          core::TopNRowNumberNode::toRankFunction(functionName_),
           std::vector<core::FieldAccessTypedExprPtr>{toFieldExpr("a", rowType)},
           std::vector<core::FieldAccessTypedExprPtr>{toFieldExpr("b", rowType)},
           std::vector<core::SortOrder>{core::kAscNullsLast},
