@@ -1998,6 +1998,23 @@ TEST_F(DateTimeFunctionsTest, timestampdiff) {
           "year",
           parseTimestamp("2020-02-29 10:00:00.500"),
           parseTimestamp("2018-02-28 10:00:00.500")));
+
+  // One more whole second than fits, less a sub-second part that brings the
+  // difference to exactly INT64_MAX microseconds.
+  EXPECT_EQ(
+      INT64_MAX,
+      timestampDiff(
+          "microsecond",
+          Timestamp(-1, 999'999'000),
+          Timestamp(9'223'372'036'854, 775'806'000)));
+  // One microsecond more does not fit in 64 bits: an error, not a wrapped
+  // value.
+  VELOX_ASSERT_USER_THROW(
+      timestampDiff(
+          "microsecond",
+          Timestamp(-1, 999'999'000),
+          Timestamp(9'223'372'036'854, 775'807'000)),
+      "Timestamp difference overflows in microseconds");
 }
 
 TEST_F(DateTimeFunctionsTest, timestampadd) {
@@ -2139,6 +2156,11 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
   EXPECT_EQ(
       parseTimestamp("1968-02-28 12:00:00"),
       timestampadd("year", -1, parseTimestamp("1969-02-28 12:00:00")));
+
+  // A result outside the Timestamp range is an error, not a wrapped value.
+  VELOX_ASSERT_USER_THROW(
+      timestampadd("second", 1, Timestamp::max()),
+      "Timestamp is out of range after arithmetic");
 }
 
 TEST_F(DateTimeFunctionsTest, timestampAddTimestampUtc) {
