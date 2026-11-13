@@ -47,7 +47,12 @@ struct CacheRequest {
   /// accessed large columns where hitting one piece should not load the
   /// adjacent pieces.
   bool coalesces{true};
-  const SeekableInputStream* stream;
+
+  /// Stream this request was enqueued for, used to hand the resulting
+  /// CoalescedLoad to the first stream that reads it. Must be propagated to
+  /// every part when a request is split by load quantum, otherwise the load is
+  /// registered under an indeterminate key and the stream never joins it.
+  const SeekableInputStream* stream{nullptr};
 };
 
 class CachedBufferedInput : public BufferedInput {
