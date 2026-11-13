@@ -348,11 +348,19 @@ bool isCheckedDecimalArithmetic(const core::TypedExprPtr& expr) {
       name == "mod";
 }
 
+// A CAST from VARCHAR fails on a string that spells no value of the target
+// type; a TRY_CAST gives NULL instead.
+bool isFailingCastFromVarchar(const core::TypedExprPtr& expr) {
+  return expr->isCastKind() &&
+      !expr->asUnchecked<core::CastTypedExpr>()->isTryCast() &&
+      !expr->inputs().empty() && expr->inputs()[0]->type()->isVarchar();
+}
+
 /// Calls whose cuDF implementation raises on row data but skips null rows.
 /// Branch masking exists to keep the rows a conditional discards away from
 /// these.
 bool isFailFastCall(const core::TypedExprPtr& expr) {
-  if (isCheckedDecimalArithmetic(expr)) {
+  if (isCheckedDecimalArithmetic(expr) || isFailingCastFromVarchar(expr)) {
     return true;
   }
   if (expr->kind() != core::ExprKind::kCall) {
@@ -361,7 +369,7 @@ bool isFailFastCall(const core::TypedExprPtr& expr) {
   const auto name =
       unprefixedFunctionName(*expr->asUnchecked<core::CallTypedExpr>());
   return name == "subscript" || name == "element_at" || name == "get" ||
-      name == "like";
+      name == "like" || name == "from_unixtime";
 }
 
 bool containsFailFastCall(const core::TypedExprPtr& expr) {
@@ -435,12 +443,9 @@ const CudfExpressionEvaluatorEntry* findBestEvaluator(
   return best;
 }
 
-// Returns true if the tree holds a CAST from VARCHAR, which fails on a string
-// that spells no value of the target type; a TRY_CAST gives NULL instead.
+// Returns true if the tree holds a failing CAST from VARCHAR.
 bool containsFailingCastFromVarchar(const core::TypedExprPtr& expr) {
-  if (expr->isCastKind() &&
-      !expr->asUnchecked<core::CastTypedExpr>()->isTryCast() &&
-      !expr->inputs().empty() && expr->inputs()[0]->type()->isVarchar()) {
+  if (isFailingCastFromVarchar(expr)) {
     return true;
   }
   for (const auto& input : expr->inputs()) {
@@ -3879,7 +3884,12 @@ cuda::device_buffer<std::byte> makeBranchRowMask(
         activeRows,
         reinterpret_cast<const cudf::bitmask_type*>(branchMask.data())};
     const std::vector<cudf::size_type> beginBits{0, 0};
-    return cudf::bitmask_and(masks, beginBits, condition.size(), stream, mr)
+    return cudf::bitmask_and(
+               masks,
+               beginBits,
+               condition.size(),
+               stream,
+               cudf::memory_resources{mr, get_temp_mr()})
         .first;
   };
 
@@ -3994,8 +4004,12 @@ ColumnOrView applyActivityMask(
     masks.push_back(view.null_mask());
     beginBits.push_back(0);
   }
-  auto [combined, nullCount] =
-      cudf::bitmask_and(masks, beginBits, view.size(), stream, mr);
+  auto [combined, nullCount] = cudf::bitmask_and(
+      masks,
+      beginBits,
+      view.size(),
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
   owned->set_null_mask(std::move(combined), nullCount);
   return owned;
 }

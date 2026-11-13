@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -53,6 +54,7 @@ class CudfDecimalTest : public exec::test::OperatorTestBase {
     VELOX_CHECK_EQ(0, static_cast<int>(cudaSetDevice(0)));
     VELOX_CHECK_EQ(0, static_cast<int>(cudaFree(nullptr)));
     registerCudf();
+    registerPrestoFunctions(CudfConfig::getInstance().functionNamePrefix);
   }
 
   void TearDown() override {
