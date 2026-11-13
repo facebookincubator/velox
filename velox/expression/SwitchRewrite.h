@@ -35,7 +35,15 @@ class SwitchRewrite {
   /// If there are no conditions in the expression now, the else value is
   /// returned if it is present; otherwise NULL is returned. The else value is
   /// added to the inputs otherwise and the optimized SWITCH expression with
-  /// pruned inputs is returned. Returns nullptr when no input is pruned.
+  /// pruned inputs is returned.
+  ///
+  /// Trailing conditions whose value equals the else value are removed too,
+  /// e.g. `IF(condition, x, x)` is rewritten to `x`. The same applies to simple
+  /// CASE expressions, e.g. `CASE a WHEN 1 THEN x ELSE x END` is rewritten to
+  /// `x`. This applies only to values that are comparable. For CASE, removal
+  /// stops at a WHEN value whose type differs from the type of `a`, since
+  /// removing it can change the type in which `a` is compared. Returns nullptr
+  /// when no input is pruned.
   static core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
 
   static void registerRewrite();
