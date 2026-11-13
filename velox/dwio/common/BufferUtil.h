@@ -53,6 +53,26 @@ inline void ensureCapacity(
   }
 }
 
+/// Makes 'buffer' writable with at least 'numBytes' of capacity without
+/// allocating, by keeping it or by swapping in 'spare'. A 'buffer' that is
+/// still held elsewhere becomes the spare, so that it can be written again once
+/// its holders release it. Returns false if neither can be written, and the
+/// caller then allocates 'buffer'.
+inline bool
+reuseBufferOrSpare(BufferPtr& buffer, BufferPtr& spare, size_t numBytes) {
+  if (buffer && buffer->isMutable() && buffer->capacity() >= numBytes) {
+    return true;
+  }
+  if (spare && spare->isMutable() && spare->capacity() >= numBytes) {
+    std::swap(buffer, spare);
+    return true;
+  }
+  if (buffer && !buffer->isMutable()) {
+    spare = std::move(buffer);
+  }
+  return false;
+}
+
 template <typename T>
 inline T* resetIfWrongVectorType(VectorPtr& result) {
   if (result) {

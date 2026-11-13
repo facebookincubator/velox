@@ -128,7 +128,12 @@ void DwrfData::readNulls(
 
   const auto numBytes = bits::nbytes(numValues);
   if (!nulls || nulls->capacity() < numBytes) {
-    nulls = AlignedBuffer::allocate<char>(numBytes, &memoryPool_);
+    if (flatMapContext_.inMapDecoder && !notNullDecoder_ && inMap_ &&
+        inMap_->isMutable() && inMap_->capacity() >= numBytes) {
+      nulls = inMap_;
+    } else {
+      nulls = AlignedBuffer::allocate<char>(numBytes, &memoryPool_);
+    }
   }
   nulls->setSize(numBytes);
 

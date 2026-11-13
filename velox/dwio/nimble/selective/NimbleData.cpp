@@ -145,10 +145,10 @@ void NimbleData::readNulls(
           inMap_->asMutable<uint64_t>(), numValues, incomingNulls);
       nullsDecoder_->nextBools(nullsPtr, numValues, inMap_->as<uint64_t>());
     } else {
-      inMapDecoder_->nextBools(nullsPtr, numValues, incomingNulls);
-      if (inMap_.get() != nulls.get()) {
-        inMap_ = nulls;
-      }
+      dwio::common::ensureCapacity<char>(inMap_, numBytes, pool_);
+      inMapDecoder_->nextBools(
+          inMap_->asMutable<uint64_t>(), numValues, incomingNulls);
+      std::memcpy(nullsPtr, inMap_->as<uint64_t>(), numBytes);
     }
   } else if (nullsDecoder_) {
     nullsDecoder_->nextBools(nullsPtr, numValues, incomingNulls);
