@@ -22,6 +22,7 @@
 
 #include <glog/logging.h>
 
+#include <cstdint>
 #include <optional>
 
 namespace facebook::velox::cudf_velox {
@@ -32,14 +33,19 @@ class NvtxHelper {
   NvtxHelper(
       std::optional<nvtx3::color> color = std::nullopt,
       std::optional<int64_t> payload = std::nullopt,
-      std::optional<std::string> extraInfo = std::nullopt)
+      std::optional<std::string> extraInfo = std::nullopt,
+      uint32_t category = 0)
       : color_(color.value_or(nvtx3::rgb{160, 82, 45} /* Sienna */)),
         payload_(payload),
-        extraInfo_(extraInfo) {}
+        extraInfo_(extraInfo),
+        category_(category) {}
 
   nvtx3::color color_{nvtx3::rgb{125, 125, 125}}; // Gray
   std::optional<int64_t> payload_{};
   std::optional<std::string> extraInfo_{};
+  // Groups every range of one Task under a filterable id. 0 is NVTX's
+  // "no category", used by instrumentation that has no Task in scope.
+  uint32_t category_{0};
 };
 
 /**
@@ -121,8 +127,10 @@ constexpr std::string_view extractFunctionName(
   ::nvtx3::event_attributes const nvtx3_func_attr__{                            \
       this->payload_.has_value() ?                                               \
           ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,      \
+                                   ::nvtx3::category{this->category_},          \
                                    nvtx3::payload{this->payload_.value()}} :    \
-          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_}}; \
+          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,      \
+                                   ::nvtx3::category{this->category_}}}; \
   ::nvtx3::scoped_range_in<VeloxDomain> const nvtx3_range__{nvtx3_func_attr__};
 
 #define VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(condition, ...)                          \
@@ -149,8 +157,10 @@ constexpr std::string_view extractFunctionName(
     ::nvtx3::event_attributes const nvtx3_func_attr__{                           \
         this->payload_.has_value() ?                                             \
             ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,    \
+                                     ::nvtx3::category{this->category_},        \
                                      nvtx3::payload{this->payload_.value()}} :  \
-            ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_}}; \
+            ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,    \
+                                     ::nvtx3::category{this->category_}}}; \
     nvtx3_opt_range__.begin(nvtx3_func_attr__);                                    \
   }
 
