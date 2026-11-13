@@ -138,6 +138,13 @@ class StreamReader {
     return streamsBound_;
   }
 
+  // Returns true when the field readers can decode child fields in parallel on
+  // the decode executor.
+  bool parallelDecodeEnabled() const {
+    return readerParams_.decodeExecutor != nullptr &&
+        readerParams_.maxDecodeParallelism > 1;
+  }
+
   // Returns the cached reader of the bound stripe. Fails when no stripe is
   // bound.
   CachedReader& reader() const;
@@ -157,6 +164,8 @@ class StreamReader {
   // Owns all buffers allocated while decoding.
   velox::memory::MemoryPool* const pool_;
 
+  // Configures the field readers, including the parallel decoding of child
+  // fields.
   const FieldReaderParams readerParams_;
 
   // Configures the encodings of the bound stripe. Each binding sets it, and the
