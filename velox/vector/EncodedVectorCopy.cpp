@@ -331,6 +331,18 @@ std::vector<BaseVector::CopyRange> compactNestedRanges(
       vector, folly::Range(&range, 1), 0, newOffsets, newSizes);
 }
 
+// Resizes 'vector' to 'size' rows. A smaller RowVector keeps its children as
+// they are: RowVector::resize would grow the ones shorter than 'size', and
+// growing a dictionary over an empty base makes rows that point past its end.
+void resizeKeepingShortChildren(BaseVector& vector, vector_size_t size) {
+  if (size <= vector.size() &&
+      vector.encoding() == VectorEncoding::Simple::ROW) {
+    vector.asUnchecked<RowVector>()->unsafeResize(size);
+  } else {
+    vector.resize(size);
+  }
+}
+
 void compactNestedVector(
     const EncodedVectorCopyOptions& options,
     const folly::Range<const BaseVector::CopyRange*>& ranges,
@@ -338,12 +350,12 @@ void compactNestedVector(
     bool mutableVector) {
   if (mutableVector) {
     if (ranges.empty()) {
-      vector->resize(0);
+      resizeKeepingShortChildren(*vector, 0);
       return;
     }
     if (ranges.size() == 1 && ranges[0].sourceIndex == 0) {
       VELOX_CHECK_EQ(ranges[0].targetIndex, 0);
-      vector->resize(ranges[0].count);
+      resizeKeepingShortChildren(*vector, ranges[0].count);
       return;
     }
   }
@@ -725,6 +737,14 @@ void setSkippedRowsNull(
   skipped.applyToSelected([&](auto row) { bits::setNull(rawNulls, row); });
 }
 
+void setSkippedRowsNull(const SelectivityVector& skipped, BaseVector& vector) {
+  if (!skipped.hasSelections()) {
+    return;
+  }
+  auto* rawNulls = vector.mutableRawNulls();
+  skipped.applyToSelected([&](auto row) { bits::setNull(rawNulls, row); });
+}
+
 void copyIntoDictionary(
     const EncodedVectorCopyOptions& options,
     const folly::Range<const BaseVector::CopyRange*>& ranges,
@@ -777,7 +797,7 @@ void copyIntoDictionary(
   auto baseRanges =
       toBaseRanges(decodedSource, ranges, decodedTarget, rawIndices);
   if (targetBaseMutable) {
-    targetBase->resize(targetBaseSize);
+    resizeKeepingShortChildren(*targetBase, targetBaseSize);
   }
   copyImpl(options, sourceBase, baseRanges, targetBase, targetBaseMutable);
   target = BaseVector::wrapInDictionary(
@@ -799,6 +819,9 @@ void copyIntoRow(
     targetRow->unsafeResize(size);
     targetRow->resetDataDependentFlags(nullptr);
     setSourceNulls(sourceNulls, *target, ranges);
+    // A skipped row that is not null needs child values, which the copy does
+    // not write.
+    setSkippedRowsNull(skippedRows(oldSize, size, ranges), *target);
     for (column_index_t i = 0; i < targetRow->childrenSize(); ++i) {
       auto& targetChild = targetRow->childAt(i);
       const auto& sourceChild = source.childAt(i);
@@ -808,7 +831,7 @@ void copyIntoRow(
       bool targetChildMutable = targetChild.use_count() == 1;
       if (targetChildMutable && targetChild->size() > oldSize) {
         // Shrink the size to allow unreferenced nested rows to be released.
-        targetChild->resize(oldSize);
+        resizeKeepingShortChildren(*targetChild, oldSize);
       }
       copyImpl(
           options,
@@ -829,6 +852,8 @@ void copyIntoRow(
           sourceNulls,
           ranges);
     }
+    setSkippedRowsNull(
+        skippedRows(target->size(), size, ranges), options.pool, nulls);
     auto children = targetRow->children();
     for (column_index_t i = 0; i < children.size(); ++i) {
       const auto& sourceChild = source.childAt(i);
