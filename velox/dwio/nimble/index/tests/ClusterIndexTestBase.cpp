@@ -19,8 +19,6 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsGenerated.h"
 #include "velox/dwio/nimble/tablet/ClusterIndexGenerated.h"
@@ -439,7 +437,7 @@ ClusterIndexTestBase::createChunkOnlyTestClusterIndex(
 
 std::unique_ptr<ClusterIndex> ClusterIndexTestBase::createClusterIndex(
     const IndexBuffers& indexBuffers,
-    velox::ReadFile* keyStreamFile,
+    std::shared_ptr<velox::ReadFile> keyStreamFile,
     bool pinIndex,
     bool preloadIndex,
     bool withKeyStreamLocator) {
@@ -456,12 +454,13 @@ std::unique_ptr<ClusterIndex> ClusterIndexTestBase::createClusterIndex(
       metadataFile_.get(),
       MetadataInput::Options{.pool = pool_.get(), .ioStats = ioStats_});
 
-  auto dataFile = keyStreamFile != nullptr
-      ? std::shared_ptr<velox::ReadFile>(
-            std::shared_ptr<velox::ReadFile>{}, keyStreamFile)
-      : metadataFile_;
-  auto dataInput = std::make_unique<velox::dwio::common::BufferedInput>(
-      std::move(dataFile), *pool_);
+  keyStreamIoStats_ = std::make_shared<velox::io::IoStatistics>();
+  auto dataInput = std::make_shared<DirectDataInput>(
+      keyStreamFile != nullptr ? std::move(keyStreamFile) : metadataFile_,
+      DirectDataInput::Options{
+          .pool = pool_.get(),
+          .ioStats = keyStreamIoStats_,
+      });
 
   // Stands in for the stripe group metadata, which locates the key stream of
   // each stripe in the Stripe layout.

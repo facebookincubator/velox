@@ -42,17 +42,13 @@
 #include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::nimble {
+class BlockCache;
+class DataInput;
 class MetadataInput;
 } // namespace facebook::nimble
 
 namespace facebook::velox {
 struct FileHandle;
-namespace cache {
-class AsyncDataCache;
-} // namespace cache
-namespace dwio::common {
-class BufferedInput;
-} // namespace dwio::common
 namespace io {
 class ReaderOptions;
 } // namespace io
@@ -97,19 +93,28 @@ class IndexLookup {
       uint32_t stripeGroup,
       std::span<const uint32_t> keyStreamIds)>;
 
-  /// IO options for index lookup creation. fileHandle and cache must
-  /// both be set (cached path) or both null (direct path).
+  /// IO options for index lookup creation. With blockCache, the index caches
+  /// its metadata and data there. Without it, the index reads them directly.
   struct Options {
     /// File to read index metadata and key stream data from.
     std::shared_ptr<velox::ReadFile> file;
+
     /// IO settings: coalescing, executor, and index IO stats.
     const velox::io::ReaderOptions* ioOptions{nullptr};
-    /// File handle for cache key. Set with cache for cached path.
-    const velox::FileHandle* fileHandle{nullptr};
-    /// Data cache for index metadata. Set with fileHandle for cached path.
-    velox::cache::AsyncDataCache* cache{nullptr};
-    /// Maximum decompressed index metadata size admitted to the data cache.
+
+    /// Maximum decompressed index metadata size admitted to blockCache.
     std::optional<uint32_t> maxCacheEntrySize{std::nullopt};
+
+    /// Block cache for decompressed index metadata and for index data as
+    /// stored in the file. Cluster and sorted indexes cache each key chunk as
+    /// one entry. Keyed by fileHandle->uuid, so it requires fileHandle. Must
+    /// outlive the index. See MetadataInput::Options::blockCache.
+    BlockCache* blockCache{nullptr};
+
+    /// Identity of the file in blockCache keys: fileHandle->uuid. Must name
+    /// 'file'.
+    const velox::FileHandle* fileHandle{nullptr};
+
     /// If true, pins parsed index objects in the index cache with strong
     /// references so they are never evicted.
     bool pinIndex{false};
@@ -352,8 +357,9 @@ class IndexLookup {
 std::shared_ptr<MetadataInput> createIndexMetadataInput(
     const IndexLookup::Options& options);
 
-/// Creates a BufferedInput (cached or direct) from index options.
-std::shared_ptr<velox::dwio::common::BufferedInput> createIndexDataInput(
+/// Creates a DataInput for index data from index options. With blockCache,
+/// caches the data in it. Otherwise reads it directly.
+std::shared_ptr<DataInput> createIndexDataInput(
     const IndexLookup::Options& options);
 
 inline std::string toString(IndexLookup::LookupRequest::Mode mode) {

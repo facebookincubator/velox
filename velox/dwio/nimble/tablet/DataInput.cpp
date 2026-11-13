@@ -34,8 +34,9 @@ namespace facebook::nimble {
 
 namespace {
 
-velox::ReadFile* checkedFile(velox::ReadFile* file) {
-  NIMBLE_CHECK_NOT_NULL(file);
+std::shared_ptr<velox::ReadFile> checkedFile(
+    std::shared_ptr<velox::ReadFile> file) {
+  NIMBLE_CHECK_NOT_NULL(file.get());
   return file;
 }
 
@@ -55,10 +56,13 @@ velox::ReadFile* checkedFile(velox::ReadFile* file) {
   }
 }
 
-DirectDataInput::DirectDataInput(velox::ReadFile* file, const Options& options)
-    : file_{checkedFile(file)},
+DirectDataInput::DirectDataInput(
+    std::shared_ptr<velox::ReadFile> file,
+    const Options& options)
+    : file_{checkedFile(std::move(file))},
       pool_{options.pool},
       ioStats_{options.ioStats},
+      fileIoContext_{options.fileIoContext},
       alignment_{readAlignment(*file_)},
       allocAlignment_{std::max(
           alignment_,
@@ -245,7 +249,7 @@ void DirectDataInput::populateBufferRefs(
 }
 
 std::pair<char*, DataInput::Handle> DirectDataInput::allocateBuffer(
-    uint64_t bytes) {
+    uint64_t bytes) const {
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::DirectDataInput::allocateBuffer", &bytes);
   auto* buffer = static_cast<char*>(
@@ -277,7 +281,8 @@ void DirectDataInput::executeIoGroups(
       folly::Range<const velox::common::Region*>(
           readRegions_.data(), readRegions_.size()),
       folly::Range<const folly::Range<char*>*>(
-          readBuffers_.data(), readBuffers_.size()));
+          readBuffers_.data(), readBuffers_.size()),
+      fileIoContext_);
   NIMBLE_CHECK_GE(
       bytesRead,
       fileReadBytes(readRegions_, file_->size()),
@@ -352,6 +357,7 @@ DataInput::Handle DirectDataInput::load(LoadCallback loadCallback) {
     ioStats_->incRawBytesRead(group.payloadSize);
     ioStats_->incRawOverreadBytes(group.readSize - group.payloadSize);
   }
+  ioStats_->queryThreadIoLatencyUs().increment(ioUs);
   ioStats_->storageReadLatencyUs().increment(ioUs);
   ioStats_->incTotalScanTimeNs(ioUs * 1'000);
 
@@ -404,14 +410,64 @@ void DirectDataInput::clear() {
   bufferRefs_.clear();
 }
 
+std::pair<std::string_view, DataInput::Handle> DirectDataInput::read(
+    Region region) const {
+  NIMBLE_CHECK_GT(region.length, 0, "Read region length must be positive");
+  const auto readRegion = alignedRegion(region, alignment_, file_->size());
+  auto [buffer, handle] = allocateBuffer(readRegion.length);
+  const folly::Range<char*> destination{
+      buffer, static_cast<size_t>(readRegion.length)};
+
+  uint64_t ioUs{0};
+  uint64_t bytesRead{0};
+  {
+    velox::MicrosecondTimer ioTimer(&ioUs);
+    bytesRead = file_->preadv(
+        folly::Range<const Region*>(&readRegion, 1),
+        folly::Range<const folly::Range<char*>*>(&destination, 1),
+        fileIoContext_);
+  }
+  NIMBLE_CHECK_GE(
+      bytesRead,
+      fileReadBytes({&readRegion, 1}, file_->size()),
+      "preadv returned a short read");
+  ioStats_->read().increment(readRegion.length);
+  ioStats_->incRawBytesRead(region.length);
+  ioStats_->incRawOverreadBytes(readRegion.length - region.length);
+  ioStats_->queryThreadIoLatencyUs().increment(ioUs);
+  ioStats_->storageReadLatencyUs().increment(ioUs);
+  ioStats_->incTotalScanTimeNs(ioUs * 1'000);
+
+  const std::string_view data{
+      buffer + (region.offset - readRegion.offset), region.length};
+  return {data, std::move(handle)};
+}
+
 // --- CachedDataInput ---
 
-CachedDataInput::CachedDataInput(velox::ReadFile* file, const Options& options)
-    : file_{checkedFile(file)},
+namespace {
+
+// Checks that 'groupRegion' fits in one cache entry.
+void checkCacheGroupRegion(const DataInput::Region& groupRegion) {
+  NIMBLE_CHECK_GT(
+      groupRegion.length, 0, "Cached group length must be positive");
+  NIMBLE_CHECK_LE(
+      groupRegion.length,
+      static_cast<uint64_t>(std::numeric_limits<int32_t>::max()),
+      "Cached group exceeds the maximum cache entry size");
+}
+
+} // namespace
+
+CachedDataInput::CachedDataInput(
+    std::shared_ptr<velox::ReadFile> file,
+    const Options& options)
+    : file_{checkedFile(std::move(file))},
       pool_{options.pool},
       cache_{options.cache},
       fileId_{options.fileId},
       ioStats_{options.ioStats},
+      fileIoContext_{options.fileIoContext},
       alignment_{readAlignment(*file_)},
       allocationAlignment_{std::max(
           alignment_,
@@ -441,12 +497,7 @@ void CachedDataInput::startGroup(std::optional<Region> groupRegion) {
       groups_.empty() || groups_.back().enqueuedRegionOffset < regions_.size(),
       "Previous group is empty");
   NIMBLE_CHECK(groupRegion.has_value(), "Cached group region is required");
-  NIMBLE_CHECK_GT(
-      groupRegion->length, 0, "Cached group length must be positive");
-  NIMBLE_CHECK_LE(
-      groupRegion->length,
-      static_cast<uint64_t>(std::numeric_limits<int32_t>::max()),
-      "Cached group exceeds the maximum cache entry size");
+  checkCacheGroupRegion(*groupRegion);
   if (!groups_.empty()) {
     const auto& previous = groups_.back().groupRegion;
     NIMBLE_CHECK_GE(
@@ -530,8 +581,8 @@ uint64_t CachedDataInput::populateBufferRefs(
 void CachedDataInput::loadCacheMissGroups(
     std::span<const CacheMissGroup> cacheMissGroups,
     uint64_t stagingBufferSize,
-    std::vector<BlockCache::Entry>& cacheEntries,
-    LoadCallback loadCallback) {
+    std::span<BlockCache::Entry> cacheEntries,
+    LoadCallback loadCallback) const {
   char* stagingBuffer{nullptr};
   Handle stagingHandle;
   if (alignment_ > 1) {
@@ -555,8 +606,12 @@ void CachedDataInput::loadCacheMissGroups(
   readRegions.reserve(cacheMissGroups.size());
   readBuffers.reserve(cacheMissGroups.size());
   for (const auto& cacheMissGroup : cacheMissGroups) {
+    NIMBLE_CHECK_LT(
+        cacheMissGroup.groupIndex,
+        cacheEntries.size(),
+        "Cache miss group index out of range");
     readRegions.push_back(cacheMissGroup.readRegion);
-    auto& entry = cacheEntries.at(cacheMissGroup.groupIndex);
+    auto& entry = cacheEntries[cacheMissGroup.groupIndex];
     auto* destination = alignment_ == 1
         ? entry.data()
         : stagingBuffer + cacheMissGroup.stagingBufferOffset;
@@ -570,7 +625,8 @@ void CachedDataInput::loadCacheMissGroups(
     bytesRead = file_->preadv(
         folly::Range<const Region*>(readRegions.data(), readRegions.size()),
         folly::Range<const folly::Range<char*>*>(
-            readBuffers.data(), readBuffers.size()));
+            readBuffers.data(), readBuffers.size()),
+        fileIoContext_);
   }
   NIMBLE_CHECK_GE(
       bytesRead,
@@ -582,14 +638,14 @@ void CachedDataInput::loadCacheMissGroups(
 
   for (const auto& cacheMissGroup : cacheMissGroups) {
     const auto groupIndex = cacheMissGroup.groupIndex;
-    auto& entry = cacheEntries.at(groupIndex);
-    const auto& group = groups_[groupIndex];
+    auto& entry = cacheEntries[groupIndex];
     if (alignment_ > 1) {
       std::memcpy(
           entry.data(),
           stagingBuffer + cacheMissGroup.stagingBufferOffset +
-              group.groupRegion.offset - cacheMissGroup.readRegion.offset,
-          group.groupRegion.length);
+              cacheMissGroup.groupRegion.offset -
+              cacheMissGroup.readRegion.offset,
+          cacheMissGroup.groupRegion.length);
     }
     ioStats_->read().increment(cacheMissGroup.readRegion.length);
     ioStats_->incRawOverreadBytes(
@@ -655,7 +711,10 @@ DataInput::Handle CachedDataInput::load(LoadCallback loadCallback) {
     const auto endRegion = groupEndRegion(groupIndex);
 
     auto entry = cache_->getOrCreate(
-        fileId_, group.groupRegion.offset, group.groupRegion.length, *ioStats_);
+        fileId_.id(),
+        group.groupRegion.offset,
+        group.groupRegion.length,
+        *ioStats_);
     const bool needLoad = !entry.sealed();
 
     const auto payloadBytes =
@@ -668,6 +727,7 @@ DataInput::Handle CachedDataInput::load(LoadCallback loadCallback) {
       cacheMissGroups.push_back(
           CacheMissGroup{
               .groupIndex = groupIndex,
+              .groupRegion = group.groupRegion,
               .readRegion = readRegion,
               .stagingBufferOffset = stagingBufferSize,
               .payloadBytes = payloadBytes,
@@ -702,6 +762,33 @@ void CachedDataInput::clear() {
   regions_.clear();
   groups_.clear();
   bufferRefs_.clear();
+}
+
+std::pair<std::string_view, DataInput::Handle> CachedDataInput::read(
+    Region region) const {
+  checkCacheGroupRegion(region);
+
+  // Checked before the entry is created, so a region past the end of the file
+  // allocates no cache memory.
+  const auto readRegion = alignedRegion(region, alignment_, file_->size());
+  auto entry = std::make_shared<BlockCache::Entry>(cache_->getOrCreate(
+      fileId_.id(), region.offset, region.length, *ioStats_));
+  ioStats_->incRawBytesRead(static_cast<int64_t>(region.length));
+  if (!entry->sealed()) {
+    const CacheMissGroup cacheMissGroup{
+        .groupIndex = 0,
+        .groupRegion = region,
+        .readRegion = readRegion,
+        .stagingBufferOffset = 0,
+        .payloadBytes = region.length,
+    };
+    loadCacheMissGroups(
+        std::span<const CacheMissGroup>{&cacheMissGroup, 1},
+        readRegion.length,
+        std::span<BlockCache::Entry>{entry.get(), 1});
+  }
+  const std::string_view data{entry->data(), region.length};
+  return {data, std::move(entry)};
 }
 
 } // namespace facebook::nimble

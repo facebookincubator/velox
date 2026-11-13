@@ -17,19 +17,21 @@
 
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/nimble/index/KeyReader.h"
+#include "velox/dwio/nimble/tablet/DataInput.h"
 
 namespace facebook::nimble::index {
 
 /// Decoded key chunk with ownership of backing buffers.
 struct DecodedKeyChunk {
-  // Zero-copy path: stream kept alive so its buffer backs the encoding.
-  std::unique_ptr<velox::dwio::common::SeekableInputStream> dataStream;
+  // Zero-copy path: handle kept alive so the bytes it owns back the encoding,
+  // such as a load buffer or a pinned cache entry.
+  DataInput::Handle handle;
 
   // Thread-safe random-access reader over the decoded key payload.
   std::unique_ptr<KeyReader> reader;
@@ -42,29 +44,19 @@ using KeyReaderFactory = std::function<std::unique_ptr<KeyReader>(
     std::function<void*(uint32_t)>,
     velox::memory::MemoryPool*)>;
 
-/// Decodes a key chunk from an input stream. Reads the chunk header, validates
-/// compression and payload layout, and creates the reader. Handles both
-/// contiguous (zero-copy) and multi-buffer reads.
+/// Decodes the key chunk in 'chunk', which holds the chunk header and payload.
+/// Reads the chunk header, validates compression and payload layout, and
+/// creates the reader with 'readerFactory'. 'handle' keeps the bytes of 'chunk'
+/// alive. The returned DecodedKeyChunk holds 'handle' when it reads an
+/// uncompressed payload in place.
 ///
 /// Returns a shared_ptr so the reader's string allocator lambda (which
 /// captures a pointer to the DecodedKeyChunk) remains valid when the caller
 /// moves or reassigns the shared_ptr.
-///
-/// @param dataBuffer Caller-owned reuse slot for multi-buffer reads. When
-///        the existing buffer has sufficient capacity it is reused;
-///        otherwise a fresh buffer is allocated and written back into the
-///        slot. The destination buffer (reused or freshly allocated) is
-///        always appended to DecodedKeyChunk::stringBuffers, so the
-///        returned DecodedKeyChunk holds its own reference and the caller
-///        may independently reassign or destroy dataBuffer without
-///        affecting the returned DecodedKeyChunk. Callers that don't want
-///        cross-call reuse can pass a local BufferPtr that goes out of
-///        scope after the call.
-/// Decodes a key chunk and constructs its reader with `readerFactory`.
 std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
-    std::unique_ptr<velox::dwio::common::SeekableInputStream> inputStream,
+    std::string_view chunk,
+    DataInput::Handle handle,
     const KeyReaderFactory& readerFactory,
-    velox::BufferPtr& dataBuffer,
     velox::memory::MemoryPool* pool);
 
 } // namespace facebook::nimble::index

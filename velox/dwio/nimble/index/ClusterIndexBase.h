@@ -37,14 +37,10 @@
 #include "velox/dwio/nimble/tablet/MetadataCache.h"
 
 namespace facebook::nimble {
+class DataInput;
 class Encoding;
 class MetadataInput;
 } // namespace facebook::nimble
-
-namespace facebook::velox::dwio::common {
-class BufferedInput;
-class SeekableInputStream;
-} // namespace facebook::velox::dwio::common
 
 namespace facebook::nimble::index {
 
@@ -194,12 +190,13 @@ class ClusterIndexBase : public IndexLookup {
 
   // 'keyComparator' is the order of the encoded keys, or null for bytewise
   // order; 'keyReaderFactory' must create readers that seek in the same order.
-  // 'keyStreamLocator' locates the key streams of the stripes, and may be
-  // empty unless the index stores its key chunks in stripes.
+  // 'dataInput' reads the key streams. A cached input keeps one cache entry per
+  // key chunk. 'keyStreamLocator' locates the key streams of the stripes, and
+  // may be empty unless the index stores its key chunks in stripes.
   ClusterIndexBase(
       Section rootSection,
       std::shared_ptr<MetadataInput> metadataInput,
-      std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+      std::shared_ptr<DataInput> dataInput,
       KeyStreamLocator keyStreamLocator,
       KeyReaderFactory keyReaderFactory,
       const KeyComparator* keyComparator,
@@ -208,10 +205,11 @@ class ClusterIndexBase : public IndexLookup {
       velox::memory::MemoryPool* pool);
 
   // Eagerly loads all partition metadata via a single coalesced metadata IO,
-  // then decodes each partition's key-stream chunks via one coalesced data
-  // IO per partition. After this returns, subsequent lookups against any
+  // then decodes each partition's key-stream chunks via one batched data IO
+  // per partition. After this returns, subsequent lookups against any
   // partition/chunk hit pure-memory state (assuming pinIndex_=true, which is
-  // enforced).
+  // enforced). Runs only in the constructor, before any lookup, because it
+  // uses the batch API of dataInput_, which is not thread-safe.
   void preloadIndex();
 
   // Builds the flat LookupResult from partitionRowRanges. Subclasses override
@@ -251,10 +249,10 @@ class ClusterIndexBase : public IndexLookup {
     std::shared_ptr<DecodedKeyChunk> data;
   };
 
-  // Cached decoded chunk. The DecodedKeyChunk owns its own backing buffer
-  // (decodeKeyChunk appends it to DecodedKeyChunk::stringBuffers when no
-  // external reuse buffer is provided), so each cached entry is fully
-  // self-contained.
+  // Cached decoded chunk. The DecodedKeyChunk keeps its key bytes alive on its
+  // own, so each cached entry is fully self-contained. It holds them in its
+  // stringBuffers, or holds the handle of the bytes it reads in place, such as
+  // the pin of a block cache entry.
   struct DecodedChunk {
     // Position of the chunk in its partition. Tells which chunk the single
     // scratch slot of an unpinned index holds. Chunk offsets cannot tell it:
@@ -489,7 +487,7 @@ class ClusterIndexBase : public IndexLookup {
   void loadPartitions(std::span<const uint32_t> partitionIds) const;
 
   // Loads and decodes all key-stream chunks for a single partition via one
-  // coalesced data IO. Populates partition->decodedChunks_. Called per
+  // batched data IO. Populates partition->decodedChunks_. Called per
   // partition from preloadIndex().
   void loadPartitionKeyStream(IndexPartitionBase* partition) const;
 
@@ -525,8 +523,13 @@ class ClusterIndexBase : public IndexLookup {
   // Total number of rows in the file.
   const uint32_t numRows_;
 
+  // Reads the partition metadata.
   const std::shared_ptr<MetadataInput> metadataInput_;
-  const std::shared_ptr<velox::dwio::common::BufferedInput> dataInput_;
+
+  // Reads the key streams. A cached input keeps one cache entry per key chunk.
+  // Lookups use its thread-safe read(). Only preloadIndex() uses its batch API.
+  const std::shared_ptr<DataInput> dataInput_;
+
   // Stripe layout only. Locates the key streams of the stripes.
   const KeyStreamLocator keyStreamLocator_;
   // Stripe layout only. Id of the key stream of every stripe.

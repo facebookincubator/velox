@@ -191,11 +191,11 @@ std::unique_ptr<DataInput> createDataInput(
     BlockCache* blockCache) {
   if (blockCache != nullptr) {
     return std::make_unique<CachedDataInput>(
-        fileHandle.file.get(),
+        fileHandle.file,
         CachedDataInput::Options{
             .pool = &options.memoryPool(),
             .cache = blockCache,
-            .fileId = fileHandle.uuid.id(),
+            .fileId = fileHandle.uuid,
             .ioStats = options.dataIoStats(),
         });
   }
@@ -205,8 +205,7 @@ std::unique_ptr<DataInput> createDataInput(
   dataInputOptions.ioStats = options.dataIoStats();
   dataInputOptions.maxCoalesceDistance = options.maxCoalesceDistance();
   dataInputOptions.maxCoalesceBytes = options.maxCoalesceBytes();
-  return std::make_unique<DirectDataInput>(
-      fileHandle.file.get(), dataInputOptions);
+  return std::make_unique<DirectDataInput>(fileHandle.file, dataInputOptions);
 }
 
 void freeDataHandle(void* /*buf*/, void* userData) {

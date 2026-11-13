@@ -22,12 +22,12 @@
 
 #include "folly/json/json.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
 #include "velox/dwio/nimble/tablet/ClusterIndexGenerated.h"
+#include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 
@@ -223,7 +223,7 @@ ClusterIndexBase::~ClusterIndexBase() = default;
 ClusterIndexBase::ClusterIndexBase(
     Section rootSection,
     std::shared_ptr<MetadataInput> metadataInput,
-    std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+    std::shared_ptr<DataInput> dataInput,
     KeyStreamLocator keyStreamLocator,
     KeyReaderFactory keyReaderFactory,
     const KeyComparator* keyComparator,
@@ -292,30 +292,33 @@ void ClusterIndexBase::loadPartitionKeyStream(
   const uint32_t numChunks = loadedPartition.numChunks();
   NIMBLE_CHECK_GT(
       numChunks, 0, "Partition {} has no chunks", loadedPartition.id());
-  std::vector<std::unique_ptr<velox::dwio::common::SeekableInputStream>>
-      streams;
-  streams.reserve(numChunks);
+
+  // Loads the chunks in one batch, with each chunk as its own group, so a
+  // cached input caches one entry per chunk.
+  dataInput_->reserve(numChunks);
   for (uint32_t chunkIdx = 0; chunkIdx < numChunks; ++chunkIdx) {
     const ChunkLocation chunkLocation{
         chunkIdx,
         loadedPartition.chunkOffset(chunkIdx),
         loadedPartition.chunkSize(chunkIdx),
         loadedPartition.rowOffset(chunkIdx)};
-    streams.push_back(
-        dataInput_->enqueue(loadedPartition.chunkStreamRegion(chunkLocation)));
+    const auto region = loadedPartition.chunkStreamRegion(chunkLocation);
+    dataInput_->startGroup(region);
+    dataInput_->enqueue(region);
   }
-  dataInput_->load(velox::dwio::common::LogType::GROUP_INDEX);
+  const auto handle = dataInput_->load();
 
-  auto stream = streams.begin();
-  for (uint32_t chunkIdx = 0; chunkIdx < numChunks; ++chunkIdx, ++stream) {
+  for (uint32_t chunkIdx = 0; chunkIdx < numChunks; ++chunkIdx) {
+    const auto& bufferRef = dataInput_->bufferRef(chunkIdx);
     auto& decodedChunk = loadedPartition.decodedChunks().at(chunkIdx);
     decodedChunk.chunkIndex = chunkIdx;
-    // Per-iteration scratch so the previous chunk's buffer isn't aliased
-    // and overwritten if the next chunk fits in its capacity.
-    velox::BufferPtr scratch;
-    decodedChunk.data =
-        decodeKeyChunk(std::move(*stream), keyReaderFactory_, scratch, pool_);
+    decodedChunk.data = decodeKeyChunk(
+        std::string_view{bufferRef.data, bufferRef.length},
+        handle,
+        keyReaderFactory_,
+        pool_);
   }
+  dataInput_->clear();
 }
 
 void ClusterIndexBase::loadPartitions(
@@ -853,15 +856,9 @@ ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
   DecodedChunk decodedChunk;
   const auto region = loadedPartition.chunkStreamRegion(chunkLocation);
   decodedChunk.chunkIndex = chunkLocation.chunkIndex;
-  velox::BufferPtr scratch;
-  decodedChunk.data = decodeKeyChunk(
-      dataInput_->read(
-          region.offset,
-          region.length,
-          velox::dwio::common::LogType::GROUP_INDEX),
-      keyReaderFactory_,
-      scratch,
-      pool_);
+  auto [chunk, handle] = dataInput_->read(region);
+  decodedChunk.data =
+      decodeKeyChunk(chunk, std::move(handle), keyReaderFactory_, pool_);
 
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",

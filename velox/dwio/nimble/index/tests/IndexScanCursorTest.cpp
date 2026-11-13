@@ -1302,6 +1302,11 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, fuzzesPrefetchFailures) {
     return fault.load() == point && countdown.fetch_sub(1) == 1;
   };
 
+  // A range seek reads index key chunks through DirectDataInput on the
+  // consumer thread. Load failures are injected only into stripe loads, so the
+  // reads of a seek do not count toward them.
+  const auto consumerThread = std::this_thread::get_id();
+  std::atomic_bool seeking{false};
   const bool wasEnabled = velox::common::testutil::TestValue::enabled();
   velox::common::testutil::TestValue::enable();
   auto restoreTestValue = folly::makeGuard([&] {
@@ -1312,6 +1317,9 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, fuzzesPrefetchFailures) {
   SCOPED_TESTVALUE_SET(
       "facebook::nimble::DirectDataInput::allocateBuffer",
       std::function<void(uint64_t*)>([&](uint64_t*) {
+        if (seeking && std::this_thread::get_id() == consumerThread) {
+          return;
+        }
         if (fires(Fault::kLoad)) {
           NIMBLE_FAIL("injected load failure");
         }
@@ -1383,6 +1391,8 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, fuzzesPrefetchFailures) {
       }
     });
     const auto seek = [&] {
+      seeking = true;
+      auto seekDone = folly::makeGuard([&] { seeking = false; });
       if (fullScan) {
         cursor->seekToFirst();
       } else {
