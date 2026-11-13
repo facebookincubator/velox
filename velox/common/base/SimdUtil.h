@@ -321,7 +321,8 @@ xsimd::batch<int16_t, A> gather(
     const A& = {});
 
 // Loads up to 8 disjoint bits at bit offsets 'indices' and returns
-// these as a bit mask.
+// these as a bit mask. 'bits' must be 4-byte aligned. It needs no padding:
+// only the aligned words that hold the indexed bits are read.
 template <typename A = xsimd::default_arch>
 uint8_t gather8Bits(
     const void* bits,
@@ -546,7 +547,9 @@ inline void transpose(
 
 /// Gathers the bit from 'bits' for each bit offset in 'indices'. Stores the
 /// result in 'result'. Writes one byte of 'result' for each 8 bits. If the last
-/// byte is not full the trailing bits are undefined.
+/// byte is not full the trailing bits are undefined. 'bits' must be 8-byte
+/// aligned. It needs no padding: only the aligned words that hold the indexed
+/// bits are read.
 void gatherBits(
     const uint64_t* bits,
     folly::Range<const int32_t*> indices,

@@ -16,8 +16,11 @@
 
 #include "velox/vector/DecodedVector.h"
 
+#include <folly/ScopeGuard.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <optional>
 
 #include "velox/type/Variant.h"
@@ -795,6 +798,62 @@ TEST_F(DecodedVectorTest, nullsOfDictionaryOverNullableBase) {
     ASSERT_NE(decoded.nulls(&rows), nullptr);
     EXPECT_EQ(nullsOf(decoded.nulls(&rows)), expected);
   }
+}
+
+TEST_F(DecodedVectorTest, nullsOfDictionaryOverBaseWithUnpaddedNulls) {
+  // A base whose nulls wrap external memory, as vectors imported from Arrow
+  // do, can have its nulls end flush against an unmapped page. Gathering its
+  // nulls through a dictionary must stay inside the bitmap.
+  constexpr vector_size_t kSize = 4'096;
+  const size_t pageSize = ::sysconf(_SC_PAGESIZE);
+  void* mapping = ::mmap(
+      nullptr,
+      2 * pageSize,
+      PROT_READ | PROT_WRITE,
+      MAP_PRIVATE | MAP_ANONYMOUS,
+      -1,
+      0);
+  ASSERT_NE(mapping, MAP_FAILED);
+  SCOPE_EXIT {
+    ::munmap(mapping, 2 * pageSize);
+  };
+  auto* guard = static_cast<uint8_t*>(mapping) + pageSize;
+  ASSERT_EQ(::mprotect(guard, pageSize, PROT_NONE), 0);
+
+  // The indices reverse the base, so row i reads base row kSize - 1 - i, and
+  // the first rows read its last null bits.
+  const auto isRowNull = [](vector_size_t row) { return row % 3 == 0; };
+  auto* rawNulls = reinterpret_cast<uint64_t*>(guard - bits::nbytes(kSize));
+  std::vector<bool> expected(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    bits::setNull(rawNulls, kSize - 1 - row, isRowNull(row));
+    expected[row] = isRowNull(row);
+  }
+  struct NoopReleaser {
+    void addRef() const {}
+    void release() const {}
+  };
+  auto base = std::make_shared<FlatVector<int64_t>>(
+      pool(),
+      BIGINT(),
+      BufferView<NoopReleaser>::create(
+          reinterpret_cast<uint8_t*>(rawNulls),
+          bits::nbytes(kSize),
+          NoopReleaser{}),
+      kSize,
+      AlignedBuffer::allocate<int64_t>(kSize, pool()),
+      std::vector<BufferPtr>{});
+  auto reversed = makeIndices(kSize, [](auto row) { return kSize - 1 - row; });
+  auto dictionary =
+      BaseVector::wrapInDictionary(nullptr, reversed, kSize, base);
+
+  DecodedVector decoded(*dictionary);
+  ASSERT_NE(decoded.nulls(), nullptr);
+  std::vector<bool> actual(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    actual[row] = bits::isBitNull(decoded.nulls(), row);
+  }
+  EXPECT_EQ(actual, expected);
 }
 
 TEST_F(DecodedVectorTest, nullsOfDictionaryWithNullsOverNullableBase) {
