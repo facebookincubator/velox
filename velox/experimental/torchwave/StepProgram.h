@@ -148,6 +148,10 @@ struct BoundLaunch {
   /// is.
   int32_t countSize{-1};
   bool countFromReserve{false};
+  /// The count reads a value one of the launch's outputs writes (an op sized
+  /// from its own output, e.g. index_select), so it is taken again after the
+  /// outputs are written.
+  bool recount{false};
   /// Outputs when the launch is sized by its largest input and one exists,
   /// and the outputs otherwise.
   int32_t largestShapeSize{-1};
@@ -232,6 +236,7 @@ struct LaunchOp {
   int32_t countSize{-1};
   int32_t largestShapeSize{-1};
   bool countFromReserve{false};
+  bool recount{false};
   /// Into StepCode::outputs.
   Span outputs;
   Span largestOutputs;

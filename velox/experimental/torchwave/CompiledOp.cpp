@@ -3397,7 +3397,8 @@ void CompositeInvocation::materializeStepGroups(
         continue;
       }
       buffer = state.tableOnlyActive
-          ? materializeAllocGroupTable(requests, frame, state)
+          ? materializeAllocGroupTable(
+                requests, frame, state, collector.group(g))
           : materializeAllocGroup(requests, frame);
       numCarved = static_cast<int32_t>(requests.size());
     }

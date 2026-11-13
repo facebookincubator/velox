@@ -158,6 +158,32 @@ struct WaveConfig {
   // more expensive for the blocks that only wait.
   bool costCountsBarrierWait{true};
 
+  // A concat result that the allocation plan put in a lifetime group takes its
+  // slot there: the concat sizes it into the step's collector and writes its
+  // operands' bands once the group is carved. When false, every such result is
+  // allocated on its own, as the plan's group then holds no slot for it.
+  bool concatResultSlots{true};
+
+  // Groups the values that are never released, and are not graph outputs, with
+  // the others produced at the same point. They all live until the frame is
+  // cleared, so sharing a buffer holds nothing longer than before.
+  bool groupUnreleasedValues{true};
+
+  // Lets a value join a group when its own node only takes a table-derived
+  // view of it. The view is derived for its shape while the step is sized and
+  // again, with storage, once the group is carved.
+  bool groupViewedValues{true};
+
+  // Carves lifetime groups out of one persistent buffer, laid out from the
+  // previous execution's lifetimes, instead of one allocator call per group.
+  bool groupArena{true};
+
+  // Groups of at least this many bytes are allocated on their own rather than
+  // given an arena slot. A few such allocations cost little, and leaving them
+  // to the allocator lets other buffers use their space while they are dead,
+  // which a slot of the arena never does.
+  int64_t groupArenaMaxBytes{16 << 20};
+
   // Ablation knobs.  Each switches one optimization off so its contribution
   // can be measured by comparing runtimes; none is meant for production use.
 
@@ -433,14 +459,6 @@ struct WaveConfig {
   // cg grid because each names its predecessor through inputFromPreviousKernel,
   // which breaks that producer into its own kernel whatever the grid mode.
   bool mkSelect{false};
-
-  // If true, a fused cat / stack of more than two operands stops emitting one
-  // copy per operand into its own kernel and instead pushes every operand into
-  // a kernel op of its own in the previous step. Each of those is sized by the
-  // operand it writes and gets its own share of the grid, so the operands fill
-  // the result side by side instead of walking a chain of __concatCopy calls in
-  // one block. The concat then becomes a kernel break that copies nothing.
-  bool parallelConcatFill{false};
 
   // If true, alongside each composite kernel also compile one single-op kernel
   // per op it contains, named <composite>_op_<opCode>. Diagnostic only: the

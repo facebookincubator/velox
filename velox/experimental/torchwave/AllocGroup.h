@@ -107,6 +107,11 @@ struct AllocLifetime {
   /// A graph output, not a concat result. Never released; grouped with the
   /// graph outputs produced at the same point.
   bool graphOutput{false};
+
+  /// Never released and not a graph output: it lives until the frame is
+  /// cleared. Grouped only with the other such values produced at the same
+  /// point, which live exactly as long.
+  bool unreleased{false};
 };
 
 /// Lays a group out as the result of a fused cat / stack instead of packing its
@@ -280,8 +285,13 @@ struct AllocGroupStats {
 
   // Why the rest were left out, summing to numAllocated - numGrouped.
 
-  /// Never released and not a graph output: a value nothing reads.
+  /// Never released, not a graph output, and borrowed by its own node, for the
+  /// reason numBorrowedInOwnNode gives. The other never-released values are
+  /// grouped with each other and counted in numUnreleasedGrouped.
   int32_t numEscaping{0};
+  /// Never-released values grouped with those produced at the same point.
+  /// Counted in numGrouped.
+  int32_t numUnreleasedGrouped{0};
   /// Graph outputs grouped with the graph outputs produced at the same point.
   /// Counted in numGrouped.
   int32_t numGraphOutputsGrouped{0};
@@ -547,6 +557,18 @@ class AllocGroupCollector {
   /// never produced".
   bool owns(nativert::ValueId actualId) const {
     return slotOf_.count(actualId) != 0;
+  }
+
+  /// True when 'actualId' belongs to a group whose slots have not been handed
+  /// out yet.
+  bool awaitsCarve(nativert::ValueId actualId) const {
+    auto it = slotOf_.find(actualId);
+    return it != slotOf_.end() && !groups_[it->second.group].materialized;
+  }
+
+  /// The plan's group 'g'.
+  const AllocGroup* group(size_t g) const {
+    return groups_[g].group;
   }
 
   /// Members of group 'g' that were never sized, for the report.

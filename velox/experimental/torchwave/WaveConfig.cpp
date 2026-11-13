@@ -89,6 +89,11 @@ std::string WaveConfig::toString() const {
   addBool("debugSingleOps", &WaveConfig::debugSingleOps);
   addBool("autoAdjustCost", &WaveConfig::autoAdjustCost);
   addBool("costCountsBarrierWait", &WaveConfig::costCountsBarrierWait);
+  addBool("concatResultSlots", &WaveConfig::concatResultSlots);
+  addBool("groupUnreleasedValues", &WaveConfig::groupUnreleasedValues);
+  addBool("groupViewedValues", &WaveConfig::groupViewedValues);
+  addBool("groupArena", &WaveConfig::groupArena);
+  addInt("groupArenaMaxBytes", &WaveConfig::groupArenaMaxBytes);
   addBool("uniformCost", &WaveConfig::uniformCost);
   addBool("launchPerOp", &WaveConfig::launchPerOp);
   addBool("dedupProjectOps", &WaveConfig::dedupProjectOps);
