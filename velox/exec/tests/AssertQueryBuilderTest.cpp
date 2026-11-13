@@ -84,6 +84,36 @@ TEST_F(AssertQueryBuilderTest, concurrency) {
       .assertResults({data, data, data});
 }
 
+TEST_F(AssertQueryBuilderTest, countResults) {
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+
+  EXPECT_EQ(
+      3,
+      AssertQueryBuilder(PlanBuilder().values({data}).planNode())
+          .countResults());
+
+  std::shared_ptr<Task> task;
+  EXPECT_EQ(
+      9,
+      AssertQueryBuilder(PlanBuilder().values({data}, true).planNode())
+          .maxDrivers(3)
+          .countResults(task));
+  EXPECT_NE(nullptr, task);
+}
+
+TEST_F(AssertQueryBuilderTest, countResultsMultipleBatches) {
+  std::vector<RowVectorPtr> batches;
+  for (auto i = 0; i < 10; ++i) {
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(100, [](auto row) { return row; })}));
+  }
+
+  EXPECT_EQ(
+      1'000,
+      AssertQueryBuilder(PlanBuilder().values(batches).planNode())
+          .countResults());
+}
+
 TEST_F(AssertQueryBuilderTest, config) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
 
