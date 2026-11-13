@@ -1156,14 +1156,6 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
   assertReadsAs({"-1e-400f"}, 0.0f, 0.0);
 }
 
-template <typename T>
-std::optional<T> valueAt(const VectorPtr& vector, vector_size_t row) {
-  if (vector->isNullAt(row)) {
-    return std::nullopt;
-  }
-  return vector->variantAt(row).value<T>();
-}
-
 TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
   struct TestCase {
     std::string line;
@@ -1189,21 +1181,26 @@ TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
       {"+1,+2,+3x,+4", 1, 2, std::nullopt, 4},
       {"+1,+2,+3,+-4", 1, 2, 3, std::nullopt},
   };
-  auto textFile = TempFilePath::create();
-  {
-    auto writeFile =
-        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
-    for (const auto& testCase : testCases) {
-      writeFile->append(testCase.line + "\n");
-    }
-    writeFile->close();
+  std::vector<std::optional<int8_t>> tinyintValues;
+  std::vector<std::optional<int16_t>> smallintValues;
+  std::vector<std::optional<int32_t>> integerValues;
+  std::vector<std::optional<int64_t>> bigintValues;
+  for (const auto& testCase : testCases) {
+    tinyintValues.push_back(testCase.tinyint);
+    smallintValues.push_back(testCase.smallint);
+    integerValues.push_back(testCase.integer);
+    bigintValues.push_back(testCase.bigint);
   }
 
-  auto type = ROW(
-      {{"tinyint", TINYINT()},
-       {"smallint", SMALLINT()},
-       {"integer", INTEGER()},
-       {"bigint", BIGINT()}});
+  auto expected = makeNamedRowVector({
+      {"tinyint", makeNullableFlatVector<int8_t>(tinyintValues)},
+      {"smallint", makeNullableFlatVector<int16_t>(smallintValues)},
+      {"integer", makeNullableFlatVector<int32_t>(integerValues)},
+      {"bigint", makeNullableFlatVector<int64_t>(bigintValues)},
+  });
+  auto textFile = createTextFile(
+      testCases.size(), [&](size_t row) { return testCases[row].line; });
+  auto type = expected->rowType();
   auto reader = createReader(
       type, textFile->getPath(), dwio::common::SerDeOptions(',', '\2', '\3'));
   dwio::common::RowReaderOptions rowReaderOptions;
@@ -1212,17 +1209,7 @@ TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
 
   VectorPtr result;
   ASSERT_EQ(rowReader->next(testCases.size(), result), testCases.size());
-  const auto* rowVector = result->as<RowVector>();
-  ASSERT_NE(rowVector, nullptr);
-  for (size_t row = 0; row < testCases.size(); ++row) {
-    const auto& testCase = testCases[row];
-    SCOPED_TRACE(testCase.line);
-    ASSERT_FALSE(rowVector->isNullAt(row));
-    EXPECT_EQ(valueAt<int8_t>(rowVector->childAt(0), row), testCase.tinyint);
-    EXPECT_EQ(valueAt<int16_t>(rowVector->childAt(1), row), testCase.smallint);
-    EXPECT_EQ(valueAt<int32_t>(rowVector->childAt(2), row), testCase.integer);
-    EXPECT_EQ(valueAt<int64_t>(rowVector->childAt(3), row), testCase.bigint);
-  }
+  assertEqualVectors(expected, result);
   ASSERT_EQ(rowReader->next(1, result), 0);
 }
 
