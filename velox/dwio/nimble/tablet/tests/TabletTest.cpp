@@ -244,7 +244,6 @@ class TabletTest : public ::testing::TestWithParam<BufferedInputMode> {
       fileHandle_ = std::make_unique<velox::FileHandle>();
       fileHandle_->uuid = velox::StringIdLease(ids, fileKey);
       fileHandle_->groupId = velox::StringIdLease(ids, "testGroup");
-      options.cache = cache_.get();
       options.blockCache = nimble::getBlockCache(cache_.get());
       options.fileHandle = fileHandle_.get();
       options.cacheMetadata = true;
@@ -7830,11 +7829,12 @@ TEST_P(TabletTest, configureOptionsStripeGroupEncodingViewDeduplication) {
 }
 
 TEST_P(TabletTest, configureOptionsCacheFields) {
-  // Verify that configureOptions wires fileHandle and cache from ReaderOptions
-  // into TabletReader::Options, that it sets blockCache to the block cache
-  // built on 'cache', and that a TabletReader created via this path actually
-  // uses CachedMetadataInput (warm path reads from cache, not file). Guards
-  // against accidental removal of the cache wiring in configureOptions.
+  // Verify that configureOptions wires fileHandle from ReaderOptions into
+  // TabletReader::Options, that it sets blockCache to the block cache built on
+  // the async data cache of ReaderOptions, and that a TabletReader created via
+  // this path actually uses CachedMetadataInput (warm path reads from cache,
+  // not file). Guards against accidental removal of the cache wiring in
+  // configureOptions.
 
   // Verify defaults are null.
   {
@@ -7843,7 +7843,6 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
     defaults.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
     auto opts = nimble::TabletReader::configureOptions(defaults);
     EXPECT_EQ(opts.fileHandle, nullptr);
-    EXPECT_EQ(opts.cache, nullptr);
     EXPECT_EQ(opts.blockCache, nullptr);
   }
 
@@ -7896,7 +7895,6 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
         makeReaderOptions(std::make_shared<velox::io::IoStatistics>());
     auto opts = nimble::TabletReader::configureOptions(readerOptions);
     EXPECT_EQ(opts.fileHandle, &fileHandle);
-    EXPECT_EQ(opts.cache, cache.get());
     EXPECT_EQ(opts.blockCache, nimble::getBlockCache(cache.get()));
   }
 
@@ -7907,7 +7905,6 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
         makeReaderOptions(std::make_shared<velox::io::IoStatistics>());
     readerOptions.setFileHandle(nullptr);
     auto opts = nimble::TabletReader::configureOptions(readerOptions);
-    EXPECT_EQ(opts.cache, cache.get());
     EXPECT_EQ(opts.blockCache, nullptr);
     auto tablet = nimble::TabletReader::create(readFile, pool_.get(), opts);
     EXPECT_EQ(tablet->stripeCount(), 1);
@@ -9697,7 +9694,7 @@ TEST_F(TabletTest, metadataInBlockCache) {
         openReader(options), "blockCache requires fileHandle");
   }
   {
-    SCOPED_TRACE("Caches reject a file handle of another file");
+    SCOPED_TRACE("Block cache rejects a file handle of another file");
     velox::FileHandle otherFileHandle;
     otherFileHandle.file = std::make_shared<velox::InMemoryReadFile>(file);
     otherFileHandle.uuid = velox::StringIdLease(
@@ -9710,16 +9707,7 @@ TEST_F(TabletTest, metadataInBlockCache) {
           "file and fileHandle->file must point to the same file");
     }
     {
-      nimble::TabletReader::Options options;
-      options.cacheMetadata = true;
-      options.fileHandle = &otherFileHandle;
-      options.cache = cache_.get();
-      NIMBLE_ASSERT_USER_THROW(
-          openReader(options),
-          "file and fileHandle->file must point to the same file");
-    }
-    {
-      // Without a cache the handle is unused, as when the reader reads an
+      // Without blockCache the handle is unused, as when the reader reads an
       // in-memory copy of a small file.
       nimble::TabletReader::Options options;
       options.cacheMetadata = true;
@@ -9744,45 +9732,48 @@ TEST_F(TabletTest, metadataInBlockCache) {
     EXPECT_EQ(metadataIoStats->ramHit().count(), 0);
   }
   {
-    SCOPED_TRACE("Metadata needs blockCache, even with the async data cache");
-    velox::FileHandle asyncFileHandle;
-    asyncFileHandle.file = readFile;
-    asyncFileHandle.uuid = velox::StringIdLease(
-        velox::fileIds(), "TabletTest.metadataInBlockCache.asyncDataCache");
+    SCOPED_TRACE("Reader without blockCache reads metadata from the file");
+    velox::FileHandle uncachedFileHandle;
+    uncachedFileHandle.file = readFile;
+    uncachedFileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "TabletTest.metadataInBlockCache.uncached");
     nimble::TabletReader::Options options;
     options.cacheMetadata = true;
-    options.fileHandle = &asyncFileHandle;
-    options.cache = cache_.get();
+    options.fileHandle = &uncachedFileHandle;
     EXPECT_EQ(streamLocations(*openReader(options).first), expected);
     auto [reader, metadataIoStats] = openReader(options);
     EXPECT_FALSE(reader->stats().footerCacheHit);
     EXPECT_EQ(streamLocations(*reader), expected);
     EXPECT_GT(metadataIoStats->read().sum(), 0);
   }
-  {
-    SCOPED_TRACE("Block cache combines with the async data cache");
+}
 
-    // A separate async data cache shows that file metadata goes to blockCache,
-    // not to a block cache built on the async data cache.
-    auto otherAllocator = std::make_shared<velox::memory::MallocAllocator>(
-        velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
-    auto otherCache =
-        velox::cache::AsyncDataCache::create(otherAllocator.get());
-    velox::FileHandle combinedFileHandle;
-    combinedFileHandle.file = readFile;
-    combinedFileHandle.uuid = velox::StringIdLease(
-        velox::fileIds(), "TabletTest.metadataInBlockCache.combined");
-    auto options = cachedOptions;
-    options.fileHandle = &combinedFileHandle;
-    options.cache = otherCache.get();
-    EXPECT_EQ(streamLocations(*openReader(options).first), expected);
-    auto [reader, metadataIoStats] = openReader(options);
-    EXPECT_TRUE(reader->stats().footerCacheHit);
-    EXPECT_EQ(streamLocations(*reader), expected);
-    EXPECT_EQ(metadataIoStats->read().sum(), 0);
-    EXPECT_EQ(otherCache->refreshStats().numEntries, 0);
-    otherCache->shutdown();
-  }
+TEST_F(TabletTest, cacheIndexRejectsFileHandleOfAnotherFile) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  nimble::TabletWriter::create(&writeFile, *pool_, {})->close();
+  writeFile.close();
+
+  allocator_ = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+  cache_ = velox::cache::AsyncDataCache::create(allocator_.get());
+  velox::FileHandle fileHandle;
+  fileHandle.file = std::make_shared<velox::InMemoryReadFile>(file);
+  fileHandle.uuid = velox::StringIdLease(
+      velox::fileIds(), "TabletTest.cacheIndexRejectsFileHandleOfAnotherFile");
+  nimble::TabletReader::Options options;
+  options.cacheIndex = true;
+  options.fileHandle = &fileHandle;
+  options.blockCache = nimble::getBlockCache(cache_.get());
+  options.ioOptions.emplace(pool_.get())
+      .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
+
+  NIMBLE_ASSERT_USER_THROW(
+      nimble::TabletReader::create(
+          std::make_shared<velox::InMemoryReadFile>(file),
+          pool_.get(),
+          options),
+      "file and fileHandle->file must point to the same file");
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -9867,7 +9858,7 @@ TEST_F(TabletTest, concurrentReadersWithCacheEviction) {
           fileHandle.uuid =
               velox::StringIdLease(ids, fmt::format("stress_{}", threadId));
           fileHandle.groupId = velox::StringIdLease(ids, "stressGroup");
-          options.cache = cache.get();
+          options.blockCache = nimble::getBlockCache(cache.get());
           options.fileHandle = &fileHandle;
           break;
         }

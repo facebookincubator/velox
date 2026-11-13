@@ -139,7 +139,7 @@ class ClusterIndexTestBase : public ::testing::Test {
   ///        that returns indexBuffers.stripeKeyStreams.
   std::unique_ptr<ClusterIndex> createClusterIndex(
       const IndexBuffers& indexBuffers,
-      velox::ReadFile* keyStreamFile = nullptr,
+      std::shared_ptr<velox::ReadFile> keyStreamFile = nullptr,
       bool pinIndex = false,
       bool preloadIndex = false,
       bool withKeyStreamLocator = true);
@@ -155,6 +155,9 @@ class ClusterIndexTestBase : public ::testing::Test {
       rootPool_->addLeafChild("ClusterIndexTestBase")};
   std::shared_ptr<velox::ReadFile> metadataFile_;
   std::shared_ptr<velox::io::IoStatistics> ioStats_;
+  // Receives the key stream reads of the index createClusterIndex() returned
+  // last.
+  std::shared_ptr<velox::io::IoStatistics> keyStreamIoStats_;
 };
 
 } // namespace facebook::nimble::index::test

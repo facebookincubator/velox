@@ -23,18 +23,18 @@
 namespace facebook::nimble::index {
 
 std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
-    std::unique_ptr<velox::dwio::common::SeekableInputStream> inputStream,
+    std::string_view chunk,
+    DataInput::Handle handle,
     const KeyReaderFactory& readerFactory,
-    velox::BufferPtr& dataBuffer,
     velox::memory::MemoryPool* pool) {
   NIMBLE_CHECK_NOT_NULL(pool);
-  const void* buf;
-  int bufLen{0};
-  NIMBLE_CHECK(velox::checkedNotNull(inputStream.get())->Next(&buf, &bufLen));
-  NIMBLE_CHECK_GE(bufLen, kChunkHeaderSize);
-  const auto* header = velox::checkedNotNull(static_cast<const char*>(buf));
+  NIMBLE_CHECK_FILE_GE(
+      chunk.size(),
+      static_cast<size_t>(kChunkHeaderSize),
+      "Key chunk is smaller than a chunk header");
+  const auto* header = chunk.data();
   const auto chunkHeader = readChunkHeader(header);
-  NIMBLE_CHECK(
+  NIMBLE_CHECK_FILE(
       chunkHeader.compressionType == CompressionType::Uncompressed ||
           chunkHeader.compressionType == CompressionType::Zstd ||
           chunkHeader.compressionType == CompressionType::Lz4,
@@ -42,48 +42,19 @@ std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
       chunkHeader.compressionType);
 
   const auto dataLen = chunkHeader.length;
+  NIMBLE_CHECK_FILE_GE(
+      chunk.size() - kChunkHeaderSize,
+      dataLen,
+      "Key chunk is shorter than its header length");
   auto result = std::make_shared<DecodedKeyChunk>();
+  result->handle = std::move(handle);
 
-  // Determine the contiguous data pointer. If the first buffer contains all
-  // the data, use it directly (zero-copy). Otherwise, copy across buffers.
-  // readChunkHeader advanced 'header' past the chunk header, so the remaining
-  // available bytes are bufLen - kChunkHeaderSize.
-  const char* chunkData;
-  bufLen -= kChunkHeaderSize;
-  if (bufLen >= static_cast<int>(dataLen)) {
-    result->dataStream = std::move(inputStream);
-    chunkData = header;
-  } else {
-    // Reuse the caller's buffer when it has sufficient capacity; otherwise
-    // allocate fresh and write it back into the slot. The destination buffer
-    // is appended to stringBuffers so the returned DecodedKeyChunk holds its
-    // own reference (co-owned with the caller's slot).
-    if (dataBuffer == nullptr || dataBuffer->capacity() < dataLen) {
-      dataBuffer = velox::AlignedBuffer::allocate<char>(dataLen, pool);
-    }
-    dataBuffer->setSize(dataLen);
-    auto* dest = velox::checkedNotNull(dataBuffer->asMutable<char>());
-    std::memcpy(dest, header, bufLen);
-    int copied = bufLen;
-    while (copied < static_cast<int>(dataLen)) {
-      NIMBLE_CHECK(
-          velox::checkedNotNull(inputStream.get())->Next(&buf, &bufLen));
-      const int toCopy = std::min(bufLen, static_cast<int>(dataLen) - copied);
-      std::memcpy(
-          velox::checkedNotNull(dest) + copied,
-          velox::checkedNotNull(static_cast<const char*>(buf)),
-          toCopy);
-      copied += toCopy;
-    }
-    chunkData = dest;
-    result->stringBuffers.push_back(dataBuffer);
-  }
-
-  // chunkData/dataLen is the raw chunk payload. For a compressed chunk it must
-  // be decompressed into an owned buffer before decoding keys, so the returned
-  // (and cached) DecodedKeyChunk holds uncompressed key bytes. Uses the same
+  // readChunkHeader advanced 'header' past the chunk header, so header/dataLen
+  // is the raw chunk payload. For a compressed chunk it must be decompressed
+  // into an owned buffer before decoding keys, so the returned (and cached)
+  // DecodedKeyChunk holds uncompressed key bytes. Uses the same
   // Compression::uncompress path as the general chunked-stream reader.
-  std::string_view encodedData{chunkData, dataLen};
+  std::string_view encodedData{header, dataLen};
   if (chunkHeader.compressionType != CompressionType::Uncompressed) {
     auto uncompressed = Compression::uncompress(
         *pool,
@@ -91,12 +62,9 @@ std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
         DataType::String,
         encodedData,
         /*decompressCounter=*/nullptr);
-    // Drop the returned chunk's references to the compressed payload (input
-    // stream or staging copy) so the cached DecodedKeyChunk holds only the
-    // uncompressed key bytes. The caller's dataBuffer scratch may still hold
-    // the staging copy, but callers use only the returned chunk and discard it.
-    result->dataStream.reset();
-    result->stringBuffers.clear();
+    // Drop the returned chunk's reference to the compressed payload so the
+    // cached DecodedKeyChunk holds only the uncompressed key bytes.
+    result->handle.reset();
     encodedData =
         std::string_view(uncompressed->as<char>(), uncompressed->size());
     result->stringBuffers.push_back(std::move(uncompressed));

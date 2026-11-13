@@ -4608,6 +4608,18 @@ DEBUG_ONLY_TEST_P(NimbleIndexProjectorTest, statsDuringProjection) {
       velox::common::testutil::TestValue::disable();
     }
   });
+
+  // The cluster index reads its key chunk through a DirectDataInput too. One
+  // projection up front decodes it in the cached tablet that every projector
+  // below shares, so the stripe load is the only allocation the hook sees.
+  {
+    std::vector<Subfield> subfields;
+    subfields.emplace_back("value");
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {makeRangeLookup(rowType, {"key"}, 0, kNumRows)};
+    createProjector(subfields)->projectStreams(request, {});
+  }
+
   for (const std::string_view method :
        {"projectStreams", "co_projectRows", "loadStripeStreams"}) {
     SCOPED_TRACE(method);
