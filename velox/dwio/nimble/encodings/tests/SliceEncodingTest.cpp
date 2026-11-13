@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -1081,6 +1082,23 @@ TEST_F(SliceEncodingTest, pushDownConstant) {
   auto encoding = createEncoding(wrapped);
   const std::vector<int32_t> expected{34, 34, 34};
   EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownSequence) {
+  const auto values = makeVector<int64_t>({-6, -2, 2, 6, 10, 14});
+  const auto encoded =
+      nimble::test::Encoder<nimble::SequenceEncoding<int64_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<int64_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/4, *buffer_, /*valueDelta=*/-100, {});
+
+  // Push-down shifts the base, which shifts every row by the same delta.
+  EXPECT_EQ(readStoredValueDelta(wrapped), 0);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int64_t> expected{-102, -98, -94, -90};
+  EXPECT_EQ(materialize<int64_t>(*encoding, 4), expected);
 }
 
 TEST_F(SliceEncodingTest, pushDownTrivialUint32) {
