@@ -1,0 +1,18 @@
+# limitation=synchronous ABFS over local Azurite only; no real Azure service, native async, fibers, or io_uring claim
+# fixture_schema=id:BIGINT,payload:BIGINT; seed=1000000007; id=seed+row*1000003; payload=(id<<7)^(id>>3)^5a5a5a5a5a5a5a5a
+# fixture_rows=48000; row_groups=4; file_size_bytes=938794; data_checksum=16009607394047081120
+# query_drivers=8; storage_read_operations=Velox IO operations, not proven HTTP request counts or wire bytes
+# blob_range_downloads_derived=storageReadBytes.count when available; derived from the current synchronous ABFS code path, not an observed HTTP/server count
+# http_request_count_observed=unavailable; current ABFS/Azurite helper exposes no safe counter
+# cache_rounds=cold-cache; AsyncDataCache cleared before every measured round; fileProperties avoids GetProperties in the measured path
+# sampler_interval_ms=5; sampled_peak_rss_kb=peak sampled VmRSS, not VmHWM
+io_executor_threads,round,elapsed_wall_us,process_user_us,process_system_us,storage_read_bytes,storage_read_operations,blob_range_downloads_derived,overread_bytes,http_request_count_observed,table_scan_input_bytes,table_scan_raw_input_bytes,initial_threads,final_threads,sampled_peak_threads,sampled_peak_rss_kb,row_count,checksum
+1,1,55518,15729,43923,1199104,5,5,303,unavailable,7327744,9592832,7,9,20,121192,384000,17396394710119339264
+1,2,45105,16764,24092,1199104,4,4,303,unavailable,7327744,9592832,9,9,19,124796,384000,17396394710119339264
+1,3,41327,21935,14122,1199104,4,4,402,unavailable,7327744,9592832,9,9,19,125448,384000,17396394710119339264
+2,1,41062,15650,24851,1199104,4,4,402,unavailable,7327744,9592832,8,10,20,128808,384000,17396394710119339264
+2,2,39029,24430,12014,1199104,4,4,402,unavailable,7327744,9592832,10,10,20,131588,384000,17396394710119339264
+2,3,36367,31860,2607,1199104,4,4,402,unavailable,7327744,9592832,10,10,20,133496,384000,17396394710119339264
+8,1,32668,14953,26053,1199104,5,5,402,unavailable,7327744,9592832,8,16,26,137452,384000,17396394710119339264
+8,2,33676,22109,13652,1199104,3,3,402,unavailable,7327744,9592832,16,16,26,138204,384000,17396394710119339264
+8,3,37174,16477,20605,1199104,4,4,402,unavailable,7327744,9592832,16,16,27,140260,384000,17396394710119339264

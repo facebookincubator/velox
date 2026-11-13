@@ -31,6 +31,12 @@ class SharedKeyAzureClientProvider final : public AzureClientProvider {
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config) override;
 
+  /// Creates a read client with the supplied transport pipeline options.
+  std::unique_ptr<AzureBlobClient> getReadFileClientWithOptions(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config,
+      const Azure::Storage::Blobs::BlobClientOptions& options) override;
+
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config) override;
@@ -80,6 +86,12 @@ class FixedSasAzureClientProvider final : public AzureClientProvider {
   std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config) override;
+
+  /// Creates a read client with the supplied transport pipeline options.
+  std::unique_ptr<AzureBlobClient> getReadFileClientWithOptions(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config,
+      const Azure::Storage::Blobs::BlobClientOptions& options) override;
 
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,

@@ -1,0 +1,31 @@
+All private roots are sanitized. The build ran in the Linux-native ext4 checkout.
+
+Configure:
+cmake -S <repository-root> -B <stage1-debug> -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVELOX_ENABLE_ABFS=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HIVE_CONNECTOR=ON -DVELOX_ENABLE_EXEC=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_BUILD_TESTING=ON -DCMAKE_PREFIX_PATH=<dependency-prefix>
+
+Build focused target:
+cmake --build <stage1-debug> --target velox_abfs_stage1_transport_test --parallel 4
+
+Run all focused Stage 1 tests, including C1:
+ctest --test-dir <stage1-debug> --output-on-failure -R '^velox_abfs_stage1_transport_test$'
+
+Run functional transport matrix only:
+<stage1-test-binary> --gtest_filter='FollyHttpTransportTest.*'
+
+Run C1 only:
+<stage1-test-binary> --gtest_filter='FollyHttpTransportC1Test.SixtyFourDownloadsOneEventBase'
+
+Run final TLS stress:
+<stage1-test-binary> --gtest_filter='FollyHttpTransportTest.*Tls*:FollyHttpTransportTest.Tls*' --gtest_repeat=20 --gtest_break_on_failure
+
+Run existing ABFS regressions:
+cmake --build <stage1-debug> --target velox_abfs_test velox_abfs_registration_test --parallel 4
+ctest --test-dir <stage1-debug> --output-on-failure -R '^(velox_abfs_test|velox_abfs_registration_test)$'
+
+Profiler stack proof:
+gdb -batch -ex 'break folly::fibers::Baton::wait()' -ex 'run <C1-filter>' -ex 'thread apply all bt 20' -ex 'continue' <stage1-test-binary>
+
+Nonblocking syscall proof:
+strace -ff -tt -T -o <temporary-trace-prefix> -e trace=network,epoll_wait,epoll_pwait,poll,ppoll,prctl <stage1-test-binary> <C1-filter>
+
+Raw GDB and strace output was kept in temporary storage only. It was not copied into repository evidence because raw request bytes include a deterministic test query. Sanitized summaries are recorded under c1/.

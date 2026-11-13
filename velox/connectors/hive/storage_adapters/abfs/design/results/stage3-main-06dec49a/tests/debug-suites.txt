@@ -1,0 +1,19 @@
+Stage 3 C3 ordinary Debug validation
+Date: 2026-07-21
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Complete suites
+- velox_abfs_test: 32 of 32 tests passed.
+- velox_abfs_registration_test: 25 of 25 tests passed.
+- velox_abfs_stage1_transport_test: 59 of 59 tests passed.
+- velox_abfs_stage2_runtime_test: 12 of 12 tests passed.
+
+C3 coverage includes provider pairing, options propagation, cache isolation,
+Shared Key/fixed-SAS Azurite parity, truthful async capability, one contiguous
+scatter request, null gaps, all-null ranges, fragmented bodies, zero length,
+range validation, future error and timeout settlement, file destruction,
+multiple pending reads above runtime thread count, and reentrant sync-wait
+rejection.
+
+The final four-suite CTest run completed in 75.76 seconds with zero failures.

@@ -1,0 +1,59 @@
+Stage 4 representative commands
+Date: 2026-07-21
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+
+Run from the WSL ext4 repository root. Paths are repository-relative placeholders.
+
+Azure RetryPolicy
+cmake --build <azure-core-test-build> --target azure-core-test -j 2
+ctest --test-dir <azure-core-test-build> --output-on-failure \
+  -R '^azure-core\.RetryPolicy\.'
+
+Focused warnings-as-errors check
+cmake -S <azure-core-source> -B <azure-core-test-build> \
+  -DWARNINGS_AS_ERRORS=ON
+rm -f <azure-core-test-build>/test/ut/CMakeFiles/azure-core-test.dir/retry_policy_test.cpp.o
+cmake --build <azure-core-test-build> \
+  --target test/ut/CMakeFiles/azure-core-test.dir/retry_policy_test.cpp.o -j 2
+
+The isolated retry translation unit passes with warnings treated as errors.
+The complete pinned-Core warnings-as-errors target reaches an unrelated
+pre-existing pessimizing-move warning in nullable_test.cpp, so the complete
+RetryPolicy suite is run after restoring the prior warning mode.
+
+Ordinary Debug
+cmake --build <ordinary-build> --target \
+  velox_abfs_test velox_abfs_registration_test \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j 2
+ctest --test-dir <ordinary-build> --output-on-failure \
+  -R '^(velox_abfs_test|velox_abfs_registration_test|velox_abfs_stage1_transport_test|velox_abfs_stage2_runtime_test)$'
+
+ASAN Debug
+cmake --build <asan-build> --target \
+  velox_abfs_test velox_abfs_registration_test \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j 2
+grep -q '#define FOLLY_LIBRARY_SANITIZE_ADDRESS 1' \
+  <asan-build>/_deps/folly-build/folly/folly-config.h
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 \
+  ctest --test-dir <asan-build> --output-on-failure \
+  -R '^(velox_abfs_test|velox_abfs_registration_test|velox_abfs_stage1_transport_test|velox_abfs_stage2_runtime_test)$'
+
+TSAN Debug
+cmake --build <tsan-build> --target \
+  velox_abfs_test velox_abfs_registration_test \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j 2
+TSAN_OPTIONS=halt_on_error=1:abort_on_error=1 \
+  setarch x86_64 -R ctest --test-dir <tsan-build> --output-on-failure \
+  -R '^(velox_abfs_test|velox_abfs_registration_test|velox_abfs_stage1_transport_test|velox_abfs_stage2_runtime_test)$'
+
+Focused timer race
+<runtime-test> \
+  --gtest_filter='AbfsAsyncRuntimeTest.RetryDelayTimerExpires:AbfsAsyncRuntimeTest.RetryDelayExpiryRacesShutdown:AbfsAsyncRuntimeTest.FutureCancellationInterruptsRetryDelay:AbfsAsyncRuntimeTest.FutureCancellationRemovesQueuedRequest:AbfsAsyncRuntimeTest.RetryDelayCancellationRacesExpiryAndShutdown'
+
+Stack capture
+<gdb> -q -batch \
+  -ex 'set pagination off' \
+  -ex 'break velox/connectors/hive/storage_adapters/abfs/AbfsAsyncRuntime.cpp:567' \
+  -ex 'run --gtest_filter=AbfsAsyncRuntimeTest.AzureRetryPolicyYieldsToUnrelatedRequest' \
+  -ex 'bt 40' \
+  --args <runtime-test>

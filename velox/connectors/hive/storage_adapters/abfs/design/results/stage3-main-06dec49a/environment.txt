@@ -1,0 +1,34 @@
+Stage 3 C3 validation environment
+Date: 2026-07-21
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+
+Execution environment
+- OS: Ubuntu 24.04 under WSL2
+- Kernel: Microsoft WSL2 Linux kernel
+- Architecture: x86_64
+- Build filesystem: WSL ext4
+- CMake: 3.30.4
+- Ninja: 1.11.1
+- Clang/Clang++ sanitizer toolchain: 20.1.2
+- ASAN/TSAN runtime: compiler-rt 20.1.2
+- Pinned formatter: clang-format 21.1.2
+- Azure SDK pin: 12.8.0
+
+Build trees
+- Ordinary Debug: abfs-stage1-debug
+- ASAN Debug: abfs-stage2-asan-clang20-debug
+- TSAN Debug: abfs-stage2-tsan-clang20-debug
+
+Sanitizer prerequisites
+- Sanitizer trees use bundled Folly compiled with the same sanitizer flags as
+  the ABFS targets.
+- The valid ASAN build sets the generated bundled-Folly library-ASAN marker to
+  1 after CMake regeneration, then rebuilds the affected graph.
+- TSAN binaries run through setarch x86_64 -R because randomized mappings can
+  abort compiler-rt before main on this WSL kernel.
+
+Security and privacy
+- Tests use loopback fixtures, deterministic certificates, synthetic provider
+  identities, and Azurite.
+- Reports retain no credentials, SAS values, authorization headers, real
+  endpoints, account identifiers, usernames, hostnames, or private paths.
