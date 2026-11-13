@@ -169,7 +169,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
     auto rows = makeRowVector({keys, values});
 
     AggregationTester(*this)
-        .inputs(rows)
+        .inputs(split(rows))
         .groupBy({"c0"})
         .aggregates({functionCall(true, percentile, accuracy, false)})
         .config(
@@ -217,7 +217,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
       }
 
       AggregationTester(*this)
-          .inputs(rows)
+          .inputs(split(rows))
           .groupBy({"c0"})
           .aggregates({functionCall(true, percentile, accuracy, true)})
           .config(
