@@ -378,13 +378,11 @@ TEST_F(FilterProjectTest, statsSplitter) {
 
 TEST_F(FilterProjectTest, barrier) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   for (int32_t i = 0; i < numSplits; ++i) {
     vectors.push_back(makeTestVector());
-    tempFiles.push_back(TempFilePath::create());
   }
-  writeToFiles(toFilePaths(tempFiles), vectors);
+  auto tempFiles = writeToFiles(vectors);
   createDuckDbTable(vectors);
 
   core::PlanNodeId projectPlanNodeId;

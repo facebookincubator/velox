@@ -160,12 +160,8 @@ class StreamingAggregationTest
       uint32_t expectedNumOuputBatches) {
     const auto inputVectors = addPayload(keys, 2);
 
-    std::vector<std::shared_ptr<TempFilePath>> tempFiles;
     const int numSplits = keys.size();
-    for (int32_t i = 0; i < numSplits; ++i) {
-      tempFiles.push_back(TempFilePath::create());
-    }
-    writeToFiles(toFilePaths(tempFiles), inputVectors);
+    auto tempFiles = writeToFiles(inputVectors);
 
     createDuckDbTable(inputVectors);
 
@@ -270,12 +266,8 @@ class StreamingAggregationTest
       uint32_t outputBatchSize,
       uint32_t expectedNumOuputBatches) {
     const auto inputVectors = addPayload(keys, 2);
-    std::vector<std::shared_ptr<TempFilePath>> tempFiles;
     const int numSplits = keys.size();
-    for (int32_t i = 0; i < numSplits; ++i) {
-      tempFiles.push_back(TempFilePath::create());
-    }
-    writeToFiles(toFilePaths(tempFiles), inputVectors);
+    auto tempFiles = writeToFiles(inputVectors);
 
     createDuckDbTable(inputVectors);
 
@@ -537,12 +529,8 @@ class StreamingAggregationTest
       const std::vector<RowVectorPtr>& keys,
       uint32_t outputBatchSize) {
     const auto inputVectors = addPayload(keys);
-    std::vector<std::shared_ptr<TempFilePath>> tempFiles;
     const int numSplits = keys.size();
-    for (int32_t i = 0; i < numSplits; ++i) {
-      tempFiles.push_back(TempFilePath::create());
-    }
-    writeToFiles(toFilePaths(tempFiles), inputVectors);
+    auto tempFiles = writeToFiles(inputVectors);
 
     createDuckDbTable(inputVectors);
 
@@ -1199,12 +1187,8 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
       makeFlatVector<int32_t>({17, 18, 19}),
   };
   auto inputVectors = addPayload(keys, 1);
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits = keys.size();
-  for (int32_t i = 0; i < numSplits; ++i) {
-    tempFiles.push_back(TempFilePath::create());
-  }
-  writeToFiles(toFilePaths(tempFiles), inputVectors);
+  auto tempFiles = writeToFiles(inputVectors);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId streamingAggregationNodeId;

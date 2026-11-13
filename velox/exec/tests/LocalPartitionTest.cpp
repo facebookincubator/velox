@@ -46,15 +46,6 @@ class LocalPartitionTest : public HiveConnectorTestBase {
         size, [start, max](auto row) { return (start + row) % max; });
   }
 
-  std::vector<std::shared_ptr<TempFilePath>> writeToFiles(
-      const std::vector<RowVectorPtr>& vectors) {
-    auto filePaths = makeFilePaths(vectors.size());
-    for (auto i = 0; i < vectors.size(); i++) {
-      writeToFile(filePaths[i]->getPath(), vectors[i]);
-    }
-    return filePaths;
-  }
-
   void verifyExchangeSourceOperatorStats(
       const std::shared_ptr<exec::Task>& task,
       int expectedPositions,
@@ -1224,10 +1215,8 @@ TEST_F(LocalPartitionTest, barrier) {
       auto vector = std::dynamic_pointer_cast<RowVector>(
           BatchMaker::createBatch(rowType, 100, *pool_));
       sourceVectors.push_back(vector);
-      tempFiles[i].push_back(TempFilePath::create());
     }
-    HiveConnectorTestBase::writeToFiles(
-        toFilePaths(tempFiles[i]), sourceVectors);
+    tempFiles[i] = writeToFiles(sourceVectors);
     std::copy(
         sourceVectors.begin(),
         sourceVectors.end(),

@@ -898,10 +898,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
         width,
         numWorkers);
     const auto* scan = findInitialPlanScan(*plan->as<FixedPointNode>());
-    auto files = makeFilePaths(numWorkers);
-    for (size_t i = 0; i < data.size(); ++i) {
-      writeToFile(files[i]->getPath(), data[i]);
-    }
+    auto files = writeToFiles(data);
     return runWorkers(
         plan,
         exec::Task::ExecutionMode::kParallel,

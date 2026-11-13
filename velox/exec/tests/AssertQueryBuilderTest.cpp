@@ -97,8 +97,7 @@ TEST_F(AssertQueryBuilderTest, config) {
 TEST_F(AssertQueryBuilderTest, hiveSplits) {
   auto data = makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3}));
 
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), {data});
+  auto file = writeToFile(data);
 
   // Single leaf node.
   AssertQueryBuilder(
@@ -164,8 +163,7 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
 
   // Two leaf nodes.
   auto buildData = makeRowVector({makeFlatVector<int32_t>({2, 3})});
-  auto buildFile = TempFilePath::create();
-  writeToFile(buildFile->getPath(), {buildData});
+  auto buildFile = writeToFile(buildData);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId probeScanId;

@@ -138,6 +138,12 @@ class FileDataSource : public DataSource {
  protected:
   virtual std::unique_ptr<FileSplitReader> createSplitReader();
 
+  // Returns true to skip 'split_' without opening its file. The split then
+  // returns no rows and counts toward skippedSplits.
+  virtual bool skipSplit() {
+    return false;
+  }
+
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;

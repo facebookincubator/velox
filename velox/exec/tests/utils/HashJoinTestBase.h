@@ -912,11 +912,9 @@ class HashJoinTestBase : public HiveConnectorTestBase {
               vectorSize, [](auto row) { return row * 3; })});
         });
 
-    std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-    writeToFile(probeFile->getPath(), probeVectors);
+    auto probeFile = writeToFile(probeVectors);
 
-    std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-    writeToFile(buildFile->getPath(), buildVectors);
+    auto buildFile = writeToFile(buildVectors);
 
     createDuckDbTable("t", probeVectors);
     createDuckDbTable("u", buildVectors);

@@ -377,11 +377,9 @@ class MergeJoinTest : public HiveConnectorTestBase {
   void testJoinTwoKeysWithNulls(
       RowVectorPtr& leftVectors,
       RowVectorPtr& rightVectors) {
-    auto leftFile = TempFilePath::create();
-    writeToFile(leftFile->getPath(), leftVectors);
+    auto leftFile = writeToFile(leftVectors);
     createDuckDbTable("t", {leftVectors});
-    auto rightFile = TempFilePath::create();
-    writeToFile(rightFile->getPath(), rightVectors);
+    auto rightFile = writeToFile(rightVectors);
     createDuckDbTable("u", {rightVectors});
 
     auto joinTypes = {
@@ -980,12 +978,10 @@ TEST_F(MergeJoinTest, lazyVectors) {
           makeFlatVector<int64_t>(10'000, [](auto row) { return row % 31; }),
       });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftVectors);
+  auto leftFile = writeToFile(leftVectors);
   createDuckDbTable("t", {leftVectors});
 
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightVectors);
+  auto rightFile = writeToFile(rightVectors);
   createDuckDbTable("u", {rightVectors});
 
   auto joinTypes = {
@@ -2386,10 +2382,8 @@ TEST_F(MergeJoinTest, barrier) {
       {makeFlatVector<int32_t>(1'024, [](auto row) { return row / 6; }),
        makeFlatVector<int32_t>(1'024, [](auto row) { return row; })});
 
-  auto leftFile = TempFilePath::create();
-  HiveConnectorTestBase::writeToFile(leftFile->getPath(), left);
-  auto rightFile = TempFilePath::create();
-  HiveConnectorTestBase::writeToFile(rightFile->getPath(), right);
+  auto leftFile = writeToFile(left);
+  auto rightFile = writeToFile(right);
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});

@@ -54,7 +54,7 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
     const RowTypePtr rowType,
     int32_t bucketCount,
     const std::vector<std::string>& bucketColumns,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy) {
+    const std::vector<HiveSortingColumnPtr>& sortBy) {
   std::vector<TypePtr> bucketTypes;
   bucketTypes.reserve(bucketColumns.size());
   for (const auto& bucketColumn : bucketColumns) {
@@ -827,7 +827,7 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& partitionBy,
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+    const std::vector<HiveSortingColumnPtr>& sortBy,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
     const std::string_view& connectorId,

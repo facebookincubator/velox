@@ -1817,9 +1817,8 @@ TEST_F(IcebergReadTest, defaultValueWithDeletesAndFilters) {
   auto newRowType = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})})};
-  auto dataFilePath = TempFilePath::create();
   // Write data file with old schema (only c0) containing rows 1-10.
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   auto deleteFilePath = TempFilePath::create();
   // Create delete file that deletes positions 1, 3, 5 (rows 2, 4, 6).
@@ -2060,9 +2059,8 @@ TEST_F(IcebergReadTest, partitionColumnsFromHive) {
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {makeFlatVector<int64_t>({1, 2, 3}),
        makeFlatVector<int32_t>({10, 20, 30})})};
-  auto dataFilePath = TempFilePath::create();
   // Write data file with only non-partition columns (c0, c1).
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   // Set partition keys for region and year.
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys = {

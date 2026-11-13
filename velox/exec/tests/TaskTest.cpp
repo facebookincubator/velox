@@ -775,8 +775,7 @@ TEST_F(TaskTest, stateChangeFutureOnSplitQueueDrain) {
   // before the task starves. Serial next() requires noMoreSplits up front,
   // which would gate the notification, so exercise the consume path directly.
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
   auto task = Task::create(
       "task-1",
       PlanBuilder().tableScan(asRowType(data->type())).planFragment(),
@@ -813,8 +812,7 @@ TEST_F(TaskTest, stateChangeFutureNotFiredWhenNoMoreSplits) {
   // split queue carries no actionable signal and does not resolve
   // stateChangeFuture.
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
   auto task = Task::create(
       "task-1",
       PlanBuilder().tableScan(asRowType(data->type())).planFragment(),
@@ -1572,13 +1570,10 @@ TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
   });
 
   // Create temp files for each data source
-  auto filePath1 = TempFilePath::create();
-  auto filePath2 = TempFilePath::create();
-  auto filePath3 = TempFilePath::create();
 
-  writeToFile(filePath1->getPath(), {data});
-  writeToFile(filePath2->getPath(), {data});
-  writeToFile(filePath3->getPath(), {data});
+  auto filePath1 = writeToFile(data);
+  auto filePath2 = writeToFile(data);
+  auto filePath3 = writeToFile(data);
 
   // Create a plan with two joins and three source nodes
   core::PlanNodeId scanNodeId1;
@@ -1849,8 +1844,7 @@ TEST_F(TaskTest, serialExecution) {
   }
 
   // Project + Aggregation over TableScan.
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data, data});
+  auto filePath = writeToFile(std::vector{data, data});
 
   core::PlanNodeId scanId;
   plan = PlanBuilder()
@@ -1974,16 +1968,14 @@ TEST_F(TaskTest, serialHashJoin) {
           makeFlatVector<int64_t>({1, 2, 3, 4}),
           makeFlatVector<int64_t>({10, 20, 30, 40}),
       });
-  auto leftPath = TempFilePath::create();
-  writeToFile(leftPath->getPath(), {left});
+  auto leftPath = writeToFile(left);
 
   auto right = makeRowVector(
       {"u_c0"},
       {
           makeFlatVector<int64_t>({0, 1, 3, 5}),
       });
-  auto rightPath = TempFilePath::create();
-  writeToFile(rightPath->getPath(), {right});
+  auto rightPath = writeToFile(right);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanId;
@@ -2019,12 +2011,10 @@ TEST_F(TaskTest, serialHashJoin) {
 
 TEST_F(TaskTest, serialCrossJoin) {
   auto left = makeNamedRowVector("t_c0", makeFlatVector<int64_t>({1, 2, 3}));
-  auto leftPath = TempFilePath::create();
-  writeToFile(leftPath->getPath(), {left});
+  auto leftPath = writeToFile(left);
 
   auto right = makeNamedRowVector("u_c0", makeFlatVector<int64_t>({10, 20}));
-  auto rightPath = TempFilePath::create();
-  writeToFile(rightPath->getPath(), {right});
+  auto rightPath = writeToFile(right);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanId;
@@ -2790,8 +2780,7 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data, data});
+  auto filePath = writeToFile(std::vector{data, data});
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -3905,8 +3894,7 @@ DEBUG_ONLY_TEST_F(TaskTest, allDriversClosedFutureAfterOutputPipelineFinishes) {
 
 TEST_F(TaskTest, allDriversClosedFutureWithQueuedSplitGroup) {
   const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
-  const auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  const auto filePath = writeToFile(data);
   auto plan = PlanBuilder().tableScan(asRowType(data->type())).planFragment();
   const auto scanNodeId = plan.planNode->id();
   plan.executionStrategy = core::ExecutionStrategy::kGrouped;
@@ -4070,8 +4058,7 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data, data});
+  auto filePath = writeToFile(std::vector{data, data});
 
   core::PlanNodeId scanId;
   const auto plan = PlanBuilder()
@@ -4135,8 +4122,7 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data, data});
+  auto filePath = writeToFile(std::vector{data, data});
 
   core::PlanNodeId scanId;
   const auto plan = PlanBuilder()
@@ -4202,8 +4188,7 @@ TEST_F(TaskTest, testTerminateDuringBarrier) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
   });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
 
   core::PlanNodeId scanId;
   auto plan = PlanBuilder()
@@ -4271,8 +4256,7 @@ TEST_F(TaskTest, testBarrierClearedOnTerminate) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(100, [](auto row) { return row; }),
   });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
 
   core::PlanNodeId scanId;
   auto plan = PlanBuilder()
@@ -4460,8 +4444,7 @@ TEST_F(TaskTest, operatorErrorDuringBarrier) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
   });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
 
   std::string errMsg{"injectedError"};
   auto injectionCallback =
@@ -4519,8 +4502,7 @@ TEST_F(TaskTest, dropOutputDuringBarrier) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
   });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
 
   auto injectionCallback = [&](size_t numInputs, bool draining, Operator* op) {
     if (!draining) {
@@ -4585,8 +4567,7 @@ TEST_F(TaskTest, testTerminateDuringBarrierWithUnion) {
   auto vector = makeRowVector({
       makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
   });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {vector});
+  auto filePath = writeToFile(vector);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   std::vector<core::PlanNodeId> scanNodeIds;
@@ -4648,8 +4629,7 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
   });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
 
   core::PlanNodeId scanId;
   core::PlanNodeId projectNodeId;
@@ -4715,7 +4695,6 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
 
 DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   const int numRowsPerSplit{1'000};
   for (int32_t i = 0; i < numSplits; ++i) {
@@ -4723,9 +4702,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
         {makeFlatVector<int32_t>(numRowsPerSplit, [](auto row) { return row; }),
          makeFlatVector<int32_t>(
              numRowsPerSplit, [](auto row) { return row * 2; })}));
-    tempFiles.push_back(TempFilePath::create());
   }
-  writeToFiles(toFilePaths(tempFiles), vectors);
+  auto tempFiles = writeToFiles(vectors);
   createDuckDbTable(vectors);
 
   const int injectedDelaySecs{2};

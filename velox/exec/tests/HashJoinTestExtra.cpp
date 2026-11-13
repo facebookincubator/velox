@@ -1875,8 +1875,7 @@ TEST_P(HashJoinTest, customTypeStringDynamicFilterNotPushedDown) {
       {"c0", "c1"},
       {makeFlatVector<StringView>(kNumRows, keyAt, nullptr, VARBINARY()),
        makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
-  auto probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVector);
+  auto probeFile = writeToFile(probeVector);
 
   // Only three build keys, so a pushed-down filter would be highly selective
   // and its absence is visible in the scan's input positions.
@@ -2063,8 +2062,7 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughAgg) {
       makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
       makeFlatIdentityVector<int64_t>(numRowsProbe),
   })};
-  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  auto probeFile = writeToFile(probeVectors);
 
   // Create build data
   std::vector<RowVectorPtr> buildVectors{makeNamedRowVector(
@@ -2132,8 +2130,7 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughStreamingAgg) {
       makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
       makeFlatIdentityVector<int64_t>(numRowsProbe),
   })};
-  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  auto probeFile = writeToFile(probeVectors);
 
   // Create build data
   std::vector<RowVectorPtr> buildVectors{makeNamedRowVector(
@@ -2219,8 +2216,7 @@ TEST_P(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
           makeFlatIdentityVector<int64_t>(10),
           makeFlatIdentityVector<int64_t>(10),
       })};
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), rightProbe);
+  auto file = writeToFile(rightProbe);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanNodeId;
   auto plan =
@@ -7376,11 +7372,9 @@ TEST_P(HashJoinTest, nullAwareRightSemiProjectOverScan) {
   for (int i = 0; i < probes.size(); i++) {
     RowVectorPtr& probe = probes[i];
     RowVectorPtr& build = builds[i];
-    std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-    writeToFile(probeFile->getPath(), {probe});
+    auto probeFile = writeToFile(probe);
 
-    std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-    writeToFile(buildFile->getPath(), {build});
+    auto buildFile = writeToFile(build);
 
     createDuckDbTable("t", {probe});
     createDuckDbTable("u", {build});
@@ -8055,11 +8049,9 @@ TEST_P(HashJoinTest, semiProjectOverLazyVectors) {
         });
   });
 
-  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  auto probeFile = writeToFile(probeVectors);
 
-  std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-  writeToFile(buildFile->getPath(), buildVectors);
+  auto buildFile = writeToFile(buildVectors);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);

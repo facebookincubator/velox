@@ -148,15 +148,13 @@ TEST_F(LimitTest, partialLimitEagerFlush) {
 
 TEST_F(LimitTest, barrier) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   const int numRowsPerSplit{1'000};
   for (int32_t i = 0; i < numSplits; ++i) {
     vectors.push_back(makeRowVector({makeFlatVector<int32_t>(
         numRowsPerSplit, [](auto row) { return row; })}));
-    tempFiles.push_back(TempFilePath::create());
   }
-  writeToFiles(toFilePaths(tempFiles), vectors);
+  auto tempFiles = writeToFiles(vectors);
   createDuckDbTable(vectors);
 
   struct {

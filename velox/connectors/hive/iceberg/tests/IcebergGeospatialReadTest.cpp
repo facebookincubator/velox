@@ -1376,8 +1376,7 @@ TEST_F(IcebergGeospatialReadTest, hiveConnectorDoesNotConvert) {
   }
   auto data = makeNamedRowVector("geom", makeVarbinaryVector(wkb));
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
 
   auto plan = exec::test::PlanBuilder()
                   .tableScan(ROW({"geom"}, {GEOMETRY()}))
@@ -1481,8 +1480,7 @@ TEST_F(IcebergGeospatialReadTest, nonParquetGeometryIsRejected) {
   fileFormat_ = dwio::common::FileFormat::DWRF;
   const auto wkb = toWkb("POINT (1 2)");
   auto data = makeNamedRowVector("geom", makeVarbinaryVector({wkb}));
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
 
   auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {GEOMETRY()}));
   VELOX_ASSERT_THROW(

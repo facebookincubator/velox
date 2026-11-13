@@ -370,8 +370,7 @@ IcebergTestBase::makeIcebergSplitWithInfoColumns(
 
 std::shared_ptr<common::testutil::TempFilePath> IcebergTestBase::writeDataFile(
     const std::vector<RowVectorPtr>& data) {
-  auto file = common::testutil::TempFilePath::create();
-  writeToFile(file->getPath(), data);
+  auto file = writeToFile(data);
   return file;
 }
 
