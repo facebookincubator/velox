@@ -220,6 +220,10 @@ void CompactRow::initialize(const TypePtr& type) {
     }
     case TypeKind::MAP: {
       auto* mapBase = base->as<MapVector>();
+      VELOX_CHECK_NOT_NULL(
+          mapBase,
+          "Unsupported map vector encoding for CompactRow: {}",
+          base->encoding());
       children_.push_back(CompactRow(mapBase->mapKeys()));
       children_.push_back(CompactRow(mapBase->mapValues()));
       childIsFixedWidth_.push_back(mapBase->mapKeys()->type()->isFixedWidth());
