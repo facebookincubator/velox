@@ -385,7 +385,8 @@ Projector::Projector(
     NIMBLE_CHECK(subfield.valid(), "Invalid subfield: {}", subfield.toString());
   }
 
-  projection_ = buildProjectedNimbleType(inputSchema_.get(), projectSubfields);
+  projection_ =
+      buildProjectedNimbleType(inputSchema_.get(), projectSubfields, pool_);
   NIMBLE_CHECK_EQ(
       projection_.streamOffsets.size(),
       projection_.barrierStreams.size(),

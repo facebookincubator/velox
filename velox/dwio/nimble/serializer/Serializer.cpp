@@ -104,6 +104,10 @@ Serializer::Serializer(
           columnName);
       context_.addHybridFlatMapNode(child->id(), hybridMap);
     }
+    if (options_.hybridFlatMapGroupKeysLayout.has_value()) {
+      context_.setHybridFlatMapGroupKeysLayout(
+          *options_.hybridFlatMapGroupKeysLayout);
+    }
   }
 
   typeWithId_ = typeWithId;

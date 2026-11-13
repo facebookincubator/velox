@@ -81,17 +81,40 @@ enum HybridFlatMapKeyPresenceMode:uint8 {
 
 /// Typed Hybrid FlatMap metadata. Physical stream descriptors and value types
 /// are represented by the group's child schema nodes, following FlatMap. The
-/// parallel ID and count vectors describe consecutive slices in group_keys.
-/// Every configured group's key order defines its key-presence bitmap.
+/// parallel ID and count vectors describe consecutive slices of the keys, in
+/// group_keys or encoded_group_keys. Each group's key order defines its
+/// key-presence bitmap.
 table HybridFlatMap {
   group_ids:[uint32];
   group_key_counts:[uint32];
+  /// The keys of every group in group order, as strings, or only the Default
+  /// group's keys when encoded_group_keys holds the explicit groups' keys.
+  /// Writers put String keys here, and integer keys unless they encode them in
+  /// encoded_group_keys. Writers sort an explicit group's integer keys by
+  /// value, but older writers sorted them as strings, e.g. "10" before "9", so
+  /// readers take the keys in the order recorded.
   group_keys:[string];
   /// How batches record Default keys. With Bitmap, Default starts empty and
   /// appends keys in first-seen order while writing; with KeyList, Default
   /// lists no keys and each batch lists its own. Always written: readers
   /// reject metadata without it.
   default_group_key_presence_mode:HybridFlatMapKeyPresenceMode;
+  /// The keys of each explicit group, for maps with integer keys whose writer
+  /// names an encoding for them: one Nimble-encoded stream of the keys'
+  /// integer type per explicit group, e.g. an Int32 stream for Int32 keys,
+  /// concatenated in group order, so a projection copies the streams of the
+  /// groups it keeps. Each stream ascends by value, its group's key-presence
+  /// bitmap order. For example, groups {"9", "10"} and {"3"} are a stream of 9
+  /// then 10 and a stream of 3. Each stream's encoding prefix names its
+  /// encoding, and the row count in that prefix is a varint. Streams are never
+  /// compressed. The Default group's keys stay in group_keys. Omitted when the
+  /// map has no explicit group.
+  encoded_group_keys:[ubyte];
+  /// The size in bytes of each group's stream in encoded_group_keys, parallel
+  /// to group_ids, so group `i`'s stream follows the streams of the preceding
+  /// groups. The Default group has size 0. Set exactly when encoded_group_keys
+  /// is.
+  encoded_group_key_sizes:[uint32];
 }
 
 table SchemaNode {

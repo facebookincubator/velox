@@ -478,8 +478,8 @@ class FieldReaderTest : public ::testing::Test {
         pool_.get()};
     const std::string serialized{
         serializer.serialize(input, OrderedRanges::of(0, kRows))};
-    const auto schema =
-        SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+    const auto schema = SchemaReader::getSchema(
+        serializer.schemaBuilder().schemaNodes(), *pool_);
     EXPECT_EQ(
         schema->asRow()
             .childAt(0)
@@ -840,7 +840,7 @@ TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
   const std::string serialized{
       serializer.serialize(input, OrderedRanges::of(0, input->size()))};
   const auto schema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes(), *pool_);
   const auto& defaultGroup =
       schema->asRow().childAt(0)->asHybridFlatMap().defaultGroup();
   ASSERT_TRUE(defaultGroup.groupKeys.empty());
@@ -876,7 +876,7 @@ TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
 const std::vector<std::string> kNoGroupKeys;
 
 TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{pool_.get()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
@@ -888,7 +888,7 @@ TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
       kNoGroupKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes(), *pool_);
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
   std::vector<uint32_t> streamOffsets;
@@ -920,7 +920,7 @@ TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
 }
 
 TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{pool_.get()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
@@ -933,7 +933,7 @@ TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
       kNoGroupKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes(), *pool_);
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
   std::vector<uint32_t> streamOffsets;
@@ -1007,7 +1007,7 @@ TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
 }
 
 TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{pool_.get()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
@@ -1020,7 +1020,7 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
       kNoGroupKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes(), *pool_);
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
   FieldReaderParams params;
@@ -1152,7 +1152,7 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
 }
 
 TEST_F(FieldReaderTest, rejectsKeyListWithoutInMapRows) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{pool_.get()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kKeyList);
@@ -1164,7 +1164,7 @@ TEST_F(FieldReaderTest, rejectsKeyListWithoutInMapRows) {
       kNoGroupKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes(), *pool_);
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
   std::vector<uint32_t> streamOffsets;
@@ -1187,13 +1187,13 @@ TEST_F(FieldReaderTest, rejectsKeyListWithoutInMapRows) {
 }
 
 TEST_F(FieldReaderTest, readsCanonicalHybridSchemaKeys) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{pool_.get()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
-  // Schema keys ascend as strings, so "-5" comes first.
+  // Schema keys ascend by value, so "-5" comes first.
   const std::vector<std::string> groupKeys{"-5", "0", "2147483647"};
   const auto group = hybridMap->addGroup(7, groupKeys, std::move(groupValue));
   hybridMap->addGroup(
@@ -1201,7 +1201,7 @@ TEST_F(FieldReaderTest, readsCanonicalHybridSchemaKeys) {
       kNoGroupKeys,
       builder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes(), *pool_);
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
   std::vector<uint32_t> streamOffsets;
@@ -1245,7 +1245,7 @@ TEST_F(FieldReaderTest, readsCanonicalHybridSchemaKeys) {
 TEST_F(FieldReaderTest, rejectsNonCanonicalHybridSchemaKeys) {
   const auto expectFailure = [&](std::string key, std::string_view message) {
     SCOPED_TRACE(key);
-    SchemaBuilder builder;
+    SchemaBuilder builder{pool_.get()};
     auto root = builder.createRowTypeBuilder(1);
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(
         ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
@@ -1257,7 +1257,7 @@ TEST_F(FieldReaderTest, rejectsNonCanonicalHybridSchemaKeys) {
         kNoGroupKeys,
         builder.createScalarTypeBuilder(ScalarKind::Int64));
     root->addChild("features", hybridMap);
-    const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+    const auto schema = SchemaReader::getSchema(builder.schemaNodes(), *pool_);
     const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
         velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
     std::vector<uint32_t> streamOffsets;
@@ -1305,7 +1305,7 @@ TEST_F(FieldReaderTest, filtersDecodedHybridGroupsToRequestedFeatures) {
   const std::string serialized{
       serializer.serialize(input, OrderedRanges::of(0, input->size()))};
   const auto schema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes(), *pool_);
 
   Deserializer wholeGroupDeserializer{schema, pool_.get()};
   velox::VectorPtr wholeGroupOutput;
@@ -1399,7 +1399,7 @@ TEST_F(FieldReaderTest, filtersKeyListDefaultToRequestedFeatures) {
   const std::string serialized{
       serializer.serialize(input, OrderedRanges::of(0, input->size()))};
   const auto schema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes(), *pool_);
 
   // Default may list ungrouped key 9 in any batch, so Default is read and
   // filtered to the requested keys.
@@ -1457,7 +1457,7 @@ TEST_F(FieldReaderTest, filtersKeyListDefaultToRequestedFeatures) {
 }
 
 TEST_F(FieldReaderTest, excludesRequestedKeysAfterWholeGroupDecode) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{pool_.get()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
@@ -1473,7 +1473,7 @@ TEST_F(FieldReaderTest, excludesRequestedKeysAfterWholeGroupDecode) {
   defaultKeys.push_back("9");
   defaultKeys.push_back("10");
   root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes(), *pool_);
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
   FieldReaderParams params;
@@ -1536,7 +1536,7 @@ TEST_F(FieldReaderTest, skipsNullRowsWithoutAdvancingHybridGroups) {
   const std::string serialized{
       serializer.serialize(input, OrderedRanges::of(0, input->size()))};
   const auto schema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes(), *pool_);
   Deserializer deserializer{schema, pool_.get()};
 
   velox::VectorPtr output;
@@ -1627,7 +1627,7 @@ TEST_F(FieldReaderTest, hybridFlatMapRoundTripsNestedValues) {
   const std::string serialized{
       serializer.serialize(input, OrderedRanges::of(0, kRows))};
   const auto schema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes(), *pool_);
   const auto& hybridMap = schema->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(hybridMap.groupCount(), 3);
   EXPECT_TRUE(hybridMap.groupAt(0).valueType->isArray());
@@ -1670,7 +1670,7 @@ TEST_F(FieldReaderTest, hybridFlatMapCopiesGroupsInKeyOrder) {
   const std::string serialized{
       serializer.serialize(input, OrderedRanges::of(0, input->size()))};
   const auto schema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes(), *pool_);
   Deserializer deserializer{schema, pool_.get()};
 
   // Checks that output row `outputRow` holds `expectedKeys` in that order, each

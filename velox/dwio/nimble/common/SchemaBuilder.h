@@ -24,6 +24,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaTypes.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 
 // SchemaBuilder is used to construct a tablet compatible schema.
 // The table schema translates logical type tree to its underlying Nimble
@@ -334,6 +335,9 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
     const StreamDescriptorBuilder& inMapDescriptor;
     /// Complete value subtree of the group.
     const TypeBuilder& valueType;
+    /// The recorded `encoded_group_keys` stream of the keys, which
+    /// schemaNodes() copies instead of encoding them, or empty.
+    std::string_view encodedKeys{};
   };
 
   /// Returns the map-level null stream descriptor.
@@ -348,6 +352,11 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   /// Returns whether group `groupId` lists its keys in its key-presence
   /// stream. See HybridFlatMap::hasKeyPresenceList().
   bool useKeyPresentList(uint32_t groupId) const;
+
+  /// Returns the encoding of the integer keys that schemaNodes() writes
+  /// (SchemaBuilder::createHybridFlatMapTypeBuilder()), or null when it
+  /// writes them as strings or copies their recorded streams.
+  const EncodingLayout* groupKeysLayout() const;
 
   /// Registers one group and its complete value subtree, and returns the
   /// group, as groupAt() does. Views `groupKeys`, which the caller keeps alive,
@@ -369,11 +378,22 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   ///   projection that selects no group, lends an empty vector.
   ///
   /// Group IDs are unique, with at most one Default group. schemaNodes()
-  /// checks the keys: explicit groups non-empty and strictly ascending, no key
-  /// empty, every key unique.
+  /// checks the keys: explicit groups non-empty, no key empty, every key
+  /// unique. Keys keep the given order, their key-presence bitmap order, e.g.
+  /// the order a projection's source schema recorded.
   Group addGroup(
       uint32_t groupId,
       const std::vector<std::string>& groupKeys,
+      std::shared_ptr<TypeBuilder> valueType);
+
+  /// Registers a group as the other addGroup() does, and views
+  /// `encodedKeys`, the recorded stream of `groupKeys`
+  /// (HybridFlatMap::Group::encodedKeys), e.g. from a projection's source,
+  /// which the caller keeps alive as it does the keys.
+  Group addGroup(
+      uint32_t groupId,
+      const std::vector<std::string>& groupKeys,
+      std::string_view encodedKeys,
       std::shared_ptr<TypeBuilder> valueType);
 
   /// Returns the number of groups present in this schema.
@@ -396,17 +416,22 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
     std::unique_ptr<StreamDescriptorBuilder> keyPresenceDescriptor;
     std::unique_ptr<StreamDescriptorBuilder> inMapDescriptor;
     std::shared_ptr<const TypeBuilder> valueType;
+    // See Group::encodedKeys.
+    std::string_view encodedKeys{};
   };
 
   HybridFlatMapTypeBuilder(
       SchemaBuilder& schemaBuilder,
       ScalarKind keyScalarKind,
       HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
-      bool requiresDefaultGroup);
+      bool requiresDefaultGroup,
+      std::optional<EncodingLayout> groupKeysLayout);
 
   const ScalarKind keyScalarKind_;
   const bool requiresDefaultGroup_;
   const HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode_;
+  // See groupKeysLayout().
+  const std::optional<EncodingLayout> groupKeysLayout_;
   StreamDescriptorBuilder nullsDescriptor_;
   // See groupAt().
   std::vector<StoredGroup> groups_;
@@ -435,6 +460,15 @@ class ArrayWithOffsetsTypeBuilder : public TypeBuilder {
 
 class SchemaBuilder {
  public:
+  /// Builds schemas whose Hybrid FlatMap nodes serialize their groups with
+  /// `hybridFlatMapGroupKeysPool` (HybridFlatMap::serialize()), e.g. to encode
+  /// integer keys for type builders that name a layout
+  /// (createHybridFlatMapTypeBuilder()). The pool outlives this builder's
+  /// schemaNodes() calls, and must not be null when the schema holds a Hybrid
+  /// FlatMap.
+  explicit SchemaBuilder(
+      velox::memory::MemoryPool* hybridFlatMapGroupKeysPool = nullptr);
+
   // Create a builder representing a scalar type with kind |scalarKind|.
   std::shared_ptr<ScalarTypeBuilder> createScalarTypeBuilder(
       ScalarKind scalarKind);
@@ -472,10 +506,16 @@ class SchemaBuilder {
   /// requires the reserved Default group, which may be its only group. A
   /// projection may omit Default but keeps at least one group.
   /// `defaultGroupKeyPresenceMode` selects how batches record Default keys.
+  /// schemaNodes() encodes the explicit groups' integer keys with
+  /// `groupKeysLayout`, e.g. EliasFano, allocating from this builder's pool,
+  /// which the layout requires, or writes them as strings without one
+  /// (HybridFlatMap::serialize()). See
+  /// SerializerOptions::hybridFlatMapGroupKeysLayout.
   std::shared_ptr<HybridFlatMapTypeBuilder> createHybridFlatMapTypeBuilder(
       ScalarKind keyScalarKind,
       HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
-      bool projection = false);
+      bool projection = false,
+      std::optional<EncodingLayout> groupKeysLayout = std::nullopt);
 
   // Retrieves all the nodes CURRENTLY known to the schema builder.
   // If more nodes are added to the schema builder later on, following calls to
@@ -532,6 +572,8 @@ class SchemaBuilder {
   // first in each stripe.
   std::optional<offset_size> clusterIndexKeyStreamOffset_;
   offset_size currentOffset_{0};
+  // See SchemaBuilder().
+  velox::memory::MemoryPool* const hybridFlatMapGroupKeysPool_{nullptr};
 
   friend class ScalarTypeBuilder;
   friend class TimestampMicroNanoTypeBuilder;
@@ -551,7 +593,11 @@ class SchemaBuilder {
 std::ostream& operator<<(std::ostream& out, const SchemaBuilder& schema);
 
 /// Converts a deserialized type tree into the same DFS schema node layout
-/// produced by SchemaBuilder::schemaNodes().
-std::vector<SchemaNode> schemaNodes(const Type& type);
+/// produced by SchemaBuilder::schemaNodes(). Hybrid FlatMap nodes serialize
+/// their groups with `pool` (HybridFlatMap::serialize()), which must not be
+/// null when `type` holds one.
+std::vector<SchemaNode> schemaNodes(
+    const Type& type,
+    velox::memory::MemoryPool* pool = nullptr);
 
 } // namespace facebook::nimble

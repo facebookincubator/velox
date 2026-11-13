@@ -905,11 +905,16 @@ std::shared_ptr<HybridFlatMapTypeBuilder> buildProjectedHybridFlatMapType(
   // The builder views each selected group's keys in the source, which outlives
   // it. A selected bitmap Default keeps every key the source recorded, in
   // first-seen order, since its key-presence bits index them.
+  // A group keeps the stream its keys were recorded in, which the projected
+  // schema copies.
+  const auto& recordedGroups =
+      projectedHybridFlatMap.source->hybridFlatMap().groups();
   for (const auto groupIndex : projectedHybridFlatMap.groupIndices) {
     const auto& group = projectedHybridFlatMap.source->groupAt(groupIndex);
     result->addGroup(
         group.groupId,
         group.groupKeys,
+        recordedGroups[groupIndex].encodedKeys,
         buildHybridFlatMapValueType(builder, *group.valueType));
   }
   return result;
@@ -921,7 +926,8 @@ std::shared_ptr<const Type> buildProjectedNimbleType(
     const velox::RowType& type,
     const std::vector<velox::common::Subfield>& projectedSubfields,
     const ColumnEncodings& columnEncodings,
-    const ProjectedHybridFlatMaps& projectedHybridFlatMaps) {
+    const ProjectedHybridFlatMaps& projectedHybridFlatMaps,
+    velox::memory::MemoryPool* pool) {
   NIMBLE_CHECK(
       !projectedSubfields.empty(), "projectedSubfields must not be empty");
 
@@ -933,7 +939,7 @@ std::shared_ptr<const Type> buildProjectedNimbleType(
       !selectedTopLevelColumns.empty(),
       "No top-level columns resolved from projectedSubfields");
 
-  SchemaBuilder builder;
+  SchemaBuilder builder{pool};
   auto root = builder.createRowTypeBuilder(selectedTopLevelColumns.size());
 
   // Iterate in velox type order for consistent child ordering.
@@ -967,7 +973,10 @@ std::shared_ptr<const Type> buildProjectedNimbleType(
             useFlatMap));
   }
 
-  return SchemaReader::getSchema(builder.schemaNodes());
+  if (pool == nullptr) {
+    return SchemaReader::getSchema(builder.schemaNodes());
+  }
+  return SchemaReader::getSchema(builder.schemaNodes(), *pool);
 }
 
 //
@@ -1498,7 +1507,8 @@ ColumnEncodings getColumnEncodings(const RowType& nimbleType) {
 
 NimbleTypeProjection buildProjectedNimbleType(
     const Type* type,
-    const std::vector<velox::common::Subfield>& projectedSubfields) {
+    const std::vector<velox::common::Subfield>& projectedSubfields,
+    velox::memory::MemoryPool* pool) {
   NIMBLE_CHECK(
       !projectedSubfields.empty(), "projectedSubfields must not be empty");
   NIMBLE_CHECK_NOT_NULL(type, "type must not be null");
@@ -1557,7 +1567,8 @@ NimbleTypeProjection buildProjectedNimbleType(
       veloxSource->asRow(),
       projectedSubfields,
       encodings,
-      projectedHybridFlatMaps);
+      projectedHybridFlatMaps,
+      pool);
 
   // Walk the source nimble in the same DFS pre-order + FlatMap-alphabetical
   // traversal the velox-source builder uses, emitting one source stream offset
@@ -1596,7 +1607,7 @@ NimbleTypeProjection buildProjectedNimbleType(
   // schemaNodes() materializes the projected schema, so keep this debug-only.
   NIMBLE_DCHECK_EQ(
       projection.streamOffsets.size(),
-      schemaNodes(*projection.nimbleType).size(),
+      schemaNodes(*projection.nimbleType, pool).size(),
       "Projected visible stream count does not match projected schema.");
   NIMBLE_DCHECK_EQ(
       projection.streamOffsets.size(), projection.barrierStreams.size());

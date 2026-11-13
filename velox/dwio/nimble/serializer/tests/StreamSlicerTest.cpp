@@ -1359,7 +1359,7 @@ TEST_F(StreamSlicerTest, hybridFlatMapRequiresWholeBatch) {
   const std::string serialized{
       serializer.serialize(input, OrderedRanges::of(0, input->size()))};
   const auto schema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes(), *pool_);
 
   StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
   EXPECT_EQ(

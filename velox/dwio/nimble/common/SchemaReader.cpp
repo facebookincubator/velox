@@ -494,7 +494,13 @@ std::string takeHybridFlatMapAttribute(
 
 } // namespace
 
-NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
+// Builds the type at `index` of `nodes` and its descendants, advancing
+// `index` past them. Hybrid FlatMap nodes decode their encoded group keys from
+// `pool` (HybridFlatMap's schema constructor).
+NamedType getType(
+    offset_size& index,
+    const std::vector<SchemaNode>& nodes,
+    velox::memory::MemoryPool* pool) {
   // Runtime check: recursion into value subtrees consumes an unbounded number
   // of nodes, so a truncated schema blob must be rejected in release builds.
   NIMBLE_CHECK_LT(index, nodes.size(), "Index out of range.");
@@ -529,7 +535,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           .name = node.name()};
     }
     case Kind::Array: {
-      auto elements = getType(index, nodes).type;
+      auto elements = getType(index, nodes, pool).type;
       return {
           .type = std::make_shared<ArrayType>(
               StreamDescriptor{offset, ScalarKind::UInt32},
@@ -538,8 +544,8 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           .name = node.name()};
     }
     case Kind::Map: {
-      auto keys = getType(index, nodes).type;
-      auto values = getType(index, nodes).type;
+      auto keys = getType(index, nodes, pool).type;
+      auto values = getType(index, nodes, pool).type;
       return {
           .type = std::make_shared<MapType>(
               StreamDescriptor{offset, ScalarKind::UInt32},
@@ -554,8 +560,8 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           lengthsNode.kind() == Kind::Scalar &&
               lengthsNode.scalarKind() == ScalarKind::UInt32,
           "SlidingWindowMap field must have a uint32 scalar type.");
-      auto keys = getType(index, nodes).type;
-      auto values = getType(index, nodes).type;
+      auto keys = getType(index, nodes, pool).type;
+      auto values = getType(index, nodes, pool).type;
       return {
           .type = std::make_shared<SlidingWindowMapType>(
               StreamDescriptor{offset, ScalarKind::UInt32},
@@ -570,7 +576,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
       std::vector<std::string> names{childrenCount};
       std::vector<std::shared_ptr<const Type>> children{childrenCount};
       for (auto i = 0; i < childrenCount; ++i) {
-        auto namedType = getType(index, nodes);
+        auto namedType = getType(index, nodes, pool);
         NIMBLE_CHECK(namedType.name.has_value(), "Row fields must have names.");
         children[i] = namedType.type;
         names[i] = namedType.name.value();
@@ -600,7 +606,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
             "Flat map in-map field must have a boolean scalar type.");
         NIMBLE_CHECK(
             inMapNode.name().has_value(), "Flat map fields must have names.");
-        auto field = getType(index, nodes);
+        auto field = getType(index, nodes, pool);
         names[i] = inMapNode.name().value();
         inMapDescriptors[i] = std::make_unique<StreamDescriptor>(
             inMapNode.offset(), inMapNode.scalarKind());
@@ -644,7 +650,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
             inMapNode.kind() == Kind::Scalar &&
                 inMapNode.scalarKind() == ScalarKind::Bool,
             "Hybrid FlatMap in-map stream must be boolean.");
-        auto values = getType(index, nodes);
+        auto values = getType(index, nodes, pool);
         NIMBLE_CHECK(
             !values.name.has_value(),
             "Hybrid FlatMap group value child must be unnamed.");
@@ -655,7 +661,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
         valueTypes.push_back(std::move(values.type));
       }
       HybridFlatMap hybridFlatMap{
-          node.scalarKind(), takeHybridFlatMapAttribute(attributes)};
+          node.scalarKind(), takeHybridFlatMapAttribute(attributes), pool};
       const auto& recordedGroups = hybridFlatMap.groups();
       NIMBLE_CHECK_EQ(
           valueTypes.size(),
@@ -687,7 +693,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           offsetsNode.kind() == Kind::Scalar &&
               offsetsNode.scalarKind() == ScalarKind::UInt32,
           "Array with offsets field must have a uint32 scalar type.");
-      auto elements = getType(index, nodes).type;
+      auto elements = getType(index, nodes, pool).type;
       return {
           .type = std::make_shared<ArrayWithOffsetsType>(
               StreamDescriptor{offsetsNode.offset(), offsetsNode.scalarKind()},
@@ -706,8 +712,14 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
 std::shared_ptr<const Type> SchemaReader::getSchema(
     const std::vector<SchemaNode>& nodes) {
   offset_size index{0};
-  auto namedType = getType(index, nodes);
-  return namedType.type;
+  return getType(index, nodes, /*pool=*/nullptr).type;
+}
+
+std::shared_ptr<const Type> SchemaReader::getSchema(
+    const std::vector<SchemaNode>& nodes,
+    velox::memory::MemoryPool& pool) {
+  offset_size index{0};
+  return getType(index, nodes, &pool).type;
 }
 
 void traverseSchema(
