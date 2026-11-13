@@ -32,6 +32,7 @@ velox_add_library(
   OBJECT
   FileDataSink.cpp
   FileIndexReader.cpp
+  HiveBucketProperty.cpp
   HiveConfig.cpp
   HiveConfigProvider.cpp
   HiveConnector.cpp
@@ -51,6 +52,8 @@ velox_add_library(
   FileHandle.h
   FileIndexReader.h
   FileProperties.h
+  HiveBucketProperty.h
+  HiveBucketPruning.h
   HiveConfig.h
   HiveConfigProvider.h
   HiveConnector.h
@@ -86,7 +89,7 @@ if(VELOX_ENABLE_PARQUET)
   velox_link_libraries(velox_hive_connector PRIVATE velox_dwio_parquet_common)
 endif()
 
-velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)
+velox_add_library(velox_hive_partition_function HiveBucketPruning.cpp HivePartitionFunction.cpp)
 
 velox_link_libraries(velox_hive_partition_function velox_core velox_exec velox_hive_hash)
 

@@ -47,6 +47,7 @@
 #include "velox/dwio/nimble/tablet/MetadataCache.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
+#include "velox/dwio/nimble/tablet/StripeMetadata.h"
 
 /// The TabletReader class is the on-disk layout for nimble.
 ///
@@ -475,14 +476,14 @@ class TabletReader {
   }
 
   /// Returns the byte offset of `streamId` within `stripe` (relative to the
-  /// stripe's start). O(1) point read into the per-stream FBW-encoded blob
-  /// held by the StripeGroup. Callers must ensure
-  /// `streamId < streamCount(stripe)`.
+  /// stripe's start), with the cost of StripeGroup::streamOffset(). Callers
+  /// must ensure `streamId < streamCount(stripe)`.
   uint32_t streamOffset(const StripeIdentifier& stripe, uint32_t streamId)
       const;
 
   /// Returns the byte size of `streamId` within `stripe`. Returns 0 if the
-  /// stream does not exist in this stripe. O(1) point read.
+  /// stream does not exist in this stripe, with the cost of
+  /// StripeGroup::streamSize().
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
 
   /// Relative byte location of one stream within a stripe. A zero size means
@@ -639,6 +640,15 @@ class TabletReader {
   uint32_t stripeGroupIndex(uint32_t stripeIndex) const;
 
   std::shared_ptr<StripeGroup> stripeGroup(uint32_t stripeGroupIndex) const;
+
+  // Returns the metadata of each stripe of stripe group 'stripeGroupIndex',
+  // with the location of each of 'streamIds' in the stripe, in the order of
+  // 'streamIds': absent (size 0) for a stream that the stripe lacks or that is
+  // beyond the stream count of the group. For example, a cluster index that
+  // stores its key chunks in stripes locates their key streams with it.
+  std::vector<StripeMetadata> stripeMetadata(
+      uint32_t stripeGroupIndex,
+      std::span<const uint32_t> streamIds) const;
 
   std::shared_ptr<StripeGroup> loadStripeGroup(uint32_t stripeGroupIndex) const;
 

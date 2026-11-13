@@ -56,8 +56,7 @@ TEST_F(BasicTableWriterTest, roundTrip) {
           size, [](auto row) { return row * 2; }, nullEvery(7)),
   });
 
-  auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), data);
+  auto sourceFilePath = writeToFile(data);
 
   auto targetDirectoryPath = TempDirectoryPath::create();
 
@@ -307,28 +306,6 @@ class PartitionedTableWriterTest
                   CompressionKind_ZSTD,
                   scaleWriter}
                   .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
         }
       }
     }
@@ -483,39 +460,6 @@ class BucketedTableOnlyWriteTest
                   CommitStrategy::kTaskCommit,
                   HiveBucketProperty::Kind::kHiveCompatible,
                   true,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  true,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
                   multiDrivers,
                   CompressionKind_ZSTD,
                   /*scaleWriter=*/false}
@@ -703,28 +647,6 @@ class AllTableWriterTest : public TableWriterTestBase,
           testParams.push_back(
               TestParam{
                   fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
                   TestMode::kOnlyBucketed,
                   CommitStrategy::kNoCommit,
                   HiveBucketProperty::Kind::kHiveCompatible,
@@ -739,28 +661,6 @@ class AllTableWriterTest : public TableWriterTestBase,
                   TestMode::kOnlyBucketed,
                   CommitStrategy::kTaskCommit,
                   HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kOnlyBucketed,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kOnlyBucketed,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
                   false,
                   multiDrivers,
                   CompressionKind_ZSTD,
@@ -775,11 +675,8 @@ class AllTableWriterTest : public TableWriterTestBase,
 
 // Runs a pipeline with read + filter + project (with substr) + write.
 TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
-  auto filePaths = makeFilePaths(5);
-  auto vectors = makeVectors(filePaths.size(), 500);
-  for (int i = 0; i < filePaths.size(); i++) {
-    writeToFile(filePaths[i]->getPath(), vectors[i]);
-  }
+  auto vectors = makeVectors(5, 500);
+  auto filePaths = writeToFiles(vectors);
 
   createDuckDbTable(vectors);
 
@@ -829,11 +726,8 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
 }
 
 TEST_P(AllTableWriterTest, renameAndReorderColumns) {
-  auto filePaths = makeFilePaths(5);
-  auto vectors = makeVectors(filePaths.size(), 500);
-  for (int i = 0; i < filePaths.size(); ++i) {
-    writeToFile(filePaths[i]->getPath(), vectors[i]);
-  }
+  auto vectors = makeVectors(5, 500);
+  auto filePaths = writeToFiles(vectors);
 
   createDuckDbTable(vectors);
 
@@ -895,11 +789,8 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
 
 // Runs a pipeline with read + write.
 TEST_P(AllTableWriterTest, directReadWrite) {
-  auto filePaths = makeFilePaths(5);
-  auto vectors = makeVectors(filePaths.size(), 200);
-  for (int i = 0; i < filePaths.size(); i++) {
-    writeToFile(filePaths[i]->getPath(), vectors[i]);
-  }
+  auto vectors = makeVectors(5, 200);
+  auto filePaths = writeToFiles(vectors);
 
   createDuckDbTable(vectors);
 
@@ -1133,10 +1024,7 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
   });
   createDuckDbTable(vectors);
 
-  auto inputFilePaths = makeFilePaths(numBatches);
-  for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
-  }
+  auto inputFilePaths = writeToFiles(vectors);
 
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
@@ -1219,10 +1107,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
   });
   createDuckDbTable(vectors);
 
-  auto inputFilePaths = makeFilePaths(numBatches);
-  for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
-  }
+  auto inputFilePaths = writeToFiles(vectors);
 
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
@@ -1299,10 +1184,7 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
   });
   createDuckDbTable(vectors);
 
-  auto inputFilePaths = makeFilePaths(numBatches);
-  for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
-  }
+  auto inputFilePaths = writeToFiles(vectors);
 
   auto outputDirectory = TempDirectoryPath::create();
   const int numWriters = getNumWriters();
@@ -2693,10 +2575,7 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
   });
   createDuckDbTable(vectors);
 
-  auto inputFilePaths = makeFilePaths(numBatches);
-  for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
-  }
+  auto inputFilePaths = writeToFiles(vectors);
 
   auto outputDirectory = TempDirectoryPath::create();
   const int numWriters = getNumWriters();
@@ -3807,8 +3686,8 @@ DEBUG_ONLY_TEST_F(
       .queryCtx(queryCtx)
       .maxDrivers(1)
       .spillDirectory(spillDirectory->getPath())
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(core::QueryConfig::kWriterSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kWriterSpillEnabled, true)
       // Set file writer flush threshold of zero to always trigger flush in
       // test.
       .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)

@@ -24,10 +24,11 @@ namespace facebook::nimble::index {
 std::unique_ptr<IndexWriter> FlatClusterIndexFactory::createWriter(
     const IndexConfig& config,
     const velox::TypePtr& inputType,
-    velox::memory::MemoryPool* pool) const {
+    velox::memory::MemoryPool* pool,
+    const Options& options) const {
   NIMBLE_USER_CHECK_EQ(config.family, IndexFamily::Cluster);
   NIMBLE_USER_CHECK_EQ(config.name, name());
-  return ClusterIndexWriter::create(config, inputType, pool);
+  return ClusterIndexWriter::create(config, inputType, pool, options);
 }
 
 std::unique_ptr<IndexKeyEncoder> FlatClusterIndexFactory::createKeyEncoder(

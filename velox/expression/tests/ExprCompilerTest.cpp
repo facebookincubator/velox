@@ -533,7 +533,7 @@ TEST_F(ExprCompilerTest, listenerFactory) {
   ASSERT_EQ(factory->trackedNames.size(), 1);
   EXPECT_EQ(factory->trackedNames[0], "plus");
 
-  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto input = makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2, 3}));
   SelectivityVector rows(3);
   EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
   std::vector<VectorPtr> results(1);
@@ -566,7 +566,7 @@ TEST_F(ExprCompilerTest, listenerPrePostCallbacks) {
   auto expression = call("plus", {field("a"), bigint(1)});
   auto exprSet = compile(expression);
 
-  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto input = makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2, 3}));
   SelectivityVector rows(3);
   EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
   std::vector<VectorPtr> results(1);
@@ -590,7 +590,7 @@ TEST_F(ExprCompilerTest, listenerSelectiveHooking) {
       call("plus", {call("multiply", {field("a"), bigint(2)}), bigint(1)});
   auto exprSet = compile(expression);
 
-  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto input = makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2, 3}));
   SelectivityVector rows(3);
   EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
   std::vector<VectorPtr> results(1);
@@ -631,7 +631,7 @@ TEST_F(ExprCompilerTest, listenerPreThrows) {
   auto expression = call("plus", {field("a"), bigint(1)});
   auto exprSet = compile(expression);
 
-  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto input = makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2, 3}));
   SelectivityVector rows(3);
   EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
   std::vector<VectorPtr> results(1);
@@ -703,7 +703,7 @@ TEST_F(ExprCompilerTest, listenerPostThrowsIsSwallowed) {
   auto expression = call("plus", {field("a"), bigint(1)});
   auto exprSet = compile(expression);
 
-  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto input = makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2, 3}));
   SelectivityVector rows(3);
   EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
   std::vector<VectorPtr> results(1);
@@ -763,7 +763,7 @@ TEST_F(ExprCompilerTest, listenerPostReceivesApplyError) {
   auto expression = call("divide", {field("a"), bigint(0)});
   auto exprSet = compile(expression);
 
-  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto input = makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2, 3}));
   SelectivityVector rows(3);
   EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
   std::vector<VectorPtr> results(1);
@@ -785,7 +785,7 @@ TEST_F(ExprCompilerTest, multipleListenerFactories) {
   auto expression = call("plus", {field("a"), bigint(1)});
   auto exprSet = compile(expression);
 
-  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto input = makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2, 3}));
   SelectivityVector rows(3);
   EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
   std::vector<VectorPtr> results(1);

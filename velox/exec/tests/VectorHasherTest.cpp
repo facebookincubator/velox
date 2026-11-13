@@ -1466,17 +1466,17 @@ TEST_F(VectorHasherTest, customComparisonRow) {
   // hash implementation they provide.
 
   testCustomComparison(
-      makeRowVector(
-          {"a"},
-          {makeNullableFlatVector<int64_t>(
+      makeNamedRowVector(
+          "a",
+          makeNullableFlatVector<int64_t>(
               {std::nullopt, 0, 1, 256, 257, 512, 513},
-              BIGINT_TYPE_WITH_CUSTOM_COMPARISON())}),
+              BIGINT_TYPE_WITH_CUSTOM_COMPARISON())),
       // Different values that are equal mod 256 should hash to the same value.
-      makeRowVector(
-          {"a"},
-          {makeNullableFlatVector<int64_t>(
+      makeNamedRowVector(
+          "a",
+          makeNullableFlatVector<int64_t>(
               {std::nullopt, 0, 1, 0, 1, 0, 1},
-              BIGINT_TYPE_WITH_CUSTOM_COMPARISON())}));
+              BIGINT_TYPE_WITH_CUSTOM_COMPARISON())));
 }
 
 TEST_F(VectorHasherTest, customComparisonValueIds) {

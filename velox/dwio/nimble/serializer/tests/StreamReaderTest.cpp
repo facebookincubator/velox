@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <random>
@@ -27,10 +28,12 @@
 
 #include <fmt/format.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/NimbleException.h"
@@ -408,6 +411,81 @@ TEST_F(StreamReaderTest, readsRowsWithoutNullsIntoOutputNulls) {
   for (velox::vector_size_t row{0}; row < 2; ++row) {
     EXPECT_FALSE(nullOutput->isNullAt(row));
     EXPECT_FALSE(child->isNullAt(row));
+  }
+}
+
+DEBUG_ONLY_TEST_F(StreamReaderTest, decodesChildFieldsInParallel) {
+  auto lengths = encodeNullableChunk<uint32_t>(
+      {2, std::nullopt, 1}, EncodingType::Trivial);
+  auto elements = encodeChunk<int64_t>(
+      std::array<int64_t, 3>{10, 11, 12}, EncodingType::Trivial);
+  const std::string longValue(500, 'a');
+  auto strings = encodeChunk<std::string_view>(
+      std::vector<std::string_view>(3, longValue),
+      EncodingType::Trivial,
+      {.type = CompressionType::Zstd, .acceptRatio = 1.0F});
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"numbers", "text"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ArrayType>(
+              StreamDescriptor{1, ScalarKind::UInt32},
+              std::make_shared<const ScalarType>(
+                  StreamDescriptor{2, ScalarKind::Int64})),
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{3, ScalarKind::String}),
+      });
+  const std::array<std::string_view, 4> streams{
+      std::string_view{}, lengths, elements, strings};
+  folly::CPUThreadPoolExecutor executor{2};
+
+  velox::common::testutil::TestValue::enable();
+  std::atomic_uint32_t parallelFieldReads{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::decodeChildRanges",
+      std::function<void(const uint32_t*)>([&](const uint32_t* count) {
+        EXPECT_EQ(*count, 2);
+        ++parallelFieldReads;
+      }));
+
+  {
+    StreamReader serialReader{type, pool_.get(), {.decodeExecutor = &executor}};
+    velox::VectorPtr output;
+    serialReader.setStreams(streams, {});
+    folly::coro::blockingWait(serialReader.co_next(3, output));
+    EXPECT_EQ(parallelFieldReads, 0);
+  }
+  parallelFieldReads = 0;
+  StreamReader reader{
+      type,
+      pool_.get(),
+      {.decodeExecutor = &executor,
+       .maxDecodeParallelism = 4,
+       .minStreamsPerDecodeTask = 1}};
+
+  velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
+  std::array<velox::VectorPtr, 2> outputs;
+  for (auto& output : outputs) {
+    reader.setStreams(streams, {.bufferPool = &bufferPool});
+    folly::coro::blockingWait(reader.co_next(3, output));
+    reader.reset();
+  }
+  EXPECT_EQ(parallelFieldReads, 2);
+  EXPECT_EQ(bufferPool.size(), 0);
+  lengths.assign(lengths.size(), 'x');
+  elements.assign(elements.size(), 'x');
+  strings.assign(strings.size(), 'x');
+  for (const auto& output : outputs) {
+    const auto* row = output->as<velox::RowVector>();
+    using NullableArray = std::optional<std::vector<int64_t>>;
+    EXPECT_THAT(
+        readArrays(row->childAt(0), 0, 3),
+        testing::ElementsAre(
+            NullableArray{{10, 11}}, std::nullopt, NullableArray{{12}}));
+    const auto* text = row->childAt(1)->asFlatVector<velox::StringView>();
+    for (velox::vector_size_t i{0}; i < 3; ++i) {
+      EXPECT_EQ(text->valueAt(i).str(), longValue);
+    }
   }
 }
 

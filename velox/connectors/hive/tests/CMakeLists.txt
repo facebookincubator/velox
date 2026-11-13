@@ -17,6 +17,7 @@ add_executable(
   FileConfigTest.cpp
   FileDataSourceTest.cpp
   HiveIndexSourceUtilsTest.cpp
+  HiveBucketPruningTest.cpp
   FileConnectorSplitTest.cpp
   FileConnectorUtilTest.cpp
   FileHandleTest.cpp

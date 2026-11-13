@@ -1075,8 +1075,7 @@ TEST_F(OperatorTraceTest, traceSplitRoundTrip) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1142,8 +1141,7 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1231,8 +1229,7 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1492,8 +1489,7 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);

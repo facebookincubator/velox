@@ -79,7 +79,7 @@ function install_build_prerequisites {
 
 # Install dependencies from the package managers.
 function install_velox_deps_from_dnf {
-  dnf_install libevent-devel \
+  dnf_install libevent-devel c-ares-devel \
     openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
     libdwarf-devel elfutils-libelf-devel curl-devel libicu-devel bison flex \
     libsodium-devel zlib-devel gtest-devel gmock-devel xxhash-devel
@@ -122,6 +122,7 @@ function install_velox_deps {
   run_and_time install_snappy
   run_and_time install_boost
   run_and_time install_protobuf
+  run_and_time install_grpc
   run_and_time install_fmt
   run_and_time install_fast_float
   run_and_time install_flatbuffers

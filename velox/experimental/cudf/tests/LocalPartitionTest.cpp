@@ -301,8 +301,8 @@ TEST_F(LocalPartitionTest, unsupportedPartitionSpecIntoTopN) {
 }
 
 TEST_F(LocalPartitionTest, unionAllLocalExchange) {
-  auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  auto data1 = makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  auto data2 = makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();

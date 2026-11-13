@@ -30,6 +30,7 @@
 #include "folly/FileUtil.h"
 #include "folly/Random.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
+#include "folly/executors/ManualExecutor.h"
 #include "velox/common/Casts.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/caching/AsyncDataCache.h"
@@ -41,6 +42,9 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/ColumnSelector.h"
+#include "velox/dwio/common/OnDemandUnitLoader.h"
+#include "velox/dwio/common/ParallelUnitLoader.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
@@ -53,6 +57,7 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/serializer/Options.h"
 #include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
@@ -1503,11 +1508,25 @@ nimble::EncodingLayout makeFsstEncodingLayout() {
           nimble::CompressionType::Uncompressed}}};
 }
 
+// A StripeGroup metadata format: a layout, and for kStreamMajor whether it uses
+// the sparse layout.
+struct StripeGroupFormat {
+  nimble::StripeGroup::EncodingLayout layout;
+  bool sparseLayout{false};
+
+  std::string debugString() const {
+    if (layout == nimble::StripeGroup::EncodingLayout::kRaw) {
+      return "Raw";
+    }
+    return sparseLayout ? "StreamMajorSparse" : "StreamMajor";
+  }
+};
+
 // Exercises read-path stream-selection across every StripeGroup metadata
 // format. Parameterized on the format alone (independent of BatchReaderTest's
 // cache/pin matrix) because these tests only assert which streams are read.
 class BatchReaderStripeGroupFormatTest
-    : public ::testing::TestWithParam<nimble::StripeGroup::EncodingLayout> {
+    : public ::testing::TestWithParam<StripeGroupFormat> {
  protected:
   static void SetUpTestCase() {
     velox::memory::MemoryManager::testingSetInstance(
@@ -1517,6 +1536,12 @@ class BatchReaderStripeGroupFormatTest
   void SetUp() override {
     rootPool_ = velox::memory::memoryManager()->addRootPool("default_root");
     leafPool_ = rootPool_->addLeafChild("default_leaf");
+  }
+
+  // Sets `options` to write the StripeGroup metadata format under test.
+  void setStripeGroupFormat(nimble::WriterOptions& options) const {
+    options.experimentalStripeGroupEncodingLayout = GetParam().layout;
+    options.experimentalStripeGroupSparseLayout = GetParam().sparseLayout;
   }
 
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
@@ -1545,7 +1570,7 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnselectedColumnsFromFile) {
 
   uint32_t readSize = 1;
   nimble::WriterOptions writerOptions;
-  writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+  setStripeGroupFormat(writerOptions);
   auto file = nimble::test::createNimbleFile(*rootPool_, vector, writerOptions);
   for (auto useChainedBuffers : {false, true}) {
     nimble::testing::InMemoryTrackableReadFile readFile(
@@ -1597,7 +1622,7 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
 
   nimble::WriterOptions writerOptions;
   writerOptions.flatMapColumns["float_features"];
-  writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+  setStripeGroupFormat(writerOptions);
 
   auto file = nimble::test::createNimbleFile(
       *rootPool_, vector, std::move(writerOptions));
@@ -1686,21 +1711,66 @@ TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
   }
 }
 
+TEST_P(BatchReaderStripeGroupFormatTest, readsFlatMapKeysMissingFromStripes) {
+  // Each stripe holds keys of its own plus one key every stripe has, so most
+  // key streams have data in some stripes only.
+  constexpr int32_t kStripeCount{4};
+  constexpr int32_t kRowsPerStripe{5};
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  std::vector<velox::VectorPtr> batches;
+  for (int32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    std::vector<velox::vector_size_t> offsets;
+    std::vector<int32_t> keys;
+    std::vector<int64_t> values;
+    for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+      offsets.push_back(static_cast<velox::vector_size_t>(keys.size()));
+      for (const int32_t key : {stripe, stripe + kStripeCount, 100}) {
+        keys.push_back(key);
+        values.push_back(key * 1'000 + row);
+      }
+    }
+    batches.push_back(vectorMaker.rowVector(
+        {"features"},
+        {vectorMaker.mapVector(
+            offsets,
+            vectorMaker.flatVector<int32_t>(keys),
+            vectorMaker.flatVector<int64_t>(values))}));
+  }
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.flatMapColumns["features"];
+  setStripeGroupFormat(writerOptions);
+  // Each vector is flushed into its own stripe.
+  const auto file =
+      nimble::test::createNimbleFile(*rootPool_, batches, writerOptions);
+
+  velox::InMemoryReadFile readFile(file);
+  auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
+      std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type()));
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, std::move(selector), nimble::BatchReadParams{});
+  for (int32_t stripe = 0; stripe < kStripeCount; ++stripe) {
+    SCOPED_TRACE(fmt::format("stripe={}", stripe));
+    velox::VectorPtr result;
+    ASSERT_TRUE(reader.next(kRowsPerStripe, result));
+    ASSERT_EQ(result->size(), kRowsPerStripe);
+    for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+      EXPECT_TRUE(batches[stripe]->equalValueAt(result.get(), row, row));
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     BatchReaderStripeGroupFormatTestSuite,
     BatchReaderStripeGroupFormatTest,
     ::testing::Values(
-        nimble::StripeGroup::EncodingLayout::kRaw,
-        nimble::StripeGroup::EncodingLayout::kStreamMajor),
-    [](const ::testing::TestParamInfo<nimble::StripeGroup::EncodingLayout>&
-           info) {
-      switch (info.param) {
-        case nimble::StripeGroup::EncodingLayout::kRaw:
-          return "Raw";
-        case nimble::StripeGroup::EncodingLayout::kStreamMajor:
-          return "StreamMajor";
-      }
-      return "Unknown";
+        StripeGroupFormat{nimble::StripeGroup::EncodingLayout::kRaw},
+        StripeGroupFormat{nimble::StripeGroup::EncodingLayout::kStreamMajor},
+        StripeGroupFormat{
+            nimble::StripeGroup::EncodingLayout::kStreamMajor,
+            /*sparseLayout=*/true}),
+    [](const ::testing::TestParamInfo<StripeGroupFormat>& info) {
+      return info.param.debugString();
     });
 
 TEST_P(BatchReaderTest, sharedDictionary) {
@@ -8746,3 +8816,102 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<TestParam>& info) {
       return info.param.debugString();
     });
+
+namespace {
+
+template <typename Factory>
+class RecordingUnitLoaderFactory : public Factory {
+ public:
+  RecordingUnitLoaderFactory() : Factory(nullptr) {}
+
+  std::unique_ptr<velox::dwio::common::UnitLoader> create(
+      std::vector<std::unique_ptr<velox::dwio::common::LoadUnit>> units,
+      uint64_t rowsToSkip) override {
+    ++numCreates;
+    return Factory::create(std::move(units), rowsToSkip);
+  }
+
+  int numCreates{0};
+};
+
+} // namespace
+
+TEST_P(BatchReaderTest, projectedStripePrefetchMatchesOnDemand) {
+  auto vectors = createSkipSeekVectors(*leafPool_, {80, 83, 81, 73});
+  auto file = std::make_shared<velox::InMemoryReadFile>(
+      nimble::test::createNimbleFile(*rootPool_, vectors));
+  auto executor = std::make_shared<folly::ManualExecutor>();
+  enum class FactoryKind { kDefault, kOnDemand, kParallel };
+  for (auto factoryKind :
+       {FactoryKind::kDefault,
+        FactoryKind::kOnDemand,
+        FactoryKind::kParallel}) {
+    SCOPED_TRACE(static_cast<int>(factoryKind));
+    const bool prefetch = factoryKind == FactoryKind::kParallel;
+    velox::dwio::common::ReaderOptions options(leafPool_.get());
+    auto reader = velox::nimble::detail::createBatchReader(options, file, {});
+    size_t numPrefetchScheduled{0};
+    size_t numBlockedOnIoCallbacks{0};
+    auto factory =
+        std::make_shared<velox::dwio::common::ParallelUnitLoaderFactory>(
+            executor.get(),
+            2,
+            velox::dwio::common::ParallelUnitLoaderOptions{
+                .metricCallback =
+                    [&](auto event, auto) {
+                      if (event ==
+                          velox::dwio::common::UnitLoader::Event::
+                              kPrefetchScheduled) {
+                        ++numPrefetchScheduled;
+                      }
+                    },
+                .blockedOnIoCallback =
+                    [&](auto) { ++numBlockedOnIoCallbacks; }});
+    auto onDemandFactory = std::make_shared<RecordingUnitLoaderFactory<
+        velox::dwio::common::OnDemandUnitLoaderFactory>>();
+    auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
+        velox::checkedPointerCast<const velox::RowType>(vectors[0]->type()),
+        std::vector<std::string>{"a", "b"});
+    velox::dwio::common::RowReaderOptions rowOptions;
+    auto scanSpec = std::make_shared<velox::common::ScanSpec>("root");
+    for (int column = 0; column < 2; ++column) {
+      auto* field = scanSpec->getOrCreateChild(
+          velox::common::Subfield(column == 0 ? "a" : "b"));
+      field->setProjectOut(true);
+      field->setChannel(column);
+    }
+    rowOptions.setScanSpec(scanSpec);
+    rowOptions.select(selector);
+    size_t numStripeCountCallbacks{0};
+    rowOptions.setStripeCountCallback([&](auto) { ++numStripeCountCallbacks; });
+    if (prefetch) {
+      rowOptions.setUnitLoaderFactory(factory);
+    } else if (factoryKind == FactoryKind::kOnDemand) {
+      rowOptions.setUnitLoaderFactory(onDemandFactory);
+    }
+    auto rowReader = reader->createRowReader(rowOptions);
+    EXPECT_EQ(
+        onDemandFactory->numCreates,
+        factoryKind == FactoryKind::kOnDemand ? 1 : 0);
+    EXPECT_EQ(numStripeCountCallbacks, 1);
+    for (const auto& expected : vectors) {
+      velox::VectorPtr result;
+      ASSERT_EQ(rowReader->next(128, result), expected->size());
+      ASSERT_NE(result, nullptr);
+      ASSERT_EQ(result->size(), expected->size());
+      const auto* expectedRow = expected->as<velox::RowVector>();
+      const auto* actualRow = result->as<velox::RowVector>();
+      ASSERT_EQ(actualRow->childrenSize(), 2);
+      for (int column = 0; column < 2; ++column) {
+        for (velox::vector_size_t row = 0; row < result->size(); ++row) {
+          ASSERT_TRUE(expectedRow->childAt(column)->equalValueAt(
+              actualRow->childAt(column).get(), row, row));
+        }
+      }
+    }
+    velox::VectorPtr result;
+    EXPECT_EQ(rowReader->next(128, result), 0);
+    EXPECT_EQ(numBlockedOnIoCallbacks, prefetch ? vectors.size() : 0);
+    EXPECT_EQ(numPrefetchScheduled, prefetch ? vectors.size() - 1 : 0);
+  }
+}

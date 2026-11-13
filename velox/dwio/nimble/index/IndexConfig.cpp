@@ -30,6 +30,17 @@ std::string_view toString(IndexFamily family) {
   NIMBLE_UNREACHABLE("Unsupported index family: {}", static_cast<int>(family));
 }
 
+std::string_view toString(KeyStreamLayout layout) {
+  switch (layout) {
+    case KeyStreamLayout::kPartition:
+      return "Partition";
+    case KeyStreamLayout::kStripe:
+      return "Stripe";
+    default:
+      NIMBLE_FAIL("Unknown KeyStreamLayout: {}", static_cast<int>(layout));
+  }
+}
+
 IndexFamily toIndexFamily(serialization::IndexFamily family) {
   switch (family) {
     case serialization::IndexFamily_Cluster:

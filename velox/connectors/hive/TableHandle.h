@@ -18,6 +18,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/common/FileColumnHandle.h"
 #include "velox/connectors/common/FileTableHandle.h"
+#include "velox/connectors/hive/HiveBucketProperty.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
@@ -114,7 +115,8 @@ class HiveTableHandle : public connector::FileTableHandle {
       std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
       double sampleRate = 1.0,
       std::string dbName = "",
-      std::vector<int32_t> dataColumnFieldIds = {});
+      std::vector<int32_t> dataColumnFieldIds = {},
+      HiveBucketPropertyPtr bucketProperty = nullptr);
 
   /// Legacy constructor without indexColumns parameter for backward
   /// compatibility.
@@ -140,6 +142,13 @@ class HiveTableHandle : public connector::FileTableHandle {
   /// vector means field IDs are unavailable.
   const std::vector<int32_t>& dataColumnFieldIds() const {
     return dataColumnFieldIds_;
+  }
+
+  /// Returns how the table is bucketed, or nullptr if it is not bucketed. A
+  /// data source skips the splits of buckets that the filters on the bucket
+  /// columns exclude.
+  const HiveBucketPropertyPtr& bucketProperty() const {
+    return bucketProperty_;
   }
 
   /// Returns the names of the index columns for the table.
@@ -199,6 +208,7 @@ class HiveTableHandle : public connector::FileTableHandle {
   const std::vector<int32_t> dataColumnFieldIds_;
   const std::vector<std::string> indexColumns_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
+  const HiveBucketPropertyPtr bucketProperty_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;

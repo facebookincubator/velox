@@ -76,7 +76,7 @@ std::string TableWriterTestBase::TestParam::toString() const {
       dwio::common::FileFormatName::toName((fileFormat())),
       testModeString(testMode()),
       CommitStrategyName::toName(commitStrategy()),
-      HiveBucketProperty::kindString(bucketKind()),
+      HiveBucketProperty::toName(bucketKind()),
       bucketSort(),
       multiDrivers(),
       compressionKindToString(compressionKind()),
@@ -180,7 +180,7 @@ TableWriterTestBase::TableWriterTestBase(uint64_t testValue)
       testMode_ == TestMode::kOnlyBucketed) {
     std::vector<std::string> bucketedBy = {"c3", "c5"};
     std::vector<TypePtr> bucketedTypes = {REAL(), VARCHAR()};
-    std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
+    std::vector<HiveSortingColumnPtr> sortedBy;
     if (testParam_.bucketSort()) {
       // The sortedBy key shouldn't contain partitionBy key.
       sortedBy = {std::make_shared<const HiveSortingColumn>(
@@ -240,8 +240,8 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
           numPartitionedTableWriterCount_)
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(QueryConfig::kWriterSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kWriterSpillEnabled, true)
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
       .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
@@ -265,8 +265,8 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
         .config(
             QueryConfig::kTaskPartitionedWriterCount,
             numPartitionedTableWriterCount_)
-        .config(core::QueryConfig::kSpillEnabled, "true")
-        .config(QueryConfig::kWriterSpillEnabled, "true")
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(QueryConfig::kWriterSpillEnabled, true)
         // Scale writer settings to trigger partition rebalancing.
         .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
         .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
@@ -286,8 +286,8 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
           numPartitionedTableWriterCount_)
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(QueryConfig::kWriterSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kWriterSpillEnabled, true)
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
       .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
@@ -327,8 +327,8 @@ RowVectorPtr TableWriterTestBase::runQueryWithWriterConfigs(
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
           numPartitionedTableWriterCount_)
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(QueryConfig::kWriterSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kWriterSpillEnabled, true)
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
       .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
@@ -360,7 +360,7 @@ void TableWriterTestBase::setBucketProperty(
     uint32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
     const std::vector<TypePtr>& bucketedTypes,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortedBy) {
+    const std::vector<HiveSortingColumnPtr>& sortedBy) {
   bucketProperty_ = std::make_shared<HiveBucketProperty>(
       kind, bucketCount, bucketedBy, bucketedTypes, sortedBy);
 }

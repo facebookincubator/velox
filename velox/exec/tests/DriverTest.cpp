@@ -262,7 +262,7 @@ class DriverTest : public OperatorTestBase {
     std::vector<RowVectorPtr> batches;
     for (int i = 0; i < 4; ++i) {
       batches.push_back(
-          makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})}));
+          makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3})));
     }
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto plan =
@@ -1560,7 +1560,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverThreadContext) {
   std::vector<RowVectorPtr> batches;
   for (int i = 0; i < 4; ++i) {
     batches.push_back(
-        makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})}));
+        makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3})));
   }
   createDuckDbTable(batches);
 
@@ -1599,7 +1599,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
   std::vector<RowVectorPtr> batches;
   for (int i = 0; i < numBatches; ++i) {
     batches.push_back(
-        makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})}));
+        makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3})));
   }
 
   struct TestParam {
@@ -1723,7 +1723,7 @@ class OpCallStatusTest : public OperatorTestBase {};
 // expected.
 TEST_F(OpCallStatusTest, basic) {
   std::vector<RowVectorPtr> data{
-      makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})})};
+      makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3}))};
 
   const int firstNodeId{17};
   auto planNodeIdGenerator =

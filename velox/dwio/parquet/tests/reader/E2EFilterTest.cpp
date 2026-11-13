@@ -951,15 +951,14 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
     auto writer = std::make_unique<parquet::Writer>(
         std::move(sink), commonOptions_, rowType);
     // Row group 1: contains the value we will filter for ("360手机助手").
-    writer->write(makeRowVector(
-        {"s"},
-        {makeFlatVector<std::string>(
-            {k360, kSanXing, kVivo, k360, kSanXing})}));
+    writer->write(makeNamedRowVector(
+        "s",
+        makeFlatVector<std::string>({k360, kSanXing, kVivo, k360, kSanXing})));
     // Row group 2: does not contain "360手机助手".
-    writer->write(makeRowVector(
-        {"s"},
-        {makeFlatVector<std::string>(
-            {kSanXing, kVivo, kSanXing, kVivo, kSanXing})}));
+    writer->write(makeNamedRowVector(
+        "s",
+        makeFlatVector<std::string>(
+            {kSanXing, kVivo, kSanXing, kVivo, kSanXing})));
     writer->close();
 
     dwio::common::ReaderOptions readerOptions(leafPool_.get());

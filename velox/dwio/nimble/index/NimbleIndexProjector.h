@@ -291,6 +291,12 @@ class NimbleIndexProjector {
   /// Returns an empty vector for an empty range.
   std::vector<StripeSelection> lookup(const RowRange& rowRange);
 
+  /// Returns the number of consecutive file stripes that fit the encoded
+  /// read-ahead budget, stopping at EOF. Includes one stripe even if it exceeds
+  /// the budget. A zero budget selects one stripe. Requires a valid first
+  /// stripe.
+  uint32_t numStripesToRead(uint32_t stripeOffset) const;
+
   /// Loads projected streams for contiguous full stripes in one I/O batch.
   /// Returns one entry per stripe, in stripe order, including stripes whose
   /// projected streams are all absent. The caller applies row selections.
@@ -298,6 +304,9 @@ class NimbleIndexProjector {
   std::vector<facebook::nimble::ProjectedStripe> loadStripeStreams(
       uint32_t stripeOffset,
       uint32_t numStripes);
+
+  /// Releases stream-scan resources after all stripe loads have stopped.
+  void resetStreamScan();
 
   /// Returns the projected nimble schema. Preserves encoding-specific types
   /// (ArrayWithOffsets, SlidingWindowMap, FlatMap) from the file schema.
@@ -390,6 +399,7 @@ class NimbleIndexProjector {
       std::shared_ptr<const NimbleTypeProjection> projection,
       velox::memory::MemoryPool* pool,
       std::shared_ptr<velox::io::IoStatistics> ioStats,
+      uint64_t readAheadSizeBytes,
       bool verifyStreamChecksums);
 
   // A request index paired with its stripe-relative row range.
@@ -654,6 +664,9 @@ class NimbleIndexProjector {
   velox::memory::MemoryPool* const pool_;
   const ClusterIndexBase* const clusterIndex_;
   const uint32_t numStripes_{0};
+
+  // Bounds the physical file span of encoded scan batches.
+  const uint64_t readAheadSizeBytes_{0};
 
   const std::shared_ptr<const NimbleTypeProjection> projection_;
   // True when every emitted slice must preserve a native HFM batch boundary,
