@@ -262,7 +262,12 @@ TabletReader::TabletReader(
             .pinIndex = options.pinIndex || options.preloadIndex,
             .preloadIndex = options.preloadIndex,
             .cacheKeyEncodingViews = options.cacheKeyEncodingViews,
-            .fileIoContext = fileIoContext_};
+            .fileIoContext = fileIoContext_,
+            .keyStreamLocator = [this](
+                                    uint32_t stripeGroupIndex,
+                                    std::span<const uint32_t> keyStreamIds) {
+              return stripeMetadata(stripeGroupIndex, keyStreamIds);
+            }};
       }()},
       metadataInput_{[&]() {
         MetadataInput::Options metadataOptions{
@@ -983,6 +988,26 @@ std::shared_ptr<StripeGroup> TabletReader::loadStripeGroup(
 std::shared_ptr<StripeGroup> TabletReader::stripeGroup(
     uint32_t stripeGroupIndex) const {
   return stripeGroupCache_.getOrCreate(stripeGroupIndex);
+}
+
+std::vector<StripeMetadata> TabletReader::stripeMetadata(
+    uint32_t stripeGroupIndex,
+    std::span<const uint32_t> streamIds) const {
+  const auto group = stripeGroup(stripeGroupIndex);
+  std::vector<StripeMetadata> stripes;
+  stripes.reserve(group->stripeCount());
+  const uint32_t endStripe = group->firstStripe() + group->stripeCount();
+  for (uint32_t stripe = group->firstStripe(); stripe < endStripe; ++stripe) {
+    auto& metadata = stripes.emplace_back(
+        StripeMetadata{
+            .offset = stripeOffset(stripe),
+            .numRows = stripeRowCount(stripe),
+            .streams =
+                std::vector<StripeGroup::StreamMetadata>(streamIds.size()),
+        });
+    group->streamLocations(stripe, streamIds, metadata.streams);
+  }
+  return stripes;
 }
 
 std::shared_ptr<ChunkStatsGroup> TabletReader::createChunkStatsGroup(

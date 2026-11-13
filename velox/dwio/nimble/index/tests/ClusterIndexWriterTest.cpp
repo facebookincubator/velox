@@ -1981,7 +1981,8 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   const auto& partition = layout.partitions[0];
   EXPECT_EQ(partition.numRows, kNumRows);
   EXPECT_GT(partition.metadataSizeBytes, 0);
-  EXPECT_GT(partition.keyStreamRegion.length, 0);
+  ASSERT_EQ(partition.keyStreamRegions.size(), 1);
+  EXPECT_GT(partition.keyStreamRegions[0].length, 0);
 
   // Verify chunk count. encodeKeyChunks absorbs tail when remaining < 2 *
   // maxRows, so expected chunks = floor(numRows / maxRows) when tail is

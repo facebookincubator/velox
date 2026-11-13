@@ -36,6 +36,7 @@ class ClusterIndex final : public ClusterIndexBase {
       Section rootSection,
       std::shared_ptr<MetadataInput> metadataInput,
       std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+      KeyStreamLocator keyStreamLocator,
       const KeyComparator* keyComparator,
       bool pinIndex,
       bool preloadIndex,

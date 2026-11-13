@@ -47,6 +47,7 @@
 #include "velox/dwio/nimble/tablet/MetadataCache.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
+#include "velox/dwio/nimble/tablet/StripeMetadata.h"
 
 /// The TabletReader class is the on-disk layout for nimble.
 ///
@@ -639,6 +640,15 @@ class TabletReader {
   uint32_t stripeGroupIndex(uint32_t stripeIndex) const;
 
   std::shared_ptr<StripeGroup> stripeGroup(uint32_t stripeGroupIndex) const;
+
+  // Returns the metadata of each stripe of stripe group 'stripeGroupIndex',
+  // with the location of each of 'streamIds' in the stripe, in the order of
+  // 'streamIds': absent (size 0) for a stream that the stripe lacks or that is
+  // beyond the stream count of the group. For example, a cluster index that
+  // stores its key chunks in stripes locates their key streams with it.
+  std::vector<StripeMetadata> stripeMetadata(
+      uint32_t stripeGroupIndex,
+      std::span<const uint32_t> streamIds) const;
 
   std::shared_ptr<StripeGroup> loadStripeGroup(uint32_t stripeGroupIndex) const;
 
