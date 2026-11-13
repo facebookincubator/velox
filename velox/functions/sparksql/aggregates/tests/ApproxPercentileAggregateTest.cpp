@@ -170,7 +170,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
     auto rows = makeRowVector({keys, values});
 
     AggregationTester(*this)
-        .inputs(rows)
+        .inputs(split(rows))
         .groupBy({"c0"})
         .aggregates({functionCall(true, percentile, accuracy, false)})
         .config(
@@ -218,7 +218,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
       }
 
       AggregationTester(*this)
-          .inputs(rows)
+          .inputs(split(rows))
           .groupBy({"c0"})
           .aggregates({functionCall(true, percentile, accuracy, true)})
           .config(
@@ -430,6 +430,19 @@ TEST_F(ApproxPercentileAggregateTest, noInput) {
          makeNullConstant(TypeKind::INTEGER, 7)});
 
     testGroupByAgg(keys, nullValues, 0.5, 0, expected);
+
+    // An accuracy too large for a sketch is an error only when a group has a
+    // value to add. Incremental aggregation is disabled because it aggregates
+    // all rows into one group, which sizes the sketch even when every value
+    // is null.
+    AggregationTester(*this)
+        .inputs(split(makeRowVector({keys, nullValues})))
+        .groupBy({"c0"})
+        .aggregates({functionCall(
+            true, 0.5, std::numeric_limits<int32_t>::max(), false)})
+        .disableIncremental()
+        .withCompanion()
+        .assertResults(expected);
   }
 
   // Test when all inputs are masked out.

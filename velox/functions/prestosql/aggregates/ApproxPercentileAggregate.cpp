@@ -34,12 +34,20 @@ struct PrestoAccuracyPolicy {
     return accuracy == kMissingNormalizedValue;
   }
 
+  // Returns the sketch K that bounds the error by 'accuracy'.
+  static uint32_t toK(double accuracy) {
+    if (isDefaultAccuracy(accuracy)) {
+      return functions::kll::kDefaultK;
+    }
+    return functions::kll::kFromEpsilon(accuracy);
+  }
+
   template <typename T>
   static void setOnAccumulator(
       functions::aggregate::detail::KllSketchAccumulator<T>* accumulator,
       double accuracy) {
     if (accuracy != kMissingNormalizedValue) {
-      accumulator->setAccuracy(accuracy);
+      accumulator->setK(toK(accuracy));
     }
   }
 
