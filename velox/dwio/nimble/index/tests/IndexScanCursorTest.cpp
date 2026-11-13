@@ -580,12 +580,29 @@ TEST_P(IndexScanCursorTest, rejectsConsumedAndBackwardStripesWithoutDequeuing) {
 
 TEST_P(IndexScanCursorTest, boundsPrefetchForAllLimitModes) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/6);
-  for (const uint32_t limit : {0, 1, 2, 3, 4, 10}) {
-    SCOPED_TRACE(limit);
+  struct TestParam {
+    uint32_t numPrefetchBatches;
+    uint32_t limit;
+
+    std::string debugString() const {
+      return fmt::format(
+          "numPrefetchBatches {}, limit {}", numPrefetchBatches, limit);
+    }
+  };
+  std::vector<TestParam> testSettings;
+  for (const uint32_t numPrefetchBatches : {1, 2}) {
+    for (const uint32_t limit : {0, 1, 2, 3, 4, 10}) {
+      testSettings.push_back({numPrefetchBatches, limit});
+    }
+  }
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto limit = testData.limit;
     auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
     NimbleIterator::Options options;
     options.prefetchExecutor = folly::getKeepAliveToken(*executor);
     options.maxPrefetchStripes = limit;
+    options.numPrefetchBatches = testData.numPrefetchBatches;
     auto cursor = makeCursor(options);
     cursor->seekToFirst();
     std::promise<void> producerPaused;
@@ -595,7 +612,10 @@ TEST_P(IndexScanCursorTest, boundsPrefetchForAllLimitModes) {
     EXPECT_EQ(cursor->stats().numReadStripes, std::min(limit, 6U));
     EXPECT_EQ(materializer_->numMaterializeCalls(), 0);
     if (limit > 0) {
-      const auto maxBatchStripes = std::max(1U, limit / 2);
+      // A batch reserves its stripes until the consumer takes its last one, so
+      // the producer loads the next batch only then.
+      const auto maxBatchStripes =
+          std::max(1U, limit / testData.numPrefetchBatches);
       materializer_->setOnMaterialize(
           [&, maxBatchStripes](const ProjectedStripe& stripe) {
             if (stripe.selection.stripeIndex >= maxBatchStripes) {
@@ -632,17 +652,29 @@ TEST_P(IndexScanCursorTest, boundsPrefetchForAllLimitModes) {
 TEST_P(IndexScanCursorTest, prefetchLoadsOnlySelectedStripes) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
-  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
+  for (const uint32_t numPrefetchBatches : {1, 2}) {
+    SCOPED_TRACE(numPrefetchBatches);
+    auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(1);
+    NimbleIterator::Options options;
+    options.prefetchExecutor = folly::getKeepAliveToken(*executor);
+    options.maxPrefetchStripes = 8;
+    options.numPrefetchBatches = numPrefetchBatches;
+    auto cursor = makeCursor(options);
+    cursor->seek(makeRangeLookup(rowType, {"key"}, 5, 7));
+    const auto& stripe = nextStripe(*cursor, 5);
+    EXPECT_EQ(stripe.selection.stripeIndex, 1);
+    EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(5, 7));
+    cursor->reset();
+    EXPECT_EQ(cursor->stats().numReadStripes, 1);
+  }
+}
+
+TEST_P(IndexScanCursorTest, rejectsZeroPrefetchBatches) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/1);
   NimbleIterator::Options options;
-  options.prefetchExecutor = folly::getKeepAliveToken(*executor);
-  options.maxPrefetchStripes = 8;
-  auto cursor = makeCursor(options);
-  cursor->seek(makeRangeLookup(rowType, {"key"}, 5, 7));
-  const auto& stripe = nextStripe(*cursor, 5);
-  EXPECT_EQ(stripe.selection.stripeIndex, 1);
-  EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(5, 7));
-  cursor->reset();
-  EXPECT_EQ(cursor->stats().numReadStripes, 1);
+  options.numPrefetchBatches = 0;
+  NIMBLE_ASSERT_USER_THROW(
+      makeCursor(options), "Prefetch batch count must be positive");
 }
 
 TEST_P(IndexScanCursorTest, retainsLoadedStorageAcrossResetAndReseek) {
