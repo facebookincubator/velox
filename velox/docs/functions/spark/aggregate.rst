@@ -303,6 +303,11 @@ General Aggregate Functions
     returns Infinity. For all other input types, when the sum of input values exceeds its limit, it cycles to the
     overflowed value rather than raising an error.
 
+    When Spark ANSI mode is enabled (``spark.ansi_enabled``), an overflow is an error instead: for
+    TINYINT, SMALLINT, INTEGER and BIGINT input, the sum throws when it exceeds the BIGINT range, and for
+    DECIMAL input, the sum throws when the final result overflows. An intermediate overflow that comes
+    back into range is not an error.
+
     Example::
 
         SELECT SUM(x)
@@ -313,6 +318,34 @@ General Aggregate Functions
         ) AS t(x);
 
     Returns -9223372036854775808
+
+.. spark:function:: try_sum(x) -> bigint|decimal
+
+    Returns the sum of `x`, or NULL if the sum overflows. Supported types of `x` are TINYINT,
+    SMALLINT, INTEGER, BIGINT and DECIMAL. Corresponds to Spark's ``try_sum``.
+
+    For TINYINT, SMALLINT, INTEGER and BIGINT input, the result type is BIGINT and the result is
+    NULL once the sum leaves the BIGINT range, also when later input would bring it back into range.
+    The intermediate result is Spark's aggregation buffer ``ROW(sum, isEmpty)``, where ``sum`` is
+    NULL after an overflow and ``isEmpty`` is true while no non-NULL input has been seen.
+
+    For DECIMAL(p, s) input, the result type is DECIMAL(p + 10, s), where (p + 10) is capped at 38,
+    and the result is NULL when the final sum overflows, like :spark:func:`sum` without ANSI mode.
+    Unlike :spark:func:`sum`, it does not throw in ANSI mode.
+
+    REAL and DOUBLE input is not supported, since Spark's ``try_sum`` gives the same result as
+    :spark:func:`sum` for them.
+
+    Example::
+
+        SELECT try_sum(x)
+        FROM (
+            VALUES
+                (9223372036854775807),
+                (1)
+        ) AS t(x);
+
+    Returns NULL
 
 .. spark:function:: var_samp(x) -> double
 
