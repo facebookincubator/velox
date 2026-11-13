@@ -331,6 +331,8 @@ class NimbleReader : public dwio::common::Reader {
     params.fileRangeStartOffset = options.offset();
     params.fileRangeEndOffset = options.limit();
     params.decodingExecutor = options.decodingExecutor();
+    params.unitLoaderFactory = options.unitLoaderFactory();
+    params.stripeCountCallback = options.stripeCountCallback();
     params.encodingFactory =
         [](velox::memory::MemoryPool& pool,
            std::string_view data,
