@@ -204,8 +204,8 @@ class ProjectorTestBase : public ::testing::Test {
       SerializerOptions options = SerializerOptions{}) {
     Serializer serializer{std::move(options), type, pool_.get()};
     auto sv = serializer.serialize(vec, OrderedRanges::of(0, vec->size()));
-    auto schema =
-        SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+    auto schema = SchemaReader::getSchema(
+        serializer.schemaBuilder().schemaNodes(), *pool_);
     return {std::string(sv), schema};
   }
 
@@ -216,7 +216,8 @@ class ProjectorTestBase : public ::testing::Test {
       const TypePtr& type,
       SerializerOptions options = SerializerOptions{}) {
     Serializer serializer{std::move(options), type, pool_.get()};
-    return SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+    return SchemaReader::getSchema(
+        serializer.schemaBuilder().schemaNodes(), *pool_);
   }
 
   // Deserialize a projected buffer with the projected schema.
@@ -2046,7 +2047,7 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
   const std::string serialized{
       serializer.serialize(input, OrderedRanges::of(0, kRows))};
   const auto inputSchema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes(), *pool_);
 
   Projector projector(
       inputSchema,
@@ -3091,7 +3092,7 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionFuzz) {
 const std::vector<std::string> kNoGroupKeys;
 
 TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{pool_.get()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kBitmap);
@@ -3107,7 +3108,8 @@ TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId, kNoGroupKeys, makeValueType());
   root->addChild("features", hybridMap);
-  const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto inputSchema =
+      SchemaReader::getSchema(builder.schemaNodes(), *pool_);
   const auto projectType =
       ROW({{"features", MAP(BIGINT(), ROW({{"new_value", BIGINT()}}))}});
   Projector projector{
@@ -3129,7 +3131,7 @@ TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
 }
 
 TEST_F(ProjectorTest, hybridFlatMapProjectTypeKeepsKeyList) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{pool_.get()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kKeyList);
@@ -3144,7 +3146,8 @@ TEST_F(ProjectorTest, hybridFlatMapProjectTypeKeepsKeyList) {
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId, kNoGroupKeys, makeValueType());
   root->addChild("features", hybridMap);
-  const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto inputSchema =
+      SchemaReader::getSchema(builder.schemaNodes(), *pool_);
   const auto projectType =
       ROW({{"features", MAP(BIGINT(), ROW({{"new_value", BIGINT()}}))}});
   // Key 7 is in no configured group, so it selects Default, whose key-presence
@@ -3233,6 +3236,63 @@ TEST_F(ProjectorTest, projectTypeRenamesEveryNestedContainerKind) {
   EXPECT_EQ(
       projected.childAt(3)->asSlidingWindowMap().values()->asRow().nameAt(0),
       "new_value");
+}
+
+// A projection of a schema with encoded integer keys copies the encoded keys
+// of the groups it keeps, so the projected schema stays as small as the
+// source's without encoding the keys again.
+TEST_F(ProjectorTest, hybridFlatMapProjectionKeepsGroupKeysEncoding) {
+  SchemaBuilder builder{pool_.get()};
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int64,
+      HybridFlatMap::KeyPresenceMode::kKeyList,
+      /*projection=*/false,
+      EncodingLayout{
+          EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed});
+  const std::vector<std::string> firstGroupKeys{"1", "2"};
+  const std::vector<std::string> secondGroupKeys{"30"};
+  hybridMap->addGroup(
+      0, firstGroupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      1, secondGroupKeys, builder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto inputSchema =
+      SchemaReader::getSchema(builder.schemaNodes(), *pool_);
+
+  Projector projector{
+      inputSchema,
+      makeSubfields({"features[2]"}),
+      pool_.get(),
+      {.projectVersion = SerializationVersion::kProjection}};
+  // The projected group copies the stream its keys were recorded in.
+  const auto& sourceGroups = inputSchema->asRow()
+                                 .childAt(0)
+                                 ->asHybridFlatMap()
+                                 .hybridFlatMap()
+                                 .groups();
+  const auto& projectedGroups = projector.projectedSchema()
+                                    ->asRow()
+                                    .childAt(0)
+                                    ->asHybridFlatMap()
+                                    .hybridFlatMap()
+                                    .groups();
+  ASSERT_EQ(projectedGroups.size(), 1);
+  EXPECT_FALSE(projectedGroups[0].encodedKeys.empty());
+  EXPECT_EQ(projectedGroups[0].encodedKeys, sourceGroups[0].encodedKeys);
+
+  // Re-serializing the projected schema copies the stream again.
+  SchemaSerializer schemaSerializer{pool_.get()};
+  const auto reread = SchemaDeserializer::deserialize(
+      schemaSerializer.serialize(*projector.projectedSchema()), *pool_);
+  const auto& rereadGroups =
+      reread->asRow().childAt(0)->asHybridFlatMap().hybridFlatMap().groups();
+  EXPECT_EQ(rereadGroups[0].encodedKeys, sourceGroups[0].encodedKeys);
+  EXPECT_THAT(rereadGroups[0].groupKeys, ElementsAre("1", "2"));
 }
 
 TEST_F(ProjectorTest, hybridFlatMapRejectsEmptyProjectedKey) {

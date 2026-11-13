@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 
@@ -185,6 +186,15 @@ struct SerializerOptions {
   /// Default is required and may be the only group, in which case it holds
   /// every key.
   folly::F14FastMap<std::string, HybridFlatMap> hybridFlatMapColumns{};
+
+  /// Encoding of the integer keys that the schema of every Hybrid FlatMap
+  /// column records, e.g. EliasFano. Without one, the keys are written as
+  /// strings. The layout must name every nested encoding, and its compression
+  /// is ignored, so readers need no codec. A node whose keys the layout cannot
+  /// encode, and String keys, are written as strings. Readers built before
+  /// this option reject the encoded keys, so set
+  /// it only once every reader of the schema is newer.
+  std::optional<EncodingLayout> hybridFlatMapGroupKeysLayout{};
 
   /// Omits all-false Hybrid FlatMap in-map and key-presence streams from
   /// serialized values. All-true in-map streams stay explicit so the reader

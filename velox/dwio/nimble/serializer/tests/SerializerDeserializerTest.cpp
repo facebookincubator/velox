@@ -1477,8 +1477,8 @@ HybridFlatMapGroupingCase makeHybridFlatMapGrouping(
 }
 
 // Checks that the written schema's groups match the grouping: group IDs in
-// order, configured keys sorted as strings and Default keys in first-seen
-// order.
+// order, explicit groups' keys sorted (by value for integer keys) and Default
+// keys in first-seen order.
 void verifyHybridFlatMapGroups(
     const HybridFlatMapType& actual,
     const HybridFlatMapGroupingCase& expected) {
@@ -1489,8 +1489,17 @@ void verifyHybridFlatMapGroups(
     if (HybridFlatMap::isDefaultGroup(expectedGroup.groupId)) {
       expectedKeys = expected.expectedDefaultKeys;
     } else {
-      // Configured keys are stored sorted as strings, so "10" precedes "9".
-      std::sort(expectedKeys.begin(), expectedKeys.end());
+      // Explicit groups store their keys as a writer configuration sorts
+      // them: integer keys by value, so "9" precedes "10".
+      expectedKeys =
+          HybridFlatMap{
+              actual.keyScalarKind(),
+              {{.groupId = expectedGroup.groupId,
+                .groupKeys = std::move(expectedKeys)},
+               {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+              HybridFlatMap::KeyPresenceMode::kBitmap}
+              .groups()[0]
+              .groupKeys;
     }
     EXPECT_EQ(actual.groupAt(i).groupId, expectedGroup.groupId);
     EXPECT_EQ(actual.groupAt(i).groupKeys, expectedKeys);
@@ -1718,8 +1727,8 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
       Serializer serializer{options, testCase.type, pool_.get()};
       const std::string serialized{
           serializer.serialize(input, OrderedRanges::of(0, input->size()))};
-      const auto schema =
-          SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      const auto schema = SchemaReader::getSchema(
+          serializer.schemaBuilder().schemaNodes(), *pool_);
       for (const auto& [column, grouping] : groupings) {
         SCOPED_TRACE(column);
         verifyHybridFlatMapGroups(
@@ -1905,7 +1914,7 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
     // Built once from the first batch's schema bytes and reused for every
     // batch.
     const auto keyListSchema =
-        SchemaDeserializer::deserialize(keyListSchemas.front());
+        SchemaDeserializer::deserialize(keyListSchemas.front(), *pool_);
     const serde::Projector projector{keyListSchema, subfields, pool_.get(), {}};
     const Deserializer keyListDeserializer{
         keyListSchema, pool_.get(), deserializerOptions()};
