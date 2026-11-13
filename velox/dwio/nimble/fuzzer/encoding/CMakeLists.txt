@@ -82,7 +82,6 @@ target_link_libraries(
   nimble_encodings
   nimble_common
   gtest
-  gtest_main
   gflags::gflags
   glog::glog
   Folly::folly
