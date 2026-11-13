@@ -220,6 +220,18 @@ class FieldWriterContext {
     return it == hybridFlatMaps_.end() ? nullptr : &it->second;
   }
 
+  /// Sets the encoding of the integer keys that the schema of every Hybrid
+  /// FlatMap node records (SerializerOptions::hybridFlatMapGroupKeysLayout),
+  /// before the nodes' field writers are created.
+  void setHybridFlatMapGroupKeysLayout(EncodingLayout layout) {
+    hybridFlatMapGroupKeysLayout_.emplace(std::move(layout));
+  }
+
+  /// Returns the layout setHybridFlatMapGroupKeysLayout() set, if any.
+  const std::optional<EncodingLayout>& hybridFlatMapGroupKeysLayout() const {
+    return hybridFlatMapGroupKeysLayout_;
+  }
+
   inline void reserveHybridFlatMapNodes(size_t size) {
     hybridFlatMaps_.reserve(size);
   }
@@ -506,7 +518,11 @@ class FieldWriterContext {
   // shared groups. They view each Default group's keys in its field writer,
   // whichever mode records them.
   folly::F14FastMap<uint32_t, HybridFlatMap> hybridFlatMaps_;
-  SchemaBuilder schemaBuilder_;
+  // See hybridFlatMapGroupKeysLayout().
+  std::optional<EncodingLayout> hybridFlatMapGroupKeysLayout_;
+  // Encodes Hybrid FlatMap group keys from the buffer pool, which is
+  // initialized first.
+  SchemaBuilder schemaBuilder_{bufferMemoryPool_.get()};
 
   folly::F14FastMap<uint32_t, std::set<std::string>> flatMapNodes_;
   folly::F14FastSet<uint32_t> dictionaryArrayNodeIds_;

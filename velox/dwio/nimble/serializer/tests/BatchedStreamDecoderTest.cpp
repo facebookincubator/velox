@@ -266,7 +266,7 @@ TEST_F(BatchedStreamDecoderTest, rejectsSelectedReads) {
 }
 
 TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{pool_.get()};
   auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
   const std::vector<std::string> groupKeys{"A", "B"};
@@ -282,7 +282,7 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
 
   SchemaSerializer schemaSerializer;
   const auto schema = SchemaDeserializer::deserialize(
-      schemaSerializer.serialize(schemaBuilder));
+      schemaSerializer.serialize(schemaBuilder), *pool_);
   const auto& group = schema->asHybridFlatMap().groupAt(0);
 
   const auto options = serializerOptions();
@@ -434,7 +434,7 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
 const std::vector<std::string> kNoGroupKeys;
 
 TEST_F(BatchedStreamDecoderTest, hybridFlatMapOmittedNullsAreAllNonNull) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{pool_.get()};
   auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
   const std::vector<std::string> groupKeys{"configured"};
@@ -444,7 +444,8 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapOmittedNullsAreAllNonNull) {
       HybridFlatMap::kDefaultGroupId,
       kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(schemaBuilder.schemaNodes(), *pool_);
 
   BatchedStreamDecoder decoder{
       *schema, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
