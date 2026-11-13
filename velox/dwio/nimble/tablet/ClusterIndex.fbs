@@ -18,6 +18,18 @@ include "Footer.fbs";
 
 namespace facebook.nimble.serialization;
 
+/// Where a cluster index stores its key chunks.
+enum KeyStreamLayout : ubyte {
+  /// Each partition, one stripe group flush, writes its key chunks in one blob
+  /// after its stripes. ClusterIndex.index_partitions describes them.
+  Partition = 0,
+  /// Each stripe stores its keys as one key chunk in a stream of that stripe.
+  /// ClusterIndex.key_stream_id names that stream, which no schema node
+  /// references, and the stripe group metadata locates it in each stripe like
+  /// any other stream. ClusterIndex.index_groups describes the stripes.
+  Stripe = 1,
+}
+
 /// Cluster index data for a partition (group of stripes).
 /// A partition corresponds to one stripe group flush.
 /// Contains chunk-level search boundaries for key lookups.
@@ -37,6 +49,16 @@ table ClusterIndexPartition {
   chunk_keys:[string];
 }
 
+/// Cluster index data for a stripe group in the Stripe layout. The key chunk
+/// of each stripe is the whole key stream of that stripe, and the stripe group
+/// metadata locates that stream and holds the rows of each stripe, so only the
+/// keys that find a stripe are here.
+table ClusterIndexGroup {
+  /// Last key of each stripe of the group, in stripe order (binary search
+  /// boundary).
+  stripe_keys:[string];
+}
+
 /// Root index table shared by the flat and hierarchical cluster indexes.
 table ClusterIndex {
   /// Names of columns used for indexing.
@@ -47,7 +69,9 @@ table ClusterIndex {
   /// Size must equal index_columns size.
   sort_orders:[string];
 
-  /// Metadata sections for each partition's index.
+  /// Partition layout only. Metadata sections for each partition's index.
+  /// Stripe layout indexes leave it unset and set index_groups instead, so
+  /// readers that predate that layout fail to open them.
   index_partitions:[MetadataSection];
 
   /// Keys for root-level binary search across all partitions.
@@ -60,6 +84,19 @@ table ClusterIndex {
   /// without external stripe info. Size equals number of partitions.
   partition_row_counts:[uint32];
 
+  /// Where the key chunks of every partition are stored: a KeyStreamLayout,
+  /// stored as a plain byte. As an enum-typed field, a layout added after this
+  /// reader was built would not be a valid value.
+  key_stream_layout:ubyte = 0;
+
+  /// Stripe layout only. Id of the stream that holds the key chunk of every
+  /// stripe, the id that the stripe group metadata locates streams by.
+  key_stream_id:uint32;
+
+  /// Stripe layout only. Metadata sections for the ClusterIndexGroup of each
+  /// stripe group. These stripe groups are the partitions of partition_keys
+  /// and partition_row_counts.
+  index_groups:[MetadataSection];
 }
 
 root_type ClusterIndex;

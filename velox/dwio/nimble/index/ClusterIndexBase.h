@@ -58,7 +58,9 @@ class ClusterIndexTestHelper;
 /// The index uses partition keys at the root level for binary search across
 /// all partitions, then chunk keys within each partition for finer-grained
 /// lookup. When a key stream loader is provided, lookup returns exact row
-/// positions by decoding key stream data within chunks.
+/// positions by decoding key stream data within chunks. Key chunks live in one
+/// blob per partition, or each stripe's key stream is its key chunk, as
+/// keyStreamLayout() tells.
 ///
 /// Thread-safety: `lookup()` and `keyAtRow()` are safe for concurrent use
 /// from multiple threads. Partition metadata and key-stream chunks are
@@ -128,6 +130,11 @@ class ClusterIndexBase : public IndexLookup {
     return sortOrders_;
   }
 
+  /// Returns where the index stores its key chunks.
+  KeyStreamLayout keyStreamLayout() const {
+    return keyStreamLayout_;
+  }
+
   /// Returns a cursor over the encoded keys of the rows in 'rows'.
   ///
   /// Scanning advances a chunk cursor instead of binary searching per row,
@@ -148,10 +155,12 @@ class ClusterIndexBase : public IndexLookup {
     struct Partition {
       /// Location and compression of partition metadata in the file.
       MetadataSection metadataSection;
-      /// File region containing the encoded key data blob.
-      /// Only populated when detail=true.
-      velox::common::Region keyStreamRegion;
-      /// Number of key chunks in this partition.
+      /// File region of each key stream of the partition: its one key blob in
+      /// the Partition layout, and each stripe's key stream, in stripe order,
+      /// in the Stripe layout. Only populated when detail=true.
+      std::vector<velox::common::Region> keyStreamRegions;
+      /// Number of key chunks in this partition: one per stripe in the Stripe
+      /// layout.
       uint32_t numChunks{0};
       /// Total rows in this partition.
       uint32_t numRows{0};
@@ -161,6 +170,8 @@ class ClusterIndexBase : public IndexLookup {
 
     std::vector<std::string> indexColumns;
     std::vector<SortOrder> sortOrders;
+    /// Where the index stores its key chunks.
+    KeyStreamLayout keyStreamLayout{KeyStreamLayout::kPartition};
     uint32_t numPartitions{0};
 
     /// Per-partition details. Empty when detail=false.
@@ -183,10 +194,13 @@ class ClusterIndexBase : public IndexLookup {
 
   // 'keyComparator' is the order of the encoded keys, or null for bytewise
   // order; 'keyReaderFactory' must create readers that seek in the same order.
+  // 'keyStreamLocator' locates the key streams of the stripes, and may be
+  // empty unless the index stores its key chunks in stripes.
   ClusterIndexBase(
       Section rootSection,
       std::shared_ptr<MetadataInput> metadataInput,
       std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+      KeyStreamLocator keyStreamLocator,
       KeyReaderFactory keyReaderFactory,
       const KeyComparator* keyComparator,
       bool pinIndex,
@@ -242,67 +256,117 @@ class ClusterIndexBase : public IndexLookup {
   // external reuse buffer is provided), so each cached entry is fully
   // self-contained.
   struct DecodedChunk {
-    uint32_t chunkOffset{0};
+    // Position of the chunk in its partition. Tells which chunk the single
+    // scratch slot of an unpinned index holds. Chunk offsets cannot tell it:
+    // in the Stripe layout every chunk starts its stripe's key stream.
+    uint32_t chunkIndex{0};
     std::shared_ptr<DecodedKeyChunk> data;
   };
 
-  // Parsed partition metadata, cached on demand.
-  struct IndexPartition {
-    const uint32_t id;
-    const std::unique_ptr<MetadataBuffer> metadata;
-    const serialization::ClusterIndexPartition* const index;
+ public:
+  /// Parsed metadata of a partition, the index data of one stripe group,
+  /// cached on demand. ClusterIndexBase.cpp derives a class that reads a
+  /// Partition layout partition, whose key chunks are in one blob after its
+  /// stripes, and one that reads a Stripe layout partition, whose stripes each
+  /// hold one key chunk in their key stream.
+  class IndexPartitionBase {
+   public:
+    virtual ~IndexPartitionBase() = default;
 
-    // Protects decodedChunks against concurrent lazy decoding. Shared lock
-    // for cache hits, exclusive lock for cache misses (lazy decode).
-    mutable folly::SharedMutex mutex;
-
-    // Lazily-populated decoded chunks. Sized to numChunks() when
-    // pinIndex_=true (each slot indexed by chunkIndex, retained across
-    // lookups). Sized to 1 when pinIndex_=false (a single shared scratch
-    // slot, evicted on every different-chunk lookup). Each slot starts
-    // empty (data == nullptr) and is filled on first access.
-    mutable std::vector<DecodedChunk> decodedChunks;
-
-    // Constructs the partition and allocates the decoded chunks vector.
-    // When pinIndex=true, allocates one slot per chunk for full caching;
-    // when false, allocates a single scratch slot that retains at most one
-    // decoded chunk.
-    IndexPartition(
-        uint32_t id,
-        std::unique_ptr<MetadataBuffer> metadata,
-        bool pinIndex);
-
-    uint32_t numChunks() const {
-      return index->chunk_keys()->size();
+    /// Position of the partition in the index, which is also the index of its
+    /// stripe group.
+    uint32_t id() const {
+      return id_;
     }
 
-    // Returns the chunk index for the given encoded key via binary search
-    // under 'keyComparator', or bytewise when it is null. The key must be
-    // within the partition's chunk range.
+    /// The partition metadata.
+    const MetadataBuffer& metadata() const {
+      return *metadata_;
+    }
+
+    /// Where the partition keeps its key chunks.
+    virtual KeyStreamLayout layout() const = 0;
+
+    uint32_t numChunks() const {
+      return chunkKeys().size();
+    }
+
+    /// Returns the last key of each chunk: the stripe keys in the Stripe
+    /// layout.
+    virtual const flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>&
+    chunkKeys() const = 0;
+
+    /// Returns the accumulated row counts per chunk (prefix sum,
+    /// partition-wide).
+    virtual folly::Range<const uint32_t*> chunkRows() const = 0;
+
+    /// Returns the byte offset of a chunk within the key stream that holds it.
+    virtual uint32_t chunkOffset(uint32_t chunkIdx) const = 0;
+
+    /// Returns the encoded size of a chunk in bytes.
+    virtual uint32_t chunkSize(uint32_t chunkIdx) const = 0;
+
+    /// Returns the index of the key stream that holds a chunk: 0 in the
+    /// Partition layout, whose chunks are all in its one key stream, and the
+    /// chunk's stripe in the Stripe layout.
+    virtual uint32_t keyStreamIndex(uint32_t chunkIdx) const = 0;
+
+    /// Returns the file region of key stream 'keyStreamIdx', without its
+    /// stream trailer: the partition's one blob, or the key stream of stripe
+    /// 'keyStreamIdx', which is the whole chunk of the stripe.
+    virtual velox::common::Region keyStreamRegion(
+        uint32_t keyStreamIdx) const = 0;
+
+    /// Returns the chunk index for the given encoded key via binary search
+    /// under 'keyComparator', or bytewise when it is null. The key must be
+    /// within the partition's chunk range.
     uint32_t chunkIndex(
         std::string_view encodedKey,
         const KeyComparator* keyComparator) const;
 
-    uint32_t chunkOffset(uint32_t chunkIdx) const {
-      return index->chunk_offsets()->Get(chunkIdx);
-    }
-
-    uint32_t chunkSize(uint32_t chunkIdx) const {
-      const uint32_t offset = chunkOffset(chunkIdx);
-      const uint32_t nextOffset = chunkIdx + 1 < numChunks()
-          ? chunkOffset(chunkIdx + 1)
-          : index->key_stream_size();
-      return nextOffset - offset;
-    }
-
     uint32_t rowOffset(uint32_t chunkIdx) const {
-      return chunkIdx == 0 ? 0 : index->chunk_rows()->Get(chunkIdx - 1);
+      return chunkIdx == 0 ? 0 : chunkRows()[chunkIdx - 1];
     }
 
+    /// Returns the file region of a chunk in either layout: in the Stripe
+    /// layout, the key stream of its stripe.
     velox::common::Region chunkStreamRegion(
         const ChunkLocation& chunkLocation) const;
+
+    /// Protects decodedChunks() against concurrent lazy decoding. Shared lock
+    /// for cache hits, exclusive lock for cache misses (lazy decode).
+    folly::SharedMutex& mutex() const {
+      return mutex_;
+    }
+
+    /// Lazily-populated decoded chunks. Sized to numChunks() when the index
+    /// pins its chunks (each slot indexed by chunkIndex, retained across
+    /// lookups), and to 1 otherwise (a single shared scratch slot, evicted on
+    /// every different-chunk lookup). Each slot starts empty (data ==
+    /// nullptr) and is filled on first access.
+    std::vector<DecodedChunk>& decodedChunks() const {
+      return decodedChunks_;
+    }
+
+   protected:
+    IndexPartitionBase(uint32_t id, std::unique_ptr<MetadataBuffer> metadata);
+
+    // Allocates the decoded chunks once the derived class has validated its
+    // chunks: one slot per chunk when 'pinIndex', so every chunk stays
+    // cached, otherwise a single scratch slot that retains at most one
+    // decoded chunk.
+    void allocateDecodedChunks(bool pinIndex);
+
+    const uint32_t id_;
+    // The partition metadata, which the derived class reads its chunks from.
+    const std::unique_ptr<MetadataBuffer> metadata_;
+
+    mutable folly::SharedMutex mutex_;
+
+    mutable std::vector<DecodedChunk> decodedChunks_;
   };
 
+ private:
   // Looks up 'request' as lookup(request) does, and sets 'lowerBoundChunk' to
   // the decoded key chunk of the lower bound, which the upper bound reads when
   // it is in the same chunk. 'lowerBoundChunk' can be null.
@@ -315,7 +379,7 @@ class ClusterIndexBase : public IndexLookup {
   std::optional<uint32_t> lookupPartition(std::string_view key) const;
 
   // Finds the partition containing the given file-level row.
-  const IndexPartition* lookupPartition(uint32_t row) const;
+  const IndexPartitionBase* lookupPartition(uint32_t row) const;
 
   // Converts a file-level row to a partition-relative row number.
   uint32_t partitionRow(uint32_t partitionId, uint32_t row) const;
@@ -371,7 +435,7 @@ class ClusterIndexBase : public IndexLookup {
   // @param lowerBoundChunk Is set for a lower bound, and read otherwise, as
   //        seekInChunk() does. Can be null.
   uint32_t resolvePartitionRow(
-      const IndexPartition* partition,
+      const IndexPartitionBase* partition,
       const PartitionLookup& bound,
       LowerBoundChunk* lowerBoundChunk) const;
 
@@ -384,25 +448,26 @@ class ClusterIndexBase : public IndexLookup {
   // Binary searches chunk keys in the partition. The returned ChunkLocation
   // carries the chunkIndex for indexing into per-chunk arrays.
   ChunkLocation lookupChunk(
-      const IndexPartition* partition,
+      const IndexPartitionBase* partition,
       std::string_view encodedKey) const;
 
   // Finds the chunk containing the given partition-relative row via binary
   // search on chunk_rows.
   ChunkLocation lookupChunk(
-      const IndexPartition* partition,
+      const IndexPartitionBase* partition,
       uint32_t partitionRow) const;
 
   // Returns the decoded chunk for the given chunk location. When
   // pinIndex_=true, lazily fills the per-chunk slot in
-  // IndexPartition::decodedChunks (indexed by chunkIndex) and returns a copy.
+  // IndexPartitionBase::decodedChunks_ (indexed by chunkIndex) and returns a
+  // copy.
   // When pinIndex_=false, uses a single shared scratch slot — a hit only
-  // when the requested chunk matches the cached chunkOffset, otherwise the
+  // when the requested chunk matches the cached chunkIndex, otherwise the
   // slot is evicted and refilled. The returned DecodedChunk owns its
   // underlying buffer via shared_ptr / BufferPtr so it is safe to use past
   // the call.
   DecodedChunk getDecodedChunk(
-      const IndexPartition* partition,
+      const IndexPartitionBase* partition,
       const ChunkLocation& chunkLocation) const;
 
   // Seeks the key of 'bound' within a chunk's decoded encoding.
@@ -410,13 +475,13 @@ class ClusterIndexBase : public IndexLookup {
   //        and is set to the chunk of a lower bound. Can be null.
   // Returns the partition-level row offset.
   uint32_t seekInChunk(
-      const IndexPartition* partition,
+      const IndexPartitionBase* partition,
       const ChunkLocation& chunkLocation,
       const PartitionLookup& bound,
       LowerBoundChunk* lowerBoundChunk) const;
 
   // Returns the partition, loading on demand if needed. Never evicted.
-  const IndexPartition* loadPartition(uint32_t partitionId) const;
+  const IndexPartitionBase* loadPartition(uint32_t partitionId) const;
 
   // Batch-loads the metadata for the given partitionIds via a single
   // coalesced IO. Caller guarantees each id is < numPartitions_ and not
@@ -424,13 +489,14 @@ class ClusterIndexBase : public IndexLookup {
   void loadPartitions(std::span<const uint32_t> partitionIds) const;
 
   // Loads and decodes all key-stream chunks for a single partition via one
-  // coalesced data IO. Populates partition->decodedChunks. Called per
+  // coalesced data IO. Populates partition->decodedChunks_. Called per
   // partition from preloadIndex().
-  void loadPartitionKeyStream(IndexPartition* partition) const;
+  void loadPartitionKeyStream(IndexPartitionBase* partition) const;
 
-  // Constructs IndexPartition for partitionId from the given metadata buffer
-  // and (when pinIndex_=true) pre-sizes its decodedChunks vector. Shared by
-  // loadPartition() (single IO) and loadPartitions() (batched IO).
+  // Constructs the IndexPartition or, in the Stripe layout, the IndexGroup for
+  // partitionId from the given metadata buffer and (when pinIndex_=true)
+  // pre-sizes its decodedChunks_ vector. Shared by loadPartition() (single IO)
+  // and loadPartitions() (batched IO).
   void initializePartition(uint32_t partitionId, MetadataBuffer&& buffer) const;
 
   const Section rootSection_;
@@ -438,6 +504,9 @@ class ClusterIndexBase : public IndexLookup {
   const uint32_t numPartitions_;
   const std::vector<std::string> indexColumns_;
   const std::vector<SortOrder> sortOrders_;
+  // Where the index stores its key chunks, from the index root. The same for
+  // every partition.
+  const KeyStreamLayout keyStreamLayout_;
 
   // File-level key range for early pruning.
   const std::string_view firstKey_;
@@ -458,14 +527,18 @@ class ClusterIndexBase : public IndexLookup {
 
   const std::shared_ptr<MetadataInput> metadataInput_;
   const std::shared_ptr<velox::dwio::common::BufferedInput> dataInput_;
+  // Stripe layout only. Locates the key streams of the stripes.
+  const KeyStreamLocator keyStreamLocator_;
+  // Stripe layout only. Id of the key stream of every stripe.
+  const uint32_t keyStreamId_;
   const KeyReaderFactory keyReaderFactory_;
 
   // Order of the encoded keys, or null for bytewise order.
   const KeyComparator* const keyComparator_;
   velox::memory::MemoryPool* const pool_;
 
-  // When true, every decoded chunk stays pinned in IndexPartition::
-  // decodedChunks. When false, decodedChunks holds at most one entry.
+  // When true, every decoded chunk stays pinned in IndexPartitionBase::
+  // decodedChunks_. When false, decodedChunks_ holds at most one entry.
   const bool pinIndex_;
 
   // --- Mutable state ---
@@ -474,7 +547,7 @@ class ClusterIndexBase : public IndexLookup {
   mutable folly::SharedMutex mutex_;
 
   // Partitions loaded on demand and never evicted. Accessed by raw pointer.
-  mutable std::vector<std::unique_ptr<IndexPartition>> partitions_;
+  mutable std::vector<std::unique_ptr<IndexPartitionBase>> partitions_;
 
   friend class test::ClusterIndexTestHelper;
 };

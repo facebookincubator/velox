@@ -42,10 +42,40 @@ const serialization::ClusterIndex* getIndexRoot(const Section& rootSection) {
   return indexRoot;
 }
 
+KeyStreamLayout getKeyStreamLayout(
+    const serialization::ClusterIndex* indexRoot) {
+  // An index root without key_stream_layout, such as every root written before
+  // the Stripe layout, reads as the default, Partition.
+  const uint32_t layout = velox::checkedNotNull(indexRoot)->key_stream_layout();
+  NIMBLE_CHECK_FILE_LE(
+      layout,
+      static_cast<uint32_t>(serialization::KeyStreamLayout_MAX),
+      "Unknown cluster index key stream layout");
+  return static_cast<KeyStreamLayout>(layout);
+}
+
+// Returns the metadata sections of the partitions: the ClusterIndexPartition
+// sections in the Partition layout, the ClusterIndexGroup sections of the
+// stripe groups in the Stripe layout.
+const flatbuffers::Vector<flatbuffers::Offset<serialization::MetadataSection>>*
+getPartitionSections(const serialization::ClusterIndex& root) {
+  if (getKeyStreamLayout(&root) == KeyStreamLayout::kPartition) {
+    NIMBLE_CHECK_FILE_NOT_NULL(
+        root.index_partitions(),
+        "Partition layout index must set index_partitions");
+    return root.index_partitions();
+  }
+  NIMBLE_CHECK_FILE_NULL(
+      root.index_partitions(),
+      "Stripe layout index must not set index_partitions");
+  NIMBLE_CHECK_FILE_NOT_NULL(
+      root.index_groups(), "Stripe layout index must set index_groups");
+  return root.index_groups();
+}
+
 uint32_t getIndexPartitionCount(const serialization::ClusterIndex* indexRoot) {
   const auto& root = *velox::checkedNotNull(indexRoot);
-  const auto* indexPartitions = root.index_partitions();
-  NIMBLE_CHECK_NOT_NULL(indexPartitions);
+  const auto* indexPartitions = getPartitionSections(root);
   NIMBLE_CHECK_GT(indexPartitions->size(), 0, "ClusterIndex cannot be empty");
   return indexPartitions->size();
 }
@@ -116,6 +146,52 @@ std::vector<SortOrder> getSortOrders(
   return result;
 }
 
+// Returns the file region of the key stream of each stripe of a Stripe layout
+// partition, from the metadata of its stripes with the location of the key
+// stream in each. Checks that each stripe has a key stream, which every key
+// chunk read then trusts.
+std::vector<velox::common::Region> getKeyStreamRegions(
+    std::span<const StripeMetadata> stripes) {
+  std::vector<velox::common::Region> regions;
+  regions.reserve(stripes.size());
+  for (const auto& stripe : stripes) {
+    NIMBLE_CHECK_EQ(
+        stripe.streams.size(),
+        1,
+        "Key stream locator must locate one stream per stripe");
+    const auto& keyStream = stripe.streams[0];
+    NIMBLE_CHECK_FILE_GT(keyStream.size, 0, "Stripe has no key stream");
+    regions.emplace_back(stripe.offset + keyStream.offset, keyStream.size);
+  }
+  return regions;
+}
+
+// Returns the accumulated row counts of the stripes of a Stripe layout
+// partition. Checks that 'group' has a key for each stripe and that each
+// stripe has rows.
+std::vector<uint32_t> getStripeRows(
+    const serialization::ClusterIndexGroup& group,
+    std::span<const StripeMetadata> stripes) {
+  const auto* stripeKeys = group.stripe_keys();
+  NIMBLE_CHECK_FILE_NOT_NULL(
+      stripeKeys, "Cluster index group has no stripe_keys");
+  NIMBLE_CHECK_FILE_GT(stripes.size(), 0, "Cluster index group has no stripes");
+  NIMBLE_CHECK_FILE_EQ(
+      stripeKeys->size(),
+      stripes.size(),
+      "Cluster index group must have one key per stripe");
+
+  std::vector<uint32_t> stripeRows;
+  stripeRows.reserve(stripes.size());
+  uint32_t endRow{0};
+  for (const auto& stripe : stripes) {
+    NIMBLE_CHECK_FILE_GT(stripe.numRows, 0, "Stripe has no rows");
+    endRow += stripe.numRows;
+    stripeRows.push_back(endRow);
+  }
+  return stripeRows;
+}
+
 // Builds cumulative row offsets from partition_row_counts in the FlatBuffer.
 // Returns a prefix-sum vector of size numPartitions + 1.
 std::vector<uint32_t> getPartitionRows(
@@ -148,6 +224,7 @@ ClusterIndexBase::ClusterIndexBase(
     Section rootSection,
     std::shared_ptr<MetadataInput> metadataInput,
     std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+    KeyStreamLocator keyStreamLocator,
     KeyReaderFactory keyReaderFactory,
     const KeyComparator* keyComparator,
     bool pinIndex,
@@ -159,6 +236,7 @@ ClusterIndexBase::ClusterIndexBase(
       numPartitions_{getIndexPartitionCount(indexRoot_)},
       indexColumns_{getIndexColumns(indexRoot_)},
       sortOrders_{getSortOrders(indexRoot_)},
+      keyStreamLayout_{getKeyStreamLayout(indexRoot_)},
       firstKey_{getFirstKey(indexRoot_)},
       lastKey_{getLastKey(indexRoot_)},
       partitionKeys_{getPartitionLastKeys(indexRoot_)},
@@ -166,11 +244,19 @@ ClusterIndexBase::ClusterIndexBase(
       numRows_{partitionRows_.at(partitionRows_.size() - 1)},
       metadataInput_{std::move(metadataInput)},
       dataInput_{std::move(dataInput)},
+      keyStreamLocator_{std::move(keyStreamLocator)},
+      keyStreamId_{indexRoot_->key_stream_id()},
       keyReaderFactory_{std::move(keyReaderFactory)},
       keyComparator_{keyComparator},
       pool_{pool},
       pinIndex_{pinIndex},
       partitions_(numPartitions_) {
+  // Only the Stripe layout locates key streams, in the stripes of the file.
+  if (keyStreamLayout_ == KeyStreamLayout::kStripe) {
+    NIMBLE_CHECK_NOT_NULL(
+        keyStreamLocator_,
+        "A cluster index that stores its key chunks in stripes needs a key stream locator");
+  }
   NIMBLE_CHECK(!indexColumns_.empty());
   NIMBLE_CHECK_EQ(indexColumns_.size(), sortOrders_.size());
   NIMBLE_CHECK_EQ(partitionRows_.size(), numPartitions_ + 1);
@@ -200,11 +286,12 @@ void ClusterIndexBase::preloadIndex() {
   }
 }
 
-void ClusterIndexBase::loadPartitionKeyStream(IndexPartition* partition) const {
+void ClusterIndexBase::loadPartitionKeyStream(
+    IndexPartitionBase* partition) const {
   auto& loadedPartition = *velox::checkedNotNull(partition);
   const uint32_t numChunks = loadedPartition.numChunks();
   NIMBLE_CHECK_GT(
-      numChunks, 0, "Partition {} has no chunks", loadedPartition.id);
+      numChunks, 0, "Partition {} has no chunks", loadedPartition.id());
   std::vector<std::unique_ptr<velox::dwio::common::SeekableInputStream>>
       streams;
   streams.reserve(numChunks);
@@ -221,8 +308,8 @@ void ClusterIndexBase::loadPartitionKeyStream(IndexPartition* partition) const {
 
   auto stream = streams.begin();
   for (uint32_t chunkIdx = 0; chunkIdx < numChunks; ++chunkIdx, ++stream) {
-    auto& decodedChunk = loadedPartition.decodedChunks.at(chunkIdx);
-    decodedChunk.chunkOffset = loadedPartition.chunkOffset(chunkIdx);
+    auto& decodedChunk = loadedPartition.decodedChunks().at(chunkIdx);
+    decodedChunk.chunkIndex = chunkIdx;
     // Per-iteration scratch so the previous chunk's buffer isn't aliased
     // and overwritten if the next chunk fits in its capacity.
     velox::BufferPtr scratch;
@@ -268,7 +355,7 @@ std::optional<uint32_t> ClusterIndexBase::lookupPartition(
       });
 }
 
-const ClusterIndexBase::IndexPartition* ClusterIndexBase::lookupPartition(
+const ClusterIndexBase::IndexPartitionBase* ClusterIndexBase::lookupPartition(
     uint32_t row) const {
   NIMBLE_CHECK_LT(
       row, numRows_, "Row {} is beyond file total rows {}", row, numRows_);
@@ -303,7 +390,7 @@ void ClusterIndexBase::resolvePartitionBounds(
     const auto& loadedPartition = *velox::checkedNotNull(partition);
 
     while (i < partitionLookups.size() &&
-           partitionLookups.at(i).partitionId == loadedPartition.id) {
+           partitionLookups.at(i).partitionId == loadedPartition.id()) {
       const auto& entry = partitionLookups.at(i);
       *velox::checkedNotNull(entry.targetRow) =
           resolvePartitionRow(partition, entry, lowerBoundChunk);
@@ -446,30 +533,26 @@ IndexLookup::LookupResult ClusterIndexBase::lookup(
 }
 
 uint32_t ClusterIndexBase::resolvePartitionRow(
-    const IndexPartition* partition,
+    const IndexPartitionBase* partition,
     const PartitionLookup& bound,
     LowerBoundChunk* lowerBoundChunk) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const auto chunkLocation = lookupChunk(partition, bound.encodedKey);
   const auto partitionRow =
       seekInChunk(partition, chunkLocation, bound, lowerBoundChunk);
-  return partitionRows_.at(loadedPartition.id) + partitionRow;
+  return partitionRows_.at(loadedPartition.id()) + partitionRow;
 }
 
 folly::Range<const uint32_t*> ClusterIndexBase::partitionChunkRows(
     uint32_t partitionId) const {
   const auto* partition = loadPartition(partitionId);
-  const auto& loadedPartition = *velox::checkedNotNull(partition);
-  const auto& partitionIndex = *velox::checkedNotNull(loadedPartition.index);
-  const auto* chunkRows = partitionIndex.chunk_rows();
-  NIMBLE_CHECK_NOT_NULL(chunkRows, "Index partition has no chunk rows");
-  return {chunkRows->data(), chunkRows->size()};
+  return velox::checkedNotNull(partition)->chunkRows();
 }
 
 MetadataSection ClusterIndexBase::partitionSection(uint32_t partitionId) const {
   NIMBLE_CHECK_LT(partitionId, numPartitions_);
   const auto& indexRoot = *velox::checkedNotNull(indexRoot_);
-  const auto* indexPartitions = indexRoot.index_partitions();
+  const auto* indexPartitions = getPartitionSections(indexRoot);
   NIMBLE_CHECK_NOT_NULL(indexPartitions);
   const auto* metadata = indexPartitions->Get(partitionId);
   const auto& section = *velox::checkedNotNull(metadata);
@@ -482,67 +565,195 @@ MetadataSection ClusterIndexBase::partitionSection(uint32_t partitionId) const {
                               : std::nullopt};
 }
 
-ClusterIndexBase::IndexPartition::IndexPartition(
-    uint32_t _id,
-    std::unique_ptr<MetadataBuffer> _metadata,
-    bool pinIndex)
-    : id{_id},
-      metadata{std::move(_metadata)},
-      index{flatbuffers::GetRoot<serialization::ClusterIndexPartition>(
-          velox::checkedNotNull(metadata.get())->content().data())} {
-  const auto& partitionIndex = *velox::checkedNotNull(index);
-  const auto* chunkKeys = partitionIndex.chunk_keys();
-  NIMBLE_CHECK_NOT_NULL(chunkKeys);
-  const auto* chunkRows = partitionIndex.chunk_rows();
-  NIMBLE_CHECK_NOT_NULL(chunkRows);
-  NIMBLE_CHECK_EQ(chunkRows->size(), chunkKeys->size());
-  const auto* chunkOffsets = partitionIndex.chunk_offsets();
-  NIMBLE_CHECK_NOT_NULL(chunkOffsets);
-  NIMBLE_CHECK_EQ(chunkOffsets->size(), chunkKeys->size());
-  // Allocate the cache slot vector. When pinIndex is true, size to the
-  // number of chunks so every chunk has a dedicated slot. When false,
-  // allocate a single scratch slot that retains at most one decoded chunk.
-  decodedChunks.resize(pinIndex ? numChunks() : 1);
+ClusterIndexBase::IndexPartitionBase::IndexPartitionBase(
+    uint32_t id,
+    std::unique_ptr<MetadataBuffer> metadata)
+    : id_{id}, metadata_{std::move(metadata)} {
+  NIMBLE_CHECK_NOT_NULL(metadata_);
 }
 
-uint32_t ClusterIndexBase::IndexPartition::chunkIndex(
+void ClusterIndexBase::IndexPartitionBase::allocateDecodedChunks(
+    bool pinIndex) {
+  decodedChunks_.resize(pinIndex ? numChunks() : 1);
+}
+
+uint32_t ClusterIndexBase::IndexPartitionBase::chunkIndex(
     std::string_view encodedKey,
     const KeyComparator* keyComparator) const {
-  const auto& partitionIndex = *velox::checkedNotNull(index);
-  const auto* chunkKeys = partitionIndex.chunk_keys();
+  const auto& keys = chunkKeys();
   const auto it = withKeyOrder(keyComparator, [&](auto keyOrder) {
     return std::lower_bound(
-        chunkKeys->begin(),
-        chunkKeys->end(),
+        keys.begin(),
+        keys.end(),
         encodedKey,
         [keyOrder](const flatbuffers::String* chunkKey, std::string_view key) {
           return keyOrder(chunkKey->string_view(), key);
         });
   });
-  NIMBLE_CHECK(
-      it != chunkKeys->end(), "Key must be within partition's chunk range");
-  return static_cast<uint32_t>(it - chunkKeys->begin());
+  NIMBLE_CHECK(it != keys.end(), "Key must be within partition's chunk range");
+  return static_cast<uint32_t>(it - keys.begin());
 }
 
-velox::common::Region ClusterIndexBase::IndexPartition::chunkStreamRegion(
+velox::common::Region ClusterIndexBase::IndexPartitionBase::chunkStreamRegion(
     const ChunkLocation& chunkLocation) const {
-  const auto& partitionIndex = *velox::checkedNotNull(index);
-  const uint64_t offset =
-      partitionIndex.key_stream_offset() + chunkLocation.chunkOffset;
-  return velox::common::Region{offset, chunkLocation.chunkSize};
+  const auto keyStream =
+      keyStreamRegion(keyStreamIndex(chunkLocation.chunkIndex));
+  return velox::common::Region{
+      keyStream.offset + chunkLocation.chunkOffset, chunkLocation.chunkSize};
 }
+
+namespace detail {
+
+// A Partition layout partition, read from its ClusterIndexPartition.
+class IndexPartition final : public ClusterIndexBase::IndexPartitionBase {
+ public:
+  IndexPartition(
+      uint32_t id,
+      std::unique_ptr<MetadataBuffer> metadata,
+      bool pinIndex)
+      : IndexPartitionBase{id, std::move(metadata)},
+        partition_{flatbuffers::GetRoot<serialization::ClusterIndexPartition>(
+            metadata_->content().data())} {
+    const auto* chunkKeys = partition_->chunk_keys();
+    NIMBLE_CHECK_NOT_NULL(chunkKeys);
+    const auto* chunkRows = partition_->chunk_rows();
+    NIMBLE_CHECK_NOT_NULL(chunkRows);
+    NIMBLE_CHECK_EQ(chunkRows->size(), chunkKeys->size());
+    const auto* chunkOffsets = partition_->chunk_offsets();
+    NIMBLE_CHECK_NOT_NULL(chunkOffsets);
+    NIMBLE_CHECK_EQ(chunkOffsets->size(), chunkKeys->size());
+    allocateDecodedChunks(pinIndex);
+  }
+
+  KeyStreamLayout layout() const override {
+    return KeyStreamLayout::kPartition;
+  }
+
+  const flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>&
+  chunkKeys() const override {
+    return *partition_->chunk_keys();
+  }
+
+  folly::Range<const uint32_t*> chunkRows() const override {
+    const auto* rows = partition_->chunk_rows();
+    return {rows->data(), rows->size()};
+  }
+
+  uint32_t chunkOffset(uint32_t chunkIdx) const override {
+    return partition_->chunk_offsets()->Get(chunkIdx);
+  }
+
+  uint32_t chunkSize(uint32_t chunkIdx) const override {
+    const uint32_t offset = chunkOffset(chunkIdx);
+    const uint32_t nextOffset = chunkIdx + 1 < numChunks()
+        ? chunkOffset(chunkIdx + 1)
+        : partition_->key_stream_size();
+    return nextOffset - offset;
+  }
+
+  // Every chunk of the partition is in its one key stream.
+  uint32_t keyStreamIndex(uint32_t chunkIdx) const override {
+    NIMBLE_CHECK_LT(chunkIdx, numChunks());
+    return 0;
+  }
+
+  velox::common::Region keyStreamRegion(uint32_t keyStreamIdx) const override {
+    NIMBLE_CHECK_EQ(keyStreamIdx, 0);
+    return velox::common::Region{
+        partition_->key_stream_offset(), partition_->key_stream_size()};
+  }
+
+ private:
+  const serialization::ClusterIndexPartition* const partition_;
+};
+
+// A Stripe layout partition, read from its ClusterIndexGroup and the metadata
+// of its stripe group.
+class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
+ public:
+  // 'keyStreamMetadata' holds the metadata of each stripe of the group, with
+  // the location of its key stream.
+  IndexGroup(
+      uint32_t id,
+      std::unique_ptr<MetadataBuffer> metadata,
+      std::span<const StripeMetadata> keyStreamMetadata,
+      bool pinIndex)
+      : IndexPartitionBase{id, std::move(metadata)},
+        group_{flatbuffers::GetRoot<serialization::ClusterIndexGroup>(
+            metadata_->content().data())},
+        keyStreamRegions_{getKeyStreamRegions(keyStreamMetadata)},
+        stripeRows_{getStripeRows(*group_, keyStreamMetadata)} {
+    allocateDecodedChunks(pinIndex);
+  }
+
+  KeyStreamLayout layout() const override {
+    return KeyStreamLayout::kStripe;
+  }
+
+  const flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>&
+  chunkKeys() const override {
+    return *group_->stripe_keys();
+  }
+
+  folly::Range<const uint32_t*> chunkRows() const override {
+    return {stripeRows_.data(), stripeRows_.size()};
+  }
+
+  // The key chunk of a stripe is its whole key stream.
+  uint32_t chunkOffset(uint32_t /*chunkIdx*/) const override {
+    return 0;
+  }
+
+  uint32_t chunkSize(uint32_t chunkIdx) const override {
+    return static_cast<uint32_t>(
+        keyStreamRegion(keyStreamIndex(chunkIdx)).length);
+  }
+
+  // Each stripe holds its chunk in a key stream of its own.
+  uint32_t keyStreamIndex(uint32_t chunkIdx) const override {
+    return chunkIdx;
+  }
+
+  velox::common::Region keyStreamRegion(uint32_t keyStreamIdx) const override {
+    NIMBLE_CHECK_LT(keyStreamIdx, keyStreamRegions_.size());
+    return keyStreamRegions_[keyStreamIdx];
+  }
+
+ private:
+  const serialization::ClusterIndexGroup* const group_;
+  // File region of the key stream of each stripe, without its stream trailer.
+  const std::vector<velox::common::Region> keyStreamRegions_;
+  // Accumulated row counts per stripe (prefix sum, group-wide): the chunk rows
+  // of the group.
+  const std::vector<uint32_t> stripeRows_;
+};
+
+} // namespace detail
 
 void ClusterIndexBase::initializePartition(
     uint32_t partitionId,
     MetadataBuffer&& buffer) const {
   NIMBLE_CHECK_NULL(partitions_[partitionId]);
-  partitions_[partitionId] = std::make_unique<IndexPartition>(
-      partitionId,
-      std::make_unique<MetadataBuffer>(std::move(buffer)),
-      pinIndex_);
+  auto metadata = std::make_unique<MetadataBuffer>(std::move(buffer));
+  if (keyStreamLayout_ == KeyStreamLayout::kPartition) {
+    partitions_[partitionId] = std::make_unique<detail::IndexPartition>(
+        partitionId, std::move(metadata), pinIndex_);
+    return;
+  }
+
+  // A partition holds the stripes of the stripe group of the same index.
+  const auto keyStreamMetadata = keyStreamLocator_(
+      partitionId, std::span<const uint32_t>{&keyStreamId_, 1});
+  auto group = std::make_unique<detail::IndexGroup>(
+      partitionId, std::move(metadata), keyStreamMetadata, pinIndex_);
+  NIMBLE_CHECK_FILE_EQ(
+      group->chunkRows().back(),
+      partitionRows_.at(partitionId + 1) - partitionRows_.at(partitionId),
+      "The stripes of a cluster index group must hold its rows");
+  partitions_[partitionId] = std::move(group);
 }
 
-const ClusterIndexBase::IndexPartition* ClusterIndexBase::loadPartition(
+const ClusterIndexBase::IndexPartitionBase* ClusterIndexBase::loadPartition(
     uint32_t partitionId) const {
   NIMBLE_CHECK_LT(partitionId, numPartitions_);
   {
@@ -565,7 +776,7 @@ const ClusterIndexBase::IndexPartition* ClusterIndexBase::loadPartition(
 }
 
 ChunkLocation ClusterIndexBase::lookupChunk(
-    const IndexPartition* partition,
+    const IndexPartitionBase* partition,
     std::string_view encodedKey) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const uint32_t idx = loadedPartition.chunkIndex(encodedKey, keyComparator_);
@@ -580,6 +791,7 @@ ClusterIndexBase::Layout ClusterIndexBase::layout(bool detail) const {
   Layout result;
   result.indexColumns = indexColumns_;
   result.sortOrders = sortOrders_;
+  result.keyStreamLayout = keyStreamLayout_;
   result.numPartitions = numPartitions_;
 
   // Always populate partition metadata sections (cheap, from root FlatBuffer).
@@ -597,16 +809,22 @@ ClusterIndexBase::Layout ClusterIndexBase::layout(bool detail) const {
   for (uint32_t i = 0; i < numPartitions_; ++i) {
     const auto* partition = loadPartition(i);
     const auto& loadedPartition = *velox::checkedNotNull(partition);
-    const auto& partitionIndex = *velox::checkedNotNull(loadedPartition.index);
     auto& partitionLayout = result.partitions.at(i);
-    partitionLayout.keyStreamRegion = velox::common::Region{
-        partitionIndex.key_stream_offset(), partitionIndex.key_stream_size()};
+    // Every chunk of a Partition layout partition is in its one key stream,
+    // and each stripe of a Stripe layout partition holds one key chunk.
+    const uint32_t numKeyStreams =
+        loadedPartition.layout() == KeyStreamLayout::kPartition
+        ? 1
+        : loadedPartition.numChunks();
+    partitionLayout.keyStreamRegions.reserve(numKeyStreams);
+    for (uint32_t keyStream = 0; keyStream < numKeyStreams; ++keyStream) {
+      partitionLayout.keyStreamRegions.emplace_back(
+          loadedPartition.keyStreamRegion(keyStream));
+    }
     partitionLayout.numChunks = loadedPartition.numChunks();
     partitionLayout.numRows = partitionRows_.at(i + 1) - partitionRows_.at(i);
-    partitionLayout.metadataSizeBytes = static_cast<uint32_t>(
-        velox::checkedNotNull(loadedPartition.metadata.get())
-            ->content()
-            .size());
+    partitionLayout.metadataSizeBytes =
+        static_cast<uint32_t>(loadedPartition.metadata().content().size());
   }
   return result;
 }
@@ -616,17 +834,17 @@ ClusterIndexBase::Layout ClusterIndexBase::layout(bool detail) const {
 // ---------------------------------------------------------------------------
 
 ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
-    const IndexPartition* partition,
+    const IndexPartitionBase* partition,
     const ChunkLocation& chunkLocation) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const uint32_t slotIdx = pinIndex_ ? chunkLocation.chunkIndex : 0;
   // Fast path: shared lock for cache hit.
   {
-    std::shared_lock l(loadedPartition.mutex);
-    NIMBLE_CHECK_LT(slotIdx, loadedPartition.decodedChunks.size());
-    const auto& slot = loadedPartition.decodedChunks.at(slotIdx);
+    std::shared_lock l(loadedPartition.mutex());
+    NIMBLE_CHECK_LT(slotIdx, loadedPartition.decodedChunks().size());
+    const auto& slot = loadedPartition.decodedChunks().at(slotIdx);
     if (slot.data != nullptr &&
-        (pinIndex_ || slot.chunkOffset == chunkLocation.chunkOffset)) {
+        (pinIndex_ || slot.chunkIndex == chunkLocation.chunkIndex)) {
       return slot;
     }
   }
@@ -634,7 +852,7 @@ ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
   // Decode outside the lock to avoid blocking concurrent readers.
   DecodedChunk decodedChunk;
   const auto region = loadedPartition.chunkStreamRegion(chunkLocation);
-  decodedChunk.chunkOffset = chunkLocation.chunkOffset;
+  decodedChunk.chunkIndex = chunkLocation.chunkIndex;
   velox::BufferPtr scratch;
   decodedChunk.data = decodeKeyChunk(
       dataInput_->read(
@@ -651,9 +869,9 @@ ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
 
   // Install under exclusive lock. Another thread may have filled the slot
   // while we were decoding — that's fine, both produce the same result.
-  std::unique_lock l(loadedPartition.mutex);
-  auto& slot = loadedPartition.decodedChunks.at(slotIdx);
-  if (slot.data == nullptr || slot.chunkOffset != chunkLocation.chunkOffset) {
+  std::unique_lock l(loadedPartition.mutex());
+  auto& slot = loadedPartition.decodedChunks().at(slotIdx);
+  if (slot.data == nullptr || slot.chunkIndex != chunkLocation.chunkIndex) {
     NIMBLE_DCHECK(
         !pinIndex_ || slot.data == nullptr,
         "Pinned slot should only be filled once");
@@ -663,14 +881,14 @@ ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
 }
 
 uint32_t ClusterIndexBase::seekInChunk(
-    const IndexPartition* partition,
+    const IndexPartitionBase* partition,
     const ChunkLocation& chunkLocation,
     const PartitionLookup& bound,
     LowerBoundChunk* lowerBoundChunk) const {
   // The upper bound of a key is usually in the chunk of its lower bound.
   const bool inLowerBoundChunk = lowerBoundChunk != nullptr &&
       lowerBoundChunk->data != nullptr &&
-      lowerBoundChunk->partitionId == velox::checkedNotNull(partition)->id &&
+      lowerBoundChunk->partitionId == velox::checkedNotNull(partition)->id() &&
       lowerBoundChunk->chunkIndex == chunkLocation.chunkIndex;
   const auto chunk = inLowerBoundChunk
       ? lowerBoundChunk->data
@@ -678,7 +896,7 @@ uint32_t ClusterIndexBase::seekInChunk(
   if (bound.lowerBound && lowerBoundChunk != nullptr) {
     NIMBLE_CHECK_NULL(lowerBoundChunk->data, "A seek has one lower bound");
     *lowerBoundChunk = {
-        .partitionId = velox::checkedNotNull(partition)->id,
+        .partitionId = velox::checkedNotNull(partition)->id(),
         .chunkIndex = chunkLocation.chunkIndex,
         .data = chunk};
   }
@@ -694,22 +912,20 @@ uint32_t ClusterIndexBase::seekInChunk(
 }
 
 ChunkLocation ClusterIndexBase::lookupChunk(
-    const IndexPartition* partition,
+    const IndexPartitionBase* partition,
     uint32_t partitionRow) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
-  const auto& partitionIndex = *velox::checkedNotNull(loadedPartition.index);
   // chunk_rows is cumulative: chunk_rows[i] = total rows through chunk i.
   // Binary search for the first chunk whose cumulative rows > partitionRow.
-  const auto* chunkRows = partitionIndex.chunk_rows();
-  NIMBLE_CHECK_NOT_NULL(chunkRows);
+  const auto chunkRows = loadedPartition.chunkRows();
   const auto it =
-      std::upper_bound(chunkRows->begin(), chunkRows->end(), partitionRow);
+      std::upper_bound(chunkRows.begin(), chunkRows.end(), partitionRow);
   NIMBLE_CHECK(
-      it != chunkRows->end(),
+      it != chunkRows.end(),
       "Row {} is beyond partition {} total rows",
       partitionRow,
-      loadedPartition.id);
-  const auto idx = static_cast<uint32_t>(it - chunkRows->begin());
+      loadedPartition.id());
+  const auto idx = static_cast<uint32_t>(it - chunkRows.begin());
   return ChunkLocation{
       idx,
       loadedPartition.chunkOffset(idx),
@@ -720,23 +936,20 @@ ChunkLocation ClusterIndexBase::lookupChunk(
 std::string ClusterIndexBase::keyAtRow(uint32_t row) const {
   const auto* partition = lookupPartition(row);
   const auto& loadedPartition = *velox::checkedNotNull(partition);
-  const auto& partitionIndex = *velox::checkedNotNull(loadedPartition.index);
-  const auto partitionRow = this->partitionRow(loadedPartition.id, row);
+  const auto partitionRow = this->partitionRow(loadedPartition.id(), row);
 
-  const auto* chunkRows = partitionIndex.chunk_rows();
-  const auto* chunkKeys = partitionIndex.chunk_keys();
-  NIMBLE_CHECK_NOT_NULL(chunkRows);
-  NIMBLE_CHECK_NOT_NULL(chunkKeys);
+  const auto chunkRows = loadedPartition.chunkRows();
+  const auto& chunkKeys = loadedPartition.chunkKeys();
 
   const auto chunkIt =
-      std::upper_bound(chunkRows->begin(), chunkRows->end(), partitionRow);
-  NIMBLE_CHECK(chunkIt != chunkRows->end());
-  const auto chunkIdx = static_cast<uint32_t>(chunkIt - chunkRows->begin());
+      std::upper_bound(chunkRows.begin(), chunkRows.end(), partitionRow);
+  NIMBLE_CHECK(chunkIt != chunkRows.end());
+  const auto chunkIdx = static_cast<uint32_t>(chunkIt - chunkRows.begin());
 
   // Fast path: the last row of each chunk has its key in chunk_keys metadata.
-  const uint32_t chunkEndRow = chunkRows->Get(chunkIdx);
+  const uint32_t chunkEndRow = chunkRows[chunkIdx];
   if (partitionRow == chunkEndRow - 1) {
-    return std::string(chunkKeys->Get(chunkIdx)->string_view());
+    return std::string(chunkKeys.Get(chunkIdx)->string_view());
   }
 
   const ChunkLocation chunkLocation{
@@ -924,8 +1137,7 @@ void ClusterIndexBase::KeyIterator::openChunkAt(
     std::shared_ptr<DecodedKeyChunk> chunk) {
   const auto* partition = index_.lookupPartition(row);
   const auto& loadedPartition = *velox::checkedNotNull(partition);
-  const auto& partitionIndex = *velox::checkedNotNull(loadedPartition.index);
-  const uint32_t partitionRow = index_.partitionRow(loadedPartition.id, row);
+  const uint32_t partitionRow = index_.partitionRow(loadedPartition.id(), row);
   const auto chunkLocation = index_.lookupChunk(partition, partitionRow);
   if (chunk == nullptr) {
     chunk = index_.getDecodedChunk(partition, chunkLocation).data;
@@ -934,18 +1146,17 @@ void ClusterIndexBase::KeyIterator::openChunkAt(
   // chunk_rows is a partition-relative prefix sum, so this chunk's entry is
   // the row it ends at and its distance from rowOffset is its row count.
   const uint32_t chunkEndRowInPartition =
-      velox::checkedNotNull(partitionIndex.chunk_rows())
-          ->Get(chunkLocation.chunkIndex);
+      loadedPartition.chunkRows()[chunkLocation.chunkIndex];
   NIMBLE_CHECK_EQ(
       chunk->reader->rowCount(),
       chunkEndRowInPartition - chunkLocation.rowOffset,
       "Decoded key chunk holds a different row count than partition {} chunk {} metadata",
-      loadedPartition.id,
+      loadedPartition.id(),
       chunkLocation.chunkIndex);
 
   auto cursor = chunk->reader->cursor(partitionRow - chunkLocation.rowOffset);
   const uint32_t partitionStartRow =
-      index_.partitionRows_.at(loadedPartition.id);
+      index_.partitionRows_.at(loadedPartition.id());
 
   // Commit after every step that can throw, so a failure leaves the iterator
   // on its previous chunk rather than half-moved onto this one.

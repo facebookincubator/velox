@@ -40,6 +40,7 @@ class HierarchicalClusterIndex final : public ClusterIndexBase {
       std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
       std::shared_ptr<MetadataInput> metadataInput,
       std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+      KeyStreamLocator keyStreamLocator,
       bool pinIndex,
       bool preloadIndex,
       bool cacheKeyEncodingViews,

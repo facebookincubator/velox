@@ -1231,6 +1231,96 @@ TEST_P(TabletTest, rejectsMalformedStripeGroupIndices) {
   }
 }
 
+TEST_P(TabletTest, stripeMetadata) {
+  constexpr uint32_t kNumStripes{4};
+  constexpr uint32_t kNumStreams{3};
+
+  // A threshold of 1 gives every stripe its own group; the default puts all of
+  // them in one group.
+  for (const uint32_t metadataFlushThreshold :
+       {uint32_t{1}, nimble::kMetadataFlushThreshold}) {
+    SCOPED_TRACE(
+        fmt::format("metadataFlushThreshold {}", metadataFlushThreshold));
+    std::string file;
+    velox::InMemoryWriteFile writeFile(&file);
+    auto writer = nimble::TabletWriter::create(
+        &writeFile,
+        *pool_,
+        {
+            .metadataFlushThreshold = metadataFlushThreshold,
+            .streamDeduplicationEnabled = false,
+        });
+    nimble::Buffer buffer{*pool_};
+    for (uint32_t stripe{0}; stripe < kNumStripes; ++stripe) {
+      std::vector<nimble::Stream> streams;
+      for (uint32_t streamId{0}; streamId < kNumStreams; ++streamId) {
+        // Stream 1 is absent from stripe 1.
+        if (stripe == 1 && streamId == 1) {
+          continue;
+        }
+        streams.push_back(
+            nimble::index::test::createStream(
+                buffer,
+                {
+                    .offset = streamId,
+                    .chunks =
+                        {{.rowCount = 10 + stripe,
+                          .size = 5 + stripe * kNumStreams + streamId}},
+                }));
+      }
+      writer->writeStripe(10 + stripe, std::move(streams));
+    }
+    writer->close();
+    writeFile.close();
+
+    const auto tablet = createTabletReader(file);
+    const nimble::test::TabletReaderTestHelper helper(tablet.get());
+    ASSERT_EQ(
+        helper.numStripeGroups(),
+        metadataFlushThreshold == 1 ? kNumStripes : 1);
+    // Requested out of stream order.
+    const std::vector<uint32_t> streamIds{2, 0, 1};
+    uint32_t stripe{0};
+    for (uint32_t group{0}; group < helper.numStripeGroups(); ++group) {
+      SCOPED_TRACE(fmt::format("group {}", group));
+      const auto stripes = helper.stripeMetadata(group, streamIds);
+      for (const auto& metadata : stripes) {
+        SCOPED_TRACE(fmt::format("stripe {}", stripe));
+        ASSERT_LT(stripe, kNumStripes);
+        EXPECT_EQ(helper.stripeGroupIndex(stripe), group);
+        EXPECT_EQ(metadata.offset, tablet->stripeOffset(stripe));
+        EXPECT_EQ(metadata.numRows, 10 + stripe);
+        ASSERT_EQ(metadata.streams.size(), streamIds.size());
+        const auto identifier = tablet->stripeIdentifier(stripe);
+        for (size_t i{0}; i < streamIds.size(); ++i) {
+          SCOPED_TRACE(fmt::format("stream {}", streamIds[i]));
+          const auto location =
+              tablet->streamLocation(identifier, streamIds[i]);
+          EXPECT_EQ(metadata.streams[i].offset, location.offset);
+          EXPECT_EQ(metadata.streams[i].size, location.size);
+          if (stripe == 1 && streamIds[i] == 1) {
+            EXPECT_EQ(metadata.streams[i].size, 0);
+          } else {
+            EXPECT_EQ(
+                metadata.streams[i].size,
+                5 + stripe * kNumStreams + streamIds[i]);
+          }
+        }
+        ++stripe;
+      }
+    }
+    EXPECT_EQ(stripe, kNumStripes);
+
+    // A stream beyond the stream count of a group is absent from its stripes.
+    const std::vector<uint32_t> outOfRangeStream{kNumStreams};
+    for (const auto& metadata :
+         helper.stripeMetadata(/*stripeGroupIndex=*/0, outOfRangeStream)) {
+      ASSERT_EQ(metadata.streams.size(), 1);
+      EXPECT_EQ(metadata.streams[0].size, 0);
+    }
+  }
+}
+
 TEST_P(TabletTest, emptyWrite) {
   // Creating an Nimble file without writing any stripes
   test(/* stripes */ {});
