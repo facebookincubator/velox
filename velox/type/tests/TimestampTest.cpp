@@ -161,6 +161,39 @@ TEST(TimestampTest, arithmeticOverflow) {
   EXPECT_EQ(INT64_MAX, Timestamp::maxMicros().toMicros());
 }
 
+TEST(TimestampTest, toNanosAtInt64Limits) {
+  // The seconds times 10^9 is below INT64_MIN, but adding the nanos brings the
+  // result back into range.
+  {
+    const Timestamp timestamp(-9'223'372'037, 146'000'000);
+    EXPECT_EQ(-9'223'372'036'854'000'000, timestamp.toNanos());
+  }
+  // -9'223'372'037 * 10^9 + 145'224'192 is INT64_MIN.
+  {
+    const Timestamp timestamp(-9'223'372'037, 145'224'192);
+    EXPECT_EQ(INT64_MIN, timestamp.toNanos());
+  }
+  // One nanosecond before INT64_MIN.
+  {
+    const Timestamp timestamp(-9'223'372'037, 145'224'191);
+    VELOX_ASSERT_USER_THROW(
+        timestamp.toNanos(),
+        "Could not convert Timestamp(-9223372037, 145224191) to nanoseconds");
+  }
+  // 9'223'372'036 * 10^9 + 854'775'807 is INT64_MAX.
+  {
+    const Timestamp timestamp(9'223'372'036, 854'775'807);
+    EXPECT_EQ(INT64_MAX, timestamp.toNanos());
+  }
+  // One nanosecond after INT64_MAX.
+  {
+    const Timestamp timestamp(9'223'372'036, 854'775'808);
+    VELOX_ASSERT_USER_THROW(
+        timestamp.toNanos(),
+        "Could not convert Timestamp(9223372036, 854775808) to nanoseconds");
+  }
+}
+
 TEST(TimestampTest, toAppend) {
   std::string tsStringZeroValue;
   toAppend(Timestamp(0, 0), &tsStringZeroValue);
