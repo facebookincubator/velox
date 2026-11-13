@@ -96,6 +96,13 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @brief
   void deleteResults(std::string_view taskId, int destination);
 
+  /// Returns the queue generation a new server must retain. Creates a
+  /// placeholder for a task that has not initialized yet, or returns nullptr
+  /// for a task that was already removed.
+  std::shared_ptr<UcxOutputQueue> getQueueForServer(
+      std::string_view taskId,
+      int destination);
+
   /// @brief Asynchronously returns data through 'notify', immediately if
   /// available. Keeps unpublished readers pending until task initialization or
   /// a buffer update publishes their destination. Published broadcast readers
