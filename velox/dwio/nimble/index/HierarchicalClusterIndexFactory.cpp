@@ -418,11 +418,12 @@ std::string_view HierarchicalClusterIndexFactory::name() const {
 std::unique_ptr<IndexWriter> HierarchicalClusterIndexFactory::createWriter(
     const IndexConfig& config,
     const velox::TypePtr& inputType,
-    velox::memory::MemoryPool* pool) const {
+    velox::memory::MemoryPool* pool,
+    const Options& options) const {
   NIMBLE_USER_CHECK_EQ(config.family, IndexFamily::Cluster);
   NIMBLE_USER_CHECK_EQ(config.name, name());
   return HierarchicalClusterIndexWriter::create(
-      config, inputType, keyCodec_, pool);
+      config, inputType, keyCodec_, pool, options);
 }
 
 std::unique_ptr<IndexKeyEncoder>
