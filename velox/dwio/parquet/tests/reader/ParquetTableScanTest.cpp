@@ -704,6 +704,30 @@ TEST_F(ParquetTableScanTest, singleRowStruct) {
       "SELECT (0, 1)");
 }
 
+TEST_F(ParquetTableScanTest, requiredStructNullFilter) {
+  // 's' is a required group, so it is never null. 's IS NULL', and
+  // 's IS NOT NULL' when 's' is not projected, read only the nulls of 's'.
+  auto rowType = ROW({"s"}, {ROW({"a", "b"}, {BIGINT(), BIGINT()})});
+  const auto filePath = getExampleFilePath("single_row_struct.parquet");
+  {
+    SCOPED_TRACE("s IS NULL");
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {"s IS NULL"}, "", rowType)
+                    .planNode();
+    AssertQueryBuilder(plan).split(makeSplit(filePath)).assertEmptyResults();
+  }
+  {
+    SCOPED_TRACE("s IS NOT NULL");
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(ROW({}, {}), {"s IS NOT NULL"}, "", rowType)
+                    .singleAggregation({}, {"count(1)"})
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .split(makeSplit(filePath))
+        .assertResults(makeRowVector({makeFlatVector<int64_t>({1})}));
+  }
+}
+
 TEST_F(ParquetTableScanTest, array) {
   auto vector = makeArrayVector<int32_t>({});
   loadData(
