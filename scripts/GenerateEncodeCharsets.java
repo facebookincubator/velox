@@ -165,8 +165,16 @@ public final class GenerateEncodeCharsets {
 
         // Generated with JDK %s; do not edit.
         // Regenerate from the repository root with JDK 17:
-        //   header=velox/functions/sparksql/EncodeCharsets.h
-        //   java scripts/GenerateEncodeCharsets.java | clang-format > "$header"
+        //   (
+        //     set -e
+        //     header=velox/functions/sparksql/EncodeCharsets.h
+        //     tmp=$(mktemp "${header}.XXXXXX")
+        //     trap 'rm -f "$tmp"' EXIT
+        //     java scripts/GenerateEncodeCharsets.java > "$tmp"
+        //     clang-format -i "$tmp"
+        //     chmod 644 "$tmp"
+        //     mv "$tmp" "$header"
+        //   )
         // @generated
         namespace facebook::velox::functions::sparksql::detail::single_byte {
 

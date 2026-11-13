@@ -74,8 +74,7 @@ constexpr auto kStandardTypes = [] {
   return types;
 }();
 
-template <bool foldKelvinSign>
-std::strong_ordering compareIgnoreCase(
+std::strong_ordering compareCharsetAlias(
     const StringView& value,
     std::string_view expected) {
   const auto compareCharacter = [](char left, char right) {
@@ -90,14 +89,12 @@ std::strong_ordering compareIgnoreCase(
   size_t expectedPosition{0};
   while (position < value.size() && expectedPosition < expected.size()) {
     auto character = value.data()[position++];
-    if constexpr (foldKelvinSign) {
-      // Spark lowercases names; only U+212A folds from non-ASCII to ASCII.
-      if (character == '\xE2' && value.size() - position >= 2 &&
-          value.data()[position] == '\x84' &&
-          value.data()[position + 1] == '\xAA') {
-        character = 'k';
-        position += 2;
-      }
+    // Spark lowercases names; only U+212A folds from non-ASCII to ASCII.
+    if (character == '\xE2' && value.size() - position >= 2 &&
+        value.data()[position] == '\x84' &&
+        value.data()[position + 1] == '\xAA') {
+      character = 'k';
+      position += 2;
     }
     if (const auto comparison =
             compareCharacter(character, expected[expectedPosition++]);
@@ -469,7 +466,7 @@ Status encodeUtf32(
   }
   size_t numCodePoints{0};
   // Amortize validation before using the vectorizable UTF-8 byte counter.
-  constexpr size_t kMinByteCountSize = 64;
+  constexpr size_t kMinByteCountSize{64};
   if (input.size() >= kMinByteCountSize &&
       simdjson::validate_utf8(input.data(), input.size())) {
     numCodePoints = stringCore::lengthUnicode(input.data(), input.size());
@@ -522,17 +519,17 @@ Charset resolveCharset(const StringView& charset, bool legacyJavaCharsets) {
           aliases.end(),
           charset,
           [](const auto& alias, const StringView& name) {
-            return compareIgnoreCase<true>(name, alias.name) > 0;
+            return compareCharsetAlias(name, alias.name) > 0;
           });
     };
     const auto standard = findAlias(single_byte::kStandardAliases);
     if (standard != single_byte::kStandardAliases.end() &&
-        compareIgnoreCase<true>(charset, standard->name) == 0) {
+        compareCharsetAlias(charset, standard->name) == 0) {
       return {kStandardTypes[standard->charsetIndex]};
     }
     const auto legacy = findAlias(single_byte::kLegacyAliases);
     if (legacy != single_byte::kLegacyAliases.end() &&
-        compareIgnoreCase<true>(charset, legacy->name) == 0) {
+        compareCharsetAlias(charset, legacy->name) == 0) {
       return {CharsetType::kLegacySingleByte, legacy->charsetIndex};
     }
   }
