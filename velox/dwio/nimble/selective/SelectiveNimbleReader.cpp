@@ -931,7 +931,7 @@ void SelectiveNimbleRowReader::initIndexBounds() {
 
   // Single lookup to get the exact file-level row range.
   const auto lookupResult = clusterIndex_->lookup(
-      index::IndexLookup::LookupRequest::rangeScan({encodedBounds}));
+      *index::IndexLookup::LookupRequest::rangeScan({encodedBounds}));
   const auto rowRanges = lookupResult[0];
   if (rowRanges.empty()) {
     int64_t rowsSkipped = 0;

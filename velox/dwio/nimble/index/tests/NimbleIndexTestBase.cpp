@@ -135,7 +135,7 @@ HybridFlatMap makeHybridFlatMapConfig(
 
 NimbleIndexProjector::RowProjectionResult projectRows(
     NimbleIndexProjector& projector,
-    const NimbleIndexProjector::Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const NimbleIndexProjector::Options& options) {
   return folly::coro::blockingWait(projector.co_projectRows(request, options));
 }
@@ -577,9 +577,8 @@ NimbleIndexProjectorTestBase::makeWindowedSlice() {
   subfields.emplace_back("value");
   auto projector = createProjector(subfields);
   auto bounds = makeRangeLookup(rowType, {"key"}, kWindowStart, kWindowEnd);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
   return {std::move(projector), std::move(result), std::move(values)};
 }
 

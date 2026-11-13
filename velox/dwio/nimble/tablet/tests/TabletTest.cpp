@@ -4447,7 +4447,7 @@ class TabletWithIndexTest : public TabletTest {
       std::vector<velox::serializer::EncodedKeyBounds> keyBounds = {
           {.lowerKey = testCase.key, .upperKey = {}}};
       auto result = index->lookup(
-          nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
+          *nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
       ASSERT_EQ(result.size(), 1);
       if (testCase.expectedRange.has_value()) {
         ASSERT_EQ(result[0].size(), 1);
@@ -6780,7 +6780,7 @@ TEST_P(TabletWithIndexTest, preloadClusterIndex) {
     velox::serializer::EncodedKeyBounds bounds{
         .lowerKey = std::string("bbb"), .upperKey = std::nullopt};
     tablet->clusterIndex()->lookup(
-        nimble::index::IndexLookup::LookupRequest::rangeScan({bounds}));
+        *nimble::index::IndexLookup::LookupRequest::rangeScan({bounds}));
     EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesAfterOpen)
         << "Lookup after preload must not trigger additional index IO";
   }
@@ -7132,7 +7132,7 @@ TEST_F(TabletWithIndexTest, configCombinations) {
         std::vector<velox::serializer::EncodedKeyBounds> keyBounds = {
             {.lowerKey = key, .upperKey = {}}};
         return idx->lookup(
-            nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
+            *nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
       };
       ASSERT_EQ(lookupKey("aaa")[0].size(), 1);
       EXPECT_EQ(lookupKey("aaa")[0][0], chunk0);
@@ -7421,7 +7421,7 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPath) {
     std::vector<velox::serializer::EncodedKeyBounds> keyBounds = {
         {.lowerKey = "bbb", .upperKey = {}}};
     auto result = coldReader->clusterIndex()->lookup(
-        nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
+        *nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0], nimble::RowRange(0, 300));
@@ -7461,7 +7461,7 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPath) {
     std::vector<velox::serializer::EncodedKeyBounds> warmKeyBounds = {
         {.lowerKey = "ddd", .upperKey = {}}};
     auto warmResult = warmReader->clusterIndex()->lookup(
-        nimble::index::IndexLookup::LookupRequest::rangeScan(warmKeyBounds));
+        *nimble::index::IndexLookup::LookupRequest::rangeScan(warmKeyBounds));
     ASSERT_EQ(warmResult.size(), 1);
     ASSERT_EQ(warmResult[0].size(), 1);
     EXPECT_EQ(warmResult[0][0], nimble::RowRange(100, 300));
@@ -7794,6 +7794,20 @@ TEST_P(TabletTest, configureOptionsIndexFlags) {
     EXPECT_TRUE(containsSection(
         opts.preloadOptionalSections, nimble::kChunkStatsSection));
   }
+}
+
+TEST_P(TabletTest, configureOptionsClusterIndexName) {
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  EXPECT_EQ(
+      nimble::TabletReader::configureOptions(readerOptions).clusterIndexName,
+      nimble::index::kClusterIndexName);
+
+  readerOptions.setClusterIndexName("custom.index");
+  EXPECT_EQ(
+      nimble::TabletReader::configureOptions(readerOptions).clusterIndexName,
+      "custom.index");
 }
 
 TEST_P(TabletTest, configureOptionsCacheKeyEncodingViews) {

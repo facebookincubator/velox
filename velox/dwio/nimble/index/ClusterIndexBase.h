@@ -213,11 +213,11 @@ class ClusterIndexBase : public IndexLookup {
   void preloadIndex();
 
   // Builds the flat LookupResult from partitionRowRanges. Subclasses override
-  // this to apply their own narrowing. The base implementation rejects any
-  // lookup extension it is handed, because ignoring one would silently return
-  // a wider range than the caller asked for.
+  // this to apply their own narrowing. validateLookupRequest() has already
+  // validated the request's additional requirements, because ignoring its
+  // parameters would silently return a wider range than the caller asked for.
   virtual LookupResult buildLookupResult(
-      const LookupOptions& options,
+      const LookupRequest& request,
       const std::vector<RowRange>& partitionRowRanges) const;
 
   // Accumulated row counts of a partition's key chunks (prefix sum), so that

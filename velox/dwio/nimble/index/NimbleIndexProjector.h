@@ -55,9 +55,9 @@ class StreamSlicer;
 
 using Subfield = velox::common::Subfield;
 
-/// NimbleIndexProjector takes a batch of index lookup requests (point lookups
-/// or range scans with already-encoded keys) and column projections, then uses
-/// the Nimble cluster index to read the matching stripe rows. Results can be
+/// Projects columns for a batch of range lookups with already-encoded keys,
+/// using the Nimble cluster index to read the matching stripe rows. Single-key
+/// point lookups are available through lookup(encodedKey). Results can be
 /// serialized for transport, decoded into a Velox vector, or supplied as
 /// stripe streams to iterators.
 ///
@@ -190,12 +190,6 @@ class NimbleIndexProjector {
     bool cacheEncodingView{false};
   };
 
-  /// Request for a batch of index lookups.
-  struct Request {
-    /// Pre-encoded key bounds for each lookup.
-    std::vector<velox::serializer::EncodedKeyBounds> keyBounds;
-  };
-
   /// Serialized output for a single request.
   struct SerializedResponse {
     /// One self-describing kTablet IOBuf chain per (request × stripe)
@@ -248,19 +242,19 @@ class NimbleIndexProjector {
   };
 
   /// Projects the requested columns for the given batch of index lookups.
-  /// Returns one SerializedResponse per request, in order. Processes all
-  /// relevant stripes internally.
+  /// Returns one SerializedResponse per lookup position, in order. Processes
+  /// all relevant stripes internally. 'request' must be a range scan.
   SerializedResult projectStreams(
-      const Request& request,
+      const index::IndexLookup::LookupRequest& request,
       const Options& options);
 
   /// Projects rows directly into a Velox vector. Flat scalar projections use
   /// random-access EncodingView reads when supported. Nested projections use
   /// the general FieldReader path without serializing an intermediate kTablet
-  /// payload. The request and options must remain alive until the returned
-  /// task completes.
+  /// payload. 'request' must be a range scan. The request and options must
+  /// remain alive until the returned task completes.
   folly::coro::Task<RowProjectionResult> co_projectRows(
-      const Request& request,
+      const index::IndexLookup::LookupRequest& request,
       const Options& options);
 
   /// Resolves key bounds into stripe selections, in stripe order.
@@ -448,7 +442,9 @@ class NimbleIndexProjector {
 
   // Initializes per-request state: stores request/options pointers and
   // resets running totals.
-  void initRequest(const Request& request, const Options& options);
+  void initRequest(
+      const index::IndexLookup::LookupRequest& request,
+      const Options& options);
 
   // Clears all per-request state set by initRequest(). Invoked on scope
   // exit so a subsequent projection starts from a clean slate.
@@ -566,7 +562,9 @@ class NimbleIndexProjector {
   void initStreamChecksum(bool verifyStreamChecksums);
 
   // Resolves the request's stripes and loads their projected streams.
-  void loadStripes(const Request& request, const Options& options);
+  void loadStripes(
+      const index::IndexLookup::LookupRequest& request,
+      const Options& options);
 
   // Returns decoding options backed by this projector's scratch pool.
   Encoding::Options encodingOptions(bool cacheEncodingView);
@@ -715,7 +713,7 @@ class NimbleIndexProjector {
   // pipeline (lookupStripes → prepareStripes → loadStripeStreams), consumed by
   // whichever terminal step the caller asked for, and reset on return.
   struct ProjectionContext {
-    const Request* request{nullptr};
+    const index::IndexLookup::LookupRequest* request{nullptr};
     const Options* options{nullptr};
     uint32_t numRequests{0};
     // CSR mapping from stripes to request row ranges. Populated by

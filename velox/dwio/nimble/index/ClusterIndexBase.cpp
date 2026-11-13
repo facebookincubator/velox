@@ -403,8 +403,9 @@ void ClusterIndexBase::resolvePartitionBounds(
 }
 
 IndexLookup::LookupResult ClusterIndexBase::buildLookupResult(
-    const LookupOptions& options,
+    const LookupRequest& request,
     const std::vector<RowRange>& partitionRowRanges) const {
+  const auto& options = request.options();
   std::vector<RowRange> locations;
   locations.reserve(partitionRowRanges.size());
   std::vector<uint32_t> offsets;
@@ -525,6 +526,7 @@ IndexLookup::LookupResult ClusterIndexBase::lookup(
 IndexLookup::LookupResult ClusterIndexBase::lookup(
     const LookupRequest& request,
     LowerBoundChunk* lowerBoundChunk) const {
+  validateLookupRequest(request);
   std::vector<PartitionLookup> partitionLookups;
   std::vector<RowRange> partitionRowRanges;
   lookupPartitions(request, partitionLookups, partitionRowRanges);
@@ -532,7 +534,7 @@ IndexLookup::LookupResult ClusterIndexBase::lookup(
   NIMBLE_CHECK_LE(partitionLookups.size(), 2 * request.size());
   resolvePartitionBounds(partitionLookups, lowerBoundChunk);
 
-  return buildLookupResult(request.options(), partitionRowRanges);
+  return buildLookupResult(request, partitionRowRanges);
 }
 
 uint32_t ClusterIndexBase::resolvePartitionRow(
@@ -1031,7 +1033,7 @@ ClusterIndexBase::SeekResult ClusterIndexBase::seek(
     const velox::serializer::EncodedKeyBounds& bounds) const {
   LowerBoundChunk lowerBoundChunk;
   const auto result =
-      lookup(LookupRequest::rangeScan({bounds}), &lowerBoundChunk);
+      lookup(*LookupRequest::rangeScan({bounds}), &lowerBoundChunk);
   NIMBLE_CHECK_EQ(result.size(), 1);
   const auto& ranges = result[0];
   NIMBLE_CHECK_LE(
