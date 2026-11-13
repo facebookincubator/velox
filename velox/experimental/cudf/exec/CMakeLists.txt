@@ -33,6 +33,7 @@ add_library(
   CudfMarkDistinct.cpp
   CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
+  CudfPrestoOutput.cpp
   CudfReduce.cpp
   CudfTopN.cpp
   CudfTopNRowNumber.cpp
@@ -61,6 +62,7 @@ target_link_libraries(
     velox_cudf_expression
     velox_cudf_hive_connector
     velox_cudf_iceberg_connector
+    velox_cudf_presto_serializer
     velox_cudf_vector
     velox_exception
     velox_exec

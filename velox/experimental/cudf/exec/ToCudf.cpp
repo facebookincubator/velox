@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPrestoOutput.h"
 #include "velox/experimental/cudf/exec/GpuCapabilities.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
@@ -128,12 +129,21 @@ bool CompileState::compile(bool allowCpuFallback) {
       };
 
   // caching operator properties
-  std::vector<OperatorProperties> opProps(operators.size());
-  std::transform(
-      operators.begin(),
-      operators.end(),
-      opProps.begin(),
-      getOperatorProperties);
+  std::vector<OperatorProperties> opProps;
+  opProps.reserve(operators.size());
+  for (size_t i = 0; i < operators.size(); ++i) {
+    auto props = getOperatorProperties(operators[i]);
+    // An adapter that requires GPU input keeps the CPU operator after an
+    // operator with CPU output: nothing would move to the GPU.
+    if (props.canRunOnGPU && props.adapter != nullptr &&
+        props.adapter->requiresGpuInput() &&
+        (i == 0 || !opProps[i - 1].producesGpuOutput)) {
+      props.canRunOnGPU = false;
+      props.acceptsGpuInput = false;
+      props.producesGpuOutput = false;
+    }
+    opProps.push_back(std::move(props));
+  }
 
   int32_t operatorsOffset = 0;
   // When an operator's input types are unsupported by cuDF, all subsequent
@@ -230,13 +240,9 @@ bool CompileState::compile(bool allowCpuFallback) {
         }
       }
 
-      if (keepOperator == 0) {
-        // Only a declined GPU path requires CPU fallback.
-        isPureCpuOperator = !canUseGpuPath;
-      } else {
-        // A kept operator is valid with or without appended operators.
-        isPureCpuOperator = false;
-      }
+      // A kept operator is valid with or without appended operators, and so
+      // is a declined operator that its adapter allows on the CPU.
+      isPureCpuOperator = !canUseGpuPath && !adapter->allowsCpuOperator();
     } else {
       // special case for CudfOperator
       if (isAnyOf<CudfOperator>(oper)) {
@@ -529,6 +535,15 @@ void CudfConfig::initialize(
   if (config.find(kUcxPartitionedOutputBatchRows) != config.end()) {
     partitionedOutputBatchRows =
         folly::to<int64_t>(config[kUcxPartitionedOutputBatchRows]);
+  }
+  if (config.find(kCudfPrestoOutputEnabled) != config.end()) {
+    prestoOutputEnabled = folly::to<bool>(config[kCudfPrestoOutputEnabled]);
+  }
+  if (config.find(kCudfPrestoOutputPageBytes) != config.end()) {
+    const auto pageBytes =
+        folly::to<int64_t>(config[kCudfPrestoOutputPageBytes]);
+    CudfPrestoOutput::checkPageBytes(pageBytes);
+    prestoOutputPageBytes = pageBytes;
   }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);

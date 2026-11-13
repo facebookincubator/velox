@@ -262,6 +262,18 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_presto_output_test
+  SOURCES Main.cpp PrestoOutputTest.cpp
+  LIBS
+    ${CUDF_TEST_DEFAULT_LIBS}
+    velox_cudf_exec_test_lib
+    velox_cudf_hive_connector
+    velox_dwio_parquet_writer
+    velox_presto_serializer
+    fmt::fmt
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_presto_page_device_test
   SOURCES Main.cpp PrestoPageDeviceTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_presto_serializer
