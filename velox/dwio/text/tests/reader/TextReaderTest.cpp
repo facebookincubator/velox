@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <type_traits>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
@@ -42,6 +43,14 @@ namespace {
 
 int32_t parseDate(const std::string& text) {
   return DATE()->toDays(text);
+}
+
+std::shared_ptr<TempFilePath> createTextFile(std::string_view contents) {
+  auto textFile = TempFilePath::create();
+  LocalWriteFile writeFile(textFile->getPath(), true, false);
+  writeFile.append(contents);
+  writeFile.close();
+  return textFile;
 }
 
 class TextReaderTest : public testing::Test,
@@ -91,17 +100,13 @@ class TextReaderTest : public testing::Test,
       std::optional<double> expectedDouble) {
     ASSERT_FALSE(inputs.empty());
     SCOPED_TRACE(inputs.front());
-    auto textFile = TempFilePath::create();
-    {
-      auto writeFile =
-          std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
-      for (const auto& input : inputs) {
-        writeFile->append("7," + input + "," + input + "," + input + ",9\n");
-      }
-      // Verify a malformed field does not prevent reading a later valid row.
-      writeFile->append("7,2.5f,2.5f,2.5f,9\n");
-      writeFile->close();
+    std::string contents;
+    for (const auto& input : inputs) {
+      contents += "7," + input + "," + input + "," + input + ",9\n";
     }
+    // Verify a malformed field does not prevent reading a later valid row.
+    contents += "7,2.5f,2.5f,2.5f,9\n";
+    auto textFile = createTextFile(contents);
 
     const auto type = ROW(
         {{"before", INTEGER()},
@@ -1993,26 +1998,20 @@ TEST_F(TextReaderTest, extractionMapValues) {
 TEST_F(TextReaderTest, extractionMapKeyFilter) {
   // Write a text file with a MAP(VARCHAR, BIGINT) column and apply a
   // MapKeyFilter extraction transform via ScanSpec.
-  auto textFile = TempFilePath::create();
-  {
-    auto writeFile =
-        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
-    // Row format: map entries separated by \x02, key-value by \x03.
-    // Row 0: {"a":1, "b":2, "c":3}
-    // Row 1: {"a":10, "d":40}
-    writeFile->append(
-        "a\x03"
-        "1\x02"
-        "b\x03"
-        "2\x02"
-        "c\x03"
-        "3\n"
-        "a\x03"
-        "10\x02"
-        "d\x03"
-        "40\n");
-    writeFile->close();
-  }
+  // Row format: map entries separated by \x02, key-value by \x03.
+  // Row 0: {"a":1, "b":2, "c":3}
+  // Row 1: {"a":10, "d":40}
+  auto textFile = createTextFile(
+      "a\x03"
+      "1\x02"
+      "b\x03"
+      "2\x02"
+      "c\x03"
+      "3\n"
+      "a\x03"
+      "10\x02"
+      "d\x03"
+      "40\n");
 
   const auto type = ROW({{"col_map", MAP(VARCHAR(), BIGINT())}});
   auto reader = createReader(type, textFile->getPath());
