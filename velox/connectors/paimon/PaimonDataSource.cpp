@@ -58,10 +58,6 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       "Paimon same-schema append reader requires rawConvertible=true; "
       "merge-on-read and data-evolution column merging are not implemented yet");
   for (const auto& file : paimonSplit->dataFiles()) {
-    VELOX_USER_CHECK(
-        !file.deletionFile,
-        "Paimon reader does not support deletion vectors; "
-        "position-based deletion filtering is not implemented yet");
     VELOX_USER_CHECK_EQ(
         file.type,
         PaimonDataFile::Type::kData,

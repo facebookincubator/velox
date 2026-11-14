@@ -23,13 +23,16 @@ PaimonDeletionFile::PaimonDeletionFile(
     std::string _path,
     uint64_t _offset,
     uint64_t _length,
-    uint64_t _cardinality)
+    std::optional<uint64_t> _cardinality)
     : path(std::move(_path)),
       offset(_offset),
       length(_length),
       cardinality(_cardinality) {
   VELOX_CHECK_GT(length, 0, "PaimonDeletionFile length must be > 0");
-  VELOX_CHECK_GT(cardinality, 0, "PaimonDeletionFile cardinality must be > 0");
+  if (cardinality.has_value()) {
+    VELOX_CHECK_GT(
+        *cardinality, 0, "PaimonDeletionFile cardinality must be > 0");
+  }
 }
 
 std::string PaimonDeletionFile::toString() const {
@@ -38,7 +41,7 @@ std::string PaimonDeletionFile::toString() const {
       path,
       offset,
       length,
-      cardinality);
+      cardinality.has_value() ? std::to_string(*cardinality) : "null");
 }
 
 folly::dynamic PaimonDeletionFile::serialize() const {
@@ -46,17 +49,23 @@ folly::dynamic PaimonDeletionFile::serialize() const {
   obj["path"] = path;
   obj["offset"] = offset;
   obj["length"] = length;
-  obj["cardinality"] = cardinality;
+  if (cardinality.has_value()) {
+    obj["cardinality"] = *cardinality;
+  }
   return obj;
 }
 
 // static
 PaimonDeletionFile PaimonDeletionFile::create(const folly::dynamic& obj) {
+  std::optional<uint64_t> cardinality;
+  if (obj.count("cardinality") > 0 && !obj["cardinality"].isNull()) {
+    cardinality = static_cast<uint64_t>(obj["cardinality"].asInt());
+  }
   return PaimonDeletionFile(
       obj["path"].asString(),
       static_cast<uint64_t>(obj["offset"].asInt()),
       static_cast<uint64_t>(obj["length"].asInt()),
-      static_cast<uint64_t>(obj["cardinality"].asInt()));
+      cardinality);
 }
 
 } // namespace facebook::velox::connector::paimon

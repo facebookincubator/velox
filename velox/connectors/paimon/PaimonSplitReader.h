@@ -17,6 +17,7 @@
 
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonDeletionVectorReader.h"
 #include "velox/connectors/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::paimon {
@@ -24,12 +25,13 @@ namespace facebook::velox::connector::paimon {
 /// Sequential multi-file reader for rawConvertible Paimon splits. Opens one
 /// file at a time and reuses FileSplitReader for per-file preparation and batch
 /// reads, advancing past exhausted, empty or skipped files. The same ScanSpec
-/// is reused across files.
+/// is reused across files. A file's deletion vector is loaded when the file is
+/// opened and applied in next() via Mutation.deletedRows, the same contract as
+/// IcebergSplitReader.
 class PaimonSplitReader : public connector::FileSplitReader {
  public:
   /// @param fileSplit FileConnectorSplit for the first data file.
-  /// @param paimonSplit Complete logical split. The caller checks raw-read
-  ///        eligibility and rejects deletion vectors and changelog files.
+  /// @param paimonSplit Complete logical split of data files.
   /// @param partitionKeys Borrowed partition-column handles for the scan,
   ///        distinct from the partition values in paimonSplit.
   PaimonSplitReader(
@@ -95,6 +97,10 @@ class PaimonSplitReader : public connector::FileSplitReader {
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   // Borrowed from the data source; rebound with setRuntimeStats() on takeover.
   dwio::common::RuntimeStats* runtimeStats_{nullptr};
+
+  // Deletion-vector reader for the currently open data file, if present.
+  std::unique_ptr<PaimonDeletionVectorReader> deletionVectorReader_;
+  BufferPtr deleteBitmap_;
 };
 
 } // namespace facebook::velox::connector::paimon

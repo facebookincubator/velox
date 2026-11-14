@@ -15,7 +15,12 @@
  */
 #include "velox/connectors/paimon/PaimonSplitReader.h"
 
+#include <cstring>
 #include <limits>
+
+#include "velox/common/base/BitUtil.h"
+#include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/common/Mutation.h"
 
 namespace facebook::velox::connector::paimon {
 
@@ -50,8 +55,8 @@ PaimonSplitReader::PaimonSplitReader(
       paimonSplit_(std::move(paimonSplit)) {
   VELOX_CHECK_NOT_NULL(paimonSplit_);
 
-  // Build FileConnectorSplits for all data files so we can switch between
-  // them during multi-file iteration.
+  // Build FileConnectorSplits for all files so we can switch between them
+  // during multi-file iteration.
   const auto& dataFiles = paimonSplit_->dataFiles();
   fileSplits_.reserve(dataFiles.size());
   for (const auto& dataFile : dataFiles) {
@@ -70,10 +75,29 @@ void PaimonSplitReader::prepareSplit(
 
 uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
   while (ensureFileSplitReader()) {
-    // TODO: Apply deletion vectors using original physical file row positions.
     // TODO: Decode internal columns and row kinds for primary-key/changelog
     // files.
-    const auto rowsRead = connector::FileSplitReader::next(size, output);
+    const auto actualSize = baseRowReader_->nextReadSize(size);
+    if (actualSize == dwio::common::RowReader::kAtEnd) {
+      finishFileSplitReader();
+      continue;
+    }
+
+    dwio::common::Mutation mutation;
+    mutation.randomSkip = baseReaderOpts_.randomSkip().get();
+    if (deletionVectorReader_ != nullptr &&
+        !deletionVectorReader_->noMoreData()) {
+      // The bitmap is reused across batches and files, so clear every word
+      // this batch reads before setting its deletes.
+      const auto numBytes = bits::nwords(actualSize) * sizeof(uint64_t);
+      dwio::common::ensureCapacity<int8_t>(
+          deleteBitmap_, numBytes, connectorQueryCtx_->memoryPool());
+      std::memset(deleteBitmap_->asMutable<int8_t>(), 0, numBytes);
+      deletionVectorReader_->readDeletePositions(
+          baseRowReader_->nextRowNumber(), actualSize, deleteBitmap_);
+      mutation.deletedRows = deleteBitmap_->as<uint64_t>();
+    }
+    const auto rowsRead = baseRowReader_->next(actualSize, output, &mutation);
     if (rowsRead > 0) {
       return rowsRead;
     }
@@ -97,6 +121,13 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // TODO: Add historical-schema adaptation using per-file schema metadata.
     connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     if (!emptySplit_) {
+      const auto& dataFile = paimonSplit_->dataFiles()[currentFileIndex_];
+      if (dataFile.deletionFile.has_value()) {
+        deletionVectorReader_ = std::make_unique<PaimonDeletionVectorReader>(
+            *dataFile.deletionFile);
+      } else {
+        deletionVectorReader_ = nullptr;
+      }
       return true;
     }
     // Empty preparation may leave a file reader but no row reader. Reset
@@ -115,6 +146,7 @@ void PaimonSplitReader::finishFileSplitReader() {
   ++currentFileIndex_;
   baseReader_ = nullptr;
   baseRowReader_ = nullptr;
+  deletionVectorReader_ = nullptr;
   emptySplit_ = false;
 }
 
