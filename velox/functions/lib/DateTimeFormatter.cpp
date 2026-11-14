@@ -816,6 +816,18 @@ int getMaxDigitConsume(
   }
 }
 
+// Rescales parsed fraction-of-second digits to truncated microseconds.
+int64_t scaleFractionToMicros(int64_t value, int digitCount) {
+  constexpr int kMicroDigits = 6;
+  for (int i = digitCount; i < kMicroDigits; ++i) {
+    value *= 10;
+  }
+  for (int i = kMicroDigits; i < digitCount; ++i) {
+    value /= 10;
+  }
+  return value;
+}
+
 // If failOnError is true, throws exception for parsing error. Otherwise,
 // returns -1. Returns 0 if no parsing error.
 int32_t parseFromPattern(
@@ -863,7 +875,7 @@ int32_t parseFromPattern(
       return -1;
     }
     cur += size;
-    if (!date.hasYear) {
+    if (!date.hasYear && type != DateTimeFormatterType::SPARK_ISO) {
       date.hasYear = true;
       date.year = 2000;
     }
@@ -912,10 +924,15 @@ int32_t parseFromPattern(
         ++cur;
         ++count;
       }
+      if (type == DateTimeFormatterType::SPARK_ISO) {
+        // Spark truncates toward zero to microsecond precision.
+        number = scaleFractionToMicros(number, count);
+      }
       // If the number of digits is less than 3, a simple formatter interprets
       // it as the whole number; otherwise, it pads the number with zeros.
       if (type != DateTimeFormatterType::STRICT_SIMPLE &&
-          type != DateTimeFormatterType::LENIENT_SIMPLE) {
+          type != DateTimeFormatterType::LENIENT_SIMPLE &&
+          type != DateTimeFormatterType::SPARK_ISO) {
         number *= std::pow(10, 3 - count);
       }
     } else if (
@@ -937,7 +954,10 @@ int32_t parseFromPattern(
         ++count;
       }
       if (count == 2) {
-        if (number >= 70) {
+        if (type == DateTimeFormatterType::SPARK_ISO) {
+          // Spark always resolves a two-digit year as 2000 + value.
+          number += 2000;
+        } else if (number >= 70) {
           number += 1900;
         } else if (number >= 0 && number < 70) {
           number += 2000;
@@ -1011,8 +1031,8 @@ int32_t parseFromPattern(
         date.dayOfYearFormat = false;
         // Joda has this weird behavior where it returns 1970 as the year by
         // default (if no year is specified), but if either day or month are
-        // specified, it fallsback to 2000.
-        if (!date.hasYear) {
+        // specified, it fallsback to 2000. Spark always defaults to 1970.
+        if (!date.hasYear && type != DateTimeFormatterType::SPARK_ISO) {
           date.hasYear = true;
           date.year = 2000;
         }
@@ -1027,8 +1047,8 @@ int32_t parseFromPattern(
         date.weekOfMonthDateFormat = false;
         // Joda has this weird behavior where it returns 1970 as the year by
         // default (if no year is specified), but if either day or month are
-        // specified, it fallsback to 2000.
-        if (!date.hasYear) {
+        // specified, it fallsback to 2000. Spark always defaults to 1970.
+        if (!date.hasYear && type != DateTimeFormatterType::SPARK_ISO) {
           date.hasYear = true;
           date.year = 2000;
         }
@@ -1043,8 +1063,8 @@ int32_t parseFromPattern(
         date.weekOfMonthDateFormat = false;
         // Joda has this weird behavior where it returns 1970 as the year by
         // default (if no year is specified), but if either day or month are
-        // specified, it fallsback to 2000.
-        if (!date.hasYear) {
+        // specified, it fallsback to 2000. Spark always defaults to 1970.
+        if (!date.hasYear && type != DateTimeFormatterType::SPARK_ISO) {
           date.hasYear = true;
           date.year = 2000;
         }
@@ -1101,7 +1121,10 @@ int32_t parseFromPattern(
         break;
 
       case DateTimeFormatSpecifier::FRACTION_OF_SECOND:
-        date.microsecond = number * util::kMicrosPerMsec;
+        // For SPARK_ISO, `number` was already rescaled to microseconds above.
+        date.microsecond = type == DateTimeFormatterType::SPARK_ISO
+            ? number
+            : number * util::kMicrosPerMsec;
         break;
 
       case DateTimeFormatSpecifier::WEEK_YEAR:
@@ -1831,7 +1854,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
 }
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
-    const std::string_view& format) {
+    const std::string_view& format,
+    DateTimeFormatterType type) {
   if (format.empty()) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
@@ -1843,6 +1867,11 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
   DateTimeFormatterBuilder builder(format.size());
   const char* cur = format.data();
   const char* end = cur + format.size();
+
+  // C is not a Java pattern letter at all; Y, w, e, E are rejected by Spark
+  // when parsing. x is rejected here too: Velox would parse it as a
+  // week-year, while Spark treats it as a zone offset (not supported yet).
+  static constexpr std::string_view kSparkIsoRejectedLetters = "CYxweE";
 
   while (cur < end) {
     const char* startTokenPtr = cur;
@@ -1877,6 +1906,16 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
       while (cur < end && *startTokenPtr == *cur) {
         ++count;
         ++cur;
+      }
+      if (type == DateTimeFormatterType::SPARK_ISO &&
+          kSparkIsoRejectedLetters.find(*startTokenPtr) !=
+              std::string_view::npos) {
+        if (threadSkipErrorDetails()) {
+          return folly::makeUnexpected(Status::UserError());
+        }
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Specifier {} is not supported.", *startTokenPtr));
       }
       switch (*startTokenPtr) {
         case 'G':
@@ -1938,6 +1977,15 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
           builder.appendSecondOfMinute(count);
           break;
         case 'S':
+          if (type == DateTimeFormatterType::SPARK_ISO && count > 9) {
+            if (threadSkipErrorDetails()) {
+              return folly::makeUnexpected(Status::UserError());
+            }
+            return folly::makeUnexpected(
+                Status::UserError(
+                    "Specifier S supports at most 9 pattern letters, got: {}",
+                    count));
+          }
           builder.appendFractionOfSecond(count);
           break;
         case 'z':
@@ -1961,7 +2009,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
       }
     }
   }
-  return builder.setType(DateTimeFormatterType::JODA).build();
+  return builder.setType(type).build();
 }
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
