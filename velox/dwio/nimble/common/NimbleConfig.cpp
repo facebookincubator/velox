@@ -417,6 +417,38 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.index.omit_key_column_storage",
     false);
 
+/* static */ Config::Entry<std::string> Config::INDEX_NAME(
+    "nimble.index.name",
+    "");
+
+/* static */ Config::Entry<std::string> Config::INDEX_WEIGHT_COLUMN(
+    "nimble.index.weight_column",
+    "");
+
+/* static */ Config::Entry<const std::vector<std::pair<EncodingType, float>>>
+    Config::INDEX_KEY_ENCODING_READ_FACTORS(
+        "nimble.index.key_encoding_read_factors",
+        {},
+        [](const std::vector<std::pair<EncodingType, float>>& readFactors) {
+          std::vector<std::string> parts;
+          std::transform(
+              readFactors.cbegin(),
+              readFactors.cend(),
+              std::back_inserter(parts),
+              [](const auto& readFactor) {
+                return fmt::format(
+                    "{}={}", toString(readFactor.first), readFactor.second);
+              });
+          return folly::join(";", parts);
+        },
+        [](const std::string& /* key */, const std::string& readFactorsConfig) {
+          if (readFactorsConfig.empty()) {
+            return std::vector<std::pair<EncodingType, float>>{};
+          }
+          return ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
+              readFactorsConfig);
+        });
+
 // EXPERIMENTAL: BlockBitPacking encoding is not production-ready. Do not
 // enable for production tables without consulting the Nimble team
 // (oncall: dwios).
@@ -446,17 +478,25 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "");
 
 // Defaults match the corresponding WriterOptions fields, so an absent key
-// leaves the writer exactly where it was. METADATA_COMPRESSION_THRESHOLD is the
-// exception: WriterOptions holds an optional and the writer substitutes its own
-// threshold when unset, so the builder applies this only when the key is
-// present rather than defaulting it here.
+// leaves the writer exactly where it was. METADATA_COMPRESSION_THRESHOLD and
+// METADATA_FLUSH_THRESHOLD are the exception: WriterOptions holds optionals and
+// the writer substitutes its own thresholds when unset, so the builder applies
+// them only when the key is present rather than defaulting them here.
 /* static */ Config::Entry<uint32_t> Config::METADATA_COMPRESSION_THRESHOLD(
     "nimble.metadata.compression.threshold",
+    0);
+
+/* static */ Config::Entry<uint32_t> Config::METADATA_FLUSH_THRESHOLD(
+    "nimble.metadata.flush.threshold",
     0);
 
 /* static */ Config::Entry<std::string> Config::STRIPE_GROUP_ENCODING_LAYOUT(
     "nimble.stripe_group.encoding_layout",
     "raw");
+
+/* static */ Config::Entry<bool> Config::STRIPE_GROUP_SPARSE_LAYOUT(
+    "nimble.stripe_group.sparse_layout",
+    false);
 
 /* static */ Config::Entry<double> Config::CHUNK_STATS_MIN_AVG_CHUNKS(
     "nimble.chunk.stats.min_avg_chunks",
