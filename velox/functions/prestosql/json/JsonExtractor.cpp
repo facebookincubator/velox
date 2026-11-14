@@ -36,7 +36,7 @@ class JsonExtractor {
   // Use this method to get an instance of JsonExtractor given a json path.
   static JsonExtractor& getInstance(std::string_view path) {
     // Pre-process
-    std::string trimedPath = folly::trimWhitespace(path).str();
+    std::string trimedPath = std::string(folly::trimWhitespace(path));
 
     std::shared_ptr<JsonExtractor> op;
     if (kExtractorCache.count(trimedPath)) {
