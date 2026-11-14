@@ -83,6 +83,17 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx)
   inputFlatNoNulls_ = false;
 }
 
+bool EvalCtx::flattenInsteadOfPeeling(const BaseVector& input) const {
+  // Peeling is disabled globally.
+  if (!execCtx_->optimizationParams().peelingEnabled) {
+    return true;
+  }
+
+  // Flattening copies every row of the dictionary, so compare its whole flat
+  // size against the budget for that many rows.
+  return input.estimateFlatSize() <= input.size() * kMaxFlattenRowBytes;
+}
+
 void EvalCtx::saveAndReset(ContextSaver& saver, const SelectivityVector& rows) {
   if (saver.context) {
     return;

@@ -5575,6 +5575,77 @@ TEST_F(ExprTest, disablePeeling) {
       execCtx.get()));
 }
 
+TEST_F(ExprTest, smallBatchFlattenOrPeel) {
+  // Batches below 'expression.min_rows_for_peeling' flatten a single
+  // dictionary input of small rows and peel one of large rows. A flattened
+  // input is processed once per dictionary row and gives a flat result. A
+  // peeled input is processed once per distinct base row and gives a
+  // dictionary result.
+  constexpr vector_size_t kDictionarySize = 4;
+  constexpr vector_size_t kNumBaseRows = 2;
+
+  auto makeExecCtx = [&](std::unordered_map<std::string, std::string> config) {
+    config.emplace(core::QueryConfig::kMinRowsForPeeling, "16");
+    auto queryCtx =
+        core::QueryCtx::create(nullptr, core::QueryConfig(std::move(config)));
+    return std::make_pair(
+        queryCtx, std::make_unique<core::ExecCtx>(pool_.get(), queryCtx.get()));
+  };
+
+  // Wraps 'kNumBaseRows' rows of arrays of arrays, each inner array holding
+  // 'innerSize' bigints, in a dictionary of 'kDictionarySize' rows.
+  auto makeInput = [&](vector_size_t innerSize) {
+    auto inner = makeArrayVector<int64_t>(
+        2 * kNumBaseRows,
+        [&](auto /*row*/) { return innerSize; },
+        [](auto row) { return row; });
+    auto base = makeArrayVector({0, 2}, inner);
+    return makeRowVector({wrapInDictionary(
+        makeIndices(kDictionarySize, [](auto row) { return row % 2; }),
+        kDictionarySize,
+        base)});
+  };
+
+  auto expectFlattened = [&](const RowVectorPtr& input,
+                             core::ExecCtx* execCtx) {
+    auto [results, stats] =
+        evaluateMultipleWithStats({"cardinality(c0)"}, input, {}, execCtx);
+    ASSERT_EQ(results[0]->encoding(), VectorEncoding::Simple::FLAT);
+    ASSERT_EQ(stats["cardinality"].numProcessedRows, kDictionarySize);
+    assertEqualVectors(makeConstant<int64_t>(2, kDictionarySize), results[0]);
+  };
+
+  auto expectPeeled = [&](const RowVectorPtr& input, core::ExecCtx* execCtx) {
+    auto [results, stats] =
+        evaluateMultipleWithStats({"cardinality(c0)"}, input, {}, execCtx);
+    ASSERT_EQ(results[0]->encoding(), VectorEncoding::Simple::DICTIONARY);
+    ASSERT_EQ(stats["cardinality"].numProcessedRows, kNumBaseRows);
+    assertEqualVectors(makeConstant<int64_t>(2, kDictionarySize), results[0]);
+  };
+
+  // Rows of 16 bytes and of 64KB.
+  auto smallRows = makeInput(1);
+  auto largeRows = makeInput(4'096);
+  const auto maxFlattenBytes =
+      kDictionarySize * exec::EvalCtx::kMaxFlattenRowBytes;
+  ASSERT_LE(smallRows->childAt(0)->estimateFlatSize(), maxFlattenBytes);
+  ASSERT_GT(largeRows->childAt(0)->estimateFlatSize(), maxFlattenBytes);
+
+  // Small rows are flattened and large rows are peeled.
+  {
+    auto [queryCtx, execCtx] = makeExecCtx({});
+    expectFlattened(smallRows, execCtx.get());
+    expectPeeled(largeRows, execCtx.get());
+  }
+
+  // Peeling disabled for debugging flattens large rows too.
+  {
+    auto [queryCtx, execCtx] = makeExecCtx(
+        {{core::QueryConfig::kDebugDisableExpressionWithPeeling, "true"}});
+    expectFlattened(largeRows, execCtx.get());
+  }
+}
+
 TEST_F(ExprTest, disableSharedSubExpressionReuse) {
   // Verify that shared subexpression reuse is disabled when the config is set
   // by confirming that the same rows are processed twice by the shared

@@ -601,6 +601,18 @@ class EvalCtx {
         rows.countSelected() >= params.minRowsForPeeling;
   }
 
+  /// Largest average flat size of a row of a dictionary input that batches
+  /// below OptimizationParams::minRowsForPeeling flatten. Inputs with larger
+  /// rows are peeled, since copying them costs more than peeling.
+  static constexpr uint64_t kMaxFlattenRowBytes{4 << 10};
+
+  /// Returns true if 'input', a dictionary-encoded function argument on rows
+  /// for which peelingEnabled() is false, should be flattened rather than
+  /// peeled. Always true when peeling is disabled globally. Otherwise, true
+  /// only if the rows of 'input' average at most kMaxFlattenRowBytes when
+  /// flat.
+  bool flattenInsteadOfPeeling(const BaseVector& input) const;
+
   /// Returns true if shared subexpression reuse is enabled.
   bool sharedSubExpressionReuseEnabled() const {
     return execCtx_->optimizationParams().sharedSubExpressionReuseEnabled;

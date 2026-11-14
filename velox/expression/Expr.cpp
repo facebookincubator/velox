@@ -1588,6 +1588,10 @@ bool Expr::applyFunctionWithPeeling(
   // 3. Single dictionary-encoded argument with all other arguments being
   //    constants (e.g. in-predicate: dict_wrap(c0) in (40, 42)): flatten the
   //    dictionary — the constants pass through unchanged.
+  //
+  // In cases 2 and 3, a dictionary whose rows are large is peeled instead,
+  // since copying them costs more than peeling (see
+  // EvalCtx::flattenInsteadOfPeeling()).
   if (!context.peelingEnabled(applyRows) &&
       !(inputValues_.size() == 1 &&
         inputValues_[0]->encoding() == VectorEncoding::Simple::CONSTANT)) {
@@ -1605,13 +1609,18 @@ bool Expr::applyFunctionWithPeeling(
         dictIndex = i;
       }
     }
-    if (canFlatten && dictIndex != -1) {
+    if (!canFlatten || dictIndex == -1) {
+      return false;
+    }
+
+    // Flatten the dictionary unless copying it costs more than peeling it.
+    if (context.flattenInsteadOfPeeling(*inputValues_[dictIndex])) {
       BaseVector::flattenVector(inputValues_[dictIndex]);
       applyFunction(applyRows, context, result);
       return true;
     }
-    return false;
   }
+
   // Attempt peeling.
   std::vector<VectorPtr> peeledVectors;
   auto peeledEncoding = PeeledEncoding::peel(
