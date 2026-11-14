@@ -73,6 +73,7 @@
 #include "velox/serializers/KeyEncoder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook {
 DEFINE_uint32(
@@ -1896,6 +1897,67 @@ TEST_F(WriterTest, rootHasNulls) {
   for (auto i = 0; i < batchSize; ++i) {
     ASSERT_TRUE(result->equalValueAt(vector.get(), i, i));
   }
+}
+
+TEST_F(WriterTest, flatMapVectorIntoMapColumn) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto map = vectorMaker.mapVector(
+      {0, 2, 2, 4, 4, 5},
+      vectorMaker.flatVector<int64_t>({1, 2, 1, 3, 2, 1, 2, 3}),
+      vectorMaker.arrayVectorNullable<int64_t>({
+          {{1, 2}},
+          {{3}},
+          std::nullopt,
+          {{4, std::nullopt, 6}},
+          {std::vector<std::optional<int64_t>>{}},
+          {{7}},
+          {{8}},
+          {{9}},
+      }),
+      {1});
+  auto flatMap = velox::FlatMapVector::fromMapVector(*map);
+  ASSERT_EQ(flatMap->encoding(), velox::VectorEncoding::Simple::FLAT_MAP);
+  ASSERT_EQ(flatMap->numDistinctKeys(), 3);
+
+  auto testRoundTrip = [&](const velox::VectorPtr& input,
+                           const velox::VectorPtr& expected,
+                           bool flatColumn) {
+    auto vector = vectorMaker.rowVector({"m"}, {input});
+    std::string file;
+    {
+      auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+      nimble::WriterOptions options;
+      if (flatColumn) {
+        options.flatMapColumns = {{"m", {}}};
+      }
+      nimble::Writer writer(
+          vector->type(), std::move(writeFile), *rootPool_, std::move(options));
+      writer.write(vector);
+      writer.close();
+    }
+
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    nimble::BatchReader reader(readFile.get(), *leafPool_);
+    ASSERT_EQ(
+        reader.schema()->asRow().childAt(0)->kind(),
+        flatColumn ? nimble::Kind::FlatMap : nimble::Kind::Map);
+    velox::VectorPtr result;
+    ASSERT_TRUE(reader.next(100, result));
+    velox::test::assertEqualVectors(
+        expected, result->as<velox::RowVector>()->childAt(0));
+    ASSERT_FALSE(reader.next(100, result));
+  };
+
+  testRoundTrip(flatMap, map, false);
+  testRoundTrip(flatMap, map, true);
+
+  auto indices =
+      velox::test::makeIndicesInReverse(map->size(), leafPool_.get());
+  testRoundTrip(
+      velox::BaseVector::wrapInDictionary(
+          nullptr, indices, map->size(), flatMap),
+      velox::BaseVector::wrapInDictionary(nullptr, indices, map->size(), map),
+      false);
 }
 
 TEST_F(WriterTest, schemaGrowthExtraColumn) {

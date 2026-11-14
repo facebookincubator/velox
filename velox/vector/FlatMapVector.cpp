@@ -1042,18 +1042,20 @@ MapVectorPtr FlatMapVector::toMapVector() const {
 
   // The main scatter loop. Scan each map values vector, and copy the elements
   // to the right offsets in the flattened output.
+  std::vector<CopyRange> ranges;
   for (vector_size_t i = 0; i < mapValues_.size(); i++) {
     if (mapValues_[i] != nullptr) {
+      ranges.clear();
       for (vector_size_t j = 0; j < length_; j++) {
         // If needed, this check could be unrolled out of the loop (in many
         // cases the inMap buffer doesn't exist).
         if (isInMap(i, j)) {
-          mapValues->copy(
-              mapValues_[i].get(), rawOffsets[j] + rawSizes[j], j, 1);
+          ranges.push_back({j, rawOffsets[j] + rawSizes[j], 1});
           rawKeyDictIndices[rawOffsets[j] + rawSizes[j]] = i;
           ++rawSizes[j];
         }
       }
+      mapValues->copyRanges(mapValues_[i].get(), ranges);
     }
   }
 
