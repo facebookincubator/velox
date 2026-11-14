@@ -207,6 +207,83 @@ class FunctionExpression : public CudfExpression {
   RowTypePtr inputRowSchema_;
 };
 
+/// Evaluates AND and OR, handing each operand only the rows the operands
+/// before it leave undecided, the rows Velox CPU's ConjunctExpr evaluates it
+/// on. LogicalFunction folds operands that were each materialized over every
+/// row, so otherwise a guard like d <> 0 would not keep a later q / d off the
+/// zero rows.
+class ConjunctExpression : public CudfExpression {
+ public:
+  /// Builds the function and its operand evaluators with the session config.
+  static std::shared_ptr<ConjunctExpression> create(
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& inputRowSchema,
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
+
+  ColumnOrView eval(
+      std::vector<cudf::column_view> inputColumnViews,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr,
+      bool finalize = false) override;
+
+  void close() override;
+
+  /// True for an AND or OR that FunctionExpression can evaluate and whose
+  /// operands after the first hold a fail-fast kernel (hasFailFastSubexpr).
+  /// Does not check whether the operands can be evaluated.
+  static bool canEvaluate(
+      const core::TypedExprPtr& expr,
+      const core::QueryConfig& config);
+
+ private:
+  bool isAnd_{false};
+  std::shared_ptr<CudfFunction> function_;
+  // The non-constant operands, in order; LogicalFunction inlines the
+  // constants.
+  std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+};
+
+/// Evaluates IF and single-branch SWITCH, handing each branch only the rows
+/// it supplies, the rows Velox CPU's SwitchExpr evaluates it on.
+/// SwitchFunction selects between branches that were each materialized over
+/// every row, so otherwise a fail-fast kernel in one branch would abort the
+/// batch over rows the condition discards.
+class ConditionalExpression : public CudfExpression {
+ public:
+  /// Builds the function and its operand evaluators with the session config.
+  static std::shared_ptr<ConditionalExpression> create(
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& inputRowSchema,
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
+
+  ColumnOrView eval(
+      std::vector<cudf::column_view> inputColumnViews,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr,
+      bool finalize = false) override;
+
+  void close() override;
+
+  /// True for an IF or SWITCH that FunctionExpression can evaluate. Does not
+  /// recursively check the operands.
+  static bool canEvaluate(
+      const core::TypedExprPtr& expr,
+      const core::QueryConfig& config);
+
+ private:
+  core::TypedExprPtr expr_;
+  std::shared_ptr<CudfFunction> function_;
+  // The condition followed by the non-constant branches; SwitchFunction
+  // inlines the constants.
+  std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+  // Whether each branch in subexpressions_[1..] is the THEN branch. Branch
+  // positions shift when a constant branch is dropped, so `if(c, 1, x)` keeps
+  // only the ELSE branch.
+  std::vector<bool> isThenBranch_;
+};
+
 /// Create a CudfExpression from a TypedExpr, selecting the best evaluator.
 /// Does not apply expression-level optimization; callers that need
 /// optimization should run expression::optimize at the top-level entry point
@@ -261,6 +338,13 @@ bool containsCastFromVarchar(
 
 /// Returns true if 'expr' holds a CAST or TRY_CAST from TIMESTAMP to VARCHAR.
 bool containsTimestampToVarcharCast(const core::TypedExprPtr& expr);
+
+/// Returns true if a node in 'expr' runs a kernel that fails the whole batch
+/// on one row's value, e.g. a DECIMAL divide by zero or an array subscript out
+/// of bounds, where Velox CPU fails only if it evaluates that row. Each such
+/// kernel passes a null row, so an evaluator that nulls the rows it must not
+/// evaluate keeps them from failing.
+bool hasFailFastSubexpr(const core::TypedExprPtr& expr);
 
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.

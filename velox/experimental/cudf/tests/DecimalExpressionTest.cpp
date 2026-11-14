@@ -1224,6 +1224,110 @@ TEST_F(CudfDecimalTest, decimalDivideByZeroGuardedByConditional) {
           .planNode());
 }
 
+// AND and OR guard their later operands the same way: LogicalFunction folds
+// operands materialized over every row, so without narrowing, a divide behind
+// a guard would still reach the rows the guard decides.
+TEST_F(CudfDecimalTest, decimalDivideByZeroGuardedByConjunct) {
+  // Rows 0 and 4 have a zero divisor. Row 2's null divisor leaves every guard
+  // null, so it stays undecided and reaches the divide, which skips it as null.
+  auto input = makeRowVector(
+      {"q", "d"},
+      {
+          makeFlatVector<int64_t>(
+              {1000, 2000, 3000, 4000, 5000}, DECIMAL(5, 2)),
+          makeNullableFlatVector<int64_t>(
+              {0, 500, std::nullopt, 5000, 0}, DECIMAL(5, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+  const std::string zero = "CAST('0.00' AS DECIMAL(5, 2))";
+  const std::string one = "CAST('1.00' AS DECIMAL(7, 2))";
+
+  // A false guard decides AND, in a filter as in a projection.
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .filter("d <> " + zero + " AND q / d > " + one)
+          .planNode());
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"d <> " + zero + " AND q / d > " + one + " AS guarded"})
+          .planNode());
+
+  // A true guard decides OR.
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"d = " + zero + " OR q / d > " + one + " AS guarded"})
+          .planNode());
+
+  // Nested conjuncts compose because maskInputRows ANDs each operand's mask
+  // into the null masks it was handed. Row 0 needs that AND: the outer guard
+  // decides it, while its g of 1 would leave it undecided by the inner guard
+  // and pass it on to the divide. AND over OR, because DuckDB's parser flattens
+  // a conjunct nested in one of its own kind.
+  auto nestedInput = makeRowVector(
+      {"a", "g", "q", "d"},
+      {
+          makeFlatVector<int32_t>({0, 1}),
+          makeFlatVector<int32_t>({1, 1}),
+          makeFlatVector<int64_t>({2000, 3000}, DECIMAL(5, 2)),
+          makeFlatVector<int64_t>({0, 500}, DECIMAL(5, 2)),
+      });
+  std::vector<RowVectorPtr> nestedVectors = {nestedInput};
+
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(nestedVectors)
+          .project({"a > 0 AND (g = 0 OR q / d > " + one + ") AS guarded"})
+          .planNode());
+
+  // Three operands: rows the first guard decides must stay decided after the
+  // second, which sees them only as null. Row 1 has a zero divisor that only
+  // `a` guards, row 4 one that only `d` guards behind a null `a`.
+  std::vector<RowVectorPtr> chainVectors = {makeRowVector(
+      {"a", "q", "d"},
+      {
+          makeNullableFlatVector<int32_t>({1, 0, 1, 1, std::nullopt, 0}),
+          makeFlatVector<int64_t>(
+              {1000, 2000, 3000, 4000, 5000, 6000}, DECIMAL(5, 2)),
+          makeNullableFlatVector<int64_t>(
+              {0, 0, 500, std::nullopt, 0, 200}, DECIMAL(5, 2)),
+      })};
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(chainVectors)
+          .filter("a > 0 AND d <> " + zero + " AND q / d > " + one)
+          .planNode());
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(chainVectors)
+          .project(
+              {"a > 0 AND d <> " + zero + " AND q / d > " + one + " AS guarded",
+               "a <= 0 OR d = " + zero + " OR q / d > " + one +
+                   " AS guardedOr"})
+          .planNode());
+
+  // A guard that decides no row hands the divide every row, and one that
+  // decides every row keeps the divide from running at all.
+  for (const auto& divisors :
+       {std::vector<int64_t>{100, 200, 400}, std::vector<int64_t>{0, 0, 0}}) {
+    std::vector<RowVectorPtr> edgeVectors = {makeRowVector(
+        {"q", "d"},
+        {
+            makeFlatVector<int64_t>({1000, 2000, 3000}, DECIMAL(5, 2)),
+            makeFlatVector<int64_t>(divisors, DECIMAL(5, 2)),
+        })};
+    assertCpuAndGpuAgree(
+        exec::test::PlanBuilder()
+            .values(edgeVectors)
+            .project(
+                {"d <> " + zero + " AND q / d > " + one + " AS guarded",
+                 "d = " + zero + " OR q / d > " + one + " AS guardedOr"})
+            .planNode());
+  }
+}
+
 TEST_F(CudfDecimalTest, decimalModulo) {
   auto input = makeRowVector(
       {"a", "b"},

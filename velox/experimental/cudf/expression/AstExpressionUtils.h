@@ -40,6 +40,8 @@
 #include <cudf/unary.hpp>
 #include <cudf/utilities/traits.hpp>
 
+#include <algorithm>
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -356,6 +358,18 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
     // Binary operations.  Velox parsers always lower AND/OR into binary
     // chains, so a single isOpAndInputsSupported check covers them too.
     if (binaryOps.find(name) != binaryOps.end()) {
+      // Precomputed operands are materialized over every row, so an operand
+      // after the first would also run on the rows the ones before it decide,
+      // e.g. q / d on the zero rows of `d <> 0 AND q / d > 1`, or a[3] on the
+      // short arrays of `cardinality(a) >= 3 AND a[3] > 0`. Leave such
+      // conjuncts to ConjunctExpression, which narrows each operand's rows.
+      if ((name == "and" || name == "or") && len == 2 &&
+          std::any_of(
+              call->inputs().begin() + 1,
+              call->inputs().end(),
+              hasFailFastSubexpr)) {
+        return false;
+      }
       return len == 2 &&
           isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
     }
