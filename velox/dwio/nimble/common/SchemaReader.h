@@ -372,8 +372,16 @@ class SchemaReader {
  public:
   // Construct type tree from an ordered list of schema nodes.
   // If the schema nodes are ordered incorrectly the behavior is undefined.
+  // Throws a user error for a Hybrid FlatMap node, which needs the overload
+  // below.
   static std::shared_ptr<const Type> getSchema(
       const std::vector<SchemaNode>& nodes);
+
+  // Same as above, but reads Hybrid FlatMap nodes with `pool`, which decodes
+  // their encoded group keys, e.g. the pool of the reader the schema is for.
+  static std::shared_ptr<const Type> getSchema(
+      const std::vector<SchemaNode>& nodes,
+      velox::memory::MemoryPool& pool);
 
   struct NodeInfo {
     std::string_view name;

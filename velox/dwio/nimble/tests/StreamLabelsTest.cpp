@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 
+#include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/common/SchemaReader.h"
@@ -26,9 +27,18 @@ using namespace facebook;
 
 namespace {
 
+// Returns the pool that Hybrid FlatMap schemas are read and written with.
+velox::memory::MemoryPool& schemaPool() {
+  // Owns its manager, which tests that reset the default manager cannot free.
+  static velox::memory::MemoryManager manager;
+  static const auto pool = manager.addLeafPool();
+  return *pool;
+}
+
 nimble::StreamLabels buildLabels(nimble::SchemaBuilder& builder) {
   auto nodes = builder.schemaNodes();
-  return nimble::StreamLabels{nimble::SchemaReader::getSchema(nodes)};
+  return nimble::StreamLabels{
+      nimble::SchemaReader::getSchema(nodes, schemaPool())};
 }
 
 } // namespace
@@ -162,7 +172,7 @@ TEST(StreamLabelsTest, flatMap) {
 const std::vector<std::string> kNoGroupKeys;
 
 TEST(StreamLabelsTest, hybridFlatMap) {
-  nimble::SchemaBuilder builder;
+  nimble::SchemaBuilder builder{&schemaPool()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       nimble::ScalarKind::Int32,
@@ -178,7 +188,8 @@ TEST(StreamLabelsTest, hybridFlatMap) {
   root->addChild("features", hybridMap);
 
   auto labels = buildLabels(builder);
-  const auto schema = nimble::SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema =
+      nimble::SchemaReader::getSchema(builder.schemaNodes(), schemaPool());
   const auto& hybridMapType = schema->asRow().childAt(0)->asHybridFlatMap();
 
   EXPECT_EQ(labels.streamLabel(hybridMapType.nullsDescriptor().offset()), "/0");

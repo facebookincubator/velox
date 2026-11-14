@@ -39,6 +39,14 @@
 namespace facebook::nimble {
 namespace {
 
+// Returns the pool that Hybrid FlatMap schemas are read and written with.
+velox::memory::MemoryPool& schemaPool() {
+  // Owns its manager, which tests that reset the default manager cannot free.
+  static velox::memory::MemoryManager manager;
+  static const auto pool = manager.addLeafPool();
+  return *pool;
+}
+
 HybridFlatMap makeHybridFlatMap(
     ScalarKind keyKind,
     std::vector<std::vector<std::string>> explicitGroups,
@@ -67,7 +75,14 @@ HybridFlatMap schemaGroups(
     const std::vector<HybridFlatMap::Group>& groups,
     HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode) {
   return HybridFlatMap{
-      keyKind, HybridFlatMap::serialize(groups, defaultGroupKeyPresenceMode)};
+      keyKind,
+      HybridFlatMap::serialize(
+          keyKind,
+          groups,
+          defaultGroupKeyPresenceMode,
+          /*groupKeysLayout=*/nullptr,
+          &schemaPool()),
+      &schemaPool()};
 }
 
 class FieldWriterTest : public ::testing::Test {
@@ -137,7 +152,7 @@ TEST_F(FieldWriterTest, writesHybridGroupKeysInMapsAndValues) {
   writer->write(input, OrderedRanges::of(0, input->size()));
 
   const auto schema =
-      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes(), *pool_);
   const auto& hybridMap = schema->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(hybridMap.groupCount(), 3);
   EXPECT_EQ(hybridMap.groupAt(0).groupId, 0);
@@ -203,7 +218,7 @@ TEST_F(FieldWriterTest, omitsAbsentHybridKeysAndEmptyGroups) {
   writer->write(map, OrderedRanges::of(0, map->size()));
 
   const auto schema =
-      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes(), *pool_);
   const auto& writtenMap = schema->asHybridFlatMap();
   ASSERT_EQ(writtenMap.groupCount(), 2);
 
@@ -244,7 +259,7 @@ TEST_F(FieldWriterTest, disablesChunkingOnlyForHybridGroupMetadata) {
   auto writer = FieldWriter::create(context, typeWithId);
 
   const auto schema =
-      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes(), *pool_);
   const auto& hybridMap = schema->asHybridFlatMap();
   for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
     SCOPED_TRACE(fmt::format("group={}", i));
@@ -290,7 +305,7 @@ TEST_F(FieldWriterTest, writesStringKeysInGroupOrder) {
   writer->write(map, OrderedRanges::of(0, map->size()));
 
   const auto schema =
-      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes(), *pool_);
   const auto& hybridMap = schema->asHybridFlatMap();
   EXPECT_EQ(
       hybridMap.groupAt(0).groupKeys, (std::vector<std::string>{"a", "b"}));
@@ -327,8 +342,8 @@ TEST_F(FieldWriterTest, accumulatesDefaultKeysInSchemaOrderAcrossBatches) {
       [&](const std::vector<std::vector<Entry>>& maps) {
         const auto input = vectorMaker_->mapVector<int32_t, int64_t>(maps);
         writer->write(input, OrderedRanges::of(0, input->size()));
-        const auto schema =
-            SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+        const auto schema = SchemaReader::getSchema(
+            context.schemaBuilder().schemaNodes(), *pool_);
         const auto& defaultGroup = schema->asHybridFlatMap().defaultGroup();
         const auto* keyPresence =
             findStream(context, defaultGroup.keyPresenceDescriptor.offset());
@@ -388,8 +403,8 @@ TEST_F(FieldWriterTest, listsDefaultKeysInFirstSeenOrderPerBatch) {
       [&](const std::vector<std::vector<Entry>>& maps) {
         const auto input = vectorMaker_->mapVector<int32_t, int64_t>(maps);
         writer->write(input, OrderedRanges::of(0, input->size()));
-        const auto schema =
-            SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+        const auto schema = SchemaReader::getSchema(
+            context.schemaBuilder().schemaNodes(), *pool_);
         const auto& defaultGroup = schema->asHybridFlatMap().defaultGroup();
         const auto* listedKeys =
             findStream(context, defaultGroup.keyPresenceDescriptor.offset());
@@ -452,7 +467,7 @@ TEST_F(FieldWriterTest, findsGroupsByPositionWhenDefaultListsKeys) {
   writer->write(input, OrderedRanges::of(0, input->size()));
 
   const auto schema =
-      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes(), *pool_);
   // Returns the group ID and values of the group at schema position `index`.
   const auto readGroup = [&](size_t index) {
     const auto& group = schema->asHybridFlatMap().groupAt(index);
@@ -648,7 +663,8 @@ TEST_F(FieldWriterTest, sharesGroupedKeys) {
         [&](const std::vector<std::vector<Entry>>& maps) {
           const auto input = vectorMaker_->mapVector<int64_t, int64_t>(maps);
           writer->write(input, OrderedRanges::of(0, input->size()));
-          return SchemaReader::getSchema(context.schemaBuilder().schemaNodes())
+          return SchemaReader::getSchema(
+                     context.schemaBuilder().schemaNodes(), *pool_)
               ->asHybridFlatMap()
               .defaultGroup()
               .groupKeys;
@@ -736,8 +752,8 @@ TEST_F(FieldWriterTest, hybridFlatMapOwnsLongStringKeys) {
         2, velox::StringView{replacementDefaultKey});
     const std::string replacementSerialized{
         serializer.serialize(input, OrderedRanges::of(0, kRows))};
-    const auto schema =
-        SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+    const auto schema = SchemaReader::getSchema(
+        serializer.schemaBuilder().schemaNodes(), *pool_);
     EXPECT_EQ(
         schema->asRow()
             .childAt(0)
@@ -811,7 +827,7 @@ TEST_F(FieldWriterTest, initializesEverySupportedHybridValueType) {
   writer->close();
 
   const auto schema =
-      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes(), *pool_);
   const auto& hybridMap = schema->asHybridFlatMap();
   ASSERT_EQ(hybridMap.groupCount(), 2);
   EXPECT_EQ(hybridMap.groupAt(1).groupId, HybridFlatMap::kDefaultGroupId);
@@ -885,7 +901,7 @@ TEST_F(FieldWriterTest, writesDecodedMapAndKeyVectors) {
   writer->write(dictionaryMap, OrderedRanges::of(0, dictionaryMap->size()));
 
   const auto schema =
-      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes(), *pool_);
   const auto& writtenMap = schema->asHybridFlatMap();
   ASSERT_EQ(writtenMap.groupCount(), 2);
   const auto* explicitValues = findStream(

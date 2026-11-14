@@ -41,10 +41,12 @@ namespace facebook::nimble {
 
 namespace {
 
-std::shared_ptr<const Type> loadSchema(const TabletReader& tabletReader) {
+std::shared_ptr<const Type> loadSchema(
+    const TabletReader& tabletReader,
+    velox::memory::MemoryPool& pool) {
   auto section = tabletReader.loadOptionalSection(std::string(kSchemaSection));
   NIMBLE_CHECK(section.has_value(), "Schema not found.");
-  return SchemaDeserializer::deserialize(section->content().data());
+  return SchemaDeserializer::deserialize(section->content().data(), pool);
 }
 
 std::map<std::string, std::string> loadMetadata(
@@ -264,7 +266,7 @@ BatchReader::BatchReader(
     : pool_{pool},
       tabletReader_{std::move(tabletReader)},
       parameters_{std::move(params)},
-      schema_{loadSchema(*tabletReader_)},
+      schema_{loadSchema(*tabletReader_, pool)},
       type_{
           selector ? selector->getSchema()
                    : std::dynamic_pointer_cast<const velox::RowType>(

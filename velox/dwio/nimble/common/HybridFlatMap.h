@@ -33,7 +33,13 @@
 #include "velox/dwio/nimble/common/SchemaTypes.h"
 #include "velox/dwio/nimble/common/Types.h"
 
+namespace facebook::velox::memory {
+class MemoryPool;
+} // namespace facebook::velox::memory
+
 namespace facebook::nimble {
+
+class EncodingLayout;
 
 /// Groups the keys of a MAP column: a writer configuration, or the groups a
 /// written schema records. Read-only once built. Its copies share its groups
@@ -58,12 +64,22 @@ class HybridFlatMap {
   /// Describes one group in logical schema order.
   struct Group {
     uint32_t groupId{0};
-    /// Keys in key-presence bitmap order. Configured groups are sorted;
+    /// Keys in key-presence bitmap order. A writer configuration sorts
+    /// explicit groups, by value for integer keys and as strings for String
+    /// keys. A schema keeps the order it records: one written before integer
+    /// keys sorted by value lists them as strings, e.g. "10" before "9".
     /// Default preserves first-seen order, and lists no keys with
     /// KeyPresenceMode::kKeyList.
     std::vector<std::string> groupKeys;
+    /// The group's `encoded_group_keys` stream, when a schema recorded one.
+    /// serialize() copies it instead of encoding the keys again, e.g. for a
+    /// projection that keeps the group.
+    std::string encodedKeys{};
 
-    bool operator==(const Group&) const = default;
+    /// Compares the ID and the keys, however they were stored.
+    bool operator==(const Group& other) const {
+      return groupId == other.groupId && groupKeys == other.groupKeys;
+    }
   };
 
   /// Reserved identifier for the Default group.
@@ -80,11 +96,12 @@ class HybridFlatMap {
   /// and normalized: every key canonical (canonicalKey()), group IDs
   /// ascending, no key repeated within or across groups, every explicit
   /// group non-empty, and exactly one Default group, without keys. groups()
-  /// then holds each group's keys sorted, the schema and key-presence bitmap
-  /// order. Builds the key index of findGroup(), which copies share.
+  /// then holds each group's keys sorted, by value for integer keys and as
+  /// strings for String keys, the schema and key-presence bitmap order. Builds
+  /// the key index of findGroup(), which copies share.
   ///
-  /// Example: for Int64 keys, groups {0: ["9", "10"], Default: []} hold
-  /// {0: ["10", "9"], Default: []}; {0: ["07"], Default: []} and
+  /// Example: for Int64 keys, groups {0: ["10", "9"], Default: []} hold
+  /// {0: ["9", "10"], Default: []}; {0: ["07"], Default: []} and
   /// {1: ["1"], 0: ["2"], Default: []} are rejected.
   HybridFlatMap(
       ScalarKind keyKind,
@@ -93,13 +110,20 @@ class HybridFlatMap {
 
   /// The groups a written schema records for keys of `keyKind`, parsed from
   /// `serialized`, as serialize() writes them. Checked as a written schema:
-  /// group IDs ascending, explicit groups non-empty with ascending keys, no key
-  /// listed twice, and no Default keys with KeyPresenceMode::kKeyList. A bitmap
-  /// Default lists the keys found while writing, in first-seen order, and a
-  /// projection may leave groups out, Default included. Also accepts an omitted
-  /// `group_keys` vector when no group has keys. Builds the key index of
-  /// findGroup(), which copies share.
-  HybridFlatMap(ScalarKind keyKind, std::string_view serialized);
+  /// group IDs ascending, explicit groups non-empty, no key listed twice, and
+  /// no Default keys with KeyPresenceMode::kKeyList. Keys keep the order the
+  /// schema records, their key-presence bitmap order, so schemas written
+  /// before integer keys sorted by value read with their keys sorted as
+  /// strings. A bitmap Default lists the keys found while writing, in
+  /// first-seen order, and a projection may leave groups out, Default
+  /// included. Decodes `encoded_group_keys` back to the keys' canonical
+  /// strings, allocating from `pool`, which must not be null.
+  /// Also accepts omitted key vectors when no group has keys. Builds the key
+  /// index of findGroup(), which copies share.
+  HybridFlatMap(
+      ScalarKind keyKind,
+      std::string_view serialized,
+      velox::memory::MemoryPool* pool);
 
   /// The key kind the groups were built or recorded for.
   ScalarKind keyKind() const {
@@ -165,17 +189,32 @@ class HybridFlatMap {
   template <typename T>
   static T parseCanonicalIntegerKey(std::string_view key);
 
-  /// Serializes `groups` and `defaultGroupKeyPresenceMode` into the flattened
-  /// HybridFlatMap FlatBuffer table. `group_ids` and `group_key_counts` are
-  /// parallel per-group vectors, and `group_keys` concatenates the keys of
-  /// every group in group order, so group `i` owns the `group_key_counts[i]`
-  /// keys that follow the keys of the preceding groups. The Default key
-  /// presence mode is always written. Takes groups rather than a HybridFlatMap,
-  /// since a type builder's bitmap Default lists the keys found while writing,
-  /// which no writer configuration holds.
+  /// Serializes `groups` and `defaultGroupKeyPresenceMode` of a schema node
+  /// whose keys are of `keyKind` into the flattened HybridFlatMap FlatBuffer
+  /// table. `group_ids` and `group_key_counts` are parallel per-group vectors.
+  /// The keys of every group follow in group order, so group `i` owns the
+  /// `group_key_counts[i]` keys that follow the keys of the preceding groups.
+  /// Keys are written as `group_keys` strings, except integer keys when
+  /// `groupKeysLayout` is not null or every group with keys carries its
+  /// recorded stream (Group::encodedKeys). Those are written as
+  /// `encoded_group_keys`, one Nimble-encoded stream of the keys' integer type
+  /// per group: the recorded stream as is, e.g. for a projection, or the keys
+  /// encoded in exactly `groupKeysLayout`, which must name every nested
+  /// encoding. When the layout cannot encode a group's keys, e.g. Prefix, a
+  /// missing nested encoding, or a stream under one bit per key, which readers
+  /// reject, every key of the node is written as `group_keys` strings instead.
+  /// Compression is always off, including any that the layout names, so
+  /// readers need no codec. String keys ignore the layout. Encoding allocates
+  /// from `pool`, which must not be null.
+  /// The Default key presence mode is always written. Takes groups rather
+  /// than a HybridFlatMap, since a type builder's bitmap Default lists the keys
+  /// found while writing, which no writer configuration holds.
   static std::string serialize(
+      ScalarKind keyKind,
       const std::vector<Group>& groups,
-      KeyPresenceMode defaultGroupKeyPresenceMode);
+      KeyPresenceMode defaultGroupKeyPresenceMode,
+      const EncodingLayout* groupKeysLayout,
+      velox::memory::MemoryPool* pool);
 
  private:
   // See keyKind().
@@ -219,11 +258,12 @@ std::string toString(HybridFlatMap::KeyPresenceMode mode);
 namespace detail {
 
 // Checks the rules for one group's own keys, used only by whole-schema
-// validation (validateHybridFlatMapGroups()). Configured keys must be non-empty
-// and strictly ascending because lookups binary search them. Default keys keep
-// their first-seen order, which is their key-presence bitmap order, so only
-// empty keys are rejected here. Callers check that every key is unique across
-// all groups.
+// validation (validateHybridFlatMapGroups()): an explicit group must list a
+// key, and no key may be empty. Keys may come in any order, which is their
+// key-presence bitmap order. A writer configuration sorts explicit groups, but
+// schemas written before integer keys sorted by value list them as strings,
+// e.g. "10" before "9", and Default keeps its first-seen order. Callers check
+// that every key is unique across all groups.
 void checkHybridFlatMapGroupKeys(
     uint32_t groupId,
     const std::vector<std::string>& groupKeys);

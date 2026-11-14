@@ -289,7 +289,8 @@ std::string_view serializeNodes(
 
 } // namespace
 
-SchemaSerializer::SchemaSerializer() : builder_{kInitialSchemaSectionSize} {}
+SchemaSerializer::SchemaSerializer(velox::memory::MemoryPool* pool)
+    : builder_{kInitialSchemaSectionSize}, pool_{pool} {}
 
 std::string_view SchemaSerializer::serialize(
     const SchemaBuilder& schemaBuilder) {
@@ -297,11 +298,13 @@ std::string_view SchemaSerializer::serialize(
 }
 
 std::string_view SchemaSerializer::serialize(const Type& type) {
-  return serializeNodes(builder_, schemaNodes(type));
+  return serializeNodes(builder_, schemaNodes(type, pool_));
 }
 
-std::shared_ptr<const Type> SchemaDeserializer::deserialize(
-    std::string_view input) {
+namespace {
+
+// Returns the schema nodes that `input`, a serialized schema, records.
+std::vector<SchemaNode> deserializeNodes(std::string_view input) {
   auto schema = flatbuffers::GetRoot<serialization::Schema>(input.data());
   auto nodeCount = schema->nodes()->size();
   std::vector<SchemaNode> nodes;
@@ -331,8 +334,20 @@ std::shared_ptr<const Type> SchemaDeserializer::deserialize(
         node->children(),
         std::move(attributes));
   }
+  return nodes;
+}
 
-  return SchemaReader::getSchema(nodes);
+} // namespace
+
+std::shared_ptr<const Type> SchemaDeserializer::deserialize(
+    std::string_view input) {
+  return SchemaReader::getSchema(deserializeNodes(input));
+}
+
+std::shared_ptr<const Type> SchemaDeserializer::deserialize(
+    std::string_view input,
+    velox::memory::MemoryPool& pool) {
+  return SchemaReader::getSchema(deserializeNodes(input), pool);
 }
 
 } // namespace facebook::nimble

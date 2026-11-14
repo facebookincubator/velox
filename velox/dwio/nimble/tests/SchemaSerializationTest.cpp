@@ -17,6 +17,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/common/SchemaGenerated.h"
@@ -28,6 +29,20 @@
 
 using namespace facebook;
 using namespace facebook::nimble;
+
+namespace {
+
+// Returns the pool that schema reads decode encoded Hybrid FlatMap group keys
+// from.
+velox::memory::MemoryPool& schemaPool() {
+  // Owns its manager, which tests that reset the default manager cannot free.
+  static velox::memory::MemoryManager manager;
+  static const auto pool = manager.addLeafPool();
+  return *pool;
+}
+
+} // namespace
+
 using testing::ElementsAre;
 
 // The keys that groups holding none lend to a type builder.
@@ -38,7 +53,7 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
       "feature,with:delimiters|and;slashes/",
       std::string{"prefix\0suffix", 13},
   };
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{&schemaPool()};
   auto row = schemaBuilder.createRowTypeBuilder(1);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
@@ -58,7 +73,7 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Double));
   row->addChild("features", features);
 
-  SchemaSerializer serializer;
+  SchemaSerializer serializer{&schemaPool()};
   SchemaDeserializer deserializer;
   const auto serializedSchema = serializer.serialize(schemaBuilder);
   flatbuffers::Verifier verifier{
@@ -105,7 +120,8 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   EXPECT_EQ(metadata->group_keys()->Get(1)->size(), 13);
   EXPECT_EQ(metadata->group_keys()->Get(2)->str(), "C");
 
-  const HybridFlatMap decodedMetadata{ScalarKind::String, serializedMetadata};
+  const HybridFlatMap decodedMetadata{
+      ScalarKind::String, serializedMetadata, &schemaPool()};
   ASSERT_EQ(decodedMetadata.groups().size(), 3);
   EXPECT_EQ(decodedMetadata.groups()[0].groupId, 0);
   EXPECT_EQ(decodedMetadata.groups()[0].groupKeys, groupKeys);
@@ -117,7 +133,7 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
 
   EXPECT_EQ(serialized->nodes()->Get(2)->kind(), serialization::Kind_Bool);
   EXPECT_EQ(serialized->nodes()->Get(3)->kind(), serialization::Kind_Bool);
-  const auto schema = deserializer.deserialize(serializedSchema);
+  const auto schema = deserializer.deserialize(serializedSchema, schemaPool());
 
   const auto& hybridFlatMap = schema->asRow().childAt(0)->asHybridFlatMap();
   EXPECT_EQ(hybridFlatMap.kind(), Kind::HybridFlatMap);
@@ -144,7 +160,8 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   const std::string firstSerialization{serializedSchema};
   const auto reserializedSchema = serializer.serialize(*schema);
   EXPECT_EQ(reserializedSchema, firstSerialization);
-  const auto reserializedType = deserializer.deserialize(reserializedSchema);
+  const auto reserializedType =
+      deserializer.deserialize(reserializedSchema, schemaPool());
   const auto& reserializedHybridMap =
       reserializedType->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(reserializedHybridMap.groupCount(), 3);
@@ -161,7 +178,7 @@ TEST(SchemaSerializationTest, hybridFlatMapKeyKindsRoundTrip) {
            ScalarKind::Int64,
            ScalarKind::String,
        }) {
-    SchemaBuilder schemaBuilder;
+    SchemaBuilder schemaBuilder{&schemaPool()};
     auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
         keyKind, HybridFlatMap::KeyPresenceMode::kBitmap);
     const std::vector<std::string> groupKeys{"configured"};
@@ -173,7 +190,8 @@ TEST(SchemaSerializationTest, hybridFlatMapKeyKindsRoundTrip) {
         schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
 
     const auto serializedSchema = serializer.serialize(schemaBuilder);
-    const auto schema = SchemaDeserializer::deserialize(serializedSchema);
+    const auto schema =
+        SchemaDeserializer::deserialize(serializedSchema, schemaPool());
     ASSERT_TRUE(schema->isHybridFlatMap());
     EXPECT_EQ(schema->asHybridFlatMap().keyScalarKind(), keyKind);
     EXPECT_EQ(
@@ -244,35 +262,41 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
   };
 
   NIMBLE_ASSERT_THROW(
-      HybridFlatMap(ScalarKind::String, "malformed"),
+      HybridFlatMap(ScalarKind::String, "malformed", &schemaPool()),
       "Hybrid FlatMap metadata attribute is malformed");
 
   const auto emptyMetadata = HybridFlatMap::serialize(
-      /*groups=*/{}, HybridFlatMap::KeyPresenceMode::kBitmap);
+      ScalarKind::String,
+      /*groups=*/{},
+      HybridFlatMap::KeyPresenceMode::kBitmap,
+      /*groupKeysLayout=*/nullptr,
+      &schemaPool());
   const auto schemaWithEmptyMetadata =
       encodeSchemaWithMetadataAttribute(emptyMetadata);
   NIMBLE_ASSERT_THROW(
-      SchemaDeserializer::deserialize(schemaWithEmptyMetadata),
+      SchemaDeserializer::deserialize(schemaWithEmptyMetadata, schemaPool()),
       "Hybrid FlatMap requires at least 1 group(s)");
 
   NIMBLE_ASSERT_THROW(
       HybridFlatMap(
           ScalarKind::String,
-          encodeRawMetadata({0, HybridFlatMap::kDefaultGroupId}, {1}, {})),
+          encodeRawMetadata({0, HybridFlatMap::kDefaultGroupId}, {1}, {}),
+          &schemaPool()),
       "Hybrid FlatMap group IDs and key counts must have the same size");
 
   NIMBLE_ASSERT_THROW(
       HybridFlatMap(
           ScalarKind::String,
-          encodeRawMetadata(
-              {0, HybridFlatMap::kDefaultGroupId}, {1, 1}, {"a"})),
+          encodeRawMetadata({0, HybridFlatMap::kDefaultGroupId}, {1, 1}, {"a"}),
+          &schemaPool()),
       "Hybrid FlatMap group key counts must match group keys size");
 
   NIMBLE_ASSERT_THROW(
       HybridFlatMap(
           ScalarKind::String,
           encodeRawMetadata(
-              {0, HybridFlatMap::kDefaultGroupId}, {0, 0}, {"unexpected"})),
+              {0, HybridFlatMap::kDefaultGroupId}, {0, 0}, {"unexpected"}),
+          &schemaPool()),
       "Hybrid FlatMap group key counts must match group keys size");
 }
 
