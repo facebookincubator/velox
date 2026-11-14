@@ -18,7 +18,6 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
@@ -29,8 +28,6 @@
 
 namespace facebook::nimble::index {
 namespace {
-
-using velox::dwio::common::SeekableArrayInputStream;
 
 class KeyChunkDecoderTest : public ::testing::TestWithParam<EncodingType> {
  protected:
@@ -65,23 +62,13 @@ class KeyChunkDecoderTest : public ::testing::TestWithParam<EncodingType> {
     return result;
   }
 
-  // blockSize caps how many bytes each SeekableArrayInputStream::Next() returns
-  // (0 means the whole buffer in one call). decodeKeyChunk branches on whether
-  // the first Next() window already holds the whole chunk, so a small blockSize
-  // splits the data across windows and forces its multi-buffer copy path.
-  std::unique_ptr<SeekableArrayInputStream> makeStream(
-      const std::string& data,
-      uint64_t blockSize = 0) {
-    return std::make_unique<SeekableArrayInputStream>(
-        reinterpret_cast<const unsigned char*>(data.data()),
-        data.size(),
-        blockSize);
-  }
-
+  // Decodes 'chunk', whose bytes 'handle' keeps alive.
   std::shared_ptr<DecodedKeyChunk> decode(
-      std::unique_ptr<SeekableArrayInputStream> stream) {
+      std::string_view chunk,
+      DataInput::Handle handle) {
     return decodeKeyChunk(
-        std::move(stream),
+        chunk,
+        std::move(handle),
         [](std::string_view encodedKeys,
            std::function<void*(uint32_t)> stringBufferFactory,
            velox::memory::MemoryPool* pool) {
@@ -91,20 +78,18 @@ class KeyChunkDecoderTest : public ::testing::TestWithParam<EncodingType> {
               /*comparator=*/nullptr,
               pool);
         },
-        dataBuffer_,
         leafPool_.get());
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
-  velox::BufferPtr dataBuffer_;
 };
 
 TEST_P(KeyChunkDecoderTest, decodeAndMaterialize) {
   std::vector<std::string_view> keys = {"apple", "banana", "cherry"};
   auto chunkData = encodeChunk(keys);
 
-  auto result = decode(makeStream(chunkData));
+  auto result = decode(chunkData, /*handle=*/nullptr);
   ASSERT_NE(result, nullptr);
   ASSERT_NE(result->reader, nullptr);
   EXPECT_NE(dynamic_cast<FlatKeyReader*>(result->reader.get()), nullptr);
@@ -120,7 +105,7 @@ TEST_P(KeyChunkDecoderTest, seekAndSelectiveMaterialize) {
   std::vector<std::string_view> keys = {"aaa", "bbb", "ccc", "ddd", "eee"};
   auto chunkData = encodeChunk(keys);
 
-  auto result = decode(makeStream(chunkData));
+  auto result = decode(chunkData, /*handle=*/nullptr);
   ASSERT_NE(result, nullptr);
   ASSERT_NE(result->reader, nullptr);
 
@@ -137,7 +122,7 @@ TEST_P(KeyChunkDecoderTest, singleEntry) {
   std::vector<std::string_view> keys = {"only"};
   auto chunkData = encodeChunk(keys);
 
-  auto result = decode(makeStream(chunkData));
+  auto result = decode(chunkData, /*handle=*/nullptr);
   ASSERT_NE(result, nullptr);
   ASSERT_NE(result->reader, nullptr);
   EXPECT_EQ(result->reader->rowCount(), 1);
@@ -152,7 +137,7 @@ TEST_P(KeyChunkDecoderTest, materializeAfterMove) {
 
   std::shared_ptr<DecodedKeyChunk> moved;
   {
-    auto decoded = decode(makeStream(chunkData));
+    auto decoded = decode(chunkData, /*handle=*/nullptr);
     moved = std::move(decoded);
   }
 
@@ -171,8 +156,8 @@ TEST_P(KeyChunkDecoderTest, materializeAfterMoveAssign) {
   auto chunkData1 = encodeChunk(keys1);
   auto chunkData2 = encodeChunk(keys2);
 
-  auto holder = decode(makeStream(chunkData1));
-  holder = decode(makeStream(chunkData2));
+  auto holder = decode(chunkData1, /*handle=*/nullptr);
+  holder = decode(chunkData2, /*handle=*/nullptr);
 
   ASSERT_NE(holder->reader, nullptr);
   EXPECT_EQ(holder->reader->rowCount(), 3);
@@ -211,24 +196,61 @@ TEST_P(KeyChunkDecoderTest, roundTripsCompressedKeyChunk) {
         static_cast<uint8_t>(chunkData[kChunkHeaderSize - 1]),
         static_cast<uint8_t>(compressionType));
 
-    // Exercise both compressed-payload release paths. blockSize 0 delivers the
-    // whole chunk in the first Next() (zero-copy branch: releases dataStream);
-    // blockSize 64 delivers it in 64-byte windows, so the first window is
-    // smaller than the payload and decode stitches across windows (multi-buffer
-    // branch: releases the staging copy from stringBuffers).
-    for (const uint64_t blockSize : {uint64_t{0}, uint64_t{64}}) {
-      SCOPED_TRACE(fmt::format("blockSize={}", blockSize));
-      auto result = decode(makeStream(chunkData, blockSize));
-      ASSERT_NE(result, nullptr);
-      ASSERT_NE(result->reader, nullptr);
-      ASSERT_EQ(result->reader->rowCount(), static_cast<uint32_t>(keys.size()));
+    // The decoded chunk holds only the uncompressed keys, so it drops the
+    // handle of the compressed bytes.
+    auto handle = std::make_shared<std::string>(chunkData);
+    const std::weak_ptr<std::string> weakHandle{handle};
+    const std::string_view chunk{*handle};
+    auto result = decode(chunk, std::move(handle));
+    ASSERT_NE(result, nullptr);
+    ASSERT_NE(result->reader, nullptr);
+    ASSERT_EQ(result->reader->rowCount(), static_cast<uint32_t>(keys.size()));
 
-      auto materialized =
-          result->reader->materialize(0, static_cast<uint32_t>(keys.size()));
-      for (size_t i = 0; i < keys.size(); ++i) {
-        EXPECT_EQ(materialized[i], keys[i]);
-      }
+    auto materialized =
+        result->reader->materialize(0, static_cast<uint32_t>(keys.size()));
+    for (size_t i = 0; i < keys.size(); ++i) {
+      EXPECT_EQ(materialized[i], keys[i]);
     }
+    EXPECT_TRUE(weakHandle.expired());
+  }
+}
+
+// An uncompressed payload is read in place, so the decoded chunk holds the
+// handle that keeps its bytes alive.
+TEST_P(KeyChunkDecoderTest, keepsHandleOfUncompressedChunk) {
+  const std::vector<std::string_view> keys = {"apple", "banana", "cherry"};
+  auto handle = std::make_shared<std::string>(encodeChunk(keys));
+  const std::weak_ptr<std::string> weakHandle{handle};
+  const std::string_view chunk{*handle};
+
+  auto result = decode(chunk, std::move(handle));
+  ASSERT_NE(result, nullptr);
+  ASSERT_NE(result->reader, nullptr);
+  EXPECT_EQ(
+      result->reader->materialize(0, 3),
+      (std::vector<std::string>{"apple", "banana", "cherry"}));
+  EXPECT_FALSE(weakHandle.expired());
+
+  result.reset();
+  EXPECT_TRUE(weakHandle.expired());
+}
+
+TEST_P(KeyChunkDecoderTest, rejectsTruncatedChunk) {
+  const std::vector<std::string_view> keys = {"apple", "banana", "cherry"};
+  const auto chunkData = encodeChunk(keys);
+  ASSERT_GT(chunkData.size(), static_cast<size_t>(kChunkHeaderSize));
+
+  {
+    const std::string_view chunk{chunkData.data(), kChunkHeaderSize - 1};
+    NIMBLE_ASSERT_FILE_THROW(
+        decode(chunk, /*handle=*/nullptr),
+        "Key chunk is smaller than a chunk header");
+  }
+  {
+    const std::string_view chunk{chunkData.data(), chunkData.size() - 1};
+    NIMBLE_ASSERT_FILE_THROW(
+        decode(chunk, /*handle=*/nullptr),
+        "Key chunk is shorter than its header length");
   }
 }
 
@@ -240,8 +262,9 @@ TEST_P(KeyChunkDecoderTest, rejectsUnsupportedChunkCompression) {
   chunkData[kChunkHeaderSize - 1] =
       static_cast<char>(CompressionType::MetaInternal);
 
-  NIMBLE_ASSERT_THROW(
-      decode(makeStream(chunkData)), "Unsupported key chunk compression type");
+  NIMBLE_ASSERT_FILE_THROW(
+      decode(chunkData, /*handle=*/nullptr),
+      "Unsupported key chunk compression type");
 }
 
 INSTANTIATE_TEST_SUITE_P(

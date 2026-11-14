@@ -20,7 +20,6 @@
 #include "velox/functions/lib/MapFromEntries.h"
 #include "velox/functions/prestosql/Map.h"
 #include "velox/functions/prestosql/MapAppend.h"
-#include "velox/functions/prestosql/MapExcept.h"
 #include "velox/functions/prestosql/MapFunctions.h"
 #include "velox/functions/prestosql/MapIntersect.h"
 #include "velox/functions/prestosql/MapKeysByTopNValues.h"
@@ -109,37 +108,6 @@ void registerMapIntersect(
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>>({prefix + "map_intersect"}, {}, true, defaultOwner);
-}
-
-template <typename T>
-void registerMapExceptPrimitive(
-    const std::string& prefix,
-    std::string_view defaultOwner) {
-  registerFunction<
-      ParameterBinder<MapExceptPrimitiveFunction, T>,
-      Map<T, Generic<T1>>,
-      Map<T, Generic<T1>>,
-      Array<T>>({prefix + "map_except"}, true, defaultOwner);
-}
-
-void registerMapExcept(
-    const std::string& prefix,
-    std::string_view defaultOwner) {
-  registerMapExceptPrimitive<bool>(prefix, defaultOwner);
-  registerMapExceptPrimitive<int8_t>(prefix, defaultOwner);
-  registerMapExceptPrimitive<int16_t>(prefix, defaultOwner);
-  registerMapExceptPrimitive<int32_t>(prefix, defaultOwner);
-  registerMapExceptPrimitive<int64_t>(prefix, defaultOwner);
-  registerMapExceptPrimitive<float>(prefix, defaultOwner);
-  registerMapExceptPrimitive<double>(prefix, defaultOwner);
-  registerMapExceptPrimitive<Timestamp>(prefix, defaultOwner);
-  registerMapExceptPrimitive<Date>(prefix, defaultOwner);
-
-  registerFunction<
-      MapExceptVarcharFunction,
-      Map<Varchar, Generic<T1>>,
-      Map<Varchar, Generic<T1>>,
-      Array<Varchar>>({prefix + "map_except"}, {}, true, defaultOwner);
 }
 
 template <typename T>
@@ -364,7 +332,8 @@ void registerMapFunctions(
 
   registerMapIntersect(prefix, defaultOwner);
 
-  registerMapExcept(prefix, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_except, prefix + "map_except", defaultOwner);
 
   registerMapKeysOverlap(prefix, defaultOwner);
 

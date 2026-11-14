@@ -20,6 +20,7 @@
 #include <fmt/ranges.h>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/SortedIndexGenerated.h"
 
 namespace facebook::nimble::index {
@@ -66,7 +67,7 @@ uint8_t getRowIdWidth(const MetadataBuffer& metadata) {
 SortedIndex::SortedIndex(
     std::vector<std::string> columns,
     std::unique_ptr<MetadataBuffer> indexMetadata,
-    std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+    std::shared_ptr<DataInput> dataInput,
     velox::memory::MemoryPool* pool)
     : IndexLookup{IndexType::Sorted},
       columns_{std::move(columns)},
@@ -80,7 +81,7 @@ SortedIndex::SortedIndex(
 std::unique_ptr<SortedIndex> SortedIndex::create(
     std::vector<std::string> columns,
     std::unique_ptr<MetadataBuffer> indexMetadata,
-    std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+    std::shared_ptr<DataInput> dataInput,
     velox::memory::MemoryPool* pool) {
   return std::unique_ptr<SortedIndex>(new SortedIndex(
       std::move(columns),
@@ -131,11 +132,11 @@ std::shared_ptr<DecodedKeyChunk> SortedIndex::loadChunk(
   const uint32_t chunkOffset = this->chunkOffset(chunkIdx);
   const uint32_t chunkSize = this->chunkSize(chunkIdx);
 
+  auto [chunk, handle] = dataInput_->read(
+      DataInput::Region{streamOffset + chunkOffset, chunkSize});
   return decodeKeyChunk(
-      dataInput_->read(
-          streamOffset + chunkOffset,
-          chunkSize,
-          velox::dwio::common::LogType::FOOTER),
+      chunk,
+      std::move(handle),
       [](std::string_view encodedKeys,
          std::function<void*(uint32_t)> stringBufferFactory,
          velox::memory::MemoryPool* pool) {
@@ -145,7 +146,6 @@ std::shared_ptr<DecodedKeyChunk> SortedIndex::loadChunk(
             /*comparator=*/nullptr,
             pool);
       },
-      chunkBuffer_,
       pool_);
 }
 

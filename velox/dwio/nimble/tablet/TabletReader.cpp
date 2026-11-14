@@ -98,7 +98,6 @@ TabletReader::Options TabletReader::configureOptions(
   tabletOptions.pinIndex = options.pinIndex();
   tabletOptions.cacheIndex = options.cacheIndex();
   tabletOptions.fileHandle = options.fileHandle();
-  tabletOptions.cache = options.cache();
 
   // Velox reader options carry the async data cache, not a block cache. The
   // block cache is keyed by fileHandle->uuid, so it needs the handle too.
@@ -206,9 +205,9 @@ uint64_t decompressedSize(const MetadataSection& section) {
   return section.uncompressedSize().value_or(section.size());
 }
 
-// Both caches key their entries by fileHandle->uuid, so a handle of another
-// file would make the reader serve that file's bytes. Without a cache the
-// handle is unused, and the file may be a copy, such as the in-memory file of a
+// blockCache keys its entries by fileHandle->uuid, so a handle of another file
+// would make the reader serve that file's bytes. Without blockCache the handle
+// is unused, and the file may be a copy, such as the in-memory file of a
 // preloaded small file.
 void checkFileHandle(
     const TabletReader::Options& options,
@@ -216,7 +215,7 @@ void checkFileHandle(
   if (options.fileHandle == nullptr) {
     return;
   }
-  if (options.cache == nullptr && options.blockCache == nullptr) {
+  if (options.blockCache == nullptr) {
     return;
   }
   NIMBLE_USER_CHECK_EQ(
@@ -248,14 +247,9 @@ TabletReader::TabletReader(
       }()},
       fileIoContext_{options.fileIoContext},
       indexOptions_{[&]() {
-        // cacheIndex takes effect only when fileHandle and cache are provided.
-        const bool cacheEnabled = options.cacheIndex &&
-            options.fileHandle != nullptr && options.cache != nullptr;
-        return index::IndexLookup::Options{
+        index::IndexLookup::Options indexOptions{
             .file = file_,
             .ioOptions = &ioOptions_,
-            .fileHandle = cacheEnabled ? options.fileHandle : nullptr,
-            .cache = cacheEnabled ? options.cache : nullptr,
             .maxCacheEntrySize = options.maxCacheEntrySize,
             // preloadIndex requires pinIndex; auto-promote so the caller only
             // needs to flip one knob.
@@ -268,6 +262,18 @@ TabletReader::TabletReader(
                                     std::span<const uint32_t> keyStreamIds) {
               return stripeMetadata(stripeGroupIndex, keyStreamIds);
             }};
+        if (!options.cacheIndex) {
+          return indexOptions;
+        }
+
+        indexOptions.blockCache = options.blockCache;
+
+        // Only a cache uses the handle. Without one, the handle's file may not
+        // be the reader's file.
+        if (indexOptions.blockCache != nullptr) {
+          indexOptions.fileHandle = options.fileHandle;
+        }
+        return indexOptions;
       }()},
       metadataInput_{[&]() {
         MetadataInput::Options metadataOptions{
@@ -1000,6 +1006,7 @@ std::vector<StripeMetadata> TabletReader::stripeMetadata(
   for (uint32_t stripe = group->firstStripe(); stripe < endStripe; ++stripe) {
     auto& metadata = stripes.emplace_back(
         StripeMetadata{
+            .stripe = stripe,
             .offset = stripeOffset(stripe),
             .numRows = stripeRowCount(stripe),
             .streams =

@@ -17,7 +17,6 @@
 
 #include <fmt/ranges.h>
 
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/HashIndex.h"
 #include "velox/dwio/nimble/index/HashIndexWriter.h"
@@ -25,6 +24,7 @@
 #include "velox/dwio/nimble/index/IndexFactoryRegistry.h"
 #include "velox/dwio/nimble/index/SortedIndex.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
+#include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/HashIndexGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataCache.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
@@ -214,7 +214,7 @@ class SortedIndexFactory final : public DenseIndexFactory {
     return BuiltInDenseIndexReader<
         SortedIndex,
         serialization::SortedIndexDirectory,
-        velox::dwio::common::BufferedInput>::
+        DataInput>::
         create(
             std::move(rootSection),
             "Sorted index",

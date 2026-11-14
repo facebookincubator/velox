@@ -82,6 +82,7 @@ add_library(
   views/SubIntSplitEncodingView.h
   views/RLEEncodingView.h
   views/SentinelEncodingView.h
+  views/SequenceEncodingView.h
   views/PFOREncodingView.h
   views/MainlyConstantEncodingView.h
   views/NullableEncodingView.h
@@ -122,6 +123,7 @@ add_library(
   SharedDictionaryEncoding.h
   SharedDictionaryBuilder.h
   SentinelEncoding.h
+  SequenceEncoding.h
   RLEEncoding.h
   PrefixEncoding.h
   PFOREncoding.h

@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
@@ -188,6 +189,14 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       }
       NIMBLE_UNREACHABLE(
           "PartitionedEliasFano encoding only supports integral data types, got {}.",
+          encoding.dataType());
+    case EncodingType::Sequence:
+      if constexpr (isIntegralType<T>()) {
+        return dispatchBySerializedIntegerType<SequenceEncoding>(
+            encoding, std::forward<F>(f));
+      }
+      NIMBLE_UNREACHABLE(
+          "Sequence encoding only supports integral data types, got {}.",
           encoding.dataType());
     case EncodingType::ALPRD:
       if constexpr (isFloatingPointType<T>()) {

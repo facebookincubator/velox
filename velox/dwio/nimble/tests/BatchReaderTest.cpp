@@ -593,7 +593,6 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
       fileHandle_->file = readFile;
       fileHandle_->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle_->groupId = velox::StringIdLease(ids, "testGroup");
-      tabletOptions.cache = cache_.get();
       tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle_.get();
     }
@@ -8185,7 +8184,6 @@ TEST_P(MetadataReuseTest, metadataReuseWithSameReader) {
       fileHandle->file = trackingFile;
       fileHandle->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle->groupId = velox::StringIdLease(ids, fileIdStr + "_group");
-      tabletOptions.cache = cache_.get();
       tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle.get();
     }
@@ -8305,7 +8303,6 @@ TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
             fileHandleOut->file = trackingFile;
             fileHandleOut->uuid = fileId;
             fileHandleOut->groupId = groupId;
-            tabletOptions.cache = cache_.get();
             tabletOptions.blockCache = nimble::getBlockCache(cache_.get());
             tabletOptions.fileHandle = fileHandleOut.get();
           }

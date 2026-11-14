@@ -245,6 +245,20 @@ class Statistics {
     }
   }
 
+  /// Returns the step when the values form an arithmetic progression, i.e.
+  /// value i equals value 0 + i * step in the wraparound arithmetic of the
+  /// input type, such as row ids 0, 1, 2, ... with step 1. A single value and
+  /// a constant stream have step 0. Returns std::nullopt for any other stream
+  /// and for an empty one. The check stops at the first value off the
+  /// progression, so most other streams are settled within a few values.
+  std::optional<T> sequenceStep() const noexcept {
+    static_assert(nimble::isIntegralType<InputType>());
+    if (!sequenceStep_.has_value()) {
+      populateSequenceStep();
+    }
+    return sequenceStep_.value();
+  }
+
   const std::vector<uint64_t>& bucketCounts() const noexcept {
     static_assert(nimble::isIntegralType<T>());
     if (!bucketCounts_.has_value()) {
@@ -320,6 +334,10 @@ class Statistics {
 
   // Checks signed logical order over unsigned physical input values.
   void populateSignedOrderNonDecreasing() const noexcept;
+
+  // Compares each difference of adjacent values with the first one and stops
+  // at the first mismatch.
+  void populateSequenceStep() const noexcept;
   void populateStringLength() const;
 
   mutable std::optional<uint64_t> consecutiveRepeatCount_;
@@ -336,6 +354,9 @@ class Statistics {
 
   // Caches signed logical order for unsigned physical input.
   mutable std::optional<bool> signedOrderNonDecreasing_;
+
+  // Caches sequenceStep(): unset until computed, then the step or nullopt.
+  mutable std::optional<std::optional<T>> sequenceStep_;
   mutable std::optional<std::vector<uint64_t>> bucketCounts_;
   mutable std::optional<std::vector<BlockStats>> minMaxBlocks_;
   mutable uint16_t minMaxBlockSize_{0};

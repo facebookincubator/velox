@@ -21,11 +21,13 @@
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/FileHandle.h"
+#include "velox/common/caching/FileIds.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
+#include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
@@ -42,6 +44,7 @@
 #include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/SortOrder.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 #include "velox/serializers/KeyEncoder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -432,10 +435,9 @@ TEST_F(ClusterIndexWriterTest, keyChunkCompressionProducesRequestedChunkCodec) {
     // Decode the writer's actual output and confirm every codec round-trips to
     // the same keys as the uncompressed run: compression must not alter
     // content.
-    velox::BufferPtr decodeBuffer;
     auto decoded = decodeKeyChunk(
-        std::make_unique<velox::dwio::common::SeekableArrayInputStream>(
-            keyStreamData.data(), keyStreamData.size()),
+        keyStreamData,
+        /*handle=*/nullptr,
         [](std::string_view encodedKeys,
            std::function<void*(uint32_t)> stringBufferFactory,
            velox::memory::MemoryPool* pool) {
@@ -445,7 +447,6 @@ TEST_F(ClusterIndexWriterTest, keyChunkCompressionProducesRequestedChunkCodec) {
               /*comparator=*/nullptr,
               pool);
         },
-        decodeBuffer,
         pool_.get());
     ASSERT_NE(decoded, nullptr);
     ASSERT_NE(decoded->reader, nullptr);
@@ -1515,6 +1516,45 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
         std::vector<std::string>(flatKeys.begin() + startRow, flatKeys.end()));
   }
 
+  {
+    // With blockCache, the key stream is read into the block cache.
+    auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+        velox::memory::MemoryAllocator::Options{
+            .capacity = 1UL << 30, .reservationByteLimit = 0});
+    auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+    testingResetBlockCache();
+    auto cachedOptions = indexOptions;
+    cachedOptions.blockCache = getBlockCache(cache.get());
+    velox::FileHandle fileHandle;
+    fileHandle.file = cachedOptions.file;
+    fileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(),
+        "ClusterIndexWriterTest.hierarchicalKeyChunksUseIntegralColumns");
+    cachedOptions.fileHandle = &fileHandle;
+    auto cachedIndex =
+        clusterIndexFactory(descriptor->name)
+            .createReader(makeRootSection(), pool_.get(), cachedOptions);
+    std::vector<std::string> cachedKeys;
+    auto cachedKeyCursor = cachedIndex->keyCursor(
+        RowRange{0, static_cast<uint32_t>(flatKeys.size())});
+    while (cachedKeyCursor->hasNext()) {
+      cachedKeys.emplace_back(cachedKeyCursor->next());
+    }
+    EXPECT_EQ(cachedKeys, flatKeys);
+
+    // The file starts with the key stream, so its first chunk is at offset 0.
+    velox::io::IoStatistics probeStats;
+    EXPECT_FALSE(
+        cachedOptions.blockCache
+            ->find(
+                cachedOptions.fileHandle->uuid.id(), /*offset=*/0, probeStats)
+            .empty());
+    cachedKeyCursor.reset();
+    cachedIndex.reset();
+    testingResetBlockCache();
+    cache->shutdown();
+  }
+
   const auto keyType = velox::ROW(
       {{keyColumns[0], velox::BOOLEAN()},
        {keyColumns[1], velox::TINYINT()},
@@ -2124,8 +2164,13 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   auto metadataInput = MetadataInput::create(
       metadataFile.get(),
       MetadataInput::Options{.pool = pool_.get(), .ioStats = ioStats});
-  auto dataInput = std::make_unique<velox::dwio::common::BufferedInput>(
-      std::make_shared<velox::InMemoryReadFile>(keyStreamData), *pool_);
+  auto keyStreamFile = std::make_shared<velox::InMemoryReadFile>(keyStreamData);
+  auto dataInput = std::make_shared<DirectDataInput>(
+      keyStreamFile,
+      DirectDataInput::Options{
+          .pool = pool_.get(),
+          .ioStats = std::make_shared<velox::io::IoStatistics>(),
+      });
 
   auto clusterIndex = test::ClusterIndexTestHelper::create(
       std::move(rootSection),

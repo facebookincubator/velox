@@ -40,13 +40,18 @@
 #include <vector>
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/FileHandle.h"
+#include "velox/common/caching/FileIds.h"
 #include "velox/common/file/File.h"
 #include "velox/common/io/Options.h"
+#include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/index/VectorIndex.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/VectorIndexGenerated.h"
@@ -1557,6 +1562,58 @@ TEST_F(VectorIndexTest, writerRoundTripWithMultipleIndexes) {
   NIMBLE_ASSERT_THROW(
       vectorIndexDirectory.load("missing"),
       "Vector index column does not exist");
+}
+
+TEST_F(VectorIndexTest, blockCacheServesIndexData) {
+  const auto written = writeIndexFromVectors(
+      makeConfig(VectorIndexType::kIvfFlat),
+      generateRandomVectors(100, kDimensions));
+  const auto file =
+      std::make_shared<velox::InMemoryReadFile>(written.indexData);
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  velox::FileHandle fileHandle;
+  fileHandle.file = file;
+  fileHandle.uuid = velox::StringIdLease(
+      velox::fileIds(), "VectorIndexTest.blockCacheServesIndexData");
+
+  // Loads the index through a new directory over the block cache. Returns the
+  // index IO counters.
+  const auto loadWithNewDirectory =
+      [&](std::optional<uint32_t> maxCacheEntrySize) {
+        auto ioStats = std::make_shared<velox::io::IoStatistics>();
+        velox::io::ReaderOptions ioOptions(pool());
+        ioOptions.setIndexIoStats(ioStats);
+        const IndexLookup::Options indexOptions{
+            .file = file,
+            .ioOptions = &ioOptions,
+            .maxCacheEntrySize = maxCacheEntrySize,
+            .blockCache = getBlockCache(cache.get()),
+            .fileHandle = &fileHandle,
+        };
+        const auto directory = VectorIndexDirectory::create(
+            Section{MetadataBuffer{toPinnedBuffer(
+                MetadataBuffer::decompress(
+                    written.directoryData,
+                    CompressionType::Uncompressed,
+                    pool()))}},
+            indexOptions);
+        EXPECT_NE(directory.load("embedding"), nullptr);
+        return ioStats;
+      };
+
+  // An index above maxCacheEntrySize bypasses the cache.
+  loadWithNewDirectory(/*maxCacheEntrySize=*/1);
+  EXPECT_GT(loadWithNewDirectory(/*maxCacheEntrySize=*/1)->read().sum(), 0);
+
+  EXPECT_GT(loadWithNewDirectory(std::nullopt)->read().sum(), 0);
+  EXPECT_EQ(loadWithNewDirectory(std::nullopt)->read().sum(), 0)
+      << "The second directory reads the index from the cache";
+
+  testingResetBlockCache();
+  cache->shutdown();
 }
 
 TEST_F(VectorIndexTest, partitionMetadataMatchesBuiltIndex) {

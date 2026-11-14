@@ -22,9 +22,12 @@
 
 namespace facebook::nimble {
 
-/// Where a stripe lies in the file, its rows, and where some of its streams
-/// lie in it, as TabletReader reports them for the stripes of a stripe group.
+/// Which stripe of the file a stripe is, where it lies in the file, its rows,
+/// and where some of its streams lie in it, as TabletReader reports them for
+/// the stripes of a stripe group.
 struct StripeMetadata {
+  /// Index of the stripe in the file.
+  uint32_t stripe{0};
   /// File offset of the stripe, which stream offsets are relative to.
   uint64_t offset{0};
   /// Rows of the stripe.

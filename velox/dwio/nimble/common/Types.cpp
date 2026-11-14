@@ -53,6 +53,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::SharedDictionary, "SharedDictionary"},
         {EncodingType::Slice, "Slice"},
         {EncodingType::EliasFano, "EliasFano"},
+        {EncodingType::Sequence, "Sequence"},
     });
 
 constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({

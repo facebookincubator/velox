@@ -76,6 +76,8 @@ add_executable(
   RLEEncodingTest.cpp
   SentinelEncodingTest.cpp
   SentinelEncodingViewTest.cpp
+  SequenceEncodingTest.cpp
+  SequenceEncodingViewTest.cpp
   SharedDictionaryBuilderTest.cpp
   SharedDictionaryEncodingTest.cpp
   SimdForBitpackEncodingViewTest.cpp

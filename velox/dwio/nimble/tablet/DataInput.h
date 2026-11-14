@@ -19,12 +19,14 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <fmt/core.h>
 #include <folly/Function.h>
 #include <folly/Range.h>
 
+#include "velox/common/caching/StringIdMap.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/Region.h"
 #include "velox/common/io/Options.h"
@@ -39,6 +41,8 @@ namespace facebook::nimble {
 /// reads are sorted by file offset for coalescing. Across groups,
 /// relative order is preserved (stripes are already in file order).
 /// After load(), bufferRef() provides zero-copy access to loaded data.
+/// read() reads a single region on its own, for callers that read regions
+/// concurrently rather than in planned batches.
 ///
 /// Implementations:
 ///   - DirectDataInput: coalesced I/O, no caching
@@ -117,16 +121,20 @@ class DataInput {
 
   /// Release all state (loaded buffers, enqueued requests).
   virtual void clear() = 0;
+
+  /// Reads 'region' on its own, outside any group. Returns the region's bytes
+  /// view and a handle that keeps them alive. Thread-safe: unlike the batch API
+  /// above, read() keeps no state in this object.
+  virtual std::pair<std::string_view, Handle> read(Region region) const = 0;
 };
 
 /// Direct data loading with IO coalescing and alignment for direct I/O.
 ///
-/// After coalescing, each I/O group is backed by a non-contiguous
-/// Allocation (page-aligned runs). Reads are submitted through the file's
-/// positioned vector read API.
+/// After coalescing, one aligned buffer backs every I/O group of a load. Reads
+/// are submitted through the file's positioned vector read API.
 ///
-/// NOTE: DirectDataInput is not thread-safe. Each thread must use its
-/// own instance.
+/// NOTE: The batch API of DirectDataInput is not thread-safe. Each thread must
+/// use its own instance for it. read() is thread-safe.
 class DirectDataInput : public DataInput {
  public:
   static constexpr int32_t kDefaultCoalesceDistance{4 << 10};
@@ -137,9 +145,15 @@ class DirectDataInput : public DataInput {
     std::shared_ptr<velox::io::IoStatistics> ioStats;
     int32_t maxCoalesceDistance{kDefaultCoalesceDistance};
     int64_t maxCoalesceBytes{velox::io::ReaderOptions::kDefaultCoalesceBytes};
+
+    /// Passed to every read of the file. The stats and pool inside it must
+    /// outlive this input.
+    velox::FileIoContext fileIoContext{};
   };
 
-  DirectDataInput(velox::ReadFile* file, const Options& options);
+  DirectDataInput(
+      std::shared_ptr<velox::ReadFile> file,
+      const Options& options);
 
   bool cached() const override {
     return false;
@@ -158,6 +172,8 @@ class DirectDataInput : public DataInput {
   std::span<const BufferRef> bufferRefs() const override;
 
   void clear() override;
+
+  std::pair<std::string_view, Handle> read(Region region) const override;
 
   enum class State { kInit, kEnqueuing, kLoaded };
 
@@ -217,17 +233,19 @@ class DirectDataInput : public DataInput {
 
   // Allocates the shared aligned read buffer and returns a handle that frees
   // it.
-  std::pair<char*, Handle> allocateBuffer(uint64_t bytes);
+  std::pair<char*, Handle> allocateBuffer(uint64_t bytes) const;
 
   // Executes all physical IO groups through ReadFile's positioned vector API.
   void executeIoGroups(std::vector<IoGroup>& ioGroups, char* buffer);
 
-  // File to read from.
-  velox::ReadFile* const file_;
+  // File to read from. Shared, so the file lives as long as this input.
+  const std::shared_ptr<velox::ReadFile> file_;
   // Memory pool for allocating the read buffer.
   velox::memory::MemoryPool* const pool_;
   // IO statistics for tracking read bytes, latency, and gaps.
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
+  // Passed to every read of 'file_'.
+  const velox::FileIoContext fileIoContext_;
   // I/O alignment for file offsets and read sizes.
   const uint64_t alignment_;
   // Allocation alignment passed to allocateAligned, clamped to
@@ -262,24 +280,32 @@ class DirectDataInput : public DataInput {
 /// Loads and caches one contiguous entry per group. Enqueued regions return
 /// zero-copy slices into their group's cached entry.
 ///
-/// NOTE: CachedDataInput is not thread-safe. Each thread must use its own
-/// instance, while the underlying BlockCache may be shared.
+/// NOTE: The batch API of CachedDataInput is not thread-safe. Each thread must
+/// use its own instance for it, while the underlying BlockCache may be shared.
+/// read() is thread-safe.
 class CachedDataInput final : public DataInput {
  public:
   /// Configures the cache, source-file identity, and memory accounting.
   struct Options {
     /// Pool used for direct-I/O staging buffers.
     velox::memory::MemoryPool* pool{nullptr};
-    /// Shared cache receiving one entry for each loaded group.
+    /// Shared cache receiving one entry for each loaded group or read() region.
     BlockCache* cache{nullptr};
-    /// Stable identity of the source file in the cache key space.
-    uint64_t fileId{0};
+    /// Lease on the id of the source file in velox::fileIds(), used in cache
+    /// keys. The input keeps a copy, so the id stays registered for as long
+    /// as the input can create cache entries.
+    velox::StringIdLease fileId;
     /// Statistics receiving storage-read and memory-hit counters.
     std::shared_ptr<velox::io::IoStatistics> ioStats;
+    /// Passed to every read of the file. The stats and pool inside it must
+    /// outlive this input.
+    velox::FileIoContext fileIoContext{};
   };
 
   /// Constructs a grouped cache reader for `file`.
-  CachedDataInput(velox::ReadFile* file, const Options& options);
+  CachedDataInput(
+      std::shared_ptr<velox::ReadFile> file,
+      const Options& options);
 
   bool cached() const override {
     return true;
@@ -307,6 +333,12 @@ class CachedDataInput final : public DataInput {
   /// Clears request state without releasing pins owned by a returned handle.
   void clear() override;
 
+  /// Reads 'region' as one cache entry, served from the cache on a hit. The
+  /// returned handle pins the entry. Like a group, 'region' must fit in one
+  /// cache entry. Entries are keyed by offset alone, so a read shares its entry
+  /// with any read or group at the same offset.
+  std::pair<std::string_view, Handle> read(Region region) const override;
+
  private:
   struct EnqueuedRegion {
     // Position of this request in bufferRefs_.
@@ -323,8 +355,12 @@ class CachedDataInput final : public DataInput {
   };
 
   struct CacheMissGroup {
-    // Position shared by groups_ and the vector of cache entries.
+    // Position of the group's entry in the cache entries. load() uses the same
+    // position in groups_.
     size_t groupIndex{0};
+
+    // Complete physical region stored in the group's cache entry.
+    Region groupRegion;
     // Physical range submitted to storage, including direct-I/O alignment.
     Region readRegion;
     // Offset of this read's destination in the aligned staging allocation.
@@ -348,23 +384,28 @@ class CachedDataInput final : public DataInput {
 
   // Loads cache-miss groups in one positioned read batch. `loadCallback`, when
   // set, runs on each group's regions after its entry is filled and before the
-  // entry is published, so a rejected group never becomes visible.
+  // entry is published, so a rejected group never becomes visible. Running it
+  // reads groups_, so read(), which keeps no batch state, passes none.
   void loadCacheMissGroups(
       std::span<const CacheMissGroup> cacheMissGroups,
       uint64_t stagingBufferSize,
-      std::vector<BlockCache::Entry>& cacheEntries,
-      LoadCallback loadCallback);
+      std::span<BlockCache::Entry> cacheEntries,
+      LoadCallback loadCallback = {}) const;
 
-  // File to read from on a cache miss.
-  velox::ReadFile* const file_;
+  // File to read from on a cache miss. Shared, so the file lives as long as
+  // this input.
+  const std::shared_ptr<velox::ReadFile> file_;
   // Memory pool for allocating direct-I/O staging buffers.
   velox::memory::MemoryPool* const pool_;
   // Shared cache used for full-group entries.
   BlockCache* const cache_;
-  // Stable file identity used in cache keys.
-  const uint64_t fileId_;
+  // Stable file identity used in cache keys, held so that the id stays
+  // registered.
+  const velox::StringIdLease fileId_;
   // IO statistics for storage reads, cache hits, and logical bytes.
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
+  // Passed to every read of 'file_'.
+  const velox::FileIoContext fileIoContext_;
   // Required alignment for file offsets, read sizes, and destination buffers.
   const uint64_t alignment_;
   // Allocation alignment accepted by the memory pool.

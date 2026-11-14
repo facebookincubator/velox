@@ -224,7 +224,7 @@ struct ReaderFixture {
       const char* name)
       : table{getTable(numColumns, numStripes, numPatterns)},
         pool{velox::memory::memoryManager()->addLeafPool(name)},
-        reader{table.type, pool.get()} {}
+        reader{table.type, pool.get(), /*options=*/{}} {}
 
   void resetOutput() {
     output = velox::BaseVector::create(table.outputType, 1, pool.get());
