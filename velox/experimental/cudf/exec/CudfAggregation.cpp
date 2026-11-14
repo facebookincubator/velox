@@ -255,7 +255,8 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
             ? std::make_optional(getCountInputKind(aggregate, constants[i]))
             : std::nullopt,
         maskIndex,
-        isDecimalAggregate);
+        isDecimalAggregate,
+        aggregate.distinct);
   }
   return params;
 }
@@ -300,7 +301,8 @@ AggregationInputChannels buildAggregationInputChannels(
     }
 
     VELOX_NYI_CHECK(
-        !aggregate.distinct, "De-dup before aggregation is not yet supported");
+        !aggregate.distinct || isCountFunctionName(aggregate.call->name()),
+        "De-dup before aggregation is not yet supported");
 
     result.channels.push_back(aggInputs[0]);
   }

@@ -55,6 +55,7 @@ bool canAggregationBeEvaluatedByCudf(
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
@@ -742,27 +743,71 @@ TEST_F(CudfAggregationSelectionTest, invalidTypeCombinationsRejected) {
       canAggregationBeEvaluatedByCudf(*maxBooleanExpr, queryCtx_.get()));
 }
 
-// Test `distinct` aggregations should be rejected early (otherwise the throw
-// NYI)
-TEST_F(CudfAggregationSelectionTest, distinctAggregationsRejected) {
-  auto plan = PlanBuilder()
-                  .values({makeRowVector({
-                      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
-                      makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60}),
-                  })})
-                  .aggregation(
-                      {"c0"},
-                      {"count(distinct c1)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
+// Only a grouped single-step count(DISTINCT) of a non-floating-point column,
+// with or without a FILTER mask, runs on cuDF.
+TEST_F(CudfAggregationSelectionTest, countDistinctSelection) {
+  for (const auto& aggregates : std::vector<std::vector<std::string>>{
+           {"count(distinct c1)"},
+           {"count(distinct c6)"},
+           {"count(distinct c1)", "sum(c2)"},
+       }) {
+    SCOPED_TRACE(aggregates[0]);
+    EXPECT_TRUE(canBeEvaluatedByCudf(
+        *createAggregationNode({"c0"}, aggregates),
+        queryCtx_.get(),
+        pool_.get()));
+  }
+  EXPECT_TRUE(canBeEvaluatedByCudf(
+      *createMaskedAggregationNode("count(distinct c1)"),
+      queryCtx_.get(),
+      pool_.get()));
 
-  auto aggregationNode =
-      std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  for (const auto* rejected :
+       {"sum(distinct c1)",
+        "count(distinct c3)",
+        "count(distinct c4)",
+        "count(distinct c0 + c1)"}) {
+    SCOPED_TRACE(rejected);
+    EXPECT_FALSE(canBeEvaluatedByCudf(
+        *createAggregationNode({"c0"}, {rejected}),
+        queryCtx_.get(),
+        pool_.get()));
+  }
+  EXPECT_FALSE(canBeEvaluatedByCudf(
+      *createAggregationNode({}, {"count(distinct c1)"}),
+      queryCtx_.get(),
+      pool_.get()));
 
-  ASSERT_FALSE(
-      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+  auto partial = PlanBuilder()
+                     .values({makeRowVector({
+                         makeFlatVector<int64_t>({1, 1, 2}),
+                         makeFlatVector<int64_t>({10, 20, 30}),
+                     })})
+                     .partialAggregation({"c0"}, {"count(distinct c1)"})
+                     .planNode();
+  EXPECT_FALSE(canBeEvaluatedByCudf(
+      *std::dynamic_pointer_cast<const core::AggregationNode>(partial),
+      queryCtx_.get(),
+      pool_.get()));
+
+  // A timestamp unit coarser than nanoseconds merges distinct timestamps.
+  auto timestamps = std::dynamic_pointer_cast<const core::AggregationNode>(
+      PlanBuilder()
+          .values({makeRowVector({
+              makeFlatVector<int64_t>({1, 1}),
+              makeFlatVector<Timestamp>({Timestamp(0, 1), Timestamp(0, 2)}),
+          })})
+          .singleAggregation({"c0"}, {"count(distinct c1)"})
+          .planNode());
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  EXPECT_TRUE(canBeEvaluatedByCudf(*timestamps, queryCtx_.get(), pool_.get()));
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+  EXPECT_FALSE(canBeEvaluatedByCudf(*timestamps, queryCtx_.get(), pool_.get()));
 }
 
 // An aggregate with ORDER BY stays on the CPU when its result depends on the

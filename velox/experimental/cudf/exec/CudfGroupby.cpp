@@ -659,9 +659,11 @@ struct GroupbyCountAggregator : GroupbyAggregator {
       uint32_t inputIndex,
       CountInputKind inputKind,
       const TypePtr& resultType,
-      std::optional<uint32_t> maskIndex)
+      std::optional<uint32_t> maskIndex,
+      bool distinct)
       : GroupbyAggregator(step, inputIndex, nullptr, resultType, maskIndex),
-        inputKind_(inputKind) {}
+        inputKind_(inputKind),
+        distinct_(distinct) {}
 
   void addGroupbyRequest(
       cudf::table_view const& tbl,
@@ -673,7 +675,15 @@ struct GroupbyCountAggregator : GroupbyAggregator {
     const bool countAll = (inputKind_ != CountInputKind::kColumn);
     auto& request = requests.emplace_back();
     outputIndex_ = requests.size() - 1;
-    if (exec::isRawInput(step) && maskIndex.has_value()) {
+    if (distinct_) {
+      VELOX_CHECK_EQ(step, core::AggregationNode::Step::kSingle);
+      VELOX_CHECK(inputKind_ == CountInputKind::kColumn);
+      // Masked rows become nulls, which nunique excludes.
+      request.values = materializeMaskedInput(tbl, inputIndex, stream, mr);
+      request.aggregations.push_back(
+          cudf::make_nunique_aggregation<cudf::groupby_aggregation>(
+              cudf::null_policy::EXCLUDE));
+    } else if (exec::isRawInput(step) && maskIndex.has_value()) {
       if (countAll) {
         // count(*)/count(const) FILTER(WHERE m): count mask-true rows via a
         // validity-only column + COUNT_VALID.
@@ -717,8 +727,14 @@ struct GroupbyCountAggregator : GroupbyAggregator {
       std::unique_ptr<cudf::column> state,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK(!distinct_, "count(DISTINCT) is not aggregated incrementally");
     VELOX_CHECK_EQ(step, core::AggregationNode::Step::kFinal);
     return makeCountResult(std::move(state), stream, mr);
+  }
+
+  bool stateGrowsWithInput() const override {
+    // Distinct sets cannot be merged by summing per-batch counts.
+    return distinct_;
   }
 
  private:
@@ -745,6 +761,7 @@ struct GroupbyCountAggregator : GroupbyAggregator {
 
  private:
   CountInputKind inputKind_;
+  bool distinct_;
   uint32_t outputIndex_;
   // Transient validity column for masked count(*)/count(const), valid until the
   // next addGroupbyRequest on this aggregator.
@@ -1407,7 +1424,8 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
         aggregate.inputIndex,
         *aggregate.countInputKind,
         aggregate.resultType,
-        aggregate.maskIndex);
+        aggregate.maskIndex,
+        aggregate.distinct);
   } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<GroupbyMinAggregator>(
         aggregate.companionStep,
@@ -1471,7 +1489,8 @@ std::unique_ptr<StreamingGroupbyAggregator> createStreamingGroupbyAggregator(
     column_index_t inputIndex,
     const TypePtr& inputType,
     const TypePtr& resultType) {
-  if (aggregate.constant != nullptr || aggregate.maskIndex.has_value()) {
+  if (aggregate.constant != nullptr || aggregate.maskIndex.has_value() ||
+      aggregate.distinct) {
     return nullptr;
   }
 
@@ -1660,10 +1679,28 @@ bool canGroupbyBeEvaluatedByCudf(
       return false;
     }
 
-    // `distinct` aggregations are not supported, in testing fails with "De-dup
-    // before aggregation is not yet supported"
+    // Only a single-step count(DISTINCT) of a column runs on cuDF (see
+    // GroupbyCountAggregator). nunique compares raw values, so
+    // floating-point inputs, where Velox treats all NaNs as equal and -0.0 as
+    // 0.0, stay on the CPU, as do types without a plain cuDF equivalent and
+    // timestamps truncated to a unit coarser than nanoseconds.
     if (aggregate.distinct) {
-      return false;
+      const auto& inputs = aggregate.call->inputs();
+      if (!isCountFunctionName(aggregate.call->name()) ||
+          getCompanionStep(aggregate.call->name(), step) !=
+              core::AggregationNode::Step::kSingle ||
+          inputs.size() != 1 || !inputs[0]->isFieldAccessKind()) {
+        return false;
+      }
+      const auto& inputType = inputs[0]->type();
+      if (!inputType->isPrimitiveType() || !isTypeSupportedByCudf(inputType) ||
+          inputType->kind() == TypeKind::REAL ||
+          inputType->kind() == TypeKind::DOUBLE ||
+          (inputType->kind() == TypeKind::TIMESTAMP &&
+           CudfConfig::getInstance().timestampUnit !=
+               cudf::type_id::TIMESTAMP_NANOSECONDS)) {
+        return false;
+      }
     }
 
     if (!sortingKeysSupportedByCudf(aggregate)) {
