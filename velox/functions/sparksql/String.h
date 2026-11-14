@@ -17,6 +17,8 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 
+#include <algorithm>
+#include <cstring>
 #include <string>
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
@@ -38,7 +40,7 @@ struct PadFunctionBase {
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size,
       const arg_type<Varchar>& padString) {
-    stringImpl::pad<lpad, false /*isAscii*/>(result, string, size, padString);
+    padOrTruncate<false /*isAscii*/>(result, string, size, padString);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -53,7 +55,7 @@ struct PadFunctionBase {
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size,
       const arg_type<Varchar>& padString) {
-    stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, padString);
+    padOrTruncate<true /*isAscii*/>(result, string, size, padString);
   }
 
   FOLLY_ALWAYS_INLINE void callAscii(
@@ -61,6 +63,29 @@ struct PadFunctionBase {
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size) {
     stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, {" "});
+  }
+
+ private:
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void padOrTruncate(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& string,
+      const arg_type<int64_t>& size,
+      const arg_type<Varchar>& padString) {
+    if (padString.empty()) {
+      // Spark adds no padding for an empty pad string. It only truncates.
+      const int64_t keptChars = std::min<int64_t>(
+          std::max<int64_t>(size, 0), stringImpl::length<isAscii>(string));
+      const size_t keptBytes = stringCore::getByteRange<isAscii>(
+                                   string.data(), string.size(), 1, keptChars)
+                                   .second;
+      result.resize(keptBytes);
+      if (keptBytes > 0) {
+        std::memcpy(result.data(), string.data(), keptBytes);
+      }
+      return;
+    }
+    stringImpl::pad<lpad, isAscii>(result, string, size, padString);
   }
 };
 

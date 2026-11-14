@@ -874,6 +874,14 @@ TEST_F(StringTest, lpad) {
 
   // Empty string
   EXPECT_EQ("aaa", lpadWithPadString("", 3, "a"));
+  // An empty pad string adds no padding, and the input is only truncated.
+  EXPECT_EQ("abc", lpadWithPadString("abc", 5, ""));
+  EXPECT_EQ("ab", lpadWithPadString("abc", 2, ""));
+  EXPECT_EQ("", lpadWithPadString("abc", 0, ""));
+  EXPECT_EQ("", lpadWithPadString("abc", -1, ""));
+  EXPECT_EQ("", lpadWithPadString("", 3, ""));
+  EXPECT_EQ("\u00E9", lpadWithPadString("\u00E9", 3, ""));
+  EXPECT_EQ("h\u00E9", lpadWithPadString("h\u00E9llo", 2, ""));
 
   // Truncating string
   EXPECT_EQ("", lpadWithPadString("abc", 0, "e"));
@@ -1066,6 +1074,14 @@ TEST_F(StringTest, rpad) {
   EXPECT_EQ("textx", rpadWithPadString("text", 5, "x"));
   EXPECT_EQ("text", rpadWithPadString("text", 4, "x"));
   EXPECT_EQ("textxyx", rpadWithPadString("text", 7, "xy"));
+  // An empty pad string adds no padding, and the input is only truncated.
+  EXPECT_EQ("abc", rpadWithPadString("abc", 5, ""));
+  EXPECT_EQ("ab", rpadWithPadString("abc", 2, ""));
+  EXPECT_EQ("", rpadWithPadString("abc", 0, ""));
+  EXPECT_EQ("", rpadWithPadString("abc", -1, ""));
+  EXPECT_EQ("", rpadWithPadString("", 3, ""));
+  EXPECT_EQ("\u00E9", rpadWithPadString("\u00E9", 3, ""));
+  EXPECT_EQ("h\u00E9", rpadWithPadString("h\u00E9llo", 2, ""));
 
   // Non-ASCII strings with various values for size and padString
   EXPECT_EQ(
