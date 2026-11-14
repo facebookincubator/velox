@@ -21,13 +21,14 @@
 namespace facebook::velox::connector::paimon {
 namespace {
 
-RowTypePtr deriveDataColumns(
+// Paimon writes partition columns into data files at their table positions, so
+// every table column is stored. Readers that bind file columns by position
+// need the partition columns in place; partition values still come from the
+// split.
+RowTypePtr storedDataColumns(
     const RowTypePtr& rowType,
     const std::vector<std::string>& partitionKeys) {
   VELOX_USER_CHECK_NOT_NULL(rowType, "Missing Paimon table row type");
-  if (partitionKeys.empty()) {
-    return rowType;
-  }
   std::unordered_set<column_index_t> partitions;
   for (const auto& name : partitionKeys) {
     const auto index = rowType->getChildIdxIfExists(name);
@@ -38,15 +39,7 @@ RowTypePtr deriveDataColumns(
         "Duplicate Paimon partition column '{}'",
         name);
   }
-  std::vector<std::string> names;
-  std::vector<TypePtr> types;
-  for (column_index_t i = 0; i < rowType->size(); ++i) {
-    if (!partitions.count(i)) {
-      names.push_back(rowType->nameOf(i));
-      types.push_back(rowType->childAt(i));
-    }
-  }
-  return ROW(std::move(names), std::move(types));
+  return rowType;
 }
 
 } // namespace
@@ -70,7 +63,7 @@ PaimonTableHandle::PaimonTableHandle(
           std::move(tableName),
           std::move(subfieldFilters),
           std::move(remainingFilter),
-          deriveDataColumns(rowType, partitionKeys),
+          storedDataColumns(rowType, partitionKeys),
           /*tableParameters=*/{},
           sampleRate,
           std::move(dbName)),

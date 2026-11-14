@@ -62,8 +62,7 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
   EXPECT_EQ(handle->connectorId(), "test-paimon");
   EXPECT_EQ(handle->name(), "orders");
   EXPECT_EQ(handle->dbName(), "");
-  EXPECT_EQ(
-      *handle->dataColumns(), *ROW({{"id", BIGINT()}, {"value", BIGINT()}}));
+  EXPECT_EQ(*handle->dataColumns(), *rowType());
   EXPECT_TRUE(handle->tableParameters().empty());
   EXPECT_TRUE(handle->filterColumnHandles().empty());
   EXPECT_TRUE(handle->subfieldFilters().empty());
@@ -85,7 +84,8 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
   EXPECT_EQ(
       handle->toString(),
       "PaimonTableHandle[table orders, schemaId 1099511627776, tableType "
-      "APPEND_ONLY, dataColumns ROW<id:BIGINT,value:BIGINT>, sampleRate 1]");
+      "APPEND_ONLY, dataColumns ROW<id:BIGINT,p:VARCHAR,value:BIGINT>, "
+      "sampleRate 1]");
 
   const PaimonTableHandle onlyPartition(
       "test-paimon",
@@ -95,7 +95,7 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
       {0},
       PaimonTableType::kAppendOnly,
       {"p"});
-  EXPECT_EQ(onlyPartition.dataColumns()->size(), 0);
+  EXPECT_EQ(onlyPartition.dataColumns()->size(), 1);
   const auto emptyType = ROW({});
   const PaimonTableHandle empty(
       "test-paimon", "t", 0, emptyType, {}, PaimonTableType::kAppendOnly);
@@ -139,8 +139,7 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
   EXPECT_EQ(fileHandle.sampleRate(), 0.5);
   EXPECT_EQ(fileHandle.remainingFilter(), remaining);
   EXPECT_TRUE(fileHandle.tableParameters().empty());
-  EXPECT_EQ(
-      *fileHandle.dataColumns(), *ROW({{"id", BIGINT()}, {"value", BIGINT()}}));
+  EXPECT_EQ(*fileHandle.dataColumns(), *rowType());
   ASSERT_EQ(fileHandle.filterColumnHandles().size(), 1);
   EXPECT_EQ(fileHandle.filterColumnHandles()[0], filterColumn);
   EXPECT_EQ(
