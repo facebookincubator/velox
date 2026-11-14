@@ -59,6 +59,10 @@ using hive::HiveConfig;
 using hive::HiveConnector;
 using hive::HiveTableHandle;
 
+#ifdef VELOX_ENABLE_NIMBLE
+namespace nimble = ::facebook::nimble;
+#endif
+
 static_assert(std::is_base_of_v<connector::FileConnector, PaimonConnector>);
 static_assert(!std::is_base_of_v<HiveConnector, PaimonConnector>);
 
@@ -1154,9 +1158,9 @@ TEST_F(PaimonConnectorTest, nimbleFileFieldIds) {
        makeNullableFlatVector<int64_t>(
            {std::nullopt, std::nullopt, std::nullopt})});
   nimble::unregisterSelectiveNimbleReaderFactory();
-  nimble::registerNimbleReaderFactory();
+  ::facebook::velox::nimble::registerNimbleReaderFactory();
   const auto restore = folly::makeGuard([] {
-    nimble::unregisterNimbleReaderFactory();
+    ::facebook::velox::nimble::unregisterNimbleReaderFactory();
     nimble::registerSelectiveNimbleReaderFactory();
   });
   for (const bool batchReader : {false, true}) {
