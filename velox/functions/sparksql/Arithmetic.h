@@ -269,16 +269,32 @@ struct UnaryMinusFunction {
   bool failOnError_ = false;
 };
 
+/// Spark's operator / for DOUBLE inputs. Division by zero is NULL, or an error
+/// when Spark ANSI mode is enabled in the query config.
 template <typename T>
 struct DivideFunction {
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const double* /*num*/,
+      const double* /*denom*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
   FOLLY_ALWAYS_INLINE bool
   call(double& result, const double num, const double denom) {
     if (UNLIKELY(denom == 0)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Division by zero");
+      }
       return false;
     }
     result = num / denom;
     return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 /*
@@ -849,6 +865,97 @@ struct TryMultiplyFunction {
   }
 };
 
+/// Spark's operator + for numeric inputs. Integral overflow wraps around, or
+/// is an error when Spark ANSI mode is enabled in the query config. Interval
+/// inputs are registered with CheckedAddFunction instead, because Spark always
+/// uses exact arithmetic for them.
+template <typename TExec>
+struct AddFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/,
+      const T* /*b*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      // The builtin stores the wrapped-around result on overflow.
+      const bool overflow = __builtin_add_overflow(a, b, &result);
+      VELOX_USER_RETURN(
+          overflow && ansiEnabled_, "Arithmetic overflow: {} + {}", a, b);
+    } else {
+      result = a + b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+/// Spark's operator - for numeric inputs. Integral overflow wraps around, or
+/// is an error when Spark ANSI mode is enabled in the query config. Interval
+/// inputs are registered with CheckedSubtractFunction instead.
+template <typename TExec>
+struct SubtractFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/,
+      const T* /*b*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      const bool overflow = __builtin_sub_overflow(a, b, &result);
+      VELOX_USER_RETURN(
+          overflow && ansiEnabled_, "Arithmetic overflow: {} - {}", a, b);
+    } else {
+      result = a - b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+/// Spark's operator * for numeric inputs. Integral overflow wraps around, or
+/// is an error when Spark ANSI mode is enabled in the query config.
+template <typename TExec>
+struct MultiplyFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/,
+      const T* /*b*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      const bool overflow = __builtin_mul_overflow(a, b, &result);
+      VELOX_USER_RETURN(
+          overflow && ansiEnabled_, "Arithmetic overflow: {} * {}", a, b);
+    } else {
+      result = a * b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
 template <typename TExec>
 struct CheckedDivideFunction {
   template <typename T>
@@ -866,29 +973,48 @@ struct CheckedDivideFunction {
   }
 };
 
-/// Implements integral division with truncation towards zero.
-/// Returns Null if divisor is 0.
+/// Spark's operator div: integral division with truncation towards zero.
+/// Division by zero is NULL and BIGINT overflow wraps around, or both are an
+/// error when Spark ANSI mode is enabled in the query config.
 template <typename TExec>
 struct IntegralDivideFunction {
   template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/,
+      const T* /*b*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename T>
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const T& a, const T& b) {
     if (b == 0) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Division by zero");
+      }
       return false;
     }
     // In Java, Long.MIN_VALUE is -2^63 and Long.MAX_VALUE is 2^63 - 1.
     // Dividing Long.MIN_VALUE by -1 overflows because the positive
     // result (+2^63) cannot be represented in a signed 64-bit integer.
     // Java integer arithmetic wraps around on overflow (two's complement),
-    // so Long.MIN_VALUE / -1 evaluates to Long.MIN_VALUE itself instead
-    // of throwing an exception.
+    // so Long.MIN_VALUE / -1 evaluates to Long.MIN_VALUE itself, or is an
+    // error in ANSI mode.
     if (a == std::numeric_limits<int64_t>::min() && b == -1) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Overflow in integral divide");
+      }
       result = a;
       return true;
     }
-
-    result = a / b;
+    // Divide as BIGINT so that INT32 min / -1 does not trap.
+    result = static_cast<int64_t>(a) / static_cast<int64_t>(b);
     return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 /// Implements integral division with truncation towards zero.
@@ -901,7 +1027,7 @@ struct CheckedIntegralDivideFunction {
     VELOX_USER_RETURN(
         a == std::numeric_limits<int64_t>::min() && b == -1,
         "Overflow in integral divide");
-    result = a / b;
+    result = static_cast<int64_t>(a) / static_cast<int64_t>(b);
     return Status::OK();
   }
 };
