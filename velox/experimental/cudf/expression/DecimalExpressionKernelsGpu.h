@@ -104,6 +104,8 @@ __int128_t getDecimalScalarValue(
  * @param out Mutable output column to write divided values into.
  * @param rescaleFactor Fixed-point scale factor, typically
  * DecimalUtil::kPowersOfTen[aRescale] from the caller.
+ * @param precisionBound 10^outputPrecision; a result whose magnitude reaches it
+ * sets the overflow status bit.
  * @param stream CUDA stream for kernel execution.
  * @return DecimalBinaryOpStatus: kOk, kOverflow, or kDivisionByZero.
  */
@@ -114,6 +116,7 @@ DecimalBinaryOpStatus decimalDivideColumnColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
+    __int128_t precisionBound,
     cuda::stream_ref stream);
 
 /**
@@ -129,6 +132,8 @@ DecimalBinaryOpStatus decimalDivideColumnColumn(
  * @param out Mutable output column to write divided values into.
  * @param rescaleFactor Fixed-point scale factor, typically
  * DecimalUtil::kPowersOfTen[aRescale] from the caller.
+ * @param precisionBound 10^outputPrecision; a result whose magnitude reaches it
+ * sets the overflow status bit.
  * @param stream CUDA stream for kernel execution.
  * @return DecimalBinaryOpStatus: kOk, kOverflow, or kDivisionByZero.
  */
@@ -139,6 +144,7 @@ DecimalBinaryOpStatus decimalDivideColumnScalar(
     __int128_t rhsValue,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
+    __int128_t precisionBound,
     cuda::stream_ref stream);
 
 /**
@@ -154,6 +160,8 @@ DecimalBinaryOpStatus decimalDivideColumnScalar(
  * @param out Mutable output column to write divided values into.
  * @param rescaleFactor Fixed-point scale factor, typically
  * DecimalUtil::kPowersOfTen[aRescale] from the caller.
+ * @param precisionBound 10^outputPrecision; a result whose magnitude reaches it
+ * sets the overflow status bit.
  * @param stream CUDA stream for kernel execution.
  * @return DecimalBinaryOpStatus: kOk, kOverflow, or kDivisionByZero.
  */
@@ -164,6 +172,7 @@ DecimalBinaryOpStatus decimalDivideScalarColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
+    __int128_t precisionBound,
     cuda::stream_ref stream);
 
 } // namespace detail

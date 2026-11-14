@@ -1348,8 +1348,14 @@ class BinaryFunction : public CudfFunction {
         auto rhsScale = -rhsView.type().scale();
         auto outScale = -type_.scale();
         auto aRescale = outScale - lhsScale + rhsScale;
-        auto result =
-            decimalDivide(lhsView, rhsView, workingType, aRescale, stream, mr);
+        auto result = decimalDivide(
+            lhsView,
+            rhsView,
+            workingType,
+            decimalPrecision_,
+            aRescale,
+            stream,
+            mr);
         return finalizeDecimalDivision(std::move(result), type_, stream, mr);
       }
       auto lhsView = asView(inputColumns[0]);
@@ -1416,8 +1422,14 @@ class BinaryFunction : public CudfFunction {
         auto rhsScale = -right_->type().scale();
         auto outScale = -type_.scale();
         auto aRescale = outScale - lhsScale + rhsScale;
-        auto result =
-            decimalDivide(lhsView, *right_, workingType, aRescale, stream, mr);
+        auto result = decimalDivide(
+            lhsView,
+            *right_,
+            workingType,
+            decimalPrecision_,
+            aRescale,
+            stream,
+            mr);
         return finalizeDecimalDivision(std::move(result), type_, stream, mr);
       }
       auto lhsView = asView(inputColumns[0]);
@@ -1475,8 +1487,14 @@ class BinaryFunction : public CudfFunction {
       auto rhsScale = -rhsView.type().scale();
       auto outScale = -type_.scale();
       auto aRescale = outScale - lhsScale + rhsScale;
-      auto result =
-          decimalDivide(*left_, rhsView, workingType, aRescale, stream, mr);
+      auto result = decimalDivide(
+          *left_,
+          rhsView,
+          workingType,
+          decimalPrecision_,
+          aRescale,
+          stream,
+          mr);
       return finalizeDecimalDivision(std::move(result), type_, stream, mr);
     }
     auto rhsView = asView(inputColumns[0]);
