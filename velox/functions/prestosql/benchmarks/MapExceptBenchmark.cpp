@@ -21,6 +21,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -40,7 +41,12 @@
 //  - `varchar_`: VARCHAR keys instead of BIGINT.
 //  - `dict_`: maps wrapped in a dictionary, as a filter produces.
 //
-// Every case reports time per row.
+// Every case reports time per row. The `flatMap` group runs some cases over the
+// same maps passed as:
+//  - map: a MapVector, as above.
+//  - toMap: a FlatMapVector, converted to a MapVector with toMapVector() before
+//    evaluating. Reported relative to `map`.
+//  - flatMap: a FlatMapVector, evaluated directly. Reported relative to `map`.
 
 DEFINE_int32(batch_size, 1'000, "Number of rows per batch");
 DEFINE_int32(seed, 42, "Random seed for key shuffling and dictionary indices");
@@ -52,6 +58,8 @@ namespace {
 
 enum class KeyKind { kBigint, kVarchar };
 
+enum class MapEncoding { kMap, kToMap, kFlatMap };
+
 struct CaseSpec {
   int mapSize;
   int numExcluded;
@@ -62,6 +70,7 @@ struct CaseSpec {
   // ARRAY(BIGINT) values instead of REAL.
   bool arrayValues{false};
   bool dictionaryEncoded{false};
+  MapEncoding encoding{MapEncoding::kMap};
 
   bool operator==(const CaseSpec&) const = default;
 };
@@ -132,7 +141,12 @@ class MapExceptBenchmark : public functions::test::FunctionBenchmarkBase {
 
     unsigned numRows{0};
     for (unsigned i = 0; i < times; ++i) {
-      numRows += evaluate(exprSet, data_)->size();
+      auto input = data_;
+      if (spec.encoding == MapEncoding::kToMap) {
+        input = maker().rowVector(
+            {"c0", "c1"}, {wrap(flatMap_->toMapVector()), data_->childAt(1)});
+      }
+      numRows += evaluate(exprSet, input)->size();
     }
 
     suspender.rehire();
@@ -213,25 +227,64 @@ class MapExceptBenchmark : public functions::test::FunctionBenchmarkBase {
         std::move(elements));
   }
 
+  // Returns flat maps with the keys [0, mapSize) in every row.
+  FlatMapVectorPtr makeFlatMap(const CaseSpec& spec) {
+    VELOX_CHECK(spec.keyKind == KeyKind::kBigint && !spec.arrayValues);
+    const vector_size_t numRows = FLAGS_batch_size;
+    std::vector<VectorPtr> mapValues;
+    mapValues.reserve(spec.mapSize);
+    for (int key = 0; key < spec.mapSize; ++key) {
+      mapValues.push_back(maker().flatVector<float>(numRows, [&](auto row) {
+        return static_cast<float>(row * spec.mapSize + key);
+      }));
+    }
+    return std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(BIGINT(), REAL()),
+        nullptr,
+        numRows,
+        maker().flatVector<int64_t>(
+            spec.mapSize, [](auto index) { return index; }),
+        std::move(mapValues),
+        std::vector<BufferPtr>{});
+  }
+
+  // Returns 'maps' wrapped in the dictionary of the current case, if it has
+  // one.
+  VectorPtr wrap(VectorPtr maps) const {
+    if (wrapIndices_ == nullptr) {
+      return maps;
+    }
+    const auto numRows = maps->size();
+    return BaseVector::wrapInDictionary(
+        nullptr, wrapIndices_, numRows, std::move(maps));
+  }
+
   void prepare(const CaseSpec& spec) {
     if (spec_ == spec) {
       return;
     }
     data_.reset();
+    flatMap_.reset();
+    wrapIndices_.reset();
 
-    auto maps = makeMaps(spec);
     if (spec.dictionaryEncoded) {
       // The excluded keys stay flat: the expression evaluator peels a
       // dictionary when every other argument is constant, and map_except would
       // then see the unwrapped maps.
       VELOX_CHECK(!spec.constantKeys);
-      VectorFuzzer fuzzer({}, pool(), FLAGS_seed);
-      const auto numRows = maps->size();
-      maps = BaseVector::wrapInDictionary(
-          nullptr, fuzzer.fuzzIndices(numRows, numRows), numRows, maps);
+      wrapIndices_ = VectorFuzzer({}, pool(), FLAGS_seed)
+                         .fuzzIndices(FLAGS_batch_size, FLAGS_batch_size);
     }
-    data_ =
-        maker().rowVector({"c0", "c1"}, {maps, makeExcludedKeyArrays(spec)});
+    VectorPtr maps;
+    if (spec.encoding == MapEncoding::kMap) {
+      maps = makeMaps(spec);
+    } else {
+      flatMap_ = makeFlatMap(spec);
+      maps = flatMap_;
+    }
+    data_ = maker().rowVector(
+        {"c0", "c1"}, {wrap(std::move(maps)), makeExcludedKeyArrays(spec)});
     spec_ = spec;
   }
 
@@ -240,6 +293,9 @@ class MapExceptBenchmark : public functions::test::FunctionBenchmarkBase {
   // generation out of the timed region and holds one case in memory at a time.
   std::optional<CaseSpec> spec_;
   RowVectorPtr data_;
+  // The unwrapped flat maps of the current case, if it uses flat maps.
+  FlatMapVectorPtr flatMap_;
+  BufferPtr wrapIndices_;
 };
 
 std::unique_ptr<MapExceptBenchmark> benchmark;
@@ -387,6 +443,51 @@ BENCHMARK_MULTI(dict_map1000_exclude30_allHit, n) {
        .dictionaryEncoded = true},
       n);
 }
+
+BENCHMARK_DRAW_LINE();
+
+// Flat maps, as described at the top. Defines the benchmarks of the case
+// `name`, whose CaseSpec fields follow.
+#define FLAT_MAP_BENCHMARKS(name, ...)                                        \
+  BENCHMARK_MULTI(map_##name, n) {                                            \
+    return benchmark->run({__VA_ARGS__, .encoding = MapEncoding::kMap}, n);   \
+  }                                                                           \
+  BENCHMARK_RELATIVE_MULTI(toMap_##name, n) {                                 \
+    return benchmark->run({__VA_ARGS__, .encoding = MapEncoding::kToMap}, n); \
+  }                                                                           \
+  BENCHMARK_RELATIVE_MULTI(flatMap_##name, n) {                               \
+    return benchmark->run(                                                    \
+        {__VA_ARGS__, .encoding = MapEncoding::kFlatMap}, n);                 \
+  }                                                                           \
+  BENCHMARK_DRAW_LINE();
+
+FLAT_MAP_BENCHMARKS(
+    map1000_exclude3_noHit,
+    .mapSize = 1'000,
+    .numExcluded = 3,
+    .hitFraction = 0.0)
+FLAT_MAP_BENCHMARKS(
+    map100_exclude3_allHit,
+    .mapSize = 100,
+    .numExcluded = 3,
+    .hitFraction = 1.0)
+FLAT_MAP_BENCHMARKS(
+    map1000_exclude30_allHit,
+    .mapSize = 1'000,
+    .numExcluded = 30,
+    .hitFraction = 1.0)
+FLAT_MAP_BENCHMARKS(
+    const_map1000_exclude3_allHit,
+    .mapSize = 1'000,
+    .numExcluded = 3,
+    .hitFraction = 1.0,
+    .constantKeys = true)
+FLAT_MAP_BENCHMARKS(
+    dict_map1000_exclude30_allHit,
+    .mapSize = 1'000,
+    .numExcluded = 30,
+    .hitFraction = 1.0,
+    .dictionaryEncoded = true)
 
 } // namespace
 
