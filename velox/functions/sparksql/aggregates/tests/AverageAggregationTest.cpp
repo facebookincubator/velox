@@ -19,12 +19,16 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/type/DecimalUtil.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
+using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 
@@ -46,6 +50,33 @@ class AverageAggregationTest : public AggregationTestBase {
         .aggregates({"spark_avg(c0)"})
         .assertResults(expected);
   }
+
+  // Runs the global average with ANSI mode on, including the plans that end
+  // with the '_merge' companion.
+  void testGlobalAverageAnsi(
+      const RowVectorPtr& input,
+      const RowVectorPtr& expected) {
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_avg(c0)"})
+        .config(kAnsiEnabled, "true")
+        .withCompanion(CompanionPlans::kMergeOnly)
+        .assertResults(expected);
+  }
+
+  // Checks that the global average fails on overflow with ANSI mode on, in
+  // every plan shape: single, partial + final, intermediate, abandoned
+  // partial, local exchange and streaming.
+  void testGlobalAverageOverflowAnsi(const RowVectorPtr& input) {
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_avg(c0)"})
+        .config(kAnsiEnabled, "true")
+        .assertError("Decimal overflow in average");
+  }
+
+  static inline const std::string kAnsiEnabled{
+      SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled)};
 
   core::PlanNodePtr createMergeExtractDecimal(
       const RowVectorPtr& intermediateInput,
@@ -170,6 +201,8 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       .aggregates({"spark_avg(c0)"})
       .withCompanion(CompanionPlans::kMergeOnly)
       .assertResults(shortDecimalExpected);
+  // ANSI mode does not change the result of a sum that does not overflow.
+  testGlobalAverageAnsi(shortDecimalInput, shortDecimalExpected);
 
   // Long decimal aggregation.
   auto longDecimalInput = makeRowVector({makeNullableFlatVector<int128_t>(
@@ -187,6 +220,7 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       .aggregates({"spark_avg(c0)"})
       .withCompanion(CompanionPlans::kMergeOnly)
       .assertResults(longDecimalExpected);
+  testGlobalAverageAnsi(longDecimalInput, longDecimalExpected);
 
   // The total sum overflows the max int128_t limit.
   std::vector<int128_t> rawVector;
@@ -195,20 +229,20 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   for (int i = 0; i < 10; ++i) {
     rawVector.push_back(DecimalUtil::kLongDecimalMax);
   }
-  testGlobalAverage(
-      {makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))})},
-      {nullExpected},
-      {DECIMAL(38, 4)});
+  auto overflowInput =
+      makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))});
+  testGlobalAverage({overflowInput}, {nullExpected}, {DECIMAL(38, 4)});
+  testGlobalAverageOverflowAnsi(overflowInput);
 
   // The total sum underflows the min int128_t limit.
   rawVector.clear();
   for (int i = 0; i < 10; ++i) {
     rawVector.push_back(DecimalUtil::kLongDecimalMin);
   }
-  testGlobalAverage(
-      {makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))})},
-      {nullExpected},
-      {DECIMAL(38, 4)});
+  auto underflowInput =
+      makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))});
+  testGlobalAverage({underflowInput}, {nullExpected}, {DECIMAL(38, 4)});
+  testGlobalAverageOverflowAnsi(underflowInput);
 
   // Test constant vector.
   testGlobalAverage(
@@ -444,6 +478,77 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
           .customStats.at("toIntermediateFastPathCalls")
           .sum,
       2);
+}
+
+// With ANSI mode on, a partial step does not fail on overflow. It emits a
+// NULL sum, as Spark does, so the final step decides.
+TEST_F(AverageAggregationTest, avgDecimalOverflowPartialAnsi) {
+  std::vector<int128_t> rawVector;
+  for (int i = 0; i < 10; ++i) {
+    rawVector.push_back(DecimalUtil::kLongDecimalMax);
+  }
+  auto input =
+      makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .partialAggregation({}, {"spark_avg(c0)"})
+                  .planNode();
+  auto expected = makeRowVector({makeRowVector(
+      {makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 0)),
+       makeFlatVector<int64_t>(std::vector<int64_t>{10})})});
+  AssertQueryBuilder(plan).config(kAnsiEnabled, "true").assertResults(expected);
+}
+
+// The '_merge_extract' step decides on overflow like the final step: with ANSI
+// mode on, a NULL sum from an overflowed partial step is an error, and with it
+// off the result is NULL.
+TEST_F(AverageAggregationTest, avgDecimalCompanionMergeExtractAnsi) {
+  auto intermediateInput = makeRowVector({makeRowVector(
+      {makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 0)),
+       makeFlatVector<int64_t>(std::vector<int64_t>{10})})});
+  auto plan = createMergeExtractDecimal(
+      intermediateInput, ROW({DECIMAL(38, 0), BIGINT()}), DECIMAL(38, 4));
+
+  AssertQueryBuilder(plan).assertResults(makeRowVector(
+      {makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 4))}));
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).config(kAnsiEnabled, "true").copyResults(pool()),
+      "Decimal overflow in average");
+}
+
+// With ANSI mode on, an overflow in one group fails the query. With it off,
+// only that group is NULL.
+TEST_F(AverageAggregationTest, avgDecimalOverflowOneGroupAnsi) {
+  std::vector<int128_t> values;
+  std::vector<int32_t> keys;
+  for (int i = 0; i < 10; ++i) {
+    values.push_back(DecimalUtil::kLongDecimalMax);
+    keys.push_back(1);
+    values.push_back(HugeInt::build(10, 100));
+    keys.push_back(2);
+  }
+  auto input = makeRowVector(
+      {makeFlatVector<int128_t>(values, DECIMAL(38, 0)),
+       makeFlatVector<int32_t>(keys)});
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2}),
+       makeNullableFlatVector<int128_t>(
+           {std::nullopt,
+            HugeInt::build(10, 100) * DecimalUtil::kPowersOfTen[4]},
+           DECIMAL(38, 4))});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c1"})
+      .aggregates({"spark_avg(c0)"})
+      .assertResults(expected);
+
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c1"})
+      .aggregates({"spark_avg(c0)"})
+      .config(kAnsiEnabled, "true")
+      .assertError("Decimal overflow in average");
 }
 
 } // namespace
