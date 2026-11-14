@@ -105,18 +105,16 @@ std::vector<velox::core::SortOrder> toVeloxSortOrders(
 // includes all descendants and null overhead. We just need to find the
 // projected top-level columns and sum their sizes.
 uint64_t sumProjectedLogicalSize(
-    const velox::dwio::common::TypeWithId& rootTypeWithId,
-    const std::vector<std::unique_ptr<ColumnStatistics>>& columnStats,
+    const ReaderBase& readerBase,
     const velox::common::ScanSpec& scanSpec) {
+  const auto& rootTypeWithId = *readerBase.fileSchemaWithId();
   uint64_t size = 0;
   for (uint32_t i = 0; i < rootTypeWithId.size(); ++i) {
     if (auto* childSpec =
             scanSpec.childByName(rootTypeWithId.type()->asRow().nameOf(i));
         childSpec != nullptr && rootTypeWithId.childAt(i) != nullptr) {
-      auto id = rootTypeWithId.childAt(i)->id();
-      if (id < columnStats.size() && columnStats[id]) {
-        size += columnStats[id]->getLogicalSize();
-      }
+      size += readerBase.fileColumnLogicalSize(rootTypeWithId.childAt(i)->id())
+                  .value_or(0);
     }
   }
   return size;
@@ -736,12 +734,11 @@ void SelectiveNimbleRowReader::computeStatsBasedRowSize() const {
     return;
   }
   statsBasedRowSizeAttempted_ = true;
-  const auto& columnStats = readerBase_->fileColumnStats();
-  if (columnStats.empty()) {
+  if (!readerBase_->hasFileColumnStatistics()) {
     return;
   }
-  auto totalLogicalSize = sumProjectedLogicalSize(
-      *readerBase_->fileSchemaWithId(), columnStats, *options_.scanSpec());
+  auto totalLogicalSize =
+      sumProjectedLogicalSize(*readerBase_, *options_.scanSpec());
   auto totalRows = readerBase_->tablet().tabletRowCount();
   if (totalRows > 0) {
     statsBasedRowSize_ = std::max<size_t>(1, totalLogicalSize / totalRows);
@@ -1092,13 +1089,11 @@ std::optional<uint64_t> SelectiveNimbleReader::numberOfRows() const {
 
 std::unique_ptr<dwio::common::ColumnStatistics>
 SelectiveNimbleReader::columnStatistics(uint32_t index) const {
-  const auto& stats = readerBase_->fileColumnStats();
-  // Return nullptr if the index is out of range (e.g., no vectorized stats
-  // section) or if the column has no statistics (e.g., unsupported type).
-  if (index >= stats.size() || !stats[index]) {
+  const auto* stats = readerBase_->fileColumnStatistics(index);
+  if (stats == nullptr) {
     return nullptr;
   }
-  return stats[index]->toCommonStatistics();
+  return stats->toCommonStatistics();
 }
 
 const RowTypePtr& SelectiveNimbleReader::rowType() const {

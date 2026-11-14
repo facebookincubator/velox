@@ -933,6 +933,15 @@ class ReaderOptions : public io::ReaderOptions {
     nimbleDirectBufferedInputEnabled_ = value;
   }
 
+  /// Whether Nimble decodes file column statistics on first use.
+  bool nimbleLazyFileStats() const {
+    return nimbleLazyFileStats_;
+  }
+
+  void setNimbleLazyFileStats(bool value) {
+    nimbleLazyFileStats_ = value;
+  }
+
   /// Whether to cache file metadata (footer, stripes, index) in the
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
   /// speculative tail read and populates the cache; subsequent readers on the
@@ -1088,6 +1097,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool nimbleDirectBufferedInputEnabled_{false};
+  bool nimbleLazyFileStats_{false};
   bool cacheMetadata_{false};
   bool pinMetadata_{false};
   bool cacheIndex_{false};

@@ -16,6 +16,8 @@
 
 #include "velox/dwio/nimble/selective/ReaderBase.h"
 
+#include <cstring>
+
 #include "velox/buffer/Buffer.h"
 #include "velox/common/file/File.h"
 #include "velox/dwio/common/InputStream.h"
@@ -153,7 +155,8 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
       scanSpec,
       nimbleSchema,
       std::move(fileSchema),
-      pool));
+      pool,
+      options.nimbleLazyFileStats()));
 }
 
 std::shared_ptr<ReaderBase> ReaderBase::create(
@@ -181,7 +184,8 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
       scanSpec,
       cachedTablet->nimbleSchema(),
       std::move(fileSchema),
-      pool));
+      pool,
+      options.nimbleLazyFileStats()));
 }
 
 ReaderBase::ReaderBase(
@@ -191,7 +195,8 @@ ReaderBase::ReaderBase(
     const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
     std::shared_ptr<const Type> nimbleSchema,
     velox::RowTypePtr fileSchema,
-    velox::memory::MemoryPool* pool)
+    velox::memory::MemoryPool* pool,
+    bool lazyFileStats)
     : input_{std::move(input)},
       tablet_{std::move(tablet)},
       pool_{pool},
@@ -199,7 +204,11 @@ ReaderBase::ReaderBase(
       scanSpec_{scanSpec},
       nimbleSchema_{std::move(nimbleSchema)},
       fileSchema_{std::move(fileSchema)},
+      lazyFileStats_{lazyFileStats},
       fileColumnStats_{[&]() -> std::vector<std::unique_ptr<ColumnStatistics>> {
+        if (lazyFileStats) {
+          return {};
+        }
         auto statsSection =
             tablet_->loadOptionalSection(std::string(kVectorizedStatsSection));
         if (!statsSection.has_value()) {
@@ -212,6 +221,51 @@ ReaderBase::ReaderBase(
         }
         return fileStats->toColumnStatistics(fileSchema_, nimbleSchema_);
       }()} {}
+
+bool ReaderBase::hasFileColumnStatistics() const {
+  if (lazyFileStats_) {
+    return loadLazyFileStats() != nullptr;
+  }
+  return !fileColumnStats_.empty();
+}
+
+const ColumnStatistics* ReaderBase::fileColumnStatistics(
+    uint32_t nodeId) const {
+  if (lazyFileStats_) {
+    const auto* lazyStats = loadLazyFileStats();
+    return lazyStats == nullptr ? nullptr : lazyStats->columnStatistics(nodeId);
+  }
+  return nodeId < fileColumnStats_.size() ? fileColumnStats_[nodeId].get()
+                                          : nullptr;
+}
+
+std::optional<uint64_t> ReaderBase::fileColumnLogicalSize(
+    uint32_t nodeId) const {
+  if (lazyFileStats_) {
+    const auto* lazyStats = loadLazyFileStats();
+    return lazyStats == nullptr ? std::nullopt : lazyStats->logicalSize(nodeId);
+  }
+  const auto* stats = fileColumnStatistics(nodeId);
+  if (stats == nullptr) {
+    return std::nullopt;
+  }
+  return stats->getLogicalSize();
+}
+
+const LazyVectorizedFileStats* ReaderBase::loadLazyFileStats() const {
+  const std::lock_guard<std::mutex> lock(lazyStatsMutex_);
+  if (lazyStatsLoaded_) {
+    return lazyStats_.get();
+  }
+  const auto statsSection =
+      tablet_->loadOptionalSection(std::string(kVectorizedStatsSection));
+  if (statsSection.has_value()) {
+    lazyStats_ = std::make_unique<LazyVectorizedFileStats>(
+        statsSection->content(), fileSchema_, *pool_);
+  }
+  lazyStatsLoaded_ = true;
+  return lazyStats_.get();
+}
 
 void LazyInput::load() {
   if (!loaded_) {
