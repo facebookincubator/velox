@@ -53,6 +53,20 @@ Encoding Functions
     Unescapes the URL encoded ``value``.
     This function is the inverse of :spark:func:`url_encode`.
 
+.. spark:function:: url_decode(value, failOnError) -> varchar
+   :noindex:
+
+    Unescapes the URL encoded ``value`` like the one-argument form. When
+    ``value`` contains a malformed escape, such as a ``%`` followed by fewer
+    than two characters or by characters that are not hexadecimal digits,
+    throws an error if ``failOnError`` is true and returns NULL if it is
+    false. Spark's ``try_url_decode`` corresponds to ``failOnError`` false. ::
+
+        SELECT url_decode('https%3A%2F%2Fspark.apache.org', false); -- 'https://spark.apache.org'
+        SELECT url_decode('a+b%20c', false); -- 'a b c'
+        SELECT url_decode('abc%', false); -- NULL
+        SELECT url_decode('abc%', true); -- Incomplete trailing escape (%) pattern
+
 .. spark:function:: url_encode(value) -> varchar
 
     Escapes ``value`` by encoding it so that it can be safely included in
