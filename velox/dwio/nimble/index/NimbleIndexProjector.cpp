@@ -191,11 +191,11 @@ std::unique_ptr<DataInput> createDataInput(
     BlockCache* blockCache) {
   if (blockCache != nullptr) {
     return std::make_unique<CachedDataInput>(
-        fileHandle.file.get(),
+        fileHandle.file,
         CachedDataInput::Options{
             .pool = &options.memoryPool(),
             .cache = blockCache,
-            .fileId = fileHandle.uuid.id(),
+            .fileId = fileHandle.uuid,
             .ioStats = options.dataIoStats(),
         });
   }
@@ -205,8 +205,7 @@ std::unique_ptr<DataInput> createDataInput(
   dataInputOptions.ioStats = options.dataIoStats();
   dataInputOptions.maxCoalesceDistance = options.maxCoalesceDistance();
   dataInputOptions.maxCoalesceBytes = options.maxCoalesceBytes();
-  return std::make_unique<DirectDataInput>(
-      fileHandle.file.get(), dataInputOptions);
+  return std::make_unique<DirectDataInput>(fileHandle.file, dataInputOptions);
 }
 
 void freeDataHandle(void* /*buf*/, void* userData) {
@@ -257,9 +256,6 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
       std::move(projection),
       &options.memoryPool(),
       options.dataIoStats(),
-      options.prefetchMode() == velox::io::PrefetchMode::PRELOAD
-          ? options.autoPreloadLength()
-          : 0,
       options.verifyStreamChecksums()));
 }
 
@@ -270,7 +266,6 @@ NimbleIndexProjector::NimbleIndexProjector(
     std::shared_ptr<const NimbleTypeProjection> projection,
     velox::memory::MemoryPool* pool,
     std::shared_ptr<velox::io::IoStatistics> ioStats,
-    uint64_t readAheadSizeBytes,
     bool verifyStreamChecksums)
     : file_{std::move(file)},
       tablet_{std::move(tablet)},
@@ -278,7 +273,6 @@ NimbleIndexProjector::NimbleIndexProjector(
       pool_{pool},
       clusterIndex_{tablet_->clusterIndex()},
       numStripes_{tablet_->stripeCount()},
-      readAheadSizeBytes_{readAheadSizeBytes},
       projection_{std::move(projection)},
       hasProjectedHybridFlatMaps_{hasProjectedHybridFlatMaps(*projection_)},
       dataInput_{std::move(dataInput)} {
@@ -507,24 +501,6 @@ std::vector<StripeSelection> NimbleIndexProjector::lookup(
   return stripeSelections;
 }
 
-uint32_t NimbleIndexProjector::numStripesToRead(uint32_t stripeOffset) const {
-  uint32_t numStripes{1};
-  if (readAheadSizeBytes_ == 0) {
-    return numStripes;
-  }
-  const auto startOffset = tablet_->stripeOffset(stripeOffset);
-  while (numStripes < numStripes_ - stripeOffset) {
-    const auto stripeIndex = stripeOffset + numStripes;
-    const auto endOffset =
-        tablet_->stripeOffset(stripeIndex) + tablet_->stripeSize(stripeIndex);
-    if (endOffset - startOffset > readAheadSizeBytes_) {
-      break;
-    }
-    ++numStripes;
-  }
-  return numStripes;
-}
-
 std::vector<facebook::nimble::ProjectedStripe>
 NimbleIndexProjector::loadStripeStreams(
     uint32_t stripeOffset,
@@ -594,10 +570,6 @@ NimbleIndexProjector::loadStripeStreams(
   return result;
 }
 
-void NimbleIndexProjector::resetStreamScan() {
-  clearRequest();
-}
-
 Encoding::Options NimbleIndexProjector::encodingOptions(
     bool cacheEncodingView) {
   Encoding::Options options;
@@ -611,8 +583,8 @@ void NimbleIndexProjector::ensureStreamReader() {
   if (streamReader_ != nullptr) {
     return;
   }
-  streamReader_ =
-      std::make_unique<StreamReader>(projection_->nimbleType, pool_);
+  streamReader_ = std::make_unique<StreamReader>(
+      projection_->nimbleType, pool_, StreamReader::Options{});
 }
 
 void NimbleIndexProjector::setResumeKey(

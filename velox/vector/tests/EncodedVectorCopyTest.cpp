@@ -1230,6 +1230,87 @@ TEST_P(EncodedVectorCopyTest, trailingNullRowsOverShortChildren) {
   }
 }
 
+TEST_P(EncodedVectorCopyTest, appendToRowWithShortDictionaryChild) {
+  // Row 1 is null, so the dictionary child only has row 0. Its indices buffer
+  // has room for more rows, which hold garbage as recycled memory does.
+  constexpr vector_size_t kIndicesCapacity = 16;
+  auto indices = allocateIndices(kIndicesCapacity, pool());
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  std::fill(rawIndices, rawIndices + kIndicesCapacity, 1'000'000'000);
+  rawIndices[0] = 0;
+  indices->setSize(sizeof(vector_size_t));
+  auto nulls = allocateNulls(2, pool());
+  bits::setNull(nulls->asMutable<uint64_t>(), 1);
+  VectorPtr target = std::make_shared<RowVector>(
+      pool(),
+      ROW("a", BIGINT()),
+      std::move(nulls),
+      2,
+      std::vector<VectorPtr>{BaseVector::wrapInDictionary(
+          nullptr, std::move(indices), 1, makeFlatVector<int64_t>({7}))});
+  target->validate({});
+
+  // Each copy appends past the end of the child. The second one also reads
+  // back the child rows the first one wrote.
+  auto source = makeRowVector({
+      wrapInDictionary(makeIndices({1, 0}), makeFlatVector<int64_t>({8, 9})),
+  });
+  for (const vector_size_t targetIndex : {2, 4}) {
+    SCOPED_TRACE(fmt::format("targetIndex={}", targetIndex));
+    BaseVector::CopyRange range = {0, targetIndex, 2};
+    copy(source, folly::Range(&range, 1), target);
+    target->validate({});
+  }
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>({7, 0, 9, 8, 9, 8})},
+      [](auto row) { return row == 1; });
+  test::assertEqualVectors(expected, target);
+}
+
+TEST_P(EncodedVectorCopyTest, appendToRowWithEmptyChild) {
+  auto testEmptyChild = [&](const std::function<VectorPtr()>& makeEmpty) {
+    // Both rows are null, so the child is empty.
+    VectorPtr target = std::make_shared<RowVector>(
+        pool(),
+        ROW("a", makeEmpty()->type()),
+        allocateNulls(2, pool(), bits::kNull),
+        2,
+        std::vector<VectorPtr>{makeEmpty()});
+    target->validate({});
+    SCOPED_TRACE(target->toString());
+
+    // Every row of the source child is null, so its base is empty too.
+    auto source = makeRowVector({BaseVector::wrapInDictionary(
+        allocateNulls(2, pool(), bits::kNull),
+        makeIndices({0, 0}),
+        2,
+        makeEmpty())});
+    BaseVector::CopyRange range = {0, 2, 2};
+    copy(source, folly::Range(&range, 1), target);
+    target->validate({});
+
+    auto expected = makeRowVector(
+        {BaseVector::createNullConstant(makeEmpty()->type(), 4, pool())},
+        [](auto row) { return row < 2; });
+    test::assertEqualVectors(expected, target);
+  };
+
+  testEmptyChild([&] {
+    return makeArrayVector<int64_t>(std::vector<std::vector<int64_t>>{});
+  });
+  testEmptyChild([&] {
+    return std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(BIGINT(), BIGINT()),
+        nullptr,
+        0,
+        makeFlatVector<int64_t>({}),
+        std::vector<VectorPtr>{},
+        std::vector<BufferPtr>{});
+  });
+}
+
 TEST_P(EncodedVectorCopyTest, rowWithUnprojectedChild) {
   // A null child is a column the reader did not project.
   const auto rowType = ROW({{"a", BIGINT()}, {"b", BIGINT()}});

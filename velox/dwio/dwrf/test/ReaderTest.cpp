@@ -3354,6 +3354,50 @@ TEST_F(TestReader, readFlatMapMultiStripeDifferentKeys) {
   EXPECT_EQ(totalRows, 5); // 2 rows from stripe 1 + 3 rows from stripe 2.
 }
 
+TEST_F(TestReader, readFlatMapsAsFlatMapsWithSharedMapValues) {
+  auto row = makeRowVector({
+      makeMapVector(
+          {0,  1,  2,  3,  4,  5,  6,  7,  8,  9,
+           10, 11, 12, 13, 14, 15, 16, 17, 18, 19},
+          makeFlatVector<int32_t>(20, [](auto /*row*/) { return 1; }),
+          makeFlatVector<int64_t>(20, std::identity{})),
+      makeFlatVector<int64_t>(20, std::identity{}),
+  });
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_, config);
+
+  auto schema = asRowType(row->type());
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  spec->childByName("c1")->setFilter(
+      std::make_unique<common::BigintRange>(8, 19, false));
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  rowReaderOpts.setPreserveFlatMapsInMemory(true);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  VectorPtr batch = BaseVector::create(schema, 0, pool());
+  auto nextFlatMap = [&]() {
+    VELOX_CHECK_GT(rowReader->next(10, batch), 0);
+    auto& child = batch->as<RowVector>()->childAt(0);
+    child = BaseVector::loadedVectorShared(child);
+    return child->as<FlatMapVector>();
+  };
+
+  auto values = nextFlatMap()->mapValuesAt(0);
+  assertEqualVectors(makeFlatVector<int64_t>({8, 9}), values);
+
+  auto* second = nextFlatMap();
+  ASSERT_EQ(second->size(), 10);
+  assertEqualVectors(
+      makeFlatVector<int64_t>(10, [](auto row) { return 10 + row; }),
+      second->mapValuesAt(0));
+  assertEqualVectors(makeFlatVector<int64_t>({8, 9}), values);
+}
+
 TEST_F(TestReader, readStructWithWholeBatchFiltered) {
   // Test reading a struct with a pushdown filter that filters out all rows
   // for a certain batch.

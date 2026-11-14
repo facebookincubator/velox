@@ -65,6 +65,7 @@ void extractCompressionType(
     case EncodingType::Delta:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::Constant:
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
@@ -142,6 +143,7 @@ void traverseEncodings(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::SimdForBitpack:
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.

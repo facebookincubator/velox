@@ -43,6 +43,7 @@
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
@@ -189,6 +190,17 @@ class EncodingSliceTest : public ::testing::Test {
         values.push_back(
             static_cast<DataType>(
                 std::uniform_int_distribution<uint32_t>{0, 4096}(rng) / 4.0));
+      }
+    } else if constexpr (std::is_same_v<
+                             EncodingType,
+                             nimble::SequenceEncoding<DataType>>) {
+      // A random start and step, wrapping like DataType.
+      auto value = nextIntegerValue();
+      const auto step =
+          static_cast<DataType>(std::uniform_int_distribution<uint32_t>{}(rng));
+      for (uint32_t i = 0; i < rowCount; ++i) {
+        values.push_back(value);
+        value = static_cast<DataType>(value + step);
       }
     } else if constexpr (std::is_same_v<
                              EncodingType,
@@ -373,6 +385,7 @@ using EncodingSliceTypes = ::testing::Types<
     EncodingSliceConfig<nimble::SimdForBitpackEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::HuffmanEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::ForEncoding<uint32_t>>,
+    EncodingSliceConfig<nimble::SequenceEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::ALPEncoding<double>>>;
 
 template <typename Config>

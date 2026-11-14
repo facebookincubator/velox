@@ -120,6 +120,33 @@ TEST(StatisticsTest, naturalAndSignedOrderCachesAreIndependent) {
   testNaturalAndSignedOrderCachesAreIndependent<int64_t>();
 }
 
+// SequenceEncoding stores exactly the streams sequenceStep() finds a step for,
+// so it must find one for every progression, including decreasing ones and
+// ones that wrap around, and for nothing else.
+TEST(StatisticsTest, sequenceStep) {
+  const auto sequenceStep = [](const auto& values) {
+    using T = typename std::decay_t<decltype(values)>::value_type;
+    return nimble::Statistics<T>::create(values).sequenceStep();
+  };
+  EXPECT_EQ(sequenceStep(std::vector<uint64_t>{5, 8, 11, 14}), 3);
+  EXPECT_EQ(sequenceStep(std::vector<uint32_t>{7, 7, 7}), 0);
+  EXPECT_EQ(sequenceStep(std::vector<uint32_t>{9}), 0);
+  EXPECT_EQ(sequenceStep(std::vector<uint32_t>{}), std::nullopt);
+  // Steps down by 2, which is a step of 2^16 - 2 in uint16 arithmetic.
+  EXPECT_EQ(sequenceStep(std::vector<uint16_t>{10, 8, 6, 4}), 65'534);
+  EXPECT_EQ(sequenceStep(std::vector<uint8_t>{254, 255, 0, 1}), 1);
+  EXPECT_EQ(sequenceStep(std::vector<int32_t>{2, 0, -2, -4}), -2);
+  EXPECT_EQ(
+      sequenceStep(
+          std::vector<int64_t>{
+              std::numeric_limits<int64_t>::max(),
+              std::numeric_limits<int64_t>::min()}),
+      1);
+  // Off the progression at the last value, and at the third value.
+  EXPECT_EQ(sequenceStep(std::vector<uint64_t>{0, 1, 2, 4}), std::nullopt);
+  EXPECT_EQ(sequenceStep(std::vector<uint64_t>{0, 1, 3, 4}), std::nullopt);
+}
+
 TEST(StatisticsTest, runValues) {
   const std::vector<int32_t> data = {1, 1, 2, 2, 1, 3, 3};
   const std::vector<int32_t> expected = {1, 2, 1, 3};

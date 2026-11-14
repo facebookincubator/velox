@@ -127,6 +127,11 @@ WriteOutcome expectedOutcome(
       !columnCase.isNonDecreasing) {
     return WriteOutcome::kNotApplied;
   }
+  // Sequence needs an arithmetic progression. Among the cases only the
+  // single-valued columns form one, with step 0.
+  if (encodingType == EncodingType::Sequence && !columnCase.isSingleValued) {
+    return WriteOutcome::kNotApplied;
+  }
   // PartitionedEliasFano declines a stream with fewer than two ascending runs,
   // which plain EliasFano covers. The cycling columns have two runs of at
   // least 64 rows, the minimum average it accepts.

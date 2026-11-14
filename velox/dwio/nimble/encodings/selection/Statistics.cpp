@@ -242,6 +242,35 @@ void Statistics<T, InputType>::populateSignedOrderNonDecreasing()
 }
 
 template <typename T, typename InputType>
+void Statistics<T, InputType>::populateSequenceStep() const noexcept {
+  if (data_.empty()) {
+    sequenceStep_ = std::optional<T>{};
+    return;
+  }
+  if (data_.size() == 1) {
+    sequenceStep_ = std::optional<T>{T{0}};
+    return;
+  }
+  using UnsignedInputType = std::make_unsigned_t<InputType>;
+  // Differences wrap like the unsigned input type, so a progression that
+  // decreases or wraps around has one step too.
+  const auto difference = [](const auto previous, const auto current) {
+    return static_cast<UnsignedInputType>(
+        static_cast<UnsignedInputType>(current) -
+        static_cast<UnsignedInputType>(previous));
+  };
+  const auto step = difference(data_[0], data_[1]);
+  const bool isSequence = std::adjacent_find(
+                              data_.begin() + 1,
+                              data_.end(),
+                              [&](const auto previous, const auto current) {
+                                return difference(previous, current) != step;
+                              }) == data_.end();
+  sequenceStep_ =
+      isSequence ? std::optional<T>{static_cast<T>(step)} : std::optional<T>{};
+}
+
+template <typename T, typename InputType>
 void Statistics<T, InputType>::populateUniques() const {
   MapType<T, InputType> uniqueCounts;
   if constexpr (nimble::isBoolType<T>()) {
@@ -493,6 +522,16 @@ template void Statistics<uint32_t>::populateSignedOrderNonDecreasing()
     const noexcept;
 template void Statistics<uint64_t>::populateSignedOrderNonDecreasing()
     const noexcept;
+
+// populateSequenceStep works on integral types only.
+template void Statistics<int8_t>::populateSequenceStep() const noexcept;
+template void Statistics<uint8_t>::populateSequenceStep() const noexcept;
+template void Statistics<int16_t>::populateSequenceStep() const noexcept;
+template void Statistics<uint16_t>::populateSequenceStep() const noexcept;
+template void Statistics<int32_t>::populateSequenceStep() const noexcept;
+template void Statistics<uint32_t>::populateSequenceStep() const noexcept;
+template void Statistics<int64_t>::populateSequenceStep() const noexcept;
+template void Statistics<uint64_t>::populateSequenceStep() const noexcept;
 
 // populateMinMaxBlocks is used through the estimation path where T is always
 // the unsigned physicalType.

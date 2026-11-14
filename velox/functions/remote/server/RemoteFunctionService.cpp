@@ -117,12 +117,17 @@ void RemoteFunctionServiceHandler::invokeFunction(
   // Deserialize types and data.
   auto inputType = deserializeArgTypes(functionHandle.argumentTypes().value());
   auto outputType = deserializeType(functionHandle.returnType().value());
+  auto functionName =
+      getFunctionName(functionPrefix_, functionHandle.name().value());
+  const bool throwOnError = folly::copy(request->throwOnError().value());
 
   auto serdeFormat = folly::copy(inputs.pageFormat().value());
   auto serde = getSerde(serdeFormat);
 
   auto inputVector = IOBufToRowVector(
       inputs.payload().value(), inputType, *pool_, serde.get());
+  // Avoid retaining the serialized payload during function evaluation.
+  request.reset();
 
   // Execute the expression.
   const vector_size_t numRows = inputVector->size();
@@ -132,14 +137,10 @@ void RemoteFunctionServiceHandler::invokeFunction(
   auto queryCtx = core::QueryCtx::create();
   core::ExecCtx execCtx{pool_.get(), queryCtx.get()};
   exec::ExprSet exprSet{
-      getExpressions(
-          inputType,
-          outputType,
-          getFunctionName(functionPrefix_, functionHandle.name().value())),
-      &execCtx};
+      getExpressions(inputType, outputType, functionName), &execCtx};
 
   exec::EvalCtx evalCtx(&execCtx, &exprSet, inputVector.get());
-  if (!folly::copy(request->throwOnError().value())) {
+  if (!throwOnError) {
     *evalCtx.mutableThrowOnError() = false;
   }
 

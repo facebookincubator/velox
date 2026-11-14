@@ -25,25 +25,30 @@
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestBase.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 
+#include "folly/executors/IOThreadPoolExecutor.h"
 #include "folly/synchronization/Baton.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/caching/SsdCache.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 #include "velox/serializers/KeyEncoder.h"
+
+DECLARE_bool(velox_ssd_odirect);
 
 namespace facebook::nimble::index::test {
 namespace {
 
 using namespace facebook::velox;
-using namespace facebook::velox::dwio::common;
 
 // Creates a range scan LookupRequest with only a lower bound (no upper bound).
 // The result endRow will be numRows_ (total file rows).
@@ -155,9 +160,10 @@ class ClusterIndexTest : public ClusterIndexTestBase {
     return result;
   }
 
-  velox::ReadFile* createKeyStreamFile(const std::string& streamData) {
+  std::shared_ptr<velox::ReadFile> createKeyStreamFile(
+      const std::string& streamData) {
     keyStreamFile_ = std::make_shared<velox::InMemoryReadFile>(streamData);
-    return keyStreamFile_.get();
+    return keyStreamFile_;
   }
 
   std::shared_ptr<velox::ReadFile> keyStreamFile_;
@@ -274,6 +280,24 @@ class ClusterIndexTest : public ClusterIndexTestBase {
     }
     ASSERT_EQ(ranges.size(), 1);
     EXPECT_EQ(ranges[0].toString(), expected->toString());
+  }
+
+  // Returns the key chunk of each of 'stripes' of 'keyStreams' from 'file', a
+  // caller's copy of the key stream file.
+  static std::vector<ClusterIndexBase::KeyChunk> keyChunks(
+      const StripeKeyStreams& keyStreams,
+      std::string_view file,
+      const std::vector<uint32_t>& stripes) {
+    std::vector<ClusterIndexBase::KeyChunk> result;
+    result.reserve(stripes.size());
+    for (const auto stripe : stripes) {
+      const auto& keyStream = keyStreams.stripes.at(stripe).keyStream;
+      result.push_back({
+          .stripe = stripe,
+          .data = file.substr(keyStream.streamOffset, keyStream.streamSize),
+      });
+    }
+    return result;
   }
 };
 
@@ -1177,6 +1201,308 @@ TEST_F(ClusterIndexTest, stripeLayoutRequiresKeyStreamLocator) {
           /*preloadIndex=*/false,
           /*withKeyStreamLocator=*/false),
       "A cluster index that stores its key chunks in stripes needs a key stream locator");
+}
+
+TEST_F(ClusterIndexTest, keyChunkLookupsRequireStripeLayout) {
+  const auto encoded = encodeKeyStream({{"k00", "k01"}});
+  const std::vector<Stripe> stripes = {createStripeWithKeys(
+      {.streamOffset = 0,
+       .streamSize = static_cast<uint32_t>(encoded.data.size()),
+       .stream =
+           {.numChunks = 1,
+            .chunkRows = {2},
+            .chunkOffsets = encoded.chunkOffsets},
+       .chunkKeys = {"k01"}})};
+  auto clusterIndex = createClusterIndex(
+      createTestClusterIndex({"col1"}, "k00", stripes, {1}),
+      createKeyStreamFile(encoded.data));
+  // The layout, which every IndexLookup tells, keeps a reader from these
+  // calls.
+  EXPECT_EQ(
+      static_cast<const IndexLookup&>(*clusterIndex).keyStreamLayout(),
+      KeyStreamLayout::kPartition);
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookupStripes(makeKeyRequest("k00")),
+      "Only a Stripe layout index looks up the stripes of a request");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(makeKeyRequest("k00"), /*keyChunks=*/{}),
+      "Only a Stripe layout index looks up keys in given key chunks");
+  // Also when given the bytes of its key stream, from which its lookups read
+  // the key.
+  expectRows(clusterIndex->lookup(makeKeyRequest("k00")), RowRange(0, 1));
+  const std::vector<ClusterIndexBase::KeyChunk> givenKeyChunks{
+      {.stripe = 0, .data = encoded.data},
+  };
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(makeKeyRequest("k00"), givenKeyChunks),
+      "Only a Stripe layout index looks up keys in given key chunks");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->keyStreamId(),
+      "Only a Stripe layout index keeps its key chunks in a stream of each stripe");
+}
+
+TEST_F(ClusterIndexTest, lookupStripes) {
+  const auto keyStreams = writeStripeKeyStreams(fourStripeKeys());
+  auto clusterIndex = createStripeLayoutIndex(
+      keyStreams, /*pinIndex=*/false, /*preloadIndex=*/false);
+  EXPECT_EQ(
+      static_cast<const IndexLookup&>(*clusterIndex).keyStreamLayout(),
+      KeyStreamLayout::kStripe);
+  EXPECT_EQ(clusterIndex->keyStreamId(), kKeyStreamId);
+  const auto rangeScan = [](std::optional<std::string> lowerKey,
+                            std::optional<std::string> upperKey) {
+    return IndexLookup::LookupRequest::rangeScan(
+        {{.lowerKey = std::move(lowerKey), .upperKey = std::move(upperKey)}});
+  };
+
+  struct TestCase {
+    IndexLookup::LookupRequest request;
+    std::string name;
+    // Stripes whose key chunks the lookup decodes.
+    std::vector<uint32_t> stripes;
+
+    std::string debugString() const {
+      return name;
+    }
+  };
+  // The stripes of a key before the first key, at the first key, between the
+  // stripes of a stripe group, between stripe groups, between the stripes of
+  // the last stripe group and after the last key. The rows of the last key of
+  // a stripe end at its successor, which the next stripe holds, while a point
+  // lookup of that key reads only its own stripe. Ranges decode the chunks of
+  // the stripes of their bounds only, not of the stripes between them, also
+  // without a lower or an upper bound or with an upper bound after the last
+  // key, and ranges out of order decode none.
+  const std::vector<TestCase> testCases = {
+      {makeKeyRequest("j"), "j", {0}},
+      {makeKeyRequest("k00"), "k00", {0}},
+      {makeKeyRequest("k045"), "k045", {1}},
+      {makeKeyRequest("k075"), "k075", {2}},
+      {makeKeyRequest("k135"), "k135", {3}},
+      {makeKeyRequest("l"), "l", {}},
+      {makeKeyRequest("k13"), "k13", {2, 3}},
+      {IndexLookup::LookupRequest::pointLookup({"k13"}), "point k13", {2}},
+      {rangeScan("k02", "k145"), "k02 to k145", {0, 3}},
+      {rangeScan("k01", "k06"), "k01 to k06", {0, 1}},
+      {rangeScan(std::nullopt, "k045"), "to k045", {1}},
+      {rangeScan("k09", std::nullopt), "from k09", {2}},
+      {rangeScan("k03", "l"), "k03 to l", {0}},
+      {rangeScan("k06", "k01"), "k06 to k01", {}},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+    EXPECT_EQ(clusterIndex->lookupStripes(testCase.request), testCase.stripes);
+  }
+
+  // A request of several entries returns each stripe once, in file order.
+  EXPECT_EQ(
+      clusterIndex->lookupStripes(
+          IndexLookup::LookupRequest::rangeScan(
+              {makeKeyBounds("k09"),
+               makeKeyBounds("k00"),
+               makeKeyBounds("k01")})),
+      (std::vector<uint32_t>{0, 2}));
+}
+
+TEST_F(ClusterIndexTest, lookupStripesWithDuplicateKeys) {
+  // A run of "k04" crosses from the last stripe of the first stripe group into
+  // the first stripe of the second.
+  const auto keyStreams = writeStripeKeyStreams({
+      {"k00", "k01", "k02"},
+      {"k03", "k04", "k04"},
+      {"k04", "k04", "k05"},
+      {"k06", "k07"},
+  });
+  auto clusterIndex = createStripeLayoutIndex(
+      keyStreams, /*pinIndex=*/false, /*preloadIndex=*/false);
+
+  // The key's successor, the upper bound, is in the stripe where the run ends,
+  // so the lookup decodes the chunks of the stripes where the run starts and
+  // ends, and selects the whole run.
+  const auto request = makeKeyRequest("k04");
+  const auto stripes = clusterIndex->lookupStripes(request);
+  EXPECT_EQ(stripes, (std::vector<uint32_t>{1, 2}));
+  expectRows(
+      clusterIndex->lookup(
+          request, keyChunks(keyStreams, keyStreams.file, stripes)),
+      RowRange(4, 8));
+  // Without the chunk of either stripe, the lookup fails.
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(
+          request, keyChunks(keyStreams, keyStreams.file, {1})),
+      "No key chunk is given for stripe 2");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(
+          request, keyChunks(keyStreams, keyStreams.file, {2})),
+      "No key chunk is given for stripe 1");
+}
+
+// A lookup in given key chunks needs the key chunk of each stripe that
+// lookupStripes() returns for its request, and fails on one it is not given,
+// for which neither a chunk of another stripe nor the file stands in.
+TEST_F(ClusterIndexTest, lookupWithMissingKeyChunks) {
+  const auto keyStreams = writeStripeKeyStreams(fourStripeKeys());
+  // The file the index reads key chunks from holds filler bytes, which do not
+  // decode.
+  auto clusterIndex = createClusterIndex(
+      createTestClusterIndex(
+          {"col1"},
+          "k00",
+          keyStreams.stripes,
+          {2, 2},
+          KeyStreamLayout::kStripe),
+      createKeyStreamFile(std::string(keyStreams.file.size(), 'x')),
+      /*pinIndex=*/false,
+      /*preloadIndex=*/false);
+  const auto rangeScan = [](std::optional<std::string> lowerKey,
+                            std::optional<std::string> upperKey) {
+    return IndexLookup::LookupRequest::rangeScan(
+        {{.lowerKey = std::move(lowerKey), .upperKey = std::move(upperKey)}});
+  };
+
+  struct TestCase {
+    IndexLookup::LookupRequest request;
+    std::string name;
+    // Stripes whose key chunks the lookup is given.
+    std::vector<uint32_t> givenStripes;
+    // The one stripe of the request whose key chunk the lookup is not given.
+    uint32_t missingStripe;
+
+    std::string debugString() const {
+      return name;
+    }
+  };
+  // Stripes 0 and 1 are the first stripe group, and stripes 2 and 3 the
+  // second. The rows of k13, the last key of stripe 2, end at its successor,
+  // which stripe 3 holds, while a point lookup of k13 reads only stripe 2.
+  const std::vector<TestCase> testCases = {
+      {makeKeyRequest("k06"),
+       "k06 with the stripes around its stripe",
+       {0, 2},
+       1},
+      {makeKeyRequest("k09"),
+       "k09 with the stripes of the other stripe group",
+       {0, 1},
+       2},
+      {makeKeyRequest("k13"),
+       "k13 without the stripe of its successor",
+       {2},
+       3},
+      {makeKeyRequest("k13"), "k13 without its stripe", {3}, 2},
+      {IndexLookup::LookupRequest::pointLookup({"k13"}),
+       "point k13 without its stripe",
+       {3},
+       2},
+      {rangeScan("k02", "k145"),
+       "k02 to k145 without the stripe of the upper bound",
+       {0},
+       3},
+      {rangeScan("k02", "k145"),
+       "k02 to k145 without the stripe of the lower bound",
+       {3},
+       0},
+      {rangeScan("k02", "k145"),
+       "k02 to k145 with the stripes after the lower bound",
+       {1, 2, 3},
+       0},
+      {rangeScan(std::nullopt, "k045"),
+       "to k045 without the stripe of the upper bound",
+       {0},
+       1},
+      {rangeScan("k09", std::nullopt),
+       "from k09 without the stripe of the lower bound",
+       {3},
+       2},
+      {IndexLookup::LookupRequest::rangeScan(
+           {makeKeyBounds("k00"), makeKeyBounds("k09")}),
+       "k00 and k09 without the stripe of k09",
+       {0},
+       2},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+    const auto stripes = clusterIndex->lookupStripes(testCase.request);
+    EXPECT_NE(
+        std::find(stripes.begin(), stripes.end(), testCase.missingStripe),
+        stripes.end());
+    NIMBLE_ASSERT_THROW(
+        clusterIndex->lookup(
+            testCase.request,
+            keyChunks(keyStreams, keyStreams.file, testCase.givenStripes)),
+        fmt::format(
+            "No key chunk is given for stripe {}", testCase.missingStripe));
+  }
+}
+
+TEST_F(ClusterIndexTest, lookupWithKeyChunks) {
+  const auto stripeKeys = fourStripeKeys();
+  const auto keyStreams = writeStripeKeyStreams(stripeKeys);
+  // The file the index reads key chunks from holds filler bytes, which do not
+  // decode, so lookups succeed only with the key chunks they are given.
+  auto clusterIndex = createClusterIndex(
+      createTestClusterIndex(
+          {"col1"},
+          "k00",
+          keyStreams.stripes,
+          {2, 2},
+          KeyStreamLayout::kStripe),
+      createKeyStreamFile(std::string(keyStreams.file.size(), 'x')),
+      /*pinIndex=*/true,
+      /*preloadIndex=*/false);
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(makeKeyRequest("k05")),
+      "Unsupported key chunk compression type");
+
+  // The caller's copy of the key streams, freed after the lookups.
+  auto keyFile = std::make_unique<std::string>(keyStreams.file);
+  // Returns the caller's bytes of the key streams of the stripes that
+  // lookupStripes() returns for 'request'.
+  const auto readKeyChunks = [&](const IndexLookup::LookupRequest& request) {
+    return keyChunks(
+        keyStreams, *keyFile, clusterIndex->lookupStripes(request));
+  };
+  const auto keys = flattenKeys(stripeKeys);
+
+  // A lookup never reads a key chunk from the file, so it fails without the
+  // key stream of each stripe that lookupStripes() returns for it: the first
+  // key needs the key stream of the first stripe, not of the last.
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(
+          makeKeyRequest(keys[0]), readKeyChunks(makeKeyRequest(keys.back()))),
+      "No key chunk is given for stripe 0");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(makeKeyRequest(keys[0]), /*keyChunks=*/{}),
+      "A lookup in given key chunks needs some");
+  // The bytes given for a stripe must be its key stream, neither short of it
+  // nor with more, such as its stream trailer.
+  const auto firstKeyChunks = readKeyChunks(makeKeyRequest(keys[0]));
+  ASSERT_EQ(firstKeyChunks.size(), 1);
+  const auto& keyStream = firstKeyChunks[0].data;
+  for (const auto size : {keyStream.size() - 1, keyStream.size() + 1}) {
+    SCOPED_TRACE(fmt::format("size {} of {}", size, keyStream.size()));
+    const std::vector<ClusterIndexBase::KeyChunk> badKeyChunks{
+        {.stripe = 0, .data = std::string_view(keyStream.data(), size)}};
+    NIMBLE_ASSERT_THROW(
+        clusterIndex->lookup(makeKeyRequest(keys[0]), badKeyChunks),
+        "The given key chunk of stripe 0 is not the key stream of the stripe");
+  }
+
+  // The rows of the last key of a stripe end at its successor, in the next
+  // stripe, so the lookup also decodes the key stream of that stripe.
+  for (uint32_t row = 0; row < keys.size(); ++row) {
+    SCOPED_TRACE(keys[row]);
+    const auto request = makeKeyRequest(keys[row]);
+    expectRows(
+        clusterIndex->lookup(request, readKeyChunks(request)),
+        RowRange(row, row + 1));
+  }
+
+  // Even a pinned index keeps no chunk it decoded in place from the caller's
+  // bytes, so once they are gone, it reads the key streams of the file, which
+  // do not decode.
+  keyFile.reset();
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->keyAtRow(0), "Unsupported key chunk compression type");
 }
 
 TEST_F(ClusterIndexTest, lookupChunk) {
@@ -2155,8 +2481,10 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, keyCursorSkipsKeysWithoutReadingThem) {
 }
 
 // Verifies that the index caching mechanism works end-to-end when
-// ClusterIndex is created with IndexLookup::Options containing a cache
-// and fileHandle. The first open reads index data from the file; the
+// ClusterIndex is created with IndexLookup::Options containing the block cache
+// over the async data cache. The first lookup reads index data from the file;
+// a second lookup of the same key reuses the decoded chunk and does no index
+// IO.
 TEST_F(ClusterIndexTest, indexDataReuseWithSameReader) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
@@ -2201,6 +2529,7 @@ TEST_F(ClusterIndexTest, indexDataReuseWithSameReader) {
       velox::memory::MemoryAllocator::Options{
           .capacity = 1UL << 30, .reservationByteLimit = 0});
   auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
 
   struct TestCase {
     bool cacheIndex;
@@ -2255,7 +2584,7 @@ TEST_F(ClusterIndexTest, indexDataReuseWithSameReader) {
       fileHandle->file = readFile;
       fileHandle->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle->groupId = velox::StringIdLease(ids, fileIdStr + "_group");
-      options.cache = cache.get();
+      options.blockCache = getBlockCache(cache.get());
       options.fileHandle = fileHandle.get();
     }
 
@@ -2284,6 +2613,7 @@ TEST_F(ClusterIndexTest, indexDataReuseWithSameReader) {
         << "Same-key lookup should reuse cached data with no new IO";
   }
 
+  testingResetBlockCache();
   cache->shutdown();
 }
 
@@ -2331,6 +2661,7 @@ TEST_F(ClusterIndexTest, indexDataReuseCrossReaders) {
       velox::memory::MemoryAllocator::Options{
           .capacity = 1UL << 30, .reservationByteLimit = 0});
   auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
 
   struct TestCase {
     bool cacheIndex;
@@ -2388,7 +2719,7 @@ TEST_F(ClusterIndexTest, indexDataReuseCrossReaders) {
         fileHandle->file = readFile;
         fileHandle->uuid = fileId;
         fileHandle->groupId = groupId;
-        options.cache = cache.get();
+        options.blockCache = getBlockCache(cache.get());
         options.fileHandle = fileHandle.get();
       }
 
@@ -2424,10 +2755,13 @@ TEST_F(ClusterIndexTest, indexDataReuseCrossReaders) {
       if (testCase.expectCrossReaderReuse) {
         EXPECT_GT(indexIoStats_->ramHit().count(), 0)
             << "Second reader should serve index data from cache";
+        EXPECT_EQ(indexIoStats_->read().sum(), 0)
+            << "Second reader should not read index data from the file";
       }
     }
   }
 
+  testingResetBlockCache();
   cache->shutdown();
 }
 
@@ -2476,6 +2810,381 @@ std::shared_ptr<velox::ReadFile> writeThreeChunkPartitionFile(
   return std::make_shared<velox::InMemoryReadFile>(fileBacking);
 }
 } // namespace
+
+TEST_F(ClusterIndexTest, indexDataReuseCrossReadersWithBlockCache) {
+  std::string file;
+  auto readFile = writeThreeChunkPartitionFile(*pool_, file);
+
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{
+          .capacity = 1UL << 30, .reservationByteLimit = 0});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  auto* blockCache = getBlockCache(cache.get());
+
+  struct TestCase {
+    bool cacheIndex;
+
+    // Whether the reader that fills the cache preloads the index.
+    bool firstPreloadIndex;
+
+    // Whether the reader after it preloads the index.
+    bool secondPreloadIndex;
+    bool expectKeyStreamReuse;
+
+    std::string debugString() const {
+      return fmt::format(
+          "cacheIndex={}, firstPreloadIndex={}, secondPreloadIndex={}, expectKeyStreamReuse={}",
+          cacheIndex,
+          firstPreloadIndex,
+          secondPreloadIndex,
+          expectKeyStreamReuse);
+    }
+  };
+
+  const std::vector<TestCase> testCases = {
+      {true, false, false, true},
+      {true, true, true, true},
+      // Preloading and lookups cache each key chunk as its own entry, so
+      // either reader reuses the chunks the other cached.
+      {true, true, false, true},
+      {true, false, true, true},
+      // Without cacheIndex, the index reads its metadata and key stream from
+      // the file.
+      {false, false, false, false},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+
+    // A file id per case keeps the cases' cache entries apart.
+    const velox::StringIdLease fileId{
+        velox::fileIds(),
+        fmt::format(
+            "blockCacheCrossReaderTest_cache{}_preload{}{}",
+            testCase.cacheIndex,
+            testCase.firstPreloadIndex,
+            testCase.secondPreloadIndex)};
+    velox::FileHandle fileHandle;
+    fileHandle.file = readFile;
+    fileHandle.uuid = fileId;
+
+    // Opens a reader over the shared cache and looks up a key in every
+    // chunk, so each chunk is read whether or not it was preloaded.
+    const auto lookupWithNewReader = [&](bool preloadIndex) {
+      indexIoStats_ = std::make_shared<velox::io::IoStatistics>();
+      TabletReader::Options options;
+      options.loadClusterIndex = true;
+      options.cacheIndex = testCase.cacheIndex;
+      options.preloadIndex = preloadIndex;
+      options.fileHandle = &fileHandle;
+      options.blockCache = blockCache;
+      options.ioOptions.emplace(pool_.get())
+          .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>())
+          .setIndexIoStats(indexIoStats_);
+      auto reader = TabletReader::create(readFile, pool_.get(), options);
+      ASSERT_NE(reader->clusterIndex(), nullptr);
+      const std::vector<std::pair<std::string, RowRange>> expectedRanges = {
+          {"bbb", RowRange(0, 300)},
+          {"ddd", RowRange(100, 300)},
+          {"fff", RowRange(200, 300)},
+      };
+      for (const auto& [key, expectedRange] : expectedRanges) {
+        SCOPED_TRACE(fmt::format("key={}", key));
+        const auto result =
+            reader->clusterIndex()->lookup(makeRangeScanRequest(key));
+        ASSERT_EQ(result.size(), 1);
+        ASSERT_EQ(result[0].size(), 1);
+        EXPECT_EQ(result[0][0], expectedRange);
+      }
+    };
+
+    // read() counts bytes read from storage. rawBytesRead also counts cache
+    // hits.
+    ASSERT_NO_FATAL_FAILURE(lookupWithNewReader(testCase.firstPreloadIndex));
+    EXPECT_GT(indexIoStats_->read().sum(), 0)
+        << "The first reader reads the index from the file";
+    const auto firstRawBytesRead = indexIoStats_->rawBytesRead();
+
+    ASSERT_NO_FATAL_FAILURE(lookupWithNewReader(testCase.secondPreloadIndex));
+    if (testCase.secondPreloadIndex == testCase.firstPreloadIndex) {
+      EXPECT_EQ(indexIoStats_->rawBytesRead(), firstRawBytesRead)
+          << "A reader that reads the same bytes counts them the same, "
+          << "whether from the file or the cache";
+    }
+
+    if (testCase.cacheIndex) {
+      EXPECT_GT(indexIoStats_->ramHit().count(), 0)
+          << "The second reader reads the partition metadata from the cache";
+    } else {
+      EXPECT_EQ(indexIoStats_->ramHit().count(), 0)
+          << "Without cacheIndex, the index bypasses the cache";
+    }
+    if (testCase.expectKeyStreamReuse) {
+      EXPECT_EQ(indexIoStats_->read().sum(), 0)
+          << "The second reader reads the key stream from the cache";
+    } else {
+      EXPECT_GT(indexIoStats_->read().sum(), 0)
+          << "The second reader reads the key stream from the file";
+    }
+  }
+
+  testingResetBlockCache();
+  cache->shutdown();
+}
+
+// The index cache keys use the id of the file handle, which the index inputs
+// keep leased after the handle is released.
+TEST_F(ClusterIndexTest, cacheIndexOutlivesFileHandle) {
+  std::string file;
+  auto readFile = writeThreeChunkPartitionFile(*pool_, file);
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{
+          .capacity = 1UL << 30, .reservationByteLimit = 0});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+
+  std::shared_ptr<TabletReader> reader;
+  {
+    velox::FileHandle fileHandle;
+    fileHandle.file = readFile;
+    fileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "ClusterIndexTest.cacheIndexOutlivesFileHandle");
+    TabletReader::Options options;
+    options.loadClusterIndex = true;
+    options.cacheIndex = true;
+    options.blockCache = getBlockCache(cache.get());
+    options.fileHandle = &fileHandle;
+    options.ioOptions.emplace(pool_.get())
+        .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>())
+        .setIndexIoStats(indexIoStats_);
+    reader = TabletReader::create(readFile, pool_.get(), options);
+  }
+
+  // Only the index leases the file id now. A cache miss creates its entry
+  // under that id, which needs the id in velox::fileIds().
+  cache->clear();
+  const auto result =
+      reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+  ASSERT_EQ(result.size(), 1);
+  ASSERT_EQ(result[0].size(), 1);
+  EXPECT_EQ(result[0][0], RowRange(0, 300));
+
+  reader.reset();
+  testingResetBlockCache();
+  cache->shutdown();
+}
+
+// The block cache saves index metadata and key chunks to the SSD cache of the
+// async data cache, so a reader after a memory clear reads them from SSD.
+TEST_F(ClusterIndexTest, cacheIndexReadsFromSsd) {
+  std::string file;
+  auto readFile = writeThreeChunkPartitionFile(*pool_, file);
+  velox::filesystems::registerLocalFileSystem();
+  FLAGS_velox_ssd_odirect = false;
+  const auto ssdDirectory =
+      velox::common::testutil::TempDirectoryPath::create();
+  folly::IOThreadPoolExecutor ssdExecutor{1};
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{
+          .capacity = 1UL << 30, .reservationByteLimit = 0});
+  auto cache = velox::cache::AsyncDataCache::create(
+      allocator.get(),
+      std::make_unique<velox::cache::SsdCache>(velox::cache::SsdCache::Config(
+          fmt::format("{}/cache", ssdDirectory->getPath()),
+          /*_maxBytes=*/64UL << 20,
+          /*_numShards=*/1,
+          &ssdExecutor)));
+  testingResetBlockCache();
+  velox::FileHandle fileHandle;
+  fileHandle.file = readFile;
+  fileHandle.uuid = velox::StringIdLease(
+      velox::fileIds(), "ClusterIndexTest.cacheIndexReadsFromSsd");
+
+  // Opens a reader and looks up a key in every chunk.
+  const auto lookupWithNewReader = [&]() {
+    indexIoStats_ = std::make_shared<velox::io::IoStatistics>();
+    TabletReader::Options options;
+    options.loadClusterIndex = true;
+    options.cacheIndex = true;
+    options.blockCache = getBlockCache(cache.get());
+    options.fileHandle = &fileHandle;
+    options.ioOptions.emplace(pool_.get())
+        .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>())
+        .setIndexIoStats(indexIoStats_);
+    auto reader = TabletReader::create(readFile, pool_.get(), options);
+    ASSERT_NE(reader->clusterIndex(), nullptr);
+    const std::vector<std::pair<std::string, RowRange>> expectedRanges = {
+        {"bbb", RowRange(0, 300)},
+        {"ddd", RowRange(100, 300)},
+        {"fff", RowRange(200, 300)},
+    };
+    for (const auto& [key, expectedRange] : expectedRanges) {
+      SCOPED_TRACE(fmt::format("key={}", key));
+      const auto result =
+          reader->clusterIndex()->lookup(makeRangeScanRequest(key));
+      ASSERT_EQ(result.size(), 1);
+      ASSERT_EQ(result[0].size(), 1);
+      EXPECT_EQ(result[0][0], expectedRange);
+    }
+  };
+
+  ASSERT_NO_FATAL_FAILURE(lookupWithNewReader());
+  EXPECT_GT(indexIoStats_->read().sum(), 0);
+
+  ASSERT_TRUE(cache->ssdCache()->startWrite());
+  cache->saveToSsd(/*saveAll=*/true);
+  cache->ssdCache()->waitForWriteToFinish();
+  cache->clear();
+
+  ASSERT_NO_FATAL_FAILURE(lookupWithNewReader());
+  EXPECT_EQ(indexIoStats_->read().sum(), 0);
+  EXPECT_GT(indexIoStats_->ssdRead().count(), 0);
+  EXPECT_EQ(indexIoStats_->ramHit().count(), 0);
+
+  testingResetBlockCache();
+  cache->shutdown();
+}
+
+// The key chunks of this file are uncompressed, so a decoded chunk reads its
+// keys in place from the cache entry its bytes were loaded into.
+TEST_F(ClusterIndexTest, blockCachedKeyChunkStaysPinnedWhileDecoded) {
+  std::string file;
+  auto readFile = writeThreeChunkPartitionFile(*pool_, file);
+
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{
+          .capacity = 1UL << 30, .reservationByteLimit = 0});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  auto* blockCache = getBlockCache(cache.get());
+
+  for (const bool preloadIndex : {false, true}) {
+    SCOPED_TRACE(fmt::format("preloadIndex={}", preloadIndex));
+
+    // A file id per case keeps the cases' cache entries apart.
+    velox::FileHandle fileHandle;
+    fileHandle.file = readFile;
+    fileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(),
+        fmt::format("blockCachedKeyChunkPinTest_preload{}", preloadIndex));
+
+    TabletReader::Options options;
+    options.loadClusterIndex = true;
+    options.pinIndex = true;
+    options.preloadIndex = preloadIndex;
+    options.cacheIndex = true;
+    options.blockCache = blockCache;
+    options.fileHandle = &fileHandle;
+    options.ioOptions.emplace(pool_.get())
+        .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>())
+        .setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+    auto reader = TabletReader::create(readFile, pool_.get(), options);
+    ASSERT_NE(reader->clusterIndex(), nullptr);
+    ClusterIndexTestHelper helper(reader->clusterIndex());
+
+    const auto lookupFirstKey = [&]() {
+      const auto result =
+          reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+      ASSERT_EQ(result.size(), 1);
+      ASSERT_EQ(result[0].size(), 1);
+      EXPECT_EQ(result[0][0], RowRange(0, 300));
+    };
+    ASSERT_NO_FATAL_FAILURE(lookupFirstKey());
+    ASSERT_GE(helper.decodedChunkCount(0), 1);
+    const auto chunkOffset = helper.keyStreamRegion(0).offset +
+        helper.lookupChunk(0, "bbb").chunkOffset;
+
+    // Evicts every entry that nothing pins.
+    cache->clear();
+
+    velox::io::IoStatistics probeStats;
+    EXPECT_FALSE(
+        blockCache->find(fileHandle.uuid.id(), chunkOffset, probeStats).empty())
+        << "The decoded chunk must keep its cache entry pinned";
+    ASSERT_NO_FATAL_FAILURE(lookupFirstKey());
+
+    // Destroying the reader drops the decoded chunk and with it the pin.
+    reader.reset();
+    cache->clear();
+    EXPECT_TRUE(
+        blockCache->find(fileHandle.uuid.id(), chunkOffset, probeStats).empty())
+        << "The cache entry must not stay pinned after the reader is gone";
+  }
+
+  testingResetBlockCache();
+  cache->shutdown();
+}
+
+// Without pinIndex, every lookup of a chunk other than the one in the scratch
+// slot reads it again through the shared cached input, so concurrent lookups
+// read key chunks concurrently.
+TEST_F(ClusterIndexTest, blockCachedKeyChunksReadConcurrently) {
+  constexpr uint32_t kNumThreads{16};
+  constexpr uint32_t kLookupsPerThread{200};
+
+  std::string file;
+  auto readFile = writeThreeChunkPartitionFile(*pool_, file);
+
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{
+          .capacity = 1UL << 30, .reservationByteLimit = 0});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  auto* blockCache = getBlockCache(cache.get());
+
+  const velox::StringIdLease fileId{
+      velox::fileIds(), "blockCachedKeyChunksReadConcurrentlyTest"};
+  velox::FileHandle fileHandle;
+  fileHandle.file = readFile;
+  fileHandle.uuid = fileId;
+  const auto indexIoStats = std::make_shared<velox::io::IoStatistics>();
+
+  TabletReader::Options options;
+  options.loadClusterIndex = true;
+  options.cacheIndex = true;
+  options.fileHandle = &fileHandle;
+  options.blockCache = blockCache;
+  options.ioOptions.emplace(pool_.get())
+      .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>())
+      .setIndexIoStats(indexIoStats);
+  auto reader = TabletReader::create(readFile, pool_.get(), options);
+  ASSERT_NE(reader->clusterIndex(), nullptr);
+
+  const std::vector<std::pair<std::string, RowRange>> expectedRanges = {
+      {"bbb", RowRange(0, 300)},
+      {"ddd", RowRange(100, 300)},
+      {"fff", RowRange(200, 300)},
+  };
+  std::atomic_uint32_t numMismatches{0};
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (uint32_t threadIdx = 0; threadIdx < kNumThreads; ++threadIdx) {
+    threads.emplace_back([&, threadIdx]() {
+      for (uint32_t i = 0; i < kLookupsPerThread; ++i) {
+        const auto& [key, expectedRange] =
+            expectedRanges[(threadIdx + i) % expectedRanges.size()];
+        const auto result =
+            reader->clusterIndex()->lookup(makeRangeScanRequest(key));
+        if (result.size() != 1 || result[0].size() != 1 ||
+            result[0][0] != expectedRange) {
+          ++numMismatches;
+        }
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  EXPECT_EQ(numMismatches.load(), 0);
+
+  // The partition metadata is read once, so every hit is a key chunk read.
+  EXPECT_GT(indexIoStats->ramHit().count(), 0);
+
+  reader.reset();
+  testingResetBlockCache();
+  cache->shutdown();
+}
 
 TEST_F(ClusterIndexTest, pinIndexEnabledRetainsChunks) {
   std::string file;
@@ -2578,6 +3287,60 @@ TEST_F(ClusterIndexTest, preloadIndexDecodesAllChunksAtConstruction) {
   EXPECT_EQ(helper.decodedChunkCount(0), 3);
   EXPECT_EQ(indexIoStats_->rawBytesRead(), bytesAfterPreload)
       << "Lookups after preload must not trigger additional index IO";
+}
+
+// Preloading loads the key chunks of each partition in its own batch, so every
+// partition is decoded at construction, not only the first.
+TEST_F(ClusterIndexTest, preloadIndexDecodesEveryPartition) {
+  auto encoded0 = encodeKeyStream({{"ccc"}});
+  auto encoded1 = encodeKeyStream({{"fff"}});
+  auto encoded2 = encodeKeyStream({{"iii"}});
+  const auto size0 = static_cast<uint32_t>(encoded0.data.size());
+  const auto size1 = static_cast<uint32_t>(encoded1.data.size());
+  const auto size2 = static_cast<uint32_t>(encoded2.data.size());
+  const std::vector<Stripe> stripes = {
+      createStripeWithKeys(
+          {.streamOffset = 0,
+           .streamSize = size0,
+           .stream = {.numChunks = 1, .chunkRows = {1}, .chunkOffsets = {0}},
+           .chunkKeys = {"ccc"}}),
+      createStripeWithKeys(
+          {.streamOffset = size0,
+           .streamSize = size1,
+           .stream = {.numChunks = 1, .chunkRows = {1}, .chunkOffsets = {0}},
+           .chunkKeys = {"fff"}}),
+      createStripeWithKeys(
+          {.streamOffset = size0 + size1,
+           .streamSize = size2,
+           .stream = {.numChunks = 1, .chunkRows = {1}, .chunkOffsets = {0}},
+           .chunkKeys = {"iii"}})};
+  // Partition 0 holds stripes 0 and 1, and partition 1 holds stripe 2.
+  const auto indexBuffers = createTestClusterIndex(
+      {"key_col"}, "aaa", stripes, /*stripeGroups=*/{2, 1});
+  auto clusterIndex = createClusterIndex(
+      indexBuffers,
+      createKeyStreamFile(encoded0.data + encoded1.data + encoded2.data),
+      /*pinIndex=*/true,
+      /*preloadIndex=*/true);
+  ClusterIndexTestHelper helper(clusterIndex.get());
+
+  EXPECT_EQ(helper.decodedChunkCount(0), 2);
+  EXPECT_EQ(helper.decodedChunkCount(1), 1);
+  const auto bytesAfterPreload = keyStreamIoStats_->rawBytesRead();
+  EXPECT_EQ(bytesAfterPreload, size0 + size1 + size2);
+
+  const std::vector<std::pair<std::string, RowRange>> expectedRanges = {
+      {"ddd", RowRange(1, 3)},
+      {"ggg", RowRange(2, 3)},
+  };
+  for (const auto& [key, expectedRange] : expectedRanges) {
+    SCOPED_TRACE(key);
+    const auto result = clusterIndex->lookup(makeRangeScanRequest(key));
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0], expectedRange);
+  }
+  EXPECT_EQ(keyStreamIoStats_->rawBytesRead(), bytesAfterPreload);
 }
 
 TEST_F(ClusterIndexTest, preloadIndexRequiresPinIndex) {
@@ -2803,8 +3566,12 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunksDifferentChunksInParallel) {
       MetadataInput::Options{.pool = pool_.get(), .ioStats = ioStats_});
   keyStreamFile_ =
       std::make_shared<velox::InMemoryReadFile>(encodedStream.data);
-  auto dataInput = std::make_unique<velox::dwio::common::BufferedInput>(
-      keyStreamFile_, *pool_);
+  auto dataInput = std::make_shared<DirectDataInput>(
+      keyStreamFile_,
+      DirectDataInput::Options{
+          .pool = pool_.get(),
+          .ioStats = std::make_shared<velox::io::IoStatistics>(),
+      });
   auto clusterIndex = ClusterIndexTestHelper::create(
       std::move(indexSection),
       pool_.get(),

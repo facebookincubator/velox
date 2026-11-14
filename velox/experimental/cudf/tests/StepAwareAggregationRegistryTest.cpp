@@ -128,7 +128,14 @@ TEST_F(StepAwareAggregationRegistryTest, allFunctionsAreRegisteredInReduce) {
 // function that is mask-capable on the other path starts without a mask.
 TEST_F(StepAwareAggregationRegistryTest, maskSupportIsDeclaredPerRegistry) {
   const std::unordered_set<std::string> groupbyNames = {
-      "sum", "count", "min", "max", "avg", "stddev_samp", "stddev"};
+      "sum",
+      "count",
+      "min",
+      "max",
+      "avg",
+      "stddev_samp",
+      "stddev",
+      "array_agg"};
   const std::unordered_set<std::string> reduceNames = {
       "sum", "count", "min", "max", "avg", "approx_distinct"};
   EXPECT_EQ(
