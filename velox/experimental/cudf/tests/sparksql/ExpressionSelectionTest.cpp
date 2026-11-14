@@ -308,6 +308,23 @@ TEST_F(CudfSparkExpressionSelectionTest, signatureGetSmallIntegralIndices) {
   ASSERT_TRUE(canExprRunOnGpu(smallintExpr, queryCtx_.get(), pool_.get()));
 }
 
+// Spark's element_at raises on a missing map key under ANSI mode, so a lookup
+// into a constant map runs on the GPU only after the Presto registration.
+TEST_F(CudfSparkExpressionSelectionTest, elementAtMapStaysOnCpu) {
+  auto expr = optimizeTypedExpr(
+      "element_at(map(array['a', 'b'], array[1, 2]), name)",
+      rowType_,
+      queryCtx_.get(),
+      execCtx_.get());
+  unregisterFunctions();
+  registerBuiltinFunctions("");
+  registerSparkFunctions("");
+  EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+
+  registerPrestoFunctions("");
+  EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+}
+
 TEST_F(CudfSparkExpressionSelectionTest, signatureVarargsHashWithSeed) {
   // canExprRunOnGpu reads this setting directly; no driver re-registration is
   // needed.

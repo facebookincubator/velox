@@ -712,6 +712,47 @@ TEST_F(CudfExpressionSelectionTest, castAndTryCast) {
   ASSERT_FALSE(canExprRunOnGpu(badCast, queryCtx_.get(), pool_.get()));
 }
 
+// element_at and contains over a constant collection run on the GPU, except
+// where cuDF would compare the keys or elements differently from the CPU.
+TEST_F(CudfExpressionSelectionTest, constantLookupFallbacks) {
+  const auto rowType = ROW(
+      {{"s", VARCHAR()}, {"d", DOUBLE()}, {"i", BIGINT()}, {"t", TIMESTAMP()}});
+  const auto canRunOnGpu = [&](const std::string& sql) {
+    SCOPED_TRACE(sql);
+    return canExprRunOnGpu(
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get()),
+        queryCtx_.get(),
+        pool_.get());
+  };
+
+  EXPECT_TRUE(canRunOnGpu("element_at(map(array['a', 'b'], array[1, 2]), s)"));
+  EXPECT_TRUE(canRunOnGpu("contains(array[1, 5, 7], i)"));
+
+  // subscript raises on a missing key.
+  EXPECT_FALSE(canRunOnGpu("subscript(map(array['a', 'b'], array[1, 2]), s)"));
+  // Velox compares REAL and DOUBLE with NaN equal to NaN, cuDF does not.
+  EXPECT_FALSE(canRunOnGpu("element_at(map(array[1.5, 2.5], array[1, 2]), d)"));
+  EXPECT_FALSE(canRunOnGpu("contains(array[1.5, 2.5], d)"));
+  // contains gives NULL rather than false when a NULL element matches no row.
+  EXPECT_FALSE(canRunOnGpu("contains(array[1, null, 7], i)"));
+  // An empty array stays on the CPU too.
+  EXPECT_FALSE(canRunOnGpu("contains(array_constructor()::bigint[], i)"));
+
+  // TIMESTAMP keys stay distinct on the GPU only with nanoseconds.
+  const auto timestampLookup =
+      "element_at(map(array[TIMESTAMP '2025-01-01 00:00:00.000001', "
+      "TIMESTAMP '2025-01-01 00:00:00.000002'], array[1, 2]), t)";
+  auto& config = CudfConfig::getInstance();
+  const auto previousUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = previousUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  EXPECT_TRUE(canRunOnGpu(timestampLookup));
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+  EXPECT_FALSE(canRunOnGpu(timestampLookup));
+}
+
 TEST_F(CudfExpressionSelectionTest, constantFoldingStringAllocatesOnCompile) {
   auto optimized = optimizeTypedExpr(
       "lower('ABCDEF')", rowType_, queryCtx_.get(), execCtx_.get());

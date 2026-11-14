@@ -668,7 +668,8 @@ class CudfFilterProjectTest : public OperatorTestBase {
   void assertProjectMatchesVelox(
       const std::vector<RowVectorPtr>& input,
       const std::vector<std::string>& projections) {
-    auto plan = PlanBuilder().values(input).project(projections).planNode();
+    auto plan =
+        PlanBuilder(pool_.get()).values(input).project(projections).planNode();
     assertPlanMatchesVelox(plan);
   }
 
@@ -2529,6 +2530,53 @@ TEST_F(CudfFilterProjectTest, arrayJoin) {
   auto expected = makeRowVector({makeNullableFlatVector<std::string>(
       {"a, b, c", "", ", d", "e", std::nullopt})});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// element_at over a constant map runs on the GPU as a lookup into the keys;
+// a missing or NULL key gives NULL.
+TEST_F(CudfFilterProjectTest, constantMapElementAt) {
+  auto data = makeRowVector(
+      {"s", "i"},
+      {makeNullableFlatVector<std::string>({"a", "B", "z", std::nullopt, "A"}),
+       makeNullableFlatVector<int64_t>({1, 50, 251, std::nullopt, 200})});
+  const auto mapOf = [](int numEntries) {
+    std::string keys;
+    std::string values;
+    for (int i = 1; i <= numEntries; ++i) {
+      keys += fmt::format("{}{}", i == 1 ? "" : ", ", i);
+      values += fmt::format("{}{}", i == 1 ? "" : ", ", 100 + i);
+    }
+    return fmt::format("map(array[{}], array[{}])", keys, values);
+  };
+
+  assertProjectMatchesVelox(
+      {data},
+      {"element_at(map(array['a'], array[10]), s) AS one_entry",
+       "element_at(map(array['a', 'b'], array[1, 2]), s) AS varchar_key",
+       fmt::format("element_at({}, i) AS bigint_key", mapOf(50)),
+       fmt::format("element_at({}, i) AS large_map", mapOf(250)),
+       "element_at(map(array['a', 'b'], array[1, 2]), lower(s)) AS "
+       "computed_key",
+       "element_at(map(array['a', 'b'], array[cast(1.25 as decimal(12, 2)), "
+       "cast(-3.5 as decimal(12, 2))]), s) AS decimal_value",
+       // Compiled as a subexpression of an AST or JIT parent.
+       "element_at(map(array['a', 'b'], array[1, 2]), s) + 1 AS nested"});
+}
+
+// contains over a constant array runs on the GPU as a lookup into the
+// elements.
+TEST_F(CudfFilterProjectTest, constantArrayContains) {
+  auto data = makeRowVector(
+      {"i", "s"},
+      {makeNullableFlatVector<int64_t>({1, 5, 7, 2, std::nullopt}),
+       makeNullableFlatVector<std::string>(
+           {"a", "b", "z", std::nullopt, "a"})});
+
+  assertProjectMatchesVelox(
+      {data},
+      {"contains(array[1, 5, 7], i) AS bigint_element",
+       "contains(array['a', 'b'], s) AS varchar_element",
+       "contains(array[2, 6, 8], i + 1) AS computed_probe"});
 }
 
 TEST_F(CudfFilterProjectTest, negativeSubstr) {
