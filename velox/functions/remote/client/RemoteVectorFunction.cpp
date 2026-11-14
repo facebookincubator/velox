@@ -122,46 +122,49 @@ void RemoteVectorFunction::applyRemote(
           BufferPtr{}, compactedToOriginal, numSelected, arg);
     }
   }
-  // Create type and row vector for serialization.
-  auto remoteRowVector = std::make_shared<RowVector>(
-      context.pool(),
-      remoteInputType_,
-      BufferPtr{},
-      shouldCompact ? numSelected : rows.end(),
-      std::move(args));
-
-  // Create the thrift payload.
-  remote::RemoteFunctionRequest request;
-  request.throwOnError() = context.throwOnError();
-
-  auto functionHandle = request.remoteFunctionHandle();
-  functionHandle->name() = functionName_;
-  functionHandle->returnType() = serializeType(outputType);
-  functionHandle->argumentTypes() = serializedInputTypes_;
-
-  auto requestInputs = request.inputs();
-  requestInputs->rowCount() = remoteRowVector->size();
-  requestInputs->pageFormat() = serdeFormat_;
-
-  if (preserveEncoding_) {
-    requestInputs->payload_ref() = rowVectorToIOBufBatch(
-        remoteRowVector, *context.pool(), serde_.get(), serdeOptions_.get());
-  } else {
-    requestInputs->payload_ref() =
-        rowVectorToIOBuf(remoteRowVector, *context.pool(), serde_.get());
-  }
-
   std::unique_ptr<remote::RemoteFunctionResponse> remoteResponse;
 
-  // Invoke function that communicates with the remote host.
-  try {
-    remoteResponse = folly::coro::blockingWait(invokeRemoteFunction(request));
-  } catch (const std::exception& e) {
-    VELOX_FAIL(
-        "Error while executing remote function '{}' at '{}': {}",
-        functionName_,
-        remoteLocationToString(),
-        e.what());
+  {
+    remote::RemoteFunctionRequest request;
+    request.throwOnError() = context.throwOnError();
+
+    auto functionHandle = request.remoteFunctionHandle();
+    functionHandle->name() = functionName_;
+    functionHandle->returnType() = serializeType(outputType);
+    functionHandle->argumentTypes() = serializedInputTypes_;
+
+    auto requestInputs = request.inputs();
+    requestInputs->pageFormat() = serdeFormat_;
+    {
+      auto remoteRowVector = std::make_shared<RowVector>(
+          context.pool(),
+          remoteInputType_,
+          BufferPtr{},
+          shouldCompact ? numSelected : rows.end(),
+          std::move(args));
+      requestInputs->rowCount() = remoteRowVector->size();
+      if (preserveEncoding_) {
+        requestInputs->payload_ref() = rowVectorToIOBufBatch(
+            remoteRowVector,
+            *context.pool(),
+            serde_.get(),
+            serdeOptions_.get());
+      } else {
+        requestInputs->payload_ref() =
+            rowVectorToIOBuf(remoteRowVector, *context.pool(), serde_.get());
+      }
+    }
+
+    // Invoke function that communicates with the remote host.
+    try {
+      remoteResponse = folly::coro::blockingWait(invokeRemoteFunction(request));
+    } catch (const std::exception& e) {
+      VELOX_FAIL(
+          "Error while executing remote function '{}' at '{}': {}",
+          functionName_,
+          remoteLocationToString(),
+          e.what());
+    }
   }
 
   const auto& remoteResult = remoteResponse->result().value();
