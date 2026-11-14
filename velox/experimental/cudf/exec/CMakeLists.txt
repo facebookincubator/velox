@@ -21,6 +21,7 @@ add_library(
   CudfConversion.cpp
   CudfDistinct.cpp
   CudfEnforceSingleRow.cpp
+  CudfExpand.cpp
   CudfFilterProject.cpp
   CudfGroupId.cpp
   CudfGroupby.cpp
@@ -33,6 +34,7 @@ add_library(
   CudfMarkDistinct.cpp
   CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
+  CudfProjectionOperator.cpp
   CudfReduce.cpp
   CudfTopN.cpp
   CudfTopNRowNumber.cpp
