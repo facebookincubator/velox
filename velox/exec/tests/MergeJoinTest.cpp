@@ -511,6 +511,72 @@ TEST_F(MergeJoinTest, allRowsMatch) {
   testJoin(rightKeys, leftKeys);
 }
 
+// Exercises serial execution with MergeJoin last and right batches pending.
+TEST_F(MergeJoinTest, bufferedMatchesAtEndOfInput) {
+  auto left = makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int32_t>({0}), makeFlatVector<int32_t>({10})});
+  auto right = makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int32_t>({0, 0}), makeFlatVector<int32_t>({20, 30})});
+  auto expected = makeRowVector(
+      {"t0", "t1", "u1"},
+      {makeFlatVector<int32_t>({0, 0}),
+       makeFlatVector<int32_t>({10, 10}),
+       makeFlatVector<int32_t>({20, 30})});
+  auto antiExpected = BaseVector::create<RowVector>(left->type(), 0, pool());
+
+  for (auto joinType :
+       {core::JoinType::kInner,
+        core::JoinType::kLeft,
+        core::JoinType::kRight,
+        core::JoinType::kFull,
+        core::JoinType::kLeftSemiFilter,
+        core::JoinType::kRightSemiFilter,
+        core::JoinType::kAnti}) {
+    const auto& expectedOutput = isLeftSemiFilterJoin(joinType) ? left
+        : isRightSemiFilterJoin(joinType)                       ? right
+        : isAntiJoin(joinType)                                  ? antiExpected
+                                                                : expected;
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({left})
+                    .mergeJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(
+                                {std::static_pointer_cast<RowVector>(
+                                     right->slice(0, 1)),
+                                 std::static_pointer_cast<RowVector>(
+                                     right->slice(1, 1))})
+                            .planNode(),
+                        "",
+                        asRowType(expectedOutput->type())->names(),
+                        joinType)
+                    .planNode();
+
+    for (const auto* streamLeft : {"false", "true"}) {
+      for (auto outputBatchRows : {1, 8}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "streamLeft={} outputBatchRows={}",
+                streamLeft,
+                outputBatchRows));
+        AssertQueryBuilder(plan)
+            .serialExecution(true)
+            .maxDrivers(1)
+            .config(core::QueryConfig::kMergeJoinStreamLeftSide, streamLeft)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchRows, outputBatchRows)
+            .config(core::QueryConfig::kMaxOutputBatchRows, outputBatchRows)
+            .assertResults(expectedOutput);
+      }
+    }
+  }
+}
+
 TEST_F(MergeJoinTest, keySkew) {
   testJoin<int32_t>(
       [](auto row) { return row; },
