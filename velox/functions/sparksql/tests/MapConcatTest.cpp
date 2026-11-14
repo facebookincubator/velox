@@ -69,6 +69,21 @@ class MapConcatTest : public SparkFunctionBaseTest {
     result.insert(a.begin(), a.end());
     return result;
   }
+
+  // Checks that the expression gives a flat map equal to 'expected' over the
+  // flat map inputs, and the same maps over the same inputs as MapVectors.
+  void testFlatMap(
+      const std::string& expression,
+      const std::vector<VectorPtr>& flatMapInputs,
+      const std::vector<VectorPtr>& mapInputs,
+      const VectorPtr& expected) {
+    auto result = evaluate(expression, makeRowVector(flatMapInputs));
+    ASSERT_EQ(result->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    result->validate();
+    velox::test::assertEqualVectors(expected, result);
+    velox::test::assertEqualVectors(
+        evaluate(expression, makeRowVector(mapInputs)), result);
+  }
 };
 
 TEST_F(MapConcatTest, duplicateKeys) {
@@ -108,6 +123,92 @@ TEST_F(MapConcatTest, duplicateKeys) {
       "Duplicate map key a2 was found");
 }
 
+TEST_F(MapConcatTest, flatMapWithMap) {
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "{3:30}",
+  });
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{4:40}",
+      "{3:31}",
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate("map_concat(c0, c1)", makeRowVector({flatMap, map})),
+      "Wrong type cast expected");
+  VELOX_ASSERT_THROW(
+      evaluate("map_concat(c1, c0)", makeRowVector({flatMap, map})),
+      "Wrong type cast expected");
+  VELOX_ASSERT_THROW(
+      evaluate("map_concat(c0, map(7, 70))", makeRowVector({flatMap})),
+      "Wrong type cast expected");
+}
+
+TEST_F(MapConcatTest, flatMapWithMapLiteral) {
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "null",
+      "{3:30}",
+  });
+
+  setGenerateConstantMapsAsFlatMaps(false);
+  auto result =
+      evaluate("map_concat(c0, map(2, 99, 7, 70))", makeRowVector({flatMap}));
+  ASSERT_EQ(result->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  result->validate();
+  velox::test::assertEqualVectors(
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:99, 7:70}",
+          "null",
+          "{2:99, 3:30, 7:70}",
+      }),
+      result);
+  const auto& flatMapResult = *result->asUnchecked<FlatMapVector>();
+  EXPECT_EQ(
+      flatMapResult.mapValuesAt(
+          flatMapResult.getKeyChannel(int64_t{1}).value()),
+      flatMap->mapValuesAt(flatMap->getKeyChannel(int64_t{1}).value()));
+}
+
+TEST_F(MapConcatTest, flatMapDuplicateKeys) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1:10, 2:20}",
+      "null",
+      "{3:30}",
+  });
+  auto other = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{2:21, 4:40}",
+      "{5:50}",
+      "{6:60}",
+  });
+
+  testFlatMap(
+      "map_concat(c0, c1)",
+      {flatMap, other},
+      {flatMap->toMapVector(), other->toMapVector()},
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1:10, 2:21, 4:40}",
+          "null",
+          "{3:30, 6:60}",
+      }));
+  testFlatMap(
+      "map_concat(c1, c0)",
+      {flatMap, other},
+      {flatMap->toMapVector(), other->toMapVector()},
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1:10, 2:20, 4:40}",
+          "null",
+          "{3:30, 6:60}",
+      }));
+
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"},
+  });
+  VELOX_ASSERT_USER_THROW(
+      evaluate("map_concat(c0, c1)", makeRowVector({flatMap, other})),
+      "Duplicate map key 2 was found.");
+}
+
 TEST_F(MapConcatTest, singleArg) {
   vector_size_t size = 1'000;
 
@@ -119,6 +220,16 @@ TEST_F(MapConcatTest, singleArg) {
 
   auto result = evaluate<MapVector>("map_concat(c0)", makeRowVector({aMap}));
   velox::test::assertEqualVectors(expectedMap, result);
+}
+
+TEST_F(MapConcatTest, flatMapSingleArg) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1:10, 2:20}",
+      "null",
+      "{}",
+  });
+
+  testFlatMap("map_concat(c0)", {flatMap}, {flatMap->toMapVector()}, flatMap);
 }
 
 } // namespace

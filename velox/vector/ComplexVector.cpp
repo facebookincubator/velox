@@ -1732,7 +1732,10 @@ MapVectorPtr MapVector::update(
     inputs.push_back(&other);
   }
   SelectivityVector allRows(size(), true);
-  return mapConcat(pool(), type(), inputs, allRows, {});
+  auto result = std::dynamic_pointer_cast<MapVector>(
+      mapConcat(pool(), type(), inputs, allRows, {}));
+  VELOX_CHECK_NOT_NULL(result);
+  return result;
 }
 
 MapVectorPtr MapVector::update(const std::vector<MapVectorPtr>& others) const {
