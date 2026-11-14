@@ -1165,6 +1165,17 @@ TEST_F(PaimonConnectorTest, nimbleFileFieldIds) {
   });
   for (const bool batchReader : {false, true}) {
     SCOPED_TRACE(batchReader);
+    for (const size_t fileIndex : {0, 1}) {
+      exec::test::AssertQueryBuilder(plan)
+          .connectorSessionProperty(
+              kPaimonConnectorId,
+              "selective_nimble_reader_enabled",
+              batchReader ? "false" : "true")
+          .split(evolutionSplit(kFormat, {{paths[fileIndex]->getPath(), 17}}))
+          .assertResults(
+              std::static_pointer_cast<RowVector>(expected->slice(
+                  fileIndex == 0 ? 0 : 2, fileIndex == 0 ? 2 : 1)));
+    }
     // Even equal schema IDs must bind using file IDs, not query order or names.
     const auto task =
         exec::test::AssertQueryBuilder(plan)
@@ -1182,6 +1193,15 @@ TEST_F(PaimonConnectorTest, nimbleFileFieldIds) {
         stats.at(batchReader ? "batchNimbleReader" : "selectiveNimbleReader")
             .sum,
         2);
+    exec::test::AssertQueryBuilder(plan)
+        .connectorSessionProperty(
+            kPaimonConnectorId,
+            "selective_nimble_reader_enabled",
+            batchReader ? "false" : "true")
+        .splits(
+            {evolutionSplit(kFormat, {{paths[0]->getPath(), 17}}),
+             evolutionSplit(kFormat, {{paths[1]->getPath(), 17}})})
+        .assertResults(expected);
   }
 }
 
@@ -2395,7 +2415,7 @@ TEST_F(PaimonConnectorTest, columnHandlesRoundTrip) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
     const auto files = makeFilePaths(2);
     for (const auto& file : files) {
-      writeFile(file->getPath(), input, format);
+      writeFile(file->getPath(), input, format, {41, 7});
     }
     const auto split = evolutionSplit(
         format,
