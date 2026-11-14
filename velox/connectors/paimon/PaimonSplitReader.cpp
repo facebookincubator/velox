@@ -18,6 +18,28 @@
 #include <limits>
 
 namespace facebook::velox::connector::paimon {
+namespace {
+
+// Nimble exposes physical types; logical annotations such as DATE use the
+// query type. Nested fields are unchanged in this top-level evolution reader.
+bool hasSamePhysicalType(const Type& fileType, const Type& queryType) {
+  if (fileType.kind() != queryType.kind() ||
+      fileType.size() != queryType.size()) {
+    return false;
+  }
+  if (fileType.isRow() &&
+      fileType.asRow().names() != queryType.asRow().names()) {
+    return false;
+  }
+  for (column_index_t i = 0; i < fileType.size(); ++i) {
+    if (!hasSamePhysicalType(*fileType.childAt(i), *queryType.childAt(i))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 PaimonSplitReader::PaimonSplitReader(
     const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
@@ -59,6 +81,56 @@ PaimonSplitReader::PaimonSplitReader(
   }
 }
 
+void PaimonSplitReader::configureBaseReaderOptions() {
+  connector::FileSplitReader::configureBaseReaderOptions();
+  if (fileSplit_->fileFormat != dwio::common::FileFormat::NIMBLE) {
+    return;
+  }
+  const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
+  std::vector<dwio::common::ParquetFieldId> fieldIds;
+  fieldIds.reserve(table.fieldIds().size());
+  for (auto id : table.fieldIds()) {
+    fieldIds.push_back({id, {}});
+  }
+  baseReaderOpts_.setFileSchema(table.rowType());
+  baseReaderOpts_.setFieldIds(std::move(fieldIds));
+  baseReaderOpts_.setFieldIdAttributeKey("paimon.id");
+  baseReaderOpts_.setColumnMappingMode(
+      dwio::common::ColumnMappingMode::kFieldId);
+}
+
+std::vector<TypePtr> PaimonSplitReader::adaptColumns(
+    const RowTypePtr& fileType,
+    const RowTypePtr& /*tableSchema*/) const {
+  if (fileSplit_->fileFormat == dwio::common::FileFormat::NIMBLE) {
+    // The reader has bound file IDs to query names while preserving physical
+    // types. Validate before the common adapter substitutes output types.
+    // TODO: Support nested field evolution and type conversions.
+    const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
+    for (const auto& spec : scanSpec_->children()) {
+      if (spec->columnType() != common::ScanSpec::ColumnType::kRegular ||
+          fileSplit_->partitionKeys.count(spec->fieldName())) {
+        continue;
+      }
+      const auto index = fileType->getChildIdxIfExists(spec->fieldName());
+      if (!index.has_value()) {
+        // A missing field ID is NULL, not a name- or position-based fallback.
+        continue;
+      }
+      const auto& physical = fileType->childAt(*index);
+      const auto& query = table.rowType()->findChild(spec->fieldName());
+      VELOX_USER_CHECK(
+          hasSamePhysicalType(*physical, *query),
+          "Paimon type evolution is not supported for field '{}': {} to {}",
+          spec->fieldName(),
+          physical->toString(),
+          query->toString());
+    }
+  }
+  return connector::FileSplitReader::adaptColumns(
+      fileType, tableHandle_->dataColumns());
+}
+
 void PaimonSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStats& runtimeStats,
@@ -69,7 +141,17 @@ void PaimonSplitReader::prepareSplit(
 }
 
 uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
-  while (ensureFileSplitReader()) {
+  while (true) {
+    const bool newFile = baseReader_ == nullptr;
+    if (!ensureFileSplitReader()) {
+      return 0;
+    }
+    if (newFile && output &&
+        fileSplit_->fileFormat == dwio::common::FileFormat::NIMBLE) {
+      // Keep the logical output required by selective readers, but discard
+      // batch-reader private vectors tied to the previous physical layout.
+      output->asUnchecked<RowVector>()->rawVectorForBatchReader().reset();
+    }
     // TODO: Apply deletion vectors using original physical file row positions.
     // TODO: Decode internal columns and row kinds for primary-key/changelog
     // files.
@@ -80,7 +162,6 @@ uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
     // Current file exhausted, try the next one.
     finishFileSplitReader();
   }
-  return 0;
 }
 
 bool PaimonSplitReader::ensureFileSplitReader() {
@@ -94,7 +175,7 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
 
-    // TODO: Add historical-schema adaptation using per-file schema metadata.
+    configureReaderOptions(baseReaderOpts_.randomSkip());
     connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     if (!emptySplit_) {
       return true;

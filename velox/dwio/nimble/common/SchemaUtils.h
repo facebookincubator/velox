@@ -30,6 +30,10 @@
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
+namespace facebook::velox::dwio::common {
+class ReaderOptions;
+}
+
 namespace facebook::nimble {
 
 class TypeBuilder;
@@ -37,6 +41,15 @@ class TypeBuilder;
 velox::TypePtr convertToVeloxType(const Type& type);
 
 std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type);
+
+/// Binds top-level file columns to requested names by their ID attribute.
+/// Preserves file order, physical types and nested fields. Unmatched columns
+/// receive names outside the requested schema so they cannot shadow new fields.
+/// Throws if any physical top-level ID is missing, invalid or duplicated.
+velox::RowTypePtr mapTopLevelColumnsByFieldId(
+    const Type& nimbleSchema,
+    const velox::RowTypePtr& fileSchema,
+    const velox::dwio::common::ReaderOptions& options);
 
 /// Returns the key kind of a Hybrid FlatMap for a MAP column whose keys are of
 /// `keyType`, one that HybridFlatMap::supportedKeyKind() accepts. Throws

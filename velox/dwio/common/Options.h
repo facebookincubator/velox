@@ -128,22 +128,19 @@ enum class ColumnMappingMode {
   /// mode instead of interpreting it as a generic column identity mechanism.
   kParquetFieldId,
 
-  /// Matches physical fields to requested columns by Iceberg field id carried
-  /// as per-type string attributes ("iceberg.id") in the file schema.
+  /// Matches physical fields to requested columns by field IDs stored as
+  /// per-type string attributes in the file schema. The caller supplies
+  /// ReaderOptions::fieldIds() aligned to the requested fileSchema().
   ///
-  /// Use this mode for DWRF/ORC files written for Iceberg, where a column's
-  /// identity is its field id rather than its name or position. Unlike
-  /// kParquetFieldId (which reads physical Parquet field_id metadata), this
-  /// mode
-  /// reads the ORC-spec attribute convention that DWRF/ORC writers stamp onto
-  /// each schema node. The caller provides ReaderOptions::fieldIds() describing
-  /// the requested (table) schema's field ids, aligned to fileSchema() at every
-  /// row-typed level. The reader renames the file's columns to the requested
-  /// names that share their field id, so a downstream name-based read resolves
-  /// renames, reorders, deletions, and drop/re-add-with-same-name correctly.
-  /// Physical nodes without an "iceberg.id" attribute do not match any positive
-  /// requested field id and are surfaced as missing (the connector materializes
-  /// them as null or the table format's default value).
+  /// DWRF/ORC use Iceberg's "iceberg.id" convention. Nimble uses
+  /// fieldIdAttributeKey(), allowing independent table-format conventions such
+  /// as "iceberg.id" and "paimon.id" to share this mapping mode.
+  ///
+  /// Iceberg supports nested field-ID trees with its existing compatibility
+  /// behavior. Nimble's "paimon.id" mapping currently matches only top-level
+  /// fields, preserving nested fields and physical types. It requires valid,
+  /// unique, nonnegative IDs on every physical top-level field; unmatched
+  /// requested IDs remain missing without name- or position-based fallback.
   kFieldId,
 };
 
@@ -787,15 +784,16 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   /// Sets the requested (table) schema field ids for
-  /// ColumnMappingMode::kFieldId, one ParquetFieldId tree per top-level column,
-  /// aligned to fileSchema().
+  /// field-ID mapping, one ParquetFieldId tree per top-level column, aligned
+  /// to fileSchema(). Paimon's Nimble mapping consumes only each root's
+  /// fieldId.
   ReaderOptions& setFieldIds(std::vector<ParquetFieldId> fieldIds) {
     fieldIds_ = std::move(fieldIds);
     return *this;
   }
 
   /// Sets the per-type attribute key under which the file encodes field ids
-  /// (e.g. Iceberg's "iceberg.id"). Consumed when
+  /// (e.g. "iceberg.id" or "paimon.id"). Consumed by Nimble when
   /// columnMappingMode() == kFieldId.
   ReaderOptions& setFieldIdAttributeKey(std::string key) {
     fieldIdAttributeKey_ = std::move(key);
@@ -841,13 +839,13 @@ class ReaderOptions : public io::ReaderOptions {
     return fileSchema_;
   }
 
-  /// Gets the requested schema field ids for ColumnMappingMode::kFieldId.
+  /// Gets the requested schema field IDs for field-ID mapping.
   const std::vector<ParquetFieldId>& fieldIds() const {
     return fieldIds_;
   }
 
   /// Gets the per-type attribute key under which the file encodes field ids
-  /// (e.g. Iceberg's "iceberg.id"). Consumed when
+  /// (e.g. "iceberg.id" or "paimon.id"). Consumed by Nimble when
   /// columnMappingMode() == kFieldId.
   const std::string& fieldIdAttributeKey() const {
     return fieldIdAttributeKey_;
