@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -3997,7 +3998,13 @@ void ConjunctExpression::close() {
 bool ConjunctExpression::canEvaluate(
     const core::TypedExprPtr& expr,
     const core::QueryConfig& config) {
-  return isConjunctFunction(expr) &&
+  // Narrowing costs mask ops per operand, so only take conjuncts where a later
+  // operand could fail fast on rows an earlier one decides.
+  return isConjunctFunction(expr) && expr->inputs().size() > 1 &&
+      std::any_of(
+             expr->inputs().begin() + 1,
+             expr->inputs().end(),
+             hasFailFastSubexpr) &&
       FunctionExpression::canEvaluate(expr, config);
 }
 
@@ -4345,6 +4352,34 @@ bool containsTimestampToVarcharCast(const core::TypedExprPtr& expr) {
     }
   }
   return false;
+}
+
+bool hasFailFastSubexpr(const core::TypedExprPtr& expr) {
+  if (expr->type()->isDecimal()) {
+    // Division by zero and overflow.
+    return true;
+  }
+  if (expr->isCallKind()) {
+    std::string_view name = expr->asUnchecked<core::CallTypedExpr>()->name();
+    const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
+    if (name.starts_with(prefix)) {
+      name.remove_prefix(prefix.size());
+    }
+    // An index out of bounds, or element_at's index 0.
+    if (name == "subscript" || name == "element_at") {
+      return true;
+    }
+    // Presto's date_add(unit, value, date), with a value outside INTEGER.
+    if (name == "date_add" && expr->inputs().size() == 3) {
+      return true;
+    }
+    // A date plus an interval that is not a whole number of days.
+    if (name == "plus" && expr->type()->isDate()) {
+      return true;
+    }
+  }
+  return std::any_of(
+      expr->inputs().begin(), expr->inputs().end(), hasFailFastSubexpr);
 }
 
 bool canExprRunOnGpu(

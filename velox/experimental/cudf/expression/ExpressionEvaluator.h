@@ -229,8 +229,9 @@ class ConjunctExpression : public CudfExpression {
 
   void close() override;
 
-  /// True for an AND or OR that FunctionExpression can evaluate. Does not
-  /// recursively check the operands.
+  /// True for an AND or OR that FunctionExpression can evaluate and whose
+  /// operands after the first hold a fail-fast kernel (hasFailFastSubexpr).
+  /// Does not check whether the operands can be evaluated.
   static bool canEvaluate(
       const core::TypedExprPtr& expr,
       const core::QueryConfig& config);
@@ -337,6 +338,13 @@ bool containsCastFromVarchar(
 
 /// Returns true if 'expr' holds a CAST or TRY_CAST from TIMESTAMP to VARCHAR.
 bool containsTimestampToVarcharCast(const core::TypedExprPtr& expr);
+
+/// Returns true if a node in 'expr' runs a kernel that fails the whole batch
+/// on one row's value, e.g. a DECIMAL divide by zero or an array subscript out
+/// of bounds, where Velox CPU fails only if it evaluates that row. Each such
+/// kernel passes a null row, so an evaluator that nulls the rows it must not
+/// evaluate keeps them from failing.
+bool hasFailFastSubexpr(const core::TypedExprPtr& expr);
 
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.

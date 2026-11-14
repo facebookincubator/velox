@@ -279,16 +279,6 @@ bool isOpAndInputsSupported(
   return false;
 }
 
-// True if any node under `expr` produces a DECIMAL. Such nodes are always
-// precomputed, and their kernels fail fast on division by zero and overflow.
-bool hasDecimalSubexpr(const core::TypedExprPtr& expr) {
-  if (expr->type()->isDecimal()) {
-    return true;
-  }
-  return std::any_of(
-      expr->inputs().begin(), expr->inputs().end(), hasDecimalSubexpr);
-}
-
 // not special form, name = function, so unsupported for astpure
 // "in", "between", "isnotnull" are not special form, but supported for astpure
 // Check if the expression (name + input types) is supported in AST.
@@ -370,13 +360,14 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
     if (binaryOps.find(name) != binaryOps.end()) {
       // Precomputed operands are materialized over every row, so an operand
       // after the first would also run on the rows the ones before it decide,
-      // e.g. q / d on the zero rows of `d <> 0 AND q / d > 1`. Leave such
+      // e.g. q / d on the zero rows of `d <> 0 AND q / d > 1`, or a[3] on the
+      // short arrays of `cardinality(a) >= 3 AND a[3] > 0`. Leave such
       // conjuncts to ConjunctExpression, which narrows each operand's rows.
       if ((name == "and" || name == "or") && len == 2 &&
           std::any_of(
               call->inputs().begin() + 1,
               call->inputs().end(),
-              hasDecimalSubexpr)) {
+              hasFailFastSubexpr)) {
         return false;
       }
       return len == 2 &&
