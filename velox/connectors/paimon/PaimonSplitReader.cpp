@@ -146,10 +146,11 @@ uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
     if (!ensureFileSplitReader()) {
       return 0;
     }
-    if (newFile && fileSplit_->fileFormat == dwio::common::FileFormat::NIMBLE) {
-      // A previous batch may retain reader-private vectors in physical file
-      // order. Do not reuse them for a file with a different column layout.
-      output.reset();
+    if (newFile && output &&
+        fileSplit_->fileFormat == dwio::common::FileFormat::NIMBLE) {
+      // Keep the logical output required by selective readers, but discard
+      // batch-reader private vectors tied to the previous physical layout.
+      output->asUnchecked<RowVector>()->rawVectorForBatchReader().reset();
     }
     // TODO: Apply deletion vectors using original physical file row positions.
     // TODO: Decode internal columns and row kinds for primary-key/changelog
