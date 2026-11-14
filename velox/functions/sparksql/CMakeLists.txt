@@ -28,6 +28,7 @@ velox_add_library(
   velox_functions_spark_impl
   ArrayGetFunction.cpp
   ArraySort.cpp
+  ArrayUnion.cpp
   AssertNotNull.cpp
   SequenceFunction.cpp
   Transform.cpp
@@ -69,6 +70,7 @@ velox_add_library(
   ArrayMinMaxFunction.h
   ArrayPrepend.h
   ArraySort.h
+  ArrayUnion.h
   ArraysOverlap.h
   AssertNotNull.h
   Base64Function.h
