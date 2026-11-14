@@ -72,7 +72,12 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
         PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
       )
     endif()
-    target_link_libraries(velox_paimon_connector_test nimble_writer nimble_velox_selective)
+    target_link_libraries(
+      velox_paimon_connector_test
+      nimble_writer
+      nimble_velox_selective
+      nimble_velox_reader_factory
+    )
   endif()
 
   add_executable(velox_paimon_split_test PaimonConnectorSplitTest.cpp)
