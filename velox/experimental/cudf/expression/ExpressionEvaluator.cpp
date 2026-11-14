@@ -3734,20 +3734,6 @@ bool isConjunctFunction(const core::TypedExprPtr& expr) {
   return name == "and" || name == "or";
 }
 
-/// Maps each entry of subexpressions_ back to its expr_->inputs() index.
-/// create() drops constant children, so `if(c, x, 1)` yields {0, 1}.
-std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
-  std::vector<size_t> indices;
-  indices.reserve(expr->inputs().size());
-  for (size_t input = 0; input < expr->inputs().size(); ++input) {
-    const auto& child = expr->inputs()[input];
-    if (!child->isConstantKind() && !child->isInputKind()) {
-      indices.push_back(input);
-    }
-  }
-  return indices;
-}
-
 /// Rows where \p condition is anything but a valid \p value, nulls included.
 cuda::device_buffer<std::byte> makeRowMaskExcept(
     const cudf::column_view& condition,
@@ -3901,52 +3887,8 @@ ColumnOrView FunctionExpression::eval(
   if (function_) {
     std::vector<ColumnOrView> subexprResults;
     subexprResults.reserve(subexpressions_.size());
-
-    // Borrowed by the masked views until after function_->eval.
-    std::vector<MaskedInputs> branchInputs;
-    std::vector<cuda::device_buffer<std::byte>> branchRowMasks;
-
-    // Operand 0 is the condition, 1 and 2 the branches. Not positionally
-    // aligned with subexpressions_, which omits constant branches.
-    const auto operandIndex = isConditionalFunction(expr_)
-        ? conditionalOperandIndex(expr_)
-        : std::vector<size_t>{};
-
-    const bool maskBranches = operandIndex.size() == subexpressions_.size() &&
-        !operandIndex.empty() && operandIndex.front() == 0;
-
-    if (maskBranches) {
-      // Branches are materialized over every row before copy_if_else selects,
-      // so a fail-fast kernel in one would abort the batch over rows the
-      // conditional discards. Hand each branch inputs whose null mask excludes
-      // the rows it does not supply; the kernels already skip null rows. Velox
-      // CPU narrows a SelectivityVector per branch instead.
-      auto condition = subexpressions_[0]->eval(inputColumnViews, stream, mr);
-      const auto conditionView = asView(condition);
-      subexprResults.push_back(std::move(condition));
-
-      branchInputs.reserve(subexpressions_.size() - 1);
-      branchRowMasks.reserve(subexpressions_.size() - 1);
-      for (size_t branch = 1; branch < subexpressions_.size(); ++branch) {
-        branchRowMasks.push_back(makeBranchRowMask(
-            conditionView,
-            /*takeWhenTrue=*/operandIndex[branch] == 1,
-            stream,
-            mr));
-        branchInputs.push_back(maskInputRows(
-            inputColumnViews,
-            reinterpret_cast<const cudf::bitmask_type*>(
-                branchRowMasks.back().data()),
-            stream,
-            mr));
-        subexprResults.push_back(
-            subexpressions_[branch]->eval(
-                branchInputs.back().views, stream, mr));
-      }
-    } else {
-      for (const auto& subexpr : subexpressions_) {
-        subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
-      }
+    for (const auto& subexpr : subexpressions_) {
+      subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
     }
 
     auto result = function_->eval(subexprResults, stream, mr);
@@ -4056,6 +3998,93 @@ bool ConjunctExpression::canEvaluate(
     const core::TypedExprPtr& expr,
     const core::QueryConfig& config) {
   return isConjunctFunction(expr) &&
+      FunctionExpression::canEvaluate(expr, config);
+}
+
+std::shared_ptr<ConditionalExpression> ConditionalExpression::create(
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
+  auto node = std::make_shared<ConditionalExpression>();
+  node->expr_ = expr;
+  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
+  node->function_ = createCudfFunction(name, expr, pool, config);
+  VELOX_CHECK_NOT_NULL(
+      node->function_, "No cuDF function for {}", expr->toString());
+  const auto& inputs = expr->inputs();
+  VELOX_CHECK(
+      !inputs[0]->isConstantKind() && !inputs[0]->isInputKind(),
+      "The condition should be computed: {}",
+      expr->toString());
+  for (size_t input = 0; input < inputs.size(); ++input) {
+    if (inputs[input]->isConstantKind() || inputs[input]->isInputKind()) {
+      continue;
+    }
+    node->subexpressions_.push_back(
+        createCudfExpression(inputs[input], inputRowSchema, pool, config));
+    if (input > 0) {
+      node->isThenBranch_.push_back(input == 1);
+    }
+  }
+  return node;
+}
+
+ColumnOrView ConditionalExpression::eval(
+    std::vector<cudf::column_view> inputColumnViews,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr,
+    bool finalize) {
+  std::vector<ColumnOrView> operandResults;
+  operandResults.reserve(subexpressions_.size());
+  // Borrowed by the masked views until after function_->eval.
+  std::vector<cuda::device_buffer<std::byte>> branchRowMasks;
+  branchRowMasks.reserve(isThenBranch_.size());
+  std::vector<MaskedInputs> branchInputs;
+  branchInputs.reserve(isThenBranch_.size());
+
+  auto condition = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+  const auto conditionView = asView(condition);
+  operandResults.push_back(std::move(condition));
+
+  // Each branch sees the rows it does not supply as null, and its kernels
+  // already skip null rows.
+  for (size_t branch = 0; branch < isThenBranch_.size(); ++branch) {
+    branchRowMasks.push_back(makeBranchRowMask(
+        conditionView, /*takeWhenTrue=*/isThenBranch_[branch], stream, mr));
+    branchInputs.push_back(maskInputRows(
+        inputColumnViews,
+        reinterpret_cast<const cudf::bitmask_type*>(
+            branchRowMasks.back().data()),
+        stream,
+        mr));
+    operandResults.push_back(
+        subexpressions_[branch + 1]->eval(
+            branchInputs.back().views, stream, mr));
+  }
+
+  auto result = function_->eval(operandResults, stream, mr);
+  if (finalize) {
+    const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
+    auto resultView = asView(result);
+    if (resultView.type() != requestedType) {
+      return cudf::cast(resultView, requestedType, stream, mr);
+    }
+  }
+  return result;
+}
+
+void ConditionalExpression::close() {
+  function_.reset();
+  subexpressions_.clear();
+}
+
+bool ConditionalExpression::canEvaluate(
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config) {
+  return isConditionalFunction(expr) && !expr->inputs().empty() &&
+      !expr->inputs()[0]->isConstantKind() &&
+      !expr->inputs()[0]->isInputKind() &&
       FunctionExpression::canEvaluate(expr, config);
 }
 

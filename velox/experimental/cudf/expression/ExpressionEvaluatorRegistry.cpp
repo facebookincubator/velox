@@ -93,6 +93,24 @@ void ensureBuiltinExpressionEvaluatorsRegistered() {
       },
       /*overwrite=*/false);
 
+  // Above the function evaluator, which would evaluate both branches over every
+  // row. The AST and JIT evaluators do not take IF or SWITCH.
+  const int kConditionalPriority = 60;
+
+  registerCudfExpressionEvaluator(
+      "conditional",
+      kConditionalPriority,
+      [](const core::TypedExprPtr& expr, const core::QueryConfig& config) {
+        return ConditionalExpression::canEvaluate(expr, config);
+      },
+      [](const core::TypedExprPtr& expr,
+         const RowTypePtr& row,
+         memory::MemoryPool* pool,
+         const core::QueryConfig& config) {
+        return ConditionalExpression::create(expr, row, pool, config);
+      },
+      /*overwrite=*/false);
+
   registeredBuiltins = true;
 }
 

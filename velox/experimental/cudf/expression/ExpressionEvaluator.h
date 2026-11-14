@@ -243,6 +243,46 @@ class ConjunctExpression : public CudfExpression {
   std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
 };
 
+/// Evaluates IF and single-branch SWITCH, handing each branch only the rows
+/// it supplies, the rows Velox CPU's SwitchExpr evaluates it on.
+/// SwitchFunction selects between branches that were each materialized over
+/// every row, so otherwise a fail-fast kernel in one branch would abort the
+/// batch over rows the condition discards.
+class ConditionalExpression : public CudfExpression {
+ public:
+  /// Builds the function and its operand evaluators with the session config.
+  static std::shared_ptr<ConditionalExpression> create(
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& inputRowSchema,
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
+
+  ColumnOrView eval(
+      std::vector<cudf::column_view> inputColumnViews,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr,
+      bool finalize = false) override;
+
+  void close() override;
+
+  /// True for an IF or SWITCH that FunctionExpression can evaluate. Does not
+  /// recursively check the operands.
+  static bool canEvaluate(
+      const core::TypedExprPtr& expr,
+      const core::QueryConfig& config);
+
+ private:
+  core::TypedExprPtr expr_;
+  std::shared_ptr<CudfFunction> function_;
+  // The condition followed by the non-constant branches; SwitchFunction
+  // inlines the constants.
+  std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+  // Whether each branch in subexpressions_[1..] is the THEN branch. Branch
+  // positions shift when a constant branch is dropped, so `if(c, 1, x)` keeps
+  // only the ELSE branch.
+  std::vector<bool> isThenBranch_;
+};
+
 /// Create a CudfExpression from a TypedExpr, selecting the best evaluator.
 /// Does not apply expression-level optimization; callers that need
 /// optimization should run expression::optimize at the top-level entry point
