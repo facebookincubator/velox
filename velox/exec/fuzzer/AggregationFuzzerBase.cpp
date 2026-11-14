@@ -16,6 +16,8 @@
 #include "velox/exec/fuzzer/AggregationFuzzerBase.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
+#include <folly/Conv.h>
+#include <limits>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -55,6 +57,12 @@ DEFINE_double(
     0.1,
     "Chance of adding a null constant to the plan, or null value in a vector "
     "(expressed as double from 0 to 1).");
+
+DEFINE_double(
+    pooled_grouping_key_ratio,
+    0.3,
+    "Probability of drawing grouping keys from a pool shared across batches "
+    "(0 disables pooling, 1 always uses a pool).");
 
 DEFINE_string(
     repro_persist_path,
@@ -283,13 +291,46 @@ std::shared_ptr<InputGenerator> AggregationFuzzerBase::findInputGenerator(
 std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
     std::vector<std::string> names,
     std::vector<TypePtr> types,
-    const std::optional<CallableSignature>& signature) {
+    const std::optional<CallableSignature>& signature,
+    const std::vector<std::string>& groupingKeys) {
   std::shared_ptr<InputGenerator> generator;
   if (signature.has_value()) {
     generator = findInputGenerator(signature.value());
   }
 
-  const auto size = vectorFuzzer_.getOptions().vectorSize;
+  VELOX_CHECK_EQ(names.size(), types.size());
+  VELOX_USER_CHECK_GE(FLAGS_pooled_grouping_key_ratio, 0.0);
+  VELOX_USER_CHECK_LE(FLAGS_pooled_grouping_key_ratio, 1.0);
+
+  const auto size =
+      folly::to<vector_size_t>(vectorFuzzer_.getOptions().vectorSize);
+  const uint64_t numRows =
+      static_cast<uint64_t>(size) * static_cast<uint64_t>(FLAGS_num_batches);
+
+  // Build the pool of grouping key values before the batch loop so that every
+  // batch draws from it. Keys fuzzed independently per batch practically never
+  // repeat across batches, and spill files are written at different points in
+  // the input, so the paths that combine equal keys coming from different
+  // spill files stay unreachable.
+  std::vector<VectorPtr> keyPool(types.size());
+  if (!groupingKeys.empty() && numRows > 0 &&
+      vectorFuzzer_.coinToss(FLAGS_pooled_grouping_key_ratio)) {
+    const std::unordered_set<std::string> keyNames{
+        groupingKeys.begin(), groupingKeys.end()};
+    // Span the whole input, not one batch. Merging equal keys across spill
+    // files needs a key to reach several files but not all of them, which
+    // happens when the cardinality is near the number of rows per file, so
+    // the useful values run well past a single batch.
+    const auto maxCardinality =
+        std::min<uint64_t>(numRows, std::numeric_limits<vector_size_t>::max());
+    const auto cardinality =
+        static_cast<vector_size_t>(randomLogUniform(rng_, 1, maxCardinality));
+    for (auto i = 0; i < names.size(); ++i) {
+      if (keyNames.count(names[i]) > 0) {
+        keyPool[i] = vectorFuzzer_.fuzz(types[i], cardinality);
+      }
+    }
+  }
 
   auto inputType = ROW(std::move(names), std::move(types));
   std::vector<RowVectorPtr> input;
@@ -301,8 +342,22 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
           signature->args, vectorFuzzer_, rng_, pool_.get());
     }
 
-    for (auto j = children.size(); j < inputType->size(); ++j) {
-      children.push_back(vectorFuzzer_.fuzz(inputType->childAt(j), size));
+    // All key columns share one index buffer so that the composite key keeps
+    // the pool's cardinality. Indexing each column independently would
+    // multiply the per-column cardinalities back up to one group per row.
+    BufferPtr keyIndices;
+
+    for (auto j = folly::to<uint32_t>(children.size()); j < inputType->size();
+         ++j) {
+      if (keyPool[j] == nullptr) {
+        children.push_back(vectorFuzzer_.fuzz(inputType->childAt(j), size));
+        continue;
+      }
+      if (keyIndices == nullptr) {
+        keyIndices = vectorFuzzer_.fuzzIndices(size, keyPool[j]->size());
+      }
+      children.push_back(
+          BaseVector::wrapInDictionary(nullptr, keyIndices, size, keyPool[j]));
     }
 
     input.push_back(
@@ -504,7 +559,14 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
       builder.spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kAggregationSpillEnabled, true)
-          .config(core::QueryConfig::kMaxSpillRunRows, randInt(32, 1L << 30));
+          .config(
+              core::QueryConfig::kMaxSpillRunRows, randomMaxSpillRunRows(rng_))
+          .config(
+              core::QueryConfig::kSpillNumMaxMergeFiles,
+              randomSpillNumMaxMergeFiles(rng_))
+          .config(
+              core::QueryConfig::kSpillNumPartitionBits,
+              randomSpillNumPartitionBits(rng_));
       // Randomized the spill injection with a percentage less than 100.
       spillPct = 20;
     }

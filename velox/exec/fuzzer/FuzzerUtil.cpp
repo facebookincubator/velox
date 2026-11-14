@@ -16,6 +16,7 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include <re2/re2.h>
 #include <filesystem>
+#include <limits>
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -444,6 +445,47 @@ std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
         static_cast<std::chrono::milliseconds>(reqTimeoutMs));
     LOG(INFO) << "Using Presto as the reference DB.";
   }
+}
+
+std::string randomSpillNumMaxMergeFiles(fuzzer::FuzzerGenerator& rng) {
+  if (fuzzer::coinToss(rng, 0.5)) {
+    return "0";
+  }
+  return std::to_string(fuzzer::rand<uint32_t>(rng, 2, 8));
+}
+
+uint64_t
+randomLogUniform(fuzzer::FuzzerGenerator& rng, uint64_t min, uint64_t max) {
+  VELOX_CHECK_GT(min, 0);
+  VELOX_CHECK_LE(min, max);
+  // Band b spans [2^b, 2^(b+1) - 1]. 63 is the last band a uint64_t can hold,
+  // so stop there instead of evaluating 1ULL << 64.
+  constexpr uint32_t kMaxBand{63};
+  uint32_t lowBand{0};
+  while ((lowBand < kMaxBand) && ((1ULL << (lowBand + 1)) <= min)) {
+    ++lowBand;
+  }
+  uint32_t highBand{lowBand};
+  while ((highBand < kMaxBand) && ((1ULL << (highBand + 1)) <= max)) {
+    ++highBand;
+  }
+  const auto band = fuzzer::rand<uint32_t>(rng, lowBand, highBand);
+  const uint64_t bandEnd = band == kMaxBand
+      ? std::numeric_limits<uint64_t>::max()
+      : (1ULL << (band + 1)) - 1;
+  return fuzzer::rand<uint64_t>(
+      rng, std::max<uint64_t>(min, 1ULL << band), std::min(max, bandEnd));
+}
+
+std::string randomMaxSpillRunRows(fuzzer::FuzzerGenerator& rng) {
+  return std::to_string(randomLogUniform(rng, 32, 1ULL << 30));
+}
+
+std::string randomSpillNumPartitionBits(fuzzer::FuzzerGenerator& rng) {
+  // 0 is excluded: SpillConfig::spillLevel() divides by the partition bits, so
+  // a single partition makes any operator that calls exceedSpillLevelLimit()
+  // die with SIGFPE.
+  return std::to_string(fuzzer::rand<uint32_t>(rng, 1, 3));
 }
 
 void logVectors(const std::vector<RowVectorPtr>& vectors) {
