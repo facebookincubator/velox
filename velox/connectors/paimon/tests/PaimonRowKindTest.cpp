@@ -111,6 +111,8 @@ TEST(PaimonRowKindTest, changelogModeStreamAndFormat) {
       "FULL_COMPACTION");
 }
 
-TEST(PaimonRowKindTest, rowKindColumnName) {
-  EXPECT_EQ(kRowKindColumn, "_rowkind");
+TEST(PaimonRowKindTest, specialColumnNames) {
+  EXPECT_EQ(kKeyColumnPrefix, "_KEY_");
+  EXPECT_EQ(kSequenceNumberColumn, "_SEQUENCE_NUMBER");
+  EXPECT_EQ(kValueKindColumn, "_VALUE_KIND");
 }

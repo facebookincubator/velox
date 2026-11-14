@@ -38,14 +38,7 @@ PaimonDataSource::PaimonDataSource(
           ioExecutor,
           connectorQueryCtx,
           paimonConfig),
-      paimonTableHandle_(tableHandle) {
-  // TODO: Implement primary-key read semantics.
-  VELOX_USER_CHECK_EQ(
-      tableHandle->tableType(),
-      PaimonTableType::kAppendOnly,
-      "Paimon same-schema append reader does not support primary-key tables; "
-      "primary-key reading is not implemented yet");
-}
+      paimonTableHandle_(tableHandle) {}
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   auto paimonSplit = checkedPointerCast<PaimonConnectorSplit>(split);
@@ -53,33 +46,25 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       paimonSplit->tableType(),
       paimonTableHandle_->tableType(),
       "Paimon split table type does not match table handle");
-  VELOX_USER_CHECK(
-      paimonSplit->rawConvertible(),
-      "Paimon same-schema append reader requires rawConvertible=true; "
-      "merge-on-read and data-evolution column merging are not implemented yet");
+  // Changelog files serve streaming reads, which return row kinds.
   for (const auto& file : paimonSplit->dataFiles()) {
     VELOX_USER_CHECK_EQ(
         file.type,
         PaimonDataFile::Type::kData,
-        "Paimon reader requires data files; changelog reading is not implemented yet");
+        "Paimon reader does not support changelog files: {}",
+        file.path);
   }
+  VELOX_USER_CHECK(
+      paimonSplit->rawConvertible(),
+      "Paimon same-schema append reader requires rawConvertible=true; "
+      "merge-on-read and data-evolution column merging are not implemented yet");
   paimonSplit_ = std::move(paimonSplit);
 
   // Use the first file to enter the FileDataSource scan pipeline;
   // PaimonSplitReader keeps the full file list.
-  const auto& firstFile = paimonSplit_->dataFiles().front();
-  auto firstFileSplit = std::make_shared<connector::FileConnectorSplit>(
-      paimonSplit_->connectorId,
-      firstFile.path,
-      paimonSplit_->fileFormat(),
-      /*_start=*/0,
-      /*_length=*/std::numeric_limits<uint64_t>::max(),
-      /*splitWeight=*/0,
-      /*cacheable=*/true,
-      /*_properties=*/std::nullopt,
-      paimonSplit_->partitionKeys());
-
-  connector::FileDataSource::addSplit(std::move(firstFileSplit));
+  connector::FileDataSource::addSplit(
+      PaimonSplitReader::makeFileConnectorSplit(
+          *paimonSplit_, paimonSplit_->dataFiles().front()));
 }
 
 std::unique_ptr<connector::FileSplitReader>
