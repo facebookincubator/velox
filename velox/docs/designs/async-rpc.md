@@ -16,6 +16,38 @@ That forces three decisions, and most of what follows is mechanism for them:
 This document describes the shape the pieces form;
 `develop/async-rpc-functions.rst` is the how-to for writing a function.
 
+## Flow-control policy
+
+`rpc.flow_control_policy` selects how a query's rate limiters adapt their
+window: `WINDOW_AIMD`, the default, or experimental `SMART_PROBING`.
+`SMART_PROBING` takes effect only for adaptive `PER_ROW` execution of a
+function that returns capacity retries; any other query runs `WINDOW_AIMD`.
+Limiters are keyed by policy, so a `SMART_PROBING` query gets its own limiter
+per backend, with its own ceiling, and `WINDOW_AIMD` queries are unaffected.
+
+`SMART_PROBING` admits as `WINDOW_AIMD` does until the first capacity
+rejection, except that each acquisition takes at most four units before the
+first service sample, and that first cut halves the largest population charged
+during startup rather than an unused initial window.
+
+After that cut the window keeps an integral baseline B and grows it only
+through probes. A probe is the one admission beyond B, sent once B clean
+successes have arrived since the last change and no other probe is in flight;
+each acquisition then takes one unit. A successful probe raises B by one, so
+growth stays at one unit per round. A failed probe withdraws that unit without
+cutting B. After n failures at level L, the next probe there waits
+min(2L², L·2^(n−1)) clean successes, and a level at or below B forgets one
+failure after that many clean successes. While a probe is in flight, the first
+fresh capacity rejection is charged to it; every other rejection cuts the
+window as `WINDOW_AIMD` does, and a rejection of work admitted before the last
+cut is ignored as stale. A rejection the function does not name as a capacity
+limit, such as a rate quota or one without a retry hint, gets `WINDOW_AIMD`'s
+cut and teaches the probing state nothing. While the
+window is below one unit, `WINDOW_AIMD`'s paced recovery applies.
+
+Under `SMART_PROBING` the shared limiter owns retry backoff while it can still
+back off; `WINDOW_AIMD` also halves the driver window on every overloaded retry.
+
 ## Layering
 
 Four responsibilities, separated by what each is in a position to know:

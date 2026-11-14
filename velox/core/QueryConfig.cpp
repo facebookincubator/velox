@@ -280,6 +280,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionAsyncGrowthMaxWindow);
 
     // RPC adaptive rate limiter.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcFlowControlPolicy);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterAdaptiveEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMinLimit);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);

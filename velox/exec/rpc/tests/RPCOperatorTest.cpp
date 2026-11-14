@@ -27,6 +27,7 @@
 #include "velox/exec/rpc/RPCOperator.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
+#include "velox/exec/rpc/RpcErrorClassification.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
 #include "velox/exec/rpc/tests/DemoRPCFunction.h"
 #include "velox/exec/rpc/tests/TextOutput.h"
@@ -40,8 +41,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include "velox/exec/Cursor.h"
@@ -194,6 +198,170 @@ class OverloadedAttemptsRPCFunction : public DemoAsyncRPCFunction {
       futures.emplace_back(row, folly::makeSemiFuture(std::move(response)));
     });
     return futures;
+  }
+};
+
+class HeldPacedRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static constexpr std::string_view kAdmissionKey = "held_paced_rpc";
+
+  explicit HeldPacedRPCFunction(std::string key = std::string{kAdmissionKey})
+      : key_(std::move(key)) {}
+
+  std::string name() const override {
+    return key_;
+  }
+
+  std::string admissionKey() const override {
+    return key_;
+  }
+
+  bool mayReturnCapacityRetries() const override {
+    return true;
+  }
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        futures;
+    rows.applyToSelected([&](vector_size_t row) {
+      auto response = RPCResponse::ok(
+          0, makeTextPayload("demo: " + prompts->valueAt(row).str()));
+      auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+      futures.emplace_back(row, std::move(future));
+      std::unique_lock<std::mutex> lock(mutex_);
+      ++dispatches_;
+      if (!released_) {
+        held_.emplace_back(std::move(promise), std::move(response));
+        lock.unlock();
+        dispatchChanged_.notify_all();
+        return;
+      }
+      lock.unlock();
+      promise.setValue(std::move(response));
+      dispatchChanged_.notify_all();
+    });
+    return futures;
+  }
+
+  bool waitForDispatches(int64_t count) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return dispatchChanged_.wait_for(
+        lock, std::chrono::seconds{5}, [&]() { return dispatches_ >= count; });
+  }
+
+  int64_t numDispatches() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dispatches_;
+  }
+
+  void releaseResponses() {
+    std::vector<std::pair<folly::Promise<RPCResponse>, RPCResponse>> responses;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      released_ = true;
+      responses.swap(held_);
+    }
+    for (auto& [promise, response] : responses) {
+      promise.setValue(std::move(response));
+    }
+  }
+
+ private:
+  const std::string key_;
+  std::mutex mutex_;
+  std::condition_variable dispatchChanged_;
+  int64_t dispatches_{0};
+  bool released_{false};
+  std::vector<std::pair<folly::Promise<RPCResponse>, RPCResponse>> held_;
+};
+
+class FirstCapacityRetryRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  explicit FirstCapacityRetryRPCFunction(
+      std::string key,
+      int32_t inPlaceRetries = 0,
+      std::chrono::milliseconds retryAfter = std::chrono::milliseconds{1})
+      : key_(std::move(key)),
+        inPlaceRetries_(inPlaceRetries),
+        retryAfter_(retryAfter) {}
+
+  std::string name() const override {
+    return key_;
+  }
+
+  std::string admissionKey() const override {
+    return key_;
+  }
+
+  bool mayReturnCapacityRetries() const override {
+    return true;
+  }
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        futures;
+    rows.applyToSelected([&](vector_size_t row) {
+      auto response = RPCResponse::ok(
+          0, makeTextPayload("demo: " + prompts->valueAt(row).str()));
+      if (attempts.fetch_add(1) == 0) {
+        if (rejection == FirstRejection::kException) {
+          futures.emplace_back(
+              row,
+              folly::makeSemiFuture<RPCResponse>(
+                  folly::make_exception_wrapper<RpcClassifiedError>(
+                      velox::rpc::RPCErrorKind::kRateLimited,
+                      "first rejection")));
+          return;
+        }
+        response = RPCResponse::failed(
+            0, velox::rpc::RPCErrorKind::kRateLimited, "first capacity retry");
+        if (rejection == FirstRejection::kHint) {
+          response.setCapacityRetry(
+              {.cause = cause,
+               .retryAfter = retryAfter_,
+               .maxRetries = 1,
+               .numInPlaceRetries = inPlaceRetries_});
+        }
+      }
+      futures.emplace_back(row, folly::makeSemiFuture(std::move(response)));
+    });
+    return futures;
+  }
+
+  // How the first attempt is rejected.
+  enum class FirstRejection {
+    // A failed response with a retry hint naming 'cause'.
+    kHint,
+    // A failed response without a retry hint.
+    kUnhinted,
+    // An exception classified as a rate limit.
+    kException,
+  };
+
+  std::atomic<int64_t> attempts{0};
+  // Set before the query runs.
+  velox::rpc::CapacityRetryCause cause{
+      velox::rpc::CapacityRetryCause::kCapacity};
+  FirstRejection rejection{FirstRejection::kHint};
+
+ private:
+  const std::string key_;
+  const int32_t inPlaceRetries_;
+  const std::chrono::milliseconds retryAfter_;
+};
+
+class ConservativeRetryRPCFunction : public HeldPacedRPCFunction {
+ public:
+  std::string name() const override {
+    return "conservative_retry_rpc";
   }
 };
 
@@ -911,6 +1079,74 @@ class RPCOperatorTest : public OperatorTestBase {
     };
   }
 
+  void assertCapacityRetryBackoff(
+      const std::string& key,
+      const std::unordered_map<std::string, std::string>& session,
+      bool sharedAdaptive,
+      int64_t flowControlPolicy,
+      std::optional<int64_t> minimumSharedCapacity = std::nullopt) {
+    SCOPED_TRACE(key);
+    auto function = std::make_shared<FirstCapacityRetryRPCFunction>(key);
+    AsyncRPCFunctionRegistry::registerFunction(
+        function->name(),
+        [function]() { return function; },
+        DemoAsyncRPCFunction::signatures());
+    auto input = makeRowVector(
+        {"prompt"}, {makeFlatVector<StringView>({"first", "second", "third"})});
+    auto plan = makeRPCNode(
+        PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+    std::shared_ptr<Task> task;
+    const auto result =
+        AssertQueryBuilder(plan).maxDrivers(1).configs(session).copyResults(
+            pool(), task);
+    ASSERT_EQ(result->size(), 3);
+    EXPECT_EQ(function->attempts.load(), 4);
+    auto expectedPrompts =
+        std::unordered_set<std::string>{"first", "second", "third"};
+    const auto* prompts =
+        result->childAt(0)->asChecked<SimpleVector<StringView>>();
+    const auto* values =
+        result->childAt(1)->asChecked<SimpleVector<StringView>>();
+    for (vector_size_t row = 0; row < result->size(); ++row) {
+      ASSERT_FALSE(prompts->isNullAt(row));
+      ASSERT_FALSE(values->isNullAt(row));
+      const auto prompt = prompts->valueAt(row).str();
+      EXPECT_EQ(expectedPrompts.erase(prompt), 1);
+      EXPECT_EQ(values->valueAt(row).str(), "demo: " + prompt);
+    }
+    EXPECT_TRUE(expectedPrompts.empty());
+    const auto stats = toPlanStats(task->taskStats());
+    const auto& custom = stats.at(plan->id()).customStats;
+    EXPECT_EQ(custom.at(RPCOperator::kRpcRequestsDispatched).sum, 3);
+    EXPECT_EQ(custom.at(RPCOperator::kRpcAttemptsDispatched).sum, 4);
+    EXPECT_EQ(custom.at(RPCOperator::kRpcResponsesReceived).sum, 3);
+    EXPECT_EQ(custom.at(RPCOperator::kRpcErrorCount).sum, 0);
+    EXPECT_EQ(custom.at(RPCOperator::kRpcCapacityRetries).sum, 1);
+    // Only SMART_PROBING leaves the backoff to an adaptive shared limiter;
+    // WINDOW_AIMD halves the driver window as well.
+    const bool smartProbing = flowControlPolicy ==
+        static_cast<int64_t>(RPCFlowControlPolicy::kSmartProbing);
+    EXPECT_EQ(
+        custom.count(RPCOperator::kRpcCongestionOverloadShrinks),
+        sharedAdaptive && smartProbing ? 0 : 1);
+    EXPECT_EQ(
+        custom.at(RPCOperator::kRpcFlowControlEffectivePolicy).max,
+        flowControlPolicy);
+    if (minimumSharedCapacity.has_value()) {
+      EXPECT_EQ(
+          custom.at(RPCOperator::kRpcRateLimiterMinCap).min,
+          minimumSharedCapacity.value());
+    } else if (!sharedAdaptive) {
+      EXPECT_EQ(custom.at(RPCOperator::kRpcRateLimiterMinCap).min, 64);
+    } else if (flowControlPolicy == 0) {
+      EXPECT_LT(custom.at(RPCOperator::kRpcRateLimiterMinCap).min, 64);
+    } else {
+      EXPECT_LT(
+          custom.at(RPCOperator::kRpcRateLimiterMinLimitMilli).min,
+          custom.at(RPCOperator::kRpcRateLimiterHardLimit).max * 1'000);
+    }
+  }
+
   // Returns whether the query's RPC operator ran under a limiter scoped to its
   // own policy rather than the backend's shared limiter.
   static bool ranOnPolicyScopedLimiter(
@@ -999,6 +1235,223 @@ class RPCOperatorTest : public OperatorTestBase {
         0);
   }
 };
+
+TEST_F(RPCOperatorTest, capacityRetryBackoffAtDefaultWindowFloor) {
+  const std::string key{"capacity_retry_default_window_floor"};
+  RPCRateLimiter::Config policy{
+      .adaptive = true,
+      .ceiling = 200,
+      .floor = 50,
+  };
+  auto* limiter =
+      RPCRateLimiterRegistry::global().getForPolicy(key, policy).limiter;
+  for (int32_t cut = 0; cut < 2; ++cut) {
+    auto reserved = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(reserved.size(), 1);
+    auto lease = limiter->makeLease(std::move(reserved));
+    EXPECT_TRUE(lease->completeAndRelease(true).sharedOverloadHandled);
+  }
+  ASSERT_EQ(limiter->stats().capacity, 50);
+
+  auto session = sessionFor({.adaptive = true, .ceiling = 200, .floor = 50});
+  session[core::QueryConfig::kRpcCongestionMaxWindow] = "200";
+  // Shared floor and driver fallback are independent backoff observations.
+  assertCapacityRetryBackoff(key, session, false, 0, 50);
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().admissionWaiters, 0);
+}
+
+TEST_F(RPCOperatorTest, capacityRetryDriverBackoffFollowsPolicy) {
+  struct Selection {
+    std::optional<std::string> policyName;
+    bool adaptive;
+    int64_t floor{1};
+  };
+  const std::vector<Selection> selections{
+      {std::nullopt, true},
+      {"WINDOW_AIMD", true},
+      {"SMART_PROBING", true},
+      {std::nullopt, false},
+      {"WINDOW_AIMD", false},
+      {"SMART_PROBING", false},
+      {std::nullopt, true, 64},
+      {"WINDOW_AIMD", true, 64},
+      {"SMART_PROBING", true, 64},
+      {std::nullopt, true, 128},
+      {"WINDOW_AIMD", true, 128},
+      {"SMART_PROBING", true, 128},
+  };
+  int32_t caseIndex = 0;
+  for (const auto& [policyName, adaptive, floor] : selections) {
+    SCOPED_TRACE(
+        fmt::format(
+            "policy={} adaptive={} floor={}",
+            policyName.value_or("default"),
+            adaptive,
+            floor));
+    auto session =
+        sessionFor({.adaptive = adaptive, .ceiling = 64, .floor = floor});
+    session[core::QueryConfig::kRpcCongestionMaxWindow] = "64";
+    if (policyName.has_value()) {
+      session[core::QueryConfig::kRpcFlowControlPolicy] = policyName.value();
+    }
+    const bool window =
+        !policyName.has_value() || policyName.value() == "WINDOW_AIMD";
+    const bool sharedAdaptive = adaptive && floor < 64;
+    const int64_t flowControlPolicy = !adaptive || window ? 0 : 1;
+    assertCapacityRetryBackoff(
+        fmt::format("capacity_retry_backoff_{}", caseIndex++),
+        session,
+        sharedAdaptive,
+        flowControlPolicy,
+        floor >= 64 ? std::optional<int64_t>{64} : std::nullopt);
+  }
+}
+
+// After the first cut SMART_PROBING settles each attempt from its raw
+// callback, before RPCState sees the response, so the operator itself must mark
+// every rejection not named as capacity: it then cuts without recording a
+// failed level.
+TEST_F(RPCOperatorTest, smartProbingRecordsLevelFailureOnlyForNamedCapacity) {
+  using Rejection = FirstCapacityRetryRPCFunction::FirstRejection;
+  struct Case {
+    std::string name;
+    Rejection rejection;
+    velox::rpc::CapacityRetryCause cause;
+    int64_t levelFailures;
+  };
+  const std::vector<Case> cases{
+      {"quota_hint",
+       Rejection::kHint,
+       velox::rpc::CapacityRetryCause::kQuota,
+       0},
+      {"capacity_hint",
+       Rejection::kHint,
+       velox::rpc::CapacityRetryCause::kCapacity,
+       1},
+      {"unnamed_hint",
+       Rejection::kHint,
+       velox::rpc::CapacityRetryCause::kUnknown,
+       0},
+      {"unhinted",
+       Rejection::kUnhinted,
+       velox::rpc::CapacityRetryCause::kUnknown,
+       0},
+      {"exception",
+       Rejection::kException,
+       velox::rpc::CapacityRetryCause::kUnknown,
+       0},
+  };
+  for (const auto& testCase : cases) {
+    const auto key = "smart_raw_" + testCase.name;
+    SCOPED_TRACE(key);
+    auto function = std::make_shared<FirstCapacityRetryRPCFunction>(key);
+    function->rejection = testCase.rejection;
+    function->cause = testCase.cause;
+    AsyncRPCFunctionRegistry::registerFunction(
+        function->name(),
+        [function]() { return function; },
+        DemoAsyncRPCFunction::signatures());
+    auto input =
+        makeRowVector({"prompt"}, {makeFlatVector<StringView>({"first"})});
+    auto plan = makeRPCNode(
+        PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+    auto session = sessionFor({.adaptive = true, .ceiling = 4, .floor = 1});
+    session[core::QueryConfig::kRpcFlowControlPolicy] = "SMART_PROBING";
+    // The first query only installs the operator's policy for this key.
+    function->attempts = 1;
+    AssertQueryBuilder(plan).maxDrivers(1).configs(session).copyResults(pool());
+    auto& limiter = RPCRateLimiterRegistry::global().get(key);
+    {
+      auto tokens = limiter.tryAcquireUpTo(4);
+      ASSERT_EQ(tokens.size(), 4);
+      auto rejected = limiter.makeLease(std::move(tokens.front()));
+      tokens.clear();
+      rejected->completeAndRelease(
+          RPCRateLimiter::Outcome::kOverload, /*handedOff=*/true);
+    }
+    ASSERT_TRUE(limiter.testingProbingSnapshot().cut);
+    ASSERT_EQ(limiter.testingProbingSnapshot().baseline, 2);
+
+    function->attempts = 0;
+    AssertQueryBuilder(plan).maxDrivers(1).configs(session).copyResults(pool());
+    // Every rejection cuts the baseline; only a named capacity rejection fails
+    // level 2.
+    EXPECT_EQ(limiter.testingProbingSnapshot().baseline, 1);
+    EXPECT_EQ(
+        limiter.testingProbingSnapshot().nextLevelFailures,
+        testCase.levelFailures);
+  }
+}
+
+// A function's aggregate congestion verdict carries no capacity hint, so it
+// gets WINDOW_AIMD's cut without starting SMART_PROBING's probing.
+TEST_F(
+    RPCOperatorTest,
+    smartProbingAggregateOverloadVerdictDoesNotStartProbing) {
+  class OverloadVerdictFunction : public DemoAsyncRPCFunction {
+   public:
+    std::string name() const override {
+      return "smart_aggregate_overload_verdict";
+    }
+    std::string admissionKey() const override {
+      return name();
+    }
+    bool mayReturnCapacityRetries() const override {
+      return true;
+    }
+    CongestionSignal evaluateCongestion(
+        const std::vector<RPCResponse>& /*responses*/) const override {
+      return CongestionSignal::kOverloaded;
+    }
+  };
+  auto function = std::make_shared<OverloadVerdictFunction>();
+  AsyncRPCFunctionRegistry::registerFunction(
+      function->name(),
+      [function]() { return function; },
+      DemoAsyncRPCFunction::signatures());
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"first"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+  auto session = sessionFor({.adaptive = true, .ceiling = 4, .floor = 1});
+  session[core::QueryConfig::kRpcFlowControlPolicy] = "SMART_PROBING";
+  AssertQueryBuilder(plan).maxDrivers(1).configs(session).copyResults(pool());
+  auto& limiter = RPCRateLimiterRegistry::global().get(function->name());
+  EXPECT_FALSE(limiter.testingProbingSnapshot().cut);
+}
+
+TEST_F(RPCOperatorTest, terminalCapacityRejectionStillCutsDriverWindow) {
+  // The transport has spent the positive count budget before handing off.
+  auto function = std::make_shared<FirstCapacityRetryRPCFunction>(
+      "terminal_capacity_rejection", 1);
+  AsyncRPCFunctionRegistry::registerFunction(
+      function->name(),
+      [function]() { return function; },
+      DemoAsyncRPCFunction::signatures());
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"first"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+  auto session = sessionFor({.adaptive = true, .ceiling = 64, .floor = 1});
+  session[core::QueryConfig::kRpcCongestionMaxWindow] = "64";
+  std::shared_ptr<Task> task;
+  const auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).configs(session).copyResults(
+          pool(), task);
+  ASSERT_EQ(result->size(), 1);
+  EXPECT_TRUE(result->childAt(1)->isNullAt(0));
+  EXPECT_EQ(function->attempts.load(), 1);
+  const auto stats = toPlanStats(task->taskStats());
+  const auto& custom = stats.at(plan->id()).customStats;
+  EXPECT_EQ(custom.at(RPCOperator::kRpcRequestsDispatched).sum, 1);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcAttemptsDispatched).sum, 1);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcResponsesReceived).sum, 1);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcErrorCount).sum, 1);
+  EXPECT_EQ(custom.count(RPCOperator::kRpcCapacityRetries), 0);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcCongestionOverloadShrinks).sum, 1);
+  EXPECT_LT(custom.at(RPCOperator::kRpcRateLimiterMinCap).min, 64);
+}
 
 /// Runs Values(3 rows) → RPCNode → verifies passthrough + RPC result.
 TEST_F(RPCOperatorTest, basicPerRow) {
@@ -3787,6 +4240,749 @@ TEST_F(RPCOperatorTest, batchExecutionModeReachesTheFunction) {
 
   ASSERT_NE(function, nullptr);
   EXPECT_EQ(function->receivedExecutionMode(), RPCStreamingMode::kBatch);
+}
+
+// Waits up to five seconds for a driver to park on 'limiter'.
+bool waitForAdmissionWaiter(const RPCRateLimiter& limiter) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{5};
+  while (limiter.stats().admissionWaiters == 0) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
+    std::this_thread::yield();
+  }
+  return true;
+}
+
+TEST_F(RPCOperatorTest, boundedWindowAdmissionWaitsForHeldRows) {
+  constexpr int32_t kRows = 4;
+  auto function = std::make_shared<HeldPacedRPCFunction>("held_paced_wake");
+  AsyncRPCFunctionRegistry::registerFunction(
+      function->name(),
+      [function]() { return function; },
+      DemoAsyncRPCFunction::signatures());
+
+  RPCRateLimiter::Config policy{
+      .adaptive = true,
+      .ceiling = 2,
+      .floor = 1,
+      .decreaseFactor = 0.5,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing,
+  };
+  auto* limiter = RPCRateLimiterRegistry::global()
+                      .getForPolicy(function->admissionKey(), policy)
+                      .limiter;
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {StringView("one"),
+           StringView("two"),
+           StringView("three"),
+           StringView("four")})});
+  CursorParameters params;
+  params.planNode = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+  params.maxDrivers = 1;
+  params.queryConfigs = {
+      {core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING"},
+      {core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true"},
+      {core::QueryConfig::kRpcRateLimiterMaxLimit, "2"},
+      {core::QueryConfig::kRpcRateLimiterMinLimit, "1"},
+  };
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+
+  // Held physical rows exhaust capacity and park the remaining admissions.
+  EXPECT_TRUE(function->waitForDispatches(2));
+  EXPECT_EQ(limiter->stats().pending, 2);
+  ASSERT_TRUE(waitForAdmissionWaiter(*limiter));
+  const auto heldStats = toPlanStats(cursor->task()->taskStats());
+  EXPECT_LE(heldStats.at("rpc-0").isBlockedTiming.count, 8);
+  function->releaseResponses();
+
+  int32_t outputRows = 0;
+  while (cursor->moveNext()) {
+    outputRows += cursor->current()->size();
+  }
+  EXPECT_EQ(outputRows, kRows);
+  ASSERT_TRUE(
+      cursor->task()->allDriversClosedFuture().wait(std::chrono::seconds{5}));
+  const auto stats = toPlanStats(cursor->task()->taskStats());
+  // Driver traversal also polls isBlocked while emitting output and finishing.
+  // Count actual parks: at most one admission and one completion per row.
+  EXPECT_LE(
+      stats.at("rpc-0").customStats.at("blockedWaitForRPCTimes").sum,
+      2 * kRows);
+  EXPECT_EQ(
+      stats.at("rpc-0").customStats.at(RPCOperator::kRpcAttemptsDispatched).sum,
+      kRows);
+}
+
+TEST_F(RPCOperatorTest, nonAdaptiveSmartRequestSharesFixedLimiter) {
+  const std::string key = "fixed_shared_policy_gauges";
+  auto function = std::make_shared<HeldPacedRPCFunction>(key);
+  function->releaseResponses();
+  AsyncRPCFunctionRegistry::registerFunction(
+      key,
+      [function]() { return function; },
+      DemoAsyncRPCFunction::signatures());
+  const RPCRateLimiter::Config base{.adaptive = false, .ceiling = 2};
+  auto& registry = RPCRateLimiterRegistry::global();
+  auto* original = registry.getForPolicy(key, base).limiter;
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({StringView("backend")})});
+  auto plan =
+      makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"}, key);
+  for (const auto requested :
+       {RPCFlowControlPolicy::kWindowAimd,
+        RPCFlowControlPolicy::kSmartProbing}) {
+    SCOPED_TRACE(rpcFlowControlPolicyName(requested));
+    std::shared_ptr<Task> task;
+    auto result =
+        AssertQueryBuilder(plan)
+            .maxDrivers(1)
+            .config(
+                core::QueryConfig::kRpcFlowControlPolicy,
+                std::string{rpcFlowControlPolicyName(requested)})
+            .config(core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "false")
+            .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "2")
+            .copyResults(pool(), task);
+    ASSERT_TRUE(task->allDriversClosedFuture().wait(std::chrono::seconds{5}));
+    ASSERT_EQ(result->size(), 1);
+    ASSERT_FALSE(result->childAt(1)->isNullAt(0));
+    EXPECT_EQ(
+        result->childAt(1)->asChecked<SimpleVector<StringView>>()->valueAt(0),
+        StringView("demo: backend"));
+    const auto stats = toPlanStats(task->taskStats());
+    const auto& custom = stats.at("rpc-0").customStats;
+    EXPECT_EQ(
+        custom.at(RPCOperator::kRpcFlowControlRequestedPolicy).sum,
+        static_cast<int64_t>(requested));
+    EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlEffectivePolicy).sum, 0);
+    auto policy = base;
+    policy.flowControlPolicy = requested;
+    EXPECT_EQ(registry.getForPolicy(key, policy).limiter, original);
+  }
+}
+
+TEST_F(RPCOperatorTest, cancelWindowAdmissionWithInflightRows) {
+  auto function = std::make_shared<HeldPacedRPCFunction>("held_paced_cancel");
+  AsyncRPCFunctionRegistry::registerFunction(
+      function->name(),
+      [function]() { return function; },
+      DemoAsyncRPCFunction::signatures());
+  RPCRateLimiter::Config policy{
+      .adaptive = true,
+      .ceiling = 2,
+      .floor = 1,
+      .decreaseFactor = 0.5,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing,
+  };
+  auto* limiter = RPCRateLimiterRegistry::global()
+                      .getForPolicy(function->admissionKey(), policy)
+                      .limiter;
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {StringView("one"),
+           StringView("two"),
+           StringView("three"),
+           StringView("four")})});
+  CursorParameters params;
+  params.planNode = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+  params.maxDrivers = 1;
+  params.queryConfigs = {
+      {core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING"},
+      {core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true"},
+      {core::QueryConfig::kRpcRateLimiterMaxLimit, "2"},
+      {core::QueryConfig::kRpcRateLimiterMinLimit, "1"},
+  };
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+  EXPECT_TRUE(function->waitForDispatches(2));
+  EXPECT_EQ(limiter->stats().pending, 2);
+  ASSERT_TRUE(waitForAdmissionWaiter(*limiter));
+
+  // Cancellation must finish while both the response futures and an
+  // admission wait remain unresolved. Late responses still release leases.
+  auto stopped = cursor->task()->requestCancel();
+  EXPECT_TRUE(std::move(stopped).wait(std::chrono::seconds{5}));
+  function->releaseResponses();
+  EXPECT_EQ(limiter->stats().pending, 0);
+}
+
+TEST_F(RPCOperatorTest, limitedWindowQueryDoesNotRetainDemandForNextQuery) {
+  // LIMIT must close while the first row's retry is still future-due.
+  auto function = std::make_shared<FirstCapacityRetryRPCFunction>(
+      "limited_rate_query_idle", 0, std::chrono::hours{1});
+  AsyncRPCFunctionRegistry::registerFunction(
+      function->name(),
+      [function]() { return function; },
+      DemoAsyncRPCFunction::signatures());
+  const RPCRateLimiter::Config policy{
+      .adaptive = true,
+      .ceiling = 1,
+      .floor = 1,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing,
+  };
+  auto* limiter = RPCRateLimiterRegistry::global()
+                      .getForPolicy(function->admissionKey(), policy)
+                      .limiter;
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"first", "undispatched"})});
+  auto rpcPlan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+  auto limitedPlan =
+      std::make_shared<core::LimitNode>("limit", 0, 1, false, rpcPlan);
+  const auto run = [&](const core::PlanNodePtr& plan) {
+    return AssertQueryBuilder(plan)
+        .maxDrivers(1)
+        .config(core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING")
+        .config(core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true")
+        .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "1")
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "1")
+        .config(core::QueryConfig::kRpcCongestionMaxWindow, "1")
+        .copyResults(pool());
+  };
+  const auto first = run(limitedPlan);
+  ASSERT_EQ(first->size(), 1);
+  EXPECT_EQ(function->attempts.load(), 2);
+  const auto atClose = limiter->stats();
+  EXPECT_EQ(atClose.pending, 0);
+  EXPECT_EQ(atClose.admissionWaiters, 0);
+  EXPECT_FALSE(atClose.admissionTimerArmed);
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().admissionWaiters, 0);
+  auto nextInput =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"next query"})});
+  auto nextPlan = makeRPCNode(
+      PlanBuilder().values({nextInput}).planNode(),
+      {"prompt"},
+      function->name());
+  const auto next = run(nextPlan);
+  EXPECT_EQ(next->size(), 1);
+  EXPECT_EQ(function->attempts.load(), 3);
+  EXPECT_EQ(limiter->stats().admissionWaiters, 0);
+}
+
+TEST_F(RPCOperatorTest, retryCapabilityAloneDoesNotSelectSmartProbing) {
+  RPCRateLimiter::Config policy{
+      .adaptive = true,
+      .ceiling = 100,
+      .floor = 1,
+      .decreaseFactor = 0.5,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing,
+  };
+  auto function = std::make_shared<ConservativeRetryRPCFunction>();
+  AsyncRPCFunctionRegistry::registerFunction(
+      function->name(),
+      [function]() { return function; },
+      DemoAsyncRPCFunction::signatures());
+  auto* active = RPCRateLimiterRegistry::global()
+                     .getForPolicy(function->admissionKey(), policy)
+                     .limiter;
+  auto tokens = active->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+  active->makeLease(std::move(tokens.front()))
+      ->completeAndRelease(/*hardOverload=*/true);
+  ASSERT_EQ(active->stats().limitMilli, 1'000);
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {StringView("one"),
+           StringView("two"),
+           StringView("three"),
+           StringView("four")})});
+  CursorParameters params;
+  params.planNode = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+  params.maxDrivers = 1;
+  params.queryConfigs = {
+      {core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true"},
+      {core::QueryConfig::kRpcRateLimiterMaxLimit, "100"},
+      {core::QueryConfig::kRpcRateLimiterMinLimit, "1"},
+  };
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+  EXPECT_TRUE(function->waitForDispatches(4));
+  function->releaseResponses();
+  int32_t outputRows = 0;
+  while (cursor->moveNext()) {
+    outputRows += cursor->current()->size();
+  }
+  EXPECT_EQ(outputRows, 4);
+  ASSERT_TRUE(
+      cursor->task()->allDriversClosedFuture().wait(std::chrono::seconds{5}));
+  const auto stats = toPlanStats(cursor->task()->taskStats());
+  const auto& custom = stats.at("rpc-0").customStats;
+  EXPECT_EQ(custom.at(RPCOperator::kRpcRateLimiterPolicyScoped).sum, 1);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlRequestedPolicy).sum, 0);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlEffectivePolicy).sum, 0);
+}
+
+TEST_F(RPCOperatorTest, flowControlPolicySelectionIsExplicitAndReported) {
+  for (const auto& [policy, code] :
+       std::vector<std::pair<std::string, int64_t>>{
+           {"WINDOW_AIMD", 0}, {"sMaRt_PrObInG", 1}}) {
+    SCOPED_TRACE(policy);
+    auto function = std::make_shared<HeldPacedRPCFunction>();
+    function->releaseResponses();
+    const auto name = "reported_policy_" + policy;
+    AsyncRPCFunctionRegistry::registerFunction(
+        name,
+        [function]() { return function; },
+        DemoAsyncRPCFunction::signatures());
+    auto input =
+        makeRowVector({"prompt"}, {makeFlatVector<StringView>({"one", "two"})});
+    auto plan =
+        makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"}, name);
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .maxDrivers(1)
+                      .config(core::QueryConfig::kRpcFlowControlPolicy, policy)
+                      .copyResults(pool(), task);
+    ASSERT_EQ(result->size(), 2);
+    const auto stats = toPlanStats(task->taskStats());
+    const auto& custom = stats.at("rpc-0").customStats;
+    EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlRequestedPolicy).sum, code);
+    EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlEffectivePolicy).sum, code);
+    const auto retries = custom.find(RPCOperator::kRpcCapacityRetries);
+    EXPECT_TRUE(retries == custom.end() || retries->second.sum == 0);
+  }
+}
+
+TEST_F(RPCOperatorTest, batchSmartRequestRunsWindowPolicy) {
+  const auto name = "policy_batch_rpc";
+  AsyncRPCFunctionRegistry::registerFunction(
+      name,
+      [] { return std::make_shared<DemoBatchRPCFunction>(); },
+      DemoBatchRPCFunction::signatures());
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"one", "two"})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, name);
+  std::shared_ptr<Task> task;
+  auto result =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING")
+          .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), 2);
+  const auto stats = toPlanStats(task->taskStats());
+  const auto& custom = stats.at("rpc-0").customStats;
+  EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlRequestedPolicy).sum, 1);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlEffectivePolicy).sum, 0);
+}
+
+TEST_F(
+    RPCOperatorTest,
+    probingUnsupportedModesReportRequestedAndEffectivePolicy) {
+  struct Selection {
+    bool batch;
+    bool adaptive;
+    bool capacityRetries;
+  };
+  for (const auto selection :
+       {Selection{true, true, false},
+        Selection{false, true, false},
+        Selection{false, false, true}}) {
+    const auto name = fmt::format(
+        "probing_fallback_{}_{}_{}",
+        selection.batch,
+        selection.adaptive,
+        selection.capacityRetries);
+    SCOPED_TRACE(name);
+    if (selection.batch) {
+      AsyncRPCFunctionRegistry::registerFunction(
+          name,
+          [] { return std::make_shared<DemoBatchRPCFunction>(); },
+          DemoBatchRPCFunction::signatures());
+    } else if (selection.capacityRetries) {
+      auto function = std::make_shared<HeldPacedRPCFunction>(name);
+      function->releaseResponses();
+      AsyncRPCFunctionRegistry::registerFunction(
+          name,
+          [function] { return function; },
+          DemoAsyncRPCFunction::signatures());
+    } else {
+      AsyncRPCFunctionRegistry::registerFunction(
+          name,
+          [] { return std::make_shared<DemoAsyncRPCFunction>(); },
+          DemoAsyncRPCFunction::signatures());
+    }
+    auto input = makeRowVector(
+        {"prompt"}, {makeFlatVector<StringView>({"one", "two", "three"})});
+    const auto source = PlanBuilder().values({input}).planNode();
+    auto plan = selection.batch ? makeBatchRPCNode(source, {"prompt"}, name)
+                                : makeRPCNode(source, {"prompt"}, name);
+    std::shared_ptr<Task> task;
+    const auto result =
+        AssertQueryBuilder(plan)
+            .maxDrivers(1)
+            .config(core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING")
+            .config(
+                core::QueryConfig::kRpcRateLimiterAdaptiveEnabled,
+                selection.adaptive ? "true" : "false")
+            .copyResults(pool(), task);
+    ASSERT_EQ(result->size(), 3);
+    const auto stats = toPlanStats(task->taskStats());
+    const auto& custom = stats.at("rpc-0").customStats;
+    EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlRequestedPolicy).sum, 1);
+    EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlEffectivePolicy).sum, 0);
+    if (selection.capacityRetries) {
+      // Only this function has its own admission key, so its limiter is fresh
+      // and stores exactly the WINDOW_AIMD policy.
+      const auto config = RPCRateLimiterRegistry::global().get(name).config();
+      EXPECT_EQ(config.flowControlPolicy, RPCFlowControlPolicy::kWindowAimd);
+    }
+    EXPECT_EQ(custom.at(RPCOperator::kRpcRequestsDispatched).sum, 3);
+    EXPECT_EQ(
+        custom.at(RPCOperator::kRpcAttemptsDispatched).sum,
+        selection.batch ? 0 : 3);
+    EXPECT_EQ(custom.at(RPCOperator::kRpcResponsesReceived).sum, 3);
+  }
+}
+
+TEST_F(RPCOperatorTest, probingTransportCompoundSuccessCannotBootstrap) {
+  class CompoundFunction : public OverloadedAttemptsRPCFunction {
+   public:
+    std::string name() const override {
+      return "probing_compound_transport_success";
+    }
+    std::string admissionKey() const override {
+      return name();
+    }
+    bool mayReturnCapacityRetries() const override {
+      return true;
+    }
+  };
+  auto function = std::make_shared<CompoundFunction>();
+  AsyncRPCFunctionRegistry::registerFunction(
+      function->name(),
+      [function] { return function; },
+      DemoAsyncRPCFunction::signatures());
+  const RPCRateLimiter::Config config{
+      .adaptive = true,
+      .ceiling = 64,
+      .floor = 1,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing};
+  auto* limiter = RPCRateLimiterRegistry::global()
+                      .getForPolicy(function->name(), config)
+                      .limiter;
+  ASSERT_EQ(limiter->stats().pending, 0);
+  auto cut = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(cut.size(), 1);
+  limiter->makeLease(std::move(cut))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"one", "two"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+  std::shared_ptr<Task> task;
+  const auto result =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING")
+          .config(core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true")
+          .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "64")
+          .config(core::QueryConfig::kRpcRateLimiterMinLimit, "1")
+          .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), 2);
+  EXPECT_EQ(limiter->stats().pending, 0);
+  const auto stats = toPlanStats(task->taskStats());
+  const auto& custom = stats.at("rpc-0").customStats;
+  EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlEffectivePolicy).sum, 1);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcRequestsDispatched).sum, 2);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcAttemptsDispatched).sum, 2);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcResponsesReceived).sum, 2);
+  // Both rows were baseline work: their successes paid the retry debt, no
+  // probe was admitted and no level failed.
+  const auto probing = limiter->testingProbingSnapshot();
+  EXPECT_TRUE(probing.cut);
+  EXPECT_EQ(probing.baseline, 1);
+  EXPECT_EQ(probing.retryDebt, 0);
+  EXPECT_EQ(probing.nextLevelFailures, 0);
+  EXPECT_EQ(probing.held, 0);
+  EXPECT_EQ(probing.heldProbes, 0);
+  // A success after in-place overload retries is not a service sample.
+  EXPECT_EQ(limiter->stats().serviceHorizonNanos, 1'000'000'000);
+}
+
+TEST_F(RPCOperatorTest, probingExhaustedRetryBudgetTerminatesWithoutDispatch) {
+  auto function = std::make_shared<FirstCapacityRetryRPCFunction>(
+      "probing_terminal_capacity_rejection", 1);
+  AsyncRPCFunctionRegistry::registerFunction(
+      function->name(),
+      [function] { return function; },
+      DemoAsyncRPCFunction::signatures());
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"first"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, function->name());
+  auto session = sessionFor({.adaptive = true, .ceiling = 64, .floor = 1});
+  session[core::QueryConfig::kRpcFlowControlPolicy] = "SMART_PROBING";
+  std::shared_ptr<Task> task;
+  const auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).configs(session).copyResults(
+          pool(), task);
+  ASSERT_EQ(result->size(), 1);
+  EXPECT_TRUE(result->childAt(1)->isNullAt(0));
+  EXPECT_EQ(function->attempts.load(), 1);
+  const auto stats = toPlanStats(task->taskStats());
+  const auto& custom = stats.at(plan->id()).customStats;
+  EXPECT_EQ(custom.at(RPCOperator::kRpcRequestsDispatched).sum, 1);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcAttemptsDispatched).sum, 1);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcResponsesReceived).sum, 1);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcErrorCount).sum, 1);
+  EXPECT_EQ(custom.count(RPCOperator::kRpcCapacityRetries), 0);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlEffectivePolicy).sum, 1);
+}
+
+TEST_F(RPCOperatorTest, probingCapacityRetryPreservesRowAndAttemptBudget) {
+  const RPCRateLimiter::Config config{
+      .adaptive = true,
+      .ceiling = 200,
+      .floor = 50,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing};
+  auto* limiter = RPCRateLimiterRegistry::global()
+                      .getForPolicy("probing_capacity_retry_budget", config)
+                      .limiter;
+  ASSERT_EQ(limiter->stats().pending, 0);
+  assertCapacityRetryBackoff(
+      "probing_capacity_retry_budget",
+      {{core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING"},
+       {core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true"}},
+      false,
+      1,
+      50);
+}
+
+TEST_F(RPCOperatorTest, probingLocalFullProducerDemandDrainsAcrossHandoff) {
+  const std::string name{"probing_local_full_handoff"};
+  auto function = std::make_shared<HeldPacedRPCFunction>(name);
+  AsyncRPCFunctionRegistry::registerFunction(
+      name,
+      [function] { return function; },
+      DemoAsyncRPCFunction::signatures());
+  const RPCRateLimiter::Config config{
+      .adaptive = true,
+      .ceiling = 4,
+      .floor = 1,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing};
+  auto* limiter =
+      RPCRateLimiterRegistry::global().getForPolicy(name, config).limiter;
+  ASSERT_EQ(limiter->stats().pending, 0);
+  auto seedDemand = limiter->registerRunnableDemand();
+  auto startup = limiter->tryAcquireUpTo(4);
+  ASSERT_EQ(startup.size(), 4);
+  auto cut = limiter->makeLease(std::move(startup.front()));
+  startup.clear();
+  cut->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  ASSERT_EQ(limiter->stats().capacity, 2);
+  seedDemand.reset();
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {"one", "two", "three", "four", "five", "six", "seven", "eight"})});
+  CursorParameters params;
+  params.planNode =
+      makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"}, name);
+  params.maxDrivers = 1;
+  params.queryConfigs = {
+      {core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING"},
+      {core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true"},
+      {core::QueryConfig::kRpcRateLimiterMaxLimit, "4"},
+      {core::QueryConfig::kRpcRateLimiterMinLimit, "1"}};
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+  const bool firstCohort = function->waitForDispatches(2);
+  EXPECT_TRUE(firstCohort);
+  if (firstCohort) {
+    EXPECT_EQ(limiter->stats().pending, 2);
+    EXPECT_LE(limiter->stats().peakPending, 4);
+  }
+  // Always release the fixture even if dispatch did not reach the cohort.
+  function->releaseResponses();
+  vector_size_t rows{0};
+  while (cursor->moveNext()) {
+    rows += cursor->current()->size();
+  }
+  EXPECT_EQ(rows, 8);
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().admissionWaiters, 0);
+  ASSERT_TRUE(
+      cursor->task()->allDriversClosedFuture().wait(std::chrono::seconds{5}));
+  const auto stats = toPlanStats(cursor->task()->taskStats());
+  const auto& custom = stats.at("rpc-0").customStats;
+  EXPECT_EQ(custom.at(RPCOperator::kRpcRequestsDispatched).sum, 8);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcAttemptsDispatched).sum, 8);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcResponsesReceived).sum, 8);
+  EXPECT_EQ(custom.at(RPCOperator::kRpcFlowControlEffectivePolicy).sum, 1);
+}
+
+TEST_F(
+    RPCOperatorTest,
+    ownedWindowOperatorCloseKeepsRawMarginUntilLateSettlement) {
+  const std::string name{"owned_window_close"};
+  auto function = std::make_shared<HeldPacedRPCFunction>(name);
+  AsyncRPCFunctionRegistry::registerFunction(
+      name,
+      [function] { return function; },
+      DemoAsyncRPCFunction::signatures());
+  const RPCRateLimiter::Config config{
+      .adaptive = true,
+      .ceiling = 4,
+      .floor = 1,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing};
+  auto* limiter =
+      RPCRateLimiterRegistry::global().getForPolicy(name, config).limiter;
+  auto seedDemand = limiter->registerRunnableDemand();
+  auto startup = limiter->tryAcquireUpTo(4);
+  ASSERT_EQ(startup.size(), 4);
+  auto cut = limiter->makeLease(std::move(startup.front()));
+  startup.clear();
+  cut->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  for (int i = 0; i < 3; ++i) {
+    auto lease = limiter->makeLease(limiter->tryAcquireUpTo(1));
+    auto released = lease->completeAndRelease(
+        RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+    released.credit.consume();
+  }
+  EXPECT_EQ(limiter->stats().capacity, 2);
+  EXPECT_EQ(limiter->testingProbingSnapshot().retryDebt, 0);
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {"one", "two", "three", "four", "five", "six"})});
+  CursorParameters params;
+  params.planNode =
+      makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"}, name);
+  params.maxDrivers = 1;
+  params.queryConfigs = {
+      {core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING"},
+      {core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true"},
+      {core::QueryConfig::kRpcRateLimiterMaxLimit, "4"},
+      {core::QueryConfig::kRpcRateLimiterMinLimit, "1"}};
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+  EXPECT_TRUE(function->waitForDispatches(3));
+  EXPECT_EQ(limiter->stats().pending, 3);
+  EXPECT_EQ(limiter->testingProbingSnapshot().heldProbes, 1);
+  seedDemand.reset();
+  auto stopped = cursor->task()->requestCancel();
+  EXPECT_TRUE(std::move(stopped).wait(std::chrono::seconds{5}));
+  EXPECT_EQ(limiter->stats().pending, 3);
+  EXPECT_EQ(limiter->testingProbingSnapshot().heldProbes, 1);
+  function->releaseResponses();
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->testingProbingSnapshot().held, 0);
+  EXPECT_EQ(limiter->stats().capacity, 2);
+  EXPECT_EQ(limiter->testingProbingSnapshot().retryDebt, 0);
+}
+
+TEST_F(
+    RPCOperatorTest,
+    ownedWindowRawObserverAllocationRollsBackBeforeDispatch) {
+#ifdef NDEBUG
+  GTEST_SKIP() << "Needs TestValue injection, which release builds omit.";
+#endif
+  const std::string name{"raw_observer_allocation"};
+  auto function = std::make_shared<HeldPacedRPCFunction>(name);
+  function->releaseResponses();
+  AsyncRPCFunctionRegistry::registerFunction(
+      name,
+      [function] { return function; },
+      DemoAsyncRPCFunction::signatures());
+  const RPCRateLimiter::Config config{
+      .adaptive = true,
+      .ceiling = 4,
+      .floor = 1,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing};
+  auto* limiter =
+      RPCRateLimiterRegistry::global().getForPolicy(name, config).limiter;
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"one", "two"})});
+  auto plan =
+      makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"}, name);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::rpc::RPCOperator::rawObserverPreflight",
+      std::function<void(RPCOperator*)>(
+          [](auto*) __attribute__((noreturn)) { throw std::bad_alloc{}; }));
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING")
+          .config(core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true")
+          .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "4")
+          .config(core::QueryConfig::kRpcRateLimiterMinLimit, "1")
+          .copyResults(pool()),
+      "std::bad_alloc");
+  EXPECT_EQ(function->numDispatches(), 0);
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->testingProbingSnapshot().held, 0);
+}
+
+TEST_F(
+    RPCOperatorTest,
+    ownedWindowOutputAllocationFailureDoesNotConsumeCredit) {
+#ifdef NDEBUG
+  GTEST_SKIP() << "Needs TestValue injection, which release builds omit.";
+#endif
+  const std::string name{"output_credit_allocation"};
+  auto function = std::make_shared<HeldPacedRPCFunction>(name);
+  function->releaseResponses();
+  AsyncRPCFunctionRegistry::registerFunction(
+      name,
+      [function] { return function; },
+      DemoAsyncRPCFunction::signatures());
+  const RPCRateLimiter::Config config{
+      .adaptive = true,
+      .ceiling = 4,
+      .floor = 1,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing};
+  auto* limiter =
+      RPCRateLimiterRegistry::global().getForPolicy(name, config).limiter;
+  auto startup = limiter->tryAcquireUpTo(4);
+  ASSERT_EQ(startup.size(), 4);
+  auto cut = limiter->makeLease(std::move(startup.front()));
+  startup.clear();
+  cut->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>({"one"})});
+  auto plan =
+      makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"}, name);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::rpc::RPCOperator::outputCreditPreflight",
+      std::function<void(RPCOperator*)>(
+          [](auto*) __attribute__((noreturn)) { throw std::bad_alloc{}; }));
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kRpcFlowControlPolicy, "SMART_PROBING")
+          .config(core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true")
+          .config(core::QueryConfig::kRpcRateLimiterMaxLimit, "4")
+          .config(core::QueryConfig::kRpcRateLimiterMinLimit, "1")
+          .copyResults(pool()),
+      "std::bad_alloc");
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().capacity, 2);
+  EXPECT_EQ(limiter->testingProbingSnapshot().retryDebt, 2);
+}
+
+TEST_F(RPCOperatorTest, invalidFlowControlPolicyFailsBeforeDispatch) {
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>({"one"})});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+  for (const auto* unsupported : {"UNKNOWN", "1", " SMART_PROBING"}) {
+    SCOPED_TRACE(unsupported);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan)
+            .config(core::QueryConfig::kRpcFlowControlPolicy, unsupported)
+            .copyResults(pool()),
+        "RPC flow control policy must be WINDOW_AIMD or SMART_PROBING");
+  }
 }
 
 } // namespace facebook::velox::exec::rpc

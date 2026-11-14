@@ -1591,6 +1591,21 @@ class QueryConfig {
       "cap. A positive value below the effective BATCH start window is raised "
       "to that start. The congestion max window remains the overall ceiling.")
 
+  /// Admission-window policy of the query's RPC rate limiters.
+  VELOX_QUERY_CONFIG(
+      kRpcFlowControlPolicy,
+      rpcFlowControlPolicy,
+      "rpc.flow_control_policy",
+      std::string,
+      "WINDOW_AIMD",
+      "RPC flow-control policy, case-insensitive: WINDOW_AIMD (default) or "
+      "SMART_PROBING (experimental). SMART_PROBING follows WINDOW_AIMD until "
+      "the first capacity rejection, then grows the window only through "
+      "one-unit probes whose failure does not cut it. It applies to adaptive "
+      "PER_ROW functions that return capacity retries; other queries run "
+      "WINDOW_AIMD. A SMART_PROBING query gets its own rate limiter per "
+      "backend, with its own ceiling. Any other value fails the query.")
+
   /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterAdaptiveEnabled,
