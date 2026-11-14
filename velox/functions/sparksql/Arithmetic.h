@@ -195,39 +195,64 @@ struct RemainderFunction {
   bool ansiEnabled_ = false;
 };
 
+/// Computes primitive PMOD using the query's ANSI mode at initialization.
 template <typename T>
-struct PModIntFunction {
+struct PmodFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a, const TInput n)
-#if defined(__has_feature)
-#if __has_feature(__address_sanitizer__)
-      __attribute__((__no_sanitize__("signed-integer-overflow")))
-#endif
-#endif
-  {
-    TInput r;
-    bool notNull = RemainderFunction<T>().call(r, a, n);
-    if (!notNull) {
-      return false;
-    }
-
-    result = (r > 0) ? r : (r + n) % n;
-    return true;
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*dividend*/,
+      const TInput* /*divisor*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
-};
 
-template <typename T>
-struct PModFloatFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
-  call(TInput& result, const TInput a, const TInput n) {
-    if (UNLIKELY(n == (TInput)0)) {
+  call(TInput& result, const TInput dividend, const TInput divisor) {
+    if (UNLIKELY(divisor == 0)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Division by zero");
+      }
       return false;
     }
-    TInput r = fmod(a, n);
-    result = (r > 0) ? r : fmod(r + n, n);
+
+    if constexpr (std::is_floating_point_v<TInput>) {
+      const TInput remainder = std::fmod(dividend, divisor);
+      if (remainder < 0) {
+        const TInput adjusted = remainder + divisor;
+        result = std::fmod(adjusted, divisor);
+      } else {
+        // Preserve signed zero and NaN.
+        result = remainder;
+      }
+    } else {
+      // Java defines MIN % -1 as zero; C++ signed division would overflow.
+      if (divisor == -1) {
+        result = 0;
+        return true;
+      }
+      const TInput remainder = dividend % divisor;
+      if (remainder >= 0) {
+        result = remainder;
+        return true;
+      }
+      if constexpr (sizeof(TInput) < sizeof(int32_t)) {
+        // Java promotes byte and short arithmetic to int before narrowing.
+        result = (remainder + divisor) % divisor;
+      } else {
+        // Java int and long addition wraps, including in ANSI PMOD.
+        using Unsigned = std::make_unsigned_t<TInput>;
+        const Unsigned adjusted =
+            static_cast<Unsigned>(remainder) + static_cast<Unsigned>(divisor);
+        result = std::bit_cast<TInput>(adjusted) % divisor;
+      }
+    }
     return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
