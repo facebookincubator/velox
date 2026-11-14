@@ -25,6 +25,7 @@
 #include "velox/common/base/Doubles.h"
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/NormalizeFloatingPoint.h"
 #include "velox/functions/lib/ToHex.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/type/DecimalArithmetic.h"
@@ -587,13 +588,7 @@ template <typename T>
 struct NormalizeNaNAndZeroFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(TInput& result, TInput value) {
-    if (std::isnan(value)) {
-      result = std::numeric_limits<TInput>::quiet_NaN();
-    } else if (value == TInput(0)) {
-      result = TInput(0);
-    } else {
-      result = value;
-    }
+    result = normalizeFloatingPoint(value);
   }
 };
 
