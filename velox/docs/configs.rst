@@ -1573,6 +1573,13 @@ Spark-specific Configuration
      - bool
      - true
      - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
+   * - spark.binary_output_style
+     - string
+     - ""
+     - The style :spark:func:`to_pretty_string` uses to render binary values. Corresponds to Spark 4.0's
+       ``spark.sql.binaryOutputStyle``. Valid values are ``UTF-8``, ``BASIC``, ``BASE64``, ``HEX`` and
+       ``HEX_DISCRETE``, case-insensitive. An empty value means the Spark config is unset, which renders
+       like ``HEX_DISCRETE``.
    * - spark.decimal_to_float_high_precision_cast_enabled
      - bool
      - false
