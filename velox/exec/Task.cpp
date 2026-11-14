@@ -32,6 +32,7 @@
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/FixedPointLoop.h"
@@ -1909,9 +1910,44 @@ void Task::setMaxSplitSequenceId(
   }
 }
 
+long Task::maxSplitSequenceId(const core::PlanNodeId& planNodeId) const {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
+    const auto it = fixedPointMaxSequenceIds_.find(planNodeId);
+    return it == fixedPointMaxSequenceIds_.end()
+        ? std::numeric_limits<long>::min()
+        : it->second;
+  }
+  if (!isRunningLocked()) {
+    return std::numeric_limits<long>::min();
+  }
+  const auto it = splitsStates_.find(planNodeId);
+  VELOX_USER_CHECK(
+      it != splitsStates_.end(),
+      "Splits can be associated only with leaf plan nodes which require splits. Plan node ID {} doesn't refer to such plan node.",
+      planNodeId);
+  return it->second.maxSequenceId;
+}
+
 void Task::onAddSplit(
     const core::PlanNodeId& planNodeId,
     const exec::Split& split) {
+  if (splitListeners_.empty()) {
+    return;
+  }
+  // Listeners see the splits of a batch as they were added.
+  if (split.hasConnectorSplit()) {
+    if (const auto* batch =
+            split.connectorSplit->as<connector::ConnectorSplitBatch>()) {
+      for (const auto& child : batch->splits) {
+        const exec::Split childSplit{std::shared_ptr(child)};
+        for (auto& listener : splitListeners_) {
+          listener->onAddSplit(planNodeId, childSplit);
+        }
+      }
+      return;
+    }
+  }
   for (auto& listener : splitListeners_) {
     listener->onAddSplit(planNodeId, split);
   }
@@ -2046,6 +2082,63 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
   if (shouldLogSplit) {
     onAddSplit(planNodeId, split);
   }
+}
+
+bool Task::shouldBatchSplits(
+    const core::PlanNodeId& planNodeId,
+    const std::vector<exec::Split>& splits) const {
+  if (splits.size() <= 1 ||
+      (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId))) {
+    return false;
+  }
+  const auto& first = splits.front();
+  if (!first.hasConnectorSplit()) {
+    return false;
+  }
+  const auto& connectorId = first.connectorSplit->connectorId;
+  const auto batchSizeHint = first.connectorSplit->batchSizeHint;
+  const bool compatible =
+      std::ranges::all_of(splits, [&](const exec::Split& split) {
+        return split.hasConnectorSplit() && !split.hasGroup() &&
+            split.connectorSplit->connectorId == connectorId &&
+            split.connectorSplit->batchSizeHint == batchSizeHint &&
+            !split.connectorSplit->is<connector::ConnectorSplitBatch>();
+      });
+  if (!compatible) {
+    return false;
+  }
+  {
+    std::lock_guard<std::timed_mutex> l(mutex_);
+    const auto it = splitsStates_.find(planNodeId);
+    if (it == splitsStates_.end() || !it->second.sourceIsTableScan) {
+      return false;
+    }
+  }
+  const auto connector =
+      connector::ConnectorRegistry::tryGet(*queryCtx_, connectorId);
+  return connector != nullptr && connector->supportsSplitBatch();
+}
+
+void Task::addSplits(
+    const core::PlanNodeId& planNodeId,
+    std::vector<exec::Split>&& splits) {
+  if (!shouldBatchSplits(planNodeId, splits)) {
+    for (auto& split : splits) {
+      addSplit(planNodeId, std::move(split));
+    }
+    return;
+  }
+  const auto connectorId = splits.front().connectorSplit->connectorId;
+  const auto batchSizeHint = splits.front().connectorSplit->batchSizeHint;
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> connectorSplits;
+  connectorSplits.reserve(splits.size());
+  for (auto& split : splits) {
+    connectorSplits.push_back(std::move(split.connectorSplit));
+  }
+  auto batch = std::make_shared<connector::ConnectorSplitBatch>(
+      connectorId, std::move(connectorSplits));
+  batch->batchSizeHint = batchSizeHint;
+  addSplit(planNodeId, exec::Split(std::move(batch)));
 }
 
 void Task::addRemoteSplit(

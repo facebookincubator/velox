@@ -67,6 +67,17 @@ std::unique_ptr<connector::DataSource> createDataSource(
   return dataSource;
 }
 
+// Adds 'split' to 'dataSource', unwrapping a split batch into its splits.
+void addSplitToDataSource(
+    connector::DataSource& dataSource,
+    const std::shared_ptr<connector::ConnectorSplit>& split) {
+  if (const auto* batch = split->as<connector::ConnectorSplitBatch>()) {
+    dataSource.addSplits(batch->splits);
+  } else {
+    dataSource.addSplit(split);
+  }
+}
+
 // Snapshots cumulative 'dataSource' runtime stats into 'stats'. Must be called
 // with the operator stats lock held and from the Driver thread (the only thread
 // that mutates 'dataSource'). No-op if 'dataSource' is null.
@@ -344,7 +355,14 @@ bool TableScan::getSplit() {
   }
 
   if (splitTracer_ != nullptr) [[unlikely]] {
-    splitTracer_->write(split);
+    if (const auto* batch =
+            split.connectorSplit->as<connector::ConnectorSplitBatch>()) {
+      for (const auto& child : batch->splits) {
+        splitTracer_->write(exec::Split(std::shared_ptr(child)));
+      }
+    } else {
+      splitTracer_->write(split);
+    }
   }
 
   stats_.wlock()->addRuntimeStat(
@@ -418,7 +436,7 @@ bool TableScan::getSplit() {
     {
       MicrosecondWallTimer timer(&addSplitTimeUs);
       auto lk = driverCtx_->driver->pushdownFilters()->at(0).rlock();
-      dataSource_->addSplit(connectorSplit);
+      addSplitToDataSource(*dataSource_, connectorSplit);
     }
     stats_.wlock()->addRuntimeStat(
         std::string(TableScan::kDataSourceAddSplitWallNanos),
@@ -491,7 +509,7 @@ void TableScan::preload(
         }
         {
           auto lk = pushdownFilters->at(0).rlock();
-          dataSource->addSplit(split);
+          addSplitToDataSource(*dataSource, split);
         }
         return dataSource;
       });

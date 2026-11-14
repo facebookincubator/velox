@@ -140,6 +140,11 @@ class AssertQueryBuilder {
   /// when the query runs.
   AssertQueryBuilder& addSplitWithSequence(bool addWithSequence);
 
+  /// Indicate that the splits of each plan node should be added to the task
+  /// with Task::addSplits() in groups of up to 'batchSize' splits when the
+  /// query runs. Zero adds them one by one.
+  AssertQueryBuilder& addSplitsInBatches(size_t batchSize);
+
   /// Options for running FixedPointNode loops.
   AssertQueryBuilder& fixedPointOptions(const FixedPointOptions* options) {
     params_.fixedPointOptions = options;
@@ -259,6 +264,9 @@ class AssertQueryBuilder {
       connectorSessionProperties_;
   std::unordered_map<core::PlanNodeId, std::vector<Split>> splits_;
   bool addSplitWithSequence_{false};
+  // Number of splits of a plan node added together with Task::addSplits(),
+  // or zero to add them one by one.
+  size_t splitBatchSize_{0};
   // The sequence Id to be used when addSplitWithSequence_ is true.
   int32_t sequenceId_{0};
   // Maximum time in microseconds to wait for task completion after all results

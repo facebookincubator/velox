@@ -16,6 +16,7 @@
 
 #include "velox/connectors/Connector.h"
 
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -23,6 +24,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/PlainUserNameTokenProvider.h"
 #include "velox/common/memory/Memory.h"
@@ -390,6 +392,40 @@ TEST(ConnectorTest, connectorSplit) {
         split.toString(),
         "[split: connector id test, weight 50, cacheable false]");
   }
+  {
+    const ConnectorSplitBatch batch(
+        "test",
+        {std::make_shared<ConnectorSplit>("test", 100, true),
+         std::make_shared<ConnectorSplit>("test", 50, false)});
+    ASSERT_EQ(batch.splits.size(), 2);
+    ASSERT_EQ(batch.splitWeight, 150);
+    ASSERT_EQ(batch.cacheable, false);
+    ASSERT_EQ(
+        batch.toString(),
+        "[split batch: connector id test, 2 splits, weight 150]");
+  }
+  const auto split = std::make_shared<ConnectorSplit>("test", 1);
+  VELOX_ASSERT_THROW(
+      ConnectorSplitBatch("test", {}), "A split batch must not be empty");
+  VELOX_ASSERT_THROW(
+      ConnectorSplitBatch("test", {split, nullptr}),
+      "A split batch must not hold a null split");
+  VELOX_ASSERT_THROW(
+      ConnectorSplitBatch("other", {split}),
+      "A split batch must hold splits of a single connector");
+  VELOX_ASSERT_THROW(
+      ConnectorSplitBatch(
+          "test",
+          {std::make_shared<ConnectorSplitBatch>(
+              "test", std::vector<std::shared_ptr<ConnectorSplit>>{split})}),
+      "Split batches must not be nested");
+  VELOX_ASSERT_THROW(
+      ConnectorSplitBatch(
+          "test",
+          {split,
+           std::make_shared<ConnectorSplit>(
+               "test", std::numeric_limits<int64_t>::max())}),
+      "Split batch weight overflows");
 }
 
 TEST_F(ConnectorQueryCtxTest, dataSinkNumChangedRowsDefaultsToInputSize) {

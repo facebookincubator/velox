@@ -72,6 +72,12 @@ class CudfIcebergDataSource : public ::facebook::velox::cudf_velox::connector::
   // `CudfHiveConnectorSplit`
   void convertSplit(std::shared_ptr<ConnectorSplit> split) override;
 
+  // Override to also require no delete files, partition keys or read info
+  // columns, which the split reader resolves per data file.
+  bool canBatch(
+      const ConnectorSplit& split,
+      const CudfHiveConnectorSplit& cudfSplit) const override;
+
  private:
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;

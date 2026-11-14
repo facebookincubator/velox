@@ -188,6 +188,11 @@ AssertQueryBuilder& AssertQueryBuilder::addSplitWithSequence(
   return *this;
 }
 
+AssertQueryBuilder& AssertQueryBuilder::addSplitsInBatches(size_t batchSize) {
+  splitBatchSize_ = batchSize;
+  return *this;
+}
+
 std::shared_ptr<Task> AssertQueryBuilder::assertResults(
     const std::string& duckDbSql,
     const std::optional<std::vector<uint32_t>>& sortingKeys) {
@@ -380,6 +385,20 @@ AssertQueryBuilder::readCursor() {
           taskCursor->setNoMoreSplits();
         } else {
           for (auto& [nodeId, nodeSplits] : splits_) {
+            if (splitBatchSize_ > 0) {
+              VELOX_CHECK(!addSplitWithSequence_);
+              for (size_t i = 0; i < nodeSplits.size(); i += splitBatchSize_) {
+                const auto end =
+                    std::min(i + splitBatchSize_, nodeSplits.size());
+                task->addSplits(
+                    nodeId,
+                    std::vector<Split>(
+                        std::make_move_iterator(nodeSplits.begin() + i),
+                        std::make_move_iterator(nodeSplits.begin() + end)));
+              }
+              task->noMoreSplits(nodeId);
+              continue;
+            }
             for (auto& split : nodeSplits) {
               if (addSplitWithSequence_) {
                 task->addSplitWithSequence(

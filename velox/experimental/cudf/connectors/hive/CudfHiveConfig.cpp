@@ -143,6 +143,16 @@ bool CudfHiveConfig::preloadColumnChunksSession(
       config_->get<bool>(kPreloadColumnChunks, false));
 }
 
+bool CudfHiveConfig::splitBatching() const {
+  return config_->get<bool>(kSplitBatching, false);
+}
+
+bool CudfHiveConfig::splitBatchingSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kSplitBatchingSession, config_->get<bool>(kSplitBatching, false));
+}
+
 bool CudfHiveConfig::serializeIoRequests() const {
   return config_->get<bool>(kSerializeIoRequests, false);
 }
