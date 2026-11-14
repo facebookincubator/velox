@@ -141,7 +141,16 @@ void PaimonSplitReader::prepareSplit(
 }
 
 uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
-  while (ensureFileSplitReader()) {
+  while (true) {
+    const bool newFile = baseReader_ == nullptr;
+    if (!ensureFileSplitReader()) {
+      return 0;
+    }
+    if (newFile && fileSplit_->fileFormat == dwio::common::FileFormat::NIMBLE) {
+      // A previous batch may retain reader-private vectors in physical file
+      // order. Do not reuse them for a file with a different column layout.
+      output.reset();
+    }
     // TODO: Apply deletion vectors using original physical file row positions.
     // TODO: Decode internal columns and row kinds for primary-key/changelog
     // files.
@@ -152,7 +161,6 @@ uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
     // Current file exhausted, try the next one.
     finishFileSplitReader();
   }
-  return 0;
 }
 
 bool PaimonSplitReader::ensureFileSplitReader() {
