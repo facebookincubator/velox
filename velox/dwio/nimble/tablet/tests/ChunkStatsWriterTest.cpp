@@ -2063,6 +2063,49 @@ TEST_P(ChunkStatsReaderVersionTest, minAvgChunksPerStream) {
   }
 }
 
+TEST_P(ChunkStatsReaderVersionTest, groupWithoutStreams) {
+  // A stripe writes no streams when, e.g., every column is a scalar that is
+  // null in every row. A group of such stripes has a stream count of 0.
+  {
+    auto& writer = createWriter(GetParam(), /*minAvgChunksPerStream=*/0);
+    Buffer buffer{*pool_};
+    TestChunkFileIndex fileIndex;
+
+    writer.newStripe(2);
+    writer.addStream(0, createChunks(buffer, {{30, 6}, {70, 9}}));
+    writer.addStream(1, createChunks(buffer, {{100, 30}}));
+    writer.writeGroup(2, 1, createMetadataSectionCallback(fileIndex));
+
+    writer.newStripe(0);
+    writer.newStripe(0);
+    writer.writeGroup(0, 2, createMetadataSectionCallback(fileIndex));
+
+    writer.writeRoot(writeRootCallback(fileIndex, sectionName(GetParam())));
+
+    ASSERT_EQ(fileIndex.groupMetadataSections.size(), 1);
+    auto* rootChunkStats = flatbuffers::GetRoot<serialization::ChunkStats>(
+        fileIndex.rootIndexData.data());
+    ASSERT_NE(rootChunkStats, nullptr);
+    ASSERT_NE(rootChunkStats->stripe_indexes(), nullptr);
+    ASSERT_EQ(rootChunkStats->stripe_indexes()->size(), 2);
+    EXPECT_GT(rootChunkStats->stripe_indexes()->Get(0)->size(), 0);
+    EXPECT_EQ(rootChunkStats->stripe_indexes()->Get(1)->size(), 0);
+  }
+
+  // When no group of the file has streams, no chunk stats section is written.
+  {
+    auto& writer = createWriter(GetParam(), /*minAvgChunksPerStream=*/0);
+    TestChunkFileIndex fileIndex;
+
+    writer.newStripe(0);
+    writer.writeGroup(0, 1, createMetadataSectionCallback(fileIndex));
+    writer.writeRoot(writeRootCallback(fileIndex, sectionName(GetParam())));
+
+    EXPECT_TRUE(fileIndex.groupMetadataSections.empty());
+    EXPECT_TRUE(fileIndex.rootIndexData.empty());
+  }
+}
+
 TEST_P(ChunkStatsReaderVersionTest, uncompressedSizeRoundtrip) {
   auto& writer = createWriter(GetParam(), /*minAvgChunksPerStream=*/0);
   Buffer buffer{*pool_};

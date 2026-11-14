@@ -22,8 +22,9 @@ namespace facebook.nimble.serialization;
 /// Enables O(1) chunk-level seeking by row ID.
 ///
 /// All streams are indexed. Streams with a single chunk have one entry
-/// each. The group-level minAvgChunksPerStream threshold controls whether
-/// the entire chunk stats section is written for a stripe group.
+/// each. A stripe group gets no chunk stats when it has no streams or when
+/// its average chunks per stream is below minAvgChunksPerStream; see
+/// ChunkStats.stripe_indexes.
 table StripeChunkStats {
   /// Total number of streams indexed in this stripe group.
   stream_count:uint32;
@@ -83,8 +84,10 @@ table StripeChunkStatsV2 {
 table ChunkStats {
   /// MetadataSection for each stripe group's version-specific chunk stats
   /// table.
-  /// Parallel to Footer.stripe_groups. size==0 means no chunk stats
-  /// for that group (e.g., when average chunks per stream is below threshold).
+  /// Parallel to Footer.stripe_groups. size==0 means no chunk stats for that
+  /// group. The writer leaves a group's entry empty when:
+  /// - the group has no streams, or
+  /// - its average chunks per stream is below minAvgChunksPerStream.
   stripe_indexes:[MetadataSection];
 }
 
