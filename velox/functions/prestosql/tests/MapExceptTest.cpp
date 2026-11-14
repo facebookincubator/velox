@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/tests/utils/FuzzerTestUtils.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox::test;
 
@@ -150,6 +152,204 @@ TEST_F(MapExceptTest, varcharKey) {
 TEST_F(MapExceptTest, floatNaNs) {
   testFloatNaNs<float>();
   testFloatNaNs<double>();
+}
+
+TEST_F(MapExceptTest, removeEveryKey) {
+  auto data = makeRowVector({
+      makeMapVectorFromJson<int64_t, int32_t>({"{1:10, 2:20}", "{}", "{3:30}"}),
+      makeArrayVectorFromJson<int64_t>({"[2, null, 1]", "[1]", "[4]"}),
+  });
+  auto expected =
+      makeMapVectorFromJson<int64_t, int32_t>({"{}", "{}", "{3:30}"});
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+
+  data = makeRowVector({
+      makeMapVectorFromJson<int64_t, int32_t>({"{1:10}", "{2:20}"}),
+      makeArrayVectorFromJson<int64_t>({"[1]", "[2]"}),
+  });
+  expected = makeMapVectorFromJson<int64_t, int32_t>({"{}", "{}"});
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+}
+
+TEST_F(MapExceptTest, complexValues) {
+  auto data = makeRowVector({
+      makeMapVector(
+          {0, 3},
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
+          makeArrayVectorFromJson<int32_t>(
+              {"[1, 2]", "null", "[3]", "[]", "[4, 5]"})),
+      makeArrayVectorFromJson<int64_t>({"[2]", "[1, 3]"}),
+  });
+  auto expected = makeMapVector(
+      {0, 2},
+      makeFlatVector<int64_t>({1, 3, 2}),
+      makeArrayVectorFromJson<int32_t>({"[1, 2]", "[3]", "[4, 5]"}));
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+}
+
+TEST_F(MapExceptTest, wrappedMap) {
+  auto maps = makeMapVectorFromJson<int64_t, int32_t>(
+      {"{1:10, 2:20}", "{3:30}", "{1:11, 4:40}"});
+  auto data = makeRowVector({
+      wrapInDictionary(makeIndices({2, 0, 2, 1}), maps),
+      makeArrayVectorFromJson<int64_t>({"[1]", "[2]", "[4]", "[5]"}),
+  });
+  auto expected = makeMapVectorFromJson<int64_t, int32_t>(
+      {"{4:40}", "{1:10}", "{1:11}", "{3:30}"});
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+}
+
+TEST_F(MapExceptTest, tooManyEntries) {
+  // Every row reads the same 220,000-entry map, for 2.2B entries in total.
+  constexpr vector_size_t kNumRows = 10'000;
+  auto map = makeMapVector<int64_t, int64_t>(
+      1,
+      [](auto /*row*/) { return 220'000; },
+      [](auto i) { return i; },
+      [](auto i) { return i; });
+  auto data = makeRowVector({
+      wrapInDictionary(makeIndices(kNumRows, [](auto) { return 0; }), map),
+      makeArrayVector<int64_t>(
+          kNumRows, [](auto) { return 1; }, [](auto i) { return i; }),
+  });
+  VELOX_ASSERT_USER_THROW(
+      evaluate("map_except(c0, c1)", data), "map_except input too large");
+}
+
+TEST_F(MapExceptTest, otherKeyTypes) {
+  auto data = makeRowVector({
+      makeMapVector<bool, int32_t>({{{true, 1}, {false, 2}}, {{false, 3}}}),
+      makeArrayVector<bool>({{true}, {false}}),
+  });
+  auto expected = makeMapVector<bool, int32_t>({{{false, 2}}, {}});
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+
+  data = makeRowVector({
+      makeMapVector<int32_t, int32_t>(
+          {{{18'000, 1}, {18'001, 2}}}, MAP(DATE(), INTEGER())),
+      makeArrayVector<int32_t>({{18'001}}, DATE()),
+  });
+  expected =
+      makeMapVector<int32_t, int32_t>({{{18'000, 1}}}, MAP(DATE(), INTEGER()));
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+
+  data = makeRowVector({
+      makeMapVector<Timestamp, int32_t>(
+          {{{Timestamp(1, 0), 1}, {Timestamp(2, 0), 2}}}),
+      makeArrayVector<Timestamp>({{Timestamp(1, 0)}}),
+  });
+  expected = makeMapVector<Timestamp, int32_t>({{{Timestamp(2, 0), 2}}});
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+}
+
+TEST_F(MapExceptTest, arrayKey) {
+  // NaNs match each other, and so do nulls nested in a key.
+  auto data = makeRowVector({
+      makeMapVector(
+          {0, 3, 5},
+          makeArrayVectorFromJson<double>({
+              "[1, 2]",
+              "[3]",
+              "[]",
+              "[NaN, 1]",
+              "[null, 2]",
+              "[1, 2]",
+          }),
+          makeFlatVector<int32_t>({10, 20, 30, 40, 50, 60})),
+      makeArrayVector(
+          {0, 2, 4},
+          makeArrayVectorFromJson<double>({
+              "[1, 2]",
+              "[]",
+              "[NaN, 1]",
+              "[null, 2]",
+              "[2, 1]",
+          })),
+  });
+  auto expected = makeMapVector(
+      {0, 1, 1},
+      makeArrayVectorFromJson<double>({"[3]", "[1, 2]"}),
+      makeFlatVector<int32_t>({20, 60}));
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+
+  // Constant keys, with a null element.
+  data = makeRowVector({
+      data->childAt(0),
+      BaseVector::wrapInConstant(
+          3,
+          0,
+          makeArrayVector(
+              {0},
+              makeArrayVectorFromJson<double>({"[1, 2]", "null", "[NaN, 1]"}))),
+  });
+  expected = makeMapVector(
+      {0, 2, 3},
+      makeArrayVectorFromJson<double>({"[3]", "[]", "[null, 2]"}),
+      makeFlatVector<int32_t>({20, 30, 50}));
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+}
+
+TEST_F(MapExceptTest, rowKey) {
+  auto keyType = ROW({INTEGER(), VARCHAR()});
+  auto data = makeRowVector({
+      makeMapVector(
+          {0, 3},
+          makeRowVector(
+              {makeFlatVector<int32_t>({1, 1, 2, 1}),
+               makeFlatVector<std::string>({"a", "b", "a", "a"})}),
+          makeFlatVector<int32_t>({10, 20, 30, 40})),
+      makeArrayVector(
+          {0, 2},
+          makeRowVector(
+              {makeFlatVector<int32_t>({1, 2, 1}),
+               makeFlatVector<std::string>({"b", "a", "c"})})),
+  });
+  auto expected = makeMapVector(
+      {0, 1},
+      makeRowVector(
+          {makeFlatVector<int32_t>({1, 1}),
+           makeFlatVector<std::string>({"a", "a"})}),
+      makeFlatVector<int32_t>({10, 40}));
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+}
+
+TEST_F(MapExceptTest, longDecimalKey) {
+  auto data = makeRowVector({
+      makeMapVector(
+          {0, 2},
+          makeFlatVector<int128_t>({100, 200, 300}, DECIMAL(20, 2)),
+          makeFlatVector<int32_t>({1, 2, 3})),
+      makeArrayVector(
+          {0, 1}, makeFlatVector<int128_t>({200, 400}, DECIMAL(20, 2))),
+  });
+  auto expected = makeMapVector(
+      {0, 1},
+      makeFlatVector<int128_t>({100, 300}, DECIMAL(20, 2)),
+      makeFlatVector<int32_t>({1, 3}));
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
+}
+
+TEST_F(MapExceptTest, timestampWithTimeZoneKey) {
+  // Keys are compared by instant, regardless of time zone.
+  auto data = makeRowVector({
+      makeMapVector(
+          {0, 3},
+          makeFlatVector<int64_t>(
+              {pack(1, 1), pack(2, 2), pack(3, 3), pack(1, 4), pack(2, 5)},
+              TIMESTAMP_WITH_TIME_ZONE()),
+          makeFlatVector<int32_t>({10, 20, 30, 40, 50})),
+      makeArrayVector(
+          {0, 2},
+          makeFlatVector<int64_t>(
+              {pack(1, 7), pack(3, 8), pack(2, 9)},
+              TIMESTAMP_WITH_TIME_ZONE())),
+  });
+  auto expected = makeMapVector(
+      {0, 1},
+      makeFlatVector<int64_t>(
+          {pack(2, 2), pack(1, 4)}, TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int32_t>({20, 40}));
+  assertEqualVectors(expected, evaluate("map_except(c0, c1)", data));
 }
 
 // Custom fuzzer tests
@@ -364,6 +564,18 @@ TEST_F(MapExceptFuzzerTest, fuzzConstantVectors) {
     auto data = makeRowVector({inputMap, keysArray});
     testEquivalence(data);
   }
+}
+
+// Fuzz test with array keys, which take the generic path.
+TEST_F(MapExceptFuzzerTest, fuzzArrayKeys) {
+  runFuzzTest(
+      ARRAY(INTEGER()),
+      INTEGER(),
+      {.vectorSize = 100,
+       .nullRatio = 0.0,
+       .containerLength = 3,
+       .containerVariableLength = true,
+       .iterations = 10});
 }
 
 // Stress test with large vectors
