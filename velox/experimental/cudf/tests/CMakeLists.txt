@@ -284,6 +284,12 @@ if(VELOX_ENABLE_S3)
 endif()
 
 velox_add_cudf_test(
+  NAME velox_cudf_row_number_test
+  SOURCES Main.cpp RowNumberTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_step_aware_aggregation_registry_test
   SOURCES Main.cpp StepAwareAggregationRegistryTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_exec_test_lib

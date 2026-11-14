@@ -34,6 +34,7 @@
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/CudfRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
@@ -66,6 +67,7 @@
 #include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/RowNumber.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
@@ -1367,6 +1369,57 @@ class WindowAdapter : public OperatorAdapter {
   }
 };
 
+/// RowNumberAdapter - Replaces with CudfRowNumber
+class RowNumberAdapter : public OperatorAdapter {
+ public:
+  RowNumberAdapter() : OperatorAdapter("RowNumber") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<exec::RowNumber>();
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    auto node = std::dynamic_pointer_cast<const core::RowNumberNode>(planNode);
+    if (!node) {
+      return false;
+    }
+    // cuDF would compare the raw values of custom-comparison types.
+    for (const auto& key : node->partitionKeys()) {
+      if (containsCustomComparison(key->type())) {
+        LOG_FALLBACK(
+            "RowNumber: PARTITION BY key {} uses custom comparison type {}, PlanNode id: {}",
+            key->name(),
+            key->type()->toString(),
+            planNode->id());
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto node = std::dynamic_pointer_cast<const core::RowNumberNode>(planNode);
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(std::make_unique<CudfRowNumber>(operatorId, ctx, node));
+    return result;
+  }
+};
+
 /// GroupIdAdapter - Replaces with CudfGroupId
 class GroupIdAdapter : public OperatorAdapter {
  public:
@@ -1549,6 +1602,7 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
   registry.registerAdapter(std::make_unique<PartitionedOutputAdapter>());
   registry.registerAdapter(std::make_unique<WindowAdapter>());
+  registry.registerAdapter(std::make_unique<RowNumberAdapter>());
 #ifdef VELOX_ENABLE_UCX_EXCHANGE
   registry.registerAdapter(std::make_unique<UcxExchangeAdapter>());
   registry.registerAdapter(std::make_unique<UcxPartitionedOutputAdapter>());
