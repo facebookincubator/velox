@@ -194,14 +194,14 @@ struct DateFunction : public TimestampWithTimezoneSupport<T> {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* date) {
-    timeZone_ = getTimeZoneFromConfig(config);
+    timeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Timestamp>* timestamp) {
-    timeZone_ = getTimeZoneFromConfig(config);
+    timeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -479,7 +479,7 @@ struct TimestampPlusInterval : public TimestampWithTimezoneSupport<T> {
       const core::QueryConfig& config,
       const arg_type<Timestamp>*,
       const arg_type<IntervalYearMonth>*) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
@@ -545,7 +545,7 @@ struct IntervalPlusTimestamp : public TimestampWithTimezoneSupport<T> {
       const core::QueryConfig& config,
       const arg_type<IntervalYearMonth>*,
       const arg_type<Timestamp>*) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
@@ -611,7 +611,7 @@ struct TimestampMinusInterval : public TimestampWithTimezoneSupport<T> {
       const core::QueryConfig& config,
       const arg_type<Timestamp>*,
       const arg_type<IntervalYearMonth>*) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
@@ -1049,7 +1049,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
       const core::QueryConfig& config,
       const arg_type<Varchar>* unitString,
       const arg_type<Timestamp>* /*timestamp*/) {
-    timeZone_ = getTimeZoneFromConfig(config);
+    timeZone_ = config.timeZoneToAdjustTo();
 
     if (unitString != nullptr) {
       unit_ = getTimestampUnit(*unitString);
@@ -1201,7 +1201,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Varchar>* unitString,
       const int64_t* /*value*/,
       const arg_type<Timestamp>* /*timestamp*/) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
     if (unitString != nullptr) {
       unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/true);
     }
@@ -1333,7 +1333,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
       unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/true);
     }
 
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -1590,7 +1590,7 @@ struct AtTimezoneFromTimestampToTimestampFunction {
       const arg_type<Timestamp>* /*timestamp*/,
       const arg_type<Varchar>* timezone) {
     inputSessionTimeZone_ = getSessionTimeZone(config);
-    outputSessionTimeZone_ = getTimeZoneFromConfig(config);
+    outputSessionTimeZone_ = config.timeZoneToAdjustTo();
     adjustTimestampToTimezone_ = config.adjustTimestampToTimezone();
     if (timezone) {
       targetTimeZone_ =
@@ -1639,7 +1639,7 @@ struct AtTimezoneToTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<TimestampWithTimezone>* /*timestampWithTimezone*/,
       const arg_type<Varchar>* timezone) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
     if (timezone) {
       targetTimeZone_ =
           tz::locateZone(std::string_view(timezone->data(), timezone->size()));
