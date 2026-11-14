@@ -198,6 +198,42 @@ SubfieldFilterDecimalTypes parquetDecimalTypes(
   return decimalTypes;
 }
 
+SubfieldFilterTimestampTypes parquetTimestampTypes(
+    std::span<const cudf::io::parquet::SchemaElement> schema,
+    bool fileColumnNamesReadAsLowerCase) {
+  using ParquetType = cudf::io::parquet::Type;
+  using ConvertedType = cudf::io::parquet::ConvertedType;
+  SubfieldFilterTimestampTypes types;
+  for (const auto index : schema.front().children_idx) {
+    const auto& column = schema[index];
+    std::optional<cudf::type_id> type;
+    if (column.type == ParquetType::INT96) {
+      type = cudf::type_id::TIMESTAMP_NANOSECONDS;
+    } else if (column.logical_type.has_value()) {
+      const auto& logical = *column.logical_type;
+      if (logical.is_timestamp_millis()) {
+        type = cudf::type_id::TIMESTAMP_MILLISECONDS;
+      } else if (logical.is_timestamp_micros()) {
+        type = cudf::type_id::TIMESTAMP_MICROSECONDS;
+      } else if (logical.is_timestamp_nanos()) {
+        type = cudf::type_id::TIMESTAMP_NANOSECONDS;
+      }
+    } else if (column.converted_type == ConvertedType::TIMESTAMP_MILLIS) {
+      type = cudf::type_id::TIMESTAMP_MILLISECONDS;
+    } else if (column.converted_type == ConvertedType::TIMESTAMP_MICROS) {
+      type = cudf::type_id::TIMESTAMP_MICROSECONDS;
+    }
+    if (type) {
+      types.emplace(
+          fileColumnNamesReadAsLowerCase
+              ? functions::stringImpl::utf8StrToLowerCopy(column.name)
+              : column.name,
+          *type);
+    }
+  }
+  return types;
+}
+
 // Returns whether a constant-folded filter keeps every row. A null constant
 // keeps none, matching SQL three-valued logic.
 bool isTrueConstant(
@@ -603,7 +639,13 @@ CudfHiveDataSource::CudfHiveDataSource(
     hasDecimalSubfieldFilter_ =
         hasDecimalSubfieldFilter(subfieldFilters_, readerFilterType);
     subfieldFilterAst_ = &createAstFromSubfieldFilters(
-        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
+        subfieldFilters_,
+        subfieldTree_,
+        subfieldScalars_,
+        readerFilterType,
+        /*decimalTypes=*/nullptr,
+        constantTimestampType(
+            *cudfHiveConfig_, connectorQueryCtx_->sessionProperties()));
   }
 
   {
@@ -708,15 +750,42 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     return;
   }
 
+  const auto readerFilterType = getTableRowType();
+  bool hasTimestampFilter = false;
+  for (const auto& [subfield, filter] : subfieldFilters_) {
+    if (filter &&
+        (filter->kind() == common::FilterKind::kTimestampRange ||
+         filter->kind() == common::FilterKind::kMultiRange) &&
+        readerFilterType->findChild(subfield.baseName())->isTimestamp()) {
+      hasTimestampFilter = true;
+      break;
+    }
+  }
+
   // An empty split has no footer to build the filter from.
-  if (hasDecimalSubfieldFilter_ and
+  if ((hasDecimalSubfieldFilter_ or hasTimestampFilter) and
       not cudfSplitReader_->fileMetaDatas().empty()) {
     const auto& fileMetadatas = cudfSplitReader_->fileMetaDatas();
-    const auto readerFilterType = getTableRowType();
     const HiveConfig hiveConfig(cudfHiveConfig_->config());
     const auto fileColumnNamesReadAsLowerCase =
         hiveConfig.isFileColumnNamesReadAsLowerCase(
             connectorQueryCtx_->sessionProperties());
+    const auto timestampTypes = parquetTimestampTypes(
+        fileMetadatas.front().schema, fileColumnNamesReadAsLowerCase);
+    if (hasTimestampFilter) {
+      subfieldTree_ = cudf::ast::tree{};
+      subfieldScalars_.clear();
+      subfieldFilterAst_ = &createAstFromSubfieldFilters(
+          subfieldFilters_,
+          subfieldTree_,
+          subfieldScalars_,
+          readerFilterType,
+          /*decimalTypes=*/nullptr,
+          constantTimestampType(
+              *cudfHiveConfig_, connectorQueryCtx_->sessionProperties()),
+          &timestampTypes);
+      cudfSplitReader_->setNativeTimestampFilter(subfieldFilterAst_);
+    }
     pushdownFilterTree_ = cudf::ast::tree{};
     pushdownFilterScalars_.clear();
     const auto decimalTypes = parquetDecimalTypes(
@@ -728,7 +797,10 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         pushdownFilterTree_,
         pushdownFilterScalars_,
         readerFilterType,
-        &decimalTypes);
+        &decimalTypes,
+        constantTimestampType(
+            *cudfHiveConfig_, connectorQueryCtx_->sessionProperties()),
+        hasTimestampFilter ? &timestampTypes : nullptr);
     cudfSplitReader_->setPushdownFilter(&filter);
   }
   cudfSplitReader_->prepareSplit(runtimeStats_);

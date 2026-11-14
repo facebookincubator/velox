@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
@@ -54,6 +55,7 @@
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 #include <cudf/io/parquet.hpp>
+#include <cudf/unary.hpp>
 
 #include <cuda_runtime_api.h>
 
@@ -87,11 +89,12 @@ StatsFilterMetrics readParquetWithStatsFilter(
     const std::string& filePath,
     const RowTypePtr& rowType,
     const common::SubfieldFilters& filters,
-    bool useJitFilter) {
+    bool useJitFilter,
+    std::optional<cudf::type_id> timestampType = std::nullopt) {
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
-  auto const& expr =
-      createAstFromSubfieldFilters(filters, tree, scalars, rowType);
+  auto const& expr = createAstFromSubfieldFilters(
+      filters, tree, scalars, rowType, nullptr, timestampType);
 
   auto options =
       cudf::io::parquet_reader_options::builder(cudf::io::source_info(filePath))
@@ -331,7 +334,8 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
 
   void writeCompactDecimalParquet(
       const std::shared_ptr<TempFilePath>& filePath,
-      const RowVectorPtr& vector) {
+      const RowVectorPtr& vector,
+      std::optional<TimestampPrecision> timestampPrecision = std::nullopt) {
     auto fs = filesystems::getFileSystem(filePath->getPath(), {});
     auto writeFile = fs->openFileForWrite(
         filePath->getPath(),
@@ -345,6 +349,7 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
     options.memoryPool = writerPool.get();
     auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
     parquetOptions->enableStoreDecimalAsInteger = true;
+    parquetOptions->parquetWriteTimestampUnit = timestampPrecision;
     options.formatSpecificOptions = std::move(parquetOptions);
     parquet::Writer writer(
         std::move(sink), options, writerPool, vector->rowType());
@@ -1912,6 +1917,42 @@ TEST_F(TableScanTest, doubleStatsFilterIoPruning) {
   EXPECT_EQ(metrics.outputRows, 2);
 }
 
+TEST_F(TableScanTest, timestampStatsFilterIoPruning) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  // 1ns equality is impossible in the FILE unit, not just the output unit.
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+  const auto rowType = ROW({"ts"}, {TIMESTAMP()});
+  auto file = TempFilePath::create();
+  std::vector<RowVectorPtr> groups;
+  for (int64_t seconds : {1, 3, 5}) {
+    groups.push_back(makeRowVector(
+        {"ts"},
+        {makeFlatVector<Timestamp>(
+            {Timestamp(seconds, 0), Timestamp(seconds + 1, 0)})}));
+  }
+  writeToFile(file->getPath(), groups);
+  for (const bool impossible : {false, true}) {
+    auto filters =
+        common::test::SubfieldFiltersBuilder()
+            .add(
+                "ts",
+                impossible ? facebook::velox::exec::equal(Timestamp(3, 1))
+                           : facebook::velox::exec::between(
+                                 Timestamp(3, 0), Timestamp(4, 0)))
+            .build();
+    const auto metrics = readParquetWithStatsFilter(
+        file->getPath(), rowType, filters, true, config.timestampUnit);
+    EXPECT_EQ(metrics.inputRowGroups, 3);
+    ASSERT_TRUE(metrics.rowGroupsAfterStats.has_value());
+    EXPECT_EQ(*metrics.rowGroupsAfterStats, impossible ? 0 : 1);
+    EXPECT_EQ(metrics.outputRows, impossible ? 0 : 2);
+  }
+}
+
 TEST_F(TableScanTest, splitOffsetAndLength) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
@@ -2162,6 +2203,258 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
   ASSERT_NE(it, scanStats.customStats.end());
   EXPECT_EQ(it->second.sum, 0)
       << "Expected no remaining filter time when filter is fully extracted";
+}
+
+// A TIMESTAMP range filter, pushed down or extracted from the remaining
+// filter, keeps the rows the CPU scan keeps for each reader timestamp unit,
+// including sub-tick file values, pre-epoch bounds and nulls.
+TEST_F(TableScanTest, timestampRangeFilter) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  const auto rowType = ROW({"c0", "c1"}, {TIMESTAMP(), BIGINT()});
+  const Timestamp bound(1'700'000'000, 0);
+  const std::string boundSql = "timestamp '2023-11-14 22:13:20'";
+  const std::vector<std::string> filters{
+      "c0 > " + boundSql,
+      // This value is representable in the nanosecond FILE, even when the
+      // requested output unit is coarser. It must exclude the 500ns row.
+      "c0 <> timestamp '2023-11-14 22:13:20.000000500'",
+      "c0 > timestamp '1969-12-31 23:59:59.9995'",
+      "c0 > " + boundSql + " OR c0 IS NULL",
+  };
+
+  for (const auto& [readerUnit, cpuReaderUnit, nanosPerTick] :
+       {std::tuple{cudf::type_id::TIMESTAMP_MILLISECONDS, "3", 1'000'000},
+        std::tuple{cudf::type_id::TIMESTAMP_MICROSECONDS, "6", 1'000},
+        std::tuple{cudf::type_id::TIMESTAMP_NANOSECONDS, "9", 1}}) {
+    SCOPED_TRACE(static_cast<int32_t>(readerUnit));
+    const auto ticksFromBound = [&](int64_t ticks) {
+      return Timestamp::fromNanos(bound.toNanos() + ticks * nanosPerTick);
+    };
+    auto filePath = TempFilePath::create();
+    writeToFile(
+        filePath->getPath(),
+        makeRowVector(
+            {"c0", "c1"},
+            {makeNullableFlatVector<Timestamp>(
+                 {ticksFromBound(-2),
+                  ticksFromBound(-1),
+                  bound,
+                  std::nullopt,
+                  ticksFromBound(1),
+                  ticksFromBound(2),
+                  Timestamp(bound.getSeconds(), 500),
+                  Timestamp(-1, 999'500'500),
+                  Timestamp(-1, 999'499'500)}),
+             makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8})}));
+
+    for (const auto& filter : filters) {
+      for (const bool pushedDown : {true, false}) {
+        SCOPED_TRACE(fmt::format("{} pushedDown={}", filter, pushedDown));
+        PlanBuilder planBuilder(pool_.get());
+        auto& scan =
+            planBuilder.startTableScan()
+                .connectorId(kCudfHiveConnectorId)
+                .outputType(rowType)
+                .dataColumns(rowType)
+                .assignments(
+                    facebook::velox::exec::test::HiveConnectorTestBase::
+                        allRegularColumns(rowType));
+        if (pushedDown) {
+          scan.subfieldFilter(filter);
+        } else {
+          scan.remainingFilter(filter);
+        }
+        const auto plan = scan.endTableScan().planNode();
+        const auto run = [&](std::shared_ptr<Task>& task) {
+          return AssertQueryBuilder(plan)
+              .connectorSessionProperty(
+                  kCudfHiveConnectorId,
+                  cudf_velox::connector::hive::CudfHiveConfig::
+                      kTimestampTypeSession,
+                  std::to_string(static_cast<int32_t>(readerUnit)))
+              .connectorSessionProperty(
+                  kCudfHiveConnectorId,
+                  hive::HiveConfig::kReadTimestampUnitSession,
+                  cpuReaderUnit)
+              .split(makeCudfHiveSplit(filePath->getPath()))
+              .copyResults(pool_.get(), task);
+        };
+
+        std::shared_ptr<Task> task;
+        const auto gpuResult = run(task);
+        EXPECT_TRUE(toPlanStats(task->taskStats())
+                        .at(plan->id())
+                        .operatorStats.contains("CudfToVelox"));
+        // A remaining filter is extracted into a subfield filter, leaving no
+        // remaining filter to evaluate.
+        EXPECT_EQ(
+            toPlanStats(task->taskStats())
+                .at(plan->id())
+                .customStats.at("totalRemainingFilterWallNanos")
+                .sum,
+            0);
+        unregisterCudf();
+        SCOPE_EXIT {
+          registerCudf();
+        };
+        const auto cpuResult = run(task);
+        assertEqualResults({cpuResult}, {gpuResult});
+      }
+    }
+  }
+}
+
+TEST_F(TableScanTest, nestedTimestampConversionPreservesDate) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  auto dates = makeFlatVector<int32_t>({-1, 1}, DATE());
+  auto nested = makeRowVector(
+      {"ts", "day"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(-1, 999'500'000), Timestamp(0, 500'000)}),
+       dates});
+  auto input = makeRowVector(
+      {"filter_ts", "nested"},
+      {makeFlatVector<Timestamp>({Timestamp(1, 0), Timestamp(2, 0)}), nested});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), input);
+  auto plan = PlanBuilder(pool())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(input->rowType())
+                  .dataColumns(input->rowType())
+                  .subfieldFilter("filter_ts > timestamp '1970-01-01 00:00:00'")
+                  .endTableScan()
+                  .planNode();
+  auto expected = makeRowVector(
+      {"filter_ts", "nested"},
+      {input->childAt(0),
+       makeRowVector(
+           {"ts", "day"},
+           {makeFlatVector<Timestamp>(
+                {Timestamp(-1, 999'000'000), Timestamp(0, 0)}),
+            dates})});
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kCudfHiveConnectorId,
+          cudf_velox::connector::hive::CudfHiveConfig::kTimestampTypeSession,
+          std::to_string(
+              static_cast<int>(cudf::type_id::TIMESTAMP_MILLISECONDS)))
+      .split(makeCudfHiveSplit(file->getPath()))
+      .assertResults(expected);
+}
+
+TEST_F(TableScanTest, mixedFileTimestampUnits) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  auto input = makeRowVector(
+      {"ms", "us"},
+      {makeFlatVector<Timestamp>({Timestamp(0, 1'000'000), Timestamp(0, 0)}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(0, 500'000), Timestamp(0, 500'000)})});
+  const auto stream = cudf::get_default_stream();
+  auto table = with_arrow::toCudfTable(
+      input, pool(), stream, cudf::get_current_device_resource_ref());
+  auto columns = table->release();
+  columns[0] = cudf::cast(
+      columns[0]->view(),
+      cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+      stream,
+      cudf::get_current_device_resource_ref());
+  table = std::make_unique<cudf::table>(std::move(columns));
+  cudf::io::table_input_metadata metadata(table->view());
+  metadata.column_metadata[0].set_name("ms");
+  metadata.column_metadata[1].set_name("us");
+  auto file = TempFilePath::create();
+  auto options = cudf::io::parquet_writer_options::builder(
+                     cudf::io::sink_info{file->getPath()}, table->view())
+                     .metadata(metadata)
+                     .build();
+  cudf::io::write_parquet(options, stream);
+  auto plan = PlanBuilder(pool())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(input->rowType())
+                  .dataColumns(input->rowType())
+                  .subfieldFilters(
+                      {"ms > timestamp '1970-01-01 00:00:00'",
+                       "us > timestamp '1970-01-01 00:00:00'"})
+                  .endTableScan()
+                  .planNode();
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kCudfHiveConnectorId,
+          cudf_velox::connector::hive::CudfHiveConfig::kTimestampTypeSession,
+          std::to_string(
+              static_cast<int>(cudf::type_id::TIMESTAMP_MILLISECONDS)))
+      .split(makeCudfHiveSplit(file->getPath()))
+      .assertResults(makeRowVector(
+          {"ms", "us"},
+          {makeFlatVector<Timestamp>({Timestamp(0, 1'000'000)}),
+           makeFlatVector<Timestamp>({Timestamp(0, 0)})}));
+}
+
+// Rebuild both physical decimal widths and timestamp units on every split.
+TEST_F(TableScanTest, mixedDecimalTimestampFilter) {
+  const auto type = ROW({"ts", "price"}, {TIMESTAMP(), DECIMAL(5, 2)});
+  std::vector<std::shared_ptr<TempFilePath>> files;
+  for (const auto precision :
+       {TimestampPrecision::kMicroseconds, TimestampPrecision::kMilliseconds}) {
+    auto file = TempFilePath::create();
+    writeCompactDecimalParquet(
+        file,
+        makeRowVector(
+            {"ts", "price"},
+            {makeFlatVector<Timestamp>(
+                 {Timestamp(0, 500'000), Timestamp(0, 2'000'000)}),
+             makeFlatVector<int64_t>({100, 200}, DECIMAL(5, 2))}),
+        precision);
+    files.push_back(file);
+  }
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(type)
+                  .dataColumns(type)
+                  .subfieldFilters(
+                      {"ts > timestamp '1970-01-01 00:00:00'",
+                       "price <= CAST('2.00' AS DECIMAL(5,2))"})
+                  .endTableScan()
+                  .planNode();
+  auto expected = makeRowVector(
+      {"ts", "price"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(0, 0), Timestamp(0, 2'000'000), Timestamp(0, 2'000'000)}),
+       makeFlatVector<int64_t>({100, 200, 200}, DECIMAL(5, 2))});
+  auto task =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "2")
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kTimestampTypeSession,
+              std::to_string(
+                  static_cast<int>(cudf::type_id::TIMESTAMP_MILLISECONDS)))
+          .splits(makeCudfHiveConnectorSplits(files))
+          .assertResults(expected);
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& stats = planStats.at(plan->id()).customStats;
+  ASSERT_TRUE(stats.contains(std::string(TableScan::kPreloadedSplits)));
+  EXPECT_GT(stats.at(std::string(TableScan::kPreloadedSplits)).sum, 0);
 }
 
 TEST_F(TableScanTest, remainingFilterEligibility) {

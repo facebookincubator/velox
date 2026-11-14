@@ -61,8 +61,7 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
 
 /// Returns the type a TIMESTAMP constant takes to match the split reader's
 /// timestamp columns: the session's timestamp type setting, or the connector's
-/// when the session sets none. Returns nullopt when that setting is
-/// TIMESTAMP_DAYS, a unit no TIMESTAMP scalar can take.
+/// when the session sets none. Unsupported units are rejected by the config.
 std::optional<cudf::type_id> constantTimestampType(
     const CudfHiveConfig& config,
     const config::ConfigBase* session);
@@ -93,6 +92,10 @@ class CudfSplitReader : public NvtxHelper {
   /// Sets the split-specific pushdown filter. The expression must remain alive
   /// while the split is being read.
   void setPushdownFilter(const cudf::ast::expression* filter);
+
+  // Keeps file timestamp precision through pushdown and deferred filtering.
+  // The logical-width filter must use the same native timestamp units.
+  void setNativeTimestampFilter(const cudf::ast::expression* filter);
 
   /// Opens the cuDF reader and sets up its options. Returns early without
   /// updating runtime statistics when the split is empty.
@@ -224,6 +227,8 @@ class CudfSplitReader : public NvtxHelper {
   // Whether the split reads no columns, so no cuDF reader exists and the row
   // count comes from the Parquet footer.
   bool noColumnsToRead_{false};
+
+  bool preserveNativeTimestamps_{false};
 
  private:
   // Stores row group indices for one Parquet source.

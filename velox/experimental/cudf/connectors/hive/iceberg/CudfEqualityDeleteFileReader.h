@@ -39,6 +39,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -113,11 +114,13 @@ class CudfEqualityDeleteFileReader {
   ///   resolve equality column indices.
   /// @param rowMask Mutable view of row mask column.
   /// @param stream CUDA stream for kernel launches.
+  /// @param timestampType Optional pre-native-filter precision for data keys.
   void applyDeletes(
       cudf::table_view table,
       const std::vector<std::string>& inputColumnNames,
       cudf::mutable_column_view const& rowMask,
-      cuda::stream_ref stream);
+      cuda::stream_ref stream,
+      std::optional<cudf::data_type> timestampType = std::nullopt);
 
   /// Returns the number of delete key tuples loaded from the file.
   size_t numDeleteKeys() const {
