@@ -410,6 +410,88 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
     }
     facebook::velox::test::assertEqualVectors(expected, actual);
   }
+
+  // Reads a mocked ORC file of 10 rows: 'c0 INTEGER = row % 2' and a nullable
+  // RLEv2 'c1' that is null on rows 0, 2, 4 and 5. 'c1' is filter-only and
+  // 'c0 = 0' runs first, so 'c1' is read on sparse rows: {0, 2, 4} in the
+  // first batch of 5 rows and {6, 8} in the second. Returns the size of each
+  // batch.
+  template <size_t kDataSize, size_t kSecondarySize>
+  std::vector<vector_size_t> readFilterOnlyOrcColumn(
+      const TypePtr& c1Type,
+      std::unique_ptr<common::Filter> c1Filter,
+      const unsigned char (&dataBuffer)[kDataSize],
+      const unsigned char (&secondaryBuffer)[kSecondarySize]) {
+    constexpr vector_size_t kNumRows{10};
+    streams_.setFormat(DwrfFormat::kOrc);
+    proto::orc::ColumnEncoding directEncoding;
+    directEncoding.set_kind(proto::orc::ColumnEncoding_Kind_DIRECT);
+    proto::orc::ColumnEncoding directV2Encoding;
+    directV2Encoding.set_kind(proto::orc::ColumnEncoding_Kind_DIRECT_V2);
+    EXPECT_CALL(streams_, getEncodingOrcProxy(0))
+        .WillRepeatedly(Return(&directEncoding));
+    EXPECT_CALL(streams_, getEncodingOrcProxy(1))
+        .WillRepeatedly(Return(&directEncoding));
+    EXPECT_CALL(streams_, getEncodingOrcProxy(2))
+        .WillRepeatedly(Return(&directV2Encoding));
+
+    EXPECT_CALL(
+        streams_, getStreamOrcProxy(_, proto::orc::Stream_Kind_PRESENT, false))
+        .WillRepeatedly(Return(nullptr));
+    EXPECT_CALL(
+        streams_,
+        getStreamOrcProxy(_, proto::orc::Stream_Kind_ROW_INDEX, false))
+        .WillRepeatedly(Return(nullptr));
+
+    std::array<char, 64> c0Data{};
+    c0Data[0] = static_cast<char>(-kNumRows); // RLEv1 literal run.
+    std::vector<int64_t> c0Values;
+    c0Values.reserve(kNumRows);
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      c0Values.push_back(row % 2);
+    }
+    const auto c0Size = writeVsLongs(c0Data.data() + 1, c0Values);
+    EXPECT_CALL(
+        streams_, getStreamOrcProxy(1, proto::orc::Stream_Kind_DATA, true))
+        .WillRepeatedly(
+            Return(new SeekableArrayInputStream(c0Data.data(), c0Size + 1)));
+
+    // Rows 0-9: null, value, null, value, null, null, value x 4.
+    const unsigned char presentBuffer[] = {0xfe, 0x53, 0xc0};
+    EXPECT_CALL(
+        streams_, getStreamOrcProxy(2, proto::orc::Stream_Kind_PRESENT, false))
+        .WillRepeatedly(Return(new SeekableArrayInputStream(
+            presentBuffer, std::size(presentBuffer))));
+    EXPECT_CALL(
+        streams_, getStreamOrcProxy(2, proto::orc::Stream_Kind_DATA, true))
+        .WillRepeatedly(
+            Return(new SeekableArrayInputStream(dataBuffer, kDataSize)));
+    EXPECT_CALL(
+        streams_, getStreamOrcProxy(2, proto::orc::Stream_Kind_SECONDARY, true))
+        .WillRepeatedly(Return(
+            new SeekableArrayInputStream(secondaryBuffer, kSecondarySize)));
+
+    auto rowType = ROW({{"c0", INTEGER()}, {"c1", c1Type}});
+    auto scanSpec = std::make_unique<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    scanSpec->childByName("c0")->setFilter(
+        std::make_unique<common::BigintRange>(0, 0, false));
+    auto* c1Spec = scanSpec->childByName("c1");
+    c1Spec->setFilter(std::move(c1Filter));
+    scanSpec->disableStatsBasedFilterReorder();
+    buildReader(rowType, nullptr, {}, scanSpec.get());
+    // buildReader() projects every column.
+    c1Spec->setProjectOut(false);
+    c1Spec->setChannel(common::ScanSpec::kNoChannel);
+
+    VectorPtr batch = newBatch(ROW("c0", INTEGER()));
+    std::vector<vector_size_t> batchSizes;
+    for (auto i = 0; i < 2; ++i) {
+      next(kNumRows / 2, batch);
+      batchSizes.push_back(batch->size());
+    }
+    return batchSizes;
+  }
 };
 
 struct NonSelectiveReaderTestParams {
@@ -4043,6 +4125,83 @@ TEST_P(TestColumnReader, testTimestamp) {
   }
 }
 
+// The second batch's rows must not read the null flags the first batch left in
+// the reader's result nulls.
+TEST_P(TestColumnReader, filterOnlyTimestampOnSparseRows) {
+  if (!useSelectiveReader()) {
+    return;
+  }
+  // RLEv2 short repeats of 6 zeros: the ORC epoch, 2015-01-01.
+  const unsigned char secondsBuffer[] = {0x03, 0x00};
+  const unsigned char nanosBuffer[] = {0x03, 0x00};
+  // Passes the nulls and rejects every value.
+  auto filter = std::make_unique<common::TimestampRange>(
+      Timestamp(1'500'000'000, 0), Timestamp::max(), true);
+
+  EXPECT_THAT(
+      readFilterOnlyOrcColumn(
+          TIMESTAMP(), std::move(filter), secondsBuffer, nanosBuffer),
+      ElementsAre(3, 0));
+}
+
+// The RLEv2 decoder decodes row by row and writes the null rows to the result
+// nulls, so the reader must prepare them even with no filter.
+TEST_P(TestColumnReader, projectedRleV2TimestampWithNulls) {
+  if (!useSelectiveReader()) {
+    return;
+  }
+  streams_.setFormat(DwrfFormat::kOrc);
+  proto::orc::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::orc::ColumnEncoding_Kind_DIRECT);
+  proto::orc::ColumnEncoding directV2Encoding;
+  directV2Encoding.set_kind(proto::orc::ColumnEncoding_Kind_DIRECT_V2);
+  EXPECT_CALL(streams_, getEncodingOrcProxy(0))
+      .WillRepeatedly(Return(&directEncoding));
+  EXPECT_CALL(streams_, getEncodingOrcProxy(1))
+      .WillRepeatedly(Return(&directV2Encoding));
+  EXPECT_CALL(
+      streams_, getStreamOrcProxy(_, proto::orc::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(
+      streams_, getStreamOrcProxy(_, proto::orc::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  // Rows 0-9: null, value, null, value, null, null, value x 4.
+  const unsigned char presentBuffer[] = {0xfe, 0x53, 0xc0};
+  EXPECT_CALL(
+      streams_, getStreamOrcProxy(1, proto::orc::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(new SeekableArrayInputStream(
+          presentBuffer, std::size(presentBuffer))));
+  // RLEv2 short repeats of 6 zeros: the ORC epoch, 2015-01-01.
+  const unsigned char secondsBuffer[] = {0x03, 0x00};
+  const unsigned char nanosBuffer[] = {0x03, 0x00};
+  EXPECT_CALL(
+      streams_, getStreamOrcProxy(1, proto::orc::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(new SeekableArrayInputStream(
+          secondsBuffer, std::size(secondsBuffer))));
+  EXPECT_CALL(
+      streams_, getStreamOrcProxy(1, proto::orc::Stream_Kind_SECONDARY, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(nanosBuffer, std::size(nanosBuffer))));
+
+  auto rowType = ROW("c1", TIMESTAMP());
+  buildReader(rowType);
+  VectorPtr batch = newBatch(rowType);
+  next(10, batch);
+
+  auto* pool = &streams_.getMemoryPool();
+  auto expected =
+      BaseVector::create<FlatVector<Timestamp>>(TIMESTAMP(), 10, pool);
+  for (vector_size_t row = 0; row < 10; ++row) {
+    if (row == 0 || row == 2 || row == 4 || row == 5) {
+      expected->setNull(row, true);
+    } else {
+      expected->set(row, Timestamp(1'420'099'200, 0));
+    }
+  }
+  facebook::velox::test::assertEqualVectors(
+      expected, getOnlyChild<FlatVector<Timestamp>>(batch));
+}
+
 TEST_P(TestColumnReader, testDecimal64) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
@@ -4219,6 +4378,42 @@ TEST_P(TestColumnReader, testDecimal128WithSkip) {
   ASSERT_EQ(
       "-9.9999999999999999999999999999999999999",
       DecimalUtil::toString(intBatch->valueAt(4), decimalType));
+}
+
+// See filterOnlyTimestampOnSparseRows.
+TEST_P(TestColumnReader, filterOnlyShortDecimalOnSparseRows) {
+  if (!useSelectiveReader()) {
+    return;
+  }
+  // Varints of 6 zeros, and an RLEv2 short repeat of 6 scales of 2.
+  const unsigned char valuesBuffer[] = {0, 0, 0, 0, 0, 0};
+  const unsigned char scalesBuffer[] = {0x03, 0x04};
+  // Passes the nulls and rejects every value.
+  auto filter = std::make_unique<common::BigintRange>(
+      100, std::numeric_limits<int64_t>::max(), true);
+
+  EXPECT_THAT(
+      readFilterOnlyOrcColumn(
+          DECIMAL(10, 2), std::move(filter), valuesBuffer, scalesBuffer),
+      ElementsAre(3, 0));
+}
+
+// See filterOnlyTimestampOnSparseRows.
+TEST_P(TestColumnReader, filterOnlyLongDecimalOnSparseRows) {
+  if (!useSelectiveReader()) {
+    return;
+  }
+  // Varints of 6 zeros, and an RLEv2 short repeat of 6 scales of 2.
+  const unsigned char valuesBuffer[] = {0, 0, 0, 0, 0, 0};
+  const unsigned char scalesBuffer[] = {0x03, 0x04};
+  // Passes the nulls and rejects every value.
+  auto filter = std::make_unique<common::HugeintRange>(
+      100, std::numeric_limits<int128_t>::max(), true);
+
+  EXPECT_THAT(
+      readFilterOnlyOrcColumn(
+          DECIMAL(20, 2), std::move(filter), valuesBuffer, scalesBuffer),
+      ElementsAre(3, 0));
 }
 
 // Verify that when the file type doesn't match the metastore type,
