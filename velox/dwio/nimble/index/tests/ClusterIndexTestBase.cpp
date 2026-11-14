@@ -123,7 +123,8 @@ ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
       keyDataSize += keyStream.streamSize;
       // The key stream starts its stripe.
       stripeKeyStreams.push_back(
-          {.offset = keyStream.streamOffset,
+          {.stripe = stripeIdx,
+           .offset = keyStream.streamOffset,
            .numRows = stripeRowCount,
            .streams = {{.offset = 0, .size = keyStream.streamSize}}});
 

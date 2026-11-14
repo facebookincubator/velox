@@ -1006,6 +1006,7 @@ std::vector<StripeMetadata> TabletReader::stripeMetadata(
   for (uint32_t stripe = group->firstStripe(); stripe < endStripe; ++stripe) {
     auto& metadata = stripes.emplace_back(
         StripeMetadata{
+            .stripe = stripe,
             .offset = stripeOffset(stripe),
             .numRows = stripeRowCount(stripe),
             .streams =

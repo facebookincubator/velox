@@ -281,6 +281,24 @@ class ClusterIndexTest : public ClusterIndexTestBase {
     ASSERT_EQ(ranges.size(), 1);
     EXPECT_EQ(ranges[0].toString(), expected->toString());
   }
+
+  // Returns the key chunk of each of 'stripes' of 'keyStreams' from 'file', a
+  // caller's copy of the key stream file.
+  static std::vector<ClusterIndexBase::KeyChunk> keyChunks(
+      const StripeKeyStreams& keyStreams,
+      std::string_view file,
+      const std::vector<uint32_t>& stripes) {
+    std::vector<ClusterIndexBase::KeyChunk> result;
+    result.reserve(stripes.size());
+    for (const auto stripe : stripes) {
+      const auto& keyStream = keyStreams.stripes.at(stripe).keyStream;
+      result.push_back({
+          .stripe = stripe,
+          .data = file.substr(keyStream.streamOffset, keyStream.streamSize),
+      });
+    }
+    return result;
+  }
 };
 
 TEST_F(ClusterIndexTest, basic) {
@@ -1183,6 +1201,308 @@ TEST_F(ClusterIndexTest, stripeLayoutRequiresKeyStreamLocator) {
           /*preloadIndex=*/false,
           /*withKeyStreamLocator=*/false),
       "A cluster index that stores its key chunks in stripes needs a key stream locator");
+}
+
+TEST_F(ClusterIndexTest, keyChunkLookupsRequireStripeLayout) {
+  const auto encoded = encodeKeyStream({{"k00", "k01"}});
+  const std::vector<Stripe> stripes = {createStripeWithKeys(
+      {.streamOffset = 0,
+       .streamSize = static_cast<uint32_t>(encoded.data.size()),
+       .stream =
+           {.numChunks = 1,
+            .chunkRows = {2},
+            .chunkOffsets = encoded.chunkOffsets},
+       .chunkKeys = {"k01"}})};
+  auto clusterIndex = createClusterIndex(
+      createTestClusterIndex({"col1"}, "k00", stripes, {1}),
+      createKeyStreamFile(encoded.data));
+  // The layout, which every IndexLookup tells, keeps a reader from these
+  // calls.
+  EXPECT_EQ(
+      static_cast<const IndexLookup&>(*clusterIndex).keyStreamLayout(),
+      KeyStreamLayout::kPartition);
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookupStripes(makeKeyRequest("k00")),
+      "Only a Stripe layout index looks up the stripes of a request");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(makeKeyRequest("k00"), /*keyChunks=*/{}),
+      "Only a Stripe layout index looks up keys in given key chunks");
+  // Also when given the bytes of its key stream, from which its lookups read
+  // the key.
+  expectRows(clusterIndex->lookup(makeKeyRequest("k00")), RowRange(0, 1));
+  const std::vector<ClusterIndexBase::KeyChunk> givenKeyChunks{
+      {.stripe = 0, .data = encoded.data},
+  };
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(makeKeyRequest("k00"), givenKeyChunks),
+      "Only a Stripe layout index looks up keys in given key chunks");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->keyStreamId(),
+      "Only a Stripe layout index keeps its key chunks in a stream of each stripe");
+}
+
+TEST_F(ClusterIndexTest, lookupStripes) {
+  const auto keyStreams = writeStripeKeyStreams(fourStripeKeys());
+  auto clusterIndex = createStripeLayoutIndex(
+      keyStreams, /*pinIndex=*/false, /*preloadIndex=*/false);
+  EXPECT_EQ(
+      static_cast<const IndexLookup&>(*clusterIndex).keyStreamLayout(),
+      KeyStreamLayout::kStripe);
+  EXPECT_EQ(clusterIndex->keyStreamId(), kKeyStreamId);
+  const auto rangeScan = [](std::optional<std::string> lowerKey,
+                            std::optional<std::string> upperKey) {
+    return IndexLookup::LookupRequest::rangeScan(
+        {{.lowerKey = std::move(lowerKey), .upperKey = std::move(upperKey)}});
+  };
+
+  struct TestCase {
+    IndexLookup::LookupRequest request;
+    std::string name;
+    // Stripes whose key chunks the lookup decodes.
+    std::vector<uint32_t> stripes;
+
+    std::string debugString() const {
+      return name;
+    }
+  };
+  // The stripes of a key before the first key, at the first key, between the
+  // stripes of a stripe group, between stripe groups, between the stripes of
+  // the last stripe group and after the last key. The rows of the last key of
+  // a stripe end at its successor, which the next stripe holds, while a point
+  // lookup of that key reads only its own stripe. Ranges decode the chunks of
+  // the stripes of their bounds only, not of the stripes between them, also
+  // without a lower or an upper bound or with an upper bound after the last
+  // key, and ranges out of order decode none.
+  const std::vector<TestCase> testCases = {
+      {makeKeyRequest("j"), "j", {0}},
+      {makeKeyRequest("k00"), "k00", {0}},
+      {makeKeyRequest("k045"), "k045", {1}},
+      {makeKeyRequest("k075"), "k075", {2}},
+      {makeKeyRequest("k135"), "k135", {3}},
+      {makeKeyRequest("l"), "l", {}},
+      {makeKeyRequest("k13"), "k13", {2, 3}},
+      {IndexLookup::LookupRequest::pointLookup({"k13"}), "point k13", {2}},
+      {rangeScan("k02", "k145"), "k02 to k145", {0, 3}},
+      {rangeScan("k01", "k06"), "k01 to k06", {0, 1}},
+      {rangeScan(std::nullopt, "k045"), "to k045", {1}},
+      {rangeScan("k09", std::nullopt), "from k09", {2}},
+      {rangeScan("k03", "l"), "k03 to l", {0}},
+      {rangeScan("k06", "k01"), "k06 to k01", {}},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+    EXPECT_EQ(clusterIndex->lookupStripes(testCase.request), testCase.stripes);
+  }
+
+  // A request of several entries returns each stripe once, in file order.
+  EXPECT_EQ(
+      clusterIndex->lookupStripes(
+          IndexLookup::LookupRequest::rangeScan(
+              {makeKeyBounds("k09"),
+               makeKeyBounds("k00"),
+               makeKeyBounds("k01")})),
+      (std::vector<uint32_t>{0, 2}));
+}
+
+TEST_F(ClusterIndexTest, lookupStripesWithDuplicateKeys) {
+  // A run of "k04" crosses from the last stripe of the first stripe group into
+  // the first stripe of the second.
+  const auto keyStreams = writeStripeKeyStreams({
+      {"k00", "k01", "k02"},
+      {"k03", "k04", "k04"},
+      {"k04", "k04", "k05"},
+      {"k06", "k07"},
+  });
+  auto clusterIndex = createStripeLayoutIndex(
+      keyStreams, /*pinIndex=*/false, /*preloadIndex=*/false);
+
+  // The key's successor, the upper bound, is in the stripe where the run ends,
+  // so the lookup decodes the chunks of the stripes where the run starts and
+  // ends, and selects the whole run.
+  const auto request = makeKeyRequest("k04");
+  const auto stripes = clusterIndex->lookupStripes(request);
+  EXPECT_EQ(stripes, (std::vector<uint32_t>{1, 2}));
+  expectRows(
+      clusterIndex->lookup(
+          request, keyChunks(keyStreams, keyStreams.file, stripes)),
+      RowRange(4, 8));
+  // Without the chunk of either stripe, the lookup fails.
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(
+          request, keyChunks(keyStreams, keyStreams.file, {1})),
+      "No key chunk is given for stripe 2");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(
+          request, keyChunks(keyStreams, keyStreams.file, {2})),
+      "No key chunk is given for stripe 1");
+}
+
+// A lookup in given key chunks needs the key chunk of each stripe that
+// lookupStripes() returns for its request, and fails on one it is not given,
+// for which neither a chunk of another stripe nor the file stands in.
+TEST_F(ClusterIndexTest, lookupWithMissingKeyChunks) {
+  const auto keyStreams = writeStripeKeyStreams(fourStripeKeys());
+  // The file the index reads key chunks from holds filler bytes, which do not
+  // decode.
+  auto clusterIndex = createClusterIndex(
+      createTestClusterIndex(
+          {"col1"},
+          "k00",
+          keyStreams.stripes,
+          {2, 2},
+          KeyStreamLayout::kStripe),
+      createKeyStreamFile(std::string(keyStreams.file.size(), 'x')),
+      /*pinIndex=*/false,
+      /*preloadIndex=*/false);
+  const auto rangeScan = [](std::optional<std::string> lowerKey,
+                            std::optional<std::string> upperKey) {
+    return IndexLookup::LookupRequest::rangeScan(
+        {{.lowerKey = std::move(lowerKey), .upperKey = std::move(upperKey)}});
+  };
+
+  struct TestCase {
+    IndexLookup::LookupRequest request;
+    std::string name;
+    // Stripes whose key chunks the lookup is given.
+    std::vector<uint32_t> givenStripes;
+    // The one stripe of the request whose key chunk the lookup is not given.
+    uint32_t missingStripe;
+
+    std::string debugString() const {
+      return name;
+    }
+  };
+  // Stripes 0 and 1 are the first stripe group, and stripes 2 and 3 the
+  // second. The rows of k13, the last key of stripe 2, end at its successor,
+  // which stripe 3 holds, while a point lookup of k13 reads only stripe 2.
+  const std::vector<TestCase> testCases = {
+      {makeKeyRequest("k06"),
+       "k06 with the stripes around its stripe",
+       {0, 2},
+       1},
+      {makeKeyRequest("k09"),
+       "k09 with the stripes of the other stripe group",
+       {0, 1},
+       2},
+      {makeKeyRequest("k13"),
+       "k13 without the stripe of its successor",
+       {2},
+       3},
+      {makeKeyRequest("k13"), "k13 without its stripe", {3}, 2},
+      {IndexLookup::LookupRequest::pointLookup({"k13"}),
+       "point k13 without its stripe",
+       {3},
+       2},
+      {rangeScan("k02", "k145"),
+       "k02 to k145 without the stripe of the upper bound",
+       {0},
+       3},
+      {rangeScan("k02", "k145"),
+       "k02 to k145 without the stripe of the lower bound",
+       {3},
+       0},
+      {rangeScan("k02", "k145"),
+       "k02 to k145 with the stripes after the lower bound",
+       {1, 2, 3},
+       0},
+      {rangeScan(std::nullopt, "k045"),
+       "to k045 without the stripe of the upper bound",
+       {0},
+       1},
+      {rangeScan("k09", std::nullopt),
+       "from k09 without the stripe of the lower bound",
+       {3},
+       2},
+      {IndexLookup::LookupRequest::rangeScan(
+           {makeKeyBounds("k00"), makeKeyBounds("k09")}),
+       "k00 and k09 without the stripe of k09",
+       {0},
+       2},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+    const auto stripes = clusterIndex->lookupStripes(testCase.request);
+    EXPECT_NE(
+        std::find(stripes.begin(), stripes.end(), testCase.missingStripe),
+        stripes.end());
+    NIMBLE_ASSERT_THROW(
+        clusterIndex->lookup(
+            testCase.request,
+            keyChunks(keyStreams, keyStreams.file, testCase.givenStripes)),
+        fmt::format(
+            "No key chunk is given for stripe {}", testCase.missingStripe));
+  }
+}
+
+TEST_F(ClusterIndexTest, lookupWithKeyChunks) {
+  const auto stripeKeys = fourStripeKeys();
+  const auto keyStreams = writeStripeKeyStreams(stripeKeys);
+  // The file the index reads key chunks from holds filler bytes, which do not
+  // decode, so lookups succeed only with the key chunks they are given.
+  auto clusterIndex = createClusterIndex(
+      createTestClusterIndex(
+          {"col1"},
+          "k00",
+          keyStreams.stripes,
+          {2, 2},
+          KeyStreamLayout::kStripe),
+      createKeyStreamFile(std::string(keyStreams.file.size(), 'x')),
+      /*pinIndex=*/true,
+      /*preloadIndex=*/false);
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(makeKeyRequest("k05")),
+      "Unsupported key chunk compression type");
+
+  // The caller's copy of the key streams, freed after the lookups.
+  auto keyFile = std::make_unique<std::string>(keyStreams.file);
+  // Returns the caller's bytes of the key streams of the stripes that
+  // lookupStripes() returns for 'request'.
+  const auto readKeyChunks = [&](const IndexLookup::LookupRequest& request) {
+    return keyChunks(
+        keyStreams, *keyFile, clusterIndex->lookupStripes(request));
+  };
+  const auto keys = flattenKeys(stripeKeys);
+
+  // A lookup never reads a key chunk from the file, so it fails without the
+  // key stream of each stripe that lookupStripes() returns for it: the first
+  // key needs the key stream of the first stripe, not of the last.
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(
+          makeKeyRequest(keys[0]), readKeyChunks(makeKeyRequest(keys.back()))),
+      "No key chunk is given for stripe 0");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(makeKeyRequest(keys[0]), /*keyChunks=*/{}),
+      "A lookup in given key chunks needs some");
+  // The bytes given for a stripe must be its key stream, neither short of it
+  // nor with more, such as its stream trailer.
+  const auto firstKeyChunks = readKeyChunks(makeKeyRequest(keys[0]));
+  ASSERT_EQ(firstKeyChunks.size(), 1);
+  const auto& keyStream = firstKeyChunks[0].data;
+  for (const auto size : {keyStream.size() - 1, keyStream.size() + 1}) {
+    SCOPED_TRACE(fmt::format("size {} of {}", size, keyStream.size()));
+    const std::vector<ClusterIndexBase::KeyChunk> badKeyChunks{
+        {.stripe = 0, .data = std::string_view(keyStream.data(), size)}};
+    NIMBLE_ASSERT_THROW(
+        clusterIndex->lookup(makeKeyRequest(keys[0]), badKeyChunks),
+        "The given key chunk of stripe 0 is not the key stream of the stripe");
+  }
+
+  // The rows of the last key of a stripe end at its successor, in the next
+  // stripe, so the lookup also decodes the key stream of that stripe.
+  for (uint32_t row = 0; row < keys.size(); ++row) {
+    SCOPED_TRACE(keys[row]);
+    const auto request = makeKeyRequest(keys[row]);
+    expectRows(
+        clusterIndex->lookup(request, readKeyChunks(request)),
+        RowRange(row, row + 1));
+  }
+
+  // Even a pinned index keeps no chunk it decoded in place from the caller's
+  // bytes, so once they are gone, it reads the key streams of the file, which
+  // do not decode.
+  keyFile.reset();
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->keyAtRow(0), "Unsupported key chunk compression type");
 }
 
 TEST_F(ClusterIndexTest, lookupChunk) {

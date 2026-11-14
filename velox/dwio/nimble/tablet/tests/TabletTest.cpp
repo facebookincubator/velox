@@ -1287,6 +1287,7 @@ TEST_P(TabletTest, stripeMetadata) {
         SCOPED_TRACE(fmt::format("stripe {}", stripe));
         ASSERT_LT(stripe, kNumStripes);
         EXPECT_EQ(helper.stripeGroupIndex(stripe), group);
+        EXPECT_EQ(metadata.stripe, stripe);
         EXPECT_EQ(metadata.offset, tablet->stripeOffset(stripe));
         EXPECT_EQ(metadata.numRows, 10 + stripe);
         ASSERT_EQ(metadata.streams.size(), streamIds.size());
