@@ -111,6 +111,9 @@ class Window : public Operator {
   // indices to send in window function apply invocations.
   void createPeerAndFrameBuffers();
 
+  // Updates the output row size estimate from the latest non-empty batch.
+  void updateEstimatedOutputRowSize(const RowVectorPtr& output);
+
   // Compute the peer and frame buffers for rows between
   // startRow and endRow in the current partition.
   void computePeerAndFrameBuffers(vector_size_t startRow, vector_size_t endRow);
@@ -219,8 +222,13 @@ class Window : public Operator {
   // Number of input rows.
   vector_size_t numRows_ = 0;
 
-  // Number of rows that be fit into an output block.
-  vector_size_t numRowsPerOutput_;
+  // Fixed capacity of peer/frame buffers and the WindowBuild batch threshold.
+  vector_size_t maxBatchRows_;
+
+  // Average row size of the latest output batch with a non-zero estimate.
+  // Output starts with one row while this estimate is unknown. Later batches
+  // can exceed the byte target if their rows are wider than the previous batch.
+  std::optional<uint64_t> estimatedOutputRowSize_;
 
   // Number of rows output from the WindowOperator so far. The rows
   // are output in the same order of the pointers in sortedRows. This

@@ -354,6 +354,184 @@ TEST_F(WindowTest, spillUnsupported) {
       1);
 }
 
+// Compares every output row at its expected position across batch boundaries.
+void assertOrderedBatches(
+    const RowVectorPtr& expected,
+    const std::vector<RowVectorPtr>& batches) {
+  vector_size_t offset{0};
+  for (const auto& batch : batches) {
+    ASSERT_LE(offset + batch->size(), expected->size());
+    velox::test::assertEqualVectors(
+        expected->slice(offset, batch->size()), batch);
+    offset += batch->size();
+  }
+  EXPECT_EQ(offset, expected->size());
+}
+
+TEST_F(WindowTest, outputBatchesShrinkForWideWindowResults) {
+  const vector_size_t size{192};
+  const vector_size_t preferredRows{64};
+  const uint64_t preferredBytes{4'096};
+  auto input = makeRowVector(
+      {"c0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .window({"array_agg(c0) over (order by c0 rows between "
+                           "unbounded preceding and unbounded following)"})
+                  .planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  params.queryCtx->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kPreferredOutputBatchRows,
+       std::to_string(preferredRows)},
+      {core::QueryConfig::kPreferredOutputBatchBytes,
+       std::to_string(preferredBytes)},
+  });
+  auto [cursor, batches] = readCursor(params);
+
+  ASSERT_GT(batches.size(), 2);
+  EXPECT_EQ(batches.front()->size(), 1);
+  for (const auto& batch : batches) {
+    EXPECT_GT(batch->size(), 0);
+    // Allow for vector metadata and allocation rounding.
+    EXPECT_LE(batch->estimateFlatSize(), preferredBytes + 1'024);
+    // Each row has 1,536 bytes of array elements, so 4,096 bytes fits at most
+    // two rows even before accounting for vector overhead.
+    EXPECT_LE(batch->size(), 2);
+  }
+
+  auto expected = makeRowVector(
+      {input->childAt(0),
+       makeArrayVector<int64_t>(
+           size,
+           [size](auto) { return size; },
+           [](auto /*row*/, auto index) { return index; })});
+  assertOrderedBatches(expected, batches);
+}
+
+TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {
+  const vector_size_t phaseRows{128};
+  const vector_size_t size{3 * phaseRows};
+  const vector_size_t preferredRows{64};
+  const uint64_t preferredBytes{2'048};
+  const int64_t precedingRows{32};
+  const int64_t peerGroupSize{4};
+  const auto precedingForRow = [&](vector_size_t row) {
+    return row >= phaseRows && row < 2 * phaseRows ? precedingRows : 0;
+  };
+  for (const auto& frameType : {"rows", "range"}) {
+    SCOPED_TRACE(frameType);
+    const bool isRows = std::string_view(frameType) == "rows";
+    auto input = makeRowVector(
+        {"c0", "c1", "id"},
+        {makeFlatVector<int64_t>(
+             size, [&](auto row) { return row / peerGroupSize; }),
+         makeFlatVector<int64_t>(
+             size,
+             [&](auto row) {
+               const auto preceding = precedingForRow(row);
+               // RANGE bounds contain precomputed sort-key values; ROWS bounds
+               // contain row offsets.
+               return isRows ? preceding : row / peerGroupSize - preceding;
+             }),
+         makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .streamingWindow({fmt::format(
+                        "array_agg(c0) over (order by c0 {} between c1 "
+                        "preceding and current row)",
+                        frameType)})
+                    .planNode();
+    auto batches =
+        AssertQueryBuilder(plan)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, preferredRows)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchBytes, preferredBytes)
+            .copyResultBatches(pool());
+
+    ASSERT_FALSE(batches.empty());
+    vector_size_t offset{0};
+    vector_size_t smallestWideBatch{preferredRows};
+    vector_size_t largestRecoveredBatch{0};
+    for (const auto& batch : batches) {
+      // Measure batches wholly inside a phase so a boundary does not dilute
+      // the observed row width. Peer groups cross the smaller batch boundaries.
+      if (offset >= phaseRows && offset + batch->size() <= 2 * phaseRows) {
+        smallestWideBatch = std::min(smallestWideBatch, batch->size());
+      }
+      if (offset >= 2 * phaseRows) {
+        largestRecoveredBatch = std::max(largestRecoveredBatch, batch->size());
+      }
+      offset += batch->size();
+    }
+    EXPECT_EQ(offset, size);
+    EXPECT_LT(smallestWideBatch, preferredRows);
+    EXPECT_GT(largestRecoveredBatch, smallestWideBatch);
+
+    std::vector<std::vector<int64_t>> expectedArrays;
+    for (vector_size_t row = 0; row < size; ++row) {
+      const auto preceding = precedingForRow(row);
+      const auto start = isRows
+          ? std::max<int64_t>(0, row - preceding)
+          : std::max<int64_t>(0, row / peerGroupSize - preceding) *
+              peerGroupSize;
+      const auto end =
+          isRows ? row + 1 : (row / peerGroupSize + 1) * peerGroupSize;
+      std::vector<int64_t> values;
+      for (auto i = start; i < end; ++i) {
+        values.push_back(i / peerGroupSize);
+      }
+      expectedArrays.push_back(std::move(values));
+    }
+    auto expected = makeRowVector(
+        {input->childAt(0),
+         input->childAt(1),
+         input->childAt(2),
+         makeArrayVector<int64_t>(expectedArrays)});
+    assertOrderedBatches(expected, batches);
+  }
+}
+
+TEST_F(WindowTest, outputBatchesRespectMaxRows) {
+  const vector_size_t size{100};
+  const vector_size_t maxRows{17};
+  const uint64_t preferredBytes{1'048'576};
+  auto input = makeRowVector(
+      {"c0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto expected = makeRowVector(
+      {input->childAt(0),
+       makeFlatVector<int64_t>(size, [](auto row) { return row + 1; })});
+
+  for (bool streaming : {false, true}) {
+    SCOPED_TRACE(streaming);
+    PlanBuilder builder;
+    builder.values({input});
+    const std::vector<std::string> functions{
+        "row_number() over (order by c0 rows unbounded preceding)"};
+    if (streaming) {
+      builder.streamingWindow(functions);
+    } else {
+      builder.window(functions);
+    }
+    auto batches =
+        AssertQueryBuilder(builder.planNode())
+            .config(core::QueryConfig::kPreferredOutputBatchRows, 128)
+            .config(core::QueryConfig::kMaxOutputBatchRows, maxRows)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchBytes, preferredBytes)
+            .copyResultBatches(pool());
+
+    ASSERT_FALSE(batches.empty());
+    for (const auto& batch : batches) {
+      EXPECT_GT(batch->size(), 0);
+      EXPECT_LE(batch->size(), maxRows);
+    }
+    assertOrderedBatches(expected, batches);
+  }
+}
+
 TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   const vector_size_t size = 1'000'000;
   auto data = makeRowVector(

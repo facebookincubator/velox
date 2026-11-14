@@ -107,7 +107,7 @@ void Window::initialize() {
   VELOX_CHECK_NOT_NULL(windowNode_);
   createWindowFunctions();
   createPeerAndFrameBuffers();
-  windowBuild_->setNumRowsPerOutput(numRowsPerOutput_);
+  windowBuild_->setNumRowsPerOutput(maxBatchRows_);
   windowNode_.reset();
 }
 
@@ -315,14 +315,14 @@ void Window::reclaim(
 }
 
 void Window::createPeerAndFrameBuffers() {
-  // TODO: This computation needs to be revised. It only takes into account
-  // the input columns size. We need to also account for the output columns.
-  numRowsPerOutput_ = outputBatchRows(windowBuild_->estimateRowSize());
+  // Keep the buffer capacity and build threshold fixed. Output batches can
+  // shrink based on the observed output row size.
+  maxBatchRows_ = outputBatchRows(windowBuild_->estimateRowSize());
 
   peerStartBuffer_ = AlignedBuffer::allocate<vector_size_t>(
-      numRowsPerOutput_, operatorCtx_->pool());
+      maxBatchRows_, operatorCtx_->pool());
   peerEndBuffer_ = AlignedBuffer::allocate<vector_size_t>(
-      numRowsPerOutput_, operatorCtx_->pool());
+      maxBatchRows_, operatorCtx_->pool());
 
   const auto numFuncs = windowFunctions_.size();
   frameStartBuffers_.reserve(numFuncs);
@@ -331,12 +331,12 @@ void Window::createPeerAndFrameBuffers() {
 
   for (auto i = 0; i < numFuncs; i++) {
     BufferPtr frameStartBuffer = AlignedBuffer::allocate<vector_size_t>(
-        numRowsPerOutput_, operatorCtx_->pool());
+        maxBatchRows_, operatorCtx_->pool());
     BufferPtr frameEndBuffer = AlignedBuffer::allocate<vector_size_t>(
-        numRowsPerOutput_, operatorCtx_->pool());
+        maxBatchRows_, operatorCtx_->pool());
     frameStartBuffers_.push_back(frameStartBuffer);
     frameEndBuffers_.push_back(frameEndBuffer);
-    validFrames_.push_back(SelectivityVector(numRowsPerOutput_));
+    validFrames_.push_back(SelectivityVector(maxBatchRows_));
   }
 }
 
@@ -760,15 +760,36 @@ RowVectorPtr Window::getOutput() {
     return nullptr;
   }
 
-  const auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);
+  // Sample one output row before choosing a byte-based batch size. Input row
+  // widths cannot predict variable-width window results such as array_agg.
+  const auto numOutputRows = estimatedOutputRowSize_.has_value()
+      ? std::min(
+            {maxBatchRows_,
+             outputBatchRows(estimatedOutputRowSize_),
+             numRowsLeft})
+      : 1;
   auto result = BaseVector::create<RowVector>(
       outputType_, numOutputRows, operatorCtx_->pool());
 
   // Compute the output values of window functions.
   auto numResultRows = callApplyLoop(numOutputRows, result);
-  return numResultRows < numOutputRows
+  auto output = numResultRows < numOutputRows
       ? std::dynamic_pointer_cast<RowVector>(result->slice(0, numResultRows))
       : result;
+  updateEstimatedOutputRowSize(output);
+  return output;
+}
+
+void Window::updateEstimatedOutputRowSize(const RowVectorPtr& output) {
+  if (output->size() == 0) {
+    return;
+  }
+
+  const auto outputBytes = output->estimateFlatSize();
+  const auto averageRowSize = outputBytes / output->size();
+  if (averageRowSize > 0) {
+    estimatedOutputRowSize_ = averageRowSize;
+  }
 }
 
 } // namespace facebook::velox::exec
