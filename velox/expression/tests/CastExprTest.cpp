@@ -1570,6 +1570,213 @@ TEST_F(CastExprTest, mapCast) {
   }
 }
 
+TEST_F(CastExprTest, flatMapCast) {
+  auto testFlatMapCast = [&](const VectorPtr& input,
+                             const std::string& expression,
+                             const std::optional<SelectivityVector>& rows =
+                                 std::nullopt) {
+    SCOPED_TRACE(expression);
+    auto expected =
+        evaluate(expression, makeRowVector({withMapBase(input)}), rows);
+    auto result = evaluate(expression, makeRowVector({input}), rows);
+    EXPECT_EQ(
+        result->wrappedVector()->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    result->validate();
+    assertEqualVectors(
+        expected,
+        withMapBase(result),
+        rows.value_or(SelectivityVector(input->size())));
+    return result;
+  };
+
+  auto intKeys = makeNullableFlatMapVector<int32_t, int64_t>({
+      {{{1, 10}, {2, 20}}},
+      std::nullopt,
+      {{{1, std::nullopt}, {3, 30}}},
+      {{}},
+      {{{2, 21}}},
+  });
+
+  {
+    auto result = testFlatMapCast(intKeys, "cast(c0 as map(bigint, bigint))");
+    const auto* flatMap = result->wrappedVector()->as<FlatMapVector>();
+    ASSERT_EQ(flatMap->numDistinctKeys(), 3);
+    ASSERT_EQ(flatMap->mapValuesAt(0), intKeys->mapValuesAt(0));
+  }
+
+  {
+    auto result = testFlatMapCast(intKeys, "cast(c0 as map(integer, double))");
+    ASSERT_EQ(
+        result->wrappedVector()->as<FlatMapVector>()->distinctKeys(),
+        intKeys->distinctKeys());
+  }
+
+  testFlatMapCast(intKeys, "cast(c0 as map(varchar, varchar))");
+
+  auto arrayValues = withFlatMapBase(makeMapVector(
+      {0, 2, 2, 4, 4},
+      makeFlatVector<int32_t>({1, 2, 1, 3, 2}),
+      makeNullableArrayVector<int32_t>({
+          {{1, 2}},
+          {{3, std::nullopt}},
+          std::nullopt,
+          {{4, 5, 6}},
+          {std::vector<std::optional<int32_t>>{}},
+      }),
+      {1}));
+
+  testFlatMapCast(arrayValues, "cast(c0 as map(bigint, bigint[]))");
+
+  {
+    SelectivityVector rows(5);
+    rows.setValid(1, false);
+    rows.setValid(3, false);
+    rows.updateBounds();
+    testFlatMapCast(arrayValues, "cast(c0 as map(bigint, bigint[]))", rows);
+  }
+
+  {
+    SelectivityVector rows(5);
+    rows.setValid(0, false);
+    rows.setValid(4, false);
+    rows.updateBounds();
+    testFlatMapCast(intKeys, "cast(c0 as map(bigint, double))", rows);
+  }
+
+  testFlatMapCast(
+      wrapInDictionary(makeIndicesInReverse(5), arrayValues),
+      "cast(c0 as map(bigint, bigint[]))");
+  testFlatMapCast(
+      BaseVector::wrapInDictionary(
+          makeNulls(5, nullEvery(2)), makeIndicesInReverse(5), 5, intKeys),
+      "cast(c0 as map(bigint, double))");
+  testFlatMapCast(
+      BaseVector::wrapInConstant(10, 2, intKeys),
+      "cast(c0 as map(bigint, double))");
+
+  testFlatMapCast(
+      makeFlatMapVector<int32_t, int64_t>({{}, {}, {}}),
+      "cast(c0 as map(bigint, double))");
+
+  auto doubleKeys = makeFlatMapVector<double, int64_t>({
+      {{1.2, 1}},
+      {{1.4, 2}, {2.0, 3}},
+      {},
+      {{2.0, 4}},
+  });
+
+  {
+    auto result =
+        testFlatMapCast(doubleKeys, "cast(c0 as map(bigint, bigint))");
+    ASSERT_EQ(
+        result->wrappedVector()->as<FlatMapVector>()->numDistinctKeys(), 2);
+  }
+
+  {
+    auto sameRowDuplicates = makeFlatMapVector<double, int64_t>({
+        {{1.2, 1}, {1.4, 2}},
+        {{1.4, 3}},
+        {{2.0, 4}},
+    });
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+    auto result = evaluate(
+        "cast(c0 as map(bigint, bigint))", makeRowVector({sameRowDuplicates}));
+    const auto* flatMap = result->wrappedVector()->as<FlatMapVector>();
+    ASSERT_NE(flatMap, nullptr);
+    ASSERT_EQ(flatMap->numDistinctKeys(), 2);
+    result->validate();
+    assertEqualVectors(
+        makeMapVector<int64_t, int64_t>({
+            {{1, 2}},
+            {{1, 3}},
+            {{2, 4}},
+        }),
+        withMapBase(result));
+
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+    VELOX_ASSERT_THROW(
+        evaluate(
+            "cast(c0 as map(bigint, bigint))",
+            makeRowVector({sameRowDuplicates})),
+        "Duplicate map key was found: 1");
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+  }
+
+  for (const bool nullFirst : {true, false}) {
+    SCOPED_TRACE(fmt::format("nullFirst: {}", nullFirst));
+    auto inMap = AlignedBuffer::allocate<bool>(3, pool(), false);
+    bits::setBit(inMap->asMutable<uint64_t>(), 0);
+    bits::setBit(inMap->asMutable<uint64_t>(), 2);
+    VectorPtr values = makeFlatVector<int64_t>({10, 20, 30});
+    auto nullValuesCollision = std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(DOUBLE(), BIGINT()),
+        nullptr,
+        3,
+        makeFlatVector<double>({1.2, 1.4}),
+        nullFirst ? std::vector<VectorPtr>{nullptr, values}
+                  : std::vector<VectorPtr>{values, nullptr},
+        nullFirst ? std::vector<BufferPtr>{nullptr, inMap}
+                  : std::vector<BufferPtr>{inMap, nullptr});
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{1, 10}},
+        {},
+        {{1, 30}},
+    });
+    for (const auto* throwOnDuplicateKeys : {"false", "true"}) {
+      SCOPED_TRACE(throwOnDuplicateKeys);
+      queryCtx_->testingOverrideConfigUnsafe(
+          {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
+            throwOnDuplicateKeys}});
+      auto result = evaluate(
+          "cast(c0 as map(bigint, bigint))",
+          makeRowVector({nullValuesCollision}));
+      const auto* flatMap = result->wrappedVector()->as<FlatMapVector>();
+      ASSERT_NE(flatMap, nullptr);
+      ASSERT_EQ(flatMap->numDistinctKeys(), 1);
+      result->validate();
+      assertEqualVectors(expected, withMapBase(result));
+    }
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+  }
+
+  {
+    auto unselectedKeys = makeFlatMapVector<std::string, int64_t>({
+        {{"1", 1}},
+        {{"2", 2}, {"x", 3}},
+        {{"1", 4}},
+    });
+    SelectivityVector rows(3);
+    rows.setValid(1, false);
+    rows.updateBounds();
+    auto result = testFlatMapCast(
+        unselectedKeys, "cast(c0 as map(bigint, bigint))", rows);
+    ASSERT_EQ(
+        result->wrappedVector()->as<FlatMapVector>()->numDistinctKeys(), 1);
+  }
+
+  VELOX_ASSERT_THROW(
+      evaluate("cast(c0 as map(timestamp, bigint))", makeRowVector({intKeys})),
+      "Conversion to Timestamp is not supported");
+  testFlatMapCast(intKeys, "try_cast(c0 as map(timestamp, bigint))");
+  testFlatMapCast(intKeys, "try(cast(c0 as map(timestamp, bigint)))");
+
+  auto stringValues = makeFlatMapVector<int32_t, std::string>({
+      {{1, "1"}, {2, "x"}},
+      {{1, "2"}},
+      {{2, "3"}},
+  });
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "cast(c0 as map(bigint, integer))", makeRowVector({stringValues})),
+      "Cannot cast VARCHAR 'x' to INT");
+  testFlatMapCast(stringValues, "try_cast(c0 as map(bigint, integer))");
+}
+
 TEST_F(CastExprTest, arrayCast) {
   auto sizeAt = [](vector_size_t /* row */) { return 7; };
   auto valueAt = [](vector_size_t /* row */, vector_size_t idx) {
