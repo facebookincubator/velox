@@ -1,0 +1,143 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
+#include "velox/experimental/cudf/exec/CudfBatchConcat.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfDistinct.h"
+#include "velox/experimental/cudf/exec/CudfEnforceSingleRow.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
+#include "velox/experimental/cudf/exec/CudfGroupId.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/CudfLocalMerge.h"
+#include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
+#include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeTranslator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
+#include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
+#include "velox/experimental/cudf/exec/CudfWindow.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
+
+#include "velox/exec/Task.h"
+
+namespace facebook::velox::cudf_velox {
+
+std::unique_ptr<exec::Operator> CudfPlanNodeTranslator::toOperator(
+    exec::DriverCtx* ctx,
+    int32_t id,
+    const core::PlanNodePtr& node) {
+  if (!cudfIsRegistered()) {
+    return nullptr;
+  }
+  if (auto fromVelox =
+          std::dynamic_pointer_cast<const CudfFromVeloxNode>(node)) {
+    return std::make_unique<CudfFromVelox>(
+        id, fromVelox->outputType(), ctx, fromVelox->id());
+  }
+
+  if (auto toVelox = std::dynamic_pointer_cast<const CudfToVeloxNode>(node)) {
+    return std::make_unique<CudfToVelox>(
+        id, toVelox->outputType(), ctx, toVelox->id());
+  }
+
+  if (auto filterProject =
+          std::dynamic_pointer_cast<const CudfFilterProjectNode>(node)) {
+    return std::make_unique<CudfFilterProject>(id, ctx, filterProject);
+  }
+
+  if (auto gpuAgg =
+          std::dynamic_pointer_cast<const CudfAggregationNode>(node)) {
+    const bool isGlobal = gpuAgg->groupingKeys().empty();
+    const bool isDistinct = !isGlobal && gpuAgg->aggregates().empty();
+    if (isGlobal) {
+      return std::make_unique<CudfReduce>(id, ctx, gpuAgg);
+    }
+    if (isDistinct) {
+      return std::make_unique<CudfDistinct>(id, ctx, gpuAgg);
+    }
+    return std::make_unique<CudfGroupby>(id, ctx, gpuAgg);
+  }
+
+  if (auto orderBy = std::dynamic_pointer_cast<const CudfOrderByNode>(node)) {
+    return std::make_unique<CudfOrderBy>(id, ctx, orderBy);
+  }
+
+  if (auto topN = std::dynamic_pointer_cast<const CudfTopNNode>(node)) {
+    return std::make_unique<CudfTopN>(id, ctx, topN);
+  }
+
+  if (auto topNRowNumber =
+          std::dynamic_pointer_cast<const CudfTopNRowNumberNode>(node)) {
+    return std::make_unique<CudfTopNRowNumber>(id, ctx, topNRowNumber);
+  }
+
+  if (auto limit = std::dynamic_pointer_cast<const CudfLimitNode>(node)) {
+    return std::make_unique<CudfLimit>(id, ctx, limit);
+  }
+
+  if (auto concat =
+          std::dynamic_pointer_cast<const CudfBatchConcatNode>(node)) {
+    return std::make_unique<CudfBatchConcat>(id, ctx, concat);
+  }
+
+  if (auto assignUniqueId =
+          std::dynamic_pointer_cast<const CudfAssignUniqueIdNode>(node)) {
+    return std::make_unique<CudfAssignUniqueId>(
+        id,
+        ctx,
+        assignUniqueId,
+        ctx->task->planFragment().taskUniqueId.value_or(
+            assignUniqueId->taskUniqueId()),
+        ctx->task->uniqueRowIdPool());
+  }
+
+  if (auto markDistinct =
+          std::dynamic_pointer_cast<const CudfMarkDistinctNode>(node)) {
+    return std::make_unique<CudfMarkDistinct>(id, ctx, markDistinct);
+  }
+
+  if (auto enforceSingleRow =
+          std::dynamic_pointer_cast<const CudfEnforceSingleRowNode>(node)) {
+    return std::make_unique<CudfEnforceSingleRow>(id, ctx, enforceSingleRow);
+  }
+
+  if (auto groupId = std::dynamic_pointer_cast<const CudfGroupIdNode>(node)) {
+    return std::make_unique<CudfGroupId>(id, ctx, groupId);
+  }
+
+  if (auto window = std::dynamic_pointer_cast<const CudfWindowNode>(node)) {
+    return std::make_unique<CudfWindow>(id, ctx, window);
+  }
+
+  return nullptr;
+}
+
+std::optional<uint32_t> CudfPlanNodeTranslator::maxDrivers(
+    const core::PlanNodePtr& node) {
+  const auto& maxDrivers = CudfConfig::getInstance().maxDrivers;
+  if (!maxDrivers.has_value() ||
+      dynamic_cast<const CudfPlanNode*>(node.get()) == nullptr) {
+    return std::nullopt;
+  }
+  return *maxDrivers;
+}
+
+} // namespace facebook::velox::cudf_velox
