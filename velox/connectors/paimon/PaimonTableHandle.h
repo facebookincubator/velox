@@ -28,7 +28,8 @@ class PaimonTableHandle final : public connector::FileTableHandle {
   static constexpr int32_t kSerdeVersion = 1;
 
   /// rowType includes partition columns; fieldIds follow its column order.
-  /// options are resolved by the caller.
+  /// dataColumns() is the complete rowType because Paimon data files store
+  /// partition columns too. options are resolved by the caller.
   PaimonTableHandle(
       std::string connectorId,
       std::string tableName,
