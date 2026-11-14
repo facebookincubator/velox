@@ -57,7 +57,9 @@ void enableAbandonPartialAggregation(AssertQueryBuilder& queryBuilder) {
 struct CompanionFunctions {
   std::string partialFunction;
   std::string mergeFunction;
-  std::string mergeExtractFunction;
+  // The merge_extract companion is returned by name, without arguments, so
+  // that callers can build the call with an explicit result type.
+  std::string mergeExtractFunctionName;
   std::string extractFunction;
 };
 
@@ -242,12 +244,11 @@ std::string getExtractFunctionNameWithSuffix(
   VELOX_UNREACHABLE("Could not find a function bound to argTypes.");
 }
 
-// Given the `index`-th aggregation expression, e.g., "avg(c0)", return the
-// names of its partial companion aggregation expression, merge companion
-// aggregation expression, merge_extract companion expression and extract
-// companion expression, e.g., CompanionFunctions{"avg_partial(c0)",
-// "avg_merge(a0)", "avg_merge_extract_double(a0)", "avg_extract_double(a0)"}
-// when `index` is 0.
+// Given the `index`-th aggregation expression, e.g., "avg(c0)", return its
+// partial companion aggregation expression, merge companion aggregation
+// expression, merge_extract companion name and extract companion expression,
+// e.g., CompanionFunctions{"avg_partial(c0)", "avg_merge(a0)",
+// "avg_merge_extract_double", "avg_extract_double(a0)"} when `index` is 0.
 CompanionFunctions getCompanionAggregates(
     column_index_t index,
     const exec::CompanionFunctionSignatureMap& companionFunctions,
@@ -262,21 +263,14 @@ CompanionFunctions getCompanionAggregates(
   auto mergeAggregate = fmt::format(
       "{}(a{})", companionFunctions.merge.front().functionName, index);
 
-  // Construct the merge_extract expression. Rename the result of the expression
-  // to be the same as the original aggregation result, so that post-aggregation
-  // projections, if exist, can apply with no change.
-  std::string mergeExtractExpression;
+  std::string mergeExtractFunctionName;
   if (companionFunctions.mergeExtract.size() == 1) {
-    mergeExtractExpression = fmt::format(
-        "{0}(a{1}) as a{1}",
-        companionFunctions.mergeExtract.front().functionName,
-        index);
+    mergeExtractFunctionName =
+        companionFunctions.mergeExtract.front().functionName;
   } else {
     VELOX_CHECK_GT(companionFunctions.mergeExtract.size(), 1);
-    auto mergeExtractFunctionName =
+    mergeExtractFunctionName =
         getMergeExtractFunctionNameWithSuffix(functionName, argTypes);
-    mergeExtractExpression =
-        fmt::format("{0}(a{1}) as a{1}", mergeExtractFunctionName, index);
   }
 
   // Construct the extract expression.
@@ -296,7 +290,7 @@ CompanionFunctions getCompanionAggregates(
   return CompanionFunctions{
       partialAggregate,
       mergeAggregate,
-      mergeExtractExpression,
+      mergeExtractFunctionName,
       extractExpression};
 }
 
@@ -491,7 +485,7 @@ struct AggregationTestBase::CompanionPlanInputs {
       const std::function<void(PlanBuilder&)>& makeSource,
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
-      const std::vector<std::vector<TypePtr>>& aggregatesArgTypes) {
+      const std::vector<core::AggregationNode::Aggregate>& resolvedAggregates) {
     CompanionPlanInputs inputs;
     inputs.data = data;
     inputs.makeSource = makeSource;
@@ -512,11 +506,19 @@ struct AggregationTestBase::CompanionPlanInputs {
           *companionSignatures,
           functionNames[i],
           aggregateArgs[i],
-          aggregatesArgTypes[i]);
+          resolvedAggregates[i].rawInputTypes);
       inputs.partialAggregates.push_back(companionFunctions.partialFunction);
       inputs.mergeAggregates.push_back(companionFunctions.mergeFunction);
+      // Name the result the same as the original aggregate, so that
+      // post-aggregation projections apply with no change.
       inputs.mergeExtractAggregates.push_back(
-          companionFunctions.mergeExtractFunction);
+          fmt::format(
+              "{0}(a{1}) as a{1}",
+              companionFunctions.mergeExtractFunctionName,
+              i));
+      inputs.mergeExtractFunctionNames.push_back(
+          companionFunctions.mergeExtractFunctionName);
+      inputs.resultTypes.push_back(resolvedAggregates[i].call->type());
       inputs.extractExpressions.push_back(companionFunctions.extractFunction);
     }
     return inputs;
@@ -534,6 +536,11 @@ struct AggregationTestBase::CompanionPlanInputs {
   std::vector<std::string> partialAggregates;
   std::vector<std::string> mergeAggregates;
   std::vector<std::string> mergeExtractAggregates;
+  std::vector<std::string> mergeExtractFunctionNames;
+  // The result type of each aggregate. The single merge_extract step passes
+  // it explicitly, since some functions cannot resolve it from the
+  // intermediate type.
+  std::vector<TypePtr> resultTypes;
   // 'groupingKeys' followed by one extract expression per aggregate.
   std::vector<std::string> extractExpressions;
 };
@@ -750,13 +757,93 @@ void AggregationTestBase::testCompanionExtract(
   }
 }
 
+namespace {
+
+// Adds a single aggregation that groups by 'groupingKeys' and computes the
+// i-th aggregate from the intermediate column 'a<i>' with the merge_extract
+// companion 'functionNames[i]'. The calls carry 'resultTypes' explicitly
+// instead of resolving them from the intermediate types, which some
+// functions, such as Spark's decimal avg, cannot do.
+void addSingleMergeExtract(
+    PlanBuilder& builder,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& functionNames,
+    const std::vector<TypePtr>& resultTypes) {
+  builder.addNode([&](const std::string& nodeId, core::PlanNodePtr source) {
+    const auto& inputType = source->outputType();
+
+    std::vector<core::FieldAccessTypedExprPtr> keys;
+    keys.reserve(groupingKeys.size());
+    for (const auto& key : groupingKeys) {
+      keys.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              inputType->findChild(key), key));
+    }
+
+    std::vector<std::string> names;
+    std::vector<core::AggregationNode::Aggregate> aggregates;
+    names.reserve(functionNames.size());
+    aggregates.reserve(functionNames.size());
+    for (size_t i = 0; i < functionNames.size(); ++i) {
+      auto name = fmt::format("a{}", i);
+      const auto& intermediateType = inputType->findChild(name);
+      core::AggregationNode::Aggregate aggregate;
+      aggregate.call = std::make_shared<core::CallTypedExpr>(
+          resultTypes[i],
+          functionNames[i],
+          std::make_shared<core::FieldAccessTypedExpr>(intermediateType, name));
+      aggregate.rawInputTypes = {intermediateType};
+      aggregates.push_back(std::move(aggregate));
+      names.push_back(std::move(name));
+    }
+
+    return std::make_shared<core::AggregationNode>(
+        nodeId,
+        core::AggregationNode::Step::kSingle,
+        keys,
+        std::vector<core::FieldAccessTypedExprPtr>{},
+        names,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        std::move(source));
+  });
+}
+
+} // namespace
+
 void AggregationTestBase::testCompanionMergeExtract(
     const CompanionPlanInputs& inputs,
     const std::vector<std::string>& postAggregationProjections,
     const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
         assertResults,
-    const std::unordered_map<std::string, std::string>& config) {
-  {
+    const std::unordered_map<std::string, std::string>& config,
+    bool singleStepOnly) {
+  auto addMergeExtract = [&](PlanBuilder& builder) {
+    addSingleMergeExtract(
+        builder,
+        inputs.groupingKeys,
+        inputs.mergeExtractFunctionNames,
+        inputs.resultTypes);
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+  };
+
+  if (singleStepOnly) {
+    SCOPED_TRACE("Run partial + final + single merge extract");
+    PlanBuilder builder(pool());
+    inputs.makeSource(builder);
+    builder
+        .partialAggregation(
+            inputs.partialGroupingKeys, inputs.partialAggregates)
+        .finalAggregation();
+    addMergeExtract(builder);
+
+    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    queryBuilder.configs(config);
+    assertResults(queryBuilder);
+  } else {
     SCOPED_TRACE("Run partial + intermediate + final merge extract");
     PlanBuilder builder(pool());
     inputs.makeSource(builder);
@@ -806,8 +893,12 @@ void AggregationTestBase::testCompanionMergeExtract(
                                        .copyResults(pool());
 
     PlanBuilder mergeExtractBuilder(pool());
-    mergeExtractBuilder.values({intermediateInput})
-        .singleAggregation(inputs.groupingKeys, inputs.mergeExtractAggregates);
+    mergeExtractBuilder.values({intermediateInput});
+    addSingleMergeExtract(
+        mergeExtractBuilder,
+        inputs.groupingKeys,
+        inputs.mergeExtractFunctionNames,
+        inputs.resultTypes);
     const auto& mergeExtractNode = static_cast<const core::AggregationNode&>(
         *mergeExtractBuilder.planNode());
 
@@ -821,12 +912,8 @@ void AggregationTestBase::testCompanionMergeExtract(
         mergeExtractCalls, inputs.groupingKeys, intermediateInput, pool());
     if (inputWithNulls) {
       PlanBuilder builder(pool());
-      builder.values({inputWithNulls})
-          .singleAggregation(
-              inputs.groupingKeys, inputs.mergeExtractAggregates);
-      if (!postAggregationProjections.empty()) {
-        builder.project(postAggregationProjections);
-      }
+      builder.values({inputWithNulls});
+      addMergeExtract(builder);
 
       AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
       queryBuilder.configs(config);
@@ -2008,13 +2095,18 @@ void AggregationTestBase::AggregationTester::run(
         },
         groupingKeys_,
         aggregates_,
-        aggregateArgTypes());
+        resolveAggregates());
     if (companionPlans_ == CompanionPlans::kAll) {
       test_.testCompanionExtract(
           companionInputs, projections_, assertResults, config_, streaming_);
-      test_.testCompanionMergeExtract(
-          companionInputs, projections_, assertResults, config_);
     }
+    test_.testCompanionMergeExtract(
+        companionInputs,
+        projections_,
+        assertResults,
+        config_,
+        /*singleStepOnly=*/companionPlans_ ==
+            CompanionPlans::kMergeAndSingleMergeExtract);
     test_.testCompanionMerge(companionInputs, config_);
   }
 }
@@ -2027,20 +2119,13 @@ void AggregationTestBase::AggregationTester::addSource(
   }
 }
 
-std::vector<std::vector<TypePtr>>
-AggregationTestBase::AggregationTester::aggregateArgTypes() const {
+std::vector<core::AggregationNode::Aggregate>
+AggregationTestBase::AggregationTester::resolveAggregates() const {
   PlanBuilder builder(test_.pool());
   addSource(builder);
   builder.singleAggregation(groupingKeys_, aggregates_);
-  const auto& aggregationNode =
-      dynamic_cast<const core::AggregationNode&>(*builder.planNode());
-
-  std::vector<std::vector<TypePtr>> argTypes;
-  argTypes.reserve(aggregationNode.aggregates().size());
-  for (const auto& aggregate : aggregationNode.aggregates()) {
-    argTypes.push_back(aggregate.rawInputTypes);
-  }
-  return argTypes;
+  return dynamic_cast<const core::AggregationNode&>(*builder.planNode())
+      .aggregates();
 }
 
 uint32_t aggregateAndReadRowSize(
