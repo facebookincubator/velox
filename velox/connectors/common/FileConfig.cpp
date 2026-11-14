@@ -72,6 +72,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_FILE_CONFIG_REGISTER(kPinIndexSession);
     VELOX_FILE_CONFIG_REGISTER(kSelectiveNimbleReaderEnabledSession);
     VELOX_FILE_CONFIG_REGISTER(kNimbleDirectBufferedInputEnabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleLazyFileStatsSession);
     VELOX_FILE_CONFIG_REGISTER(kMaxCoalescedDistanceSession);
     VELOX_FILE_CONFIG_REGISTER(kParallelUnitLoadCountSession);
     VELOX_FILE_CONFIG_REGISTER(kReadTimestampUnitSession);
