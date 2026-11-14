@@ -1247,6 +1247,12 @@ Nimble Options (prefix ``hive.nimble.``)
        not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
        allow lazy IO across stripes. Configure as ``nimble.lazy-column-io``; do not prepend ``hive.``.
        Session: ``nimble_lazy_column_io``.
+   * - ``lazy-file-stats``
+     - bool
+     - false
+     - Decode Nimble file column statistics on first use, and only those a read needs, instead of all
+       of them when the file is opened. Configure as ``nimble-lazy-file-stats``; do not prepend ``hive.``.
+       Session: ``nimble_lazy_file_stats``.
    * - ``preserve-dictionary-encoding``
      - bool
      - false

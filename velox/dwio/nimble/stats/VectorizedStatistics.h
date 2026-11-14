@@ -15,9 +15,11 @@
  */
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -176,6 +178,75 @@ class VectorizedFileStats {
           DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
     return encodingFactory.createPolicy(dataType);
   };
+};
+
+namespace detail {
+class DecodedStatStream;
+struct StatNodeInfo;
+} // namespace detail
+
+/// Like VectorizedFileStats, but decodes on first use. Thread-safe.
+class LazyVectorizedFileStats {
+ public:
+  /// Copies 'payload' and parses only its header.
+  LazyVectorizedFileStats(
+      std::string_view payload,
+      velox::TypePtr schema,
+      velox::memory::MemoryPool& pool);
+
+  ~LazyVectorizedFileStats();
+
+  /// Builds the node's statistics on first call. Throws on a corrupt section.
+  const ColumnStatistics* columnStatistics(uint32_t nodeId) const;
+
+  /// Builds no ColumnStatistics.
+  std::optional<uint64_t> logicalSize(uint32_t nodeId) const;
+
+ private:
+  // One slot per StatStreamType value.
+  static constexpr size_t kNumStatStreamTypes =
+      static_cast<size_t>(StatStreamType::DEDUPLICATED_LOGICAL_SIZE) + 1;
+
+  // The methods below require 'mutex_'.
+
+  // Built from 'schema_' on first call.
+  const std::vector<detail::StatNodeInfo>& nodes() const;
+
+  // Decodes on first call.
+  template <typename T>
+  const detail::DecodedStatStream* stream(StatStreamType type) const;
+
+  // Decodes the stream on first use. Throws if 'index' is past the end.
+  template <typename T>
+  std::optional<T> valueAt(StatStreamType type, uint32_t index) const;
+
+  // Like valueAt(), but throws if absent.
+  uint64_t defaultValueAt(StatStreamType type, uint32_t nodeId) const;
+
+  // Reads the entries at 'nodeId' and the min/max at 'node.typedIndex'.
+  std::unique_ptr<ColumnStatistics> buildColumnStatistics(
+      uint32_t nodeId,
+      const detail::StatNodeInfo& node) const;
+
+  // Allocates the section copy and the decoded streams.
+  velox::memory::MemoryPool& pool_;
+  // Gives each node its statistics kind.
+  const velox::TypePtr schema_;
+  // Declared before the views into it, so it outlives them.
+  velox::BufferPtr payload_;
+  // Indexed by StatStreamType.
+  std::array<std::optional<std::string_view>, kNumStatStreamTypes>
+      streamPayloads_;
+  // Guards 'decodedStreams_', 'nodes_' and 'columnStats_'.
+  mutable std::mutex mutex_;
+  // Each decoded on first use, indexed by StatStreamType.
+  mutable std::
+      array<std::unique_ptr<detail::DecodedStatStream>, kNumStatStreamTypes>
+          decodedStreams_;
+  // Kind and typed index of each node, built on first use.
+  mutable std::vector<detail::StatNodeInfo> nodes_;
+  // Each built on first request, indexed by node id.
+  mutable std::vector<std::unique_ptr<ColumnStatistics>> columnStats_;
 };
 
 } // namespace facebook::nimble
