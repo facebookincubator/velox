@@ -139,6 +139,11 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     /// Round-trip latency (nanos) from dispatch to completion, used as the
     /// gradient congestion signal on success.
     int64_t rttNs{0};
+    /// Transfers successful admission work without a second epoch credit path.
+    RPCRateLimiter::OutputCredit outputCredit{};
+    /// Keeps marginal and stale errors from cutting unrelated driver work.
+    RPCRateLimiter::FeedbackDisposition disposition{
+        RPCRateLimiter::FeedbackDisposition::kCanonical};
   };
 
   /// A row whose attempt was rejected for capacity, waiting to be admitted and
@@ -166,6 +171,9 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     /// Admission epoch of the rejected attempt, whose overload the shared
     /// limiter already handled.
     std::optional<uint64_t> admissionEpoch;
+    /// Retains attribution when a rejected row exhausts its retry budget.
+    RPCRateLimiter::FeedbackDisposition disposition{
+        RPCRateLimiter::FeedbackDisposition::kCanonical};
   };
 
   /// Overload feedback from rejected attempts that went to the retry queue
@@ -176,6 +184,9 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     bool overloaded{false};
     /// True when the shared limiter already applied the overload.
     bool sharedOverloadHandled{false};
+    /// Canonical or mixed feedback retains the original driver fallback.
+    RPCRateLimiter::FeedbackDisposition disposition{
+        RPCRateLimiter::FeedbackDisposition::kCanonical};
   };
 
   /// Pairs completed responses with their query-pool memory charge.
@@ -262,6 +273,10 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     int64_t numCompletionsSignaled{0};
     // Rejected rows admitted again for another attempt.
     int64_t numCapacityRetries{0};
+    // Hinted rejections of a rate quota, retried or not.
+    int64_t numQuotaRejections{0};
+    // Hinted rejections for lack of serving capacity, retried or not.
+    int64_t numCapacityRejections{0};
     // Retries a hint's minRetries granted after its budget ran out.
     int64_t numCapacityRetryFloorRetries{0};
     // Transport-reported overloaded attempts summed over completed rows.
@@ -626,6 +641,10 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   // driver thread (a potential deadlock TSAN flags).
   [[nodiscard]] std::vector<ContinuePromise> takeWaitersLocked();
 
+  // Counts a hinted rejection by the limit it hit. Must be called with mutex_
+  // held.
+  void countRejectionLocked(velox::rpc::CapacityRetryCause cause);
+
   // Extracts the ready batch referenced by 'it': computes its round-trip
   // latency, moves out the responses (capturing any error), erases the entry,
   // and decrements inFlight_. Must be called under mutex_ with 'it->future'
@@ -662,6 +681,9 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   RetryFeedback retryFeedback_;
   // Rejected attempts sent back for another admission.
   int64_t numCapacityRetries_{0};
+  // Hinted rejections by the limit they hit; kUnknown counts in neither.
+  int64_t numQuotaRejections_{0};
+  int64_t numCapacityRejections_{0};
   // Retries scheduled past their hint's budget because of its minRetries.
   int64_t numCapacityRetryFloorRetries_{0};
   // Deadline (nanos) of the armed retry wake-up timer, or 0 when none is

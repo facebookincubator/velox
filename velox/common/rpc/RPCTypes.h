@@ -303,10 +303,24 @@ enum class CapacityRetryJitter {
   kEqual,
 };
 
+/// Which limit a capacity rejection hit. A quota limits the rate of requests
+/// or tokens, whatever their concurrency; a capacity limit bounds the requests
+/// a backend can serve at once.
+enum class CapacityRetryCause {
+  /// Not reported by the function.
+  kUnknown,
+  /// A rate quota, such as requests or tokens per minute.
+  kQuota,
+  /// Serving capacity, such as an overloaded backend.
+  kCapacity,
+};
+
 /// Asks the caller to retry a capacity rejection itself. The function returns
 /// this instead of retrying internally, so the caller can give back the
 /// request's admission slot while it waits and admit the retry again.
 struct CapacityRetry {
+  /// Which limit the rejection hit.
+  CapacityRetryCause cause{CapacityRetryCause::kUnknown};
   /// The nominal wait before the row's first retry.
   std::chrono::milliseconds retryAfter{0};
   /// How long, from the row's first attempt, the row may keep retrying, for a
@@ -407,6 +421,13 @@ struct RPCResponse {
   /// Returns the caller-retry hint, if the function set one.
   const std::optional<CapacityRetry>& capacityRetry() const {
     return capacityRetry_;
+  }
+
+  /// Returns true if the function handed this rejection back for the caller
+  /// to retry and named a lack of serving capacity as its cause.
+  bool isCapacityRejection() const {
+    return capacityRetry_.has_value() &&
+        capacityRetry_->cause == CapacityRetryCause::kCapacity;
   }
 
   /// Returns true if this response represents an error.

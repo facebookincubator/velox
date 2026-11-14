@@ -18,9 +18,11 @@
 
 #include "velox/exec/rpc/RpcErrorClassification.h"
 
+#include <folly/executors/InlineExecutor.h>
 #include <algorithm>
 #include <cmath>
 
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
@@ -81,6 +83,7 @@ RPCOperator::RPCOperator(
 }
 
 RPCOperator::~RPCOperator() {
+  probingDemand_.reset();
   if (state_ == nullptr) {
     return;
   }
@@ -157,11 +160,16 @@ void RPCOperator::initialize() {
   auto* driverCtx = operatorCtx_->driverCtx();
   VELOX_CHECK_NOT_NULL(driverCtx);
   const auto& queryConfig = driverCtx->queryConfig();
+  requestedFlowControlPolicy_ =
+      parseRPCFlowControlPolicy(queryConfig.rpcFlowControlPolicy());
   function_->initialize(
       queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
   capacityRetryEnabled_ =
       rpcNode_->streamingMode() == RPCStreamingMode::kPerRow &&
       function_->mayReturnCapacityRetries();
+  smartProbingEnabled_ =
+      requestedFlowControlPolicy_ == RPCFlowControlPolicy::kSmartProbing &&
+      queryConfig.rpcRateLimiterAdaptiveEnabled() && capacityRetryEnabled_;
   state_->setCapacityRetryEnabled(capacityRetryEnabled_);
   *liveStatsSources_.wlock() =
       LiveStatsSources{.state = state_, .function = function_};
@@ -226,6 +234,9 @@ void RPCOperator::initializeRateLimiter() {
   const bool functionBoundsFirst = sessionHardLimit >= 0;
   RPCRateLimiter::Config policy;
   policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
+  policy.flowControlPolicy = smartProbingEnabled_
+      ? RPCFlowControlPolicy::kSmartProbing
+      : RPCFlowControlPolicy::kWindowAimd;
   const auto functionFloor = function_->configuredAdaptiveFloor();
   if (functionBoundsFirst && functionFloor > 0) {
     policy.floor = functionFloor;
@@ -273,6 +284,7 @@ std::vector<RPCRateLimiter::Token> RPCOperator::tryAcquireAdmission(
     const auto baseline = limiter_->stats();
     liveStatsSources_.wlock()->limiterBaseline = baseline;
   }
+  refreshProbingDemand();
   return limiter_->tryAcquireUpTo(want);
 }
 
@@ -412,16 +424,26 @@ void RPCOperator::addInput(RowVectorPtr input) {
 
 void RPCOperator::dispatchDueRetries() {
   const auto feedback = state_->takeRetryFeedback();
-  if (feedback.overloaded) {
+  // WINDOW_AIMD halves the driver window on every overloaded retry. Under
+  // SMART_PROBING the shared limiter owns the backoff while it can still back
+  // off, and an overload charged to a probe or an older epoch cuts nothing.
+  const bool skipDriverBackoff = smartProbingEnabled_ &&
+      (feedback.disposition !=
+           RPCRateLimiter::FeedbackDisposition::kCanonical ||
+       (feedback.sharedOverloadHandled && limiter_ != nullptr &&
+        limiter_->canHandleRetryBackoff()));
+  if (feedback.overloaded && !skipDriverBackoff) {
     recordCongestion(
         AsyncRPCFunction::CongestionSignal::kOverloaded,
         /*roundTripTimesNs=*/{},
         /*successUnitsByEpoch=*/{},
-        feedback.sharedOverloadHandled);
+        feedback.sharedOverloadHandled,
+        feedback.disposition);
   }
   // Fails rows past their budget now, even when no slot is free below.
   state_->takeDueRetries(0);
   while (true) {
+    refreshProbingDemand();
     const int64_t want =
         std::min(state_->dispatchHeadroom(), state_->numDueRetries());
     if (want <= 0) {
@@ -443,24 +465,41 @@ void RPCOperator::dispatchDueRetries() {
       SelectivityVector row(numRows, false);
       row.setValid(retry.location.rowIndex, true);
       row.updateBounds();
+      std::shared_ptr<RPCRateLimiter::AdmissionLease> lease;
+      std::shared_ptr<RawAttemptObserver> observer;
+      if (reserved[i].isProbing()) {
+        VELOX_CHECK_NOT_NULL(limiter_);
+        lease = limiter_->makeLease(std::move(reserved[i]));
+        observer = prepareRawAttemptObserver(lease);
+      }
       auto futures = function_->dispatchPerRow(row, arguments);
+      if (!lease) {
+        VELOX_CHECK_NOT_NULL(limiter_);
+        lease = limiter_->makeLease(std::move(reserved[i]));
+      }
       VELOX_CHECK_EQ(
           futures.size(),
           1,
           "dispatchPerRow returned {} futures for one retried row",
           futures.size());
-      for (auto& [_, future] : futures) {
-        state_->addRetriedRow(
-            state_,
-            retry,
-            wrapRowFuture(std::move(future), retry.rowId, kBatchRpcTimeout),
-            limiter_->makeLease(std::move(reserved[i])));
+      numAttemptsDispatched_.fetch_add(1, std::memory_order_relaxed);
+      auto wrapped = wrapAdmittedRowFuture(
+          std::move(futures.begin()->second),
+          retry.rowId,
+          lease,
+          std::move(observer));
+      if (lease->isProbing()) {
+        wrapped =
+            wrapRowFuture(std::move(wrapped), retry.rowId, kBatchRpcTimeout);
       }
+      state_->addRetriedRow(
+          state_, retry, std::move(wrapped), std::move(lease));
     }
   }
 }
 
 void RPCOperator::dispatchRowsUnderAdmission() {
+  refreshProbingDemand();
   if (capacityRetryEnabled_) {
     dispatchDueRetries();
   }
@@ -488,6 +527,18 @@ void RPCOperator::dispatchRowsUnderAdmission() {
     chunk.setValidRange(pendingCursor_, pendingCursor_ + numRowsInChunk, true);
     chunk.updateBounds();
 
+    const bool candidate = reserved.front().isProbing();
+    std::vector<std::shared_ptr<RPCRateLimiter::AdmissionLease>> leases;
+    std::vector<std::shared_ptr<RawAttemptObserver>> observers;
+    if (candidate) {
+      leases.reserve(reserved.size());
+      observers.reserve(reserved.size());
+      for (auto& token : reserved) {
+        VELOX_CHECK_NOT_NULL(limiter_);
+        leases.push_back(limiter_->makeLease(std::move(token)));
+        observers.push_back(prepareRawAttemptObserver(leases.back()));
+      }
+    }
     auto futures = function_->dispatchPerRow(chunk, pendingArgs_);
     // Contract: one future per selected row. We advance pendingCursor_ by n and
     // the stored batch's activeRowCount was set to the full row count, so a
@@ -501,18 +552,42 @@ void RPCOperator::dispatchRowsUnderAdmission() {
         numRowsInChunk);
     numRequestsDispatched_.fetch_add(
         static_cast<int64_t>(futures.size()), std::memory_order_relaxed);
+    numAttemptsDispatched_.fetch_add(
+        static_cast<int64_t>(futures.size()), std::memory_order_relaxed);
     size_t reservedIndex = 0;
+    if (candidate) {
+      for (auto& [_, future] : futures) {
+        future = wrapAdmittedRowFuture(
+            std::move(future),
+            globalRowIdCounter_ + static_cast<int64_t>(reservedIndex),
+            leases.at(reservedIndex),
+            std::move(observers.at(reservedIndex)));
+        ++reservedIndex;
+      }
+    }
+    reservedIndex = 0;
     for (auto& [originalRowIndex, future] : futures) {
       auto rowId = globalRowIdCounter_++;
       // RPCState owns one pre-reserved lease per row until completion, when it
       // applies canonical overload feedback and releases admission.
-      auto admissionLease =
-          limiter_->makeLease(std::move(reserved[reservedIndex++]));
+      std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease;
+      if (candidate) {
+        admissionLease = std::move(leases.at(reservedIndex));
+      } else {
+        VELOX_CHECK_NOT_NULL(limiter_);
+        admissionLease =
+            limiter_->makeLease(std::move(reserved.at(reservedIndex)));
+      }
+      ++reservedIndex;
+      auto wrapped = candidate
+          ? wrapRowFuture(std::move(future), rowId, kBatchRpcTimeout)
+          : wrapAdmittedRowFuture(
+                std::move(future), rowId, admissionLease, nullptr);
       state_->addPendingRow(
           state_,
           rowId,
           RPCState::RowLocation{pendingBatchIndex_, originalRowIndex},
-          wrapRowFuture(std::move(future), rowId, kBatchRpcTimeout),
+          std::move(wrapped),
           std::move(admissionLease));
     }
     pendingCursor_ += numRowsInChunk;
@@ -525,6 +600,7 @@ void RPCOperator::dispatchRowsUnderAdmission() {
     pendingCursor_ = 0;
     pendingBatchIndex_ = -1;
   }
+  refreshProbingDemand();
 }
 
 namespace {
@@ -911,7 +987,8 @@ int64_t RPCOperator::recordCongestion(
     AsyncRPCFunction::CongestionSignal signal,
     const std::vector<int64_t>& roundTripTimesNs,
     const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
-    bool sharedOverloadHandled) {
+    bool sharedOverloadHandled,
+    RPCRateLimiter::FeedbackDisposition disposition) {
   if (limiter_ == nullptr) {
     return 0;
   }
@@ -923,9 +1000,13 @@ int64_t RPCOperator::recordCongestion(
   const bool overloadObserved = sharedOverloadHandled ||
       signal == AsyncRPCFunction::CongestionSignal::kOverloaded;
   if (overloadObserved) {
-    state_->onUnitError();
-    if (!sharedOverloadHandled) {
-      limiter_->onOutcome(RPCRateLimiter::Outcome::kOverload, 0, 0);
+    // An overload charged to a probe, or from an older epoch, cuts neither
+    // window. Retries are scheduled either way.
+    if (disposition == RPCRateLimiter::FeedbackDisposition::kCanonical) {
+      state_->onUnitError();
+      if (!sharedOverloadHandled) {
+        limiter_->onUnattributedOverload();
+      }
     }
   } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
     state_->onUnitSamples(roundTripTimesNs);
@@ -963,6 +1044,7 @@ int64_t RPCOperator::recordCongestion(
 }
 
 RowVectorPtr RPCOperator::outputPerRow() {
+  refreshProbingDemand();
   if (claimedRows_.empty()) {
     return finishIfDrained();
   }
@@ -983,8 +1065,22 @@ RowVectorPtr RPCOperator::outputPerRow() {
   responses.reserve(claimedRows_.size());
   locations.reserve(claimedRows_.size());
   roundTripTimesNs.reserve(claimedRows_.size());
+  bool attributedNegative = false;
+  auto disposition = RPCRateLimiter::FeedbackDisposition::kStale;
+  auto wholeOutputDisposition = RPCRateLimiter::FeedbackDisposition::kStale;
   for (auto& row : claimedRows_) {
+    wholeOutputDisposition = RPCRateLimiter::strongerDisposition(
+        wholeOutputDisposition, row.disposition);
     const bool hasError = row.response.hasError();
+    const bool overloaded = hasError &&
+        velox::rpc::errorCategory(row.response.errorKind()) ==
+            velox::rpc::RPCErrorCategory::kOverload;
+    if (overloaded || row.sharedOverloadHandled ||
+        row.response.numOverloadedAttempts > 0) {
+      attributedNegative = true;
+      disposition =
+          RPCRateLimiter::strongerDisposition(disposition, row.disposition);
+    }
     if (hasError) {
       numErrors_++;
       recordErrorKind(row.response.errorKind());
@@ -995,7 +1091,7 @@ RowVectorPtr RPCOperator::outputPerRow() {
     // the gradient/baseline.
     if (!hasError) {
       roundTripTimesNs.push_back(row.rttNs);
-      if (row.admissionEpoch.has_value()) {
+      if (row.admissionEpoch.has_value() && !row.outputCredit) {
         const auto overloadEpoch = row.admissionEpoch.value();
         const auto it = std::find_if(
             successUnitsByEpoch.begin(),
@@ -1016,6 +1112,16 @@ RowVectorPtr RPCOperator::outputPerRow() {
 
   checkNoFrameworkFailures(function_->name(), responses);
 
+  const bool candidateOutput = std::any_of(
+      claimedRows_.begin(), claimedRows_.end(), [](const auto& row) {
+        return static_cast<bool>(row.outputCredit);
+      });
+  RowVectorPtr output;
+  if (candidateOutput) {
+    common::testutil::TestValue::adjust(
+        "facebook::velox::exec::rpc::RPCOperator::outputCreditPreflight", this);
+    output = buildOutputVector(responses, locations);
+  }
   if (!claimedRowsAreLocalOnly_) {
     const bool sharedOverloadHandled = std::any_of(
         claimedRows_.begin(), claimedRows_.end(), [](const auto& row) {
@@ -1027,16 +1133,25 @@ RowVectorPtr RPCOperator::outputPerRow() {
         function_->evaluateCongestion(responses),
         roundTripTimesNs,
         successUnitsByEpoch,
-        sharedOverloadHandled);
+        sharedOverloadHandled,
+        attributedNegative ? disposition : wholeOutputDisposition);
     numStaleSuccessUnits_.fetch_add(discardedUnits, std::memory_order_relaxed);
     // Apply the completed rows' driver-local feedback before admitting more
     // buffered work. Completion already released the shared admission lease.
     dispatchRowsUnderAdmission();
   }
 
-  auto output = buildOutputVector(responses, locations);
+  if (!candidateOutput) {
+    output = buildOutputVector(responses, locations);
+  }
   numResponsesReceived_ += numRows;
   responses.clear();
+  // All throwing output/dispatch work precedes the actual output crossing.
+  if (candidateOutput) {
+    for (auto& row : claimedRows_) {
+      row.outputCredit.consume();
+    }
+  }
   claimedRows_.clear();
   claimedRowsAreLocalOnly_ = false;
   return output;
@@ -1084,7 +1199,8 @@ RowVectorPtr RPCOperator::outputBatch() {
         function_->evaluateCongestion(claimedBatch_->responses),
         roundTripTimesNs,
         successUnitsByEpoch,
-        claimedBatch_->sharedOverloadHandled);
+        claimedBatch_->sharedOverloadHandled,
+        RPCRateLimiter::FeedbackDisposition::kCanonical);
     numStaleSuccessUnits_.fetch_add(discardedUnits, std::memory_order_relaxed);
   }
 
@@ -1097,6 +1213,88 @@ RowVectorPtr RPCOperator::outputBatch() {
 RowVectorPtr RPCOperator::getOutput() {
   return state_->streamingMode() == RPCStreamingMode::kPerRow ? outputPerRow()
                                                               : outputBatch();
+}
+
+bool RPCOperator::hasRunnableProbingDemand() const {
+  return smartProbingEnabled_ && state_ && !finished_ && limiter_ &&
+      limiter_->usesAttributedAdmissionControl() && !state_->isFinished() &&
+      (hasPendingRows() || state_->numDueRetries() > 0);
+}
+
+void RPCOperator::refreshProbingDemand() {
+  if (hasRunnableProbingDemand()) {
+    if (!probingDemand_) {
+      VELOX_CHECK_NOT_NULL(limiter_);
+      probingDemand_ = limiter_->registerRunnableDemand();
+    }
+  } else {
+    probingDemand_.reset();
+  }
+}
+
+struct RPCOperator::RawAttemptObserver {
+  explicit RawAttemptObserver(
+      std::shared_ptr<RPCRateLimiter::AdmissionLease> owned)
+      : lease{std::move(owned)}, output{completion.getSemiFuture()} {}
+  std::shared_ptr<RPCRateLimiter::AdmissionLease> lease;
+  folly::Promise<RPCResponse> completion;
+  folly::SemiFuture<RPCResponse> output;
+};
+
+std::shared_ptr<RPCOperator::RawAttemptObserver>
+RPCOperator::prepareRawAttemptObserver(
+    const std::shared_ptr<RPCRateLimiter::AdmissionLease>& lease) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::rpc::RPCOperator::rawObserverPreflight", this);
+  return std::make_shared<RawAttemptObserver>(lease);
+}
+
+folly::SemiFuture<RPCResponse> RPCOperator::wrapAdmittedRowFuture(
+    folly::SemiFuture<RPCResponse> future,
+    int64_t rowId,
+    const std::shared_ptr<RPCRateLimiter::AdmissionLease>& lease,
+    std::shared_ptr<RawAttemptObserver> observer) {
+  if (lease->isProbing()) {
+    VELOX_CHECK_NOT_NULL(observer);
+    VELOX_CHECK(future.valid());
+    auto output = std::move(observer->output);
+    lease->bindRawAttempt();
+    // thenTry would allocate another Core after work starts. This small
+    // callback uses Folly's installation entry point and the preflight Core.
+    std::move(future)
+        .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
+        .setCallback_([observer = std::move(observer)](
+                          folly::Executor::KeepAlive<>&&,
+                          folly::Try<RPCResponse>&& result) {
+          bool validProof = true;
+          auto outcome = RPCRateLimiter::Outcome::kFailure;
+          if (result.hasValue()) {
+            const auto& response = result.value();
+            validProof = response.numOverloadedAttempts == 0 &&
+                (!response.capacityRetry() ||
+                 response.capacityRetry()->numInPlaceRetries == 0);
+            if (response.hasError() && !response.isCapacityRejection()) {
+              observer->lease->markNonCapacityRejection();
+            }
+            outcome = !response.hasError() ? RPCRateLimiter::Outcome::kSuccess
+                : velox::rpc::errorCategory(response.errorKind()) ==
+                    velox::rpc::RPCErrorCategory::kOverload
+                ? RPCRateLimiter::Outcome::kOverload
+                : RPCRateLimiter::Outcome::kFailure;
+          } else {
+            // An exception carries no retry hint, so it never names capacity.
+            observer->lease->markNonCapacityRejection();
+            if (velox::rpc::errorCategory(errorKindFor(result.exception())) ==
+                velox::rpc::RPCErrorCategory::kOverload) {
+              outcome = RPCRateLimiter::Outcome::kOverload;
+            }
+          }
+          observer->lease->settleRawAttempt(outcome, validProof);
+          observer->completion.setTry(std::move(result));
+        });
+    return output;
+  }
+  return wrapRowFuture(std::move(future), rowId, kBatchRpcTimeout);
 }
 
 void RPCOperator::endBlockWait() {
@@ -1142,6 +1340,7 @@ bool RPCOperator::hasUndispatchableWork() const {
 }
 
 exec::BlockingReason RPCOperator::parkOnAdmission(ContinueFuture* future) {
+  refreshProbingDemand();
   auto admission = limiter_->admitOrWait();
   if (admission.admitted) {
     // Capacity is available; retry dispatch.
@@ -1159,6 +1358,9 @@ std::optional<exec::BlockingReason> RPCOperator::tryClaimOrParkOnRow(
       claimedRows_.push_back(std::move(*claimed));
       return exec::BlockingReason::kNotBlocked;
     case RPCState::ClaimResult::kMustWait:
+      if (smartProbingEnabled_) {
+        return parkOnRowOrProbingAdmission(future, std::move(waitFuture));
+      }
       // Nothing in flight here, so no completion can wake this driver; its
       // buffered rows wait for a shared slot, not for the next retry's timer.
       if (capacityRetryEnabled_ && state_->numInFlight() == 0 &&
@@ -1182,6 +1384,28 @@ std::optional<exec::BlockingReason> RPCOperator::tryClaimOrParkOnRow(
       return std::nullopt;
   }
   VELOX_UNREACHABLE();
+}
+
+exec::BlockingReason RPCOperator::parkOnRowOrProbingAdmission(
+    ContinueFuture* future,
+    ContinueFuture rowWait) {
+  VELOX_CHECK_NOT_NULL(limiter_);
+  refreshProbingDemand();
+  if (state_->dispatchHeadroom() > 0 &&
+      (hasPendingRows() || state_->numDueRetries() > 0)) {
+    auto admission = limiter_->admitOrWait();
+    if (admission.admitted) {
+      return exec::BlockingReason::kNotBlocked;
+    }
+    // Admission can become due before an in-flight call completes. The row
+    // future also wakes on a completion or retry deadline, so a slow call
+    // cannot strand available admission or ready output.
+    std::vector<ContinueFuture> waits;
+    waits.push_back(std::move(rowWait));
+    waits.push_back(std::move(admission.wait));
+    rowWait = folly::collectAny(waits).unit();
+  }
+  return park(future, std::move(rowWait), /*isBackpressure=*/false);
 }
 
 std::optional<exec::BlockingReason> RPCOperator::tryClaimOrParkOnBatch(
@@ -1300,6 +1524,7 @@ exec::BlockingReason RPCOperator::blockedInBatch(ContinueFuture* future) {
 }
 
 exec::BlockingReason RPCOperator::isBlocked(ContinueFuture* future) {
+  refreshProbingDemand();
   endBlockWait();
 
   // Emit ready output or finish before waiting on shared admission.
@@ -1349,6 +1574,12 @@ bool RPCOperator::startDrain() {
 }
 
 void RPCOperator::close() {
+  probingDemand_.reset();
+  // Only SMART_PROBING closes the open block wait here, so WINDOW_AIMD keeps
+  // its rollback close-time accounting.
+  if (smartProbingEnabled_) {
+    endBlockWait();
+  }
   recordRuntimeStats();
 
   // Release resources explicitly. RPCState may be held alive by in-flight RPC
@@ -1449,8 +1680,12 @@ void RPCOperator::addLiveProgressStats(
   if (sources->state == nullptr) {
     return;
   }
+  stats.runtimeStats[kRpcFlowControlRequestedPolicy] =
+      RuntimeMetric(static_cast<int64_t>(requestedFlowControlPolicy_));
   stats.runtimeStats[kRpcRequestsDispatched] =
       RuntimeMetric(numRequestsDispatched_.load(std::memory_order_relaxed));
+  stats.runtimeStats[kRpcAttemptsDispatched] =
+      RuntimeMetric(numAttemptsDispatched_.load(std::memory_order_relaxed));
   const auto snapshot = sources->state->operatorSnapshot();
   stats.runtimeStats[kRpcCompletionsSignaled] =
       RuntimeMetric(snapshot.numCompletionsSignaled);
@@ -1476,6 +1711,8 @@ void RPCOperator::addLiveProgressStats(
   // report in that case, and no stats worth reporting either.
   if (sources->limiter != nullptr) {
     const auto limiterStats = sources->limiter->stats();
+    stats.runtimeStats[kRpcFlowControlEffectivePolicy] =
+        RuntimeMetric(static_cast<int64_t>(limiterStats.flowControlPolicy));
     stats.runtimeStats[kRpcRateLimiterCap] =
         RuntimeMetric(limiterStats.capacity);
     stats.runtimeStats[kRpcRateLimiterHardLimit] =
@@ -1490,6 +1727,14 @@ void RPCOperator::addLiveProgressStats(
         RuntimeMetric(limiterStats.lowWaterLimitMilli);
     stats.runtimeStats[kRpcRateLimiterServiceHorizonNanos] =
         RuntimeMetric(limiterStats.serviceHorizonNanos);
+    if (includeGauges) {
+      stats.runtimeStats[kRpcRateLimiterAdmissionWaiters] =
+          RuntimeMetric(limiterStats.admissionWaiters);
+      stats.runtimeStats[kRpcRateLimiterAdmissionTimerArmed] =
+          RuntimeMetric(limiterStats.admissionTimerArmed ? 1 : 0);
+      stats.runtimeStats[kRpcRateLimiterNextPermitDelayNanos] = RuntimeMetric(
+          limiterStats.nextPermitDelayNanos, RuntimeCounter::Unit::kNanos);
+    }
     if (sources->policyScoped) {
       stats.runtimeStats[kRpcRateLimiterPolicyScoped] = RuntimeMetric(1);
     }
@@ -1575,6 +1820,15 @@ void RPCOperator::recordRuntimeStats() {
     if (snapshot.numCapacityRetries > 0) {
       lockedStats->addRuntimeStat(
           kRpcCapacityRetries, RuntimeCounter(snapshot.numCapacityRetries));
+    }
+    if (snapshot.numQuotaRejections > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcQuotaRejections, RuntimeCounter(snapshot.numQuotaRejections));
+    }
+    if (snapshot.numCapacityRejections > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcCapacityRejections,
+          RuntimeCounter(snapshot.numCapacityRejections));
     }
     if (snapshot.numCapacityRetryFloorRetries > 0) {
       lockedStats->addRuntimeStat(

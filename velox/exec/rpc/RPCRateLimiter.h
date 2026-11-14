@@ -30,7 +30,11 @@
 #include <utility>
 #include <vector>
 
+#include <folly/container/F14Map.h>
+#include <folly/container/small_vector.h>
+
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/exec/rpc/RPCFlowControlPolicy.h"
 
 namespace folly {
 class exception_wrapper;
@@ -63,6 +67,12 @@ namespace facebook::velox::exec::rpc {
 class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Restricts owner-backed token construction without using friendship.
   struct TokenConstructionKey {};
+  // Whether a token is plain or tracked by SMART_PROBING state. Fixed at
+  // admission, so a later policy change cannot reroute its release.
+  enum class AdmissionKind : uint8_t { kPlain, kProbing };
+  struct ProbingCredit;
+  using ProbingCreditCells =
+      folly::small_vector<std::shared_ptr<ProbingCredit>, 1>;
 
  public:
   /// Resolved tuning a limiter runs: one query's rate-limiter policy. The
@@ -84,7 +94,7 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// wins.
     double floor{0.01};
 
-    /// Multiplicative-decrease factor applied on overload, in (0, 1). Maps to
+    /// Window multiplicative-decrease factor on overload, in (0, 1). Maps to
     /// rpc.ratelimiter.decrease_factor.
     double decreaseFactor{0.5};
 
@@ -94,6 +104,11 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// apart as the floor allows. Maps to
     /// rpc.ratelimiter.max_probe_interval_ms.
     std::chrono::milliseconds maxProbeInterval{60'000};
+
+    /// Effective admission-window policy after the operator resolves the
+    /// request against streaming mode, adaptation and retry capability.
+    /// Non-adaptive limiters always run WINDOW_AIMD.
+    RPCFlowControlPolicy flowControlPolicy{RPCFlowControlPolicy::kWindowAimd};
 
     /// Field-wise equality. Limiters compare policies after reducing them to
     /// the fields a limiter reads; see initializeOrMatch().
@@ -119,6 +134,8 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// A snapshot for per-query runtime stats. Read at operator close() for the
   /// final stats, and on every RPCOperator::stats() call so the admission
   /// capacity trajectory is observable while the query is still running.
+  /// Scaled nonnegative gauges saturate at INT64_MAX when their units cannot
+  /// represent the control value. Integral capacity and hardLimit stay exact.
   struct Stats {
     /// Integral in-flight capacity. This remains at least one while a
     /// fractional limit is enforced through paced admission.
@@ -175,6 +192,16 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// The limiter's clock at this snapshot, for timing the interval between
     /// two snapshots.
     int64_t clockNanos{0};
+
+    /// Current registered admission waits and whether their timer is armed.
+    int64_t admissionWaiters{0};
+    bool admissionTimerArmed{false};
+
+    /// Remaining time until the next pacing permit, zero when already due.
+    int64_t nextPermitDelayNanos{0};
+
+    /// Effective admission-window policy.
+    RPCFlowControlPolicy flowControlPolicy{RPCFlowControlPolicy::kWindowAimd};
   };
 
   /// One in-flight request slot, released on destruction so a slot is returned
@@ -188,7 +215,10 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     Token() = default;
 
     Token(Token&& other) noexcept
-        : owner_{other.owner_}, overloadEpoch_{other.overloadEpoch_} {
+        : owner_{other.owner_},
+          overloadEpoch_{other.overloadEpoch_},
+          admissionId_{other.admissionId_},
+          kind_{other.kind_} {
       other.owner_ = nullptr;
     }
 
@@ -201,12 +231,25 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
 
     /// Takes ownership of one slot already claimed on 'owner'. The passkey
     /// restricts direct construction to RPCRateLimiter.
-    Token(TokenConstructionKey&, RPCRateLimiter* owner, uint64_t overloadEpoch)
-        : owner_{owner}, overloadEpoch_{overloadEpoch} {}
+    Token(
+        TokenConstructionKey&,
+        RPCRateLimiter* owner,
+        uint64_t overloadEpoch,
+        uint64_t admissionId,
+        AdmissionKind kind)
+        : owner_{owner},
+          overloadEpoch_{overloadEpoch},
+          admissionId_{admissionId},
+          kind_{kind} {}
 
     /// Admission epoch captured with this token's reservation.
     uint64_t overloadEpoch() const {
       return overloadEpoch_;
+    }
+
+    /// Correlates lease feedback with the issuing controller's held record.
+    uint64_t admissionId() const {
+      return admissionId_;
     }
 
     /// True when this token was issued by `owner`.
@@ -214,10 +257,74 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
       return owner_ == owner;
     }
 
+    /// True for a token tracked by SMART_PROBING probing state.
+    bool isProbing() const {
+      return owner_ && kind_ == AdmissionKind::kProbing;
+    }
+
+    /// Detaches ownership only after the limiter settles its physical charge.
+    void disarm(TokenConstructionKey&) noexcept {
+      owner_ = nullptr;
+    }
+
+    /// Matches internal provenance without exposing controller metadata.
+    bool belongsTo(const RPCRateLimiter* owner, AdmissionKind kind) const {
+      return owner_ == owner && kind_ == kind;
+    }
+
    private:
     // Null means moved-from or default-constructed: no slot is held.
     RPCRateLimiter* owner_{nullptr};
     uint64_t overloadEpoch_{0};
+    // Carries only opaque identity; the controller owns full held metadata.
+    uint64_t admissionId_{0};
+    // Survives moves and policy changes until physical release.
+    AdmissionKind kind_{AdmissionKind::kPlain};
+  };
+
+  /// How an overload reached the window: kCanonical cut it,
+  /// kExclusivelySpeculative was charged to a probe, and kStale came from an
+  /// older epoch.
+  enum class FeedbackDisposition {
+    kCanonical,
+    kExclusivelySpeculative,
+    kStale,
+  };
+
+  /// Combines the dispositions of feedback applied together: kCanonical wins
+  /// over kExclusivelySpeculative, which wins over kStale.
+  static FeedbackDisposition strongerDisposition(
+      FeedbackDisposition lhs,
+      FeedbackDisposition rhs);
+
+  /// Carries immutable admission credit to the actual output crossing.
+  class OutputCredit {
+   public:
+    OutputCredit() = default;
+    ~OutputCredit() = default;
+    OutputCredit(OutputCredit&&) noexcept = default;
+    OutputCredit& operator=(OutputCredit&&) noexcept = default;
+    OutputCredit(const OutputCredit&) = delete;
+    OutputCredit& operator=(const OutputCredit&) = delete;
+    OutputCredit(
+        TokenConstructionKey&,
+        std::shared_ptr<RPCRateLimiter> owner,
+        ProbingCreditCells cells);
+    /// Consumes each owned unit at most once, including work from older epochs.
+    void consume() noexcept;
+    explicit operator bool() const {
+      return !cells_.empty();
+    }
+    /// Exposes cells only to the issuing limiter's internal passkey.
+    const auto& cells(TokenConstructionKey&) const {
+      return cells_;
+    }
+
+   private:
+    // Keeps the lifecycle that issued these cells alive until output or drop.
+    std::shared_ptr<RPCRateLimiter> owner_;
+    // Bounds identity bookkeeping by held attempts and buffered output.
+    ProbingCreditCells cells_;
   };
 
   /// Owns one dispatch's admission tokens until the RPC completes or its
@@ -231,6 +338,11 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
       bool sharedOverloadHandled{false};
       /// Admission epoch shared by every token in this lease.
       uint64_t overloadEpoch{0};
+      /// Prevents exclusively marginal errors from cutting driver
+      /// authorization.
+      FeedbackDisposition disposition{FeedbackDisposition::kCanonical};
+      /// Drops safely when response or ready-queue allocation fails.
+      OutputCredit credit{};
     };
 
     AdmissionLease(
@@ -248,6 +360,28 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// admission epoch are coalesced into one multiplicative decrease.
     Completion completeAndRelease(bool hardOverload) noexcept;
 
+    /// Records one completion before releasing admission. 'handedOff' marks a
+    /// rejection the operator retries, whose duration is not a service sample.
+    Completion completeAndRelease(Outcome outcome, bool handedOff) noexcept;
+
+    /// Binds client ownership before attaching an eager raw-future
+    /// continuation.
+    void bindRawAttempt() noexcept;
+    /// Settles actual raw work independently of timeout and operator teardown.
+    void settleRawAttempt(Outcome outcome, bool validServiceProof) noexcept;
+    /// True when the lease holds SMART_PROBING tokens, which settle when the
+    /// raw attempt completes.
+    bool isProbing() const {
+      return probingLease_;
+    }
+
+    /// Marks an overload of this attempt as not named a lack of serving
+    /// capacity: a rate quota, an unnamed cause, or no retry hint. Such a
+    /// rejection says nothing about the window, so SMART_PROBING answers it
+    /// with WINDOW_AIMD's cut and never charges it to a probe. Must precede the
+    /// attempt's feedback.
+    void markNonCapacityRejection() noexcept;
+
     /// Releases without feedback, as used when the owning query closes.
     void release() noexcept;
 
@@ -257,6 +391,22 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     std::vector<Token> tokens_;
     const uint64_t overloadEpoch_;
     bool completed_{false};
+    // Set by markNonCapacityRejection().
+    bool nonCapacityRejection_{false};
+    // Fixes WINDOW ownership independently of later runtime configuration.
+    const bool probingLease_;
+    // Distinguishes undispatched rollback from unresolved client work.
+    bool rawBound_{false};
+    // Detached tokens remain unresolved until their verdict is published.
+    bool rawSettled_{false};
+    // Withdraws all credit and proof promptly on timeout or close.
+    bool cancelled_{false};
+    // Transfers the raw settlement verdict once to the ready-output path.
+    Completion rawCompletion_;
+    // Preallocates output ownership before dispatch starts.
+    OutputCredit probingCredit_;
+    // Retains cancellation cells even after raw settlement detaches output.
+    ProbingCreditCells cancellationCells_;
   };
 
   explicit RPCRateLimiter(std::string admissionKey);
@@ -323,6 +473,30 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// and the pacing deadline has arrived.
   int64_t available() const;
 
+  /// True when callers must retain eligible demand ownership across a wake
+  /// until dispatch replaces it or eligible work ends.
+  bool usesAttributedAdmissionControl() const;
+
+  /// Owns producer runnable intent independently of waits and current headroom.
+  class RunnableDemand {
+   public:
+    RunnableDemand(std::weak_ptr<RPCRateLimiter> owner, uint64_t id);
+    ~RunnableDemand();
+    RunnableDemand(const RunnableDemand&) = delete;
+    RunnableDemand& operator=(const RunnableDemand&) = delete;
+    RunnableDemand(RunnableDemand&&) = delete;
+    RunnableDemand& operator=(RunnableDemand&&) = delete;
+
+   private:
+    // Does not keep an abandoned producer's limiter alive.
+    std::weak_ptr<RPCRateLimiter> owner_;
+    // Identifies only this producer's registration.
+    const uint64_t id_;
+  };
+
+  /// Registers runnable candidate work; returns null for other policies.
+  std::shared_ptr<RunnableDemand> registerRunnableDemand();
+
   /// The answer to "can you take work now, and if not, what do I wait on?" --
   /// the same question a Velox operator asks its consumer.
   struct Admission {
@@ -340,6 +514,11 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// is holding nothing to wait on; falling through to some other wait is how
   /// a driver ends up parked on a future nothing can fulfil.
   Admission admitOrWait();
+
+  /// Applies an overload that no completion attributed to an attempt, such as
+  /// a function's aggregate congestion verdict. It names no capacity limit, so
+  /// SMART_PROBING answers it with WINDOW_AIMD's cut and learns nothing.
+  void onUnattributedOverload();
 
   /// Feeds completion feedback without a service-horizon sample. Intended for
   /// tests and outcomes that cannot carry one.
@@ -359,6 +538,28 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// Returns false when `units` would have earned recovery credit and were
   /// discarded because `overloadEpoch` is no longer current, true otherwise.
   bool onSuccessForEpoch(uint64_t overloadEpoch, int64_t units, int64_t rttNs);
+
+  /// Whether the limiter can still back off for an operator retry: adaptive,
+  /// and either pacing or above its floor.
+  bool canHandleRetryBackoff() const;
+
+  /// Observes SMART_PROBING state without changing it. Intended only for
+  /// tests.
+  struct TestingProbingSnapshot {
+    /// True once a canonical overload ended the WINDOW-identical phase.
+    bool cut{};
+    /// Integral allowance in force.
+    int64_t baseline{};
+    /// Baseline successes still required before the next probe.
+    int64_t retryDebt{};
+    /// Remembered failures at the next probe level.
+    int64_t nextLevelFailures{};
+    /// Charged admissions awaiting physical settlement.
+    size_t held{};
+    /// Probes among them: zero or one.
+    size_t heldProbes{};
+  };
+  TestingProbingSnapshot testingProbingSnapshot() const;
 
   Stats stats() const;
 
@@ -468,12 +669,24 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // to the floor. A no-op when adaptation is off, and never raises capacity.
   void onOverload();
 
-  // Handles canonical overload once per admission epoch. Returns true when
-  // handled or coalesced, so the driver never repeats shared feedback.
-  bool handleOverloadForEpoch(uint64_t overloadEpoch);
+  // Advances the overload epoch and applies one decrease. 'nonCapacity' as for
+  // applyOverloadLocked().
+  void applyOverload(bool nonCapacity);
 
-  // Applies one decrease with mutex_ held.
-  void applyOverloadLocked();
+  // Applies a canonical overload once per admission epoch: the first overload
+  // from an epoch advances it and decreases the window; later ones coalesce.
+  // Returns true, since the limiter handled the overload either way.
+  bool handleOverloadForEpoch(uint64_t overloadEpoch, bool nonCapacity);
+
+  // Lowers the limit to 'target', never raising it and never below the floor.
+  // Caller holds mutex_.
+  void decreaseLimitLocked(double target);
+
+  // Applies one decrease with mutex_ held. 'nonCapacity' marks a rejection not
+  // shown to be a lack of capacity, which gets WINDOW's cut, records no level
+  // failure, and leaves SMART_PROBING's window state untouched before its
+  // first cut.
+  void applyOverloadLocked(bool nonCapacity);
 
   // Ends time-based recovery after a non-overload failure.
   void onFailure();
@@ -482,7 +695,9 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   void onSuccess(int64_t units, int64_t rttNs);
 
   // Applies success recovery with mutex_ held.
-  void applySuccessLocked(int64_t units, int64_t rttNs);
+  // 'attributed' marks a success from SMART_PROBING output credit, which alone
+  // grows the window once probing has started.
+  void applySuccessLocked(int64_t units, int64_t rttNs, bool attributed);
 
   // True when a success would grow the window: adaptation is on and the window
   // is below the ceiling. Only the stale-success verdict uses it: a success at
@@ -490,9 +705,129 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // the ceiling without growing it. Caller holds mutex_.
   bool successEarnsCreditLocked() const;
 
-  // Called by Token on destruction; releases the slot and hands it to the
-  // longest-waiting parked driver, if any.
-  void release() noexcept;
+  // Called by Token on destruction; releases the slot and wakes parked drivers
+  // that may now be admitted.
+  void release(uint64_t admissionId, AdmissionKind kind) noexcept;
+
+  // Bounds startup dispatch granularity until WINDOW learns a service sample.
+  // Caller holds mutex_.
+  bool usesProbingStartupLocked() const;
+
+  // Records the reservation's captured population before releases can lower it.
+  // Caller holds mutex_.
+  void noteStartupPeakLocked(int64_t pending);
+
+  // One charged SMART_PROBING admission, from reservation until its output is
+  // consumed or dropped.
+  struct ProbingCredit {
+    // Never reused, so late feedback cannot match a newer admission.
+    uint64_t admissionId{};
+    // True for the one exploratory unit above the baseline allowance.
+    bool probe{false};
+    // In-flight units, this one included, when it was admitted. A probe
+    // promotes only if this is still the next level.
+    int64_t level{};
+    // Starts the service sample measured at settlement.
+    std::chrono::steady_clock::time_point admittedAt{};
+    // Rejects output credit from a previous controller lifecycle.
+    uint64_t lifecycle{};
+    // Enforces exactly-once output credit consumption.
+    std::atomic<bool> consumed{false};
+    // Published before the limiter lock is taken, so a settling attempt sees
+    // cancellation that raced with it.
+    std::atomic<bool> cancelled{false};
+    // Records successful physical completion independently of output.
+    bool successful{false};
+    // Requires authoritative physical release before output credit.
+    bool released{false};
+  };
+  // Failures remembered for one level.
+  struct LevelFailures {
+    int64_t count{0};
+    // Baseline successes at or above the level since its last failure or
+    // forgiveness.
+    int64_t cleanSuccesses{0};
+  };
+  // SMART_PROBING state. Before the first canonical overload the policy admits
+  // exactly as WINDOW does. Afterwards the baseline allowance only grows by
+  // probes: one exploratory unit admitted when the baseline is full.
+  struct ProbingState {
+    // Charged admissions awaiting physical settlement.
+    folly::F14FastMap<uint64_t, std::shared_ptr<ProbingCredit>> receipts;
+    // Keeps runnable producer ownership distinct from parked waits.
+    std::vector<uint64_t> demands;
+    // Allocates producer identities without reusing cancelled registrations.
+    uint64_t nextDemandId{0};
+    // Allocates admission identities; never reset.
+    uint64_t nextAdmissionId{0};
+    // Invalidates output credit across controller resets and policy changes.
+    uint64_t lifecycle{0};
+    // True once a canonical overload ended the WINDOW-identical phase.
+    bool cut{false};
+    // Baseline successes still required before the next probe.
+    int64_t retryDebt{0};
+    // The probe in flight, if any.
+    std::optional<uint64_t> probe;
+    // True once the probe in flight can no longer promote: it was charged with
+    // an overload, or a cut or reset happened while it was in flight. A probe
+    // holds one slot, so it is charged with at most one overload.
+    bool probeFailed{false};
+    // Remembered failures by level. Bounded by the levels at or below the
+    // ceiling that failed and were not yet forgiven.
+    folly::F14FastMap<int64_t, LevelFailures> failures;
+  };
+  // SMART_PROBING state; null for a limiter that never ran that policy.
+  std::unique_ptr<ProbingState> probing_;
+  bool usesProbingPolicyLocked() const;
+  // True once a canonical overload ended the WINDOW-identical phase. Before
+  // that, SMART_PROBING issues WINDOW's own tokens and feedback path. Caller
+  // holds mutex_.
+  bool isProbingLocked() const;
+  // Clears probing state for a reset or a policy change. Caller holds mutex_.
+  void resetProbingLocked();
+  int64_t probingAdmissionCapacityLocked() const;
+  std::vector<Token> tryAcquireProbingLocked(
+      std::unique_lock<std::mutex>& lock,
+      int64_t want);
+  OutputCredit makeProbingCredit(const std::vector<Token>& tokens);
+  // Preserves the authoritative verdict if later settlement or wakeup throws.
+  void settleProbingAttempt(
+      std::vector<Token> tokens,
+      OutputCredit credit,
+      Outcome outcome,
+      bool validServiceProof,
+      bool cancelled,
+      bool nonCapacity,
+      AdmissionLease::Completion& completion);
+  void consumeProbingCredit(const std::shared_ptr<ProbingCredit>& cell);
+  void releaseProbingLocked(uint64_t admissionId);
+  // Baseline successes a probe at 'level' waits after 'failures' failures
+  // there: level * 2^(failures - 1), capped at 2 * level^2, i.e. one round
+  // doubling per failure up to 2 * level rounds.
+  static int64_t probePenalty(int64_t level, int64_t failures);
+  // Baseline successes before the next probe: one round at a level that never
+  // failed, otherwise its penalty. Caller holds mutex_.
+  int64_t nextRetryDebtLocked() const;
+  // Remembers a failure at 'level'. Caller holds mutex_.
+  void recordLevelFailureLocked(int64_t level);
+  // Forgives one failure at each level the baseline has sustained for as many
+  // successes as its penalty. Caller holds mutex_.
+  void creditSustainedLevelsLocked();
+  // Counts successful baseline units toward probe spacing and forgiveness.
+  // Caller holds mutex_.
+  void creditBaselineSuccessLocked(int64_t units);
+  // Raises the baseline to the probed level. Caller holds mutex_.
+  void promoteProbeLocked();
+  // Charges an overload to the probe instead of the baseline. Caller holds
+  // mutex_.
+  void failProbeLocked();
+
+  // Peak charged startup population, retained across releases so late feedback
+  // cannot mistake a drained window for the rejected allowance.
+  int64_t startupPeak_{0};
+
+  // Withdraws one producer without affecting other producers or held tokens.
+  void cancelRunnableDemand(uint64_t id) noexcept;
 
   // Names the backend this limiter admits for in logs: the admission key, with
   // a suffix on a policy-scoped limiter. The registry, not this name, decides

@@ -33,8 +33,7 @@
 /// - adaptiveIsPerBackend: Two backends adapt independently.
 /// - adaptiveFactorsAreIndependent: Each backend uses its own decrease factor.
 
-#include "velox/exec/rpc/RPCRateLimiter.h"
-
+#include <folly/futures/Future.h>
 #include <folly/futures/ManualTimekeeper.h>
 #include <gtest/gtest.h>
 
@@ -44,12 +43,16 @@
 #include <future>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 #include <thread>
 #include <tuple>
 #include <vector>
 
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/rpc/RPCRateLimiter.h"
 
 namespace facebook::velox::exec::rpc {
 namespace {
@@ -93,9 +96,14 @@ class ManualPacingClock {
   }
 
   template <typename Rep, typename Period>
-  void advance(std::chrono::duration<Rep, Period> duration) {
+  void advanceClockOnly(std::chrono::duration<Rep, Period> duration) {
     now_ += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         duration);
+  }
+
+  template <typename Rep, typename Period>
+  void advance(std::chrono::duration<Rep, Period> duration) {
+    advanceClockOnly(duration);
     timekeeper_.advance(duration);
   }
 
@@ -179,6 +187,458 @@ class RPCRateLimiterTest : public testing::Test {
     RPCRateLimiterRegistry::global().testingReset();
   }
 };
+
+TEST_F(RPCRateLimiterTest, flowControlPolicyNamesParseCaseInsensitively) {
+  const std::vector<std::pair<std::string_view, RPCFlowControlPolicy>> policies{
+      {"WINDOW_AIMD", RPCFlowControlPolicy::kWindowAimd},
+      {"SMART_PROBING", RPCFlowControlPolicy::kSmartProbing},
+  };
+  for (const auto& [name, policy] : policies) {
+    SCOPED_TRACE(name);
+    EXPECT_EQ(parseRPCFlowControlPolicy(name), policy);
+    EXPECT_EQ(rpcFlowControlPolicyName(policy), name);
+    EXPECT_EQ(
+        parseRPCFlowControlPolicy(rpcFlowControlPolicyName(policy)), policy);
+  }
+  EXPECT_EQ(static_cast<int>(RPCFlowControlPolicy::kWindowAimd), 0);
+  EXPECT_EQ(static_cast<int>(RPCFlowControlPolicy::kSmartProbing), 1);
+  EXPECT_EQ(
+      parseRPCFlowControlPolicy("smart_probing"),
+      RPCFlowControlPolicy::kSmartProbing);
+  EXPECT_EQ(
+      parseRPCFlowControlPolicy("sMaRt_PrObInG"),
+      RPCFlowControlPolicy::kSmartProbing);
+  EXPECT_EQ(
+      parseRPCFlowControlPolicy("window_aimd"),
+      RPCFlowControlPolicy::kWindowAimd);
+  for (const std::string_view invalid :
+       {"", "unknown", "1", " SMART_PROBING", "SMART_PROBING "}) {
+    SCOPED_TRACE(invalid);
+    const auto expectedMessage =
+        "RPC flow control policy must be WINDOW_AIMD or SMART_PROBING; received '" +
+        std::string{invalid} + "'";
+    VELOX_ASSERT_USER_THROW(
+        parseRPCFlowControlPolicy(invalid), expectedMessage);
+  }
+}
+
+TEST_F(RPCRateLimiterTest, rpcProbingDefaultAndAdaptiveDisabledFallback) {
+  ManualPacingClock clock;
+  auto omitted = makePacingLimiter("test.probing.omitted", clock);
+  auto explicitWindow =
+      makePacingLimiter("test.probing.explicit-window", clock);
+  const RPCRateLimiter::Config defaults;
+  EXPECT_EQ(defaults.flowControlPolicy, RPCFlowControlPolicy::kWindowAimd);
+  EXPECT_EQ(
+      omitted->stats().flowControlPolicy, RPCFlowControlPolicy::kWindowAimd);
+  explicitWindow->configure(defaults);
+  EXPECT_EQ(omitted->stats().capacity, explicitWindow->stats().capacity);
+  EXPECT_EQ(omitted->stats().limitMilli, explicitWindow->stats().limitMilli);
+  EXPECT_EQ(
+      omitted->tryAcquireUpTo(20).size(),
+      explicitWindow->tryAcquireUpTo(20).size());
+
+  const auto requested = parseRPCFlowControlPolicy("SMART_PROBING");
+  RPCRateLimiter::Config fixed{.ceiling = 20, .flowControlPolicy = requested};
+  auto& registry = RPCRateLimiterRegistry::global();
+  const auto fallback =
+      registry.getForPolicy("test.probing.fixed-fallback", fixed);
+  EXPECT_EQ(static_cast<int>(requested), 1);
+  EXPECT_EQ(static_cast<int>(fallback.limiter->stats().flowControlPolicy), 0);
+  EXPECT_EQ(
+      fallback.limiter->config().flowControlPolicy,
+      RPCFlowControlPolicy::kWindowAimd);
+  EXPECT_FALSE(fallback.limiter->config().adaptive);
+  EXPECT_FALSE(fallback.limiter->canHandleRetryBackoff());
+  fixed.flowControlPolicy = RPCFlowControlPolicy::kWindowAimd;
+  EXPECT_EQ(
+      registry.getForPolicy("test.probing.fixed-fallback", fixed).limiter,
+      fallback.limiter);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    smartProbingWindowColdStartChunksFillUnchangedCeiling) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.smart-probing-window.chunks", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 20,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  const auto startedAt = clock.now();
+  EXPECT_EQ(limiter->stats().limitMilli, 20'000);
+  EXPECT_EQ(limiter->stats().capacity, 20);
+  EXPECT_FALSE(limiter->usesAttributedAdmissionControl());
+  EXPECT_TRUE(limiter->tryAcquireUpTo(0).empty());
+  std::vector<RPCRateLimiter::Token> held;
+  for (int i = 0; i < 5; ++i) {
+    auto chunk = limiter->tryAcquireUpTo(20);
+    ASSERT_EQ(chunk.size(), 4);
+    for (auto& token : chunk) {
+      held.push_back(std::move(token));
+    }
+    EXPECT_EQ(limiter->stats().limitMilli, 20'000);
+    EXPECT_EQ(limiter->stats().pending, 4 * (i + 1));
+    EXPECT_EQ(limiter->stats().nextPermitDelayNanos, 0);
+    EXPECT_FALSE(limiter->stats().admissionTimerArmed);
+  }
+  EXPECT_EQ(clock.now(), startedAt);
+  EXPECT_EQ(limiter->available(), 0);
+  EXPECT_TRUE(limiter->tryAcquireUpTo(20).empty());
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  EXPECT_FALSE(wait.wait.isReady());
+  EXPECT_FALSE(limiter->stats().admissionTimerArmed);
+  held.clear();
+  EXPECT_TRUE(wait.wait.isReady());
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().peakPending, 20);
+  EXPECT_EQ(limiter->tryAcquireUpTo(3).size(), 3);
+}
+
+TEST_F(RPCRateLimiterTest, retryBackoffStopsAtFloorUnderBothPolicies) {
+  for (const auto policy :
+       {RPCFlowControlPolicy::kWindowAimd,
+        RPCFlowControlPolicy::kSmartProbing}) {
+    SCOPED_TRACE(rpcFlowControlPolicyName(policy));
+    for (const bool floorCase : {false, true}) {
+      SCOPED_TRACE(floorCase);
+      ManualPacingClock clock;
+      auto limiter = makePacingLimiter("test.floor-retry", clock);
+      limiter->configure(
+          {.adaptive = true,
+           .ceiling = floorCase ? 200 : 20,
+           .floor = floorCase ? 50.0 : 1.0,
+           .flowControlPolicy = policy});
+      if (floorCase) {
+        EXPECT_EQ(limiter->stats().limitMilli, 200'000);
+        EXPECT_TRUE(limiter->canHandleRetryBackoff());
+        limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+        EXPECT_EQ(limiter->stats().limitMilli, 100'000);
+        EXPECT_TRUE(limiter->canHandleRetryBackoff());
+        limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+        EXPECT_EQ(limiter->stats().limitMilli, 50'000);
+        EXPECT_FALSE(limiter->canHandleRetryBackoff());
+      }
+      const int64_t units = floorCase ? 50 : 20;
+      const auto collect = [&] {
+        std::vector<RPCRateLimiter::Token> held;
+        held.reserve(static_cast<size_t>(units));
+        while (held.size() < static_cast<size_t>(units)) {
+          auto grant = limiter->tryAcquireUpTo(
+              units - static_cast<int64_t>(held.size()));
+          EXPECT_FALSE(grant.empty());
+          if (grant.empty()) {
+            break;
+          }
+          for (auto& token : grant) {
+            held.push_back(std::move(token));
+          }
+        }
+        return held;
+      };
+      auto first = collect();
+      ASSERT_EQ(first.size(), units);
+      if (!floorCase) {
+        clock.advance(20ms);
+      }
+      const auto completed =
+          limiter->makeLease(std::move(first))
+              ->completeAndRelease(
+                  floorCase ? RPCRateLimiter::Outcome::kOverload
+                            : RPCRateLimiter::Outcome::kSuccess,
+                  floorCase);
+      EXPECT_EQ(limiter->stats().pending, 0);
+      if (floorCase) {
+        EXPECT_EQ(
+            completed.disposition,
+            RPCRateLimiter::FeedbackDisposition::kCanonical);
+        EXPECT_TRUE(completed.sharedOverloadHandled);
+        EXPECT_EQ(limiter->stats().limitMilli, 50'000);
+        EXPECT_FALSE(limiter->canHandleRetryBackoff());
+      }
+      auto second = collect();
+      ASSERT_EQ(second.size(), units);
+      EXPECT_EQ(limiter->stats().pending, units);
+    }
+  }
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    smartProbingWindowColdStartCutUsesChargedPopulation) {
+  for (const auto policy :
+       {RPCFlowControlPolicy::kWindowAimd,
+        RPCFlowControlPolicy::kSmartProbing}) {
+    SCOPED_TRACE(rpcFlowControlPolicyName(policy));
+    ManualPacingClock clock;
+    auto limiter =
+        makePacingLimiter("test.smart-probing-window.charged-cut", clock);
+    limiter->configure(
+        {.adaptive = true,
+         .ceiling = 32,
+         .floor = 1,
+         .flowControlPolicy = policy});
+    auto held = limiter->tryAcquireUpTo(4);
+    ASSERT_EQ(held.size(), 4);
+    EXPECT_EQ(limiter->stats().limitMilli, 32'000);
+    auto lease = limiter->makeLease(std::move(held));
+    EXPECT_TRUE(
+        lease->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+            .sharedOverloadHandled);
+    EXPECT_EQ(
+        limiter->stats().limitMilli,
+        policy == RPCFlowControlPolicy::kSmartProbing ? 2'000 : 16'000);
+    EXPECT_EQ(limiter->stats().pending, 0);
+    EXPECT_FALSE(limiter->stats().admissionTimerArmed);
+  }
+}
+
+// A quota limits the rate, not the window: its rejection gets WINDOW's cut of
+// the limit rather than of the charged startup peak, and does not start
+// probing.
+TEST_F(RPCRateLimiterTest, smartProbingQuotaRejectionCutsAsWindow) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.smart-probing.quota-cut", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 32,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  auto held = limiter->tryAcquireUpTo(4);
+  ASSERT_EQ(held.size(), 4);
+  auto lease = limiter->makeLease(std::move(held));
+  lease->markNonCapacityRejection();
+  EXPECT_TRUE(
+      lease->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().limitMilli, 16'000);
+  EXPECT_FALSE(limiter->testingProbingSnapshot().cut);
+  EXPECT_FALSE(limiter->usesAttributedAdmissionControl());
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    smartProbingWindowColdStartPeakSurvivesReleaseBeforeNegative) {
+  ManualPacingClock clock;
+  auto limiter =
+      makePacingLimiter("test.smart-probing-window.release-before-cut", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 32,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  auto held = limiter->tryAcquireUpTo(4);
+  ASSERT_EQ(held.size(), 4);
+  auto rejected = limiter->makeLease(std::move(held.back()));
+  held.pop_back();
+  clock.advance(20ms);
+  limiter->makeLease(std::move(held))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  EXPECT_EQ(limiter->stats().pending, 1);
+  EXPECT_EQ(limiter->stats().peakPending, 4);
+  EXPECT_EQ(limiter->stats().serviceHorizonNanos, 1'000'000'000);
+  EXPECT_TRUE(
+      rejected->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().limitMilli, 2'000);
+  EXPECT_EQ(limiter->stats().pending, 0);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    smartProbingWindowColdStartCutRetainsPeakAcrossChunks) {
+  ManualPacingClock clock;
+  auto limiter =
+      makePacingLimiter("test.smart-probing-window.multi-chunk-cut", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 32,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  std::vector<RPCRateLimiter::Token> held;
+  for (int i = 0; i < 3; ++i) {
+    auto chunk = limiter->tryAcquireUpTo(32);
+    ASSERT_EQ(chunk.size(), 4);
+    for (auto& token : chunk) {
+      held.push_back(std::move(token));
+    }
+  }
+  EXPECT_EQ(limiter->stats().pending, 12);
+  auto rejected = limiter->makeLease(std::move(held.back()));
+  held.clear();
+  EXPECT_EQ(limiter->stats().pending, 1);
+  EXPECT_EQ(limiter->stats().peakPending, 12);
+  EXPECT_TRUE(
+      rejected->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().limitMilli, 6'000);
+  EXPECT_EQ(limiter->stats().pending, 0);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    smartProbingWindowSingleUnitLegacyIdentityAndCancellation) {
+  ManualPacingClock clock;
+  auto limiter =
+      makePacingLimiter("test.smart-probing-window.physical-unit", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 4,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  auto held = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(held.size(), 1);
+  EXPECT_EQ(held.front().admissionId(), 0);
+  EXPECT_TRUE(held.front().belongsTo(limiter.get()));
+  const auto epoch = held.front().overloadEpoch();
+  RPCRateLimiter::Token moved(std::move(held.front()));
+  EXPECT_FALSE(held.front().belongsTo(limiter.get()));
+  RPCRateLimiter::Token assigned;
+  assigned = std::move(moved);
+  EXPECT_EQ(assigned.admissionId(), 0);
+  EXPECT_TRUE(assigned.belongsTo(limiter.get()));
+  held.clear();
+  EXPECT_EQ(limiter->stats().pending, 1);
+  auto cancelled = limiter->makeLease(std::move(assigned));
+  cancelled->release();
+  cancelled->release();
+  cancelled->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().limitMilli, 4'000);
+  auto fresh = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(fresh.size(), 1);
+  EXPECT_EQ(fresh.front().overloadEpoch(), epoch);
+  EXPECT_EQ(fresh.front().admissionId(), 0);
+  auto rejected = limiter->makeLease(std::move(fresh));
+  EXPECT_TRUE(
+      rejected->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().limitMilli, 1'000);
+  auto next = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(next.size(), 1);
+  EXPECT_EQ(next.front().overloadEpoch(), epoch + 1);
+  EXPECT_NE(next.front().admissionId(), 0);
+  cancelled->completeAndRelease(
+      RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  EXPECT_EQ(limiter->stats().pending, 1);
+  EXPECT_EQ(limiter->stats().limitMilli, 1'000);
+  next.clear();
+  EXPECT_EQ(limiter->stats().pending, 0);
+}
+
+TEST_F(RPCRateLimiterTest, retryBackoffOwnershipTracksCurrentWindow) {
+  auto window = std::make_shared<RPCRateLimiter>("test.retry-backoff.window");
+  window->configure({.adaptive = true, .ceiling = 200, .floor = 50});
+  EXPECT_TRUE(window->canHandleRetryBackoff());
+  window->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_TRUE(window->canHandleRetryBackoff());
+  window->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_FALSE(window->canHandleRetryBackoff());
+
+  auto precise = std::make_shared<RPCRateLimiter>("test.retry-backoff.precise");
+  precise->configure(
+      {.adaptive = true,
+       .ceiling = 200,
+       .floor = 50.0001,
+       .decreaseFactor = 0.500001});
+  precise->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  precise->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(precise->stats().limitMilli, 50'000);
+  EXPECT_TRUE(precise->canHandleRetryBackoff());
+  precise->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_FALSE(precise->canHandleRetryBackoff());
+
+  auto paced = std::make_shared<RPCRateLimiter>("test.retry-backoff.paced");
+  paced->configure({.adaptive = true, .ceiling = 1, .floor = 0.01});
+  for (int32_t cut = 0; cut < 20; ++cut) {
+    paced->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  }
+  EXPECT_TRUE(paced->canHandleRetryBackoff());
+
+  for (const auto policy :
+       {RPCFlowControlPolicy::kWindowAimd,
+        RPCFlowControlPolicy::kSmartProbing}) {
+    for (const bool adaptive : {false, true}) {
+      auto fixed = std::make_shared<RPCRateLimiter>("test.retry-backoff.fixed");
+      fixed->configure(
+          {.adaptive = adaptive,
+           .ceiling = 1,
+           .floor = 1,
+           .flowControlPolicy = policy});
+      EXPECT_FALSE(fixed->canHandleRetryBackoff());
+      fixed->amend([](auto& config) { config.floor = 0.01; });
+      EXPECT_EQ(fixed->canHandleRetryBackoff(), adaptive);
+    }
+  }
+}
+
+TEST_F(RPCRateLimiterTest, serviceHorizonEwmaHandlesPositiveInt64Extremes) {
+  constexpr int64_t kMaximum = std::numeric_limits<int64_t>::max();
+  const std::vector<std::tuple<int64_t, int64_t, int64_t>> samples{
+      {kMaximum, kMaximum, kMaximum},
+      {kMaximum, 1, 8'070'450'532'247'928'831},
+      {1, kMaximum, 1'152'921'504'606'846'976},
+      {kMaximum, kMaximum - 1, kMaximum - 1},
+      {8, 1, 7},
+      {9, 2, 8},
+      {8, 9, 8},
+      {1, 8, 1},
+      {1, 9, 2}};
+  for (const auto& [initial, next, expected] : samples) {
+    SCOPED_TRACE(initial);
+    SCOPED_TRACE(next);
+    auto limiter = std::make_shared<RPCRateLimiter>("test.horizon.int64");
+    limiter->configure({.adaptive = false, .ceiling = 2});
+    limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1, initial);
+    ASSERT_EQ(limiter->stats().serviceHorizonNanos, initial);
+    limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1, next);
+    EXPECT_EQ(limiter->stats().serviceHorizonNanos, expected);
+    limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1, 0);
+    limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1, -1);
+    EXPECT_EQ(limiter->stats().serviceHorizonNanos, expected);
+  }
+}
+
+TEST_F(RPCRateLimiterTest, fixedCapacityPreservesLargeIntegerCeiling) {
+  auto limiter = std::make_shared<RPCRateLimiter>("test.integer-ceiling");
+  limiter->configure(
+      {.adaptive = false, .ceiling = std::numeric_limits<int64_t>::max()});
+  EXPECT_EQ(limiter->available(), std::numeric_limits<int64_t>::max());
+  auto tokens = limiter->tryAcquireUpTo(2);
+  EXPECT_EQ(tokens.size(), 2);
+  EXPECT_EQ(limiter->available(), std::numeric_limits<int64_t>::max() - 2);
+  const auto stats = limiter->stats();
+  EXPECT_EQ(stats.capacity, std::numeric_limits<int64_t>::max());
+  EXPECT_EQ(stats.hardLimit, std::numeric_limits<int64_t>::max());
+  EXPECT_EQ(stats.lowWaterCapacity, std::numeric_limits<int64_t>::max());
+  EXPECT_EQ(stats.limitMilli, std::numeric_limits<int64_t>::max());
+  EXPECT_EQ(stats.lowWaterLimitMilli, std::numeric_limits<int64_t>::max());
+}
+
+TEST_F(RPCRateLimiterTest, registryKeepsSeparateLimiterPerPolicy) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config smartProbing{
+      .adaptive = true,
+      .ceiling = 100,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing};
+  auto* first =
+      registry.getForPolicy("test.policy-limiters", smartProbing).limiter;
+  auto windowAimd = smartProbing;
+  windowAimd.flowControlPolicy = RPCFlowControlPolicy::kWindowAimd;
+  auto* second =
+      registry.getForPolicy("test.policy-limiters", windowAimd).limiter;
+  EXPECT_NE(first, second);
+  EXPECT_EQ(
+      registry.getForPolicy("test.policy-limiters", smartProbing).limiter,
+      first);
+  EXPECT_EQ(
+      first->stats().flowControlPolicy, RPCFlowControlPolicy::kSmartProbing);
+  EXPECT_EQ(
+      second->stats().flowControlPolicy, RPCFlowControlPolicy::kWindowAimd);
+}
 
 TEST_F(RPCRateLimiterTest, acquireAndRelease) {
   const std::string backend = "test.backend";
@@ -275,6 +735,369 @@ TEST_F(
   EXPECT_NE(nextCompletion.overloadEpoch, firstCompletion.overloadEpoch);
   EXPECT_EQ(limiter->stats().limitMilli, 50'000);
   EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 50'000);
+}
+
+TEST_F(RPCRateLimiterTest, dueWakeupWindowPreservesOutputLearning) {
+  ManualPacingClock clock;
+  auto window = makePacingLimiter("test.probing.window-reference", clock);
+  auto probing = makePacingLimiter("test.probing.healthy", clock);
+  window->configure({.adaptive = true, .ceiling = 400, .floor = 1});
+  auto config = window->config();
+  probing->configure(config);
+  auto windowTokens = window->tryAcquireUpTo(400);
+  auto probingTokens = probing->tryAcquireUpTo(400);
+  ASSERT_EQ(windowTokens.size(), 200);
+  ASSERT_EQ(probingTokens.size(), windowTokens.size());
+  EXPECT_TRUE(probing->tryAcquireUpTo(1).empty());
+  const auto windowEpoch = windowTokens.front().overloadEpoch();
+  const auto probingEpoch = probingTokens.front().overloadEpoch();
+  clock.advance(20ms);
+  window->makeLease(std::move(windowTokens.front()))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  probing->makeLease(std::move(probingTokens.front()))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  EXPECT_EQ(probing->stats().serviceHorizonNanos, 1'000'000'000);
+  EXPECT_EQ(probing->stats().limitMilli, window->stats().limitMilli);
+  EXPECT_EQ(probing->tryAcquireUpTo(400).size(), 1);
+  EXPECT_TRUE(window->onSuccessForEpoch(windowEpoch, 1, 20'000'000));
+  EXPECT_TRUE(probing->onSuccessForEpoch(probingEpoch, 1, 20'000'000));
+  EXPECT_EQ(
+      probing->stats().serviceHorizonNanos,
+      window->stats().serviceHorizonNanos);
+  EXPECT_EQ(probing->stats().limitMilli, window->stats().limitMilli);
+  window->makeLease(std::move(windowTokens.back()))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  probing->makeLease(std::move(probingTokens.back()))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  EXPECT_EQ(probing->stats().serviceHorizonNanos, 20'000'000);
+  window->onSuccessForEpoch(windowEpoch, 1, 40'000'000);
+  probing->onSuccessForEpoch(probingEpoch, 1, 40'000'000);
+  EXPECT_EQ(probing->stats().serviceHorizonNanos, 22'500'000);
+  EXPECT_EQ(probing->stats().limitMilli, window->stats().limitMilli);
+}
+
+TEST_F(RPCRateLimiterTest, windowCancellationAndUnsampledWorkDoNotProveGrowth) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.window.no-proof", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 20,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  for (const auto outcome :
+       {RPCRateLimiter::Outcome::kNone,
+        RPCRateLimiter::Outcome::kFailure,
+        RPCRateLimiter::Outcome::kSuccess}) {
+    auto tokens = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(tokens.size(), 1);
+    auto lease = limiter->makeLease(std::move(tokens));
+    lease->completeAndRelease(outcome, /*handedOff=*/false);
+    lease->release();
+    lease->completeAndRelease(
+        RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+    EXPECT_EQ(limiter->stats().pending, 0);
+  }
+  auto compound = limiter->tryAcquireUpTo(2);
+  auto second = limiter->tryAcquireUpTo(2);
+  ASSERT_EQ(compound.size(), 1);
+  ASSERT_EQ(second.size(), 1);
+  compound.push_back(std::move(second.front()));
+  limiter->makeLease(std::move(compound))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+}
+
+TEST_F(RPCRateLimiterTest, windowResetKeepsOldPhysicalOwnershipAndUniqueIds) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.window.reset", clock);
+  const RPCRateLimiter::Config config{
+      .adaptive = true,
+      .ceiling = 4,
+      .floor = 1,
+      .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing};
+  limiter->configure(config);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto old = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(old.size(), 1);
+  const auto oldId = old.front().admissionId();
+  EXPECT_NE(oldId, 0);
+  auto oldLease = limiter->makeLease(std::move(old));
+  limiter->testingReset();
+  limiter->configure(config);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto fresh = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(fresh.size(), 1);
+  EXPECT_GT(fresh.front().admissionId(), oldId);
+  EXPECT_EQ(limiter->stats().pending, 2);
+  RPCRateLimiter::Token moved(std::move(fresh.front()));
+  RPCRateLimiter::Token assigned;
+  assigned = std::move(moved);
+  fresh.clear();
+  oldLease->completeAndRelease(
+      RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  EXPECT_EQ(limiter->stats().pending, 1);
+  auto freshLease = limiter->makeLease(std::move(assigned));
+  freshLease->release();
+  freshLease->release();
+  EXPECT_EQ(limiter->stats().pending, 0);
+}
+
+TEST_F(RPCRateLimiterTest, windowFeedbackPreservesFractionalProgress) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.window.active-fractional", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 2,
+       .floor = 0.25,
+       .flowControlPolicy = RPCFlowControlPolicy::kWindowAimd});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1, 100'000'000);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+  clock.advance(200ms);
+  auto fresh = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(fresh.size(), 1);
+  const auto epoch = fresh.front().overloadEpoch();
+  clock.advance(100ms);
+  limiter->makeLease(std::move(fresh))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  ASSERT_EQ(limiter->stats().serviceHorizonNanos, 100'000'000);
+  EXPECT_FALSE(limiter->stats().recovering);
+  EXPECT_TRUE(limiter->onSuccessForEpoch(epoch, 1, 100'000'000));
+  EXPECT_TRUE(limiter->stats().recovering);
+  EXPECT_TRUE(limiter->tryAcquireUpTo(2).empty());
+  clock.advance(100ms);
+  auto progressed = limiter->tryAcquireUpTo(2);
+  ASSERT_EQ(progressed.size(), 1);
+  EXPECT_GE(limiter->stats().limitMilli, 1'000);
+  EXPECT_TRUE(limiter->tryAcquireUpTo(2).empty());
+}
+
+TEST_F(RPCRateLimiterTest, windowAcceptedCutKeepsAdvancingClockMonotonic) {
+  ManualPacingClock clock;
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.probing.advancing-clock",
+      [&] {
+        clock.advanceClockOnly(1ns);
+        return clock.now();
+      },
+      clock.timekeeper(),
+      [] { return 1.0; });
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 4,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kWindowAimd});
+  auto cut = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(cut.size(), 1);
+  const auto completion =
+      limiter->makeLease(std::move(cut))
+          ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  EXPECT_TRUE(completion.sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().limitMilli, 2'000);
+  auto fresh = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(fresh.size(), 1);
+  const auto epoch = fresh.front().overloadEpoch();
+  clock.advanceClockOnly(20ms);
+  limiter->makeLease(std::move(fresh))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  EXPECT_TRUE(limiter->onSuccessForEpoch(epoch, 1, 20'000'000));
+  EXPECT_EQ(limiter->stats().serviceHorizonNanos, 20'000'000);
+  EXPECT_EQ(limiter->stats().limitMilli, std::llround(std::sqrt(6.0) * 1'000));
+  EXPECT_EQ(limiter->stats().pending, 0);
+}
+
+TEST_F(RPCRateLimiterTest, windowDeadlineCrossingCannotStrandRunnableWaiter) {
+  ManualPacingClock clock;
+  bool crossDeadline{false};
+  int clockReads{0};
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.window.deadline-crossing",
+      [&] {
+        if (crossDeadline && ++clockReads == 2) {
+          crossDeadline = false;
+          clock.advanceClockOnly(1ns);
+        }
+        return clock.now();
+      },
+      clock.timekeeper(),
+      [] { return 1.0; });
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1,
+       .floor = 0.01,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  auto demand = limiter->registerRunnableDemand();
+  auto cut = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(cut.size(), 1);
+  limiter->makeLease(std::move(cut))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  clock.advance(
+      std::chrono::ceil<std::chrono::milliseconds>(
+          std::chrono::nanoseconds{limiter->stats().nextPermitDelayNanos}));
+  auto fresh = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(fresh.size(), 1);
+  clock.advance(20ms);
+  limiter->makeLease(std::move(fresh))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  clock.advance(
+      std::chrono::ceil<std::chrono::milliseconds>(
+          std::chrono::nanoseconds{limiter->stats().nextPermitDelayNanos}));
+  auto paced = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(paced.size(), 1);
+  paced.clear();
+  const auto delay = limiter->stats().nextPermitDelayNanos;
+  ASSERT_GT(delay, 0);
+  clock.advanceClockOnly(std::chrono::nanoseconds{delay - 1});
+  crossDeadline = true;
+  const auto wait = limiter->admitOrWait();
+  EXPECT_FALSE(crossDeadline);
+  clock.advance(1ms);
+  EXPECT_TRUE(wait.admitted || wait.wait.isReady());
+  EXPECT_EQ(limiter->stats().pending, 0);
+}
+
+// Bounds physical ownership independently of output feedback.
+std::shared_ptr<RPCRateLimiter> makeSingleWindowLimiter(
+    ManualPacingClock& clock) {
+  auto limiter = makePacingLimiter("test.smart-probing-owned.moves", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  return limiter;
+}
+
+TEST_F(RPCRateLimiterTest, windowMovesAndDuplicateCancellationRetainOwnership) {
+  ManualPacingClock clock;
+  auto limiter = makeSingleWindowLimiter(clock);
+  auto tokens = limiter->tryAcquireUpTo(32);
+  ASSERT_EQ(tokens.size(), 1);
+  RPCRateLimiter::Token moved(std::move(tokens.front()));
+  RPCRateLimiter::Token assigned;
+  assigned = std::move(moved);
+  tokens.clear();
+  EXPECT_EQ(limiter->stats().pending, 1);
+  EXPECT_TRUE(limiter->tryAcquireUpTo(32).empty());
+  auto lease = limiter->makeLease(std::move(assigned));
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  lease->release();
+  lease->release();
+  lease->completeAndRelease(
+      RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  EXPECT_TRUE(wait.wait.isReady());
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->tryAcquireUpTo(32).size(), 1);
+}
+
+TEST_F(RPCRateLimiterTest, windowOwnedPolicyDoesNotPaceOrdinaryRetryPolicy) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config policy{.adaptive = true, .ceiling = 100, .floor = 1};
+  auto* ordinary =
+      registry.getForPolicy("test.rate-mode-isolation", policy).limiter;
+  policy.flowControlPolicy = RPCFlowControlPolicy::kSmartProbing;
+  auto* controlled =
+      registry.getForPolicy("test.rate-mode-isolation", policy).limiter;
+  ASSERT_NE(ordinary, controlled);
+  auto rejected = controlled->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  controlled->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  EXPECT_EQ(controlled->stats().limitMilli, 1'000);
+  EXPECT_EQ(ordinary->tryAcquireUpTo(10).size(), 10);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    fixedConcurrencyDoesNotMergeWindowOwnedAndOrdinaryPolicies) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config policy{.adaptive = true, .ceiling = 1, .floor = 1};
+  auto* ordinary =
+      registry.getForPolicy("test.fixed-rate-policy", policy).limiter;
+  policy.flowControlPolicy = RPCFlowControlPolicy::kSmartProbing;
+  auto* controlled =
+      registry.getForPolicy("test.fixed-rate-policy", policy).limiter;
+  ASSERT_NE(ordinary, controlled);
+  auto rejected = controlled->tryAcquireUpTo(1);
+  ASSERT_EQ(rejected.size(), 1);
+  controlled->makeLease(std::move(rejected.front()))
+      ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  EXPECT_EQ(controlled->stats().capacity, 1);
+  EXPECT_EQ(controlled->stats().limitMilli, 1'000);
+  EXPECT_EQ(ordinary->tryAcquireUpTo(1).size(), 1);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    fractionalAdmissionCrossingPermitDeadlineStillGetsWakeup) {
+  ManualPacingClock clock;
+  bool crossDeadline{false};
+  int clockReads{0};
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.fractional-deadline-crossing",
+      [&] {
+        if (crossDeadline && ++clockReads == 2) {
+          crossDeadline = false;
+          clock.advanceClockOnly(2s);
+        }
+        return clock.now();
+      },
+      clock.timekeeper(),
+      [] { return 1.0; });
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1,
+       .floor = 0.01,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+  clock.advance(1s);
+  crossDeadline = true;
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  EXPECT_TRUE(limiter->stats().admissionTimerArmed);
+  clock.advance(1ms);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, windowAimdPolicyRetainsOriginalDeadlineRace) {
+  ManualPacingClock clock;
+  bool crossDeadline{false};
+  int clockReads{0};
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.legacy-deadline-rollback",
+      [&] {
+        if (crossDeadline && ++clockReads == 2) {
+          crossDeadline = false;
+          clock.advanceClockOnly(2s);
+        }
+        return clock.now();
+      },
+      clock.timekeeper(),
+      [] { return 1.0; });
+  limiter->configure({.adaptive = true, .ceiling = 1, .floor = 0.01});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  clock.advance(1s);
+  crossDeadline = true;
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  EXPECT_FALSE(limiter->stats().admissionTimerArmed);
+  clock.advance(1ms);
+  EXPECT_FALSE(wait.wait.isReady());
+  // Release the deliberately preserved old wait without leaving a pending
+  // promise at fixture teardown.
+  limiter->amend([](auto& config) { config.adaptive = false; });
+  EXPECT_TRUE(wait.wait.isReady());
 }
 
 TEST_F(RPCRateLimiterTest, configAmendDoesNotSuppressCanonicalOverload) {
@@ -2234,6 +3057,449 @@ TEST_F(RPCRateLimiterTest, lowWaterReportsTheCeilingWhenNeverShrunk) {
   limiterFor(backend).onOutcome(RPCRateLimiter::Outcome::kSuccess, 1'024);
   EXPECT_EQ(
       limiterFor(backend).stats().lowWaterCapacity, shrunk.lowWaterCapacity);
+}
+
+// A SMART_PROBING limiter at ceiling 4 with registered demand, and helpers to
+// drive it through the cut and probing phases.
+struct OwnedWindow {
+  OwnedWindow() {
+    common::testutil::TestValue::enable();
+    limiter = makePacingLimiter("test.owned-window", clock);
+    limiter->configure(
+        {.adaptive = true,
+         .ceiling = 4,
+         .floor = 1,
+         .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+    demand = limiter->registerRunnableDemand();
+  }
+
+  void cut() {
+    auto tokens = limiter->tryAcquireUpTo(4);
+    ASSERT_EQ(tokens.size(), 4);
+    auto rejected = limiter->makeLease(std::move(tokens.front()));
+    tokens.clear();
+    auto result =
+        rejected->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+    EXPECT_EQ(
+        result.disposition, RPCRateLimiter::FeedbackDisposition::kCanonical);
+    EXPECT_EQ(limiter->stats().capacity, 2);
+  }
+
+  std::shared_ptr<RPCRateLimiter::AdmissionLease> admitOne() {
+    auto tokens = limiter->tryAcquireUpTo(1);
+    if (tokens.size() != 1) {
+      ADD_FAILURE() << "Expected one owned admission";
+      return nullptr;
+    }
+    return limiter->makeLease(std::move(tokens));
+  }
+
+  void succeed(const std::shared_ptr<RPCRateLimiter::AdmissionLease>& lease) {
+    auto completion = lease->completeAndRelease(
+        RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+    completion.credit.consume();
+  }
+
+  void baselineSuccesses(int64_t count) {
+    for (int64_t i = 0; i < count; ++i) {
+      auto lease = admitOne();
+      ASSERT_TRUE(lease);
+      succeed(lease);
+    }
+  }
+
+  // Raises the ceiling to 16, charges two startup acquisitions of four and
+  // rejects one unit, which cuts the window to half the charged peak.
+  void cutToFour() {
+    limiter->amend([](auto& config) { config.ceiling = 16; });
+    auto first = limiter->tryAcquireUpTo(4);
+    auto second = limiter->tryAcquireUpTo(4);
+    ASSERT_EQ(first.size() + second.size(), 8);
+    auto rejected = limiter->makeLease(std::move(first.front()));
+    first.clear();
+    second.clear();
+    EXPECT_EQ(
+        rejected->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+            .disposition,
+        RPCRateLimiter::FeedbackDisposition::kCanonical);
+    EXPECT_EQ(limiter->stats().capacity, 4);
+  }
+
+  void payRetryDebt() {
+    baselineSuccesses(limiter->testingProbingSnapshot().retryDebt);
+    EXPECT_EQ(limiter->testingProbingSnapshot().retryDebt, 0);
+  }
+
+  std::vector<std::shared_ptr<RPCRateLimiter::AdmissionLease>> fillBaseline() {
+    std::vector<std::shared_ptr<RPCRateLimiter::AdmissionLease>> leases;
+    while (limiter->stats().pending < limiter->stats().capacity) {
+      auto lease = admitOne();
+      if (!lease) {
+        break;
+      }
+      leases.push_back(std::move(lease));
+    }
+    return leases;
+  }
+
+  ManualPacingClock clock;
+  std::shared_ptr<RPCRateLimiter> limiter;
+  std::shared_ptr<RPCRateLimiter::RunnableDemand> demand;
+};
+
+TEST_F(RPCRateLimiterTest, probeWaitsForOneCleanRoundThenPromotesOneUnit) {
+  OwnedWindow window;
+  window.cut();
+  EXPECT_TRUE(window.limiter->testingProbingSnapshot().cut);
+  EXPECT_TRUE(window.limiter->usesAttributedAdmissionControl());
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().retryDebt, 2);
+  EXPECT_EQ(window.limiter->tryAcquireUpTo(4).size(), 1);
+  {
+    auto held = window.fillBaseline();
+    ASSERT_EQ(held.size(), 2);
+    EXPECT_TRUE(window.limiter->tryAcquireUpTo(1).empty());
+    for (auto& lease : held) {
+      window.succeed(lease);
+    }
+  }
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().retryDebt, 0);
+
+  auto held = window.fillBaseline();
+  ASSERT_EQ(held.size(), 2);
+  auto probe = window.admitOne();
+  ASSERT_TRUE(probe);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().heldProbes, 1);
+  EXPECT_TRUE(window.limiter->tryAcquireUpTo(1).empty());
+  window.succeed(probe);
+  EXPECT_EQ(window.limiter->stats().capacity, 3);
+  // Level 4 failed once at the startup cut: 4 * 2^0 successes.
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().retryDebt, 4);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().nextLevelFailures, 1);
+}
+
+TEST_F(RPCRateLimiterTest, failedProbeKeepsBaselineAndDoublesPenaltyUpToCap) {
+  OwnedWindow window;
+  window.cut();
+  window.baselineSuccesses(2);
+  // Level 3 penalties double from 3 until the 2 * 3^2 cap.
+  for (const int64_t penalty : {3, 6, 12, 18}) {
+    SCOPED_TRACE(penalty);
+    auto held = window.fillBaseline();
+    ASSERT_EQ(held.size(), 2);
+    auto probe = window.admitOne();
+    ASSERT_TRUE(probe);
+    EXPECT_EQ(
+        probe->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+            .disposition,
+        RPCRateLimiter::FeedbackDisposition::kExclusivelySpeculative);
+    EXPECT_EQ(window.limiter->stats().capacity, 2);
+    EXPECT_EQ(window.limiter->testingProbingSnapshot().retryDebt, penalty);
+    for (auto& lease : held) {
+      lease->release();
+    }
+    window.baselineSuccesses(penalty);
+  }
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().nextLevelFailures, 4);
+}
+
+TEST_F(RPCRateLimiterTest, probeAbsorbsOnlyOneOverloadBeforeCanonicalCut) {
+  OwnedWindow window;
+  window.cut();
+  window.baselineSuccesses(2);
+  auto held = window.fillBaseline();
+  ASSERT_EQ(held.size(), 2);
+  auto probe = window.admitOne();
+  ASSERT_TRUE(probe);
+  EXPECT_EQ(
+      held[0]
+          ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .disposition,
+      RPCRateLimiter::FeedbackDisposition::kExclusivelySpeculative);
+  EXPECT_EQ(window.limiter->stats().capacity, 2);
+  EXPECT_EQ(
+      held[1]
+          ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .disposition,
+      RPCRateLimiter::FeedbackDisposition::kCanonical);
+  EXPECT_EQ(window.limiter->stats().capacity, 1);
+  window.succeed(probe);
+  EXPECT_EQ(window.limiter->stats().capacity, 1);
+}
+
+TEST_F(RPCRateLimiterTest, staleOverloadDuringProbeIsNotCharged) {
+  OwnedWindow window;
+  window.cutToFour();
+  window.payRetryDebt();
+  // Admitted before the next cut, and rejected only after a probe started.
+  auto stale = window.admitOne();
+  ASSERT_TRUE(stale);
+  auto rejected = window.admitOne();
+  ASSERT_TRUE(rejected);
+  EXPECT_EQ(
+      rejected->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .disposition,
+      RPCRateLimiter::FeedbackDisposition::kCanonical);
+  EXPECT_EQ(window.limiter->stats().capacity, 2);
+  window.payRetryDebt();
+  auto held = window.fillBaseline();
+  ASSERT_EQ(held.size(), 1);
+  auto probe = window.admitOne();
+  ASSERT_TRUE(probe);
+  ASSERT_EQ(window.limiter->testingProbingSnapshot().heldProbes, 1);
+
+  EXPECT_EQ(
+      stale->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .disposition,
+      RPCRateLimiter::FeedbackDisposition::kStale);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().nextLevelFailures, 0);
+  window.succeed(probe);
+  EXPECT_EQ(window.limiter->stats().capacity, 3);
+}
+
+TEST_F(RPCRateLimiterTest, overloadAfterProbePromotedCutsWindow) {
+  OwnedWindow window;
+  window.cut();
+  window.baselineSuccesses(2);
+  auto held = window.fillBaseline();
+  ASSERT_EQ(held.size(), 2);
+  auto probe = window.admitOne();
+  ASSERT_TRUE(probe);
+  for (auto& lease : held) {
+    window.succeed(lease);
+  }
+  // Admitted while the probe was in flight, rejected after it promoted.
+  auto late = window.admitOne();
+  ASSERT_TRUE(late);
+  window.succeed(probe);
+  ASSERT_EQ(window.limiter->stats().capacity, 3);
+
+  EXPECT_EQ(
+      late->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .disposition,
+      RPCRateLimiter::FeedbackDisposition::kCanonical);
+  EXPECT_EQ(window.limiter->stats().capacity, 1);
+}
+
+TEST_F(RPCRateLimiterTest, probeFailedByQuotaCutAbsorbsNoOverload) {
+  OwnedWindow window;
+  window.cutToFour();
+  window.payRetryDebt();
+  auto held = window.fillBaseline();
+  ASSERT_EQ(held.size(), 4);
+  auto probe = window.admitOne();
+  ASSERT_TRUE(probe);
+  held[0]->markNonCapacityRejection();
+  EXPECT_EQ(
+      held[0]
+          ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .disposition,
+      RPCRateLimiter::FeedbackDisposition::kCanonical);
+  EXPECT_EQ(window.limiter->stats().capacity, 2);
+  for (size_t i = 1; i < held.size(); ++i) {
+    window.succeed(held[i]);
+  }
+  // Admitted after the quota cut, while the failed probe still holds a slot.
+  auto fresh = window.admitOne();
+  ASSERT_TRUE(fresh);
+
+  EXPECT_EQ(
+      fresh->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .disposition,
+      RPCRateLimiter::FeedbackDisposition::kCanonical);
+  EXPECT_EQ(window.limiter->stats().capacity, 1);
+}
+
+TEST_F(RPCRateLimiterTest, unsettledProbeWithoutCapacityHintCutsWindow) {
+  OwnedWindow window;
+  window.cut();
+  window.baselineSuccesses(2);
+  auto held = window.fillBaseline();
+  ASSERT_EQ(held.size(), 2);
+  auto probe = window.admitOne();
+  ASSERT_TRUE(probe);
+  // Completed before its raw attempt settles, as an operator timeout does.
+  probe->bindRawAttempt();
+  probe->markNonCapacityRejection();
+  EXPECT_EQ(
+      probe
+          ->completeAndRelease(
+              RPCRateLimiter::Outcome::kOverload, /*handedOff=*/false)
+          .disposition,
+      RPCRateLimiter::FeedbackDisposition::kCanonical);
+  EXPECT_EQ(window.limiter->stats().capacity, 1);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().nextLevelFailures, 0);
+}
+
+TEST_F(RPCRateLimiterTest, quotaRejectionDuringProbeCutsWithoutLevelFailure) {
+  OwnedWindow window;
+  window.cut();
+  window.baselineSuccesses(2);
+  auto held = window.fillBaseline();
+  ASSERT_EQ(held.size(), 2);
+  auto probe = window.admitOne();
+  ASSERT_TRUE(probe);
+  held[0]->markNonCapacityRejection();
+  EXPECT_EQ(
+      held[0]
+          ->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+          .disposition,
+      RPCRateLimiter::FeedbackDisposition::kCanonical);
+  EXPECT_EQ(window.limiter->stats().capacity, 1);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().nextLevelFailures, 0);
+  window.succeed(probe);
+  EXPECT_EQ(window.limiter->stats().capacity, 1);
+}
+
+TEST_F(RPCRateLimiterTest, sustainedLevelForgivesOneFailure) {
+  OwnedWindow window;
+  window.cut();
+  window.baselineSuccesses(2);
+  const auto canonicalCut = [&] {
+    auto rejected = window.admitOne();
+    ASSERT_TRUE(rejected);
+    EXPECT_EQ(
+        rejected->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+            .disposition,
+        RPCRateLimiter::FeedbackDisposition::kCanonical);
+  };
+  canonicalCut();
+  EXPECT_EQ(window.limiter->stats().capacity, 1);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().nextLevelFailures, 1);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().retryDebt, 2);
+  window.baselineSuccesses(2);
+  {
+    auto held = window.admitOne();
+    auto probe = window.admitOne();
+    ASSERT_TRUE(held);
+    ASSERT_TRUE(probe);
+    window.succeed(probe);
+    window.succeed(held);
+  }
+  EXPECT_EQ(window.limiter->stats().capacity, 2);
+  // The second clean success at level 2 sustains it for 2 * 2^0 successes.
+  window.baselineSuccesses(1);
+  canonicalCut();
+  EXPECT_EQ(window.limiter->stats().capacity, 1);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().nextLevelFailures, 1);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().retryDebt, 2);
+}
+
+TEST_F(RPCRateLimiterTest, startupSuccessesSettlingAfterCutPayRetryDebt) {
+  OwnedWindow window;
+  auto tokens = window.limiter->tryAcquireUpTo(4);
+  ASSERT_EQ(tokens.size(), 4);
+  const auto epoch = tokens.front().overloadEpoch();
+  auto rejected = window.limiter->makeLease(std::move(tokens.back()));
+  tokens.pop_back();
+  rejected->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().retryDebt, 2);
+  window.limiter->makeLease(std::move(tokens))
+      ->completeAndRelease(
+          RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+  window.limiter->onSuccessForEpoch(epoch, 3, 1);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().retryDebt, 0);
+  EXPECT_EQ(window.limiter->stats().capacity, 2);
+}
+
+TEST_F(RPCRateLimiterTest, rawSettlementKeepsOverloadVerdictAfterWakeFailure) {
+  OwnedWindow window;
+#ifdef NDEBUG
+  GTEST_SKIP() << "Needs TestValue injection, which release builds omit.";
+#endif
+  window.limiter->amend([](auto& config) { config.ceiling = 1; });
+  window.limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  for (const bool stale : {false, true}) {
+    SCOPED_TRACE(stale ? "stale" : "fresh");
+    auto tokens = window.limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(tokens.size(), 1);
+    const auto admissionEpoch = tokens.front().overloadEpoch();
+    auto lease = window.limiter->makeLease(std::move(tokens));
+    lease->bindRawAttempt();
+    auto waiter = window.limiter->admitOrWait();
+    ASSERT_FALSE(waiter.admitted);
+    ASSERT_TRUE(waiter.wait.valid());
+    if (stale) {
+      window.limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+    }
+    window.clock.advanceClockOnly(10ms);
+    bool injected = false;
+    {
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::exec::rpc::RPCRateLimiter::probingWakePreflight",
+          std::function<void(RPCRateLimiter*)>([&](auto*) {
+            injected = true;
+            throw std::bad_alloc{};
+          }));
+      lease->settleRawAttempt(RPCRateLimiter::Outcome::kOverload, true);
+    }
+    EXPECT_TRUE(injected);
+    EXPECT_EQ(window.limiter->stats().pending, 0);
+    EXPECT_EQ(window.limiter->testingProbingSnapshot().held, 0);
+    EXPECT_FALSE(waiter.wait.isReady());
+    auto completion =
+        lease->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true);
+    EXPECT_EQ(completion.overloadEpoch, admissionEpoch);
+    EXPECT_TRUE(completion.sharedOverloadHandled);
+    EXPECT_EQ(
+        completion.disposition,
+        stale ? RPCRateLimiter::FeedbackDisposition::kStale
+              : RPCRateLimiter::FeedbackDisposition::kCanonical);
+    EXPECT_FALSE(completion.credit);
+    EXPECT_FALSE(
+        lease->completeAndRelease(RPCRateLimiter::Outcome::kOverload, true)
+            .sharedOverloadHandled);
+    // Mirror retry feedback without allowing an already handled or stale
+    // overload to cut the current admission wave again.
+    if (!completion.sharedOverloadHandled &&
+        completion.disposition ==
+            RPCRateLimiter::FeedbackDisposition::kCanonical) {
+      window.limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+    }
+    auto retry = window.limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(retry.size(), 1);
+    EXPECT_EQ(retry.front().overloadEpoch(), admissionEpoch + 1);
+    retry.clear();
+    EXPECT_TRUE(waiter.wait.isReady());
+    EXPECT_EQ(window.limiter->stats().pending, 0);
+  }
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    allocationPreflightRollsBackBeforePhysicalReservation) {
+  OwnedWindow window;
+#ifdef NDEBUG
+  GTEST_SKIP() << "Needs TestValue injection, which release builds omit.";
+#endif
+  window.cut();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::rpc::RPCRateLimiter::probingReservationPreflight",
+      std::function<void(RPCRateLimiter*)>(
+          [](auto*) __attribute__((noreturn)) { throw std::bad_alloc{}; }));
+  EXPECT_THROW(window.limiter->tryAcquireUpTo(1), std::bad_alloc);
+  EXPECT_EQ(window.limiter->stats().pending, 0);
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().held, 0);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    actualChargeTimestampExcludesPreflightDelayAndReportedRtt) {
+  OwnedWindow window;
+  window.cut();
+  {
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::rpc::RPCRateLimiter::probingReservationPreflight",
+        std::function<void(RPCRateLimiter*)>(
+            [&](auto*) { window.clock.advanceClockOnly(50ms); }));
+    auto lease = window.admitOne();
+    ASSERT_TRUE(lease);
+    window.clock.advanceClockOnly(10ms);
+    auto output = lease->completeAndRelease(
+        RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false);
+    output.credit.consume();
+    EXPECT_EQ(window.limiter->stats().serviceHorizonNanos, 10'000'000);
+  }
+  EXPECT_EQ(window.limiter->testingProbingSnapshot().held, 0);
 }
 
 // Regression test for the defect that motivated one limiter per backend: the

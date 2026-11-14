@@ -19,15 +19,18 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <folly/Random.h>
+#include <folly/ScopeGuard.h>
 #include <folly/executors/InlineExecutor.h>
 #include <folly/futures/Future.h>
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/testutil/TestValue.h"
 
@@ -46,6 +49,13 @@ std::atomic<int64_t>& defaultCapacityRef() {
 
 constexpr int64_t kBootstrapServiceHorizonNanos{1'000'000'000};
 
+// Most units one SMART_PROBING acquisition takes before the first service
+// sample. Nothing is known about the backend yet, so small grabs keep admission
+// incremental: the startup peak then tracks what the backend saw, and the first
+// cut halves that rather than an unused ceiling. Repeated acquisitions can
+// still fill the window.
+constexpr int64_t kStartupAcquisitionCap{4};
+
 // Highest floor the probe interval may impose. A floor of one would end pacing,
 // letting probes go out as fast as rejections return; a backend whose calls
 // outlast the probe interval is probed every two horizons instead.
@@ -57,6 +67,54 @@ constexpr double kProbeJitter{0.2};
 
 constexpr int64_t kServiceHorizonEwmaWeight{8};
 constexpr double kInitialAdaptiveLimit{200.0};
+
+template <typename Period>
+std::chrono::steady_clock::duration boundedPacingDuration(
+    std::chrono::duration<double, Period> value,
+    bool roundUp) {
+  using Duration = std::chrono::steady_clock::duration;
+  VELOX_CHECK(!std::isnan(value.count()), "Invalid RPC pacing duration");
+  const auto maximum = std::chrono::duration<double, Period>(Duration::max());
+  if (value >= maximum) {
+    return Duration::max();
+  }
+  if (value.count() <= 0) {
+    return Duration::zero();
+  }
+  return roundUp ? std::chrono::ceil<Duration>(value)
+                 : std::chrono::duration_cast<Duration>(value);
+}
+
+std::chrono::steady_clock::time_point pacingDeadline(
+    std::chrono::steady_clock::time_point origin,
+    std::chrono::steady_clock::duration delay) {
+  const auto maximum = std::chrono::steady_clock::time_point::max();
+  return origin > maximum - delay ? maximum : origin + delay;
+}
+
+int64_t boundedCapacity(double window, int64_t ceiling) {
+  VELOX_CHECK_GE(ceiling, 1);
+  VELOX_CHECK(!std::isnan(window), "Invalid RPC capacity");
+  if (window >= static_cast<double>(ceiling)) {
+    return ceiling;
+  }
+  if (window <= 1.0) {
+    return 1;
+  }
+  return static_cast<int64_t>(std::floor(window));
+}
+
+int64_t scaledMetric(double value) {
+  VELOX_CHECK(!std::isnan(value), "Invalid RPC metric");
+  if (value <= 0.0) {
+    return 0;
+  }
+  const auto maximum = std::numeric_limits<int64_t>::max();
+  if (value >= static_cast<double>(maximum)) {
+    return maximum;
+  }
+  return static_cast<int64_t>(std::llround(value));
+}
 
 // Reports a contained teardown failure without allowing diagnostics to escape
 // the noexcept token-release path.
@@ -102,10 +160,12 @@ RPCRateLimiter::Token& RPCRateLimiter::Token::operator=(
     Token&& other) noexcept {
   if (this != &other) {
     if (owner_ != nullptr) {
-      owner_->release();
+      owner_->release(admissionId_, kind_);
     }
     owner_ = other.owner_;
     overloadEpoch_ = other.overloadEpoch_;
+    admissionId_ = other.admissionId_;
+    kind_ = other.kind_;
     other.owner_ = nullptr;
   }
   return *this;
@@ -113,7 +173,7 @@ RPCRateLimiter::Token& RPCRateLimiter::Token::operator=(
 
 RPCRateLimiter::Token::~Token() noexcept {
   if (owner_ != nullptr) {
-    owner_->release();
+    owner_->release(admissionId_, kind_);
   }
 }
 
@@ -125,7 +185,13 @@ RPCRateLimiter::AdmissionLease::AdmissionLease(
     uint64_t overloadEpoch)
     : owner_{std::move(owner)},
       tokens_{std::move(tokens)},
-      overloadEpoch_{overloadEpoch} {}
+      overloadEpoch_{overloadEpoch},
+      probingLease_{
+          !tokens_.empty() &&
+          tokens_.front().belongsTo(owner_.get(), AdmissionKind::kProbing)},
+      probingCredit_{
+          probingLease_ ? owner_->makeProbingCredit(tokens_) : OutputCredit{}},
+      cancellationCells_{probingCredit_.cells(owner_->tokenConstructionKey_)} {}
 
 RPCRateLimiter::AdmissionLease::~AdmissionLease() {
   release();
@@ -133,14 +199,69 @@ RPCRateLimiter::AdmissionLease::~AdmissionLease() {
 
 RPCRateLimiter::AdmissionLease::Completion
 RPCRateLimiter::AdmissionLease::completeAndRelease(bool hardOverload) noexcept {
+  return completeAndRelease(
+      hardOverload ? Outcome::kOverload : Outcome::kNone,
+      /*handedOff=*/false);
+}
+
+RPCRateLimiter::AdmissionLease::Completion
+RPCRateLimiter::AdmissionLease::completeAndRelease(
+    Outcome outcome,
+    bool handedOff) noexcept {
+  if (probingLease_) {
+    bool unresolved;
+    bool rawBound;
+    bool nonCapacity;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      if (completed_) {
+        return {};
+      }
+      rawBound = rawBound_;
+      nonCapacity = nonCapacityRejection_;
+      unresolved = rawBound && !rawSettled_;
+    }
+    if (unresolved) {
+      const bool speculative = !nonCapacity &&
+          std::all_of(
+              cancellationCells_.begin(),
+              cancellationCells_.end(),
+              [](const auto& cell) { return cell->probe; });
+      release();
+      bool stale;
+      {
+        std::lock_guard<std::mutex> l(owner_->mutex_);
+        stale = overloadEpoch_ != owner_->overloadEpoch_;
+      }
+      const bool handled =
+          !stale && !speculative && outcome == Outcome::kOverload
+          ? owner_->handleOverloadForEpoch(overloadEpoch_, nonCapacity)
+          : (speculative || stale) && outcome == Outcome::kOverload;
+      return Completion{
+          .sharedOverloadHandled = handled,
+          .overloadEpoch = overloadEpoch_,
+          .disposition = stale ? FeedbackDisposition::kStale
+              : speculative    ? FeedbackDisposition::kExclusivelySpeculative
+                               : FeedbackDisposition::kCanonical,
+      };
+    }
+    if (!rawBound) {
+      settleRawAttempt(outcome, !handedOff);
+    }
+    std::lock_guard<std::mutex> l(mutex_);
+    completed_ = true;
+    return std::move(rawCompletion_);
+  }
   std::shared_ptr<RPCRateLimiter> owner;
   std::vector<Token> tokens;
+  bool nonCapacity{false};
   try {
     std::lock_guard<std::mutex> l(mutex_);
     if (completed_) {
       return {};
     }
     completed_ = true;
+    nonCapacity = nonCapacityRejection_;
     owner = std::move(owner_);
     tokens = std::move(tokens_);
   } catch (...) {
@@ -149,15 +270,11 @@ RPCRateLimiter::AdmissionLease::completeAndRelease(bool hardOverload) noexcept {
   }
 
   bool handled = false;
-  if (hardOverload && !tokens.empty()) {
+  if (outcome == Outcome::kOverload && !tokens.empty()) {
     try {
-      handled = owner->handleOverloadForEpoch(overloadEpoch_);
+      handled = owner->handleOverloadForEpoch(overloadEpoch_, nonCapacity);
     } catch (...) {
-      try {
-        RPC_RATE_LIMITER_LOG(ERROR)
-            << "failed to apply completion-time overload feedback";
-      } catch (...) {
-      }
+      logLimiterFailure("admission lease", "completion feedback");
     }
   }
   tokens.clear();
@@ -165,7 +282,97 @@ RPCRateLimiter::AdmissionLease::completeAndRelease(bool hardOverload) noexcept {
       .sharedOverloadHandled = handled, .overloadEpoch = overloadEpoch_};
 }
 
+void RPCRateLimiter::AdmissionLease::markNonCapacityRejection() noexcept {
+  std::lock_guard<std::mutex> l(mutex_);
+  nonCapacityRejection_ = true;
+}
+
+void RPCRateLimiter::AdmissionLease::bindRawAttempt() noexcept {
+  if (probingLease_) {
+    std::lock_guard<std::mutex> l(mutex_);
+    rawBound_ = true;
+    rawCompletion_.overloadEpoch = overloadEpoch_;
+    rawCompletion_.disposition =
+        std::all_of(
+            cancellationCells_.begin(),
+            cancellationCells_.end(),
+            [](const auto& cell) { return cell->probe; })
+        ? FeedbackDisposition::kExclusivelySpeculative
+        : FeedbackDisposition::kCanonical;
+  }
+}
+
+void RPCRateLimiter::AdmissionLease::settleRawAttempt(
+    Outcome outcome,
+    bool validServiceProof) noexcept {
+  if (!probingLease_) {
+    return;
+  }
+  std::shared_ptr<RPCRateLimiter> owner;
+  std::vector<Token> tokens;
+  OutputCredit credit;
+  Completion completion;
+  bool cancelled;
+  bool valid;
+  bool nonCapacity;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (tokens_.empty()) {
+      return;
+    }
+    owner = owner_;
+    tokens = std::move(tokens_);
+    credit = std::move(probingCredit_);
+    cancelled = cancelled_;
+    valid = validServiceProof;
+    nonCapacity = nonCapacityRejection_;
+    completion.overloadEpoch = overloadEpoch_;
+    completion.disposition = rawCompletion_.disposition;
+  }
+  try {
+    owner->settleProbingAttempt(
+        std::move(tokens),
+        std::move(credit),
+        outcome,
+        valid,
+        cancelled,
+        nonCapacity,
+        completion);
+  } catch (...) {
+    // Keep credit already earned before a late notification failure.
+    logLimiterFailure("probing lease", "raw settlement");
+  }
+  std::lock_guard<std::mutex> l(mutex_);
+  if (cancelled_) {
+    completion.credit = {};
+  }
+  rawCompletion_ = std::move(completion);
+  rawSettled_ = true;
+}
+
 void RPCRateLimiter::AdmissionLease::release() noexcept {
+  if (probingLease_) {
+    std::shared_ptr<RPCRateLimiter> owner;
+    std::vector<Token> rollback;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      if (completed_) {
+        return;
+      }
+      owner = owner_;
+      completed_ = true;
+      cancelled_ = true;
+      for (const auto& cell : cancellationCells_) {
+        cell->cancelled.store(true, std::memory_order_release);
+      }
+      rawCompletion_.credit = {};
+      if (!rawBound_) {
+        rollback = std::move(tokens_);
+      }
+    }
+    rollback.clear();
+    return;
+  }
   std::shared_ptr<RPCRateLimiter> owner;
   std::vector<Token> tokens;
   try {
@@ -184,6 +391,23 @@ void RPCRateLimiter::AdmissionLease::release() noexcept {
 }
 
 // --- RPCRateLimiter ---
+
+RPCRateLimiter::FeedbackDisposition RPCRateLimiter::strongerDisposition(
+    FeedbackDisposition lhs,
+    FeedbackDisposition rhs) {
+  const auto rank = [](FeedbackDisposition disposition) {
+    switch (disposition) {
+      case FeedbackDisposition::kStale:
+        return 0;
+      case FeedbackDisposition::kExclusivelySpeculative:
+        return 1;
+      case FeedbackDisposition::kCanonical:
+        return 2;
+    }
+    VELOX_UNREACHABLE();
+  };
+  return rank(rhs) > rank(lhs) ? rhs : lhs;
+}
 
 RPCRateLimiter::RPCRateLimiter(std::string admissionKey)
     : RPCRateLimiter(
@@ -240,6 +464,27 @@ bool RPCRateLimiter::isPacingLocked() const {
   return config_.adaptive && limitLocked() < 1.0;
 }
 
+bool RPCRateLimiter::handleOverloadForEpoch(
+    uint64_t overloadEpoch,
+    bool nonCapacity) {
+  std::vector<ContinuePromise> toNotify;
+  std::optional<PacingTimerRequest> timerRequest;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (overloadEpoch != overloadEpoch_) {
+      return true;
+    }
+    ++overloadEpoch_;
+    applyOverloadLocked(nonCapacity);
+    timerRequest = collectWakeableLocked(toNotify);
+  }
+  fulfillWaitersNoThrow(toNotify, admissionKey_);
+  if (timerRequest.has_value()) {
+    schedulePacingTimer(timerRequest.value());
+  }
+  return true;
+}
+
 std::chrono::steady_clock::duration RPCRateLimiter::pacingIntervalLocked()
     const {
   const double window = limitLocked();
@@ -251,9 +496,10 @@ std::chrono::steady_clock::duration RPCRateLimiter::pacingIntervalLocked()
       : window <= 1.0 - std::numbers::ln2
       ? std::log2(1.0 + std::numbers::ln2 / window)
       : std::log2(1.0 / window) + 1.0 - (1.0 - window) / std::numbers::ln2;
-  return std::chrono::ceil<std::chrono::steady_clock::duration>(
+  return boundedPacingDuration(
       std::chrono::duration<double, std::nano>{
-          static_cast<double>(serviceHorizonNanos_) * horizons});
+          static_cast<double>(serviceHorizonNanos_) * horizons},
+      /*roundUp=*/true);
 }
 
 std::chrono::steady_clock::duration RPCRateLimiter::nextPacedDelayLocked()
@@ -263,8 +509,7 @@ std::chrono::steady_clock::duration RPCRateLimiter::nextPacedDelayLocked()
     return interval;
   }
   const double fraction = 1.0 - kProbeJitter * (1.0 - random_());
-  return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-      interval * fraction);
+  return boundedPacingDuration(interval * fraction, /*roundUp=*/false);
 }
 
 double RPCRateLimiter::grownLimitLocked(
@@ -310,8 +555,8 @@ void RPCRateLimiter::setLimitLocked(double limit) {
   if (isPacingLocked()) {
     const auto delay = nextPacedDelayLocked();
     nextPacedAdmission_ = lastAdmission_.has_value()
-        ? std::max(now, lastAdmission_.value() + delay)
-        : now + delay;
+        ? std::max(now, pacingDeadline(lastAdmission_.value(), delay))
+        : pacingDeadline(now, delay);
   } else {
     recovering_ = false;
     nextPacedAdmission_ = std::chrono::steady_clock::time_point{};
@@ -319,9 +564,7 @@ void RPCRateLimiter::setLimitLocked(double limit) {
 }
 
 int64_t RPCRateLimiter::capacityLocked() const {
-  const int64_t ceiling = ceilingLocked();
-  return std::clamp<int64_t>(
-      static_cast<int64_t>(std::floor(limitLocked())), 1, ceiling);
+  return boundedCapacity(limitLocked(), ceilingLocked());
 }
 
 namespace {
@@ -336,6 +579,9 @@ RPCRateLimiter::Config clamped(RPCRateLimiter::Config config) {
       : std::clamp(config.decreaseFactor, 0.01, 0.99);
   config.maxProbeInterval =
       std::max(config.maxProbeInterval, std::chrono::milliseconds{0});
+  if (!config.adaptive) {
+    config.flowControlPolicy = RPCFlowControlPolicy::kWindowAimd;
+  }
   return config;
 }
 
@@ -343,7 +589,8 @@ RPCRateLimiter::Config clamped(RPCRateLimiter::Config config) {
 // in fields it ignores compare equal.
 RPCRateLimiter::Config canonicalize(const RPCRateLimiter::Config& policy) {
   auto canonical = clamped(policy);
-  if (canonical.ceiling > 0 &&
+  if (canonical.flowControlPolicy == RPCFlowControlPolicy::kWindowAimd &&
+      canonical.ceiling > 0 &&
       canonical.floor >= static_cast<double>(canonical.ceiling)) {
     canonical.adaptive = false;
   }
@@ -352,6 +599,7 @@ RPCRateLimiter::Config canonicalize(const RPCRateLimiter::Config& policy) {
     canonical.floor = defaults.floor;
     canonical.decreaseFactor = defaults.decreaseFactor;
     canonical.maxProbeInterval = defaults.maxProbeInterval;
+    canonical.flowControlPolicy = RPCFlowControlPolicy::kWindowAimd;
   }
   return canonical;
 }
@@ -399,18 +647,43 @@ void RPCRateLimiter::testingReset() {
   lastAccrual_ = now_();
   serviceHorizonNanos_ = kBootstrapServiceHorizonNanos;
   hasServiceHorizonSample_ = false;
+  startupPeak_ = 0;
   nextPacedAdmission_ = std::chrono::steady_clock::time_point{};
   lastAdmission_.reset();
   ++pacingGeneration_;
   ++overloadEpoch_;
   pacingTimerArmed_ = false;
-  pending_.store(0);
-  peakPending_.store(0);
+  if (probing_) {
+    resetProbingLocked();
+  }
+  if (!probing_ || probing_->receipts.empty()) {
+    pending_.store(0);
+  }
+  peakPending_.store(pending_.load());
   waiters_.clear();
 }
 
 std::optional<RPCRateLimiter::PacingTimerRequest>
 RPCRateLimiter::collectWakeableLocked(std::vector<ContinuePromise>& toNotify) {
+  if (isProbingLocked()) {
+    const auto now = now_();
+    if (waiters_.empty() ||
+        pending_.load() >= probingAdmissionCapacityLocked() ||
+        (isPacingLocked() && pending_.load() != 0)) {
+      return std::nullopt;
+    }
+    if (isPacingLocked() && now < nextPacedAdmission_) {
+      return preparePacingTimerLocked();
+    }
+    while (!waiters_.empty()) {
+      common::testutil::TestValue::adjust(
+          "facebook::velox::exec::rpc::RPCRateLimiter::probingWakePreflight",
+          this);
+      toNotify.push_back(std::move(waiters_.front()));
+      waiters_.pop_front();
+    }
+    return std::nullopt;
+  }
   if (isPacingLocked()) {
     if (pending_.load() != 0 || waiters_.empty()) {
       return std::nullopt;
@@ -442,7 +715,10 @@ RPCRateLimiter::preparePacingTimerLocked() {
     return std::nullopt;
   }
   const auto now = now_();
-  if (now >= nextPacedAdmission_) {
+  // SMART_PROBING also arms the timer when the admission is already due, so a
+  // waiter that parked at the deadline still wakes without another event.
+  if (now >= nextPacedAdmission_ &&
+      config_.flowControlPolicy != RPCFlowControlPolicy::kSmartProbing) {
     return std::nullopt;
   }
   const auto delay = std::max(
@@ -523,9 +799,27 @@ void RPCRateLimiter::onPacingTimerFailure(
 void RPCRateLimiter::applyMutationLocked(
     const std::function<void(Config&)>& mutate) {
   const bool wasAdaptive = config_.adaptive;
+  const auto previousFlowControlPolicy = config_.flowControlPolicy;
   accrueLocked();
-  mutate(config_);
-  config_ = clamped(config_);
+  auto nextConfig = config_;
+  mutate(nextConfig);
+  config_ = clamped(nextConfig);
+  if (config_.flowControlPolicy == RPCFlowControlPolicy::kSmartProbing &&
+      !probing_) {
+    probing_ = std::make_unique<ProbingState>();
+  }
+  if (probing_ && previousFlowControlPolicy != config_.flowControlPolicy) {
+    resetProbingLocked();
+  }
+  if (previousFlowControlPolicy != config_.flowControlPolicy &&
+      (previousFlowControlPolicy == RPCFlowControlPolicy::kSmartProbing ||
+       config_.flowControlPolicy == RPCFlowControlPolicy::kSmartProbing)) {
+    ++overloadEpoch_;
+  }
+  if (wasAdaptive != config_.adaptive ||
+      previousFlowControlPolicy != config_.flowControlPolicy) {
+    startupPeak_ = 0;
+  }
   if (!config_.adaptive) {
     setLimitLocked(0.0);
   } else if (!wasAdaptive) {
@@ -611,16 +905,393 @@ RPCRateLimiter::Token RPCRateLimiter::acquire() {
   {
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK(
+        !usesProbingPolicyLocked(),
+        "Unconditional acquisition cannot bypass RPC probing admission");
+    VELOX_CHECK(
         !isPacingLocked(),
         "Unconditional acquisition cannot bypass paced admission");
     lastAdmission_ = now_();
     pending = ++pending_;
     overloadEpoch = overloadEpoch_;
+    noteStartupPeakLocked(pending);
   }
   notePeakPending(pending);
   RPC_RATE_LIMITER_VLOG(2) << "acquire[" << admissionKey_
                            << "]: pending=" << pending;
-  return Token{tokenConstructionKey_, this, overloadEpoch};
+  return Token{
+      tokenConstructionKey_, this, overloadEpoch, 0, AdmissionKind::kPlain};
+}
+
+bool RPCRateLimiter::usesProbingStartupLocked() const {
+  return config_.adaptive &&
+      config_.flowControlPolicy == RPCFlowControlPolicy::kSmartProbing &&
+      !hasServiceHorizonSample_;
+}
+
+void RPCRateLimiter::noteStartupPeakLocked(int64_t pending) {
+  if (usesProbingStartupLocked()) {
+    startupPeak_ = std::max(startupPeak_, pending);
+  }
+}
+
+RPCRateLimiter::OutputCredit::OutputCredit(
+    TokenConstructionKey&,
+    std::shared_ptr<RPCRateLimiter> owner,
+    ProbingCreditCells cells)
+    : owner_{std::move(owner)}, cells_{std::move(cells)} {}
+
+void RPCRateLimiter::OutputCredit::consume() noexcept {
+  for (const auto& cell : cells_) {
+    try {
+      owner_->consumeProbingCredit(cell);
+    } catch (...) {
+      logLimiterFailure("probing output", "credit consumption");
+    }
+  }
+  cells_.clear();
+  owner_.reset();
+}
+
+bool RPCRateLimiter::usesProbingPolicyLocked() const {
+  return probing_ && config_.adaptive &&
+      config_.flowControlPolicy == RPCFlowControlPolicy::kSmartProbing;
+}
+
+bool RPCRateLimiter::isProbingLocked() const {
+  return usesProbingPolicyLocked() && probing_->cut;
+}
+
+void RPCRateLimiter::resetProbingLocked() {
+  ++probing_->lifecycle;
+  probing_->cut = false;
+  probing_->retryDebt = 0;
+  // A probe from before the reset still holds its slot until it settles, but
+  // can no longer promote.
+  probing_->probeFailed = probing_->probe.has_value();
+  probing_->failures.clear();
+}
+
+int64_t RPCRateLimiter::probePenalty(int64_t level, int64_t failures) {
+  VELOX_CHECK_GE(level, 1);
+  VELOX_CHECK_GE(failures, 1);
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  int64_t cap;
+  if (mulWithOverflow(level, level, &cap) ||
+      mulWithOverflow(cap, int64_t{2}, &cap)) {
+    cap = kMax;
+  }
+  const auto doublings = std::min<int64_t>(failures - 1, 62);
+  int64_t penalty;
+  if (mulWithOverflow(level, int64_t{1} << doublings, &penalty)) {
+    penalty = kMax;
+  }
+  return std::min(cap, penalty);
+}
+
+int64_t RPCRateLimiter::nextRetryDebtLocked() const {
+  const auto baseline = capacityLocked();
+  const auto position = probing_->failures.find(baseline + 1);
+  return position == probing_->failures.end()
+      ? baseline
+      : probePenalty(baseline + 1, position->second.count);
+}
+
+void RPCRateLimiter::recordLevelFailureLocked(int64_t level) {
+  auto& failures = probing_->failures[level];
+  if (failures.count < std::numeric_limits<int64_t>::max()) {
+    ++failures.count;
+  }
+  failures.cleanSuccesses = 0;
+}
+
+void RPCRateLimiter::creditSustainedLevelsLocked() {
+  const auto baseline = capacityLocked();
+  folly::small_vector<int64_t, 4> forgiven;
+  for (auto& [level, failures] : probing_->failures) {
+    if (level > baseline ||
+        ++failures.cleanSuccesses < probePenalty(level, failures.count)) {
+      continue;
+    }
+    failures.cleanSuccesses = 0;
+    if (--failures.count == 0) {
+      forgiven.push_back(level);
+    }
+  }
+  for (const auto level : forgiven) {
+    probing_->failures.erase(level);
+  }
+}
+
+void RPCRateLimiter::creditBaselineSuccessLocked(int64_t units) {
+  for (int64_t i = 0; i < units; ++i) {
+    if (probing_->retryDebt > 0) {
+      --probing_->retryDebt;
+    }
+    creditSustainedLevelsLocked();
+  }
+}
+
+void RPCRateLimiter::promoteProbeLocked() {
+  setLimitLocked(static_cast<double>(capacityLocked() + 1));
+  probing_->retryDebt = nextRetryDebtLocked();
+}
+
+void RPCRateLimiter::failProbeLocked() {
+  // The baseline has not moved since the probe was admitted: promotion
+  // settles the probe, and a cut fails it.
+  probing_->probeFailed = true;
+  recordLevelFailureLocked(capacityLocked() + 1);
+  probing_->retryDebt = nextRetryDebtLocked();
+}
+
+int64_t RPCRateLimiter::probingAdmissionCapacityLocked() const {
+  const auto baseline = capacityLocked();
+  const bool probe = probing_->cut && !isPacingLocked() &&
+      !probing_->probe.has_value() && probing_->retryDebt == 0 &&
+      baseline < ceilingLocked() && !probing_->demands.empty();
+  return probe ? baseline + 1 : baseline;
+}
+
+std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireProbingLocked(
+    std::unique_lock<std::mutex>& lock,
+    int64_t want) {
+  std::vector<Token> granted;
+  auto unlockOnExit = folly::makeGuard([&] {
+    if (lock.owns_lock()) {
+      lock.unlock();
+    }
+  });
+  granted.reserve(static_cast<size_t>(std::min(want, ceilingLocked() + 1)));
+  while (static_cast<int64_t>(granted.size()) < want) {
+    const auto now = now_();
+    const auto capacity = probingAdmissionCapacityLocked();
+    if (pending_.load() >= capacity ||
+        (isPacingLocked() &&
+         (pending_.load() != 0 || now < nextPacedAdmission_))) {
+      break;
+    }
+    if (isPacingLocked()) {
+      commitGrowthLocked();
+    }
+    auto cell = std::make_shared<ProbingCredit>();
+    cell->admissionId = ++probing_->nextAdmissionId;
+    cell->probe = probing_->cut && !isPacingLocked() &&
+        pending_.load() >= capacityLocked();
+    cell->level = pending_.load() + 1;
+    cell->lifecycle = probing_->lifecycle;
+    probing_->receipts.emplace(cell->admissionId, cell);
+    bool reserved{false};
+    auto rollback = folly::makeGuard([&] {
+      if (!reserved) {
+        probing_->receipts.erase(cell->admissionId);
+      }
+    });
+    common::testutil::TestValue::adjust(
+        "facebook::velox::exec::rpc::RPCRateLimiter::probingReservationPreflight",
+        this);
+    ++pending_;
+    reserved = true;
+    cell->admittedAt = now_();
+    if (cell->probe) {
+      probing_->probe = cell->admissionId;
+      probing_->probeFailed = false;
+    }
+    granted.emplace_back(
+        tokenConstructionKey_,
+        this,
+        overloadEpoch_,
+        cell->admissionId,
+        AdmissionKind::kProbing);
+    noteStartupPeakLocked(pending_.load());
+    notePeakPending(pending_.load());
+    lastAdmission_ = cell->admittedAt;
+    if (isPacingLocked()) {
+      ++pacingGeneration_;
+      pacingTimerArmed_ = false;
+      nextPacedAdmission_ =
+          pacingDeadline(cell->admittedAt, nextPacedDelayLocked());
+      break;
+    }
+  }
+  return granted;
+}
+
+RPCRateLimiter::OutputCredit RPCRateLimiter::makeProbingCredit(
+    const std::vector<Token>& tokens) {
+  ProbingCreditCells cells;
+  cells.reserve(tokens.size());
+  std::lock_guard<std::mutex> l(mutex_);
+  for (const auto& token : tokens) {
+    if (token.belongsTo(this, AdmissionKind::kProbing)) {
+      const auto position = probing_->receipts.find(token.admissionId());
+      VELOX_CHECK(position != probing_->receipts.end());
+      cells.push_back(position->second);
+    }
+  }
+  return OutputCredit{
+      tokenConstructionKey_, shared_from_this(), std::move(cells)};
+}
+
+void RPCRateLimiter::consumeProbingCredit(
+    const std::shared_ptr<ProbingCredit>& cell) {
+  std::vector<ContinuePromise> toNotify;
+  std::optional<PacingTimerRequest> timer;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (cell->consumed.exchange(true, std::memory_order_acq_rel) ||
+        !usesProbingPolicyLocked() || cell->lifecycle != probing_->lifecycle ||
+        cell->cancelled.load(std::memory_order_acquire) || !cell->successful ||
+        !cell->released) {
+      return;
+    }
+    if (isPacingLocked()) {
+      // WINDOW_AIMD's paced recovery while the window is below one unit.
+      applySuccessLocked(1, 0, /*attributed=*/true);
+    } else if (!cell->probe) {
+      creditBaselineSuccessLocked(1);
+    }
+    timer = collectWakeableLocked(toNotify);
+  }
+  fulfillWaitersNoThrow(toNotify, admissionKey_);
+  if (timer) {
+    schedulePacingTimer(*timer);
+  }
+}
+
+void RPCRateLimiter::releaseProbingLocked(uint64_t admissionId) {
+  const auto position = probing_->receipts.find(admissionId);
+  if (position == probing_->receipts.end()) {
+    return;
+  }
+  position->second->released = true;
+  probing_->receipts.erase(position);
+  if (probing_->probe == admissionId) {
+    probing_->probe.reset();
+    probing_->probeFailed = false;
+  }
+}
+
+void RPCRateLimiter::settleProbingAttempt(
+    std::vector<Token> tokens,
+    OutputCredit credit,
+    Outcome outcome,
+    bool validServiceProof,
+    bool cancelled,
+    bool nonCapacity,
+    AdmissionLease::Completion& completion) {
+  std::vector<ContinuePromise> toNotify;
+  std::optional<PacingTimerRequest> timer;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    completion.overloadEpoch =
+        tokens.empty() ? overloadEpoch_ : tokens.front().overloadEpoch();
+    const bool fresh = completion.overloadEpoch == overloadEpoch_;
+    for (auto& token : tokens) {
+      --pending_;
+      token.disarm(tokenConstructionKey_);
+    }
+    // The tokens no longer release their receipts, so feedback that throws
+    // must not leave a receipt, or the probe slot, held.
+    const auto releaseReceipts = [&] {
+      for (const auto& token : tokens) {
+        releaseProbingLocked(token.admissionId());
+      }
+    };
+    auto releaseOnThrow = folly::makeGuard(releaseReceipts);
+    const auto now = now_();
+    const auto& cells = credit.cells(tokenConstructionKey_);
+    bool promote{false};
+    bool live{false};
+    for (const auto& cell : cells) {
+      const bool cellCancelled =
+          cancelled || cell->cancelled.load(std::memory_order_acquire);
+      cell->successful = !cellCancelled && outcome == Outcome::kSuccess;
+      if (cellCancelled) {
+        continue;
+      }
+      live = true;
+      if (outcome == Outcome::kSuccess && cell->probe) {
+        // The probe was admitted while the baseline was full, so its success
+        // shows the backend accepted one unit more than the baseline.
+        promote = usesProbingPolicyLocked() &&
+            probing_->probe == cell->admissionId && !probing_->probeFailed &&
+            cell->lifecycle == probing_->lifecycle &&
+            cell->level == capacityLocked() + 1;
+      }
+      // The sample spans the whole single-unit lease, from its charge to this
+      // settlement, so it includes time held outside backend service.
+      int64_t ticks;
+      if (outcome == Outcome::kSuccess && validServiceProof && !cell->probe &&
+          tokens.size() == 1 &&
+          !subWithOverflow(
+              now.time_since_epoch().count(),
+              cell->admittedAt.time_since_epoch().count(),
+              &ticks) &&
+          ticks > 0) {
+        updateServiceHorizonLocked(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::duration{ticks})
+                .count());
+      }
+    }
+    if (outcome == Outcome::kOverload) {
+      completion.sharedOverloadHandled = true;
+      // A probe holds one physical slot, so it explains at most one capacity
+      // overload while it is in flight: its own or another unit's. Overload
+      // from before the last cut is stale, and a rejection not shown to be a
+      // lack of capacity, such as a quota, says nothing about the probe. Any
+      // other overload cuts as WINDOW does.
+      const bool chargeProbe = live && fresh && !nonCapacity && probing_->cut &&
+          probing_->probe.has_value() && !probing_->probeFailed;
+      if (chargeProbe) {
+        failProbeLocked();
+        completion.disposition = FeedbackDisposition::kExclusivelySpeculative;
+      } else if (live && fresh) {
+        ++overloadEpoch_;
+        applyOverloadLocked(nonCapacity);
+        completion.disposition = FeedbackDisposition::kCanonical;
+      } else {
+        completion.disposition = fresh ? FeedbackDisposition::kCanonical
+                                       : FeedbackDisposition::kStale;
+      }
+    } else {
+      completion.disposition =
+          fresh ? FeedbackDisposition::kCanonical : FeedbackDisposition::kStale;
+    }
+    if (promote) {
+      promoteProbeLocked();
+    }
+    releaseOnThrow.dismiss();
+    releaseReceipts();
+    if (!cancelled && outcome == Outcome::kSuccess) {
+      completion.credit = std::move(credit);
+    }
+    timer = collectWakeableLocked(toNotify);
+  }
+  fulfillWaitersNoThrow(toNotify, admissionKey_);
+  if (timer) {
+    schedulePacingTimer(*timer);
+  }
+}
+
+RPCRateLimiter::TestingProbingSnapshot RPCRateLimiter::testingProbingSnapshot()
+    const {
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK(probing_);
+  size_t probes{0};
+  for (const auto& [_, cell] : probing_->receipts) {
+    probes += cell->probe;
+  }
+  const auto next = probing_->failures.find(capacityLocked() + 1);
+  return {
+      .cut = probing_->cut,
+      .baseline = capacityLocked(),
+      .retryDebt = probing_->retryDebt,
+      .nextLevelFailures =
+          next == probing_->failures.end() ? 0 : next->second.count,
+      .held = probing_->receipts.size(),
+      .heldProbes = probes,
+  };
 }
 
 std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
@@ -630,22 +1301,34 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
     return granted;
   }
 
-  std::lock_guard<std::mutex> l(mutex_);
+  std::unique_lock<std::mutex> l(mutex_);
   const auto now = now_();
+  if (usesProbingStartupLocked()) {
+    // Interleave ready feedback between chunks without limiting the healthy
+    // aggregate window or introducing a startup timer.
+    want = std::min(want, kStartupAcquisitionCap);
+  }
+  if (isProbingLocked()) {
+    // One unit per call, so a rejection completed inline by the caller is
+    // seen before the next unit is admitted.
+    return tryAcquireProbingLocked(l, std::min<int64_t>(want, 1));
+  }
   if (isPacingLocked()) {
     if (pending_.load() > 0 || now < nextPacedAdmission_) {
       return granted;
     }
     commitGrowthLocked();
     const int64_t pending = ++pending_;
+    noteStartupPeakLocked(pending);
     ++pacingGeneration_;
     pacingTimerArmed_ = false;
     lastAdmission_ = now;
     nextPacedAdmission_ = isPacingLocked()
-        ? now + nextPacedDelayLocked()
+        ? pacingDeadline(now, nextPacedDelayLocked())
         : std::chrono::steady_clock::time_point{};
     notePeakPending(pending);
-    granted.emplace_back(tokenConstructionKey_, this, overloadEpoch_);
+    granted.emplace_back(
+        tokenConstructionKey_, this, overloadEpoch_, 0, AdmissionKind::kPlain);
     return granted;
   }
   const int64_t capacity = capacityLocked();
@@ -664,6 +1347,7 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
     // loses the exchange recomputes its grant against the winner's value
     // rather than its own stale read.
   } while (!pending_.compare_exchange_weak(pending, pending + take));
+  noteStartupPeakLocked(pending + take);
   lastAdmission_ = now;
 
   // The post-exchange total, not the caller's pre-read: reporting the stale
@@ -674,9 +1358,22 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
   for (int64_t i = 0; i < take; ++i) {
     // One token per slot: each releases exactly one on destruction, so the
     // bulk grant unwinds row by row as the requests complete.
-    granted.emplace_back(tokenConstructionKey_, this, overloadEpoch_);
+    granted.emplace_back(
+        tokenConstructionKey_, this, overloadEpoch_, 0, AdmissionKind::kPlain);
   }
   return granted;
+}
+
+bool RPCRateLimiter::canHandleRetryBackoff() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  return config_.adaptive &&
+      (isPacingLocked() ||
+       limitLocked() > floorLocked(static_cast<double>(ceilingLocked())));
+}
+
+bool RPCRateLimiter::usesAttributedAdmissionControl() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  return isProbingLocked();
 }
 
 int64_t RPCRateLimiter::available() const {
@@ -684,7 +1381,72 @@ int64_t RPCRateLimiter::available() const {
   if (isPacingLocked()) {
     return pending_.load() == 0 && now_() >= nextPacedAdmission_ ? 1 : 0;
   }
-  return std::max<int64_t>(0, capacityLocked() - pending_.load());
+  const auto capacity =
+      isProbingLocked() ? probingAdmissionCapacityLocked() : capacityLocked();
+  return std::max<int64_t>(0, capacity - pending_.load());
+}
+
+RPCRateLimiter::RunnableDemand::RunnableDemand(
+    std::weak_ptr<RPCRateLimiter> owner,
+    uint64_t id)
+    : owner_{std::move(owner)}, id_{id} {}
+
+RPCRateLimiter::RunnableDemand::~RunnableDemand() {
+  if (const auto owner = owner_.lock()) {
+    owner->cancelRunnableDemand(id_);
+  }
+}
+
+std::shared_ptr<RPCRateLimiter::RunnableDemand>
+RPCRateLimiter::registerRunnableDemand() {
+  std::shared_ptr<RunnableDemand> result;
+  std::vector<ContinuePromise> toNotify;
+  std::optional<PacingTimerRequest> timer;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (!usesProbingPolicyLocked()) {
+      return nullptr;
+    }
+    auto& demands = probing_->demands;
+    auto& nextDemandId = probing_->nextDemandId;
+    const auto owner = weak_from_this();
+    VELOX_CHECK(!owner.expired(), "Runnable demand requires shared ownership");
+    VELOX_CHECK_LT(nextDemandId, std::numeric_limits<uint64_t>::max());
+    const auto id = ++nextDemandId;
+    demands.push_back(id);
+    try {
+      result = std::make_shared<RunnableDemand>(owner, id);
+    } catch (...) {
+      std::erase(demands, id);
+      throw;
+    }
+    timer = collectWakeableLocked(toNotify);
+  }
+  fulfillWaitersNoThrow(toNotify, admissionKey_);
+  if (timer) {
+    schedulePacingTimer(*timer);
+  }
+  return result;
+}
+
+void RPCRateLimiter::cancelRunnableDemand(uint64_t id) noexcept {
+  std::vector<ContinuePromise> toNotify;
+  std::optional<PacingTimerRequest> timer;
+  try {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (probing_) {
+      std::erase(probing_->demands, id);
+    }
+    if (usesProbingPolicyLocked()) {
+      timer = collectWakeableLocked(toNotify);
+    }
+  } catch (...) {
+    logLimiterFailure(admissionKey_, "runnable demand cancellation");
+  }
+  fulfillWaitersNoThrow(toNotify, admissionKey_);
+  if (timer) {
+    schedulePacingTimer(*timer);
+  }
 }
 
 RPCRateLimiter::Admission RPCRateLimiter::admitOrWait() {
@@ -693,7 +1455,8 @@ RPCRateLimiter::Admission RPCRateLimiter::admitOrWait() {
   {
     std::lock_guard<std::mutex> l(mutex_);
     const int64_t pending = pending_.load();
-    const int64_t capacity = capacityLocked();
+    const int64_t capacity =
+        isProbingLocked() ? probingAdmissionCapacityLocked() : capacityLocked();
     if (isPacingLocked()) {
       if (pending == 0 && now_() >= nextPacedAdmission_) {
         result.admitted = true;
@@ -745,7 +1508,32 @@ void RPCRateLimiter::onOutcome(Outcome outcome, int64_t units, int64_t rttNs) {
   }
 }
 
-void RPCRateLimiter::applyOverloadLocked() {
+void RPCRateLimiter::applyOverloadLocked(bool nonCapacity) {
+  const double rejectedWindow =
+      !nonCapacity && usesProbingStartupLocked() && startupPeak_ > 0
+      ? std::min(limitLocked(), static_cast<double>(startupPeak_))
+      : limitLocked();
+  const auto failedAllowance = boundedCapacity(rejectedWindow, ceilingLocked());
+  // Cold-start authorization is not exercised capacity. Back off the charged
+  // allowance using the same decrease factor, not an unused bootstrap ceiling.
+  decreaseLimitLocked(rejectedWindow * config_.decreaseFactor);
+  // A rejection not shown to be a lack of capacity says nothing about the
+  // window's levels: before the first capacity cut it leaves SMART_PROBING
+  // identical to WINDOW_AIMD, and afterwards it records no level failure.
+  if (!usesProbingPolicyLocked() || (nonCapacity && !probing_->cut)) {
+    return;
+  }
+  probing_->cut = true;
+  if (probing_->probe.has_value()) {
+    probing_->probeFailed = true;
+  }
+  if (!nonCapacity) {
+    recordLevelFailureLocked(failedAllowance);
+  }
+  probing_->retryDebt = nextRetryDebtLocked();
+}
+
+void RPCRateLimiter::decreaseLimitLocked(double target) {
   if (!config_.adaptive) {
     return;
   }
@@ -756,7 +1544,7 @@ void RPCRateLimiter::applyOverloadLocked() {
   const double current = limitLocked();
   const double next = std::max(
       floorLocked(static_cast<double>(ceilingLocked())),
-      current * config_.decreaseFactor);
+      std::min(current, target));
   // Reschedule even when the window is already at its floor, so the next
   // probe waits the back-off interval rather than the recovery one.
   setLimitLocked(next);
@@ -771,37 +1559,26 @@ void RPCRateLimiter::applyOverloadLocked() {
 }
 
 void RPCRateLimiter::onOverload() {
-  std::vector<ContinuePromise> toNotify;
-  std::optional<PacingTimerRequest> timerRequest;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    ++overloadEpoch_;
-    applyOverloadLocked();
-    timerRequest = collectWakeableLocked(toNotify);
-  }
-  fulfillWaitersNoThrow(toNotify, admissionKey_);
-  if (timerRequest.has_value()) {
-    schedulePacingTimer(timerRequest.value());
-  }
+  applyOverload(/*nonCapacity=*/false);
 }
 
-bool RPCRateLimiter::handleOverloadForEpoch(uint64_t overloadEpoch) {
+void RPCRateLimiter::onUnattributedOverload() {
+  applyOverload(/*nonCapacity=*/true);
+}
+
+void RPCRateLimiter::applyOverload(bool nonCapacity) {
   std::vector<ContinuePromise> toNotify;
   std::optional<PacingTimerRequest> timerRequest;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    if (overloadEpoch != overloadEpoch_) {
-      return true;
-    }
     ++overloadEpoch_;
-    applyOverloadLocked();
+    applyOverloadLocked(nonCapacity);
     timerRequest = collectWakeableLocked(toNotify);
   }
   fulfillWaitersNoThrow(toNotify, admissionKey_);
   if (timerRequest.has_value()) {
     schedulePacingTimer(timerRequest.value());
   }
-  return true;
 }
 
 bool RPCRateLimiter::updateServiceHorizonLocked(int64_t rttNs) {
@@ -815,9 +1592,15 @@ bool RPCRateLimiter::updateServiceHorizonLocked(int64_t rttNs) {
     hasServiceHorizonSample_ = true;
     return serviceHorizonNanos_ != previous;
   }
-  serviceHorizonNanos_ =
-      ((kServiceHorizonEwmaWeight - 1) * serviceHorizonNanos_ + rttNs) /
-      kServiceHorizonEwmaWeight;
+  if (rttNs >= previous) {
+    serviceHorizonNanos_ =
+        previous + (rttNs - previous) / kServiceHorizonEwmaWeight;
+  } else {
+    const auto difference = previous - rttNs;
+    const auto decrease = difference / kServiceHorizonEwmaWeight +
+        (difference % kServiceHorizonEwmaWeight != 0);
+    serviceHorizonNanos_ = previous - decrease;
+  }
   return serviceHorizonNanos_ != previous;
 }
 
@@ -826,7 +1609,13 @@ bool RPCRateLimiter::successEarnsCreditLocked() const {
       limitLocked() < static_cast<double>(ceilingLocked());
 }
 
-void RPCRateLimiter::applySuccessLocked(int64_t units, int64_t rttNs) {
+void RPCRateLimiter::applySuccessLocked(
+    int64_t units,
+    int64_t rttNs,
+    bool attributed) {
+  if (isProbingLocked() && !attributed) {
+    return;
+  }
   if (isPacingLocked()) {
     // Growth earned so far is measured on the old horizon; commit it before
     // the sample moves the horizon. Rescheduling restarts growth from now.
@@ -877,7 +1666,7 @@ void RPCRateLimiter::onSuccess(int64_t units, int64_t rttNs) {
   std::optional<PacingTimerRequest> timerRequest;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    applySuccessLocked(units, rttNs);
+    applySuccessLocked(units, rttNs, /*attributed=*/false);
     timerRequest = collectWakeableLocked(toNotify);
   }
   fulfillWaitersNoThrow(toNotify, admissionKey_);
@@ -898,7 +1687,14 @@ bool RPCRateLimiter::onSuccessForEpoch(
   bool discarded{false};
   {
     std::lock_guard<std::mutex> l(mutex_);
-    if (overloadEpoch != overloadEpoch_) {
+    if (isProbingLocked()) {
+      // Units admitted before the first overload carry plain tokens; their
+      // successes still count as baseline work for probe spacing.
+      if (!isPacingLocked()) {
+        creditBaselineSuccessLocked(units);
+      }
+      discarded = overloadEpoch != overloadEpoch_;
+    } else if (overloadEpoch != overloadEpoch_) {
       commitGrowthLocked();
       const bool horizonMoved = updateServiceHorizonLocked(rttNs);
       discarded = successEarnsCreditLocked();
@@ -906,7 +1702,7 @@ bool RPCRateLimiter::onSuccessForEpoch(
         setLimitLocked(limitLocked());
       }
     } else {
-      applySuccessLocked(units, rttNs);
+      applySuccessLocked(units, rttNs, /*attributed=*/false);
     }
     timerRequest = collectWakeableLocked(toNotify);
   }
@@ -917,7 +1713,28 @@ bool RPCRateLimiter::onSuccessForEpoch(
   return !discarded;
 }
 
-void RPCRateLimiter::release() noexcept {
+void RPCRateLimiter::release(
+    uint64_t admissionId,
+    AdmissionKind kind) noexcept {
+  if (kind == AdmissionKind::kProbing) {
+    std::vector<ContinuePromise> toNotify;
+    std::optional<PacingTimerRequest> timer;
+    try {
+      std::lock_guard<std::mutex> l(mutex_);
+      --pending_;
+      if (probing_) {
+        releaseProbingLocked(admissionId);
+      }
+      timer = collectWakeableLocked(toNotify);
+    } catch (...) {
+      logLimiterFailure(admissionKey_, "probing rollback release");
+    }
+    fulfillWaitersNoThrow(toNotify, admissionKey_);
+    if (timer) {
+      schedulePacingTimer(*timer);
+    }
+    return;
+  }
   // Saturate at zero. A token can outlive testingReset(), which zeroes the
   // count; without the floor its release would drive pending_ negative and
   // make available() report more capacity than exists.
@@ -961,11 +1778,9 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
       .hardLimit = ceilingLocked(),
       .pending = pending_.load(),
       .peakPending = peakPending_.load(),
-      .lowWaterCapacity =
-          std::max<int64_t>(1, static_cast<int64_t>(std::floor(lowWaterLimit))),
-      .limitMilli = static_cast<int64_t>(std::llround(currentLimit * 1'000)),
-      .lowWaterLimitMilli =
-          static_cast<int64_t>(std::llround(lowWaterLimit * 1'000)),
+      .lowWaterCapacity = boundedCapacity(lowWaterLimit, ceilingLocked()),
+      .limitMilli = scaledMetric(currentLimit * 1'000),
+      .lowWaterLimitMilli = scaledMetric(lowWaterLimit * 1'000),
       .serviceHorizonNanos = serviceHorizonNanos_,
       .recovering = recovering_,
       .pacingNanos =
@@ -976,6 +1791,15 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
       .clockNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
                         now.time_since_epoch())
                         .count(),
+      .admissionWaiters = static_cast<int64_t>(waiters_.size()),
+      .admissionTimerArmed = pacingTimerArmed_,
+      .nextPermitDelayNanos =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::max(
+                  nextPacedAdmission_ - now,
+                  std::chrono::steady_clock::duration::zero()))
+              .count(),
+      .flowControlPolicy = config_.flowControlPolicy,
   };
 }
 

@@ -45,16 +45,22 @@
 #include "velox/exec/rpc/RpcErrorClassification.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
 
+#include <folly/executors/InlineExecutor.h>
 #include <folly/futures/Promise.h>
+
 #include <gtest/gtest.h>
+#include "velox/common/testutil/TestValue.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include "velox/common/memory/Memory.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <functional>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -189,6 +195,81 @@ TEST_F(RPCStateTest, basicAddAndClaim) {
   ASSERT_TRUE(claimedRow.has_value());
   EXPECT_EQ(claimedRow->rowId, 42);
   EXPECT_EQ(responseAs<TextPayload>(claimedRow->response).text, "test result");
+}
+
+TEST_F(RPCStateTest, completionFeedbackMatchesSelectedPolicy) {
+  for (const bool smartProbing : {false, true}) {
+    auto state = std::make_shared<RPCState>(testPool());
+    state->setStreamingMode(RPCStreamingMode::kPerRow);
+    state->setCapacityRetryEnabled(true);
+    auto now = std::chrono::steady_clock::time_point{};
+    auto limiter = std::make_shared<RPCRateLimiter>(
+        "test.completion-policy",
+        [&] { return now; },
+        nullptr,
+        [] { return 1.0; });
+    limiter->configure(
+        {.adaptive = true,
+         .ceiling = 100,
+         .floor = 1,
+         .flowControlPolicy = smartProbing
+             ? RPCFlowControlPolicy::kSmartProbing
+             : RPCFlowControlPolicy::kWindowAimd});
+    if (smartProbing) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+    }
+    auto tokens = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(tokens.size(), 1);
+    auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+    state->addPendingRow(
+        state,
+        42,
+        RPCState::RowLocation{0, 0},
+        std::move(future),
+        limiter->makeLease(std::move(tokens.front())));
+    now += std::chrono::milliseconds(100);
+    // Completes on another thread, as a transport does. Moved into an
+    // init-capture: a structured binding cannot be captured before Clang 16.
+    std::thread completer([p = std::move(promise)]() mutable {
+      RPCResponse response;
+      response.rowId = 42;
+      response.setPayload(makeTextPayload("success"));
+      p.setValue(std::move(response));
+    });
+    completer.join();
+    waitFor([&] { return state->numInFlight() == 0; });
+    auto ready = state->tryClaimReady();
+    ASSERT_TRUE(ready.has_value());
+    ASSERT_TRUE(ready->admissionEpoch.has_value());
+    const auto beforeDrain = limiter->stats();
+    EXPECT_EQ(
+        beforeDrain.serviceHorizonNanos,
+        smartProbing ? 100'000'000 : 1'000'000'000);
+    if (smartProbing) {
+      ASSERT_TRUE(ready->outputCredit);
+      ready->outputCredit.consume();
+    }
+    limiter->onSuccessForEpoch(ready->admissionEpoch.value(), 1, 250'000'000);
+    EXPECT_EQ(
+        limiter->stats().serviceHorizonNanos,
+        smartProbing ? beforeDrain.serviceHorizonNanos : 250'000'000);
+
+    tokens = limiter->tryAcquireUpTo(1);
+    ASSERT_EQ(tokens.size(), 1);
+    state->addPendingRow(
+        state,
+        43,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(
+            RPCResponse::failed(
+                43, velox::rpc::RPCErrorKind::kBackendError, "failed")),
+        limiter->makeLease(std::move(tokens.front())));
+    waitFor([&] { return state->numInFlight() == 0; });
+    ready = state->tryClaimReady();
+    ASSERT_TRUE(ready.has_value());
+    EXPECT_TRUE(ready->response.hasError());
+    EXPECT_EQ(limiter->stats().pending, 0);
+  }
 }
 
 TEST_F(RPCStateTest, claimReportsIdleWithoutCreatingAWaiter) {
@@ -973,6 +1054,63 @@ TEST_F(RPCStateTest, capacityRetriesCountReadmissions) {
       nullptr);
   waitFor([&]() { return state_->numInFlight() == 0; });
   EXPECT_EQ(state_->operatorSnapshot().numCapacityRetries, 1);
+}
+
+// Each hinted rejection counts once under the limit it hit, whether it is
+// queued for a retry or becomes the row's output once its retries are spent.
+// An unreported cause, and a rejection without a hint, count under neither.
+TEST_F(RPCStateTest, rejectionsCountByCause) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  const auto reject = [&](int64_t rowId, velox::rpc::CapacityRetry hint) {
+    auto response = RPCResponse::failed(
+        rowId, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+    response.setCapacityRetry(hint);
+    state_->addPendingRow(
+        state_,
+        rowId,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(std::move(response)));
+    waitFor([&]() { return state_->numInFlight() == 0; });
+  };
+  using velox::rpc::CapacityRetryCause;
+  const auto retried = [](CapacityRetryCause cause) {
+    return velox::rpc::CapacityRetry{
+        .cause = cause,
+        .retryAfter = std::chrono::milliseconds(0),
+        .budget = std::chrono::seconds(60)};
+  };
+  reject(1, retried(CapacityRetryCause::kQuota));
+  reject(2, retried(CapacityRetryCause::kCapacity));
+  // The transport already spent the row's only retry in place.
+  reject(
+      3,
+      {.cause = CapacityRetryCause::kCapacity,
+       .retryAfter = std::chrono::milliseconds(0),
+       .maxRetries = 1,
+       .numInPlaceRetries = 1});
+  reject(4, retried(CapacityRetryCause::kUnknown));
+  {
+    state_->addPendingRow(
+        state_,
+        5,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(
+            RPCResponse::failed(
+                5, velox::rpc::RPCErrorKind::kRateLimited, "rejected")));
+    waitFor([&]() { return state_->numInFlight() == 0; });
+  }
+
+  EXPECT_EQ(state_->takeDueRetries(10).size(), 3);
+  std::vector<int64_t> outputRows;
+  while (const auto ready = state_->tryClaimReady()) {
+    outputRows.push_back(ready->rowId);
+  }
+  std::sort(outputRows.begin(), outputRows.end());
+  EXPECT_EQ(outputRows, (std::vector<int64_t>{3, 5}));
+  const auto snapshot = state_->operatorSnapshot();
+  EXPECT_EQ(snapshot.numQuotaRejections, 1);
+  EXPECT_EQ(snapshot.numCapacityRejections, 2);
 }
 
 // A hint far beyond any real wait or budget queues the row rather than
@@ -2556,6 +2694,163 @@ TEST_F(RPCStateTest, finishesNormallyWhenNoRowWasDropped) {
       state->tryClaimOrWait(&future, &claimed),
       RPCState::ClaimResult::kFinished);
   EXPECT_TRUE(state->isFinished());
+}
+
+TEST_F(RPCStateTest, smartProbingCloseRetainsEagerRawLeaseWithoutOutputCredit) {
+  auto now = std::chrono::steady_clock::time_point{};
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.state-close", [&] { return now; }, nullptr, [] { return 1.0; });
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 4,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto lease = limiter->makeLease(limiter->tryAcquireUpTo(1));
+  lease->bindRawAttempt();
+  std::weak_ptr<RPCRateLimiter::AdmissionLease> weakLease = lease;
+  folly::Promise<RPCResponse> promise;
+  auto eager =
+      promise.getSemiFuture()
+          .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
+          .thenTry([lease](folly::Try<RPCResponse>&& response) {
+            lease->settleRawAttempt(RPCRateLimiter::Outcome::kSuccess, true);
+            return std::move(response);
+          })
+          .semi();
+  state_->addPendingRow(state_, 0, {0, 0}, std::move(eager), lease);
+  lease.reset();
+  state_->close();
+  EXPECT_FALSE(weakLease.expired());
+  EXPECT_EQ(limiter->stats().pending, 1);
+  now += std::chrono::milliseconds(10);
+  RPCResponse response;
+  response.rowId = 0;
+  response.setPayload(makeTextPayload("ok"));
+  promise.setValue(std::move(response));
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->testingProbingSnapshot().held, 0);
+  EXPECT_EQ(limiter->testingProbingSnapshot().retryDebt, 2);
+  EXPECT_TRUE(weakLease.expired());
+}
+
+TEST_F(
+    RPCStateTest,
+    smartProbingReadyOutputCarriesCreditUntilConsumedOrClosed) {
+  auto now = std::chrono::steady_clock::time_point{};
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.state-ready", [&] { return now; }, nullptr, [] { return 1.0; });
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 4,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  for (int64_t row = 0; row < 2; ++row) {
+    auto lease = limiter->makeLease(limiter->tryAcquireUpTo(1));
+    folly::Promise<RPCResponse> promise;
+    state_->addPendingRow(state_, row, {0, 0}, promise.getSemiFuture(), lease);
+    now += std::chrono::milliseconds(10);
+    RPCResponse response;
+    response.rowId = row;
+    response.setPayload(makeTextPayload("ok"));
+    promise.setValue(std::move(response));
+  }
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->testingProbingSnapshot().retryDebt, 2);
+  auto claimed = state_->tryClaimReady();
+  ASSERT_TRUE(claimed);
+  ASSERT_TRUE(claimed->outputCredit);
+  claimed->outputCredit.consume();
+  EXPECT_EQ(limiter->testingProbingSnapshot().retryDebt, 1);
+  state_->close();
+  EXPECT_EQ(limiter->testingProbingSnapshot().retryDebt, 1);
+  EXPECT_EQ(limiter->testingProbingSnapshot().held, 0);
+}
+
+// The state marks every rejection not named as capacity on its lease, so
+// SMART_PROBING cuts as WINDOW_AIMD does instead of starting to probe; only a
+// named capacity rejection starts it.
+TEST_F(RPCStateTest, smartProbingQuotaRejectionDoesNotStartProbing) {
+  for (const auto cause :
+       {std::optional{velox::rpc::CapacityRetryCause::kQuota},
+        std::optional{velox::rpc::CapacityRetryCause::kCapacity},
+        std::optional{velox::rpc::CapacityRetryCause::kUnknown},
+        std::optional<velox::rpc::CapacityRetryCause>{}}) {
+    SCOPED_TRACE(cause.has_value() ? static_cast<int>(*cause) : -1);
+    auto state = std::make_shared<RPCState>(testPool());
+    state->setStreamingMode(RPCStreamingMode::kPerRow);
+    state->setCapacityRetryEnabled(true);
+    auto limiter = std::make_shared<RPCRateLimiter>(
+        "test.state-quota-rejection",
+        [] { return std::chrono::steady_clock::time_point{}; },
+        nullptr,
+        [] { return 1.0; });
+    limiter->configure(
+        {.adaptive = true,
+         .ceiling = 4,
+         .floor = 1,
+         .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+    auto response = RPCResponse::failed(
+        0, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+    if (cause.has_value()) {
+      response.setCapacityRetry(
+          {.cause = *cause,
+           .retryAfter = std::chrono::milliseconds(0),
+           .budget = std::chrono::seconds(60)});
+    }
+    state->addPendingRow(
+        state,
+        0,
+        {0, 0},
+        folly::makeSemiFuture(std::move(response)),
+        limiter->makeLease(limiter->tryAcquireUpTo(1)));
+    waitFor([&] { return state->numInFlight() == 0; });
+    EXPECT_EQ(
+        limiter->testingProbingSnapshot().cut,
+        cause == velox::rpc::CapacityRetryCause::kCapacity);
+  }
+}
+
+TEST_F(
+    RPCStateTest,
+    smartProbingReadyAllocationFailureDropsReturnedCompletionCredit) {
+#ifdef NDEBUG
+  GTEST_SKIP() << "Needs TestValue injection, which release builds omit.";
+#endif
+  common::testutil::TestValue::enable();
+  auto now = std::chrono::steady_clock::time_point{};
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.state-allocation",
+      [&] { return now; },
+      nullptr,
+      [] { return 1.0; });
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 4,
+       .floor = 1,
+       .flowControlPolicy = RPCFlowControlPolicy::kSmartProbing});
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto lease = limiter->makeLease(limiter->tryAcquireUpTo(1));
+  folly::Promise<RPCResponse> promise;
+  state_->addPendingRow(state_, 0, {0, 0}, promise.getSemiFuture(), lease);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::rpc::RPCState::readyOutputPreflight",
+      std::function<void(RPCState*)>(
+          [](auto*) __attribute__((noreturn)) { throw std::bad_alloc{}; }));
+  now += std::chrono::milliseconds(10);
+  RPCResponse response;
+  response.rowId = 0;
+  response.setPayload(makeTextPayload("ok"));
+  promise.setValue(std::move(response));
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(state_->numInFlight(), 0);
+  EXPECT_FALSE(state_->tryClaimReady());
+  EXPECT_EQ(limiter->testingProbingSnapshot().retryDebt, 2);
+  EXPECT_FALSE(lease
+                   ->completeAndRelease(
+                       RPCRateLimiter::Outcome::kSuccess, /*handedOff=*/false)
+                   .credit);
 }
 
 } // namespace

@@ -124,6 +124,11 @@ class RPCOperator : public exec::Operator {
   /// Runtime stat names.
   static inline const std::string kRpcRequestsDispatched{
       "rpcRequestsDispatched"};
+  /// Rows passed to admitted PER_ROW dispatch calls, including operator
+  /// retries. Local-only output is excluded. Retries inside a transport are
+  /// counted separately by rpcRetriesAttempted, not as framework dispatches.
+  static inline const std::string kRpcAttemptsDispatched{
+      "rpcAttemptsDispatched"};
   static inline const std::string kRpcResponsesReceived{"rpcResponsesReceived"};
   static inline const std::string kRpcErrorCount{"rpcErrorCount"};
   static inline const std::string kRpcWaitWallNanos{"rpcWaitWallNanos"};
@@ -136,6 +141,13 @@ class RPCOperator : public exec::Operator {
       "rpcCongestionOverloadShrinks"};
   /// Attempts rejected for capacity and admitted again for another attempt.
   static inline const std::string kRpcCapacityRetries{"rpcCapacityRetries"};
+  /// Hinted rejections of a rate quota, such as requests or tokens per minute,
+  /// whether or not they retried.
+  static inline const std::string kRpcQuotaRejections{"rpcQuotaRejections"};
+  /// Hinted rejections for lack of serving capacity, whether or not they
+  /// retried.
+  static inline const std::string kRpcCapacityRejections{
+      "rpcCapacityRejections"};
   /// Capacity retries a hint's minRetries granted after its budget ran out.
   static inline const std::string kRpcCapacityRetryFloorRetries{
       "rpcCapacityRetryFloorRetries"};
@@ -145,6 +157,14 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcRttMaxWallNanos{"rpcRttMaxWallNanos"};
   static inline const std::string kRpcRttCount{"rpcRttCount"};
   static inline const std::string kRpcStreamingMode{"rpcStreamingMode"};
+  /// The requested flow-control policy, by RPCFlowControlPolicy value:
+  /// WINDOW_AIMD=0, SMART_PROBING=1. Reported per driver.
+  static inline const std::string kRpcFlowControlRequestedPolicy{
+      "rpcFlowControlRequestedPolicy"};
+  /// The policy the limiter runs, by the same values. A SMART_PROBING request
+  /// that is not eligible reports WINDOW_AIMD here.
+  static inline const std::string kRpcFlowControlEffectivePolicy{
+      "rpcFlowControlEffectivePolicy"};
   static inline const std::string kRpcErrorKindRateLimited{
       "rpcErrorKindRateLimited"};
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
@@ -176,6 +196,17 @@ class RPCOperator : public exec::Operator {
       "rpcRateLimiterMinLimitMilli"};
   static inline const std::string kRpcRateLimiterServiceHorizonNanos{
       "rpcRateLimiterServiceHorizonNanos"};
+  /// Live queued admission waits on the shared controller. Replicated by
+  /// drivers sharing it, not a per-query sum.
+  static inline const std::string kRpcRateLimiterAdmissionWaiters{
+      "rpcRateLimiterAdmissionWaiters"};
+  /// Live flag indicating an armed admission timer on the shared controller.
+  static inline const std::string kRpcRateLimiterAdmissionTimerArmed{
+      "rpcRateLimiterAdmissionTimerArmed"};
+  /// Live delay until the shared controller's next paced permit; zero when
+  /// the deadline is already due. Replicated by drivers sharing it.
+  static inline const std::string kRpcRateLimiterNextPermitDelayNanos{
+      "rpcRateLimiterNextPermitDelayNanos"};
   /// Present, with value one per driver, when the backend's shared limiter
   /// runs another policy and this operator runs under the limiter for its own.
   static inline const std::string kRpcRateLimiterPolicyScoped{
@@ -335,7 +366,8 @@ class RPCOperator : public exec::Operator {
       AsyncRPCFunction::CongestionSignal signal,
       const std::vector<int64_t>& roundTripTimesNs,
       const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
-      bool sharedOverloadHandled);
+      bool sharedOverloadHandled,
+      RPCRateLimiter::FeedbackDisposition disposition);
 
   // isBlocked() decomposed. Each returns the reason to hand the driver; the
   // try* helpers return nullopt when the state reports finished, which the
@@ -350,9 +382,34 @@ class RPCOperator : public exec::Operator {
   // Parks if shared admission is full; otherwise returns kNotBlocked.
   exec::BlockingReason parkOnAdmission(ContinueFuture* future);
 
+  // SMART_PROBING's must-wait path: with dispatchable work, parks on the first
+  // of 'rowWait' and an admission wait, so admission that frees before the
+  // next completion is not stranded; otherwise parks on 'rowWait'.
+  exec::BlockingReason parkOnRowOrProbingAdmission(
+      ContinueFuture* future,
+      ContinueFuture rowWait);
+
   // Hands 'waitFuture' to the driver and starts a block-wait measurement.
   exec::BlockingReason
   park(ContinueFuture* future, ContinueFuture waitFuture, bool isBackpressure);
+
+  // True while SMART_PROBING has rows or retries ready to dispatch.
+  bool hasRunnableProbingDemand() const;
+  // Registers runnable demand with the limiter while there is some and drops
+  // it otherwise. A probe is admitted only while some producer has demand.
+  void refreshProbingDemand();
+
+  // Preallocates raw terminal observation without retaining the operator/state.
+  struct RawAttemptObserver;
+  std::shared_ptr<RawAttemptObserver> prepareRawAttemptObserver(
+      const std::shared_ptr<RPCRateLimiter::AdmissionLease>& lease);
+
+  // Observes compound attempt metadata before RPCState completes its lease.
+  folly::SemiFuture<RPCResponse> wrapAdmittedRowFuture(
+      folly::SemiFuture<RPCResponse> future,
+      int64_t rowId,
+      const std::shared_ptr<RPCRateLimiter::AdmissionLease>& lease,
+      std::shared_ptr<RawAttemptObserver> observer);
 
   // Closes the measurement started by the last park().
   void endBlockWait();
@@ -430,6 +487,14 @@ class RPCOperator : public exec::Operator {
   RPCRateLimiter* limiter_{nullptr};
   // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
   bool capacityRetryEnabled_{false};
+  // Query-stable policy choice, independent of per-row retry ownership.
+  RPCFlowControlPolicy requestedFlowControlPolicy_{
+      RPCFlowControlPolicy::kWindowAimd};
+  // True when SMART_PROBING is requested for adaptive PER_ROW execution of a
+  // function that may return capacity retries. Selects the SMART limiter
+  // policy, typed completion feedback and attributed admission demand. Any
+  // other request runs exactly as WINDOW_AIMD.
+  bool smartProbingEnabled_{false};
 
   // Set by the first tryAcquireAdmission() call.
   bool admissionRequested_{false};
@@ -461,6 +526,8 @@ class RPCOperator : public exec::Operator {
   // stats collector thread, hence atomic. Relaxed ordering is enough: these
   // are independent counters, not a handshake.
   std::atomic<int64_t> numRequestsDispatched_{0};
+  // PER_ROW framework attempts, including readmitted retries, published live.
+  std::atomic<int64_t> numAttemptsDispatched_{0};
   // Success units the shared limiter discarded as stale; see
   // kRpcStaleSuccessUnits.
   std::atomic<int64_t> numStaleSuccessUnits_{0};
@@ -518,6 +585,8 @@ class RPCOperator : public exec::Operator {
   // Block wait time tracking for runtime stats. Started when the operator
   // parks and reset when the wait ends.
   std::optional<folly::stop_watch<std::chrono::nanoseconds>> blockWaitWatch_;
+  // This driver's runnable demand on a SMART_PROBING limiter; null otherwise.
+  std::shared_ptr<RPCRateLimiter::RunnableDemand> probingDemand_;
   bool blockWaitIsBackpressure_{false};
   uint64_t totalBlockWaitNanos_{0};
   uint64_t totalBackpressureWaitNanos_{0};
