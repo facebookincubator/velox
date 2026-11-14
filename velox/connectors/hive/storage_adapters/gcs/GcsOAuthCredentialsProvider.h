@@ -16,20 +16,23 @@
 
 #pragma once
 
-#include <google/cloud/storage/oauth2/credentials.h>
+#include <google/cloud/credentials.h>
 
 namespace facebook::velox::filesystems {
 
-namespace gcs = ::google::cloud::storage;
-
-/// Interface for providing OAuth2 credentials for Google Cloud Storage (GCS).
-/// Implementations should return a GCS OAuth2 credential used for creating the
-/// GCS client for a specific bucket via `getCredentials`.
+/// Interface for providing credentials for Google Cloud Storage (GCS).
+/// Implementations should return a `google::cloud::Credentials` used for
+/// creating the GCS client for a specific bucket via `getCredentials`.
+/// Build the return value with one of the factory functions in
+/// `<google/cloud/credentials.h>` such as `MakeAccessTokenCredentials` for
+/// bearer-token flows or `MakeServiceAccountCredentials` for service-account
+/// JSON. The deprecated `storage::oauth2::Credentials` type was removed in
+/// google-cloud-cpp 3.x.
 class GcsOAuthCredentialsProvider {
  public:
   virtual ~GcsOAuthCredentialsProvider() = default;
 
-  virtual std::shared_ptr<gcs::oauth2::Credentials> getCredentials(
+  virtual std::shared_ptr<::google::cloud::Credentials> getCredentials(
       const std::string& bucket) = 0;
 };
 
