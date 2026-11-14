@@ -34,6 +34,7 @@
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -1152,23 +1153,31 @@ TEST_F(PaimonConnectorTest, nimbleFileFieldIds) {
        makeFlatVector<std::string>({"a", "b", "c"}),
        makeNullableFlatVector<int64_t>(
            {std::nullopt, std::nullopt, std::nullopt})});
+  nimble::unregisterSelectiveNimbleReaderFactory();
+  nimble::registerNimbleReaderFactory();
+  const auto restore = folly::makeGuard([] {
+    nimble::unregisterNimbleReaderFactory();
+    nimble::registerSelectiveNimbleReaderFactory();
+  });
   for (const bool batchReader : {false, true}) {
     SCOPED_TRACE(batchReader);
-    if (batchReader) {
-      nimble::unregisterSelectiveNimbleReaderFactory();
-      nimble::registerNimbleReaderFactory();
-    }
-    const auto restore = folly::makeGuard([&] {
-      if (batchReader) {
-        nimble::unregisterNimbleReaderFactory();
-        nimble::registerSelectiveNimbleReaderFactory();
-      }
-    });
     // Even equal schema IDs must bind using file IDs, not query order or names.
-    exec::test::AssertQueryBuilder(plan)
-        .split(evolutionSplit(
-            kFormat, {{paths[0]->getPath(), 17}, {paths[1]->getPath(), 17}}))
-        .assertResults(expected);
+    const auto task =
+        exec::test::AssertQueryBuilder(plan)
+            .connectorSessionProperty(
+                kPaimonConnectorId,
+                "selective_nimble_reader_enabled",
+                batchReader ? "false" : "true")
+            .split(evolutionSplit(
+                kFormat,
+                {{paths[0]->getPath(), 17}, {paths[1]->getPath(), 17}}))
+            .assertResults(expected);
+    const auto stats =
+        exec::toPlanStats(task->taskStats()).at(plan->id()).customStats;
+    EXPECT_EQ(
+        stats.at(batchReader ? "batchNimbleReader" : "selectiveNimbleReader")
+            .sum,
+        2);
   }
 }
 
