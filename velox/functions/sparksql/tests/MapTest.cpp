@@ -82,21 +82,6 @@ TEST_F(MapTest, boolType) {
   testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector);
 }
 
-TEST_F(MapTest, constantKeysBuildFlatMap) {
-  const auto data = makeRowVector({
-      makeFlatVector<int64_t>({10, 11}),
-  });
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kGenerateConstantMapsAsFlatMaps, "true"},
-  });
-  VELOX_ASSERT_THROW(
-      evaluate("map(1, c0)", data),
-      "Flat maps for constant map keys are not implemented in map()");
-  velox::test::assertEqualVectors(
-      makeMapVectorFromJson<int64_t, int64_t>({"{10:1}", "{11:1}"}),
-      evaluate("map(c0, 1)", data));
-}
-
 TEST_F(MapTest, duplicateMapKey) {
   // Input vectors with duplicate keys.
   auto inputVector1 = makeNullableFlatVector<int64_t>({1, 20, 3});
@@ -645,6 +630,107 @@ TEST_F(MapTest, constantKeys) {
   VELOX_ASSERT_THROW(
       evaluate("map(1, c0, 2, c1, 1, c2)", data),
       "Duplicate map key was found: 1");
+}
+
+TEST_F(MapTest, constantKeysBuildFlatMap) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({10, 11}),
+      makeNullableFlatVector<int64_t>({20, std::nullopt}),
+      makeFlatVector<int64_t>({30, 31}),
+  });
+  setGenerateConstantMapsAsFlatMaps(false);
+  {
+    auto result = evaluate("map(1, c0, 2, c1, 1, c2)", data);
+    ASSERT_EQ(result->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    result->validate();
+    const auto& flatMap = *result->asUnchecked<FlatMapVector>();
+    ::facebook::velox::test::assertEqualVectors(
+        makeFlatVector<int64_t>({1, 2}), flatMap.distinctKeys());
+    EXPECT_EQ(flatMap.mapValuesAt(0), data->childAt(2));
+    EXPECT_EQ(flatMap.mapValuesAt(1), data->childAt(1));
+    EXPECT_EQ(flatMap.rawInMapsAt(0), nullptr);
+    EXPECT_EQ(flatMap.rawInMapsAt(1), nullptr);
+    ::facebook::velox::test::assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1:30, 2:20}",
+            "{1:31, 2:null}",
+        }),
+        result);
+  }
+
+  setGenerateConstantMapsAsFlatMaps(true);
+  VELOX_ASSERT_THROW(
+      evaluate("map(1, c0, 2, c1, 1, c2)", data),
+      "Duplicate map key was found: 1");
+  {
+    auto result = evaluate("map(1, c0, 2, c1)", data);
+    ASSERT_EQ(result->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    const auto& flatMap = *result->asUnchecked<FlatMapVector>();
+    ::facebook::velox::test::assertEqualVectors(
+        makeFlatVector<int64_t>({1, 2}), flatMap.distinctKeys());
+    EXPECT_EQ(flatMap.mapValuesAt(0), data->childAt(0));
+    EXPECT_EQ(flatMap.mapValuesAt(1), data->childAt(1));
+  }
+
+  VELOX_ASSERT_THROW(
+      evaluate("map(cast(null as bigint), c0)", data),
+      "Cannot use null as map key!");
+  EXPECT_EQ(
+      evaluate("map(c0, c1)", data)->encoding(), VectorEncoding::Simple::MAP);
+
+  setThrowExceptionOnDuplicateMapKeys(false);
+  EXPECT_EQ(
+      evaluate("map(1, c0, 2, c1)", data)->encoding(),
+      VectorEncoding::Simple::MAP);
+}
+
+TEST_F(MapTest, constantKeysBuildFlatMapInConditional) {
+  const auto data = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeFlatVector<int64_t>({10, 11, 12, 13}),
+      makeNullableFlatVector<int64_t>({20, std::nullopt, 22, 23}),
+  });
+  setGenerateConstantMapsAsFlatMaps(true);
+  auto result = evaluate("if(c0, map(1, c1, 2, c2), map(1, c2, 3, c1))", data);
+  ASSERT_EQ(result->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  result->validate();
+  ::facebook::velox::test::assertEqualVectors(
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:20}",
+          "{1:null, 3:11}",
+          "{1:12, 2:22}",
+          "{1:23, 3:13}",
+      }),
+      result);
+  ::facebook::velox::test::assertEqualVectors(
+      makeFlatVector<int64_t>({10, 11, 12, 13}), data->childAt(1));
+  ::facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>({20, std::nullopt, 22, 23}),
+      data->childAt(2));
+}
+
+TEST_F(MapTest, constantFloatingPointKeysBuildRegularMap) {
+  const auto data = makeRowVector({
+      makeConstant(1.5, 2),
+      makeFlatVector<int64_t>({10, 11}),
+      makeConstant(2.5, 2),
+      makeFlatVector<int64_t>({20, 21}),
+      makeConstant(1.5f, 2),
+      makeConstant(2.5f, 2),
+  });
+  const auto doubleKeys = evaluate("map(c0, c1, c2, c3)", data);
+  const auto realKeys = evaluate("map(c4, c1, c5, c3)", data);
+  setGenerateConstantMapsAsFlatMaps(false);
+  {
+    auto result = evaluate("map(c0, c1, c2, c3)", data);
+    EXPECT_EQ(result->encoding(), VectorEncoding::Simple::MAP);
+    ::facebook::velox::test::assertEqualVectors(doubleKeys, result);
+  }
+  {
+    auto result = evaluate("map(c4, c1, c5, c3)", data);
+    EXPECT_EQ(result->encoding(), VectorEncoding::Simple::MAP);
+    ::facebook::velox::test::assertEqualVectors(realKeys, result);
+  }
 }
 
 TEST_F(MapTest, resultSize) {
