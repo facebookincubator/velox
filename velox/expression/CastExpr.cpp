@@ -18,6 +18,9 @@
 
 #include <fmt/format.h>
 #include <folly/Likely.h>
+#include <folly/container/F14Map.h>
+#include <functional>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -581,6 +584,49 @@ void propagateErrorsOrSetNulls(
     }
   }
 }
+
+void collapseChannel(
+    const SelectivityVector& rows,
+    const SelectivityVector& rowsWithKey,
+    const VectorPtr& values,
+    const BaseVector& keys,
+    vector_size_t channel,
+    bool throwOnDuplicateKeys,
+    vector_size_t size,
+    memory::MemoryPool* pool,
+    BufferPtr& collidedInMap,
+    VectorPtr& collidedValues) {
+  if (values == nullptr) {
+    return;
+  }
+  const auto* rawCollidedInMap =
+      collidedInMap != nullptr ? collidedInMap->as<uint64_t>() : nullptr;
+  auto mergedInMap = AlignedBuffer::allocate<bool>(size, pool, false);
+  auto* rawMergedInMap = mergedInMap->asMutable<uint64_t>();
+  bits::copyBits(
+      rowsWithKey.asRange().bits(), 0, rawMergedInMap, 0, rows.end());
+  auto mergedValues = BaseVector::create(values->type(), size, pool);
+  mergedValues->copy(values.get(), rowsWithKey, nullptr);
+  if (collidedValues != nullptr) {
+    rows.applyToSelected([&](vector_size_t row) {
+      if (rawCollidedInMap != nullptr &&
+          !bits::isBitSet(rawCollidedInMap, row)) {
+        return;
+      }
+      if (rowsWithKey.isValid(row)) {
+        VELOX_USER_CHECK(
+            !throwOnDuplicateKeys,
+            "Duplicate map key was found: {}",
+            keys.toString(channel));
+        return;
+      }
+      bits::setBit(rawMergedInMap, row);
+      mergedValues->copy(collidedValues.get(), row, row, 1);
+    });
+  }
+  collidedInMap = std::move(mergedInMap);
+  collidedValues = std::move(mergedValues);
+}
 } // namespace
 
 #define VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(       \
@@ -689,6 +735,172 @@ VectorPtr CastExpr::applyMap(
       elementToTopLevelRows,
       result,
       oldErrors);
+
+  // Restore original state.
+  context.swapErrors(oldErrors);
+  return result;
+}
+
+VectorPtr CastExpr::applyFlatMap(
+    const SelectivityVector& rows,
+    const FlatMapVector* input,
+    exec::EvalCtx& context,
+    const MapType& fromType,
+    const MapType& toType) {
+  const auto numDistinctKeys = input->numDistinctKeys();
+  auto* pool = context.pool();
+
+  auto rowsToCast = [&](vector_size_t channel) {
+    SelectivityVector rowsWithKey = rows;
+    if (const auto* rawInMap = input->rawInMapsAt(channel)) {
+      rowsWithKey.deselectNulls(rawInMap, rows.begin(), rows.end());
+    }
+    return rowsWithKey;
+  };
+
+  EvalErrorsPtr oldErrors;
+  context.swapErrors(oldErrors);
+
+  VectorPtr newDistinctKeys = input->distinctKeys();
+  EvalErrorsPtr keyErrors;
+  const bool throwOnError = *context.mutableThrowOnError();
+  if (*fromType.keyType() != *toType.keyType()) {
+    {
+      ScopedVarSetter holder(&inTopLevel, false);
+      ScopedVarSetter noThrow(context.mutableThrowOnError(), false);
+      ScopedVarSetter details(context.mutableCaptureErrorDetails(), true);
+      apply(
+          SelectivityVector(numDistinctKeys),
+          input->distinctKeys(),
+          context,
+          fromType.keyType(),
+          toType.keyType(),
+          newDistinctKeys);
+    }
+    context.swapErrors(keyErrors);
+  }
+
+  const bool castKeys = *fromType.keyType() != *toType.keyType();
+  const bool castValues = *fromType.valueType() != *toType.valueType();
+  bool throwOnDuplicateKeys{false};
+  if (auto* queryCtx = context.execCtx()->queryCtx()) {
+    throwOnDuplicateKeys =
+        queryCtx->queryConfig().throwExceptionOnDuplicateMapKeys();
+  }
+  folly::F14FastMap<
+      vector_size_t,
+      vector_size_t,
+      std::function<uint64_t(vector_size_t)>,
+      std::function<bool(vector_size_t, vector_size_t)>>
+      channelByKey(
+          numDistinctKeys,
+          [&](vector_size_t channel) {
+            return newDistinctKeys->hashValueAt(channel);
+          },
+          [&](vector_size_t left, vector_size_t right) {
+            return newDistinctKeys->equalValueAt(
+                newDistinctKeys.get(), left, right);
+          });
+  std::vector<vector_size_t> keptKeyIndices;
+  std::vector<VectorPtr> newMapValues;
+  std::vector<BufferPtr> newInMaps;
+  keptKeyIndices.reserve(numDistinctKeys);
+  newMapValues.reserve(numDistinctKeys);
+  newInMaps.reserve(numDistinctKeys);
+  for (vector_size_t channel = 0; channel < numDistinctKeys; ++channel) {
+    const auto rowsWithKey = rowsToCast(channel);
+    if (keyErrors && keyErrors->hasErrorAt(channel)) {
+      if (throwOnError && rowsWithKey.hasSelections()) {
+        keyErrors->throwIfErrorAt(channel);
+      }
+      context.ensureErrorsVectorSize(rows.end());
+      rowsWithKey.applyToSelected([&](vector_size_t row) {
+        context.errors()->copyError(*keyErrors, channel, row);
+      });
+      continue;
+    }
+    if (!rowsWithKey.hasSelections()) {
+      continue;
+    }
+    std::optional<vector_size_t> collidedChannel;
+    if (castKeys) {
+      auto [it, inserted] =
+          channelByKey.try_emplace(channel, keptKeyIndices.size());
+      if (!inserted) {
+        collidedChannel = it->second;
+      }
+    }
+    const auto& values = input->mapValuesAt(channel);
+    VectorPtr newValues = values;
+    if (castValues && values != nullptr) {
+      newValues = nullptr;
+      {
+        ScopedVarSetter holder(&inTopLevel, false);
+        apply(
+            rowsWithKey,
+            values,
+            context,
+            fromType.valueType(),
+            toType.valueType(),
+            newValues);
+      }
+      if (newValues->size() < input->size()) {
+        newValues->resize(input->size());
+      }
+    }
+    if (collidedChannel.has_value()) {
+      collapseChannel(
+          rows,
+          rowsWithKey,
+          newValues,
+          *newDistinctKeys,
+          channel,
+          throwOnDuplicateKeys,
+          input->size(),
+          pool,
+          newInMaps[*collidedChannel],
+          newMapValues[*collidedChannel]);
+      keptKeyIndices[*collidedChannel] = channel;
+    } else {
+      keptKeyIndices.push_back(channel);
+      newInMaps.push_back(
+          channel < input->inMaps().size() ? input->inMaps()[channel]
+                                           : nullptr);
+      newMapValues.push_back(std::move(newValues));
+    }
+  }
+
+  if (keptKeyIndices.size() < numDistinctKeys) {
+    auto indices = allocateIndices(keptKeyIndices.size(), pool);
+    std::copy(
+        keptKeyIndices.begin(),
+        keptKeyIndices.end(),
+        indices->asMutable<vector_size_t>());
+    newDistinctKeys = BaseVector::wrapInDictionary(
+        nullptr, indices, keptKeyIndices.size(), newDistinctKeys);
+  }
+
+  VectorPtr result = std::make_shared<FlatMapVector>(
+      pool,
+      MAP(toType.keyType(), toType.valueType()),
+      input->nulls(),
+      input->size(),
+      std::move(newDistinctKeys),
+      std::move(newMapValues),
+      std::move(newInMaps));
+
+  if (context.errors()) {
+    if (setNullInResultAtError()) {
+      auto* rawNulls = result->mutableRawNulls();
+      rows.applyToSelected([&](vector_size_t row) {
+        if (context.errors()->hasErrorAt(row)) {
+          bits::setNull(rawNulls, row, true);
+        }
+      });
+    } else {
+      context.addErrors(rows, *context.errorsPtr(), oldErrors);
+    }
+  }
 
   // Restore original state.
   context.swapErrors(oldErrors);
@@ -1092,12 +1304,21 @@ void CastExpr::applyPeeled(
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:
-        result = applyMap(
-            rows,
-            input.asUnchecked<MapVector>(),
-            context,
-            fromType->asMap(),
-            toType->asMap());
+        if (input.encoding() == VectorEncoding::Simple::FLAT_MAP) {
+          result = applyFlatMap(
+              rows,
+              input.asUnchecked<FlatMapVector>(),
+              context,
+              fromType->asMap(),
+              toType->asMap());
+        } else {
+          result = applyMap(
+              rows,
+              input.asUnchecked<MapVector>(),
+              context,
+              fromType->asMap(),
+              toType->asMap());
+        }
         break;
       case TypeKind::ARRAY:
         result = applyArray(
