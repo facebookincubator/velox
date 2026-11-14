@@ -145,6 +145,7 @@ class ArraysOverlapTest : public SparkFunctionBaseTest {
         {-kInf},
         {1.5, -0.0},
         {-0.0, std::nullopt},
+        {-0.0, std::nullopt},
     });
     auto right = makeNullableArrayVector<T>({
         {0.0},
@@ -157,18 +158,20 @@ class ArraysOverlapTest : public SparkFunctionBaseTest {
         {kInf},
         {0.0, 1.5},
         {0.0},
+        {1.5},
     });
-    // Spark compares top-level floating-point elements by their bits, with all
-    // NaNs equal: -0.0 and 0.0 are different values.
+    // Spark normalizes top-level floating-point elements before comparing
+    // them: -0.0 equals 0.0 and all NaNs are equal.
     auto expected = makeNullableFlatVector<bool>({
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
         false,
         true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        false,
         true,
         std::nullopt,
     });
@@ -382,7 +385,7 @@ TEST_F(ArraysOverlapTest, constantFloatingPoint) {
       column,
       makeArrayVector<double>(
           {{-0.0, std::numeric_limits<double>::quiet_NaN()}}),
-      makeFlatVector<bool>({false, true, true, false}));
+      makeFlatVector<bool>({true, true, true, false}));
 }
 
 TEST_F(ArraysOverlapTest, bothArgumentsConstant) {
