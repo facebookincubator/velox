@@ -39,6 +39,7 @@ using namespace stringCore;
 template <
     bool ascii,
     bool turkishCasing = false,
+    bool fullCaseMapping = false,
     typename TOutString,
     typename TInString>
 FOLLY_ALWAYS_INLINE bool upper(TOutString& output, const TInString& input) {
@@ -47,8 +48,9 @@ FOLLY_ALWAYS_INLINE bool upper(TOutString& output, const TInString& input) {
     upperAscii(output.data(), input.data(), input.size());
   } else {
     output.resize(input.size() * 4);
-    auto size =
-        upperUnicode(output.data(), output.size(), input.data(), input.size());
+    auto size = upperUnicode<
+        fullCaseMapping ? CaseMapping::kFullUpper : CaseMapping::kSimple>(
+        output.data(), output.size(), input.data(), input.size());
     output.resize(size);
   }
   return true;
@@ -736,6 +738,7 @@ template <
     bool strictSpace,
     bool turkishCasing,
     bool greekFinalSigma,
+    bool fullCaseMapping,
     typename TOutString,
     typename TInString>
 FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
@@ -766,7 +769,8 @@ FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
       std::memcpy(outputBytes, inputBytes, numBytesRead);
       outputBytes += numBytesRead;
     } else if (isStartOfWord) {
-      auto upperSize = upperUnicode(
+      auto upperSize = upperUnicode<
+          fullCaseMapping ? CaseMapping::kFullTitle : CaseMapping::kSimple>(
           outputBytes,
           static_cast<size_t>(outputStart + output.size() - outputBytes),
           inputBytes,
@@ -797,11 +801,14 @@ FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
 /// considered as word separators.
 /// @tparam turkishCasing If true, handles special Turkish case during
 /// the unicode lower-casing.
+/// @tparam fullCaseMapping If true, the first letter of a word uses Unicode
+/// full titlecase mapping, where one code point can become several.
 template <
     bool strictSpace,
     bool isAscii,
     bool turkishCasing,
     bool greekFinalSigma,
+    bool fullCaseMapping,
     typename TOutString,
     typename TInString>
 FOLLY_ALWAYS_INLINE bool initcap(TOutString& output, const TInString& input) {
@@ -809,8 +816,11 @@ FOLLY_ALWAYS_INLINE bool initcap(TOutString& output, const TInString& input) {
     detail::initcapAsciiImpl<strictSpace>(output, input);
     return true;
   } else {
-    return detail::initcapUtf8Impl<strictSpace, turkishCasing, greekFinalSigma>(
-        output, input);
+    return detail::initcapUtf8Impl<
+        strictSpace,
+        turkishCasing,
+        greekFinalSigma,
+        fullCaseMapping>(output, input);
   }
 }
 

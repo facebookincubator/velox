@@ -22,6 +22,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/external/utf8proc/utf8procImpl.h"
+#include "velox/functions/lib/string/FullCaseMapping.h"
 #include "velox/functions/lib/string/GreekFinalSigma.h"
 
 #if (ENABLE_VECTORIZATION > 0) && !defined(_DEBUG) && !defined(DEBUG)
@@ -125,7 +126,11 @@ lowerAscii(char* output, const char* input, size_t length) {
 /// Perform upper for utf8 string input, output should be pre-allocated and
 /// large enough for the results. outputLength refers to the number of bytes
 /// available in the output buffer, and inputLength is the number of bytes in
-/// the input string
+/// the input string.
+/// @tparam mapping kSimple maps each code point to one code point. kFullUpper
+/// and kFullTitle apply Unicode full case mapping, where one code point can
+/// become up to three, so the output can be up to 3 times the input's size.
+template <CaseMapping mapping>
 FOLLY_ALWAYS_INLINE size_t upperUnicode(
     char* output,
     size_t outputLength,
@@ -148,7 +153,28 @@ FOLLY_ALWAYS_INLINE size_t upperUnicode(
     }
     inputIdx += size;
 
-    auto upperCodePoint = utf8proc_toupper(nextCodePoint);
+    if constexpr (mapping != CaseMapping::kSimple) {
+      if (const auto* full = findFullCaseMapping(nextCodePoint)) {
+        const auto& mapped =
+            mapping == CaseMapping::kFullUpper ? full->upper : full->title;
+        for (const int32_t codePoint : mapped) {
+          if (codePoint == 0) {
+            break;
+          }
+          assert(
+              outputIdx + utf8proc_codepoint_length(codePoint) <=
+                  outputLength &&
+              "access out of bound");
+          outputIdx += utf8proc_encode_char(
+              codePoint, reinterpret_cast<unsigned char*>(&output[outputIdx]));
+        }
+        continue;
+      }
+    }
+
+    auto upperCodePoint = mapping == CaseMapping::kFullTitle
+        ? utf8proc_totitle(nextCodePoint)
+        : utf8proc_toupper(nextCodePoint);
 
     assert(
         (outputIdx + utf8proc_codepoint_length(upperCodePoint)) <

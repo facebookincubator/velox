@@ -37,7 +37,18 @@ class InitcapTest : public SparkFunctionBaseTest {
         {"добро-пожаловать.тест", "Добро-пожаловать.тест"},
         {"çalışkan öğrenci@üniversite.tr", "Çalışkan Öğrenci@üniversite.tr"},
         {"emoji😊test🚀case", "Emoji😊test🚀case"},
-        {"тест@пример.рф", "Тест@пример.рф"}};
+        {"тест@пример.рф", "Тест@пример.рф"},
+        {"\u00DF", "Ss"},
+        {"stra\u00DFe", "Stra\u00DFe"},
+        {"\uFB01", "Fi"},
+        {"\uFB03", "Ffi"},
+        {"\u0149", "\u02BCN"},
+        {"\u01F0", "J\u030C"},
+        {"\u0587", "\u0535\u0582"},
+        {"\u01C6", "\u01C5"},
+        {"\u1FB3", "\u1FBC"},
+        {"\u10D0\u10D1", "\u10D0\u10D1"},
+        {"\u00DF \uFB01", "Ss Fi"}};
   }
 
   static std::vector<std::tuple<std::string, std::string>>

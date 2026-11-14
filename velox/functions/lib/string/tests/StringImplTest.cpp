@@ -186,7 +186,12 @@ class StringImplTest : public testing::Test {
         {"тест@пример.рф", "Тест@пример.рф"},
         {"BİLGİ", "Bi̇lgi̇"},
         {"\u0130\u0130", "\u0130\u0069\u0307"},
-        {"İstanbul", "İstanbul"}};
+        {"İstanbul", "İstanbul"},
+        {"\u00DF \uFB01", "Ss Fi"},
+        {"stra\u00DFe", "Stra\u00DFe"},
+        {"\u1FB3", "\u1FBC"},
+        {"\u01C6", "\u01C5"},
+        {"\u10D0\u10D1", "\u10D0\u10D1"}};
   }
 
   static std::vector<std::pair<std::string, std::string>>
@@ -1313,7 +1318,8 @@ TEST_F(StringImplTest, initcapUnicodePresto) {
         /*strictSpace=*/false,
         /*isAscii=*/false,
         /*turkishCasing=*/false,
-        /*greekFinalSigma=*/false>(output, input);
+        /*greekFinalSigma=*/false,
+        /*fullCaseMapping=*/false>(output, input);
     ASSERT_EQ(output, expected);
   }
 }
@@ -1325,7 +1331,8 @@ TEST_F(StringImplTest, initcapAsciiPresto) {
         /*strictSpace=*/false,
         /*isAscii=*/true,
         /*turkishCasing=*/false,
-        /*greekFinalSigma=*/false>(output, input);
+        /*greekFinalSigma=*/false,
+        /*fullCaseMapping=*/false>(output, input);
     ASSERT_EQ(output, expected);
   }
 }
@@ -1336,7 +1343,8 @@ TEST_F(StringImplTest, initcapUnicodeSpark) {
         /*strictSpace=*/true,
         /*isAscii=*/false,
         /*turkishCasing=*/true,
-        /*greekFinalSigma=*/true>(output, input);
+        /*greekFinalSigma=*/true,
+        /*fullCaseMapping=*/true>(output, input);
     ASSERT_EQ(output, expected);
   }
 }
@@ -1348,7 +1356,8 @@ TEST_F(StringImplTest, initcapAsciiSpark) {
         /*strictSpace=*/true,
         /*isAscii=*/true,
         /*turkishCasing=*/true,
-        /*greekFinalSigma=*/true>(output, input);
+        /*greekFinalSigma=*/true,
+        /*fullCaseMapping=*/true>(output, input);
     ASSERT_EQ(output, expected);
   }
 }
