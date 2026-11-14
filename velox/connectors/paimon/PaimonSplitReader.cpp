@@ -96,7 +96,7 @@ void PaimonSplitReader::configureBaseReaderOptions() {
   baseReaderOpts_.setFieldIds(std::move(fieldIds));
   baseReaderOpts_.setFieldIdAttributeKey("paimon.id");
   baseReaderOpts_.setColumnMappingMode(
-      dwio::common::ColumnMappingMode::kTopLevelFieldId);
+      dwio::common::ColumnMappingMode::kFieldId);
 }
 
 std::vector<TypePtr> PaimonSplitReader::adaptColumns(

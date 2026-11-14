@@ -1205,6 +1205,52 @@ TEST_F(PaimonConnectorTest, nimbleFileFieldIds) {
   }
 }
 
+TEST_F(PaimonConnectorTest, nimbleFieldIdAttributeIsolation) {
+  const auto input = makeRowVector(
+      {"a", "b"}, {makeFlatVector<int64_t>({1}), makeFlatVector<int64_t>({2})});
+  const auto plan = makePaimonScanPlan(asRowType(input->type()));
+  const auto expected =
+      makeRowVector({"a", "b"}, {input->childAt(1), input->childAt(0)});
+  nimble::unregisterSelectiveNimbleReaderFactory();
+  ::facebook::velox::nimble::registerNimbleReaderFactory();
+  const auto restore = folly::makeGuard([] {
+    ::facebook::velox::nimble::unregisterNimbleReaderFactory();
+    nimble::registerSelectiveNimbleReaderFactory();
+  });
+  for (const bool paimonIds : {true, false}) {
+    SCOPED_TRACE(paimonIds);
+    nimble::WriterOptions options;
+    options.schemaAttributes = {
+        {1, {{"iceberg.id", "10"}}}, {2, {{"iceberg.id", "11"}}}};
+    if (paimonIds) {
+      // Paimon IDs deliberately disagree with Iceberg IDs and column names.
+      options.schemaAttributes[1].emplace_back("paimon.id", "11");
+      options.schemaAttributes[2].emplace_back("paimon.id", "10");
+    }
+    const auto paths = makeFilePaths(1);
+    writeNimbleFile(paths[0]->getPath(), input, std::move(options));
+    for (const bool batchReader : {false, true}) {
+      SCOPED_TRACE(batchReader);
+      exec::test::AssertQueryBuilder query(plan);
+      query
+          .connectorSessionProperty(
+              kPaimonConnectorId,
+              "selective_nimble_reader_enabled",
+              batchReader ? "false" : "true")
+          .split(makePaimonSplit(
+              {paths[0]->getPath()},
+              PaimonTableType::kAppendOnly,
+              dwio::common::FileFormat::NIMBLE));
+      if (paimonIds) {
+        query.assertResults(expected);
+      } else {
+        VELOX_ASSERT_USER_THROW(
+            query.copyResults(pool()), "Missing 'paimon.id' field ID");
+      }
+    }
+  }
+}
+
 TEST_F(PaimonConnectorTest, nimbleRejectsInvalidFieldIds) {
   const auto input = makeRowVector(
       {"a", "b"}, {makeFlatVector<int64_t>({1}), makeFlatVector<int64_t>({2})});

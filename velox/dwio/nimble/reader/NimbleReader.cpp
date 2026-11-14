@@ -255,8 +255,9 @@ class NimbleReader : public dwio::common::Reader {
           return facebook::nimble::TabletReader::create(
               readFile_, &options.memoryPool(), tabletOptions);
         }()) {
-    // Field-id column resolution: when the caller requests
-    // `kFieldId` mode, walk the file's NIMBLE Type tree in
+    // Paimon uses strict top-level ID matching. Other attribute conventions
+    // retain the existing recursive resolution and compatibility behavior:
+    // in `kFieldId` mode, walk the file's NIMBLE Type tree in
     // lockstep with the requested file schema + per-column field-id
     // tree, then rewrite `options_.fileSchema()` to use the file's
     // column names at every nested-Row level. The downstream
@@ -270,7 +271,8 @@ class NimbleReader : public dwio::common::Reader {
     // otherwise it is a no-op and the existing position/name-based
     // behavior is preserved.
     if (options_.columnMappingMode() ==
-        dwio::common::ColumnMappingMode::kTopLevelFieldId) {
+            dwio::common::ColumnMappingMode::kFieldId &&
+        options_.fieldIdAttributeKey() == "paimon.id") {
       facebook::nimble::BatchReader tmpReader(
           tabletReader_, options.memoryPool());
       tableNamedSchema_ = facebook::nimble::mapTopLevelColumnsByFieldId(
