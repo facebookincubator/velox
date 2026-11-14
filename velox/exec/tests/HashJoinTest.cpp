@@ -1641,6 +1641,23 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
         .run();
   }
 
+  // NULL NOT IN (1) is NULL, so only 2 passes, with or without spilling.
+  {
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+        .probeKeys({"c0"})
+        .probeVectors({makeRowVector(
+            {makeNullableFlatVector<int64_t>({std::nullopt, 1, 2})})})
+        .buildKeys({"u0"})
+        .buildVectors({makeRowVector({"u0"}, {makeFlatVector<int64_t>({1})})})
+        .joinType(core::JoinType::kAnti)
+        .nullAware(true)
+        .joinOutputLayout({"c0"})
+        .referenceQuery("SELECT c0 FROM t WHERE c0 NOT IN (SELECT u0 FROM u)")
+        .run();
+  }
+
   // Empty build side.
   {
     auto testProbeVectors = probeVectors;

@@ -7818,7 +7818,8 @@ TEST_P(HashJoinTest, semiProjectWithFilter) {
     return makeRowVector(
         {"t0", "t1"},
         {
-            makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 5}),
+            makeNullableFlatVector<bool>(
+                {true, false, true, std::nullopt, false}),
             makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
         });
   });
@@ -7827,7 +7828,7 @@ TEST_P(HashJoinTest, semiProjectWithFilter) {
     return makeRowVector(
         {"u0", "u1"},
         {
-            makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt}),
+            makeNullableFlatVector<bool>({true, true, true, std::nullopt}),
             makeFlatVector<int64_t>({11, 22, 33, 44}),
         });
   });
@@ -7866,7 +7867,13 @@ TEST_P(HashJoinTest, semiProjectWithFilter) {
             fmt::format(
                 "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
                 filter))
-        .injectSpill(false)
+        .checkSpillStats(false)
+        .verifier([](const std::shared_ptr<Task>& task, bool /*unused*/) {
+          const auto statsPair = taskSpilledStats(*task);
+          EXPECT_EQ(statsPair.first.spilledRows, 0);
+          EXPECT_EQ(statsPair.second.spilledRows, 0);
+          verifyTaskSpilledRuntimeStats(*task, false);
+        })
         .run();
 
     plan = makePlan(false /*nullAware*/, filter);
@@ -7879,7 +7886,6 @@ TEST_P(HashJoinTest, semiProjectWithFilter) {
             fmt::format(
                 "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
                 filter))
-        .injectSpill(false)
         .run();
   }
 }
