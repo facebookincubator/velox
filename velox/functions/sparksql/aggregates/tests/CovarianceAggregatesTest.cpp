@@ -103,14 +103,14 @@ TEST_F(CovarianceAggregatesTest, corr) {
       std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
   testCovarianceAggResult(agg, input, expected, true);
 
-  // Output NaN when m2x or m2y equals 0 but c2 is NaN.
+  // Output NULL when m2x or m2y equals 0, even if c2 is NaN.
   input = makeRowVector(
       {makeFlatVector<double>({0, 0, 0, 0, 0, 0}),
        makeFlatVector<double>(
            {std::numeric_limits<double>::quiet_NaN(), 0, 0, 0, 0, 0})});
 
-  expected = makeRowVector({makeFlatVector<double>(
-      std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
+  expected = makeRowVector({makeNullableFlatVector<double>(
+      std::vector<std::optional<double>>{std::nullopt})});
   testCovarianceAggResult(agg, input, expected);
   testCovarianceAggResult(agg, input, expected, true);
 
@@ -170,12 +170,21 @@ TEST_F(CovarianceAggregatesTest, covarSamp) {
       std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
   testCovarianceAggResult(agg, input, expected, true);
 
-  // Output NaN when c2 is ±inf.
+  // Output -inf when an infinite input makes c2 -inf.
   input = makeRowVector(
       {makeFlatVector<double>({22, std::numeric_limits<double>::infinity()}),
        makeFlatVector<double>({0.688, 0.225})});
   expected = makeRowVector({makeFlatVector<double>(
-      std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
+      std::vector<double>{-std::numeric_limits<double>::infinity()})});
+  testCovarianceAggResult(agg, input, expected);
+  testCovarianceAggResult(agg, input, expected, true);
+
+  // Output inf when c2 overflows to inf.
+  input = makeRowVector(
+      {makeFlatVector<double>({1e200, -1e200}),
+       makeFlatVector<double>({1e200, -1e200})});
+  expected = makeRowVector({makeFlatVector<double>(
+      std::vector<double>{std::numeric_limits<double>::infinity()})});
   testCovarianceAggResult(agg, input, expected);
   testCovarianceAggResult(agg, input, expected, true);
 }

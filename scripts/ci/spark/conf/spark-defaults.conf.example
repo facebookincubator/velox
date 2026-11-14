@@ -1,3 +1,8 @@
 spark.master local[1]
 spark.driver.cores 1
 spark.sql.shuffle.partitions 1
+# Parquet files written by Velox carry no Spark version metadata. Read
+# ancient dates and timestamps as-is instead of failing.
+spark.sql.parquet.datetimeRebaseModeInRead CORRECTED
+spark.sql.parquet.int96RebaseModeInRead CORRECTED
+spark.ui.enabled false

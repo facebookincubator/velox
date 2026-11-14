@@ -15,4 +15,5 @@
 
 set -e
 
-"$SPARK_HOME"/sbin/start-connect-server.sh --jars "$SPARK_HOME"/misc/spark-connect.jar
+# Since Spark 4.0, the Spark Connect server jar is bundled in $SPARK_HOME/jars.
+"$SPARK_HOME"/sbin/start-connect-server.sh
