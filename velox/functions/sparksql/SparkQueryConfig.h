@@ -179,6 +179,15 @@ class SparkQueryConfig {
       false,
       "Enable high precision casts from DECIMAL to REAL/DOUBLE.")
 
+  /// If true, map() builds a flat map when every key is constant.
+  VELOX_SPARK_CONFIG(
+      kGenerateConstantMapsAsFlatMaps,
+      generateConstantMapsAsFlatMaps,
+      "generate_constant_maps_as_flat_maps",
+      bool,
+      false,
+      "Build a flat map in Spark map() when every key is constant.")
+
   /// Returns all registered Spark config properties. Property names are
   /// unqualified (no "spark." prefix).
   static const std::vector<config::ConfigProperty>& registeredProperties();
