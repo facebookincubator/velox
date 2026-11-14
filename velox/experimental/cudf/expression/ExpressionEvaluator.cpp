@@ -4377,6 +4377,10 @@ bool hasFailFastSubexpr(const core::TypedExprPtr& expr) {
     if (name == "plus" && expr->type()->isDate()) {
       return true;
     }
+    // Seconds past the range of the cuDF timestamp unit.
+    if (name == "from_unixtime") {
+      return true;
+    }
   }
   return std::any_of(
       expr->inputs().begin(), expr->inputs().end(), hasFailFastSubexpr);

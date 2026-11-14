@@ -1385,12 +1385,18 @@ TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowMatchesVelox) {
   assertProjectMatchesVelox(vectors, projections);
 }
 
-// Array subscript, date_add and date plus interval fail the whole batch on a
-// bad row. Rows 1 and 3 hold one, and the guard ahead of each decides them, so
-// as on Velox CPU they must not reach the kernel.
+// Array subscript, date_add, date plus interval and from_unixtime fail the
+// whole batch on a bad row. Rows 1 and 3 hold one, and the guard ahead of each
+// decides them, so as on Velox CPU they must not reach the kernel.
 TEST_F(CudfFilterProjectTest, failFastKernelGuardedByConjunct) {
   auto data = makeRowVector(
-      {"event_id", "a", "event_date", "amount", "whole_days", "interval_val"},
+      {"event_id",
+       "a",
+       "event_date",
+       "amount",
+       "whole_days",
+       "interval_val",
+       "seconds"},
       {makeFlatVector<int64_t>({0, 1, 2, 3}),
        makeArrayVector<int64_t>({{1, 2, 3}, {1}, {4, 5, -6}, {}}),
        makeFlatVector<int32_t>(
@@ -1407,12 +1413,15 @@ TEST_F(CudfFilterProjectTest, failFastKernelGuardedByConjunct) {
        makeFlatVector<bool>({true, false, true, false}),
        makeFlatVector<int64_t>(
            {kMillisInDay, kMillisInHour, -2 * kMillisInDay, kMillisInHour},
-           INTERVAL_DAY_TIME())});
+           INTERVAL_DAY_TIME()),
+       makeFlatVector<double>({0.0, 1e300, 5.0, -1e300})});
   std::vector<RowVectorPtr> vectors{data};
 
   // A false guard decides AND, and a true one decides OR.
   for (const std::string condition :
-       {"cardinality(a) >= 3 AND a[3] > 0",
+       {"abs(seconds) < 1e10 AND to_unixtime(from_unixtime(seconds)) >= 0.0",
+        "abs(seconds) >= 1e10 OR to_unixtime(from_unixtime(seconds)) >= 0.0",
+        "cardinality(a) >= 3 AND a[3] > 0",
         "cardinality(a) < 3 OR a[3] > 0",
         "amount BETWEEN -10 AND 10 AND "
         "date_add('day', amount, event_date) > event_date",
