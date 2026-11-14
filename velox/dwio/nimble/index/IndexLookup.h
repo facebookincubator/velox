@@ -36,6 +36,7 @@
 #include "velox/common/file/File.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/RowRange.h"
+#include "velox/dwio/nimble/index/IndexTypes.h"
 #include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/KeyCursor.h"
 #include "velox/dwio/nimble/tablet/StripeMetadata.h"
@@ -339,6 +340,14 @@ class IndexLookup {
   virtual std::unique_ptr<KeyCursor> keyCursor(RowRange /*rows*/) const {
     NIMBLE_NOT_IMPLEMENTED(
         "keyCursor is not supported by index type {}", toString(type_));
+  }
+
+  /// Returns where the index keeps its key chunks. kStripe tells a reader that
+  /// each stripe holds the key chunk of its rows, which it can read together
+  /// with the stripe's data. An index without key chunks in stripes returns
+  /// kPartition.
+  virtual KeyStreamLayout keyStreamLayout() const {
+    return KeyStreamLayout::kPartition;
   }
 
   /// Returns runtime statistics accumulated during lookups.
