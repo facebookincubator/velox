@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/nimble/common/SchemaUtils.h"
 
+#include <charconv>
 #include <cstdint>
 #include <functional>
 #include <set>
@@ -23,6 +24,7 @@
 
 #include "folly/container/F14Map.h"
 #include "velox/common/Casts.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
@@ -432,6 +434,68 @@ std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type) {
   SchemaBuilder builder;
   convertToNimbleType(builder, type);
   return SchemaReader::getSchema(builder.schemaNodes());
+}
+
+velox::RowTypePtr mapTopLevelColumnsByFieldId(
+    const Type& nimbleSchema,
+    const velox::RowTypePtr& fileSchema,
+    const velox::dwio::common::ReaderOptions& options) {
+  const auto& requested = options.fileSchema();
+  const auto& key = options.fieldIdAttributeKey();
+  VELOX_CHECK_NOT_NULL(requested);
+  VELOX_CHECK_EQ(options.fieldIds().size(), requested->size());
+  VELOX_CHECK(!key.empty(), "Missing field ID attribute key");
+
+  folly::F14FastMap<int32_t, velox::column_index_t> requestedById;
+  for (velox::column_index_t i = 0; i < requested->size(); ++i) {
+    requestedById.emplace(options.fieldIds()[i].fieldId, i);
+  }
+  const auto& fileRow = nimbleSchema.asRow();
+  folly::F14FastSet<int32_t> fileIds;
+  std::vector<std::string> names;
+  names.reserve(fileSchema->size());
+  for (velox::column_index_t i = 0; i < fileSchema->size(); ++i) {
+    std::optional<int32_t> fieldId;
+    for (const auto& [attributeKey, value] : fileRow.childAt(i)->attributes()) {
+      if (attributeKey != key) {
+        continue;
+      }
+      VELOX_USER_CHECK(
+          !fieldId.has_value(),
+          "Duplicate '{}' attribute for Nimble column '{}'",
+          key,
+          fileRow.nameAt(i));
+      int32_t id;
+      const auto* end = value.data() + value.size();
+      const auto result = std::from_chars(value.data(), end, id);
+      VELOX_USER_CHECK(
+          result.ec == std::errc{} && result.ptr == end && id >= 0,
+          "Invalid '{}' field ID '{}' for Nimble column '{}'",
+          key,
+          value,
+          fileRow.nameAt(i));
+      fieldId = id;
+    }
+    VELOX_USER_CHECK(
+        fieldId.has_value(),
+        "Missing '{}' field ID for Nimble column '{}'",
+        key,
+        fileRow.nameAt(i));
+    const auto inserted = fileIds.insert(*fieldId).second;
+    VELOX_USER_CHECK(
+        inserted, "Duplicate '{}' field ID {} in Nimble schema", key, *fieldId);
+    if (const auto it = requestedById.find(*fieldId);
+        it != requestedById.end()) {
+      names.push_back(requested->nameOf(it->second));
+    } else {
+      auto name = fmt::format("__unmapped_{}", i);
+      while (requested->containsChild(name)) {
+        name.push_back('_');
+      }
+      names.push_back(std::move(name));
+    }
+  }
+  return velox::ROW(std::move(names), fileSchema->children());
 }
 
 ScalarKind hybridFlatMapKeyKind(const velox::Type& keyType) {

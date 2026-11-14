@@ -427,21 +427,6 @@ class Reader {
   static TypePtr updateColumnNames(
       const TypePtr& fileType,
       const TypePtr& tableType);
-
-  /// Applies externally resolved field-ID bindings to the actual file schema.
-  /// Preserves physical column order and types; only top-level names change.
-  static RowTypePtr updateColumnNamesFromFieldIdMapping(
-      const RowTypePtr& fileType,
-      const ReaderOptions& options);
-
-  /// Resolves one physical column name using fieldIdColumnNameMapping(). An
-  /// unmatched column gets a unique name outside the requested schema so it
-  /// cannot shadow a missing query column. fileColumnId is a physical index,
-  /// used only to make unmatched names distinct, not to resolve field identity.
-  static std::string fieldIdMappedColumnName(
-      const std::string& fileName,
-      uint32_t fileColumnId,
-      const ReaderOptions& options);
 };
 
 } // namespace facebook::velox::dwio::common

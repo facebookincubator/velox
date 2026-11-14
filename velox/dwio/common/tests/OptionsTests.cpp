@@ -56,22 +56,6 @@ TEST(OptionsTests, commonReaderOptions) {
       ColumnMappingMode::kName);
 }
 
-TEST(OptionsTests, fieldIdColumnNameMapping) {
-  facebook::velox::memory::MemoryManager::testingSetInstance({});
-  auto pool = facebook::velox::memory::memoryManager()->addRootPool();
-  facebook::velox::dwio::common::ReaderOptions options(pool.get());
-  EXPECT_FALSE(options.fieldIdColumnNameMapping().has_value());
-  options.setColumnMappingMode(ColumnMappingMode::kFieldId);
-  options.setFieldIdColumnNameMapping({{"old_name", "new_name"}});
-  const auto copy = options;
-  options.setFieldIdColumnNameMapping({});
-  ASSERT_TRUE(options.fieldIdColumnNameMapping().has_value());
-  EXPECT_TRUE(options.fieldIdColumnNameMapping()->empty());
-  ASSERT_TRUE(copy.fieldIdColumnNameMapping().has_value());
-  EXPECT_EQ(copy.fieldIdColumnNameMapping()->at("old_name"), "new_name");
-  EXPECT_EQ(copy.columnMappingMode(), ColumnMappingMode::kFieldId);
-}
-
 TEST(OptionsTests, setRowNumberColumnInfoTest) {
   RowReaderOptions rowReaderOptions;
   RowNumberColumnInfo rowNumberColumnInfo;

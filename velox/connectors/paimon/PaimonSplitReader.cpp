@@ -20,24 +20,23 @@
 namespace facebook::velox::connector::paimon {
 namespace {
 
-// Indexed by target-table column; nullopt means its field ID is absent from
-// the file's historical schema. No physical-file ID attributes are involved.
-std::vector<std::optional<column_index_t>> mapTableColumnsToFile(
-    const std::vector<int32_t>& tableFieldIds,
-    const std::vector<int32_t>& fileFieldIds) {
-  std::unordered_map<int32_t, column_index_t> fileColumns;
-  for (column_index_t i = 0; i < fileFieldIds.size(); ++i) {
-    fileColumns.emplace(fileFieldIds[i], i);
+// Nimble exposes physical types; logical annotations such as DATE use the
+// query type. Nested fields are unchanged in this top-level evolution reader.
+bool hasSamePhysicalType(const Type& fileType, const Type& queryType) {
+  if (fileType.kind() != queryType.kind() ||
+      fileType.size() != queryType.size()) {
+    return false;
   }
-
-  std::vector<std::optional<column_index_t>> mapping(tableFieldIds.size());
-  for (column_index_t i = 0; i < tableFieldIds.size(); ++i) {
-    if (const auto it = fileColumns.find(tableFieldIds[i]);
-        it != fileColumns.end()) {
-      mapping[i] = it->second;
+  if (fileType.isRow() &&
+      fileType.asRow().names() != queryType.asRow().names()) {
+    return false;
+  }
+  for (column_index_t i = 0; i < fileType.size(); ++i) {
+    if (!hasSamePhysicalType(*fileType.childAt(i), *queryType.childAt(i))) {
+      return false;
     }
   }
-  return mapping;
+  return true;
 }
 
 } // namespace
@@ -79,73 +78,55 @@ PaimonSplitReader::PaimonSplitReader(
   fileSplits_.reserve(dataFiles.size());
   for (const auto& dataFile : dataFiles) {
     fileSplits_.emplace_back(makeFileConnectorSplit(dataFile));
-    if (!fileReadSchemas_.count(dataFile.schemaId)) {
-      fileReadSchemas_.emplace(
-          dataFile.schemaId, makeFileReadSchema(dataFile.schemaId));
-    }
   }
-}
-
-PaimonSplitReader::FileReadSchema PaimonSplitReader::makeFileReadSchema(
-    int64_t fileSchemaId) const {
-  const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
-  const auto& fileType = fileSchemaId == table.schemaId()
-      ? table.rowType()
-      : table.tableSchemas().at(fileSchemaId).rowType;
-  const auto& fileFieldIds = fileSchemaId == table.schemaId()
-      ? table.fieldIds()
-      : table.tableSchemas().at(fileSchemaId).fieldIds;
-  const auto tableToFileColumns =
-      mapTableColumnsToFile(table.fieldIds(), fileFieldIds);
-  std::vector<TypePtr> types = table.rowType()->children();
-  std::unordered_map<std::string, std::string> columnNames;
-
-  // Only top-level field evolution is handled here; nested fields are treated
-  // as unchanged.
-  // TODO: Support nested field evolution using historical nested field IDs.
-  for (column_index_t i = 0; i < tableToFileColumns.size(); ++i) {
-    const auto fileColumn = tableToFileColumns[i];
-    if (!fileColumn.has_value()) {
-      // This field ID is absent from the file's schema. Leave it unmapped so
-      // FileSplitReader::adaptColumns supplies NULL for regular columns;
-      // partition columns continue to use the split's partition values.
-      continue;
-    }
-    const auto& name = table.rowType()->nameOf(i);
-    columnNames.emplace(fileType->nameOf(*fileColumn), name);
-    types[i] = fileType->childAt(*fileColumn);
-    if (const auto* spec = scanSpec_->childByName(name);
-        spec && spec->columnType() == common::ScanSpec::ColumnType::kRegular) {
-      const auto& type = table.rowType()->childAt(i);
-      VELOX_USER_CHECK(
-          *type == *fileType->childAt(*fileColumn),
-          "Paimon type evolution is not supported for field {} ('{}'), "
-          "file schema {}, target schema {}: {} to {}",
-          table.fieldIds()[i],
-          name,
-          fileSchemaId,
-          table.schemaId(),
-          fileType->childAt(*fileColumn)->toString(),
-          type->toString());
-    }
-  }
-  return {
-      ROW(table.rowType()->names(), std::move(types)), std::move(columnNames)};
 }
 
 void PaimonSplitReader::configureBaseReaderOptions() {
   connector::FileSplitReader::configureBaseReaderOptions();
-  const auto id = paimonSplit_->dataFiles()[currentFileIndex_].schemaId;
-  const auto& schema = fileReadSchemas_.at(id);
-  baseReaderOpts_.setFileSchema(schema.rowType);
-  baseReaderOpts_.setFieldIdColumnNameMapping(schema.columnNameMapping);
+  if (fileSplit_->fileFormat != dwio::common::FileFormat::NIMBLE) {
+    return;
+  }
+  const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
+  std::vector<dwio::common::ParquetFieldId> fieldIds;
+  fieldIds.reserve(table.fieldIds().size());
+  for (auto id : table.fieldIds()) {
+    fieldIds.push_back({id, {}});
+  }
+  baseReaderOpts_.setFileSchema(table.rowType());
+  baseReaderOpts_.setFieldIds(std::move(fieldIds));
+  baseReaderOpts_.setFieldIdAttributeKey("paimon.id");
   baseReaderOpts_.setColumnMappingMode(
-      dwio::common::ColumnMappingMode::kFieldId);
+      dwio::common::ColumnMappingMode::kTopLevelFieldId);
 }
 
 std::vector<TypePtr> PaimonSplitReader::adaptColumns(
     const RowTypePtr& fileType,
     const RowTypePtr& /*tableSchema*/) const {
+  if (fileSplit_->fileFormat == dwio::common::FileFormat::NIMBLE) {
+    // The reader has bound file IDs to query names while preserving physical
+    // types. Validate before the common adapter substitutes output types.
+    // TODO: Support nested field evolution and type conversions.
+    const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
+    for (const auto& spec : scanSpec_->children()) {
+      if (spec->columnType() != common::ScanSpec::ColumnType::kRegular ||
+          fileSplit_->partitionKeys.count(spec->fieldName())) {
+        continue;
+      }
+      const auto index = fileType->getChildIdxIfExists(spec->fieldName());
+      if (!index.has_value()) {
+        // A missing field ID is NULL, not a name- or position-based fallback.
+        continue;
+      }
+      const auto& physical = fileType->childAt(*index);
+      const auto& query = table.rowType()->findChild(spec->fieldName());
+      VELOX_USER_CHECK(
+          hasSamePhysicalType(*physical, *query),
+          "Paimon type evolution is not supported for field '{}': {} to {}",
+          spec->fieldName(),
+          physical->toString(),
+          query->toString());
+    }
+  }
   return connector::FileSplitReader::adaptColumns(
       fileType, tableHandle_->dataColumns());
 }
