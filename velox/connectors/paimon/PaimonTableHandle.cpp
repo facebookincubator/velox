@@ -15,10 +15,56 @@
  */
 #include "velox/connectors/paimon/PaimonTableHandle.h"
 
+#include <fmt/ranges.h>
+#include <folly/String.h>
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <unordered_set>
 
 namespace facebook::velox::connector::paimon {
+namespace {
+
+std::string toLower(std::string_view value) {
+  std::string lower(value);
+  std::transform(lower.begin(), lower.end(), lower.begin(), [](auto c) {
+    return std::tolower(static_cast<unsigned char>(c));
+  });
+  return lower;
+}
+
+} // namespace
+
+std::string paimonMergeEngineString(PaimonMergeEngine mergeEngine) {
+  switch (mergeEngine) {
+    case PaimonMergeEngine::kDeduplicate:
+      return "deduplicate";
+    case PaimonMergeEngine::kPartialUpdate:
+      return "partial-update";
+    case PaimonMergeEngine::kAggregation:
+      return "aggregation";
+    case PaimonMergeEngine::kFirstRow:
+      return "first-row";
+    default:
+      VELOX_FAIL(
+          "Unknown PaimonMergeEngine: {}", static_cast<int>(mergeEngine));
+  }
+}
+
+PaimonMergeEngine paimonMergeEngineFromString(const std::string& str) {
+  const auto lower = toLower(str);
+  for (auto mergeEngine :
+       {PaimonMergeEngine::kDeduplicate,
+        PaimonMergeEngine::kPartialUpdate,
+        PaimonMergeEngine::kAggregation,
+        PaimonMergeEngine::kFirstRow}) {
+    if (lower == paimonMergeEngineString(mergeEngine)) {
+      return mergeEngine;
+    }
+  }
+  VELOX_USER_FAIL("Unknown Paimon merge engine: {}", str);
+}
+
 namespace {
 
 // Paimon writes partition columns into data files at their table positions, so
@@ -42,6 +88,110 @@ RowTypePtr storedDataColumns(
   return rowType;
 }
 
+// Checks the primary keys and returns those that are not partition columns, as
+// Paimon Java's TableSchema.trimmedPrimaryKeys does.
+std::vector<std::string> trimPrimaryKeys(
+    PaimonTableType tableType,
+    const RowTypePtr& rowType,
+    const std::vector<std::string>& primaryKeys,
+    const std::vector<std::string>& partitionKeys) {
+  if (primaryKeys.empty()) {
+    return {};
+  }
+  VELOX_USER_CHECK_EQ(
+      tableType,
+      PaimonTableType::kPrimaryKey,
+      "Paimon append-only table cannot have primary keys");
+  std::unordered_set<std::string> keys;
+  std::vector<std::string> trimmed;
+  for (const auto& key : primaryKeys) {
+    VELOX_USER_CHECK(
+        rowType->containsChild(key), "Unknown Paimon primary key: {}", key);
+    VELOX_USER_CHECK(
+        keys.insert(key).second, "Duplicate Paimon primary key: {}", key);
+    if (std::find(partitionKeys.begin(), partitionKeys.end(), key) ==
+        partitionKeys.end()) {
+      trimmed.push_back(key);
+    }
+  }
+  VELOX_USER_CHECK(
+      !trimmed.empty(),
+      "Paimon primary keys must not all be partition columns: [{}]",
+      fmt::join(primaryKeys, ", "));
+  return trimmed;
+}
+
+bool parseBooleanOption(std::string_view key, std::string_view value) {
+  const auto lower = toLower(value);
+  if (lower == "true") {
+    return true;
+  }
+  VELOX_USER_CHECK_EQ(
+      lower, "false", "Paimon table option must be true or false: {}", key);
+  return false;
+}
+
+// Parses the merge-on-read options of a primary-key table as Paimon Java's
+// CoreOptions does, and checks them as its SchemaValidation does.
+PaimonTableHandle::MergeOptions parseMergeOptions(
+    PaimonTableType tableType,
+    const RowTypePtr& rowType,
+    const std::unordered_map<std::string, std::string>& options) {
+  PaimonTableHandle::MergeOptions mergeOptions;
+  if (tableType != PaimonTableType::kPrimaryKey) {
+    return mergeOptions;
+  }
+  if (auto it = options.find("merge-engine"); it != options.end()) {
+    mergeOptions.mergeEngine = paimonMergeEngineFromString(it->second);
+  }
+  for (const auto* key :
+       {"ignore-delete",
+        "first-row.ignore-delete",
+        "deduplicate.ignore-delete",
+        "partial-update.ignore-delete"}) {
+    if (auto it = options.find(key); it != options.end()) {
+      mergeOptions.ignoreDelete = parseBooleanOption(key, it->second);
+      break;
+    }
+  }
+  if (auto it = options.find("sequence.field"); it != options.end()) {
+    // Java's String.split drops trailing empty fields before each field is
+    // trimmed.
+    std::vector<std::string_view> fields;
+    folly::split(',', it->second, fields);
+    while (!fields.empty() && fields.back().empty()) {
+      fields.pop_back();
+    }
+    std::unordered_set<std::string> names;
+    for (auto field : fields) {
+      std::string name(folly::trimWhitespace(field));
+      VELOX_USER_CHECK(
+          rowType->containsChild(name),
+          "Unknown Paimon sequence field: {}",
+          name);
+      VELOX_USER_CHECK(
+          names.insert(name).second,
+          "Duplicate Paimon sequence field: {}",
+          name);
+      mergeOptions.sequenceFields.push_back(std::move(name));
+    }
+  }
+  if (auto it = options.find("sequence.field.sort-order");
+      it != options.end()) {
+    const auto order = toLower(it->second);
+    VELOX_USER_CHECK(
+        order == "ascending" || order == "descending",
+        "Unknown Paimon sequence.field.sort-order: {}",
+        it->second);
+    mergeOptions.sequenceFieldsAscending = order == "ascending";
+  }
+  VELOX_USER_CHECK(
+      mergeOptions.sequenceFields.empty() ||
+          mergeOptions.mergeEngine != PaimonMergeEngine::kFirstRow,
+      "Paimon first-row merge engine does not support sequence.field");
+  return mergeOptions;
+}
+
 } // namespace
 
 PaimonTableHandle::PaimonTableHandle(
@@ -57,7 +207,8 @@ PaimonTableHandle::PaimonTableHandle(
     core::TypedExprPtr remainingFilter,
     std::vector<connector::FileColumnHandlePtr> filterColumnHandles,
     double sampleRate,
-    std::string dbName)
+    std::string dbName,
+    std::vector<std::string> primaryKeys)
     : connector::FileTableHandle(
           std::move(connectorId),
           std::move(tableName),
@@ -73,7 +224,11 @@ PaimonTableHandle::PaimonTableHandle(
       tableType_(tableType),
       partitionKeys_(std::move(partitionKeys)),
       options_(std::move(options)),
-      filterColumnHandles_(std::move(filterColumnHandles)) {
+      filterColumnHandles_(std::move(filterColumnHandles)),
+      primaryKeys_(std::move(primaryKeys)),
+      trimmedPrimaryKeys_(
+          trimPrimaryKeys(tableType_, rowType_, primaryKeys_, partitionKeys_)),
+      mergeOptions_(parseMergeOptions(tableType_, rowType_, options_)) {
   VELOX_USER_CHECK_GE(schemaId_, 0, "Paimon schema ID must be nonnegative");
   VELOX_USER_CHECK_EQ(
       fieldIds_.size(),
@@ -127,6 +282,9 @@ folly::dynamic PaimonTableHandle::serialize() const {
   for (const auto& [key, value] : options_) {
     obj["options"][key] = value;
   }
+  if (!primaryKeys_.empty()) {
+    obj["primaryKeys"] = ISerializable::serialize(primaryKeys_);
+  }
   return obj;
 }
 
@@ -174,6 +332,11 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
   for (const auto& [key, value] : obj.at("options").items()) {
     options.emplace(key.asString(), value.asString());
   }
+  std::vector<std::string> primaryKeys;
+  if (auto it = obj.find("primaryKeys"); it != obj.items().end()) {
+    primaryKeys =
+        ISerializable::deserialize<std::vector<std::string>>(it->second);
+  }
 
   return std::make_shared<PaimonTableHandle>(
       std::move(connectorId),
@@ -189,7 +352,8 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
       std::move(remainingFilter),
       std::move(filterColumns),
       sampleRate,
-      std::move(dbName));
+      std::move(dbName),
+      std::move(primaryKeys));
 }
 
 void PaimonTableHandle::registerSerDe() {

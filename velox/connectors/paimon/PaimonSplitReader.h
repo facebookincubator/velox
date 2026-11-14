@@ -78,10 +78,26 @@ class PaimonSplitReader : public connector::FileSplitReader {
       const PaimonConnectorSplit& paimonSplit,
       const PaimonDataFile& dataFile);
 
+ protected:
+  size_t currentDataFileIndex() const {
+    return currentFileIndex_;
+  }
+
+  // Returns the bitmap of the current file, one bit per row, with the rows to
+  // return set, or nullptr to return all rows not deleted by a deletion
+  // vector.
+  virtual const uint64_t* keptRows() const {
+    return nullptr;
+  }
+
  private:
   // Reuses the current reader or lazily prepares the next non-empty file.
   // Returns false when no files remain.
   bool ensureFileSplitReader();
+
+  // Returns the deleted-row bitmap for the next 'numRows' rows of the current
+  // file, or nullptr if none of them is deleted.
+  const uint64_t* deletedRows(uint64_t numRows);
 
   // Cleans up the current file reader after it is exhausted and advances
   // currentFileIndex_ so ensureFileSplitReader() opens the next file.

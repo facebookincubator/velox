@@ -85,18 +85,7 @@ uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
 
     dwio::common::Mutation mutation;
     mutation.randomSkip = baseReaderOpts_.randomSkip().get();
-    if (deletionVectorReader_ != nullptr &&
-        !deletionVectorReader_->noMoreData()) {
-      // The bitmap is reused across batches and files, so clear every word
-      // this batch reads before setting its deletes.
-      const auto numBytes = bits::nwords(actualSize) * sizeof(uint64_t);
-      dwio::common::ensureCapacity<int8_t>(
-          deleteBitmap_, numBytes, connectorQueryCtx_->memoryPool());
-      std::memset(deleteBitmap_->asMutable<int8_t>(), 0, numBytes);
-      deletionVectorReader_->readDeletePositions(
-          baseRowReader_->nextRowNumber(), actualSize, deleteBitmap_);
-      mutation.deletedRows = deleteBitmap_->as<uint64_t>();
-    }
+    mutation.deletedRows = deletedRows(actualSize);
     const auto rowsRead = baseRowReader_->next(actualSize, output, &mutation);
     if (rowsRead > 0) {
       return rowsRead;
@@ -105,6 +94,32 @@ uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
     finishFileSplitReader();
   }
   return 0;
+}
+
+const uint64_t* PaimonSplitReader::deletedRows(uint64_t numRows) {
+  const auto* kept = keptRows();
+  if (kept == nullptr &&
+      (deletionVectorReader_ == nullptr ||
+       deletionVectorReader_->noMoreData())) {
+    return nullptr;
+  }
+
+  // The bitmap is reused across batches and files, so set every word this
+  // batch reads.
+  const auto numBytes = bits::nwords(numRows) * sizeof(uint64_t);
+  dwio::common::ensureCapacity<int8_t>(
+      deleteBitmap_, numBytes, connectorQueryCtx_->memoryPool());
+  auto* deleted = deleteBitmap_->asMutable<uint64_t>();
+  const auto rowNumber = baseRowReader_->nextRowNumber();
+  if (kept != nullptr) {
+    // Merge-on-read keeps no row that a deletion vector deletes.
+    bits::copyBits(kept, rowNumber, deleted, 0, numRows);
+    bits::negate(deleted, static_cast<int32_t>(numRows));
+    return deleted;
+  }
+  std::memset(deleted, 0, numBytes);
+  deletionVectorReader_->readDeletePositions(rowNumber, numRows, deleteBitmap_);
+  return deleted;
 }
 
 bool PaimonSplitReader::ensureFileSplitReader() {
