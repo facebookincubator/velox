@@ -17,6 +17,7 @@
 
 #include <utility>
 
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/reader/FeatureSelection.h"
 #include "velox/dwio/nimble/reader/FieldIdResolver.h"
@@ -269,6 +270,14 @@ class NimbleReader : public dwio::common::Reader {
     // otherwise it is a no-op and the existing position/name-based
     // behavior is preserved.
     if (options_.columnMappingMode() ==
+        dwio::common::ColumnMappingMode::kTopLevelFieldId) {
+      facebook::nimble::BatchReader tmpReader(
+          tabletReader_, options.memoryPool());
+      tableNamedSchema_ = facebook::nimble::mapTopLevelColumnsByFieldId(
+          *tmpReader.schema(), asRowType(tmpReader.type()), options_);
+      options_.setFileSchema(asRowType(tmpReader.type()));
+    } else if (
+        options_.columnMappingMode() ==
         dwio::common::ColumnMappingMode::kFieldId) {
       facebook::nimble::BatchReader tmpReader(
           tabletReader_, options.memoryPool());
@@ -277,12 +286,7 @@ class NimbleReader : public dwio::common::Reader {
       }
       const auto& fileSchemaType = tmpReader.schema();
       const auto& fieldIdAttributeKey = options_.fieldIdAttributeKey();
-      if (options_.fieldIdColumnNameMapping().has_value()) {
-        tableNamedSchema_ = updateColumnNamesFromFieldIdMapping(
-            asRowType(tmpReader.type()), options_);
-        options_.setFileSchema(asRowType(tmpReader.type()));
-      } else if (
-          fileSchemaType != nullptr && !options_.fieldIds().empty() &&
+      if (fileSchemaType != nullptr && !options_.fieldIds().empty() &&
           !fieldIdAttributeKey.empty()) {
         auto resolution = resolveSchema(
             options_.fileSchema(),

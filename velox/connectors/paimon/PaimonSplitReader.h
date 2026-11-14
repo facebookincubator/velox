@@ -25,6 +25,9 @@ namespace facebook::velox::connector::paimon {
 /// file at a time and reuses FileSplitReader for per-file preparation and batch
 /// reads, advancing past exhausted, empty or skipped files. The same ScanSpec
 /// is reused across files.
+/// Nimble files identify top-level fields with the "paimon.id" schema
+/// attribute; historical schema definitions and physical column order are not
+/// used for field identity. Nested fields must remain unchanged.
 class PaimonSplitReader : public connector::FileSplitReader {
  public:
   /// @param fileSplit FileConnectorSplit for the first data file.
@@ -76,18 +79,6 @@ class PaimonSplitReader : public connector::FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  struct FileReadSchema {
-    // Query column names with historical types for fields present in the file's
-    // schema. This is a request schema, not the file's physical column layout.
-    RowTypePtr rowType;
-    // Historical column name to query column name, resolved by field ID.
-    std::unordered_map<std::string, std::string> columnNameMapping;
-  };
-
-  // Resolves identities before opening files. DWIO uses the name mapping to
-  // bind each file's actual columns, independently of their physical order.
-  FileReadSchema makeFileReadSchema(int64_t fileSchemaId) const;
-
   // Builds a FileConnectorSplit from a PaimonDataFile.
   std::shared_ptr<connector::FileConnectorSplit> makeFileConnectorSplit(
       const PaimonDataFile& dataFile) const;
@@ -101,10 +92,6 @@ class PaimonSplitReader : public connector::FileSplitReader {
   void finishFileSplitReader();
 
   const std::shared_ptr<const PaimonConnectorSplit> paimonSplit_;
-
-  // Reuses request schemas and identity bindings by schema ID, not physical
-  // column positions. Each reader binds names against its own file metadata.
-  std::unordered_map<int64_t, FileReadSchema> fileReadSchemas_;
 
   // FileConnectorSplits built from paimonSplit_->dataFiles(), one per file.
   // Used to switch the base reader between files during iteration.

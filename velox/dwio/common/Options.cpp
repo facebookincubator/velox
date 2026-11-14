@@ -48,6 +48,7 @@ const auto& columnMappingModeNames() {
       {ColumnMappingMode::kName, "NAME"},
       {ColumnMappingMode::kParquetFieldId, "PARQUET_FIELD_ID"},
       {ColumnMappingMode::kFieldId, "FIELD_ID"},
+      {ColumnMappingMode::kTopLevelFieldId, "TOP_LEVEL_FIELD_ID"},
   };
   return kNames;
 }

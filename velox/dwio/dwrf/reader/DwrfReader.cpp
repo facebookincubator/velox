@@ -909,20 +909,7 @@ DwrfReader::DwrfReader(
   // ...) written by old Hive with no real field names, so name-based matching
   // would find nothing.
   if (readerBase_->readerOptions().fileSchema() != nullptr) {
-    if (mappingMode == dwio::common::ColumnMappingMode::kFieldId &&
-        options.fieldIdColumnNameMapping().has_value()) {
-      // Bind original footer names before any configured lower-case conversion.
-      const auto root = readerBase_->footer().types(0);
-      std::vector<std::string> names;
-      names.reserve(root.subtypesSize());
-      for (int32_t i = 0; i < root.subtypesSize(); ++i) {
-        names.push_back(
-            fieldIdMappedColumnName(root.fieldNames(i), i, options));
-      }
-      readerBase_->setSchema(
-          ROW(std::move(names),
-              std::vector<TypePtr>(readerBase_->schema()->children())));
-    } else if (mappingMode == dwio::common::ColumnMappingMode::kFieldId) {
+    if (mappingMode == dwio::common::ColumnMappingMode::kFieldId) {
       updateColumnNamesFromFieldIds();
     } else if (
         mappingMode != dwio::common::ColumnMappingMode::kName ||

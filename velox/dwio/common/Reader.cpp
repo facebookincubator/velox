@@ -356,30 +356,4 @@ TypePtr Reader::updateColumnNames(
   return updateColumnNamesImpl(fileType, tableType, "", "");
 }
 
-std::string Reader::fieldIdMappedColumnName(
-    const std::string& fileName,
-    uint32_t fileColumnId,
-    const ReaderOptions& options) {
-  const auto& mapping = options.fieldIdColumnNameMapping().value();
-  if (const auto it = mapping.find(fileName); it != mapping.end()) {
-    return it->second;
-  }
-  auto name = fmt::format("__unmapped_{}", fileColumnId);
-  while (options.fileSchema()->containsChild(name)) {
-    name.push_back('_');
-  }
-  return name;
-}
-
-RowTypePtr Reader::updateColumnNamesFromFieldIdMapping(
-    const RowTypePtr& fileType,
-    const ReaderOptions& options) {
-  std::vector<std::string> names;
-  names.reserve(fileType->size());
-  for (column_index_t i = 0; i < fileType->size(); ++i) {
-    names.push_back(fieldIdMappedColumnName(fileType->nameOf(i), i, options));
-  }
-  return ROW(std::move(names), std::vector<TypePtr>(fileType->children()));
-}
-
 } // namespace facebook::velox::dwio::common

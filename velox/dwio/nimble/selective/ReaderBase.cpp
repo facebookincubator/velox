@@ -87,12 +87,12 @@ std::shared_ptr<const facebook::nimble::Type> loadSchema(
 
 TypePtr getFileSchema(
     const dwio::common::ReaderOptions& options,
-    const TypePtr& fileSchema) {
+    const TypePtr& fileSchema,
+    const Type& nimbleSchema) {
   if (options.columnMappingMode() ==
-          dwio::common::ColumnMappingMode::kFieldId &&
-      options.fieldIdColumnNameMapping().has_value()) {
-    return dwio::common::Reader::updateColumnNamesFromFieldIdMapping(
-        asRowType(fileSchema), options);
+      dwio::common::ColumnMappingMode::kTopLevelFieldId) {
+    return mapTopLevelColumnsByFieldId(
+        nimbleSchema, asRowType(fileSchema), options);
   }
   if (options.columnMappingMode() == dwio::common::ColumnMappingMode::kName ||
       !options.fileSchema()) {
@@ -149,8 +149,8 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
   const auto& randomSkip = options.randomSkip();
   const auto& scanSpec = options.scanSpec();
   const auto nimbleSchema = loadSchema(*tablet);
-  auto fileSchema =
-      asRowType(getFileSchema(options, convertToVeloxType(*nimbleSchema)));
+  auto fileSchema = asRowType(
+      getFileSchema(options, convertToVeloxType(*nimbleSchema), *nimbleSchema));
 
   return std::shared_ptr<ReaderBase>(new ReaderBase(
       std::move(input),
@@ -170,8 +170,8 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
   auto* pool = &options.memoryPool();
   const auto& randomSkip = options.randomSkip();
   const auto& scanSpec = options.scanSpec();
-  auto fileSchema =
-      asRowType(getFileSchema(options, cachedTablet->veloxSchema()));
+  auto fileSchema = asRowType(getFileSchema(
+      options, cachedTablet->veloxSchema(), *cachedTablet->nimbleSchema()));
 
   // Aliased onto the entry so this ReaderBase owns it, not just the tablet.
   // The entry owns the IoStatistics the tablet writes its metadata and index

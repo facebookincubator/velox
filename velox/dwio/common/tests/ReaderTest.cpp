@@ -33,39 +33,6 @@ class ReaderTest : public testing::Test, public velox::test::VectorTestBase {
   }
 };
 
-TEST_F(ReaderTest, externallyResolvedFieldIdMapping) {
-  ReaderOptions options(pool());
-  options.setColumnMappingMode(ColumnMappingMode::kFieldId);
-  const auto nested = ROW({{"x", BIGINT()}});
-  const auto requested =
-      ROW({{"kept", nested}, {"added", BIGINT()}, {"__unmapped_1", VARCHAR()}});
-  options.setFileSchema(requested);
-  options.setFieldIdColumnNameMapping({{"old_name", "kept"}});
-
-  const auto first = ROW({{"old_name", nested}, {"added", BIGINT()}});
-  const auto second = ROW({{"added", BIGINT()}, {"old_name", nested}});
-  const auto mappedFirst =
-      Reader::updateColumnNamesFromFieldIdMapping(first, options);
-  const auto mappedSecond =
-      Reader::updateColumnNamesFromFieldIdMapping(second, options);
-  EXPECT_EQ(mappedFirst->nameOf(0), "kept");
-  EXPECT_EQ(mappedFirst->nameOf(1), "__unmapped_1_");
-  EXPECT_EQ(mappedSecond->nameOf(0), "__unmapped_0");
-  EXPECT_EQ(mappedSecond->nameOf(1), "kept");
-  EXPECT_EQ(mappedFirst->children(), first->children());
-  EXPECT_EQ(mappedSecond->children(), second->children());
-  EXPECT_EQ(mappedFirst->findChild("kept"), nested);
-  EXPECT_FALSE(mappedFirst->containsChild("added"));
-  EXPECT_FALSE(mappedSecond->containsChild("added"));
-
-  options.setFieldIdColumnNameMapping({});
-  const auto unmatched =
-      Reader::updateColumnNamesFromFieldIdMapping(first, options);
-  EXPECT_FALSE(unmatched->containsChild("kept"));
-  EXPECT_FALSE(unmatched->containsChild("added"));
-  EXPECT_EQ(unmatched->children(), first->children());
-}
-
 TEST_F(ReaderTest, getOrCreateChild) {
   auto input = makeRowVector(
       {"c.0", "c.1"},
