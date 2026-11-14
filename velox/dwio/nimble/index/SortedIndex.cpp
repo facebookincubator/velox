@@ -305,6 +305,7 @@ std::string_view SortedIndex::maxKey() const {
 
 IndexLookup::LookupResult SortedIndex::lookup(
     const LookupRequest& request) const {
+  validateLookupRequest(request);
   const auto& options = request.options();
 
   std::vector<RowRange> rowRanges;

@@ -52,7 +52,8 @@ using namespace facebook::velox;
 
 // Creates a range scan LookupRequest with only a lower bound (no upper bound).
 // The result endRow will be numRows_ (total file rows).
-IndexLookup::LookupRequest makeRangeScanRequest(std::string_view key) {
+std::unique_ptr<const IndexLookup::LookupRequest> makeRangeScanRequest(
+    std::string_view key) {
   velox::serializer::EncodedKeyBounds bounds{
       .lowerKey = std::string(key), .upperKey = std::nullopt};
   return IndexLookup::LookupRequest::rangeScan({bounds});
@@ -67,7 +68,8 @@ velox::serializer::EncodedKeyBounds makeKeyBounds(std::string_view key) {
 }
 
 // Returns the request for the rows of one key, as makeKeyBounds() bounds them.
-IndexLookup::LookupRequest makeKeyRequest(std::string_view key) {
+std::unique_ptr<const IndexLookup::LookupRequest> makeKeyRequest(
+    std::string_view key) {
   return IndexLookup::LookupRequest::rangeScan({makeKeyBounds(key)});
 }
 
@@ -400,7 +402,7 @@ TEST_F(ClusterIndexTest, lookup) {
 
   // Key before minKey returns full file range.
   {
-    auto result = clusterIndex->lookup(makeRangeScanRequest("000"));
+    auto result = clusterIndex->lookup(*makeRangeScanRequest("000"));
     ASSERT_EQ(result.size(), 1);
     auto ranges = result[0];
     ASSERT_EQ(ranges.size(), 1);
@@ -410,7 +412,7 @@ TEST_F(ClusterIndexTest, lookup) {
 
   // Key in partition 0, chunk 0 → row-level start.
   {
-    auto result = clusterIndex->lookup(makeRangeScanRequest("bbb"));
+    auto result = clusterIndex->lookup(*makeRangeScanRequest("bbb"));
     ASSERT_EQ(result.size(), 1);
     auto ranges = result[0];
     ASSERT_EQ(ranges.size(), 1);
@@ -420,7 +422,7 @@ TEST_F(ClusterIndexTest, lookup) {
 
   // Key "ddd" is in partition 0, chunk 1 → row 1.
   {
-    auto result = clusterIndex->lookup(makeRangeScanRequest("ddd"));
+    auto result = clusterIndex->lookup(*makeRangeScanRequest("ddd"));
     ASSERT_EQ(result.size(), 1);
     auto ranges = result[0];
     ASSERT_EQ(ranges.size(), 1);
@@ -430,7 +432,7 @@ TEST_F(ClusterIndexTest, lookup) {
 
   // Key "ggg" is in partition 1 → row 2.
   {
-    auto result = clusterIndex->lookup(makeRangeScanRequest("ggg"));
+    auto result = clusterIndex->lookup(*makeRangeScanRequest("ggg"));
     ASSERT_EQ(result.size(), 1);
     auto ranges = result[0];
     ASSERT_EQ(ranges.size(), 1);
@@ -440,7 +442,7 @@ TEST_F(ClusterIndexTest, lookup) {
 
   // Key after last stripe max key returns empty.
   {
-    auto result = clusterIndex->lookup(makeRangeScanRequest("zzz"));
+    auto result = clusterIndex->lookup(*makeRangeScanRequest("zzz"));
     ASSERT_EQ(result.size(), 1);
     EXPECT_EQ(result[0].size(), 0);
   }
@@ -528,7 +530,7 @@ TEST_F(ClusterIndexTest, lookupAllStripes) {
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.debugString());
     auto result =
-        clusterIndex->lookup(makeRangeScanRequest(testCase.lookupKey));
+        clusterIndex->lookup(*makeRangeScanRequest(testCase.lookupKey));
     ASSERT_EQ(result.size(), 1);
     auto ranges = result[0];
     if (testCase.expectedRange.has_value()) {
@@ -612,7 +614,7 @@ TEST_F(ClusterIndexTest, lookupWithSameKeys) {
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.debugString());
     auto result =
-        clusterIndex->lookup(makeRangeScanRequest(testCase.lookupKey));
+        clusterIndex->lookup(*makeRangeScanRequest(testCase.lookupKey));
     ASSERT_EQ(result.size(), 1);
     auto ranges = result[0];
     if (testCase.expectedRange.has_value()) {
@@ -687,7 +689,7 @@ TEST_F(ClusterIndexTest, lookupWithKeyStream) {
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.debugString());
     auto result =
-        clusterIndex->lookup(makeRangeScanRequest(testCase.lookupKey));
+        clusterIndex->lookup(*makeRangeScanRequest(testCase.lookupKey));
     ASSERT_EQ(result.size(), 1);
     auto ranges = result[0];
     if (testCase.expectedRange.has_value()) {
@@ -764,7 +766,7 @@ TEST_F(ClusterIndexTest, lookupWithKeyStreamMultiplePartitions) {
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.debugString());
     auto result =
-        clusterIndex->lookup(makeRangeScanRequest(testCase.lookupKey));
+        clusterIndex->lookup(*makeRangeScanRequest(testCase.lookupKey));
     ASSERT_EQ(result.size(), 1);
     auto ranges = result[0];
     if (testCase.expectedRange.has_value()) {
@@ -845,7 +847,7 @@ TEST_F(ClusterIndexTest, lookupKeyRangeSpanningChunks) {
     auto clusterIndex = createClusterIndex(
         indexBuffers, createKeyStreamFile(encodedStream.data));
 
-    const auto result = clusterIndex->lookup(makeKeyRequest(testCase.key));
+    const auto result = clusterIndex->lookup(*makeKeyRequest(testCase.key));
     ASSERT_EQ(result.size(), 1);
     const auto ranges = result[0];
     if (!testCase.expected.has_value()) {
@@ -887,7 +889,7 @@ TEST_F(ClusterIndexTest, lookupKeyRangeSpanningPartitions) {
   };
   for (const auto& [key, expected] : testCases) {
     SCOPED_TRACE(key);
-    const auto result = clusterIndex->lookup(makeKeyRequest(key));
+    const auto result = clusterIndex->lookup(*makeKeyRequest(key));
     ASSERT_EQ(result.size(), 1);
     const auto ranges = result[0];
     ASSERT_EQ(ranges.size(), 1);
@@ -988,7 +990,7 @@ TEST_F(ClusterIndexTest, stripeLayoutLookup) {
   for (uint32_t row = 0; row < keys.size(); ++row) {
     SCOPED_TRACE(keys[row]);
     expectRows(
-        clusterIndex->lookup(makeKeyRequest(keys[row])),
+        clusterIndex->lookup(*makeKeyRequest(keys[row])),
         RowRange(row, row + 1));
   }
 
@@ -999,7 +1001,7 @@ TEST_F(ClusterIndexTest, stripeLayoutLookup) {
        {"j", "k025", "k035", "k045", "k075", "k135", "l"}) {
     SCOPED_TRACE(key);
     expectRows(
-        clusterIndex->lookup(makeRangeScanRequest(key)),
+        clusterIndex->lookup(*makeRangeScanRequest(key)),
         rowsFromLowerBound(keys, key));
   }
 }
@@ -1369,7 +1371,7 @@ TEST_P(ClusterIndexLookupTest, rangeScanEmptyRange) {
     velox::serializer::EncodedKeyBounds bounds{
         .lowerKey = testCase.lower, .upperKey = testCase.upper};
     auto result =
-        clusterIndex_->lookup(IndexLookup::LookupRequest::rangeScan({bounds}));
+        clusterIndex_->lookup(*IndexLookup::LookupRequest::rangeScan({bounds}));
     ASSERT_EQ(result.size(), 1);
     EXPECT_EQ(result[0].size(), 0);
   }
@@ -1407,7 +1409,7 @@ TEST_P(ClusterIndexLookupTest, rangeScanValidRange) {
     velox::serializer::EncodedKeyBounds bounds{
         .lowerKey = testCase.lower, .upperKey = testCase.upper};
     auto result =
-        clusterIndex_->lookup(IndexLookup::LookupRequest::rangeScan({bounds}));
+        clusterIndex_->lookup(*IndexLookup::LookupRequest::rangeScan({bounds}));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0].startRow, testCase.expected.startRow);
@@ -1445,7 +1447,7 @@ TEST_P(ClusterIndexLookupTest, pointLookupExactMatch) {
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.debugString());
     auto result = clusterIndex_->lookup(
-        IndexLookup::LookupRequest::pointLookup({testCase.key}));
+        *IndexLookup::LookupRequest::pointLookup({testCase.key}));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0].startRow, testCase.expected.startRow);
@@ -1471,7 +1473,7 @@ TEST_P(ClusterIndexLookupTest, pointLookupNonExistent) {
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.debugString());
     auto result = clusterIndex_->lookup(
-        IndexLookup::LookupRequest::pointLookup({testCase.key}));
+        *IndexLookup::LookupRequest::pointLookup({testCase.key}));
     ASSERT_EQ(result.size(), 1);
     if (testCase.expectEmpty) {
       EXPECT_EQ(result[0].size(), 0);
@@ -1483,7 +1485,7 @@ TEST_P(ClusterIndexLookupTest, pointLookupNonExistent) {
 
 TEST_P(ClusterIndexLookupTest, pointLookupBatch) {
   auto result = clusterIndex_->lookup(
-      IndexLookup::LookupRequest::pointLookup({"key_a", "key_e", "key_i"}));
+      *IndexLookup::LookupRequest::pointLookup({"key_a", "key_e", "key_i"}));
   ASSERT_EQ(result.size(), 3);
 
   ASSERT_EQ(result[0].size(), 1);
@@ -1501,7 +1503,7 @@ TEST_P(ClusterIndexLookupTest, pointLookupBatch) {
 
 TEST_P(ClusterIndexLookupTest, pointLookupBatchMixed) {
   auto result = clusterIndex_->lookup(
-      IndexLookup::LookupRequest::pointLookup({"key_a", "key_z", "key_e"}));
+      *IndexLookup::LookupRequest::pointLookup({"key_a", "key_z", "key_e"}));
   ASSERT_EQ(result.size(), 3);
 
   ASSERT_EQ(result[0].size(), 1);
@@ -2046,7 +2048,7 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, seekKeepsTheKeyChunkOfItsFirstRow) {
   EXPECT_EQ(decodeCount.load(), 1);
 
   // A lookup of the other chunk evicts the first chunk from the index.
-  clusterIndex->lookup(makeKeyRequest("key_c"));
+  clusterIndex->lookup(*makeKeyRequest("key_c"));
   EXPECT_EQ(decodeCount.load(), 2);
 
   // The key cursor of the seek reads the first chunk that it keeps.
@@ -2067,7 +2069,7 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, seekKeepsTheKeyChunkOfItsFirstRow) {
   EXPECT_EQ(range.rows.endRow, 3);
   ASSERT_NE(range.keyCursor, nullptr);
   EXPECT_EQ(decodeCount.load(), 4);
-  clusterIndex->lookup(makeKeyRequest("key_a"));
+  clusterIndex->lookup(*makeKeyRequest("key_a"));
   EXPECT_EQ(decodeCount.load(), 5);
 
   // The key cursor reads its first row from the chunk that it keeps, and then
@@ -2273,7 +2275,7 @@ TEST_F(ClusterIndexTest, indexDataReuseWithSameReader) {
 
     // First lookup loads partition metadata and key stream data lazily.
     auto firstResult =
-        reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+        reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
     ASSERT_EQ(firstResult.size(), 1);
     ASSERT_EQ(firstResult[0].size(), 1);
     EXPECT_EQ(firstResult[0][0], RowRange(0, 300));
@@ -2285,7 +2287,7 @@ TEST_F(ClusterIndexTest, indexDataReuseWithSameReader) {
 
     // Same-key lookup reuses DecodedChunk cache — no new index IO.
     auto secondResult =
-        reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+        reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
     ASSERT_EQ(secondResult.size(), 1);
     ASSERT_EQ(secondResult[0].size(), 1);
     EXPECT_EQ(secondResult[0][0], RowRange(0, 300));
@@ -2413,7 +2415,7 @@ TEST_F(ClusterIndexTest, indexDataReuseCrossReaders) {
       ASSERT_NE(reader1->clusterIndex(), nullptr);
 
       auto firstResult =
-          reader1->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+          reader1->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
       ASSERT_EQ(firstResult.size(), 1);
       ASSERT_EQ(firstResult[0].size(), 1);
       EXPECT_EQ(firstResult[0][0], RowRange(0, 300));
@@ -2427,7 +2429,7 @@ TEST_F(ClusterIndexTest, indexDataReuseCrossReaders) {
       ASSERT_NE(reader2->clusterIndex(), nullptr);
 
       auto secondResult =
-          reader2->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+          reader2->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
       ASSERT_EQ(secondResult.size(), 1);
       ASSERT_EQ(secondResult[0].size(), 1);
       EXPECT_EQ(secondResult[0][0], RowRange(0, 300));
@@ -2572,7 +2574,7 @@ TEST_F(ClusterIndexTest, indexDataReuseCrossReadersWithBlockCache) {
       for (const auto& [key, expectedRange] : expectedRanges) {
         SCOPED_TRACE(fmt::format("key={}", key));
         const auto result =
-            reader->clusterIndex()->lookup(makeRangeScanRequest(key));
+            reader->clusterIndex()->lookup(*makeRangeScanRequest(key));
         ASSERT_EQ(result.size(), 1);
         ASSERT_EQ(result[0].size(), 1);
         EXPECT_EQ(result[0][0], expectedRange);
@@ -2645,7 +2647,7 @@ TEST_F(ClusterIndexTest, cacheIndexOutlivesFileHandle) {
   // under that id, which needs the id in velox::fileIds().
   cache->clear();
   const auto result =
-      reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+      reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
   ASSERT_EQ(result.size(), 1);
   ASSERT_EQ(result[0].size(), 1);
   EXPECT_EQ(result[0][0], RowRange(0, 300));
@@ -2702,7 +2704,7 @@ TEST_F(ClusterIndexTest, cacheIndexReadsFromSsd) {
     for (const auto& [key, expectedRange] : expectedRanges) {
       SCOPED_TRACE(fmt::format("key={}", key));
       const auto result =
-          reader->clusterIndex()->lookup(makeRangeScanRequest(key));
+          reader->clusterIndex()->lookup(*makeRangeScanRequest(key));
       ASSERT_EQ(result.size(), 1);
       ASSERT_EQ(result[0].size(), 1);
       EXPECT_EQ(result[0][0], expectedRange);
@@ -2765,7 +2767,7 @@ TEST_F(ClusterIndexTest, blockCachedKeyChunkStaysPinnedWhileDecoded) {
 
     const auto lookupFirstKey = [&]() {
       const auto result =
-          reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+          reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
       ASSERT_EQ(result.size(), 1);
       ASSERT_EQ(result[0].size(), 1);
       EXPECT_EQ(result[0][0], RowRange(0, 300));
@@ -2845,7 +2847,7 @@ TEST_F(ClusterIndexTest, blockCachedKeyChunksReadConcurrently) {
         const auto& [key, expectedRange] =
             expectedRanges[(threadIdx + i) % expectedRanges.size()];
         const auto result =
-            reader->clusterIndex()->lookup(makeRangeScanRequest(key));
+            reader->clusterIndex()->lookup(*makeRangeScanRequest(key));
         if (result.size() != 1 || result[0].size() != 1 ||
             result[0][0] != expectedRange) {
           ++numMismatches;
@@ -2881,24 +2883,24 @@ TEST_F(ClusterIndexTest, pinIndexEnabledRetainsChunks) {
   ASSERT_NE(reader->clusterIndex(), nullptr);
   ClusterIndexTestHelper helper(reader->clusterIndex());
 
-  reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
   EXPECT_EQ(helper.decodedChunkCount(0), 1);
   const auto bytesAfterChunk0 = indexIoStats_->rawBytesRead();
   EXPECT_GT(bytesAfterChunk0, 0);
 
-  reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
   EXPECT_EQ(helper.decodedChunkCount(0), 1);
   EXPECT_EQ(indexIoStats_->rawBytesRead(), bytesAfterChunk0)
       << "Repeated lookup of a pinned chunk must not trigger index IO";
 
-  reader->clusterIndex()->lookup(makeRangeScanRequest("fff"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("fff"));
   EXPECT_EQ(helper.decodedChunkCount(0), 2);
 
-  reader->clusterIndex()->lookup(makeRangeScanRequest("ddd"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("ddd"));
   EXPECT_EQ(helper.decodedChunkCount(0), 3);
 
   const auto bytesAfterAllChunks = indexIoStats_->rawBytesRead();
-  reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
   EXPECT_EQ(helper.decodedChunkCount(0), 3);
   EXPECT_EQ(indexIoStats_->rawBytesRead(), bytesAfterAllChunks)
       << "Re-lookup of pinned chunk must not trigger new index IO";
@@ -2923,17 +2925,17 @@ TEST_F(ClusterIndexTest, pinIndexDisabledDoesNotRetainChunks) {
   // chunk is retained at a time, evicted whenever a different chunk is
   // requested. Each lookup that lands on a different chunk issues fresh IO.
   const auto bytesBefore = indexIoStats_->rawBytesRead();
-  reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
   EXPECT_EQ(helper.decodedChunkCount(0), 1);
   const auto bytesAfter1 = indexIoStats_->rawBytesRead();
   EXPECT_GT(bytesAfter1, bytesBefore);
 
-  reader->clusterIndex()->lookup(makeRangeScanRequest("fff"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("fff"));
   EXPECT_EQ(helper.decodedChunkCount(0), 1);
   const auto bytesAfter2 = indexIoStats_->rawBytesRead();
   EXPECT_GT(bytesAfter2, bytesAfter1);
 
-  reader->clusterIndex()->lookup(makeRangeScanRequest("ddd"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("ddd"));
   EXPECT_EQ(helper.decodedChunkCount(0), 1);
   EXPECT_GT(indexIoStats_->rawBytesRead(), bytesAfter2);
 }
@@ -2961,9 +2963,9 @@ TEST_F(ClusterIndexTest, preloadIndexDecodesAllChunksAtConstruction) {
 
   // Subsequent lookups across all three chunks must not trigger any further
   // index data IO.
-  reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
-  reader->clusterIndex()->lookup(makeRangeScanRequest("ddd"));
-  reader->clusterIndex()->lookup(makeRangeScanRequest("fff"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("ddd"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("fff"));
   EXPECT_EQ(helper.decodedChunkCount(0), 3);
   EXPECT_EQ(indexIoStats_->rawBytesRead(), bytesAfterPreload)
       << "Lookups after preload must not trigger additional index IO";
@@ -3015,7 +3017,7 @@ TEST_F(ClusterIndexTest, preloadIndexDecodesEveryPartition) {
   };
   for (const auto& [key, expectedRange] : expectedRanges) {
     SCOPED_TRACE(key);
-    const auto result = clusterIndex->lookup(makeRangeScanRequest(key));
+    const auto result = clusterIndex->lookup(*makeRangeScanRequest(key));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0], expectedRange);
@@ -3067,9 +3069,9 @@ TEST_F(ClusterIndexTest, preloadIndexAutoPromotesPinIndex) {
 
   // Lookups across all three chunks must not trigger additional index IO,
   // confirming the chunks are pinned (not evicted between lookups).
-  reader->clusterIndex()->lookup(makeRangeScanRequest("bbb"));
-  reader->clusterIndex()->lookup(makeRangeScanRequest("ddd"));
-  reader->clusterIndex()->lookup(makeRangeScanRequest("fff"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("bbb"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("ddd"));
+  reader->clusterIndex()->lookup(*makeRangeScanRequest("fff"));
   EXPECT_EQ(helper.decodedChunkCount(0), 3);
   EXPECT_EQ(indexIoStats_->rawBytesRead(), bytesAfterPreload);
 }
@@ -3118,12 +3120,12 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, loadPartitionOnce) {
         }
       }));
 
-  std::thread t1([&]() { clusterIndex->lookup(makeRangeScanRequest("bbb")); });
+  std::thread t1([&]() { clusterIndex->lookup(*makeRangeScanRequest("bbb")); });
 
   firstLoaderReady.wait();
   EXPECT_EQ(loadCount.load(), 1);
 
-  std::thread t2([&]() { clusterIndex->lookup(makeRangeScanRequest("aaa")); });
+  std::thread t2([&]() { clusterIndex->lookup(*makeRangeScanRequest("aaa")); });
 
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   EXPECT_EQ(loadCount.load(), 1);
@@ -3179,12 +3181,12 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunkFirstWins) {
       }));
 
   std::thread t1(
-      [&]() { clusterIndex->lookup(makeRangeScanRequest("key_a")); });
+      [&]() { clusterIndex->lookup(*makeRangeScanRequest("key_a")); });
 
   firstDecodeReady.wait();
 
   std::thread t2(
-      [&]() { clusterIndex->lookup(makeRangeScanRequest("key_b")); });
+      [&]() { clusterIndex->lookup(*makeRangeScanRequest("key_b")); });
 
   secondDecodeReady.wait();
 
@@ -3261,7 +3263,7 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunksDifferentChunksInParallel) {
   ClusterIndexTestHelper helper(clusterIndex.get());
 
   // Pre-load the partition so both threads go straight to getDecodedChunk.
-  clusterIndex->lookup(makeRangeScanRequest("key_a"));
+  clusterIndex->lookup(*makeRangeScanRequest("key_a"));
   EXPECT_EQ(helper.decodedChunkCount(0), 1);
 
   std::atomic_int decodeCount{0};
@@ -3291,9 +3293,9 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunksDifferentChunksInParallel) {
   // from both threads to test the same-chunk parallel decode scenario.
   // Instead, let's just look up the uncached chunk 1 from two threads.
   std::thread t1(
-      [&]() { clusterIndex->lookup(makeRangeScanRequest("key_c")); });
+      [&]() { clusterIndex->lookup(*makeRangeScanRequest("key_c")); });
   std::thread t2(
-      [&]() { clusterIndex->lookup(makeRangeScanRequest("key_d")); });
+      [&]() { clusterIndex->lookup(*makeRangeScanRequest("key_d")); });
 
   // Both threads are decoding chunk 1 in parallel.
   firstDecodeReady.wait();
@@ -3335,12 +3337,12 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunkLastWinsUnpinned) {
   ClusterIndexTestHelper helper(clusterIndex.get());
 
   // Pre-load partition and chunk 0.
-  clusterIndex->lookup(makeRangeScanRequest("key_a"));
+  clusterIndex->lookup(*makeRangeScanRequest("key_a"));
   EXPECT_EQ(helper.decodedChunkCount(0), 1);
   const auto* chunk0Data = helper.decodedChunkData(0, 0);
 
   // Now look up chunk 1 — single scratch slot evicts chunk 0.
-  clusterIndex->lookup(makeRangeScanRequest("key_c"));
+  clusterIndex->lookup(*makeRangeScanRequest("key_c"));
   EXPECT_EQ(helper.decodedChunkCount(0), 1);
   const auto* chunk1Data = helper.decodedChunkData(0, 0);
   EXPECT_NE(chunk0Data, chunk1Data);
@@ -3458,7 +3460,7 @@ TEST_P(ClusterIndexConcurrentTest, concurrentLookup) {
         const auto& key = allKeys[keyIdx];
 
         auto result = clusterIndex->lookup(
-            IndexLookup::LookupRequest::pointLookup({key}));
+            *IndexLookup::LookupRequest::pointLookup({key}));
         if (result.size() != 1 || result[0].size() != 1 ||
             result[0][0].startRow != keyIdx ||
             result[0][0].endRow != keyIdx + 1) {

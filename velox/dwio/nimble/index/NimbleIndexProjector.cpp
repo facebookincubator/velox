@@ -328,7 +328,7 @@ void NimbleIndexProjector::initStreamChecksum(bool verifyStreamChecksums) {
 }
 
 void NimbleIndexProjector::loadStripes(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   initRequest(request, options);
   lookupStripes();
@@ -337,7 +337,7 @@ void NimbleIndexProjector::loadStripes(
 }
 
 NimbleIndexProjector::SerializedResult NimbleIndexProjector::projectStreams(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   SCOPE_EXIT {
     clearRequest();
@@ -348,7 +348,7 @@ NimbleIndexProjector::SerializedResult NimbleIndexProjector::projectStreams(
 
 folly::coro::Task<NimbleIndexProjector::RowProjectionResult>
 NimbleIndexProjector::co_projectRows(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   ensureStreamReader();
   SCOPE_EXIT {
@@ -940,11 +940,14 @@ void NimbleIndexProjector::prepareStripes() {
 }
 
 void NimbleIndexProjector::initRequest(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   NIMBLE_CHECK_NULL(ctx_.request, "Projection is not reentrant");
   NIMBLE_CHECK_NULL(ctx_.options, "Projection is not reentrant");
-  NIMBLE_CHECK_GT(request.keyBounds.size(), 0, "keyBounds must not be empty");
+  NIMBLE_USER_CHECK_EQ(
+      request.mode(),
+      index::IndexLookup::LookupRequest::Mode::RangeScan,
+      "Projection requires a range-scan request");
   NIMBLE_CHECK(
       std::isfinite(options.maxOverfetchRowsRatio) &&
           options.maxOverfetchRowsRatio >= 0.0 &&
@@ -953,7 +956,7 @@ void NimbleIndexProjector::initRequest(
       options.maxOverfetchRowsRatio);
   ctx_.request = &request;
   ctx_.options = &options;
-  ctx_.numRequests = static_cast<uint32_t>(request.keyBounds.size());
+  ctx_.numRequests = static_cast<uint32_t>(request.size());
 }
 
 void NimbleIndexProjector::clearRequest() {
@@ -1008,8 +1011,7 @@ void NimbleIndexProjector::lookupStripes() {
         recordStatsTiming(&Stats::lookupTiming, timing);
       }};
 
-  const auto result = clusterIndex_->lookup(
-      index::IndexLookup::LookupRequest::rangeScan(ctx_.request->keyBounds));
+  const auto result = clusterIndex_->lookup(*ctx_.request);
 
   struct ResolvedRequest {
     uint32_t requestIndex;
@@ -1757,7 +1759,7 @@ void NimbleIndexProjector::prepareResumeKeys() {
       if (resumeKey.has_value()) {
         continue;
       }
-      const auto& keyBounds = ctx_.request->keyBounds[range.requestIndex];
+      const auto& keyBounds = ctx_.request->rangeBound(range.requestIndex);
       NIMBLE_CHECK(
           keyBounds.lowerKey.has_value(),
           "Request {} has no lowerKey: unbounded lower requests start from "

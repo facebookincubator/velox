@@ -61,7 +61,7 @@ HybridFlatMap makeHybridFlatMapConfig(
     const std::vector<std::vector<std::string>>& explicitGroups);
 NimbleIndexProjector::RowProjectionResult projectRows(
     NimbleIndexProjector& projector,
-    const NimbleIndexProjector::Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const NimbleIndexProjector::Options& options);
 
 // Adapts the coroutine iterator API to synchronous assertions in this test.

@@ -134,12 +134,19 @@ class Config : public velox::config::ConfigBase {
   ///
   /// Currently supported:
   ///   type:user_sequence[,user_id_column:<name>|,user_id_column_index:<n>]
+  ///                     [,event_type_column:<name>]
   ///                     [,max_rows_per_stripe:<n>]
+  ///                     [,target_keys_per_stripe:<n>]
   ///       Cuts a stripe at every change of an int64 grouping column, with an
   ///       optional hard row cap 'max_rows_per_stripe' (default 0, meaning
   ///       uncapped). Each emitted stripe therefore holds rows for exactly one
   ///       key, which is what the cluster-index read path expects. See
   ///       UserSequenceBufferPolicy.h.
+  ///
+  ///       'event_type_column' also cuts at every change of that column, so a
+  ///       stripe holds one (user, event type) pair. 'target_keys_per_stripe'
+  ///       (default 1, must be positive) packs that many contiguous keys into
+  ///       a stripe before a key change cuts it.
   ///
   ///       Address the grouping column by 'user_id_column' (a name, matching
   ///       how nimble.index.columns is spelled) or by 'user_id_column_index'
@@ -211,6 +218,26 @@ class Config : public velox::config::ConfigBase {
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<bool> INDEX_OMIT_KEY_COLUMN_STORAGE;
 
+  /// Names the registered cluster index to build. Empty (default) selects the
+  /// built-in cluster index. A weighted cluster index name requires
+  /// nimble.index.weight_column.
+  /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
+  /// production tables without consulting the Nimble team (oncall: dwios).
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> INDEX_NAME;
+
+  /// Input column holding each row's weight for a weighted cluster index. Must
+  /// be set exactly when nimble.index.name names a weighted cluster index.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> INDEX_WEIGHT_COLUMN;
+
+  /// Candidate encodings, with read factors, for the keys of a hierarchical
+  /// cluster index, in the "Encoding=factor;..." format of
+  /// alpha.encodingselection.read.factors. Empty (default) keeps the index's
+  /// own candidates.
+  static Entry<const std::vector<std::pair<EncodingType, float>>>
+      INDEX_KEY_ENCODING_READ_FACTORS;
+
   // EXPERIMENTAL: BlockBitPacking encoding is not production-ready. Do not
   // enable for production tables without consulting the Nimble team
   // (oncall: dwios).
@@ -244,11 +271,22 @@ class Config : public velox::config::ConfigBase {
   /// compression outright.
   static Entry<uint32_t> METADATA_COMPRESSION_THRESHOLD;
 
+  /// Target size of a stripe group's metadata before compression; see
+  /// WriterOptions::metadataFlushThreshold. Unset leaves the writer's own
+  /// threshold.
+  static Entry<uint32_t> METADATA_FLUSH_THRESHOLD;
+
   /// Selects how per-stripe-group stream offsets/sizes are serialized:
   /// "raw" (default, readable by all readers) or "stream_major".
   /// EXPERIMENTAL: see WriterOptions::experimentalStripeGroupEncodingLayout.
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<std::string> STRIPE_GROUP_ENCODING_LAYOUT;
+
+  /// Whether "stream_major" stripe groups use the sparse layout: each stream
+  /// holds its stripe list, and offsets and sizes only for the stripes where
+  /// it has data.
+  /// EXPERIMENTAL: see WriterOptions::experimentalStripeGroupSparseLayout.
+  static Entry<bool> STRIPE_GROUP_SPARSE_LAYOUT;
 
   /// Minimum average chunks per stripe before chunk stats are written.
   /// Only consulted when nimble.chunk.index.enabled is true.

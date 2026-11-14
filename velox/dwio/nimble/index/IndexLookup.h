@@ -23,8 +23,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <type_traits>
-#include <typeinfo>
 #include <vector>
 
 #include <fmt/format.h>
@@ -72,17 +70,15 @@ enum class IndexType {
 std::string toString(IndexType indexType);
 std::ostream& operator<<(std::ostream& out, IndexType indexType);
 
-/// Unified index interface for both cluster and hash indices.
+/// Provides a common lookup interface for cluster, hash, and sorted indexes.
 ///
-/// This provides a common abstraction for index metadata and lookup
-/// capabilities. Both ClusterIndex and HashIndex implement this interface,
-/// enabling the reader to select the best index for a given query without
-/// knowing the concrete type.
+/// Abstracts index metadata and lookup capabilities, enabling the reader to
+/// select an index for a query without knowing its concrete type.
 ///
 /// Two lookup modes:
-/// - Point lookup: find rows matching exact keys. Works on both index types.
+/// - Point lookup: find rows matching exact keys. Supported by all three types.
 /// - Range scan: find rows in [lower, upper) ranges with exclusive upper
-///   bound. Only supported on cluster index.
+///   bound. Supported by cluster and sorted indexes.
 class IndexLookup {
  public:
   /// Returns the metadata of each stripe of stripe group 'stripeGroup', in
@@ -148,38 +144,34 @@ class IndexLookup {
   };
 
   /// Batch lookup request. Contains encoded keys or key bounds and options.
+  /// A derived request can add parameters for each lookup position.
   class LookupRequest {
    public:
     /// Lookup mode determines how key bounds are interpreted.
     enum class Mode {
-      /// Point lookup: find rows where key == encodedKey.
-      /// Each key bound has lowerKey == upperKey == the lookup key.
+      /// Point lookup: find all rows where key == encodedKey.
       PointLookup,
       /// Range scan: find rows where key in [lower, upper).
       /// Upper bound is exclusive.
       RangeScan,
     };
 
-    /// Options for controlling lookup behavior.
+    /// Shares call-level settings across the keys in a request.
     ///
-    /// An index that accepts parameters beyond these derives from Options and
-    /// recovers the derived type with checkedLookupOptions(), the same way an
-    /// index extends IndexConfig. An index handed options it does not
-    /// recognize must reject the request, so that a dropped parameter
-    /// surfaces as an error rather than as a silently unfiltered result.
-    struct Options {
+    /// Per-key index-specific parameters belong in a derived LookupRequest,
+    /// next to the keys they constrain, rather than here.
+    /// A derived request must validate its additional requirements in
+    /// validateFor(), so unsupported parameters surface as an error rather
+    /// than an unfiltered result.
+    struct Options final {
       Options() = default;
       explicit Options(RowRange rowRange) : rowRange{rowRange} {}
-      virtual ~Options() = default;
 
-      /// Limit results to this file-level row range. Rows outside this range
-      /// are excluded from the result. When set, the index only searches
-      /// within the specified range. When not set, the entire file is searched.
+      /// Limits results to this file-level row range, independently of the
+      /// keys. Rows outside it are excluded from the result. When unset, no
+      /// additional row window is applied. Implementations may resolve keys
+      /// before intersecting their results with this window.
       std::optional<RowRange> rowRange;
-
-     protected:
-      Options(const Options&) = default;
-      Options(Options&&) = default;
     };
 
     /// Shared no-op options, used when a request carries none. Returning a
@@ -187,18 +179,28 @@ class IndexLookup {
     static const std::shared_ptr<const Options>& defaultOptions();
 
     /// Creates a point lookup request for exact key matching.
-    static LookupRequest pointLookup(
+    static std::unique_ptr<const LookupRequest> pointLookup(
         std::vector<std::string> encodedKeys,
         std::shared_ptr<const Options> options = nullptr) {
-      return LookupRequest(std::move(encodedKeys), std::move(options));
+      return std::unique_ptr<const LookupRequest>(
+          new LookupRequest(std::move(encodedKeys), std::move(options)));
     }
 
     /// Creates a range scan request with exclusive upper bounds.
-    static LookupRequest rangeScan(
+    static std::unique_ptr<const LookupRequest> rangeScan(
         std::vector<velox::serializer::EncodedKeyBounds> keyBounds,
         std::shared_ptr<const Options> options = nullptr) {
-      return LookupRequest(std::move(keyBounds), std::move(options));
+      return std::unique_ptr<const LookupRequest>(
+          new LookupRequest(std::move(keyBounds), std::move(options)));
     }
+
+    virtual ~LookupRequest() = default;
+
+    /// Validates that the index can honor this request's additional parameters.
+    /// Base requests have no additional requirements. Derived requests that
+    /// add constraints must override this and throw NimbleUserError if the
+    /// index cannot honor them.
+    virtual void validateFor(const IndexLookup& /*index*/) const {}
 
     Mode mode() const {
       return mode_;
@@ -227,7 +229,7 @@ class IndexLookup {
       return options_ != nullptr ? *options_ : *defaultOptions();
     }
 
-   private:
+   protected:
     // Point lookup constructor.
     LookupRequest(
         std::vector<std::string> keys,
@@ -248,6 +250,7 @@ class IndexLookup {
       NIMBLE_CHECK(!rangeBounds_.empty());
     }
 
+   private:
     const Mode mode_;
     // Point lookup: single encoded keys.
     const std::vector<std::string> pointKeys_;
@@ -257,14 +260,6 @@ class IndexLookup {
   };
 
   using LookupOptions = LookupRequest::Options;
-
-  /// Recovers the index-specific options a request carries. Throws when the
-  /// request does not carry options of type T.
-  template <typename T>
-  static const T& checkedLookupOptions(const LookupOptions& options) {
-    static_assert(std::is_base_of_v<LookupOptions, T>);
-    return *velox::checkedPointerCast<const T>(&options);
-  }
 
   /// Batch lookup result. Stores a flat array of RowRanges with
   /// per-key offsets for O(1) access via operator[].
@@ -318,7 +313,10 @@ class IndexLookup {
   ///   RowRanges for exact single rows (may return multiple per key).
   ///
   /// Results are indexed by input key position: result[i] returns the
-  /// RowRanges for request.keyBounds()[i].
+  /// RowRanges for the key or bounds at request position i.
+  ///
+  /// An implementation calls validateLookupRequest() before reading any keys,
+  /// so that the request validates its additional requirements against it.
   virtual LookupResult lookup(const LookupRequest& request) const = 0;
 
   /// Returns the minimum key in this index.
@@ -348,6 +346,11 @@ class IndexLookup {
 
  protected:
   explicit IndexLookup(IndexType type) : type_{type} {}
+
+  // Delegates compatibility validation to the request before partition
+  // metadata or key data is read. Each request extension validates the
+  // additional parameters it carries.
+  void validateLookupRequest(const LookupRequest& request) const;
 
  private:
   const IndexType type_;
