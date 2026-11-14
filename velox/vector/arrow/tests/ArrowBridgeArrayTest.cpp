@@ -467,6 +467,49 @@ class ArrowBridgeArrayExportTest : public testing::Test, public VectorTestBase {
     validateArray<TRunEnds>({vectorSize}, runEnds);
   }
 
+  // Exports an array and a map with these offsets, sizes and nulls over
+  // 'numElements' elements, and checks the exported offsets. Offsets and sizes
+  // of null rows are undefined. In each test the rows are back to back, but a
+  // null row's offset or size is out of range.
+  void testNullRowOffsets(
+      const std::vector<vector_size_t>& offsets,
+      const std::vector<vector_size_t>& sizes,
+      const std::vector<bool>& nulls,
+      vector_size_t numElements,
+      const std::vector<int32_t>& expectedOffsets) {
+    auto elements = makeFlatVector<int64_t>(
+        numElements, [](vector_size_t row) { return row; });
+    const std::vector<VectorPtr> vectors{
+        std::make_shared<ArrayVector>(
+            pool(),
+            ARRAY(BIGINT()),
+            makeNulls(nulls),
+            offsets.size(),
+            makeBuffer(offsets),
+            makeBuffer(sizes),
+            elements),
+        std::make_shared<MapVector>(
+            pool(),
+            MAP(BIGINT(), BIGINT()),
+            makeNulls(nulls),
+            offsets.size(),
+            makeBuffer(offsets),
+            makeBuffer(sizes),
+            elements,
+            elements),
+    };
+    for (const auto& vector : vectors) {
+      SCOPED_TRACE(vector->type()->toString());
+      auto array = toArrow(vector, options_, pool());
+      ASSERT_OK(array->ValidateFull());
+      const auto& lists = static_cast<const arrow::ListArray&>(*array);
+      for (size_t row = 0; row < nulls.size(); ++row) {
+        EXPECT_EQ(nulls[row], lists.IsNull(row));
+      }
+      validateOffsets(lists, expectedOffsets);
+    }
+  }
+
   ArrowSchema makeArrowSchema(const char* format) {
     return ArrowSchema{
         .format = format,
@@ -1621,6 +1664,20 @@ TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
   EXPECT_EQ(values.Value(1), 5);
   EXPECT_EQ(values.Value(2), 1);
   EXPECT_EQ(values.Value(3), 2);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nullRowPastElements) {
+  testNullRowOffsets(
+      {0, 2, 4}, {2, 2, 5}, {false, false, true}, 4, {0, 2, 4, 4});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nullRowNegativeOffset) {
+  testNullRowOffsets({-3, 0}, {3, 2}, {true, false}, 2, {0, 0, 2});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nullRowNegativeSize) {
+  testNullRowOffsets(
+      {0, 2, 1}, {2, -1, 1}, {false, true, false}, 2, {0, 2, 2, 3});
 }
 
 TEST_F(ArrowBridgeArrayExportTest, arrayNested) {
