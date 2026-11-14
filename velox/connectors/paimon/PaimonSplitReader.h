@@ -17,6 +17,7 @@
 
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonDeletionVectorReader.h"
 #include "velox/connectors/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::paimon {
@@ -24,12 +25,13 @@ namespace facebook::velox::connector::paimon {
 /// Sequential multi-file reader for rawConvertible Paimon splits. Opens one
 /// file at a time and reuses FileSplitReader for per-file preparation and batch
 /// reads, advancing past exhausted, empty or skipped files. The same ScanSpec
-/// is reused across files.
+/// is reused across files. A file's deletion vector is loaded when the file is
+/// opened and applied in next() via Mutation.deletedRows, the same contract as
+/// IcebergSplitReader.
 class PaimonSplitReader : public connector::FileSplitReader {
  public:
   /// @param fileSplit FileConnectorSplit for the first data file.
-  /// @param paimonSplit Complete logical split. The caller checks raw-read
-  ///        eligibility and rejects deletion vectors and changelog files.
+  /// @param paimonSplit Complete logical split of data files.
   /// @param partitionKeys Borrowed partition-column handles for the scan,
   ///        distinct from the partition values in paimonSplit.
   PaimonSplitReader(
@@ -69,14 +71,33 @@ class PaimonSplitReader : public connector::FileSplitReader {
     runtimeStats_ = &runtimeStats;
   }
 
- private:
-  // Builds a FileConnectorSplit from a PaimonDataFile.
-  std::shared_ptr<connector::FileConnectorSplit> makeFileConnectorSplit(
-      const PaimonDataFile& dataFile) const;
+  /// Builds the FileConnectorSplit that reads 'dataFile' of 'paimonSplit'.
+  /// Reader options come from the split of the first file, so every split of
+  /// a Paimon file must come from here.
+  static std::shared_ptr<connector::FileConnectorSplit> makeFileConnectorSplit(
+      const PaimonConnectorSplit& paimonSplit,
+      const PaimonDataFile& dataFile);
 
+ protected:
+  size_t currentDataFileIndex() const {
+    return currentFileIndex_;
+  }
+
+  // Returns the bitmap of the current file, one bit per row, with the rows to
+  // return set, or nullptr to return all rows not deleted by a deletion
+  // vector.
+  virtual const uint64_t* keptRows() const {
+    return nullptr;
+  }
+
+ private:
   // Reuses the current reader or lazily prepares the next non-empty file.
   // Returns false when no files remain.
   bool ensureFileSplitReader();
+
+  // Returns the deleted-row bitmap for the next 'numRows' rows of the current
+  // file, or nullptr if none of them is deleted.
+  const uint64_t* deletedRows(uint64_t numRows);
 
   // Cleans up the current file reader after it is exhausted and advances
   // currentFileIndex_ so ensureFileSplitReader() opens the next file.
@@ -95,6 +116,10 @@ class PaimonSplitReader : public connector::FileSplitReader {
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   // Borrowed from the data source; rebound with setRuntimeStats() on takeover.
   dwio::common::RuntimeStats* runtimeStats_{nullptr};
+
+  // Deletion-vector reader for the currently open data file, if present.
+  std::unique_ptr<PaimonDeletionVectorReader> deletionVectorReader_;
+  BufferPtr deleteBitmap_;
 };
 
 } // namespace facebook::velox::connector::paimon

@@ -16,7 +16,9 @@
 #include "velox/connectors/paimon/PaimonTableHandle.h"
 #include "velox/connectors/paimon/PaimonColumnHandle.h"
 
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <limits>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -62,8 +64,7 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
   EXPECT_EQ(handle->connectorId(), "test-paimon");
   EXPECT_EQ(handle->name(), "orders");
   EXPECT_EQ(handle->dbName(), "");
-  EXPECT_EQ(
-      *handle->dataColumns(), *ROW({{"id", BIGINT()}, {"value", BIGINT()}}));
+  EXPECT_EQ(*handle->dataColumns(), *rowType());
   EXPECT_TRUE(handle->tableParameters().empty());
   EXPECT_TRUE(handle->filterColumnHandles().empty());
   EXPECT_TRUE(handle->subfieldFilters().empty());
@@ -77,15 +78,14 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
   EXPECT_EQ(paimon->fieldIds(), (std::vector<int32_t>{7, 8, 20}));
   EXPECT_EQ(paimon->partitionKeys(), (std::vector<std::string>{"p"}));
   EXPECT_EQ(paimon->tableType(), PaimonTableType::kAppendOnly);
-  // The handle can describe primary-key tables even though reading them
-  // is not yet supported.
   EXPECT_EQ(
       table(PaimonTableType::kPrimaryKey)->tableType(),
       PaimonTableType::kPrimaryKey);
   EXPECT_EQ(
       handle->toString(),
       "PaimonTableHandle[table orders, schemaId 1099511627776, tableType "
-      "APPEND_ONLY, dataColumns ROW<id:BIGINT,value:BIGINT>, sampleRate 1]");
+      "APPEND_ONLY, dataColumns ROW<id:BIGINT,p:VARCHAR,value:BIGINT>, "
+      "sampleRate 1]");
 
   const PaimonTableHandle onlyPartition(
       "test-paimon",
@@ -95,7 +95,7 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
       {0},
       PaimonTableType::kAppendOnly,
       {"p"});
-  EXPECT_EQ(onlyPartition.dataColumns()->size(), 0);
+  EXPECT_EQ(onlyPartition.dataColumns()->size(), 1);
   const auto emptyType = ROW({});
   const PaimonTableHandle empty(
       "test-paimon", "t", 0, emptyType, {}, PaimonTableType::kAppendOnly);
@@ -139,8 +139,7 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
   EXPECT_EQ(fileHandle.sampleRate(), 0.5);
   EXPECT_EQ(fileHandle.remainingFilter(), remaining);
   EXPECT_TRUE(fileHandle.tableParameters().empty());
-  EXPECT_EQ(
-      *fileHandle.dataColumns(), *ROW({{"id", BIGINT()}, {"value", BIGINT()}}));
+  EXPECT_EQ(*fileHandle.dataColumns(), *rowType());
   ASSERT_EQ(fileHandle.filterColumnHandles().size(), 1);
   EXPECT_EQ(fileHandle.filterColumnHandles()[0], filterColumn);
   EXPECT_EQ(
@@ -382,6 +381,167 @@ TEST_F(PaimonTableHandleTest, invalidDefinition) {
         make(rowType(), {7, 8, 20}, {}, 0, rate),
         "Paimon sample rate must be finite and in (0, 1]");
   }
+}
+
+TEST_F(PaimonTableHandleTest, primaryKeys) {
+  const auto make = [](PaimonTableType type,
+                       std::vector<std::string> primaryKeys) {
+    return PaimonTableHandle(
+        "test-paimon",
+        "orders",
+        0,
+        rowType(),
+        {7, 8, 20},
+        type,
+        {"p"},
+        /*options=*/{},
+        /*subfieldFilters=*/{},
+        /*remainingFilter=*/nullptr,
+        /*filterColumnHandles=*/{},
+        /*sampleRate=*/1.0,
+        /*dbName=*/"",
+        std::move(primaryKeys));
+  };
+  const auto handle = make(PaimonTableType::kPrimaryKey, {"p", "id"});
+  EXPECT_EQ(handle.primaryKeys(), (std::vector<std::string>{"p", "id"}));
+  EXPECT_EQ(handle.trimmedPrimaryKeys(), (std::vector<std::string>{"id"}));
+  const auto obj = handle.serialize();
+  EXPECT_EQ(obj.at("primaryKeys"), folly::dynamic::array("p", "id"));
+  const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
+  EXPECT_EQ(copy->primaryKeys(), handle.primaryKeys());
+  EXPECT_EQ(copy->trimmedPrimaryKeys(), handle.trimmedPrimaryKeys());
+  EXPECT_EQ(copy->serialize(), obj);
+
+  // A table without primary keys leaves them off the wire.
+  const auto noKeys = table(PaimonTableType::kPrimaryKey);
+  EXPECT_TRUE(noKeys->trimmedPrimaryKeys().empty());
+  EXPECT_FALSE(noKeys->serialize().count("primaryKeys"));
+
+  VELOX_ASSERT_USER_THROW(
+      make(PaimonTableType::kAppendOnly, {"id"}),
+      "Paimon append-only table cannot have primary keys");
+  VELOX_ASSERT_USER_THROW(
+      make(PaimonTableType::kPrimaryKey, {"missing"}),
+      "Unknown Paimon primary key: missing");
+  VELOX_ASSERT_USER_THROW(
+      make(PaimonTableType::kPrimaryKey, {"id", "id"}),
+      "Duplicate Paimon primary key: id");
+  VELOX_ASSERT_USER_THROW(
+      make(PaimonTableType::kPrimaryKey, {"p"}),
+      "Paimon primary keys must not all be partition columns: [p]");
+}
+
+TEST_F(PaimonTableHandleTest, mergeOptions) {
+  const auto make = [](std::unordered_map<std::string, std::string> options,
+                       PaimonTableType type = PaimonTableType::kPrimaryKey) {
+    return PaimonTableHandle(
+        "test-paimon",
+        "orders",
+        0,
+        rowType(),
+        {7, 8, 20},
+        type,
+        {"p"},
+        std::move(options));
+  };
+  {
+    const auto options = make({}).mergeOptions();
+    EXPECT_EQ(options.mergeEngine, PaimonMergeEngine::kDeduplicate);
+    EXPECT_FALSE(options.ignoreDelete);
+    EXPECT_TRUE(options.sequenceFields.empty());
+    EXPECT_TRUE(options.sequenceFieldsAscending);
+  }
+  // Append-only tables do not merge, so they ignore merge options.
+  EXPECT_EQ(
+      make({{"merge-engine", "unknown"}}, PaimonTableType::kAppendOnly)
+          .mergeOptions()
+          .mergeEngine,
+      PaimonMergeEngine::kDeduplicate);
+  EXPECT_EQ(
+      make({{"merge-engine", "First-Row"}}).mergeOptions().mergeEngine,
+      PaimonMergeEngine::kFirstRow);
+  VELOX_ASSERT_USER_THROW(
+      make({{"merge-engine", "first_row"}}),
+      "Unknown Paimon merge engine: first_row");
+
+  struct TestParam {
+    std::unordered_map<std::string, std::string> options;
+    bool ignoreDelete;
+
+    std::string debugString() const {
+      std::vector<std::string> entries;
+      for (const auto& [key, value] : options) {
+        entries.push_back(fmt::format("{}={}", key, value));
+      }
+      std::sort(entries.begin(), entries.end());
+      return fmt::format(
+          "options [{}], ignoreDelete {}",
+          fmt::join(entries, ", "),
+          ignoreDelete);
+    }
+  };
+  // 'ignore-delete' wins over its fallbacks, which apply in this order.
+  const std::vector<TestParam> testSettings{
+      {{{"ignore-delete", "TRUE"}}, true},
+      {{{"first-row.ignore-delete", "true"}}, true},
+      {{{"deduplicate.ignore-delete", "true"}}, true},
+      {{{"partial-update.ignore-delete", "true"}}, true},
+      {{{"ignore-delete", "false"}, {"deduplicate.ignore-delete", "true"}},
+       false},
+      {{{"first-row.ignore-delete", "false"},
+        {"deduplicate.ignore-delete", "true"}},
+       false},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    EXPECT_EQ(
+        make(testData.options).mergeOptions().ignoreDelete,
+        testData.ignoreDelete);
+  }
+  VELOX_ASSERT_USER_THROW(
+      make({{"ignore-delete", "yes"}}),
+      "Paimon table option must be true or false: ignore-delete");
+
+  // Like Paimon Java, drops trailing empty fields before trimming fields.
+  const auto options = make({{"sequence.field", " value , id,,"},
+                             {"sequence.field.sort-order", "DESCENDING"}})
+                           .mergeOptions();
+  EXPECT_EQ(options.sequenceFields, (std::vector<std::string>{"value", "id"}));
+  EXPECT_FALSE(options.sequenceFieldsAscending);
+  VELOX_ASSERT_USER_THROW(
+      make({{"sequence.field", "missing"}}),
+      "Unknown Paimon sequence field: missing");
+  VELOX_ASSERT_USER_THROW(
+      make({{"sequence.field", "value,,id"}}),
+      "Unknown Paimon sequence field: ");
+  VELOX_ASSERT_USER_THROW(
+      make({{"sequence.field", "value,value"}}),
+      "Duplicate Paimon sequence field: value");
+  VELOX_ASSERT_USER_THROW(
+      make({{"sequence.field.sort-order", "desc"}}),
+      "Unknown Paimon sequence.field.sort-order: desc");
+  VELOX_ASSERT_USER_THROW(
+      make({{"merge-engine", "first-row"}, {"sequence.field", "value"}}),
+      "Paimon first-row merge engine does not support sequence.field");
+}
+
+TEST_F(PaimonTableHandleTest, mergeEngineNames) {
+  for (auto mergeEngine :
+       {PaimonMergeEngine::kDeduplicate,
+        PaimonMergeEngine::kPartialUpdate,
+        PaimonMergeEngine::kAggregation,
+        PaimonMergeEngine::kFirstRow}) {
+    EXPECT_EQ(
+        paimonMergeEngineFromString(paimonMergeEngineString(mergeEngine)),
+        mergeEngine);
+  }
+  EXPECT_EQ(
+      paimonMergeEngineString(PaimonMergeEngine::kPartialUpdate),
+      "partial-update");
+  EXPECT_EQ(fmt::format("{}", PaimonMergeEngine::kAggregation), "aggregation");
+  VELOX_ASSERT_THROW(
+      paimonMergeEngineString(static_cast<PaimonMergeEngine>(10)),
+      "Unknown PaimonMergeEngine: 10");
 }
 
 TEST_F(PaimonTableHandleTest, malformedWire) {

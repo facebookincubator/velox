@@ -24,15 +24,27 @@
 
 namespace facebook::velox::connector::paimon {
 
-/// Name of the hidden system column that stores the change type per row.
-/// Only present in primary-key table files — append-only tables do not
-/// have this column (every row is implicitly +I).
-/// At the file format level (Parquet, ORC, Nimble), this is a regular
-/// TINYINT column — the file format has no special knowledge of it.
-/// It is "hidden" only at the SQL layer (not shown in SELECT *).
-static constexpr std::string_view kRowKindColumn = "_rowkind";
+/// Paimon primary-key data and changelog files lay out each row as
+///
+///   [_KEY_<key>..., _SEQUENCE_NUMBER, _VALUE_KIND, <table columns>...]
+///
+/// where the key columns are the primary key without the partition columns.
+/// Files written with data-file.thin-mode=true omit the _KEY_ columns, since
+/// the table columns already hold the keys. Append-only files hold only the
+/// table columns. At the file format level (Parquet, ORC, Nimble) these are
+/// regular columns — the file format has no special knowledge of them.
 
-/// Row-level change type stored in the `_rowkind` column.
+/// Name prefix of the key columns.
+static constexpr std::string_view kKeyColumnPrefix = "_KEY_";
+
+/// BIGINT column holding the sequence number that orders the versions of a
+/// key.
+static constexpr std::string_view kSequenceNumberColumn = "_SEQUENCE_NUMBER";
+
+/// TINYINT column holding the PaimonRowKind of each row.
+static constexpr std::string_view kValueKindColumn = "_VALUE_KIND";
+
+/// Row-level change type stored in the `_VALUE_KIND` column.
 /// Values match the Paimon Java RowKind enum (0-3).
 ///
 /// Only meaningful for primary-key tables. Append-only tables have no
@@ -58,36 +70,26 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
   return os;
 }
 
-/// Changelog mode determines how a table produces changelog records and
-/// whether `_rowkind` is physically stored in data files. This is a
+/// Changelog mode determines how a table produces changelog files. This is a
 /// table-level property set via the `changelog-producer` option.
 /// Only meaningful for primary-key tables — append-only tables have no
 /// updates or deletes, so every row is implicitly +I regardless of this
 /// setting.
 ///
-/// # _rowkind Presence in Files
-///
-///   Mode             | Data files  | Changelog files (from compaction)
-///   -----------------+-------------+----------------------------------
-///   kNone            | No          | N/A (no changelog files produced)
-///   kInput           | Yes         | Yes
-///   kLookup          | No          | Yes
-///   kFullCompaction   | No          | Yes
-///
-/// For batch reads, `_rowkind` is not needed — the reader returns
-/// current state, not changelog. This enum becomes relevant for streaming.
+/// Every primary-key data file stores `_VALUE_KIND` whatever the mode, and
+/// changelog files store it too. Batch reads use it to drop retracted keys
+/// during merge-on-read and read no changelog files. This enum becomes
+/// relevant for streaming.
 enum class PaimonChangelogMode {
   /// Default for primary-key tables. No changelog producer configured.
-  /// Data files do NOT contain `_rowkind`. Compaction does NOT generate
-  /// changelog files. Streaming reads emit all delta rows as +I (cannot
-  /// distinguish INSERT from UPDATE).
+  /// Compaction does NOT generate changelog files. Streaming reads emit all
+  /// delta rows as +I (cannot distinguish INSERT from UPDATE).
   kNone,
-  /// Source provides RowKind explicitly (CDC/input changelog).
-  /// Data files DO contain `_rowkind` for every row.
+  /// Source provides RowKind explicitly (CDC/input changelog), and writes
+  /// copy the input records into changelog files.
   kInput,
   /// Compactor generates changelog files by looking up old values during
-  /// every compaction (both partial and full). Data files do NOT contain
-  /// `_rowkind`, but changelog files do. Provides low-latency changelog
+  /// every compaction (both partial and full). Provides low-latency changelog
   /// for streaming consumers at the cost of higher write amplification.
   kLookup,
   /// Same mechanism as kLookup (looking up old values to produce changelog),

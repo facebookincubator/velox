@@ -57,9 +57,8 @@ struct PaimonDataFile {
   /// Origin of a Paimon file — how it was produced, not what it contains.
   /// Mirrors Paimon's DataFileMeta.FileSource enum.
   ///
-  /// This does NOT indicate whether the file contains `_rowkind`. The presence
-  /// of `_rowkind` depends on the changelog mode (upsert vs input changelog),
-  /// not the source type.
+  /// Every primary-key file stores the row kind of each row in the
+  /// `_VALUE_KIND` column, whatever its source.
   enum class Source {
     /// File produced by a normal write (flush/append).
     kAppend,
@@ -68,11 +67,10 @@ struct PaimonDataFile {
     ///   - Without changelog-producer=lookup: a regular data file (same as
     ///     kAppend but produced by compaction instead of a write).
     ///   - With changelog-producer=lookup: compaction produces TWO files —
-    ///     (1) a data file (no `_rowkind` in upsert mode) and (2) a separate
-    ///     changelog file (with `_rowkind` containing correct +I/-U/+U/-D).
-    ///     Both are marked kCompact. The coordinator sends the right one based
-    ///     on the read mode (data file for batch, changelog file for
-    ///     streaming).
+    ///     (1) a data file and (2) a separate changelog file whose row kinds
+    ///     describe the changes (+I/-U/+U/-D). Both are marked kCompact. The
+    ///     coordinator sends the right one based on the read mode (data file
+    ///     for batch, changelog file for streaming).
     kCompact,
   };
 
@@ -104,13 +102,11 @@ struct PaimonDataFile {
   /// Always 0 for append-only tables (no compaction).
   int32_t level{0};
 
-  /// Sequence number range of records in this file. Auto-generated per-commit,
-  /// monotonically increasing. For level 0 files, min == max (single commit).
-  /// For compacted files (level 1+), min < max (merged from multiple commits).
-  /// Used during merge-on-read to resolve duplicate keys — higher sequence
-  /// number wins. Per-file metadata only (not per-row); after compaction,
-  /// per-row sequence attribution is lost but LSM level order makes it
-  /// unnecessary.
+  /// Sequence number range of records in this file. A writer gives each record
+  /// the next number, so a file covers a range of them. Each row of a
+  /// primary-key file also stores its own number in `_SEQUENCE_NUMBER`, which
+  /// merge-on-read uses to resolve duplicate keys — higher sequence number
+  /// wins.
   int64_t minSequenceNumber{0};
   int64_t maxSequenceNumber{0};
 
@@ -118,8 +114,8 @@ struct PaimonDataFile {
   /// row_count = addRowCount + deleteRowCount, where addRowCount is the
   /// number of INSERT or UPDATE_AFTER rows.
   ///
-  /// Only applicable to primary-key tables. Append-only tables have no
-  /// _rowkind column and every row is implicitly +I, so deleteRowCount is
+  /// Only applicable to primary-key tables. Append-only files have no
+  /// `_VALUE_KIND` column and every row is implicitly +I, so deleteRowCount is
   /// always 0.
   ///
   /// This is independent of deletionFile — deleteRowCount counts changelog
