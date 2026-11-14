@@ -272,6 +272,28 @@ Decimal Functions
 Decimal Special Forms
 ---------------------
 
+.. spark:function:: decimal_bround(decimal[, scale]) -> [decimal] (ANSI compliant)
+
+    Rounds ``decimal`` to a new scale using HALF_EVEN rounding: exact halfway
+    cases round to the result whose last retained digit is even.
+    ``scale`` defaults to zero and must be a constant INTEGER expression in
+    the full INTEGER range, or NULL.
+
+    Shares result typing, NULL-scale handling, and overflow behavior with
+    :spark:func:`decimal_round`. Overflow raises a user error in both ANSI
+    and non-ANSI modes; ``try`` catches that error per row. Dropping more than
+    38 digits returns zero. When exactly 38 digits are dropped, the exact
+    halfway value rounds to zero, while a larger magnitude can overflow.
+
+    See `Spark's BRound expression
+    <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+
+    ::
+
+        SELECT decimal_bround(cast(2.5 as DECIMAL(2, 1))); -- decimal 2
+        SELECT decimal_bround(cast(3.5 as DECIMAL(2, 1))); -- decimal 4
+        SELECT decimal_bround(cast(2.55 as DECIMAL(3, 2)), 1); -- decimal 2.6
+
 .. spark:function:: decimal_round(decimal[, scale]) -> [decimal]
 
     Rounds ``decimal`` to a new scale using HALF_UP rounding: exact halfway

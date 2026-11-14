@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <limits>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/DecimalUtil.h"
@@ -208,6 +209,54 @@ TEST(DecimalTest, divideWithRoundUpLargeDivisor) {
         0);
     EXPECT_EQ(result, test.expected);
     EXPECT_EQ(remainder, HugeInt::parse(test.expectedRemainder));
+  }
+}
+
+TEST(DecimalTest, divideWithRoundHalfEven) {
+  const int128_t largeDivisor = DecimalUtil::kPowersOfTen[38];
+  const int128_t half = largeDivisor / 2;
+  const auto minimum = std::numeric_limits<int128_t>::min();
+  const auto maximum = std::numeric_limits<int128_t>::max();
+  struct TestCase {
+    int128_t value;
+    int128_t divisor;
+    int128_t expected;
+  };
+  const std::vector<TestCase> cases{
+      {0, 10, 0},
+      {10, 10, 1},
+      {-10, 10, -1},
+      {14, 10, 1},
+      {15, 10, 2},
+      {25, 10, 2},
+      {26, 10, 3},
+      {-14, 10, -1},
+      {-15, 10, -2},
+      {-25, 10, -2},
+      {-26, 10, -3},
+      {4, 3, 1},
+      {5, 3, 2},
+      {-4, 3, -1},
+      {-5, 3, -2},
+      {half - 1, largeDivisor, 0},
+      {half, largeDivisor, 0},
+      {half + 1, largeDivisor, 1},
+      {-half + 1, largeDivisor, 0},
+      {-half, largeDivisor, 0},
+      {-half - 1, largeDivisor, -1},
+      {largeDivisor - 1, largeDivisor, 1},
+      {-largeDivisor + 1, largeDivisor, -1},
+      {minimum, 1, minimum},
+      {maximum, 1, maximum},
+      {minimum, maximum, -1},
+      {maximum, maximum, 1},
+      {minimum + 1, 2, minimum / 2},
+      {maximum, 2, maximum / 2 + 1}};
+  for (const auto& test : cases) {
+    SCOPED_TRACE(fmt::format("{}/{}", test.value, test.divisor));
+    EXPECT_EQ(
+        DecimalUtil::divideWithRoundHalfEven(test.value, test.divisor),
+        test.expected);
   }
 }
 
