@@ -154,9 +154,8 @@ void OperatorTestBase::TearDown() {
   waitForAllTasksToBeDeleted();
   stopPeriodicStatsReporter();
   executor_.reset();
-  // There might be lingering exchange source on executor even after all tasks
-  // are deleted. This can cause memory leak because exchange source holds
-  // reference to memory pool. We need to make sure they are properly cleaned.
+  // Stop and join the shared local exchange timeout thread between tests.
+  // SetUp() requires the timer thread and pending timeouts to be cleared.
   testingShutdownLocalExchangeSource();
   pool_.reset();
   rootPool_.reset();
