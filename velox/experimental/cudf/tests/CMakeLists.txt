@@ -74,7 +74,7 @@ endif()
 velox_add_cudf_test(
   NAME velox_cudf_adapter_operator_test
   SOURCES Main.cpp AdapterOperatorTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib velox_custom_types_for_testing
 )
 
 velox_add_cudf_test(

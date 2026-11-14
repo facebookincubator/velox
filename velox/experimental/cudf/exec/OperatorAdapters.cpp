@@ -106,7 +106,23 @@ bool subtreeHasUnsupportedType(const core::PlanNodePtr& root) {
          }) != nullptr;
 }
 
+std::vector<core::TypedExprPtr> toComparisonKeys(
+    const std::vector<core::FieldAccessTypedExprPtr>& first,
+    const std::vector<core::FieldAccessTypedExprPtr>& second = {}) {
+  std::vector<core::TypedExprPtr> keys(first.begin(), first.end());
+  keys.insert(keys.end(), second.begin(), second.end());
+  return keys;
+}
+
 } // namespace
+
+bool OperatorAdapter::needsCustomComparison(
+    const core::PlanNodePtr& planNode) const {
+  const auto keys = comparisonKeys(planNode);
+  return std::any_of(keys.begin(), keys.end(), [](const auto& key) {
+    return containsCustomComparison(key);
+  });
+}
 
 /// OperatorAdapterRegistry Implementation
 OperatorAdapterRegistry& OperatorAdapterRegistry::getInstance() {
@@ -423,6 +439,16 @@ class AggregationAdapter : public OperatorAdapter {
     return canEvaluate;
   }
 
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node =
+        std::dynamic_pointer_cast<const core::AggregationNode>(planNode);
+    if (!node) {
+      return {};
+    }
+    return toComparisonKeys(node->groupingKeys());
+  }
+
   bool acceptsGpuInput() const override {
     return true;
   }
@@ -534,6 +560,19 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
 
     return true;
   }
+
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node = std::dynamic_pointer_cast<const core::HashJoinNode>(planNode);
+    if (!node) {
+      return {};
+    }
+    auto keys = toComparisonKeys(node->leftKeys(), node->rightKeys());
+    if (node->filter()) {
+      keys.push_back(node->filter());
+    }
+    return keys;
+  }
 };
 
 /// HashJoinBuildAdapter - Replaces with CudfHashJoinBuild
@@ -636,13 +675,6 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
 
     // Check if join condition can be evaluated on GPU
     if (joinPlanNode->joinCondition()) {
-      if (containsCustomComparison(joinPlanNode->joinCondition())) {
-        LOG_FALLBACK(
-            "NestedLoopJoin condition has custom comparison semantics, "
-            "PlanNode id: {}",
-            planNode->id());
-        return false;
-      }
       if (!canJoinFilterRunOnGpu(
               joinPlanNode->joinCondition(),
               ctx->task->queryCtx().get(),
@@ -670,6 +702,16 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
     }
 
     return true;
+  }
+
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node =
+        std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode);
+    if (!node || !node->joinCondition()) {
+      return {};
+    }
+    return {node->joinCondition()};
   }
 };
 
@@ -758,6 +800,15 @@ class OrderByAdapter : public OperatorAdapter {
         nullptr;
   }
 
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node = std::dynamic_pointer_cast<const core::OrderByNode>(planNode);
+    if (!node) {
+      return {};
+    }
+    return toComparisonKeys(node->sortingKeys());
+  }
+
   bool acceptsGpuInput() const override {
     return true;
   }
@@ -795,6 +846,15 @@ class TopNAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
     return std::dynamic_pointer_cast<const core::TopNNode>(planNode) != nullptr;
+  }
+
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node = std::dynamic_pointer_cast<const core::TopNNode>(planNode);
+    if (!node) {
+      return {};
+    }
+    return toComparisonKeys(node->sortingKeys());
   }
 
   bool acceptsGpuInput() const override {
@@ -838,6 +898,16 @@ class TopNRowNumberAdapter : public OperatorAdapter {
       return false;
     }
     return CudfTopNRowNumber::canRunOnGPU(*node);
+  }
+
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node =
+        std::dynamic_pointer_cast<const core::TopNRowNumberNode>(planNode);
+    if (!node) {
+      return {};
+    }
+    return toComparisonKeys(node->partitionKeys(), node->sortingKeys());
   }
 
   bool acceptsGpuInput() const override {
@@ -1120,6 +1190,16 @@ class MarkDistinctAdapter : public OperatorAdapter {
         nullptr;
   }
 
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node =
+        std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode);
+    if (!node) {
+      return {};
+    }
+    return toComparisonKeys(node->distinctKeys());
+  }
+
   bool acceptsGpuInput() const override {
     return true;
   }
@@ -1211,6 +1291,15 @@ class CallbackSinkAdapter : public OperatorAdapter {
     return supported;
   }
 
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node = std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
+    if (!node) {
+      return {};
+    }
+    return toComparisonKeys(node->sortingKeys());
+  }
+
   bool acceptsGpuInput() const override {
     return true;
   }
@@ -1249,6 +1338,15 @@ class LocalMergeAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
         nullptr &&
         !subtreeHasUnsupportedType(planNode);
+  }
+
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node = std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
+    if (!node) {
+      return {};
+    }
+    return toComparisonKeys(node->sortingKeys());
   }
 
   bool acceptsGpuInput() const override {
@@ -1342,6 +1440,15 @@ class WindowAdapter : public OperatorAdapter {
       return false;
     }
     return true;
+  }
+
+  std::vector<core::TypedExprPtr> comparisonKeys(
+      const core::PlanNodePtr& planNode) const override {
+    auto node = std::dynamic_pointer_cast<const core::WindowNode>(planNode);
+    if (!node) {
+      return {};
+    }
+    return toComparisonKeys(node->partitionKeys(), node->sortingKeys());
   }
 
   bool acceptsGpuInput() const override {

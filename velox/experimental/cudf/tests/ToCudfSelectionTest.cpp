@@ -238,6 +238,36 @@ TEST_F(ToCudfSelectionTest, timeToVarcharCastFallsBack) {
   EXPECT_EQ(toOperatorStats(task->taskStats()).count("CudfFromVelox"), 0);
 }
 
+TEST_F(ToCudfSelectionTest, outputTypesReasonWithoutFallback) {
+  auto input = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2})});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"map(array[k], array[k]) AS m"})
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, false)
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed: output types are not convertible to cuDF");
+}
+
+TEST_F(ToCudfSelectionTest, inputTypesReasonWithoutFallback) {
+  auto input = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
+  auto plan = PlanBuilder().values({input}).project({"k"}).planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, false)
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed: input types are not convertible to cuDF");
+}
+
 TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
   auto input = makeRowVector(
       {"k", "m"},

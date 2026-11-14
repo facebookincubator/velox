@@ -277,18 +277,6 @@ std::unique_ptr<cudf::column> computeFullPartitionAverage(
   return std::move(result->release()[0]);
 }
 
-bool containsCustomComparison(const TypePtr& type) {
-  if (type->providesCustomComparison()) {
-    return true;
-  }
-  for (uint32_t i = 0; i < type->size(); ++i) {
-    if (containsCustomComparison(type->childAt(i))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 bool containsMap(const TypePtr& type) {
   if (type->isMap()) {
     return true;
@@ -475,28 +463,7 @@ bool CudfWindow::canRunOnGPU(const core::WindowNode& windowNode) {
 bool CudfWindow::canRunOnGPU(
     const core::WindowNode& windowNode,
     std::string* reason) {
-  for (const auto& key : windowNode.partitionKeys()) {
-    if (containsCustomComparison(key->type())) {
-      if (reason) {
-        *reason = fmt::format(
-            "PARTITION BY key {} uses custom comparison type {}",
-            key->name(),
-            key->type()->toString());
-      }
-      return false;
-    }
-  }
-
   for (const auto& key : windowNode.sortingKeys()) {
-    if (containsCustomComparison(key->type())) {
-      if (reason) {
-        *reason = fmt::format(
-            "ORDER BY key {} uses custom comparison type {}",
-            key->name(),
-            key->type()->toString());
-      }
-      return false;
-    }
     // Velox compares maps independently of entry order, while cuDF compares
     // their list representation in entry order.
     if (containsMap(key->type())) {
