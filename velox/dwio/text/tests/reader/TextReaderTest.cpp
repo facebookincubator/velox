@@ -14,6 +14,13 @@
  * limitations under the License.
  */
 
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <optional>
+#include <string>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
@@ -36,6 +43,19 @@ namespace {
 
 int32_t parseDate(const std::string& text) {
   return DATE()->toDays(text);
+}
+
+std::shared_ptr<TempFilePath> createTextFile(
+    size_t numLines,
+    const std::function<std::string(size_t)>& lineAt) {
+  auto textFile = TempFilePath::create();
+  LocalWriteFile writeFile(textFile->getPath(), true, false);
+  for (size_t i = 0; i < numLines; ++i) {
+    writeFile.append(lineAt(i));
+    writeFile.append("\n");
+  }
+  writeFile.close();
+  return textFile;
 }
 
 class TextReaderTest : public testing::Test,
@@ -77,6 +97,78 @@ class TextReaderTest : public testing::Test,
     auto input =
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
     return factory->createReader(std::move(input), readerOptions);
+  }
+
+  void assertReadsAs(
+      const std::vector<std::string>& inputs,
+      std::optional<float> expectedReal,
+      std::optional<double> expectedDouble) {
+    ASSERT_FALSE(inputs.empty());
+    SCOPED_TRACE(inputs.front());
+    auto textFile = createTextFile(inputs.size() + 1, [&](size_t row) {
+      if (row == inputs.size()) {
+        // Verify a malformed field does not prevent reading a later valid row.
+        return std::string("7,2.5f,2.5f,2.5f,9");
+      }
+      const auto& input = inputs[row];
+      return "7," + input + "," + input + "," + input + ",9";
+    });
+
+    const auto type = ROW(
+        {{"before", INTEGER()},
+         {"real", REAL()},
+         {"double", DOUBLE()},
+         {"widened_real", REAL()},
+         {"after", INTEGER()}});
+    const auto requestedType = ROW(
+        {{"before", INTEGER()},
+         {"real", REAL()},
+         {"double", DOUBLE()},
+         {"widened_real", DOUBLE()},
+         {"after", INTEGER()}});
+    auto reader = createReader(
+        type, textFile->getPath(), dwio::common::SerDeOptions(',', '\2', '\3'));
+    dwio::common::RowReaderOptions rowReaderOptions;
+    setScanSpec(*requestedType, rowReaderOptions);
+    rowReaderOptions.select(
+        std::make_shared<dwio::common::ColumnSelector>(requestedType, type));
+    rowReaderOptions.setProjectSelectedType(true);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    const std::optional<double> expectedWidenedReal = expectedReal
+        ? std::optional<double>{static_cast<double>(*expectedReal)}
+        : std::nullopt;
+    std::vector<std::optional<float>> realValues(inputs.size(), expectedReal);
+    std::vector<std::optional<double>> doubleValues(
+        inputs.size(), expectedDouble);
+    std::vector<std::optional<double>> widenedRealValues(
+        inputs.size(), expectedWidenedReal);
+    realValues.push_back(2.5f);
+    doubleValues.push_back(2.5);
+    widenedRealValues.push_back(2.5);
+    const auto size = realValues.size();
+    auto expected = makeRowVector(
+        {"before", "real", "double", "widened_real", "after"},
+        {
+            makeFlatVector<int32_t>(std::vector<int32_t>(size, 7)),
+            makeNullableFlatVector<float>(realValues),
+            makeNullableFlatVector<double>(doubleValues),
+            makeNullableFlatVector<double>(widenedRealValues),
+            makeFlatVector<int32_t>(std::vector<int32_t>(size, 9)),
+        });
+    VectorPtr result;
+    ASSERT_EQ(rowReader->next(size, result), size);
+    ASSERT_NO_FATAL_FAILURE(assertEqualVectors(expected, result));
+    EXPECT_EQ(rowReader->next(1, result), 0);
+  }
+
+  void assertReadsAs(
+      const std::vector<std::string>& inputs,
+      std::optional<double> expected) {
+    const std::optional<float> expectedReal = expected
+        ? std::optional<float>{static_cast<float>(*expected)}
+        : std::nullopt;
+    ASSERT_NO_FATAL_FAILURE(assertReadsAs(inputs, expectedReal, expected));
   }
 
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
@@ -995,6 +1087,76 @@ TEST_F(TextReaderTest, readFloatAsInt) {
   }
 }
 
+TEST_F(TextReaderTest, readFloatingPointValues) {
+  const auto doubleNaN = std::numeric_limits<double>::quiet_NaN();
+  const auto realInfinity = std::numeric_limits<float>::infinity();
+  const auto doubleInfinity = std::numeric_limits<double>::infinity();
+  const auto realAboveOne = std::nextafter(1.0f, 2.0f);
+  assertReadsAs({"NaN", "+NaN", "-NaN", " \t-NaN\t "}, doubleNaN);
+  assertReadsAs(
+      {"nan",
+       "NAN",
+       "Nan",
+       "+nan",
+       "-nan",
+       "NaN()",
+       "NaN(payload)",
+       "+NaN(payload)",
+       "NaNf",
+       "NaNd",
+       "+NaNF",
+       "-NaND"},
+      std::nullopt);
+
+  assertReadsAs(
+      {"Infinity", "+Infinity", "Inf", "inf", "INF", "+inf", "inFINITY"},
+      doubleInfinity);
+  assertReadsAs(
+      {"-Infinity", "-Inf", "-inf", " \t-iNfInItY\t "}, -doubleInfinity);
+  assertReadsAs({"Infinityf", "+InfinityD", "-Infd"}, std::nullopt);
+
+  assertReadsAs(
+      {"1.25", "+1.25", "1.25f", "1.25F", "1.25d", "1.25D", " \t1.25f\t "},
+      1.25);
+  assertReadsAs({"-1.25", "-1.25f", "-1.25D"}, -1.25);
+  assertReadsAs({".5", "+.5", ".5f", "+.5f"}, 0.5);
+  assertReadsAs({"-.5", "-.5D"}, -0.5);
+  assertReadsAs({"1.", "1.f", "1.F", "1.d", "1.D"}, 1.0);
+  assertReadsAs({"1e2", "1E+2", "1e2F", "1e+2d"}, 100.0);
+  assertReadsAs({"0", "+0.0", "0e+2D"}, 0.0);
+  assertReadsAs({"-0.0", "-0f", "-0e-2D"}, -0.0);
+
+  assertReadsAs({"", " \t ", "+", "-", "f", "+f"}, std::nullopt);
+  assertReadsAs({".", ".f", ".F", ".d", ".D", ".e2", ".e2f"}, std::nullopt);
+  assertReadsAs({"1e", "1e+", "1e-", "1e+f", "1ef"}, std::nullopt);
+  assertReadsAs({"1ff", "1.0fX", "1.0X", "12a", "1L", "1.5%"}, std::nullopt);
+  assertReadsAs({"1.0 f", "1.5 d", "1\t2"}, std::nullopt);
+  assertReadsAs(
+      {"1e5x", "1e400x", "1e-400fX", "1.2.3", "--1d", "1f2"}, std::nullopt);
+  assertReadsAs({std::string("1.0\0f", 5)}, std::nullopt);
+  assertReadsAs(
+      {"0x10", "0x1.8p+1D", "-0X1p2", "0x1f", "0x1d", "0x1p+f"}, std::nullopt);
+
+  // Keep distinct REAL and DOUBLE expectations for precision and range.
+  // A suffix does not narrow a DOUBLE value to float precision.
+  assertReadsAs({"0.1f"}, 0.1f, 0.1);
+  assertReadsAs({"16777217f"}, 16'777'216.0f, 16'777'217.0);
+  // Direct float parsing rounds up, but parsing through DOUBLE rounds
+  // to the midpoint between 1.0f and its successor, then down to 1.0f.
+  assertReadsAs({"1.0000000596046448f"}, realAboveOne, 1.0000000596046448);
+  assertReadsAs({"1e100f"}, realInfinity, 1e100);
+  assertReadsAs({"-1e100"}, -realInfinity, -1e100);
+  assertReadsAs({"1e400D"}, realInfinity, doubleInfinity);
+  assertReadsAs({"-1e400d"}, -realInfinity, -doubleInfinity);
+  assertReadsAs({"1e-100f"}, 0.0f, 1e-100);
+  assertReadsAs({"-1e-100"}, -0.0f, -1e-100);
+  assertReadsAs(
+      {"1.4e-45f"}, std::numeric_limits<float>::denorm_min(), 1.4e-45);
+  assertReadsAs({"4.9e-324D"}, 0.0f, std::numeric_limits<double>::denorm_min());
+  assertReadsAs({"1e-400D"}, 0.0f, 0.0);
+  assertReadsAs({"-1e-400f"}, -0.0f, -0.0);
+}
+
 TEST_F(TextReaderTest, simpleTypes) {
   const auto tzOffsetPST = 28'800;
   const auto tzOffsetPDT = 25'200;
@@ -1819,26 +1981,23 @@ TEST_F(TextReaderTest, extractionMapValues) {
 TEST_F(TextReaderTest, extractionMapKeyFilter) {
   // Write a text file with a MAP(VARCHAR, BIGINT) column and apply a
   // MapKeyFilter extraction transform via ScanSpec.
-  auto textFile = TempFilePath::create();
-  {
-    auto writeFile =
-        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
-    // Row format: map entries separated by \x02, key-value by \x03.
-    // Row 0: {"a":1, "b":2, "c":3}
-    // Row 1: {"a":10, "d":40}
-    writeFile->append(
-        "a\x03"
-        "1\x02"
-        "b\x03"
-        "2\x02"
-        "c\x03"
-        "3\n"
-        "a\x03"
-        "10\x02"
-        "d\x03"
-        "40\n");
-    writeFile->close();
-  }
+  // Row format: map entries separated by \x02, key-value by \x03.
+  // Row 0: {"a":1, "b":2, "c":3}
+  // Row 1: {"a":10, "d":40}
+  auto textFile = createTextFile(2, [](size_t row) {
+    if (row == 0) {
+      return "a\x03"
+             "1\x02"
+             "b\x03"
+             "2\x02"
+             "c\x03"
+             "3";
+    }
+    return "a\x03"
+           "10\x02"
+           "d\x03"
+           "40";
+  });
 
   const auto type = ROW({{"col_map", MAP(VARCHAR(), BIGINT())}});
   auto reader = createReader(type, textFile->getPath());
