@@ -21,6 +21,7 @@
 #include <re2/re2.h>
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/lib/java_regex/JavaRegexTranslator.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::functions {
@@ -270,6 +271,27 @@ class ReCache {
 
   Expected<RE2*> tryFindOrCompile(const StringView& pattern);
 
+  /// A pattern rewrite applied before compilation. A plain function pointer
+  /// rather than std::function: these overloads sit on a per-row path, so the
+  /// transform must be free to pass.
+  using PatternTransform = std::string (*)(const StringView&);
+
+  /// Same as above, but caches on the original 'pattern' while compiling
+  /// 'transform(pattern)'. Callers that must rewrite a pattern before
+  /// compilation would otherwise pay for the rewrite on every row, since
+  /// preparation happens before the cache lookup.
+  ///
+  /// Because the cache key is the *untransformed* pattern, a given ReCache
+  /// instance must be used with a single transform for its whole lifetime.
+  /// Mixing transforms (or mixing these overloads with the ones above) would
+  /// return an RE2 compiled under a different transform. Call sites own one
+  /// cache per function instance, so this holds by construction.
+  RE2* findOrCompile(const StringView& pattern, PatternTransform transform);
+
+  Expected<RE2*> tryFindOrCompile(
+      const StringView& pattern,
+      PatternTransform transform);
+
  private:
   folly::F14FastMap<std::string, std::unique_ptr<RE2>> cache_;
   uint64_t maxCompiledRegexes_;
@@ -401,12 +423,7 @@ regexpReplaceWithLambdaSignatures();
 /// https://archive.apache.org/dist/spark/docs/3.5.2/api/sql/index.html#regexp_replace
 FOLLY_ALWAYS_INLINE std::string prepareRegexpReplacePattern(
     const StringView& pattern) {
-  static const RE2 kRegex("[(][?]<([^>]*)>");
-
-  std::string newPattern = pattern.getString();
-  RE2::GlobalReplace(&newPattern, kRegex, R"((?P<\1>)");
-
-  return newPattern;
+  return rewriteJavaNamedGroups(pattern.getString());
 }
 
 /// Translate a java.util.regex-style replacement string into the equivalent
