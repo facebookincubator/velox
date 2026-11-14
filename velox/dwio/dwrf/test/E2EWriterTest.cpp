@@ -35,6 +35,7 @@
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace ::testing;
 using namespace facebook::velox::common::testutil;
@@ -921,6 +922,86 @@ TEST_F(E2EWriterTest, flatMapEmpty) {
       1,
       config,
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(false));
+}
+
+TEST_F(E2EWriterTest, flatMapVectorIntoMapColumn) {
+  VectorMaker maker(leafPool_.get());
+  auto map = maker.mapVector(
+      {0, 2, 2, 4, 4, 5},
+      maker.flatVector<int64_t>({1, 2, 1, 3, 2, 1, 2, 3}),
+      maker.arrayVectorNullable<int64_t>({
+          {{1, 2}},
+          {{3}},
+          std::nullopt,
+          {{4, std::nullopt, 6}},
+          {std::vector<std::optional<int64_t>>{}},
+          {{7}},
+          {{8}},
+          {{9}},
+      }),
+      {1});
+  auto flatMap = FlatMapVector::fromMapVector(*map);
+  ASSERT_EQ(flatMap->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  ASSERT_EQ(flatMap->numDistinctKeys(), 3);
+  const auto type = ROW({"m"}, MAP(BIGINT(), ARRAY(BIGINT())));
+
+  auto testRoundTrip = [&](const VectorPtr& input,
+                           const VectorPtr& expected,
+                           bool flatColumn) {
+    auto config = std::make_shared<dwrf::Config>();
+    if (flatColumn) {
+      config->set(dwrf::Config::FLATTEN_MAP, true);
+      config->set<const std::vector<uint32_t>>(
+          dwrf::Config::MAP_FLAT_COLS, {0});
+    }
+    auto sink = std::make_unique<MemorySink>(
+        1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(config);
+    options.schema = type;
+    options.memoryPool = rootPool_.get();
+    dwrf::Writer writer{std::move(sink), options};
+    writer.write(maker.rowVector({"m"}, {input}));
+    writer.close();
+
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    auto reader = createReader(*sinkPtr, readerOptions);
+    auto rowReader = reader->createRowReader(RowReaderOptions{});
+    auto* dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
+    ASSERT_EQ(reader->getNumberOfStripes(), 1);
+    bool preload{true};
+    auto stripeMetadata = dwrfRowReader->fetchStripe(0, preload);
+    std::optional<dwrf::proto::ColumnEncoding_Kind> mapEncoding;
+    for (int32_t i = 0; i < stripeMetadata->footer->columnEncodingSize(); ++i) {
+      auto encoding = stripeMetadata->footer->columnEncodingDwrf(i);
+      if (encoding.node() == 1) {
+        mapEncoding = encoding.kind();
+      }
+    }
+    ASSERT_TRUE(mapEncoding.has_value());
+    ASSERT_EQ(
+        mapEncoding.value() ==
+            dwrf::proto::ColumnEncoding_Kind::ColumnEncoding_Kind_MAP_FLAT,
+        flatColumn);
+
+    VectorPtr result = BaseVector::create(type, 0, leafPool_.get());
+    ASSERT_TRUE(rowReader->next(100, result));
+    auto resultMap = result->as<RowVector>()->childAt(0);
+    ASSERT_EQ(resultMap->encoding(), VectorEncoding::Simple::MAP);
+    assertEqualVectors(expected, resultMap);
+    ASSERT_FALSE(rowReader->next(100, result));
+  };
+
+  testRoundTrip(flatMap, map, false);
+  testRoundTrip(flatMap, map, true);
+
+  auto indices = makeIndicesInReverse(map->size(), leafPool_.get());
+  testRoundTrip(
+      BaseVector::wrapInDictionary(nullptr, indices, map->size(), flatMap),
+      BaseVector::wrapInDictionary(nullptr, indices, map->size(), map),
+      false);
 }
 
 TEST_F(E2EWriterTest, flatMapConfigSingleColumn) {
