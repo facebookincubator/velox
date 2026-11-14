@@ -55,6 +55,17 @@ class CudfHiveConnectorTestBase
       const std::string& filePath,
       const std::vector<RowVectorPtr>& vectors);
 
+  /// Writes 'vector' with Velox's Parquet writer, which stores decimals of up
+  /// to 18 digits as INT32 or INT64.
+  void writeCompactDecimalParquet(
+      const std::shared_ptr<TempFilePath>& filePath,
+      const RowVectorPtr& vector);
+
+  /// Writes 'vectors' with Velox's Parquet writer, one row group each.
+  void writeCompactDecimalParquet(
+      const std::shared_ptr<TempFilePath>& filePath,
+      const std::vector<RowVectorPtr>& vectors);
+
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,
       int32_t numVectors,

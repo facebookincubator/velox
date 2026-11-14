@@ -29,6 +29,7 @@ target_link_libraries(
   velox_cudf_vector
   velox_cursor
   velox_duckdb_conversion
+  velox_dwio_parquet_writer
   velox_exception
   velox_exec_test_lib
   velox_expression

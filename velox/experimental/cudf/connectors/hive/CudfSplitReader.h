@@ -18,6 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/hive/CudfRowGroupPruning.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderByteFetch.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
@@ -94,6 +95,21 @@ class CudfSplitReader : public NvtxHelper {
   /// while the split is being read.
   void setPushdownFilter(const cudf::ast::expression* filter);
 
+  /// Sets the subfield filters the pushed-down filter was built from, prepared
+  /// by prepareRowGroupPruningFilters(). The row groups their statistics rule
+  /// out are then pruned on the host while the split is prepared, and cuDF's
+  /// statistics pass runs only when a filter was left undecided. The filters
+  /// must remain alive until prepareSplit() returns.
+  void setHostRowGroupPruning(const HostRowGroupPruningFilters* filters) {
+    hostPruningFilters_ = filters;
+  }
+
+  /// Returns the number of row groups of the current split cuDF's statistics
+  /// pass tested: 0 when the host decided them all or none was left.
+  int64_t statsTestedStrides() const {
+    return statsTestedStrides_;
+  }
+
   /// Opens the cuDF reader and sets up its options. Returns early without
   /// updating runtime statistics when the split is empty.
   /// @param runtimeStats Reference to the DataSource's runtime statistics
@@ -169,12 +185,17 @@ class CudfSplitReader : public NvtxHelper {
   // data source and footer metadata.
   void markSplitEmpty();
 
-  // Create the parquet reader and select the row group passes to read.
-  void createCudfReader();
+  // Create the parquet reader and select the row group passes to read,
+  // counting the row groups statistics prune in 'runtimeStats'.
+  void createCudfReader(dwio::common::RuntimeStats& runtimeStats);
 
   // Read file metadatas and cache `fileColumnNames_`, `baseReadOffset_` and
   // `splitRowCount_` from the Parquet footer.
   void cacheSchemaFromMetadata();
+
+  // Returns the row groups whose first byte lies in the split's byte range,
+  // in file order, as cuDF's filter_row_groups_with_byte_range() selects them.
+  std::vector<cudf::size_type> splitRowGroupIndices() const;
 
   // Returns the {start row, row count} covered by the split.
   std::pair<std::size_t, std::size_t> computeSplitRowRange() const;
@@ -259,7 +280,13 @@ class CudfSplitReader : public NvtxHelper {
 
   // Return the row groups to read, grouped into passes bounded by the pass
   // read limit. Empty when the split has no row groups left after pruning.
-  RowGroupPasses selectRowGroupPasses();
+  RowGroupPasses selectRowGroupPasses(dwio::common::RuntimeStats& runtimeStats);
+
+  // Return the host statistics decision for the split's row groups, or
+  // nullopt when no filter is pushed down or no prepared filters were set.
+  // Reads the footer, so it runs before the footer moves into the cuDF
+  // reader.
+  std::optional<HostRowGroupPruning> pruneRowGroupsOnHost() const;
 
   // Wait for the column chunks of the current pass, fetching them first if
   // that has not started yet, and set up its chunked read.
@@ -289,6 +316,13 @@ class CudfSplitReader : public NvtxHelper {
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
   bool hasSplitSpecificPushdownFilter_{false};
+  // Read while the split is prepared, then dropped.
+  const HostRowGroupPruningFilters* hostPruningFilters_{nullptr};
+  // Host statistics decision for the current split; unset when cuDF's
+  // statistics pass decides alone.
+  std::optional<HostRowGroupPruning> hostPruning_;
+  // Row groups cuDF's statistics pass tested for the current split.
+  int64_t statsTestedStrides_{0};
   // Set when an ignored missing data file leaves nothing to read.
   bool emptySplit_{false};
 
