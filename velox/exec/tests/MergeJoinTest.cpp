@@ -2900,6 +2900,92 @@ TEST_F(MergeJoinTest, dynamicOutputBatchSizingWithFilter) {
           "WHERE t_c0 = u_c0 AND (t.t_c3 + u.u_c3) % 3 = 0");
 }
 
+// Verifies that joins which track matches per output row return correct
+// results when the starting output batch size is larger than
+// preferredOutputBatchRows.
+TEST_F(MergeJoinTest, dynamicOutputBatchSizingWithLargeStartSize) {
+  auto left = makeRowVector(
+      {"t_k", "t_v"},
+      {
+          makeFlatVector<int64_t>({0, 0, 0, 0, 0, 1}),
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5}),
+      });
+  auto right = makeRowVector(
+      {"u_k", "u_v"},
+      {
+          makeFlatVector<int64_t>({0, 0, 0, 0, 2}),
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  const auto testJoin = [&](core::JoinType joinType,
+                            const std::string& filter,
+                            const std::vector<std::string>& outputLayout,
+                            const std::string& sql) {
+    SCOPED_TRACE(
+        fmt::format("{} {}", core::JoinTypeName::toName(joinType), filter));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .mergeJoin(
+                {"t_k"},
+                {"u_k"},
+                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+                filter,
+                outputLayout,
+                joinType)
+            .planNode();
+
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+        .config(core::QueryConfig::kMergeJoinOutputBatchStartSize, "16")
+        .assertResults(sql);
+  };
+
+  const std::vector<std::string> allColumns{"t_k", "t_v", "u_k", "u_v"};
+  testJoin(
+      core::JoinType::kLeft,
+      "t_v < u_v",
+      allColumns,
+      "SELECT * FROM t LEFT JOIN u ON t_k = u_k AND t_v < u_v");
+  testJoin(
+      core::JoinType::kRight,
+      "t_v < u_v",
+      allColumns,
+      "SELECT * FROM t RIGHT JOIN u ON t_k = u_k AND t_v < u_v");
+  testJoin(
+      core::JoinType::kFull,
+      "t_v < u_v",
+      allColumns,
+      "SELECT * FROM t FULL OUTER JOIN u ON t_k = u_k AND t_v < u_v");
+  testJoin(
+      core::JoinType::kLeftSemiFilter,
+      "t_v < u_v",
+      {"t_k", "t_v"},
+      "SELECT * FROM t WHERE EXISTS "
+      "(SELECT * FROM u WHERE t_k = u_k AND t_v < u_v)");
+  testJoin(
+      core::JoinType::kRightSemiFilter,
+      "t_v < u_v",
+      {"u_k", "u_v"},
+      "SELECT * FROM u WHERE EXISTS "
+      "(SELECT * FROM t WHERE t_k = u_k AND t_v < u_v)");
+  testJoin(
+      core::JoinType::kAnti,
+      "t_v < u_v",
+      {"t_k", "t_v"},
+      "SELECT * FROM t WHERE NOT EXISTS "
+      "(SELECT * FROM u WHERE t_k = u_k AND t_v < u_v)");
+  testJoin(
+      core::JoinType::kAnti,
+      "",
+      {"t_k", "t_v"},
+      "SELECT * FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t_k = u_k)");
+}
+
 // Verifies that when mergeJoinOutputBatchStartSize is 0 (default), dynamic
 // batch sizing is disabled and the batch size is fixed at
 // preferredOutputBatchRows.

@@ -681,6 +681,11 @@ class MergeJoin : public Operator {
   // batching is enabled.
   vector_size_t outputBatchSize_;
 
+  // Largest value 'outputBatchSize_' can take: the larger of the starting batch
+  // size and 'preferredOutputBatchRows_'. Sizes per-output-row state that is
+  // allocated once and reused across output batches.
+  const vector_size_t maxOutputBatchSize_;
+
   // The cached merge join plan node used to initialize this operator after the
   // driver has started execution. It is reset after the initialization.
   std::shared_ptr<const core::MergeJoinNode> joinNode_;
