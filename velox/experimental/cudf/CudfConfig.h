@@ -28,6 +28,9 @@ namespace facebook::velox::cudf_velox {
 struct CudfConfig {
   /// Keys used by the initialize() method.
   static constexpr const char* kCudfEnabled{"cudf.enabled"};
+  static constexpr const char* kCudfDriverAdapterEnabled{
+      "cudf.driver_adapter_enabled"};
+  static constexpr const char* kCudfMaxDrivers{"cudf.max_drivers"};
   static constexpr const char* kCudfDebugEnabled{"cudf.debug_enabled"};
   static constexpr const char* kCudfMemoryResource{"cudf.memory_resource"};
   static constexpr const char* kCudfMemoryPercent{"cudf.memory_percent"};
@@ -157,6 +160,17 @@ struct CudfConfig {
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
+
+  /// Whether to register the cuDF driver adapter, which replaces CPU
+  /// operators with cuDF operators after drivers are created. Set to false to
+  /// run plans of cuDF plan nodes instead.
+  bool enableDriverAdapter{true};
+
+  /// Maximum number of drivers for a pipeline that contains cuDF plan nodes.
+  /// Pipelines without them keep the task's driver count. Unset means no
+  /// separate limit. Only applies to plans of cuDF plan nodes, because the
+  /// driver adapter runs after driver counts are fixed.
+  std::optional<int32_t> maxDrivers;
 
   /// Whether to insert CudfBatchConcat operators before supported Cudf
   /// operators.

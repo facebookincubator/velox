@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/CudfJoin.h"
 #include "velox/experimental/cudf/exec/CudfJoinBuild.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -114,11 +115,16 @@ class CudfNestedLoopJoinBuild : public CudfJoinBuild {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
 
+  CudfNestedLoopJoinBuild(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfNestedLoopJoinNode> joinNode);
+
  protected:
   void buildAndPublish(std::vector<CudfVectorPtr> inputs) override;
 
  private:
-  std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
+  std::shared_ptr<const CudfNestedLoopJoinNode> joinNode_;
 };
 
 /// Performs nested loop join using cuDF APIs.
@@ -168,6 +174,11 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
+
+  CudfNestedLoopJoinProbe(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfNestedLoopJoinNode> joinNode);
 
   void initialize() override;
 
@@ -263,7 +274,7 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
         joinType_ == core::JoinType::kFull;
   }
 
-  std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
+  std::shared_ptr<const CudfNestedLoopJoinNode> joinNode_;
   core::JoinType joinType_;
   std::optional<build_data_type> buildData_;
 
