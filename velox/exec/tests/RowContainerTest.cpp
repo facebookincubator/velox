@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <gmock/gmock.h>
+#include <set>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
@@ -1300,6 +1301,179 @@ TEST_P(RowContainerTest, initialNulls) {
     auto* row = rowContainer.newRow();
     EXPECT_FALSE(isNullAt(rowContainer, row, 0));
     EXPECT_FALSE(isNullAt(rowContainer, row, 1));
+  }
+}
+
+TEST_F(RowContainerTest, newRowsMatchesNewRow) {
+  for (bool hasVarchar : {false, true}) {
+    RowContainer::Options options;
+    options.hasNext = true;
+    options.hasProbedFlag = true;
+    const std::vector<TypePtr> keyTypes = {
+        hasVarchar ? TypePtr(SMALLINT()) : TypePtr(BIGINT())};
+    const std::vector<TypePtr> dependentTypes = {
+        hasVarchar ? TypePtr(VARCHAR()) : TypePtr(INTEGER())};
+    auto makeContainer = [&]() {
+      return std::make_unique<RowContainer>(
+          keyTypes,
+          std::vector<Accumulator>{},
+          dependentTypes,
+          pool_.get(),
+          options);
+    };
+    auto a = makeContainer();
+    auto b = makeContainer();
+    constexpr int32_t kTotal = 300'000;
+    std::vector<char*> ra, rb;
+    for (int32_t i = 0; i < kTotal; ++i) {
+      ra.push_back(a->newRow());
+    }
+    std::vector<char*> buf(5000);
+    int32_t done = 0;
+    int32_t step = 1;
+    while (done < kTotal) {
+      auto n = std::min(step, kTotal - done);
+      b->newRows(n, buf.data());
+      rb.insert(rb.end(), buf.begin(), buf.begin() + n);
+      done += n;
+      step = step % 4999 + 7;
+    }
+    ASSERT_EQ(a->numRows(), b->numRows());
+    const auto size = a->fixedRowSize();
+    ASSERT_EQ(size, b->fixedRowSize());
+    for (int32_t i = 0; i < kTotal; ++i) {
+      if (hasVarchar) {
+        // rowSizeOffset != 0: the whole fixed row is zeroed by both paths.
+        ASSERT_EQ(0, ::memcmp(ra[i], rb[i], size)) << i;
+      } else {
+        // Otherwise only the flag bytes are defined by initializeRow(); the
+        // unset key/dependent slots are uninitialized in the newRow() path. A
+        // new row has its probed flag cleared, so setting it flips it.
+        ASSERT_TRUE(a->testAndSetProbedFlag(ra[i])) << i;
+        ASSERT_TRUE(b->testAndSetProbedFlag(rb[i])) << i;
+      }
+    }
+    // listRows must return exactly the allocated rows (no phantom rows at the
+    // tail of closed ranges) and in the same set.
+    std::vector<char*> listed(1024);
+    RowContainerIterator iter;
+    std::set<char*> seen;
+    int64_t total = 0;
+    while (auto n = b->listRows(&iter, std::span(listed))) {
+      for (int32_t i = 0; i < n; ++i) {
+        seen.insert(listed[i]);
+      }
+      total += n;
+    }
+    ASSERT_EQ(kTotal, total);
+    ASSERT_EQ(std::set<char*>(rb.begin(), rb.end()), seen);
+    // Free rows are reused by the fallback path.
+    b->eraseRows(folly::Range<char**>(rb.data(), 1000));
+    std::vector<char*> reused(1500);
+    b->newRows(1500, reused.data());
+    ASSERT_EQ(kTotal + 500, b->numRows());
+  }
+}
+
+TEST_F(RowContainerTest, newRowsRowShapes) {
+  // Every combination of the optional row fields, narrow and wide rows, with
+  // and without a variable width column. A VARCHAR dependent column makes
+  // initializeRow() define the whole fixed row, so the rows of both paths can
+  // be compared byte by byte. Without it only the metadata is defined.
+  for (int32_t flags = 0; flags < 32; ++flags) {
+    const bool variableWidth = !(flags & 16);
+    for (bool wide : {false, true}) {
+      RowContainer::Options options;
+      options.hasNext = flags & 1;
+      options.hasCountFlag = flags & 2;
+      options.hasNormalizedKey = flags & 4;
+      options.useListRowIndex = flags & 8;
+      std::vector<TypePtr> dependentTypes;
+      if (variableWidth) {
+        dependentTypes.push_back(VARCHAR());
+      }
+      dependentTypes.insert(dependentTypes.end(), wide ? 200 : 1, BIGINT());
+      auto makeContainer = [&]() {
+        return std::make_unique<RowContainer>(
+            std::vector<TypePtr>{BIGINT()},
+            std::vector<Accumulator>{},
+            dependentTypes,
+            pool_.get(),
+            options);
+      };
+      auto expected = makeContainer();
+      auto actual = makeContainer();
+      std::vector<char*> expectedRows;
+      std::vector<char*> actualRows;
+
+      const std::vector<int32_t> steps = {0, 1, 2, 3, 255, 256, 257, 1000};
+      auto addRows = [&](int32_t total) {
+        for (int32_t i = 0; i < total; ++i) {
+          expectedRows.push_back(expected->newRow());
+        }
+        std::vector<char*> buffer(1000);
+        int32_t done = 0;
+        size_t step = 0;
+        while (done < total) {
+          const auto n = std::min(steps[step++ % steps.size()], total - done);
+          actual->newRows(n, buffer.data());
+          actualRows.insert(
+              actualRows.end(), buffer.begin(), buffer.begin() + n);
+          done += n;
+        }
+      };
+
+      auto verify = [&]() {
+        ASSERT_EQ(expected->numRows(), actual->numRows());
+        ASSERT_EQ(expectedRows.size(), actualRows.size());
+        const auto size = expected->fixedRowSize();
+        ASSERT_EQ(size, actual->fixedRowSize());
+        for (size_t i = 0; i < actualRows.size(); ++i) {
+          if (variableWidth) {
+            ASSERT_EQ(0, ::memcmp(expectedRows[i], actualRows[i], size)) << i;
+          }
+          if (options.hasNext) {
+            ASSERT_EQ(
+                nullptr,
+                *reinterpret_cast<char**>(
+                    actualRows[i] + actual->nextOffset()));
+          }
+          if (options.hasCountFlag) {
+            ASSERT_EQ(1, actual->count(actualRows[i]));
+          }
+        }
+        // listRows() returns exactly the allocated rows.
+        std::vector<char*> listed(1024);
+        RowContainerIterator iter;
+        std::set<char*> seen;
+        int64_t numListed = 0;
+        while (auto n = actual->listRows(&iter, std::span(listed))) {
+          seen.insert(listed.begin(), listed.begin() + n);
+          numListed += n;
+        }
+        ASSERT_EQ(actualRows.size(), numListed);
+        ASSERT_EQ(std::set<char*>(actualRows.begin(), actualRows.end()), seen);
+      };
+
+      addRows(wide ? 3'000 : 20'000);
+      verify();
+
+      // The prototype row does not depend on the normalized key.
+      if (options.hasNormalizedKey) {
+        expected->disableNormalizedKeys();
+        actual->disableNormalizedKeys();
+        addRows(1'000);
+        verify();
+      }
+
+      // A cleared container can be filled again.
+      expected->clear();
+      actual->clear();
+      expectedRows.clear();
+      actualRows.clear();
+      addRows(500);
+      verify();
+    }
   }
 }
 

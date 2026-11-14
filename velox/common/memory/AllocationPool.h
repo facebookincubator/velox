@@ -104,6 +104,12 @@ class AllocationPool {
     hugePageThreshold_ = size;
   }
 
+  /// Returns the number of bytes left in the current run, i.e. the space a
+  /// subsequent allocateFixed() can use without starting a new run.
+  int64_t freeBytesInCurrentRun() const {
+    return freeAddressableBytes();
+  }
+
   int64_t testingFreeAddressableBytes() const {
     return freeAddressableBytes();
   }

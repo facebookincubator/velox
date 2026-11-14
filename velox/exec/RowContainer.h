@@ -400,6 +400,12 @@ class RowContainer {
     return layout_.types;
   }
 
+  /// Allocates 'numRows' rows into 'rows', equivalent to calling newRow()
+  /// 'numRows' times. When there are no free rows to reuse, allocates several
+  /// rows at a time within each allocation run and initializes them by copying
+  /// a prototype row.
+  void newRows(int32_t numRows, char** rows);
+
   int32_t rawDependentSize() const {
     return layout_.rawDependentSize;
   }
@@ -1333,6 +1339,8 @@ class RowContainer {
   // The count of entries that have an extra normalized_key_t before the
   // start.
   int64_t numRowsWithNormalizedKey_{0};
+  // Prototype of an initialized fixed-size row, copied by newRows().
+  std::vector<char> newRowProto_;
   // Extra bytes to reserve before each added row for a normalized key. Set to
   // 0 after deciding not to use normalized keys.
   int normalizedKeySize_;
