@@ -56,7 +56,8 @@ int64_t SharedArbitrator::ExtraConfig::reservedCapacity(
   return config::toCapacity(
       getConfig<std::string>(
           configs, kReservedCapacity, std::string(kDefaultReservedCapacity)),
-      config::CapacityUnit::BYTE);
+      config::CapacityUnit::BYTE,
+      kReservedCapacity);
 }
 
 uint64_t SharedArbitrator::ExtraConfig::memoryPoolInitialCapacity(
@@ -66,7 +67,8 @@ uint64_t SharedArbitrator::ExtraConfig::memoryPoolInitialCapacity(
           configs,
           kMemoryPoolInitialCapacity,
           std::string(kDefaultMemoryPoolInitialCapacity)),
-      config::CapacityUnit::BYTE);
+      config::CapacityUnit::BYTE,
+      kMemoryPoolInitialCapacity);
 }
 
 uint64_t SharedArbitrator::ExtraConfig::memoryPoolReservedCapacity(
@@ -76,7 +78,8 @@ uint64_t SharedArbitrator::ExtraConfig::memoryPoolReservedCapacity(
           configs,
           kMemoryPoolReservedCapacity,
           std::string(kDefaultMemoryPoolReservedCapacity)),
-      config::CapacityUnit::BYTE);
+      config::CapacityUnit::BYTE,
+      kMemoryPoolReservedCapacity);
 }
 
 uint64_t SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(
@@ -97,7 +100,8 @@ uint64_t SharedArbitrator::ExtraConfig::memoryPoolMinFreeCapacity(
           configs,
           kMemoryPoolMinFreeCapacity,
           std::string(kDefaultMemoryPoolMinFreeCapacity)),
-      config::CapacityUnit::BYTE);
+      config::CapacityUnit::BYTE,
+      kMemoryPoolMinFreeCapacity);
 }
 
 double SharedArbitrator::ExtraConfig::memoryPoolMinFreeCapacityPct(
@@ -115,7 +119,8 @@ uint64_t SharedArbitrator::ExtraConfig::memoryPoolMinReclaimBytes(
           configs,
           kMemoryPoolMinReclaimBytes,
           std::string(kDefaultMemoryPoolMinReclaimBytes)),
-      config::CapacityUnit::BYTE);
+      config::CapacityUnit::BYTE,
+      kMemoryPoolMinReclaimBytes);
 }
 
 double SharedArbitrator::ExtraConfig::memoryPoolMinReclaimPct(
@@ -131,7 +136,8 @@ uint64_t SharedArbitrator::ExtraConfig::memoryPoolSpillCapacityLimit(
           configs,
           kMemoryPoolSpillCapacityLimit,
           std::string(kDefaultMemoryPoolSpillCapacityLimit)),
-      config::CapacityUnit::BYTE);
+      config::CapacityUnit::BYTE,
+      kMemoryPoolSpillCapacityLimit);
 }
 
 uint64_t SharedArbitrator::ExtraConfig::memoryPoolAbortCapacityLimit(
@@ -141,7 +147,8 @@ uint64_t SharedArbitrator::ExtraConfig::memoryPoolAbortCapacityLimit(
           configs,
           kMemoryPoolAbortCapacityLimit,
           std::string(kDefaultMemoryPoolAbortCapacityLimit)),
-      config::CapacityUnit::BYTE);
+      config::CapacityUnit::BYTE,
+      kMemoryPoolAbortCapacityLimit);
 }
 
 bool SharedArbitrator::ExtraConfig::globalArbitrationEnabled(
@@ -162,7 +169,8 @@ uint64_t SharedArbitrator::ExtraConfig::fastExponentialGrowthCapacityLimitBytes(
           configs,
           kFastExponentialGrowthCapacityLimit,
           std::string(kDefaultFastExponentialGrowthCapacityLimit)),
-      config::CapacityUnit::BYTE);
+      config::CapacityUnit::BYTE,
+      kFastExponentialGrowthCapacityLimit);
 }
 
 double SharedArbitrator::ExtraConfig::slowCapacityGrowPct(

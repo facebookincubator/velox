@@ -55,30 +55,41 @@ dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
           : context.getEstimatedOutputStreamSize()};
 }
 
+uint64_t orcWriterCapacity(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session,
+    const char* sessionKey,
+    const char* connectorKey,
+    const std::string& defaultValue) {
+  if (const auto value = session.get<std::string>(sessionKey)) {
+    return config::toCapacity(*value, config::CapacityUnit::BYTE, sessionKey);
+  }
+  return config::toCapacity(
+      connectorConfig.get<std::string>(connectorKey, defaultValue),
+      config::CapacityUnit::BYTE,
+      connectorKey);
+}
+
 uint64_t orcWriterMaxStripeSize(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return config::toCapacity(
-      session
-          .getLegacyWithFallback<std::string>(
-              dwrf::Config::kOrcWriterMaxStripeSizeSession,
-              config,
-              dwrf::Config::kOrcWriterMaxStripeSize)
-          .value_or("64MB"),
-      config::CapacityUnit::BYTE);
+  return orcWriterCapacity(
+      config,
+      session,
+      dwrf::Config::kOrcWriterMaxStripeSizeSession,
+      dwrf::Config::kOrcWriterMaxStripeSize,
+      "64MB");
 }
 
 uint64_t orcWriterMaxDictionaryMemory(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return config::toCapacity(
-      session
-          .getLegacyWithFallback<std::string>(
-              dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
-              config,
-              dwrf::Config::kOrcWriterMaxDictionaryMemory)
-          .value_or("16MB"),
-      config::CapacityUnit::BYTE);
+  return orcWriterCapacity(
+      config,
+      session,
+      dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
+      dwrf::Config::kOrcWriterMaxDictionaryMemory,
+      "16MB");
 }
 
 bool isOrcWriterIntegerDictionaryEncodingEnabled(

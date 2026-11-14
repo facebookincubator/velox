@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/HiveConfig.h"
 #include "gtest/gtest.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/dwio/common/Options.h"
@@ -276,6 +277,33 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
       config.maxTargetFileSizeBytes(
           dwio::common::FileFormat::NIMBLE, session.get()),
       56UL << 20);
+
+  const HiveConfig invalidConfig(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {HiveConfig::kParquetMaxTargetFileSize, "10XB"},
+          }));
+  VELOX_ASSERT_USER_THROW(
+      invalidConfig.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::PARQUET, emptySession.get()),
+      fmt::format(
+          "Invalid value for config {}: 10XB - Invalid capacity unit 'XB'",
+          HiveConfig::kParquetMaxTargetFileSize));
+  EXPECT_EQ(
+      invalidConfig.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::PARQUET, session.get()),
+      32UL << 20);
+
+  const config::ConfigBase invalidSession(
+      std::unordered_map<std::string, std::string>{
+          {HiveConfig::kParquetMaxTargetFileSizeSession, "20XB"},
+      });
+  VELOX_ASSERT_USER_THROW(
+      config.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::PARQUET, &invalidSession),
+      fmt::format(
+          "Invalid value for config {}: 20XB - Invalid capacity unit 'XB'",
+          HiveConfig::kParquetMaxTargetFileSizeSession));
 }
 
 #ifdef VELOX_ENABLE_PARQUET
