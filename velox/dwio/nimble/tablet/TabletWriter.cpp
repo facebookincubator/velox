@@ -204,6 +204,19 @@ struct StreamEqual {
   }
 };
 
+// Returns true when both streams split their bytes at the same chunk
+// boundaries. StreamEqual compares only the concatenated bytes.
+bool sameChunkBoundaries(const Stream& lhs, const Stream& rhs) {
+  return std::equal(
+      lhs.chunks.begin(),
+      lhs.chunks.end(),
+      rhs.chunks.begin(),
+      rhs.chunks.end(),
+      [](const Chunk& lhsChunk, const Chunk& rhsChunk) {
+        return lhsChunk.contentSize() == rhsChunk.contentSize();
+      });
+}
+
 } // namespace
 
 void TabletWriter::close() {
@@ -352,7 +365,10 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
 
     if (options_.streamDeduplicationEnabled) {
       const auto [it, inserted] = uniqueStreams.emplace(&stream, index);
-      if (!inserted) {
+
+      // A duplicate takes the original's chunk boundaries, so a stream with
+      // equal bytes split differently is written as its own copy.
+      if (!inserted && sameChunkBoundaries(*it->first, stream)) {
         // This is a duplicate stream, so it references the original stream
         // instead of being written again.
         ++stats_.duplicateStreamCount;
@@ -367,7 +383,19 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
         stripeStreamOffsets[index] = stripeStreamOffsets[originalIndex];
         // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
         stripeStreamSizes[index] = stripeStreamSizes[originalIndex];
-        addStreamChunkStats(index, it->first->chunks);
+
+        // The duplicate points at the original's bytes, so its per-chunk row
+        // counts, offsets and min/max are the original's. Its null counts are
+        // its own because they depend on the stream's role, not its bytes: a
+        // struct's null stream counts each false as a null, while a
+        // non-nullable Bool column with the same bytes has none.
+        if (hasChunkStats()) {
+          std::vector<Chunk> chunks{it->first->chunks};
+          for (size_t i = 0; i < chunks.size(); ++i) {
+            chunks[i].nullCount = stream.chunks[i].nullCount;
+          }
+          addStreamChunkStats(index, chunks);
+        }
         continue;
       }
     }

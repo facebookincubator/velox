@@ -2056,6 +2056,92 @@ TEST_P(TabletTest, chunkStatsV2WritePath) {
       decode(group->stream_chunk_null_counts()), testing::ElementsAre(1, 2, 3));
 }
 
+TEST_P(TabletTest, chunkStatsV2DuplicateStreamKeepsOwnNullCounts) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  auto tabletWriter = nimble::TabletWriter::create(
+      &writeFile,
+      *pool_,
+      {
+          .streamDeduplicationEnabled = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV2,
+          .chunkStatsMinAvgChunks = 0,
+      });
+
+  // Stream 1 repeats stream 0's bytes, as a struct's null stream does when it
+  // encodes like a non-nullable Bool column. Only the null stream counts its
+  // false values as nulls.
+  const std::string data = "same-stream-data";
+  nimble::Stream stream0{.offset = 0};
+  stream0.chunks.push_back(
+      {.rowCount = 100, .nullCount = 0, .content = {data}});
+  nimble::Stream stream1{.offset = 1};
+  stream1.chunks.push_back(
+      {.rowCount = 100, .nullCount = 25, .content = {data}});
+  tabletWriter->writeStripe(100, {std::move(stream0), std::move(stream1)});
+  EXPECT_EQ(tabletWriter->stats().duplicateStreamCount, 1);
+  tabletWriter->close();
+  writeFile.close();
+
+  auto tablet = createTabletReader(file);
+  auto stripe = tablet->stripeIdentifier(0);
+  EXPECT_EQ(tablet->streamOffset(stripe, 1), tablet->streamOffset(stripe, 0));
+  ASSERT_NE(stripe.chunkStats(), nullptr);
+  std::vector<uint32_t> nullCounts;
+  for (uint32_t streamId = 0; streamId < 2; ++streamId) {
+    auto streamIndex = stripe.chunkStats()->createStreamIndex(
+        0, streamId, tablet->streamSize(stripe, streamId));
+    ASSERT_NE(streamIndex, nullptr);
+    const auto nullCount =
+        streamIndex->chunkNullCount(streamIndex->lookupChunk(0).chunkIndex);
+    ASSERT_TRUE(nullCount.has_value());
+    nullCounts.push_back(*nullCount);
+  }
+  EXPECT_THAT(nullCounts, testing::ElementsAre(0, 25));
+}
+
+// A duplicate takes the original's chunk boundaries, so equal bytes split at
+// other boundaries are written as their own copy.
+TEST_P(TabletTest, equalBytesWithOtherChunkBoundariesAreNotDeduplicated) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  auto tabletWriter = nimble::TabletWriter::create(
+      &writeFile,
+      *pool_,
+      {
+          .streamDeduplicationEnabled = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV2,
+          .chunkStatsMinAvgChunks = 0,
+      });
+
+  const std::string_view data = "same-stream-data";
+  nimble::Stream stream0{.offset = 0};
+  stream0.chunks.push_back({.rowCount = 100, .content = {data}});
+  nimble::Stream stream1{.offset = 1};
+  stream1.chunks.push_back(
+      {.rowCount = 40, .nullCount = 10, .content = {data.substr(0, 4)}});
+  stream1.chunks.push_back(
+      {.rowCount = 60, .nullCount = 15, .content = {data.substr(4)}});
+  tabletWriter->writeStripe(100, {std::move(stream0), std::move(stream1)});
+  EXPECT_EQ(tabletWriter->stats().duplicateStreamCount, 0);
+  tabletWriter->close();
+  writeFile.close();
+
+  auto tablet = createTabletReader(file);
+  auto stripe = tablet->stripeIdentifier(0);
+  EXPECT_NE(tablet->streamOffset(stripe, 1), tablet->streamOffset(stripe, 0));
+  ASSERT_NE(stripe.chunkStats(), nullptr);
+  auto streamIndex = stripe.chunkStats()->createStreamIndex(
+      0, /*streamId=*/1, tablet->streamSize(stripe, 1));
+  ASSERT_NE(streamIndex, nullptr);
+  EXPECT_EQ(
+      streamIndex->chunkNullCount(streamIndex->lookupChunk(0).chunkIndex), 10);
+  EXPECT_EQ(
+      streamIndex->chunkNullCount(streamIndex->lookupChunk(50).chunkIndex), 15);
+}
+
 TEST_P(TabletTest, prefersV2ChunkStatsWhenBothSectionsExist) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
