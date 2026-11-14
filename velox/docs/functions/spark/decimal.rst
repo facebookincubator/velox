@@ -136,11 +136,12 @@ Arithmetic Functions
 
     Returns the result of adding ``x`` and ``y``. The result type is determined
     by the precision and scale computation rules described above.
-    Returns NULL when the result overflows.
-    Corresponds to Spark's operator ``+`` with ``spark.sql.ansi.enabled`` set to false.  ::
+    Returns NULL when the result overflows, or throws an error when Spark ANSI
+    mode is enabled (``spark.ansi_enabled``).
+    Corresponds to Spark's operator ``+``.  ::
 
         SELECT CAST(1.1 as DECIMAL(3, 1)) + CAST(2.2 as DECIMAL(3, 1)); -- 3.3
-        SELECT CAST('99999999999999999999999999999999999999' as DECIMAL(38, 0)) + CAST(1 as DECIMAL(38, 0)); -- NULL
+        SELECT CAST('99999999999999999999999999999999999999' as DECIMAL(38, 0)) + CAST(1 as DECIMAL(38, 0)); -- NULL, or error in ANSI mode
 
 .. spark:function:: checked_add(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
 
@@ -176,33 +177,36 @@ Arithmetic Functions
 
     Performs integer division and returns the bigint result of dividing ``x`` by ``y``, truncating toward zero.
     Truncation occurs if the result is within the result precision but exceeds the BIGINT range.
-    Division by zero or overflow results in NULL. Does not respect the ``allow-precision-loss`` configuration.
-    Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to false.  ::
+    Division by zero or overflow results in NULL, or in an error when Spark ANSI
+    mode is enabled (``spark.ansi_enabled``). Does not respect the ``allow-precision-loss`` configuration.
+    Corresponds to Spark's operator ``div``.  ::
 
         SELECT CAST(1 as DECIMAL(17, 3)) div CAST(2 as DECIMAL(17, 3)); -- 0
         SELECT CAST(21 as DECIMAL(20, 3)) div CAST(20 as DECIMAL(20, 2)); -- 1
-        SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
+        SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL, or error in ANSI mode
         SELECT CAST(99999999999999999999999999999999999 as DECIMAL(38, 1)) div CAST(0.001 as DECIMAL(7, 4)); -- 687399551400672280 // Result is truncated to int64_t.
 
 .. spark:function:: multiply(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
 
     Returns the result of multiplying ``x`` and ``y``. The result type is determined
     by the precision and scale computation rules described above.
-    Returns NULL when the result overflows.
-    Corresponds to Spark's operator ``*`` with ``spark.sql.ansi.enabled`` set to false.  ::
+    Returns NULL when the result overflows, or throws an error when Spark ANSI
+    mode is enabled (``spark.ansi_enabled``).
+    Corresponds to Spark's operator ``*``.  ::
 
         SELECT CAST(1.1 as DECIMAL(3, 1)) * CAST(2.0 as DECIMAL(3, 1)); -- 2.20
-        SELECT CAST('99999999999999999999999999999999999999' as DECIMAL(38, 0)) * CAST(10 as DECIMAL(38, 0)); -- NULL
+        SELECT CAST('99999999999999999999999999999999999999' as DECIMAL(38, 0)) * CAST(10 as DECIMAL(38, 0)); -- NULL, or error in ANSI mode
 
 .. spark:function:: subtract(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
 
     Returns the result of subtracting ``y`` from ``x``. The result type is determined
     by the precision and scale computation rules described above.
-    Returns NULL when the result overflows.
-    Corresponds to Spark's operator ``-`` with ``spark.sql.ansi.enabled`` set to false.  ::
+    Returns NULL when the result overflows, or throws an error when Spark ANSI
+    mode is enabled (``spark.ansi_enabled``).
+    Corresponds to Spark's operator ``-``.  ::
 
         SELECT CAST(1.1 as DECIMAL(3, 1)) - CAST(2.2 as DECIMAL(3, 1)); -- -1.1
-        SELECT CAST('-99999999999999999999999999999999999999' as DECIMAL(38, 0)) - CAST(1 as DECIMAL(38, 0)); -- NULL
+        SELECT CAST('-99999999999999999999999999999999999999' as DECIMAL(38, 0)) - CAST(1 as DECIMAL(38, 0)); -- NULL, or error in ANSI mode
 
 Decimal Functions
 -----------------
