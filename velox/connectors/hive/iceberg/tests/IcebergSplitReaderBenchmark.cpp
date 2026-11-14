@@ -347,12 +347,14 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_ =
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>());
+  const core::QueryConfig queryConfig{{}};
 
   std::unique_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_ =
       connector::ConnectorQueryCtx::Builder()
           .operatorPool(opPool.get())
           .connectorPool(connectorPool.get())
           .sessionProperties(connectorSessionProperties_.get())
+          .queryConfig(&queryConfig)
           .queryId("query.IcebergSplitReader")
           .taskId("task.IcebergSplitReader")
           .planNodeId("planNodeId.IcebergSplitReader")

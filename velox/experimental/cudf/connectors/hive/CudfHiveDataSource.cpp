@@ -240,25 +240,24 @@ bool testPartitionKeyFilter(
                     kIsoString));
 }
 
-// A connector sees the session time zone settings but not the session
-// QueryConfig. As a workaround, the remaining filter is folded and compiled
-// against a local QueryCtx with only those settings, and a filter that depends
-// on another setting runs on the CPU data source.
-// TODO: Remove the workaround once ConnectorQueryCtx exposes the session
-// QueryConfig (facebookincubator/velox#19476) and expression::optimize can fold
-// through the session's evaluator (facebookincubator/velox#17898).
+// expression::optimize needs a QueryCtx, which a connector does not have, so
+// the remaining filter is folded and compiled against a local QueryCtx. It
+// copies only the session time zone settings, so a filter that depends on
+// another setting runs on the CPU data source.
+// TODO: Build the local QueryCtx from the whole session config.
 // NOTE: A setting left at its default can still change a fold, such as how
 // TIMESTAMP WITH TIME ZONE renders as VARCHAR.
 std::shared_ptr<core::QueryCtx> makeRemainingFilterQueryCtx(
     const ConnectorQueryCtx& connectorQueryCtx) {
+  const auto& queryConfig = connectorQueryCtx.queryConfig();
   std::unordered_map<std::string, std::string> sessionSettings{
       {core::QueryConfig::kAdjustTimestampToTimezone,
-       connectorQueryCtx.adjustTimestampToTimezone() ? "true" : "false"}};
+       queryConfig.adjustTimestampToTimezone() ? "true" : "false"}};
   // An empty time zone is not a valid setting; leaving it unset means UTC.
-  if (!connectorQueryCtx.sessionTimezone().empty()) {
+  const auto sessionTimezone = queryConfig.sessionTimezone();
+  if (!sessionTimezone.empty()) {
     sessionSettings.emplace(
-        core::QueryConfig::kSessionTimezone,
-        connectorQueryCtx.sessionTimezone());
+        core::QueryConfig::kSessionTimezone, sessionTimezone);
   }
   return core::QueryCtx::create(
       nullptr, core::QueryConfig{std::move(sessionSettings)});

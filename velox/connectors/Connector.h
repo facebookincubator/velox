@@ -544,10 +544,11 @@ class ConnectorQueryCtx {
   ///
   /// Provides a fluent interface for setting context parameters by name. Prefer
   /// this over the positional constructor, especially when configuring only a
-  /// subset of the optional parameters. Session properties are required.
-  /// The scan ID is derived from the task and plan node IDs.
-  /// Raw pointers are borrowed and must outlive the context; the expression
-  /// evaluator is owned by the context and the token provider is shared.
+  /// subset of the optional parameters. Session properties and the query
+  /// config are required. The scan ID is derived from the task and plan node
+  /// IDs. Raw pointers are borrowed and must outlive the context; the
+  /// expression evaluator is owned by the context and the token provider is
+  /// shared.
   ///
   /// Example:
   /// @code
@@ -555,6 +556,7 @@ class ConnectorQueryCtx {
   ///                  .operatorPool(operatorPool)
   ///                  .connectorPool(connectorPool)
   ///                  .sessionProperties(sessionProperties)
+  ///                  .queryConfig(queryConfig)
   ///                  .queryId("query-123")
   ///                  .taskId("task-123")
   ///                  .planNodeId("scan-1")
@@ -621,13 +623,10 @@ class ConnectorQueryCtx {
       return *this;
     }
 
-    Builder& sessionTimezone(std::string sessionTimezone) {
-      sessionTimezone_ = std::move(sessionTimezone);
-      return *this;
-    }
-
-    Builder& adjustTimestampToTimezone(bool adjustTimestampToTimezone) {
-      adjustTimestampToTimezone_ = adjustTimestampToTimezone;
+    /// Sets the session's query config, which the context returns from
+    /// queryConfig(). Required.
+    Builder& queryConfig(const core::QueryConfig* queryConfig) {
+      queryConfig_ = queryConfig;
       return *this;
     }
 
@@ -666,8 +665,7 @@ class ConnectorQueryCtx {
     std::string taskId_;
     std::string planNodeId_;
     int driverId_{0};
-    std::string sessionTimezone_;
-    bool adjustTimestampToTimezone_{false};
+    const core::QueryConfig* queryConfig_{nullptr};
     folly::CancellationToken cancellationToken_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::unordered_map<std::string, memory::MemoryPool*> customPools_;
@@ -689,8 +687,7 @@ class ConnectorQueryCtx {
       const std::string& taskId,
       const std::string& planNodeId,
       int driverId,
-      const std::string& sessionTimezone,
-      bool adjustTimestampToTimezone = false,
+      const core::QueryConfig* queryConfig,
       folly::CancellationToken cancellationToken = {},
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
       std::unordered_map<std::string, memory::MemoryPool*> customPools = {});
@@ -752,20 +749,6 @@ class ConnectorQueryCtx {
     return planNodeId_;
   }
 
-  /// Session timezone used for reading Timestamp. Stores a string with the
-  /// actual timezone name. If the session timezone is not set in the
-  /// QueryConfig, it will return an empty string.
-  const std::string& sessionTimezone() const {
-    return sessionTimezone_;
-  }
-
-  /// Whether to adjust Timestamp to the timeZone obtained through
-  /// sessionTimezone(). This is used to be compatible with the
-  /// old logic of Presto.
-  bool adjustTimestampToTimezone() const {
-    return adjustTimestampToTimezone_;
-  }
-
   /// Returns the cancellation token associated with this task.
   const folly::CancellationToken& cancellationToken() const {
     return cancellationToken_;
@@ -787,6 +770,17 @@ class ConnectorQueryCtx {
 
   void setRowSizeTrackingMode(core::QueryConfig::RowSizeTrackingMode value) {
     rowSizeTrackingEnabled_ = value;
+  }
+
+  /// Returns the session's query config, which holds the session settings,
+  /// such as the session time zone. A connector that compiles expressions
+  /// itself, rather than through expressionEvaluator(), reads from it the
+  /// settings a simple function's initialize() resolves. Constant folding with
+  /// expression::optimize() still needs a core::QueryCtx, which the connector
+  /// can build from this config. The config is borrowed and outlives every
+  /// data source and data sink created from this context.
+  const core::QueryConfig& queryConfig() const {
+    return *queryConfig_;
   }
 
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
@@ -814,8 +808,8 @@ class ConnectorQueryCtx {
   const std::string taskId_;
   const int driverId_;
   const std::string planNodeId_;
-  const std::string sessionTimezone_;
-  const bool adjustTimestampToTimezone_;
+  // Never null.
+  const core::QueryConfig* const queryConfig_;
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   const std::unordered_map<std::string, memory::MemoryPool*> customPools_;

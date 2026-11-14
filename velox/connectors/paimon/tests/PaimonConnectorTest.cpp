@@ -108,6 +108,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
         .connectorPool(rootPool_.get())
         .expressionEvaluator(
             std::make_unique<exec::SimpleExpressionEvaluator>(queryCtx, pool()))
+        .queryConfig(&queryCtx->queryConfig())
         .queryId("PaimonConnectorTest")
         .taskId("PaimonConnectorTest")
         .planNodeId("scan");
@@ -206,6 +207,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
                        .expressionEvaluator(
                            std::make_unique<exec::SimpleExpressionEvaluator>(
                                queryCtx.get(), pool()))
+                       .queryConfig(&queryCtx->queryConfig())
                        .queryId("PaimonConnectorTest")
                        .taskId("PaimonConnectorTest")
                        .planNodeId("scan")

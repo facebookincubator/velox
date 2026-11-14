@@ -44,6 +44,7 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
 
   struct QueryCtxHolder {
     std::shared_ptr<config::ConfigBase> sessionProperties;
+    std::shared_ptr<core::QueryConfig> queryConfig;
     std::unique_ptr<ConnectorQueryCtx> ctx;
   };
 
@@ -52,10 +53,13 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
     QueryCtxHolder holder;
     holder.sessionProperties =
         std::make_shared<config::ConfigBase>(std::move(sessionProps));
+    holder.queryConfig = std::make_shared<core::QueryConfig>(
+        std::unordered_map<std::string, std::string>{});
     holder.ctx = ConnectorQueryCtx::Builder()
                      .operatorPool(pool_.get())
                      .connectorPool(pool_.get())
                      .sessionProperties(holder.sessionProperties.get())
+                     .queryConfig(holder.queryConfig.get())
                      .queryId("query.FileConnectorUtilTest")
                      .taskId("task.FileConnectorUtilTest")
                      .planNodeId("planNodeId.FileConnectorUtilTest")

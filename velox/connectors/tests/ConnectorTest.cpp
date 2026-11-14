@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/PlainUserNameTokenProvider.h"
 #include "velox/common/memory/Memory.h"
@@ -133,6 +134,7 @@ TEST(ConnectorTest, registryOperations) {
 
 TEST(ConnectorTest, positionalQueryCtxConstructorRemainsPublic) {
   config::ConfigBase sessionProperties({});
+  const core::QueryConfig queryConfig{{}};
   ConnectorQueryCtx context(
       nullptr,
       nullptr,
@@ -145,9 +147,10 @@ TEST(ConnectorTest, positionalQueryCtxConstructorRemainsPublic) {
       "task",
       "scan",
       3,
-      "UTC");
+      &queryConfig);
 
   EXPECT_EQ(context.sessionProperties(), &sessionProperties);
+  EXPECT_EQ(&context.queryConfig(), &queryConfig);
   EXPECT_EQ(context.scanId(), "task.scan");
   EXPECT_EQ(context.driverId(), 3);
   EXPECT_EQ(context.customMemoryPool("gpu"), nullptr);
@@ -181,8 +184,7 @@ TEST(ConnectorTest, builderPreservesConfiguredFields) {
                                .taskId("task")
                                .planNodeId("plan")
                                .driverId(7)
-                               .sessionTimezone("America/Los_Angeles")
-                               .adjustTimestampToTimezone(true)
+                               .queryConfig(&queryCtx->queryConfig())
                                .cancellationToken(cancellationSource.getToken())
                                .tokenProvider(tokenProvider)
                                .build();
@@ -201,8 +203,7 @@ TEST(ConnectorTest, builderPreservesConfiguredFields) {
   EXPECT_EQ(connectorQueryCtx->planNodeId(), "plan");
   EXPECT_EQ(connectorQueryCtx->scanId(), "task.plan");
   EXPECT_EQ(connectorQueryCtx->driverId(), 7);
-  EXPECT_EQ(connectorQueryCtx->sessionTimezone(), "America/Los_Angeles");
-  EXPECT_TRUE(connectorQueryCtx->adjustTimestampToTimezone());
+  EXPECT_EQ(&connectorQueryCtx->queryConfig(), &queryCtx->queryConfig());
   EXPECT_EQ(connectorQueryCtx->fsTokenProvider(), tokenProvider);
   EXPECT_FALSE(
       connectorQueryCtx->cancellationToken().isCancellationRequested());
@@ -212,12 +213,22 @@ TEST(ConnectorTest, builderPreservesConfiguredFields) {
 
 TEST(ConnectorTest, builderRejectsSecondBuild) {
   config::ConfigBase sessionProperties({});
+  const core::QueryConfig queryConfig{{}};
   ConnectorQueryCtx::Builder builder;
-  builder.sessionProperties(&sessionProperties);
+  builder.sessionProperties(&sessionProperties).queryConfig(&queryConfig);
 
   auto context = builder.build();
   EXPECT_NE(context, nullptr);
   EXPECT_THROW(builder.build(), VeloxRuntimeError);
+}
+
+TEST(ConnectorTest, builderRequiresQueryConfig) {
+  config::ConfigBase sessionProperties({});
+  VELOX_ASSERT_THROW(
+      ConnectorQueryCtx::Builder()
+          .sessionProperties(&sessionProperties)
+          .build(),
+      "ConnectorQueryCtx must be built with a query config");
 }
 
 class ConnectorRegistryTest : public testing::Test {
@@ -237,9 +248,11 @@ class ConnectorQueryCtxTest : public testing::Test {
 TEST_F(ConnectorQueryCtxTest, noCustomMemoryPoolsByDefault) {
   auto pool = memory::memoryManager()->addLeafPool("operator");
   config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
+  const core::QueryConfig queryConfig{{}};
   auto context = ConnectorQueryCtx::Builder()
                      .operatorPool(pool.get())
                      .sessionProperties(&config)
+                     .queryConfig(&queryConfig)
                      .queryId("query")
                      .taskId("task")
                      .planNodeId("scan")
@@ -255,11 +268,13 @@ TEST_F(ConnectorQueryCtxTest, customMemoryPoolsByTag) {
   auto gpu = memory::memoryManager()->addLeafPool("gpu");
   auto cxl = memory::memoryManager()->addLeafPool("cxl");
   config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
+  const core::QueryConfig queryConfig{{}};
   std::unordered_map<std::string, memory::MemoryPool*> customPools{
       {"gpu", gpu.get()}, {"cxl", cxl.get()}};
   auto context = ConnectorQueryCtx::Builder()
                      .operatorPool(pool.get())
                      .sessionProperties(&config)
+                     .queryConfig(&queryConfig)
                      .queryId("query")
                      .taskId("task")
                      .planNodeId("scan")

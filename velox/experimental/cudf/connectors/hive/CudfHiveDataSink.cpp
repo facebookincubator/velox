@@ -480,12 +480,13 @@ void CudfHiveDataSink::makeWriterOptions(
     options->compressionKind = insertTableHandle_->compressionKind();
   }
 
-  const auto& sessionTimeZoneName = connectorQueryCtx_->sessionTimezone();
+  const auto sessionTimeZoneName =
+      connectorQueryCtx_->queryConfig().sessionTimezone();
   if (!sessionTimeZoneName.empty()) {
     options->sessionTimezoneName = sessionTimeZoneName;
   }
   options->adjustTimestampToTimezone =
-      connectorQueryCtx_->adjustTimestampToTimezone();
+      connectorQueryCtx_->queryConfig().adjustTimestampToTimezone();
 }
 
 folly::dynamic CudfHiveInsertTableHandle::serialize() const {

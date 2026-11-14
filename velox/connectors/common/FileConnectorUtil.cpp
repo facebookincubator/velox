@@ -128,13 +128,13 @@ void configureReaderOptions(
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
   readerOptions.setCacheable(fileSplit->cacheable);
-  const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
+  const auto sessionTzName = connectorQueryCtx->queryConfig().sessionTimezone();
   if (!sessionTzName.empty()) {
     const auto timezone = tz::locateZone(sessionTzName);
     readerOptions.setSessionTimezone(timezone);
   }
   readerOptions.setAdjustTimestampToTimezone(
-      connectorQueryCtx->adjustTimestampToTimezone());
+      connectorQueryCtx->queryConfig().adjustTimestampToTimezone());
   // Prefer connector session property (FileConfig). Fall back to
   // ConnectorQueryCtx (threaded from QueryConfig) for backward compatibility
   // with callers that set it as a query config.

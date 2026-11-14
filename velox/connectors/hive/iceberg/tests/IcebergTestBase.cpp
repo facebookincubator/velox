@@ -102,7 +102,15 @@ void IcebergTestBase::recreateConnectorQueryCtx(
   connectorQueryCtx_.reset();
   queryCtx_.reset();
 
-  queryCtx_ = core::QueryCtx::create(nullptr, core::QueryConfig({}));
+  std::unordered_map<std::string, std::string> sessionSettings{
+      {core::QueryConfig::kAdjustTimestampToTimezone,
+       adjustTimestampToTimezone ? "true" : "false"}};
+  if (!sessionTimezone.empty()) {
+    sessionSettings.emplace(
+        core::QueryConfig::kSessionTimezone, sessionTimezone);
+  }
+  queryCtx_ = core::QueryCtx::create(
+      nullptr, core::QueryConfig(std::move(sessionSettings)));
   auto expressionEvaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
       queryCtx_.get(), opPool_.get());
 
@@ -111,11 +119,10 @@ void IcebergTestBase::recreateConnectorQueryCtx(
                            .connectorPool(connectorPool_.get())
                            .sessionProperties(connectorSessionProperties_.get())
                            .expressionEvaluator(std::move(expressionEvaluator))
+                           .queryConfig(&queryCtx_->queryConfig())
                            .queryId("query.IcebergTest")
                            .taskId("task.IcebergTest")
                            .planNodeId("planNodeId.IcebergTest")
-                           .sessionTimezone(sessionTimezone)
-                           .adjustTimestampToTimezone(adjustTimestampToTimezone)
                            .build();
 }
 
