@@ -232,7 +232,7 @@ CudfToVelox::CudfToVelox(
 
 bool CudfToVelox::isPassthroughMode() const {
   return operatorCtx_->driverCtx()->queryConfig().get<bool>(
-      kPassthroughMode, true);
+      kPassthroughMode, false);
 }
 
 void CudfToVelox::doAddInput(RowVectorPtr input) {

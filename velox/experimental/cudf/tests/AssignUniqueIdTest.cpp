@@ -69,31 +69,29 @@ class AssignUniqueIdTest : public HiveConnectorTestBase {
   void verifyUniqueId(
       const std::vector<RowVectorPtr>& input,
       const std::vector<facebook::velox::RowVectorPtr>& vectors) {
-    auto numColumns = vectors[0]->childrenSize();
-    ASSERT_EQ(numColumns, input[0]->childrenSize() + 1);
+    // Output batch boundaries need not match the input's, so compare all rows.
+    const auto expected = concatenate(input);
+    const auto actual = concatenate(vectors);
+    const auto numColumns = actual->childrenSize();
+    ASSERT_EQ(numColumns, expected->childrenSize() + 1);
+    ASSERT_EQ(actual->size(), expected->size());
 
-    std::set<int64_t> ids;
-    for (int i = 0; i < numColumns; i++) {
-      for (auto batch = 0; batch < vectors.size(); ++batch) {
-        auto column = vectors[batch]->childAt(i);
-        if (i < numColumns - 1) {
-          assertEqualVectors(input[batch]->childAt(i), column);
-        } else {
-          auto idValues = column->asFlatVector<int64_t>()->rawValues();
-          std::copy(
-              idValues,
-              idValues + column->size(),
-              std::inserter(ids, ids.end()));
-        }
-      }
+    for (auto i = 0; i < numColumns - 1; ++i) {
+      assertEqualVectors(expected->childAt(i), actual->childAt(i));
     }
 
-    vector_size_t totalInputSize = 0;
-    for (const auto& vector : input) {
-      totalInputSize += vector->size();
-    }
+    auto idValues =
+        actual->childAt(numColumns - 1)->asFlatVector<int64_t>()->rawValues();
+    std::set<int64_t> ids(idValues, idValues + actual->size());
+    ASSERT_EQ(expected->size(), ids.size());
+  }
 
-    ASSERT_EQ(totalInputSize, ids.size());
+  RowVectorPtr concatenate(const std::vector<RowVectorPtr>& vectors) {
+    auto result = BaseVector::create<RowVector>(vectors[0]->type(), 0, pool());
+    for (const auto& vector : vectors) {
+      result->append(vector.get());
+    }
+    return result;
   }
 
   core::PlanNodeId uniqueNodeId_;
