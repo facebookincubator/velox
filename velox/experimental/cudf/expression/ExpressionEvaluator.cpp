@@ -62,7 +62,6 @@
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/padding.hpp>
 #include <cudf/strings/replace.hpp>
-#include <cudf/strings/split/split.hpp>
 #include <cudf/strings/string_view.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/strings/strip.hpp>
@@ -438,38 +437,6 @@ void checkAllTrue(
   VELOX_USER_CHECK(
       result->is_valid(stream) && result->value(stream), "{}", userMessage);
 }
-
-class SplitFunction : public CudfFunction {
- public:
-  SplitFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
-    VELOX_CHECK(
-        expr->inputs()[1]->isConstantKind(),
-        "split delimiter must be a constant");
-    delimiter_ = constantToString(expr->inputs()[1], pool);
-
-    VELOX_CHECK(
-        expr->inputs()[2]->isConstantKind(), "split limit must be a constant");
-    maxSplitCount_ = std::stoll(constantToString(expr->inputs()[2], pool));
-
-    // Presto specifies maxSplitCount as the maximum size of the returned array
-    // while cuDF understands the parameter as how many splits can it perform.
-    maxSplitCount_ -= 1;
-  }
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
-      cuda::stream_ref stream,
-      rmm::device_async_resource_ref mr) const override {
-    auto inputCol = asView(inputColumns[0]);
-    cudf::string_scalar delimiterScalar(delimiter_, true, stream, mr);
-    return cudf::strings::split_record(
-        inputCol, delimiterScalar, maxSplitCount_, stream, mr);
-  };
-
- private:
-  std::string delimiter_;
-  cudf::size_type maxSplitCount_;
-};
 
 // Lists the characters the Presto cast hooks skip around a floating-point
 // literal: ASCII whitespace only (stringImpl::isAsciiWhiteSpace()).
@@ -2887,30 +2854,6 @@ std::shared_ptr<CudfFunction> createCudfFunction(
 
 bool registerBuiltinFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
-
-  registerCudfFunction(
-      prefix + "split",
-      [](const std::string&,
-         const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool,
-         const core::QueryConfig&) {
-        return std::make_shared<SplitFunction>(expr, pool);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("array(varchar)")
-           .argumentType("varchar")
-           .constantArgumentType("varchar")
-           .constantArgumentType("integer")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("array(varchar)")
-           .argumentType("varchar")
-           .constantArgumentType("varchar")
-           // cuDF expects cudf::size_type (int32) but we may get bigint from
-           // presto. SplitFunction hacks around this by converting to string
-           // and back
-           .constantArgumentType("bigint")
-           .build()});
 
   registerCudfFunction(
       prefix + "cardinality",
