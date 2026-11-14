@@ -40,6 +40,11 @@ class SelectiveTimestampColumnReader
 
   void getValues(const RowSet& rows, VectorPtr* result) override;
 
+  bool hasBulkPath() const override {
+    // The RLEv2 decoder has no fast path.
+    return version_ != velox::dwrf::RleVersion_2;
+  }
+
  private:
   template <bool isDense>
   void readHelper(const common::Filter* filter, const RowSet& rows);

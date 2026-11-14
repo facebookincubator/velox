@@ -82,13 +82,10 @@ void SelectiveTimestampColumnReader::read(
   VELOX_CHECK(
       !scanSpec_->valueHook(),
       "Selective reader for TIMESTAMP doesn't support aggregation pushdown yet");
-  if (!resultNulls_ || !resultNulls_->unique() ||
-      resultNulls_->capacity() * 8 < rows.size()) {
-    // Make sure a dedicated resultNulls_ is allocated with enough capacity as
-    // RleDecoder always assumes it is available.
-    resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), pool_);
-    rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
-  }
+  // The filter step reads the result nulls even when the column is not
+  // projected, and 'prepareRead' prepares them only for a projected column.
+  // Preparing them again here is harmless.
+  prepareNulls(rows, nullsInReadRange_ != nullptr);
   bool isDense = rows.back() == rows.size() - 1;
   if (isDense) {
     readHelper<true>(scanSpec_->filter(), rows);
