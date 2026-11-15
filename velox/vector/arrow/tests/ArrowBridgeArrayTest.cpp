@@ -468,45 +468,75 @@ class ArrowBridgeArrayExportTest : public testing::Test, public VectorTestBase {
   }
 
   // Exports an array and a map with these offsets, sizes and nulls over
-  // 'numElements' elements, and checks the exported offsets. Offsets and sizes
-  // of null rows are undefined. In each test the rows are back to back, but a
-  // null row's offset or size is out of range.
-  void testNullRowOffsets(
+  // 'numElements' timestamps, and checks the exported offsets. The nulls are
+  // the vector's own, then those of a struct around it. Only the elements of
+  // non-null rows may be exported: the offsets and sizes of null rows are
+  // undefined, and so are the other elements, which are out of range here.
+  void testExportOffsets(
       const std::vector<vector_size_t>& offsets,
       const std::vector<vector_size_t>& sizes,
       const std::vector<bool>& nulls,
       vector_size_t numElements,
       const std::vector<int32_t>& expectedOffsets) {
-    auto elements = makeFlatVector<int64_t>(
-        numElements, [](vector_size_t row) { return row; });
-    const std::vector<VectorPtr> vectors{
-        std::make_shared<ArrayVector>(
-            pool(),
-            ARRAY(BIGINT()),
-            makeNulls(nulls),
-            offsets.size(),
-            makeBuffer(offsets),
-            makeBuffer(sizes),
-            elements),
-        std::make_shared<MapVector>(
-            pool(),
-            MAP(BIGINT(), BIGINT()),
-            makeNulls(nulls),
-            offsets.size(),
-            makeBuffer(offsets),
-            makeBuffer(sizes),
-            elements,
-            elements),
+    auto elements = makeFlatVector<Timestamp>(
+        numElements, [](vector_size_t row) { return Timestamp(row, 0); });
+    std::vector<bool> covered(numElements, false);
+    for (size_t row = 0; row < nulls.size(); ++row) {
+      if (!nulls[row]) {
+        std::fill_n(covered.begin() + offsets[row], sizes[row], true);
+      }
+    }
+    std::vector<vector_size_t> uncovered;
+    for (vector_size_t i = 0; i < numElements; ++i) {
+      if (!covered[i]) {
+        uncovered.push_back(i);
+      }
+    }
+    setOutOfRange(*elements, uncovered);
+
+    auto makeVectors = [&](const BufferPtr& vectorNulls) {
+      return std::vector<VectorPtr>{
+          std::make_shared<ArrayVector>(
+              pool(),
+              ARRAY(TIMESTAMP()),
+              vectorNulls,
+              offsets.size(),
+              makeBuffer(offsets),
+              makeBuffer(sizes),
+              elements),
+          std::make_shared<MapVector>(
+              pool(),
+              MAP(TIMESTAMP(), TIMESTAMP()),
+              vectorNulls,
+              offsets.size(),
+              makeBuffer(offsets),
+              makeBuffer(sizes),
+              elements,
+              elements),
+      };
     };
-    for (const auto& vector : vectors) {
-      SCOPED_TRACE(vector->type()->toString());
-      auto array = toArrow(vector, options_, pool());
-      ASSERT_OK(array->ValidateFull());
-      const auto& lists = static_cast<const arrow::ListArray&>(*array);
+    auto checkLists = [&](const arrow::Array& array) {
+      const auto& lists = static_cast<const arrow::ListArray&>(array);
       for (size_t row = 0; row < nulls.size(); ++row) {
         EXPECT_EQ(nulls[row], lists.IsNull(row));
       }
       validateOffsets(lists, expectedOffsets);
+    };
+    for (const auto& vector : makeVectors(makeNulls(nulls))) {
+      SCOPED_TRACE(vector->type()->toString());
+      auto array = toArrow(vector, options_, pool());
+      ASSERT_OK(array->ValidateFull());
+      checkLists(*array);
+    }
+    for (const auto& vector : makeVectors(nullptr)) {
+      SCOPED_TRACE("Under a struct: " + vector->type()->toString());
+      auto array = toArrow(
+          makeRowVector(
+              {vector}, [&](vector_size_t row) { return nulls[row]; }),
+          options_,
+          pool());
+      ASSERT_OK(array->ValidateFull());
+      checkLists(*static_cast<const arrow::StructArray&>(*array).field(0));
     }
   }
 
@@ -1667,17 +1697,52 @@ TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, nullRowPastElements) {
-  testNullRowOffsets(
+  testExportOffsets(
       {0, 2, 4}, {2, 2, 5}, {false, false, true}, 4, {0, 2, 4, 4});
 }
 
 TEST_F(ArrowBridgeArrayExportTest, nullRowNegativeOffset) {
-  testNullRowOffsets({-3, 0}, {3, 2}, {true, false}, 2, {0, 0, 2});
+  testExportOffsets({-3, 0}, {3, 2}, {true, false}, 2, {0, 0, 2});
 }
 
 TEST_F(ArrowBridgeArrayExportTest, nullRowNegativeSize) {
-  testNullRowOffsets(
-      {0, 2, 1}, {2, -1, 1}, {false, true, false}, 2, {0, 2, 2, 3});
+  testExportOffsets(
+      {0, 2, 1}, {2, -1, 0}, {false, true, false}, 2, {0, 2, 2, 2});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsBeforeFirstRow) {
+  testExportOffsets({1, 3}, {2, 1}, {false, false}, 4, {0, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsPastLastRow) {
+  testExportOffsets({0, 2}, {2, 1}, {false, false}, 4, {0, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsInNullRow) {
+  testExportOffsets(
+      {0, 2, 3}, {2, 1, 1}, {false, true, false}, 4, {0, 2, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsPastStructEnd) {
+  // The array is longer than its struct. Element 3 is out of range, and only
+  // row 2, past the end of the struct, covers it.
+  auto elements = makeFlatVector<Timestamp>(
+      4, [](vector_size_t row) { return Timestamp(row, 0); });
+  setOutOfRange(*elements, {3});
+  auto arrays = makeArrayVector({0, 2, 3}, elements);
+  auto vector = std::make_shared<RowVector>(
+      pool(),
+      ROW({"c0"}, {arrays->type()}),
+      nullptr,
+      2,
+      std::vector<VectorPtr>{arrays});
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& lists = static_cast<const arrow::ListArray&>(
+      *static_cast<const arrow::StructArray&>(*array).field(0));
+  EXPECT_EQ(3, lists.values()->length());
+  validateOffsets(lists, {0, 2, 3});
 }
 
 TEST_F(ArrowBridgeArrayExportTest, arrayNested) {

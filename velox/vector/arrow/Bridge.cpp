@@ -1392,25 +1392,26 @@ void exportRows(
   }
 }
 
-// Returns true if the rows of 'vec' are back to back and within its
-// 'numElements' elements, so that its offsets can be exported as they are.
-// Null rows must pass too: their offsets and sizes are undefined.
+// Returns true if the offsets of the first 'numRows' rows of 'vec' can be
+// exported as they are, along with all its 'numElements' elements: the rows are
+// back to back from 0 to 'numElements', and null rows are empty. The offsets
+// and sizes of null rows, and elements that no non-null row covers, are
+// undefined. 'nulls' are the nulls to export, see nullsToExport().
 template <typename Vector>
-bool isCompact(const Vector& vec, vector_size_t numElements) {
-  if (vec.size() == 0) {
-    return true;
-  }
-  int64_t end = vec.offsetAt(0);
-  if (end < 0) {
-    return false;
-  }
-  for (vector_size_t i = 0; i < vec.size(); ++i) {
-    if (vec.offsetAt(i) != end || vec.sizeAt(i) < 0) {
+bool isCompact(
+    const Vector& vec,
+    vector_size_t numRows,
+    vector_size_t numElements,
+    const uint64_t* nulls) {
+  int64_t end = 0;
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    const auto size = vec.sizeAt(i);
+    if (vec.offsetAt(i) != end || (size != 0 && isNull(nulls, i))) {
       return false;
     }
-    end += vec.sizeAt(i);
+    end += size;
   }
-  return end <= numElements;
+  return end == numElements;
 }
 
 template <typename Vector>
@@ -1429,7 +1430,8 @@ void exportOffsets(
   auto rawOffsets = offsets->asMutable<vector_size_t>();
 
   // 'childRows' still selects every element, so its count is their number.
-  if (!rows.changed() && isCompact(vec, childRows.count())) {
+  if (!rows.changed() &&
+      isCompact(vec, rows.count(), childRows.count(), nulls)) {
     vector_size_t rowCount = rows.count();
     memcpy(rawOffsets, vec.rawOffsets(), sizeof(vector_size_t) * rowCount);
     rawOffsets[rowCount] = rowCount == 0
