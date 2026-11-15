@@ -23,6 +23,7 @@
 
 namespace facebook::velox::filesystems::test {
 void HdfsMiniCluster::start() {
+  std::filesystem::remove(detailsPath_);
   try {
     serverProcess_ = std::make_unique<boost::process::child>(
         env_,
