@@ -27,6 +27,7 @@ add_executable(
   FeatureGateTest.cpp
   FixedBitArrayTests.cpp
   OrderedIntegerTest.cpp
+  StripeRangeTest.cpp
   TypesTest.cpp
   VarintTests.cpp
   VectorTest.cpp
