@@ -158,7 +158,7 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
   void SetUp() override {
-    auto port = facebook::velox::exec::test::getFreePort();
+    auto port = facebook::velox::exec::test::PortUtil::getFreePort();
     azuriteServer_ = std::make_shared<AzuriteServer>(port);
     azuriteServer_->start();
     auto tempFile = createFile();

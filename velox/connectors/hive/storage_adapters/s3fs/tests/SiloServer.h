@@ -38,7 +38,8 @@ class SiloServer {
  public:
   SiloServer() : tempPath_(TempDirectoryPath::create()) {
     constexpr auto kHostAddressTemplate = "127.0.0.1:{}";
-    auto ports = facebook::velox::exec::test::getFreePorts(2);
+    auto ports = facebook::velox::exec::test::PortUtil::getFreePorts(2);
+    port_ = ports[0];
     connectionString_ = fmt::format(kHostAddressTemplate, ports[0]);
     consoleAddress_ = fmt::format(kHostAddressTemplate, ports[1]);
   }
@@ -77,6 +78,7 @@ class SiloServer {
 
  private:
   const std::shared_ptr<TempDirectoryPath> tempPath_;
+  int port_;
   std::string connectionString_;
   std::string consoleAddress_;
   const std::string accessKey_ = kSiloAccessKey;
@@ -112,6 +114,8 @@ void SiloServer::start() {
   } catch (const std::exception& e) {
     VELOX_FAIL("Failed to launch Silo server: {}", e.what());
   }
+  facebook::velox::exec::test::PortUtil::waitForPort(
+      port_, "SiloServer", [this] { return serverProcess_->running(); });
 }
 
 void SiloServer::stop() {

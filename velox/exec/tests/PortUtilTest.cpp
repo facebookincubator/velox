@@ -19,7 +19,9 @@
 #include <gtest/gtest.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <unistd.h>
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::velox::exec::test {
 
@@ -30,10 +32,11 @@ bool tryBind(int port) {
 
   sockaddr_in addr;
   addr.sin_family = AF_INET;
-  addr.sin_port = port;
+  addr.sin_port = htons(port);
   addr.sin_addr.s_addr = INADDR_ANY;
 
   int result = ::bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+  close(sock);
   return result != -1;
 }
 
@@ -47,7 +50,7 @@ TEST(PortUtilTest, ensureAvailablePort) {
     bool trialSucceeded = false;
 
     for (size_t j = 0; j < retries; j++) {
-      auto port = getFreePort();
+      auto port = PortUtil::getFreePort();
       if (tryBind(port)) {
         trialSucceeded = true;
         break;
@@ -65,11 +68,37 @@ TEST(PortUtilTest, uniquePorts) {
   const size_t numPorts = 100;
 
   for (size_t i = 0; i < trials; i++) {
-    auto ports = getFreePorts(numPorts);
+    auto ports = PortUtil::getFreePorts(numPorts);
     std::unordered_set<int> set(ports.begin(), ports.end());
     EXPECT_EQ(set.size(), numPorts)
         << "getFreePorts() returned non-unique ports.";
   }
+}
+
+TEST(PortUtilTest, waitForPort) {
+  const int sock = socket(AF_INET, SOCK_STREAM, 0);
+  ASSERT_NE(sock, -1);
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = 0;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  socklen_t len = sizeof(addr);
+  ASSERT_EQ(::bind(sock, reinterpret_cast<sockaddr*>(&addr), len), 0);
+  ASSERT_EQ(getsockname(sock, reinterpret_cast<sockaddr*>(&addr), &len), 0);
+  const int port = ntohs(addr.sin_port);
+
+  // Bound but not listening.
+  VELOX_ASSERT_THROW(
+      PortUtil::waitForPort(
+          port, "testServer", [] { return true; }, std::chrono::seconds(1)),
+      "Timed out after 1 seconds waiting for testServer to listen on port");
+  VELOX_ASSERT_THROW(
+      PortUtil::waitForPort(port, "testServer", [] { return false; }),
+      "testServer exited before listening on port");
+
+  ASSERT_EQ(listen(sock, 1), 0);
+  PortUtil::waitForPort(port, "testServer", [] { return true; });
+  close(sock);
 }
 
 } // namespace facebook::velox::exec::test

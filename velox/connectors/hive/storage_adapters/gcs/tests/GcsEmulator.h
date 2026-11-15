@@ -43,7 +43,8 @@ static std::string_view kLoremIpsum =
 class GcsEmulator : public testing::Environment {
  public:
   GcsEmulator() {
-    auto port = std::to_string(exec::test::getFreePort());
+    const auto portNumber = exec::test::PortUtil::getFreePort();
+    auto port = std::to_string(portNumber);
     endpoint_ = "http://localhost:" + port;
     std::vector<std::string> names{"python3", "python"};
     // If the build script or application developer provides a value in the
@@ -71,6 +72,15 @@ class GcsEmulator : public testing::Environment {
           port,
           group_);
       if (serverProcess_.valid()) {
+        try {
+          exec::test::PortUtil::waitForPort(portNumber, "GcsEmulator", [this] {
+            return serverProcess_.running();
+          });
+        } catch (const std::exception&) {
+          group_.terminate();
+          serverProcess_.wait();
+          throw;
+        }
         return;
       }
       error << " (failed to start)";
