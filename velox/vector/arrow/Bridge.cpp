@@ -2171,52 +2171,40 @@ namespace {
 
 enum class TimeUnit { kSecond, kMilli, kMicro, kNano };
 
-TimeUnit getTimeUnit(const ArrowSchema& arrowSchema) {
-  const char* format = arrowSchema.dictionary ? arrowSchema.dictionary->format
-                                              : arrowSchema.format;
+// Returns the unit of a time ("tt") or timestamp ("ts") format. 'kind' is the
+// second character of the format.
+template <typename T>
+T getUnit(const ArrowSchema& arrowSchema, char kind) {
+  const char* format = arrowSchema.format;
   VELOX_USER_CHECK_NOT_NULL(format);
   VELOX_USER_CHECK_GE(
       strlen(format),
       3,
-      "The arrow format string of time should contain 'tt' and unit char.");
+      "The arrow format string should contain 't{}' and unit char.",
+      kind);
   VELOX_USER_CHECK_EQ(format[0], 't', "The first character should be 't'.");
-  VELOX_USER_CHECK_EQ(format[1], 't', "The second character should be 't'.");
+  VELOX_USER_CHECK_EQ(
+      format[1], kind, "The second character should be '{}'.", kind);
   switch (format[2]) {
     case 's':
-      return TimeUnit::kSecond;
+      return T::kSecond;
     case 'm':
-      return TimeUnit::kMilli;
+      return T::kMilli;
     case 'u':
-      return TimeUnit::kMicro;
+      return T::kMicro;
     case 'n':
-      return TimeUnit::kNano;
+      return T::kNano;
     default:
       VELOX_UNREACHABLE();
   }
 }
 
+TimeUnit getTimeUnit(const ArrowSchema& arrowSchema) {
+  return getUnit<TimeUnit>(arrowSchema, 't');
+}
+
 TimestampUnit getTimestampUnit(const ArrowSchema& arrowSchema) {
-  const char* format = arrowSchema.dictionary ? arrowSchema.dictionary->format
-                                              : arrowSchema.format;
-  VELOX_USER_CHECK_NOT_NULL(format);
-  VELOX_USER_CHECK_GE(
-      strlen(format),
-      3,
-      "The arrow format string of timestamp should contain 'ts' and unit char.");
-  VELOX_USER_CHECK_EQ(format[0], 't', "The first character should be 't'.");
-  VELOX_USER_CHECK_EQ(format[1], 's', "The second character should be 's'.");
-  switch (format[2]) {
-    case 's':
-      return TimestampUnit::kSecond;
-    case 'm':
-      return TimestampUnit::kMilli;
-    case 'u':
-      return TimestampUnit::kMicro;
-    case 'n':
-      return TimestampUnit::kNano;
-    default:
-      VELOX_UNREACHABLE();
-  }
+  return getUnit<TimestampUnit>(arrowSchema, 's');
 }
 
 VectorPtr importFromArrowImpl(
