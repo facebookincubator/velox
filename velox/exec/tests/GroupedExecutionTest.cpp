@@ -207,8 +207,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
 TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   // Create source file - we will read from it in 6 splits.
   auto vectors = makeVectors(10, 1'000);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePath = writeToFile(vectors);
 
   // A chain of three pipelines separated by local exchange with the leaf one
   // having scan running grouped execution - this will make all three pipelines
@@ -318,8 +317,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
 TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
   // Create source file for probe and build sides
   auto vectors = makeVectors(4, 20);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePath = writeToFile(vectors);
 
   struct TestData {
     enum class Mode { kGroupedMixed = 0, kGroupedUnmixed = 1, kUngrouped = 2 };
@@ -507,12 +505,10 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
 TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecutionWithSpill) {
   const uint64_t numGroups = 3;
   auto probeVectors = makeVectors(12, 20);
-  auto probePath = TempFilePath::create();
-  writeToFile(probePath->getPath(), probeVectors);
+  auto probePath = writeToFile(probeVectors);
 
   auto buildVectors = makeVectors(4, 20);
-  auto buildPath = TempFilePath::create();
-  writeToFile(buildPath->getPath(), buildVectors);
+  auto buildPath = writeToFile(buildVectors);
 
   std::vector<RowVectorPtr> totalProbeVectors;
   for (int i = 0; i < numGroups; ++i) {
@@ -572,8 +568,7 @@ DEBUG_ONLY_TEST_F(
     groupedExecutionWithHashJoinSpillCheck) {
   // Create source file to read as split input.
   auto vectors = makeVectors(24, 20);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePath = writeToFile(vectors);
 
   const int numDriversPerGroup{3};
 
@@ -760,8 +755,7 @@ DEBUG_ONLY_TEST_F(
     mixedGroupedExecutionHashJoinSpillDelayedTermination) {
   // Create source file to read as split input.
   auto vectors = makeVectors(24, 20);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePath = writeToFile(vectors);
 
   const uint32_t numDriversPerGroup{3};
   const uint32_t numGroups{2};
@@ -895,8 +889,7 @@ DEBUG_ONLY_TEST_F(
 TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
   // Create source file - we will read from it in 6 splits.
   auto vectors = makeVectors(4, 20);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePath = writeToFile(vectors);
 
   // Run the test twice - for Hash and Cross Join.
   for (size_t i = 0; i < 2; ++i) {
@@ -1071,8 +1064,7 @@ TEST_F(GroupedExecutionTest, groupedExecution) {
   // Create source file - we will read from it in 6 splits.
   const size_t numSplits{6};
   auto vectors = makeVectors(10, 1'000);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePath = writeToFile(vectors);
 
   CursorParameters params;
   params.planNode = tableScanNode(ROW({}, {}));
@@ -1165,8 +1157,7 @@ TEST_F(GroupedExecutionTest, allGroupSplitsReceivedBeforeTaskStart) {
   // Create source file - we will read from it in 6 splits.
   const size_t numSplits{6};
   auto vectors = makeVectors(10, 1'000);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePath = writeToFile(vectors);
 
   CursorParameters params;
   params.planNode = tableScanNode(ROW({}, {}));

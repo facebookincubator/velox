@@ -935,8 +935,11 @@ TEST_F(BinaryFunctionsTest, rpad) {
   EXPECT_EQ(rpad("1234", 14, "4524"), ("12344524452445"));
   EXPECT_EQ(rpad("1234", 6, "4524"), ("123445"));
   EXPECT_EQ(rpad("23", 0, "4524"), (""));
-  EXPECT_EQ(rpad("∆", 2, "˚"), ("∆˚"));
-  EXPECT_EQ(rpad("©", 4, "£"), ("©£££"));
+  // Sizes count bytes: '∆' is 3 bytes, '©' and '£' are 2 bytes each.
+  EXPECT_EQ(rpad("∆", 2, "˚"), "\xE2\x88");
+  EXPECT_EQ(rpad("©", 4, "£"), "©£");
+  EXPECT_EQ(rpad("1", 4, "£"), "1\xC2\xA3\xC2");
+  EXPECT_EQ(rpad("\x01", 3, "\x80"), "\x01\x80\x80");
   EXPECT_EQ(rpad("1234", 2, "4524"), ("12"));
   EXPECT_EQ(rpad(std::nullopt, 0, std::nullopt), std::nullopt);
   VELOX_ASSERT_USER_THROW(
@@ -963,8 +966,11 @@ TEST_F(BinaryFunctionsTest, lpad) {
   EXPECT_EQ(
       lpad("1234567890", 30, "44445555666677778888"),
       ("444455556666777788881234567890"));
-  EXPECT_EQ(lpad("∆", 2, "˚"), ("˚∆"));
-  EXPECT_EQ(lpad("©", 4, "£"), ("£££©"));
+  // Sizes count bytes: '∆' is 3 bytes, '©' and '£' are 2 bytes each.
+  EXPECT_EQ(lpad("∆", 2, "˚"), "\xE2\x88");
+  EXPECT_EQ(lpad("©", 4, "£"), "£©");
+  EXPECT_EQ(lpad("1", 4, "£"), std::string("\xC2\xA3\xC2") + "1");
+  EXPECT_EQ(lpad("\x01", 3, "\x80"), "\x80\x80\x01");
   EXPECT_EQ(lpad("1234", 14, "4524"), ("45244524451234"));
   EXPECT_EQ(lpad("1234", 6, "4524"), ("451234"));
   EXPECT_EQ(lpad("1234", 0, "4524"), (""));

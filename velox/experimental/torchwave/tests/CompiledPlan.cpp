@@ -20,6 +20,7 @@
 #include <limits>
 
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
 namespace torch::wave {
@@ -53,6 +54,8 @@ CompiledPlan::KernelView makeKernelView(const Launch& launch) {
     }
     view.numBarriers =
         static_cast<int32_t>(launch.op->barrierCounters().size());
+    view.code = launch.op->code();
+    view.broadcastCount = launch.op->sizeExpr().broadcast;
   } else if (launch.standalone != nullptr) {
     view.standalone = true;
     view.names.insert(normalizeTarget(launch.standalone->target()));
@@ -93,8 +96,15 @@ CompiledPlan CompiledPlan::from(WaveGraph& graph, Mode mode) {
           nodeView.steps.resize(grid.size());
         }
         for (size_t step = 0; step < grid.size(); ++step) {
+          auto& stepView = nodeView.steps[step];
+          stepView.blockSize =
+              std::max(stepView.blockSize, WaveConfig::get().blockSize);
           for (const auto& launch : grid[step]) {
-            nodeView.steps[step].kernels.push_back(makeKernelView(launch));
+            stepView.kernels.push_back(makeKernelView(launch));
+            if (launch.op != nullptr) {
+              stepView.blockSize = std::max(
+                  stepView.blockSize, launch.op->blockSizePreference());
+            }
           }
         }
       }
@@ -276,6 +286,34 @@ CompiledPlan CompiledPlan::from(WaveGraph& graph, Mode mode) {
       << describe();
 }
 
+::testing::AssertionResult CompiledPlan::runsAtBlockSize(
+    std::string_view op,
+    int32_t threads) const {
+  bool found = false;
+  for (const auto& node : nodes_) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (!kernel.has(op) || kernel.standalone) {
+          continue;
+        }
+        found = true;
+        if (step.blockSize != threads) {
+          return ::testing::AssertionFailure()
+              << op << " runs at " << step.blockSize
+              << " threads per block, not " << threads << "\n"
+              << describe();
+        }
+      }
+    }
+  }
+  if (!found) {
+    return ::testing::AssertionFailure()
+        << op << " is not fused into any kernel\n"
+        << describe();
+  }
+  return ::testing::AssertionSuccess();
+}
+
 std::string CompiledPlan::describe() const {
   std::string out = "compiled plan:\n";
   for (size_t n = 0; n < nodes_.size(); ++n) {
@@ -285,7 +323,8 @@ std::string CompiledPlan::describe() const {
     out += "  node " + std::to_string(n) + ":\n";
     for (size_t step = 0; step < nodes_[n].steps.size(); ++step) {
       for (const auto& kernel : nodes_[n].steps[step].kernels) {
-        out += "    step " + std::to_string(step) + ": ";
+        out += "    step " + std::to_string(step) + " (" +
+            std::to_string(nodes_[n].steps[step].blockSize) + " threads): ";
         if (kernel.standalone) {
           out += "standalone ";
         }

@@ -165,6 +165,24 @@ TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
     }
     testSerde(*tableHandle);
   }
+
+  auto bucketedTableHandle = makeTableHandle(
+      common::test::singleSubfieldFilter("c1", in({1, 2})),
+      parseExpr("c1 > c4", rowType),
+      "hive_table",
+      rowType,
+      /*indexColumns=*/{},
+      /*storageParameters=*/{},
+      /*dbName=*/"",
+      std::make_shared<HiveBucketProperty>(
+          HiveBucketProperty::Kind::kHiveCompatible,
+          8,
+          std::vector<std::string>{"c1"},
+          std::vector<TypePtr>{BIGINT()},
+          std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+              "c4", core::SortOrder{true, true})}));
+  ASSERT_NE(bucketedTableHandle->bucketProperty(), nullptr);
+  testSerde(*bucketedTableHandle);
 }
 
 TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
@@ -180,11 +198,12 @@ TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
   });
 
   auto columnHandleTypes = {
-      FileColumnHandle::ColumnType::kPartitionKey,
-      FileColumnHandle::ColumnType::kRegular,
-      FileColumnHandle::ColumnType::kSynthesized,
-      FileColumnHandle::ColumnType::kRowIndex,
-      FileColumnHandle::ColumnType::kRowId,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
+      connector::FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kSynthesized,
+      connector::FileColumnHandle::ColumnType::kRowIndex,
+      connector::FileColumnHandle::ColumnType::kRowId,
+      connector::FileColumnHandle::ColumnType::kReadRange,
   };
 
   for (auto columnHandleType : columnHandleTypes) {
@@ -233,9 +252,8 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
       1024,
       std::vector<std::string>{"id", "row"},
       std::vector<TypePtr>{VARCHAR(), BOOLEAN()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{
-          std::make_shared<HiveSortingColumn>(
-              "id", core::SortOrder{true, true})});
+      std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+          "id", core::SortOrder{true, true})});
 
   std::unordered_map<std::string, std::string> serdeParameters = {
       {"key1", "value1"},

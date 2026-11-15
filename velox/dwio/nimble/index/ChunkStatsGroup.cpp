@@ -312,7 +312,7 @@ std::unique_ptr<TypedEncodingView<T>> createEncodedStreamView(
       actualRowCount,
       expectedRowCount);
   return detail::createTypedEncodingView<T>(
-      encodedView, &pool, Encoding::Options{});
+      encodedView, &pool, Encoding::Options{.cacheEncodingView = true});
 }
 
 using ChunkBoundViews =

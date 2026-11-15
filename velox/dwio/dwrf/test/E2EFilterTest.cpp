@@ -21,6 +21,7 @@
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 
+#include <folly/Portability.h>
 #include <folly/init/Init.h>
 
 using namespace facebook::velox::dwio::common;
@@ -243,62 +244,6 @@ TEST_F(E2EFilterTest, floatAndDouble) {
       false);
 }
 
-TEST_F(E2EFilterTest, DISABLED_shortDecimal) {
-  // ORC write functionality is not yet supported. Enable this test once it
-  // becomes available and set the file format to ORC at that time.
-  // options.format = DwrfFormat::kOrc;
-  const std::unordered_map<std::string, TypePtr> types = {
-      {"shortdecimal_val:decimal(8, 5)", DECIMAL(8, 5)},
-      {"shortdecimal_val:decimal(10, 5)", DECIMAL(10, 5)},
-      {"shortdecimal_val:decimal(17, 5)", DECIMAL(17, 5)}};
-
-  for (const auto& pair : types) {
-    testWithTypes(
-        pair.first,
-        [&]() {
-          makeIntDistribution<int64_t>(
-              "shortdecimal_val",
-              10, // min
-              100, // max
-              22, // repeats
-              19, // rareFrequency
-              -999, // rareMin
-              30000, // rareMax
-              true);
-        },
-        false,
-        {"shortdecimal_val"},
-        20);
-  }
-}
-
-TEST_F(E2EFilterTest, DISABLED_longDecimal) {
-  // ORC write functionality is not yet supported. Enable this test once it
-  // becomes available and set the file format to ORC at that time.
-  // options.format = DwrfFormat::kOrc;
-  const std::unordered_map<std::string, TypePtr> types = {
-      {"longdecimal_val:decimal(30, 10)", DECIMAL(30, 10)},
-      {"longdecimal_val:decimal(37, 15)", DECIMAL(37, 15)}};
-  for (const auto& pair : types) {
-    testWithTypes(
-        pair.first,
-        [&]() {
-          makeIntDistribution<int128_t>(
-              "longdecimal_val",
-              10, // min
-              100, // max
-              22, // repeats
-              19, // rareFrequency
-              -999, // rareMin
-              30000, // rareMax
-              true);
-        },
-        false,
-        {"longdecimal_val"},
-        20);
-  }
-}
-
 TEST_F(E2EFilterTest, stringDirect) {
   testutil::TestValue::enable();
   bool coverage[2][2]{};
@@ -456,11 +401,9 @@ TEST_F(E2EFilterTest, flatMapScalar) {
     dataSetBuilder_->makeMapStringValues(Subfield("string_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
   testWithTypes(
       kColumns,
       customize,
@@ -480,11 +423,9 @@ TEST_F(E2EFilterTest, flatMapComplex) {
     dataSetBuilder_->makeUniformMapKeys(Subfield("struct_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
 #if !defined(NDEBUG)
   numCombinations = 1;
 #endif

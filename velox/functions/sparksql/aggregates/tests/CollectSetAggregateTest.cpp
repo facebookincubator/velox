@@ -42,12 +42,11 @@ TEST_F(CollectSetAggregateTest, global) {
       makeArrayVectorFromJson<int32_t>({"[1, 2, 3, 4, 5, 6, 7]"}),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"collect_set(c0, true)"},
-      {"spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 
   // Null inputs.
   data = makeRowVector({
@@ -59,12 +58,11 @@ TEST_F(CollectSetAggregateTest, global) {
       makeArrayVectorFromJson<int32_t>({"[1, 2, 4, 5, 6, 7]"}),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"collect_set(c0, true)"},
-      {"spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 
   // All inputs are null.
   data = makeRowVector({
@@ -75,12 +73,11 @@ TEST_F(CollectSetAggregateTest, global) {
       makeArrayVectorFromJson<int32_t>({"[]"}),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"collect_set(c0, true)"},
-      {"spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 
   // NaN inputs are treated as distinct values.
   data = makeRowVector({
@@ -100,12 +97,11 @@ TEST_F(CollectSetAggregateTest, global) {
       }),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"collect_set(c0, true)"},
-      {"spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(CollectSetAggregateTest, noInputRow) {
@@ -114,7 +110,10 @@ TEST_F(CollectSetAggregateTest, noInputRow) {
   auto expected = makeRowVector({
       makeArrayVectorFromJson<int32_t>({"[]"}),
   });
-  testAggregations({data}, {}, {"collect_set(c0, true)"}, {}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .assertResults(expected);
 
   // No input row passes aggregate filter.
   const auto size = 1'000;
@@ -160,12 +159,12 @@ TEST_F(CollectSetAggregateTest, groupBy) {
       makeArrayVectorFromJson<int32_t>({"[1, 2, 3, 7]", "[3, 4, 5, 6]"}),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"collect_set(c1, true)"},
-      {"c0", "spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"collect_set(c1, true)"})
+      .project({"c0", "spark_array_sort(a0)"})
+      .assertResults(expected);
 
   // Null inputs.
   data = makeRowVector({
@@ -191,12 +190,12 @@ TEST_F(CollectSetAggregateTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"collect_set(c1, true)"},
-      {"c0", "spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"collect_set(c1, true)"})
+      .project({"c0", "spark_array_sort(a0)"})
+      .assertResults(expected);
 
   // All inputs are null for a group.
   data = makeRowVector({
@@ -222,12 +221,12 @@ TEST_F(CollectSetAggregateTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"collect_set(c1, true)"},
-      {"c0", "spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"collect_set(c1, true)"})
+      .project({"c0", "spark_array_sort(a0)"})
+      .assertResults(expected);
 
   data = makeRowVector({
       makeFlatVector<int16_t>({1, 2}),
@@ -237,8 +236,11 @@ TEST_F(CollectSetAggregateTest, groupBy) {
       }),
   });
 
-  testFailingAggregations(
-      {data}, {"c0"}, {"collect_set(c1, true)"}, "Unsupported type MAP");
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"collect_set(c1, true)"})
+      .assertError("Unsupported type MAP");
 }
 
 TEST_F(CollectSetAggregateTest, arrayWithNestedNulls) {
@@ -255,12 +257,11 @@ TEST_F(CollectSetAggregateTest, arrayWithNestedNulls) {
   auto expected = makeRowVector({makeNestedArrayVectorFromJson<int32_t>(
       {"[[1, 2, 3], [3, 4, 2, 6, 7], [4 ,5], [4 ,5, null]]"})});
 
-  testAggregations(
-      {data},
-      {},
-      {"collect_set(c0, true)"},
-      {"spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(CollectSetAggregateTest, rowWithNestedNull) {
@@ -280,12 +281,11 @@ TEST_F(CollectSetAggregateTest, rowWithNestedNull) {
           }),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"collect_set(c0, true)"},
-      {"spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(CollectSetAggregateTest, unknownType) {
@@ -296,14 +296,21 @@ TEST_F(CollectSetAggregateTest, unknownType) {
   auto expected = makeRowVector({
       makeArrayVectorFromJson<int32_t>({"[]"}),
   });
-  testAggregations({data}, {}, {"collect_set(c0, true)"}, {}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .assertResults(expected);
 
   // The grouping key is of UNKNOWN type.
   expected = makeRowVector({
       makeNullConstant(TypeKind::UNKNOWN, 1),
       makeArrayVectorFromJson<int32_t>({"[]"}),
   });
-  testAggregations({data}, {"c0"}, {"collect_set(c0, true)"}, {}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"collect_set(c0, true)"})
+      .assertResults(expected);
 }
 
 // Verify the 1-arg collect_set(c0) defaults to ignoring nulls (Spark default).
@@ -318,8 +325,11 @@ TEST_F(CollectSetAggregateTest, defaultIgnoreNulls) {
   });
 
   // 1-arg signature: no explicit ignoreNulls boolean.
-  testAggregations(
-      {data}, {}, {"collect_set(c0)"}, {"spark_array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 
   // All null inputs — returns empty array (nulls ignored).
   data = makeRowVector({
@@ -330,7 +340,10 @@ TEST_F(CollectSetAggregateTest, defaultIgnoreNulls) {
       makeArrayVectorFromJson<int32_t>({"[]"}),
   });
 
-  testAggregations({data}, {}, {"collect_set(c0)"}, {}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0)"})
+      .assertResults(expected);
 }
 
 // Verify that collect_set(c0, true) correctly ignores null inputs.
@@ -344,12 +357,11 @@ TEST_F(CollectSetAggregateTest, explicitIgnoreNullsTrue) {
       makeArrayVectorFromJson<int32_t>({"[1, 2, 4, 5]"}),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"collect_set(c0, true)"},
-      {"spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 
   // All null inputs with ignoreNulls=true — returns empty array.
   data = makeRowVector({
@@ -360,7 +372,10 @@ TEST_F(CollectSetAggregateTest, explicitIgnoreNullsTrue) {
       makeArrayVectorFromJson<int32_t>({"[]"}),
   });
 
-  testAggregations({data}, {}, {"collect_set(c0, true)"}, {}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, true)"})
+      .assertResults(expected);
 }
 
 TEST_F(CollectSetAggregateTest, respectNullsGlobal) {
@@ -377,12 +392,11 @@ TEST_F(CollectSetAggregateTest, respectNullsGlobal) {
   });
 
   // Pass ignoreNulls=false as a constant boolean argument.
-  testAggregations(
-      {data},
-      {},
-      {"collect_set(c0, false)"},
-      {"spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, false)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 
   // All inputs are null — should return array with a single null element.
   data = makeRowVector({
@@ -394,7 +408,10 @@ TEST_F(CollectSetAggregateTest, respectNullsGlobal) {
           std::vector<std::vector<std::optional<int32_t>>>{{std::nullopt}}),
   });
 
-  testAggregations({data}, {}, {"collect_set(c0, false)"}, {}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, false)"})
+      .assertResults(expected);
 
   // No null inputs — should behave same as collect_set.
   data = makeRowVector({
@@ -405,12 +422,11 @@ TEST_F(CollectSetAggregateTest, respectNullsGlobal) {
       makeArrayVectorFromJson<int32_t>({"[1, 2, 3]"}),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"collect_set(c0, false)"},
-      {"spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"collect_set(c0, false)"})
+      .project({"spark_array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(CollectSetAggregateTest, respectNullsGroupBy) {
@@ -437,12 +453,12 @@ TEST_F(CollectSetAggregateTest, respectNullsGroupBy) {
               {1, std::nullopt}, {3, 5, 6, std::nullopt}}),
   });
 
-  testAggregations(
-      {data},
-      {"c0"},
-      {"collect_set(c1, false)"},
-      {"c0", "spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"collect_set(c1, false)"})
+      .project({"c0", "spark_array_sort(a0)"})
+      .assertResults(expected);
 
   // All inputs null for a group.
   data = makeRowVector({
@@ -457,12 +473,67 @@ TEST_F(CollectSetAggregateTest, respectNullsGroupBy) {
               {1, 2}, {std::nullopt}}),
   });
 
-  testAggregations(
-      {data},
-      {"c0"},
-      {"collect_set(c1, false)"},
-      {"c0", "spark_array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"collect_set(c1, false)"})
+      .project({"c0", "spark_array_sort(a0)"})
+      .assertResults(expected);
+}
+
+TEST_F(CollectSetAggregateTest, mergeExtract) {
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 1, 2, 2, 2}),
+      makeFlatVector<int32_t>({1, 1, 3, 2, 3}),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeArrayVectorFromJson<int32_t>({"[1]", "[2, 3]"}),
+  });
+
+  auto plan = exec::test::PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c0"}, {"collect_set_partial(c1)"})
+                  .singleAggregation({"c0"}, {"collect_set_merge_extract(a0)"})
+                  .project({"c0", "spark_array_sort(a0)"})
+                  .planNode();
+
+  exec::test::AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CollectSetAggregateTest, mergeExtractFloatingPoint) {
+  const auto nan = std::numeric_limits<double>::quiet_NaN();
+  std::vector<RowVectorPtr> data{
+      makeRowVector({
+          makeFlatVector<int16_t>({1, 1, 1, 1}),
+          makeFlatVector<double>({nan, nan, -0.0, 1.0}),
+      }),
+      makeRowVector({
+          makeFlatVector<int16_t>({1, 1, 1}),
+          makeFlatVector<double>({std::nan("1"), 0.0, 1.0}),
+      }),
+  };
+
+  auto expected = makeRowVector({
+      makeFlatVector<int16_t>({1}),
+      makeArrayVector<double>({{0.0, 1.0, nan, nan, nan}}),
+  });
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(data)
+                  .singleAggregation({"c0"}, {"collect_set(c1)"})
+                  .project({"c0", "spark_array_sort(a0)"})
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).assertResults(expected);
+
+  plan = exec::test::PlanBuilder()
+             .values(data)
+             .singleAggregation({"c0"}, {"collect_set_partial(c1)"})
+             .singleAggregation({"c0"}, {"collect_set_merge_extract(a0)"})
+             .project({"c0", "spark_array_sort(a0)"})
+             .planNode();
+  exec::test::AssertQueryBuilder(plan).assertResults(expected);
 }
 
 } // namespace

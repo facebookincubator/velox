@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <limits>
 #include <random>
+#include <tuple>
 
 #include <gtest/gtest.h>
 
@@ -29,7 +30,7 @@ using namespace facebook;
 
 using EliasFanoEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EliasFanoEncodingViewTest, readsSignedAndUnsignedValues) {
+TEST_P(EliasFanoEncodingViewTest, readsSignedAndUnsignedValues) {
   expectReads<nimble::EliasFanoEncoding<int64_t>>(
       makeVector<int64_t>({
           std::numeric_limits<int64_t>::min(),
@@ -45,7 +46,7 @@ TEST_F(EliasFanoEncodingViewTest, readsSignedAndUnsignedValues) {
       {6, 0, 2, 3, 5, 1});
 }
 
-TEST_F(EliasFanoEncodingViewTest, lowerBound) {
+TEST_P(EliasFanoEncodingViewTest, lowerBound) {
   const auto values = makeVector<uint64_t>({3, 7, 7, 20});
   const auto serialized =
       nimble::test::Encoder<nimble::EliasFanoEncoding<uint64_t>>::encode(
@@ -69,7 +70,39 @@ TEST_F(EliasFanoEncodingViewTest, lowerBound) {
   }
 }
 
-TEST_F(EliasFanoEncodingViewTest, supportsConcurrentReads) {
+TEST_P(EliasFanoEncodingViewTest, lowerBoundInRange) {
+  const auto values = makeVector<int64_t>({-9, -1, 3, 3, 8, 20});
+  nimble::Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+  const auto serialized =
+      nimble::test::Encoder<nimble::EliasFanoEncoding<int64_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+  auto view = nimble::createEncodingView(serialized, pool_.get(), options);
+  const auto& typedView =
+      dynamic_cast<const nimble::TypedEncodingView<int64_t>&>(*view);
+
+  for (const auto& [begin, end, value, expected] :
+       std::vector<std::tuple<uint32_t, uint32_t, int64_t, uint32_t>>{
+           {0, 6, -10, 0},
+           {0, 6, -1, 1},
+           {0, 6, 0, 2},
+           {2, 5, -5, 2},
+           {2, 4, 4, 4},
+           {1, 3, 3, 2},
+           {0, 6, 21, 6},
+       }) {
+    SCOPED_TRACE(
+        ::testing::Message()
+        << "begin=" << begin << ", end=" << end << ", value=" << value);
+    int64_t found{0};
+    const auto row = typedView.lowerBound(begin, end, value, found);
+    EXPECT_EQ(row, expected);
+    if (row < end) {
+      EXPECT_EQ(found, values[row]);
+    }
+  }
+}
+
+TEST_P(EliasFanoEncodingViewTest, supportsConcurrentReads) {
   nimble::Vector<uint64_t> values{pool_.get()};
   values.reserve(kConcurrentRows);
   uint64_t value{1'000};
@@ -82,7 +115,7 @@ TEST_F(EliasFanoEncodingViewTest, supportsConcurrentReads) {
       values, randomizedPositions(/*seed=*/43));
 }
 
-TEST_F(EliasFanoEncodingViewTest, randomizedReads) {
+TEST_P(EliasFanoEncodingViewTest, randomizedReads) {
   std::mt19937_64 random{44};
   std::uniform_int_distribution<uint32_t> rowCountDistribution{1, 512};
   std::uniform_int_distribution<uint64_t> deltaDistribution{0, 1'000};
@@ -108,3 +141,5 @@ TEST_F(EliasFanoEncodingViewTest, randomizedReads) {
     expectReads<nimble::EliasFanoEncoding<uint64_t>>(values, positions);
   }
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(EliasFanoEncodingViewTest);

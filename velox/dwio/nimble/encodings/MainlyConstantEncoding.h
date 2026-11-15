@@ -417,7 +417,7 @@ class MainlyConstantEncodingBase
               begin[scatterRows[selectedRowIndex] - visitor.rowIndex()] =
                   detail::dataToValue(visitor, otherData);
               auto end = selectedRowIndex + 1;
-              if (FOLLY_UNLIKELY(end == numSelected)) {
+              if (end == numSelected) [[unlikely]] {
                 numRows = visitor.numRows() - visitor.rowIndex();
               } else {
                 numRows = scatterRows[end] - visitor.rowIndex();
@@ -585,7 +585,7 @@ class MainlyConstantEncodingBase
       const physicalType currentValue = values[i];
       const bool isCommon = currentValue == commonValue;
       streams.isCommon[i] = isCommon;
-      if (FOLLY_UNLIKELY(!isCommon)) {
+      if (!isCommon) [[unlikely]] {
         streams.otherValues.push_back(currentValue);
       }
     }
@@ -751,11 +751,10 @@ class MainlyConstantEncodingBase
       uint32_t length,
       Buffer& buffer,
       const Encoding::Options& options = {}) {
-    const auto sourceRowCount =
-        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-    NIMBLE_CHECK_LE(offset, sourceRowCount);
-    NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+    EncodingPrefix::checkSliceRange(
+        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+        offset,
+        length);
 
     const char* pos = encoded.data() +
         EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);

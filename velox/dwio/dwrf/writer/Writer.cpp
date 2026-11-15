@@ -328,9 +328,8 @@ void Writer::write(const VectorPtr& input) {
                 1.0 * context.rawDataSizePerBatch() /
                 estimatedInputMemoryBytes * inputRowCount))
           : folly::to<size_t>(inputRowCount));
-  if (FOLLY_UNLIKELY(
-          estimatedInputMemoryBytes == 0 ||
-          estimatedInputMemoryBytes > context.rawDataSizePerBatch())) {
+  if (estimatedInputMemoryBytes == 0 ||
+      estimatedInputMemoryBytes > context.rawDataSizePerBatch()) [[unlikely]] {
     VLOG(1) << fmt::format(
         "Unpopulated or huge vector memory estimate! Micro write batch size {} rows. "
         "Input vector memory estimate {} bytes. Batching threshold {} bytes.",
@@ -517,8 +516,8 @@ bool Writer::shouldFlush(const WriterContext& context, size_t nextWriteRows) {
   const auto dictionaryFlushDecision = flushPolicy_->shouldFlushDictionary(
       stripeProgressDecision, overBudget, stripeProgress, context);
 
-  if (FOLLY_UNLIKELY(
-          dictionaryFlushDecision == FlushDecision::ABANDON_DICTIONARY)) {
+  if (dictionaryFlushDecision == FlushDecision::ABANDON_DICTIONARY)
+      [[unlikely]] {
     enterLowMemoryMode();
     // Recalculate memory usage due to encoding switch.
     // We can still be over budget either due to not having enough budget to
@@ -553,8 +552,7 @@ void Writer::enterLowMemoryMode() {
   auto& context = writerBase_->getContext();
   // Until we have capability to abandon dictionary after the first
   // stripe, do nothing and rely solely on flush to comply with budget.
-  if (FOLLY_UNLIKELY(
-          context.checkLowMemoryMode() && context.stripeIndex() == 0)) {
+  if (context.checkLowMemoryMode() && context.stripeIndex() == 0) [[unlikely]] {
     // Idempotent call to switch to less memory intensive encodings.
     writer_->tryAbandonDictionaries(/*force=*/true);
   }

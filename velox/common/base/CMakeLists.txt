@@ -61,6 +61,7 @@ velox_add_library(
   Doubles.h
   Fs.h
   IOUtils.h
+  IdentityProjection.h
   IndexedPriorityQueue.h
   IoCounter.h
   Nulls.h

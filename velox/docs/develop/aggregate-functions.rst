@@ -135,351 +135,83 @@ process one vector at a time and handles input vector encodings by themselves.
 Simple Function Interface
 -------------------------
 
-This section describes the main concepts and the simple interface of
-aggregation functions. Examples of aggregation functions implemented through
-the simple-function interface can be found at SimpleAverageAggregate.cpp,
-SimpleArrayAggAggregate.cpp, SimpleVariadicSumAggregate.cpp, and
-SimpleVariadicArrayAggAggregate.cpp under velox/exec/tests.
+A simple aggregation function is a class that processes input one row at a
+time; SimpleAggregateAdapter turns it into an Aggregate. The class must satisfy
+the `SimpleAggregateFunction` concept in velox/exec/SimpleAggregateAdapter.h,
+so the compiler checks its required members. The concept's documentation lists the
+required and optional members and the rules they must follow: which rows reach
+each method, how nulls are handled, and what the write methods must preserve.
 
-A simple aggregation function is implemented as a class as the following.
+Here is a function with default-null behavior, the default: rows with a null
+argument are skipped, and groups without input produce null. It is a
+simplified version of GeometricMeanAggregate.cpp under
+velox/functions/prestosql/aggregates.
 
 .. code-block:: c++
 
-  // array_agg(T) -> array(T) -> array(T)
-  class ArrayAggAggregate {
+  // geometric_mean(BIGINT) -> ROW(DOUBLE, BIGINT) -> DOUBLE
+  class GeometricMeanAggregate {
    public:
-    // Type(s) of input vector(s) wrapped in Row.
-    using InputType = Row<Generic<T1>>;
-    using IntermediateType = Array<Generic<T1>>;
-    using OutputType = Array<Generic<T1>>;
+    // Argument types, wrapped in Row even for a single argument.
+    using InputType = Row<int64_t>;
+    // Sum of logs and count.
+    using IntermediateType = Row<double, int64_t>;
+    using OutputType = double;
 
-    // Optional. Default is true.
-    static constexpr bool default_null_behavior_ = false;
+    struct AccumulatorType {
+      double logSum{0};
+      int64_t count{0};
 
-    // Optional. Default is true.
-    static constexpr bool is_reducing_ = false;
+      explicit AccumulatorType(
+          HashStringAllocator* /*allocator*/,
+          GeometricMeanAggregate* /*fn*/) {}
 
-    // Optional.
-    static bool toIntermediate(
-        exec::out_type<Array<Generic<T1>>>& out,
-        exec::optional_arg_type<Generic<T1>> in);
-
-    // Optional. Define some function-level variables.
-    TypePtr inputType_;
-    TypePtr resultType_;
-
-    // Optional. Defined only when the aggregation function needs to use function-level variables.
-    // This method is called once when the aggregation function is created.
-    void initialize(
-        core::AggregationNode::Step step,
-        const std::vector<TypePtr>& argTypes,
-        const TypePtr& resultType) {
-      VELOX_CHECK_EQ(argTypes.size(), 1);
-      inputType_ = argTypes[0];
-      resultType_ = resultType;
-    }
-
-    // Optional. Defined only when the aggregation function needs to access constant arguments.
-    // This method is called once after the aggregation function is created, before any data
-    // is processed. Non-constant inputs have null entries in constantInputs.
-    void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
-      // Example: Extract a constant boolean flag from the second argument
-      if (constantInputs.size() >= 2 && constantInputs[1] != nullptr) {
-        ignoreNulls_ = constantInputs[1]->as<ConstantVector<bool>>()->valueAt(0);
+      void addInput(HashStringAllocator* /*allocator*/, int64_t value) {
+        logSum += std::log(value);
+        ++count;
       }
-    }
 
-    struct AccumulatorType { ... };
+      void combine(
+          HashStringAllocator* /*allocator*/,
+          exec::arg_type<Row<double, int64_t>> other) {
+        logSum += other.at<0>().value();
+        count += other.at<1>().value();
+      }
+
+      void writeIntermediateResult(
+          exec::out_type<Row<double, int64_t>>& out) {
+        out = std::make_tuple(logSum, count);
+      }
+
+      void writeFinalResult(double& out) {
+        out = std::exp(logSum / count);
+      }
+    };
   };
 
-The author declares the function's input type, intermediate type, and output
-type in the simple aggregation function class. The input type must be the
-function's argument type(s) wrapped in a Row<> even if the function only takes
-one argument. This is needed for the SimpleAggregateAdapter to parse input
-types for arbitrary aggregation functions properly.
+Functions that handle nulls themselves set `default_null_behavior_` to false;
+their accumulator methods take `exec::optional_arg_type` arguments and report
+whether the group is non-null. SimpleArrayAggAggregate.cpp under
+velox/exec/tests is an example. More examples are SimpleAverageAggregate.cpp,
+SimpleVariadicSumAggregate.cpp and SimpleVariadicArrayAggAggregate.cpp in the
+same directory.
 
-The author can optionally define function-level variables in the simple
-aggregation function class. These variables are initialized once when the
-aggregation function is created and used at every row when adding inputs to
-accumulators or extracting values from accumulators. For example, if the
-aggregation function needs to get the result type or the raw input type of the
-aggregation function, these types can be defined as member variables in the
-aggregate class and initialized in the initialize() method.
-
-The author can also optionally define a `setConstantInputs()` method to access
-constant arguments at initialization time. This method is called once after the
-aggregation function is created, before any data is processed. The method receives
-a vector of constant input values, where non-constant inputs have null entries.
-This is useful for reading configuration flags or constant parameters that don't
-change during aggregation. For example, a function might use this to read a boolean
-flag that controls null handling behavior.
-
-The author can define an optional flag `default_null_behavior_` indicating
-whether the aggregation function has default-null behavior. This flag is true
-by default. The optional `is_reducing_` flag indicates whether the accumulator
-state is expected to be smaller than its input. This flag is true by default.
-Set it to false for aggregates whose state generally grows with input
-cardinality, such as aggregates that collect input values into an array. Next,
-the class can have an optional method `toIntermediate()`
-that converts the aggregation function's raw input directly to its intermediate
-states. Finally, the author must define a struct named `AccumulatorType` in
-the aggregation function class. We explain each part in more details below.
-
-Default-Null Behavior
-^^^^^^^^^^^^^^^^^^^^^
-
-When adding raw inputs or intermediate states to accumulators, aggregation
-functions of default-null behavior ignore the input values that are nulls. For
-raw inputs that consist of multiple columns, an entire row is ignored if at
-least one column is null at this row. Below is an example.
-
-.. code-block:: sql
-
-  SELECT sum(c0) FROM (values (cast(NULL as bigint), 10), (NULL, 20), (NULL, 30)) AS t(c0, c1); -- NULL
-
-When generating intermediate or final output results from accumulators,
-aggregation functions of default-null behavior produce nulls for groups of no
-input row or only null rows. Another example is given below.
-
-.. code-block:: sql
-
-  SELECT sum(c0) FROM (values (1, 10), (2, 20), (3, 30)) AS t(c0, c1) WHERE c1 > 40; -- NULL
-
-Most aggregation functions have default-null behavior. An example is in
-SimpleAverageAggregate.cpp. On the other hand, SimpleArrayAggAggregate.cpp has
-an example of non-default-null behavior.
-
-This flag affects the C++ function signatures of `toIntermediate()` and methods
-in the `AccumulatorType` struct.
-
-toIntermediate
-^^^^^^^^^^^^^^
-
-The author can optionally define a static method `toIntermediate()` that
-converts a raw input to an intermediate state. If defined, this function is used
-in query plans that abandon the partial aggregation step. If the aggregation
-function has default-null behavior, the toIntermediate() function has an
-out-parameter of the type `exec::out_type<IntermediateType>&` followed by
-in-parameters of the type `exec::arg_type<T>` for each `T` wrapped inside
-InputType . If the aggregation function has non-default null behavior, the
-in-parameters of toIntermediate() are of the type `exec::optional_arg_type<T>`
-instead.
-
-When `T` is a primitive type except Varchar and Varbinary, `exec::arg_type<T>`
-is simply `T` itself and `exec::out_type<T>` is `T&`. `exec::optional_arg_type<T>`
-is `std::optional<T>`.
+Accumulator methods receive each argument type `T` of InputType, and the
+intermediate type, as `exec::arg_type<T>`, or as `exec::optional_arg_type<T>`
+for functions that handle nulls themselves; they write results through
+`exec::out_type<T>`. When `T` is a primitive type except Varchar and
+Varbinary, `exec::arg_type<T>` is simply `T` itself and `exec::out_type<T>` is
+`T&`. `exec::optional_arg_type<T>` provides `has_value()` and `value()`.
 
 When `T` is Varchar, Varbinary, or a complex type, `exec::arg_type<T>`,
 `exec::optional_arg_type<T>`, and `exec::out_type<T>` are the corresponding
 view and writer types of `T`. A detailed explanation can be found in :doc:`view-and-writer-types`.
 
-.. list-table::
-   :widths: 25 25
-   :header-rows: 1
-
-   * - Default-Null Behavior
-     - Non-Default-Null Behavior
-   * - static bool SimpleAverageAggregate::toIntermediate(
-          exec::out_type<Row<double, int64_t>>& out,
-          exec::arg_type<T> in);
-     - static bool SimpleArrayAggAggregate::toIntermediate(
-          exec::out_type<Array<Generic<T1>>>& out,
-          exec::optional_arg_type<Generic<T1>> in);
-
-AccumulatorType of Default-Null Behavior
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-For aggregaiton functions of default-null behavior, the author defines an
-`AccumulatorType` struct as follows.
-
-.. code-block:: c++
-
-  struct AccumulatorType {
-    // Author defines data members
-    ...
-
-    // Optional. Define a pointer to the UDAF class if the aggregation
-    // function uses function-level variables.
-    ArrayAggAggregate* fn_;
-
-    // Optional. Default is true.
-    static constexpr bool is_fixed_size_ = false;
-
-    // Optional. Default is false.
-    static constexpr bool use_external_memory_ = true;
-
-    // Optional. Default is false.
-    static constexpr bool is_aligned_ = true;
-
-    explicit AccumulatorType(
-        HashStringAllocator* allocator, ArrayAggAggregate* fn)
-        : fn_(fn);
-
-    void addInput(HashStringAllocator* allocator, exec::arg_type<T1> value1, ...);
-
-    void combine(
-        HashStringAllocator* allocator,
-        exec::arg_type<IntermediateType> other);
-
-    bool writeIntermediateResult(exec::out_type<IntermediateType>& out);
-
-    bool writeFinalResult(exec::out_type<OutputType>& out);
-
-    // Optional. Called during destruction.
-    void destroy(HashStringAllocator* allocator);
-  };
-
-The author defines an optional flag `is_fixed_size_` indicating whether the
-every accumulator takes fixed amount of memory. This flag is true by default.
-Next, the author defines another optional flag `use_external_memory_`
-indicating whether the accumulator uses memory that is not tracked by Velox.
-This flag is false by default. Then, the author can define an optional flag
-`is_aligned_` indicating whether the accumulator requires aligned
-access. This flag is false by default.
-
-The author defines a constructor that takes a single argument of
-`HashStringAllocator*`. This constructor is called before aggregation starts to
-initialize all accumulators.
-
-The author can also optionally define a `destroy` function that is called when
-*this* accumulator object is destructed.
-
-Notice that `writeIntermediateResult` and `writeFinalResult` are expected to not
-modify contents in the accumulator.
-
-addInput
-""""""""
-
-This method adds raw input values to *this* accumulator. It receives a
-`HashStringAllocator*` followed by `exec::arg_type<T1>`-typed values, one for
-each argument type `Ti` wrapped in InputType.
-
-With default-null behavior, raw-input rows where at least one column is null are
-ignored before `addInput` is called. After `addInput` is called, *this*
-accumulator is assumed to be non-null.
-
-combine
-"""""""
-
-This method adds an input intermediate state to *this* accumulator. It receives
-a `HashStringAllocator*` and one `exec::arg_type<IntermediateType>` value. With
-default-null behavior, nulls among the input intermediate states are ignored
-before `combine` is called. After `combine` is called, *this*  accumulator is
-assumed to be non-null.
-
-writeIntermediateResult
-"""""""""""""""""""""""
-
-This method writes *this* accumulator out to an intermediate state vector. It
-has an out-parameter of the type `exec::out_type<IntermediateType>&`. This
-method returns true if it writes a non-null value to `out`, or returns false
-meaning a null should be written to the intermediate state vector. Accumulators
-that are nulls (i.e., no value has been added to them) automatically become
-nulls in the intermediate state vector without `writeIntermediateResult` being
-called.
-
-writeFinalResult
-""""""""""""""""
-
-This method writes *this* accumulator out to a final result vector. It
-has an out-parameter of the type `exec::out_type<OutputType>&`. This
-method returns true if it writes a non-null value to `out`, or returns false
-meaning a null should be written to the final result vector. Accumulators
-that are nulls (i.e., no value has been added to them) automatically become
-nulls in the final result vector without `writeFinalResult` being called.
-
-AccumulatorType of Non-Default-Null Behavior
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-For aggregaiton functions of non-default-null behavior, the author defines an
-`AccumulatorType` struct as follows.
-
-.. code-block:: c++
-
-  struct AccumulatorType {
-    // Author defines data members
-    ...
-
-    // Optional. Default is true.
-    static constexpr bool is_fixed_size_ = false;
-
-    // Optional. Default is false.
-    static constexpr bool use_external_memory_ = true;
-
-    // Optional. Default is false.
-    static constexpr bool is_aligned_ = true;
-
-    explicit AccumulatorType(HashStringAllocator* allocator, ArrayAggAggregate* fn);
-
-    bool addInput(HashStringAllocator* allocator, exec::optional_arg_type<T1> value1, ...);
-
-    bool combine(
-        HashStringAllocator* allocator,
-        exec::optional_arg_type<IntermediateType> other);
-
-    bool writeIntermediateResult(bool nonNullGroup, exec::out_type<IntermediateType>& out);
-
-    bool writeFinalResult(bool nonNullGroup, exec::out_type<OutputType>& out);
-
-    // Optional.
-    void destroy(HashStringAllocator* allocator);
-  };
-
-The definition of `is_fixed_size_`, `use_external_memory_`,
-`is_aligned_`, the constructor, and the `destroy` method are exactly
-the same as those for default-null behavior.
-
-On the other hand, the C++ function signatures of `addInput`, `combine`,
-`writeIntermediateResult`, and `writeFinalResult` are different.
-
-Same as the case for default-null behavior, `writeIntermediateResult` and
-`writeFinalResult` are expected to not modify contents in the accumulator.
-
-addInput
-""""""""
-
-This method receives a `HashStringAllocator*` followed by
-`exec::optional_arg_type<T1>` values, one for each argument type `Ti` wrapped
-in InputType.
-
-This method is called on all raw-input rows even if some columns may be null.
-It returns a boolean meaning whether *this* accumulator is non-null after the
-call. All accumulators are initialized to *null* before aggregation starts. An
-accumulator that is originally null can be turned to non-null. But an
-accumulator that's already non-null remains non-null regardless of the return
-value of `addInput`.
-
-combine
-"""""""
-
-This method receives a `HashStringAllocator*` and an
-`exec::optional_arg_type<IntermediateType>` value. This method is called on
-all intermediate states even if some are nulls. Same as `addInput`, this method
-returns a boolean meaning whether *this* accumulator is non-null after the call.
-
-writeIntermediateResult
-"""""""""""""""""""""""
-
-This method has an out-parameter of the type `exec::out_type<IntermediateType>&`
-and a boolean flag `nonNullGroup` indicating whether *this* accumulator is
-non-null. This method returns true if it writes a non-null value to `out`, or
-return false meaning a null should be written to the intermediate state vector.
-
-writeFinalResult
-""""""""""""""""
-
-This method writes *this* accumulator out to a final result vector. It has an
-out-parameter of the type `exec::out_type<OutputType>&` and a boolean flag
-`nonNullGroup` indicating whether *this* accumulator is non-null. This method
-returns true if it writes a non-null value to `out`, or return false meaning a
-null should be written to the final result vector.
-
 Limitations
 ^^^^^^^^^^^
 
-The simple aggregation function interface currently has one limitation:
-aggregation pushdown to table scan is not supported yet. We're planning to
-add this support.
+Simple aggregation functions do not support aggregation pushdown to table
+scan.
 
 Vector Function Interface
 -------------------------
@@ -612,6 +344,8 @@ At this point you have accumulatorFixedWidthSize() and initializeNewGroupsIntern
     * addSingleGroupIntermediateResults() method.
 * Optional logic for converting raw inputs into intermediate results:
     * supportsToIntermediate() and toIntermediate() methods.
+* Optional logic for producing an empty group's intermediate result:
+    * supportsFillEmptyIntermediate() and fillEmptyIntermediate() methods.
 
 Some methods are only used in a subset of aggregation workflows. The following
 table shows which methods are used in which workflows.
@@ -658,6 +392,12 @@ table shows which methods are used in which workflows.
      - N
    * - toIntermediate
      - Y
+     - N
+     - N
+     - N
+     - N
+   * - fillEmptyIntermediate
+     - Y (used by merge companions)
      - N
      - N
      - N
@@ -776,6 +516,30 @@ implement toIntermediate() method which simply returns the input unmodified.
       std::vector<VectorPtr>& args,
       VectorPtr& result) const {
     VELOX_NYI("toIntermediate not supported");
+  }
+
+A `_merge` companion can abandon partial aggregation too. Each input row then
+becomes its own group, so selected non-null rows pass through unchanged, while
+masked-out and null rows must hold an empty group's intermediate result: null
+for most functions, 0 for count, and (0, 0) for Spark's avg. Implement
+fillEmptyIntermediate() and override supportsFillEmptyIntermediate() to write
+it, otherwise the merge companion falls back to creating fake groups.
+
+.. code-block:: c++
+
+  /// Returns true if fillEmptyIntermediate() is supported, allowing merge
+  /// companions to bypass accumulator construction.
+  virtual bool supportsFillEmptyIntermediate() const {
+    return false;
+  }
+
+  /// Writes an empty group's intermediate into selected rows of 'result',
+  /// leaving other rows unchanged, so merge pass-through can handle masked-out
+  /// and null inputs.
+  virtual void fillEmptyIntermediate(
+      const SelectivityVector& rows,
+      VectorPtr& result) const {
+    VELOX_NYI("fillEmptyIntermediate not supported");
   }
 
 GroupBy aggregation code path is done. We proceed to global aggregation.
@@ -970,30 +734,43 @@ result type is the same as input value type.
                                      .build());
           }
 
+A signature declares a constant argument with `constantArgumentType()`. The
+function reads the values of constant arguments in
+`Aggregate::setConstantInputs()`, which is called only in steps that read raw
+input. Velox does not check that arguments the signature declares constant are
+constant: `setConstantInputs()` receives null for a non-constant argument, so
+the function must check.
+
 Testing
 -------
 
 It is time to put all the pieces together and test how well the new function
 works.
 
-Use AggregationTestBase from velox/aggregates/tests/AggregationTestBase.h as a
-base class for the test.
+Use AggregationTestBase from
+velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h as a base class
+for the test, and AggregationTester to run the function.
 
 If the new aggregate function is supported by `DuckDB
 <https://duckdb.org/docs/sql/aggregates>`_, you can use DuckDB to check
 results. In this case you specify input data, grouping keys, a list of
-aggregates and a SQL query to run on DuckDB to calculate the expected results
-and call helper function testAggregates defined in AggregationTestBase class.
-Grouping keys can be empty for global aggregations.
+aggregates and a SQL query to run on DuckDB to calculate the expected results.
+Leave out the grouping keys for global aggregations.
 
 .. code-block:: c++
 
     // Global aggregation.
-    testAggregations(vectors, {}, {"sum(c1)"}, "SELECT sum(c1) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"sum(c1)"})
+        .assertResults("SELECT sum(c1) FROM tmp");
 
     // Group by aggregation.
-    testAggregations(
-        vectors, {"c0"}, {"sum(c1)"}, "SELECT c0, sum(c1) FROM tmp GROUP BY 1");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"sum(c1)"})
+        .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY 1");
 
 If the new function is not supported by DuckDB, you need to specify the expected
 results manually.
@@ -1001,12 +778,23 @@ results manually.
 .. code-block:: c++
 
     // Global aggregation.
-    testAggregations(vectors, {}, {"map_union(c1)"}, expectedResult);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"map_union(c1)"})
+        .assertResults(expectedResult);
 
     // Group by aggregation.
-    testAggregations(vectors, {"c0"}, {"map_union(c1)"}, expectedResult);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"map_union(c1)"})
+        .assertResults(expectedResult);
 
-Under the covers, testAggregations method generates multiple different but
+Use withCompanion() to also run the plans that compute the aggregates with
+their companion functions, and assertError() to check that every plan fails
+with a given error.
+
+Under the covers, AggregationTester generates multiple different but
 logically equivalent plans, executes these plans, verifies successful
 completion and compares the results with DuckDB or specified expected results.
 

@@ -38,7 +38,7 @@ what it does is not.
 | `RPCOperator` | A Velox `Operator` that turns input rows into RPCs and responses into output rows. | *In* `addInput(RowVectorPtr)`, `noMoreInput()`<br>*Out* `getOutput()` → `RowVectorPtr`; `isBlocked(ContinueFuture*)` → `BlockingReason` | That this is model inference, or which backend. It holds no transport and forwards `admissionKey_` without parsing it. |
 | `RPCState` | The per-driver ledger of outstanding RPCs, and the boundary between the driver thread and transport threads. | *In* `addPendingRow(...)`, `addPendingBatch(...)`, `onUnitSample(rttNs)`, `onUnitError()`, `storeInputBatch(...)`<br>*Out* `tryClaimReady()` → `optional<ReadyRow>`; `tryPollReady()` → `optional<ReadyBatch>`; `numInFlight()`; `dispatchHeadroom()`; `isFinished()` | A request. It stores a row id, a `RowLocation` and a future; there is no field a request could go in. |
 | `CongestionController` | A latency-gradient law turning round-trip samples into one integer window. | *In* `onSample(rttNs)`, `onError()`<br>*Out* `limit()` → `int64_t`; `baselineRttNs()`; `numShrinks()` | A backend, a row, or another driver. It has no admission key and no handle to shared state. |
-| `RPCRateLimiter` | A per-backend admission controller whose window adapts to the congestion verdict. One instance per admission key, from a process-scoped `RPCRateLimiterRegistry`. | *In* `initializeOnce(Config mutation)`, `onSuccessForEpoch(...)`, `handleOverloadForEpoch(...)`<br>*Out* `tryAcquireUpTo(want)` → `vector<Token>`; `admitOrWait()` → `Admission`; `makeLease(...)`; `available()`; `stats()`<br>The admission key is a registry lookup, not a parameter — one instance per key. Integral windows bound in-flight units; fractional windows pace discrete admissions. | A row, a kind, or a model. Its input surface is an outcome, an epoch, a count and an observed service duration. |
+| `RPCRateLimiter` | A per-backend admission controller whose window adapts to the congestion verdict. One instance per admission key and resolved policy, from a process-scoped `RPCRateLimiterRegistry`. | *In* `initializeOrMatch(Config policy)`, `onSuccessForEpoch(...)`, `handleOverloadForEpoch(...)`<br>*Out* `tryAcquireUpTo(want)` → `vector<Token>`; `admitOrWait()` → `Admission`; `makeLease(...)`; `available()`; `stats()`<br>The admission key and policy are a registry lookup, not parameters — one instance per key and policy. Integral windows bound in-flight units; fractional windows pace discrete admissions. | A row, a kind, or a model. Its input surface is an outcome, an epoch, a count and an observed service duration. |
 | `AsyncRPCFunction` | The interface a SQL function implements to build requests, dispatch them, and turn responses into a column. The extension point. | *In* `initialize(queryConfig, inputTypes, constantInputs, mode)`; optionally `prepareInputForAdmissionAndDispatch(rows, args)`; then `dispatchPerRow(rows, args)` **or** `accumulateBatch(rows, args)` + `flushBatch(maxRows)`<br>*Out* futures of `RPCResponse`; `buildOutput(responses, pool)` → `VectorPtr`; `evaluateCongestion(responses)` → `CongestionSignal`. Declares `resultType()`, `admissionKey()`, and stable admission bounds. | The driver thread, spill, or mutable congestion-controller state. It proposes backend constraints but never sees `RPCState` or mutates a limiter. |
 | Transport | A role, not a base class: one adapter per backend service, each with its own IDL and retry semantics. | *In* `scheduleAsync(rowId, isNull, MethodInvoker)`<br>*Out* `SemiFuture<RPCResponse>` carrying a `RPCErrorKind` | A kind or a SQL type. The closure captures an already-built typed request. |
 
@@ -137,18 +137,55 @@ completed unit means on its backend. It returns one of five signals:
 The `kNonOverloadError` case is the one worth stating. A deterministic client
 error fails identically at any concurrency, so backing off cannot help — and
 because admission capacity is shared, treating it as overload degrades every
-other query on that backend. A drain that is mostly invalid requests must not
+other query on that backend that runs the same policy. A drain that is mostly invalid requests must not
 shrink either window.
 
 Runtime stats distinguish the two backoff mechanisms.
 `rpcCongestionOverloadShrinks` counts observable per-driver window reductions
 caused by explicit overload. `rpcCongestionShrinks` also includes
-latency-gradient reductions. `rpcRateLimiterMinCap` records the shared
-controller's low-water capacity.
+latency-gradient reductions. `rpcRateLimiterMinCap` records the low-water
+capacity of the controller the query ran under, which every query on that
+backend with the same policy shares.
+
+Three counters describe the shared controller from a driver's first admission
+request until the stats sample or the driver's close.
+`rpcRateLimiterAttachedNanos` is the length of that span.
+`rpcRateLimiterPacingNanos` is the part of it during which the controller paced
+admission. `rpcRateLimiterLimitMilliUnitSeconds` is the committed window, the
+one `rpcRateLimiterLimitMilli` shows, integrated over the span, in thousandths
+of a unit times seconds; recovery growth counts once the limiter commits it to
+the window. Each driver reports its own counts, so their sums across drivers and
+tasks stay meaningful on Prestissimo and on Presto-on-Spark. The sums are driver
+time, not wall time. Divide the sums to read them. Pacing time over attached
+time is the share of attached time during which the controller paced. It is an
+upper bound on pacing delay, because it includes time a driver was idle or
+waiting on upstream. The window integral over attached seconds is the average
+window, in thousandths of a unit.
+
+`rpcStaleSuccessUnits` counts each driver's successful units whose recovery
+credit the controller discarded because an overload, including one in the same
+completion, arrived after their admission. PER_ROW counts error-free rows; BATCH
+counts the admission units of a flush with at least one successful row as a
+whole, as the controller credits them.
 
 An async-job path returns `kSuccessNoLatency` after a successful unit: its round
 trip is queue and scheduling time, which says nothing about backend load, but
 the success must still recover shared admission capacity.
+
+A transport that retries inside one RPC hides those retries from congestion
+control, which sees only the final outcome. The transport can report in
+`RPCResponse::numOverloadedAttempts` how many attempts before the final one it
+counted as overloaded, such as rate-limited, timed-out or shed attempts. Model
+API also counts errors that carry no error code, which include its load
+shedding. The operator counts them for PER_ROW rows in two stats, which stay
+zero in BATCH mode and for transports that do not report:
+
+- `rpcOverloadedAttempts` sums the reported overloaded attempts, failed rows
+  included.
+- `rpcSuccessesAfterOverload` counts successes that needed at least one.
+
+The counts do not cut the driver window or the shared limiter the way an
+overload error does.
 
 ### Why admission has two scopes
 
@@ -161,7 +198,9 @@ gradient signal is destroyed — so the latency estimator must be per driver.
 
 Rejections are produced by the aggregate. No single driver's refusal count
 reveals the backend's capacity, only the sum does — so the occupancy bound must
-be per backend.
+be per backend. Queries that run different policies against one backend each
+get a bound of their own today, so together they can admit the sum of their
+ceilings until a backend-level cap nests them.
 
 Neither signal is derivable from the other. A per-driver window also cannot go
 below one, so under per-driver control alone the least load a worker can offer

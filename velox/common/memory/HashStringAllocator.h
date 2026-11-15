@@ -23,6 +23,7 @@
 #include "velox/type/StringView.h"
 
 #include <folly/container/F14Map.h>
+#include <folly/lang/Bits.h>
 
 namespace facebook::velox {
 
@@ -55,7 +56,9 @@ class HashStringAllocator : public StreamArena {
   static constexpr int32_t kMaxAlloc =
       memory::AllocationTraits::kPageSize / 4 * 3;
 
-  class Header {
+  /// Blocks start at any byte offset in an arena, so Header is packed to
+  /// alignment 1.
+  class __attribute__((__packed__)) Header {
    public:
     static constexpr uint32_t kFree = 1U << 31;
     static constexpr uint32_t kContinued = 1U << 30;
@@ -144,7 +147,7 @@ class HashStringAllocator : public StreamArena {
     /// method.
     HashStringAllocator::Header* nextContinued() {
       VELOX_DCHECK(isContinued());
-      return *reinterpret_cast<Header**>(end() - kContinuedPtrSize);
+      return folly::loadUnaligned<Header*>(end() - kContinuedPtrSize);
     }
 
     std::string toString();

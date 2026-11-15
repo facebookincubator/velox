@@ -35,8 +35,8 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
 
 /// Returns whether createEncodingView() can wrap a stream of this encoding,
 /// which is what lets a caller read one row without decoding the whole stream.
-/// Data type restrictions still apply on top of this; createEncodingView()
-/// throws when an encoding has no view for the stream's type.
+/// Data type, compression, and nested-encoding restrictions still apply;
+/// createEncodingView() throws when the complete stream is not viewable.
 bool supportsEncodingView(EncodingType encodingType);
 
 /// Creates a random-access view over a supported uncompressed encoding stream.

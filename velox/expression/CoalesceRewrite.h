@@ -31,7 +31,8 @@ class CoalesceRewrite {
   ///     constant inputs to COALESCE are deduplicated.
   /// If there is a single input to COALESCE after pruning inputs, COALESCE is
   /// simplified to this expression. Otherwise, returns an optimized COALESCE
-  /// expression with pruned inputs.
+  /// expression with pruned inputs, or nullptr when no input is flattened or
+  /// pruned.
   static core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
 
   static void registerRewrite();

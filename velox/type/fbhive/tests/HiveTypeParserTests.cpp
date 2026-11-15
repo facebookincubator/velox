@@ -248,6 +248,11 @@ class TestCustomTypeFactory : public CustomTypeFactory {
 
 } // namespace
 
+TEST(FbHive, parseVoidAsUnknown) {
+  // "void" is the Hive/Presto serialization of the Iceberg V3 unknown type.
+  validate<TypeKind::UNKNOWN>("void");
+}
+
 TEST(FbHive, parseCustomTypeReturnsSingleton) {
   // An identifier that names a registered custom type must resolve to that
   // registered singleton (not fail as an unknown token) so downstream

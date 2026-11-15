@@ -134,6 +134,33 @@ String Functions
         SELECT empty2null(''); -- NULL
         SELECT empty2null('abc'); -- 'abc'
 
+.. spark:function:: encode(string, charset) -> varbinary
+
+    Encodes the first argument into a binary using the provided ``charset``.
+    Returns NULL if either argument is NULL.
+    Supported charsets (case-insensitive) are ``US-ASCII``, ``ISO-8859-1``,
+    ``UTF-8``, ``UTF-16BE``, ``UTF-16LE``, ``UTF-16``, and ``UTF-32``. Throws
+    an exception when ``charset`` is not supported or a character cannot be
+    represented by the selected charset, following Spark 4.0's default behavior.
+    Other charset names and aliases are not supported.
+    ``spark.legacy_coding_error_action`` corresponds to Spark 4.0's
+    ``spark.sql.legacy.codingErrorAction``. When enabled,
+    unmappable characters in ``US-ASCII`` and ``ISO-8859-1`` are replaced with
+    ``?``. Spark 3.x always replaces unmappable characters; set
+    ``spark.legacy_coding_error_action=true`` to match that behavior for the
+    supported charsets. This does not enable additional JDK charset names or
+    aliases, which remain errors in either mode.
+    ``UTF-16`` prepends a big-endian byte-order mark; ``UTF-32`` emits big-endian
+    data without a byte-order mark. Empty input returns empty output without a
+    byte-order mark.
+    Malformed UTF-8 in ``string`` is normalized to the replacement character
+    ``U+FFFD`` before encoding. ::
+
+        SELECT encode('Spark SQL', 'UTF-8'); -- [53 70 61 72 6B 20 53 51 4C]
+        SELECT encode('A', 'UTF-16BE'); -- [00 41]
+        SELECT encode('A', 'UTF-16LE'); -- [41 00]
+        SELECT encode('A', 'UTF-32'); -- [00 00 00 41]
+
 .. spark:function:: endswith(left, right) -> boolean
 
     Returns true if 'left' ends with 'right'. Otherwise, returns false. ::
@@ -172,6 +199,27 @@ String Functions
         SELECT format_number(-1234567.89, 1); -- '-1,234,567.9'
         SELECT format_number(2.5, 0); -- '2' (HALF_EVEN rounds to even)
         SELECT format_number(123, -1); -- NULL
+
+.. spark:function:: format_string(format, arguments...) -> varchar
+
+    Formats the arguments using a subset of Java's printf-style syntax.
+    ``printf`` is an alias for ``format_string`` and supports the same syntax.
+    See `Spark's format_string documentation
+    <https://spark.apache.org/docs/latest/api/sql/index.html#format_string>`_
+    for the canonical function behavior.
+    ``%%`` produces a literal percent sign. Bare ``%s`` accepts VARCHAR,
+    BOOLEAN, TINYINT, SMALLINT, INTEGER, and BIGINT arguments. The ``%d``,
+    ``%o``, ``%x``, and ``%X`` conversions accept integral arguments.
+    ``%d`` supports the ``-``, ``+``, space, and ``0`` flags; ``%o``, ``%x``,
+    and ``%X`` support ``-`` and ``0``. A width up to 1,048,576 is supported,
+    but precision, argument indexes, and other conversions or flags raise an
+    error.
+
+    A NULL format returns NULL without evaluating the remaining arguments.
+    NULL arguments render as ``null`` (or ``NULL`` for ``%X``). ::
+
+        SELECT format_string('id=%04d', 42); -- 'id=0042'
+        SELECT format_string('%s: %x', 'value', 255); -- 'value: ff'
 
 .. spark:function:: initcap(string) -> varchar
 
@@ -306,6 +354,16 @@ String Functions
         SELECT mask(NULL); -- NULL
         SELECT mask('AbCD123-@$#', NULL, NULL, NULL, NULL); -- "AbCD123-@$#"
 
+.. spark:function:: octet_length(string/binary) -> integer
+
+    Returns the byte length of the specified string or binary value.
+    For strings, this is the UTF-8 encoded byte count (not character count).
+    See the `Spark documentation
+    <https://spark.apache.org/docs/3.5.0/api/sql/index.html#octet_length>`_. ::
+
+        SELECT octet_length('hello'); -- 5
+        SELECT octet_length('€'); -- 3
+
 .. spark:function:: overlay(input, replace, pos, len) -> same as input
 
     Replace a substring of ``input`` starting at ``pos`` character with ``replace`` and
@@ -325,6 +383,10 @@ String Functions
         SELECT overlay('Spark SQL', 'ANSI ', 7, 0); -- "Spark ANSI SQL"
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
+
+.. spark:function:: printf(format, arguments...) -> varchar
+
+    Alias for :spark:func:`format_string`.
 
 .. spark:function:: randstr(length, seed) -> varchar
 
@@ -393,6 +455,11 @@ String Functions
 .. spark:function:: reverse(string) -> varchar
 
     Returns input string with characters in reverse order.
+
+.. spark:function:: right(string, length) -> string
+
+    Returns the rightmost ``length`` characters from ``string``.
+    If ``length`` is less than or equal to 0, the result is an empty string.
 
 .. spark:function:: rpad(string, len, pad) -> string
 
@@ -470,14 +537,17 @@ String Functions
     Returns a map by splitting ``string`` into entries with ``entryDelimiter`` and splitting
     each entry into key/value with ``keyValueDelimiter``.
     ``entryDelimiter`` and ``keyValueDelimiter`` must be constant strings with single ascii
-    character. Allows ``keyValueDelimiter`` not found when splitting an entry. Throws exception
-    when duplicate map keys are found for single row's result, consistent with Spark's default
-    behavior. ::
+    character. Allows ``keyValueDelimiter`` not found when splitting an entry, in which case the
+    whole entry is the key and the value is NULL. When a key is repeated within a single row's
+    result, the behavior depends on the ``throw_exception_on_duplicate_map_keys`` configuration
+    property: if true, throws; otherwise the last value wins and the key keeps the position of its
+    first occurrence. ::
 
         SELECT str_to_map('a:1,b:2,c:3', ',', ':'); -- {"a":"1","b":"2","c":"3"}
         SELECT str_to_map('a', ',', ':'); -- {"a":NULL}
         SELECT str_to_map('', ',', ':'); -- {"":NULL}
         SELECT str_to_map('a:1,b:2,c:3', ',', ','); -- {"a:1":NULL,"b:2":NULL,"c:3":NULL}
+        SELECT str_to_map('a:1,b:2,a:3', ',', ':'); -- {"a":"3","b":"2"} (throws if the property is true)
 
 .. spark:function:: substring(string, start) -> varchar
 

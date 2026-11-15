@@ -243,9 +243,7 @@ class TableScanTest : public virtual HiveConnectorTestBase,
       const std::string& duckDbSql,
       const int32_t numPrefetchSplit = 1) {
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(
-            core::QueryConfig::kMaxSplitPreloadPerDriver,
-            std::to_string(numPrefetchSplit))
+        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplit)
         .splits(splits)
         .maxDrivers(numDrivers_)
         .assertResults(duckDbSql);

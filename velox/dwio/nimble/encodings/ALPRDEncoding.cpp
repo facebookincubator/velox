@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
+#include "velox/common/base/BitUtil.h"
 
 #include "velox/dwio/nimble/encodings/selection/NestedAlpSizeEstimation.h"
 
@@ -132,27 +133,9 @@ struct SplitSelection {
   uint64_t size{std::numeric_limits<uint64_t>::max()};
 };
 
-// Adds the outer metadata and one length field for each present child.
-uint64_t splitSize(
-    uint8_t dictionarySize,
-    uint32_t numRows,
-    uint32_t numExceptions,
-    const std::array<uint64_t, 4>& childSizes,
-    const Encoding::Options& options) {
-  uint64_t size =
-      EncodingPrefix::serializedSize(numRows, options.useVarintRowCount) + 2 +
-      2 * dictionarySize + varint::varintSize(numExceptions);
-  for (auto childSize : childSizes) {
-    if (childSize != 0) {
-      size += varint::varintSize(childSize) + childSize;
-    }
-  }
-  return size;
-}
-
 // Owns the bounded sample and frequency storage for ALPRD parameter selection.
 template <typename PhysicalType>
-class SplitSelector {
+class SplitSelector : public ALPRDEncodingBase {
  public:
   // Samples the input while retaining the target row count for cost estimates.
   SplitSelector(
@@ -186,14 +169,15 @@ SplitSelector<PhysicalType>::SplitSelector(
     uint32_t numRows,
     const Encoding::Options& options)
     : numRows_{numRows},
-      numSamples_{std::min<uint32_t>(values.size(), Base::kSampleSize)},
+      numSamples_{static_cast<uint32_t>(
+          std::min<size_t>(values.size(), Base::kSampleSize))},
       options_{options} {
   NIMBLE_CHECK(
       !values.empty(), "ALPRD split selection requires non-empty input.");
   NIMBLE_CHECK_LE(values.size(), numRows_);
   for (uint32_t i = 0; i < numSamples_; ++i) {
     sample_[i] = values[detail::NestedAlpSizeEstimation::sampledRowIndex(
-        i, numSamples_, values.size())];
+        i, numSamples_, static_cast<uint32_t>(values.size()))];
   }
 }
 
@@ -244,9 +228,9 @@ SplitSelection SplitSelector<PhysicalType>::select() {
       parameters.dictionary[dictionarySize - 1] =
           frequencies_[dictionarySize - 1].first;
       numSampleExceptions -= frequencies_[dictionarySize - 1].second;
-      const uint32_t numExceptions =
+      const uint32_t numExceptions = static_cast<uint32_t>(
           (uint64_t{numSampleExceptions} * numRows_ + numSamples_ - 1) /
-          numSamples_;
+          numSamples_);
       uint64_t positionsSize{0};
       uint64_t highPartsSize{0};
       if (numExceptions != 0) {
@@ -263,8 +247,8 @@ SplitSelection SplitSelector<PhysicalType>::select() {
         highPartsSize = Cost::estimateChildSize<uint16_t>(
             numExceptions, minHigh, maxHigh, options_);
       }
-      const auto size = splitSize(
-          dictionarySize,
+      const auto size = ALPRDEncodingBase::calculateSerializedSize(
+          parameters,
           numRows_,
           numExceptions,
           {
@@ -289,6 +273,23 @@ SplitSelection SplitSelector<PhysicalType>::select() {
 
 } // namespace
 
+uint64_t ALPRDEncodingBase::calculateSerializedSize(
+    const Parameters& parameters,
+    uint32_t numRows,
+    uint32_t numExceptions,
+    const std::array<uint64_t, 4>& childEstimatedSizes,
+    const Encoding::Options& options) {
+  uint64_t size =
+      EncodingPrefix::serializedSize(numRows, options.useVarintRowCount) + 2 +
+      2 * parameters.dictionarySize + varint::varintSize(numExceptions);
+  const auto numChildren = numExceptions == 0 ? 2 : 4;
+  for (int i = 0; i < numChildren; ++i) {
+    const auto childSize = childEstimatedSizes[i];
+    size += varint::varintSize(childSize) + childSize;
+  }
+  return size;
+}
+
 template <typename PhysicalType>
 ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
     std::span<const PhysicalType> values,
@@ -298,6 +299,35 @@ ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
       values, static_cast<uint32_t>(values.size()), options}
       .select()
       .parameters;
+}
+
+template <typename PhysicalType>
+ALPRDEncodingBase::ChildSelection<PhysicalType>
+ALPRDEncodingBase::selectAndDecompose(
+    std::span<const PhysicalType> values,
+    const Encoding::Options& options) {
+  ChildSelection<PhysicalType> result;
+  result.parameters = selectParameters(values, options);
+  result.rowCount = static_cast<uint32_t>(values.size());
+  const auto numSamples =
+      std::min(static_cast<uint32_t>(values.size()), kSampleSize);
+  std::vector<uint32_t> sampledRows(numSamples);
+  for (uint32_t i = 0; i < numSamples; ++i) {
+    sampledRows[i] = detail::NestedAlpSizeEstimation::sampledRowIndex(
+        i, numSamples, result.rowCount);
+  }
+  decompose(
+      values,
+      result.parameters,
+      sampledRows,
+      result.codes,
+      result.rightParts,
+      result.exceptionPositions,
+      result.exceptionHighParts);
+  result.exceptionCount = static_cast<uint32_t>(velox::bits::divRoundUp(
+      uint64_t{result.exceptionPositions.size()} * result.rowCount,
+      numSamples));
+  return result;
 }
 
 template <typename PhysicalType>
@@ -317,6 +347,14 @@ template ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters<
     uint32_t>(std::span<const uint32_t>, const Encoding::Options&);
 template ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters<
     uint64_t>(std::span<const uint64_t>, const Encoding::Options&);
+template ALPRDEncodingBase::ChildSelection<uint32_t>
+ALPRDEncodingBase::selectAndDecompose<uint32_t>(
+    std::span<const uint32_t>,
+    const Encoding::Options&);
+template ALPRDEncodingBase::ChildSelection<uint64_t>
+ALPRDEncodingBase::selectAndDecompose<uint64_t>(
+    std::span<const uint64_t>,
+    const Encoding::Options&);
 template std::optional<uint64_t> ALPRDEncodingBase::estimateSize<uint32_t>(
     std::span<const uint32_t>,
     uint32_t,

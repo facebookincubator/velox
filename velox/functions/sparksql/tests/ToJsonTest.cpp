@@ -113,7 +113,7 @@ TEST_F(ToJsonTest, basicMap) {
 TEST_F(ToJsonTest, basicBool) {
   disableJsonIgnoreNullFields();
   auto data = makeNullableFlatVector<bool>({true, false, std::nullopt});
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":true})", R"({"a":false})", R"({"a":null})"});
   testToJson(input, expected);
@@ -123,7 +123,7 @@ TEST_F(ToJsonTest, basicString) {
   disableJsonIgnoreNullFields();
   auto data = makeNullableFlatVector<std::string>(
       {"str1", "str2\\u", std::nullopt, "str\"3\"", std::nullopt, "a\"é你😄"});
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":"str1"})",
        R"({"a":"str2\\u"})",
@@ -145,7 +145,7 @@ TEST_F(ToJsonTest, basicBinary) {
        std::string(58, 'A'),
        std::nullopt},
       VARBINARY());
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":"TWFu"})",
        R"({"a":""})",
@@ -160,7 +160,7 @@ TEST_F(ToJsonTest, basicBinary) {
 TEST_F(ToJsonTest, basicTinyInt) {
   auto data =
       makeNullableFlatVector<int8_t>({0, 127, 128, -128, -129, std::nullopt});
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":0})",
        R"({"a":127})",
@@ -173,7 +173,7 @@ TEST_F(ToJsonTest, basicTinyInt) {
 
 TEST_F(ToJsonTest, basicSmallInt) {
   auto data = makeNullableFlatVector<int16_t>({0, 32768, -32769, std::nullopt});
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":0})", R"({"a":-32768})", R"({"a":32767})", R"({})"});
   testToJson(input, expected);
@@ -182,7 +182,7 @@ TEST_F(ToJsonTest, basicSmallInt) {
 TEST_F(ToJsonTest, basicInt) {
   auto data = makeNullableFlatVector<int32_t>(
       {0, 2147483648, -2147483649, std::nullopt});
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":0})", R"({"a":-2147483648})", R"({"a":2147483647})", R"({})"});
   testToJson(input, expected);
@@ -191,7 +191,7 @@ TEST_F(ToJsonTest, basicInt) {
 TEST_F(ToJsonTest, basicBigInt) {
   auto data = makeNullableFlatVector<int64_t>(
       {std::nullopt, 0, 1, INT64_MAX, INT64_MIN});
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({})",
        R"({"a":0})",
@@ -204,7 +204,7 @@ TEST_F(ToJsonTest, basicBigInt) {
 TEST_F(ToJsonTest, basicFloat) {
   auto data = makeNullableFlatVector<float>(
       {1.0, kNaNFloat, kInfFloat, -kInfFloat, std::nullopt});
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":1.0})",
        R"({"a":"NaN"})",
@@ -217,7 +217,7 @@ TEST_F(ToJsonTest, basicFloat) {
 TEST_F(ToJsonTest, basicDouble) {
   auto data = makeNullableFlatVector<double>(
       {1.0, kNaNDouble, kInfDouble, -kInfDouble, std::nullopt});
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":1.0})",
        R"({"a":"NaN"})",
@@ -230,7 +230,7 @@ TEST_F(ToJsonTest, basicDouble) {
 TEST_F(ToJsonTest, basicDecimal) {
   auto data = makeNullableFlatVector<int64_t>(
       {12345, 0, -67890, std::nullopt}, DECIMAL(10, 2));
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":123.45})", R"({"a":0.00})", R"({"a":-678.90})", R"({})"});
   testToJson(input, expected);
@@ -252,7 +252,7 @@ TEST_F(ToJsonTest, longDecimal) {
            0x098A223FFFFFFFFF), // min decimal(38, 10)
        std::nullopt},
       DECIMAL(38, 10));
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":123456789.0123456789})",
        R"({"a":0.0000000000})",
@@ -269,7 +269,7 @@ TEST_F(ToJsonTest, basicTimestamp) {
        Timestamp(1582934400, 0),
        Timestamp(-2208988800, 0),
        std::nullopt});
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   // UTC time zone.
   auto expected = makeFlatVector<std::string>(
       {R"({"a":"1970-01-01T00:00:00.000Z"})",
@@ -287,10 +287,66 @@ TEST_F(ToJsonTest, basicTimestamp) {
   testToJson(input, expected);
 }
 
+TEST_F(ToJsonTest, basicTimestampUtc) {
+  const std::vector<std::optional<Timestamp>> timestamps{
+      Timestamp{1'704'067'200, 123'456'000},
+      Timestamp{-1, 999'999'000},
+      std::nullopt};
+  auto data = makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP_UTC());
+  ASSERT_TRUE(data->type()->equivalent(*TIMESTAMP_UTC()));
+  auto input = makeNamedRowVector("ts", data);
+  auto expected = makeFlatVector<std::string>(
+      {R"({"ts":"2024-01-01T00:00:00.123"})",
+       R"({"ts":"1969-12-31T23:59:59.999"})",
+       R"({})"});
+  auto array = makeArrayVector({0, 2, 2}, data);
+  auto expectedArray = makeFlatVector<std::string>(
+      {R"(["2024-01-01T00:00:00.123","1969-12-31T23:59:59.999"])",
+       R"([])",
+       R"([null])"});
+  auto map = makeMapVector(
+      {0, 2, 2},
+      makeFlatVector<std::string>({"now", "before", "missing"}),
+      data);
+  auto expectedMap = makeFlatVector<std::string>(
+      {R"({"now":"2024-01-01T00:00:00.123","before":"1969-12-31T23:59:59.999"})",
+       R"({})",
+       R"({"missing":null})"});
+  auto timestampKeys = makeMapVector(
+      {0, 1, 2},
+      makeFlatVector<Timestamp>(
+          {Timestamp{1'704'067'200, 123'456'000},
+           Timestamp{-1, 999'999'000},
+           Timestamp{0, 0}},
+          TIMESTAMP_UTC()),
+      makeFlatVector<int32_t>({1, 2, 3}));
+  auto expectedTimestampKeys = makeFlatVector<std::string>(
+      {R"({"1704067200123456":1})", R"({"-1":2})", R"({"0":3})"});
+
+  for (const auto* timeZone : {"America/Los_Angeles", "UTC", "Asia/Kolkata"}) {
+    SCOPED_TRACE(timeZone);
+    setTimezone(timeZone);
+    testToJson(input, expected);
+    testToJson(input, "America/New_York", expected);
+    testToJson(array, expectedArray);
+    testToJson(map, expectedMap);
+    testToJson(timestampKeys, expectedTimestampKeys);
+  }
+
+  setTimezone("America/Los_Angeles");
+  testToJson(
+      makeRowVector(
+          {"ntz", "tz"}, {data, makeNullableFlatVector<Timestamp>(timestamps)}),
+      makeFlatVector<std::string>(
+          {R"({"ntz":"2024-01-01T00:00:00.123","tz":"2023-12-31T16:00:00.123-08:00"})",
+           R"({"ntz":"1969-12-31T23:59:59.999","tz":"1969-12-31T15:59:59.999-08:00"})",
+           R"({})"}));
+}
+
 TEST_F(ToJsonTest, basicDate) {
   auto data = makeNullableFlatVector<int32_t>(
       {0, 18321, -25567, 2932896, std::nullopt}, DateType::get());
-  auto input = makeRowVector({"a"}, {data});
+  auto input = makeNamedRowVector("a", data);
   auto expected = makeFlatVector<std::string>(
       {R"({"a":"1970-01-01"})",
        R"({"a":"2020-02-29"})",
@@ -384,10 +440,10 @@ TEST_F(ToJsonTest, unsupportedType) {
       "to_json function does not support type MAP<ARRAY<MAP<VARCHAR,INTEGER>>,INTEGER>.");
 
   // ROW(MAP(ARRAY(MAP)))
-  input = makeRowVector(
-      {"a"},
-      {fuzzer.fuzzDictionary(
-          fuzzer.fuzzFlat(MAP(ARRAY(MAP(BIGINT(), BIGINT())), INTEGER())))});
+  input = makeNamedRowVector(
+      "a",
+      fuzzer.fuzzDictionary(
+          fuzzer.fuzzFlat(MAP(ARRAY(MAP(BIGINT(), BIGINT())), INTEGER()))));
   VELOX_ASSERT_THROW(
       testToJson(input, nullptr),
       "to_json function does not support type ROW<a:MAP<ARRAY<MAP<BIGINT,BIGINT>>,INTEGER>>.");

@@ -133,8 +133,8 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   }
 
  private:
-  // Sets each request's 'buffer.requestBytes' and returns the total
-  // page-padding bytes that per-request allocations would over-allocate.
+  // Sets each request's 'buffer.requestBytes' and returns the bytes that a
+  // shared allocation would avoid in page padding and duplicate buffers.
   int64_t computeLoadSizes();
 
   // Allocates each non-duplicate request's buffer and returns the file-ordered

@@ -108,7 +108,7 @@ struct DecimalAddSubtractBase {
   decimalAddResult(T whole, T fraction, uint8_t resultScale, bool& overflow) {
     T scaledWhole = sparksql::DecimalUtil::multiply<T>(
         whole, velox::DecimalUtil::kPowersOfTen[resultScale], overflow);
-    if (FOLLY_UNLIKELY(overflow)) {
+    if (overflow) [[unlikely]] {
       return 0;
     }
     const auto result = scaledWhole + fraction;

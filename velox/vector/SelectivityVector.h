@@ -196,6 +196,19 @@ class SelectivityVector {
     updateBounds();
   }
 
+  /// Returns the unselected rows within this vector's size.
+  SelectivityVector complement() const {
+    return complement(size_);
+  }
+
+  /// Returns the unselected rows within 'size'. Rows beyond this vector's size
+  /// are selected; rows beyond 'size' are excluded.
+  SelectivityVector complement(vector_size_t size) const {
+    SelectivityVector result(size);
+    result.deselect(*this);
+    return result;
+  }
+
   /**
    * Merges the valid vector of another SelectivityVector by !AND'ing them
    * together. This is used to support logical deletes where

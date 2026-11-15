@@ -24,6 +24,8 @@ class HyperLogLogType final : public VarbinaryType {
   HyperLogLogType() = default;
 
  public:
+  static std::shared_ptr<const HyperLogLogType> create() = delete;
+
   static std::shared_ptr<const HyperLogLogType> get() {
     VELOX_CONSTEXPR_SINGLETON HyperLogLogType kInstance;
     return {std::shared_ptr<const HyperLogLogType>{}, &kInstance};

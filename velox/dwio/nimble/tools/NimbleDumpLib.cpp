@@ -26,20 +26,20 @@
 #include "folly/cli/NestedCommandLineApp.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/StatsGenerated.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
+#include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 #include "velox/dwio/nimble/tools/NimbleDumpLib.h"
-#include "velox/dwio/nimble/velox/BatchReader.h"
-#include "velox/dwio/nimble/velox/StatsGenerated.h"
-#include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 
 namespace facebook::nimble::tools {
@@ -655,25 +655,11 @@ void NimbleDumpLib::emitStripes(bool noHeader) {
        {"Stripe Size", 15, Alignment::Right},
        {"Row Count", 10, Alignment::Right}},
       noHeader);
-  // Stripe identifier internally is holding on to a reference counted cache of
-  // stripe groups. We must hold on to it across loop iterations in order to
-  // maintain the items in the cache.
-  std::optional<StripeIdentifier> stripeIdentifier;
-  std::vector<TabletReader::StreamMetadata> locationsScratch;
   for (auto i = 0; i < tabletReader->stripeCount(); ++i) {
-    stripeIdentifier = tabletReader->stripeIdentifier(i);
-    locationsScratch.resize(
-        tabletReader->streamCount(stripeIdentifier.value()));
-    tabletReader->streamLocations(stripeIdentifier.value(), locationsScratch);
-    auto stripeSize = std::accumulate(
-        locationsScratch.begin(),
-        locationsScratch.end(),
-        0UL,
-        [](auto size, const auto& location) { return size + location.size; });
     formatter.writeRow({
         folly::to<std::string>(i),
         commaSeparated(tabletReader->stripeOffset(i)),
-        commaSeparated(stripeSize),
+        commaSeparated(tabletReader->stripeSize(i)),
         commaSeparated(tabletReader->stripeRowCount(i)),
     });
   }
@@ -1392,16 +1378,23 @@ void NimbleDumpLib::emitIndex() {
     uint64_t totalMetadataBytes = 0;
     for (size_t i = 0; i < indexLayout.partitions.size(); ++i) {
       const auto& part = indexLayout.partitions[i];
+      uint64_t keyStreamBytes{0};
+      for (const auto& region : part.keyStreamRegions) {
+        keyStreamBytes += region.length;
+      }
+      const uint64_t keyStreamOffset = part.keyStreamRegions.empty()
+          ? 0
+          : part.keyStreamRegions.front().offset;
       partitionFormatter.writeRow({
           std::to_string(i),
           commaSeparated(part.numChunks),
           commaSeparated(part.numRows),
-          commaSeparated(part.keyStreamRegion.length),
+          commaSeparated(keyStreamBytes),
           commaSeparated(part.metadataSizeBytes),
-          commaSeparated(part.keyStreamRegion.offset),
+          commaSeparated(keyStreamOffset),
       });
       totalChunks += part.numChunks;
-      totalKeyStreamBytes += part.keyStreamRegion.length;
+      totalKeyStreamBytes += keyStreamBytes;
       totalMetadataBytes += part.metadataSizeBytes;
     }
     ostream_ << "Total Chunks: " << commaSeparated(totalChunks)

@@ -101,8 +101,7 @@ ArbitrationParticipant::ArbitrationParticipant(
       poolWeakPtr_(pool),
       pool_(pool.get()),
       config_(config),
-      maxCapacity_(pool_->maxCapacity()),
-      createTimeNs_(getCurrentTimeNano()) {
+      maxCapacity_(pool_->maxCapacity()) {
   VELOX_CHECK_LE(
       config_->minCapacity,
       maxCapacity_,

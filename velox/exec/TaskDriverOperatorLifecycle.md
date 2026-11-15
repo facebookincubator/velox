@@ -48,16 +48,16 @@ Task has a shared ownership of Drivers.
 
 Task stores references to Drivers in two places: (1) drivers_ member variable
 that stores all drivers; (2) SplitGroupState.barriers stores references to
-Drivers containing join builds (these are used in Task::allPeersFinished).
+Drivers containing join builds (these are used in Task::allPeersArrived).
 
 References to drivers_ are cleared in (1) Task::removeDriver called from
 Driver::close; (2) Task::terminate.
 
 References to Drivers stored in barriers are cleared in (1) Task::removeDriver
-via SplitGroupState::clear(); (2) Task::allPeersFinished when all join build
+via SplitGroupState::clear(); (2) Task::allPeersArrived when all join build
 pipelines finish; (3) Task::terminate via SplitGroupState::clear().
 
-Task::removeDriver and Task::allPeersFinished are called in happy paths
+Task::removeDriver and Task::allPeersArrived are called in happy paths
 (including a path where Driver itself encounters an error and closes itself).
 Task::terminate is called in the error path.
 

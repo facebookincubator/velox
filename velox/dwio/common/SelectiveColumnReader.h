@@ -428,16 +428,14 @@ class SelectiveColumnReader {
   }
 
   /// Returns true if no filters or deterministic filters/hooks that discard
-  /// nulls. This is used at read prepare time. useFastPath() in DecoderUtil.h
-  /// is used at read time and is expected to produce the same result.
+  /// nulls, for a read whose rows have nulls when 'hasNulls' is true. This is
+  /// used at read prepare time, and at read time through useFastPath() in
+  /// DecoderUtil.h, so the reader and the decoders take the bulk path together.
+  bool useBulkPath(bool hasNulls) const;
+
+  /// Same as useBulkPath(bool) for the nulls this reader decoded.
   bool useBulkPath() const {
-    auto* filter = scanSpec_->filter();
-    return hasBulkPath() && process::hasSimd() &&
-        (!filter ||
-         (filter->isDeterministic() &&
-          (!nullsInReadRange_ || !filter->testNull()))) &&
-        (!scanSpec_->valueHook() || !nullsInReadRange_ ||
-         !scanSpec_->valueHook()->acceptsNulls());
+    return useBulkPath(nullsInReadRange_ != nullptr);
   }
 
   // true if 'this' has a fast path.
@@ -650,8 +648,12 @@ class SelectiveColumnReader {
   }
 
   bool useOutputRows() const {
-    return scanSpec_->hasFilter() || hasDeletion();
+    return hasRowFilter() || hasDeletion();
   }
+
+  // True if the scan spec has a filter that can drop rows. An AlwaysTrue filter
+  // keeps every row, so the column visitors record no output rows for it.
+  bool hasRowFilter() const;
 
   memory::MemoryPool* const pool_;
 

@@ -33,7 +33,9 @@ folly::dynamic IcebergDataFileStatistics::toJson() const {
     auto fieldIdStr = folly::to<std::string>(fieldId);
     columnSizes[fieldIdStr] = stats.columnSize;
     valueCounts[fieldIdStr] = stats.valueCount;
-    nullValueCounts[fieldIdStr] = stats.nullValueCount;
+    if (stats.nullValueCount.has_value()) {
+      nullValueCounts[fieldIdStr] = stats.nullValueCount.value();
+    }
     if (stats.nanValueCount.has_value()) {
       nanValueCounts[fieldIdStr] = stats.nanValueCount.value();
     }

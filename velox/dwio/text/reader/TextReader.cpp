@@ -17,6 +17,7 @@
 #include "velox/dwio/text/reader/TextReader.h"
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <functional>
 #include <string>
 
 #include "velox/common/encode/Base64.h"
@@ -142,7 +143,6 @@ TextRowReader::TextRowReader(
     : RowReader(),
       contents_{fileContents},
       schemaWithId_{TypeWithId::create(fileContents->schema)},
-      scanSpec_{opts.scanSpec()},
       selectedSchema_{nullptr},
       options_{opts},
       columnSelector_{
@@ -303,7 +303,7 @@ uint64_t TextRowReader::next(
   // Resize the row vector to the actual number of rows read.
   // Handled here for both cases: pos_ > fileLength_ and pos_ > limit_
   rowVecPtr->resize(rowsRead);
-  result = projectColumns(rowVecPtr, *scanSpec_, mutation);
+  result = projectColumns(rowVecPtr, *options_.scanSpec(), mutation);
 
   return rowsRead;
 }
@@ -1453,7 +1453,7 @@ void TextRowReader::readElement(
         flatVector->setNull(insertionRow, true);
       } else {
         auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(s).thenOrThrow(
-            folly::identity,
+            std::identity{},
             [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
         ts.toGMT(Timestamp::defaultTimezone());
         flatVector->set(

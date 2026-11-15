@@ -51,6 +51,7 @@ velox_add_library(
   JsonFunctions.cpp
   Map.cpp
   MapEntries.cpp
+  MapExcept.cpp
   MapKeysAndValues.cpp
   MapSubset.cpp
   MapZipWith.cpp
@@ -64,6 +65,7 @@ velox_add_library(
   SplitToMap.cpp
   StringFunctions.cpp
   Subscript.cpp
+  TimeIntervalYearMonth.cpp
   ToUtf8.cpp
   Transform.cpp
   TransformWithIndex.cpp
@@ -89,6 +91,7 @@ velox_add_library(
   Cardinality.h
   Comparisons.h
   DataSizeFunctions.h
+  DateTimeCalendarFunctions.h
   DateTimeFunctions.h
   DateTimeImpl.h
   DecimalFunctions.h
@@ -110,7 +113,6 @@ velox_add_library(
   L2Norm.h
   Map.h
   MapAppend.h
-  MapExcept.h
   MapFunctions.h
   MapIntersect.h
   MapKeysByTopNValues.h
@@ -141,6 +143,7 @@ velox_add_library(
   SplitToMultiMap.h
   StringFunctions.h
   TDigestFunctions.h
+  TimeIntervalYearMonth.h
   URIParser.h
   URLFunctions.h
   UuidFunctions.h
@@ -165,6 +168,7 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_FAISS)
+  velox_sources(velox_functions_prestosql_impl PRIVATE VectorIndexFunctions.h)
   velox_link_libraries(velox_functions_prestosql_impl FAISS::faiss)
   velox_compile_definitions(velox_functions_prestosql_impl PRIVATE VELOX_ENABLE_FAISS)
 endif()

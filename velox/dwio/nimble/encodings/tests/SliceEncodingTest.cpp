@@ -26,7 +26,6 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/Zigzag.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
@@ -36,11 +35,13 @@
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -396,8 +397,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingMatchesSourceRows) {
   // partial-front, partial-back and single-block-interior cases are all
   // covered against a raw block, a constant block, and two bit-packed ones.
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::deprecated::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -425,8 +426,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapsOnlyWhenPartial) {
   // single-block interior -- comes back wrapped in a SliceEncoding.
   const auto values = makeBlockBitPackingSource(pool_.get());
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::deprecated::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -470,8 +471,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapsOnlyWhenPartial) {
 TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapperTrimsToLength) {
   const auto values = makeBlockBitPackingSource(pool_.get());
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::deprecated::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -507,8 +508,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesInt64) {
                          : int64_t{1} << (16 + i))); // raw, bitWidth == 255
   }
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int64_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::deprecated::BlockBitPackingEncoding<int64_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -539,8 +540,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesPartialLastBlock) {
     values.push_back(500 + i);
   }
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::deprecated::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -570,8 +571,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesShortSource) {
     values.push_back(7000 + i);
   }
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::deprecated::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -598,8 +599,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesVarintRowCount) {
   const auto values = makeBlockBitPackingSource(pool_.get());
   nimble::Encoding::Options writeOptions{
       .useVarintRowCount = true, .blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::deprecated::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -1081,6 +1082,23 @@ TEST_F(SliceEncodingTest, pushDownConstant) {
   auto encoding = createEncoding(wrapped);
   const std::vector<int32_t> expected{34, 34, 34};
   EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownSequence) {
+  const auto values = makeVector<int64_t>({-6, -2, 2, 6, 10, 14});
+  const auto encoded =
+      nimble::test::Encoder<nimble::SequenceEncoding<int64_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<int64_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/4, *buffer_, /*valueDelta=*/-100, {});
+
+  // Push-down shifts the base, which shifts every row by the same delta.
+  EXPECT_EQ(readStoredValueDelta(wrapped), 0);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int64_t> expected{-102, -98, -94, -90};
+  EXPECT_EQ(materialize<int64_t>(*encoding, 4), expected);
 }
 
 TEST_F(SliceEncodingTest, pushDownTrivialUint32) {

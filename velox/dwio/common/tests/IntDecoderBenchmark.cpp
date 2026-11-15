@@ -887,7 +887,6 @@ size_t writeVulongToBuffer(uint64_t val, char* buffer, size_t pos) {
       val = (static_cast<uint64_t>(val) >> 7);
     }
   }
-  return pos;
 }
 
 BENCHMARK(decodeOld_16) {

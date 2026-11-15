@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
@@ -39,10 +40,16 @@
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxExchange.h"
+#include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
+#endif
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
@@ -68,6 +75,38 @@
 #include "velox/exec/Window.h"
 
 namespace facebook::velox::cudf_velox {
+
+namespace {
+
+bool containsCustomComparison(const TypePtr& type) {
+  if (type->providesCustomComparison()) {
+    return true;
+  }
+  for (size_t i = 0; i < type->size(); ++i) {
+    if (containsCustomComparison(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool containsCustomComparison(const core::TypedExprPtr& expression) {
+  if (containsCustomComparison(expression->type())) {
+    return true;
+  }
+  return std::any_of(
+      expression->inputs().begin(),
+      expression->inputs().end(),
+      [](const auto& input) { return containsCustomComparison(input); });
+}
+
+bool subtreeHasUnsupportedType(const core::PlanNodePtr& root) {
+  return core::PlanNode::findFirstNode(root.get(), [](const auto* node) {
+           return !isTypeSupportedByCudf(node->outputType());
+         }) != nullptr;
+}
+
+} // namespace
 
 /// OperatorAdapterRegistry Implementation
 OperatorAdapterRegistry& OperatorAdapterRegistry::getInstance() {
@@ -106,6 +145,42 @@ void OperatorAdapterRegistry::clear() {
   adapters_.clear();
 }
 
+namespace {
+
+// Returns whether legacy_cast leaves a cast from 'source' to 'target' as is: a
+// cast between BOOLEAN, integer, REAL, DOUBLE, DECIMAL and DATE types, or from
+// VARCHAR to DATE or DECIMAL.
+// NOTE: The list is short on purpose. legacy_cast changes how a VARCHAR parses
+// as a TIMESTAMP, how a TIMESTAMP, REAL or DOUBLE prints as a VARCHAR, and
+// whether a VARCHAR with non-ASCII characters casts to an integer.
+bool isLegacyCastIndependent(const TypePtr& source, const TypePtr& target) {
+  const auto isNumberOrDate = [](const TypePtr& type) {
+    return type->isDate() || type->isDecimal() ||
+        (std::string_view(type->name()) == type->kindName() &&
+         (type->isBoolean() || type->isTinyint() || type->isSmallint() ||
+          type->isInteger() || type->isBigint() || type->isReal() ||
+          type->isDouble()));
+  };
+  if (source->isVarchar()) {
+    return target->isDate() || target->isDecimal();
+  }
+  return isNumberOrDate(source) && isNumberOrDate(target);
+}
+
+// Returns whether 'expr' holds a CAST or TRY_CAST that legacy_cast may change.
+bool containsLegacyCastDependentCast(const core::TypedExprPtr& expr) {
+  if (expr->isCastKind() &&
+      !isLegacyCastIndependent(expr->inputs().at(0)->type(), expr->type())) {
+    return true;
+  }
+  return std::any_of(
+      expr->inputs().begin(), expr->inputs().end(), [](const auto& input) {
+        return containsLegacyCastDependentCast(input);
+      });
+}
+
+} // namespace
+
 /// TableScanAdapter - Keeps original operator (produces GPU output)
 class TableScanAdapter : public OperatorAdapter {
  public:
@@ -118,7 +193,7 @@ class TableScanAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto tableScanNode =
         std::dynamic_pointer_cast<const core::TableScanNode>(planNode);
     if (!tableScanNode) {
@@ -136,16 +211,50 @@ class TableScanAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
                                       iceberg::CudfIcebergConnector>(connector);
 
-    bool canRunOnGPU =
-        cudfHiveConnector != nullptr or cudfIcebergConnector != nullptr;
-
-    if (!canRunOnGPU) {
+    if (cudfHiveConnector == nullptr && cudfIcebergConnector == nullptr) {
       LOG_FALLBACK(
           "TableScan connector is not CudfHiveConnector or CudfIcebergConnector, PlanNode id: {}",
           planNode->id());
+      return false;
     }
 
-    return canRunOnGPU;
+    // Ask with the ConnectorQueryCtx the TableScan creates for the connector,
+    // so that this decision matches the data source the connector picks.
+    // unsupportedReason() allocates only from the operator pool, so no
+    // connector pool is needed.
+    const auto connectorQueryCtx = op->operatorCtx()->createConnectorQueryCtx(
+        tableScanNode->tableHandle()->connectorId(),
+        planNode->id(),
+        /*connectorPool=*/nullptr);
+    if (const auto reason = facebook::velox::cudf_velox::connector::hive::
+            CudfHiveDataSource::unsupportedReason(
+                tableScanNode->tableHandle(), *connectorQueryCtx)) {
+      LOG_FALLBACK(
+          "TableScan is not supported by the cuDF data source, PlanNode id: {}: {}",
+          planNode->id(),
+          *reason);
+      return false;
+    }
+
+    // The data source folds the remaining filter without legacy_cast, which
+    // changes how some literals cast, such as a TIMESTAMP literal. The
+    // connector cannot see legacy_cast to fall back, so the scan fails unless
+    // every cast in the filter is one legacy_cast leaves as is.
+    // TODO: Remove this check once the data source folds with the session
+    // QueryConfig (facebookincubator/velox#19476).
+    const auto hiveTableHandle = std::dynamic_pointer_cast<
+        const velox::connector::hive::HiveTableHandle>(
+        tableScanNode->tableHandle());
+    VELOX_CHECK_NOT_NULL(hiveTableHandle);
+    const auto& remainingFilter = hiveTableHandle->remainingFilter();
+    if (ctx->queryConfig().isLegacyCast() && remainingFilter &&
+        containsLegacyCastDependentCast(remainingFilter)) {
+      VELOX_UNSUPPORTED(
+          "Remaining filter with a cast that legacy_cast may change is not supported by the cuDF data source: {}",
+          remainingFilter->toString());
+    }
+
+    return true;
   }
 
   bool acceptsGpuInput() const override {
@@ -194,14 +303,31 @@ class FilterProjectAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::ProjectNode>(planNode);
     auto filterNode = filterProjectOp->filterNode();
 
-    if (projectPlanNode) {
-      if (projectPlanNode->sources()[0]->outputType()->size() == 0) {
-        if (filterNode || !projectPlanNode->projections().empty()) {
-          LOG_FALLBACK(
-              "FilterProject empty input type with filter or projections, PlanNode id: {}",
-              planNode->id());
-          return false;
-        }
+    // cuDF sizes an expression result from an input column. Over a
+    // zero-column input a filter has nothing to evaluate against, and only
+    // constant projections, which CudfFilterProject fills to the row count
+    // of each batch, can run. A FilterNode keeps its input type, so the
+    // source of 'planNode' gives the input type of a fused FilterProject too.
+    const auto& inputType = planNode->sources()[0]->outputType();
+    if (inputType->size() == 0) {
+      if (filterNode) {
+        LOG_FALLBACK(
+            "FilterProject filter over a zero-column input, PlanNode id: {}",
+            planNode->id());
+        return false;
+      }
+      if (projectPlanNode &&
+          !std::all_of(
+              projectPlanNode->projections().begin(),
+              projectPlanNode->projections().end(),
+              [&](const auto& projection) {
+                return isConstantProjectionOverZeroColumns(
+                    inputType, projection);
+              })) {
+        LOG_FALLBACK(
+            "FilterProject non-constant projection over a zero-column input, PlanNode id: {}",
+            planNode->id());
+        return false;
       }
     }
 
@@ -376,7 +502,7 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     }
 
     if (joinPlanNode->filter()) {
-      if (!canExprRunOnGpu(
+      if (!canJoinFilterRunOnGpu(
               joinPlanNode->filter(),
               ctx->task->queryCtx().get(),
               op->pool())) {
@@ -386,6 +512,26 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
         return false;
       }
     }
+
+    // Reject if any join source has types that cuDF cannot represent.
+    // The probe and build pipelines are compiled independently by ToCudf,
+    // so one side may reject GPU execution (e.g. due to unsupported types)
+    // while the other does not. This check prevents a bridge mismatch
+    // where CudfHashJoinProbe waits for a CudfHashJoinBridge that
+    // CudfHashJoinBuild never populates because it stayed on CPU.
+    if (std::any_of(
+            joinPlanNode->sources().begin(),
+            joinPlanNode->sources().end(),
+            [](const auto& source) {
+              return subtreeHasUnsupportedType(source);
+            })) {
+      LOG_FALLBACK(
+          "HashJoin source has column types unsupported by cuDF, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
     return true;
   }
 };
@@ -490,7 +636,14 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
 
     // Check if join condition can be evaluated on GPU
     if (joinPlanNode->joinCondition()) {
-      if (!canExprRunOnGpu(
+      if (containsCustomComparison(joinPlanNode->joinCondition())) {
+        LOG_FALLBACK(
+            "NestedLoopJoin condition has custom comparison semantics, "
+            "PlanNode id: {}",
+            planNode->id());
+        return false;
+      }
+      if (!canJoinFilterRunOnGpu(
               joinPlanNode->joinCondition(),
               ctx->task->queryCtx().get(),
               op->pool())) {
@@ -500,6 +653,22 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
         return false;
       }
     }
+
+    // Reject if any join source has types that cuDF cannot represent.
+    // See comment in CudfHashJoinBaseAdapter::canRunOnGPU.
+    if (std::any_of(
+            joinPlanNode->sources().begin(),
+            joinPlanNode->sources().end(),
+            [](const auto& source) {
+              return subtreeHasUnsupportedType(source);
+            })) {
+      LOG_FALLBACK(
+          "NestedLoopJoin source has column types unsupported by cuDF, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
     return true;
   }
 };
@@ -668,8 +837,7 @@ class TopNRowNumberAdapter : public OperatorAdapter {
     if (!node) {
       return false;
     }
-    return node->rankFunction() ==
-        core::TopNRowNumberNode::RankFunction::kRowNumber;
+    return CudfTopNRowNumber::canRunOnGPU(*node);
   }
 
   bool acceptsGpuInput() const override {
@@ -750,14 +918,15 @@ class LocalPartitionAdapter : public OperatorAdapter {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     bool canRun = canHandle(op) && localPartitionPlanNode &&
-        CudfLocalPartition::shouldReplace(localPartitionPlanNode);
+        CudfLocalPartition::shouldReplace(localPartitionPlanNode) &&
+        !subtreeHasUnsupportedType(localPartitionPlanNode);
     if (!canRun) {
       LOG_FALLBACK(
           "LocalPartitionAdapter {}, PlanNode id: {}",
           !canHandle(op) ? "operator is not LocalPartition"
               : !localPartitionPlanNode
               ? "planNode is not LocalPartitionNode"
-              : "CudfLocalPartition::shouldReplace returned false",
+              : "partition spec or source types are unsupported by cuDF",
           planNode->id());
     }
     return canRun;
@@ -814,13 +983,14 @@ class LocalExchangeAdapter : public OperatorAdapter {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     bool canRun = localPartitionPlanNode &&
-        CudfLocalPartition::shouldReplace(localPartitionPlanNode);
+        CudfLocalPartition::shouldReplace(localPartitionPlanNode) &&
+        !subtreeHasUnsupportedType(localPartitionPlanNode);
     if (!canRun) {
       LOG_FALLBACK(
           "LocalExchangeAdapter {}, PlanNode id: {}",
           !localPartitionPlanNode
               ? "planNode is not LocalPartitionNode"
-              : "CudfLocalPartition::shouldReplace returned false",
+              : "partition spec or source types are unsupported by cuDF",
           planNode->id());
     }
     return canRun;
@@ -1031,7 +1201,8 @@ class CallbackSinkAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     auto supported = planNode &&
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
-            nullptr;
+            nullptr &&
+        !subtreeHasUnsupportedType(planNode);
     if (!supported) {
       LOG_FALLBACK(
           "CallbackSink operator not supported on cuDF, PlanNode id: {}",
@@ -1076,7 +1247,8 @@ class LocalMergeAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     return planNode &&
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
-        nullptr;
+        nullptr &&
+        !subtreeHasUnsupportedType(planNode);
   }
 
   bool acceptsGpuInput() const override {
@@ -1236,6 +1408,117 @@ class GroupIdAdapter : public OperatorAdapter {
   }
 };
 
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+
+/// UcxExchangeAdapter - Keeps the operator; describes its GPU capabilities and,
+/// for a merge exchange, the sort that follows it.
+///
+/// UcxExchange itself is not a replacement produced here: it is built directly
+/// by the exec::ExchangeTransportEntry registered under
+/// core::TransportKind::kUcx, so by the time the cuDF driver adapter runs, the
+/// operator already exists. Describing it here is what tells CompileState the
+/// operator emits CudfVectors and is not a CPU operator, which keeps it from
+/// being wrapped in conversion operators or reported as a failed replacement.
+///
+/// A core::MergeExchangeNode additionally needs a sort behind the exchange,
+/// because UcxExchangeClient multiplexes every source into one queue and so
+/// destroys the per-source orderings exec::MergeExchange relies on. That sort
+/// is described here rather than built by the transport, so that
+/// DriverFactory::replaceOperators splices it in and renumbers the driver's
+/// operator ids -- one plan node, two operators, consecutive ids.
+class UcxExchangeAdapter : public OperatorAdapter {
+ public:
+  UcxExchangeAdapter() : OperatorAdapter("UcxExchange") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<ucx_exchange::UcxExchange>();
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    // A source operator; it has no upstream operator in its pipeline.
+    return false;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    // Inserted after the kept UcxExchange, not in place of it.
+    const auto mergeExchangeNode =
+        std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode);
+    if (mergeExchangeNode == nullptr) {
+      return {}; // A plain exchange needs no sort.
+    }
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfOrderBy>(operatorId, ctx, mergeExchangeNode));
+    return result;
+  }
+
+  bool keepOperator() const override {
+    return true;
+  }
+};
+
+/// UcxPartitionedOutputAdapter - Keeps the operator; describes its GPU
+/// capabilities.
+///
+/// The counterpart of UcxExchangeAdapter for the producer side: the operator
+/// comes from the exec::OutputTransportEntry registered under
+/// core::TransportKind::kUcx, and this adapter only tells CompileState that it
+/// consumes CudfVectors and emits nothing.
+class UcxPartitionedOutputAdapter : public OperatorAdapter {
+ public:
+  UcxPartitionedOutputAdapter() : OperatorAdapter("UcxPartitionedOutput") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<ucx_exchange::UcxPartitionedOutput>();
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    // Terminal operator: getOutput() always returns nullptr, so no conversion
+    // operator may be appended after it.
+    return false;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/,
+      int32_t /*operatorId*/) const override {
+    return {}; // Keep original operator.
+  }
+
+  bool keepOperator() const override {
+    return true;
+  }
+};
+
+#endif // VELOX_ENABLE_UCX_EXCHANGE
+
 /// Registration Function
 void registerAllOperatorAdapters() {
   auto& registry = OperatorAdapterRegistry::getInstance();
@@ -1266,6 +1549,10 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
   registry.registerAdapter(std::make_unique<PartitionedOutputAdapter>());
   registry.registerAdapter(std::make_unique<WindowAdapter>());
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  registry.registerAdapter(std::make_unique<UcxExchangeAdapter>());
+  registry.registerAdapter(std::make_unique<UcxPartitionedOutputAdapter>());
+#endif
 }
 
 } // namespace facebook::velox::cudf_velox

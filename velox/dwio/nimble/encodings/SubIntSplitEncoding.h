@@ -352,20 +352,17 @@ void SubIntSplitEncoding<T>::readWithVisitor(
   constexpr bool kIsFluidCast = sizeof(OutputType) >= sizeof(physicalType) &&
       std::is_integral_v<OutputType> && std::is_integral_v<physicalType>;
 
-  // Fast path: bulk-decode for integral 4/8-byte physical types extracted into
-  // the reader with a compatible (at-least-as-wide integral) output type.
+  // Fast path: bulk-decode for integral 4/8-byte physical types with a
+  // compatible (at-least-as-wide integral) output type.
   // Float/double fall through here (kIsFluidCast is false for them) and use the
-  // slow path, which applies castFromPhysicalType. The runtime useFastPath
-  // check additionally requires a deterministic filter, AVX2, and the bulk path
+  // slow path, which applies castFromPhysicalType. At runtime, visitors other
+  // than bulkFastPathByDefault need scanFastPath, and the useFastPath check
+  // additionally requires a deterministic filter, AVX2, and the bulk path
   // being enabled with null+filter/hook compatibility.
-  if constexpr (
-      kIsSuitableWidth &&
-      std::is_same_v<
-          typename V::Extract,
-          velox::dwio::common::ExtractToReader> &&
-      kIsFluidCast) {
+  if constexpr (kIsSuitableWidth && kIsFluidCast) {
     auto* nulls = visitor.reader().rawNullsInReadRange();
-    if (velox::dwio::common::useFastPath(visitor, nulls)) {
+    if ((detail::bulkFastPathByDefault<V>() || params.scanFastPath) &&
+        velox::dwio::common::useFastPath(visitor, nulls)) {
       detail::readWithVisitorFast(*this, visitor, params, nulls);
       return;
     }

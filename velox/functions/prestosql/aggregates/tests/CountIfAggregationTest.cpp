@@ -44,17 +44,17 @@ TEST_F(CountIfAggregationTest, countIfConst) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"count_if(c1)", "count_if(c2)"},
-      "SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"count_if(c1)", "count_if(c2)"})
+      .assertResults("SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"count_if(c1)", "count_if(c2)"},
-      "SELECT c0, sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp group by c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"count_if(c1)", "count_if(c2)"})
+      .assertResults(
+          "SELECT c0, sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp group by c0");
 }
 
 TEST_F(CountIfAggregationTest, mergeNullIntermediates) {
@@ -72,20 +72,20 @@ TEST_F(CountIfAggregationTest, mergeNullIntermediates) {
       counts,
   });
 
-  testAggregations(
-      {input},
-      {"c0"},
-      {"count_if_merge(c1)"},
-      {makeRowVector({
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"count_if_merge(c1)"})
+      .assertResults(makeRowVector({
           makeFlatVector<int64_t>({1, 2, 3}),
           makeFlatVector<int64_t>({10, 1'000, 0}),
-      })});
+      }));
 
-  testAggregations(
-      {input},
-      {},
-      {"count_if_merge(c1)"},
-      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{1'010})})});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"count_if_merge(c1)"})
+      .assertResults(makeRowVector(
+          {makeFlatVector<int64_t>(std::vector<int64_t>{1'010})}));
 
   // A null constant intermediate takes the constant-mapping branch.
   auto constantInput = makeRowVector({
@@ -93,14 +93,14 @@ TEST_F(CountIfAggregationTest, mergeNullIntermediates) {
       makeNullConstant(TypeKind::BIGINT, 3),
   });
 
-  testAggregations(
-      {constantInput},
-      {"c0"},
-      {"count_if_merge(c1)"},
-      {makeRowVector({
+  AggregationTester(*this)
+      .inputs(constantInput)
+      .groupBy({"c0"})
+      .aggregates({"count_if_merge(c1)"})
+      .assertResults(makeRowVector({
           makeFlatVector<int64_t>({1, 2}),
           makeFlatVector<int64_t>({0, 0}),
-      })});
+      }));
 }
 
 TEST_F(CountIfAggregationTest, oneAggregateSingleGroup) {
@@ -114,56 +114,59 @@ TEST_F(CountIfAggregationTest, oneAggregateSingleGroup) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors, {}, {"count_if(c0)"}, "SELECT sum(if(c0, 1, 0)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"count_if(c0)"})
+      .assertResults("SELECT sum(if(c0, 1, 0)) FROM tmp");
 }
 
 TEST_F(CountIfAggregationTest, oneAggregateMultipleGroups) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"count_if(c1)"},
-      "SELECT c0, sum(if(c1, 1, 0)) FROM tmp GROUP BY c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"count_if(c1)"})
+      .assertResults("SELECT c0, sum(if(c1, 1, 0)) FROM tmp GROUP BY c0");
 }
 
 TEST_F(CountIfAggregationTest, twoAggregatesSingleGroup) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"count_if(c1)", "count_if(c2)"},
-      "SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"count_if(c1)", "count_if(c2)"})
+      .assertResults("SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
 }
 
 TEST_F(CountIfAggregationTest, twoAggregatesMultipleGroups) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"count_if(c1)", "count_if(c2)"},
-      "SELECT c0, SUM(if(c1, 1, 0)), SUM(if(c2, 1, 0)) FROM tmp GROUP BY c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"count_if(c1)", "count_if(c2)"})
+      .assertResults(
+          "SELECT c0, SUM(if(c1, 1, 0)), SUM(if(c2, 1, 0)) FROM tmp GROUP BY c0");
 }
 
 TEST_F(CountIfAggregationTest, twoAggregatesMultipleGroupsWrapped) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors)
-            .filter("c0 % 2 = 0")
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.filter("c0 % 2 = 0")
             .project({"c0 % 11 AS c0_mod_11", "c1", "c2"});
-      },
-      {"c0_mod_11"},
-      {"count_if(c1)", "count_if(c2)"},
-      "SELECT c0 % 11, SUM(if(c1, 1, 0)), SUM(if(c2, 1, 0)) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
+      })
+      .groupBy({"c0_mod_11"})
+      .aggregates({"count_if(c1)", "count_if(c2)"})
+      .assertResults(
+          "SELECT c0 % 11, SUM(if(c1, 1, 0)), SUM(if(c2, 1, 0)) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
 }
 
 } // namespace facebook::velox::aggregate::test

@@ -46,6 +46,9 @@ enum class VectorIndexType : uint8_t {
   kIvfPq,
   /// IVF + RaBitQ binary quantization.
   kIvfRaBitQ,
+  /// IVF + RaBitQ with SIMD block scanning. Trades higher resident memory for
+  /// faster scans on dense candidate sets.
+  kIvfRaBitQFastScan,
   /// HNSW graph with SQ8 quantization.
   kHnswSq8,
 };

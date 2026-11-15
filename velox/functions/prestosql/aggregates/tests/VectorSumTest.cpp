@@ -42,7 +42,10 @@ TEST_F(VectorSumTest, global) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, globalWithNulls) {
@@ -60,7 +63,10 @@ TEST_F(VectorSumTest, globalWithNulls) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, differentLengthsThrowsError) {
@@ -96,7 +102,10 @@ TEST_F(VectorSumTest, emptyArrays) {
       }),
   });
 
-  testAggregations({allEmptyArrays}, {}, {"vector_sum(c0)"}, {expectedEmpty});
+  AggregationTester(*this)
+      .inputs(allEmptyArrays)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expectedEmpty);
 }
 
 TEST_F(VectorSumTest, nullArrays) {
@@ -106,7 +115,10 @@ TEST_F(VectorSumTest, nullArrays) {
   auto expectedNull = makeRowVector(
       {BaseVector::createNullConstant(ARRAY(BIGINT()), 1, pool())});
 
-  testAggregations({allNullArrays}, {}, {"vector_sum(c0)"}, {expectedNull});
+  AggregationTester(*this)
+      .inputs(allNullArrays)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expectedNull);
 }
 
 TEST_F(VectorSumTest, tinyintOverflow) {
@@ -271,7 +283,10 @@ TEST_F(VectorSumTest, floatNan) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, doubleNan) {
@@ -291,7 +306,10 @@ TEST_F(VectorSumTest, doubleNan) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, groupBy) {
@@ -333,8 +351,11 @@ TEST_F(VectorSumTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {batch1, batch2, batch3, batch4}, {"c0"}, {"vector_sum(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs({batch1, batch2, batch3, batch4})
+      .groupBy({"c0"})
+      .aggregates({"vector_sum(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, zerosSkipped) {
@@ -351,7 +372,10 @@ TEST_F(VectorSumTest, zerosSkipped) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, mixedZerosNullsAndValues) {
@@ -368,7 +392,10 @@ TEST_F(VectorSumTest, mixedZerosNullsAndValues) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, allZerosAndNulls) {
@@ -385,7 +412,10 @@ TEST_F(VectorSumTest, allZerosAndNulls) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, zerosWithFloats) {
@@ -402,7 +432,10 @@ TEST_F(VectorSumTest, zerosWithFloats) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, zerosWithDoubles) {
@@ -419,7 +452,10 @@ TEST_F(VectorSumTest, zerosWithDoubles) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, singleElement) {
@@ -436,7 +472,10 @@ TEST_F(VectorSumTest, singleElement) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, allNullElements) {
@@ -452,7 +491,10 @@ TEST_F(VectorSumTest, allNullElements) {
   };
   auto expected = makeRowVector({makeNullableArrayVector(expectedData)});
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, realType) {
@@ -469,7 +511,10 @@ TEST_F(VectorSumTest, realType) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, doubleType) {
@@ -486,7 +531,10 @@ TEST_F(VectorSumTest, doubleType) {
       }),
   });
 
-  testAggregations({data}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorSumTest, multipleBatches) {
@@ -501,7 +549,10 @@ TEST_F(VectorSumTest, multipleBatches) {
       makeArrayVector<int64_t>({{55, 77, 99}}),
   });
 
-  testAggregations({batch1, batch2}, {}, {"vector_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs({batch1, batch2})
+      .aggregates({"vector_sum(c0)"})
+      .assertResults(expected);
 }
 
 /// SQL equivalence tests verify vector_sum results by comparing against

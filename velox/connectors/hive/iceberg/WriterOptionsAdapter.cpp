@@ -28,11 +28,10 @@ namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
 
-// Manifest format string emitted in Iceberg commit messages for files that
-// share the ORC on-disk family. Iceberg's manifest vocabulary has no DWRF or
-// NIMBLE enum, so DWRF and NIMBLE files are reported as "ORC" per the
-// cross-engine convention shared with the Java planner (see
-// FileFormat.{DWRF,NIMBLE}.toIceberg() in presto-facebook-iceberg).
+// Manifest format string emitted in Iceberg commit messages for ORC and DWRF
+// files. Iceberg's manifest vocabulary has no DWRF enum, so DWRF is reported
+// as "ORC" per the cross-engine convention shared with the Java coordinator
+// (see FileFormat.DWRF.toIceberg() in presto-facebook-iceberg).
 constexpr std::string_view kOrcManifestFormat{"ORC"};
 
 class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {

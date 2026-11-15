@@ -55,50 +55,15 @@ uint64_t ProcessCpuWallTimer::processCpuNanos() noexcept {
   return toNanos(usage.ru_utime) + toNanos(usage.ru_stime);
 }
 
-#ifndef NDEBUG
-
-uint64_t getCurrentTimeSec() {
-  return ScopedTestTime::getCurrentTestTimeSec().value_or(
-      duration_cast<seconds>(system_clock::now().time_since_epoch()).count());
-}
-
-uint64_t getCurrentTimeMs() {
-  return ScopedTestTime::getCurrentTestTimeMs().value_or(
-      duration_cast<milliseconds>(system_clock::now().time_since_epoch())
-          .count());
-}
-
-uint64_t getCurrentTimeMicro() {
-  return ScopedTestTime::getCurrentTestTimeMicro().value_or(
-      duration_cast<microseconds>(system_clock::now().time_since_epoch())
-          .count());
-}
-
-uint64_t getCurrentTimeNano() {
-  return ScopedTestTime::getCurrentTestTimeNano().value_or(
+uint64_t EpochTime::nowNanos() {
+  const auto systemNanos =
       duration_cast<nanoseconds>(system_clock::now().time_since_epoch())
-          .count());
-}
+          .count();
+#ifndef NDEBUG
+  return ScopedTestTime::getCurrentTestTimeNano().value_or(systemNanos);
 #else
-
-uint64_t getCurrentTimeSec() {
-  return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
-}
-
-uint64_t getCurrentTimeMs() {
-  return duration_cast<milliseconds>(system_clock::now().time_since_epoch())
-      .count();
-}
-
-uint64_t getCurrentTimeMicro() {
-  return duration_cast<microseconds>(system_clock::now().time_since_epoch())
-      .count();
-}
-
-uint64_t getCurrentTimeNano() {
-  return duration_cast<nanoseconds>(system_clock::now().time_since_epoch())
-      .count();
-}
+  return systemNanos;
 #endif
+}
 
 } // namespace facebook::velox

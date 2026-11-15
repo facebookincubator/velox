@@ -1160,21 +1160,15 @@ std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
 
 bool waitForTaskDriversToFinish(exec::Task* task, uint64_t maxWaitMicros) {
   VELOX_USER_CHECK(!task->isRunning());
-  uint64_t waitMicros = 0;
-  while ((task->numFinishedDrivers() != task->numTotalDrivers()) &&
-         (waitMicros < maxWaitMicros)) {
-    const uint64_t kWaitMicros = 1000;
-    std::this_thread::sleep_for(std::chrono::microseconds(kWaitMicros));
-    waitMicros += kWaitMicros;
+  if (task->allDriversClosedFuture().wait(
+          std::chrono::microseconds(maxWaitMicros))) {
+    return true;
   }
-
-  if (task->numFinishedDrivers() != task->numTotalDrivers()) {
-    LOG(ERROR) << "Timed out waiting for all drivers of task " << task->taskId()
-               << " to finish. Finished drivers: " << task->numFinishedDrivers()
-               << ". Total drivers: " << task->numTotalDrivers();
-  }
-
-  return task->numFinishedDrivers() == task->numTotalDrivers();
+  const auto stats = task->taskStats();
+  LOG(ERROR) << "Timed out waiting for all drivers of task " << task->taskId()
+             << " to close. Open drivers: "
+             << stats.numTotalDrivers - stats.numCompletedDrivers;
+  return false;
 }
 
 } // namespace facebook::velox::exec

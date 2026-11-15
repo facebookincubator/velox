@@ -21,13 +21,15 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstring>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/dwio/common/Lemire/BitPacking/bitpackinghelpers.h"
 
 #include "arrow/util/bit_util.h"
-#include "arrow/util/bpacking.h"
+#include "arrow/util/endian.h"
 
 namespace facebook::velox::parquet {
 
@@ -119,12 +121,46 @@ inline uint64_t ReadLittleEndianWord(
     const uint8_t* buffer,
     int bytesRemaining) {
   uint64_t leValue = 0;
-  if (FOLLY_LIKELY(bytesRemaining >= 8)) {
+  if (bytesRemaining >= 8) [[likely]] {
     memcpy(&leValue, buffer, 8);
   } else {
     memcpy(&leValue, buffer, bytesRemaining);
   }
   return ::arrow::bit_util::FromLittleEndian(leValue);
+}
+
+// Unpacks the largest multiple of 32 values that doesn't exceed 'batchSize'
+// from 'in' to 'out' and returns the number of unpacked values.
+template <typename T>
+inline int unpack(const uint8_t* in, T* out, int batchSize, int numBits) {
+  static_assert(sizeof(T) == 4 || sizeof(T) == 8);
+  const int numBlocks = batchSize / 32;
+  // Each block of 32 values uses 'numBits' 32-bit words.
+  if (reinterpret_cast<uintptr_t>(in) % alignof(uint32_t) == 0) {
+    for (int i = 0; i < numBlocks; ++i) {
+      fastpforlib::fastunpack(
+          reinterpret_cast<const uint32_t*>(in) + i * numBits,
+          out + i * 32,
+          numBits);
+    }
+  } else {
+    // fastpforlib reads 'in' as 32-bit words, so copy the blocks to an aligned
+    // buffer first. Copy many blocks per memcpy() to keep the copy cheap.
+    constexpr int kNumWords{2048};
+    uint32_t words[kNumWords];
+    // 'numBits' is 0 when all values are 0.
+    const int blocksPerCopy = kNumWords / std::max(numBits, 1);
+    const auto blockSize = numBits * sizeof(uint32_t);
+    for (int i = 0; i < numBlocks; i += blocksPerCopy) {
+      const int numCopiedBlocks = std::min(blocksPerCopy, numBlocks - i);
+      std::memcpy(words, in + i * blockSize, numCopiedBlocks * blockSize);
+      for (int j = 0; j < numCopiedBlocks; ++j) {
+        fastpforlib::fastunpack(
+            words + j * numBits, out + (i + j) * 32, numBits);
+      }
+    }
+  }
+  return numBlocks * 32;
 }
 
 } // namespace detail
@@ -221,13 +257,13 @@ inline bool BitWriter::PutValue(uint64_t v, int numBits) {
     VELOX_DCHECK_EQ(v >> numBits, 0, "v = {}, numBits = {}", v, numBits);
   }
 
-  if (FOLLY_UNLIKELY(byteOffset_ * 8 + bitOffset_ + numBits > maxBytes_ * 8))
+  if (byteOffset_ * 8 + bitOffset_ + numBits > maxBytes_ * 8) [[unlikely]]
     return false;
 
   bufferedValues_ |= v << bitOffset_;
   bitOffset_ += numBits;
 
-  if (FOLLY_UNLIKELY(bitOffset_ >= 64)) {
+  if (bitOffset_ >= 64) [[unlikely]] {
     // Flush bufferedValues_ and write out bits of v that did not fit
     bufferedValues_ = folly::Endian::little(bufferedValues_);
     memcpy(buffer_ + byteOffset_, &bufferedValues_, 8);
@@ -296,7 +332,7 @@ inline void GetValue_(
     *bufferedValues = detail::ReadLittleEndianWord(
         buffer + *byteOffset, maxBytes - *byteOffset);
     // Read bits of v that crossed into new bufferedValues_
-    if (FOLLY_LIKELY(numBits - *bitOffset < static_cast<int>(8 * sizeof(T)))) {
+    if (numBits - *bitOffset < static_cast<int>(8 * sizeof(T))) [[likely]] {
       // if shift exponent(numBits - *bitOffset) is not less than sizeof(T),
       // *v will not change and the following code may cause a runtime error
       // that the shift exponent is too large
@@ -337,7 +373,7 @@ inline int BitReader::GetBatch(int numBits, T* v, int batchSize) {
   }
 
   int i = 0;
-  if (FOLLY_UNLIKELY(bitOffset != 0)) {
+  if (bitOffset != 0) [[unlikely]] {
     for (; i < batchSize && bitOffset != 0; ++i) {
       detail::GetValue_(
           numBits,
@@ -351,18 +387,16 @@ inline int BitReader::GetBatch(int numBits, T* v, int batchSize) {
   }
 
   if (sizeof(T) == 4) {
-    int numUnpacked = ::arrow::internal::unpack32(
-        reinterpret_cast<const uint32_t*>(buffer + byteOffset),
+    int numUnpacked = detail::unpack(
+        buffer + byteOffset,
         reinterpret_cast<uint32_t*>(v + i),
         batchSize - i,
         numBits);
     i += numUnpacked;
     byteOffset += numUnpacked * numBits / 8;
   } else if (sizeof(T) == 8 && numBits > 32) {
-    // Use unpack64 only if numBits is larger than 32
-    // TODO (ARROW-13677): improve the performance of internal::unpack64
-    // and remove the restriction of numBits
-    int numUnpacked = ::arrow::internal::unpack64(
+    // Unpack to 64-bit values only if numBits is larger than 32.
+    int numUnpacked = detail::unpack(
         buffer + byteOffset,
         reinterpret_cast<uint64_t*>(v + i),
         batchSize - i,
@@ -376,11 +410,8 @@ inline int BitReader::GetBatch(int numBits, T* v, int batchSize) {
     uint32_t unpackBuffer[bufferSize];
     while (i < batchSize) {
       int unpack_size = std::min(bufferSize, batchSize - i);
-      int numUnpacked = ::arrow::internal::unpack32(
-          reinterpret_cast<const uint32_t*>(buffer + byteOffset),
-          unpackBuffer,
-          unpack_size,
-          numBits);
+      int numUnpacked = detail::unpack(
+          buffer + byteOffset, unpackBuffer, unpack_size, numBits);
       if (numUnpacked == 0) {
         break;
       }
@@ -415,12 +446,12 @@ inline int BitReader::GetBatch(int numBits, T* v, int batchSize) {
 
 template <typename T>
 inline bool BitReader::GetAligned(int numBytes, T* v) {
-  if (FOLLY_UNLIKELY(numBytes > static_cast<int>(sizeof(T)))) {
+  if (numBytes > static_cast<int>(sizeof(T))) [[unlikely]] {
     return false;
   }
 
   int bytesRead = static_cast<int>(::arrow::bit_util::BytesForBits(bitOffset_));
-  if (FOLLY_UNLIKELY(byteOffset_ + bytesRead + numBytes > maxBytes_)) {
+  if (byteOffset_ + bytesRead + numBytes > maxBytes_) [[unlikely]] {
     return false;
   }
 
@@ -447,7 +478,7 @@ inline bool BitReader::GetAligned(int numBytes, T* v) {
 inline bool BitReader::Advance(int64_t numBits) {
   int64_t bitsRequired = bitOffset_ + numBits;
   int64_t bytesRequired = ::arrow::bit_util::BytesForBits(bitsRequired);
-  if (FOLLY_UNLIKELY(bytesRequired > maxBytes_ - byteOffset_)) {
+  if (bytesRequired > maxBytes_ - byteOffset_) [[unlikely]] {
     return false;
   }
   byteOffset_ += static_cast<int>(bitsRequired >> 3);
@@ -472,7 +503,7 @@ inline bool BitReader::GetVlqInt(uint32_t* v) {
 
   for (int i = 0; i < kMaxVlqByteLength; i++) {
     uint8_t byte = 0;
-    if (FOLLY_UNLIKELY(!GetAligned<uint8_t>(1, &byte))) {
+    if (!GetAligned<uint8_t>(1, &byte)) [[unlikely]] {
       return false;
     }
     tmp |= static_cast<uint32_t>(byte & 0x7F) << (7 * i);
@@ -487,7 +518,7 @@ inline bool BitReader::GetVlqInt(uint32_t* v) {
 }
 
 inline bool BitWriter::PutZigZagVlqInt(int32_t v) {
-  uint32_t copyValue = ::arrow::util::SafeCopy<uint32_t>(v);
+  uint32_t copyValue = std::bit_cast<uint32_t>(v);
   copyValue = (copyValue << 1) ^ static_cast<uint32_t>(v >> 31);
   return PutVlqInt(copyValue);
 }
@@ -497,7 +528,7 @@ inline bool BitReader::GetZigZagVlqInt(int32_t* v) {
   if (!GetVlqInt(&u))
     return false;
   u = (u >> 1) ^ (~(u & 1) + 1);
-  *v = ::arrow::util::SafeCopy<int32_t>(u);
+  *v = std::bit_cast<int32_t>(u);
   return true;
 }
 
@@ -516,7 +547,7 @@ inline bool BitReader::GetVlqInt(uint64_t* v) {
 
   for (int i = 0; i < kMaxVlqByteLengthForInt64; i++) {
     uint8_t byte = 0;
-    if (FOLLY_UNLIKELY(!GetAligned<uint8_t>(1, &byte))) {
+    if (!GetAligned<uint8_t>(1, &byte)) [[unlikely]] {
       return false;
     }
     tmp |= static_cast<uint64_t>(byte & 0x7F) << (7 * i);
@@ -531,7 +562,7 @@ inline bool BitReader::GetVlqInt(uint64_t* v) {
 }
 
 inline bool BitWriter::PutZigZagVlqInt(int64_t v) {
-  uint64_t copyValue = ::arrow::util::SafeCopy<uint64_t>(v);
+  uint64_t copyValue = std::bit_cast<uint64_t>(v);
   copyValue = (copyValue << 1) ^ static_cast<uint64_t>(v >> 63);
   return PutVlqInt(copyValue);
 }
@@ -541,7 +572,7 @@ inline bool BitReader::GetZigZagVlqInt(int64_t* v) {
   if (!GetVlqInt(&u))
     return false;
   u = (u >> 1) ^ (~(u & 1) + 1);
-  *v = ::arrow::util::SafeCopy<int64_t>(u);
+  *v = std::bit_cast<int64_t>(u);
   return true;
 }
 

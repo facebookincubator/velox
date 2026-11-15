@@ -45,7 +45,7 @@ void scalarGatherCopy(
       if (sources[i]
               ->childAt(sourceColumnChannel)
               ->isNullAt(sourceIndices[i])) {
-        if (FOLLY_UNLIKELY(rawNulls == nullptr)) {
+        if (rawNulls == nullptr) [[unlikely]] {
           rawNulls = target->mutableRawNulls();
         }
         bits::setNull(rawNulls, targetIndex + i, true);
@@ -64,7 +64,7 @@ void scalarGatherCopy(
       if (sources[i]
               ->childAt(sourceColumnChannel)
               ->isNullAt(sourceIndices[i])) {
-        if (FOLLY_UNLIKELY(rawNulls == nullptr)) {
+        if (rawNulls == nullptr) [[unlikely]] {
           rawNulls = target->mutableRawNulls();
         }
         bits::setNull(rawNulls, targetIndex + i, true);
@@ -449,7 +449,7 @@ void gatherCopy(
     const std::vector<vector_size_t>& sourceIndices,
     const std::vector<IdentityProjection>& columnMap) {
   VELOX_DCHECK_GE(count, 0);
-  if (FOLLY_UNLIKELY(count <= 0)) {
+  if (count <= 0) [[unlikely]] {
     return;
   }
   VELOX_CHECK_LE(count, sources.size());

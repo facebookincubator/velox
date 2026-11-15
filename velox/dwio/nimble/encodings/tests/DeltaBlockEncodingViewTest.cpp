@@ -25,9 +25,8 @@
 using namespace facebook;
 
 using DeltaBlockEncodingViewTest = nimble::test::EncodingViewTest;
-using EncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsDeltaBlockEncoding) {
+TEST_P(DeltaBlockEncodingViewTest, readsDeltaBlockEncoding) {
   nimble::Encoding::Options options;
   options.deltaBlockSize = 4;
 
@@ -41,7 +40,7 @@ TEST_F(EncodingViewTest, readsDeltaBlockEncoding) {
       options);
 }
 
-TEST_F(DeltaBlockEncodingViewTest, concurrent) {
+TEST_P(DeltaBlockEncodingViewTest, concurrent) {
   nimble::Encoding::Options options;
   options.deltaBlockSize = 64;
 
@@ -56,3 +55,5 @@ TEST_F(DeltaBlockEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::DeltaBlockEncoding<uint64_t>>(
       values, randomizedPositions(/*seed=*/41), options);
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(DeltaBlockEncodingViewTest);

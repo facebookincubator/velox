@@ -13,12 +13,16 @@
 # limitations under the License.
 
 # shellcheck shell=bash
-# shellcheck disable=SC2034 # CMAKE_FLAGS is consumed by callers that source this file.
+# shellcheck disable=SC2034 # CMAKE_FLAGS and VELOX_ENABLE_CUDF are consumed by callers that source this file.
 
 # Source this file (do not exec it) from a workflow `run:` step to
 # populate the CMAKE_FLAGS array for one of the supported build
 # profiles. The caller must set BUILD_PROFILE in env before sourcing;
 # USE_CLANG (default false) gates compiler-conditional flags.
+#
+# It also sets VELOX_ENABLE_CUDF to ON or OFF, matching the flag it
+# adds, so that a step installing dependencies can pass it on to
+# scripts/setup-centos-adapters.sh, which then installs what cuDF needs.
 #
 # Supported profiles:
 #   * adapters             — Linux release with adapters (linux-build-base.yml).
@@ -42,6 +46,8 @@
 #   BUILD_PROFILE=adapters [USE_CLANG=true] source .github/scripts/cmake-flags.sh
 #   EXTRA_CMAKE_FLAGS=("${CMAKE_FLAGS[@]}" -DVELOX_ENABLE_X=ON)
 
+VELOX_ENABLE_CUDF=OFF
+
 case "${BUILD_PROFILE:?BUILD_PROFILE must be set before sourcing cmake-flags.sh}" in
 adapters | dep-graph)
   # adapters and dep-graph are sister profiles: dep-graph regenerates
@@ -62,14 +68,11 @@ adapters | dep-graph)
     -DVELOX_ENABLE_S3=ON
     -DVELOX_ENABLE_GCS=ON
     -DVELOX_ENABLE_ABFS=ON
+    -DVELOX_ENABLE_FAISS=ON
   )
   if [[ ${USE_CLANG:-false} != "true" ]]; then
-    # Faiss has a link issue under Clang; the remote function service
-    # has open issues under Clang too (#13897).
-    CMAKE_FLAGS+=(
-      -DVELOX_ENABLE_FAISS=ON
-      -DVELOX_ENABLE_REMOTE_FUNCTIONS=ON
-    )
+    # The remote function service has open issues under Clang (#13897).
+    CMAKE_FLAGS+=(-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON)
   fi
   if [[ $BUILD_PROFILE == "adapters" ]]; then
     # WAVE / CUDF gate code under velox/experimental/, which the
@@ -78,6 +81,7 @@ adapters | dep-graph)
     # builds and nvcc with a Clang host trips on fmt's _BitInt usage,
     # so keep WAVE and CUDF GCC-only.
     if [[ ${USE_CLANG:-false} != "true" ]]; then
+      VELOX_ENABLE_CUDF=ON
       CMAKE_FLAGS+=(-DVELOX_ENABLE_WAVE=ON -DVELOX_ENABLE_CUDF=ON)
     fi
   fi
@@ -93,10 +97,8 @@ ubuntu-debug | ubuntu-bundled-deps)
     -DVELOX_ENABLE_GEO=ON
     -DVELOX_ENABLE_PARQUET=ON
     -DVELOX_MONO_LIBRARY=ON
+    -DVELOX_ENABLE_FAISS=ON
   )
-  if [[ ${USE_CLANG:-false} != "true" ]]; then
-    CMAKE_FLAGS+=(-DVELOX_ENABLE_FAISS=ON)
-  fi
   if [[ $BUILD_PROFILE == "ubuntu-debug" ]]; then
     # libnuma is baked into the velox-dev:ubuntu-22.04 image. ubuntu-bundled-deps
     # runs on a bare runner that doesn't install it, so it can't enable CXL.

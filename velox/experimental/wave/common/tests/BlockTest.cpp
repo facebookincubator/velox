@@ -25,6 +25,7 @@
 #include "velox/experimental/wave/common/tests/BlockTest.h"
 
 #include <folly/Random.h>
+#include <folly/stop_watch.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::wave;
@@ -99,7 +100,7 @@ class BlockTest : public testing::Test {
     prefetch(stream, indicesBuffer);
     prefetch(stream, sizesBuffer);
     stream.wait();
-    auto startMicros = getCurrentTimeMicro();
+    folly::stop_watch<std::chrono::microseconds> watch;
     if (use256) {
       stream.testBool256ToIndices(
           kNumBlocks,
@@ -115,7 +116,7 @@ class BlockTest : public testing::Test {
           sizesBuffer->as<int32_t>());
     }
     stream.wait();
-    auto elapsed = getCurrentTimeMicro() - startMicros;
+    auto elapsed = watch.elapsed().count();
     for (auto b = 0; b < kNumBlocks; ++b) {
       auto* reference = referenceIndices.data() + b * kBlockSize;
       auto* actual = indicesBuffer->as<int32_t>() + b * kBlockSize;
@@ -137,7 +138,7 @@ class BlockTest : public testing::Test {
     prefetch(stream, sizesBuffer);
     stream.wait();
 
-    startMicros = getCurrentTimeMicro();
+    watch.reset();
     if (use256) {
       stream.testBool256ToIndicesNoShared(
           kNumBlocks,
@@ -154,7 +155,7 @@ class BlockTest : public testing::Test {
           temp->as<char>());
     }
     stream.wait();
-    elapsed = getCurrentTimeMicro() - startMicros;
+    elapsed = watch.elapsed().count();
     std::cout << "Flags " << (use256 ? "256" : "")
               << " to indices: " << " to indices no smem: " << elapsed << "us, "
               << kNumFlags / static_cast<float>(elapsed) << " Mrows/s"
@@ -361,10 +362,10 @@ TEST_F(BlockTest, shortRadixSort) {
   prefetch(stream, keysPointers);
   prefetch(stream, valuesPointers);
   stream.wait();
-  auto startMicros = getCurrentTimeMicro();
+  folly::stop_watch<std::chrono::microseconds> watch;
   stream.testSort16(kNumBlocks, keySegments, valueSegments);
   stream.wait();
-  auto elapsed = getCurrentTimeMicro() - startMicros;
+  auto elapsed = watch.elapsed().count();
   for (auto b = 0; b < kNumBlocks; ++b) {
     ASSERT_EQ(
         0,
@@ -390,11 +391,11 @@ TEST_F(BlockTest, shortRadixSort) {
   prefetch(stream, keysPointers);
   prefetch(stream, valuesPointers);
   stream.wait();
-  startMicros = getCurrentTimeMicro();
+  watch.reset();
   stream.testSort16NoShared(
       kNumBlocks, keySegments, valueSegments, temp->as<char>());
   stream.wait();
-  elapsed = getCurrentTimeMicro() - startMicros;
+  elapsed = watch.elapsed().count();
   std::cout << "sort16 no shared: " << elapsed << "us, "
             << kNumValues / static_cast<float>(elapsed) << " Mrows/s"
             << std::endl;
@@ -415,7 +416,7 @@ TEST_F(BlockTest, partition) {
     for (auto rows : runSizes) {
       makePartitionRun(rows, parts, run, buffer);
       prefetch(stream, buffer);
-      auto startMicros = getCurrentTimeMicro();
+      folly::stop_watch<std::chrono::microseconds> watch;
       stream.partitionShorts(
           kNumPartitionBlocks,
           run->keys,
@@ -425,7 +426,7 @@ TEST_F(BlockTest, partition) {
           run->partitionStarts,
           run->partitionedRows);
       stream.wait();
-      auto time = getCurrentTimeMicro() - startMicros;
+      auto time = watch.elapsed().count();
       std::cout << fmt::format(
                        "Partition {} batch={}  fanout={}  rate={} Mrows/s",
                        kNumPartitionBlocks,

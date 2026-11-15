@@ -39,6 +39,38 @@ endif()
 
 add_executable(nimble_encoding_fuzzer_tests EncodingFuzzerTest.cpp EncodingFuzzer.h)
 
+add_executable(nimble_fsst_reader_fuzzer_tests FsstReaderFuzzerTest.cpp)
+
+target_link_libraries(
+  nimble_fsst_reader_fuzzer_tests
+  nimble_encodings_tests_utils
+  nimble_encodings
+  nimble_compression
+  nimble_common
+  nimble_common_file_writer
+  nimble_velox_chunked_stream
+  nimble_velox_schema_serialization
+  nimble_velox_selective
+  nimble_tablet_reader
+  nimble_writer
+  velox_dwio_common
+  velox_common_io
+  velox_memory
+  velox_vector_test_lib
+  gtest
+  gtest_main
+  gflags::gflags
+  glog::glog
+  Folly::folly
+)
+
+add_test(
+  nimble_fsst_reader_fuzzer_tests
+  nimble_fsst_reader_fuzzer_tests
+  --fsst_reader_iterations=12
+  --fsst_reader_max_rows=64
+)
+
 target_compile_definitions(
   nimble_encoding_fuzzer_tests
   PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/PartitionValue.h"
+#include "velox/connectors/common/PartitionValue.h"
 
 #include <gtest/gtest.h>
 
@@ -25,15 +25,16 @@
 namespace facebook::velox::connector::hive {
 namespace {
 
-using TimestampMode = PartitionValue::TimestampMode;
-using DateMode = PartitionValue::DateMode;
+using TimestampMode = connector::PartitionValue::TimestampMode;
+using DateMode = connector::PartitionValue::DateMode;
 
 Variant toVariant(
     std::string_view value,
     const TypePtr& type,
     TimestampMode timestampMode = TimestampMode::kUtc,
     DateMode dateMode = DateMode::kIsoString) {
-  return PartitionValue::fromString(value, *type, timestampMode, dateMode);
+  return connector::PartitionValue::fromString(
+      value, *type, timestampMode, dateMode);
 }
 
 Timestamp parseTimestamp(std::string_view value) {

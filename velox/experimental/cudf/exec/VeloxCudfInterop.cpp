@@ -37,10 +37,14 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 namespace facebook::velox::cudf_velox {
 
-cudf::data_type veloxToCudfDataType(const TypePtr& type) {
+std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type) {
+  if (type->providesCustomComparison()) {
+    return std::nullopt;
+  }
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return cudf::data_type{cudf::type_id::BOOL8};
@@ -49,20 +53,23 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
     case TypeKind::SMALLINT:
       return cudf::data_type{cudf::type_id::INT16};
     case TypeKind::INTEGER:
-      // TODO: handle interval types (durations?)
-      // if (type->isIntervalYearMonth()) {
-      //   return cudf::type_id::...;
-      // }
+      if (type->isIntervalYearMonth()) {
+        return std::nullopt;
+      }
       if (type->isDate()) {
         return cudf::data_type{cudf::type_id::TIMESTAMP_DAYS};
       }
       return cudf::data_type{cudf::type_id::INT32};
     case TypeKind::BIGINT:
-      // BIGINT is used for both INT64 and DECIMAL64
+      if (type->isTime()) {
+        return std::nullopt;
+      }
       if (type->isDecimal()) {
         auto const decimalType =
             std::dynamic_pointer_cast<const ShortDecimalType>(type);
-        VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+        if (!decimalType) {
+          return std::nullopt;
+        }
         auto const cudfScale = numeric::scale_type{-decimalType->scale()};
         return cudf::data_type{cudf::type_id::DECIMAL64, cudfScale};
       }
@@ -70,12 +77,14 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
     case TypeKind::HUGEINT: {
       // HUGEINT is used only for DECIMAL128
       // per facebookincubator/velox PR 4434 (May 2, 2023)
-      // although see commented-out HUGEINT -> DURATION_DAYS below
-      VELOX_CHECK(
-          type->isDecimal(), "HUGEINT should only be used for DECIMAL128");
+      if (!type->isDecimal()) {
+        return std::nullopt;
+      }
       auto const decimalType =
           std::dynamic_pointer_cast<const LongDecimalType>(type);
-      VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+      if (!decimalType) {
+        return std::nullopt;
+      }
       auto const cudfScale = numeric::scale_type{-decimalType->scale()};
       return cudf::data_type{cudf::type_id::DECIMAL128, cudfScale};
     }
@@ -89,50 +98,40 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
       return cudf::data_type{cudf::type_id::STRING};
     case TypeKind::TIMESTAMP:
       return cudf::data_type{CudfConfig::getInstance().timestampUnit};
-    // case TypeKind::HUGEINT: return cudf::type_id::DURATION_DAYS;
-    // TODO: DATE was converted to a logical type:
-    // https://github.com/facebookincubator/velox/commit/e480f5c03a6c47897ef4488bd56918a89719f908
-    // case TypeKind::DATE: return cudf::type_id::DURATION_DAYS;
-    // case TypeKind::INTERVAL_DAY_TIME: return cudf::type_id::EMPTY;
     case TypeKind::ARRAY:
+      if (!tryVeloxToCudfDataType(type->childAt(0))) {
+        return std::nullopt;
+      }
       return cudf::data_type{cudf::type_id::LIST};
     case TypeKind::ROW:
+      for (size_t i = 0; i < type->size(); ++i) {
+        if (!tryVeloxToCudfDataType(type->childAt(i))) {
+          return std::nullopt;
+        }
+      }
       return cudf::data_type{cudf::type_id::STRUCT};
-    // case TypeKind::MAP: return cudf::type_id::EMPTY;
-    // case TypeKind::UNKNOWN: return cudf::type_id::EMPTY;
-    // case TypeKind::FUNCTION: return cudf::type_id::EMPTY;
-    // case TypeKind::OPAQUE: return cudf::type_id::EMPTY;
-    // case TypeKind::INVALID: return cudf::type_id::EMPTY;
+    case TypeKind::MAP:
+    case TypeKind::UNKNOWN:
+    case TypeKind::FUNCTION:
+    case TypeKind::OPAQUE:
+    case TypeKind::INVALID:
     default:
-      break;
+      return std::nullopt;
   }
-  CUDF_FAIL(
-      "Unsupported Velox type: " +
-      std::string(TypeKindName::toName(type->kind())));
-  return cudf::data_type{cudf::type_id::EMPTY};
 }
 
-bool canMakeCudfDefaultScalar(const TypePtr& type) {
-  if (type->isIntervalYearMonth() || type->isIntervalDayTime()) {
-    return false;
+cudf::data_type veloxToCudfDataType(const TypePtr& type) {
+  auto result = tryVeloxToCudfDataType(type);
+  if (!result) {
+    CUDF_FAIL(
+        "Unsupported Velox type: " +
+        std::string(TypeKindName::toName(type->kind())));
   }
-  switch (type->kind()) {
-    case TypeKind::BOOLEAN:
-    case TypeKind::TINYINT:
-    case TypeKind::SMALLINT:
-    case TypeKind::INTEGER:
-    case TypeKind::BIGINT:
-    case TypeKind::REAL:
-    case TypeKind::DOUBLE:
-    case TypeKind::VARCHAR:
-    case TypeKind::VARBINARY:
-    case TypeKind::TIMESTAMP:
-      return true;
-    case TypeKind::HUGEINT:
-      return type->isDecimal();
-    default:
-      return false;
-  }
+  return *result;
+}
+
+bool isTypeSupportedByCudf(const TypePtr& type) {
+  return tryVeloxToCudfDataType(type).has_value();
 }
 
 namespace with_arrow {
@@ -213,17 +212,37 @@ void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
       }
       break;
     }
-    case TypeKind::VARBINARY: {
-      // Replace any format string with "z" to indicate VARBINARY.
-      static constexpr const char* kVarbinaryArrowFormat = "z";
-      if (schema->format != nullptr) {
-        std::free(const_cast<char*>(schema->format));
-        schema->format = nullptr;
+    case TypeKind::ARRAY: {
+      if (schema->n_children == 1) {
+        setArrowFormatBackToVarbinary(schema->children[0], type->childAt(0));
       }
-      const size_t bufferLen = std::strlen(kVarbinaryArrowFormat) + 1;
+      break;
+    }
+    case TypeKind::VARBINARY: {
+      // Each Arrow string format has a binary twin that uses the same buffers
+      // ("u"/"z" for 32-bit offsets, "U"/"Z" for 64-bit offsets and "vu"/"vz"
+      // for string views). The importer reads the buffers according to the
+      // format, so the offset layout must be preserved when relabelling the
+      // string format as binary. Binary formats are accepted as is.
+      VELOX_CHECK_NOT_NULL(
+          schema->format, "Missing Arrow format for VARBINARY column");
+      const std::string_view format{schema->format};
+      const char* varbinaryArrowFormat = nullptr;
+      if (format == "u" || format == "z") {
+        varbinaryArrowFormat = "z";
+      } else if (format == "U" || format == "Z") {
+        varbinaryArrowFormat = "Z";
+      } else if (format == "vu" || format == "vz") {
+        varbinaryArrowFormat = "vz";
+      } else {
+        VELOX_FAIL("Unexpected Arrow format for VARBINARY column: {}", format);
+      }
+      std::free(const_cast<char*>(schema->format));
+      schema->format = nullptr;
+      const size_t bufferLen = std::strlen(varbinaryArrowFormat) + 1;
       auto* buffer = static_cast<char*>(std::malloc(bufferLen));
       VELOX_CHECK_NOT_NULL(buffer);
-      std::memcpy(buffer, kVarbinaryArrowFormat, bufferLen);
+      std::memcpy(buffer, varbinaryArrowFormat, bufferLen);
       schema->format = buffer;
       break;
     }
@@ -259,11 +278,12 @@ RowVectorPtr toVeloxColumn(
   arrowSchema->release = nullptr;
 
   // Override schema type recursively with outputType if provided. This is
-  // needed for some types like VARBINARY which are exported as STRING (the
-  // format is overridden to "z" when the exportVarbinaryAsString option is set
-  // to true in the exportToArrow() call) because cuDF does not have a VARBINARY
-  // type. This code implements the other side of the conversion, to change the
-  // format back to "z" so that the data re-imports as VARBINARY.
+  // needed for types like VARBINARY, which cuDF does not have: toCudfTable
+  // exports them as strings (exportVarbinaryAsString), so cuDF holds them as
+  // STRING columns and to_arrow_schema reports a string format ("u", or "U"
+  // for 64-bit offsets). This code implements the other side of that
+  // conversion, restoring the matching binary format ("z" or "Z") so that the
+  // data re-imports as VARBINARY.
   if (outputType) {
     setArrowFormatBackToVarbinary(&schemaCopy, *outputType);
   }

@@ -15,8 +15,10 @@
  */
 #pragma once
 
+#include <vector>
+
 #include "velox/functions/Macros.h"
-#include "velox/type/DecimalUtil.h"
+#include "velox/type/DecimalArithmetic.h"
 
 namespace facebook::velox::functions::sparksql::detail {
 
@@ -31,12 +33,12 @@ struct DecimalCeilFunction {
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
       A* /*a*/) {
-    rescaleFactor_ = velox::DecimalUtil::kPowersOfTen
-        [getDecimalPrecisionScale(*inputTypes[0]).second];
+    rescaleFactor_ = DecimalArithmetic::powerOfTen(
+        getDecimalPrecisionScale(*inputTypes[0]).second);
   }
 
   template <typename R, typename A>
-  void call(R& out, const A& a) {
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a) {
     const auto increment = (a % rescaleFactor_) > 0 ? 1 : 0;
     out = a / rescaleFactor_ + increment;
   }

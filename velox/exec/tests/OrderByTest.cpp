@@ -203,7 +203,8 @@ class OrderByTest : public OperatorTestBase {
       params.queryCtx = queryCtx;
       params.spillDirectory = spillDirectory->getPath();
       auto task = assertQueryOrdered(params, duckDbSql, sortingKeys);
-      auto inputRows = toPlanStats(task->taskStats()).at(orderById).inputRows;
+      auto inputRows =
+          PlanNodeStats::extract(task->taskStats(), orderById).inputRows;
       const uint64_t peakSpillMemoryUsage =
           memory::spillMemoryPool()->stats().peakBytes;
       ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
@@ -473,7 +474,7 @@ TEST_F(OrderByTest, outputBatchRows) {
         params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
     EXPECT_EQ(
         testData.expectedOutputVectors,
-        toPlanStats(task->taskStats()).at(orderById).outputVectors);
+        PlanNodeStats::extract(task->taskStats(), orderById).outputVectors);
   }
 }
 

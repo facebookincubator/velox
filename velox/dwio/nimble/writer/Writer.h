@@ -28,10 +28,10 @@
 #include "velox/dwio/nimble/index/IndexWriter.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
-#include "velox/dwio/nimble/velox/FieldWriter.h"
-#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
+#include "velox/dwio/nimble/writer/FieldWriter.h"
 #include "velox/dwio/nimble/writer/NimbleFileMetadata.h"
+#include "velox/dwio/nimble/writer/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/DecodedVector.h"
@@ -101,7 +101,8 @@ class Writer : public velox::dwio::common::Writer {
   ///
   /// Fails when the file carries no checkpoint section, or when 'type' and
   /// 'options' would lay streams out differently than the suspended file
-  /// did: the final footer holds a single schema that has to describe every
+  /// did, stream trailers included: the final footer holds a single schema,
+  /// and the properties a single trailer layout, that have to describe every
   /// stripe.
   ///
   /// Not implemented yet.
@@ -213,10 +214,15 @@ class Writer : public velox::dwio::common::Writer {
   // runtime stats at file close.
   void reportRuntimeStats() const;
 
+  // Creates the cluster index writer, or returns null without a cluster index.
+  // When the options pick the Stripe key stream layout, first allocates the
+  // stream of each stripe that holds the stripe's key chunk from
+  // 'schemaBuilder', so it must run before the field writers allocate theirs.
   static std::unique_ptr<index::IndexWriter> createClusterIndexWriter(
       const WriterOptions& options,
       const velox::TypePtr& type,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      SchemaBuilder& schemaBuilder);
 
   static std::vector<DenseIndexWriter> createDenseIndexWriters(
       const WriterOptions& options,
@@ -225,6 +231,10 @@ class Writer : public velox::dwio::common::Writer {
 
   // Adds index keys to all configured index writers.
   void addIndexKey(const velox::VectorPtr& input);
+
+  // Adds the cluster index key chunk of the stripe being written to its
+  // encoded streams, when the cluster index stores its keys in stripes.
+  void writeStripeKeyStream();
 
   void writeProperties(const WriteOptionalSectionFn& writeMetadataFn);
 
@@ -307,6 +317,9 @@ class Writer : public velox::dwio::common::Writer {
   // close() to make sure no rows are left behind. Only invoked when a
   // BufferPolicy is installed. Returns true if any stripe was flushed.
   bool flushInputBuffers(bool finalize);
+
+  // Rejects null rows in indexed files and records stored top-level nulls.
+  void checkTopLevelNulls(const velox::VectorPtr& input);
 
   // Ingests a (possibly sliced) input into the per-column stream buffers,
   // adds index keys, and refreshes per-stripe accounting. Callers pre-slice
@@ -426,6 +439,8 @@ class Writer : public velox::dwio::common::Writer {
   const std::unique_ptr<BufferPolicy> bufferPolicy_;
 
   std::unique_ptr<FieldWriter> rootWriter_;
+  // Records null top-level rows that are preserved in the output streams.
+  bool hasTopLevelNulls_{false};
   std::unique_ptr<Buffer> encodingBuffer_;
 
   // Per-encode-task scratch vector buffer caches. They are retained across

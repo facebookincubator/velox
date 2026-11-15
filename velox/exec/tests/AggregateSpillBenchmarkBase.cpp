@@ -33,16 +33,10 @@ std::unique_ptr<RowContainer> makeRowContainer(
     std::shared_ptr<velox::memory::MemoryPool>& pool) {
   return std::make_unique<RowContainer>(
       keyTypes,
-      true, // nullableKeys
       std::vector<Accumulator>{},
       dependentTypes,
-      /*hasNext=*/false,
-      /*isJoinBuild=*/false,
-      /*hasProbedFlag=*/false,
-      /*hasCountFlag=*/false,
-      /*hasNormalizedKey=*/false,
-      /*useListRowIndex=*/false,
-      pool.get());
+      pool.get(),
+      RowContainer::Options{});
 }
 
 std::unique_ptr<RowContainer> setupSpillContainer(
@@ -160,6 +154,7 @@ std::unique_ptr<SpillerBase> AggregateSpillBenchmarkBase::makeSpiller() {
             static_cast<uint8_t>(
                 spillConfig.startPartitionBit + spillConfig.numPartitionBits)},
         sortingKeys,
+        false,
         &spillConfig,
         &spillStats_);
   } else {

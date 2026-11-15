@@ -1588,7 +1588,7 @@ DEBUG_ONLY_TEST_P(AsyncDataCacheTest, ttl) {
   });
 
   ScopedTestTime stt;
-  auto loadTime1 = getCurrentTimeSec();
+  auto loadTime1 = EpochTime::now<std::chrono::seconds>();
   auto loadTime2 = loadTime1 + 100;
 
   stt.setCurrentTestTimeSec(loadTime1);
@@ -1601,7 +1601,7 @@ DEBUG_ONLY_TEST_P(AsyncDataCacheTest, ttl) {
 
   runThreads(2, [&](int32_t /*i*/) {
     CacheTTLController::getInstance()->applyTTL(
-        getCurrentTimeSec() - loadTime1 - 2);
+        EpochTime::now<std::chrono::seconds>() - loadTime1 - 2);
   });
 
   auto statsTtl = cache_->refreshStats();

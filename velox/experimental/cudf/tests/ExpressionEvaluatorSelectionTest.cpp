@@ -22,14 +22,19 @@
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
 
 #include <folly/ScopeGuard.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <string>
@@ -40,6 +45,27 @@ using namespace facebook::velox::cudf_velox;
 using namespace facebook::velox::cudf_velox::test_utils;
 
 namespace {
+
+// Keeps a copy to exercise the config lifetime contract without GPU execution.
+class SessionConfigFunction : public CudfFunction {
+ public:
+  explicit SessionConfigFunction(const core::QueryConfig& config)
+      : config_(config) {}
+
+  std::string sessionTimezone() const {
+    return config_.sessionTimezone();
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>&,
+      cuda::stream_ref,
+      rmm::device_async_resource_ref) const override {
+    VELOX_UNREACHABLE("SessionConfigFunction is only used for construction");
+  }
+
+ private:
+  const core::QueryConfig config_;
+};
 
 class CudfExpressionSelectionTest : public ::testing::Test {
  protected:
@@ -92,7 +118,8 @@ TEST_F(CudfExpressionSelectionTest, astRoot) {
   CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr =
       optimizeTypedExpr("a + c", rowType_, queryCtx_.get(), execCtx_.get());
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
@@ -102,9 +129,120 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
   auto expr = optimizeTypedExpr(
       "lower(name)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
+}
+
+TEST_F(CudfExpressionSelectionTest, functionReceivesSessionConfig) {
+  const std::string name = "test_session_config";
+  auto functions =
+      std::make_shared<std::vector<std::shared_ptr<SessionConfigFunction>>>();
+  registerCudfFunction(
+      name,
+      [functions](
+          const std::string&,
+          const core::TypedExprPtr&,
+          memory::MemoryPool*,
+          const core::QueryConfig& config) {
+        auto function = std::make_shared<SessionConfigFunction>(config);
+        functions->push_back(function);
+        return function;
+      },
+      {exec::FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("bigint")
+           .build()});
+
+  // Check propagation to a function at both the root and a child node.
+  auto child = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")},
+      name);
+  auto expr = std::make_shared<core::CallTypedExpr>(
+      BIGINT(), std::vector<core::TypedExprPtr>{child}, name);
+
+  for (const std::string timezone : {"America/Los_Angeles", "Asia/Kolkata"}) {
+    SCOPED_TRACE(timezone);
+    functions->clear();
+    CudfExpressionPtr evaluator;
+    {
+      auto queryCtx =
+          core::QueryCtx::Builder()
+              .queryConfig(
+                  core::QueryConfig(
+                      {{core::QueryConfig::kSessionTimezone, timezone}}))
+              .build();
+      evaluator = createCudfExpression(
+          expr, rowType_, pool_.get(), queryCtx->queryConfig());
+    }
+    ASSERT_NE(dynamic_cast<FunctionExpression*>(evaluator.get()), nullptr);
+    // The session and its QueryConfig have gone out of scope.
+    EXPECT_THAT(
+        *functions,
+        testing::AllOf(
+            testing::SizeIs(2),
+            testing::Each(
+                testing::Pointee(
+                    testing::Property(
+                        &SessionConfigFunction::sessionTimezone, timezone)))));
+  }
+}
+
+TEST_F(CudfExpressionSelectionTest, functionEligibilityUsesSessionConfig) {
+  const std::string name = "test_session_eligibility";
+  registerCudfFunction(
+      name,
+      [](const std::string&,
+         const core::TypedExprPtr&,
+         memory::MemoryPool*,
+         const core::QueryConfig& config) {
+        return std::make_shared<SessionConfigFunction>(config);
+      },
+      {exec::FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("bigint")
+           .build()},
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr&, const core::QueryConfig& config) {
+        return !config.isLegacyCast();
+      });
+  auto expr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")},
+      name);
+  auto nested = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{expr}, "not");
+  auto legacyQueryCtx =
+      core::QueryCtx::Builder()
+          .queryConfig(
+              core::QueryConfig({{core::QueryConfig::kLegacyCast, "true"}}))
+          .build();
+
+  // There are no casts here, so only the registered predicate can reject the
+  // expression. Exercise both the root and recursive plan-time checks.
+  for (const auto& checked : {expr, nested}) {
+    EXPECT_TRUE(canExprRunOnGpu(checked, queryCtx_.get(), pool_.get()));
+    EXPECT_FALSE(canExprRunOnGpu(checked, legacyQueryCtx.get(), pool_.get()));
+    EXPECT_FALSE(canExprRunOnGpu(checked, legacyQueryCtx.get(), nullptr));
+    EXPECT_TRUE(canExprRunOnGpu(checked, nullptr, pool_.get()));
+    EXPECT_TRUE(canExprRunOnGpu(checked, nullptr, nullptr));
+  }
+
+  auto evaluator = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
+  EXPECT_NE(dynamic_cast<FunctionExpression*>(evaluator.get()), nullptr);
+  VELOX_ASSERT_THROW(
+      createCudfExpression(
+          expr, rowType_, pool_.get(), legacyQueryCtx->queryConfig()),
+      "No cuDF expression evaluator can handle");
+  EXPECT_EQ(
+      createCudfFunction(
+          name, expr, pool_.get(), legacyQueryCtx->queryConfig()),
+      nullptr);
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
@@ -122,7 +260,8 @@ TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
       queryCtx_.get(),
       execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
@@ -132,7 +271,8 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
   auto expr = optimizeTypedExpr(
       "lower(substr(name, 1, 5))", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
 
   // Top level should be Function
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
@@ -185,7 +325,8 @@ TEST_F(CudfExpressionSelectionTest, nestedRowDereferenceUsesFunctionEvaluator) {
       execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
 
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }
@@ -206,7 +347,10 @@ TEST_F(
       1);
 
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  ASSERT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+  ASSERT_NE(
+      createCudfExpression(
+          expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+      nullptr);
 }
 
 TEST_F(
@@ -225,14 +369,13 @@ TEST_F(
       "right");
 
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  ASSERT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+  ASSERT_NE(
+      createCudfExpression(
+          expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+      nullptr);
 }
 
-// Disabled because this test segfaults in CI while building the typed
-// not use cudf code.
-TEST_F(
-    CudfExpressionSelectionTest,
-    DISABLED_signatureEnforcesConstantArgsSplit) {
+TEST_F(CudfExpressionSelectionTest, signatureEnforcesConstantArgsSplit) {
   // OK: delimiter and limit are constants
   auto ok = optimizeTypedExpr(
       "split(name, ',', 3)",
@@ -373,6 +516,68 @@ TEST_F(CudfExpressionSelectionTest, signatureArrayAccess) {
   }
 }
 
+TEST_F(CudfExpressionSelectionTest, signatureArrayJoin) {
+  auto arrayRowType = ROW({
+      {"names", ARRAY(VARCHAR())},
+      {"documents", ARRAY(JSON())},
+      {"ids", ARRAY(BIGINT())},
+      {"sep", VARCHAR()},
+  });
+
+  for (const auto* ok : {"array_join(names, ', ')", "array_join(names, '')"}) {
+    SCOPED_TRACE(ok);
+    auto expr =
+        optimizeTypedExpr(ok, arrayRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+
+  // Stays on the CPU: a separator column or a null separator, the null
+  // replacement form, elements that are not plain VARCHAR.
+  for (const auto* bad :
+       {"array_join(names, sep)",
+        "array_join(names, cast(null as varchar))",
+        "array_join(names, ', ', 'n/a')",
+        "array_join(ids, ', ')",
+        "array_join(documents, ', ')"}) {
+    SCOPED_TRACE(bad);
+    auto expr =
+        optimizeTypedExpr(bad, arrayRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureUnixtime) {
+  auto unixtimeRowType = ROW({
+      {"seconds", DOUBLE()},
+      {"ts", TIMESTAMP()},
+      {"zoned", TIMESTAMP_WITH_TIME_ZONE()},
+      {"count", BIGINT()},
+  });
+
+  for (const auto* ok :
+       {"from_unixtime(seconds)",
+        "to_unixtime(ts)",
+        "to_unixtime(from_unixtime(seconds))",
+        "from_unixtime(cast(count as double))"}) {
+    SCOPED_TRACE(ok);
+    auto expr =
+        optimizeTypedExpr(ok, unixtimeRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+
+  // Stays on the CPU: the forms that take or return TIMESTAMP WITH TIME
+  // ZONE.
+  for (const auto* bad :
+       {"from_unixtime(seconds, 'UTC')",
+        "from_unixtime(seconds, 8, 0)",
+        "to_unixtime(zoned)"}) {
+    SCOPED_TRACE(bad);
+    auto expr = optimizeTypedExpr(
+        bad, unixtimeRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+}
+
 TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
   // OK: numeric args are castable to double
   auto ok = optimizeTypedExpr(
@@ -448,7 +653,10 @@ TEST_F(CudfExpressionSelectionTest, switchConstantCondition) {
     SCOPED_TRACE(sql);
     auto expr = parseAndInferTypedExpr(sql, rowType_, execCtx_.get());
     const auto* call = expr->asUnchecked<core::CallTypedExpr>();
-    EXPECT_EQ(createCudfFunction(call->name(), expr, pool_.get()), nullptr);
+    EXPECT_EQ(
+        createCudfFunction(
+            call->name(), expr, pool_.get(), queryCtx_->queryConfig()),
+        nullptr);
     auto optimized =
         optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
     EXPECT_TRUE(canExprRunOnGpu(optimized, queryCtx_.get(), pool_.get()));
@@ -475,12 +683,7 @@ TEST_F(CudfExpressionSelectionTest, switchWithElseRetainsNestedTypes) {
   }
 }
 
-TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
-  // TODO (dm): This is required for passing of castAndTryCast test but breaks
-  // others. This is because ASTExpr agrees to support bad casts. remove after
-  // ASTExpr checks cast types
-  // CudfConfig::getInstance().astExpressionEnabled = false;
-
+TEST_F(CudfExpressionSelectionTest, castAndTryCast) {
   // OK: cast bigint -> double (supported by cuDF)
   auto okCast = optimizeTypedExpr(
       "cast(a AS double)", rowType_, queryCtx_.get(), execCtx_.get());
@@ -490,6 +693,15 @@ TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
   auto okTryCast = optimizeTypedExpr(
       "try_cast(a AS double)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(okTryCast, queryCtx_.get(), pool_.get()));
+
+  // OK: cast bigint -> integer, which the AST does not lower
+  auto okIntegerCast = optimizeTypedExpr(
+      "cast(a AS integer) = 5",
+      rowType_,
+      queryCtx_.get(),
+      execCtx_.get(),
+      {.parseIntegerAsBigint = false, .functionPrefix = ""});
+  ASSERT_TRUE(canExprRunOnGpu(okIntegerCast, queryCtx_.get(), pool_.get()));
 
   // BAD: cast boolean -> date (expected unsupported by cuDF)
   auto badCast = optimizeTypedExpr(
@@ -522,7 +734,8 @@ TEST_F(CudfExpressionSelectionTest, compilerPureAstNoBoundaries) {
   // A simple arithmetic expression handled entirely by AST should compile
   // successfully.
   auto expr = parseAndInferTypedExpr("a + b", rowType_, execCtx_.get());
-  auto result = createCudfExpression(expr, rowType_, pool_.get());
+  auto result = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 }
 
@@ -538,7 +751,8 @@ TEST_F(CudfExpressionSelectionTest, compilerFunctionBoundaryInAst) {
 
   auto expr = parseAndInferTypedExpr(
       "a + b > cardinality(names)", arrayType, execCtx_.get());
-  auto result = createCudfExpression(expr, arrayType, pool_.get());
+  auto result = createCudfExpression(
+      expr, arrayType, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 }
 
@@ -551,7 +765,8 @@ TEST_F(CudfExpressionSelectionTest, compilerOptimizesConstantExpr) {
       expression::optimize(expr, queryCtx_.get(), pool_.get());
   ASSERT_NE(optimized, nullptr);
 
-  auto result = createCudfExpression(optimized, rowType_, pool_.get());
+  auto result = createCudfExpression(
+      optimized, rowType_, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 
   // The optimized tree should have a constant child for the folded value.
@@ -568,7 +783,8 @@ TEST_F(CudfExpressionSelectionTest, compilerOptimizesConstantExpr) {
 
 TEST_F(CudfExpressionSelectionTest, compilerSimpleExpressionCompiles) {
   auto expr = parseAndInferTypedExpr("a + b", rowType_, execCtx_.get());
-  auto result = createCudfExpression(expr, rowType_, pool_.get());
+  auto result = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 }
 

@@ -444,6 +444,33 @@ TEST_F(LazyVectorTest, lazyRowVectorWithLazyChildrenPartiallyLoaded) {
   assertEqualVectors(child, lazyInnerRowVector);
 }
 
+TEST_F(LazyVectorTest, constantOverRowWithLazyChild) {
+  for (const vector_size_t index : {1, 2}) {
+    SCOPED_TRACE(index);
+    auto row = makeRowVector(
+        {makeLazyFlatVector<int64_t>(3, [](auto row) { return 100 + row; })});
+    row->setNull(1, true);
+    auto constant = BaseVector::wrapInConstant(8, index, row);
+    if (index == 2) {
+      EXPECT_TRUE(isLazyNotLoaded(*constant));
+    }
+    EXPECT_EQ(constant->loadedVector(), constant.get());
+    ASSERT_NO_THROW(constant->mayHaveNulls());
+    EXPECT_EQ(constant->mayHaveNulls(), index == 1);
+    EXPECT_EQ(constant->isNullAt(0), index == 1);
+    if (index == 2) {
+      EXPECT_EQ(constant->valueVector().get(), row.get());
+    }
+
+    auto expectedRow =
+        makeRowVector({makeFlatVector<int64_t>({100, 101, 102})});
+    expectedRow->setNull(1, true);
+    assertEqualVectors(
+        BaseVector::wrapInConstant(8, index, expectedRow), constant);
+    EXPECT_EQ(constant->loadedVector(), constant.get());
+  }
+}
+
 TEST_F(LazyVectorTest, lazyInConstant) {
   // Wrap Lazy vector in a Constant, load some indices and verify that the
   // results.
@@ -709,6 +736,27 @@ TEST_F(LazyVectorTest, chain) {
   });
   auto expected = makeFlatVector<int32_t>(10, [](auto i) { return i * 2; });
   assertEqualVectors(expected, lazy);
+}
+
+// mayContainLazy() is true for the encodings that can hold a lazy vector,
+// itself or underneath, and false for the others.
+TEST_F(LazyVectorTest, mayContainLazy) {
+  constexpr vector_size_t size = 10;
+  auto flat = makeFlatIdentityVector<int32_t>(size);
+
+  EXPECT_FALSE(flat->mayContainLazy());
+  EXPECT_FALSE(
+      makeArrayVectorFromJson<int32_t>({"[1, 2]", "[3]"})->mayContainLazy());
+  auto map = makeMapVectorFromJson<int32_t, int32_t>({"{1: 2}"});
+  EXPECT_FALSE(map->mayContainLazy());
+
+  EXPECT_TRUE(
+      vectorMaker_.lazyFlatVector<int32_t>(size, [](auto row) { return row; })
+          ->mayContainLazy());
+  EXPECT_TRUE(
+      wrapInDictionary(makeIndicesInReverse(size), flat)->mayContainLazy());
+  EXPECT_TRUE(BaseVector::wrapInConstant(size, 0, flat)->mayContainLazy());
+  EXPECT_TRUE(makeRowVector({flat})->mayContainLazy());
 }
 
 // Verify containsLazyNotLoaded is lazily evaluated and correctly recomputed

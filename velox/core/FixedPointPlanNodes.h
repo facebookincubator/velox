@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/core/MultiStagePlan.h"
 #include "velox/core/PlanNode.h"
 
 namespace facebook::velox::core {
@@ -49,6 +50,16 @@ class StateDeclaration : public ISerializable {
   /// Renders this declaration's name and kind-specific properties for plan
   /// printing (FixedPointNode::addDetails).
   virtual std::string toString() const = 0;
+
+  template <typename T>
+  bool is() const {
+    return dynamic_cast<const T*>(this) != nullptr;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
 
  protected:
   StateDeclaration(std::string name, PlanNodePtr initialPlan)
@@ -222,54 +233,75 @@ class HashTableState {
 ///   sum(active) == 0    -> no changes          (CC)
 ///   max(delta) < eps    -> centroids settled   (KMeans)
 ///
-/// When the convergence state entry is empty the plan may emit zero rows; the
-/// framework treats "no output row" as converged (the canonical empty-frontier
-/// terminal state).  maxIterations (a ConvergenceConfig field below) is always
+/// The plan that produces the verdict must produce exactly one non-NULL row, or
+/// the fixed point fails; a global aggregation produces one row even over an
+/// empty state.  maxIterations (a ConvergenceConfig field below) is always
 /// active as a safety bound.
 ///
-/// Multi-worker contract: each worker evaluates the sequence over its own local
-/// shard, so for a shuffling fixed point (N > 1) the verdict must be globally
-/// consistent -- every worker must reach the same value on the same iteration,
-/// or lockstep breaks and the shuffle deadlocks.  Making it consistent is the
-/// plan's responsibility, and there are two ways to do it.  When the body's
-/// shuffle already replicates the convergence-deciding state, a single-plan
-/// sequence reads it locally and every worker agrees.  When the statistic is
-/// only known after the body's last exchange -- PageRank's post-update RMSE,
-/// say, whose squared error does not exist until the new ranks are computed,
-/// and whose reduce therefore has nowhere to go in the body (the last body plan
-/// produces the state itself) -- the sequence shuffles: earlier plans reduce
-/// partials, the last emits the verdict.  The framework performs no
-/// cross-worker reduction of its own.  An empty sequence means "never converge"
-/// (the loop is bounded only by maxIterations) and is always safe.
+/// Multi-worker contract: for a fixed point that runs as N > 1 peers, every
+/// worker must reach the same verdict on the same iteration, or lockstep breaks
+/// and the shuffle deadlocks.  The type of the root of 'plan' decides how:
+///
+///  - kSingle: worker 0 alone runs the root and shares its verdict.  With
+///    stages that feed it, every worker reduces its shard to partial rows that
+///    those stages gather to worker 0 (globalVerdict) -- the way to decide
+///    on a statistic known only after the body's last exchange, such as
+///    PageRank's post-update RMSE or the size of a partitioned walk's delta.
+///    Alone, it reads worker 0's own state (workerZeroVerdict), for state every
+///    worker holds in full, such as a replicated one.  Replicas need not be
+///    identical: workers can compute the same floating-point expression
+///    differently.  A root alone requires a body that shuffles, which keeps
+///    worker 0 from finishing an iteration before every worker has received
+///    the previous verdict.
+///  - kSource: each worker runs the root itself (converging) over its own
+///    state, which the body must keep identical on every worker.  Such a root
+///    reads no stage.
+///
+/// No plan means "never converge" (the loop is bounded only by maxIterations)
+/// and is always safe.
 struct ConvergenceConfig {
-  /// Plans run in order after each iteration, chained by shuffle exactly as
-  /// FixedPointNode::plans() are: the first starts with a StateSourceNode
-  /// reading the state the iteration just committed, every later one starts
-  /// with an Exchange, every non-last one ends with a PartitionedOutput.  The
-  /// last plan produces exactly one BOOLEAN output column, which the framework
-  /// reads; true stops the loop.  Convergence plans never write state.  Empty
-  /// means never converge (loop bounded by maxIterations).
-  std::vector<PlanNodePtr> plans{};
+  /// The stages run after each iteration over the state the iteration just
+  /// committed, joined by shuffle as the body's are (see
+  /// FixedPointNode::body()).  The root produces exactly one row with one
+  /// BOOLEAN output column, the verdict; true stops the loop.  Convergence
+  /// plans never write state.  std::nullopt means never converge (loop bounded
+  /// by maxIterations).
+  ///
+  /// A verdict can differ between runs of the same query, for two reasons:
+  ///
+  ///  - The plans read their rows in an order that varies between runs.  A
+  ///    verdict that is a function of the multiset of rows it reads is the same
+  ///    for any order, e.g. one built on count, min, max or an integer sum.  A
+  ///    floating-point sum depends on the order it adds values in.
+  ///  - The rows themselves can vary.  They come from state that earlier
+  ///    iterations computed, possibly in an order-dependent way, e.g. with
+  ///    floating-point arithmetic.
+  ///
+  /// Either one can stop the loop at a different iteration in another run, and
+  /// 'maxIterations' must leave room for that.
+  std::optional<MultiStagePlan> plan{};
 
   /// Maximum iterations the loop runs -- always active as a safety bound, and
-  /// the sole bound when `plans` is empty (a fixed-count loop).
+  /// the sole bound when there is no convergence criterion (a fixed-count
+  /// loop).
   int32_t maxIterations{0};
 
   /// Decides what happens when `maxIterations` is reached before the
-  /// convergence sequence signals convergence.  When true (the default), the
+  /// convergence plan signals convergence.  When true (the default), the
   /// fixed point fails -- a guard against silently returning a non-converged
   /// result.  When false, the loop instead stops at the cap and returns the
   /// current approximate result without failing: best-effort convergence (run
   /// toward convergence, but accept the partial result if the cap is hit
-  /// first), as in an early-stopped KMeans or PageRank.  Requires a non-empty
-  /// `plans` (FixedPointNode validates this) -- an empty sequence never
-  /// converges, so set this false for a fixed-count loop, where the cap is the
-  /// intended stopping point rather than a best-effort cutoff.
+  /// first), as in an early-stopped KMeans or PageRank.  Requires a
+  /// convergence criterion, `plan` or `stopWhenDeltaEmpty` (FixedPointNode
+  /// validates this) -- with neither the loop never converges, so set this
+  /// false for a fixed-count loop, where the cap is the intended stopping point
+  /// rather than a best-effort cutoff.
   bool errorWhenMaxIterationReached{true};
 
   /// Stops the loop on the first iteration that writes no rows into the output
   /// state entry -- the empty-frontier terminal state -- without running a
-  /// convergence sequence.  Mutually exclusive with `plans`: the verdict is a
+  /// convergence plan.  Mutually exclusive with `plan`: the verdict is a
   /// row count the framework already holds, so expressing it as a plan would
   /// spend a sub-task per iteration recomputing what the body just produced.
   /// Restricted to a non-shuffling fixed point, because the delta is this
@@ -278,7 +310,12 @@ struct ConvergenceConfig {
   /// read its output.
   bool stopWhenDeltaEmpty{false};
 
-  /// Builds a fixed-count loop config: no convergence plans, bounded only by
+  /// True when worker 0 alone runs the root of 'plan' and shares its
+  /// verdict with the other workers (see FixedPointOptions::publishVerdict), so
+  /// all of them stop on the same iteration: the root is kSingle.
+  bool verdictOnWorkerZero() const;
+
+  /// Builds a fixed-count loop config: no convergence plan, bounded only by
   /// `maxIterations`, so it never errors on reaching the bound.  Use for loops
   /// with a known iteration count (e.g. Fibonacci, a bounded expansion).
   static ConvergenceConfig withMaxIterations(int32_t maxIterations);
@@ -290,20 +327,44 @@ struct ConvergenceConfig {
   /// condition.
   static ConvergenceConfig whenDeltaEmpty(int32_t maxIterations);
 
-  /// Builds a convergence loop config: runs `plan` after each iteration and
-  /// stops when its BOOLEAN output is true, failing if `maxIterations` is
-  /// reached first.  For a convergence criterion that needs its own shuffle,
-  /// pass the whole chain to the vector overload.
+  /// Builds a convergence loop config: every worker runs `plan` after each
+  /// iteration and stops when its BOOLEAN output is true, failing if
+  /// `maxIterations` is reached first.  For a criterion over every worker's
+  /// state, use globalVerdict.
   static ConvergenceConfig converging(PlanNodePtr plan, int32_t maxIterations);
 
-  /// Builds a convergence loop config whose criterion needs its own shuffle:
-  /// `plans` is one logical plan cut at its shuffle boundaries, chained exactly
-  /// as FixedPointNode::plans() are, and its last plan emits the single BOOLEAN
-  /// verdict.  Use when the statistic only exists after the body's last
-  /// exchange, so its reduce cannot travel on the body's shuffle.
-  static ConvergenceConfig converging(
-      std::vector<PlanNodePtr> plans,
+  /// Builds a convergence loop config with one verdict for every worker:
+  /// 'partials' run on every worker and gather their rows to worker 0, which
+  /// runs 'verdict' over them and shares the result.  'partials' are a chain:
+  /// each one after the first reads the one before through its only Exchange.
+  /// 'verdict' produces one row with one BOOLEAN column; true stops the loop.
+  /// Fails if `maxIterations` is reached first.
+  static ConvergenceConfig globalVerdict(
+      std::vector<PlanNodePtr> partials,
+      PlanNodePtr verdict,
       int32_t maxIterations);
+
+  /// Builds a convergence loop config with one verdict for every worker, read
+  /// from worker 0's own state: worker 0 runs 'verdict' over its state and
+  /// shares the result.  For state every worker holds in full, such as a
+  /// replicated one, with a body that shuffles.  'verdict' starts with a
+  /// StateSourceNode and produces one row with one BOOLEAN column; true stops
+  /// the loop.  Fails if `maxIterations` is reached first.
+  static ConvergenceConfig workerZeroVerdict(
+      PlanNodePtr verdict,
+      int32_t maxIterations);
+
+  /// Builds a convergence loop config from any 'plan' (see the field): the
+  /// type of its root decides which workers run it.  Fails if `maxIterations`
+  /// is reached first.
+  static ConvergenceConfig converging(
+      MultiStagePlan plan,
+      int32_t maxIterations);
+
+  /// Throws a user error when the config contradicts itself or its plan does
+  /// not form a valid convergence plan.  Checks that need the fixed point's
+  /// body or state declarations are FixedPointNode's.
+  void checkConsistency() const;
 
   folly::dynamic serialize() const;
 
@@ -312,31 +373,64 @@ struct ConvergenceConfig {
       void* context);
 
   /// Renders the convergence properties for plan printing
-  /// (FixedPointNode::addDetails): max iteration bound, whether reaching it is
-  /// an error, whether the delta emptying stops the loop, and how many
-  /// convergence plans there are.
+  /// (FixedPointNode::addDetails): the max iteration bound, then only what
+  /// applies -- whether the delta emptying stops the loop, how many convergence
+  /// stages there are, whether worker 0 decides for every worker, and
+  /// that reaching the bound returns the current result when a criterion would
+  /// fail it.
   std::string toString() const;
 };
 
 /// Orchestrates iterative computation over persistent state, expressing
 /// recursive CTEs, variable-length graph paths, shortest path, connected
 /// components, and KMeans/PageRank-style iteration as one node.  Holds a list
-/// of StateDeclarations (named state that survives across iterations), a list
-/// of body plans run sequentially as sub-tasks each iteration, and a
-/// ConvergenceConfig (the termination test plus an iteration bound).  Exactly
-/// one VectorStateDeclaration -- named by `outputStateEntry` -- is the mutable
-/// loop variable: the framework writes each iteration's last plan output back
-/// into it (appending or replacing per its declaration) and emits its final
-/// contents as the node's output; every other state entry is seeded once and
-/// read-only thereafter.
+/// of StateDeclarations (named state that survives across iterations), a body
+/// -- a MultiStagePlan whose stages run as concurrent sub-tasks each iteration
+/// (see body()) -- and a ConvergenceConfig (the termination
+/// test plus an iteration bound).  Exactly one VectorStateDeclaration -- named
+/// by `outputStateEntry` -- is the mutable loop variable: the framework writes
+/// the rows the body's root produces each iteration back into it (appending or
+/// replacing per its declaration) and emits its final contents as the node's
+/// output; every other state entry is seeded once and read-only thereafter.
+/// Every worker emits its contents, unless `outputOnWorkerZero` is set: then
+/// only worker 0 does, for an output entry every worker holds in full, such as
+/// a replicated one.
+///
+/// A coordinator may run the body, convergence and trailing plans with several
+/// drivers per worker (exec::FixedPointOptions::iterationMaxDrivers).  Those
+/// plans then follow ordinary multi-driver semantics: an aggregation that must
+/// see all of a worker's rows needs a local exchange in front of it.  A
+/// convergence root that runs on worker 0 alone always runs with one driver.
+///
+/// An AssignUniqueId in the loop's plans takes its ids from the task that runs
+/// the loop. The ids do not repeat across the loop's stages, iterations and
+/// drivers on one worker. They are also distinct across workers when each
+/// worker's task has its own PlanFragment::taskUniqueId.
 class FixedPointNode : public PlanNode {
  public:
+  /// Builds a fixed point over 'stateDeclarations' that runs the stages of
+  /// 'body' each iteration until 'convergenceConfig' stops it, and emits the
+  /// state entry named 'outputStateEntry': from every worker, or from worker 0
+  /// only when 'outputOnWorkerZero' is true.
+  FixedPointNode(
+      PlanNodeId id,
+      std::vector<StateDeclarationPtr> stateDeclarations,
+      MultiStagePlan body,
+      ConvergenceConfig convergenceConfig,
+      std::string outputStateEntry,
+      bool outputOnWorkerZero = false);
+
+  /// Builds a fixed point whose body is a chain: each of 'plans' after the
+  /// first reads the one before through its only Exchange, and runs where that
+  /// shuffle delivers rows -- on worker 0 for a gather, on every worker for any
+  /// other shuffle.  The first plan runs on every worker.
   FixedPointNode(
       PlanNodeId id,
       std::vector<StateDeclarationPtr> stateDeclarations,
       std::vector<PlanNodePtr> plans,
       ConvergenceConfig convergenceConfig,
-      std::string outputStateEntry);
+      std::string outputStateEntry,
+      bool outputOnWorkerZero = false);
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -347,6 +441,9 @@ class FixedPointNode : public PlanNode {
     return kEmptySources;
   }
 
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
   std::string_view name() const override {
     return "FixedPoint";
   }
@@ -355,9 +452,34 @@ class FixedPointNode : public PlanNode {
     return stateDeclarations_;
   }
 
-  const std::vector<PlanNodePtr>& plans() const {
-    return plans_;
+  /// The stages the body runs each iteration, whose root produces the rows
+  /// written back to the output state entry.  A stage's type says which of
+  /// the fixed point's workers run it: kSource runs on every worker, and takes
+  /// no 'numRemotePartitions'; kFixed on the first 'numRemotePartitions'
+  /// workers, at least two; kSingle on worker 0.  A stage that reads a
+  /// partitioned shuffle runs one task per partition (see
+  /// sizeStagesToShuffles()).  Each worker holds a partition of every state
+  /// entry, so a stage that reads state runs on every worker, and a stage that
+  /// runs on fewer reads its rows through a shuffle; the root of
+  /// ConvergenceConfig::workerZeroVerdict is the one exception.  A stage that
+  /// reads no stage starts with a StateSourceNode.  The root runs on every
+  /// worker, since each writes its own state.  A kSingle stage runs on every
+  /// worker of a fixed point that runs as one (see requiresSingleWorker()).
+  const MultiStagePlan& body() const {
+    return body_;
   }
+
+  /// Sizes each of 'stages' that reads a partitioned shuffle to run one task
+  /// per partition: kSingle for one partition, kFixed with
+  /// 'numRemotePartitions' for more.  Leaves the other stages as they are.
+  /// For a caller that resizes the shuffles between a fixed point's stages,
+  /// before it builds the body or the convergence plan from them.
+  static std::vector<Stage> sizeStagesToShuffles(std::vector<Stage> stages);
+
+  /// Every plan this fixed point runs: the state declarations' initial plans,
+  /// the body's stages and the convergence's. A fixed point has no
+  /// sources, so these are the only plans under it.
+  std::vector<PlanNodePtr> nestedPlans() const;
 
   int32_t maxIterations() const {
     return convergenceConfig_.maxIterations;
@@ -368,26 +490,49 @@ class FixedPointNode : public PlanNode {
   }
 
   /// The mutable loop variable: the VectorStateDeclaration whose final contents
-  /// this node emits and into which the framework writes each iteration's last
-  /// plan output.  Output shaping (e.g. a recursive CTE's UNION ALL of every
-  /// iteration) is expressed by declaring this entry append-mode, not by a
-  /// framework output mode.
+  /// this node emits and into which the framework writes the rows the body's
+  /// root produces each iteration.  Output shaping (e.g. a recursive CTE's
+  /// UNION ALL of every iteration) is expressed by declaring this entry
+  /// append-mode, not by a framework output mode.
   const std::string& outputStateEntry() const {
     return outputStateEntry_;
   }
 
+  /// True when only worker 0 emits the final contents of the output state
+  /// entry, and the other workers emit nothing.  For state every worker holds
+  /// in full, such as a replicated one: every worker emitting its copy would
+  /// return each row once per worker.
+  bool outputOnWorkerZero() const {
+    return outputOnWorkerZero_;
+  }
+
   /// A fixed point is a split source when the coordinator must assign it
-  /// splits: the body shuffles (first plan ends with PartitionedOutput, so the
+  /// splits: the body shuffles (it has more than one stage, so the
   /// coordinator names peer workers), or an initial plan reads from a split
   /// source (a TableScan's file splits, or an Exchange's upstream task).  A
   /// fully local fixed point needs no splits.
   bool requiresSplits() const override;
 
-  /// Number of workers this fixed point runs as: one per output partition of
-  /// whichever chain shuffles -- the body or the convergence sequence.  1 when
-  /// neither does.  A nested FixedPointNode does not widen the enclosing loop
-  /// yet; that propagation is a follow-up.
+  /// True when the body or the convergence shuffles, or a loop nested in
+  /// an initial plan reads its peers, so every worker reads its peers' output:
+  /// the application names the workers with a FixedPointSplit (see
+  /// velox/exec/FixedPointSplit.h).
+  bool readsPeers() const;
+
+  /// Number of workers this fixed point runs as: the most tasks any kFixed
+  /// stage of the body or the convergence runs, or any fixed point nested
+  /// in their plans.  1 when there is none.  Stages that run on every
+  /// worker or on worker 0 leave this at 1, yet the loop may read every peer
+  /// (see readsPeers()) and runs on as many workers as the coordinator names,
+  /// unless requiresSingleWorker().
   int32_t numWorkers() const;
+
+  /// True when worker 0 alone runs a stage that must run on every worker:
+  /// the root, which writes each worker's state, or a stage that reads
+  /// state (see body()).  Validation accepts that only when numWorkers()
+  /// is 1, and the loop then refuses a FixedPointSplit that names more than
+  /// one worker.
+  bool requiresSingleWorker() const;
 
   folly::dynamic serialize() const override;
 
@@ -399,33 +544,34 @@ class FixedPointNode : public PlanNode {
  private:
   static inline const std::vector<PlanNodePtr> kEmptySources{};
 
-  // Validates the sub-plan chaining convention (see the class comment): plans
-  // are joined only by shuffle, so the first reads state, the last produces the
-  // rows written back, and adjacent plans are linked by PartitionedOutput ->
-  // Exchange.  Throws a VeloxUserError if violated.  Defined in the .cpp, which
-  // sees the complete node types it inspects.
+  // Validates the body's stages (see body()).  Throws a VeloxUserError
+  // if violated.  Defined in the .cpp, which sees the complete node types it
+  // inspects.
   void validatePlans() const;
 
-  // Rejects a body chain and a convergence chain that shuffle across different
-  // worker counts; numWorkers() relies on this to take the wider of the two.
+  // Checks that each stage, and each fixed point nested in an initial plan,
+  // fits the workers that run it: a fixed point nested in a stage runs on
+  // that stage's workers.
   void validateWorkerCounts() const;
 
-  // Resolves every StateSource / StateHashJoin reference (in the body plans and
-  // the convergence plan) to a declared state entry of the matching kind, and
-  // checks that referenced schemas, probe-key arity, initial-plan and last-plan
+  // Resolves every StateSource / StateHashJoin reference (in the body and the
+  // convergence stages) to a declared state entry of the matching kind, and
+  // checks that referenced schemas, probe-key arity, initial-plan and root
   // output schemas, and the convergence-plan contract are consistent.  Throws a
   // VeloxUserError if violated.
   void resolveAndValidateStateReferences() const;
 
   std::vector<StateDeclarationPtr> stateDeclarations_;
 
-  // Plans to run sequentially each iteration as separate sub-tasks.
-  std::vector<PlanNodePtr> plans_;
+  MultiStagePlan body_;
 
   ConvergenceConfig convergenceConfig_;
 
   // Name of the mutable vector state entry this node writes and outputs.
   std::string outputStateEntry_;
+
+  // See outputOnWorkerZero().
+  bool outputOnWorkerZero_;
 
   // Derived in the constructor from the schema of the VectorStateDeclaration
   // named by outputStateEntry_.
@@ -461,6 +607,9 @@ class StateSourceNode : public PlanNode {
   const std::vector<PlanNodePtr>& sources() const override {
     return kEmptySources;
   }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
 
   std::string_view name() const override {
     return "StateSource";
@@ -504,8 +653,8 @@ using StateSourceNodePtr = std::shared_ptr<const StateSourceNode>;
 /// Inner-joins the input (probe) against a HashTable persistent state entry
 /// that is built once and reused across iterations (hash-table reuse). Output
 /// rows are the probe input columns followed by the hash table's dependent
-/// (payload) columns.  The probe input's join key columns must occupy the same
-/// channels as the build key columns (keys-first on both sides).
+/// (payload) columns.  Probe key i names the probe input column matched against
+/// the table's build key i; the table lists its key columns first.
 ///
 /// Only inner join is supported: probe rows with no match are dropped (this is
 /// what gives VLP / recursive CTE its empty-frontier termination).  Supporting
@@ -528,6 +677,9 @@ class StateHashJoinNode : public PlanNode {
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
 
   std::string_view name() const override {
     return "StateHashJoin";

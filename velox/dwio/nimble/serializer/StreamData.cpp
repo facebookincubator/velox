@@ -73,6 +73,19 @@ void StreamData::skip(uint32_t count) {
   readRows_ += count;
 }
 
+void StreamData::decodeBoolsAsBits(uint32_t count, uint64_t* bits) {
+  if (count == 0) {
+    return;
+  }
+  NIMBLE_CHECK_NOT_NULL(encoding_);
+  NIMBLE_CHECK_LE(
+      count,
+      remainingRows(),
+      "StreamData::decodeBoolsAsBits past end of segment");
+  encoding_->materializeBoolsAsBits(count, bits, /*begin=*/0);
+  readRows_ += count;
+}
+
 uint32_t StreamData::copyTo(char* output, uint32_t bufferSize) {
   const uint32_t length =
       std::min(static_cast<uint32_t>(end_ - pos_), bufferSize);

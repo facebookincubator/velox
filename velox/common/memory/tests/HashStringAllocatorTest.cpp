@@ -57,10 +57,14 @@ class HashStringAllocatorTest : public testing::Test {
     auto sequence = ++sequence_;
     int32_t numWords =
         header->size() / HashStringAllocator::Header::kContinuedPtrSize;
-    void** ptr = reinterpret_cast<void**>(header->begin());
-    ptr[0] = reinterpret_cast<void*>(sequence);
+    // Blocks are byte-aligned, so write the words unaligned.
+    constexpr auto kWordSize = sizeof(void*);
+    char* words = header->begin();
+    folly::storeUnaligned<void*>(words, reinterpret_cast<void*>(sequence));
     for (int32_t offset = 1; offset < numWords; offset++) {
-      ptr[offset] = ptr + offset + sequence;
+      folly::storeUnaligned<void*>(
+          words + offset * kWordSize,
+          static_cast<void*>(words + (offset + sequence) * kWordSize));
     }
   }
 

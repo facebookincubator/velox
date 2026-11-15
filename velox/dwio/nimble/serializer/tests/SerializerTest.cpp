@@ -17,9 +17,9 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
-#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -55,10 +55,11 @@ TEST_F(SerializerTest, hybridFlatMapRequiresSerializationFormat) {
       .hybridFlatMapColumns =
           {{"features",
             HybridFlatMap{
-                .groups =
-                    {{.groupId = 0, .groupKeys = {"1"}},
-                     {.groupId = HybridFlatMap::kDefaultGroupId,
-                      .groupKeys = {}}}}}},
+                ScalarKind::Int32,
+                {{.groupId = 0, .groupKeys = {"1"}},
+                 {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+                HybridFlatMap::KeyPresenceMode::kBitmap,
+            }}},
   };
 
   NIMBLE_ASSERT_THROW(
@@ -76,10 +77,12 @@ TEST_F(SerializerTest, validatesHybridFlatMapColumnConfiguration) {
               .hybridFlatMapColumns =
                   {{"missing",
                     HybridFlatMap{
-                        .groups =
-                            {{.groupId = 0, .groupKeys = {"1"}},
-                             {.groupId = HybridFlatMap::kDefaultGroupId,
-                              .groupKeys = {}}}}}},
+                        ScalarKind::Int32,
+                        {{.groupId = 0, .groupKeys = {"1"}},
+                         {.groupId = HybridFlatMap::kDefaultGroupId,
+                          .groupKeys = {}}},
+                        HybridFlatMap::KeyPresenceMode::kBitmap,
+                    }}},
           },
           type,
           pool_.get()),
@@ -93,10 +96,12 @@ TEST_F(SerializerTest, validatesHybridFlatMapColumnConfiguration) {
               .hybridFlatMapColumns =
                   {{"features",
                     HybridFlatMap{
-                        .groups =
-                            {{.groupId = 0, .groupKeys = {"1"}},
-                             {.groupId = HybridFlatMap::kDefaultGroupId,
-                              .groupKeys = {}}}}}},
+                        ScalarKind::Int32,
+                        {{.groupId = 0, .groupKeys = {"1"}},
+                         {.groupId = HybridFlatMap::kDefaultGroupId,
+                          .groupKeys = {}}},
+                        HybridFlatMap::KeyPresenceMode::kBitmap,
+                    }}},
           },
           type,
           pool_.get()),
@@ -110,10 +115,12 @@ TEST_F(SerializerTest, validatesHybridFlatMapColumnConfiguration) {
               .hybridFlatMapColumns =
                   {{"features",
                     HybridFlatMap{
-                        .groups =
-                            {{.groupId = 0, .groupKeys = {"1"}},
-                             {.groupId = HybridFlatMap::kDefaultGroupId,
-                              .groupKeys = {}}}}}},
+                        ScalarKind::Int32,
+                        {{.groupId = 0, .groupKeys = {"1"}},
+                         {.groupId = HybridFlatMap::kDefaultGroupId,
+                          .groupKeys = {}}},
+                        HybridFlatMap::KeyPresenceMode::kBitmap,
+                    }}},
           },
           scalarType,
           pool_.get()),
@@ -126,10 +133,11 @@ TEST_F(SerializerTest, hybridFlatMapSerializesDefaultFeature) {
       .hybridFlatMapColumns =
           {{"features",
             HybridFlatMap{
-                .groups =
-                    {{.groupId = 0, .groupKeys = {"1"}},
-                     {.groupId = HybridFlatMap::kDefaultGroupId,
-                      .groupKeys = {}}}}}},
+                ScalarKind::Int32,
+                {{.groupId = 0, .groupKeys = {"1"}},
+                 {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+                HybridFlatMap::KeyPresenceMode::kBitmap,
+            }}},
   };
 
   Serializer serializer{options, mapRowType(), pool_.get()};

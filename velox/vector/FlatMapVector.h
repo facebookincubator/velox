@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include <folly/synchronization/DelayedInit.h>
 
 #include "velox/vector/BaseVector.h"
@@ -23,6 +25,8 @@
 #include "velox/vector/FlatMapKeyIndex.h"
 
 namespace facebook::velox {
+
+class DecodedVector;
 
 /// FlatMapVector implements the flat map layout, which is an alternative way of
 /// encoding logical maps.
@@ -171,15 +175,33 @@ class FlatMapVector : public BaseVector {
   std::optional<column_index_t> getKeyChannel(int64_t scalarKey) const;
   std::optional<column_index_t> getKeyChannel(StringView scalarKey) const;
 
-  /// Returns a vector containing a projection for a specific primitive key.
-  /// This is an efficient operation in flat maps (zero-copy).
+  /// Returned by getKeyChannels() for keys this flat map does not have.
+  static constexpr column_index_t kNoChannel =
+      std::numeric_limits<column_index_t>::max();
+
+  /// Returns, for each row selected in `rows`, the channel of key `keys[row]`,
+  /// or kNoChannel when the key is null or this flat map does not have it.
+  /// The result has `rows.end()` entries, indexed by row; unselected rows are
+  /// kNoChannel too. Like getKeyChannel(), this does not check the in-map
+  /// bits: callers check isInMap() for the map of each row.
+  std::vector<column_index_t> getKeyChannels(
+      const SelectivityVector& rows,
+      const DecodedVector& keys) const;
+
+  /// Returns the values of a specific primitive key, with nulls in the rows
+  /// whose map is null or does not contain the key, or nullptr if this flat
+  /// map does not have the key. The values are not copied: they are returned
+  /// as they are when every row has the key, and otherwise share their buffers
+  /// or are wrapped in a dictionary, so the result may be a new vector that
+  /// callers must hold. The raw values, with an entry for every row, are
+  /// available through mapValuesAt().
   ///
   /// The key restrictions are the same as the ones listed above for
   /// `getKeyChannel()`.
   template <typename TKey>
   VectorPtr projectKey(TKey scalarKey) const {
     if (auto channel = getKeyChannel(scalarKey)) {
-      return mapValues_[channel.value()];
+      return projectChannel(channel.value());
     }
     return nullptr;
   }
@@ -188,7 +210,7 @@ class FlatMapVector : public BaseVector {
   /// distinction between getKeyChannel we see above).
   VectorPtr projectKey(const VectorPtr& keysVector, vector_size_t index) const {
     if (auto channel = getKeyChannel(keysVector, index)) {
-      return mapValues_[channel.value()];
+      return projectChannel(channel.value());
     }
     return nullptr;
   }
@@ -299,7 +321,8 @@ class FlatMapVector : public BaseVector {
       vector_size_t otherIndex,
       CompareFlags flags) const override;
 
-  /// Copy the ranges defined by `ranges` from source into `this`.
+  /// Copy the ranges defined by `ranges` from source into `this`. `source` may
+  /// be a FlatMapVector or a MapVector, under any wrapping.
   void copyRanges(
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
@@ -325,6 +348,13 @@ class FlatMapVector : public BaseVector {
   /// testing/validation purposes, and not for performance critical paths.
   MapVectorPtr toMapVector() const;
 
+  /// Converts and copies `map` into a FlatMapVector, allocated from the same
+  /// memory pool. Each distinct key in `map` becomes a key channel.
+  ///
+  /// Like toMapVector(), this is an expensive operation that should be used
+  /// mostly for testing/validation purposes.
+  static std::shared_ptr<FlatMapVector> fromMapVector(const MapVector& map);
+
   void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
     // TODO: enable this after
     // https://github.com/facebookincubator/velox/issues/15485 is resolved to
@@ -339,6 +369,11 @@ class FlatMapVector : public BaseVector {
       const VectorPtr& sourceDistinctKeys,
       column_index_t sourceChannel);
 
+  /// Returns the in-map bits of the key at `channel` for writing. A key without
+  /// an in-map buffer is in every row, so a buffer allocated here starts with
+  /// every bit set. A buffer that is a view or shared is copied first.
+  uint64_t* ensureInMapAt(column_index_t channel);
+
   /// Updates the in map buffer from the key defined by `targetChannel` based on
   /// values from `sourceInMaps`. Updates based on the ranges defined in
   /// `ranges`.
@@ -352,10 +387,24 @@ class FlatMapVector : public BaseVector {
       const folly::Range<const BaseVector::CopyRange*>& ranges);
 
  private:
-  // Returns the in-map bits of 'channel' for writing. A key without an in-map
-  // buffer is in every row, so a buffer allocated here starts with every bit
-  // set.
-  uint64_t* ensureInMapAt(column_index_t channel);
+  // Copies 'ranges' from an unwrapped flat map.
+  void copyFlatMapRanges(
+      const FlatMapVector* sourceFlatMap,
+      const folly::Range<const CopyRange*>& ranges);
+
+  // Copies 'ranges' from 'source', a flat map under a dictionary or constant.
+  void copyWrappedFlatMapRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges);
+
+  // Copies 'ranges' from 'source', whose wrapped vector is a MapVector.
+  void copyMapRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges);
+
+  // Returns the values of the key at 'channel', with nulls in the rows whose
+  // map is null or does not contain the key. See projectKey().
+  VectorPtr projectChannel(column_index_t channel) const;
 
   void setDistinctKeysImpl(VectorPtr distinctKeys);
 

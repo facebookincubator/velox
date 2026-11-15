@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <span>
 
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
@@ -87,13 +88,17 @@ class ALPEncodingView final : public TypedEncodingView<T> {
     return decodeValue(encoded);
   }
 
+  // Reads the encoded values of the range with one read of their view: a view
+  // such as Varint pays a decode from its first row on every read.
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
       const final {
     this->checkReadRange(offset, length);
+    ScopedVector<uint64_t> encoded{
+        length, this->pool_, this->options_.bufferPool};
+    encodedValues_->read(offset, length, encoded.data());
     if (exceptionCount_ == 0) {
       for (uint32_t i = 0; i < length; ++i) {
-        output[i] = detail::alp::toPhysical<T>(decodeValue(
-            velox::ZigZag::decode(encodedValues_->readAt(offset + i))));
+        output[i] = decodePhysical(encoded[i]);
       }
       return;
     }
@@ -111,10 +116,33 @@ class ALPEncodingView final : public TypedEncodingView<T> {
         output[i] = exceptionValues_->readAt(exceptionIndex);
         ++exceptionPosition;
       } else {
-        output[i] = detail::alp::toPhysical<T>(
-            decodeValue(velox::ZigZag::decode(encodedValues_->readAt(row))));
+        output[i] = decodePhysical(encoded[i]);
       }
     }
+  }
+
+  // Gathers the encoded values with one read of their view, for the reason
+  // given at readPhysical().
+  void readPhysicalAt(std::span<const uint32_t> indices, physicalType* output)
+      const final {
+    if (indices.empty()) {
+      return;
+    }
+    ScopedVector<uint64_t> encoded{
+        indices.size(), this->pool_, this->options_.bufferPool};
+    encodedValues_->readAt(indices, encoded.data());
+    for (size_t i{0}; i < indices.size(); ++i) {
+      if (const auto exception = findException(indices[i])) {
+        output[i] = *exception;
+      } else {
+        output[i] = decodePhysical(encoded[i]);
+      }
+    }
+  }
+
+  physicalType decodePhysical(uint64_t encoded) const {
+    return detail::alp::toPhysical<T>(
+        decodeValue(velox::ZigZag::decode(encoded)));
   }
 
   std::optional<physicalType> findException(uint32_t index) const {

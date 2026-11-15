@@ -56,6 +56,13 @@ Device* currentDevice();
 
 struct StreamImpl;
 
+/// Allocates 'size' bytes of pinned host memory that the device can address,
+/// and sets 'deviceAddress' to the device's address for it.
+void* allocateHostMapped(size_t size, void** deviceAddress);
+
+/// Frees memory from allocateHostMapped.
+void freeHostMapped(void* hostAddress);
+
 class Stream {
  public:
   Stream(std::unique_ptr<StreamImpl> impl);
@@ -84,6 +91,11 @@ class Stream {
 
   /// Enqueus a memset on 'device'.
   void memset(void* address, int32_t value, size_t size);
+
+  /// Enqueues a write of 'value' to 'deviceAddress', performed once all work
+  /// enqueued before it on this stream has completed. With an address from
+  /// allocateHostMapped, the host sees the stream's progress with a plain load.
+  void writeValue64(void* deviceAddress, uint64_t value);
 
   /// Enqueus a prefetch. Prefetches to host if 'device' is nullptr, otherwise
   /// to 'device'.

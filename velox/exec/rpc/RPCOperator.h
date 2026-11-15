@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -132,6 +134,11 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
   static inline const std::string kRpcCongestionOverloadShrinks{
       "rpcCongestionOverloadShrinks"};
+  /// Attempts rejected for capacity and admitted again for another attempt.
+  static inline const std::string kRpcCapacityRetries{"rpcCapacityRetries"};
+  /// Capacity retries a hint's minRetries granted after its budget ran out.
+  static inline const std::string kRpcCapacityRetryFloorRetries{
+      "rpcCapacityRetryFloorRetries"};
   static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
   static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
   static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
@@ -143,7 +150,19 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
+  static inline const std::string kRpcErrorKindInvalidRequest{
+      "rpcErrorKindInvalidRequest"};
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
+  /// Overloaded attempts the transport reported before each completed PER_ROW
+  /// row's final attempt (RPCResponse::numOverloadedAttempts), failed rows
+  /// included. BATCH completions are not counted.
+  /// This and kRpcSuccessesAfterOverload are per-driver live counters that sum
+  /// across drivers.
+  static inline const std::string kRpcOverloadedAttempts{
+      "rpcOverloadedAttempts"};
+  /// Successes whose response reported at least one overloaded attempt.
+  static inline const std::string kRpcSuccessesAfterOverload{
+      "rpcSuccessesAfterOverload"};
   // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
   static inline const std::string kRpcRateLimiterHardLimit{
@@ -157,6 +176,36 @@ class RPCOperator : public exec::Operator {
       "rpcRateLimiterMinLimitMilli"};
   static inline const std::string kRpcRateLimiterServiceHorizonNanos{
       "rpcRateLimiterServiceHorizonNanos"};
+  /// Present, with value one per driver, when the backend's shared limiter
+  /// runs another policy and this operator runs under the limiter for its own.
+  static inline const std::string kRpcRateLimiterPolicyScoped{
+      "rpcRateLimiterPolicyScoped"};
+  /// Time from this driver's first admission request until the stats sample
+  /// or close. The pacing and window stats below cover the same span, and a
+  /// driver that never requests admission reports none of the three. These
+  /// three and rpcStaleSuccessUnits are per-driver counters that sum across
+  /// drivers and tasks on Prestissimo and on Presto-on-Spark; the sums are
+  /// driver time, not wall time. sum(PacingNanos) / sum(AttachedNanos) is the
+  /// share of attached time during which the shared limiter paced. It bounds
+  /// pacing delay from above, because it includes time a driver was idle or
+  /// waiting on upstream. sum(LimitMilliUnitSeconds) / (sum(AttachedNanos) /
+  /// 1e9) is the average window in milli-admission-units.
+  static inline const std::string kRpcRateLimiterAttachedNanos{
+      "rpcRateLimiterAttachedNanos"};
+  /// Part of that span during which the shared limiter paced admission.
+  static inline const std::string kRpcRateLimiterPacingNanos{
+      "rpcRateLimiterPacingNanos"};
+  /// The shared limiter's committed window, the one rpcRateLimiterLimitMilli
+  /// shows, integrated over that span, in milli-admission-units times seconds.
+  /// Recovery growth counts once the limiter commits it to the window.
+  static inline const std::string kRpcRateLimiterLimitMilliUnitSeconds{
+      "rpcRateLimiterLimitMilliUnitSeconds"};
+  /// This driver's successful units whose recovery credit the shared limiter
+  /// discarded because an overload, including one in the same completion,
+  /// arrived after their admission. PER_ROW counts error-free rows; BATCH
+  /// counts the admission units of a flush with at least one successful row
+  /// as a whole, as the limiter credits them.
+  static inline const std::string kRpcStaleSuccessUnits{"rpcStaleSuccessUnits"};
 
   /// Live liveness stats, refreshed on every stats() call rather than only at
   /// close(). Units dispatched but not yet completed.
@@ -244,9 +293,14 @@ class RPCOperator : public exec::Operator {
   // the name lookups per batch.
   void initOutputProjections();
 
-  // Binds the shared limiter after the function has resolved any
-  // input-dependent transport setup. Subsequent inputs must keep the same key.
+  // Binds the limiter for this operator's policy after the function has
+  // resolved any input-dependent transport setup. Subsequent inputs must keep
+  // the same key.
   void initializeRateLimiter();
+
+  // Reserves up to 'want' admission units. The first call records the limiter
+  // snapshot that the span stats are measured from.
+  std::vector<RPCRateLimiter::Token> tryAcquireAdmission(int64_t want);
 
   // Resolves an input whose selected rows all complete synchronously without a
   // backend. The function's preparation result guarantees the futures are
@@ -274,7 +328,10 @@ class RPCOperator : public exec::Operator {
   // window and the shared admission cap. They must back off together: a
   // rate-limit storm is low-latency, so the latency gradient alone is blind to
   // it and only the error verdict makes the window shrink.
-  void recordCongestion(
+  //
+  // Returns the units in 'successUnitsByEpoch' that the shared limiter
+  // discarded because an overload arrived after their admission.
+  int64_t recordCongestion(
       AsyncRPCFunction::CongestionSignal signal,
       const std::vector<int64_t>& roundTripTimesNs,
       const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
@@ -316,6 +373,11 @@ class RPCOperator : public exec::Operator {
   // whole input vector is dripped at the sustainable rate instead of blasted.
   void dispatchRowsUnderAdmission();
 
+  // Applies the window feedback of rejected attempts, then dispatches the
+  // retries that are due, ahead of new rows. Each retry takes a window slot
+  // and a fresh admission slot.
+  void dispatchDueRetries();
+
   // Whether the PER_ROW dispatch buffer still has undispatched rows.
   bool hasPendingRows() const {
     return pendingCursor_ < pendingNumRows_;
@@ -339,11 +401,17 @@ class RPCOperator : public exec::Operator {
   // state_ and function_), and racing on the pointers themselves is undefined
   // behaviour. Holding the read lock across the sample also keeps close() from
   // freeing RPCState or the function underneath an in-progress read. Off every
-  // hot path: written twice per operator, read once per stats sample.
+  // hot path: written a few times per operator, read once per stats sample.
   struct LiveStatsSources {
     std::shared_ptr<RPCState> state;
     RPCRateLimiter* limiter{nullptr};
+    // The limiter's stats at this driver's first admission request. The span
+    // stats are reported as the change since then.
+    std::optional<RPCRateLimiter::Stats> limiterBaseline{};
     std::shared_ptr<AsyncRPCFunction> function;
+    // True when 'limiter' is the controller for this operator's policy rather
+    // than the backend's shared one.
+    bool policyScoped{false};
   };
   folly::Synchronized<LiveStatsSources> liveStatsSources_;
 
@@ -352,12 +420,19 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<AsyncRPCFunction> function_;
   bool requiresRowInspectionBeforeAdmission_{true};
 
-  // Operators with the same admission key share rate-limiter capacity.
+  // Operators with the same admission key and rate-limiter policy share
+  // rate-limiter capacity.
   std::string admissionKey_;
 
-  // Process-scoped controller for admissionKey_, resolved before the first
-  // dispatch; outlives this operator.
+  // Process-scoped controller for admissionKey_ and this operator's resolved
+  // rate-limiter policy. Resolved before the first dispatch; outlives this
+  // operator.
   RPCRateLimiter* limiter_{nullptr};
+  // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
+  bool capacityRetryEnabled_{false};
+
+  // Set by the first tryAcquireAdmission() call.
+  bool admissionRequested_{false};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
   // initialize() by walking the RPC call's argument expressions. A
@@ -386,12 +461,16 @@ class RPCOperator : public exec::Operator {
   // stats collector thread, hence atomic. Relaxed ordering is enough: these
   // are independent counters, not a handshake.
   std::atomic<int64_t> numRequestsDispatched_{0};
+  // Success units the shared limiter discarded as stale; see
+  // kRpcStaleSuccessUnits.
+  std::atomic<int64_t> numStaleSuccessUnits_{0};
   int64_t numResponsesReceived_{0};
   int64_t numErrors_{0};
   // Per-error-kind breakdown of numErrors_, populated by recordErrorKind().
   int64_t numErrorsRateLimited_{0};
   int64_t numErrorsTimeout_{0};
   int64_t numErrorsBackend_{0};
+  int64_t numErrorsInvalidRequest_{0};
   // Rows that failed because something here broke -- an invariant tripped, or
   // a response was returned with no outcome set -- rather than because the
   // backend refused. Tracked apart from the backend error count.
@@ -436,8 +515,9 @@ class RPCOperator : public exec::Operator {
   // scheduling, so this needs generous headroom.
   static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
-  // Block wait time tracking for runtime stats.
-  std::optional<uint64_t> blockWaitStartNs_;
+  // Block wait time tracking for runtime stats. Started when the operator
+  // parks and reset when the wait ends.
+  std::optional<folly::stop_watch<std::chrono::nanoseconds>> blockWaitWatch_;
   bool blockWaitIsBackpressure_{false};
   uint64_t totalBlockWaitNanos_{0};
   uint64_t totalBackpressureWaitNanos_{0};

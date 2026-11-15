@@ -20,8 +20,6 @@
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 
-#include <numeric>
-
 namespace facebook::nimble {
 
 FileLayout FileLayout::create(
@@ -71,19 +69,11 @@ FileLayout FileLayout::create(
   // Per-stripe info
   const auto stripeCount = tablet->stripeCount();
   layout.stripesInfo.reserve(stripeCount);
-  std::vector<TabletReader::StreamMetadata> locationsScratch;
   for (uint32_t i = 0; i < stripeCount; ++i) {
     auto stripeIdentifier = tablet->stripeIdentifier(i);
-    locationsScratch.resize(tablet->streamCount(stripeIdentifier));
-    tablet->streamLocations(stripeIdentifier, locationsScratch);
-    auto stripeSize = std::accumulate(
-        locationsScratch.begin(),
-        locationsScratch.end(),
-        0UL,
-        [](auto size, const auto& location) { return size + location.size; });
     layout.stripesInfo.push_back({
         .offset = tablet->stripeOffset(i),
-        .size = stripeSize,
+        .size = tablet->stripeSize(i),
         .stripeGroupIndex = stripeIdentifier.stripeGroup()->index(),
     });
   }

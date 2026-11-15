@@ -18,6 +18,7 @@
 
 #include <fmt/format.h>
 #include <glog/logging.h>
+#include <unistd.h>
 
 namespace facebook::velox::common {
 

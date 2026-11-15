@@ -285,12 +285,17 @@ function cmake_install {
     CCACHE=ccache
   fi
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
+  # OPENSSL_ROOT_DIR, when set (setup-macos.sh pins Homebrew's OpenSSL 3), is
+  # passed as a cache variable too: fbthrift ships its own FindOpenSSL wrapper
+  # that ignores the environment and otherwise asks Homebrew for its default
+  # openssl, which is OpenSSL 4 now.
   cmake -Wno-dev "${CMAKE_OPTIONS}" -B"${BINARY_DIR}" \
     -GNinja \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     "${INSTALL_PREFIX+-DCMAKE_PREFIX_PATH=}${INSTALL_PREFIX-}" \
     "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \
+    ${OPENSSL_ROOT_DIR:+"-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}"} \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}" \
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DCMAKE_C_COMPILER_LAUNCHER=${CCACHE} \

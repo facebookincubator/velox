@@ -39,8 +39,10 @@ TEST_F(BitmapConstructAggAggregateTest, basic) {
   auto input = makeRowVector({makeFlatVector<int64_t>({0, 1, 7, 8, 100})});
   auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 1, 7, 8, 100}});
 
-  testAggregations(
-      {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertResults(makeRowVector({expected}));
 }
 
 TEST_F(BitmapConstructAggAggregateTest, allNullInputReturnsZeroBitmap) {
@@ -49,16 +51,20 @@ TEST_F(BitmapConstructAggAggregateTest, allNullInputReturnsZeroBitmap) {
       {std::nullopt, std::nullopt, std::nullopt})});
   auto expected = BitmapBuilder::vectorFromBits(pool(), {{}});
 
-  testAggregations(
-      {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertResults(makeRowVector({expected}));
 }
 
 TEST_F(BitmapConstructAggAggregateTest, emptyInputReturnsZeroBitmap) {
   auto input = makeRowVector({makeFlatVector<int64_t>({})});
   auto expected = BitmapBuilder::vectorFromBits(pool(), {{}});
 
-  testAggregations(
-      {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertResults(makeRowVector({expected}));
 }
 
 TEST_F(BitmapConstructAggAggregateTest, mixedNullAndValid) {
@@ -67,8 +73,10 @@ TEST_F(BitmapConstructAggAggregateTest, mixedNullAndValid) {
       {std::nullopt, 5, std::nullopt, 10, std::nullopt})});
   auto expected = BitmapBuilder::vectorFromBits(pool(), {{5, 10}});
 
-  testAggregations(
-      {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertResults(makeRowVector({expected}));
 }
 
 TEST_F(BitmapConstructAggAggregateTest, groupBy) {
@@ -85,8 +93,11 @@ TEST_F(BitmapConstructAggAggregateTest, groupBy) {
       BitmapBuilder::vectorFromBits(pool(), {{0, 100}, {}}),
   });
 
-  testAggregations(
-      {input}, {"c0"}, {"bitmap_construct_agg(c1)"}, {}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"bitmap_construct_agg(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(BitmapConstructAggAggregateTest, boundaryPositions) {
@@ -94,30 +105,26 @@ TEST_F(BitmapConstructAggAggregateTest, boundaryPositions) {
   auto input = makeRowVector({makeFlatVector<int64_t>({0, 32767})});
   auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 32767}});
 
-  testAggregations(
-      {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertResults(makeRowVector({expected}));
 }
 
 TEST_F(BitmapConstructAggAggregateTest, invalidPositionNegative) {
   auto input = makeRowVector({makeFlatVector<int64_t>({-1})});
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {input},
-          {},
-          {"bitmap_construct_agg(c0)"},
-          std::vector<RowVectorPtr>{}),
-      "Bitmap position out of bounds");
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertError("Bitmap position out of bounds");
 }
 
 TEST_F(BitmapConstructAggAggregateTest, invalidPositionTooLarge) {
   auto input = makeRowVector({makeFlatVector<int64_t>({32768})});
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {input},
-          {},
-          {"bitmap_construct_agg(c0)"},
-          std::vector<RowVectorPtr>{}),
-      "Bitmap position out of bounds");
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertError("Bitmap position out of bounds");
 }
 
 TEST_F(BitmapConstructAggAggregateTest, duplicatePositions) {
@@ -125,8 +132,10 @@ TEST_F(BitmapConstructAggAggregateTest, duplicatePositions) {
   auto input = makeRowVector({makeFlatVector<int64_t>({5, 5, 5, 10, 10})});
   auto expected = BitmapBuilder::vectorFromBits(pool(), {{5, 10}});
 
-  testAggregations(
-      {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertResults(makeRowVector({expected}));
 }
 
 TEST_F(BitmapConstructAggAggregateTest, partialAndFinalAggregation) {
@@ -136,11 +145,10 @@ TEST_F(BitmapConstructAggAggregateTest, partialAndFinalAggregation) {
   auto batch2 = makeRowVector({makeFlatVector<int64_t>({3, 4, 5})});
   auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 1, 2, 3, 4, 5}});
 
-  testAggregations(
-      {batch1, batch2},
-      {},
-      {"bitmap_construct_agg(c0)"},
-      {makeRowVector({expected})});
+  AggregationTester(*this)
+      .inputs({batch1, batch2})
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertResults(makeRowVector({expected}));
 }
 
 TEST_F(BitmapConstructAggAggregateTest, invalidIntermediateSizeTooSmall) {
@@ -195,11 +203,10 @@ TEST_F(BitmapConstructAggAggregateTest, mergeMultipleIntermediates) {
   auto batch2 = makeRowVector({makeFlatVector<int64_t>({15})});
   auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 15}});
 
-  testAggregations(
-      {batch1, batch2},
-      {},
-      {"bitmap_construct_agg(c0)"},
-      {makeRowVector({expected})});
+  AggregationTester(*this)
+      .inputs({batch1, batch2})
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertResults(makeRowVector({expected}));
 }
 
 TEST_F(BitmapConstructAggAggregateTest, mergeOverlappingIntermediates) {
@@ -208,11 +215,10 @@ TEST_F(BitmapConstructAggAggregateTest, mergeOverlappingIntermediates) {
   auto batch2 = makeRowVector({makeFlatVector<int64_t>({0, 1})});
   auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 1}});
 
-  testAggregations(
-      {batch1, batch2},
-      {},
-      {"bitmap_construct_agg(c0)"},
-      {makeRowVector({expected})});
+  AggregationTester(*this)
+      .inputs({batch1, batch2})
+      .aggregates({"bitmap_construct_agg(c0)"})
+      .assertResults(makeRowVector({expected}));
 }
 
 } // namespace

@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/SelectiveFlatMapColumnReader.h"
 
+#include "velox/common/base/SimdUtil.h"
+
 namespace facebook::velox::dwio::common {
 namespace {
 
@@ -30,6 +32,19 @@ FlatMapVector* tryReuseResult(
 
   if (result->encoding() == VectorEncoding::Simple::FLAT_MAP) {
     auto* flatMap = static_cast<FlatMapVector*>(result.get());
+    if (size > flatMap->size()) {
+      for (column_index_t i = 0; i < flatMap->numDistinctKeys(); ++i) {
+        const auto& values = flatMap->mapValuesAt(i);
+        if (values != nullptr && values.use_count() != 1) {
+          return nullptr;
+        }
+      }
+      for (const auto& inMap : flatMap->inMaps()) {
+        if (inMap != nullptr && !inMap->unique()) {
+          return nullptr;
+        }
+      }
+    }
     if (flatMap->distinctKeys() != distinctKeys) {
       flatMap->setDistinctKeys(distinctKeys);
     }
@@ -64,11 +79,24 @@ void SelectiveFlatMapColumnReader::getValues(
     child->getValues(rows, &values);
     resultFlatMap->mapValuesAt(i) = values;
 
-    const auto& inMap = inMapBuffer(i);
-    if (inMap) {
-      resultFlatMap->inMapsAt(i, true) = inMap;
+    if (auto inMap = selectInMap(inMapBuffer(i), rows, resultFlatMap->pool())) {
+      resultFlatMap->inMapsAt(i, true) = std::move(inMap);
     }
   }
+}
+
+// static
+BufferPtr SelectiveFlatMapColumnReader::selectInMap(
+    const BufferPtr& inMap,
+    const RowSet& rows,
+    memory::MemoryPool* pool) {
+  if (inMap == nullptr) {
+    return nullptr;
+  }
+  auto selected = AlignedBuffer::allocate<bool>(rows.size(), pool);
+  simd::gatherBits(
+      inMap->as<uint64_t>(), rows, selected->asMutable<uint64_t>());
+  return selected;
 }
 
 FlatMapVector* SelectiveFlatMapColumnReader::prepareResult(

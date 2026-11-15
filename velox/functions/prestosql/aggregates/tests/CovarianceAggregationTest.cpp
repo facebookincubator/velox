@@ -35,14 +35,21 @@ class CovarianceAggregationTest
     auto sql =
         fmt::format("SELECT c0, {}(c1, c2) FROM tmp GROUP BY 1", aggName);
 
-    testAggregations({data}, {"c0"}, {partialAgg}, sql);
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates({partialAgg})
+        .assertResults(sql);
   }
 
   void testGlobalAgg(const std::string& aggName, const RowVectorPtr& data) {
     auto partialAgg = fmt::format("{}(c1, c2)", aggName);
     auto sql = fmt::format("SELECT {}(c1, c2) FROM tmp", aggName);
 
-    testAggregations({data}, {}, {partialAgg}, sql);
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({partialAgg})
+        .assertResults(sql);
   }
 
   void testDistinctGroupBy(

@@ -84,6 +84,11 @@ core::TypedExprPtr SwitchRewrite::rewrite(const core::TypedExprPtr& expr) {
     return core::ConstantTypedExpr::makeNull(expr->type());
   }
 
+  // No condition was dropped: report no rewrite.
+  if (utils::sameInputs(expr, optimizedInputs)) {
+    return nullptr;
+  }
+
   return std::make_shared<core::CallTypedExpr>(
       expr->type(), std::move(optimizedInputs), callExpr->name());
 }

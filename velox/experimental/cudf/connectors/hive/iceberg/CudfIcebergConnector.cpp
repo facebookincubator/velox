@@ -15,9 +15,11 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDataSource.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
@@ -37,7 +39,7 @@ namespace {
 void registerIcebergInternalFunctions(const std::string& prefix) {
   static std::once_flag registerFlag;
   std::call_once(registerFlag, [prefix]() {
-    functions::iceberg::registerFunctions(prefix);
+    functions::iceberg::registerFunctions(prefix, "velox");
   });
 }
 
@@ -61,7 +63,8 @@ std::unique_ptr<DataSource> CudfIcebergConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  if (cudfIsRegistered()) {
+  if (cudfIsRegistered() && isTypeSupportedByCudf(outputType) &&
+      CudfHiveDataSource::isSupported(tableHandle, *connectorQueryCtx)) {
     return std::make_unique<CudfIcebergDataSource>(
         outputType,
         tableHandle,

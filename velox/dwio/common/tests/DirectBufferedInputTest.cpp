@@ -342,6 +342,15 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareCoalescedRead) {
     EXPECT_EQ(next1.value(), content.substr(123, regionSize));
     EXPECT_EQ(readFile->numReads(), 1);
 
+    if (!tinyRegion) {
+      auto* load = dynamic_cast<DirectCoalescedLoad*>(
+          input.testingCoalescedLoads()[0].get());
+      ASSERT_NE(load, nullptr);
+      ASSERT_EQ(load->requests().size(), 2);
+      EXPECT_EQ(load->requests()[0].buffer.sharedData, nullptr);
+      EXPECT_GT(load->requests()[1].buffer.ownedData.numPages(), 0);
+    }
+
     auto next2 = getNext(*stream2);
     ASSERT_TRUE(next2.has_value());
     EXPECT_EQ(next2.value(), content.substr(123, regionSize));
@@ -422,6 +431,51 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareAllocationRead) {
   ASSERT_TRUE(mid.has_value());
   EXPECT_EQ(mid.value(), content.substr(5 * kRegionSize, kRegionSize));
   EXPECT_EQ(readFile->numReads(), kNumRegions);
+}
+
+TEST_F(DirectBufferedInputTest, largeDuplicateForcesSharedAllocation) {
+  constexpr int32_t kRegionSize = 1 << 20;
+  std::string content(kRegionSize, 'x');
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setLoadQuantum(kRegionSize);
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "largeDuplicate");
+  StringIdLease groupId(ids, "largeDuplicateGroup");
+
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      dataIoStats_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  auto source = input.enqueue(common::Region{0, kRegionSize}, nullptr);
+  auto duplicate = input.enqueue(common::Region{0, kRegionSize}, nullptr);
+  ASSERT_NE(source, nullptr);
+  ASSERT_NE(duplicate, nullptr);
+
+  input.load(LogType::TEST);
+  ASSERT_EQ(input.testingCoalescedLoads().size(), 1);
+
+  EXPECT_EQ(getNext(*source), content);
+
+  auto* load = dynamic_cast<DirectCoalescedLoad*>(
+      input.testingCoalescedLoads()[0].get());
+  ASSERT_NE(load, nullptr);
+  ASSERT_EQ(load->requests().size(), 2);
+  EXPECT_NE(load->requests()[0].buffer.sharedData, nullptr);
+  EXPECT_TRUE(load->requests()[1].buffer.empty());
+
+  EXPECT_EQ(getNext(*duplicate), content);
+  EXPECT_EQ(readFile->numReads(), 1);
 }
 
 // A shared-allocation stream whose region exceeds loadQuantum reads the first
@@ -1336,7 +1390,9 @@ TEST_F(DirectBufferedInputTest, readGapTracking) {
         std::move(groupId),
         ioStats,
         nullptr,
-        executor_.get(),
+        // Gaps are recorded synchronously in load(). Without an executor, no
+        // prefetch outlives 'input'.
+        nullptr,
         readerOptions);
 
     for (const auto& region : testCase.regions) {

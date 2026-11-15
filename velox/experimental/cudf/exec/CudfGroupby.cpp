@@ -30,12 +30,15 @@
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/PrestoQueryConfig.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/lists/count_elements.hpp>
+#include <cudf/lists/lists_column_view.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
@@ -44,6 +47,9 @@
 
 #include <cuda/std/numeric>
 
+#include <folly/ScopeGuard.h>
+
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -100,7 +106,8 @@ struct SimpleStreamingGroupbyAggregator final : StreamingGroupbyAggregator {
 
   void prepareInput(
       cudf::table_view input,
-      std::vector<cudf::column_view>& preparedColumns) override {
+      std::vector<cudf::column_view>& preparedColumns,
+      cuda::stream_ref /*stream*/) override {
     preparedInputIndex_ = prepareColumn(input, preparedColumns);
   }
 
@@ -138,6 +145,76 @@ using StreamingGroupbyMaxAggregator = SimpleStreamingGroupbyAggregator<
 using StreamingGroupbyCountAggregator = SimpleStreamingGroupbyAggregator<
     &cudf::make_sum_aggregation<cudf::groupby_aggregation>>;
 
+struct StreamingGroupbyDecimalAggregator final : StreamingGroupbyAggregator {
+  StreamingGroupbyDecimalAggregator(
+      column_index_t inputIndex,
+      TypePtr resultType,
+      bool average)
+      : StreamingGroupbyAggregator(inputIndex, std::move(resultType)),
+        average_(average) {}
+
+  void prepareInput(
+      cudf::table_view input,
+      std::vector<cudf::column_view>& preparedColumns,
+      cuda::stream_ref stream) override {
+    const auto scale = getDecimalPrecisionScale(*resultType).second;
+    auto decoded = cudf_velox::deserializeDecimalSumState(
+        input.column(inputIndex), scale, stream, get_temp_mr());
+    decodedSum_ = std::move(decoded.sum);
+    preparedInputIndex_ = preparedColumns.size();
+    preparedColumns.push_back(decodedSum_->view());
+    if (average_) {
+      decodedCount_ = std::move(decoded.count);
+      preparedColumns.push_back(decodedCount_->view());
+    }
+  }
+
+  void releaseInput() override {
+    decodedSum_.reset();
+    decodedCount_.reset();
+  }
+
+  void addStreamingRequest(
+      std::vector<cudf::groupby::streaming_aggregation_request>& requests)
+      override {
+    VELOX_CHECK(preparedInputIndex_.has_value());
+    resultIndex_ = requests.size();
+    requests.push_back(
+        cudf::groupby::streaming_aggregation_request{
+            static_cast<cudf::size_type>(*preparedInputIndex_),
+            cudf::make_sum_aggregation<cudf::groupby_aggregation>()});
+    if (average_) {
+      requests.push_back(
+          cudf::groupby::streaming_aggregation_request{
+              static_cast<cudf::size_type>(*preparedInputIndex_ + 1),
+              cudf::make_sum_aggregation<cudf::groupby_aggregation>()});
+    }
+  }
+
+  std::unique_ptr<cudf::column> makeOutputColumn(
+      std::vector<cudf::groupby::aggregation_result>& results,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    auto sum = std::move(results[resultIndex_].results[0]);
+    if (average_) {
+      return finalizeDecimalAverage(
+          std::move(sum),
+          std::move(results[resultIndex_ + 1].results[0]),
+          resultType,
+          stream,
+          mr);
+    }
+    return castStreamingOutput(std::move(sum), resultType, stream, mr);
+  }
+
+ private:
+  const bool average_;
+  std::optional<column_index_t> preparedInputIndex_;
+  size_t resultIndex_{0};
+  std::unique_ptr<cudf::column> decodedSum_;
+  std::unique_ptr<cudf::column> decodedCount_;
+};
+
 struct StreamingGroupbyAverageAggregator final : StreamingGroupbyAggregator {
   StreamingGroupbyAverageAggregator(
       column_index_t inputIndex,
@@ -146,7 +223,8 @@ struct StreamingGroupbyAverageAggregator final : StreamingGroupbyAggregator {
 
   void prepareInput(
       cudf::table_view input,
-      std::vector<cudf::column_view>& preparedColumns) override {
+      std::vector<cudf::column_view>& preparedColumns,
+      cuda::stream_ref /*stream*/) override {
     sumInputIndex_ = prepareColumn(input, preparedColumns, 0);
     countInputIndex_ = prepareColumn(input, preparedColumns, 1);
   }
@@ -239,7 +317,22 @@ struct SimpleGroupbyAggregator final : GroupbyAggregator {
       std::vector<cudf::groupby::aggregation_result>& results,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
-    auto column = std::move(results[outputIndex_].results[0]);
+    return castResult(std::move(results[outputIndex_].results[0]), stream, mr);
+  }
+
+  std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK_EQ(step, core::AggregationNode::Step::kFinal);
+    return castResult(std::move(state), stream, mr);
+  }
+
+ private:
+  std::unique_ptr<cudf::column> castResult(
+      std::unique_ptr<cudf::column> column,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) {
     const auto cudfType = cudf_velox::veloxToCudfDataType(resultType);
     if (column->type() != cudfType) {
       column = cudf::cast(*column, cudfType, stream, mr);
@@ -247,7 +340,6 @@ struct SimpleGroupbyAggregator final : GroupbyAggregator {
     return column;
   }
 
- private:
   uint32_t outputIndex_{0};
 };
 
@@ -276,8 +368,8 @@ void addDecimalSumCountRequestsAfterDecode(
     uint32_t& countIdx,
     std::unique_ptr<cudf::column>& decodedSum,
     std::unique_ptr<cudf::column>& decodedCount) {
-  auto sumAndCount =
-      cudf_velox::deserializeDecimalSumState(encodedColumn, scale, stream);
+  auto sumAndCount = cudf_velox::deserializeDecimalSumState(
+      encodedColumn, scale, stream, get_temp_mr());
   decodedSum.swap(sumAndCount.sum);
   decodedCount.swap(sumAndCount.count);
 
@@ -336,7 +428,7 @@ void addDecimalFinalSumOnlyRequest(
   auto& request = requests.emplace_back();
   sumIdx = requests.size() - 1;
   auto sumAndCount = cudf_velox::deserializeDecimalSumState(
-      tbl.column(inputIndex), scale, stream);
+      tbl.column(inputIndex), scale, stream, get_temp_mr());
   decodedSum.swap(sumAndCount.sum);
   request.values = decodedSum->view();
   request.aggregations.push_back(
@@ -428,6 +520,28 @@ struct GroupbyDecimalSumAggregator : GroupbyAggregator {
     return col;
   }
 
+  std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK_EQ(step, core::AggregationNode::Step::kFinal);
+    const auto scale = getDecimalPrecisionScale(*resultType).second;
+    auto decoded = cudf_velox::deserializeDecimalSumState(
+        state->view(), scale, stream, mr);
+    const auto outputType = cudf_velox::veloxToCudfDataType(resultType);
+    if (decoded.sum->type() != outputType) {
+      return cudf::cast(*decoded.sum, outputType, stream, mr);
+    }
+    return std::move(decoded.sum);
+  }
+
+  void releaseInput() override {
+    GroupbyAggregator::releaseInput();
+    castedInput_.reset();
+    decodedSum_.reset();
+    decodedCount_.reset();
+  }
+
  private:
   uint32_t sumIdx_{0};
   uint32_t countIdx_{0};
@@ -443,22 +557,15 @@ struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
-      : GroupbyAggregator(
-            step,
-            inputIndex,
-            constant,
-            resultType,
-            std::nullopt) {}
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : GroupbyAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
-  // Decimal avg uses a dedicated path that does not honor masks; masked avg
-  // already falls back to CPU (see canGroupbyBeEvaluatedByCudf).
   void addGroupbyRequest(
       cudf::table_view const& tbl,
       std::vector<cudf::groupby::aggregation_request>& requests,
       cuda::stream_ref stream,
-      rmm::device_async_resource_ref /*mr*/) override {
-    VELOX_CHECK(!maskIndex.has_value(), "decimal avg does not support masks");
+      rmm::device_async_resource_ref mr) override {
     if (step == core::AggregationNode::Step::kIntermediate ||
         step == core::AggregationNode::Step::kFinal) {
       addDecimalDecodedSumCountRequests(
@@ -472,8 +579,9 @@ struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
           decodedSum_,
           decodedCount_);
     } else {
+      // The sum and count behind the average must skip masked rows.
       addDecimalRawPartialSingleSumRequest(
-          tbl.column(inputIndex),
+          materializeMaskedInput(tbl, inputIndex, stream, mr),
           requests,
           step == core::AggregationNode::Step::kPartial ||
               step == core::AggregationNode::Step::kSingle,
@@ -510,6 +618,29 @@ struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
     }
     // All four aggregation steps are handled above.
     VELOX_UNREACHABLE();
+  }
+
+  std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK_EQ(step, core::AggregationNode::Step::kFinal);
+    const auto scale = getDecimalPrecisionScale(*resultType).second;
+    auto decoded = cudf_velox::deserializeDecimalSumState(
+        state->view(), scale, stream, get_temp_mr());
+    return finalizeDecimalAverage(
+        std::move(decoded.sum),
+        std::move(decoded.count),
+        resultType,
+        stream,
+        mr);
+  }
+
+  void releaseInput() override {
+    GroupbyAggregator::releaseInput();
+    castedInput_.reset();
+    decodedSum_.reset();
+    decodedCount_.reset();
   }
 
  private:
@@ -578,7 +709,23 @@ struct GroupbyCountAggregator : GroupbyAggregator {
       std::vector<cudf::groupby::aggregation_result>& results,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
-    auto col = std::move(results[outputIndex_].results[0]);
+    return makeCountResult(
+        std::move(results[outputIndex_].results[0]), stream, mr);
+  }
+
+  std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK_EQ(step, core::AggregationNode::Step::kFinal);
+    return makeCountResult(std::move(state), stream, mr);
+  }
+
+ private:
+  std::unique_ptr<cudf::column> makeCountResult(
+      std::unique_ptr<cudf::column> col,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) {
     if (inputKind_ == CountInputKind::kNullConstant) {
       auto zero = cudf::numeric_scalar<int64_t>(0, true, stream, get_temp_mr());
       col = cudf::make_column_from_scalar(zero, col->size(), stream, mr);
@@ -591,6 +738,11 @@ struct GroupbyCountAggregator : GroupbyAggregator {
     return col;
   }
 
+  void releaseInput() override {
+    GroupbyAggregator::releaseInput();
+    maskedCount_.reset();
+  }
+
  private:
   CountInputKind inputKind_;
   uint32_t outputIndex_;
@@ -598,6 +750,44 @@ struct GroupbyCountAggregator : GroupbyAggregator {
   // next addGroupbyRequest on this aggregator.
   std::unique_ptr<cudf::column> maskedCount_;
 };
+
+// Builds avg's ROW(sum, count) state. A row whose count is zero, an all-null
+// or all-masked group, is NULL, as the CPU partial emits it: a CPU final takes
+// a non-null row for a live accumulator and would divide zero by zero.
+std::unique_ptr<cudf::column> makeSumCountState(
+    std::unique_ptr<cudf::column> sum,
+    std::unique_ptr<cudf::column> count,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  auto const size = count->size();
+  cudf::numeric_scalar<int64_t> zero(
+      0, /*is_valid=*/true, stream, get_temp_mr());
+  auto hasRows = cudf::binary_operation(
+      *count,
+      zero,
+      cudf::binary_operator::GREATER,
+      cudf::data_type{cudf::type_id::BOOL8},
+      stream,
+      get_temp_mr());
+  auto [mask, numNulls] = cudf::bools_to_mask(*hasRows, stream, mr);
+  auto nullMask = numNulls > 0 ? std::move(*mask)
+                               : cudf::create_null_mask(
+                                     0,
+                                     cudf::mask_state::UNALLOCATED,
+                                     stream,
+                                     cudf::memory_resources{mr, get_temp_mr()});
+
+  std::vector<std::unique_ptr<cudf::column>> children;
+  children.push_back(std::move(sum));
+  children.push_back(std::move(count));
+  return std::make_unique<cudf::column>(
+      cudf::data_type(cudf::type_id::STRUCT),
+      size,
+      rmm::device_buffer{},
+      std::move(nullMask),
+      numNulls,
+      std::move(children));
+}
 
 struct GroupbyMeanAggregator : GroupbyAggregator {
   GroupbyMeanAggregator(
@@ -608,18 +798,18 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
       std::optional<uint32_t> maskIndex)
       : GroupbyAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
-  // Masked avg falls back to CPU; never masked here.
   void addGroupbyRequest(
       cudf::table_view const& tbl,
       std::vector<cudf::groupby::aggregation_request>& requests,
-      cuda::stream_ref /*stream*/,
-      rmm::device_async_resource_ref /*mr*/) override {
-    VELOX_CHECK(!maskIndex.has_value(), "avg does not support masks");
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    // Null-inject masked rows at the raw-input steps so cuDF's null-excluding
+    // mean, sum and count skip them.
     switch (step) {
       case core::AggregationNode::Step::kSingle: {
         auto& request = requests.emplace_back();
         meanIdx_ = requests.size() - 1;
-        request.values = tbl.column(inputIndex);
+        request.values = materializeMaskedInput(tbl, inputIndex, stream, mr);
         request.aggregations.push_back(
             cudf::make_mean_aggregation<cudf::groupby_aggregation>());
         break;
@@ -627,7 +817,7 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
       case core::AggregationNode::Step::kPartial: {
         auto& request = requests.emplace_back();
         sumIdx_ = requests.size() - 1;
-        request.values = tbl.column(inputIndex);
+        request.values = materializeMaskedInput(tbl, inputIndex, stream, mr);
         request.aggregations.push_back(
             cudf::make_sum_aggregation<cudf::groupby_aggregation>());
         request.aggregations.push_back(
@@ -665,13 +855,19 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
       rmm::device_async_resource_ref mr) override {
     const auto& outputType = asRowType(resultType);
     switch (step) {
-      case core::AggregationNode::Step::kSingle:
-        return std::move(results[meanIdx_].results[0]);
+      case core::AggregationNode::Step::kSingle: {
+        // cuDF computes the mean in double; avg over REAL is declared REAL.
+        auto mean = std::move(results[meanIdx_].results[0]);
+        const auto cudfType = cudf_velox::veloxToCudfDataType(resultType);
+        if (mean->type() != cudfType) {
+          mean = cudf::cast(*mean, cudfType, stream, mr);
+        }
+        return mean;
+      }
       case core::AggregationNode::Step::kPartial: {
         auto sum = std::move(results[sumIdx_].results[0]);
         auto count = std::move(results[sumIdx_].results[1]);
 
-        auto const size = sum->size();
         auto const cudfSumType =
             cudf_velox::veloxToCudfDataType(outputType->childAt(0));
         auto const cudfCountType =
@@ -684,20 +880,7 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
               cudf::cast(*count, cudf::data_type(cudfCountType), stream, mr);
         }
 
-        auto children = std::vector<std::unique_ptr<cudf::column>>();
-        children.push_back(std::move(sum));
-        children.push_back(std::move(count));
-
-        // TODO: Handle nulls. This can happen if all values are null in a
-        // group.
-        return std::make_unique<cudf::column>(
-            cudf::data_type(cudf::type_id::STRUCT),
-            size,
-            rmm::device_buffer{},
-            cudf::create_null_mask(
-                0, cudf::mask_state::UNALLOCATED, stream, mr),
-            0,
-            std::move(children));
+        return makeSumCountState(std::move(sum), std::move(count), stream, mr);
       }
       case core::AggregationNode::Step::kIntermediate: {
         // The difference between intermediate and partial is in where the
@@ -709,7 +892,6 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
         auto sum = std::move(results[sumIdx_].results[0]);
         auto count = std::move(results[countIdx_].results[0]);
 
-        auto size = sum->size();
         auto const cudfSumType =
             cudf_velox::veloxToCudfDataType(outputType->childAt(0));
         auto const cudfCountType =
@@ -722,53 +904,66 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
               cudf::cast(*count, cudf::data_type(cudfCountType), stream, mr);
         }
 
-        auto children = std::vector<std::unique_ptr<cudf::column>>();
-        children.push_back(std::move(sum));
-        children.push_back(std::move(count));
-
-        return std::make_unique<cudf::column>(
-            cudf::data_type(cudf::type_id::STRUCT),
-            size,
-            rmm::device_buffer{},
-            cudf::create_null_mask(
-                0, cudf::mask_state::UNALLOCATED, stream, mr),
-            0,
-            std::move(children));
+        return makeSumCountState(std::move(sum), std::move(count), stream, mr);
       }
-      case core::AggregationNode::Step::kFinal: {
-        auto sum = std::move(results[sumIdx_].results[0]);
-        auto count = std::move(results[countIdx_].results[0]);
-        auto avg = cudf::binary_operation(
-            *sum,
-            *count,
-            cudf::binary_operator::DIV,
-            cudf_velox::veloxToCudfDataType(resultType),
+      case core::AggregationNode::Step::kFinal:
+        return finalizeSumCount(
+            std::move(results[sumIdx_].results[0]),
+            std::move(results[countIdx_].results[0]),
             stream,
             mr);
-        // Null out groups where count == 0 (empty groups).
-        // SQL semantics require avg of an empty group to be NULL, but
-        // cudf's 0/0 division produces NaN.  We mask on count rather
-        // than using column_nans_to_nulls so that legitimate NaN
-        // results (from NaN inputs) are preserved.
-        cudf::numeric_scalar<int64_t> zero(0, true, stream, get_temp_mr());
-        auto validMask = cudf::binary_operation(
-            *count,
-            zero,
-            cudf::binary_operator::GREATER,
-            cudf::data_type{cudf::type_id::BOOL8},
-            stream,
-            get_temp_mr());
-        auto [mask, nullCount] =
-            cudf::bools_to_mask(*validMask, stream, get_temp_mr());
-        avg->set_null_mask(std::move(*mask), nullCount);
-        return avg;
-      }
       default:
         VELOX_NYI("Unsupported aggregation step for mean");
     }
   }
 
+  std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK_EQ(step, core::AggregationNode::Step::kFinal);
+    VELOX_CHECK(state->type().id() == cudf::type_id::STRUCT);
+    auto contents = state->release();
+    VELOX_CHECK_EQ(contents.children.size(), 2);
+    return finalizeSumCount(
+        std::move(contents.children[0]),
+        std::move(contents.children[1]),
+        stream,
+        mr);
+  }
+
  private:
+  std::unique_ptr<cudf::column> finalizeSumCount(
+      std::unique_ptr<cudf::column> sum,
+      std::unique_ptr<cudf::column> count,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) {
+    auto avg = cudf::binary_operation(
+        *sum,
+        *count,
+        cudf::binary_operator::DIV,
+        cudf_velox::veloxToCudfDataType(resultType),
+        stream,
+        mr);
+    // Null out groups where count == 0 (empty groups).
+    // SQL semantics require avg of an empty group to be NULL, but
+    // cudf's 0/0 division produces NaN.  We mask on count rather
+    // than using column_nans_to_nulls so that legitimate NaN
+    // results (from NaN inputs) are preserved.
+    cudf::numeric_scalar<int64_t> zero(0, true, stream, get_temp_mr());
+    auto validMask = cudf::binary_operation(
+        *count,
+        zero,
+        cudf::binary_operator::GREATER,
+        cudf::data_type{cudf::type_id::BOOL8},
+        stream,
+        get_temp_mr());
+    auto [mask, nullCount] =
+        cudf::bools_to_mask(*validMask, stream, get_temp_mr());
+    avg->set_null_mask(std::move(*mask), nullCount);
+    return avg;
+  }
+
   // These indices are used to track where the desired result columns
   // (mean/<sum, count>) are in the output of cudf::groupby::aggregate().
   uint32_t meanIdx_;
@@ -785,16 +980,16 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
       std::optional<uint32_t> maskIndex)
       : GroupbyAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
-  // Masked stddev falls back to CPU; never masked here.
   void addGroupbyRequest(
       cudf::table_view const& tbl,
       std::vector<cudf::groupby::aggregation_request>& requests,
-      cuda::stream_ref /*stream*/,
-      rmm::device_async_resource_ref /*mr*/) override {
-    VELOX_CHECK(!maskIndex.has_value(), "stddev does not support masks");
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
     auto& request = requests.emplace_back();
     outputIdx_ = requests.size() - 1;
-    request.values = tbl.column(inputIndex);
+    // Null-inject masked rows at the raw-input steps so cuDF's null-excluding
+    // std, count, mean and M2 skip them; the merge steps carry no mask.
+    request.values = materializeMaskedInput(tbl, inputIndex, stream, mr);
 
     switch (step) {
       case core::AggregationNode::Step::kSingle:
@@ -870,58 +1065,66 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         return makeM2StructColumn(
             std::move(count), std::move(mean), std::move(m2), stream, mr);
       }
-      case core::AggregationNode::Step::kFinal: {
-        // MERGE_M2 returns struct(count, mean, m2)
-        // Compute sqrt(m2 / (count - 1)) with NULL where count < 2
-        auto merged = std::move(results[outputIdx_].results[0]);
-        auto mergedView = merged->view();
-        auto countView = mergedView.child(0);
-        auto m2View = mergedView.child(2);
-
-        // count - 1 (binary_operation handles type promotion)
-        cudf::numeric_scalar<double> one(1.0, true, stream, get_temp_mr());
-        auto countMinus1 = cudf::binary_operation(
-            countView,
-            one,
-            cudf::binary_operator::SUB,
-            cudf::data_type{cudf::type_id::FLOAT64},
-            stream,
-            get_temp_mr());
-
-        // m2 / (count - 1)
-        auto variance = cudf::binary_operation(
-            m2View,
-            *countMinus1,
-            cudf::binary_operator::DIV,
-            cudf::data_type{cudf::type_id::FLOAT64},
-            stream,
-            get_temp_mr());
-
-        // sqrt(variance)
-        auto stddev = cudf::unary_operation(
-            *variance, cudf::unary_operator::SQRT, stream, get_temp_mr());
-
-        // count >= 2
-        cudf::numeric_scalar<int64_t> two(2, true, stream, get_temp_mr());
-        auto validMask = cudf::binary_operation(
-            countView,
-            two,
-            cudf::binary_operator::GREATER_EQUAL,
-            cudf::data_type{cudf::type_id::BOOL8},
-            stream,
-            get_temp_mr());
-
-        // Apply mask: where count < 2, result is NULL
-        cudf::numeric_scalar<double> nullDouble(
-            0.0, false, stream, get_temp_mr());
-        return cudf::copy_if_else(*stddev, nullDouble, *validMask, stream, mr);
-      }
+      case core::AggregationNode::Step::kFinal:
+        return finalizeM2State(
+            std::move(results[outputIdx_].results[0]), stream, mr);
       default:
         VELOX_NYI("Unsupported aggregation step for stddev_samp");
     }
   }
 
+  std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK_EQ(step, core::AggregationNode::Step::kFinal);
+    return finalizeM2State(std::move(state), stream, mr);
+  }
+
  private:
+  std::unique_ptr<cudf::column> finalizeM2State(
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) {
+    // State is struct(count, mean, m2). Compute sqrt(m2 / (count - 1)),
+    // with NULL where count < 2.
+    auto stateView = state->view();
+    auto countView = stateView.child(0);
+    auto m2View = stateView.child(2);
+    // count - 1 (binary_operation handles type promotion)
+    cudf::numeric_scalar<double> one(1.0, true, stream, get_temp_mr());
+    auto countMinus1 = cudf::binary_operation(
+        countView,
+        one,
+        cudf::binary_operator::SUB,
+        cudf::data_type{cudf::type_id::FLOAT64},
+        stream,
+        get_temp_mr());
+    // m2 / (count - 1)
+    auto variance = cudf::binary_operation(
+        m2View,
+        *countMinus1,
+        cudf::binary_operator::DIV,
+        cudf::data_type{cudf::type_id::FLOAT64},
+        stream,
+        get_temp_mr());
+    // sqrt(variance)
+    auto stddev = cudf::unary_operation(
+        *variance, cudf::unary_operator::SQRT, stream, get_temp_mr());
+    // count >= 2
+    cudf::numeric_scalar<int64_t> two(2, true, stream, get_temp_mr());
+    auto validMask = cudf::binary_operation(
+        countView,
+        two,
+        cudf::binary_operator::GREATER_EQUAL,
+        cudf::data_type{cudf::type_id::BOOL8},
+        stream,
+        get_temp_mr());
+    // Apply mask: where count < 2, result is NULL
+    cudf::numeric_scalar<double> nullDouble(0.0, false, stream, get_temp_mr());
+    return cudf::copy_if_else(*stddev, nullDouble, *validMask, stream, mr);
+  }
+
   // Build a struct column with (count, mean, m2), casting to expected types.
   std::unique_ptr<cudf::column> makeM2StructColumn(
       std::unique_ptr<cudf::column> count,
@@ -956,7 +1159,11 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         cudf::data_type(cudf::type_id::STRUCT),
         size,
         rmm::device_buffer{},
-        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}),
         0,
         std::move(children));
   }
@@ -964,45 +1171,296 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
   uint32_t outputIdx_;
 };
 
+// Sets the rows of 'lists' that hold no element to NULL.
+std::unique_ptr<cudf::column> nullifyEmptyLists(
+    std::unique_ptr<cudf::column> lists,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  auto sizes = cudf::lists::count_elements(
+      cudf::lists_column_view{lists->view()}, stream, get_temp_mr());
+  cudf::numeric_scalar<cudf::size_type> zero(
+      0, /*is_valid=*/true, stream, get_temp_mr());
+  auto nonEmpty = cudf::binary_operation(
+      *sizes,
+      zero,
+      cudf::binary_operator::GREATER,
+      cudf::data_type{cudf::type_id::BOOL8},
+      stream,
+      get_temp_mr());
+  auto [mask, numNulls] = cudf::bools_to_mask(*nonEmpty, stream, mr);
+  if (numNulls > 0) {
+    lists->set_null_mask(std::move(*mask), numNulls);
+  }
+  return lists;
+}
+
+// Collects each group's values into one list for Presto's array_agg, nulls
+// included unless the session sets presto.array_agg.ignore_nulls, and merges
+// the lists of partial results. The rows a FILTER mask excludes are left out.
+// A group without elements yields NULL at every step, as the CPU function
+// does.
+struct GroupbyArrayAggAggregator final : GroupbyAggregator {
+  GroupbyArrayAggAggregator(
+      core::AggregationNode::Step step,
+      uint32_t inputIndex,
+      VectorPtr constant,
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex,
+      bool ignoreNulls)
+      : GroupbyAggregator(
+            step,
+            inputIndex,
+            std::move(constant),
+            resultType,
+            maskIndex),
+        ignoreNulls_(ignoreNulls) {}
+
+  void addGroupbyRequest(
+      cudf::table_view const& table,
+      std::vector<cudf::groupby::aggregation_request>& requests,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK_NULL(constant, "array_agg does not support constant input");
+    auto& request = requests.emplace_back();
+    outputIndex_ = requests.size() - 1;
+    if (exec::isRawInput(step)) {
+      // Masked rows are made null, on the values when nulls are dropped and on
+      // a one-field struct around them otherwise, so EXCLUDE leaves them out.
+      request.values = nullMaskedRows(table, stream);
+      request.aggregations.push_back(
+          cudf::make_collect_list_aggregation<cudf::groupby_aggregation>(
+              ignoreNulls_ || maskIndex.has_value()
+                  ? cudf::null_policy::EXCLUDE
+                  : cudf::null_policy::INCLUDE));
+      return;
+    }
+    request.values = mergeInput(table.column(inputIndex), stream, mr);
+    request.aggregations.push_back(
+        cudf::make_merge_lists_aggregation<cudf::groupby_aggregation>());
+  }
+
+  std::unique_ptr<cudf::column> makeOutputColumn(
+      std::vector<cudf::groupby::aggregation_result>& results,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) override {
+    auto lists = std::move(results[outputIndex_].results[0]);
+    if (maskIndex.has_value() && !ignoreNulls_) {
+      // Unwraps the one-field struct of nullMaskedRows().
+      const auto numGroups = lists->size();
+      auto contents = lists->release();
+      auto fields =
+          contents.children[cudf::lists_column_view::child_column_index]
+              ->release()
+              .children;
+      lists = cudf::make_lists_column(
+          numGroups,
+          std::move(
+              contents.children[cudf::lists_column_view::offsets_column_index]),
+          std::move(fields[0]),
+          0,
+          std::move(*contents.null_mask));
+    }
+    // A raw-input step leaves a group without elements only when it drops
+    // nulls or masked rows; a merge step whenever the group had NULL and empty
+    // lists alone.
+    if (ignoreNulls_ || maskIndex.has_value() || !exec::isRawInput(step)) {
+      return nullifyEmptyLists(std::move(lists), stream, mr);
+    }
+    return lists;
+  }
+
+  std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> /*state*/,
+      cuda::stream_ref /*stream*/,
+      rmm::device_async_resource_ref /*mr*/) override {
+    // Only incremental aggregation finalizes a buffered state, and a node
+    // with this aggregator never aggregates incrementally.
+    VELOX_UNREACHABLE("array_agg is not aggregated incrementally");
+  }
+
+  bool stateGrowsWithInput() const override {
+    return true;
+  }
+
+  void releaseInput() override {
+    GroupbyAggregator::releaseInput();
+    purgedInput_.reset();
+    maskedRowNulls_.reset();
+  }
+
+ private:
+  // Returns the input column with its masked-out rows made null, on a
+  // one-field struct around the input when nulls are kept and on the input
+  // itself otherwise. Only a new null mask is built, which works for every
+  // element type, and the view keeps the input's data and children.
+  cudf::column_view nullMaskedRows(
+      cudf::table_view const& table,
+      cuda::stream_ref stream) {
+    const auto input = table.column(inputIndex);
+    if (!maskIndex.has_value()) {
+      return input;
+    }
+    // The new null mask starts at row 0, as the data of a CudfVector column
+    // does.
+    VELOX_CHECK_EQ(input.offset(), 0, "array_agg input has a row offset");
+    auto [rowMask, nullCount] =
+        cudf::bools_to_mask(table.column(*maskIndex), stream, get_temp_mr());
+    maskedRowNulls_ = std::move(rowMask);
+    if (!ignoreNulls_) {
+      // The child keeps its null values, so EXCLUDE drops the masked rows
+      // alone.
+      return cudf::column_view(
+          cudf::data_type{cudf::type_id::STRUCT},
+          input.size(),
+          nullptr,
+          reinterpret_cast<const cudf::bitmask_type*>(maskedRowNulls_->data()),
+          nullCount,
+          0,
+          {input});
+    }
+    if (input.nullable()) {
+      const std::vector<const cudf::bitmask_type*> masks{
+          reinterpret_cast<const cudf::bitmask_type*>(maskedRowNulls_->data()),
+          input.null_mask()};
+      const std::vector<cudf::size_type> beginBits{0, 0};
+      auto [combined, combinedNullCount] = cudf::bitmask_and(
+          masks,
+          beginBits,
+          input.size(),
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+      maskedRowNulls_ =
+          std::make_unique<cuda::device_buffer<std::byte>>(std::move(combined));
+      nullCount = combinedNullCount;
+    }
+    return cudf::column_view(
+        input.type(),
+        input.size(),
+        input.head<void>(),
+        reinterpret_cast<const cudf::bitmask_type*>(maskedRowNulls_->data()),
+        nullCount,
+        0,
+        std::vector<cudf::column_view>(input.child_begin(), input.child_end()));
+  }
+
+  // Returns 'lists' as a column view without a null mask, which cuDF requires
+  // of a merge_lists input. A NULL row becomes an empty list; its elements are
+  // dropped first when it still spans some.
+  cudf::column_view mergeInput(
+      cudf::column_view const& lists,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) {
+    if (!lists.nullable()) {
+      return lists;
+    }
+    auto view = lists;
+    if (lists.has_nulls() && cudf::has_nonempty_nulls(lists, stream)) {
+      purgedInput_ = cudf::purge_nonempty_nulls(lists, stream, mr);
+      view = purgedInput_->view();
+    }
+    return cudf::column_view(
+        view.type(),
+        view.size(),
+        /*data=*/nullptr,
+        /*null_mask=*/nullptr,
+        /*null_count=*/0,
+        view.offset(),
+        {view.child(0), view.child(1)});
+  }
+
+  // Drops null values at the raw-input steps, per
+  // presto.array_agg.ignore_nulls.
+  const bool ignoreNulls_;
+  // Index of this aggregate's request in the groupby results.
+  uint32_t outputIndex_{0};
+  // Keeps a merge input whose NULL rows were emptied alive until
+  // releaseInput().
+  std::unique_ptr<cudf::column> purgedInput_;
+  // Keeps the null mask of nullMaskedRows() alive until releaseInput().
+  std::unique_ptr<cuda::device_buffer<std::byte>> maskedRowNulls_;
+};
+
 std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
-    const ResolvedAggregateInfo& p) {
-  auto const& kind = p.kind;
+    const ResolvedAggregateInfo& aggregate,
+    const core::QueryConfig& queryConfig) {
+  auto const& kind = aggregate.kind;
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
-    if (p.isDecimalAggregate) {
+    if (aggregate.isDecimalAggregate) {
       return std::make_unique<GroupbyDecimalSumAggregator>(
-          p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
+          aggregate.companionStep,
+          aggregate.inputIndex,
+          aggregate.constant,
+          aggregate.resultType,
+          aggregate.maskIndex);
     }
     return std::make_unique<GroupbySumAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
+        aggregate.companionStep,
+        aggregate.inputIndex,
+        aggregate.constant,
+        aggregate.resultType,
+        aggregate.maskIndex);
   } else if (kind.rfind(prefix + "count", 0) == 0) {
-    VELOX_CHECK(p.countInputKind.has_value());
+    VELOX_CHECK(aggregate.countInputKind.has_value());
     return std::make_unique<GroupbyCountAggregator>(
-        p.companionStep,
-        p.inputIndex,
-        *p.countInputKind,
-        p.resultType,
-        p.maskIndex);
+        aggregate.companionStep,
+        aggregate.inputIndex,
+        *aggregate.countInputKind,
+        aggregate.resultType,
+        aggregate.maskIndex);
   } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<GroupbyMinAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
+        aggregate.companionStep,
+        aggregate.inputIndex,
+        aggregate.constant,
+        aggregate.resultType,
+        aggregate.maskIndex);
   } else if (kind.rfind(prefix + "max", 0) == 0) {
     return std::make_unique<GroupbyMaxAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
+        aggregate.companionStep,
+        aggregate.inputIndex,
+        aggregate.constant,
+        aggregate.resultType,
+        aggregate.maskIndex);
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
-    if (p.isDecimalAggregate) {
+    if (aggregate.isDecimalAggregate) {
       return std::make_unique<GroupbyDecimalAvgAggregator>(
-          p.companionStep, p.inputIndex, p.constant, p.resultType);
+          aggregate.companionStep,
+          aggregate.inputIndex,
+          aggregate.constant,
+          aggregate.resultType,
+          aggregate.maskIndex);
     }
     return std::make_unique<GroupbyMeanAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
+        aggregate.companionStep,
+        aggregate.inputIndex,
+        aggregate.constant,
+        aggregate.resultType,
+        aggregate.maskIndex);
+  } else if (kind.rfind(prefix + "array_agg", 0) == 0) {
+    return std::make_unique<GroupbyArrayAggAggregator>(
+        aggregate.companionStep,
+        aggregate.inputIndex,
+        aggregate.constant,
+        aggregate.resultType,
+        aggregate.maskIndex,
+        functions::prestosql::PrestoQueryConfig{queryConfig}
+            .arrayAggIgnoreNulls());
   } else if (kind.rfind(prefix + "stddev_samp", 0) == 0) {
     return std::make_unique<GroupbyStddevSampAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
+        aggregate.companionStep,
+        aggregate.inputIndex,
+        aggregate.constant,
+        aggregate.resultType,
+        aggregate.maskIndex);
   } else if (kind.rfind(prefix + "stddev", 0) == 0) {
     // stddev is an alias for stddev_samp
     return std::make_unique<GroupbyStddevSampAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
+        aggregate.companionStep,
+        aggregate.inputIndex,
+        aggregate.constant,
+        aggregate.resultType,
+        aggregate.maskIndex);
   } else {
     VELOX_NYI("Aggregation not yet supported, kind: {}", kind);
   }
@@ -1013,12 +1471,28 @@ std::unique_ptr<StreamingGroupbyAggregator> createStreamingGroupbyAggregator(
     column_index_t inputIndex,
     const TypePtr& inputType,
     const TypePtr& resultType) {
-  if (aggregate.isDecimalAggregate || aggregate.constant != nullptr ||
-      aggregate.maskIndex.has_value()) {
+  if (aggregate.constant != nullptr || aggregate.maskIndex.has_value()) {
     return nullptr;
   }
 
   const auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
+  if (aggregate.isDecimalAggregate) {
+    const bool average = aggregate.kind == prefix + "avg";
+    if (aggregate.kind != prefix + "sum" && !average) {
+      return nullptr;
+    }
+    const auto scale = getDecimalPrecisionScale(*resultType).second;
+    if (!cudf::groupby::is_streaming_groupby_supported(
+            cudf::data_type{cudf::type_id::DECIMAL128, -scale},
+            cudf::aggregation::SUM) ||
+        (average &&
+         !cudf::groupby::is_streaming_groupby_supported(
+             cudf::data_type{cudf::type_id::INT64}, cudf::aggregation::SUM))) {
+      return nullptr;
+    }
+    return std::make_unique<StreamingGroupbyDecimalAggregator>(
+        inputIndex, resultType, average);
+  }
   if (aggregate.kind == prefix + "sum") {
     if (!cudf::groupby::is_streaming_groupby_supported(
             cudf_velox::veloxToCudfDataType(inputType),
@@ -1112,14 +1586,15 @@ std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants,
-    std::vector<std::optional<uint32_t>> const& maskChannels) {
+    std::vector<std::optional<uint32_t>> const& maskChannels,
+    const core::QueryConfig& queryConfig) {
   auto params = resolveAggregateInfos(
       aggregationNode, step, outputType, constants, maskChannels);
 
   std::vector<std::unique_ptr<GroupbyAggregator>> aggregators;
   aggregators.reserve(params.size());
-  for (const auto& p : params) {
-    aggregators.push_back(createGroupbyAggregator(p));
+  for (const auto& aggregate : params) {
+    aggregators.push_back(createGroupbyAggregator(aggregate, queryConfig));
   }
   return aggregators;
 }
@@ -1191,7 +1666,12 @@ bool canGroupbyBeEvaluatedByCudf(
       return false;
     }
 
-    if (!maskSupportedByCudf(aggregate, step)) {
+    if (!sortingKeysSupportedByCudf(aggregate)) {
+      return false;
+    }
+
+    if (!maskSupportedByCudf(
+            aggregate, step, getGroupbyAggregationRegistry())) {
       return false;
     }
 
@@ -1279,7 +1759,8 @@ bool CudfGroupby::initializeStreamingGroupby(
 }
 
 cudf::table_view CudfGroupby::makeStreamingGroupbyInputView(
-    cudf::table_view input) {
+    cudf::table_view input,
+    cuda::stream_ref stream) {
   std::vector<cudf::column_view> columns;
   columns.reserve(
       groupingKeyOutputChannels_.size() +
@@ -1293,7 +1774,7 @@ cudf::table_view CudfGroupby::makeStreamingGroupbyInputView(
     columns.push_back(input.column(inputIndex));
   }
   for (auto& aggregator : streamingGroupbyAggregators_) {
-    aggregator->prepareInput(input, columns);
+    aggregator->prepareInput(input, columns, stream);
   }
   return cudf::table_view{columns};
 }
@@ -1362,8 +1843,14 @@ void CudfGroupby::computeFinalGroupbyStreaming(CudfVectorPtr input) {
     }
   };
 
-  auto preparedInput = makeStreamingGroupbyInputView(input->getTableView());
+  auto releaseInputs = [&]() {
+    for (auto& aggregator : streamingGroupbyAggregators_) {
+      aggregator->releaseInput();
+    }
+  };
   try {
+    auto preparedInput =
+        makeStreamingGroupbyInputView(input->getTableView(), stateStream);
     if (!streamingGroupby_) {
       // max_distinct_keys is a logical capacity. libcudf's 0.5 cuco load
       // factor allocates roughly two physical hash slots per logical key. The
@@ -1418,9 +1905,11 @@ void CudfGroupby::computeFinalGroupbyStreaming(CudfVectorPtr input) {
       }
     }
   } catch (...) {
+    releaseInputs();
     orderInputDeallocation();
     throw;
   }
+  releaseInputs();
   orderInputDeallocation();
 }
 
@@ -1485,14 +1974,27 @@ void CudfGroupby::initialize() {
       inputRowSchema,
       groupingKeyInputChannels_);
   aggregationInputChannels_ = std::move(aggregationInput.channels);
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   aggregators_ = toGroupbyAggregators(
       *aggregationNode_,
       aggregationNode_->step(),
       outputType_,
       aggregationInput.constants,
-      aggregationInput.maskChannels);
+      aggregationInput.maskChannels,
+      queryConfig);
+  // Incremental aggregation re-aggregates the buffered state with every batch,
+  // copying it to concatenate and again to merge: cheap while it holds one
+  // value per group, quadratic in the number of batches when it holds every
+  // input row. A node with such an aggregate takes the non-incremental path
+  // instead, as one with companion aggregates does: a partial step aggregates
+  // the batches pending at each getOutput() and a final or single step all of
+  // its input at once.
   incrementalAggregationEnabled_ =
-      !hasCompanionAggregates(aggregationNode_->aggregates());
+      !hasCompanionAggregates(aggregationNode_->aggregates()) &&
+      std::none_of(
+          aggregators_.begin(), aggregators_.end(), [](const auto& aggregator) {
+            return aggregator->stateGrowsWithInput();
+          });
 
   // Make aggregators for intermediate step when streaming is enabled.
   if (incrementalAggregationEnabled_) {
@@ -1511,7 +2013,8 @@ void CudfGroupby::initialize() {
         core::AggregationNode::Step::kIntermediate,
         bufferedResultType_,
         nullConstants,
-        {});
+        {},
+        queryConfig);
 
     if (isSingleStep_) {
       // The kSingle streaming partial path runs for a kSingle masked query, so
@@ -1521,13 +2024,15 @@ void CudfGroupby::initialize() {
           core::AggregationNode::Step::kPartial,
           bufferedResultType_,
           aggregationInput.constants,
-          aggregationInput.maskChannels);
+          aggregationInput.maskChannels,
+          queryConfig);
       finalAggregators_ = toGroupbyAggregators(
           *aggregationNode_,
           core::AggregationNode::Step::kFinal,
           outputType_,
           nullConstants,
-          {});
+          {},
+          queryConfig);
     }
   }
 
@@ -1571,12 +2076,16 @@ void CudfGroupby::computePartialGroupbyIncrementally(CudfVectorPtr tbl) {
     auto partialOutputStream = bufferedResult_->stream();
     std::vector<CudfVectorPtr> tablesToConcat;
     tablesToConcat.push_back(bufferedResult_);
-    tablesToConcat.push_back(groupbyOnInput);
+    tablesToConcat.push_back(std::move(groupbyOnInput));
     auto concatenatedTable = getConcatenatedTable(
         std::move(tablesToConcat),
         bufferedResultType_,
         partialOutputStream,
         get_temp_mr());
+    // getConcatenatedTable consumed tablesToConcat; drop the last reference
+    // too, before the re-aggregation, so the copied-from state is not part of
+    // the peak.
+    bufferedResult_.reset();
 
     // Now we have to groupby again but this time with intermediate aggregators.
     // Keep concatenatedTable alive while we use its view.
@@ -1628,6 +2137,10 @@ void CudfGroupby::computeFinalGroupbyIncrementally(CudfVectorPtr tbl) {
 
   auto concatenatedTable =
       cudf::concatenate(tablesToConcat, finalStream, get_temp_mr());
+  // Release before the re-aggregation so the copied-from state is not part of
+  // the peak. The free is stream-ordered on `finalStream`, the stream the
+  // concatenate ran on, so it cannot race the copy.
+  bufferedResult_.reset();
   cudf::detail::join_streams(
       std::vector<cuda::stream_ref>{finalStream}, inputTableStream);
   // The concatenation owns a replacement for the retained result. Release
@@ -1663,12 +2176,14 @@ void CudfGroupby::computeSingleGroupbyIncrementally(CudfVectorPtr tbl) {
     auto partialOutputStream = bufferedResult_->stream();
     std::vector<CudfVectorPtr> tablesToConcat;
     tablesToConcat.push_back(bufferedResult_);
-    tablesToConcat.push_back(groupbyOnInput);
+    tablesToConcat.push_back(std::move(groupbyOnInput));
     auto concatenatedTable = getConcatenatedTable(
         std::move(tablesToConcat),
         bufferedResultType_,
         partialOutputStream,
         get_temp_mr());
+    // Same as the partial path.
+    bufferedResult_.reset();
 
     auto compactedOutput = doGroupByAggregation(
         concatenatedTable->view(),
@@ -1731,12 +2246,21 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
       ignoreNullKeys_ ? cudf::null_policy::EXCLUDE
                       : cudf::null_policy::INCLUDE);
 
+  auto releaseInputs = [&]() {
+    for (auto& aggregator : aggregators) {
+      aggregator->releaseInput();
+    }
+  };
+  auto releaseInputsGuard = folly::makeGuard(releaseInputs);
   std::vector<cudf::groupby::aggregation_request> requests;
   for (auto& aggregator : aggregators) {
     aggregator->addGroupbyRequest(tableView, requests, stream, get_temp_mr());
   }
 
   auto [groupKeys, results] = groupByOwner.aggregate(requests, stream, mr);
+  requests.clear();
+  releaseInputs();
+  releaseInputsGuard.dismiss();
   // flatten the results
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
 
@@ -1764,6 +2288,29 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
 
   return std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType, numRows, std::move(resultTable), stream);
+}
+
+CudfVectorPtr CudfGroupby::finalizeGroupedStates(
+    std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators) {
+  auto bufferedResult = std::move(bufferedResult_);
+  const auto stream = bufferedResult->stream();
+  const auto numRows = bufferedResult->size();
+  auto columns = bufferedResult->release()->release();
+  const auto numKeys = groupingKeyOutputChannels_.size();
+  VELOX_CHECK_EQ(columns.size(), numKeys + aggregators.size());
+
+  // Incremental aggregation has already merged all states for each key.
+  // Keep the key columns and replace only the aggregate state columns.
+  for (size_t i = 0; i < aggregators.size(); ++i) {
+    columns[numKeys + i] = aggregators[i]->finalize(
+        std::move(columns[numKeys + i]), stream, get_output_mr());
+  }
+  return std::make_shared<CudfVector>(
+      pool(),
+      outputType_,
+      numRows,
+      std::make_unique<cudf::table>(std::move(columns)),
+      stream);
 }
 
 CudfVectorPtr CudfGroupby::releaseAndResetBufferedResult() {
@@ -1832,17 +2379,7 @@ RowVectorPtr CudfGroupby::doGetOutput() {
       return nullptr;
     }
     auto& aggs = isSingleStep_ ? finalAggregators_ : aggregators_;
-    auto stream = bufferedResult_->stream();
-    auto result = doGroupByAggregation(
-        bufferedResult_->getTableView(),
-        groupingKeyOutputChannels_,
-        aggs,
-        outputType_,
-        stream,
-        get_output_mr());
-    stream.sync();
-    bufferedResult_.reset();
-    return result;
+    return finalizeGroupedStates(aggs);
   }
 
   if (inputs_.empty() && !noMoreInput_) {
