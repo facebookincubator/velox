@@ -530,6 +530,11 @@ void ReaderBase::loadFileMetaData() {
 }
 
 void ReaderBase::initializeSchema() {
+  VELOX_USER_CHECK(
+      options_.columnMappingMode() !=
+              dwio::common::ColumnMappingMode::kFieldId ||
+          options_.fieldIdAttributeKey() != "paimon.id",
+      "Parquet reader does not support Paimon field ID mapping");
   if (fileMetaData_->encryption_algorithm()) {
     VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
   }

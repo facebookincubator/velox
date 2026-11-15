@@ -93,7 +93,7 @@ TypePtr getFileSchema(
           dwio::common::ColumnMappingMode::kFieldId &&
       options.fieldIdAttributeKey() == "paimon.id") {
     // Paimon's attribute convention requires strict top-level ID matching.
-    return mapTopLevelColumnsByFieldId(
+    return mapColumnsByFieldId(
         nimbleSchema, asRowType(fileSchema), options);
   }
   if (options.columnMappingMode() == dwio::common::ColumnMappingMode::kName ||

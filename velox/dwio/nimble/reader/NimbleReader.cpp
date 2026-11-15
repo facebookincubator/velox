@@ -275,7 +275,7 @@ class NimbleReader : public dwio::common::Reader {
         options_.fieldIdAttributeKey() == "paimon.id") {
       facebook::nimble::BatchReader tmpReader(
           tabletReader_, options.memoryPool());
-      tableNamedSchema_ = facebook::nimble::mapTopLevelColumnsByFieldId(
+      tableNamedSchema_ = facebook::nimble::mapColumnsByFieldId(
           *tmpReader.schema(), asRowType(tmpReader.type()), options_);
       options_.setFileSchema(asRowType(tmpReader.type()));
     } else if (

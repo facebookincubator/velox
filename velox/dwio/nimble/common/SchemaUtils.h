@@ -42,11 +42,13 @@ velox::TypePtr convertToVeloxType(const Type& type);
 
 std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type);
 
-/// Binds top-level file columns to requested names by their ID attribute.
-/// Preserves file order, physical types and nested fields. Unmatched columns
+/// Maps file columns to requested names by their ID attribute.
+/// Currently maps top-level fields only and leaves nested fields unchanged.
+/// Preserves physical column order and types. Unmatched columns
 /// receive names outside the requested schema so they cannot shadow new fields.
 /// Throws if any physical top-level ID is missing, invalid or duplicated.
-velox::RowTypePtr mapTopLevelColumnsByFieldId(
+/// TODO: Support nested field-ID mapping.
+velox::RowTypePtr mapColumnsByFieldId(
     const Type& nimbleSchema,
     const velox::RowTypePtr& fileSchema,
     const velox::dwio::common::ReaderOptions& options);

@@ -436,7 +436,7 @@ std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type) {
   return SchemaReader::getSchema(builder.schemaNodes());
 }
 
-velox::RowTypePtr mapTopLevelColumnsByFieldId(
+velox::RowTypePtr mapColumnsByFieldId(
     const Type& nimbleSchema,
     const velox::RowTypePtr& fileSchema,
     const velox::dwio::common::ReaderOptions& options) {

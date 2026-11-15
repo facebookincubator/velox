@@ -57,8 +57,8 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       paimonSplit->rawConvertible(),
       "Paimon same-schema append reader requires rawConvertible=true; "
       "merge-on-read and data-evolution column merging are not implemented yet");
-  // The query uses the selected snapshot's schema. Older Nimble files are
-  // matched using their embedded field IDs, not historical table definitions.
+  // The query uses the selected snapshot's schema. File readers match fields
+  // using their embedded IDs, not historical table definitions.
   for (const auto& file : paimonSplit->dataFiles()) {
     VELOX_USER_CHECK_LE(
         file.schemaId,
@@ -67,10 +67,6 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         file.schemaId,
         paimonTableHandle_->schemaId(),
         file.path);
-    VELOX_USER_CHECK(
-        paimonSplit->fileFormat() == dwio::common::FileFormat::NIMBLE ||
-            file.schemaId == paimonTableHandle_->schemaId(),
-        "Paimon schema evolution currently requires Nimble files");
     VELOX_USER_CHECK(
         !file.deletionFile,
         "Paimon reader does not support deletion vectors; "

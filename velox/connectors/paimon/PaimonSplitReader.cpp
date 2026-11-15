@@ -61,9 +61,6 @@ PaimonSplitReader::PaimonSplitReader(
 
 void PaimonSplitReader::configureBaseReaderOptions() {
   connector::FileSplitReader::configureBaseReaderOptions();
-  if (fileSplit_->fileFormat != dwio::common::FileFormat::NIMBLE) {
-    return;
-  }
   const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
   std::vector<dwio::common::ParquetFieldId> fieldIds;
   fieldIds.reserve(table.fieldIds().size());
@@ -92,8 +89,7 @@ uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
     if (!ensureFileSplitReader()) {
       return 0;
     }
-    if (newFile && output &&
-        fileSplit_->fileFormat == dwio::common::FileFormat::NIMBLE) {
+    if (newFile && output) {
       // Keep the logical output required by selective readers, but discard
       // batch-reader private vectors tied to the previous physical layout.
       output->asUnchecked<RowVector>()->rawVectorForBatchReader().reset();
