@@ -2172,8 +2172,7 @@ namespace {
 enum class TimeUnit { kSecond, kMilli, kMicro, kNano };
 
 TimeUnit getTimeUnit(const ArrowSchema& arrowSchema) {
-  const char* format = arrowSchema.dictionary ? arrowSchema.dictionary->format
-                                              : arrowSchema.format;
+  const char* format = arrowSchema.format;
   VELOX_USER_CHECK_NOT_NULL(format);
   VELOX_USER_CHECK_GE(
       strlen(format),
@@ -2196,8 +2195,7 @@ TimeUnit getTimeUnit(const ArrowSchema& arrowSchema) {
 }
 
 TimestampUnit getTimestampUnit(const ArrowSchema& arrowSchema) {
-  const char* format = arrowSchema.dictionary ? arrowSchema.dictionary->format
-                                              : arrowSchema.format;
+  const char* format = arrowSchema.format;
   VELOX_USER_CHECK_NOT_NULL(format);
   VELOX_USER_CHECK_GE(
       strlen(format),
