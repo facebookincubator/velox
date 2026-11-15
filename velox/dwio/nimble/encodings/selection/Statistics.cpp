@@ -260,6 +260,9 @@ void Statistics<T, InputType>::populateSequenceStep() const noexcept {
         static_cast<UnsignedInputType>(previous));
   };
   const auto step = difference(data_[0], data_[1]);
+
+  // std::adjacent_find returns at the first pair whose difference is not
+  // 'step', so the scan ends at the first value off the progression.
   const bool isSequence = std::adjacent_find(
                               data_.begin() + 1,
                               data_.end(),
