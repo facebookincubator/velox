@@ -55,6 +55,7 @@
 namespace facebook::velox::connector::paimon {
 namespace {
 
+using dwio::common::kPaimonFieldIdKey;
 using hive::HiveConfig;
 using hive::HiveConnector;
 using hive::HiveTableHandle;
@@ -133,7 +134,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
     HiveConnectorTestBase::TearDown();
   }
 
-  virtual std::vector<dwio::common::FileFormat> fileFormats() const {
+  static std::vector<dwio::common::FileFormat> fileFormats() {
     std::vector<dwio::common::FileFormat> formats{
         dwio::common::FileFormat::DWRF};
 #ifdef VELOX_ENABLE_NIMBLE
@@ -163,7 +164,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
       nimble::WriterOptions options;
       for (column_index_t i = 0; i < type->size(); ++i) {
         options.schemaAttributes[schema->childAt(i)->id()] = {
-            {"paimon.id", std::to_string(ids[i])}};
+            {kPaimonFieldIdKey, std::to_string(ids[i])}};
       }
       writeNimbleFile(path, input, std::move(options));
       return;
@@ -402,7 +403,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<PaimonConnectorSplit> makePaimonSplit(
       const std::vector<std::string>& filePaths,
       PaimonTableType tableType = PaimonTableType::kAppendOnly,
-      dwio::common::FileFormat format = dwio::common::FileFormat::NIMBLE,
+      dwio::common::FileFormat format = dwio::common::FileFormat::DWRF,
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys = {},
       bool rawConvertible = true) {
@@ -416,49 +417,6 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
     }
     builder.rawConvertible(rawConvertible);
     return builder.build();
-  }
-};
-
-class PaimonNimbleReadTest : public PaimonConnectorTest {
- protected:
-  void SetUp() override {
-    PaimonConnectorTest::SetUp();
-#ifndef VELOX_ENABLE_NIMBLE
-    GTEST_SKIP() << "Nimble reader is not enabled";
-#endif
-  }
-
-  std::vector<dwio::common::FileFormat> fileFormats() const override {
-    return {dwio::common::FileFormat::NIMBLE};
-  }
-
-  void writeToFile(const std::string& path, const RowVectorPtr& input) {
-    writeFile(path, input, dwio::common::FileFormat::NIMBLE);
-  }
-
-  void writeToFile(
-      const std::string& path,
-      const std::vector<RowVectorPtr>& inputs) {
-#ifdef VELOX_ENABLE_NIMBLE
-    VELOX_CHECK(!inputs.empty());
-    const auto type = asRowType(inputs.front()->type());
-    const auto ids = fieldIds(type);
-    const auto schema = dwio::common::TypeWithId::create(type);
-    nimble::WriterOptions options;
-    for (column_index_t i = 0; i < type->size(); ++i) {
-      options.schemaAttributes[schema->childAt(i)->id()] = {
-          {"paimon.id", std::to_string(ids[i])}};
-    }
-    nimble::Writer writer(
-        type,
-        std::make_unique<LocalWriteFile>(path, false, false),
-        *pool(),
-        std::move(options));
-    for (const auto& input : inputs) {
-      writer.write(input);
-    }
-    writer.close();
-#endif
   }
 };
 
@@ -534,19 +492,19 @@ TEST_F(PaimonConnectorTest, configProvider) {
 }
 
 // E2E test: read a single file from an append-only Paimon split.
-TEST_F(PaimonNimbleReadTest, takeoverRuntimeStatsBeforeFirstFile) {
+TEST_F(PaimonConnectorTest, takeoverRuntimeStatsBeforeFirstFile) {
   testTakeoverRuntimeStats(1, false);
 }
 
-TEST_F(PaimonNimbleReadTest, takeoverRuntimeStatsAcrossFiles) {
+TEST_F(PaimonConnectorTest, takeoverRuntimeStatsAcrossFiles) {
   testTakeoverRuntimeStats(2, false);
 }
 
-TEST_F(PaimonNimbleReadTest, takeoverRuntimeStatsAccumulate) {
+TEST_F(PaimonConnectorTest, takeoverRuntimeStatsAccumulate) {
   testTakeoverRuntimeStats(2, true);
 }
 
-TEST_F(PaimonNimbleReadTest, appendOnlySingleFile) {
+TEST_F(PaimonConnectorTest, appendOnlySingleFile) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
   auto vectors = makeVectors(rowType, 1, 100);
 
@@ -559,7 +517,7 @@ TEST_F(PaimonNimbleReadTest, appendOnlySingleFile) {
   exec::test::AssertQueryBuilder(plan).split(split).assertResults(vectors);
 }
 
-TEST_F(PaimonConnectorTest, orcReaderRejectsPaimonFieldIds) {
+TEST_F(PaimonConnectorTest, ordinaryOrcTableScan) {
   const auto rowType = ROW({{"int1", INTEGER()}, {"string1", VARCHAR()}});
   const auto plan = exec::test::PlanBuilder(
                         makePaimonScanPlan(rowType),
@@ -568,18 +526,19 @@ TEST_F(PaimonConnectorTest, orcReaderRejectsPaimonFieldIds) {
                         .planNode();
   const auto path = velox::test::getDataFilePath(
       "velox/dwio/orc/test", "examples/TestOrcFile.columnProjection.orc");
-  VELOX_ASSERT_USER_THROW(
-      exec::test::AssertQueryBuilder(plan)
-          .split(makePaimonSplit(
-              {path},
-              PaimonTableType::kAppendOnly,
-              dwio::common::FileFormat::ORC))
-          .copyResults(pool()),
-      "DWRF/ORC reader does not support Paimon field ID mapping");
+  const auto expected = makeRowVector(
+      {"int1", "string1"},
+      {makeFlatVector<int32_t>({-1155869325, 431529176, 1761283695}),
+       makeFlatVector<std::string>(
+           {"bb2c72394b1ab9f8", "e6c5459001105f17", "7f2fc3e9dacc5ecd"})});
+  exec::test::AssertQueryBuilder(plan)
+      .split(makePaimonSplit(
+          {path}, PaimonTableType::kAppendOnly, dwio::common::FileFormat::ORC))
+      .assertResults(expected);
 }
 
 // E2E test: read multiple files from a single append-only Paimon split.
-TEST_F(PaimonNimbleReadTest, appendOnlyMultipleFiles) {
+TEST_F(PaimonConnectorTest, appendOnlyMultipleFiles) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
   auto vectors1 = makeVectors(rowType, 1, 100);
   auto vectors2 = makeVectors(rowType, 1, 50);
@@ -600,7 +559,7 @@ TEST_F(PaimonNimbleReadTest, appendOnlyMultipleFiles) {
   exec::test::AssertQueryBuilder(plan).split(split).assertResults(expected);
 }
 
-TEST_F(PaimonNimbleReadTest, tableSchemaTypesAndBatchOwnership) {
+TEST_F(PaimonConnectorTest, tableSchemaTypesAndBatchOwnership) {
   const auto input = makeRowVector(
       {"flag", "number", "id", "score", "text"},
       {makeNullableFlatVector<bool>({true, false, std::nullopt, true}),
@@ -688,7 +647,7 @@ TEST_F(PaimonConnectorTest, rejectsEmptySplit) {
 }
 
 // E2E test: read with partition keys from an append-only Paimon split.
-TEST_F(PaimonNimbleReadTest, appendOnlyWithPartitionKeys) {
+TEST_F(PaimonConnectorTest, appendOnlyWithPartitionKeys) {
   // Data file columns (not including partition column).
   auto dataRowType = ROW({"c0"}, {BIGINT()});
   auto vectors = makeVectors(dataRowType, 1, 100);
@@ -722,7 +681,7 @@ TEST_F(PaimonNimbleReadTest, appendOnlyWithPartitionKeys) {
   auto split = makePaimonSplit(
       {filePaths[0]->getPath()},
       PaimonTableType::kAppendOnly,
-      dwio::common::FileFormat::NIMBLE,
+      dwio::common::FileFormat::DWRF,
       {{"p0", std::optional<std::string>("2024-01-01")}});
 
   // Build expected output with the partition value filled in.
@@ -739,7 +698,7 @@ TEST_F(PaimonNimbleReadTest, appendOnlyWithPartitionKeys) {
   exec::test::AssertQueryBuilder(copy).split(split).assertResults({expected});
 }
 
-TEST_F(PaimonNimbleReadTest, physicalPartitionColumnsUseSplitConstants) {
+TEST_F(PaimonConnectorTest, physicalPartitionColumnsUseSplitConstants) {
   const auto rowType = ROW({{"id", BIGINT()}, {"p", VARCHAR()}});
   const auto table = makePaimonTableHandle(rowType, {}, nullptr, {"p"});
   const ColumnHandleMap assignments{
@@ -842,7 +801,7 @@ TEST_F(PaimonConnectorTest, leadingPhysicalPartitionColumn) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, tableHandleFiltersAndProjection) {
+TEST_F(PaimonConnectorTest, tableHandleFiltersAndProjection) {
   const auto rowType = ROW({{"id", BIGINT()}, {"value", BIGINT()}});
   const auto input = makeRowVector(
       {"id", "value"},
@@ -919,7 +878,7 @@ TEST_F(PaimonNimbleReadTest, tableHandleFiltersAndProjection) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, fileScanCapabilitiesWithPaimonTable) {
+TEST_F(PaimonConnectorTest, fileScanCapabilitiesWithPaimonTable) {
   const auto rowType = ROW({{"id", BIGINT()}, {"value", BIGINT()}});
   const auto input = makeRowVector(
       {"id", "value"},
@@ -1037,7 +996,7 @@ TEST_F(PaimonNimbleReadTest, fileScanCapabilitiesWithPaimonTable) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, partitionFilterOnlyConstants) {
+TEST_F(PaimonConnectorTest, partitionFilterOnlyConstants) {
   const auto rowType = ROW({{"id", BIGINT()}, {"p", VARCHAR()}});
   const auto input = makeRowVector({"id"}, {makeFlatVector<int64_t>({7, 8})});
   const auto partitionColumn = std::make_shared<PaimonColumnHandle>(
@@ -1110,7 +1069,7 @@ TEST_F(PaimonNimbleReadTest, partitionFilterOnlyConstants) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, fileExpressionPipelineWithLambda) {
+TEST_F(PaimonConnectorTest, fileExpressionPipelineWithLambda) {
   const auto rowType = ROW({{"id", BIGINT()}, {"value", BIGINT()}});
   const auto input = makeRowVector(
       {"id", "value"},
@@ -1148,7 +1107,7 @@ TEST_F(PaimonNimbleReadTest, fileExpressionPipelineWithLambda) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, dynamicFilterAndEmptyFiles) {
+TEST_F(PaimonConnectorTest, dynamicFilterAndEmptyFiles) {
   auto queryCtx = core::QueryCtx::create();
   const auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
@@ -1323,8 +1282,8 @@ TEST_F(PaimonConnectorTest, nimbleFieldIdAttributeIsolation) {
         {1, {{"iceberg.id", "10"}}}, {2, {{"iceberg.id", "11"}}}};
     if (paimonIds) {
       // Paimon IDs deliberately disagree with Iceberg IDs and column names.
-      options.schemaAttributes[1].emplace_back("paimon.id", "11");
-      options.schemaAttributes[2].emplace_back("paimon.id", "10");
+      options.schemaAttributes[1].emplace_back(kPaimonFieldIdKey, "11");
+      options.schemaAttributes[2].emplace_back(kPaimonFieldIdKey, "10");
     }
     const auto paths = makeFilePaths(1);
     writeNimbleFile(paths[0]->getPath(), input, std::move(options));
@@ -1359,11 +1318,11 @@ TEST_F(PaimonConnectorTest, nimbleRejectsInvalidFieldIds) {
       {{}, "Missing 'paimon.id' field ID"},
       {{{1, {{"other.id", "10"}}}, {2, {{"other.id", "11"}}}},
        "Missing 'paimon.id' field ID"},
-      {{{1, {{"paimon.id", "10"}}}}, "Missing 'paimon.id' field ID"},
-      {{{1, {{"paimon.id", "10"}}}, {2, {{"paimon.id", "10"}}}},
+      {{{1, {{kPaimonFieldIdKey, "10"}}}}, "Missing 'paimon.id' field ID"},
+      {{{1, {{kPaimonFieldIdKey, "10"}}}, {2, {{kPaimonFieldIdKey, "10"}}}},
        "Duplicate 'paimon.id' field ID"},
-      {{{1, {{"paimon.id", "10"}, {"paimon.id", "11"}}},
-        {2, {{"paimon.id", "11"}}}},
+      {{{1, {{kPaimonFieldIdKey, "10"}, {kPaimonFieldIdKey, "11"}}},
+        {2, {{kPaimonFieldIdKey, "11"}}}},
        "Duplicate 'paimon.id' attribute"}};
   const auto assertInvalid = [&](nimble::WriterOptions options,
                                  const std::string& message) {
@@ -1387,7 +1346,7 @@ TEST_F(PaimonConnectorTest, nimbleRejectsInvalidFieldIds) {
     SCOPED_TRACE(invalid);
     nimble::WriterOptions options;
     options.schemaAttributes = {
-        {1, {{"paimon.id", invalid}}}, {2, {{"paimon.id", "11"}}}};
+        {1, {{kPaimonFieldIdKey, invalid}}}, {2, {{kPaimonFieldIdKey, "11"}}}};
     assertInvalid(std::move(options), "Invalid 'paimon.id' field ID");
   }
 }
@@ -2062,52 +2021,7 @@ TEST_F(PaimonConnectorTest, schemaEvolutionCancellationLimitAndMissingFile) {
 
 #endif
 
-TEST_F(PaimonConnectorTest, fileReadersRejectUnsupportedFieldIdMapping) {
-  const auto type = ROW({{"a", BIGINT()}});
-  auto queryCtx = core::QueryCtx::create();
-  const auto config = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>{});
-  const auto context = queryContextBuilder(queryCtx.get())
-                           .sessionProperties(config.get())
-                           .build();
-  const auto table = makePaimonTableHandle(type);
-  const auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2})});
-  const auto fileSystem = validationFileSystem();
-  for (const auto format : fileFormats()) {
-    if (format == dwio::common::FileFormat::NIMBLE) {
-      continue;
-    }
-    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
-    for (const auto schemaId : {0, 17}) {
-      SCOPED_TRACE(schemaId);
-      const auto paths = makeFilePaths(1);
-      writeFile(paths[0]->getPath(), input, format);
-      const auto path = "paimon-table-test:" + paths[0]->getPath();
-      fileSystem->openedFiles = 0;
-      auto source =
-          ConnectorRegistry::tryGet(kPaimonConnectorId)
-              ->createDataSource(
-                  type, table, makePaimonColumnHandles(type), context.get());
-      VELOX_ASSERT_USER_THROW(
-          source->addSplit(evolutionSplit(format, {{path, 18}})),
-          "Paimon file schema 18 exceeds query schema 17");
-      EXPECT_EQ(fileSystem->openedFiles, 0);
-
-      // The split is valid for either schema version. The file reader owns
-      // the field-ID capability check when it opens the file.
-      ASSERT_NO_THROW(
-          source->addSplit(evolutionSplit(format, {{path, schemaId}})));
-      EXPECT_EQ(fileSystem->openedFiles, 0);
-      ContinueFuture future = ContinueFuture::makeEmpty();
-      VELOX_ASSERT_USER_THROW(
-          source->next(100, future),
-          "reader does not support Paimon field ID mapping");
-      EXPECT_GT(fileSystem->openedFiles, 0);
-    }
-  }
-}
-
-TEST_F(PaimonNimbleReadTest, tableValidationBeforeFileOpen) {
+TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
   const auto fileSystem = validationFileSystem();
   fileSystem->openedFiles = 0;
 
@@ -2143,7 +2057,7 @@ TEST_F(PaimonNimbleReadTest, tableValidationBeforeFileOpen) {
   const std::string path = "paimon-table-test:" + files[0]->getPath();
   const auto makeSplit = [&](PaimonTableType type, const auto& partitions) {
     return makePaimonSplit(
-        {path}, type, dwio::common::FileFormat::NIMBLE, partitions);
+        {path}, type, dwio::common::FileFormat::DWRF, partitions);
   };
   const std::unordered_map<std::string, std::optional<std::string>> good{
       {"p", std::nullopt}};
@@ -2210,7 +2124,7 @@ TEST_F(PaimonNimbleReadTest, tableValidationBeforeFileOpen) {
   numericSource->addSplit(makePaimonSplit(
       {numericPath},
       PaimonTableType::kAppendOnly,
-      dwio::common::FileFormat::NIMBLE,
+      dwio::common::FileFormat::DWRF,
       std::unordered_map<std::string, std::optional<std::string>>{
           {"p", "not-an-integer"}}));
   EXPECT_EQ(fileSystem->openedFiles, openedFiles);
@@ -2388,7 +2302,7 @@ TEST_F(PaimonConnectorTest, rejectsWrongFormatAndMissingFiles) {
       std::exception);
 }
 
-TEST_F(PaimonNimbleReadTest, ordinaryColumnsIgnoreFeatureOptions) {
+TEST_F(PaimonConnectorTest, ordinaryColumnsIgnoreFeatureOptions) {
   const auto rowType = ROW({{"id", BIGINT()}});
   const std::vector<std::unordered_map<std::string, std::string>> optionSets{
       {},
@@ -2442,7 +2356,7 @@ TEST_F(PaimonNimbleReadTest, ordinaryColumnsIgnoreFeatureOptions) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, taskCancellationAndLimit) {
+TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
   const auto input = makeRowVector(
       {"id"}, {makeFlatVector<int64_t>(10000, [](auto row) { return row; })});
   const auto plan = makePaimonScanPlan(asRowType(input->type()));
@@ -2479,7 +2393,7 @@ TEST_F(PaimonNimbleReadTest, taskCancellationAndLimit) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, takeoverPreparedSplit) {
+TEST_F(PaimonConnectorTest, takeoverPreparedSplit) {
   auto queryCtx = core::QueryCtx::create();
   const auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
@@ -2509,7 +2423,7 @@ TEST_F(PaimonNimbleReadTest, takeoverPreparedSplit) {
   test::assertEqualVectors(input, *result);
 }
 
-TEST_F(PaimonNimbleReadTest, columnHandlesRoundTrip) {
+TEST_F(PaimonConnectorTest, columnHandlesRoundTrip) {
   const auto rowType =
       ROW({{"value", BIGINT()}, {"id", BIGINT()}, {"p", VARCHAR()}});
   const auto id = std::make_shared<PaimonColumnHandle>(
@@ -2569,7 +2483,7 @@ TEST_F(PaimonNimbleReadTest, columnHandlesRoundTrip) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, nestedColumnHandleRoundTrip) {
+TEST_F(PaimonConnectorTest, nestedColumnHandleRoundTrip) {
   const auto nestedType = ROW({{"keep", BIGINT()}, {"unused", VARCHAR()}});
   const auto rowType = ROW({{"r", nestedType}});
   const auto table = makePaimonTableHandle(rowType);
@@ -2611,7 +2525,7 @@ TEST_F(PaimonNimbleReadTest, nestedColumnHandleRoundTrip) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, extractedColumnHandleRoundTrip) {
+TEST_F(PaimonConnectorTest, extractedColumnHandleRoundTrip) {
   const auto mapType = MAP(VARCHAR(), BIGINT());
   const auto table = makePaimonTableHandle(ROW({{"m", mapType}}));
   const auto column = std::make_shared<PaimonColumnHandle>(
@@ -2659,7 +2573,7 @@ TEST_F(PaimonNimbleReadTest, extractedColumnHandleRoundTrip) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, remainingFilterLambdaRoundTrip) {
+TEST_F(PaimonConnectorTest, remainingFilterLambdaRoundTrip) {
   const auto rowType = ROW({{"id", BIGINT()}, {"value", BIGINT()}});
 
   // The lambda parameter 'id' shadows the table column, while 'value' is
@@ -2692,7 +2606,7 @@ TEST_F(PaimonNimbleReadTest, remainingFilterLambdaRoundTrip) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, subfieldFilterRoundTrip) {
+TEST_F(PaimonConnectorTest, subfieldFilterRoundTrip) {
   const auto rowType = ROW({{"id", BIGINT()}, {"r", ROW({{"x", BIGINT()}})}});
   const auto outputType = ROW({{"id", BIGINT()}});
   const auto input = makeRowVector(
@@ -2734,7 +2648,7 @@ TEST_F(PaimonNimbleReadTest, subfieldFilterRoundTrip) {
   }
 }
 
-TEST_F(PaimonNimbleReadTest, partitionDateEncodingRoundTrip) {
+TEST_F(PaimonConnectorTest, partitionDateEncodingRoundTrip) {
   const auto rowType = ROW({{"id", BIGINT()}, {"day", DATE()}});
   const auto table = makePaimonTableHandle(rowType, {}, nullptr, {"day"});
   const auto column = std::make_shared<PaimonColumnHandle>(
@@ -2765,7 +2679,7 @@ TEST_F(PaimonNimbleReadTest, partitionDateEncodingRoundTrip) {
         .split(makePaimonSplit(
             {files[0]->getPath()},
             PaimonTableType::kAppendOnly,
-            dwio::common::FileFormat::NIMBLE,
+            dwio::common::FileFormat::DWRF,
             {{"day", "1234"}}))
         .assertResults(expected);
   }
@@ -2866,7 +2780,7 @@ TEST_F(PaimonConnectorTest, rejectsPrimaryKeySplits) {
 }
 
 // E2E test: multiple splits each with multiple files.
-TEST_F(PaimonNimbleReadTest, appendOnlyMultipleSplits) {
+TEST_F(PaimonConnectorTest, appendOnlyMultipleSplits) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
 
   // Split 1 with 2 files.

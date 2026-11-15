@@ -1049,10 +1049,6 @@ TypePtr renameByFieldId(
 
 void DwrfReader::updateColumnNamesFromFieldIds() {
   const auto& options = readerBase_->readerOptions();
-  VELOX_USER_CHECK_NE(
-      options.fieldIdAttributeKey(),
-      "paimon.id",
-      "DWRF/ORC reader does not support Paimon field ID mapping");
   const auto& tableSchema = options.fileSchema();
   const auto& fieldIds = options.fieldIds();
   const auto& footer = readerBase_->footer();

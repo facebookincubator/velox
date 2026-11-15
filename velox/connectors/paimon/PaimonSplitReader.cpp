@@ -69,7 +69,7 @@ void PaimonSplitReader::configureBaseReaderOptions() {
   }
   baseReaderOpts_.setFileSchema(table.rowType());
   baseReaderOpts_.setFieldIds(std::move(fieldIds));
-  baseReaderOpts_.setFieldIdAttributeKey("paimon.id");
+  baseReaderOpts_.setFieldIdAttributeKey(dwio::common::kPaimonFieldIdKey);
   baseReaderOpts_.setColumnMappingMode(
       dwio::common::ColumnMappingMode::kFieldId);
 }
@@ -84,10 +84,10 @@ void PaimonSplitReader::prepareSplit(
 }
 
 uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
-  while (true) {
+  while (currentFileIndex_ < fileSplits_.size()) {
     const bool newFile = baseReader_ == nullptr;
     if (!ensureFileSplitReader()) {
-      return 0;
+      break;
     }
     if (newFile && output) {
       // Keep the logical output required by selective readers, but discard
@@ -104,6 +104,7 @@ uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
     // Current file exhausted, try the next one.
     finishFileSplitReader();
   }
+  return 0;
 }
 
 bool PaimonSplitReader::ensureFileSplitReader() {
@@ -117,7 +118,6 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
 
-    configureReaderOptions(baseReaderOpts_.randomSkip());
     connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     if (!emptySplit_) {
       return true;

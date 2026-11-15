@@ -89,6 +89,9 @@ std::string formatConfigPrefix(FileFormat fmt, std::string_view separator);
 /// returns "orc_writer.stripe-max-size".
 std::string formatSessionProperty(FileFormat fmt, std::string_view key);
 
+/// Schema attribute key storing Paimon's stable field IDs.
+inline constexpr char kPaimonFieldIdKey[] = "paimon.id";
+
 /// Controls how a reader maps the requested table schema to physical file
 /// columns.
 enum class ColumnMappingMode {

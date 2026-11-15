@@ -272,7 +272,7 @@ class NimbleReader : public dwio::common::Reader {
     // behavior is preserved.
     if (options_.columnMappingMode() ==
             dwio::common::ColumnMappingMode::kFieldId &&
-        options_.fieldIdAttributeKey() == "paimon.id") {
+        options_.fieldIdAttributeKey() == dwio::common::kPaimonFieldIdKey) {
       facebook::nimble::BatchReader tmpReader(
           tabletReader_, options.memoryPool());
       tableNamedSchema_ = facebook::nimble::mapColumnsByFieldId(
