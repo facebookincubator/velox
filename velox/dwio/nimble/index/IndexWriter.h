@@ -20,10 +20,12 @@
 #include <string>
 #include <vector>
 
+#include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
+#include "velox/dwio/nimble/tablet/Chunk.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -34,8 +36,10 @@ namespace facebook::nimble::index {
 /// Lifecycle:
 ///   1. Create with config and input schema
 ///   2. For each batch: write(batch)
-///   3. At stripe group boundaries: flush() to write index data
-///   4. At file close: close() to finalize, serialize, and release resources
+///   3. Before each stripe is written: finishStripe() returns the index data
+///      that the stripe stores, if any
+///   4. At stripe group boundaries: finishStripeGroup() to write index data
+///   5. At file close: close() to finalize, serialize, and release resources
 /// Calls are serialized by the owning Writer; implementations do not need
 /// to support concurrent lifecycle calls.
 class IndexWriter {
@@ -45,8 +49,16 @@ class IndexWriter {
   /// Processes a batch of input data for indexing.
   virtual void write(const velox::VectorPtr& input) = 0;
 
-  /// Flushes index data at stripe group boundaries.
-  virtual void flush(
+  /// Called before each stripe is written. Returns the chunks, encoded into
+  /// 'buffer', of the stream that the index stores in every stripe, or none
+  /// when it stores no stream in stripes. 'buffer' must outlive the chunks.
+  virtual std::vector<Chunk> finishStripe(Buffer& buffer) {
+    return {};
+  }
+
+  /// Called at each stripe group boundary, after the stripes of the group are
+  /// written. Writes the index data of the stripe group.
+  virtual void finishStripeGroup(
       const WriteDataFn& writeDataFn,
       const CreateMetadataSectionFn& createMetadataFn) {}
 

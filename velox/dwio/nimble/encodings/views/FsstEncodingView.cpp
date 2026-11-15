@@ -119,8 +119,10 @@ void FsstEncodingView::initializeCached(std::string_view encodedLengths) {
   for (uint32_t row = 0; row < this->rowCount_; ++row) {
     compressedOffsets_[row + 1] = compressedOffsets_[row] + lengths[row];
   }
-  decodedChunks_.wlock()->resize(
-      this->rowCount_ / kRowsPerChunk + (this->rowCount_ % kRowsPerChunk != 0));
+  const auto numChunks =
+      this->rowCount_ / kRowsPerChunk + (this->rowCount_ % kRowsPerChunk != 0);
+  decodedChunks_.wlock()->resize(numChunks);
+  rowsReadAlone_ = std::make_unique<std::atomic_uint32_t[]>(numChunks);
 }
 
 std::string_view FsstEncodingView::readTypedAt(uint32_t index) const {
@@ -129,10 +131,11 @@ std::string_view FsstEncodingView::readTypedAt(uint32_t index) const {
     const auto size = lengths_->readAt(index);
     return decodeValue(index, lengths_->sum(0, index), size);
   }
-  const auto chunkIndex = index / kRowsPerChunk;
-  const auto chunk = getChunk(chunkIndex);
-  const auto rowInChunk = index % kRowsPerChunk;
-  return valueAt(*chunk, rowInChunk);
+  const auto chunk = chunkForRead(rowChunk(index), /*numRows=*/1);
+  if (chunk == nullptr) {
+    return decodeRow(index);
+  }
+  return valueAt(*chunk, index % kRowsPerChunk);
 }
 
 void FsstEncodingView::readPhysical(
@@ -155,14 +158,15 @@ void FsstEncodingView::readPhysical(
   uint32_t outputOffset{0};
   while (outputOffset < length) {
     const auto row = offset + outputOffset;
-    const auto chunkIndex = row / kRowsPerChunk;
+    const auto chunkIndex = rowChunk(row);
     const auto rowInChunk = row % kRowsPerChunk;
-    const auto chunk = getChunk(chunkIndex);
-    const auto rowsInChunk = static_cast<uint32_t>(chunk->offsets.size() - 1);
     const auto rowsToCopy =
-        std::min(length - outputOffset, rowsInChunk - rowInChunk);
+        std::min(length - outputOffset, chunkRows(chunkIndex) - rowInChunk);
+    const auto chunk = chunkForRead(chunkIndex, rowsToCopy);
     for (uint32_t i = 0; i < rowsToCopy; ++i) {
-      output[outputOffset + i] = valueAt(*chunk, rowInChunk + i);
+      output[outputOffset + i] = chunk == nullptr
+          ? decodeRow(row + i)
+          : valueAt(*chunk, rowInChunk + i);
     }
     outputOffset += rowsToCopy;
   }
@@ -171,6 +175,10 @@ void FsstEncodingView::readPhysical(
 void FsstEncodingView::readPhysicalAt(
     std::span<const uint32_t> indices,
     std::string_view* output) const {
+  if (indices.empty()) {
+    return;
+  }
+  this->checkReadIndices(indices);
   if (!cachesDecodedChunks()) {
     // Sums the lengths once for all indices, not once for each of them.
     ScopedVector<uint64_t> begins{
@@ -182,18 +190,70 @@ void FsstEncodingView::readPhysicalAt(
     }
     return;
   }
-  uint32_t cachedChunkIndex = std::numeric_limits<uint32_t>::max();
-  std::shared_ptr<const DecodedChunk> cachedChunk;
-  for (size_t i = 0; i < indices.size(); ++i) {
-    const auto row = indices[i];
-    NIMBLE_DCHECK_LT(row, this->rowCount_);
-    const auto chunkIndex = row / kRowsPerChunk;
-    if (chunkIndex != cachedChunkIndex) {
-      cachedChunk = getChunk(chunkIndex);
-      cachedChunkIndex = chunkIndex;
+
+  // Reads each run of indices in one chunk from the chunk or alone, as
+  // chunkForRead() decides for the run.
+  size_t runBegin{0};
+  while (runBegin < indices.size()) {
+    const auto chunkIndex = rowChunk(indices[runBegin]);
+    auto runEnd = runBegin;
+    while (runEnd < indices.size() && rowChunk(indices[runEnd]) == chunkIndex) {
+      ++runEnd;
     }
-    output[i] = valueAt(*cachedChunk, row % kRowsPerChunk);
+    const auto chunk =
+        chunkForRead(chunkIndex, static_cast<uint32_t>(runEnd - runBegin));
+    for (auto i = runBegin; i < runEnd; ++i) {
+      output[i] = chunk == nullptr
+          ? decodeRow(indices[i])
+          : valueAt(*chunk, indices[i] % kRowsPerChunk);
+    }
+    runBegin = runEnd;
   }
+}
+
+uint32_t FsstEncodingView::read(
+    std::span<const RowRange> ranges,
+    const std::function<void(uint32_t)>& setNull,
+    void* output) const {
+  if (!cachesDecodedChunks() || ranges.empty()) {
+    return TypedEncodingView<std::string_view>::read(ranges, setNull, output);
+  }
+  const auto numRows = this->checkReadRanges(ranges);
+  const auto firstChunkIndex = rowChunk(ranges.front().startRow);
+  const auto lastChunkIndex = rowChunk(ranges.back().endRow - 1);
+  ScopedVector<uint32_t> numChunkRows{
+      lastChunkIndex - firstChunkIndex + 1,
+      this->pool_,
+      this->options_.bufferPool};
+  std::fill(numChunkRows.begin(), numChunkRows.end(), 0);
+  for (const auto& range : ranges) {
+    auto row = range.startRow;
+    while (row < range.endRow) {
+      const auto chunkIndex = rowChunk(row);
+      const auto end = std::min(
+          range.endRow, chunkIndex * kRowsPerChunk + chunkRows(chunkIndex));
+      numChunkRows[chunkIndex - firstChunkIndex] += end - row;
+      row = end;
+    }
+  }
+
+  auto* values = static_cast<std::string_view*>(output);
+  uint32_t outputOffset{0};
+  auto chunkIndex = std::numeric_limits<uint32_t>::max();
+  std::shared_ptr<const DecodedChunk> chunk;
+  for (const auto& range : ranges) {
+    for (auto row = range.startRow; row < range.endRow; ++row) {
+      if (rowChunk(row) != chunkIndex) {
+        chunkIndex = rowChunk(row);
+        chunk = chunkForRead(
+            chunkIndex, numChunkRows[chunkIndex - firstChunkIndex]);
+      }
+      values[outputOffset++] = chunk == nullptr
+          ? decodeRow(row)
+          : valueAt(*chunk, row % kRowsPerChunk);
+    }
+  }
+  return numRows;
 }
 
 std::string_view FsstEncodingView::decodeValue(
@@ -234,6 +294,14 @@ std::string_view FsstEncodingView::decodeValue(
   return decodedStrings_.add(row, std::move(decoded));
 }
 
+std::string_view FsstEncodingView::decodeRow(uint32_t row) const {
+  const auto compressedBegin = compressedOffsets_[row];
+  return decodeValue(
+      row,
+      compressedBegin,
+      static_cast<uint32_t>(compressedOffsets_[row + 1] - compressedBegin));
+}
+
 std::optional<std::string_view> FsstEncodingView::DecodedStrings::find(
     uint32_t row) const {
   const std::shared_lock<std::shared_mutex> guard{lock_};
@@ -268,19 +336,41 @@ std::string_view FsstEncodingView::valueAt(
   return {chunk.data->as<char>() + begin, end - begin};
 }
 
+uint32_t FsstEncodingView::chunkRows(uint32_t chunkIndex) const {
+  return std::min(
+      kRowsPerChunk,
+      static_cast<uint32_t>(this->rowCount_ - chunkIndex * kRowsPerChunk));
+}
+
 std::shared_ptr<const FsstEncodingView::DecodedChunk>
-FsstEncodingView::getChunk(uint32_t chunkIndex) const {
+FsstEncodingView::chunkForRead(uint32_t chunkIndex, uint32_t numRows) const {
   {
     const auto chunks = decodedChunks_.rlock();
-    if ((*chunks)[chunkIndex]) {
+    if ((*chunks)[chunkIndex] != nullptr) {
       return (*chunks)[chunkIndex];
+    }
+  }
+  const auto minRowsToDecode =
+      chunkRows(chunkIndex) * kMinRowsToDecodeChunk / kRowsPerChunk;
+
+  // Counts only reads of fewer rows than the minimum, so the count cannot
+  // overflow before a read decodes the chunk.
+  if (numRows < minRowsToDecode) {
+    auto& rowsReadAlone = rowsReadAlone_[chunkIndex];
+    const auto rowsRead =
+        rowsReadAlone.fetch_add(numRows, std::memory_order_relaxed) + numRows;
+    if (rowsRead < minRowsToDecode) {
+      return nullptr;
     }
   }
 
   auto decoded = decodeChunk(chunkIndex);
   auto chunks = decodedChunks_.wlock();
   auto& cached = (*chunks)[chunkIndex];
-  if (!cached) {
+
+  // A concurrent read may have published the chunk first and returned views of
+  // its strings, so the chunk it published stays.
+  if (cached == nullptr) {
     cached = std::move(decoded);
   }
   return cached;
@@ -289,9 +379,7 @@ FsstEncodingView::getChunk(uint32_t chunkIndex) const {
 std::shared_ptr<const FsstEncodingView::DecodedChunk>
 FsstEncodingView::decodeChunk(uint32_t chunkIndex) const {
   const auto firstRow = chunkIndex * kRowsPerChunk;
-  const auto endRow = firstRow +
-      std::min(kRowsPerChunk,
-               static_cast<uint32_t>(this->rowCount_ - firstRow));
+  const auto endRow = firstRow + chunkRows(chunkIndex);
   auto chunk = std::make_shared<DecodedChunk>();
   chunk->offsets.resize(endRow - firstRow + 1);
 

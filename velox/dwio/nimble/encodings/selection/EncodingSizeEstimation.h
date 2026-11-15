@@ -37,6 +37,7 @@
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
@@ -251,6 +252,16 @@ struct EncodingSizeEstimation {
       case EncodingType::PartitionedEliasFano: {
         if constexpr (isIntegralType<T>()) {
           return PartitionedEliasFanoEncoding<T>::estimateSize(values, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      // Sequence needs every value, since a sample can form a progression
+      // that the whole stream does not. The statistics-only estimate above
+      // declines it.
+      case EncodingType::Sequence: {
+        if constexpr (isIntegralType<T>()) {
+          return SequenceEncoding<T>::estimateSize(values, statistics, options);
         } else {
           return std::nullopt;
         }

@@ -1361,7 +1361,7 @@ TEST_P(IndexLookupJoinTest, mixedFilterBatches) {
           core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
           GetParam().numPrefetches)
       .config(core::QueryConfig::kPreferredOutputBatchRows, 4)
-      .config(core::QueryConfig::kIndexLookupJoinSplitOutput, "true")
+      .config(core::QueryConfig::kIndexLookupJoinSplitOutput, true)
       .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
       .serialExecution(GetParam().serialExecution)
       .barrierExecution(GetParam().serialExecution);

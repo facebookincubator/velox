@@ -1002,10 +1002,9 @@ class RPCOperatorTest : public OperatorTestBase {
 
 /// Runs Values(3 rows) → RPCNode → verifies passthrough + RPC result.
 TEST_F(RPCOperatorTest, basicPerRow) {
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>(
-          {"hello world", "test prompt", "third row"})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>({"hello world", "test prompt", "third row"}));
 
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
 
@@ -1031,10 +1030,10 @@ TEST_F(RPCOperatorTest, basicPerRow) {
 // kPerRow output is sized from QueryConfig::preferredOutputBatchRows: 50 rows
 // with a cap of 10 emit at least 5 output vectors.
 TEST_F(RPCOperatorTest, outputBatchSizeFromConfig) {
-  auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<std::string>(50, [](auto row) {
-                      return fmt::format("row {}", row);
-                    })});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<std::string>(50, [](auto row) {
+        return fmt::format("row {}", row);
+      }));
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
 
   std::shared_ptr<exec::Task> task;
@@ -1052,7 +1051,7 @@ TEST_F(RPCOperatorTest, outputBatchSizeFromConfig) {
 TEST_F(RPCOperatorTest, nullInput) {
   auto promptVector =
       makeNullableFlatVector<StringView>({"valid prompt", std::nullopt});
-  auto input = makeRowVector({"prompt"}, {promptVector});
+  auto input = makeNamedRowVector("prompt", promptVector);
 
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
 
@@ -1120,8 +1119,8 @@ TEST_F(RPCOperatorTest, multipleColumns) {
 
 // Basic batch mode: responses in order, verify passthrough + result.
 TEST_F(RPCOperatorTest, batchBasic) {
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"hello", "world", "batch"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"hello", "world", "batch"}));
 
   auto plan =
       makeBatchRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
@@ -1151,7 +1150,7 @@ TEST_F(
     RPCOperatorTest,
     laterQueryWithAnotherPolicyLeavesSharedPolicyUnchanged) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
   auto& limiter = RPCRateLimiterRegistry::global().get("");
 
   // First query: a deliberate policy, as a small-entitlement pipeline sets.
@@ -1186,7 +1185,7 @@ TEST_F(
 // first query's limits still hold for later queries that ask for them.
 TEST_F(RPCOperatorTest, explicitSessionLimitsAreHonoredOnSealedBackend) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
   struct Run {
     int64_t lowestCap;
     bool policyScoped;
@@ -1224,7 +1223,7 @@ TEST_F(RPCOperatorTest, explicitSessionLimitsAreHonoredOnSealedBackend) {
 // that set its own limits sealed the backend's shared limiter first.
 TEST_F(RPCOperatorTest, defaultQueryDoesNotInheritAnotherQuerysPolicy) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
   AssertQueryBuilder(plan)
       .maxDrivers(1)
@@ -1251,8 +1250,8 @@ TEST_F(RPCOperatorTest, defaultQueryDoesNotInheritAnotherQuerysPolicy) {
 TEST_F(RPCOperatorTest, eagerAdmissionReportsPolicyScopedLimiter) {
   const DefaultBackendPolicy policy{.ceiling = 25};
   sealDefaultBackend(policy);
-  auto noRows = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>(std::vector<StringView>{})});
+  auto noRows = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>(std::vector<StringView>{}));
   auto runtimeStats =
       [&](const std::string& functionName,
           const std::unordered_map<std::string, std::string>& session) {
@@ -1298,8 +1297,8 @@ TEST_F(RPCOperatorTest, driversShareTheLimiterForTheirPolicy) {
   std::vector<RowVectorPtr> inputs;
   inputs.reserve(8);
   for (int i = 0; i < 8; ++i) {
-    inputs.push_back(makeRowVector(
-        {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})}));
+    inputs.push_back(makeNamedRowVector(
+        "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"})));
   }
   auto plan = makeRPCNode(
       PlanBuilder().values(inputs, /*parallelizable=*/true).planNode(),
@@ -1329,7 +1328,7 @@ TEST_F(RPCOperatorTest, driversShareTheLimiterForTheirPolicy) {
 TEST_F(RPCOperatorTest, resolvesAdmissionKeyBeforeDispatch) {
   PreAdmissionKeyRPCFunction::reset();
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"hello"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"hello"}));
 
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -1353,8 +1352,9 @@ TEST_F(RPCOperatorTest, resolvesAdmissionKeyBeforeDispatch) {
 TEST_F(RPCOperatorTest, constantSetupSkipsInputPreparation) {
   ConstantSetupRPCFunction::reset();
   std::vector<RowVectorPtr> inputs{
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"first input"})}),
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"second input"})}),
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"first input"})),
+      makeNamedRowVector(
+          "prompt", makeFlatVector<StringView>({"second input"})),
   };
 
   auto plan = makeRPCNode(
@@ -1370,10 +1370,10 @@ TEST_F(RPCOperatorTest, constantSetupSkipsInputPreparation) {
 TEST_F(RPCOperatorTest, localOnlyInputsBypassAdmissionAndCongestion) {
   DeferredAdmissionRPCFunction::reset();
   std::vector<RowVectorPtr> inputs{
-      makeRowVector(
-          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"live prompt"})}),
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"local error"})}),
+      makeNamedRowVector(
+          "prompt", makeNullableFlatVector<StringView>({std::nullopt})),
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"live prompt"})),
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"local error"})),
   };
 
   auto plan = makeRPCNode(
@@ -1419,10 +1419,10 @@ TEST_F(RPCOperatorTest, localOnlyInputsBypassAdmissionAndCongestion) {
 
 TEST_F(RPCOperatorTest, localOnlyPerRowPayloadMemoryIsAccounted) {
   DeferredAdmissionRPCFunction::reset();
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeNullableFlatVector<StringView>(
-          {std::nullopt, StringView("local error")})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeNullableFlatVector<StringView>(
+          {std::nullopt, StringView("local error")}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1443,8 +1443,8 @@ TEST_F(RPCOperatorTest, localOnlyPerRowPayloadMemoryIsAccounted) {
 
 TEST_F(RPCOperatorTest, invalidRequestRowsAreCountedByErrorKind) {
   DeferredAdmissionRPCFunction::reset();
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"live prompt", "local error"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"live prompt", "local error"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1462,11 +1462,11 @@ TEST_F(RPCOperatorTest, invalidRequestRowsAreCountedByErrorKind) {
 TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
   DeferredAdmissionBatchRPCFunction::reset();
   std::vector<RowVectorPtr> inputs{
-      makeRowVector(
-          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"live prompt"})}),
-      makeRowVector(
-          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
+      makeNamedRowVector(
+          "prompt", makeNullableFlatVector<StringView>({std::nullopt})),
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"live prompt"})),
+      makeNamedRowVector(
+          "prompt", makeNullableFlatVector<StringView>({std::nullopt})),
   };
 
   auto plan = makeBatchRPCNode(
@@ -1513,9 +1513,9 @@ TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
 
 TEST_F(RPCOperatorTest, localOnlyBatchPayloadMemoryIsAccounted) {
   DeferredAdmissionBatchRPCFunction::reset();
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeNullableFlatVector<StringView>({std::nullopt, std::nullopt})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeNullableFlatVector<StringView>({std::nullopt, std::nullopt}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1563,7 +1563,7 @@ TEST_F(RPCOperatorTest, batchMakesProgressWhenIntakeIsThrottled) {
       prompts.emplace_back(storage.back());
     }
     inputs.push_back(
-        makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)}));
+        makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts)));
   }
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
@@ -1596,7 +1596,8 @@ TEST_F(RPCOperatorTest, perRowReadyResponseReleasesAdmissionBeforeDrain) {
     storage.push_back(fmt::format("single-flight-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = 1};
   auto& limiter = sealDefaultBackend(policy);
@@ -1637,7 +1638,8 @@ void RPCOperatorTest::runContendedDrain(bool batchMode) {
     storage.push_back(fmt::format("contended-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
@@ -1694,7 +1696,7 @@ TEST_F(RPCOperatorTest, batchDrainCompletesWhileTheBackendIsHeld) {
 // guard the process dies instead.
 TEST_F(RPCOperatorTest, closeWithoutInitializeDoesNotCrash) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -1712,7 +1714,7 @@ TEST_F(RPCOperatorTest, closeWithoutInitializeDoesNotCrash) {
 // operator would otherwise still be holding at ~Task.
 TEST_F(RPCOperatorTest, retainedInputIsReleasedWhenCloseNeverRuns) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
   auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
   ASSERT_TRUE(rpcNode != nullptr);
@@ -1759,7 +1761,7 @@ TEST_F(RPCOperatorTest, retainedInputIsReleasedWhenCloseNeverRuns) {
 // worker down with SIGABRT.
 TEST_F(RPCOperatorTest, retainedInputReleasesTheTaskPoolReservation) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
   auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
   ASSERT_TRUE(rpcNode != nullptr);
@@ -1846,7 +1848,7 @@ TEST_F(RPCOperatorTest, resultColumnTypeMustMatchTheFunction) {
       []() { return std::make_shared<MismatchedResultTypeRPCFunction>(); },
       DemoAsyncRPCFunction::signatures());
 
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a"})});
+  auto input = makeNamedRowVector("prompt", makeFlatVector<StringView>({"a"}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1868,7 +1870,8 @@ TEST_F(RPCOperatorTest, batchDispatchRespectsTheBackendCap) {
     storage.push_back(fmt::format("row-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
@@ -1896,7 +1899,8 @@ TEST_F(RPCOperatorTest, batchFanOutIsClippedToGrantedAdmissionUnits) {
   FanOutBatchRPCFunction::flushSizes().clear();
 
   std::vector<StringView> prompts(kRows, StringView("prompt"));
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
   sealDefaultBackend(policy);
@@ -1925,7 +1929,8 @@ TEST_F(RPCOperatorTest, batchSuccessFromStaleEpochDoesNotUndoOverload) {
   constexpr int32_t kRows = 8;
 
   std::vector<StringView> prompts(kRows, StringView("prompt"));
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
@@ -1961,8 +1966,8 @@ TEST_F(RPCOperatorTest, rateLimitedBatchReportsNoStaleSuccess) {
   const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
 
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -1990,8 +1995,8 @@ TEST_F(RPCOperatorTest, partlyRateLimitedBatchReportsStaleSuccess) {
   const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
 
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2019,7 +2024,8 @@ TEST_F(RPCOperatorTest, staleBatchWithoutSuccessVerdictReportsStaleSuccess) {
   constexpr int64_t kCeiling = 8;
   constexpr int32_t kRows = 8;
   std::vector<StringView> prompts(kRows, StringView("prompt"));
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
@@ -2050,9 +2056,8 @@ TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
   const DefaultBackendPolicy policy{.adaptive = true, .ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
 
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>({"slow", "overload", "recover"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"slow", "overload", "recover"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "mixed_epoch_rpc");
   std::shared_ptr<exec::Task> task;
@@ -2083,7 +2088,8 @@ TEST_F(RPCOperatorTest, overloadedAttemptsAreCounted) {
   auto& limiter = sealDefaultBackend(policy);
 
   std::vector<StringView> prompts(kCeiling, StringView("retried"));
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2112,7 +2118,7 @@ TEST_F(RPCOperatorTest, overloadedAttemptsAreCounted) {
 
 TEST_F(RPCOperatorTest, batchAdmissionRequiresOneUnitForOneRow) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"prompt"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"prompt"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -2148,7 +2154,8 @@ TEST_F(RPCOperatorTest, batchAimdRecoversPerBatchNotPerRow) {
     storage.push_back(fmt::format("row-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   // Below the built-in floor of 50, so capacity can be driven low enough
   // for the two crediting schemes to separate.
@@ -2197,9 +2204,9 @@ TEST_F(
   limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, /*units=*/0);
   ASSERT_EQ(limiter.stats().capacity, 4);
 
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>({
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>({
           "0",
           "1",
           "2",
@@ -2216,7 +2223,7 @@ TEST_F(
           "13",
           "14",
           "15",
-      })});
+      }));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2262,9 +2269,9 @@ TEST_F(
   limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, /*units=*/0);
   ASSERT_EQ(limiter.stats().capacity, 4);
 
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>({
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>({
           "0",
           "1",
           "2",
@@ -2281,7 +2288,7 @@ TEST_F(
           "13",
           "14",
           "15",
-      })});
+      }));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2324,7 +2331,8 @@ TEST_F(RPCOperatorTest, lowWaterCapacityIsReportedWhenTheBackendStaysHealthy) {
     storage.push_back(fmt::format("healthy-{}", i));
     prompts.emplace_back(storage.back());
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   const DefaultBackendPolicy policy{.ceiling = kCeiling};
   auto& limiter = sealDefaultBackend(policy);
@@ -2355,8 +2363,8 @@ TEST_F(RPCOperatorTest, lowWaterCapacityIsReportedWhenTheBackendStaysHealthy) {
 // went stale.
 TEST_F(RPCOperatorTest, limiterStatsCoverOnlyTheOperatorsSpan) {
   constexpr int64_t kCeiling = 2;
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"}));
 
   // The policy the query resolves with demo_batch_rpc's floor of 0.25.
   auto& limiter = RPCRateLimiterRegistry::global().get("");
@@ -2427,8 +2435,8 @@ TEST_F(RPCOperatorTest, limiterSpanStartsAtTheFirstAdmissionRequest) {
   const auto runQuery = [&](const std::vector<StringView>& prompts) {
     auto plan = makeRPCNode(
         PlanBuilder()
-            .values({makeRowVector(
-                {"prompt"}, {makeFlatVector<StringView>(prompts)})})
+            .values({makeNamedRowVector(
+                "prompt", makeFlatVector<StringView>(prompts))})
             .planNode(),
         {"prompt"},
         "constant_setup_rpc");
@@ -2470,7 +2478,7 @@ TEST_F(RPCOperatorTest, limiterSpanStatsFollowAMidQueryWindowChange) {
       {.adaptive = true, .ceiling = 1, .floor = 0.5, .decreaseFactor = 0.5}));
 
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2505,7 +2513,7 @@ TEST_F(RPCOperatorTest, limiterSpanStatsFollowAMidQueryWindowChange) {
 
 TEST_F(RPCOperatorTest, sessionZeroDelegatesToPerLimiterFloor) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto demoPlan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
   auto demoResult = AssertQueryBuilder(demoPlan)
@@ -2535,7 +2543,7 @@ TEST_F(RPCOperatorTest, sessionZeroDelegatesToPerLimiterFloor) {
 
 TEST_F(RPCOperatorTest, functionFloorOverridesSessionFloor) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
@@ -2553,7 +2561,7 @@ TEST_F(RPCOperatorTest, functionFloorOverridesSessionFloor) {
 
 TEST_F(RPCOperatorTest, defaultHardLimitKeepsSessionPrecedence) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -2568,7 +2576,7 @@ TEST_F(RPCOperatorTest, defaultHardLimitKeepsSessionPrecedence) {
 
 TEST_F(RPCOperatorTest, zeroHardLimitSelectsFunctionBounds) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
@@ -2585,7 +2593,7 @@ TEST_F(RPCOperatorTest, zeroHardLimitSelectsFunctionBounds) {
 
 TEST_F(RPCOperatorTest, sessionBoundsApplyWhenFunctionDeclaresNone) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2604,7 +2612,7 @@ TEST_F(RPCOperatorTest, sessionBoundsApplyWhenFunctionDeclaresNone) {
 
 TEST_F(RPCOperatorTest, defaultBoundsApplyWhenNeitherDeclares) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2620,7 +2628,7 @@ TEST_F(RPCOperatorTest, defaultBoundsApplyWhenNeitherDeclares) {
 
 TEST_F(RPCOperatorTest, optedInQueryGetsItsOwnLimiterOnASharedKey) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   // The default query seals the shared limiter with the session's bounds.
@@ -2644,7 +2652,7 @@ TEST_F(RPCOperatorTest, optedInQueryGetsItsOwnLimiterOnASharedKey) {
 // and leaves the shared policy as the first set it.
 TEST_F(RPCOperatorTest, laterFunctionLeavesSharedLimiterPolicyUnchanged) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto runFunction = [&](const std::string& functionName) {
     auto plan = makeRPCNode(
         PlanBuilder().values({input}).planNode(), {"prompt"}, functionName);
@@ -2679,7 +2687,7 @@ TEST_F(RPCOperatorTest, laterFunctionLeavesSharedLimiterPolicyUnchanged) {
 
 TEST_F(RPCOperatorTest, explicitUnboundedAdaptiveLimitUsesSafetyCeiling) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
   auto result = AssertQueryBuilder(plan)
@@ -2694,7 +2702,7 @@ TEST_F(RPCOperatorTest, explicitUnboundedAdaptiveLimitUsesSafetyCeiling) {
 
 TEST_F(RPCOperatorTest, defaultFixedLimitPreservesLegacyCapacity) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
   auto result =
@@ -2710,7 +2718,7 @@ TEST_F(RPCOperatorTest, defaultFixedLimitPreservesLegacyCapacity) {
 
 TEST_F(RPCOperatorTest, defaultAdaptiveLimitPreservesLegacyCeiling) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -2722,7 +2730,7 @@ TEST_F(RPCOperatorTest, defaultAdaptiveLimitPreservesLegacyCeiling) {
 
 TEST_F(RPCOperatorTest, backendErrorsStopPacedRecovery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"fails"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"fails"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2755,7 +2763,7 @@ TEST_F(RPCOperatorTest, backendErrorsStopPacedRecovery) {
 
 TEST_F(RPCOperatorTest, backendErrorBatchesDoNotStartPacedRecovery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"fails"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"fails"}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2792,8 +2800,8 @@ TEST_F(RPCOperatorTest, backendErrorBatchesDoNotStartPacedRecovery) {
 TEST_F(RPCOperatorTest, batchWithASuccessfulRowStartsPacedRecovery) {
   // Both rows go in one flush; the function fails the first and serves the
   // second.
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"fails", "served"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"fails", "served"}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -2823,7 +2831,7 @@ TEST_F(RPCOperatorTest, batchWithASuccessfulRowStartsPacedRecovery) {
 
 TEST_F(RPCOperatorTest, maxProbeIntervalDefaultsToOneMinute) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -2835,7 +2843,7 @@ TEST_F(RPCOperatorTest, maxProbeIntervalDefaultsToOneMinute) {
 
 TEST_F(RPCOperatorTest, maxProbeIntervalReachesLimiter) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result =
@@ -2850,7 +2858,7 @@ TEST_F(RPCOperatorTest, maxProbeIntervalReachesLimiter) {
 
 TEST_F(RPCOperatorTest, legacySessionLimitPreservesOverrideSemantics) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"bounded"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"bounded"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
@@ -2865,7 +2873,7 @@ TEST_F(RPCOperatorTest, legacySessionLimitPreservesOverrideSemantics) {
 
 TEST_F(RPCOperatorTest, negativeRateLimiterBoundsAreRejected) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
 
   for (const auto& [property, message] :
        std::vector<std::pair<std::string, std::string>>{
@@ -2892,7 +2900,7 @@ TEST_F(RPCOperatorTest, negativeRateLimiterBoundsAreRejected) {
 
 TEST_F(RPCOperatorTest, functionAndSessionHardLimitsUseSmallerValue) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"bounded"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"bounded"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
   auto result = AssertQueryBuilder(plan)
@@ -2949,10 +2957,10 @@ TEST_F(RPCOperatorTest, batchReversedResponseOrder) {
 // Verifies that failed rows produce NULL results while successful rows
 // are correctly mapped to their prompts.
 TEST_F(RPCOperatorTest, batchPartialFailure) {
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>(
-          {"row0", "row1_fail", "row2", "row3_fail", "row4"})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>(
+          {"row0", "row1_fail", "row2", "row3_fail", "row4"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -2990,7 +2998,7 @@ TEST_F(RPCOperatorTest, batchPartialFailure) {
 // should complete.
 TEST_F(RPCOperatorTest, batchWholeBatchFailureDegradesToNull) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -3013,7 +3021,7 @@ TEST_F(RPCOperatorTest, batchWholeBatchFailureDegradesToNull) {
 // the operator flow to the function's buildOutput, which fails the query.
 TEST_F(RPCOperatorTest, batchWholeBatchFailureWithFailPolicyThrows) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -3030,7 +3038,7 @@ TEST_F(RPCOperatorTest, batchWholeBatchFailureWithFailPolicyThrows) {
 // before the function's row-error policy can run.
 TEST_F(RPCOperatorTest, batchWrongResponseCountFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   for (const auto& functionName :
        {"demo_batch_rpc_wrong_count", "demo_batch_rpc_wrong_count_strict"}) {
@@ -3045,7 +3053,7 @@ TEST_F(RPCOperatorTest, batchWrongResponseCountFailsQuery) {
 
 TEST_F(RPCOperatorTest, batchDuplicateRowIdFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   for (const auto& functionName :
        {"demo_batch_rpc_duplicate_row_id",
@@ -3061,7 +3069,7 @@ TEST_F(RPCOperatorTest, batchDuplicateRowIdFailsQuery) {
 
 TEST_F(RPCOperatorTest, batchOutOfRangeRowIdFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   for (const auto& functionName :
        {"demo_batch_rpc_out_of_range_row_id",
@@ -3077,7 +3085,7 @@ TEST_F(RPCOperatorTest, batchOutOfRangeRowIdFailsQuery) {
 
 TEST_F(RPCOperatorTest, batchUnsetResponseFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   for (const auto& functionName :
        {"demo_batch_rpc_unset_response",
@@ -3092,7 +3100,7 @@ TEST_F(RPCOperatorTest, batchUnsetResponseFailsQuery) {
 }
 
 TEST_F(RPCOperatorTest, perRowUnsetResponseFailsQuery) {
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a"})});
+  auto input = makeNamedRowVector("prompt", makeFlatVector<StringView>({"a"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
@@ -3105,7 +3113,7 @@ TEST_F(RPCOperatorTest, perRowUnsetResponseFailsQuery) {
 
 TEST_F(RPCOperatorTest, perRowAsyncInternalFailureFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b"}));
 
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc_fatal");
@@ -3117,7 +3125,7 @@ TEST_F(RPCOperatorTest, perRowAsyncInternalFailureFailsQuery) {
 
 TEST_F(RPCOperatorTest, batchAsyncInternalFailureFailsQuery) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -3131,10 +3139,10 @@ TEST_F(RPCOperatorTest, batchAsyncInternalFailureFailsQuery) {
 
 // Null inputs in batch mode produce null results.
 TEST_F(RPCOperatorTest, batchNullInput) {
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeNullableFlatVector<StringView>(
-          {"valid1"_sv, std::nullopt, "valid2"_sv, std::nullopt})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeNullableFlatVector<StringView>(
+          {"valid1"_sv, std::nullopt, "valid2"_sv, std::nullopt}));
 
   auto plan =
       makeBatchRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
@@ -3161,9 +3169,9 @@ TEST_F(RPCOperatorTest, batchNullInput) {
 // correctly in batch mode.
 TEST_F(RPCOperatorTest, batchMultipleInputBatches) {
   auto batch1 =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"a", "b", "c"}));
   auto batch2 =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"d", "e"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"d", "e"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({batch1, batch2}).planNode(), {"prompt"});
@@ -3191,9 +3199,9 @@ TEST_F(RPCOperatorTest, batchMultipleInputBatches) {
 // mid-addInput() instead of waiting for noMoreInput(). Verifies all rows
 // are still accounted for.
 TEST_F(RPCOperatorTest, batchPipelinedDispatch) {
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>({"p1", "p2", "p3", "p4", "p5", "p6", "p7"})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>({"p1", "p2", "p3", "p4", "p5", "p6", "p7"}));
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -3389,8 +3397,8 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
   std::vector<RowVectorPtr> inputs;
   inputs.reserve(kRows);
   for (int i = 0; i < kRows; ++i) {
-    inputs.push_back(makeRowVector(
-        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+    inputs.push_back(makeNamedRowVector(
+        "prompt", makeFlatVector<StringView>({StringView("hi")})));
   }
 
   auto plan = makeBatchRPCNode(
@@ -3446,8 +3454,8 @@ TEST_F(RPCOperatorTest, rpcLivenessStatsVisibleWhileDriverIsParked) {
   std::vector<RowVectorPtr> inputs;
   inputs.reserve(kRows);
   for (int i = 0; i < kRows; ++i) {
-    inputs.push_back(makeRowVector(
-        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+    inputs.push_back(makeNamedRowVector(
+        "prompt", makeFlatVector<StringView>({StringView("hi")})));
   }
 
   CursorParameters params;
@@ -3553,8 +3561,8 @@ TEST_F(RPCOperatorTest, rpcRetriesAttemptedAdvancesWhileDriverIsParked) {
   std::vector<RowVectorPtr> inputs;
   inputs.reserve(kRows);
   for (int i = 0; i < kRows; ++i) {
-    inputs.push_back(makeRowVector(
-        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+    inputs.push_back(makeNamedRowVector(
+        "prompt", makeFlatVector<StringView>({StringView("hi")})));
   }
 
   CursorParameters params;
@@ -3678,10 +3686,10 @@ TEST_F(RPCOperatorTest, demoBatchBackendErrorIsNotOverload) {
 TEST_F(RPCOperatorTest, batchClampedByByteBudget) {
   ByteBudgetedBatchRPCFunction::flushChunks().clear();
 
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>(
-          {"r0", "r1", "r2", "r3", "r4", "r5", "r6"})}); // 7 rows
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>(
+          {"r0", "r1", "r2", "r3", "r4", "r5", "r6"})); // 7 rows
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
@@ -3702,7 +3710,7 @@ TEST_F(RPCOperatorTest, batchClampedByByteBudget) {
 
 TEST_F(RPCOperatorTest, rejectsInvalidMaxRowsPerFlush) {
   auto input =
-      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"r0", "r1"})});
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"r0", "r1"}));
 
   for (const auto& functionName : {
            "demo_batch_rpc_zero_flush_limit",
@@ -3732,10 +3740,10 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
   // DemoAsyncRPCFunction::evaluateCongestion returns kOverloaded when a
   // response result contains "OVERLOAD" (the mock echoes the prompt into the
   // result).
-  auto input = makeRowVector(
-      {"prompt"},
-      {makeFlatVector<StringView>(
-          {"OVERLOAD one", "OVERLOAD two", "normal three"})});
+  auto input = makeNamedRowVector(
+      "prompt",
+      makeFlatVector<StringView>(
+          {"OVERLOAD one", "OVERLOAD two", "normal three"}));
 
   auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
 
@@ -3767,8 +3775,8 @@ TEST_F(RPCOperatorTest, batchExecutionModeReachesTheFunction) {
       },
       DemoBatchRPCFunction::signatures());
 
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({StringView("hi")}));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},

@@ -674,8 +674,8 @@ TEST_F(FixedPointPlanNodesTest, fragmentValidation) {
                     "cv",
                     std::make_shared<ValuesNode>(
                         "cvals",
-                        std::vector<RowVectorPtr>{makeRowVector(
-                            {"x"}, {makeFlatVector<int64_t>({1})})})),
+                        std::vector<RowVectorPtr>{makeNamedRowVector(
+                            "x", makeFlatVector<int64_t>({1}))})),
                 5)),
         "a convergence plan that reads no shuffle must start with a "
         "StateSourceNode");
@@ -953,7 +953,7 @@ TEST_F(FixedPointPlanNodesTest, nestedPlans) {
   auto initial = std::make_shared<ValuesNode>(
       "i",
       std::vector<RowVectorPtr>{
-          makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})});
+          makeNamedRowVector("x", makeFlatVector<int64_t>({1}))});
   auto body = stateSource("b", "n");
   auto convergence = std::make_shared<ProjectNode>(
       "c",

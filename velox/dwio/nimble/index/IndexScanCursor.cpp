@@ -79,6 +79,13 @@ class StripeKeyCursor final : public index::KeyCursor {
     numRemaining_ -= static_cast<uint32_t>(keys.size() - numKeys);
   }
 
+  void skip(size_t numKeys) override {
+    const auto numSkipped =
+        static_cast<uint32_t>(std::min<size_t>(numKeys, numRemaining_));
+    scanKeyCursor_->skip(numSkipped);
+    numRemaining_ -= numSkipped;
+  }
+
   // Returns the number of keys of the stripe that were not read.
   uint32_t numRemaining() const {
     return numRemaining_;
@@ -140,13 +147,25 @@ class ScanPrefetcher {
   }
 
   // Waits for the next queued stripe, which is 'stripeIndex', and returns its
-  // encoded streams for the consumer to materialize.
+  // encoded streams for the consumer to materialize. A stripe leaves the queue
+  // when the consumer takes it, so a request for a stripe that the consumer
+  // took before, as in a retry of a stripe that failed, fails at once rather
+  // than waiting for a stripe that never loads.
   folly::coro::Task<ProjectedStripe> co_nextStripe(uint32_t stripeIndex) {
+    NIMBLE_USER_CHECK_LT(
+        numReturnedStripes_,
+        selections_.size(),
+        "Reset or seek before reading again after a prefetched stripe fails");
+    NIMBLE_USER_CHECK_EQ(
+        selections_[numReturnedStripes_].stripeIndex,
+        stripeIndex,
+        "Reset or seek before reading again after a prefetched stripe fails");
     auto stripe = co_await co_dequeueStripe();
     NIMBLE_CHECK_EQ(
         stripe.selection.stripeIndex,
         stripeIndex,
         "Loaded stripe index does not match the selected stripe");
+    ++numReturnedStripes_;
     co_return std::move(stripe);
   }
 
@@ -282,6 +301,9 @@ class ScanPrefetcher {
   std::vector<ProjectedStripe> currentBatch_;
   // Next stripe to return from the consumer's current batch.
   size_t currentBatchStripe_{0};
+  // Selected stripes returned to the consumer, which is the offset of the next
+  // one in 'selections_'.
+  size_t numReturnedStripes_{0};
   // Retains producer failures, including cancellation, across consumer retries.
   folly::exception_wrapper loadError_;
   // Ensures the producer is scheduled only once.
@@ -482,15 +504,20 @@ IndexScanCursor::co_nextStripe(uint32_t row) {
   auto resetKeyCursor = folly::makeGuard([this] { keyCursor_.reset(); });
   auto entries = co_await stripeMaterializer_->materialize(
       std::move(stripe), stripeKeyCursor);
+  if (stripeOffset_ + 1 == stripeSelections_.size()) {
+    // The last stripe releases the key chunk that the key cursor holds.
+    keyCursor_.reset();
+  } else {
+    velox::common::testutil::TestValue::adjust(
+        "facebook::nimble::IndexScanCursor::co_nextStripe::beforeKeySkip",
+        this);
+    // Moves the key cursor of the scan past the keys that the materializer
+    // left unread, to the first row of the next stripe.
+    stripeKeyCursor.skip(stripeKeyCursor.numRemaining());
+  }
   resetKeyCursor.dismiss();
   numOutputRows_ += selectedRows.numRows();
   ++stripeOffset_;
-  // A stripe that left keys unread did not move the key cursor to the next
-  // stripe, and the last stripe releases the key chunk that it holds.
-  if (stripeKeyCursor.numRemaining() > 0 ||
-      stripeOffset_ == stripeSelections_.size()) {
-    keyCursor_.reset();
-  }
   co_return entries;
 }
 

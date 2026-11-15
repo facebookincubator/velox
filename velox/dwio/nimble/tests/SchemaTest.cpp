@@ -532,6 +532,36 @@ TEST(SchemaTests, sharedDictionaryStream) {
       "Shared dictionary value stream is not allocated");
 }
 
+TEST(SchemaTests, clusterIndexKeyStream) {
+  {
+    nimble::SchemaBuilder builder;
+    EXPECT_FALSE(builder.clusterIndexKeyStreamOffset().has_value());
+    EXPECT_EQ(builder.createClusterIndexKeyStream(), 0);
+    EXPECT_EQ(builder.clusterIndexKeyStreamOffset(), 0);
+
+    // No schema node references the key stream, so the schema's streams
+    // start after it.
+    auto row = builder.createRowTypeBuilder(1);
+    auto scalar = builder.createScalarTypeBuilder(nimble::ScalarKind::Int32);
+    row->addChild("c0", scalar);
+    EXPECT_EQ(row->nullsDescriptor().offset(), 1);
+    EXPECT_EQ(scalar->scalarDescriptor().offset(), 2);
+    EXPECT_EQ(builder.nodeCount(), 3);
+    const auto nodes = builder.schemaNodes();
+    EXPECT_EQ(nodes.size(), 2);
+    for (const auto& node : nodes) {
+      EXPECT_NE(node.offset(), 0);
+    }
+  }
+  {
+    nimble::SchemaBuilder builder;
+    builder.createScalarTypeBuilder(nimble::ScalarKind::Int32);
+    NIMBLE_ASSERT_THROW(
+        builder.createClusterIndexKeyStream(),
+        "The cluster index key stream must be the first stream allocated");
+  }
+}
+
 // Custom context classes for testing checkedContext
 class TestStreamContext : public nimble::StreamContext {
  public:

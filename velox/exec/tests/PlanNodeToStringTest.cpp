@@ -1303,19 +1303,18 @@ TEST_F(PlanNodeToStringTest, stateHashJoin) {
 TEST_F(PlanNodeToStringTest, fixedPointSequence) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto schema = ROW("x", BIGINT());
-  auto plan =
-      PlanBuilder(idGenerator)
-          .fixedPoint(
-              core::VectorState("n", schema, /*append=*/true)
-                  .initial(PlanBuilder(idGenerator)
-                               .values({makeRowVector(
-                                   {"x"}, {makeFlatVector<int64_t>({1})})})
-                               .planNode()),
-              PlanBuilder(idGenerator)
-                  .stateSource("n", schema)
-                  .project({"x + 1 AS x"}),
-              core::ConvergenceConfig::withMaxIterations(9))
-          .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      core::VectorState("n", schema, /*append=*/true)
+                          .initial(PlanBuilder(idGenerator)
+                                       .values({makeNamedRowVector(
+                                           "x", makeFlatVector<int64_t>({1}))})
+                                       .planNode()),
+                      PlanBuilder(idGenerator)
+                          .stateSource("n", schema)
+                          .project({"x + 1 AS x"}),
+                      core::ConvergenceConfig::withMaxIterations(9))
+                  .planNode();
 
   ASSERT_EQ("-- FixedPoint[3]\n", plan->toString());
   ASSERT_EQ(

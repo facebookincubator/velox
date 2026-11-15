@@ -120,6 +120,7 @@ velox_add_library(
   VectorCountAggregate.h
   VectorIndexBuildAggregate.h
   VectorIndexOptionsArgument.h
+  VectorIndexPackAggregate.h
   VectorIndexTrainAggregate.h
   VectorSumAggregate.h
 )
@@ -147,6 +148,7 @@ if(VELOX_ENABLE_FAISS)
       VectorCountAggregate.cpp
       VectorIndexBuildAggregate.cpp
       VectorIndexOptionsArgument.cpp
+      VectorIndexPackAggregate.cpp
       VectorIndexTrainAggregate.cpp
   )
   velox_link_libraries(velox_aggregates velox_vector_index)

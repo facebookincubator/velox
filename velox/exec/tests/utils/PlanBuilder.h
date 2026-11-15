@@ -647,8 +647,7 @@ class PlanBuilder {
 
     /// @param sortBy Specifies the sort by columns.
     TableWriterBuilder& sortBy(
-        std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
-            sortBy) {
+        std::vector<connector::hive::HiveSortingColumnPtr> sortBy) {
       sortBy_ = std::move(sortBy);
       return *this;
     }
@@ -734,8 +733,7 @@ class PlanBuilder {
     int32_t bucketCount_{0};
     std::vector<std::string> bucketedBy_;
     std::vector<std::string> aggregates_;
-    std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
-        sortBy_;
+    std::vector<connector::hive::HiveSortingColumnPtr> sortBy_;
 
     std::unordered_map<std::string, std::string> serdeParameters_;
     std::unordered_map<std::string, std::string> storageParameters_;
@@ -992,8 +990,7 @@ class PlanBuilder {
       const std::vector<std::string>& partitionBy,
       int32_t bucketCount,
       const std::vector<std::string>& bucketedBy,
-      const std::vector<
-          std::shared_ptr<const connector::hive::HiveSortingColumn>>& sortBy,
+      const std::vector<connector::hive::HiveSortingColumnPtr>& sortBy,
       const dwio::common::FileFormat fileFormat =
           dwio::common::FileFormat::DWRF,
       const std::vector<std::string>& aggregates = {},

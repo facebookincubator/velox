@@ -240,6 +240,7 @@ add_library(
   TabletReader.cpp
   TabletReader.h
   StripeGroup.h
+  StripeMetadata.h
   FileLayout.h
 )
 target_link_libraries(
@@ -269,8 +270,10 @@ target_link_libraries(
 add_library(
   nimble_tablet_writer
   ChunkStatsWriter.cpp
+  StripeGroupFlushPolicy.cpp
   TabletWriter.cpp
   ChunkStatsWriter.h
+  StripeGroupFlushPolicy.h
   TabletWriter.h
 )
 target_link_libraries(

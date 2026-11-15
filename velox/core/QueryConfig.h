@@ -387,6 +387,21 @@ class QueryConfig {
       2UL << 20,
       "Minimum bytes to accumulate before unblocking an exchange consumer.")
 
+  /// The number of rows the Exchange operator fills each output batch to.
+  /// When positive, it replaces the target the operator derives from
+  /// preferred_output_batch_bytes and an estimate of the row size. A batch
+  /// holds only pages taken from the exchange queue together, at most
+  /// preferred_output_batch_bytes, so it can have fewer rows. A Presto page is
+  /// never split, so a batch can exceed this by part of a page. 0 keeps the
+  /// derived target.
+  VELOX_QUERY_CONFIG(
+      kExchangeOutputBatchRows,
+      exchangeOutputBatchRows,
+      "exchange_output_batch_rows",
+      uint32_t,
+      0,
+      "Rows per Exchange output batch, replacing the target derived from preferred_output_batch_bytes and the estimated row size. 0 keeps the derived target.")
+
   VELOX_QUERY_CONFIG(
       kMaxPartialAggregationMemory,
       maxPartialAggregationMemoryUsage,
@@ -1322,6 +1337,16 @@ class QueryConfig {
       bool,
       false,
       "Throw exception on duplicate map keys.")
+
+  /// If true, map functions that support it build a flat map when every key is
+  /// constant.
+  VELOX_QUERY_CONFIG(
+      kGenerateConstantMapsAsFlatMaps,
+      generateConstantMapsAsFlatMaps,
+      "generate_constant_maps_as_flat_maps",
+      bool,
+      false,
+      "Build a flat map when every map key is constant.")
 
   /// Max number of input batches to prefetch for index lookup. 0 = disabled.
   VELOX_QUERY_CONFIG(

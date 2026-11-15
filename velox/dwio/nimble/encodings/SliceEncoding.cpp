@@ -154,8 +154,8 @@ void applyValueDeltaToTrivialPayload(
   }
 }
 
-// Shared baseline-rewrite folder used by FixedBitWidth, PFOR, and Constant:
-// all three push down via "memcpy inner verbatim, then rewrite the
+// Shared baseline-rewrite folder used by FixedBitWidth, PFOR, Constant, and
+// Sequence: all four push down via "memcpy inner verbatim, then rewrite the
 // uncompressed baseline field in the header." They differ only in where the
 // baseline sits relative to the encoding prefix:
 //   FBW:      [prefix][compression byte][baseline][bitWidth][packed bytes]
@@ -165,6 +165,9 @@ void applyValueDeltaToTrivialPayload(
 //             (base residuals and exception values are both baseline-relative,
 //              see PFOREncoding::patchExceptions, so one edit shifts both)
 //   Constant: [prefix][value]  -- the single stored value IS the baseline
+//             -> rewriteOffset = 0
+//   Sequence: [prefix][base][step]  -- every row is base + i * step, so
+//             shifting the base shifts every row
 //             -> rewriteOffset = 0
 // The compression indicator (when present, FBW) governs only the packed
 // region that follows the baseline, so the baseline is always written
@@ -304,6 +307,7 @@ bool canApplyValueDeltaPushdown(
     case EncodingType::FixedBitWidth:
     case EncodingType::PFOR:
     case EncodingType::Constant:
+    case EncodingType::Sequence:
       return true;
 
     case EncodingType::Trivial: {
@@ -398,9 +402,11 @@ size_t applyValueDeltaPushdown(
 
     case EncodingType::PFOR:
     case EncodingType::Constant:
+    case EncodingType::Sequence:
       // PFOR:     [prefix][baseline][baseBitWidth][varint numExceptions]...
       // Constant: [prefix][value]  -- the value IS the baseline.
-      // Both place the baseline immediately after the standard prefix.
+      // Sequence: [prefix][base][step]  -- the base is the value of row 0.
+      // All three place the baseline immediately after the standard prefix.
       return applyValueDeltaByRewrite(
           inner,
           delta,

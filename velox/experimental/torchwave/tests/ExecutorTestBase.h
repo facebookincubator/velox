@@ -46,7 +46,7 @@ struct RunTiming {
   /// Execution time excluding data transfer.
   int64_t executeUs{0};
   /// Per-launch debug info (outer = launches, inner = blocks).
-  std::vector<std::vector<DebugInfo>> debugInfo;
+  std::vector<std::vector<BlockDebugInfo>> debugInfo;
 };
 
 /// Holds the loaded model and weights shared across test methods.

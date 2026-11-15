@@ -145,8 +145,7 @@ class TableWriterTestBase : public HiveConnectorTestBase {
       uint32_t bucketCount,
       const std::vector<std::string>& bucketedBy,
       const std::vector<TypePtr>& bucketedTypes,
-      const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortedBy =
-          {});
+      const std::vector<HiveSortingColumnPtr>& sortedBy = {});
 
   void setDataTypes(
       const RowTypePtr& inputType,

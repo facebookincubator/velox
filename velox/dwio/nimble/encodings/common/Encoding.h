@@ -160,6 +160,14 @@ class Encoding {
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
 
+    /// When true, DictionaryEncoding orders an integer alphabet by physical
+    /// value instead of by first occurrence. A sorted alphabet ascends, so it
+    /// can be stored with encodings that need ascending input, such as
+    /// DeltaBlock and EliasFano, which store a gap per value instead of the
+    /// full value width. Only the writer reads this option: a reader looks
+    /// indices up in the stored alphabet whatever its order.
+    bool sortDictionaryAlphabet{false};
+
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
     ///

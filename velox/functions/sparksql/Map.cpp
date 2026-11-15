@@ -293,6 +293,9 @@ std::pair<VectorPtr, VectorPtr> toArrays(
 
 class MapFunction : public exec::VectorFunction {
  public:
+  explicit MapFunction(bool generateConstantMapsAsFlatMaps)
+      : generateConstantMapsAsFlatMaps_{generateConstantMapsAsFlatMaps} {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -330,6 +333,9 @@ class MapFunction : public exec::VectorFunction {
     for (vector_size_t i = 0; i < mapSize; ++i) {
       constantKeys = constantKeys && args[i * 2]->isConstantEncoding();
     }
+    if (generateConstantMapsAsFlatMaps_ && constantKeys) {
+      VELOX_NYI("Flat maps for constant map keys are not implemented in map()");
+    }
 
     auto* pool = context.pool();
     auto [keys, values] = toArrays(rows, args, mapSize, constantKeys, pool);
@@ -365,14 +371,22 @@ class MapFunction : public exec::VectorFunction {
             .build());
     return signatures;
   }
+
+ private:
+  bool generateConstantMapsAsFlatMaps_;
 };
 } // namespace
 
 void registerMapFunction(const std::string& name) {
-  exec::registerVectorFunction(
+  exec::registerStatefulVectorFunction(
       name,
       MapFunction::signatures(),
-      std::make_unique<MapFunction>(),
+      [](const std::string& /*name*/,
+         const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
+         const core::QueryConfig& config) {
+        return std::make_shared<MapFunction>(
+            config.generateConstantMapsAsFlatMaps());
+      },
       exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
 }
 

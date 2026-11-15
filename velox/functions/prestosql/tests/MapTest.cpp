@@ -226,6 +226,25 @@ TEST_F(MapTest, nullKeys) {
       result);
 }
 
+TEST_F(MapTest, constantKeysBuildFlatMap) {
+  const auto data = makeRowVector({
+      makeArrayVector<int64_t>({{10, 20}, {11, 21}}),
+  });
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kGenerateConstantMapsAsFlatMaps, "true"},
+  });
+  VELOX_ASSERT_THROW(
+      evaluate("map(array[1, 2], c0)", data),
+      "Flat maps for constant map keys are not implemented in map()");
+  functions::prestosql::registerMapAllowingDuplicates("map2");
+  assertEqualVectors(
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:20}",
+          "{1:11, 2:21}",
+      }),
+      evaluate("map2(array[1, 2], c0)", data));
+}
+
 TEST_F(MapTest, duplicateKeys) {
   auto size = 1'000;
 

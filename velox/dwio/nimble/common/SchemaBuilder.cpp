@@ -628,6 +628,15 @@ std::optional<offset_size> SchemaBuilder::sharedDictionaryStreamOffset(
   return iterator->second;
 }
 
+offset_size SchemaBuilder::createClusterIndexKeyStream() {
+  NIMBLE_CHECK_EQ(
+      currentOffset_,
+      0,
+      "The cluster index key stream must be the first stream allocated.");
+  clusterIndexKeyStreamOffset_ = allocateStreamOffset();
+  return clusterIndexKeyStreamOffset_.value();
+}
+
 const std::shared_ptr<const TypeBuilder>& SchemaBuilder::root() const {
   // When retreiving schema nodes, we return a vector ordered based on the
   // schema tree DFS order. To be able to flatten the schema tree to a flat

@@ -21,6 +21,7 @@
 #include <string_view>
 #include <vector>
 
+#include <folly/Executor.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/Task.h>
 #include "velox/buffer/Buffer.h"
@@ -44,10 +45,32 @@ class Type;
 /// Requires an EncodingView for the encoding of every chunk.
 class StreamReader {
  public:
+  /// Configures how the reader decodes the fields of a stripe.
+  struct Options {
+    /// Runs the tasks that decode child fields in parallel. Null decodes
+    /// serially. Must outlive the reader.
+    folly::Executor* decodeExecutor{nullptr};
+
+    /// Maximum parallel decode tasks across the field reader tree. Zero or one
+    /// decodes serially.
+    uint32_t maxDecodeParallelism{0};
+
+    /// Minimum nested scalar streams per planned decode task, so that each
+    /// task has enough work to amortize scheduling it.
+    uint32_t minStreamsPerDecodeTask{1};
+
+    /// Returns true when the reader can decode child fields in parallel.
+    bool parallelDecodeEnabled() const {
+      return decodeExecutor != nullptr && maxDecodeParallelism > 1;
+    }
+  };
+
   /// Binds the projected schema and initializes its reusable reader metadata.
+  /// Decodes child fields as 'options' configure.
   StreamReader(
       std::shared_ptr<const Type> type,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      Options options);
 
   ~StreamReader();
 
@@ -155,6 +178,9 @@ class StreamReader {
 
   // Owns all buffers allocated while decoding.
   velox::memory::MemoryPool* const pool_;
+
+  // Configures the parallel decoding of child fields.
+  const Options readerOptions_;
 
   // Configures the encodings of the bound stripe. Each binding sets it, and the
   // decoders read it when they create the views of the chunks of the binding.
