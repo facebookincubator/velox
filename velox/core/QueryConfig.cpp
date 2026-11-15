@@ -335,12 +335,13 @@ std::unordered_map<std::string, std::string> QueryConfig::rawConfigsCopy()
   return config_->rawConfigsCopy();
 }
 
-const tz::TimeZone* QueryConfig::timeZone() const {
+const tz::TimeZone* QueryConfig::timeZone(
+    const tz::TimeZone* defaultTimeZone) const {
   const auto& sessionTzName = sessionTimezone();
   if (!sessionTzName.empty()) {
     return tz::locateZone(sessionTzName);
   }
-  return nullptr;
+  return defaultTimeZone;
 }
 
 const tz::TimeZone* QueryConfig::timeZoneToAdjustTo() const {

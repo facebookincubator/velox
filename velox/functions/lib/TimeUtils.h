@@ -25,7 +25,6 @@
 #include <folly/container/F14Map.h>
 
 #include "velox/common/base/Macros.h"
-#include "velox/core/QueryConfig.h"
 #include "velox/external/date/date.h"
 #include "velox/external/date/iso_week.h"
 #include "velox/functions/Macros.h"
@@ -47,9 +46,6 @@ FOLLY_ALWAYS_INLINE const tz::TimeZone* getSessionTimeZone(
   return sessionTimeZoneName.empty() ? tz::locateZone(0)
                                      : tz::locateZone(sessionTimeZoneName);
 }
-
-/// Returns the session time zone of the query, or GMT when it is unset.
-const tz::TimeZone* getSessionTimeZone(const core::QueryConfig& config);
 
 /// Returns the epoch seconds of 'timestamp' as seen in 'timeZone', or as
 /// stored when 'timeZone' is null.
@@ -85,19 +81,6 @@ FOLLY_ALWAYS_INLINE uint32_t getWeek(
   auto weekNum = date::iso_week::year_weeknum_weekday{calDate}.weeknum();
   return (uint32_t)weekNum;
 }
-
-template <typename T>
-struct InitSessionTimezone {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-  const tz::TimeZone* timeZone_{nullptr};
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const arg_type<Timestamp>* /*timestamp*/) {
-    timeZone_ = config.timeZoneToAdjustTo();
-  }
-};
 
 /// Converts string as date time unit. Throws for invalid input string.
 ///

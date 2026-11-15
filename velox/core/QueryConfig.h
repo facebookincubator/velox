@@ -1799,9 +1799,11 @@ class QueryConfig {
 
   std::unordered_map<std::string, std::string> rawConfigsCopy() const;
 
-  /// Returns the time zone named by 'session_timezone', or null if it is unset.
-  /// For functions whose result carries a time zone, e.g. current_time().
-  const tz::TimeZone* timeZone() const;
+  /// Returns the time zone named by 'session_timezone', or 'defaultTimeZone'
+  /// (null unless specified) if it is unset. For functions whose result
+  /// carries a time zone, e.g. current_time().
+  const tz::TimeZone* timeZone(
+      const tz::TimeZone* defaultTimeZone = nullptr) const;
 
   /// Returns the time zone a timestamp-without-time-zone should be adjusted
   /// into, or null when 'adjust_timestamp_to_session_timezone' is false.

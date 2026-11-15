@@ -20,6 +20,7 @@
 #include <functional>
 #include <string_view>
 #include "velox/common/base/XxHashInline.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeCalendarFunctions.h"

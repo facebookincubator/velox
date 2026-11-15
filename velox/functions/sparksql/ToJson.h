@@ -17,6 +17,7 @@
 
 #include <vector>
 #include "velox/common/encode/Base64.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/lib/DateTimeFormatter.h"

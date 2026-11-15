@@ -23,6 +23,7 @@
 #include "velox/common/base/Macros.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/DateTimeUtil.h"
+#include "velox/functions/lib/InitSessionTimezone.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRenderZone.h"
@@ -1541,7 +1542,7 @@ struct AtTimezoneFromTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*timestamp*/,
       const arg_type<Varchar>* timezone) {
-    sessionTimeZone_ = getSessionTimeZone(config);
+    sessionTimeZone_ = config.timeZone(tz::locateZone(0));
     adjustTimestampToTimezone_ = config.adjustTimestampToTimezone();
     if (timezone) {
       targetTimezoneID_ = tz::getTimeZoneID(
@@ -1589,7 +1590,7 @@ struct AtTimezoneFromTimestampToTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*timestamp*/,
       const arg_type<Varchar>* timezone) {
-    inputSessionTimeZone_ = getSessionTimeZone(config);
+    inputSessionTimeZone_ = config.timeZone(tz::locateZone(0));
     outputSessionTimeZone_ = config.timeZoneToAdjustTo();
     adjustTimestampToTimezone_ = config.adjustTimestampToTimezone();
     if (timezone) {

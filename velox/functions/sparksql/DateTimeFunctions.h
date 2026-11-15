@@ -19,6 +19,7 @@
 #include <boost/algorithm/string.hpp>
 
 #include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/functions/lib/InitSessionTimezone.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/sparksql/AnsiMode.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
