@@ -1868,7 +1868,7 @@ TEST_F(PaimonConnectorTest, schemaEvolutionWithUnchangedNestedFields) {
   }
 }
 
-TEST_F(PaimonConnectorTest, schemaEvolutionOnlyValidatesNeededFields) {
+TEST_F(PaimonConnectorTest, schemaEvolutionUnprojectedTypeChanges) {
   const auto nested = ROW({{"x", BIGINT()}});
   const auto oldRows = makeRowVector(
       {"a", "r"},
@@ -1885,28 +1885,20 @@ TEST_F(PaimonConnectorTest, schemaEvolutionOnlyValidatesNeededFields) {
     exec::test::AssertQueryBuilder(projected)
         .split(evolutionSplit(format, {{paths[0]->getPath(), 0}}))
         .assertResults(makeRowVector({"b"}, {makeFlatVector<int64_t>({1, 2})}));
-    VELOX_ASSERT_USER_THROW(
-        exec::test::AssertQueryBuilder(
-            evolutionPlan(table, type, makePaimonColumnHandles(type)))
-            .split(evolutionSplit(format, {{paths[0]->getPath(), 0}}))
-            .copyResults(pool()),
-        "Paimon type evolution is not supported");
   }
 }
 
-TEST_F(PaimonConnectorTest, schemaEvolutionRejectsTypeChanges) {
+TEST_F(PaimonConnectorTest, schemaEvolutionUsesReaderTypeConversion) {
   const auto type = ROW({{"b", BIGINT()}});
   const auto table = makePaimonTableHandle(type);
   const auto plan = evolutionPlan(table, type, makePaimonColumnHandles(type));
   const auto paths = makeFilePaths(1);
   const auto input = makeRowVector({"a"}, {makeFlatVector<int32_t>({1, 2})});
   writeFile(paths[0]->getPath(), input, dwio::common::FileFormat::NIMBLE);
-  VELOX_ASSERT_USER_THROW(
-      exec::test::AssertQueryBuilder(plan)
-          .split(evolutionSplit(
-              dwio::common::FileFormat::NIMBLE, {{paths[0]->getPath(), 0}}))
-          .copyResults(pool()),
-      "Paimon type evolution is not supported");
+  exec::test::AssertQueryBuilder(plan)
+      .split(evolutionSplit(
+          dwio::common::FileFormat::NIMBLE, {{paths[0]->getPath(), 0}}))
+      .assertResults(makeRowVector({"b"}, {makeFlatVector<int64_t>({1, 2})}));
 }
 
 TEST_F(PaimonConnectorTest, fileSchemaVersionValidatedBeforeFileOpen) {
