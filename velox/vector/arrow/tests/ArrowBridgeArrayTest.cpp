@@ -2014,16 +2014,22 @@ TEST_F(ArrowBridgeArrayExportTest, constantCrossValidate) {
   EXPECT_EQ(runEndsArray.Value(0), 100);
 }
 
-class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
+// Runs each test with both import functions: importFromArrowAsViewer() when
+// the parameter is true, importFromArrowAsOwner() when it is false.
+class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest,
+                                   public testing::WithParamInterface<bool> {
  protected:
-  // Used by this base test class to import Arrow data and create Velox Vector.
-  // Derived test classes should call the import function under test.
-  virtual VectorPtr importFromArrow(
+  VectorPtr importFromArrow(
       ArrowSchema& arrowSchema,
       ArrowArray& arrowArray,
-      memory::MemoryPool* pool) = 0;
+      memory::MemoryPool* pool) {
+    return isViewer() ? importFromArrowAsViewer(arrowSchema, arrowArray, pool)
+                      : importFromArrowAsOwner(arrowSchema, arrowArray, pool);
+  }
 
-  virtual bool isViewer() const = 0;
+  bool isViewer() const {
+    return GetParam();
+  }
 
   // Helper structure to hold buffers required by an ArrowArray.
   struct ArrowContextHolder {
@@ -3063,90 +3069,87 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   }
 };
 
-class ArrowBridgeArrayImportAsViewerTest : public ArrowBridgeArrayImportTest {
-  bool isViewer() const override {
-    return true;
-  }
-
-  VectorPtr importFromArrow(
-      ArrowSchema& arrowSchema,
-      ArrowArray& arrowArray,
-      memory::MemoryPool* pool) override {
-    return facebook::velox::importFromArrowAsViewer(
-        arrowSchema, arrowArray, pool);
-  }
-};
-
-TEST_F(ArrowBridgeArrayImportAsViewerTest, scalar) {
+TEST_P(ArrowBridgeArrayImportTest, scalar) {
   testImportScalar();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, decimal32) {
+TEST_P(ArrowBridgeArrayImportTest, decimal32) {
   testImportDecimal32();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, timestampUtc) {
+TEST_P(ArrowBridgeArrayImportTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, withoutNullsBuffer) {
+TEST_P(ArrowBridgeArrayImportTest, withoutNullsBuffer) {
   std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
   testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
   testImportWithoutNullsBuffer<Timestamp>(inputValues, "tsn:");
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, string) {
+TEST_P(ArrowBridgeArrayImportTest, string) {
   testImportString();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, string64) {
+TEST_P(ArrowBridgeArrayImportTest, string64) {
   testImportString64();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, stringview) {
+TEST_P(ArrowBridgeArrayImportTest, stringview) {
   testImportStringView();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, fixedSizeBinary) {
+TEST_P(ArrowBridgeArrayImportTest, fixedSizeBinary) {
   testImportFixedSizeBinary();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, nullType) {
+TEST_P(ArrowBridgeArrayImportTest, nullType) {
   testImportNullType(4);
   testImportNullType(-1);
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, row) {
+TEST_P(ArrowBridgeArrayImportTest, row) {
   testImportRow();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, array) {
+TEST_P(ArrowBridgeArrayImportTest, array) {
   testImportArray();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, map) {
+TEST_P(ArrowBridgeArrayImportTest, map) {
   testImportMap();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, booleanValuesSize) {
+TEST_P(ArrowBridgeArrayImportTest, booleanValuesSize) {
   testImportBooleanValuesSize();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionary) {
+TEST_P(ArrowBridgeArrayImportTest, dictionary) {
   testImportDictionary();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionaryEncodedNullType) {
+TEST_P(ArrowBridgeArrayImportTest, dictionaryEncodedNullType) {
   testImportDictionaryEncodedNullType();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, ree) {
+TEST_P(ArrowBridgeArrayImportTest, ree) {
   testImportREE();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, failures) {
+TEST_P(ArrowBridgeArrayImportTest, failures) {
   testImportFailures();
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    ArrowBridgeArrayImportTest,
+    ArrowBridgeArrayImportTest,
+    testing::Bool(),
+    [](const testing::TestParamInfo<bool>& info) {
+      return info.param ? "viewer" : "owner";
+    });
+
+// The tests below are for one import function and call it directly.
+using ArrowBridgeArrayImportAsViewerTest = ArrowBridgeArrayExportTest;
 
 // Verify that importing a Utf8View array with an out-of-bounds buffer index
 // in a non-inline string view throws instead of reading past the buffers
@@ -3193,91 +3196,7 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, utf8ViewOobBufferIndex) {
       "Arrow Utf8View buffer index out of range");
 }
 
-class ArrowBridgeArrayImportAsOwnerTest
-    : public ArrowBridgeArrayImportAsViewerTest {
-  bool isViewer() const override {
-    return false;
-  }
-
-  VectorPtr importFromArrow(
-      ArrowSchema& arrowSchema,
-      ArrowArray& arrowArray,
-      memory::MemoryPool* pool) override {
-    return facebook::velox::importFromArrowAsOwner(
-        arrowSchema, arrowArray, pool);
-  }
-};
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, scalar) {
-  testImportScalar();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, decimal32) {
-  testImportDecimal32();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, timestampUtc) {
-  testTimestampUtcRoundtrip();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, withoutNullsBuffer) {
-  std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
-  testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
-  testImportWithoutNullsBuffer<Timestamp>(inputValues, "tsn:");
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, string) {
-  testImportString();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, string64) {
-  testImportString64();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, stringview) {
-  testImportStringView();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, fixedSizeBinary) {
-  testImportFixedSizeBinary();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, nullType) {
-  testImportNullType(4);
-  testImportNullType(-1);
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, row) {
-  testImportRow();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, array) {
-  testImportArray();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, map) {
-  testImportMap();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, booleanValuesSize) {
-  testImportBooleanValuesSize();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionary) {
-  testImportDictionary();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionaryEncodedNullType) {
-  testImportDictionaryEncodedNullType();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, ree) {
-  testImportREE();
-}
-
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, failures) {
-  testImportFailures();
-}
+using ArrowBridgeArrayImportAsOwnerTest = ArrowBridgeArrayExportTest;
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, inputsMarkedReleased) {
   const int32_t values[] = {1, 2, 3, 4};
