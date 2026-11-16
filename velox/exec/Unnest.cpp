@@ -17,9 +17,23 @@
 #include "velox/exec/Unnest.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/exec/OperatorType.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
+// Entries of a flat map unnest channel, built over the base rows of the
+// decoded vector so that the decoded indices map onto them as they do onto a
+// MapVector. The entries of a row are in ascending key channel order.
+struct FlatMapEntries {
+  const FlatMapVector* flatMap{nullptr};
+  BufferPtr sizes;
+  BufferPtr offsets;
+  // Key channel of each entry.
+  BufferPtr channels;
+  // Base row of each entry.
+  BufferPtr rows;
+};
+
 namespace {
 #ifndef NDEBUG
 void debugCheckOutput(const RowVectorPtr& output) {
@@ -30,6 +44,150 @@ void debugCheckOutput(const RowVectorPtr& output) {
 #else
 void debugCheckOutput(const RowVectorPtr& output) {}
 #endif
+
+// Builds the entries of a flat map unnest channel.
+std::unique_ptr<FlatMapEntries> makeFlatMapEntries(
+    const DecodedVector& decoded,
+    vector_size_t numRows,
+    memory::MemoryPool* pool) {
+  const auto* flatMap = decoded.base()->asUnchecked<FlatMapVector>();
+  const auto numBaseRows = flatMap->size();
+  const auto numKeys = flatMap->numDistinctKeys();
+
+  SelectivityVector baseRows(numBaseRows, false);
+  for (vector_size_t row = 0; row < numRows; ++row) {
+    if (!decoded.isNullAt(row)) {
+      baseRows.setValid(decoded.index(row), true);
+    }
+  }
+  baseRows.updateBounds();
+
+  const auto forEachEntry = [&](column_index_t keyChannel, auto func) {
+    const auto* rawInMap = flatMap->rawInMapsAt(keyChannel);
+    if (rawInMap == nullptr) {
+      baseRows.applyToSelected(func);
+      return;
+    }
+    bits::forEachSetBit(
+        rawInMap, baseRows.begin(), baseRows.end(), [&](vector_size_t row) {
+          if (baseRows.isValid(row)) {
+            func(row);
+          }
+        });
+  };
+
+  auto sizes = allocateSizes(numBaseRows, pool);
+  auto* rawSizes = sizes->asMutable<vector_size_t>();
+  vector_size_t numKeysInAllRows{0};
+  for (column_index_t keyChannel = 0; keyChannel < numKeys; ++keyChannel) {
+    bool hasEntries{false};
+    if (flatMap->rawInMapsAt(keyChannel) == nullptr) {
+      ++numKeysInAllRows;
+      hasEntries = baseRows.hasSelections();
+    } else {
+      forEachEntry(keyChannel, [&](vector_size_t row) {
+        ++rawSizes[row];
+        hasEntries = true;
+      });
+    }
+    if (hasEntries) {
+      VELOX_CHECK_NOT_NULL(
+          flatMap->mapValuesAt(keyChannel),
+          "Flat map has no values for a key present in a map. Key channel: {}",
+          keyChannel);
+    }
+  }
+  if (numKeysInAllRows > 0) {
+    baseRows.applyToSelected(
+        [&](vector_size_t row) { rawSizes[row] += numKeysInAllRows; });
+  }
+
+  auto offsets = allocateOffsets(numBaseRows, pool);
+  auto* rawOffsets = offsets->asMutable<vector_size_t>();
+  vector_size_t numEntries{0};
+  for (vector_size_t row = 0; row < numBaseRows; ++row) {
+    rawOffsets[row] = numEntries;
+    numEntries += rawSizes[row];
+  }
+
+  auto channels = AlignedBuffer::allocate<column_index_t>(numEntries, pool);
+  auto* rawChannels = channels->asMutable<column_index_t>();
+  auto rows = allocateIndices(numEntries, pool);
+  auto* rawRows = rows->asMutable<vector_size_t>();
+  std::fill(rawSizes, rawSizes + numBaseRows, 0);
+  for (column_index_t keyChannel = 0; keyChannel < numKeys; ++keyChannel) {
+    forEachEntry(keyChannel, [&](vector_size_t row) {
+      const auto entry = rawOffsets[row] + rawSizes[row]++;
+      rawChannels[entry] = keyChannel;
+      rawRows[entry] = row;
+    });
+  }
+
+  return std::make_unique<FlatMapEntries>(FlatMapEntries{
+      flatMap,
+      std::move(sizes),
+      std::move(offsets),
+      std::move(channels),
+      std::move(rows),
+  });
+}
+
+// Returns the keys or the values of the flat map entries the indices and nulls
+// select. Keys are a dictionary over the distinct keys, and values are copied.
+VectorPtr flatMapChild(
+    const FlatMapEntries& entries,
+    uint32_t sourceChildIndex,
+    const BufferPtr& indices,
+    const BufferPtr& nulls,
+    vector_size_t size,
+    memory::MemoryPool* pool) {
+  const auto* flatMap = entries.flatMap;
+  const auto* rawEntryIndices = indices->as<vector_size_t>();
+  const auto* rawNulls = nulls->as<uint64_t>();
+  const auto* rawChannels = entries.channels->as<column_index_t>();
+
+  if (sourceChildIndex == 0) {
+    if (flatMap->numDistinctKeys() == 0) {
+      return BaseVector::createNullConstant(flatMap->keyType(), size, pool);
+    }
+    auto keyIndices = allocateIndices(size, pool);
+    auto* rawKeyIndices = keyIndices->asMutable<vector_size_t>();
+    for (vector_size_t i = 0; i < size; ++i) {
+      if (!bits::isBitNull(rawNulls, i)) {
+        rawKeyIndices[i] = rawChannels[rawEntryIndices[i]];
+      }
+    }
+    return BaseVector::wrapInDictionary(
+        nulls, keyIndices, size, flatMap->distinctKeys());
+  }
+
+  const auto* rawRows = entries.rows->as<vector_size_t>();
+  auto values = BaseVector::create(flatMap->valueType(), size, pool);
+  std::vector<std::vector<BaseVector::CopyRange>> keyRanges(
+      flatMap->numDistinctKeys());
+  for (vector_size_t i = 0; i < size; ++i) {
+    if (bits::isBitNull(rawNulls, i)) {
+      values->setNull(i, true);
+      continue;
+    }
+    const auto entry = rawEntryIndices[i];
+    const BaseVector::CopyRange range{rawRows[entry], i, 1};
+    auto& ranges = keyRanges[rawChannels[entry]];
+    if (!ranges.empty() && ranges.back().mergeable(range)) {
+      ++ranges.back().count;
+    } else {
+      ranges.push_back(range);
+    }
+  }
+  for (column_index_t keyChannel = 0; keyChannel < keyRanges.size();
+       ++keyChannel) {
+    if (!keyRanges[keyChannel].empty()) {
+      values->copyRanges(
+          flatMap->mapValuesAt(keyChannel).get(), keyRanges[keyChannel]);
+    }
+  }
+  return values;
+}
 } // namespace
 
 Unnest::Unnest(
@@ -78,6 +236,7 @@ Unnest::Unnest(
     }
   }
   unnestDecoded_.resize(unnestVariables.size());
+  flatMapEntries_.resize(unnestVariables.size());
 
   column_index_t checkOutputChannel = outputType_->size() - 1;
   if (withMarker_) {
@@ -100,6 +259,8 @@ Unnest::Unnest(
         inputType->getChildIdx(variable->name()), outputChannel++);
   }
 }
+
+Unnest::~Unnest() = default;
 
 void Unnest::addInput(RowVectorPtr input) {
   input_ = std::move(input);
@@ -125,6 +286,7 @@ void Unnest::addInput(RowVectorPtr input) {
     currentDecoded.decode(*unnestVector);
 
     rawIndices_[channel] = currentDecoded.indices();
+    flatMapEntries_[channel].reset();
 
     if (unnestVector->typeKind() == TypeKind::ARRAY) {
       const auto* unnestBaseArray = currentDecoded.base()->as<ArrayVector>();
@@ -133,10 +295,23 @@ void Unnest::addInput(RowVectorPtr input) {
       rawOffsets_[channel] = unnestBaseArray->rawOffsets();
     } else {
       VELOX_CHECK_EQ(unnestVector->typeKind(), TypeKind::MAP);
-      const auto* unnestBaseMap = currentDecoded.base()->as<MapVector>();
-      VELOX_CHECK_NOT_NULL(unnestBaseMap);
-      rawSizes_[channel] = unnestBaseMap->rawSizes();
-      rawOffsets_[channel] = unnestBaseMap->rawOffsets();
+      const auto encoding = currentDecoded.base()->encoding();
+      if (encoding == VectorEncoding::Simple::FLAT_MAP) {
+        flatMapEntries_[channel] =
+            makeFlatMapEntries(currentDecoded, size, pool());
+        rawSizes_[channel] =
+            flatMapEntries_[channel]->sizes->as<vector_size_t>();
+        rawOffsets_[channel] =
+            flatMapEntries_[channel]->offsets->as<vector_size_t>();
+      } else {
+        const auto* unnestBaseMap = currentDecoded.base()->as<MapVector>();
+        VELOX_CHECK_NOT_NULL(
+            unnestBaseMap,
+            "Unsupported vector encoding for unnest: {}",
+            encoding);
+        rawSizes_[channel] = unnestBaseMap->rawSizes();
+        rawOffsets_[channel] = unnestBaseMap->rawOffsets();
+      }
     }
 
     // Count max number of elements per row.
@@ -199,6 +374,9 @@ void Unnest::finishInput() {
   input_ = nullptr;
   nextInputRow_ = 0;
   firstInnerRowStart_ = 0;
+  for (auto& entries : flatMapEntries_) {
+    entries.reset();
+  }
 }
 
 Unnest::RowRange Unnest::extractRowRange(vector_size_t inputSize) const {
@@ -458,9 +636,19 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
     }
     VELOX_CHECK(encodedChannel.has_value());
     VELOX_CHECK(encoding.has_value());
-    outputs[outputColumnIndex++] = encoding->wrap(
-        unnestChild(outputColumn.channel, outputColumn.sourceChildIndex),
-        range.numInnerRows);
+    if (flatMapEntries_[outputColumn.channel] != nullptr) {
+      outputs[outputColumnIndex++] = flatMapChild(
+          *flatMapEntries_[outputColumn.channel],
+          outputColumn.sourceChildIndex,
+          encoding->indices,
+          encoding->nulls,
+          range.numInnerRows,
+          pool());
+    } else {
+      outputs[outputColumnIndex++] = encoding->wrap(
+          unnestChild(outputColumn.channel, outputColumn.sourceChildIndex),
+          range.numInnerRows);
+    }
   }
 
   // 'Ordinality' and 'EmptyUnnestValue' columns are always at the end.

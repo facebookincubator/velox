@@ -28,6 +28,7 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
 using facebook::velox::functions::sparksql::SparkQueryConfig;
+using facebook::velox::test::assertEqualVectors;
 
 class UnnestTest : public HiveConnectorTestBase,
                    public testing::WithParamInterface<vector_size_t> {
@@ -47,6 +48,33 @@ class UnnestTest : public HiveConnectorTestBase,
     params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] =
         std::to_string(batchSize_);
     return params;
+  }
+
+  RowVectorPtr copyUnnestResults(const core::PlanNodePtr& plan) {
+    return AssertQueryBuilder(plan)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows,
+            std::to_string(batchSize_))
+        .copyResults(pool());
+  }
+
+  // Key channels are 30, 10, 20, 40, in the order the keys are first seen.
+  FlatMapVectorPtr makeTestFlatMap() {
+    return makeFlatMapVector<int32_t, int64_t>({
+        {{30, 300}, {10, 100}},
+        {{20, 201}, {10, 101}, {30, 301}},
+        {{20, 202}},
+        {{10, 103}, {40, 403}},
+    });
+  }
+
+  BufferPtr makeInMap(const std::vector<bool>& inMap) {
+    auto buffer = AlignedBuffer::allocate<bool>(inMap.size(), pool(), false);
+    auto* rawInMap = buffer->asMutable<uint64_t>();
+    for (vector_size_t row = 0; row < inMap.size(); ++row) {
+      bits::setBit(rawInMap, row, inMap[row]);
+    }
+    return buffer;
   }
 
   const vector_size_t batchSize_{GetParam()};
@@ -750,6 +778,431 @@ TEST_P(UnnestTest, mapWithMarker) {
     auto params = makeCursorParameters(op);
     assertQuery(params, testData.expected);
   }
+}
+
+TEST_P(UnnestTest, flatMap) {
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeTestFlatMap(),
+  });
+  const auto plan =
+      PlanBuilder().values({input}).unnest({"c0"}, {"c1"}).planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2, 2, 3, 4, 4}),
+          makeFlatVector<int32_t>({30, 10, 30, 10, 20, 20, 10, 40}),
+          makeFlatVector<int64_t>({300, 100, 301, 101, 201, 202, 103, 403}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapWithNulls) {
+  const auto flatMap = makeNullableFlatMapVector<int32_t, int64_t>({
+      {{{10, 1}, {20, std::nullopt}}},
+      std::nullopt,
+      common::testutil::optionalEmpty,
+      {{{20, 4}}},
+  });
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      flatMap,
+  });
+  const auto plan =
+      PlanBuilder().values({input}).unnest({"c0"}, {"c1"}).planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v"},
+      {
+          makeFlatVector<int64_t>({1, 1, 4}),
+          makeFlatVector<int32_t>({10, 20, 20}),
+          makeNullableFlatVector<int64_t>({1, std::nullopt, 4}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapWithOrdinality) {
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeTestFlatMap(),
+  });
+  const auto plan = PlanBuilder()
+                        .values({input})
+                        .unnest({"c0"}, {"c1"}, "ordinal")
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v", "ordinal"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2, 2, 3, 4, 4}),
+          makeFlatVector<int32_t>({30, 10, 30, 10, 20, 20, 10, 40}),
+          makeFlatVector<int64_t>({300, 100, 301, 101, 201, 202, 103, 403}),
+          makeFlatVector<int64_t>({1, 2, 1, 2, 3, 1, 1, 2}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapWithMarker) {
+  const auto flatMap = makeNullableFlatMapVector<int32_t, int64_t>({
+      {{{10, 1}, {20, std::nullopt}}},
+      common::testutil::optionalEmpty,
+      std::nullopt,
+      {{{20, 4}}},
+  });
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      flatMap,
+  });
+  const auto plan = PlanBuilder()
+                        .values({input})
+                        .unnest({"c0"}, {"c1"}, "ordinal", "marker")
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v", "ordinal", "marker"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 3, 4}),
+          makeNullableFlatVector<int32_t>(
+              {10, 20, std::nullopt, std::nullopt, 20}),
+          makeNullableFlatVector<int64_t>(
+              {1, std::nullopt, std::nullopt, std::nullopt, 4}),
+          makeFlatVector<int64_t>({1, 2, 0, 0, 1}),
+          makeFlatVector<bool>({true, true, false, false, true}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapDictionary) {
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      BaseVector::wrapInDictionary(
+          makeNulls({false, false, true, false}),
+          makeIndices({3, 0, 2, 0}),
+          4,
+          makeTestFlatMap()),
+  });
+  const auto plan =
+      PlanBuilder().values({input}).unnest({"c0"}, {"c1"}).planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2, 4, 4}),
+          makeFlatVector<int32_t>({10, 40, 30, 10, 30, 10}),
+          makeFlatVector<int64_t>({103, 403, 300, 100, 300, 100}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapConstant) {
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      BaseVector::wrapInConstant(3, 1, makeTestFlatMap()),
+  });
+  const auto plan =
+      PlanBuilder().values({input}).unnest({"c0"}, {"c1"}).planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v"},
+      {
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2, 2, 3, 3, 3}),
+          makeFlatVector<int32_t>({30, 10, 20, 30, 10, 20, 30, 10, 20}),
+          makeFlatVector<int64_t>(
+              {301, 101, 201, 301, 101, 201, 301, 101, 201}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapSliced) {
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeTestFlatMap()->slice(1, 2),
+  });
+  const auto plan =
+      PlanBuilder().values({input}).unnest({"c0"}, {"c1"}).planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v"},
+      {
+          makeFlatVector<int64_t>({1, 1, 1, 2}),
+          makeFlatVector<int32_t>({30, 10, 20, 20}),
+          makeFlatVector<int64_t>({301, 101, 201, 202}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapNestedValues) {
+  const auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(INTEGER(), MAP(BIGINT(), REAL())),
+      nullptr,
+      3,
+      makeFlatVector<int32_t>({7, 3}),
+      std::vector<VectorPtr>{
+          makeMapVector<int64_t, float>({{{1, 1.5}}, {}, {{2, 2.5}, {3, 3.5}}}),
+          makeMapVector<int64_t, float>({{{10, 10.5}}, {{99, 9.5}}, {}}),
+      },
+      std::vector<BufferPtr>{nullptr, makeInMap({true, false, true})});
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      flatMap,
+  });
+
+  const auto plan = PlanBuilder()
+                        .values({input})
+                        .unnest({"c0"}, {"c1"})
+                        .unnest({"c0", "c1_k"}, {"c1_v"})
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v_k", "c1_v_v"},
+      {
+          makeFlatVector<int64_t>({1, 1, 3, 3}),
+          makeFlatVector<int32_t>({7, 3, 7, 7}),
+          makeFlatVector<int64_t>({1, 10, 2, 3}),
+          makeFlatVector<float>({1.5, 10.5, 2.5, 3.5}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapMixedChannels) {
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatMapVector<int32_t, int64_t>({
+          {{30, 300}, {10, 100}},
+          {{20, 201}},
+          {},
+      }),
+      makeMapVector<int32_t, double>({
+          {{1, 1.5}},
+          {{2, 2.5}, {3, 3.5}},
+          {{4, 4.5}},
+      }),
+      makeArrayVector<int32_t>({{100, 101, 102}, {}, {103}}),
+  });
+  const auto plan = PlanBuilder()
+                        .values({input})
+                        .unnest({"c0"}, {"c1", "c2", "c3"})
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v", "c2_k", "c2_v", "c3_e"},
+      {
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2, 3}),
+          makeNullableFlatVector<int32_t>(
+              {30, 10, std::nullopt, 20, std::nullopt, std::nullopt}),
+          makeNullableFlatVector<int64_t>(
+              {300, 100, std::nullopt, 201, std::nullopt, std::nullopt}),
+          makeNullableFlatVector<int32_t>(
+              {1, std::nullopt, std::nullopt, 2, 3, 4}),
+          makeNullableFlatVector<double>(
+              {1.5, std::nullopt, std::nullopt, 2.5, 3.5, 4.5}),
+          makeNullableFlatVector<int32_t>(
+              {100, 101, 102, std::nullopt, std::nullopt, 103}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapPruned) {
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeTestFlatMap(),
+  });
+  const auto keys = makeFlatVector<int32_t>({30, 10, 30, 10, 20, 20, 10, 40});
+  const auto values =
+      makeFlatVector<int64_t>({300, 100, 301, 101, 201, 202, 103, 403});
+  const auto replicated = makeFlatVector<int64_t>({1, 1, 2, 2, 2, 3, 4, 4});
+
+  {
+    const auto plan =
+        PlanBuilder()
+            .values({input})
+            .unnest(
+                {"c0"},
+                {"c1"},
+                std::vector<std::optional<std::string>>{"c1_k", std::nullopt})
+            .planNode();
+    const auto expected = makeRowVector({"c0", "c1_k"}, {replicated, keys});
+    assertEqualVectors(expected, copyUnnestResults(plan));
+  }
+
+  {
+    const auto plan =
+        PlanBuilder()
+            .values({input})
+            .unnest(
+                {"c0"},
+                {"c1"},
+                std::vector<std::optional<std::string>>{std::nullopt, "c1_v"})
+            .planNode();
+    const auto expected = makeRowVector({"c0", "c1_v"}, {replicated, values});
+    assertEqualVectors(expected, copyUnnestResults(plan));
+  }
+
+  {
+    const auto plan = PlanBuilder()
+                          .values({input})
+                          .unnest(
+                              {"c0"},
+                              {"c1"},
+                              std::vector<std::optional<std::string>>{
+                                  std::nullopt, std::nullopt})
+                          .planNode();
+    const auto expected = makeRowVector({"c0"}, {replicated});
+    assertEqualVectors(expected, copyUnnestResults(plan));
+  }
+}
+
+TEST_P(UnnestTest, flatMapNoKeys) {
+  const auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(INTEGER(), BIGINT()),
+      makeNulls({false, true, false}),
+      3,
+      nullptr,
+      std::vector<VectorPtr>{},
+      std::vector<BufferPtr>{});
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      flatMap,
+  });
+
+  {
+    const auto plan =
+        PlanBuilder().values({input}).unnest({"c0"}, {"c1"}).planNode();
+    ASSERT_EQ(copyUnnestResults(plan)->size(), 0);
+  }
+
+  {
+    const auto plan = PlanBuilder()
+                          .values({input})
+                          .unnest({"c0"}, {"c1"}, "ordinal", "marker")
+                          .planNode();
+    const auto expected = makeRowVector(
+        {"c0", "c1_k", "c1_v", "ordinal", "marker"},
+        {
+            makeFlatVector<int64_t>({1, 2, 3}),
+            makeNullConstant(TypeKind::INTEGER, 3),
+            makeNullConstant(TypeKind::BIGINT, 3),
+            makeFlatVector<int64_t>({0, 0, 0}),
+            makeFlatVector<bool>({false, false, false}),
+        });
+    assertEqualVectors(expected, copyUnnestResults(plan));
+  }
+}
+
+TEST_P(UnnestTest, flatMapDictionaryKeys) {
+  const auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(INTEGER(), BIGINT()),
+      nullptr,
+      2,
+      wrapInDictionary(
+          makeIndices({2, 0, 1}), makeFlatVector<int32_t>({10, 20, 30})),
+      std::vector<VectorPtr>{
+          makeFlatVector<int64_t>({300, 301}),
+          makeFlatVector<int64_t>({100, 101}),
+          makeFlatVector<int64_t>({200, 201}),
+      },
+      std::vector<BufferPtr>{nullptr, nullptr, makeInMap({false, true})});
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      flatMap,
+  });
+  const auto plan =
+      PlanBuilder().values({input}).unnest({"c0"}, {"c1"}).planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2, 2}),
+          makeFlatVector<int32_t>({30, 10, 30, 10, 20}),
+          makeFlatVector<int64_t>({300, 100, 301, 101, 201}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
+}
+
+TEST_P(UnnestTest, flatMapMissingValues) {
+  {
+    const auto flatMap = std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(INTEGER(), BIGINT()),
+        nullptr,
+        2,
+        makeFlatVector<int32_t>({10, 30}),
+        std::vector<VectorPtr>{makeFlatVector<int64_t>({100, 101}), nullptr},
+        std::vector<BufferPtr>{nullptr, makeInMap({false, false})});
+    const auto input = makeRowVector({
+        makeFlatVector<int64_t>({1, 2}),
+        flatMap,
+    });
+    const auto plan =
+        PlanBuilder().values({input}).unnest({"c0"}, {"c1"}).planNode();
+    const auto expected = makeRowVector(
+        {"c0", "c1_k", "c1_v"},
+        {
+            makeFlatVector<int64_t>({1, 2}),
+            makeFlatVector<int32_t>({10, 10}),
+            makeFlatVector<int64_t>({100, 101}),
+        });
+    assertEqualVectors(expected, copyUnnestResults(plan));
+  }
+
+  {
+    const auto flatMap = std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(INTEGER(), BIGINT()),
+        nullptr,
+        2,
+        makeFlatVector<int32_t>({10, 30}),
+        std::vector<VectorPtr>{makeFlatVector<int64_t>({100, 101}), nullptr},
+        std::vector<BufferPtr>{nullptr, makeInMap({false, true})});
+    const auto input = makeRowVector({
+        makeFlatVector<int64_t>({1, 2}),
+        flatMap,
+    });
+    const auto plan =
+        PlanBuilder().values({input}).unnest({"c0"}, {"c1"}).planNode();
+    VELOX_ASSERT_THROW(
+        copyUnnestResults(plan),
+        "Flat map has no values for a key present in a map. Key channel: 1");
+  }
+}
+
+TEST_P(UnnestTest, flatMapInsertionOrder) {
+  const auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(VARCHAR(), BIGINT()),
+      nullptr,
+      3,
+      makeFlatVector<std::string>({"b", "a", "c"}),
+      std::vector<VectorPtr>{
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeConstant<int64_t>(7, 3),
+          makeNullableFlatVector<int64_t>({std::nullopt, 5, 6}),
+      },
+      std::vector<BufferPtr>{});
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      flatMap,
+  });
+  const auto plan = PlanBuilder()
+                        .values({input})
+                        .unnest({"c0"}, {"c1"}, "ordinal")
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {"c0", "c1_k", "c1_v", "ordinal"},
+      {
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2, 2, 3, 3, 3}),
+          makeFlatVector<std::string>(
+              {"b", "a", "c", "b", "a", "c", "b", "a", "c"}),
+          makeNullableFlatVector<int64_t>(
+              {1, 7, std::nullopt, 2, 7, 5, 3, 7, 6}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3, 1, 2, 3}),
+      });
+  assertEqualVectors(expected, copyUnnestResults(plan));
 }
 
 TEST_P(UnnestTest, multipleColumns) {
