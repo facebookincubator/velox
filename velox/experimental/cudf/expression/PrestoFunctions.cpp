@@ -326,7 +326,8 @@ void registerPrestoFunctions(const std::string& prefix) {
       prefix + "element_at",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<ConstantMapElementAtFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -337,13 +338,16 @@ void registerPrestoFunctions(const std::string& prefix) {
            .argumentType("K")
            .build()},
       true,
-      ConstantMapElementAtFunction::canEvaluate);
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
+        return ConstantMapElementAtFunction::canEvaluate(expr);
+      });
 
   registerCudfFunction(
       prefix + "contains",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
         return std::make_shared<ConstantArrayContainsFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -353,7 +357,9 @@ void registerPrestoFunctions(const std::string& prefix) {
            .argumentType("T")
            .build()},
       true,
-      ConstantArrayContainsFunction::canEvaluate);
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
+        return ConstantArrayContainsFunction::canEvaluate(expr);
+      });
 
   registerCudfFunction(
       prefix + "array_join",
