@@ -40,6 +40,7 @@
 #include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
@@ -125,6 +126,40 @@ class StreamReaderTest : public ::testing::Test {
       stream.append(segment);
     }
     return stream;
+  }
+
+  // Encodes the alphabet indices of the rows of a shared dictionary into one
+  // chunk. The alphabet is not part of the chunk.
+  template <typename T>
+  std::string encodeSharedDictionaryChunk(
+      const std::vector<uint32_t>& indices) {
+    Buffer buffer{*pool_};
+    const auto encoded = SharedDictionaryEncoding<T>::encode(
+        indices,
+        [](DataType dataType) {
+          const ManualEncodingSelectionPolicyFactory factory{
+              {{EncodingType::Trivial, 1.0}}, std::nullopt};
+          return factory.createPolicy(dataType);
+        },
+        buffer);
+    ChunkedStreamWriter writer{buffer};
+    std::string stream;
+    for (const auto segment : writer.encode(encoded)) {
+      stream.append(segment);
+    }
+    return stream;
+  }
+
+  template <typename T>
+  std::shared_ptr<const SharedDictionaryAlphabet> makeAlphabet(
+      const std::vector<T>& values) {
+    Buffer buffer{*pool_};
+    auto encoded =
+        std::make_shared<const std::string>(SharedDictionaryAlphabet::encode<T>(
+            values, std::array{EncodingType::Trivial}, buffer));
+    const std::string_view encodedAlphabet{*encoded};
+    return SharedDictionaryAlphabet::create(
+        encodedAlphabet, std::move(encoded), pool_.get());
   }
 
   void runRead(
@@ -984,6 +1019,139 @@ TEST_F(StreamReaderTest, rebindsStreamsWithBufferPoolOfEachStripe) {
   EXPECT_EQ(firstPool.size(), numScratchBuffers);
 }
 
+TEST_F(StreamReaderTest, readsSharedDictionaryStreamsWithTheirAlphabets) {
+  // The descriptor offsets differ from the indices of the streams, which key
+  // the alphabets.
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{4, ScalarKind::Bool},
+      std::vector<std::string>{"id", "name"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{6, ScalarKind::Int64}),
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{9, ScalarKind::String}),
+      });
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  const auto outputType =
+      velox::ROW({{"id", velox::BIGINT()}, {"name", velox::VARCHAR()}});
+  const auto readStripe = [&](std::span<const std::string_view> streams,
+                              StreamReader::SharedDictionaryAlphabets alphabets,
+                              std::span<const RowRange> ranges,
+                              velox::vector_size_t numRows) {
+    auto output = velox::BaseVector::create(outputType, numRows, pool_.get());
+    reader.setStreams(streams, alphabets, /*options=*/{});
+    // The map holds the only other references to the alphabets, so the read
+    // checks that the views of the binding keep the alphabets they use.
+    alphabets.clear();
+    runRead(reader, ranges, /*outputOffset=*/0, output);
+    reader.reset();
+    const auto* row = output->as<velox::RowVector>();
+    NIMBLE_CHECK_NOT_NULL(row);
+    std::vector<std::pair<int64_t, std::string>> rows;
+    for (velox::vector_size_t i{0}; i < numRows; ++i) {
+      rows.emplace_back(
+          row->childAt(0)->asFlatVector<int64_t>()->valueAt(i),
+          row->childAt(1)->asFlatVector<velox::StringView>()->valueAt(i).str());
+    }
+    return std::pair{std::move(output), std::move(rows)};
+  };
+
+  // Names longer than an inline StringView check that the output keeps its
+  // own copy of the strings and not views into the alphabet.
+  const auto firstIds = encodeSharedDictionaryChunk<int64_t>({0, 2, 1, 2});
+  const auto firstNames =
+      encodeSharedDictionaryChunk<std::string_view>({1, 0, 1, 2});
+  const std::array<std::string_view, 3> firstStreams{
+      std::string_view{}, firstIds, firstNames};
+  auto [firstOutput, firstRows] = readStripe(
+      firstStreams,
+      {
+          {1, makeAlphabet<int64_t>({100, 200, 300})},
+          {2,
+           makeAlphabet<std::string_view>({
+               "first_name_of_alphabet",
+               "second_name_of_alphabet",
+               "third_name_of_alphabet",
+           })},
+      },
+      std::array<RowRange, 2>{{{1, 2}, {3, 4}}},
+      2);
+  EXPECT_THAT(
+      firstRows,
+      testing::ElementsAre(
+          std::pair<int64_t, std::string>{300, "first_name_of_alphabet"},
+          std::pair<int64_t, std::string>{300, "third_name_of_alphabet"}));
+
+  // A stripe dictionary differs from stripe to stripe, and a stream can use a
+  // shared dictionary in one stripe and its own encoding in another. The
+  // second stripe has the same presence pattern, so it rebinds the decoders of
+  // the first, which must take the alphabets of the second binding. The names
+  // of the second stripe are not dictionary encoded, so their alphabet is
+  // ignored.
+  const auto secondIds = encodeSharedDictionaryChunk<int64_t>({2, 2, 0, 1});
+  const auto secondNames = encodeChunk<std::string_view>(
+      std::vector<std::string_view>{"p", "q", "r", "s"}, EncodingType::Trivial);
+  const std::array<std::string_view, 3> secondStreams{
+      std::string_view{}, secondIds, secondNames};
+  const auto [_, secondRows] = readStripe(
+      secondStreams,
+      {
+          {1, makeAlphabet<int64_t>({7, 8, 9})},
+          {2, makeAlphabet<std::string_view>({"unused"})},
+      },
+      std::array<RowRange, 1>{{{0, 4}}},
+      4);
+  EXPECT_THAT(
+      secondRows,
+      testing::ElementsAre(
+          std::pair<int64_t, std::string>{9, "p"},
+          std::pair<int64_t, std::string>{9, "q"},
+          std::pair<int64_t, std::string>{7, "r"},
+          std::pair<int64_t, std::string>{8, "s"}));
+
+  // The reader released the views of the first stripe, and with them its
+  // alphabets, so the output of the first stripe holds its strings on its own.
+  const auto* firstNamesOutput = firstOutput->as<velox::RowVector>()
+                                     ->childAt(1)
+                                     ->asFlatVector<velox::StringView>();
+  EXPECT_EQ(firstNamesOutput->valueAt(1).str(), "third_name_of_alphabet");
+}
+
+TEST_F(StreamReaderTest, rejectsAlphabetsFromBothMapAndOptions) {
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"mapped", "unmapped"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{1, ScalarKind::Int64}),
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{2, ScalarKind::Int64}),
+      });
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  const auto mapped = encodeSharedDictionaryChunk<int64_t>({0, 1});
+  const auto unmapped = encodeSharedDictionaryChunk<int64_t>({1, 0});
+  const std::array<std::string_view, 3> streams{
+      std::string_view{}, mapped, unmapped};
+
+  {
+    NIMBLE_ASSERT_USER_THROW(
+        reader.setStreams(
+            streams,
+            {{1, makeAlphabet<int64_t>({10, 20})}},
+            {.sharedDictionaryAlphabet = makeAlphabet<int64_t>({30, 40})}),
+        "Shared dictionary alphabets must come from the map or the options, not both");
+  }
+
+  // The mapped stream binds first, so the unmapped stream checks that the
+  // alphabet of the mapped stream does not stay in the options of the binding.
+  {
+    NIMBLE_ASSERT_USER_THROW(
+        reader.setStreams(
+            streams, {{1, makeAlphabet<int64_t>({10, 20})}}, /*options=*/{}),
+        "Shared dictionary encoding requires an alphabet.");
+  }
+}
+
 TEST_F(StreamReaderTest, decodesCompressedStreamChunk) {
   const std::string value(500, 'x');
   const std::vector<std::string_view> values(256, value);
@@ -1160,6 +1328,26 @@ TEST_F(StreamReaderTest, rejectsUnsupportedEncodingViews) {
   expectUnsupported(
       [&] { runRead(reader, streams, ranges, /*outputOffset=*/0, output); });
   expectUnsupported([&] { reader.setStreams(streams, /*options=*/{}); });
+}
+
+TEST_F(StreamReaderTest, rejectsSharedDictionaryStreamWithoutAlphabet) {
+  const auto stream = encodeSharedDictionaryChunk<int64_t>({0, 1});
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::Int64});
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  const std::array<std::string_view, 1> streams{stream};
+
+  NIMBLE_ASSERT_USER_THROW(
+      reader.setStreams(streams, /*options=*/{}),
+      "Shared dictionary encoding requires an alphabet.");
+
+  // An alphabet keyed by another stream does not serve this one.
+  NIMBLE_ASSERT_USER_THROW(
+      reader.setStreams(
+          streams,
+          {{1, makeAlphabet<int64_t>({10, 20})}},
+          /*options=*/{}),
+      "Shared dictionary encoding requires an alphabet.");
 }
 
 TEST_F(StreamReaderTest, readsNewStreamsAcrossCalls) {

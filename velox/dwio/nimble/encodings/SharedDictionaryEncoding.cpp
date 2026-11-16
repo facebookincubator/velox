@@ -82,10 +82,14 @@ SharedDictionaryAlphabet::create(
   NIMBLE_CHECK_NOT_NULL(encodedAlphabetOwner);
   NIMBLE_CHECK_FILE(
       !encodedAlphabet.empty(), "Shared dictionary alphabet is empty.");
+
+  // The alphabet serves every read of the streams bound to it for as long as
+  // the reader keeps it, so its view builds lookup structures once, such as
+  // the offsets of string entries, instead of for each lookup.
   auto alphabet =
       std::shared_ptr<SharedDictionaryAlphabet>{new SharedDictionaryAlphabet{
           encodedAlphabet,
-          Encoding::Options{},
+          Encoding::Options{.cacheEncodingView = true},
           std::move(encodedAlphabetOwner),
           pool}};
   NIMBLE_CHECK_GT(
