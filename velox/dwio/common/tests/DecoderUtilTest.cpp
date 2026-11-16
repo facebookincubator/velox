@@ -459,7 +459,7 @@ TEST_F(DecoderUtilTest, fixedWidthScanSmallintAtEndOfMapping) {
       NoHook noHook;
       int32_t numValues = 0;
       fixedWidthScan<int16_t, false, false>(
-          {rows.data(), numRows},
+          folly::Range<const int32_t*>(rows.data(), numRows),
           nullptr,
           values.data(),
           hits.data(),
