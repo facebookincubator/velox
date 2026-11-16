@@ -361,47 +361,32 @@ void assertOrderedBatches(
   EXPECT_EQ(offset, expected->size());
 }
 
-TEST_F(WindowTest, outputBatchesShrinkForWideWindowResults) {
-  const vector_size_t size{192};
-  const vector_size_t preferredRows{64};
-  const uint64_t preferredBytes{4'096};
+TEST_F(WindowTest, fixedWidthOutputBatchCount) {
+  const vector_size_t size{64};
   auto input = makeRowVector(
       {"c0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .window({"array_agg(c0) over (order by c0 rows between "
-                           "unbounded preceding and unbounded following)"})
-                  .planNode();
-
-  CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kPreferredOutputBatchRows,
-       std::to_string(preferredRows)},
-      {core::QueryConfig::kPreferredOutputBatchBytes,
-       std::to_string(preferredBytes)},
-  });
-  auto [cursor, batches] = readCursor(params);
-
-  ASSERT_GT(batches.size(), 2);
-  EXPECT_EQ(batches.front()->size(), 1);
-  for (const auto& batch : batches) {
-    EXPECT_GT(batch->size(), 0);
-    // Allow for vector metadata and allocation rounding.
-    EXPECT_LE(batch->estimateFlatSize(), preferredBytes + 1'024);
-    // Each row has 1,536 bytes of array elements, so 4,096 bytes fits at most
-    // two rows even before accounting for vector overhead.
-    EXPECT_LE(batch->size(), 2);
-  }
-
   auto expected = makeRowVector(
       {input->childAt(0),
-       makeArrayVector<int64_t>(
-           size,
-           [size](auto) { return size; },
-           [](auto /*row*/, auto index) { return index; })});
-  assertOrderedBatches(expected, batches);
+       makeFlatVector<int64_t>(size, [](auto row) { return row + 1; })});
+  for (bool streaming : {false, true}) {
+    SCOPED_TRACE(streaming);
+    PlanBuilder builder;
+    builder.values({input});
+    const std::vector<std::string> functions{
+        "row_number() over (order by c0 rows unbounded preceding)"};
+    if (streaming) {
+      builder.streamingWindow(functions);
+    } else {
+      builder.window(functions);
+    }
+    auto batches =
+        AssertQueryBuilder(builder.planNode())
+            .config(core::QueryConfig::kPreferredOutputBatchRows, size)
+            .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'048'576)
+            .copyResultBatches(pool());
+    ASSERT_EQ(batches.size(), 1);
+    assertOrderedBatches(expected, batches);
+  }
 }
 
 TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {

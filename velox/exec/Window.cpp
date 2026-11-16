@@ -107,7 +107,7 @@ void Window::initialize() {
   VELOX_CHECK_NOT_NULL(windowNode_);
   createWindowFunctions();
   createPeerAndFrameBuffers();
-  windowBuild_->setNumRowsPerOutput(maxBatchRows_);
+  windowBuild_->setNumRowsPerOutput(preferredOutputBatchRows_);
   windowNode_.reset();
 }
 
@@ -317,12 +317,29 @@ void Window::reclaim(
 void Window::createPeerAndFrameBuffers() {
   // Keep the buffer capacity and build threshold fixed. Output batches can
   // shrink based on the observed output row size.
-  maxBatchRows_ = outputBatchRows(windowBuild_->estimateRowSize());
+  const auto inputRowSize = windowBuild_->estimateRowSize();
+  preferredOutputBatchRows_ = outputBatchRows(inputRowSize);
+
+  // Seed fixed-width results from the input estimate when available. Before
+  // input arrives, fixed-width input columns also have a known row width.
+  auto rowSize = inputRowSize;
+  const auto firstColumn = rowSize.has_value() ? numInputColumns_ : 0;
+  for (auto column = firstColumn; column < outputType_->size(); ++column) {
+    const auto& type = outputType_->childAt(column);
+    if (!type->isFixedWidth()) {
+      rowSize.reset();
+      break;
+    }
+    rowSize = rowSize.value_or(0) + type->cppSizeInBytes();
+  }
+  nextBatchRows_ = rowSize.has_value()
+      ? std::min(preferredOutputBatchRows_, outputBatchRows(rowSize))
+      : 1;
 
   peerStartBuffer_ = AlignedBuffer::allocate<vector_size_t>(
-      maxBatchRows_, operatorCtx_->pool());
+      preferredOutputBatchRows_, operatorCtx_->pool());
   peerEndBuffer_ = AlignedBuffer::allocate<vector_size_t>(
-      maxBatchRows_, operatorCtx_->pool());
+      preferredOutputBatchRows_, operatorCtx_->pool());
 
   const auto numFuncs = windowFunctions_.size();
   frameStartBuffers_.reserve(numFuncs);
@@ -331,12 +348,12 @@ void Window::createPeerAndFrameBuffers() {
 
   for (auto i = 0; i < numFuncs; i++) {
     BufferPtr frameStartBuffer = AlignedBuffer::allocate<vector_size_t>(
-        maxBatchRows_, operatorCtx_->pool());
+        preferredOutputBatchRows_, operatorCtx_->pool());
     BufferPtr frameEndBuffer = AlignedBuffer::allocate<vector_size_t>(
-        maxBatchRows_, operatorCtx_->pool());
+        preferredOutputBatchRows_, operatorCtx_->pool());
     frameStartBuffers_.push_back(frameStartBuffer);
     frameEndBuffers_.push_back(frameEndBuffer);
-    validFrames_.push_back(SelectivityVector(maxBatchRows_));
+    validFrames_.push_back(SelectivityVector(preferredOutputBatchRows_));
   }
 }
 
@@ -760,14 +777,7 @@ RowVectorPtr Window::getOutput() {
     return nullptr;
   }
 
-  // Sample one output row before choosing a byte-based batch size. Input row
-  // widths cannot predict variable-width window results such as array_agg.
-  const auto numOutputRows = estimatedOutputRowSize_.has_value()
-      ? std::min(
-            {maxBatchRows_,
-             outputBatchRows(estimatedOutputRowSize_),
-             numRowsLeft})
-      : 1;
+  const auto numOutputRows = std::min(nextBatchRows_, numRowsLeft);
   auto result = BaseVector::create<RowVector>(
       outputType_, numOutputRows, operatorCtx_->pool());
 
@@ -776,20 +786,18 @@ RowVectorPtr Window::getOutput() {
   auto output = numResultRows < numOutputRows
       ? std::dynamic_pointer_cast<RowVector>(result->slice(0, numResultRows))
       : result;
-  updateEstimatedOutputRowSize(output);
+  updateNextBatchRows(output);
   return output;
 }
 
-void Window::updateEstimatedOutputRowSize(const RowVectorPtr& output) {
+void Window::updateNextBatchRows(const RowVectorPtr& output) {
   if (output->size() == 0) {
     return;
   }
 
-  const auto outputBytes = output->estimateFlatSize();
-  const auto averageRowSize = outputBytes / output->size();
-  if (averageRowSize > 0) {
-    estimatedOutputRowSize_ = averageRowSize;
-  }
+  nextBatchRows_ = std::min(
+      preferredOutputBatchRows_,
+      outputBatchRows(output->estimateFlatSize() / output->size()));
 }
 
 } // namespace facebook::velox::exec
