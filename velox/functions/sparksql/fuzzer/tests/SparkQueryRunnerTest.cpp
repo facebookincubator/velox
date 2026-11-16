@@ -250,7 +250,7 @@ TEST_F(SparkQueryRunnerTest, histogramFuzzerConstantArguments) {
     EXPECT_THAT(callable.constantArgs, testing::ElementsAre(false, true));
 
     const auto input = harness.generateInputData(
-        {"c0", "c1", "m0"}, {DOUBLE(), INTEGER(), BOOLEAN()}, callable);
+        {"c0", "c1", "m0"}, {DOUBLE(), INTEGER(), BOOLEAN()}, callable, {});
     ASSERT_EQ(input.size(), 3);
     const auto& firstConstant = input.front()->childAt(1);
     for (const auto& batch : input) {
