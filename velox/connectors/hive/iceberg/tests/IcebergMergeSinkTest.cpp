@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/IcebergMergeSink.h"
 
+#include <filesystem>
+
 #include <folly/json.h>
 #include <gtest/gtest.h>
 
@@ -62,7 +64,9 @@ class IcebergMergeSinkTest : public IcebergTestBase {
     parquet::registerParquetWriterFactory();
   }
 
-  IcebergInsertTableHandlePtr makeMergeHandle(const std::string& outputDir) {
+  IcebergInsertTableHandlePtr makeMergeHandle(
+      const std::string& outputDir,
+      bool includePartitionPaths = true) {
     // Construct the target column handles for (id, name). Field IDs match
     // a fresh Iceberg V1 schema (1, 2).
     std::vector<IcebergColumnHandlePtr> columnHandles;
@@ -89,11 +93,20 @@ class IcebergMergeSinkTest : public IcebergTestBase {
         /*partitionSpec=*/nullptr,
         /*compressionKind=*/common::CompressionKind::CompressionKind_ZSTD,
         /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
-        IcebergInsertTableHandle::WriteKind::kMerge);
+        IcebergInsertTableHandle::WriteKind::kMerge,
+        /*existingDeletionVectors=*/
+        std::unordered_map<
+            std::string,
+            IcebergInsertTableHandle::ExistingDeletionVector>{},
+        std::make_shared<const IcebergFileNameGenerator>(),
+        /*insertedColumns=*/std::vector<std::string>{},
+        includePartitionPaths);
   }
 
-  std::unique_ptr<IcebergMergeSink> makeSink(const std::string& outputDir) {
-    auto handle = makeMergeHandle(outputDir);
+  std::unique_ptr<IcebergMergeSink> makeSink(
+      const std::string& outputDir,
+      bool includePartitionPaths = true) {
+    auto handle = makeMergeHandle(outputDir, includePartitionPaths);
     return std::make_unique<IcebergMergeSink>(
         kMergeInputType,
         handle,
@@ -388,6 +401,34 @@ TEST_F(IcebergMergeSinkTest, tableWriterCountsUpdateOnce) {
       makeRowVector({makeFlatVector<int64_t>({3})}));
 }
 
+TEST_F(IcebergMergeSinkTest, flatLayoutWritesBothKindsToTargetDirectory) {
+  auto dataDirectory = TempDirectoryPath::create();
+  auto targetDirectory = TempDirectoryPath::create();
+  auto sink =
+      makeSink(targetDirectory->getPath(), /*includePartitionPaths=*/false);
+
+  const std::string dataFile = dataDirectory->getPath() + "/m.parquet";
+  sink->appendData(makeInput(
+      /*ids=*/{1, std::nullopt},
+      /*names=*/{{std::string("a")}, std::nullopt},
+      /*operations=*/
+      {IMS::kInsertOperationNumber, IMS::kDeleteOperationNumber},
+      /*filePaths=*/{std::nullopt, {dataFile}},
+      /*positions=*/{std::nullopt, 5},
+      /*insertFromUpdate=*/{0, 0}));
+  EXPECT_TRUE(sink->finish());
+  const auto messages = sink->close();
+
+  ASSERT_EQ(messages.size(), 2);
+  for (const auto& message : messages) {
+    EXPECT_EQ(
+        std::filesystem::path(folly::parseJson(message)["path"].asString())
+            .parent_path(),
+        std::filesystem::path(targetDirectory->getPath()));
+  }
+  EXPECT_TRUE(std::filesystem::is_empty(dataDirectory->getPath()));
+}
+
 TEST_F(IcebergMergeSinkTest, emptyBatchProducesNoCommitMessages) {
   auto tempDir = TempDirectoryPath::create();
   auto sink = makeSink(tempDir->getPath());
@@ -526,7 +567,8 @@ TEST_F(IcebergMergeSinkTest, closeIsIdempotent) {
 // the writer's name-based binding.
 TEST_F(IcebergMergeSinkTest, dataInputTypeNamesComeFromHandleNotSource) {
   auto tempDir = TempDirectoryPath::create();
-  auto handle = makeMergeHandle(tempDir->getPath());
+  auto handle =
+      makeMergeHandle(tempDir->getPath(), /*includePartitionPaths=*/true);
 
   // Source RowVector uses positional names instead of iceberg-schema names.
   const RowTypePtr positionalInputType =
