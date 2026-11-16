@@ -26,7 +26,9 @@ namespace facebook::velox::cudf_velox::prestosql {
 /// limit in [2, INT32_MAX]. Spark's regex split is not supported.
 class SplitFunction : public CudfFunction {
  public:
-  /// Checks a split call that matched the registered signature.
+  /// Returns true if expr, a split call that matched the registered
+  /// signature, takes a non-constant input, a non-empty constant delimiter
+  /// and, when present, a constant limit in [2, INT32_MAX].
   static bool canEvaluate(const core::TypedExprPtr& expr);
 
   SplitFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
@@ -37,9 +39,10 @@ class SplitFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override;
 
  private:
+  // Matched literally; never empty.
   std::string delimiter_;
-  // cuDF reads -1 as no limit.
-  cudf::size_type maxSplitCount_{-1};
+  // Presto limit minus one; -1 means no limit.
+  cudf::size_type maxNumSplits_{-1};
 };
 
 } // namespace facebook::velox::cudf_velox::prestosql

@@ -41,6 +41,10 @@ int64_t constantLimitValue(const core::TypedExprPtr& expr) {
 } // namespace
 
 bool SplitFunction::canEvaluate(const core::TypedExprPtr& expr) {
+  // FunctionExpression does not pass a constant input to eval().
+  if (expr->inputs()[0]->isConstantKind()) {
+    return false;
+  }
   // cuDF splits on whitespace runs for an empty delimiter, where Presto
   // splits between characters.
   const auto delimiter = constantVarcharValue(expr->inputs()[1]);
@@ -70,7 +74,7 @@ SplitFunction::SplitFunction(
   delimiter_ = std::string(*constantVarcharValue(expr->inputs()[1]));
   if (expr->inputs().size() == 3) {
     // Presto limits the array size; cuDF limits the number of splits.
-    maxSplitCount_ =
+    maxNumSplits_ =
         static_cast<cudf::size_type>(constantLimitValue(expr->inputs()[2]) - 1);
   }
 }
@@ -81,7 +85,7 @@ ColumnOrView SplitFunction::eval(
     rmm::device_async_resource_ref mr) const {
   const cudf::string_scalar delimiter(delimiter_, true, stream, mr);
   return cudf::strings::split_record(
-      asView(inputColumns[0]), delimiter, maxSplitCount_, stream, mr);
+      asView(inputColumns[0]), delimiter, maxNumSplits_, stream, mr);
 }
 
 } // namespace facebook::velox::cudf_velox::prestosql

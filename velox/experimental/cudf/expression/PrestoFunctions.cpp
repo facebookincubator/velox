@@ -137,6 +137,11 @@ constexpr std::string_view kPrestoWhitespace{
     "\t\n\v\f\r\x1c\x1d\x1e\x1f \u1680\u2000\u2001\u2002\u2003\u2004\u2005"
     "\u2006\u2008\u2009\u200a\u2028\u2029\u205f\u3000"};
 
+// Assumes valid UTF-8. cuDF reads a stray continuation byte as part of the
+// preceding character, so rtrim('x \x80') returns 'x' where Presto returns
+// 'x \x80'.
+// TODO: Match Presto on invalid UTF-8 by porting stringImpl's byte-level
+// whitespace checks.
 class TrimFunction : public CudfFunction {
  public:
   explicit TrimFunction(cudf::strings::side_type side) : side_(side) {
@@ -244,7 +249,12 @@ void registerPrestoFunctions(const std::string& prefix) {
         {FunctionSignatureBuilder()
              .returnType("varchar")
              .argumentType("varchar")
-             .build()});
+             .build()},
+        true,
+        // FunctionExpression does not pass a constant input to eval().
+        [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
+          return !expr->inputs()[0]->isConstantKind();
+        });
   }
 
   // Presto only: Spark's split takes a regular expression.

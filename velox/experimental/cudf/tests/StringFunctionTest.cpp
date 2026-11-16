@@ -24,8 +24,6 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
-#include <folly/ScopeGuard.h>
-
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -43,34 +41,11 @@ class CudfStringFunctionTest : public OperatorTestBase {
     filesystems::registerLocalFileSystem();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
-    cudf_velox::registerPrestoFunctions("");
   }
 
   void TearDown() override {
-    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
-  }
-
-  // Runs the projections on the GPU, which fails if any stays on the CPU, and
-  // compares the result with the CPU.
-  void assertProjectMatchesCpu(
-      const RowVectorPtr& input,
-      const std::vector<std::string>& projections) {
-    auto plan = PlanBuilder().values({input}).project(projections).planNode();
-    auto gpuResult = AssertQueryBuilder(plan).copyResults(pool());
-    cudf_velox::unregisterCudf();
-    SCOPE_EXIT {
-      cudf_velox::registerCudf();
-    };
-    auto cpuResult = AssertQueryBuilder(plan).copyResults(pool());
-    facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
-  }
-
-  bool canRunOnGpu(const std::string& sql) {
-    auto queryCtx = core::QueryCtx::create();
-    return cudf_velox::canExprRunOnGpu(
-        parseExpr(sql, ROW("c0", VARCHAR())), queryCtx.get(), pool());
   }
 };
 
@@ -469,80 +444,6 @@ TEST_F(CudfStringFunctionTest, concatUnicode) {
   assertQuery(plan, "SELECT concat(c0, c1) AS result FROM tmp");
 }
 
-// ---- TRIM and SPLIT tests -------------------------------------------------
-
-// Presto trims only the whitespace code points in stringImpl; similar-looking
-// non-whitespace code points and the control byte \x01 stay.
-TEST_F(CudfStringFunctionTest, trimFunctions) {
-  std::vector<std::optional<std::string>> strings{
-      "", std::nullopt, "   ", "\x01 d \x01", "\u2007e\u2007"};
-  // All 25 whitespace code points recognized by
-  // stringImpl::isUnicodeWhiteSpace.
-  for (const auto* whitespace :
-       {"\t",     "\n",     "\v",     "\f",     "\r",     "\x1c",   "\x1d",
-        "\x1e",   "\x1f",   " ",      "\u1680", "\u2000", "\u2001", "\u2002",
-        "\u2003", "\u2004", "\u2005", "\u2006", "\u2008", "\u2009", "\u200a",
-        "\u2028", "\u2029", "\u205f", "\u3000"}) {
-    strings.push_back(std::string(whitespace) + "x" + whitespace);
-  }
-  for (const auto* nonWhitespace :
-       {"\u00a0", "\u202f", "\u0085", "\u200b", "\ufeff"}) {
-    strings.push_back(std::string(nonWhitespace) + "x" + nonWhitespace);
-  }
-  assertProjectMatchesCpu(
-      makeRowVector({makeNullableFlatVector<std::string>(strings)}),
-      {"trim(c0)", "ltrim(c0)", "rtrim(c0)"});
-
-  for (const auto* sql :
-       {"trim(c0, 'x')", "ltrim(c0, 'x')", "rtrim(c0, 'x')"}) {
-    SCOPED_TRACE(sql);
-    EXPECT_FALSE(canRunOnGpu(sql));
-  }
-}
-
-TEST_F(CudfStringFunctionTest, split) {
-  auto input = makeRowVector({makeNullableFlatVector<std::string>(
-      {"a,b", "a,b,c", "a,,b", ",a,", "", std::nullopt, "abc"})});
-  assertProjectMatchesCpu(
-      input,
-      {"split(c0, ',')",
-       "split(c0, ',', 2)",
-       "split(c0, ',', 3)",
-       "split(c0, ',', cast(2 as integer))"});
-}
-
-TEST_F(CudfStringFunctionTest, splitOverlappingDelimiter) {
-  auto input = makeRowVector({makeFlatVector<std::string>({"aaa"})});
-  assertProjectMatchesCpu(input, {"split(c0, 'aa')"});
-}
-
-TEST_F(CudfStringFunctionTest, splitLongStrings) {
-  // Keep long strings in their own batch so the average exceeds 120 bytes.
-  const std::string part(128, 'a');
-  auto input = makeRowVector(
-      {makeFlatVector<std::string>({part + ",," + part + "," + part})});
-  assertProjectMatchesCpu(
-      input, {"split(c0, ',')", "split(c0, ',', 2)", "split(c0, ',', 3)"});
-}
-
-TEST_F(CudfStringFunctionTest, splitEligibility) {
-  EXPECT_TRUE(canRunOnGpu("split(c0, ',', 2147483647)"));
-
-  // cuDF splits on whitespace for an empty delimiter. Presto returns the input
-  // for a limit of 1 and raises below; cuDF takes an int32 limit.
-  for (const auto* sql :
-       {"split(c0, '')",
-        "split(c0, '', 2)",
-        "split(c0, c0)",
-        "split(c0, ',', 1)",
-        "split(c0, ',', 0)",
-        "split(c0, ',', -1)",
-        "split(c0, ',', 2147483648)"}) {
-    SCOPED_TRACE(sql);
-    EXPECT_FALSE(canRunOnGpu(sql));
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Direct expression tests: exercise the cudf expression evaluator directly
 // via CudfFunctionBaseTest::evaluateOnce.
@@ -555,10 +456,17 @@ class CudfStringExprTest : public cudf_velox::CudfFunctionBaseTest {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions("");
   }
 
   static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
+  }
+
+  bool canRunOnGpu(const std::string& sql) {
+    return cudf_velox::canExprRunOnGpu(
+        makeTypedExpr(sql, ROW("c0", VARCHAR())), execCtx_.queryCtx(), pool());
   }
 };
 
@@ -706,6 +614,111 @@ TEST_F(CudfStringExprTest, concatUnicode) {
   auto result = evaluateOnce<std::string, std::string, std::string>(
       "concat(c0, c1)", std::string("hello"), std::string(" w\xc3\xb6rld"));
   EXPECT_EQ(result.value(), "hello w\xc3\xb6rld");
+}
+
+// ---- TRIM and SPLIT tests -------------------------------------------------
+
+// Presto trims only the whitespace code points in stringImpl; similar-looking
+// non-whitespace code points and the control byte \x01 stay.
+TEST_F(CudfStringExprTest, trimFunctions) {
+  std::vector<std::optional<std::string>> strings{
+      "", std::nullopt, "   ", "\x01 d \x01", "\u2007e\u2007"};
+  // All 25 whitespace code points recognized by
+  // stringImpl::isUnicodeWhiteSpace.
+  for (const auto* whitespace :
+       {"\t",     "\n",     "\v",     "\f",     "\r",     "\x1c",   "\x1d",
+        "\x1e",   "\x1f",   " ",      "\u1680", "\u2000", "\u2001", "\u2002",
+        "\u2003", "\u2004", "\u2005", "\u2006", "\u2008", "\u2009", "\u200a",
+        "\u2028", "\u2029", "\u205f", "\u3000"}) {
+    strings.push_back(std::string(whitespace) + "x" + whitespace);
+  }
+  for (const auto* nonWhitespace :
+       {"\u00a0", "\u202f", "\u0085", "\u200b", "\ufeff"}) {
+    strings.push_back(std::string(nonWhitespace) + "x" + nonWhitespace);
+  }
+  const auto rowType = ROW("c0", VARCHAR());
+  const auto input =
+      makeRowVector({makeNullableFlatVector<std::string>(strings)});
+  for (const auto* expr : {"trim(c0)", "ltrim(c0)", "rtrim(c0)"}) {
+    SCOPED_TRACE(expr);
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+
+  for (const auto* sql :
+       {"trim(c0, 'x')", "ltrim(c0, 'x')", "rtrim(c0, 'x')"}) {
+    SCOPED_TRACE(sql);
+    EXPECT_FALSE(canRunOnGpu(sql));
+  }
+}
+
+TEST_F(CudfStringExprTest, split) {
+  const auto rowType = ROW("c0", VARCHAR());
+  const auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {"a,b", "a,b,c", "a,,b", ",a,", "", std::nullopt, "abc"})});
+  for (const auto* expr :
+       {"split(c0, ',')",
+        "split(c0, ',', 2)",
+        "split(c0, ',', 3)",
+        "split(c0, ',', cast(2 as integer))"}) {
+    SCOPED_TRACE(expr);
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfStringExprTest, splitOverlappingDelimiter) {
+  assertExpressionMatchesCpu(
+      "split(c0, 'aa')",
+      makeRowVector({makeFlatVector<std::string>({"aaa"})}),
+      ROW("c0", VARCHAR()));
+}
+
+TEST_F(CudfStringExprTest, splitLongStrings) {
+  // Keep long strings in their own batch so the average exceeds 120 bytes.
+  const auto rowType = ROW("c0", VARCHAR());
+  const std::string part(128, 'a');
+  const auto input = makeRowVector(
+      {makeFlatVector<std::string>({part + ",," + part + "," + part})});
+  for (const auto* expr :
+       {"split(c0, ',')", "split(c0, ',', 2)", "split(c0, ',', 3)"}) {
+    SCOPED_TRACE(expr);
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+  const auto overlapping =
+      makeRowVector({makeFlatVector<std::string>({part + "a"})});
+  for (const auto* expr : {"split(c0, 'aa')", "split(c0, 'aa', 3)"}) {
+    SCOPED_TRACE(expr);
+    assertExpressionMatchesCpu(expr, overlapping, rowType);
+  }
+}
+
+TEST_F(CudfStringExprTest, splitEligibility) {
+  EXPECT_TRUE(canRunOnGpu("split(c0, ',', 2147483647)"));
+
+  // cuDF splits on whitespace for an empty delimiter. Presto returns the input
+  // for a limit of 1 and raises below; cuDF takes an int32 limit.
+  for (const auto* sql :
+       {"split(c0, '')",
+        "split(c0, '', 2)",
+        "split(c0, c0)",
+        "split(c0, ',', 1)",
+        "split(c0, ',', 0)",
+        "split(c0, ',', -1)",
+        "split(c0, ',', 2147483648)"}) {
+    SCOPED_TRACE(sql);
+    EXPECT_FALSE(canRunOnGpu(sql));
+  }
+}
+
+// FunctionExpression does not pass a constant input to eval(). Optimization
+// folds such calls, so only an unoptimized tree reaches this check.
+TEST_F(CudfStringExprTest, constantInputStaysOnCpu) {
+  for (const auto* sql : {"trim(' a ')", "split('a,b', ',')"}) {
+    SCOPED_TRACE(sql);
+    EXPECT_FALSE(
+        cudf_velox::FunctionExpression::canEvaluate(
+            makeTypedExpr(sql, ROW("c0", VARCHAR())),
+            execCtx_.queryCtx()->queryConfig()));
+  }
 }
 
 } // namespace
