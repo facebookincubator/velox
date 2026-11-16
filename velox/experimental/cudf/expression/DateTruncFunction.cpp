@@ -101,12 +101,12 @@ DateTruncFunction::DateTruncFunction(
 
   auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
-  oneScalar_ =
-      std::make_unique<cudf::numeric_scalar<int32_t>>(1, true, stream, mr);
-  threeScalar_ =
-      std::make_unique<cudf::numeric_scalar<int32_t>>(3, true, stream, mr);
-  negOneScalar_ =
-      std::make_unique<cudf::numeric_scalar<int32_t>>(-1, true, stream, mr);
+  oneScalar_ = std::make_unique<cudf::numeric_scalar<int32_t>>(
+      1, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+  threeScalar_ = std::make_unique<cudf::numeric_scalar<int32_t>>(
+      3, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+  negOneScalar_ = std::make_unique<cudf::numeric_scalar<int32_t>>(
+      -1, true, stream, cudf::memory_resources{mr, get_temp_mr()});
   stream.sync();
 }
 
@@ -123,36 +123,62 @@ ColumnOrView DateTruncFunction::eval(
 
   auto floorToDay = [&](cudf::column_view col) {
     if (col.type() == dayType) {
-      return std::make_unique<cudf::column>(col, stream, mr);
+      return std::make_unique<cudf::column>(
+          col, stream, cudf::memory_resources{mr, get_temp_mr()});
     }
     auto floored = cudf::datetime::floor_datetimes(
-        col, cudf::datetime::rounding_frequency::DAY, stream, mr);
-    return cudf::cast(floored->view(), dayType, stream, mr);
+        col,
+        cudf::datetime::rounding_frequency::DAY,
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::cast(
+        floored->view(),
+        dayType,
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
   };
   auto castToInt32 = [&](cudf::column_view col) {
-    return cudf::cast(col, intType, stream, mr);
+    return cudf::cast(
+        col, intType, stream, cudf::memory_resources{mr, get_temp_mr()});
   };
   auto castToDurationDays = [&](cudf::column_view col) {
-    return cudf::cast(col, durationDayType, stream, mr);
+    return cudf::cast(
+        col,
+        durationDayType,
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
   };
   auto castDaysToOutput =
       [&](std::unique_ptr<cudf::column> daysCol) -> ColumnOrView {
     if (daysCol->type() == outputType) {
       return daysCol;
     }
-    return cudf::cast(daysCol->view(), outputType, stream, mr);
+    return cudf::cast(
+        daysCol->view(),
+        outputType,
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
   };
 
   switch (unit_) {
     case DateTimeUnit::kSecond:
       return cudf::datetime::floor_datetimes(
-          inputCol, cudf::datetime::rounding_frequency::SECOND, stream, mr);
+          inputCol,
+          cudf::datetime::rounding_frequency::SECOND,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     case DateTimeUnit::kMinute:
       return cudf::datetime::floor_datetimes(
-          inputCol, cudf::datetime::rounding_frequency::MINUTE, stream, mr);
+          inputCol,
+          cudf::datetime::rounding_frequency::MINUTE,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     case DateTimeUnit::kHour:
       return cudf::datetime::floor_datetimes(
-          inputCol, cudf::datetime::rounding_frequency::HOUR, stream, mr);
+          inputCol,
+          cudf::datetime::rounding_frequency::HOUR,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     case DateTimeUnit::kDay:
       return castDaysToOutput(floorToDay(inputCol));
     case DateTimeUnit::kWeek: {
@@ -161,7 +187,7 @@ ColumnOrView DateTruncFunction::eval(
           dayCol->view(),
           cudf::datetime::datetime_component::WEEKDAY,
           stream,
-          mr);
+          cudf::memory_resources{mr, get_temp_mr()});
       auto dowInt = castToInt32(dowCol->view());
       auto offset = cudf::binary_operation(
           dowInt->view(),
@@ -169,7 +195,7 @@ ColumnOrView DateTruncFunction::eval(
           cudf::binary_operator::SUB,
           intType,
           stream,
-          mr);
+          cudf::memory_resources{mr, get_temp_mr()});
       auto offsetDur = castToDurationDays(offset->view());
       auto weekStartDay = cudf::binary_operation(
           dayCol->view(),
@@ -177,7 +203,7 @@ ColumnOrView DateTruncFunction::eval(
           cudf::binary_operator::SUB,
           dayType,
           stream,
-          mr);
+          cudf::memory_resources{mr, get_temp_mr()});
       return castDaysToOutput(std::move(weekStartDay));
     }
     case DateTimeUnit::kMonth:
@@ -185,7 +211,10 @@ ColumnOrView DateTruncFunction::eval(
     case DateTimeUnit::kYear: {
       auto dayCol = floorToDay(inputCol);
       auto dayOfMonth = cudf::datetime::extract_datetime_component(
-          dayCol->view(), cudf::datetime::datetime_component::DAY, stream, mr);
+          dayCol->view(),
+          cudf::datetime::datetime_component::DAY,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
       auto dayOfMonthInt = castToInt32(dayOfMonth->view());
       auto dayOffset = cudf::binary_operation(
           dayOfMonthInt->view(),
@@ -193,7 +222,7 @@ ColumnOrView DateTruncFunction::eval(
           cudf::binary_operator::SUB,
           intType,
           stream,
-          mr);
+          cudf::memory_resources{mr, get_temp_mr()});
       auto dayOffsetDur = castToDurationDays(dayOffset->view());
       auto monthStartDay = cudf::binary_operation(
           dayCol->view(),
@@ -201,7 +230,7 @@ ColumnOrView DateTruncFunction::eval(
           cudf::binary_operator::SUB,
           dayType,
           stream,
-          mr);
+          cudf::memory_resources{mr, get_temp_mr()});
 
       if (unit_ == DateTimeUnit::kMonth) {
         return castDaysToOutput(std::move(monthStartDay));
@@ -211,7 +240,7 @@ ColumnOrView DateTruncFunction::eval(
           dayCol->view(),
           cudf::datetime::datetime_component::MONTH,
           stream,
-          mr);
+          cudf::memory_resources{mr, get_temp_mr()});
       auto monthInt = castToInt32(monthCol->view());
       auto monthIndex = cudf::binary_operation(
           monthInt->view(),
@@ -219,7 +248,7 @@ ColumnOrView DateTruncFunction::eval(
           cudf::binary_operator::SUB,
           intType,
           stream,
-          mr);
+          cudf::memory_resources{mr, get_temp_mr()});
 
       std::unique_ptr<cudf::column> monthsToSubtract;
       if (unit_ == DateTimeUnit::kYear) {
@@ -231,7 +260,7 @@ ColumnOrView DateTruncFunction::eval(
             cudf::binary_operator::MOD,
             intType,
             stream,
-            mr);
+            cudf::memory_resources{mr, get_temp_mr()});
       }
 
       auto negMonths = cudf::binary_operation(
@@ -240,9 +269,12 @@ ColumnOrView DateTruncFunction::eval(
           cudf::binary_operator::MUL,
           intType,
           stream,
-          mr);
+          cudf::memory_resources{mr, get_temp_mr()});
       auto truncated = cudf::datetime::add_calendrical_months(
-          monthStartDay->view(), negMonths->view(), stream, mr);
+          monthStartDay->view(),
+          negMonths->view(),
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
       return castDaysToOutput(std::move(truncated));
     }
     default:

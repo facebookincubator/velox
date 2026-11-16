@@ -341,7 +341,7 @@ std::unique_ptr<cudf::column> CudfIcebergSplitReader::makeRowIndex(
       numRows,
       cudf::mask_state::UNALLOCATED,
       stream_,
-      get_temp_mr());
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   fillSequence<uint64_t>(
       rowIndex->mutable_view(),
       baseReadOffset_,
@@ -416,10 +416,16 @@ CudfIcebergSplitReader::readNextChunk() {
   if (isApplyingDeletes) {
     // Allocate deletion mask column if needed (nothing is deleted)
     if (not deleteMask_ or std::cmp_less(deleteMask_->size(), numRows)) {
-      auto false_scalar =
-          cudf::numeric_scalar<bool>(false, true, stream_, get_temp_mr());
+      auto false_scalar = cudf::numeric_scalar<bool>(
+          false,
+          true,
+          stream_,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
       deleteMask_ = cudf::make_column_from_scalar(
-          false_scalar, numRows, stream_, get_temp_mr());
+          false_scalar,
+          numRows,
+          stream_,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     } else {
       // Clear the bitmap
       CUDF_CUDA_TRY(cudaMemsetAsync(
@@ -465,7 +471,10 @@ CudfIcebergSplitReader::readNextChunk() {
     if (cudfTable->num_columns() > 0) {
       const auto deleteMr = deferredFilter() ? get_temp_mr() : get_output_mr();
       cudfTable = cudf::apply_deletion_mask(
-          cudfTable->view(), deleteMaskView_, stream_, deleteMr);
+          cudfTable->view(),
+          deleteMaskView_,
+          stream_,
+          cudf::memory_resources{deleteMr, get_temp_mr()});
     }
   }
 
@@ -496,9 +505,15 @@ CudfIcebergSplitReader::readNextChunk() {
   // Apply the deferred subfield filter.
   if (deferred) {
     auto filterMask = cudf::compute_column(
-        cudfTable->view(), *deferred, stream_, get_temp_mr());
+        cudfTable->view(),
+        *deferred,
+        stream_,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     cudfTable = cudf::apply_retention_mask(
-        cudfTable->view(), filterMask->view(), stream_, get_output_mr());
+        cudfTable->view(),
+        filterMask->view(),
+        stream_,
+        cudf::memory_resources{get_output_mr(), get_temp_mr()});
   }
 
   // Update the base read offset
@@ -917,7 +932,11 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::buildOutputTable(
         injectedColIter->outputIndex == outIdx) {
       auto scalar = makeInjectedScalar(*injectedColIter++);
       output.push_back(
-          cudf::make_column_from_scalar(*scalar, numRows, stream_, mr));
+          cudf::make_column_from_scalar(
+              *scalar,
+              numRows,
+              stream_,
+              cudf::memory_resources{mr, get_temp_mr()}));
     } else {
       VELOX_CHECK(
           dataColIter != columns.end(),

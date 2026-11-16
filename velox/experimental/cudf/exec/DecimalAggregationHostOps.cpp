@@ -47,7 +47,7 @@ cudf::column_view castDecimal64InputToDecimal128(
       inputCol,
       cudf::data_type{cudf::type_id::DECIMAL128, inputCol.type().scale()},
       stream,
-      get_temp_mr());
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   return holder->view();
 }
 
@@ -56,7 +56,10 @@ std::unique_ptr<cudf::column> castCountColumnToInt64(
     cuda::stream_ref stream) {
   if (count->type().id() != cudf::type_id::INT64) {
     count = cudf::cast(
-        *count, cudf::data_type{cudf::type_id::INT64}, stream, get_temp_mr());
+        *count,
+        cudf::data_type{cudf::type_id::INT64},
+        stream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   }
   return count;
 }
@@ -80,7 +83,11 @@ std::unique_ptr<cudf::column> finalizeDecimalAverage(
   auto avgCol = computeDecimalAverage(sum->view(), count->view(), stream, mr);
   auto const cudfOutType = veloxToCudfDataType(resultType);
   if (avgCol->type() != cudfOutType) {
-    avgCol = cudf::cast(avgCol->view(), cudfOutType, stream, mr);
+    avgCol = cudf::cast(
+        avgCol->view(),
+        cudfOutType,
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
   }
   return avgCol;
 }

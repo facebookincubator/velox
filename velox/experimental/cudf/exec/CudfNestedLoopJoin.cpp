@@ -379,7 +379,7 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
           cudf::binary_operator::BITWISE_OR,
           cudf::data_type{cudf::type_id::BOOL8},
           stream,
-          get_temp_mr());
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
       // binary_operation is async on `stream`; the old column destructs via
       // cudaFreeAsync on its allocation stream (not `stream`), so the free
       // can race the kernel. Drain `stream` before the move-assign.
@@ -450,10 +450,16 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
   if (isRightOrFullJoin() && hasFilter_ && !buildEmpty_) {
     auto initStream = cudfGlobalStreamPool().get_stream();
     auto numRows = buildData_->rowCount;
-    auto falseScalar =
-        cudf::numeric_scalar<bool>(false, true, initStream, get_temp_mr());
+    auto falseScalar = cudf::numeric_scalar<bool>(
+        false,
+        true,
+        initStream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     buildMatchedFlags_ = cudf::make_column_from_scalar(
-        falseScalar, numRows, initStream, get_temp_mr());
+        falseScalar,
+        numRows,
+        initStream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     initStream.sync();
   }
 
@@ -542,14 +548,32 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
 
   // repeat() each probe index numBuildRows times, tile() the build range
   // numProbeRows times, matching cudf::cross_join's probe-major row order.
-  auto zero = cudf::numeric_scalar<cudf::size_type>(0, true, stream, mr);
-  auto one = cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr);
-  auto probeRange = cudf::sequence(numProbeRows, zero, one, stream, mr);
-  auto buildRange = cudf::sequence(numBuildRows, zero, one, stream, mr);
+  auto zero = cudf::numeric_scalar<cudf::size_type>(
+      0, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+  auto one = cudf::numeric_scalar<cudf::size_type>(
+      1, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+  auto probeRange = cudf::sequence(
+      numProbeRows,
+      zero,
+      one,
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
+  auto buildRange = cudf::sequence(
+      numBuildRows,
+      zero,
+      one,
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
   auto probeIndicesTable = cudf::repeat(
-      cudf::table_view{{probeRange->view()}}, numBuildRows, stream, mr);
+      cudf::table_view{{probeRange->view()}},
+      numBuildRows,
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
   auto buildIndicesTable = cudf::tile(
-      cudf::table_view{{buildRange->view()}}, numProbeRows, stream, mr);
+      cudf::table_view{{buildRange->view()}},
+      numProbeRows,
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
   auto probeIndices = std::move(probeIndicesTable->release()[0]);
   auto buildIndices = std::move(buildIndicesTable->release()[0]);
 
@@ -586,13 +610,19 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
   auto mask = asView(filterColumn);
 
   auto filteredProbeIndices = cudf::apply_retention_mask(
-      cudf::table_view{{probeIndices->view()}}, mask, stream, mr);
+      cudf::table_view{{probeIndices->view()}},
+      mask,
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
   auto probeIndicesCols = filteredProbeIndices->release();
 
   std::unique_ptr<cudf::column> filteredBuildIndicesCol;
   if (needBuildIndices) {
     auto filteredBuildIndices = cudf::apply_retention_mask(
-        cudf::table_view{{buildIndices->view()}}, mask, stream, mr);
+        cudf::table_view{{buildIndices->view()}},
+        mask,
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
     filteredBuildIndicesCol = std::move(filteredBuildIndices->release()[0]);
   }
   return {std::move(probeIndicesCols[0]), std::move(filteredBuildIndicesCol)};
@@ -608,15 +638,18 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinZeroColumnBuild(
   // columns in order, so the repeated table is the result.
   auto repeatCounts = cudf::make_column_from_scalar(
       cudf::numeric_scalar<cudf::size_type>(
-          buildRows, true, stream, get_temp_mr()),
+          buildRows,
+          true,
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()}),
       probeView.num_rows(),
       stream,
-      get_temp_mr());
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   return cudf::repeat(
       probeView.select(outputLayout_.probeColumnIndices()),
       repeatCounts->view(),
       stream,
-      get_output_mr());
+      cudf::memory_resources{get_output_mr(), get_temp_mr()});
 }
 
 std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
@@ -670,7 +703,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
               tree_.back(),
               std::nullopt,
               stream,
-              get_temp_mr());
+              cudf::memory_resources{get_temp_mr(), get_temp_mr()});
 
       VELOX_CHECK_LE(
           static_cast<int64_t>(leftIndicesBuffer->size()),
@@ -707,17 +740,28 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
       auto numProbeRows = probeTableView.num_rows();
       auto probeRowSequence = cudf::sequence(
           numProbeRows,
-          cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
-          cudf::numeric_scalar<cudf::size_type>(1, true, stream, get_temp_mr()),
+          cudf::numeric_scalar<cudf::size_type>(
+              0,
+              true,
+              stream,
+              cudf::memory_resources{get_temp_mr(), get_temp_mr()}),
+          cudf::numeric_scalar<cudf::size_type>(
+              1,
+              true,
+              stream,
+              cudf::memory_resources{get_temp_mr(), get_temp_mr()}),
           stream,
-          get_temp_mr());
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
 
       // The build side is concatenated into a single table (see
       // CudfNestedLoopJoinBuild::buildAndPublish), so joinWithBuildBatch runs
       // exactly once per probe input. probeMatchedFlags_ is the result of
       // this single contains() call; no cross-batch BITWISE_OR is needed.
       probeMatchedFlags_ = cudf::contains(
-          leftIndicesView, probeRowSequence->view(), stream, get_temp_mr());
+          leftIndicesView,
+          probeRowSequence->view(),
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     }
 
     // Track which build rows matched for right/full join mismatch handling.
@@ -725,13 +769,24 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
       auto numBuildRows = buildRows;
       auto buildRowSequence = cudf::sequence(
           numBuildRows,
-          cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
-          cudf::numeric_scalar<cudf::size_type>(1, true, stream, get_temp_mr()),
+          cudf::numeric_scalar<cudf::size_type>(
+              0,
+              true,
+              stream,
+              cudf::memory_resources{get_temp_mr(), get_temp_mr()}),
+          cudf::numeric_scalar<cudf::size_type>(
+              1,
+              true,
+              stream,
+              cudf::memory_resources{get_temp_mr(), get_temp_mr()}),
           stream,
-          get_temp_mr());
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
 
       auto matchedInBatch = cudf::contains(
-          rightIndicesView, buildRowSequence->view(), stream, get_temp_mr());
+          rightIndicesView,
+          buildRowSequence->view(),
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
 
       auto updatedFlags = cudf::binary_operation(
           buildMatchedFlags_->view(),
@@ -739,7 +794,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
           cudf::binary_operator::BITWISE_OR,
           cudf::data_type{cudf::type_id::BOOL8},
           stream,
-          get_temp_mr());
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
       stream.sync();
       buildMatchedFlags_ = std::move(updatedFlags);
     }
@@ -782,8 +837,11 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
     return crossJoinZeroColumnBuild(probeTableView, buildRows, stream);
   }
 
-  auto crossResult =
-      cudf::cross_join(probeTableView, buildView, stream, get_output_mr());
+  auto crossResult = cudf::cross_join(
+      probeTableView,
+      buildView,
+      stream,
+      cudf::memory_resources{get_output_mr(), get_temp_mr()});
 
   // Cross join matches every row, so no per-row matched flags are needed:
   // probeMatchedFlags_ is only consumed via emitProbeMismatchRows, which is
@@ -815,7 +873,9 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
       auto probeGatherView =
           probeTableView.select(outputLayout_.probeColumnIndices());
       unmatchedProbe = std::make_unique<cudf::table>(
-          probeGatherView, stream, get_output_mr());
+          probeGatherView,
+          stream,
+          cudf::memory_resources{get_output_mr(), get_temp_mr()});
     }
   } else {
     auto matchedMask = probeMatchedFlags_->view();
@@ -823,12 +883,18 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
       auto probeGatherView =
           probeTableView.select(outputLayout_.probeColumnIndices());
       unmatchedProbe = cudf::apply_deletion_mask(
-          probeGatherView, matchedMask, stream, get_output_mr());
+          probeGatherView,
+          matchedMask,
+          stream,
+          cudf::memory_resources{get_output_mr(), get_temp_mr()});
       numUnmatched = static_cast<cudf::size_type>(unmatchedProbe->num_rows());
     } else {
       // No probe columns in output — count unmatched rows from the mask.
       auto countTable = cudf::apply_deletion_mask(
-          cudf::table_view{{matchedMask}}, matchedMask, stream, get_temp_mr());
+          cudf::table_view{{matchedMask}},
+          matchedMask,
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
       numUnmatched = static_cast<cudf::size_type>(countTable->num_rows());
     }
   }
@@ -873,12 +939,18 @@ RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
     auto buildGatherView =
         buildTable->view().select(outputLayout_.buildColumnIndices());
     unmatchedBuild = cudf::apply_deletion_mask(
-        buildGatherView, matchedMask, stream, get_output_mr());
+        buildGatherView,
+        matchedMask,
+        stream,
+        cudf::memory_resources{get_output_mr(), get_temp_mr()});
     numUnmatched = static_cast<cudf::size_type>(unmatchedBuild->num_rows());
   } else {
     // No build columns in output — count unmatched rows from the mask.
     auto countTable = cudf::apply_deletion_mask(
-        cudf::table_view{{matchedMask}}, matchedMask, stream, get_temp_mr());
+        cudf::table_view{{matchedMask}},
+        matchedMask,
+        stream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     numUnmatched = static_cast<cudf::size_type>(countTable->num_rows());
   }
 
@@ -944,16 +1016,28 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
     if (buildEmpty_ || !hasFilter_) {
       // No filter + non-empty build: all probe rows match (true).
       // Empty build: no probe rows match (false).
-      auto scalar =
-          cudf::numeric_scalar<bool>(!buildEmpty_, true, stream, get_temp_mr());
+      auto scalar = cudf::numeric_scalar<bool>(
+          !buildEmpty_,
+          true,
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
       matchFlags = cudf::make_column_from_scalar(
-          scalar, numProbeRows, stream, get_temp_mr());
+          scalar,
+          numProbeRows,
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     } else {
       // Filtered: compute matched probe indices against the single build table.
-      auto falseScalar =
-          cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
+      auto falseScalar = cudf::numeric_scalar<bool>(
+          false,
+          true,
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
       matchFlags = cudf::make_column_from_scalar(
-          falseScalar, numProbeRows, stream, get_temp_mr());
+          falseScalar,
+          numProbeRows,
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
 
       // Owning storage for whichever path below produces the matched probe
       // indices; matchedIndicesView aliases into one of these two.
@@ -988,7 +1072,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
             tree_.back(),
             {},
             stream,
-            get_temp_mr());
+            cudf::memory_resources{get_temp_mr(), get_temp_mr()});
         matchedIndicesSize =
             static_cast<cudf::size_type>(matchedIndicesBuffer->size());
         matchedIndicesView = cudf::column_view(
@@ -1019,17 +1103,23 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
         auto probeRowSequence = cudf::sequence(
             numProbeRows,
             cudf::numeric_scalar<cudf::size_type>(
-                0, true, stream, get_temp_mr()),
+                0,
+                true,
+                stream,
+                cudf::memory_resources{get_temp_mr(), get_temp_mr()}),
             cudf::numeric_scalar<cudf::size_type>(
-                1, true, stream, get_temp_mr()),
+                1,
+                true,
+                stream,
+                cudf::memory_resources{get_temp_mr(), get_temp_mr()}),
             stream,
-            get_temp_mr());
+            cudf::memory_resources{get_temp_mr(), get_temp_mr()});
 
         auto matchedInBatch = cudf::contains(
             matchedIndicesView,
             probeRowSequence->view(),
             stream,
-            get_temp_mr());
+            cudf::memory_resources{get_temp_mr(), get_temp_mr()});
 
         matchFlags = cudf::binary_operation(
             matchFlags->view(),
@@ -1037,21 +1127,25 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
             cudf::binary_operator::BITWISE_OR,
             cudf::data_type{cudf::type_id::BOOL8},
             stream,
-            get_temp_mr());
+            cudf::memory_resources{get_temp_mr(), get_temp_mr()});
       }
     }
 
     // Copy match flags into output memory resource since they go into the
     // output table passed downstream.
     auto outputMatchFlags = std::make_unique<cudf::column>(
-        matchFlags->view(), stream, get_output_mr());
+        matchFlags->view(),
+        stream,
+        cudf::memory_resources{get_output_mr(), get_temp_mr()});
 
     // Assemble output: probe columns at their mapped positions + match column
     // at the last position.
     auto probeGatherView =
         probeTableView.select(outputLayout_.probeColumnIndices());
-    auto gatheredProbe =
-        std::make_unique<cudf::table>(probeGatherView, stream, get_output_mr());
+    auto gatheredProbe = std::make_unique<cudf::table>(
+        probeGatherView,
+        stream,
+        cudf::memory_resources{get_output_mr(), get_temp_mr()});
     auto probeCols = gatheredProbe->release();
 
     auto numOutputColumns = outputType_->size();

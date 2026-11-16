@@ -76,7 +76,11 @@ std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return cudf::make_fixed_width_column(
-      outputType, size, cudf::mask_state::ALL_NULL, stream, mr);
+      outputType,
+      size,
+      cudf::mask_state::ALL_NULL,
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
 }
 
 void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
@@ -172,7 +176,12 @@ std::unique_ptr<cudf::column> decimalDivide(
       stream,
       cudf::memory_resources{mr, get_temp_mr()});
   auto out = cudf::make_fixed_width_column(
-      outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
+      outputType,
+      lhs.size(),
+      std::move(nullMask),
+      nullCount,
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
 
   const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
   checkDecimalBinaryOpStatus(
@@ -219,7 +228,7 @@ std::unique_ptr<cudf::column> decimalDivide(
       std::move(nullMask),
       lhs.null_count(),
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 
   auto rhsValue = detail::getDecimalScalarValue(rhs, stream);
 
@@ -271,7 +280,7 @@ std::unique_ptr<cudf::column> decimalDivide(
       std::move(nullMask),
       rhs.null_count(),
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 
   auto lhsValue = detail::getDecimalScalarValue(lhs, stream);
 

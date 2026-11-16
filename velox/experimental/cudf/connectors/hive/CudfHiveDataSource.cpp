@@ -883,7 +883,10 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     auto originalTable =
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
     cudfTable = cudf::apply_retention_mask(
-        *originalTable, asView(filterResult), stream, get_output_mr());
+        *originalTable,
+        asView(filterResult),
+        stream,
+        cudf::memory_resources{get_output_mr(), get_temp_mr()});
     nRows = cudfTable->num_rows();
   }
   totalRemainingFilterTime_.fetch_add(
@@ -918,9 +921,12 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     for (const auto index : outputIndices) {
       auto& column = columns[index];
       outputColumns.push_back(
-          --remainingUses[index] == 0 ? std::move(column)
-                                      : std::make_unique<cudf::column>(
-                                            *column, stream, get_output_mr()));
+          --remainingUses[index] == 0
+              ? std::move(column)
+              : std::make_unique<cudf::column>(
+                    *column,
+                    stream,
+                    cudf::memory_resources{get_output_mr(), get_temp_mr()}));
     }
     cudfTable = std::make_unique<cudf::table>(std::move(outputColumns));
   } else if (outputType_->size() < cudfTable->num_columns()) {
@@ -1081,7 +1087,11 @@ CudfHiveDataSource::makePartitionKeyColumns(
   columns.reserve(partitionKeyScalars_.size());
   for (const auto& scalar : partitionKeyScalars_) {
     columns.push_back(
-        cudf::make_column_from_scalar(*scalar, numRows, stream, mr));
+        cudf::make_column_from_scalar(
+            *scalar,
+            numRows,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}));
   }
   return columns;
 }

@@ -82,23 +82,25 @@ void checkValueRange(
   constexpr auto kMax = std::numeric_limits<int32_t>::max();
   const auto boolType = cudf::data_type(cudf::type_id::BOOL8);
 
-  cudf::numeric_scalar<int64_t> minScalar(kMin, true, stream, mr);
+  cudf::numeric_scalar<int64_t> minScalar(
+      kMin, true, stream, cudf::memory_resources{mr, get_temp_mr()});
   auto geMin = cudf::binary_operation(
       valueCol,
       minScalar,
       cudf::binary_operator::GREATER_EQUAL,
       boolType,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 
-  cudf::numeric_scalar<int64_t> maxScalar(kMax, true, stream, mr);
+  cudf::numeric_scalar<int64_t> maxScalar(
+      kMax, true, stream, cudf::memory_resources{mr, get_temp_mr()});
   auto leMax = cudf::binary_operation(
       valueCol,
       maxScalar,
       cudf::binary_operator::LESS_EQUAL,
       boolType,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 
   auto inRange = cudf::binary_operation(
       geMin->view(),
@@ -106,15 +108,16 @@ void checkValueRange(
       cudf::binary_operator::LOGICAL_AND,
       boolType,
       stream,
-      mr);
-  auto dateIsNull = cudf::is_null(dateCol, stream, mr);
+      cudf::memory_resources{mr, get_temp_mr()});
+  auto dateIsNull =
+      cudf::is_null(dateCol, stream, cudf::memory_resources{mr, get_temp_mr()});
   auto validOrDateNull = cudf::binary_operation(
       inRange->view(),
       dateIsNull->view(),
       cudf::binary_operator::BITWISE_OR,
       boolType,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
   checkAllTrue(
       validOrDateNull->view(), "date_add value is out of range", stream, mr);
 }
@@ -130,19 +133,21 @@ std::unique_ptr<cudf::column> scaleToInt32(
   checkValueRange(valueCol, dateCol, stream, mr);
 
   auto int32Type = cudf::data_type(cudf::type_id::INT32);
-  auto int32Value = cudf::cast(valueCol, int32Type, stream, mr);
+  auto int32Value = cudf::cast(
+      valueCol, int32Type, stream, cudf::memory_resources{mr, get_temp_mr()});
   if (scale == 1) {
     return int32Value;
   }
 
-  cudf::numeric_scalar<int32_t> scaleScalar(scale, true, stream, mr);
+  cudf::numeric_scalar<int32_t> scaleScalar(
+      scale, true, stream, cudf::memory_resources{mr, get_temp_mr()});
   return cudf::binary_operation(
       int32Value->view(),
       scaleScalar,
       cudf::binary_operator::MUL,
       int32Type,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 }
 
 } // namespace
@@ -224,7 +229,10 @@ ColumnOrView DateAddFunction::eval(
         valueCol.has_value(),
         "date_add with only literal inputs is not supported");
     literalDateColumn = cudf::make_column_from_scalar(
-        *literalDate_, valueCol->size(), stream, mr);
+        *literalDate_,
+        valueCol->size(),
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
     dateCol = literalDateColumn->view();
   }
 
@@ -245,9 +253,14 @@ ColumnOrView DateAddFunction::evalDayBased(
         checkedScaleValue(literalValue_, scale),
         literalValueIsValid_,
         stream,
-        mr);
+        cudf::memory_resources{mr, get_temp_mr()});
     return cudf::binary_operation(
-        dateCol, days, cudf::binary_operator::ADD, outType, stream, mr);
+        dateCol,
+        days,
+        cudf::binary_operator::ADD,
+        outType,
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
   }
 
   auto daysInt = scaleToInt32(*valueCol, dateCol, scale, stream, mr);
@@ -255,9 +268,14 @@ ColumnOrView DateAddFunction::evalDayBased(
       daysInt->view(),
       cudf::data_type(cudf::type_id::DURATION_DAYS),
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
   return cudf::binary_operation(
-      dateCol, days->view(), cudf::binary_operator::ADD, outType, stream, mr);
+      dateCol,
+      days->view(),
+      cudf::binary_operator::ADD,
+      outType,
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
 }
 
 ColumnOrView DateAddFunction::evalMonthBased(
@@ -272,13 +290,17 @@ ColumnOrView DateAddFunction::evalMonthBased(
         checkedScaleValue(literalValue_, scale),
         literalValueIsValid_,
         stream,
-        mr);
-    return cudf::datetime::add_calendrical_months(dateCol, months, stream, mr);
+        cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::datetime::add_calendrical_months(
+        dateCol, months, stream, cudf::memory_resources{mr, get_temp_mr()});
   }
 
   auto months = scaleToInt32(*valueCol, dateCol, scale, stream, mr);
   return cudf::datetime::add_calendrical_months(
-      dateCol, months->view(), stream, mr);
+      dateCol,
+      months->view(),
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
 }
 
 } // namespace facebook::velox::cudf_velox::prestosql

@@ -185,7 +185,9 @@ const cudf::ast::expression& createRangeExpr(
   const cudf::ast::expression* upperExpr = nullptr;
 
   auto addLiteral = [&](auto value) -> const cudf::ast::expression& {
-    scalars.emplace_back(std::make_unique<ScalarT>(value, true, stream, mr));
+    scalars.emplace_back(
+        std::make_unique<ScalarT>(
+            value, true, stream, cudf::memory_resources{mr, get_temp_mr()}));
     stream.sync();
     return tree.push(
         cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
@@ -701,7 +703,10 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
       auto matchesTrue = boolValue->testBool(true);
       scalars.emplace_back(
           std::make_unique<cudf::numeric_scalar<bool>>(
-              matchesTrue, true, stream, mr));
+              matchesTrue,
+              true,
+              stream,
+              cudf::memory_resources{mr, get_temp_mr()}));
       stream.sync();
       auto const& matchesBoolExpr = tree.push(
           cudf::ast::literal{

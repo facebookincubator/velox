@@ -47,7 +47,7 @@ ColumnOrView DateAddFunction::eval(
       cudf::binary_operator::ADD,
       cudf::data_type(cudf::type_id::TIMESTAMP_DAYS),
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 }
 
 } // namespace facebook::velox::cudf_velox::sparksql

@@ -110,7 +110,11 @@ std::unique_ptr<cudf::column> castDecimalColumns(
   if (veloxType->isDecimal()) {
     auto const targetType = veloxToCudfDataType(veloxType);
     if (col->type() != targetType) {
-      return cudf::cast(col->view(), targetType, stream, mr);
+      return cudf::cast(
+          col->view(),
+          targetType,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     }
     return col;
   }
@@ -501,7 +505,7 @@ void CudfSplitReader::setupChunkingForCurrentPass(
       passState_->fetch.data,
       readerOptions_,
       stream_,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 
   passState_->isChunkingSetup = true;
 }

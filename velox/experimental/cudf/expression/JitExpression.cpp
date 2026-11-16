@@ -64,7 +64,11 @@ ColumnOrView JitExpression::eval(
       }
     } else {
       return cudf::compute_column_jit(
-          astInputTableView, expr_.cudfTree_.back(), stream, mr);
+          astInputTableView,
+          expr_.cudfTree_.back(),
+          {},
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     }
   }();
   if (finalize) {
@@ -72,7 +76,11 @@ ColumnOrView JitExpression::eval(
         cudf_velox::veloxToCudfDataType(expr_.expr_->type());
     auto resultView = asView(result);
     if (resultView.type() != requestedType) {
-      result = cudf::cast(resultView, requestedType, stream, mr);
+      result = cudf::cast(
+          resultView,
+          requestedType,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     }
   }
   return result;

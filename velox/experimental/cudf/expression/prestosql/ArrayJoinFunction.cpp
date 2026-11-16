@@ -51,9 +51,11 @@ ColumnOrView ArrayJoinFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
-  const cudf::string_scalar separator(separator_, true, stream, mr);
+  const cudf::string_scalar separator(
+      separator_, true, stream, cudf::memory_resources{mr, get_temp_mr()});
   // Presto writes nothing for a null element, not even the separator.
-  const cudf::string_scalar nullElement(std::string{}, true, stream, mr);
+  const cudf::string_scalar nullElement(
+      std::string{}, true, stream, cudf::memory_resources{mr, get_temp_mr()});
   return cudf::strings::join_list_elements(
       cudf::lists_column_view(asView(inputColumns[0])),
       separator,
@@ -61,7 +63,7 @@ ColumnOrView ArrayJoinFunction::eval(
       cudf::strings::separator_on_nulls::NO,
       cudf::strings::output_if_empty_list::EMPTY_STRING,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 }
 
 } // namespace facebook::velox::cudf_velox::prestosql

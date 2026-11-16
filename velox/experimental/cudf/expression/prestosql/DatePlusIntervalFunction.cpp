@@ -66,15 +66,15 @@ DatePlusIntervalFunction::DatePlusIntervalFunction(
       auto days = static_cast<int32_t>(millis / kMillisInDay);
       durationDaysLiteral_ =
           std::make_unique<cudf::duration_scalar<cudf::duration_D>>(
-              days, true, stream, mr);
+              days, true, stream, cudf::memory_resources{mr, get_temp_mr()});
     }
   } else {
     // Column interval path: pre-compute the kMillisInDay and zero scalars
     // used by eval() so they aren't reallocated on every batch.
     millisPerDayScalar_ = std::make_unique<cudf::numeric_scalar<int64_t>>(
-        kMillisInDay, true, stream, mr);
+        kMillisInDay, true, stream, cudf::memory_resources{mr, get_temp_mr()});
     zeroScalar_ = std::make_unique<cudf::numeric_scalar<int64_t>>(
-        int64_t{0}, true, stream, mr);
+        int64_t{0}, true, stream, cudf::memory_resources{mr, get_temp_mr()});
   }
   stream.sync();
 }
@@ -93,7 +93,7 @@ ColumnOrView DatePlusIntervalFunction::eval(
         cudf::binary_operator::ADD,
         cudf::data_type(cudf::type_id::TIMESTAMP_DAYS),
         stream,
-        mr);
+        cudf::memory_resources{mr, get_temp_mr()});
   }
 
   if (millisPerDayScalar_) {
@@ -107,14 +107,14 @@ ColumnOrView DatePlusIntervalFunction::eval(
         cudf::binary_operator::MOD,
         cudf::data_type(cudf::type_id::INT64),
         stream,
-        mr);
+        cudf::memory_resources{mr, get_temp_mr()});
     auto isWholeDays = cudf::binary_operation(
         remainder->view(),
         *zeroScalar_,
         cudf::binary_operator::EQUAL,
         cudf::data_type(cudf::type_id::BOOL8),
         stream,
-        mr);
+        cudf::memory_resources{mr, get_temp_mr()});
     checkAllTrue(
         isWholeDays->view(),
         "Cannot add hours, minutes, seconds or milliseconds to a date",
@@ -127,25 +127,30 @@ ColumnOrView DatePlusIntervalFunction::eval(
         cudf::binary_operator::DIV,
         cudf::data_type(cudf::type_id::INT32),
         stream,
-        mr);
+        cudf::memory_resources{mr, get_temp_mr()});
 
     auto daysDuration = cudf::cast(
         daysInt->view(),
         cudf::data_type(cudf::type_id::DURATION_DAYS),
         stream,
-        mr);
+        cudf::memory_resources{mr, get_temp_mr()});
     return cudf::binary_operation(
         dateCol,
         daysDuration->view(),
         cudf::binary_operator::ADD,
         cudf::data_type(cudf::type_id::TIMESTAMP_DAYS),
         stream,
-        mr);
+        cudf::memory_resources{mr, get_temp_mr()});
   }
 
   // Constant-null interval: result is null for every row.
-  cudf::timestamp_scalar<cudf::timestamp_D> nullDate(0, false, stream, mr);
-  return cudf::make_column_from_scalar(nullDate, dateCol.size(), stream, mr);
+  cudf::timestamp_scalar<cudf::timestamp_D> nullDate(
+      0, false, stream, cudf::memory_resources{mr, get_temp_mr()});
+  return cudf::make_column_from_scalar(
+      nullDate,
+      dateCol.size(),
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
 }
 
 } // namespace prestosql

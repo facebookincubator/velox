@@ -124,8 +124,8 @@ __global__ void nullBytesKernel(
   const auto end = static_cast<cudf::size_type>(t.firstBit + t.numRows);
   // The indices stay unsigned, as the kernel indices they derive from.
   const auto numRows = static_cast<uint32_t>(t.numRows);
-  const auto numBytes = cudf::util::div_rounding_up_safe(numRows, 8u);
-  const auto numWords = cudf::util::div_rounding_up_safe(numRows, 32u);
+  const auto numBytes = cudf::detail::div_rounding_up_safe(numRows, 8u);
+  const auto numWords = cudf::detail::div_rounding_up_safe(numRows, 32u);
   for (auto w = blockIdx.x * blockDim.x + threadIdx.x; w < numWords;
        w += gridDim.x * blockDim.x) {
     const auto rows = min(32u, numRows - 32 * w);
@@ -195,7 +195,7 @@ struct ToJavaDecimal {
 
 uint32_t gridXFor(int64_t maxItems) {
   const int64_t blocks =
-      cudf::util::div_rounding_up_safe<int64_t>(maxItems, kBlockSize);
+      cudf::detail::div_rounding_up_safe<int64_t>(maxItems, kBlockSize);
   return static_cast<uint32_t>(std::clamp<int64_t>(blocks, 1, 128));
 }
 
@@ -355,7 +355,7 @@ void fillPrestoNullBytes(
   int64_t maxWords = 0;
   for (const auto& t : tasks) {
     maxWords = std::max<int64_t>(
-        maxWords, cudf::util::div_rounding_up_safe<int64_t>(t.numRows, 32));
+        maxWords, cudf::detail::div_rounding_up_safe<int64_t>(t.numRows, 32));
   }
   const auto gridX = gridXFor(maxWords);
   for (size_t offset = 0; offset < tasks.size(); offset += kMaxGridY) {

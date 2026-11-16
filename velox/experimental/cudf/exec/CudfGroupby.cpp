@@ -92,7 +92,8 @@ std::unique_ptr<cudf::column> castStreamingOutput(
     rmm::device_async_resource_ref mr) {
   const auto outputType = cudf_velox::veloxToCudfDataType(type);
   if (column->type() != outputType) {
-    column = cudf::cast(*column, outputType, stream, mr);
+    column = cudf::cast(
+        *column, outputType, stream, cudf::memory_resources{mr, get_temp_mr()});
   }
   return column;
 }
@@ -260,19 +261,22 @@ struct StreamingGroupbyAverageAggregator final : StreamingGroupbyAggregator {
         cudf::binary_operator::DIV,
         cudf_velox::veloxToCudfDataType(resultType),
         stream,
-        mr);
+        cudf::memory_resources{mr, get_temp_mr()});
 
     // Preserve valid NaN inputs while making AVG of an all-null group NULL.
-    cudf::numeric_scalar<int64_t> zero(0, true, stream, get_temp_mr());
+    cudf::numeric_scalar<int64_t> zero(
+        0, true, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     auto hasValues = cudf::binary_operation(
         *count,
         zero,
         cudf::binary_operator::GREATER,
         cudf::data_type{cudf::type_id::BOOL8},
         stream,
-        get_temp_mr());
-    auto [validity, nullCount] =
-        cudf::bools_to_mask(*hasValues, stream, get_temp_mr());
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+    auto [validity, nullCount] = cudf::bools_to_mask(
+        *hasValues,
+        stream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     average->set_null_mask(std::move(*validity), nullCount);
     return average;
   }
@@ -335,7 +339,8 @@ struct SimpleGroupbyAggregator final : GroupbyAggregator {
       rmm::device_async_resource_ref mr) {
     const auto cudfType = cudf_velox::veloxToCudfDataType(resultType);
     if (column->type() != cudfType) {
-      column = cudf::cast(*column, cudfType, stream, mr);
+      column = cudf::cast(
+          *column, cudfType, stream, cudf::memory_resources{mr, get_temp_mr()});
     }
     return column;
   }
@@ -515,7 +520,8 @@ struct GroupbyDecimalSumAggregator : GroupbyAggregator {
     }
     auto const cudfResType = cudf_velox::veloxToCudfDataType(resultType);
     if (col->type() != cudfResType) {
-      col = cudf::cast(*col, cudfResType, stream, mr);
+      col = cudf::cast(
+          *col, cudfResType, stream, cudf::memory_resources{mr, get_temp_mr()});
     }
     return col;
   }
@@ -530,7 +536,11 @@ struct GroupbyDecimalSumAggregator : GroupbyAggregator {
         state->view(), scale, stream, mr);
     const auto outputType = cudf_velox::veloxToCudfDataType(resultType);
     if (decoded.sum->type() != outputType) {
-      return cudf::cast(*decoded.sum, outputType, stream, mr);
+      return cudf::cast(
+          *decoded.sum,
+          outputType,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     }
     return std::move(decoded.sum);
   }
@@ -727,13 +737,22 @@ struct GroupbyCountAggregator : GroupbyAggregator {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     if (inputKind_ == CountInputKind::kNullConstant) {
-      auto zero = cudf::numeric_scalar<int64_t>(0, true, stream, get_temp_mr());
-      col = cudf::make_column_from_scalar(zero, col->size(), stream, mr);
+      auto zero = cudf::numeric_scalar<int64_t>(
+          0,
+          true,
+          stream,
+          cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+      col = cudf::make_column_from_scalar(
+          zero, col->size(), stream, cudf::memory_resources{mr, get_temp_mr()});
     }
     // cudf produces int32 for count but velox expects int64.
     const auto cudfOutputType = cudf_velox::veloxToCudfDataType(resultType);
     if (col->type() != cudfOutputType) {
-      col = cudf::cast(*col, cudfOutputType, stream, mr);
+      col = cudf::cast(
+          *col,
+          cudfOutputType,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     }
     return col;
   }
@@ -761,15 +780,19 @@ std::unique_ptr<cudf::column> makeSumCountState(
     rmm::device_async_resource_ref mr) {
   auto const size = count->size();
   cudf::numeric_scalar<int64_t> zero(
-      0, /*is_valid=*/true, stream, get_temp_mr());
+      0,
+      /*is_valid=*/true,
+      stream,
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   auto hasRows = cudf::binary_operation(
       *count,
       zero,
       cudf::binary_operator::GREATER,
       cudf::data_type{cudf::type_id::BOOL8},
       stream,
-      get_temp_mr());
-  auto [mask, numNulls] = cudf::bools_to_mask(*hasRows, stream, mr);
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+  auto [mask, numNulls] = cudf::bools_to_mask(
+      *hasRows, stream, cudf::memory_resources{mr, get_temp_mr()});
   auto nullMask = numNulls > 0 ? std::move(*mask)
                                : cudf::create_null_mask(
                                      0,
@@ -860,7 +883,11 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
         auto mean = std::move(results[meanIdx_].results[0]);
         const auto cudfType = cudf_velox::veloxToCudfDataType(resultType);
         if (mean->type() != cudfType) {
-          mean = cudf::cast(*mean, cudfType, stream, mr);
+          mean = cudf::cast(
+              *mean,
+              cudfType,
+              stream,
+              cudf::memory_resources{mr, get_temp_mr()});
         }
         return mean;
       }
@@ -873,11 +900,18 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
         auto const cudfCountType =
             cudf_velox::veloxToCudfDataType(outputType->childAt(1));
         if (sum->type() != cudf::data_type(cudfSumType)) {
-          sum = cudf::cast(*sum, cudf::data_type(cudfSumType), stream, mr);
+          sum = cudf::cast(
+              *sum,
+              cudf::data_type(cudfSumType),
+              stream,
+              cudf::memory_resources{mr, get_temp_mr()});
         }
         if (count->type() != cudf::data_type(cudfCountType)) {
-          count =
-              cudf::cast(*count, cudf::data_type(cudfCountType), stream, mr);
+          count = cudf::cast(
+              *count,
+              cudf::data_type(cudfCountType),
+              stream,
+              cudf::memory_resources{mr, get_temp_mr()});
         }
 
         return makeSumCountState(std::move(sum), std::move(count), stream, mr);
@@ -897,11 +931,18 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
         auto const cudfCountType =
             cudf_velox::veloxToCudfDataType(outputType->childAt(1));
         if (sum->type() != cudf::data_type(cudfSumType)) {
-          sum = cudf::cast(*sum, cudf::data_type(cudfSumType), stream, mr);
+          sum = cudf::cast(
+              *sum,
+              cudf::data_type(cudfSumType),
+              stream,
+              cudf::memory_resources{mr, get_temp_mr()});
         }
         if (count->type() != cudf::data_type(cudfCountType)) {
-          count =
-              cudf::cast(*count, cudf::data_type(cudfCountType), stream, mr);
+          count = cudf::cast(
+              *count,
+              cudf::data_type(cudfCountType),
+              stream,
+              cudf::memory_resources{mr, get_temp_mr()});
         }
 
         return makeSumCountState(std::move(sum), std::move(count), stream, mr);
@@ -944,22 +985,25 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
         cudf::binary_operator::DIV,
         cudf_velox::veloxToCudfDataType(resultType),
         stream,
-        mr);
+        cudf::memory_resources{mr, get_temp_mr()});
     // Null out groups where count == 0 (empty groups).
     // SQL semantics require avg of an empty group to be NULL, but
     // cudf's 0/0 division produces NaN.  We mask on count rather
     // than using column_nans_to_nulls so that legitimate NaN
     // results (from NaN inputs) are preserved.
-    cudf::numeric_scalar<int64_t> zero(0, true, stream, get_temp_mr());
+    cudf::numeric_scalar<int64_t> zero(
+        0, true, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     auto validMask = cudf::binary_operation(
         *count,
         zero,
         cudf::binary_operator::GREATER,
         cudf::data_type{cudf::type_id::BOOL8},
         stream,
-        get_temp_mr());
-    auto [mask, nullCount] =
-        cudf::bools_to_mask(*validMask, stream, get_temp_mr());
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+    auto [mask, nullCount] = cudf::bools_to_mask(
+        *validMask,
+        stream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     avg->set_null_mask(std::move(*mask), nullCount);
     return avg;
   }
@@ -1056,12 +1100,18 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
 
         // Types don't match - need to copy and cast (use output_mr since
         // these become part of the output)
-        auto count =
-            std::make_unique<cudf::column>(mergedView.child(0), stream, mr);
-        auto mean =
-            std::make_unique<cudf::column>(mergedView.child(1), stream, mr);
-        auto m2 =
-            std::make_unique<cudf::column>(mergedView.child(2), stream, mr);
+        auto count = std::make_unique<cudf::column>(
+            mergedView.child(0),
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()});
+        auto mean = std::make_unique<cudf::column>(
+            mergedView.child(1),
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()});
+        auto m2 = std::make_unique<cudf::column>(
+            mergedView.child(2),
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()});
         return makeM2StructColumn(
             std::move(count), std::move(mean), std::move(m2), stream, mr);
       }
@@ -1092,14 +1142,18 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
     auto countView = stateView.child(0);
     auto m2View = stateView.child(2);
     // count - 1 (binary_operation handles type promotion)
-    cudf::numeric_scalar<double> one(1.0, true, stream, get_temp_mr());
+    cudf::numeric_scalar<double> one(
+        1.0,
+        true,
+        stream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     auto countMinus1 = cudf::binary_operation(
         countView,
         one,
         cudf::binary_operator::SUB,
         cudf::data_type{cudf::type_id::FLOAT64},
         stream,
-        get_temp_mr());
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     // m2 / (count - 1)
     auto variance = cudf::binary_operation(
         m2View,
@@ -1107,22 +1161,35 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         cudf::binary_operator::DIV,
         cudf::data_type{cudf::type_id::FLOAT64},
         stream,
-        get_temp_mr());
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     // sqrt(variance)
     auto stddev = cudf::unary_operation(
-        *variance, cudf::unary_operator::SQRT, stream, get_temp_mr());
+        *variance,
+        cudf::unary_operator::SQRT,
+        stream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     // count >= 2
-    cudf::numeric_scalar<int64_t> two(2, true, stream, get_temp_mr());
+    cudf::numeric_scalar<int64_t> two(
+        2, true, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     auto validMask = cudf::binary_operation(
         countView,
         two,
         cudf::binary_operator::GREATER_EQUAL,
         cudf::data_type{cudf::type_id::BOOL8},
         stream,
-        get_temp_mr());
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     // Apply mask: where count < 2, result is NULL
-    cudf::numeric_scalar<double> nullDouble(0.0, false, stream, get_temp_mr());
-    return cudf::copy_if_else(*stddev, nullDouble, *validMask, stream, mr);
+    cudf::numeric_scalar<double> nullDouble(
+        0.0,
+        false,
+        stream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+    return cudf::copy_if_else(
+        *stddev,
+        nullDouble,
+        *validMask,
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
   }
 
   // Build a struct column with (count, mean, m2), casting to expected types.
@@ -1140,13 +1207,22 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
     auto const cudfM2Type =
         cudf_velox::veloxToCudfDataType(outputType->childAt(2));
     if (count->type() != cudfCountType) {
-      count = cudf::cast(*count, cudfCountType, stream, mr);
+      count = cudf::cast(
+          *count,
+          cudfCountType,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     }
     if (mean->type() != cudfMeanType) {
-      mean = cudf::cast(*mean, cudfMeanType, stream, mr);
+      mean = cudf::cast(
+          *mean,
+          cudfMeanType,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
     }
     if (m2->type() != cudfM2Type) {
-      m2 = cudf::cast(*m2, cudfM2Type, stream, mr);
+      m2 = cudf::cast(
+          *m2, cudfM2Type, stream, cudf::memory_resources{mr, get_temp_mr()});
     }
 
     auto const size = count->size();
@@ -1177,17 +1253,23 @@ std::unique_ptr<cudf::column> nullifyEmptyLists(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto sizes = cudf::lists::count_elements(
-      cudf::lists_column_view{lists->view()}, stream, get_temp_mr());
+      cudf::lists_column_view{lists->view()},
+      stream,
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   cudf::numeric_scalar<cudf::size_type> zero(
-      0, /*is_valid=*/true, stream, get_temp_mr());
+      0,
+      /*is_valid=*/true,
+      stream,
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   auto nonEmpty = cudf::binary_operation(
       *sizes,
       zero,
       cudf::binary_operator::GREATER,
       cudf::data_type{cudf::type_id::BOOL8},
       stream,
-      get_temp_mr());
-  auto [mask, numNulls] = cudf::bools_to_mask(*nonEmpty, stream, mr);
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+  auto [mask, numNulls] = cudf::bools_to_mask(
+      *nonEmpty, stream, cudf::memory_resources{mr, get_temp_mr()});
   if (numNulls > 0) {
     lists->set_null_mask(std::move(*mask), numNulls);
   }
@@ -1303,8 +1385,10 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
     // The new null mask starts at row 0, as the data of a CudfVector column
     // does.
     VELOX_CHECK_EQ(input.offset(), 0, "array_agg input has a row offset");
-    auto [rowMask, nullCount] =
-        cudf::bools_to_mask(table.column(*maskIndex), stream, get_temp_mr());
+    auto [rowMask, nullCount] = cudf::bools_to_mask(
+        table.column(*maskIndex),
+        stream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
     maskedRowNulls_ = std::move(rowMask);
     if (!ignoreNulls_) {
       // The child keeps its null values, so EXCLUDE drops the masked rows
@@ -1330,7 +1414,8 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
           stream,
           cudf::memory_resources{get_temp_mr(), get_temp_mr()});
       maskedRowNulls_ =
-          std::make_unique<cuda::device_buffer<std::byte>>(std::move(combined));
+          std::make_unique<cuda::device_buffer<cudf::bitmask_type>>(
+              std::move(combined));
       nullCount = combinedNullCount;
     }
     return cudf::column_view(
@@ -1355,7 +1440,8 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
     }
     auto view = lists;
     if (lists.has_nulls() && cudf::has_nonempty_nulls(lists, stream)) {
-      purgedInput_ = cudf::purge_nonempty_nulls(lists, stream, mr);
+      purgedInput_ = cudf::purge_nonempty_nulls(
+          lists, stream, cudf::memory_resources{mr, get_temp_mr()});
       view = purgedInput_->view();
     }
     return cudf::column_view(
@@ -1377,7 +1463,7 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
   // releaseInput().
   std::unique_ptr<cudf::column> purgedInput_;
   // Keeps the null mask of nullMaskedRows() alive until releaseInput().
-  std::unique_ptr<cuda::device_buffer<std::byte>> maskedRowNulls_;
+  std::unique_ptr<cuda::device_buffer<cudf::bitmask_type>> maskedRowNulls_;
 };
 
 std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
@@ -1920,8 +2006,8 @@ CudfVectorPtr CudfGroupby::finalizeStreamingGroupby() {
 
   VELOX_CHECK(streamingGroupbyStream_.has_value());
   const auto stream = *streamingGroupbyStream_;
-  auto [groupKeys, results] =
-      streamingGroupby_->finalize(stream, get_output_mr());
+  auto [groupKeys, results] = streamingGroupby_->finalize(
+      stream, cudf::memory_resources{get_output_mr(), get_temp_mr()});
 
   std::vector<std::unique_ptr<cudf::column>> outputColumns;
   auto keyColumns = groupKeys->release();
@@ -2135,8 +2221,10 @@ void CudfGroupby::computeFinalGroupbyIncrementally(CudfVectorPtr tbl) {
   cudf::detail::join_streams(
       std::vector<cuda::stream_ref>{inputTableStream}, finalStream);
 
-  auto concatenatedTable =
-      cudf::concatenate(tablesToConcat, finalStream, get_temp_mr());
+  auto concatenatedTable = cudf::concatenate(
+      tablesToConcat,
+      finalStream,
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   // Release before the re-aggregation so the copied-from state is not part of
   // the peak. The free is stream-ordered on `finalStream`, the stream the
   // concatenate ran on, so it cannot race the copy.
@@ -2257,7 +2345,8 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
     aggregator->addGroupbyRequest(tableView, requests, stream, get_temp_mr());
   }
 
-  auto [groupKeys, results] = groupByOwner.aggregate(requests, stream, mr);
+  auto [groupKeys, results] = groupByOwner.aggregate(
+      requests, stream, cudf::memory_resources{mr, get_temp_mr()});
   requests.clear();
   releaseInputs();
   releaseInputsGuard.dismiss();

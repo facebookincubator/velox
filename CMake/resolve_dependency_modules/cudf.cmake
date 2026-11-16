@@ -17,12 +17,12 @@ include_guard(GLOBAL)
 # 4.0 is the minimum version required by cudf
 cmake_minimum_required(VERSION 4.0)
 
-# rapids_cmake commit 037d4c5 from 2026-10-09 (main branch)
+# rapids_cmake commit 8cf47a7 from 2026-11-14 (release/26.12 branch)
 set(VELOX_rapids_cmake_VERSION 26.12)
-set(VELOX_rapids_cmake_COMMIT 037d4c5489cc13f5b378b54197238a6e2cdbff17)
+set(VELOX_rapids_cmake_COMMIT 8cf47a7b600985f876f428ac3c335ffd2fdeeb1d)
 set(
   VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-  946ebc43d81dc7359e973df54bc0749f281a0b65b32a299b00ee6a66507b0a04
+  db0a0ff32e9bbca7d28edae4bd921a082d1b24a2c2465a36d252b3c0ff62473b
 )
 set(
   VELOX_rapids_cmake_SOURCE_URL
@@ -30,22 +30,22 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit 7e29fc0 from 2026-10-15 (main branch)
+# rmm commit b588f77 from 2026-11-14 (release/26.12 branch)
 set(VELOX_rmm_VERSION 26.12)
-set(VELOX_rmm_COMMIT 7e29fc098edc5d4d8f186c0da2be277410839a05)
+set(VELOX_rmm_COMMIT b588f77a9264a2686fd12ae46f915f0d426bc3a2)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  e1cb8d9f3483bebaea805817182da1b9a2c315a2cd71dd6496d0577381fec5b8
+  9ef4338295b2c6870bb1a13045b7f39597f8b470a0174219213a3b0bba50ce0d
 )
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit 90b116c from 2026-10-13 (main branch)
+# kvikio commit d9b082b from 2026-11-14 (release/26.12 branch)
 set(VELOX_kvikio_VERSION 26.12)
-set(VELOX_kvikio_COMMIT 90b116c67316eedd6b561c0ac7bcdfd09e536be9)
+set(VELOX_kvikio_COMMIT d9b082b0423232f18a4de089b289d8f3ff84bc4b)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  df6e4ad41b956a6fa9378aed901f85daafac7c521d913661da8d7fc477d9e0aa
+  f95fd52a06795d635474879865373cf90497916ac1d6e7276245d1efe5409e0a
 )
 set(
   VELOX_kvikio_SOURCE_URL
@@ -53,12 +53,12 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit c9086e0 from 2026-10-15 (main branch)
+# cudf commit ecbb921 from 2026-11-16 (release/26.12 branch)
 set(VELOX_cudf_VERSION 26.12 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT c9086e0afbf0cb11194a12bb2233b80139eabd09)
+set(VELOX_cudf_COMMIT ecbb921b32072c4dfcd39555d8beb53e82c20d29)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  65c4df018b62ced84ebd74235f70abd053fbcae342e2eb720bc0571023dba72f
+  3342cf7990c82dcf72deb2ee48d9e0d78078e5276b59ffc415dc726f38391a0a
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
@@ -131,6 +131,13 @@ block(SCOPE_FOR VARIABLES)
   set(CUDF_BUILD_STATIC_DEPS OFF)
   set(BUILD_SHARED_LIBS ON)
   set(KvikIO_BUILD_NSYS_PLUGIN OFF)
+
+  # cuDF fetches librtcx, whose hash target collides with the hash target of a
+  # bundled Abseil. The override patches librtcx to rename it; keep its git_tag
+  # in sync with cuDF's cpp/cmake/thirdparty/get_rtcx.cmake.
+  # RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE is honored by every rapids_cpm_init,
+  # so the override applies before cuDF fetches librtcx.
+  set(RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/cudf-cpm-overrides.json")
 
   FetchContent_Declare(
     rapids-cmake
