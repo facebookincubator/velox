@@ -1123,8 +1123,7 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
   assertReadsAs({"-.5", "-.5D"}, -0.5);
   assertReadsAs({"1.", "1.f", "1.F", "1.d", "1.D"}, 1.0);
   assertReadsAs({"1e2", "1E+2", "1e2F", "1e+2d"}, 100.0);
-  assertReadsAs({"0", "+0.0", "0e+2D"}, 0.0);
-  assertReadsAs({"-0.0", "-0f", "-0e-2D"}, -0.0);
+  assertReadsAs({"0", "+0.0", "0e+2D", "-0.0", "-0f", "-0e-2D"}, 0.0);
 
   assertReadsAs({"", " \t ", "+", "-", "f", "+f"}, std::nullopt);
   assertReadsAs({".", ".f", ".F", ".d", ".D", ".e2", ".e2f"}, std::nullopt);
@@ -1149,12 +1148,12 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
   assertReadsAs({"1e400D"}, realInfinity, doubleInfinity);
   assertReadsAs({"-1e400d"}, -realInfinity, -doubleInfinity);
   assertReadsAs({"1e-100f"}, 0.0f, 1e-100);
-  assertReadsAs({"-1e-100"}, -0.0f, -1e-100);
+  assertReadsAs({"-1e-100"}, 0.0f, -1e-100);
   assertReadsAs(
       {"1.4e-45f"}, std::numeric_limits<float>::denorm_min(), 1.4e-45);
   assertReadsAs({"4.9e-324D"}, 0.0f, std::numeric_limits<double>::denorm_min());
   assertReadsAs({"1e-400D"}, 0.0f, 0.0);
-  assertReadsAs({"-1e-400f"}, -0.0f, -0.0);
+  assertReadsAs({"-1e-400f"}, 0.0f, 0.0);
 }
 
 TEST_F(TextReaderTest, simpleTypes) {
