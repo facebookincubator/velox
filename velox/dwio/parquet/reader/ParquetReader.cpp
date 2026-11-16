@@ -742,7 +742,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               followChild = false;
             }
           }
-        } else {
+        } else if (mappingMode == dwio::common::ColumnMappingMode::kPosition) {
           // Handle schema evolution.
           if (i < requestedRowType->size()) {
             columnNames.push_back(requestedRowType->nameOf(i));
