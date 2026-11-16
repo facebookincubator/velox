@@ -197,28 +197,16 @@ struct RemainderFunction {
 
 /// Computes primitive PMOD using the query's ANSI mode at initialization.
 template <typename T>
-struct PmodFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const TInput* /*dividend*/,
-      const TInput* /*divisor*/) {
-    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
-  }
-
+struct PmodFunction : public RemainderFunction<T> {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
   call(TInput& result, const TInput dividend, const TInput divisor) {
-    if (UNLIKELY(divisor == 0)) {
-      if (ansiEnabled_) {
-        VELOX_USER_FAIL("Division by zero");
-      }
+    TInput remainder;
+    if (!RemainderFunction<T>::call(remainder, dividend, divisor)) {
       return false;
     }
 
     if constexpr (std::is_floating_point_v<TInput>) {
-      const TInput remainder = std::fmod(dividend, divisor);
       if (remainder < 0) {
         const TInput adjusted = remainder + divisor;
         result = std::fmod(adjusted, divisor);
@@ -227,12 +215,6 @@ struct PmodFunction {
         result = remainder;
       }
     } else {
-      // Java defines MIN % -1 as zero; C++ signed division would overflow.
-      if (divisor == -1) {
-        result = 0;
-        return true;
-      }
-      const TInput remainder = dividend % divisor;
       if (remainder >= 0) {
         result = remainder;
         return true;
@@ -250,9 +232,6 @@ struct PmodFunction {
     }
     return true;
   }
-
- private:
-  bool ansiEnabled_ = false;
 };
 
 template <typename T>
