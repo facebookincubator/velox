@@ -666,7 +666,7 @@ void Deserializer::deserialize(
 void Deserializer::appendToOutput(
     velox::VectorPtr&& decoded,
     velox::VectorPtr& output) const {
-  if (FOLLY_LIKELY(output == nullptr)) {
+  if (output == nullptr) [[likely]] {
     output = std::move(decoded);
     return;
   }
@@ -722,7 +722,7 @@ velox::VectorPtr Deserializer::projectOutput(
 }
 
 void Deserializer::decodeRun(DecodeRun& run, velox::VectorPtr& output) const {
-  if (FOLLY_UNLIKELY(run.batches == 0)) {
+  if (run.batches == 0) [[unlikely]] {
     return;
   }
   const auto ops = buildDecodeOps(runRanges_);
@@ -758,10 +758,10 @@ void Deserializer::appendStreamSegments(
         false);
   }
   parser_->iterateStreams([&](uint32_t offset, std::string_view streamData) {
-    if (FOLLY_UNLIKELY(offset > maxStreamOffset)) {
+    if (offset > maxStreamOffset) [[unlikely]] {
       return;
     }
-    if (FOLLY_UNLIKELY(!shouldDecodeStream(offset))) {
+    if (!shouldDecodeStream(offset)) [[unlikely]] {
       return;
     }
     if (trackMapValueStreams) {
@@ -818,7 +818,7 @@ uint32_t Deserializer::appendBatch(
     velox::VectorPtr& output) const {
   const auto rowCount = parser_->initialize(batch);
   const auto requiredBarrier = parser_->requiredBarrier();
-  if (FOLLY_UNLIKELY(requiredBarrier)) {
+  if (requiredBarrier) [[unlikely]] {
     decodeRun(run, output);
   }
 
@@ -864,7 +864,7 @@ uint32_t Deserializer::appendBatch(
   }
   run.rows += rowCount;
   ++run.batches;
-  if (FOLLY_UNLIKELY(requiredBarrier)) {
+  if (requiredBarrier) [[unlikely]] {
     decodeRun(run, output);
     parser_->reset();
   }

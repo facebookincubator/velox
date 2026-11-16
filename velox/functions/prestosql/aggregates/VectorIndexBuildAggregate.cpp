@@ -21,7 +21,7 @@
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/EmbeddingGroup.h"
-#include "velox/vector/DecodedVector.h"
+#include "velox/functions/prestosql/aggregates/VectorIndexOptionsArgument.h"
 
 namespace facebook::velox::aggregate::prestosql {
 namespace {
@@ -154,10 +154,8 @@ class VectorIndexBuildAggregate {
     const auto& options = constantInputs[4];
     VELOX_USER_CHECK_NOT_NULL(indexType, "Index type must be a constant");
     VELOX_USER_CHECK_NOT_NULL(metric, "Metric must be a constant");
-    VELOX_USER_CHECK_NOT_NULL(options, "Options must be a constant");
     VELOX_USER_CHECK(!indexType->isNullAt(0), "Index type must not be null");
     VELOX_USER_CHECK(!metric->isNullAt(0), "Metric must not be null");
-    VELOX_USER_CHECK(!options->isNullAt(0), "Options must not be null");
 
     const auto indexTypeName =
         indexType->as<ConstantVector<StringView>>()->valueAt(0);
@@ -176,28 +174,11 @@ class VectorIndexBuildAggregate {
         "Unsupported vector index metric: {}",
         metricName);
 
-    DecodedVector decodedOptions(*options);
-    const auto* map = decodedOptions.base()->asChecked<MapVector>();
-    const auto row = decodedOptions.index(0);
-    std::vector<std::pair<std::string_view, std::string_view>> optionPairs;
-    if (map->sizeAt(row) > 0) {
-      const auto* keys = map->mapKeys()->asChecked<SimpleVector<StringView>>();
-      const auto* values =
-          map->mapValues()->asChecked<SimpleVector<StringView>>();
-      for (auto i = map->offsetAt(row);
-           i < map->offsetAt(row) + map->sizeAt(row);
-           ++i) {
-        VELOX_USER_CHECK(
-            !values->isNullAt(i), "Option values must not be null");
-        optionPairs.emplace_back(keys->valueAt(i), values->valueAt(i));
-      }
-    }
-
     constantSettings_ = Settings{
         .indexKind = *parsedIndexKind,
         .metric = *parsedMetric,
-        .options =
-            LocalVectorIndexOptions::parse(*parsedIndexKind, optionPairs),
+        .options = LocalVectorIndexOptions::parse(
+            *parsedIndexKind, VectorIndexOptionsArgument::read(options)),
     };
   }
 

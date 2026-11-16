@@ -18,6 +18,7 @@
 
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 
 namespace facebook::velox::dwrf {
@@ -430,7 +431,7 @@ void SelectiveStringDirectColumnReader::readWithVisitor(
       std::is_same_v<typename TVisitor::Extract, dwio::common::ExtractToReader>;
   auto nulls = nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
 
-  if (process::hasSimd() && isExtract) {
+  if (isExtract && dwio::common::useFastPath(visitor, nulls != nullptr)) {
     if (nullsInReadRange_) {
       if (TVisitor::dense) {
         returnReaderNulls_ = true;

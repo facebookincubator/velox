@@ -268,7 +268,7 @@ inline extractBitmapT ExtractBits(
     extractBitmapT bitmap,
     extractBitmapT selectBitmap) {
 #ifdef __BMI2__
-  if (FOLLY_LIKELY(process::hasBmi2())) {
+  if (process::hasBmi2()) [[likely]] {
     return _pext_u64(bitmap, selectBitmap);
   }
 #endif
@@ -297,13 +297,13 @@ int64_t DefLevelsBatchToBitmap(
         defLevels, batchSize, levelInfo.repeatedAncestorDefLevel - 1));
     auto selectedBits = ExtractBits(definedBitmap, presentBitmap);
     int64_t selectedCount = std::popcount(presentBitmap);
-    if (FOLLY_UNLIKELY(selectedCount > upperBoundRemaining)) {
+    if (selectedCount > upperBoundRemaining) [[unlikely]] {
       VELOX_FAIL("Values read exceeded upper bound");
     }
     writer->AppendWord(selectedBits, selectedCount);
     return std::popcount(selectedBits);
   } else {
-    if (FOLLY_UNLIKELY(batchSize > upperBoundRemaining)) {
+    if (batchSize > upperBoundRemaining) [[unlikely]] {
       VELOX_FAIL("Values read exceeded upper bound");
     }
 

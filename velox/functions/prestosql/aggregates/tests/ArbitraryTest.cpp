@@ -598,9 +598,9 @@ TEST_F(ArbitraryTest, spilling) {
   exec::TestScopedSpillInjection scopedSpillInjection(100);
   spillDirectory = TempDirectoryPath::create();
   builder.spillDirectory(spillDirectory->getPath())
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(core::QueryConfig::kAggregationSpillEnabled, "true")
-      .config(core::QueryConfig::kSpillNumPartitionBits, "0");
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kAggregationSpillEnabled, true)
+      .config(core::QueryConfig::kSpillNumPartitionBits, 0);
 
   auto result = builder.maxDrivers(2).copyResults(pool_.get());
   ::facebook::velox::test::assertEqualVectors(expected, result);

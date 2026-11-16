@@ -425,8 +425,7 @@ std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
   return AssertQueryBuilder(duckDbQueryRunner_)
       .plan(plan)
       .config(
-          QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-          std::to_string(numPrefetchBatches))
+          QueryConfig::kIndexLookupJoinMaxPrefetchBatches, numPrefetchBatches)
       .assertResults(duckDbVerifySql);
 }
 
@@ -446,10 +445,9 @@ std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
       .serialExecution(serialExecution)
       .barrierExecution(barrierExecution)
       .maxDrivers(maxDrivers)
-      .config(QueryConfig::kMaxOutputBatchRows, std::to_string(maxOutputRows))
+      .config(QueryConfig::kMaxOutputBatchRows, maxOutputRows)
       .config(
-          QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-          std::to_string(numPrefetchBatches));
+          QueryConfig::kIndexLookupJoinMaxPrefetchBatches, numPrefetchBatches);
   if (needsIndexSplit) {
     // Add a fake split for the index source. The test index source doesn't
     // actually use splits, but this is used to verify the split passing
@@ -547,12 +545,6 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
 std::vector<std::shared_ptr<TempFilePath>>
 IndexLookupJoinTestBase::createProbeFiles(
     const std::vector<RowVectorPtr>& probeVectors) {
-  std::vector<std::shared_ptr<TempFilePath>> probeFiles;
-  probeFiles.reserve(probeVectors.size());
-  for (auto i = 0; i < probeVectors.size(); ++i) {
-    probeFiles.push_back(TempFilePath::create());
-  }
-  writeToFiles(toFilePaths(probeFiles), probeVectors);
-  return probeFiles;
+  return writeToFiles(probeVectors);
 }
 } // namespace facebook::velox::exec::test

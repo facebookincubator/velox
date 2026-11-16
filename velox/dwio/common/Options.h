@@ -1055,9 +1055,9 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   /// Process-wide async data cache for Nimble metadata caching. When both
-  /// fileHandle and cache are set, TabletReader creates a
-  /// CachedMetadataInput that caches decompressed footer, stripes, and
-  /// index metadata across readers on the same file.
+  /// fileHandle and cache are set and cacheMetadata() is true, TabletReader
+  /// caches decompressed footer, stripes, and index metadata across readers on
+  /// the same file, in the block cache that Nimble builds on this cache.
   cache::AsyncDataCache* cache() const {
     return cache_;
   }

@@ -526,7 +526,7 @@ inline void SimdForBitpackEncoding<T>::materializePartialGroup(
 
 template <typename T>
 void SimdForBitpackEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
-  if (FOLLY_UNLIKELY(rowCount == 0)) {
+  if (rowCount == 0) [[unlikely]] {
     return;
   }
   auto* output = static_cast<physicalType*>(buffer);

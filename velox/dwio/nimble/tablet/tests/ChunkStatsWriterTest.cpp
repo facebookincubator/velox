@@ -102,8 +102,11 @@ class ChunkStatsWriterTest : public ::testing::Test {
     auto inputBuffer =
         velox::AlignedBuffer::allocate<char>(data.size(), pool_.get());
     std::memcpy(inputBuffer->asMutable<char>(), data.data(), data.size());
-    return std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
-        std::move(inputBuffer), CompressionType::Uncompressed, pool_.get()));
+    return std::make_unique<MetadataBuffer>(toPinnedBuffer(
+        MetadataBuffer::decompress(
+            std::move(inputBuffer),
+            CompressionType::Uncompressed,
+            pool_.get())));
   }
 
   static std::vector<uint8_t> encodeTrivial(std::span<const uint32_t> values) {
@@ -2112,9 +2115,9 @@ TEST_P(ChunkStatsReaderVersionTest, uncompressedSizeRoundtrip) {
       rootBuffer->asMutable<char>(),
       fileIndex.rootIndexData.data(),
       fileIndex.rootIndexData.size());
-  Section rootSection{MetadataBuffer(
+  Section rootSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
-          std::move(rootBuffer), CompressionType::Uncompressed, pool_.get()))};
+          std::move(rootBuffer), CompressionType::Uncompressed, pool_.get())))};
 
   auto chunkStats =
       index::ChunkStats::create(GetParam(), std::move(rootSection));
@@ -2164,9 +2167,9 @@ TEST_F(ChunkStatsWriterTest, missingUncompressedSizeBackwardCompat) {
       rootBuffer->asMutable<char>(),
       builder.GetBufferPointer(),
       builder.GetSize());
-  Section rootSection{MetadataBuffer(
+  Section rootSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
-          std::move(rootBuffer), CompressionType::Uncompressed, pool_.get()))};
+          std::move(rootBuffer), CompressionType::Uncompressed, pool_.get())))};
 
   auto chunkStats =
       index::ChunkStats::create(ChunkStatsVersion::kV1, std::move(rootSection));
@@ -2219,9 +2222,9 @@ TEST_P(ChunkStatsReaderVersionTest, uncompressedSizeForUncompressedSections) {
       rootBuffer->asMutable<char>(),
       fileIndex.rootIndexData.data(),
       fileIndex.rootIndexData.size());
-  Section rootSection{MetadataBuffer(
+  Section rootSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
-          std::move(rootBuffer), CompressionType::Uncompressed, pool_.get()))};
+          std::move(rootBuffer), CompressionType::Uncompressed, pool_.get())))};
 
   auto chunkStats =
       index::ChunkStats::create(GetParam(), std::move(rootSection));

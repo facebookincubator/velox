@@ -83,7 +83,7 @@ struct CudfJoinOutputLayout {
 
   /// Read-only access to the probe-side projections, for call sites that
   /// copy from column_views instead of moving gathered columns.
-  const std::vector<exec::IdentityProjection>& probeProjections() const {
+  const std::vector<IdentityProjection>& probeProjections() const {
     return probeProjections_;
   }
 
@@ -98,8 +98,8 @@ struct CudfJoinOutputLayout {
 
  private:
   // Source of truth for the input-to-output mapping of each side.
-  std::vector<exec::IdentityProjection> probeProjections_;
-  std::vector<exec::IdentityProjection> buildProjections_;
+  std::vector<IdentityProjection> probeProjections_;
+  std::vector<IdentityProjection> buildProjections_;
   std::vector<cudf::size_type> probeColumnIndices_;
   std::vector<cudf::size_type> buildColumnIndices_;
   // Kept for the null-fill column dtypes.

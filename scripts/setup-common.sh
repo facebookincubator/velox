@@ -151,12 +151,11 @@ function install_boost {
       fi
     fi
     if [[ "$(uname)" == "Linux" && ${USE_CLANG} != "false" ]]; then
-      ./bootstrap.sh --prefix="${INSTALL_PREFIX}" --with-toolset="clang-15"
-      # Switch the compiler from the clang-15 toolset which doesn't exist (clang-15.jam) to
-      # clang of version 15 when toolset clang-15 is used.
-      # This reconciles the project-config.jam generation with what the b2 build system allows for customization.
-      sed -i 's/using clang-15/using clang : 15/g' project-config.jam
-      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi toolset=clang-15 --without-python
+      # b2 takes the compiler from its configuration, not from CXX. CLANG_CXX is
+      # the Clang of the platform's setup script.
+      ./bootstrap.sh --prefix="${INSTALL_PREFIX}"
+      echo "using clang : : ${CLANG_CXX} ;" >>project-config.jam
+      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi toolset=clang --without-python
     else
       ./bootstrap.sh --prefix="${INSTALL_PREFIX}"
       ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi --without-python

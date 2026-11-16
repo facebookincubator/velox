@@ -716,6 +716,13 @@ void concatSpecialForm(
         auto viewSpecs = outputSpecs(producer);
         ctx->fusedCode(producer, viewSpecs);
       }
+      // The copy partitions by source index, but the operand's producer in
+      // this kernel need not have written it that way: a scatter writes any
+      // destination, so the elements of one block's copy range come from all
+      // blocks of the scatter.
+      if (ctx->valueNeedsBarrier(elem, node)) {
+        ctx->emitBarrier();
+      }
       std::string offsetExpr;
       if (spec.isStack) {
         // Every stack operand occupies exactly one position along the new dim.

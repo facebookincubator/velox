@@ -142,6 +142,16 @@ bool matchesPresenceKey(
   return true;
 }
 
+// Returns the field reader parameters that decode the fields of a stripe as
+// 'options' configure.
+FieldReaderParams toReaderParams(const StreamReader::Options& options) {
+  return FieldReaderParams{
+      .decodeExecutor = options.decodeExecutor,
+      .maxDecodeParallelism = options.maxDecodeParallelism,
+      .minStreamsPerDecodeTask = options.minStreamsPerDecodeTask,
+  };
+}
+
 } // namespace
 
 struct StreamReader::CachedReader {
@@ -168,10 +178,12 @@ struct StreamReader::CachedReader {
 
 StreamReader::StreamReader(
     std::shared_ptr<const Type> type,
-    velox::memory::MemoryPool* pool)
+    velox::memory::MemoryPool* pool,
+    Options options)
     : type_{std::move(type)},
       outputType_{convertToVeloxType(*velox::checkedNotNull(type_.get()))},
       pool_{velox::checkedNotNull(pool)},
+      readerOptions_{options},
       cachedKey_{pool_} {
   NIMBLE_CHECK_NOT_NULL(outputType_);
 
@@ -182,10 +194,9 @@ void StreamReader::init() {
   const auto typeWithId =
       std::shared_ptr<const velox::dwio::common::TypeWithId>{
           velox::dwio::common::TypeWithId::create(outputType_)};
-  auto readerParams = FieldReaderParams{};
   std::vector<uint32_t> readerOffsets;
   readerFactory_ = FieldReaderFactory::create(
-      readerParams,
+      toReaderParams(readerOptions_),
       type_,
       typeWithId,
       readerOffsets,
@@ -335,6 +346,10 @@ void StreamReader::prepareRead(
     const Encoding::Options& options) {
   reset();
   options_ = options;
+  if (readerOptions_.parallelDecodeEnabled()) {
+    // TODO: Make the encoding buffer pool safe for parallel decoding.
+    options_.bufferPool = nullptr;
+  }
   if (cachedReader_ != nullptr && cachedReader_->root != nullptr &&
       matchesPresenceKey(streams, cachedKey_)) {
     // The reader points to its decoders, so rebinding replaces their views and

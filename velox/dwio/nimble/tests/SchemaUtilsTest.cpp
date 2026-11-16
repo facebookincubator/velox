@@ -633,14 +633,20 @@ TEST(SchemaUtilsTest, projectionStreamOffsets) {
           features.inMapDescriptorAt(1).offset()));
 }
 
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kBitmap);
-  hybridMap->addGroup(0, {"1"}, makeAllKindValueType(builder));
+  const std::vector<std::string> groupKeys{"1"};
+  hybridMap->addGroup(0, groupKeys, makeAllKindValueType(builder));
   hybridMap->addGroup(
-      HybridFlatMap::kDefaultGroupId, {}, makeAllKindValueType(builder));
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      makeAllKindValueType(builder));
   root->addChild("features", hybridMap);
   const auto source = SchemaReader::getSchema(builder.schemaNodes());
   const auto projection =
@@ -763,9 +769,10 @@ TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
         "1", nestedFlatMapBuilder.createScalarTypeBuilder(ScalarKind::Int64));
     return value;
   };
-  nestedHybrid->addGroup(0, {"1"}, makeFlatMapValue());
+  const std::vector<std::string> nestedGroupKeys{"1"};
+  nestedHybrid->addGroup(0, nestedGroupKeys, makeFlatMapValue());
   nestedHybrid->addGroup(
-      HybridFlatMap::kDefaultGroupId, {}, makeFlatMapValue());
+      HybridFlatMap::kDefaultGroupId, kNoGroupKeys, makeFlatMapValue());
   nestedRoot->addChild("features", nestedHybrid);
   const auto nestedSchema =
       SchemaReader::getSchema(nestedFlatMapBuilder.schemaNodes());
@@ -780,16 +787,18 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kBitmap);
-  const auto addGroup = [&](uint32_t groupId, std::vector<std::string> keys) {
+  const auto addGroup = [&](uint32_t groupId,
+                            const std::vector<std::string>& keys) {
     hybridMap->addGroup(
-        groupId,
-        std::move(keys),
-        builder.createScalarTypeBuilder(ScalarKind::Double));
+        groupId, keys, builder.createScalarTypeBuilder(ScalarKind::Double));
   };
-  addGroup(0, {"1"});
-  addGroup(1, {"2", "3"});
-  addGroup(HybridFlatMap::kDefaultGroupId, {});
-  hybridMap->appendDefaultGroupKey("9");
+  const std::vector<std::string> firstGroupKeys{"1"};
+  const std::vector<std::string> secondGroupKeys{"2", "3"};
+  std::vector<std::string> defaultKeys;
+  addGroup(0, firstGroupKeys);
+  addGroup(1, secondGroupKeys);
+  addGroup(HybridFlatMap::kDefaultGroupId, defaultKeys);
+  defaultKeys.push_back("9");
   root->addChild("features", hybridMap);
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
   const auto& sourceRoot = schema->asRow();
@@ -913,13 +922,15 @@ TEST(SchemaUtilsTest, hybridProjectionUsesEmptyDefaultForAbsentKeys) {
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"1"};
   hybridMap->addGroup(
-      0, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Double));
+      0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Double));
+  std::vector<std::string> defaultKeys;
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      defaultKeys,
       builder.createScalarTypeBuilder(ScalarKind::Double));
-  hybridMap->appendDefaultGroupKey("9");
+  defaultKeys.push_back("9");
   root->addChild("features", hybridMap);
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
   const auto& sourceRoot = schema->asRow();
@@ -1011,11 +1022,12 @@ TEST(SchemaUtilsTest, hybridProjectionSelectsKeyListDefaultForUngroupedKey) {
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kKeyList);
+  const std::vector<std::string> groupKeys{"1"};
   hybridMap->addGroup(
-      0, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Double));
+      0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Double));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       builder.createScalarTypeBuilder(ScalarKind::Double));
   root->addChild("features", hybridMap);
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
@@ -1813,13 +1825,12 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionUsesSchemaGroups) {
   auto root = schemaBuilder.createRowTypeBuilder(1);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
   const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
@@ -1856,13 +1867,12 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingColumn) {
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
   root->addChild(
@@ -1903,9 +1913,12 @@ TEST(SchemaUtilsTest, hybridFlatMapEmptyDefaultNumbersFollowingColumn) {
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
-  features->addGroup(0, {"configured"}, makeAllKindValueType(schemaBuilder));
+  const std::vector<std::string> groupKeys{"configured"};
+  features->addGroup(0, groupKeys, makeAllKindValueType(schemaBuilder));
   features->addGroup(
-      HybridFlatMap::kDefaultGroupId, {}, makeAllKindValueType(schemaBuilder));
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      makeAllKindValueType(schemaBuilder));
   root->addChild("features", features);
   root->addChild(
       "id", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
@@ -1963,13 +1976,12 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingFlatMap) {
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
   auto flatMap = schemaBuilder.createFlatMapTypeBuilder(ScalarKind::String);
@@ -2000,21 +2012,22 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingFlatMap) {
 TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersMultipleHybridColumns) {
   SchemaBuilder schemaBuilder;
   auto root = schemaBuilder.createRowTypeBuilder(3);
-  const auto addHybrid = [&](std::string_view name) {
+  const auto addHybrid = [&](std::string_view name,
+                             const std::vector<std::string>& groupKeys) {
     auto map = schemaBuilder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
     map->addGroup(
-        0,
-        {std::string{name} + "_key"},
-        schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
     map->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
     root->addChild(std::string{name}, map);
   };
-  addHybrid("first");
-  addHybrid("second");
+  const std::vector<std::string> firstGroupKeys{"first_key"};
+  const std::vector<std::string> secondGroupKeys{"second_key"};
+  addHybrid("first", firstGroupKeys);
+  addHybrid("second", secondGroupKeys);
   root->addChild(
       "id", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
@@ -2041,13 +2054,12 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingNestedRow) {
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
   auto nested = schemaBuilder.createRowTypeBuilder(2);
@@ -2082,13 +2094,12 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingArrayWithOffsets) {
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
   auto array = schemaBuilder.createArrayWithOffsetsTypeBuilder();
@@ -2117,8 +2128,10 @@ TEST(SchemaUtilsTest, hybridFlatMapConvertsToVeloxMap) {
   };
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
-  hybridMap->addGroup(0, {"1"}, makeValue());
-  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, makeValue());
+  const std::vector<std::string> groupKeys{"1"};
+  hybridMap->addGroup(0, groupKeys, makeValue());
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId, kNoGroupKeys, makeValue());
 
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
   const auto veloxType = convertToVeloxType(*schema);

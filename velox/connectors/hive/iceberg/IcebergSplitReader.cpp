@@ -700,7 +700,8 @@ void IcebergSplitReader::prepareSplit(
                 splitOffset_,
                 connectorQueryCtx_->memoryPool(),
                 fileConfig_->config(),
-                deleteFileReadOps(deleteFile, effectiveFileReadOps)));
+                deleteFileReadOps(deleteFile, effectiveFileReadOps),
+                connectorQueryCtx_->fsTokenProvider()));
       }
     } else {
       VELOX_NYI(

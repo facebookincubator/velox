@@ -304,6 +304,53 @@ TEST_P(NimbleIndexProjectorTest, projectorLooksUpStripeSelections) {
   EXPECT_EQ(dataIoStats_->read().count(), 0);
 }
 
+TEST_P(NimbleIndexProjectorTest, projectorLooksUpAKeyCursor) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  const auto encodeKey = [&](int64_t key) {
+    return makePointLookup(rowType, {"key"}, key).lowerKey.value();
+  };
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  auto projector = createProjector(projectedSubfields);
+
+  // The key cursor of a key range reads the keys of its rows, which span the
+  // three stripes, and returns the selections of lookup(bounds).
+  std::unique_ptr<index::KeyCursor> keyCursor;
+  const auto bounds = makeRangeLookup(rowType, {"key"}, 2, 10);
+  EXPECT_EQ(projector->lookup(bounds, keyCursor), projector->lookup(bounds));
+  ASSERT_NE(keyCursor, nullptr);
+  for (int64_t key{2}; key < 10; ++key) {
+    SCOPED_TRACE(key);
+    ASSERT_TRUE(keyCursor->hasNext());
+    EXPECT_EQ(keyCursor->next(), encodeKey(key));
+  }
+  EXPECT_FALSE(keyCursor->hasNext());
+
+  // The key cursor of a key reads its row.
+  const auto selections = projector->lookup(encodeKey(5), keyCursor);
+  EXPECT_THAT(
+      selections,
+      ::testing::ElementsAre(
+          ::testing::AllOf(
+              ::testing::Field(&StripeSelection::stripeIndex, 1),
+              ::testing::Field(&StripeSelection::rowRange, RowRange(1, 2)))));
+  ASSERT_NE(keyCursor, nullptr);
+  EXPECT_EQ(keyCursor->next(), encodeKey(5));
+  EXPECT_FALSE(keyCursor->hasNext());
+
+  // A miss clears the key cursor.
+  EXPECT_THAT(
+      projector->lookup(makeRangeLookup(rowType, {"key"}, 20, 30), keyCursor),
+      ::testing::IsEmpty());
+  EXPECT_EQ(keyCursor, nullptr);
+  keyCursor = projector->clusterIndex().keyCursor(RowRange{0, 1});
+  EXPECT_THAT(
+      projector->lookup(encodeKey(20), keyCursor), ::testing::IsEmpty());
+  EXPECT_EQ(keyCursor, nullptr);
+  EXPECT_EQ(projector->stats().numReadStripes, 0);
+}
+
 TEST_P(NimbleIndexProjectorTest, collectsNoTimingsWhenDisabled) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
@@ -399,7 +446,7 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
 
   for (const auto& stripe : stripes) {
     SCOPED_TRACE(fmt::format("stripeIndex={}", stripe.selection.stripeIndex));
-    StreamReader reader(schema, leafPool_.get());
+    StreamReader reader(schema, leafPool_.get(), /*options=*/{});
     reader.setStreams(stripe.streams, encodingOptions);
     velox::VectorPtr actual;
     folly::coro::blockingWait(reader.co_next(kRowsPerStripe, actual));
@@ -633,6 +680,78 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
     ASSERT_NE(result.values, nullptr);
     velox::test::assertEqualVectors(expected, result.values);
   }
+}
+
+// A cluster index that stores its key chunks in stripes puts each stripe's key
+// stream first, as stream 0, ahead of the column streams. Projections read
+// only the column streams and serve the same rows.
+TEST_P(NimbleIndexProjectorTest, projectsFileWithStripeKeyStreams) {
+  const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  constexpr int kNumBatches{3};
+  constexpr int kRowsPerBatch{100};
+  std::vector<RowVectorPtr> batches;
+  for (int batchIndex{0}; batchIndex < kNumBatches; ++batchIndex) {
+    const auto firstKey = batchIndex * kRowsPerBatch;
+    batches.push_back(vectorMaker_->rowVector(
+        {"key", "value"},
+        {vectorMaker_->flatVector<int64_t>(
+             kRowsPerBatch, [firstKey](auto row) { return firstKey + row; }),
+         vectorMaker_->flatVector<int32_t>(kRowsPerBatch, [firstKey](auto row) {
+           return (firstKey + row) * 10;
+         })}));
+  }
+  WriterOptions options;
+  options.encodingSelectionPolicyCreator = encodingViewSelectionPolicy();
+  options.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  options.clusterIndexKeyStreamLayout = index::KeyStreamLayout::kStripe;
+  // One stripe per batch.
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress& /*progress*/) { return true; });
+  };
+  writeBatches(batches, std::move(options));
+  ASSERT_EQ(openSinkTablet()->stripeCount(), kNumBatches);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  // A key in the second stripe, and a range across the first two stripes.
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makePointLookup(rowType, {"key"}, 150),
+      makeRangeLookup(rowType, {"key"}, 95, 105),
+  };
+  const auto rows = projectRows(*projector, request, {});
+  std::vector<int32_t> expectedValues{1'500};
+  for (int key = 95; key < 105; ++key) {
+    expectedValues.push_back(key * 10);
+  }
+  velox::test::assertEqualVectors(
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int32_t>(expectedValues)}),
+      rows.values);
+
+  // The serialized slices decode with the projected schema.
+  NimbleIndexProjector::Request pointRequest;
+  pointRequest.keyBounds = {makePointLookup(rowType, {"key"}, 150)};
+  const auto streams = projector->projectStreams(pointRequest, {});
+  ASSERT_EQ(streams.responses.size(), 1);
+  ASSERT_EQ(streams.responses[0].slices.size(), 1);
+  const auto coalesced = coalesceChunkSlice(streams.responses[0].slices[0]);
+  Deserializer deserializer(
+      convertToNimbleType(*ROW({"value"}, {INTEGER()})),
+      leafPool_.get(),
+      DeserializerOptions{});
+  VectorPtr deserialized;
+  deserializer.deserialize(
+      std::string_view{
+          reinterpret_cast<const char*>(coalesced.data()), coalesced.length()},
+      deserialized);
+  velox::test::assertEqualVectors(
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int32_t>({1'500})}),
+      deserialized);
 }
 
 TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedData) {
@@ -4435,6 +4554,18 @@ DEBUG_ONLY_TEST_P(NimbleIndexProjectorTest, statsDuringProjection) {
       velox::common::testutil::TestValue::disable();
     }
   });
+
+  // The cluster index reads its key chunk through a DirectDataInput too. One
+  // projection up front decodes it in the cached tablet that every projector
+  // below shares, so the stripe load is the only allocation the hook sees.
+  {
+    std::vector<Subfield> subfields;
+    subfields.emplace_back("value");
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {makeRangeLookup(rowType, {"key"}, 0, kNumRows)};
+    createProjector(subfields)->projectStreams(request, {});
+  }
+
   for (const std::string_view method :
        {"projectStreams", "co_projectRows", "loadStripeStreams"}) {
     SCOPED_TRACE(method);

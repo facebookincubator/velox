@@ -186,8 +186,8 @@ TEST_F(CountAggregationTest, mask) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, count(c) FILTER (where m) FROM tmp GROUP BY k");
   auto taskStats = toPlanStats(task->taskStats());
@@ -463,8 +463,8 @@ TEST_F(CountAggregationTest, toIntermediate) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, count(v), count(1) FILTER (WHERE m), count(c) "
               "FROM tmp GROUP BY k");

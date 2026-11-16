@@ -274,6 +274,10 @@ class Config : public velox::config::ConfigBase {
   /// than rounding up to a byte-aligned width.
   static Entry<bool> FIXED_BIT_WIDTH_USE_EXACT_BITS;
 
+  /// Sorts integer dictionary alphabets by value so they can be stored by
+  /// their gaps. See WriterOptions::sortDictionaryAlphabet.
+  static Entry<bool> SORT_DICTIONARY_ALPHABET;
+
   /// Omits in-map streams for FlatMap features whose in-map flag is constant,
   /// which is the common case for dense feature sets.
   static Entry<bool> SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS;

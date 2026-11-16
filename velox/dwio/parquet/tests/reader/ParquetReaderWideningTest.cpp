@@ -448,17 +448,17 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
       [&](auto row) { return days[row % days.size()]; },
       nullEvery(7),
       DATE());
-  const auto data = makeRowVector({"col"}, {dates});
+  const auto data = makeNamedRowVector("col", dates);
   const auto readSchema = ROW("col", TIMESTAMP_UTC());
-  const auto expected = makeRowVector(
-      {"col"},
-      {makeFlatVector<Timestamp>(
+  const auto expected = makeNamedRowVector(
+      "col",
+      makeFlatVector<Timestamp>(
           dates->size(),
           [&](auto row) {
             return Timestamp(int64_t{dates->valueAt(row)} * 86'400, 0);
           },
           [&](auto row) { return dates->isNullAt(row); },
-          TIMESTAMP_UTC())});
+          TIMESTAMP_UTC()));
 
   for (auto encoding : {
            parquet::arrow::Encoding::kPlain,
@@ -522,15 +522,15 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
         data->rowType(), *dateReader.rowReader, data, *leafPool_);
   }
 
-  const auto arrayData = makeRowVector(
-      {"col"},
-      {makeArrayVector(
+  const auto arrayData = makeNamedRowVector(
+      "col",
+      makeArrayVector(
           {0, 3, 3},
           makeNullableFlatVector<int32_t>({-1, std::nullopt, 0, 1}, DATE()),
-          {1})});
-  const auto expectedArrays = makeRowVector(
-      {"col"},
-      {makeArrayVector(
+          {1}));
+  const auto expectedArrays = makeNamedRowVector(
+      "col",
+      makeArrayVector(
           {0, 3, 3},
           makeNullableFlatVector<Timestamp>(
               {Timestamp(-86'400, 0),
@@ -538,7 +538,7 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
                Timestamp(0, 0),
                Timestamp(86'400, 0)},
               TIMESTAMP_UTC()),
-          {1})});
+          {1}));
   assertWideningReads(arrayData, expectedArrays->rowType(), expectedArrays);
 }
 
@@ -554,13 +554,13 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcFilters) {
   };
   std::vector<RowVectorPtr> batches;
   for (const auto& group : days) {
-    batches.push_back(makeRowVector(
-        {"col"},
-        {makeFlatVector<int32_t>(
+    batches.push_back(makeNamedRowVector(
+        "col",
+        makeFlatVector<int32_t>(
             kRowsPerGroup,
             [&](auto row) { return group[row % group.size()].value_or(0); },
             [&](auto row) { return !group[row % group.size()].has_value(); },
-            DATE())}));
+            DATE())));
   }
   const auto readSchema = ROW("col", TIMESTAMP_UTC());
   std::vector<std::pair<std::unique_ptr<Filter>, uint64_t>> filters;
@@ -640,10 +640,9 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcFilters) {
             }
           }
         }
-        const auto expected = makeRowVector(
-            {"col"},
-            {makeNullableFlatVector<Timestamp>(
-                expectedValues, TIMESTAMP_UTC())});
+        const auto expected = makeNamedRowVector(
+            "col",
+            makeNullableFlatVector<Timestamp>(expectedValues, TIMESTAMP_UTC()));
         auto scanSpec = makeScanSpec(readSchema);
         scanSpec->childByName("col")->setFilter(filter->clone());
         auto rowReaderOptions = makeRowReaderOpts(readSchema);
@@ -1447,9 +1446,9 @@ TEST_F(ParquetReaderWideningTest, typeWideningRejectionDecimalScaleViolation) {
 // Verify allowInt32Narrowing flag on ReaderOptions.
 TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   // Write INT32 data with values that exercise truncation edge cases.
-  auto data = makeRowVector(
-      {"c1"},
-      {makeFlatVector<int32_t>(
+  auto data = makeNamedRowVector(
+      "c1",
+      makeFlatVector<int32_t>(
           {0,
            127,
            128,
@@ -1462,7 +1461,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
            -128,
            -129,
            std::numeric_limits<int32_t>::min(),
-           std::numeric_limits<int32_t>::max()})});
+           std::numeric_limits<int32_t>::max()}));
   auto* sink = write(data);
 
   // Default: flag is false.
@@ -1488,7 +1487,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   {
     auto readSchema = ROW("c1", TINYINT());
     auto tinyData =
-        makeRowVector({"c1"}, {makeFlatVector<int8_t>({-128, -1, 0, 1, 127})});
+        makeNamedRowVector("c1", makeFlatVector<int8_t>({-128, -1, 0, 1, 127}));
     auto* tinySink = write(tinyData);
     readerOptions.setFileSchema(readSchema);
     auto readerBundle =
@@ -1501,8 +1500,8 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   // back.
   {
     auto readSchema = ROW("c1", SMALLINT());
-    auto smallData = makeRowVector(
-        {"c1"}, {makeFlatVector<int16_t>({-32768, -1, 0, 1, 32767})});
+    auto smallData = makeNamedRowVector(
+        "c1", makeFlatVector<int16_t>({-32768, -1, 0, 1, 32767}));
     auto* smallSink = write(smallData);
     readerOptions.setFileSchema(readSchema);
     auto readerBundle =
@@ -1521,9 +1520,9 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
     auto readerBundle =
         readerBuilder(*sink, readSchema).options(readerOptions).build();
 
-    auto expected = makeRowVector(
-        {"c1"},
-        {makeFlatVector<int8_t>(
+    auto expected = makeNamedRowVector(
+        "c1",
+        makeFlatVector<int8_t>(
             {static_cast<int8_t>(0),
              static_cast<int8_t>(127),
              static_cast<int8_t>(128), // -128
@@ -1536,7 +1535,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
              static_cast<int8_t>(-128), // -128
              static_cast<int8_t>(-129), // 127
              static_cast<int8_t>(std::numeric_limits<int32_t>::min()),
-             static_cast<int8_t>(std::numeric_limits<int32_t>::max())})});
+             static_cast<int8_t>(std::numeric_limits<int32_t>::max())}));
     assertReadWithReaderAndExpected(
         readSchema, *readerBundle.rowReader, expected, *leafPool_);
   }
@@ -1548,9 +1547,9 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
     auto readerBundle =
         readerBuilder(*sink, readSchema).options(readerOptions).build();
 
-    auto expected = makeRowVector(
-        {"c1"},
-        {makeFlatVector<int16_t>(
+    auto expected = makeNamedRowVector(
+        "c1",
+        makeFlatVector<int16_t>(
             {static_cast<int16_t>(0),
              static_cast<int16_t>(127),
              static_cast<int16_t>(128),
@@ -1563,7 +1562,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
              static_cast<int16_t>(-128), // -128
              static_cast<int16_t>(-129), // -129
              static_cast<int16_t>(std::numeric_limits<int32_t>::min()),
-             static_cast<int16_t>(std::numeric_limits<int32_t>::max())})});
+             static_cast<int16_t>(std::numeric_limits<int32_t>::max())}));
     assertReadWithReaderAndExpected(
         readSchema, *readerBundle.rowReader, expected, *leafPool_);
   }
@@ -1572,36 +1571,36 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
 // INT -> Integer widening + filter.
 TEST_F(ParquetReaderWideningTest, tinyintToSmallintWideningWithFilter) {
   auto writeData =
-      makeRowVector({"col"}, {makeFlatVector<int8_t>({-10, 0, 10, 50, 127})});
+      makeNamedRowVector("col", makeFlatVector<int8_t>({-10, 0, 10, 50, 127}));
   auto expected =
-      makeRowVector({"col"}, {makeFlatVector<int16_t>({0, 10, 50, 127})});
+      makeNamedRowVector("col", makeFlatVector<int16_t>({0, 10, 50, 127}));
   assertWideningWithFilter(
       writeData, ROW("col", SMALLINT()), exec::greaterThanOrEqual(0), expected);
 }
 
 TEST_F(ParquetReaderWideningTest, tinyintToIntegerWideningWithFilter) {
   auto writeData =
-      makeRowVector({"col"}, {makeFlatVector<int8_t>({-10, 0, 10, 50, 127})});
+      makeNamedRowVector("col", makeFlatVector<int8_t>({-10, 0, 10, 50, 127}));
   auto expected =
-      makeRowVector({"col"}, {makeFlatVector<int32_t>({0, 10, 50, 127})});
+      makeNamedRowVector("col", makeFlatVector<int32_t>({0, 10, 50, 127}));
   assertWideningWithFilter(
       writeData, ROW("col", INTEGER()), exec::greaterThanOrEqual(0), expected);
 }
 
 TEST_F(ParquetReaderWideningTest, shortToIntegerWideningWithFilter) {
-  auto writeData = makeRowVector(
-      {"col"}, {makeFlatVector<int16_t>({-100, 0, 50, 100, 32'767})});
+  auto writeData = makeNamedRowVector(
+      "col", makeFlatVector<int16_t>({-100, 0, 50, 100, 32'767}));
   auto expected =
-      makeRowVector({"col"}, {makeFlatVector<int32_t>({50, 100, 32'767})});
+      makeNamedRowVector("col", makeFlatVector<int32_t>({50, 100, 32'767}));
   assertWideningWithFilter(
       writeData, ROW("col", INTEGER()), exec::greaterThanOrEqual(50), expected);
 }
 
 TEST_F(ParquetReaderWideningTest, intToBigintWideningWithFilter) {
-  auto writeData = makeRowVector(
-      {"col"}, {makeFlatVector<int32_t>({-100, 0, 50, 100, 2'000'000})});
+  auto writeData = makeNamedRowVector(
+      "col", makeFlatVector<int32_t>({-100, 0, 50, 100, 2'000'000}));
   auto expected =
-      makeRowVector({"col"}, {makeFlatVector<int64_t>({50, 100, 2'000'000})});
+      makeNamedRowVector("col", makeFlatVector<int64_t>({50, 100, 2'000'000}));
   assertWideningWithFilter(
       writeData, ROW("col", BIGINT()), exec::greaterThanOrEqual(50), expected);
 }
@@ -1609,9 +1608,9 @@ TEST_F(ParquetReaderWideningTest, intToBigintWideningWithFilter) {
 // INT -> DOUBLE widening + filter.
 TEST_F(ParquetReaderWideningTest, intToDoubleWideningWithFilter) {
   auto writeData =
-      makeRowVector({"col"}, {makeFlatVector<int32_t>({-100, 0, 50, 100})});
+      makeNamedRowVector("col", makeFlatVector<int32_t>({-100, 0, 50, 100}));
   auto expected =
-      makeRowVector({"col"}, {makeFlatVector<double>({50.0, 100.0})});
+      makeNamedRowVector("col", makeFlatVector<double>({50.0, 100.0}));
   // BigintRange filter.
   assertWideningWithFilter(
       writeData, ROW("col", DOUBLE()), exec::greaterThanOrEqual(50), expected);
@@ -1619,9 +1618,9 @@ TEST_F(ParquetReaderWideningTest, intToDoubleWideningWithFilter) {
 
 TEST_F(ParquetReaderWideningTest, tinyintToDoubleWideningWithFilter) {
   auto writeData =
-      makeRowVector({"col"}, {makeFlatVector<int8_t>({-10, 0, 10, 50})});
+      makeNamedRowVector("col", makeFlatVector<int8_t>({-10, 0, 10, 50}));
   auto expected =
-      makeRowVector({"col"}, {makeFlatVector<double>({0.0, 10.0, 50.0})});
+      makeNamedRowVector("col", makeFlatVector<double>({0.0, 10.0, 50.0}));
   assertWideningWithFilter(
       writeData, ROW("col", DOUBLE()), exec::greaterThanOrEqual(0), expected);
 }
@@ -1631,25 +1630,25 @@ TEST_F(
     ParquetReaderWideningTest,
     DISABLED_intToDoubleWideningWithDoubleRangeFilter) {
   auto writeData =
-      makeRowVector({"col"}, {makeFlatVector<int32_t>({-100, 0, 50, 100})});
+      makeNamedRowVector("col", makeFlatVector<int32_t>({-100, 0, 50, 100}));
   assertWideningWithFilter(
       writeData,
       ROW("col", DOUBLE()),
       exec::greaterThanOrEqualDouble(50.0),
-      makeRowVector({"col"}, {makeFlatVector<double>({50.0, 100.0})}));
+      makeNamedRowVector("col", makeFlatVector<double>({50.0, 100.0})));
 }
 
 // INT -> Decimal widening + filter.
 TEST_F(ParquetReaderWideningTest, intToDecimalWideningWithFilter) {
   auto writeData =
-      makeRowVector({"col"}, {makeFlatVector<int32_t>({-100, 0, 50, 100})});
+      makeNamedRowVector("col", makeFlatVector<int32_t>({-100, 0, 50, 100}));
   // Scale 0.
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(10, 0)),
       exec::greaterThanOrEqual(50),
-      makeRowVector(
-          {"col"}, {makeFlatVector<int64_t>({50, 100}, DECIMAL(10, 0))}));
+      makeNamedRowVector(
+          "col", makeFlatVector<int64_t>({50, 100}, DECIMAL(10, 0))));
 }
 
 // Scale > 0 not yet supported for filter pushdown with widening. See #16895.
@@ -1657,75 +1656,75 @@ TEST_F(
     ParquetReaderWideningTest,
     DISABLED_intToDecimalWithScaleWideningWithFilter) {
   auto writeData =
-      makeRowVector({"col"}, {makeFlatVector<int32_t>({-100, 0, 50, 100})});
+      makeNamedRowVector("col", makeFlatVector<int32_t>({-100, 0, 50, 100}));
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(12, 2)),
       exec::greaterThanOrEqual(5'000),
-      makeRowVector(
-          {"col"}, {makeFlatVector<int64_t>({5'000, 10'000}, DECIMAL(12, 2))}));
+      makeNamedRowVector(
+          "col", makeFlatVector<int64_t>({5'000, 10'000}, DECIMAL(12, 2))));
 }
 
 // HugeintRange filter not yet supported for widened columns. See #16895.
 TEST_F(ParquetReaderWideningTest, DISABLED_bigintToDecimalWideningWithFilter) {
   auto writeData =
-      makeRowVector({"col"}, {makeFlatVector<int64_t>({-100, 0, 50, 100})});
+      makeNamedRowVector("col", makeFlatVector<int64_t>({-100, 0, 50, 100}));
   // BIGINT -> Decimal(25, 5).
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(25, 5)),
       exec::greaterThanOrEqualHugeint(int128_t(50) * 100'000),
-      makeRowVector(
-          {"col"},
-          {makeFlatVector<int128_t>(
+      makeNamedRowVector(
+          "col",
+          makeFlatVector<int128_t>(
               {int128_t(50) * 100'000, int128_t(100) * 100'000},
-              DECIMAL(25, 5))}));
+              DECIMAL(25, 5))));
   // BIGINT -> Decimal(38, 0).
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(38, 0)),
       exec::greaterThanOrEqualHugeint(int128_t(50)),
-      makeRowVector(
-          {"col"}, {makeFlatVector<int128_t>({50, 100}, DECIMAL(38, 0))}));
+      makeNamedRowVector(
+          "col", makeFlatVector<int128_t>({50, 100}, DECIMAL(38, 0))));
   // BIGINT -> Decimal(21, 1).
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(21, 1)),
       exec::greaterThanOrEqualHugeint(int128_t(50) * 10),
-      makeRowVector(
-          {"col"},
-          {makeFlatVector<int128_t>(
-              {int128_t(50) * 10, int128_t(100) * 10}, DECIMAL(21, 1))}));
+      makeNamedRowVector(
+          "col",
+          makeFlatVector<int128_t>(
+              {int128_t(50) * 10, int128_t(100) * 10}, DECIMAL(21, 1))));
 }
 
 // Decimal -> Decimal (short->short) + filter.
 TEST_F(ParquetReaderWideningTest, decimalShortToShortWideningWithFilter) {
-  auto writeData = makeRowVector(
-      {"col"},
-      {makeFlatVector<int64_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(7, 2))});
+  auto writeData = makeNamedRowVector(
+      "col",
+      makeFlatVector<int64_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(7, 2)));
   // Scale unchanged: DECIMAL(7,2) -> DECIMAL(10,2).
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(10, 2)),
       exec::greaterThanOrEqual(5'000),
-      makeRowVector(
-          {"col"}, {makeFlatVector<int64_t>({5'000, 10'000}, DECIMAL(10, 2))}));
+      makeNamedRowVector(
+          "col", makeFlatVector<int64_t>({5'000, 10'000}, DECIMAL(10, 2))));
 }
 
 // Scale changed: DECIMAL(7,2) -> DECIMAL(10,4). See #16895.
 TEST_F(
     ParquetReaderWideningTest,
     DISABLED_decimalScaleChangeWideningWithFilter) {
-  auto writeData = makeRowVector(
-      {"col"},
-      {makeFlatVector<int64_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(7, 2))});
+  auto writeData = makeNamedRowVector(
+      "col",
+      makeFlatVector<int64_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(7, 2)));
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(10, 4)),
       exec::greaterThanOrEqual(500'000),
-      makeRowVector(
-          {"col"},
-          {makeFlatVector<int64_t>({500'000, 1'000'000}, DECIMAL(10, 4))}));
+      makeNamedRowVector(
+          "col",
+          makeFlatVector<int64_t>({500'000, 1'000'000}, DECIMAL(10, 4))));
 }
 
 // Cases have different failure modes: same-scale fails on HugeintRange crash,
@@ -1733,68 +1732,67 @@ TEST_F(
 TEST_F(
     ParquetReaderWideningTest,
     DISABLED_decimalShortToLongWideningWithFilter) {
-  auto writeData = makeRowVector(
-      {"col"},
-      {makeFlatVector<int64_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(5, 2))});
+  auto writeData = makeNamedRowVector(
+      "col",
+      makeFlatVector<int64_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(5, 2)));
   // Scale unchanged: DECIMAL(5,2) -> DECIMAL(20,2).
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(20, 2)),
       exec::greaterThanOrEqualHugeint(int128_t(5'000)),
-      makeRowVector(
-          {"col"},
-          {makeFlatVector<int128_t>({5'000, 10'000}, DECIMAL(20, 2))}));
+      makeNamedRowVector(
+          "col", makeFlatVector<int128_t>({5'000, 10'000}, DECIMAL(20, 2))));
   // Scale changed: DECIMAL(5,2) -> DECIMAL(20,4).
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(20, 4)),
       exec::greaterThanOrEqualHugeint(int128_t(500'000)),
-      makeRowVector(
-          {"col"},
-          {makeFlatVector<int128_t>({500'000, 1'000'000}, DECIMAL(20, 4))}));
+      makeNamedRowVector(
+          "col",
+          makeFlatVector<int128_t>({500'000, 1'000'000}, DECIMAL(20, 4))));
   // Large scale increase: DECIMAL(5,2) -> DECIMAL(10,7).
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(10, 7)),
       exec::greaterThanOrEqual(500'000'000),
-      makeRowVector(
-          {"col"},
-          {makeFlatVector<int64_t>(
-              {500'000'000, 1'000'000'000}, DECIMAL(10, 7))}));
+      makeNamedRowVector(
+          "col",
+          makeFlatVector<int64_t>(
+              {500'000'000, 1'000'000'000}, DECIMAL(10, 7))));
   // Precision and scale increase: DECIMAL(5,2) -> DECIMAL(12,4).
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(12, 4)),
       exec::greaterThanOrEqual(500'000),
-      makeRowVector(
-          {"col"},
-          {makeFlatVector<int64_t>({500'000, 1'000'000}, DECIMAL(12, 4))}));
+      makeNamedRowVector(
+          "col",
+          makeFlatVector<int64_t>({500'000, 1'000'000}, DECIMAL(12, 4))));
 }
 
 // HugeintRange filter with scale change not yet supported. See #16895.
 TEST_F(
     ParquetReaderWideningTest,
     DISABLED_decimalLongToLongWideningWithFilter) {
-  auto writeData = makeRowVector(
-      {"col"},
-      {makeFlatVector<int128_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(20, 2))});
+  auto writeData = makeNamedRowVector(
+      "col",
+      makeFlatVector<int128_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(20, 2)));
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(22, 4)),
       exec::greaterThanOrEqualHugeint(int128_t(500'000)),
-      makeRowVector(
-          {"col"},
-          {makeFlatVector<int128_t>({500'000, 1'000'000}, DECIMAL(22, 4))}));
+      makeNamedRowVector(
+          "col",
+          makeFlatVector<int128_t>({500'000, 1'000'000}, DECIMAL(22, 4))));
 }
 
 // INT32 narrowing + filter.
 TEST_F(ParquetReaderWideningTest, intNarrowingFilterBehavior) {
   // INT32 -> TINYINT with filter x in [0, 127] (TINYINT range).
   // INT32 value 200 fails filter (200 > 127), so it is filtered out.
-  auto writeData =
-      makeRowVector({"col"}, {makeFlatVector<int32_t>({-10, 0, 50, 127, 200})});
+  auto writeData = makeNamedRowVector(
+      "col", makeFlatVector<int32_t>({-10, 0, 50, 127, 200}));
   auto expected =
-      makeRowVector({"col"}, {makeFlatVector<int8_t>({0, 50, 127})});
+      makeNamedRowVector("col", makeFlatVector<int8_t>({0, 50, 127}));
   assertWideningWithFilter(
       writeData,
       ROW("col", TINYINT()),
@@ -1805,78 +1803,77 @@ TEST_F(ParquetReaderWideningTest, intNarrowingFilterBehavior) {
 
 // Null filter tests.
 TEST_F(ParquetReaderWideningTest, intToBigintWideningNullFilter) {
-  auto writeData = makeRowVector(
-      {"col"},
-      {makeNullableFlatVector<int32_t>({0, std::nullopt, 50, std::nullopt})});
+  auto writeData = makeNamedRowVector(
+      "col",
+      makeNullableFlatVector<int32_t>({0, std::nullopt, 50, std::nullopt}));
   assertWideningWithFilter(
       writeData,
       ROW("col", BIGINT()),
       exec::isNull(),
-      makeRowVector(
-          {"col"},
-          {makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})}));
+      makeNamedRowVector(
+          "col",
+          makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})));
   assertWideningWithFilter(
       writeData,
       ROW("col", BIGINT()),
       exec::isNotNull(),
-      makeRowVector({"col"}, {makeFlatVector<int64_t>({0, 50})}));
+      makeNamedRowVector("col", makeFlatVector<int64_t>({0, 50})));
 }
 
 TEST_F(ParquetReaderWideningTest, intToDoubleWideningNullFilter) {
-  auto writeData = makeRowVector(
-      {"col"},
-      {makeNullableFlatVector<int32_t>({0, std::nullopt, 50, std::nullopt})});
+  auto writeData = makeNamedRowVector(
+      "col",
+      makeNullableFlatVector<int32_t>({0, std::nullopt, 50, std::nullopt}));
   assertWideningWithFilter(
       writeData,
       ROW("col", DOUBLE()),
       exec::isNull(),
-      makeRowVector(
-          {"col"},
-          {makeNullableFlatVector<double>({std::nullopt, std::nullopt})}));
+      makeNamedRowVector(
+          "col", makeNullableFlatVector<double>({std::nullopt, std::nullopt})));
   assertWideningWithFilter(
       writeData,
       ROW("col", DOUBLE()),
       exec::isNotNull(),
-      makeRowVector({"col"}, {makeFlatVector<double>({0.0, 50.0})}));
+      makeNamedRowVector("col", makeFlatVector<double>({0.0, 50.0})));
 }
 
 TEST_F(ParquetReaderWideningTest, intToDecimalScale0NullFilter) {
-  auto writeData = makeRowVector(
-      {"col"},
-      {makeNullableFlatVector<int32_t>({0, std::nullopt, 50, std::nullopt})});
+  auto writeData = makeNamedRowVector(
+      "col",
+      makeNullableFlatVector<int32_t>({0, std::nullopt, 50, std::nullopt}));
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(10, 0)),
       exec::isNull(),
-      makeRowVector(
-          {"col"},
-          {makeNullableFlatVector<int64_t>(
-              {std::nullopt, std::nullopt}, DECIMAL(10, 0))}));
+      makeNamedRowVector(
+          "col",
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt}, DECIMAL(10, 0))));
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(10, 0)),
       exec::isNotNull(),
-      makeRowVector(
-          {"col"}, {makeFlatVector<int64_t>({0, 50}, DECIMAL(10, 0))}));
+      makeNamedRowVector(
+          "col", makeFlatVector<int64_t>({0, 50}, DECIMAL(10, 0))));
 }
 
 TEST_F(ParquetReaderWideningTest, decimalPrecisionOnlyNullFilter) {
-  auto writeData = makeRowVector(
-      {"col"},
-      {makeNullableFlatVector<int64_t>(
-          {1'000, std::nullopt, 5'000, std::nullopt}, DECIMAL(7, 2))});
+  auto writeData = makeNamedRowVector(
+      "col",
+      makeNullableFlatVector<int64_t>(
+          {1'000, std::nullopt, 5'000, std::nullopt}, DECIMAL(7, 2)));
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(10, 2)),
       exec::isNull(),
-      makeRowVector(
-          {"col"},
-          {makeNullableFlatVector<int64_t>(
-              {std::nullopt, std::nullopt}, DECIMAL(10, 2))}));
+      makeNamedRowVector(
+          "col",
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt}, DECIMAL(10, 2))));
   assertWideningWithFilter(
       writeData,
       ROW("col", DECIMAL(10, 2)),
       exec::isNotNull(),
-      makeRowVector(
-          {"col"}, {makeFlatVector<int64_t>({1'000, 5'000}, DECIMAL(10, 2))}));
+      makeNamedRowVector(
+          "col", makeFlatVector<int64_t>({1'000, 5'000}, DECIMAL(10, 2))));
 }

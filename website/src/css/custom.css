@@ -12,6 +12,26 @@
   --ifm-color-primary-light: #2c49a3;
   --ifm-color-primary-lighter: #2e4caa;
   --ifm-color-primary-lightest: #3456c2;
+
+  /* Homepage colors (src/pages/index.module.css). */
+  --velox-home-hero-bg: #f7f9fc;
+  --velox-home-section-bg: #ffffff;
+  --velox-home-section-alt-bg: #f9f9f9;
+  --velox-home-card-bg: #ffffff;
+  --velox-home-feature-card-bg: #f4f4f4;
+  --velox-home-tile-bg: #fafafa;
+  --velox-home-button-bg: #ffffff;
+  --velox-home-button-hover-bg: #f0f0f0;
+  --velox-home-border: #e0e0e0;
+  --velox-home-tile-border: #ddd;
+  --velox-home-button-border: #ccc;
+  --velox-home-title: #111827;
+  --velox-home-muted: #666;
+  --velox-home-accent: #2b4eff;
+  --velox-home-linkedin: #0a66c2;
+  --velox-home-logo-fade: #f9f9f9;
+  --velox-home-image-bg: transparent;
+  --velox-logo-ink: #001d6d;
 }
 
 [data-theme='dark'] {
@@ -22,6 +42,25 @@
   --ifm-color-primary-light: #83aae6;
   --ifm-color-primary-lighter: #91b3e8;
   --ifm-color-primary-lightest: #bcd1f1;
+
+  --velox-home-hero-bg: #1d2230;
+  --velox-home-section-bg: var(--ifm-background-color);
+  --velox-home-section-alt-bg: var(--ifm-background-surface-color);
+  --velox-home-card-bg: #2e3033;
+  --velox-home-feature-card-bg: var(--ifm-background-surface-color);
+  --velox-home-tile-bg: var(--ifm-background-surface-color);
+  --velox-home-button-bg: var(--ifm-background-surface-color);
+  --velox-home-button-hover-bg: #3a3c40;
+  --velox-home-border: #44464b;
+  --velox-home-tile-border: #44464b;
+  --velox-home-button-border: #55575c;
+  --velox-home-title: #f5f6f7;
+  --velox-home-muted: #a8abb0;
+  --velox-home-accent: #7d95ff;
+  --velox-home-linkedin: #70b5f9;
+  --velox-home-logo-fade: #f5f6f7;
+  --velox-home-image-bg: #f5f6f7;
+  --velox-logo-ink: #ffffff;
 }
 
 /* ========== Hero Section ========== */

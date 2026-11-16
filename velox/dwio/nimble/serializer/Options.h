@@ -172,12 +172,11 @@ struct SerializerOptions {
 
   /// Opt-in Hybrid FlatMap grouping for MapVector-backed MAP input. Configured
   /// group keys are stored in schema metadata, and every block marks the
-  /// present ones in a key-presence bitmap. A Hybrid FlatMap built with every
-  /// group at once for the column's key type shares its groups with its
-  /// copies. Build it once and copy it into every SerializerOptions, so that
-  /// every Serializer binds it without checking its keys again. When Default
-  /// lists its keys (`kKeyList`, below), the Serializer's schema also reads the
-  /// grouped keys from it instead of copying them.
+  /// present ones in a key-presence bitmap. Each column's HybridFlatMap is
+  /// built for the column's key type and shares its groups with its copies.
+  /// Build it once and copy it into every SerializerOptions, so that every
+  /// Serializer uses it without checking its keys again, and its schema reads
+  /// the grouped keys from it instead of copying them.
   /// Each column's `HybridFlatMap::defaultGroupKeyPresenceMode` selects how its
   /// blocks record Default keys: `kBitmap`, a bitmap over Default keys appended
   /// to the schema in first-seen order, or `kKeyList`, a typed list of each

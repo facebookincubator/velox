@@ -649,7 +649,7 @@ void HashProbe::addSpillInput() {
   if (input_ != nullptr || noMoreSpillInput_) {
     return;
   }
-  if (FOLLY_UNLIKELY(!spillInputReader_->nextBatch(input_))) {
+  if (!spillInputReader_->nextBatch(input_)) [[unlikely]] {
     noMoreInputInternal();
     return;
   }
@@ -1473,7 +1473,7 @@ void HashProbe::prepareFilterRowsForNullAwareJoin(
   // When no rows are selected, filterInput must be nullptr since
   // createFilterInput() cannot be called when outputRowMapping_ has been
   // overwritten. When rows are selected, filterInput must be valid.
-  if (FOLLY_UNLIKELY(!filterInputRows_.hasSelections())) {
+  if (!filterInputRows_.hasSelections()) [[unlikely]] {
     VELOX_CHECK_NULL(filterInput);
     if (filterPropagateNulls) {
       nullFilterInputRows_.resizeFill(numRows, false);
@@ -1703,7 +1703,7 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
   // in a dictionary over outputRowMapping_, which listJoinResults() may have
   // already overwritten in the previous iteration — the dictionary would fail
   // validation in debug builds.
-  if (FOLLY_LIKELY(filterInputRows_.hasSelections())) {
+  if (filterInputRows_.hasSelections()) [[likely]] {
     RowVectorPtr filterInput = createFilterInput(numRows);
     if (nullAware_) {
       prepareFilterRowsForNullAwareJoin(

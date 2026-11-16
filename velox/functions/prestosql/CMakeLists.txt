@@ -51,6 +51,7 @@ velox_add_library(
   JsonFunctions.cpp
   Map.cpp
   MapEntries.cpp
+  MapExcept.cpp
   MapKeysAndValues.cpp
   MapSubset.cpp
   MapZipWith.cpp
@@ -112,7 +113,6 @@ velox_add_library(
   L2Norm.h
   Map.h
   MapAppend.h
-  MapExcept.h
   MapFunctions.h
   MapIntersect.h
   MapKeysByTopNValues.h

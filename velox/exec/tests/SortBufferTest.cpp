@@ -264,10 +264,8 @@ TEST_P(SortBufferTest, multipleKeys) {
   }
 }
 
-// TODO: enable it later with test utility to compare the sorted result.
-TEST_P(SortBufferTest, DISABLED_randomData) {
+TEST_P(SortBufferTest, randomData) {
   struct {
-    RowTypePtr inputType;
     std::vector<column_index_t> sortColumnIndices;
     std::vector<CompareFlags> sortCompareFlags;
 
@@ -279,46 +277,24 @@ TEST_P(SortBufferTest, DISABLED_randomData) {
         sortCompareFlagsStr << sortCompareFlag.toString() << ";";
       }
       return fmt::format(
-          "inputType:{}, sortColumnIndices:{}, sortCompareFlags:{}",
-          inputType,
+          "sortColumnIndices:{}, sortCompareFlags:{}",
           sortColumnIndicesStr,
           sortCompareFlagsStr.str());
     }
   } testSettings[] = {
-      {ROW(
-           {{"c0", BIGINT()},
-            {"c1", INTEGER()},
-            {"c2", SMALLINT()},
-            {"c3", REAL()},
-            {"c4", DOUBLE()},
-            {"c5", VARCHAR()}}),
-       {2},
+      {{2},
        {{true, true, false, CompareFlags::NullHandlingMode::kNullAsValue}}},
-      {ROW(
-           {{"c0", BIGINT()},
-            {"c1", INTEGER()},
-            {"c2", SMALLINT()},
-            {"c3", REAL()},
-            {"c4", DOUBLE()},
-            {"c5", VARCHAR()}}),
-       {4, 1},
+      {{4, 1},
        {{true, true, false, CompareFlags::NullHandlingMode::kNullAsValue},
         {true, true, false, CompareFlags::NullHandlingMode::kNullAsValue}}},
-      {ROW(
-           {{"c0", BIGINT()},
-            {"c1", INTEGER()},
-            {"c2", SMALLINT()},
-            {"c3", REAL()},
-            {"c4", DOUBLE()},
-            {"c5", VARCHAR()}}),
-       {4, 1},
+      {{4, 1},
        {{true, true, false, CompareFlags::NullHandlingMode::kNullAsValue},
         {false, false, false, CompareFlags::NullHandlingMode::kNullAsValue}}}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto sortBuffer = std::make_unique<SortBuffer>(
-        testData.inputType,
+        inputType_,
         testData.sortColumnIndices,
         testData.sortCompareFlags,
         pool_.get(),
@@ -334,9 +310,31 @@ TEST_P(SortBufferTest, DISABLED_randomData) {
       inputVectors.push_back(input);
     }
     sortBuffer->noMoreInput();
+
+    std::vector<RowVectorPtr> outputs;
+    while (auto output = sortBuffer->getOutput(1'000)) {
+      outputs.push_back(output);
+    }
+
+    std::vector<std::string> orderBy;
+    for (size_t i = 0; i < testData.sortColumnIndices.size(); ++i) {
+      const auto& flags = testData.sortCompareFlags[i];
+      orderBy.push_back(
+          fmt::format(
+              "{} {} {}",
+              inputType_->nameOf(testData.sortColumnIndices[i]),
+              flags.ascending ? "ASC" : "DESC",
+              flags.nullsFirst ? "NULLS FIRST" : "NULLS LAST"));
+    }
+    createDuckDbTable(inputVectors);
+    assertResultsOrdered(
+        outputs,
+        inputType_,
+        fmt::format(
+            "SELECT * FROM tmp ORDER BY {}", folly::join(", ", orderBy)),
+        duckDbQueryRunner_,
+        testData.sortColumnIndices);
     statWriter_.clear();
-    // todo: have a utility function buildExpectedSortResult and verify the
-    // sorting result for random data.
   }
 }
 

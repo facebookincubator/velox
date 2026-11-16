@@ -57,8 +57,9 @@ TEST_F(SerializerTest, hybridFlatMapRequiresSerializationFormat) {
             HybridFlatMap{
                 ScalarKind::Int32,
                 {{.groupId = 0, .groupKeys = {"1"}},
-                 {.groupId = HybridFlatMap::kDefaultGroupId,
-                  .groupKeys = {}}}}}},
+                 {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+                HybridFlatMap::KeyPresenceMode::kBitmap,
+            }}},
   };
 
   NIMBLE_ASSERT_THROW(
@@ -79,7 +80,9 @@ TEST_F(SerializerTest, validatesHybridFlatMapColumnConfiguration) {
                         ScalarKind::Int32,
                         {{.groupId = 0, .groupKeys = {"1"}},
                          {.groupId = HybridFlatMap::kDefaultGroupId,
-                          .groupKeys = {}}}}}},
+                          .groupKeys = {}}},
+                        HybridFlatMap::KeyPresenceMode::kBitmap,
+                    }}},
           },
           type,
           pool_.get()),
@@ -96,7 +99,9 @@ TEST_F(SerializerTest, validatesHybridFlatMapColumnConfiguration) {
                         ScalarKind::Int32,
                         {{.groupId = 0, .groupKeys = {"1"}},
                          {.groupId = HybridFlatMap::kDefaultGroupId,
-                          .groupKeys = {}}}}}},
+                          .groupKeys = {}}},
+                        HybridFlatMap::KeyPresenceMode::kBitmap,
+                    }}},
           },
           type,
           pool_.get()),
@@ -113,7 +118,9 @@ TEST_F(SerializerTest, validatesHybridFlatMapColumnConfiguration) {
                         ScalarKind::Int32,
                         {{.groupId = 0, .groupKeys = {"1"}},
                          {.groupId = HybridFlatMap::kDefaultGroupId,
-                          .groupKeys = {}}}}}},
+                          .groupKeys = {}}},
+                        HybridFlatMap::KeyPresenceMode::kBitmap,
+                    }}},
           },
           scalarType,
           pool_.get()),
@@ -128,8 +135,9 @@ TEST_F(SerializerTest, hybridFlatMapSerializesDefaultFeature) {
             HybridFlatMap{
                 ScalarKind::Int32,
                 {{.groupId = 0, .groupKeys = {"1"}},
-                 {.groupId = HybridFlatMap::kDefaultGroupId,
-                  .groupKeys = {}}}}}},
+                 {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+                HybridFlatMap::KeyPresenceMode::kBitmap,
+            }}},
   };
 
   Serializer serializer{options, mapRowType(), pool_.get()};

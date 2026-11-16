@@ -120,6 +120,12 @@ struct PlanNodeStats {
   /// Operator-specific counters.
   std::unordered_map<std::string, RuntimeMetric> customStats;
 
+  /// Returns the operator-specific counter 'name'. Throws if there is none.
+  const RuntimeMetric& customStat(std::string_view name) const;
+
+  /// Returns true if there is an operator-specific counter 'name'.
+  bool hasCustomStat(std::string_view name) const;
+
   /// Breakdown of stats by operator type.
   std::unordered_map<std::string, std::unique_ptr<PlanNodeStats>> operatorStats;
 

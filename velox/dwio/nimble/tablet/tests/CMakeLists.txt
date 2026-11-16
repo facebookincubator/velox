@@ -17,8 +17,10 @@ add_executable(
   CompressionTest.cpp
   FilePropertiesTest.cpp
   FileLayoutTest.cpp
+  IoAlignmentTest.cpp
   MetadataBufferTest.cpp
   SharedDictionaryReaderTest.cpp
+  StripeGroupFlushPolicyTest.cpp
   TabletTest.cpp
   TabletTestUtils.h
 )

@@ -532,9 +532,8 @@ void* MemoryPoolImpl::allocate(
     std::optional<uint32_t> alignment) {
   if (alignment.has_value()) {
     const auto alignmentValue = alignment.value();
-    if (FOLLY_UNLIKELY(
-            !(bits::isPowerOfTwo(alignmentValue) &&
-              alignmentValue <= alignment_))) {
+    if (!(bits::isPowerOfTwo(alignmentValue) && alignmentValue <= alignment_))
+        [[unlikely]] {
       VELOX_UNSUPPORTED(
           "Memory pool only supports fixed alignment allocations. Requested "
           "alignment {} must already be aligned with this memory pool's fixed "
@@ -548,7 +547,7 @@ void* MemoryPoolImpl::allocate(
   const auto alignedSize = sizeAlign(size);
   reserve(alignedSize);
   void* buffer = allocator_->allocateBytes(alignedSize, alignment_);
-  if (FOLLY_UNLIKELY(buffer == nullptr)) {
+  if (buffer == nullptr) [[unlikely]] {
     release(alignedSize);
     handleAllocationFailure(
         fmt::format(
@@ -575,7 +574,7 @@ void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   const auto alignedSize = sizeAlign(size);
   reserve(alignedSize);
   void* buffer = allocator_->allocateZeroFilled(alignedSize);
-  if (FOLLY_UNLIKELY(buffer == nullptr)) {
+  if (buffer == nullptr) [[unlikely]] {
     release(alignedSize);
     handleAllocationFailure(
         fmt::format(
@@ -626,7 +625,7 @@ void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
 
   // Legacy path: allocate new + memcpy + free old.
   void* const newP = allocator_->allocateBytes(alignedNewSize, alignment_);
-  if (FOLLY_UNLIKELY(newP == nullptr)) {
+  if (newP == nullptr) [[unlikely]] {
     release(alignedNewSize);
     handleAllocationFailure(
         fmt::format(
@@ -663,7 +662,7 @@ void* MemoryPoolImpl::allocateAligned(int64_t size, uint32_t alignment) {
   CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   reserve(alignedSize);
   void* buffer = allocator_->allocateBytes(alignedSize, alignment);
-  if (FOLLY_UNLIKELY(buffer == nullptr)) {
+  if (buffer == nullptr) [[unlikely]] {
     release(alignedSize);
     VELOX_MEM_ALLOC_ERROR(
         fmt::format(
@@ -835,7 +834,7 @@ void MemoryPoolImpl::growContiguous(
             toString(),
             allocator_->getAndClearFailureMessage()));
   }
-  if (FOLLY_UNLIKELY(debugEnabled())) {
+  if (debugEnabled()) [[unlikely]] {
     recordGrowDbg(allocation.data(), allocation.size());
   }
 }
@@ -927,8 +926,8 @@ bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
 }
 
 void MemoryPoolImpl::reserve(uint64_t size, bool reserveOnly) {
-  if (FOLLY_LIKELY(trackUsage_)) {
-    if (FOLLY_LIKELY(threadSafe_)) {
+  if (trackUsage_) [[likely]] {
+    if (threadSafe_) [[likely]] {
       reserveThreadSafe(size, reserveOnly);
     } else {
       reserveNonThreadSafe(size, reserveOnly);
@@ -1015,16 +1014,15 @@ void MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
     MemoryPoolArbitrationSection arbitrationSection(requestor);
     arbitrator_->growCapacity(this, size);
   } catch (const VeloxRuntimeError& veloxError) {
-    if (FOLLY_UNLIKELY(
-            debugEnabled() &&
-            veloxError.errorCode() == error_code::kMemCapExceeded)) {
+    if (debugEnabled() && veloxError.errorCode() == error_code::kMemCapExceeded)
+        [[unlikely]] {
       std::rethrow_exception(wrapExceptionDbg(veloxError));
     }
     throw;
   }
   // The memory pool might have been aborted during the time it leaves the
   // arbitration no matter the arbitration succeed or not.
-  if (FOLLY_UNLIKELY(aborted())) {
+  if (aborted()) [[unlikely]] {
     // Release the reservation committed by the memory arbitration on success.
     decrementReservation(size);
     VELOX_CHECK_NOT_NULL(abortError());
@@ -1041,9 +1039,8 @@ bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
     // arbitration process. The memory arbitration process itself needs to
     // ensure the memory pool usage of the memory pool is within the capacity
     // limit after the arbitration operation completes.
-    if (FOLLY_UNLIKELY(
-            (reservationBytes_ + size > capacity_) &&
-            !underMemoryArbitration())) {
+    if ((reservationBytes_ + size > capacity_) && !underMemoryArbitration())
+        [[unlikely]] {
       return false;
     }
   }
@@ -1065,8 +1062,8 @@ void MemoryPoolImpl::release() {
 }
 
 void MemoryPoolImpl::release(uint64_t size, bool releaseOnly) {
-  if (FOLLY_LIKELY(trackUsage_)) {
-    if (FOLLY_LIKELY(threadSafe_)) {
+  if (trackUsage_) [[likely]] {
+    if (threadSafe_) [[likely]] {
       releaseThreadSafe(size, releaseOnly);
     } else {
       releaseNonThreadSafe(size, releaseOnly);
@@ -1082,7 +1079,7 @@ void MemoryPoolImpl::releaseThreadSafe(uint64_t size, bool releaseOnly) {
   {
     std::lock_guard<std::mutex> l(mutex_);
     int64_t newQuantized;
-    if (FOLLY_UNLIKELY(releaseOnly)) {
+    if (releaseOnly) [[unlikely]] {
       VELOX_DCHECK_EQ(size, 0);
       if (minReservationBytes_ == 0) {
         return;
@@ -1126,7 +1123,7 @@ std::string MemoryPoolImpl::toString(bool detail) const {
   if (detail) {
     result += "\n" + treeMemoryUsage();
   }
-  if (FOLLY_UNLIKELY(debugEnabled())) {
+  if (debugEnabled()) [[unlikely]] {
     result += "\n" + dumpRecordsDbg();
   }
   return result;
@@ -1307,7 +1304,7 @@ void MemoryPoolImpl::setAbortError(const std::exception_ptr& error) {
 }
 
 void MemoryPoolImpl::checkIfAborted() const {
-  if (FOLLY_UNLIKELY(aborted())) {
+  if (aborted()) [[unlikely]] {
     VELOX_CHECK_NOT_NULL(abortError());
     std::rethrow_exception(abortError());
   }

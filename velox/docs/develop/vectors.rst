@@ -103,6 +103,19 @@ using helper methods from the “bits” namespace.
 Since buffers are not typed, the size of the buffer reflects the number of bytes
 in the buffer, not the number of values.
 
+Alignment and Padding
+~~~~~~~~~~~~~~~~~~~~~
+
+Buffers held by vectors (nulls, values, indices, offsets and sizes) follow a
+contract on their alignment and padding, so that a vector can wrap memory from
+Arrow and other external sources without a copy. The contract is documented on
+``Buffer`` in ``velox/buffer/Buffer.h``.
+
+Memory that follows Arrow's recommended alignment and padding, a multiple of 8
+or 64 bytes, meets the contract, except that long decimals need 16-byte
+alignment. The Arrow bridge requires it of the buffers it imports, and copies
+long decimals that aren't 16-byte aligned.
+
 Null Flags
 ----------
 

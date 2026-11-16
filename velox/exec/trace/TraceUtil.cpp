@@ -483,6 +483,7 @@ core::PlanNodePtr getTraceNode(
                                 topNRowNumberNode->outputType()->names().back())
                           : std::nullopt,
         topNRowNumberNode->limit(),
+        topNRowNumberNode->isPartial(),
         std::make_shared<DummySourceNode>(
             topNRowNumberNode->sources().front()->outputType()));
   }

@@ -743,10 +743,10 @@ TEST_F(SubfieldFilterAstTest, physicalPushdownAndLogicalDeferredDecimals) {
   ASSERT_NE(pushed.pushedExpr, nullptr);
   ASSERT_NE(deferred.deferredExpr, nullptr);
   EXPECT_TRUE(pushed.requiresSplitSpecificDecimalTypes);
-  const auto fileRows = makeRowVector(
-      {"price"},
-      {makeNullableFlatVector<int64_t>(
-          {-500, 100, 200, std::nullopt}, DECIMAL(7, 2))});
+  const auto fileRows = makeNamedRowVector(
+      "price",
+      makeNullableFlatVector<int64_t>(
+          {-500, 100, 200, std::nullopt}, DECIMAL(7, 2)));
   const auto accepted = common::createBigintValues({-500, 100}, false);
   testFilterExecution(
       fileRows->rowType(),
