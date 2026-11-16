@@ -138,8 +138,11 @@ Invalid examples
 From decimal
 ^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 The decimal part will be truncated for casting to an integer.
-It is allowed when the truncated result exceeds the range of result type.
+It is allowed when the truncated result exceeds the range of result type when ANSI mode
+is disabled; throws an error when ANSI mode is enabled.
 
 Valid examples
 
@@ -147,9 +150,9 @@ Valid examples
 
   SELECT cast(cast(2.56 as DECIMAL(6, 2)) as bigint); -- 2
   SELECT cast(cast(3.46 as DECIMAL(6, 2)) as bigint); -- 3
-  SELECT cast(cast(5500.0 as DECIMAL(5, 1)) as tinyint); -- 124
-  SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as tinyint); -- 0
-  SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as integer); -- -2147483648
+  SELECT cast(cast(5500.0 as DECIMAL(5, 1)) as tinyint); -- 124 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as tinyint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as integer); -- -2147483648 (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as bigint); -- 2147483648
 
 From timestamp
