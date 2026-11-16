@@ -203,6 +203,11 @@ void SequenceEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
       rowCount, this->rowCount() - row_, "Reading past end of encoding.");
   auto* output = static_cast<physicalType*>(buffer);
   const uint64_t first = valueAt(base_, step_, row_);
+
+  // Reads the step once into a local. 'output' has the type of 'step_', so the
+  // compiler must assume that a store to it can change 'step_'. Reading 'step_'
+  // in the loop adds a runtime overlap check and a scalar fallback loop that
+  // reloads it for every row.
   const uint64_t step = step_;
   for (uint32_t i = 0; i < rowCount; ++i) {
     output[i] = static_cast<physicalType>(first + i * step);
@@ -256,6 +261,9 @@ void SequenceEncoding<T>::bulkScan(
   if constexpr (V::dense) {
     const uint64_t first =
         valueAt(base_, step_, static_cast<uint64_t>(selectedRows[0] + offset));
+
+    // Reads the step once into a local, as materialize() does: a store to
+    // 'values' can alias 'step_'.
     const uint64_t step = step_;
     for (vector_size_t i = 0; i < numSelected; ++i) {
       values[i] = static_cast<OutputType>(

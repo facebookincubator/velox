@@ -27,6 +27,7 @@
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/file/Region.h"
+#include "velox/dwio/nimble/common/StripeRange.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/IndexTypes.h"
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
@@ -101,15 +102,19 @@ class ClusterIndexBase : public IndexLookup {
   /// that chunk again.
   SeekResult seek(const velox::serializer::EncodedKeyBounds& bounds) const;
 
-  /// Returns the stripes whose key chunks a lookup of 'request' decodes in a
-  /// Stripe layout index, in file order and each once: the stripe of each
-  /// bound of each entry. A caller reads them with their key streams, stream
-  /// keyStreamId() of each, in one load, and passes the key streams to
-  /// lookup(request, keyChunks). The stripes between the bounds of a range
-  /// hold rows that it selects but no key chunk that it decodes, so they are
-  /// not returned. Reads index metadata, and the metadata of the stripe groups
-  /// of the stripes, loading them on first use, but no key chunk.
-  std::vector<uint32_t> lookupStripes(const LookupRequest& request) const;
+  /// Returns the stripes whose rows a lookup of each entry of 'request' may
+  /// select in a Stripe layout index, in request order: from the stripe of its
+  /// lower bound, or the first stripe without one, to the stripe of its upper
+  /// bound, or the last stripe without one or with one past the last key. The
+  /// stripes of an entry that selects no row are empty. Each bound of an entry
+  /// is in its first or its last stripe, whose key chunk lookup() decodes to
+  /// resolve the bound. A caller reads the stripes in one load with their key
+  /// streams, stream keyStreamId() of each, and passes the key streams to
+  /// lookup(request, keyChunks). Reads index metadata, and the metadata of the
+  /// stripe groups of the stripes of the bounds and, for an entry that reaches
+  /// the last stripe of the file without a bound in it, of the last stripe
+  /// group, loading them on first use, but no key chunk.
+  std::vector<StripeRange> lookupStripes(const LookupRequest& request) const;
 
   /// The key chunk of a stripe in the Stripe layout, which a caller has read
   /// itself.
@@ -123,11 +128,12 @@ class ClusterIndexBase : public IndexLookup {
 
   /// Looks up 'request' in a Stripe layout index like lookup(request), but
   /// decodes each key chunk that it does not have cached from 'keyChunks',
-  /// which must hold the key chunks of the stripes that lookupStripes(request)
-  /// returns, and never reads one from the file. 'keyChunks' must not be
-  /// empty: a request for which lookupStripes() returns no stripe selects no
-  /// row. Decodes the chunks in place, without a copy, so it does not keep
-  /// them past the call.
+  /// which must hold the key chunk of the stripe of each bound of 'request',
+  /// and never reads one from the file. The key chunks of the first and the
+  /// last stripe that lookupStripes(request) returns for each entry are
+  /// enough. 'keyChunks' must not be empty: lookup(request) reads no key chunk
+  /// for a request without a bound in a stripe. Decodes the chunks in place,
+  /// without a copy, so it does not keep them past the call.
   LookupResult lookup(
       const LookupRequest& request,
       std::span<const KeyChunk> keyChunks) const;
@@ -454,17 +460,36 @@ class ClusterIndexBase : public IndexLookup {
     }
   };
 
+  // A bound of a key or a key range of a request in the partition that holds
+  // it, before it resolves to a row or a stripe.
+  struct PartitionBound {
+    uint32_t partitionId{0};
+    std::string_view encodedKey;
+    // true for the first row >= key, false for the first row > key.
+    bool inclusive{false};
+  };
+
+  // The bounds of a key or a key range of a request in the partitions that
+  // hold them.
+  struct PartitionBounds {
+    // nullopt when the range starts at the first row of the file.
+    std::optional<PartitionBound> lower;
+    // nullopt when the range ends at the last row of the file: it has no
+    // upper key, or one past the last key.
+    std::optional<PartitionBound> upper;
+  };
+
+  // Returns the bounds of the 'index'-th key or key range of 'request', or
+  // nullopt when it selects no row: a range whose upper key is not after its
+  // lower key, or a key or a lower key past the last key. A key bounds its
+  // rows from the first row >= key to the first row > key.
+  std::optional<PartitionBounds> lookupPartitionBounds(
+      const LookupRequest& request,
+      uint32_t index) const;
+
   // Builds partition lookups from request into partitionLookups
   // and initializes partitionRowRanges.
   void lookupPartitions(
-      const LookupRequest& request,
-      std::vector<PartitionLookup>& partitionLookups,
-      std::vector<RowRange>& partitionRowRanges) const;
-  void partitionPointLookups(
-      const LookupRequest& request,
-      std::vector<PartitionLookup>& partitionLookups,
-      std::vector<RowRange>& partitionRowRanges) const;
-  void partitionRangeLookups(
       const LookupRequest& request,
       std::vector<PartitionLookup>& partitionLookups,
       std::vector<RowRange>& partitionRowRanges) const;
