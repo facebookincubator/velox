@@ -29,11 +29,14 @@ class LocalReadFile final : public ReadFile {
   /// preadvAsync(). When 'bufferIo' is false the file is opened with O_DIRECT.
   /// 'useIoUring' enables positioned preadv() batches through a per-thread
   /// io_uring reader. It is valid only when 'bufferIo' is false.
+  /// 'useRegisteredFiles' retains kernel file references in that reader's
+  /// registration table. Disable it for files reclaimed after their last read.
   explicit LocalReadFile(
       std::string_view path,
       folly::Executor* executor = nullptr,
       bool bufferIo = true,
-      bool useIoUring = false);
+      bool useIoUring = false,
+      bool useRegisteredFiles = true);
 
   ~LocalReadFile();
 
@@ -93,6 +96,8 @@ class LocalReadFile final : public ReadFile {
   const bool directIo_{false};
   // True when io_uring is requested for direct-I/O positioned read batches.
   const bool useIoUring_{false};
+  // Retain fixed-file references only when the caller permits ring ownership.
+  const bool useRegisteredFiles_{true};
   const std::string path_;
   const int32_t fd_;
   const long size_;

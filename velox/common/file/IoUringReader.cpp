@@ -328,7 +328,9 @@ IoUringReader::~IoUringReader() {
   if (fileTableInitialized_) {
     ::io_uring_unregister_files(&ring_);
   }
-  ::io_uring_queue_exit(&ring_);
+  if (ringInitialized_) {
+    ::io_uring_queue_exit(&ring_);
+  }
 #endif
 }
 
@@ -339,24 +341,58 @@ IoUringReader::Stats IoUringReader::stats() const {
 uint64_t IoUringReader::read(
     int fd,
     folly::Range<const common::Region*> regions,
-    folly::Range<const folly::Range<char*>*> buffers) {
+    folly::Range<const folly::Range<char*>*> buffers,
+    bool useRegisteredFiles) {
 #if FOLLY_HAS_LIBURING
+  VELOX_CHECK_GE(fd, 0, "io_uring read fd must be non-negative");
+  VELOX_CHECK(!regions.empty(), "io_uring read regions must not be empty");
+  VELOX_CHECK_EQ(
+      regions.size(),
+      buffers.size(),
+      "io_uring requires one buffer per region");
+  for (size_t i = 0; i < regions.size(); ++i) {
+    VELOX_CHECK_NOT_NULL(
+        buffers[i].data(),
+        "io_uring destination must not be null: region {}",
+        i);
+    VELOX_CHECK_EQ(
+        buffers[i].size(),
+        regions[i].length,
+        "io_uring destination length must match region length: region {}",
+        i);
+    VELOX_CHECK_LE(
+        buffers[i].size(),
+        static_cast<size_t>(std::numeric_limits<int>::max()),
+        "preadv read length exceeds io_uring result range");
+  }
+  if (!ringInitialized_) {
+    initializeRing();
+  }
   recordRead(regions.size());
-  const auto registeredFileSlot = registerFileForRead(fd);
+  const auto registeredFileSlot =
+      useRegisteredFiles ? registerFileForRead(fd) : std::nullopt;
 
   uint64_t totalBytes{0};
   size_t next{0};
   while (next < regions.size()) {
-    const auto prepared =
-        prepareReads(fd, regions, buffers, next, registeredFileSlot);
-    totalBytes += submitAndWaitForReads(prepared);
-    next += prepared;
+    const auto initialHead = io_uring_smp_load_acquire(ring_.sq.khead);
+    size_t completed{0};
+    try {
+      const auto prepared =
+          prepareReads(fd, regions, buffers, next, registeredFileSlot);
+      totalBytes += submitAndWaitForReads(prepared, completed);
+      next += prepared;
+    } catch (...) {
+      recoverFailedBatch(initialHead, completed);
+      throw;
+    }
   }
   return totalBytes;
 #else
   (void)fd;
   (void)regions;
   (void)buffers;
+  (void)useRegisteredFiles;
   VELOX_UNSUPPORTED("io_uring is unavailable");
 #endif
 }
@@ -406,6 +442,7 @@ void IoUringReader::initializeRing() {
   fileTableInitialized_ = true;
 #endif
 
+  ringInitialized_ = true;
   LOG(INFO) << "IoUringReader initialized: submissionQueueDepth="
             << submissionQueueDepth_
             << ", completionQueueDepth=" << completionQueueDepth_
@@ -506,11 +543,6 @@ size_t IoUringReader::prepareReads(
     const auto index = regionOffset + i;
     const auto& region = regions[index];
     const auto& buffer = buffers[index];
-    VELOX_CHECK_LE(
-        buffer.size(),
-        static_cast<size_t>(std::numeric_limits<int>::max()),
-        "preadv read length exceeds io_uring result range");
-
     auto* sqe = ::io_uring_get_sqe(&ring_);
     VELOX_CHECK_NOT_NULL(sqe, "io_uring_get_sqe failed");
     ::io_uring_prep_read(
@@ -528,32 +560,55 @@ size_t IoUringReader::prepareReads(
   return count;
 }
 
-uint64_t IoUringReader::submitAndWaitForReads(size_t count) {
-  // submit_and_wait() returns the number of SQEs submitted. wait_nr only
-  // controls how many CQEs to wait for before returning; the loop below drains
-  // and validates all completions for the submitted batch.
-  const auto waitCount = std::min<size_t>(count, completionQueueDepth_);
-  const int ret =
-      ::io_uring_submit_and_wait(&ring_, static_cast<unsigned int>(waitCount));
-  VELOX_CHECK_GE(
-      ret, 0, "io_uring_submit_and_wait failed: {}", folly::errnoStr(-ret));
+void IoUringReader::testingSetIoUringCalls(
+    int (*submitAndWait)(io_uring*, unsigned),
+    int (*waitForCompletionsCallback)(io_uring*, io_uring_cqe**, unsigned)) {
+  submitAndWait_ = submitAndWait ? submitAndWait : ::io_uring_submit_and_wait;
+  waitForCompletions_ = waitForCompletionsCallback ? waitForCompletionsCallback
+                                                   : waitForCompletions;
+}
+
+int IoUringReader::waitForCompletions(
+    io_uring* ring,
+    io_uring_cqe** cqe,
+    unsigned count) {
+  return ::io_uring_wait_cqes(ring, cqe, count, nullptr, nullptr);
+}
+
+uint64_t IoUringReader::submitAndWaitForReads(size_t count, size_t& completed) {
+  const auto initialHead = io_uring_smp_load_acquire(ring_.sq.khead);
+  while (io_uring_smp_load_acquire(ring_.sq.khead) - initialHead < count) {
+    const int result = submitAndWait_(&ring_, 1);
+    if (result == -EINTR) {
+      continue;
+    }
+    VELOX_CHECK_GE(
+        result, 0, "io_uring submission failed: {}", folly::errnoStr(-result));
+    VELOX_CHECK_GT(result, 0, "io_uring submission made no progress");
+  }
   VELOX_CHECK_EQ(
-      ret, count, "io_uring_submit_and_wait submitted partial batch");
+      io_uring_smp_load_acquire(ring_.sq.khead) - initialHead, count);
 
   uint64_t totalBytes{0};
   int error{0};
-  size_t completed{0};
   while (completed < count) {
     io_uring_cqe* cqe{nullptr};
-    int ret = ::io_uring_peek_cqe(&ring_, &cqe);
-    if (ret == -EAGAIN) {
-      const auto waitCount =
-          std::min<size_t>(count - completed, completionQueueDepth_);
-      ret = ::io_uring_wait_cqes(
-          &ring_, &cqe, static_cast<unsigned>(waitCount), nullptr, nullptr);
+    int result = ::io_uring_peek_cqe(&ring_, &cqe);
+    if (result == -EAGAIN) {
+      result = waitForCompletions_(
+          &ring_,
+          &cqe,
+          static_cast<unsigned>(
+              std::min<size_t>(count - completed, completionQueueDepth_)));
+    }
+    if (result == -EINTR) {
+      continue;
     }
     VELOX_CHECK_GE(
-        ret, 0, "io_uring completion wait failed: {}", folly::errnoStr(-ret));
+        result,
+        0,
+        "io_uring completion wait failed: {}",
+        folly::errnoStr(-result));
 
     unsigned head;
     unsigned seen{0};
@@ -565,15 +620,52 @@ uint64_t IoUringReader::submitAndWaitForReads(size_t count) {
         totalBytes += static_cast<uint64_t>(cqe->res);
       }
     }
-    VELOX_CHECK_GT(seen, 0, "io_uring_wait_cqe returned no completions");
     ::io_uring_cq_advance(&ring_, seen);
     completed += seen;
+    VELOX_CHECK_GT(seen, 0, "io_uring wait returned no completions");
     VELOX_CHECK_LE(completed, count, "io_uring completed too many reads");
   }
-
   VELOX_CHECK_GE(
       error, 0, "io_uring batch pread failed: {}", folly::errnoStr(-error));
   return totalBytes;
+}
+
+void IoUringReader::recoverFailedBatch(
+    uint32_t initialHead,
+    size_t completed) noexcept {
+  const auto submitted =
+      io_uring_smp_load_acquire(ring_.sq.khead) - initialHead;
+  if (completed < submitted) {
+    io_uring_sync_cancel_reg cancellation{};
+    cancellation.flags = IORING_ASYNC_CANCEL_ANY | IORING_ASYNC_CANCEL_ALL;
+    cancellation.timeout.tv_sec = -1;
+    cancellation.timeout.tv_nsec = -1;
+    int result;
+    do {
+      result = ::io_uring_register_sync_cancel(&ring_, &cancellation);
+    } while (result == -EINTR);
+    if (result < 0 && result != -ENOENT) {
+      // Older kernels may not support synchronous cancellation. Keep caller
+      // buffers alive until every consumed SQE has a terminal completion.
+      while (completed < submitted) {
+        io_uring_cqe* cqe{nullptr};
+        do {
+          result = ::io_uring_wait_cqe(&ring_, &cqe);
+        } while (result == -EINTR);
+        CHECK_GE(result, 0) << "Cannot recover outstanding io_uring reads";
+        ::io_uring_cqe_seen(&ring_, cqe);
+        ++completed;
+      }
+    }
+  }
+  // No SQPOLL issuer exists for this ring. Unconsumed SQEs cannot execute after
+  // teardown, and consumed requests have completed or stopped touching buffers.
+  ::io_uring_queue_exit(&ring_);
+  ringInitialized_ = false;
+  fileTableInitialized_ = false;
+  registeredFiles_.clear();
+  fdToRegisteredFileSlot_.clear();
+  nextRegisteredFileSlot_ = 0;
 }
 
 #endif
@@ -593,12 +685,13 @@ void ThreadLocalIoUringReader::testingClear() {
 uint64_t ThreadLocalIoUringReader::read(
     int fd,
     folly::Range<const common::Region*> regions,
-    folly::Range<const folly::Range<char*>*> buffers) const {
+    folly::Range<const folly::Range<char*>*> buffers,
+    bool useRegisteredFiles) const {
   auto& reader = threadLocalIoUringReader();
   if (reader == nullptr) {
     reader = std::make_unique<IoUringReader>(getGlobalIoUringOptions());
   }
-  return reader->read(fd, regions, buffers);
+  return reader->read(fd, regions, buffers, useRegisteredFiles);
 }
 
 } // namespace facebook::velox

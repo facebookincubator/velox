@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -32,6 +33,8 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+
+#include <folly/ScopeGuard.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/IoUringReader.h"
@@ -124,6 +127,8 @@ TEST(IoUringReaderStatsTest, mergeAndToString) {
 #if FOLLY_HAS_LIBURING
 
 struct FdGuard {
+  explicit FdGuard(int descriptor) : fd(descriptor) {}
+
   explicit FdGuard(std::string_view path) {
     const std::string ownedPath(path);
     fd = ::open(ownedPath.c_str(), O_RDONLY);
@@ -258,7 +263,8 @@ class IoUringReaderTest : public ::testing::Test {
   void readAndVerify(
       Reader& reader,
       int fd,
-      const std::vector<ReadRegion>& readRegions) const {
+      const std::vector<ReadRegion>& readRegions,
+      bool useRegisteredFiles = true) const {
     std::vector<std::vector<char>> reads;
     std::vector<common::Region> regions;
     std::vector<folly::Range<char*>> buffers;
@@ -277,7 +283,8 @@ class IoUringReaderTest : public ::testing::Test {
     const auto bytesRead = reader.read(
         fd,
         folly::Range<const common::Region*>(regions.data(), regions.size()),
-        asConstRange(buffers));
+        asConstRange(buffers),
+        useRegisteredFiles);
     VELOX_CHECK_EQ(bytesRead, expectedBytes);
     for (size_t i = 0; i < reads.size(); ++i) {
       VELOX_CHECK_EQ(
@@ -552,6 +559,215 @@ TEST_F(IoUringReaderTest, queueDepth) {
         expectedStatsForRegionCounts(
             {testCase.regionCount}, testCase.submissionQueueDepth));
   }
+}
+
+TEST_F(
+    IoUringReaderTest,
+    unregisteredReadsSupportMixedModesAndMultipleBatches) {
+  if (!IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+  auto fd = openFile();
+  IoUringReader reader(makeReaderOptions(2, 4));
+  readAndVerify(reader, fd.fd, makeReadRegions(7), false);
+  EXPECT_EQ(reader.stats().registeredFileUpdates, 0u);
+  readAndVerify(reader, fd.fd, makeReadRegions(7));
+  EXPECT_EQ(
+      reader.stats().registeredFileUpdates, expectedRegisteredFileUpdates(1));
+  readAndVerify(reader, fd.fd, makeReadRegions(7), false);
+  EXPECT_EQ(
+      reader.stats().registeredFileUpdates, expectedRegisteredFileUpdates(1));
+}
+
+TEST_F(IoUringReaderTest, unregisteredReadReleasesKernelFileOwnership) {
+  if (!IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+#ifdef IOSQE_FIXED_FILE
+  const auto path = tempFile_->getPath() + "-lease";
+  SCOPE_EXIT {
+    ::unlink(path.c_str());
+  };
+  {
+    LocalWriteFile writer(path);
+    writer.append(testData_);
+    writer.close();
+  }
+  FdGuard leaseProbe(::open(path.c_str(), O_RDWR));
+  const int probe = leaseProbe.fd;
+  ASSERT_GE(probe, 0);
+  if (::fcntl(probe, F_SETLEASE, F_WRLCK) != 0) {
+    GTEST_SKIP() << "filesystem does not support exclusive file leases";
+  }
+  ASSERT_EQ(::fcntl(probe, F_SETLEASE, F_UNLCK), 0);
+  {
+    IoUringReader registered(makeReaderOptions());
+    {
+      FdGuard fd(path);
+      readAndVerify(registered, fd.fd, makeReadRegions(1));
+    }
+    EXPECT_EQ(::fcntl(probe, F_SETLEASE, F_WRLCK), -1);
+    EXPECT_EQ(errno, EAGAIN);
+  }
+  ASSERT_EQ(::fcntl(probe, F_SETLEASE, F_WRLCK), 0);
+  ASSERT_EQ(::fcntl(probe, F_SETLEASE, F_UNLCK), 0);
+  IoUringReader unregistered(makeReaderOptions());
+  {
+    FdGuard fd(path);
+    readAndVerify(unregistered, fd.fd, makeReadRegions(1), false);
+    ASSERT_EQ(::unlink(path.c_str()), 0);
+  }
+  EXPECT_EQ(unregistered.stats().registeredFileUpdates, 0u);
+  EXPECT_EQ(::fcntl(probe, F_SETLEASE, F_WRLCK), 0);
+  EXPECT_EQ(::fcntl(probe, F_SETLEASE, F_UNLCK), 0);
+#else
+  GTEST_SKIP() << "fixed-file registration is unavailable";
+#endif
+}
+
+TEST_F(IoUringReaderTest, invalidBatchDoesNotLeaveQueuedReads) {
+  if (!IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+  auto fd = openFile();
+  IoUringReader reader(makeReaderOptions(2));
+  std::vector<char> destination(8, 'z');
+  const std::vector<common::Region> regions{{0, 8}, {0, 8}};
+  const std::vector<folly::Range<char*>> buffers{
+      {destination.data(), destination.size()}, {destination.data(), 7}};
+  VELOX_ASSERT_THROW(
+      reader.read(fd.fd, regions, buffers, false),
+      "io_uring destination length must match region length");
+  readAndVerify(reader, fd.fd, makeReadRegions(3), false);
+  EXPECT_EQ(destination, std::vector<char>(8, 'z'));
+}
+
+TEST_F(IoUringReaderTest, partialSubmissionAndInterruptionCompleteEveryRead) {
+  if (!IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+  auto fd = openFile();
+  IoUringReader reader(makeReaderOptions(4));
+  static thread_local size_t calls;
+  calls = 0;
+  reader.testingSetIoUringCalls(
+      [](io_uring* ring, unsigned waitCount) {
+        if (++calls == 1) {
+          return -EINTR;
+        }
+        if (calls == 2) {
+          const auto tail = ring->sq.sqe_tail;
+          ring->sq.sqe_tail = ring->sq.sqe_head + 1;
+          const int result = ::io_uring_submit_and_wait(ring, waitCount);
+          ring->sq.sqe_tail = tail;
+          return result;
+        }
+        return ::io_uring_submit_and_wait(ring, waitCount);
+      },
+      nullptr);
+  readAndVerify(reader, fd.fd, makeReadRegions(7), false);
+  EXPECT_GE(calls, 4u);
+  reader.testingSetIoUringCalls(nullptr, nullptr);
+  readAndVerify(reader, fd.fd, makeReadRegions(3));
+}
+
+TEST_F(IoUringReaderTest, failedSubmissionDiscardsQueuedReadsBeforeFdReuse) {
+  if (!IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+  auto fd = openFile();
+  IoUringReader reader(makeReaderOptions(4));
+  reader.testingSetIoUringCalls(
+      [](io_uring*, unsigned) { return -EIO; }, nullptr);
+  std::vector<char> staleDestination(8, 'z');
+  const std::vector<common::Region> regions{{0, staleDestination.size()}};
+  const std::vector<folly::Range<char*>> buffers{
+      {staleDestination.data(), staleDestination.size()}};
+  VELOX_ASSERT_THROW(
+      reader.read(fd.fd, regions, buffers, false),
+      "io_uring submission failed");
+  const int reusedFd = fd.fd;
+  ::close(std::exchange(fd.fd, -1));
+  auto replacement = openFile();
+  ASSERT_GE(replacement.fd, 0);
+  if (replacement.fd != reusedFd) {
+    ASSERT_EQ(::dup2(replacement.fd, reusedFd), reusedFd);
+    ::close(std::exchange(replacement.fd, reusedFd));
+  }
+  reader.testingSetIoUringCalls(nullptr, nullptr);
+  readAndVerify(reader, replacement.fd, makeReadRegions(4), false);
+  EXPECT_EQ(staleDestination, std::vector<char>(8, 'z'));
+}
+
+TEST_F(IoUringReaderTest, failureAfterPartialSubmissionRecoversForNextBatch) {
+  if (!IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+  auto fd = openFile();
+  IoUringReader reader(makeReaderOptions(4));
+  static thread_local size_t calls;
+  calls = 0;
+  reader.testingSetIoUringCalls(
+      [](io_uring* ring, unsigned waitCount) {
+        if (++calls != 1) {
+          return -EIO;
+        }
+        const auto tail = ring->sq.sqe_tail;
+        ring->sq.sqe_tail = ring->sq.sqe_head + 1;
+        const int result = ::io_uring_submit_and_wait(ring, waitCount);
+        ring->sq.sqe_tail = tail;
+        return result;
+      },
+      nullptr);
+  VELOX_ASSERT_THROW(
+      readAndVerify(reader, fd.fd, makeReadRegions(4), false),
+      "io_uring submission failed");
+  reader.testingSetIoUringCalls(nullptr, nullptr);
+  readAndVerify(reader, fd.fd, makeReadRegions(4), false);
+}
+
+TEST_F(IoUringReaderTest, completionWaitFailureRecoversOutstandingRead) {
+  if (!IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+  int descriptors[2];
+  ASSERT_EQ(::pipe(descriptors), 0);
+  FdGuard source(descriptors[0]);
+  FdGuard destination(descriptors[1]);
+  static thread_local int writer;
+  writer = destination.fd;
+  IoUringReader reader(makeReaderOptions(4));
+  reader.testingSetIoUringCalls(
+      [](io_uring* ring, unsigned) { return ::io_uring_submit(ring); },
+      [](io_uring*, io_uring_cqe**, unsigned) {
+        EXPECT_EQ(::write(writer, "12345678", 8), 8);
+        return -EIO;
+      });
+  std::vector<char> buffer(8);
+  const std::vector<common::Region> regions{
+      {std::numeric_limits<uint64_t>::max(), 8}};
+  const std::vector<folly::Range<char*>> buffers{
+      {buffer.data(), buffer.size()}};
+  VELOX_ASSERT_THROW(
+      reader.read(source.fd, regions, buffers, false),
+      "io_uring completion wait failed");
+  std::fill(buffer.begin(), buffer.end(), 'z');
+  reader.testingSetIoUringCalls(nullptr, nullptr);
+  auto fd = openFile();
+  readAndVerify(reader, fd.fd, makeReadRegions(4), false);
+  EXPECT_EQ(buffer, std::vector<char>(8, 'z'));
+}
+
+TEST_F(IoUringReaderTest, completionErrorDrainsBatchBeforeNextRead) {
+  if (!IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+  IoUringReader reader(makeReaderOptions(4));
+  VELOX_ASSERT_THROW(
+      readAndVerify(reader, 1'000'000, makeReadRegions(4), false),
+      "io_uring batch pread failed");
+  auto fd = openFile();
+  readAndVerify(reader, fd.fd, makeReadRegions(4), false);
 }
 
 TEST_F(IoUringReaderTest, reusesRegisteredFileSlots) {

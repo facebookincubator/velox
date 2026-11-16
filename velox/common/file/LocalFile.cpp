@@ -175,10 +175,12 @@ LocalReadFile::LocalReadFile(
     std::string_view path,
     folly::Executor* executor,
     bool bufferIo,
-    bool useIoUring)
+    bool useIoUring,
+    bool useRegisteredFiles)
     : executor_(executor),
       directIo_{!bufferIo},
       useIoUring_{validateUseIoUringConfig(directIo_, useIoUring)},
+      useRegisteredFiles_{useRegisteredFiles},
       path_(path),
       fd_{openReadFile(path_, directIo_)},
       size_{fileSize(fd_, path_)},
@@ -312,7 +314,8 @@ uint64_t LocalReadFile::preadv(
   const auto length = checkBatchRead(regions, buffers);
   // TODO: Extend io_uring support to the other read APIs.
   bytesRead_ += length;
-  return ThreadLocalIoUringReader::get().read(fd_, regions, buffers);
+  return ThreadLocalIoUringReader::get().read(
+      fd_, regions, buffers, useRegisteredFiles_);
 }
 
 folly::SemiFuture<uint64_t> LocalReadFile::preadvAsync(

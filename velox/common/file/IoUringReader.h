@@ -124,10 +124,21 @@ class IoUringReader {
   /// Returns a snapshot of this reader's stats.
   Stats stats() const;
 
+  /// Reads synchronously; keep the fd and buffers alive through return.
+  /// Disabling registration avoids persistent kernel ownership of the file.
   uint64_t read(
       int fd,
       folly::Range<const common::Region*> regions,
-      folly::Range<const folly::Range<char*>*> buffers);
+      folly::Range<const folly::Range<char*>*> buffers,
+      bool useRegisteredFiles = true);
+
+#if FOLLY_HAS_LIBURING
+  /// Overrides syscall boundaries for deterministic submission/wait tests.
+  /// Null callbacks restore the corresponding liburing operation.
+  void testingSetIoUringCalls(
+      int (*submitAndWait)(io_uring*, unsigned),
+      int (*waitForCompletions)(io_uring*, io_uring_cqe**, unsigned));
+#endif
 
  private:
   friend Stats getIoUringReaderStats(uint64_t& numReaders);
@@ -171,7 +182,18 @@ class IoUringReader {
       size_t regionOffset,
       std::optional<int> registeredFileSlot);
 
-  uint64_t submitAndWaitForReads(size_t count);
+  // Track terminal completions so recovery cannot outlive caller buffers.
+  uint64_t submitAndWaitForReads(size_t count, size_t& completed);
+  // Cancel or drain consumed SQEs, then discard the failed ring's pending SQEs.
+  void recoverFailedBatch(uint32_t initialHead, size_t completed) noexcept;
+  // Adapt liburing's wait call for deterministic syscall-failure injection.
+  static int
+  waitForCompletions(io_uring* ring, io_uring_cqe** cqe, unsigned count);
+  // Allow tests to exercise partial submissions and interruption.
+  int (*submitAndWait_)(io_uring*, unsigned){::io_uring_submit_and_wait};
+  // Allow tests to inject a wait failure before all reads complete.
+  int (*waitForCompletions_)(io_uring*, io_uring_cqe**, unsigned){
+      waitForCompletions};
 
   struct RegisteredFile {
     // Raw fd number last registered in this registered-file slot.
@@ -210,6 +232,8 @@ class IoUringReader {
 
   // Whether the registered-file table has been registered with the kernel.
   bool fileTableInitialized_{false};
+  // Recreate a ring on the next read after a failed batch has been recovered.
+  bool ringInitialized_{false};
 #endif
 };
 
@@ -227,10 +251,12 @@ class ThreadLocalIoUringReader {
   /// isolated reader stats.
   static void testingClear();
 
+  /// Keeps the same registration policy for every batch of this read.
   uint64_t read(
       int fd,
       folly::Range<const common::Region*> regions,
-      folly::Range<const folly::Range<char*>*> buffers) const;
+      folly::Range<const folly::Range<char*>*> buffers,
+      bool useRegisteredFiles = true) const;
 };
 
 } // namespace facebook::velox
