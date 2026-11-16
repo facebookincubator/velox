@@ -858,7 +858,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
         std::move(ioStats),
         executor,
         readerOpts,
-        fileReadOps);
+        fileReadOps,
+        connectorQueryCtx->cancellationToken());
   }
   if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE &&
       !readerOpts.nimbleDirectBufferedInputEnabled()) {
@@ -870,7 +871,9 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
         ioStats.get(),
         dwio::common::BufferedInput::kMaxMergeDistance,
         std::nullopt,
-        fileReadOps);
+        fileReadOps,
+        /*cacheable=*/false,
+        connectorQueryCtx->cancellationToken());
   }
   return std::make_unique<dwio::common::DirectBufferedInput>(
       fileHandle.file,
@@ -883,7 +886,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
       std::move(ioStats),
       executor,
       readerOpts,
-      fileReadOps);
+      fileReadOps,
+      connectorQueryCtx->cancellationToken());
 }
 
 namespace {

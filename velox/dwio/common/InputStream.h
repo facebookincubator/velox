@@ -148,7 +148,8 @@ class ReadFileInputStream final : public InputStream {
       velox::IoStats* ioStats = nullptr,
       folly::F14FastMap<std::string, std::string> fileReadOps = {},
       bool cacheable = false,
-      memory::MemoryPool* pool = nullptr);
+      memory::MemoryPool* pool = nullptr,
+      folly::CancellationToken cancellationToken = {});
 
   ~ReadFileInputStream() override = default;
 
