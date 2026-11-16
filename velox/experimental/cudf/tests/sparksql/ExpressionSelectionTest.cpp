@@ -180,7 +180,7 @@ TEST_F(CudfSparkExpressionSelectionTest, isNullDialectRegistration) {
 }
 
 // Spark trims spaces only, and its split takes a regular expression, so the
-// cuDF Presto versions must not serve a Spark session.
+// builtin and Spark registrations must not include the cuDF Presto versions.
 TEST_F(CudfSparkExpressionSelectionTest, prestoTrimAndSplitStayOnCpu) {
   unregisterFunctions();
   registerBuiltinFunctions("");

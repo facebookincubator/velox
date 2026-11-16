@@ -28,6 +28,7 @@
 namespace facebook::velox::cudf_velox::prestosql {
 namespace {
 
+// Assumes the limit is a non-null INTEGER or BIGINT constant.
 int64_t constantLimitValue(const core::TypedExprPtr& expr) {
   const auto* constant = expr->asUnchecked<core::ConstantTypedExpr>();
   const auto value = constant->hasValueVector()

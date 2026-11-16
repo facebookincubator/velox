@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/CommonFunctions.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -137,24 +139,30 @@ constexpr std::string_view kPrestoWhitespace{
 
 class TrimFunction : public CudfFunction {
  public:
-  explicit TrimFunction(cudf::strings::side_type side) : side_(side) {}
+  explicit TrimFunction(cudf::strings::side_type side) : side_(side) {
+    // Built once rather than per batch; the sync lets eval() use it on any
+    // stream.
+    auto stream = getDefaultStreamForCurrentThread();
+    whitespace_ = std::make_unique<cudf::string_scalar>(
+        std::string(kPrestoWhitespace), true, stream, get_temp_mr());
+    stream.sync();
+  }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
-    const cudf::string_scalar whitespace(
-        std::string(kPrestoWhitespace), true, stream, mr);
     return cudf::strings::strip(
         cudf::strings_column_view(asView(inputColumns[0])),
         side_,
-        whitespace,
+        *whitespace_,
         stream,
         mr);
   }
 
  private:
   cudf::strings::side_type side_;
+  std::unique_ptr<cudf::string_scalar> whitespace_;
 };
 
 } // namespace
