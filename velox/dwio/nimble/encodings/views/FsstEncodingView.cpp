@@ -20,6 +20,7 @@
 #include <array>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <utility>
 
 #include "velox/buffer/Buffer.h"
@@ -129,13 +130,16 @@ std::string_view FsstEncodingView::readTypedAt(uint32_t index) const {
   NIMBLE_CHECK_LT(index, this->rowCount_);
   if (!cachesDecodedChunks()) {
     const auto size = lengths_->readAt(index);
-    return decodeValue(index, lengths_->sum(0, index), size);
+    const auto begin = lengths_->sum(0, index);
+    return decodeValue(index, begin, size, *decodedStrings_.wlock());
   }
   const auto chunk = chunkForRead(rowChunk(index), /*numRows=*/1);
-  if (chunk == nullptr) {
-    return decodeRow(index);
+  if (chunk != nullptr) {
+    return valueAt(*chunk, index % kRowsPerChunk);
   }
-  return valueAt(*chunk, index % kRowsPerChunk);
+  std::string_view value;
+  decodeRows(std::span<const uint32_t>{&index, 1}, &value);
+  return value;
 }
 
 void FsstEncodingView::readPhysical(
@@ -149,8 +153,9 @@ void FsstEncodingView::readPhysical(
         length, this->pool_, this->options_.bufferPool};
     lengths_->read(offset, length, sizes.data());
     auto begin = lengths_->sum(0, offset);
+    auto strings = decodedStrings_.wlock();
     for (uint32_t i = 0; i < length; ++i) {
-      output[i] = decodeValue(offset + i, begin, sizes[i]);
+      output[i] = decodeValue(offset + i, begin, sizes[i], *strings);
       begin += sizes[i];
     }
     return;
@@ -163,10 +168,15 @@ void FsstEncodingView::readPhysical(
     const auto rowsToCopy =
         std::min(length - outputOffset, chunkRows(chunkIndex) - rowInChunk);
     const auto chunk = chunkForRead(chunkIndex, rowsToCopy);
-    for (uint32_t i = 0; i < rowsToCopy; ++i) {
-      output[outputOffset + i] = chunk == nullptr
-          ? decodeRow(row + i)
-          : valueAt(*chunk, rowInChunk + i);
+    if (chunk == nullptr) {
+      ScopedVector<uint32_t> rows{
+          rowsToCopy, this->pool_, this->options_.bufferPool};
+      std::iota(rows.begin(), rows.end(), row);
+      decodeRows({rows.data(), rows.size()}, output + outputOffset);
+    } else {
+      for (uint32_t i = 0; i < rowsToCopy; ++i) {
+        output[outputOffset + i] = valueAt(*chunk, rowInChunk + i);
+      }
     }
     outputOffset += rowsToCopy;
   }
@@ -184,9 +194,12 @@ void FsstEncodingView::readPhysicalAt(
     ScopedVector<uint64_t> begins{
         indices.size(), this->pool_, this->options_.bufferPool};
     lengths_->sum(indices, begins.data());
+    ScopedVector<uint32_t> sizes{
+        indices.size(), this->pool_, this->options_.bufferPool};
+    lengths_->readAt(indices, sizes.data());
+    auto strings = decodedStrings_.wlock();
     for (size_t i = 0; i < indices.size(); ++i) {
-      output[i] =
-          decodeValue(indices[i], begins[i], lengths_->readAt(indices[i]));
+      output[i] = decodeValue(indices[i], begins[i], sizes[i], *strings);
     }
     return;
   }
@@ -202,10 +215,13 @@ void FsstEncodingView::readPhysicalAt(
     }
     const auto chunk =
         chunkForRead(chunkIndex, static_cast<uint32_t>(runEnd - runBegin));
-    for (auto i = runBegin; i < runEnd; ++i) {
-      output[i] = chunk == nullptr
-          ? decodeRow(indices[i])
-          : valueAt(*chunk, indices[i] % kRowsPerChunk);
+    if (chunk == nullptr) {
+      decodeRows(
+          indices.subspan(runBegin, runEnd - runBegin), output + runBegin);
+    } else {
+      for (auto i = runBegin; i < runEnd; ++i) {
+        output[i] = valueAt(*chunk, indices[i] % kRowsPerChunk);
+      }
     }
     runBegin = runEnd;
   }
@@ -238,91 +254,141 @@ uint32_t FsstEncodingView::read(
   }
 
   auto* values = static_cast<std::string_view*>(output);
+
+  // The rows of the current chunk that the read decodes alone, as one batch.
+  // decodeRowBatch() decodes them under one lock when the read leaves the
+  // chunk. Their outputs are adjacent, from 'rowBatchOutputOffset'. The batch
+  // stays empty for a chunk that the read reads from the chunk's decoded
+  // strings.
+  ScopedVector<uint32_t> rowBatch{
+      std::min(numRows, kRowsPerChunk), this->pool_, this->options_.bufferPool};
+
+  // Starts empty, and keeps the capacity, which a batch never exceeds.
+  rowBatch.resize(0);
+  uint32_t rowBatchOutputOffset{0};
+
+  // Decodes the rows of the batch, if there are any, since decodeRows() needs
+  // rows, and empties the batch.
+  const auto decodeRowBatch = [&] {
+    if (!rowBatch.empty()) {
+      decodeRows(
+          {rowBatch.data(), rowBatch.size()}, values + rowBatchOutputOffset);
+      rowBatch.resize(0);
+    }
+  };
   uint32_t outputOffset{0};
   auto chunkIndex = std::numeric_limits<uint32_t>::max();
   std::shared_ptr<const DecodedChunk> chunk;
   for (const auto& range : ranges) {
     for (auto row = range.startRow; row < range.endRow; ++row) {
       if (rowChunk(row) != chunkIndex) {
+        decodeRowBatch();
+        rowBatchOutputOffset = outputOffset;
         chunkIndex = rowChunk(row);
         chunk = chunkForRead(
             chunkIndex, numChunkRows[chunkIndex - firstChunkIndex]);
       }
-      values[outputOffset++] = chunk == nullptr
-          ? decodeRow(row)
-          : valueAt(*chunk, row % kRowsPerChunk);
+      if (chunk == nullptr) {
+        rowBatch.push_back(row);
+      } else {
+        values[outputOffset] = valueAt(*chunk, row % kRowsPerChunk);
+      }
+      ++outputOffset;
     }
   }
+  decodeRowBatch();
   return numRows;
 }
 
 std::string_view FsstEncodingView::decodeValue(
     uint32_t row,
     uint64_t compressedBegin,
-    uint32_t compressedSize) const {
-  if (const auto decoded = decodedStrings_.find(row); decoded.has_value()) {
+    uint32_t compressedSize,
+    DecodedStrings& strings) const {
+  if (const auto decoded = strings.find(row); decoded.has_value()) {
     return *decoded;
   }
 
-  // Validates only this string because the view skips the whole-chunk
-  // validation that a cached view performs at construction.
-  const std::array<uint32_t, 1> compressedSizes{compressedSize};
-  FsstEncoding::validateCompressedLengths(
-      compressedSizes, blob_, static_cast<size_t>(compressedBegin));
-  std::string decoded;
-  if (compressedSize != 0) {
-    const auto maxDecodedSize =
-        static_cast<size_t>(compressedSize) * kMaxSymbolLength;
-    decoded.resize(maxDecodedSize + 1);
-    const auto decodedSize = nimble_fsst_decompress(
-        &decoder_,
-        compressedSize,
-        reinterpret_cast<const unsigned char*>(blob_.data() + compressedBegin),
-        maxDecodedSize + 1,
-        reinterpret_cast<unsigned char*>(decoded.data()));
-    NIMBLE_CHECK_GT(
-        decodedSize,
-        0,
-        "FSST decompression failed for non-empty compressed string.");
-    NIMBLE_CHECK_FILE_LE(
-        decodedSize,
-        maxDecodedSize,
-        "FSST decompressed string exceeds the maximum expansion bound.");
-    decoded.resize(decodedSize);
+  // Validates only this string because a view without cacheEncodingView skips
+  // the validation of every length that a cached view performs at
+  // construction.
+  if (!cachesDecodedChunks()) {
+    const std::array<uint32_t, 1> compressedSizes{compressedSize};
+    FsstEncoding::validateCompressedLengths(
+        compressedSizes, blob_, static_cast<size_t>(compressedBegin));
   }
-
-  return decodedStrings_.add(row, std::move(decoded));
+  if (compressedSize == 0) {
+    return {};
+  }
+  const auto maxDecodedSize =
+      static_cast<size_t>(compressedSize) * kMaxSymbolLength;
+  auto* decoded = strings.reserve(maxDecodedSize + 1, this->pool_);
+  const auto decodedSize = nimble_fsst_decompress(
+      &decoder_,
+      compressedSize,
+      reinterpret_cast<const unsigned char*>(blob_.data() + compressedBegin),
+      maxDecodedSize + 1,
+      reinterpret_cast<unsigned char*>(decoded));
+  NIMBLE_CHECK_GT(
+      decodedSize,
+      0,
+      "FSST decompression failed for non-empty compressed string.");
+  NIMBLE_CHECK_FILE_LE(
+      decodedSize,
+      maxDecodedSize,
+      "FSST decompressed string exceeds the maximum expansion bound.");
+  return strings.add(row, decodedSize);
 }
 
-std::string_view FsstEncodingView::decodeRow(uint32_t row) const {
-  const auto compressedBegin = compressedOffsets_[row];
-  return decodeValue(
-      row,
-      compressedBegin,
-      static_cast<uint32_t>(compressedOffsets_[row + 1] - compressedBegin));
+void FsstEncodingView::decodeRows(
+    std::span<const uint32_t> rows,
+    std::string_view* output) const {
+  NIMBLE_CHECK_GT(rows.size(), 0, "Rows to decode must not be empty.");
+  auto strings = decodedStrings_.wlock();
+  for (size_t i = 0; i < rows.size(); ++i) {
+    const auto compressedBegin = compressedOffsets_[rows[i]];
+    output[i] = decodeValue(
+        rows[i],
+        compressedBegin,
+        static_cast<uint32_t>(
+            compressedOffsets_[rows[i] + 1] - compressedBegin),
+        *strings);
+  }
 }
 
 std::optional<std::string_view> FsstEncodingView::DecodedStrings::find(
     uint32_t row) const {
-  const std::shared_lock<std::shared_mutex> guard{lock_};
-  const auto it = positions_.find(row);
-  if (it == positions_.end()) {
+  const auto it = strings_.find(row);
+  if (it == strings_.end()) {
     return std::nullopt;
   }
-  return values_[it->second];
+  return it->second;
+}
+
+char* FsstEncodingView::DecodedStrings::reserve(
+    size_t maxSize,
+    velox::memory::MemoryPool* pool) {
+  if (freeBytes_ < maxSize) {
+    // A new block never moves the strings that are already there, so views of
+    // them stay valid for the readers that hold them.
+    const auto blockSize = std::max(kBlockSize, maxSize);
+    const auto& block = blocks_.emplace_back(
+        velox::AlignedBuffer::allocate<char>(blockSize, pool));
+    free_ = block->asMutable<char>();
+    freeBytes_ = blockSize;
+  }
+  return free_;
 }
 
 std::string_view FsstEncodingView::DecodedStrings::add(
     uint32_t row,
-    std::string decoded) {
-  const std::unique_lock<std::shared_mutex> guard{lock_};
-  // Appending never moves the strings that are already there, so views of them
-  // stay valid for the readers that hold them.
-  const auto [it, inserted] = positions_.try_emplace(row, values_.size());
-  if (inserted) {
-    values_.push_back(std::move(decoded));
-  }
-  return values_[it->second];
+    size_t size) {
+  NIMBLE_CHECK_LE(size, freeBytes_);
+  const std::string_view value{free_, size};
+  strings_.emplace(row, value);
+  free_ += size;
+  freeBytes_ -= size;
+  return value;
 }
 
 std::string_view FsstEncodingView::valueAt(
