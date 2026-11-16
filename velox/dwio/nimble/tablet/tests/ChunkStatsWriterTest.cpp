@@ -1127,6 +1127,44 @@ TEST_F(ChunkStatsWriterTest, v2StreamIndexExtendedApis) {
       stream->chunkBounds(3), "Chunk index is beyond this stream's range");
 }
 
+// A V2 group with bounds holds a min and a max table per stream, so a group of
+// more than 500k streams (e.g. a flat map with many keys) has more than the
+// 1M tables a default flatbuffers verifier accepts. The reader must still
+// accept it.
+TEST_F(ChunkStatsWriterTest, v2ReadsGroupWithMoreThanOneMillionTables) {
+  constexpr uint32_t kNumStreams{500'001};
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(kNumStreams);
+  auto boundedChunks = createChunks(buffer, {{10, 4}, {20, 6}});
+  boundedChunks[0].minValue = int64_t{-7};
+  boundedChunks[0].maxValue = int64_t{11};
+  writer.addStream(0, boundedChunks);
+  const auto unboundedChunks = createChunks(buffer, {{30, 2}});
+  for (uint32_t streamId = 1; streamId < kNumStreams; ++streamId) {
+    writer.addStream(streamId, unboundedChunks);
+  }
+  writer.writeGroup(
+      kNumStreams, /*stripeCount=*/1, createMetadataSectionCallback(fileIndex));
+  ASSERT_EQ(fileIndex.groupMetadataSections.size(), 1);
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+  auto stream = chunkStats->createStreamIndex(
+      /*stripe=*/0, /*streamId=*/0, /*streamSize=*/10);
+  ASSERT_NE(stream, nullptr);
+  const auto bounds = stream->chunkBounds(0);
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_EQ(bounds->first, ChunkStatValue{int64_t{-7}});
+  EXPECT_EQ(bounds->second, ChunkStatValue{int64_t{11}});
+}
+
 TEST_F(ChunkStatsWriterTest, v2RejectsInvalidChunkRows) {
   {
     const std::array<uint32_t, 1> chunkCounts{
