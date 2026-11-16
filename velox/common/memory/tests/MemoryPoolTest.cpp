@@ -539,7 +539,11 @@ DEBUG_ONLY_TEST_P(MemoryPoolTest, memoryLeakCheck) {
   auto child = root->addLeafChild("elastic_quota", isLeafThreadSafe_);
   const int64_t kChunkSize{32L * MB};
   void* oneChunk = child->allocate(kChunkSize);
-  ASSERT_DEATH(child.reset(), "Bad memory usage track state");
+  // The libstdc++ terminate handler prints the exception type before it calls
+  // what(), so the match does not depend on what() building its message.
+  // EXPECT_DEATH keeps going when the match fails, so the chunk is freed and
+  // destroying 'child' does not abort the test binary.
+  EXPECT_DEATH(child.reset(), "VeloxRuntimeError");
   child->free(oneChunk, kChunkSize);
 }
 
