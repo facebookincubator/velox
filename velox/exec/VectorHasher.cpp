@@ -505,8 +505,25 @@ void VectorHasher::lookupIdsRangeSimd(
   auto data = decoded.data<T>();
   uint64_t offset = min_ - 1;
   auto bits = rows.asMutableRange().bits();
-  bits::forBatches<xsimd::batch<T>::size>(
-      bits, rows.begin(), rows.end(), [&](auto index, auto /*mask*/) {
+  constexpr int32_t kWidth = xsimd::batch<T>::size;
+  // Full batches stay within 'data', which may have no padding.
+  const vector_size_t simdEnd = std::min<vector_size_t>(
+      rows.end(), decoded.base()->size() / kWidth * kWidth);
+  // Looks up the rows past the last full batch one at a time. This runs before
+  // the SIMD loop, so that no value stays live across the loop for it, which
+  // makes the loop spill registers.
+  bits::forEachSetBit(
+      bits, std::max(rows.begin(), simdEnd), rows.end(), [&](auto row) {
+        const T value = data[row];
+        if (value < min_ || value > max_) {
+          bits::clearBit(bits, row);
+          return;
+        }
+        const uint64_t id = static_cast<uint64_t>(value) - offset;
+        result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+      });
+  bits::forBatches<kWidth>(
+      bits, rows.begin(), simdEnd, [&](auto index, auto /*mask*/) {
         auto values = xsimd::batch<T>::load_unaligned(data + index);
         uint64_t outOfRange =
             simd::toBitMask(lower > values) | simd::toBitMask(values > upper);

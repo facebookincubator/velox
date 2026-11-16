@@ -17,9 +17,12 @@
 #include "velox/common/base/SimdUtil.h"
 #include <folly/Random.h>
 #include "velox/common/memory/RawVector.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/common/time/Timer.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <numeric>
 
 using namespace facebook::velox;
 
@@ -241,6 +244,106 @@ TEST_F(SimdUtilTest, gatherBits) {
   }
 }
 
+TEST_F(SimdUtilTest, gatherBitsIndicesAtEndOfMapping) {
+  // The indices, which callers such as VectorSerializer::append pass in, may
+  // end right before an unmapped page.
+  common::testutil::PageBeforeGuard page;
+  std::vector<uint64_t> bits(4);
+  randomBits(bits, 50);
+  // 13 indices end with a partial SIMD batch.
+  constexpr int32_t kNumIndices = 13;
+  auto* indices = reinterpret_cast<int32_t*>(page.end()) - kNumIndices;
+  for (auto i = 0; i < kNumIndices; ++i) {
+    indices[i] = i * 17 % 256;
+  }
+  uint64_t result{0};
+  simd::gatherBits(
+      bits.data(), folly::Range<const int32_t*>(indices, kNumIndices), &result);
+  for (auto i = 0; i < kNumIndices; ++i) {
+    EXPECT_EQ(
+        bits::isBitSet(bits.data(), indices[i]), bits::isBitSet(&result, i))
+        << i;
+  }
+}
+
+TEST_F(SimdUtilTest, gather8BitsAtWordEnds) {
+  // The bits at the ends of 32-bit words are in the last byte of each word,
+  // and the last of them in the bitmap's last byte, right before an unmapped
+  // page.
+  common::testutil::PageBeforeGuard page;
+  constexpr int32_t kNumWords = 2;
+  auto* bits = reinterpret_cast<uint64_t*>(page.end()) - kNumWords;
+  bits[0] = 0x80000001'80000000ULL;
+  bits[1] = 0x80000000'00000001ULL;
+  // The word ends come first, so that a 4-lane batch gathers them too. The
+  // array holds a full batch of any width.
+  constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
+  const int32_t indices[std::max(kBatch, 8)]{31, 63, 95, 127, 32, 64};
+  const int32_t numIndices = std::min(6, kBatch);
+  const uint8_t result = simd::gather8Bits(
+      bits, simd::loadGatherIndices<int32_t>(indices), numIndices);
+  for (auto i = 0; i < numIndices; ++i) {
+    EXPECT_EQ(bits::isBitSet(bits, indices[i]), bits::isBitSet(&result, i))
+        << indices[i];
+  }
+}
+
+TEST_F(SimdUtilTest, gather8BitsIndicesAtEndOfMapping) {
+  // Indices that callers pass in may end right before an unmapped page, with
+  // fewer of them than a SIMD batch holds.
+  common::testutil::PageBeforeGuard page;
+  std::vector<uint64_t> bits(4);
+  randomBits(bits, 50);
+  // Partial batches of the target's int32 batch width, which are loaded from a
+  // copy, and the largest count, at most the 8 indices that gather8Bits takes,
+  // which is loaded in place.
+  constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
+  for (const int32_t numIndices :
+       {1, std::min(kBatch - 1, 7), std::min(kBatch, 8)}) {
+    SCOPED_TRACE(numIndices);
+    auto* indices = reinterpret_cast<int32_t*>(page.end()) - numIndices;
+    for (auto i = 0; i < numIndices; ++i) {
+      indices[i] = i * 37 % 256;
+    }
+    const uint8_t result = simd::gather8Bits(bits.data(), indices, numIndices);
+    for (auto i = 0; i < numIndices; ++i) {
+      EXPECT_EQ(
+          bits::isBitSet(bits.data(), indices[i]), bits::isBitSet(&result, i))
+          << i;
+    }
+  }
+}
+
+TEST_F(SimdUtilTest, gatherBitsAtEndOfMapping) {
+  // A bitmap that wraps external memory can end flush against an unmapped
+  // page, with no padding after its last byte.
+  common::testutil::PageBeforeGuard page;
+  constexpr int32_t kNumBytes = 512;
+  std::vector<uint64_t> source(kNumBytes / sizeof(uint64_t));
+  randomBits(source, 500);
+  auto* bits = page.end() - kNumBytes;
+  std::memcpy(bits, source.data(), kNumBytes);
+  constexpr int32_t kNumBits = kNumBytes * 8;
+  // 32 indices take the SIMD path in full batches, 13 end with a partial one,
+  // and 4 take the scalar path. All of them reach the bitmap's last byte.
+  for (auto numIndices : {32, 13, 4}) {
+    SCOPED_TRACE(fmt::format("numIndices: {}", numIndices));
+    raw_vector<int32_t> indices;
+    for (auto i = kNumBits - numIndices; i < kNumBits; ++i) {
+      indices.push_back(i);
+    }
+    uint64_t result{0};
+    simd::gatherBits(
+        reinterpret_cast<const uint64_t*>(bits),
+        folly::Range<const int32_t*>(indices.data(), indices.size()),
+        &result);
+    for (auto i = 0; i < indices.size(); ++i) {
+      EXPECT_EQ(bits::isBitSet(bits, indices[i]), bits::isBitSet(&result, i))
+          << i;
+    }
+  }
+}
+
 TEST_F(SimdUtilTest, transpose) {
   constexpr int32_t kMaxSize = 100;
   std::vector<int32_t> data32(kMaxSize);
@@ -276,6 +379,25 @@ TEST_F(SimdUtilTest, transpose) {
     // See that there is no write past 'size'.
     EXPECT_EQ(-1, result64[size]);
   }
+}
+
+TEST_F(SimdUtilTest, transposeAtEndOfMapping) {
+  // The indices may end right before an unmapped page.
+  common::testutil::PageBeforeGuard page;
+  std::vector<int64_t> input(100);
+  std::iota(input.begin(), input.end(), 1000);
+  // 5 indices end with a partial SIMD batch.
+  constexpr int32_t kNumIndices = 5;
+  auto* indices = reinterpret_cast<int32_t*>(page.end()) - kNumIndices;
+  for (auto i = 0; i < kNumIndices; ++i) {
+    indices[i] = 99 - i * 7;
+  }
+  std::vector<int64_t> output(kNumIndices);
+  simd::transpose(
+      input.data(),
+      folly::Range<const int32_t*>(indices, kNumIndices),
+      output.data());
+  EXPECT_THAT(output, testing::ElementsAre(1099, 1092, 1085, 1078, 1071));
 }
 
 namespace {

@@ -24,6 +24,7 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/RawVector.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/common/time/Timer.h"
 #include "velox/type/Type.h"
 
@@ -404,6 +405,40 @@ TEST(StringView, linearSearch) {
   LOG(INFO) << "StringView search: SIMD: " << simdUsec << " / "
             << simdIndicesUsec << " scalar: " << loopUsec << " / "
             << loopIndicesUsec;
+}
+
+TEST(StringView, linearSearchBodiesAtEndOfMapping) {
+  // String bodies that wrap external memory may end right before an unmapped
+  // page. Comparing them must stay within their bytes.
+  const std::string text = "a string too long to inline";
+  common::testutil::PageBeforeGuard keyPage;
+  common::testutil::PageBeforeGuard matchPage;
+  auto atEnd = [&](const common::testutil::PageBeforeGuard& page) {
+    char* body = reinterpret_cast<char*>(page.end()) - text.size();
+    std::memcpy(body, text.data(), text.size());
+    return StringView(body, text.size());
+  };
+  // String 2 holds the key's text at another address, so its header matches
+  // and the search compares the bodies. String 1 has the same header and a
+  // different body.
+  const StringView key = atEnd(keyPage);
+  const std::vector<StringView> strings = {
+      StringView("a string of other length"),
+      StringView("a string too long to inlinX"),
+      atEnd(matchPage),
+      StringView("another string, also long"),
+  };
+  ASSERT_FALSE(key.isInline());
+  ASSERT_NE(key.data(), strings[2].data());
+
+  EXPECT_EQ(
+      StringView::linearSearch(key, strings.data(), nullptr, strings.size()),
+      2);
+  const std::vector<int32_t> indices = {3, 2, 1, 0};
+  EXPECT_EQ(
+      StringView::linearSearch(
+          key, strings.data(), indices.data(), indices.size()),
+      1);
 }
 
 } // namespace

@@ -38,15 +38,19 @@ void gatherBits(
   }
 
   int32_t i = 0;
-  for (; i + kStep < size; i += kStep) {
+  for (; i + kStep <= size; i += kStep) {
     uint16_t flags =
         simd::gather8Bits(bits, xsimd::load_unaligned(indices + i), kStep);
     bits::storeBitsToByte<kStep>(flags, resultPtr, i);
   }
   const auto bitsLeft = size - i;
   if (bitsLeft > 0) {
+    // Load the last indices from a copy, so that the load stays within
+    // 'indexRange', which may have no padding.
+    int32_t lastIndices[kStep]{};
+    std::copy(indices + i, indices + size, lastIndices);
     uint16_t flags =
-        simd::gather8Bits(bits, xsimd::load_unaligned(indices + i), bitsLeft);
+        simd::gather8Bits(bits, xsimd::load_unaligned(lastIndices), bitsLeft);
     bits::storeBitsToByte<kStep>(flags, resultPtr, i);
   }
 }
