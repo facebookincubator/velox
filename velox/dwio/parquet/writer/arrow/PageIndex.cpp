@@ -20,6 +20,7 @@
 
 #include <thrift/lib/cpp2/FieldRef.h>
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
@@ -27,7 +28,6 @@
 #include "velox/dwio/parquet/writer/arrow/SizeStatistics.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
-#include "velox/dwio/parquet/writer/arrow/util/OverflowUtilInternal.h"
 
 #include "arrow/util/unreachable.h"
 
@@ -976,7 +976,7 @@ RowGroupIndexReadRange PageIndexReader::determinePageIndexRangesInRowGroup(
     if (indexLocation.has_value()) {
       int64_t indexEnd = 0;
       if (indexLocation->offset < 0 || indexLocation->length <= 0 ||
-          ::arrow::internal::addWithOverflow(
+          addWithOverflow(
               indexLocation->offset, indexLocation->length, &indexEnd)) {
         throw ParquetException(
             "Invalid page index location: offset ",

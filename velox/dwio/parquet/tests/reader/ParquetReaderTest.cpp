@@ -340,13 +340,13 @@ TEST_F(ParquetReaderTest, parquetFieldIdInsertedColumnNotNullFilled) {
 }
 
 TEST_F(ParquetReaderTest, nestedNameColumnMapping) {
-  auto data = makeRowVector(
-      {"nested"},
-      {makeRowVector(
+  auto data = makeNamedRowVector(
+      "nested",
+      makeRowVector(
           // Make positional and name-based mapping disagree.
           {"padding", "present"},
           {makeFlatVector<int32_t>({10, 20, 30}),
-           makeFlatVector<int32_t>({1, 2, 3})})});
+           makeFlatVector<int32_t>({1, 2, 3})}));
   auto* sink = write(data);
 
   const auto outputNestedType = ROW({"present", "missing"}, INTEGER());
@@ -357,13 +357,13 @@ TEST_F(ParquetReaderTest, nestedNameColumnMapping) {
 
   auto readerBundle =
       readerBuilder(*sink, outputType).options(readerOptions).build();
-  auto expected = makeRowVector(
-      {"nested"},
-      {makeRowVector(
+  auto expected = makeNamedRowVector(
+      "nested",
+      makeRowVector(
           {"present", "missing"},
           {makeFlatVector<int32_t>({1, 2, 3}),
            makeNullableFlatVector<int32_t>(
-               {std::nullopt, std::nullopt, std::nullopt})})});
+               {std::nullopt, std::nullopt, std::nullopt})}));
   assertReadWithReaderAndExpected(
       outputType, *readerBundle.rowReader, expected, *leafPool_);
 }
@@ -1920,8 +1920,8 @@ TEST_F(ParquetReaderTest, readDictFLBAStringBinary) {
     EXPECT_EQ(column->parquetType_, thrift::Type::FIXED_LEN_BYTE_ARRAY);
     EXPECT_EQ(*column->type(), *VARBINARY());
 
-    auto expected = makeRowVector(
-        {"value"}, {makeNullableFlatVector<std::string>(values, VARBINARY())});
+    auto expected = makeNamedRowVector(
+        "value", makeNullableFlatVector<std::string>(values, VARBINARY()));
     assertReadWithReaderAndExpected(
         rowType, *readerBundle.rowReader, expected, *leafPool_);
   }
@@ -1936,8 +1936,8 @@ TEST_F(ParquetReaderTest, readDictFLBAStringBinary) {
     EXPECT_EQ(
         *readerBundle.reader->typeWithId()->childAt(0)->type(), *VARCHAR());
 
-    auto expected = makeRowVector(
-        {"value"}, {makeNullableFlatVector<std::string>(values, VARCHAR())});
+    auto expected = makeNamedRowVector(
+        "value", makeNullableFlatVector<std::string>(values, VARCHAR()));
     assertReadWithReaderAndExpected(
         rowType, *readerBundle.rowReader, expected, *leafPool_);
   }
@@ -1950,10 +1950,10 @@ TEST_F(ParquetReaderTest, readDictFLBAStringBinary) {
          std::make_unique<common::BytesValues>(
              std::vector<std::string>{"apple", berry},
              /*nullAllowed=*/false)});
-    auto expected = makeRowVector(
-        {"value"},
-        {makeFlatVector<std::string>(
-            {"apple", berry, "apple", berry}, VARBINARY())});
+    auto expected = makeNamedRowVector(
+        "value",
+        makeFlatVector<std::string>(
+            {"apple", berry, "apple", berry}, VARBINARY()));
     assertReadWithFilters(
         filename, ROW("value", VARBINARY()), std::move(filters), expected);
   }
@@ -2235,19 +2235,18 @@ TEST_F(ParquetReaderTest, cheapestRepDefSource) {
   }
   const auto details = makeArrayVector(
       detailOffsets,
+      makeNamedRowVector(
+          "value",
+          makeFlatVector<std::string>(kNumRows * kElementsPerRow, [](auto row) {
+            return std::string(256, 'x') + std::to_string(row);
+          })));
+  const auto vector = makeNamedRowVector(
+      "target",
       makeRowVector(
-          {"value"},
-          {makeFlatVector<std::string>(
-              kNumRows * kElementsPerRow, [](auto row) {
-                return std::string(256, 'x') + std::to_string(row);
-              })}));
-  const auto vector = makeRowVector(
-      {"target"},
-      {makeRowVector(
           {"details", "suffix"},
           {details, makeFlatVector<std::string>(kNumRows, [](auto row) {
              return "s" + std::to_string(row);
-           })})});
+           })}));
   const auto* sink = write(vector, ParquetWriterOptions{});
 
   auto readerOptions = makeDefaultReaderOptions();
@@ -2461,7 +2460,7 @@ TEST_F(ParquetReaderTest, booleanDenseReadSplitAcrossByte) {
   constexpr int32_t kNumRows = 40;
   auto values = makeFlatVector<bool>(
       kNumRows, [](auto row) { return (row % 3) == 0 || (row % 7) == 0; });
-  auto data = makeRowVector({"b"}, {values});
+  auto data = makeNamedRowVector("b", values);
 
   auto* sink = write(data);
   auto readerBundle = readerBuilder(*sink, rowType).build();
@@ -2882,18 +2881,18 @@ TEST_F(ParquetReaderTest, columnStatisticsTimestamp) {
 
 TEST_F(ParquetReaderTest, timestampRowGroupPruning) {
   // Two row groups with non-overlapping timestamp ranges.
-  auto batch1 = makeRowVector(
-      {"ts"},
-      {makeFlatVector<Timestamp>(
+  auto batch1 = makeNamedRowVector(
+      "ts",
+      makeFlatVector<Timestamp>(
           {Timestamp::fromMicros(1'000'000),
            Timestamp::fromMicros(2'000'000),
-           Timestamp::fromMicros(3'000'000)})});
-  auto batch2 = makeRowVector(
-      {"ts"},
-      {makeFlatVector<Timestamp>(
+           Timestamp::fromMicros(3'000'000)}));
+  auto batch2 = makeNamedRowVector(
+      "ts",
+      makeFlatVector<Timestamp>(
           {Timestamp::fromMicros(10'000'000),
            Timestamp::fromMicros(11'000'000),
-           Timestamp::fromMicros(12'000'000)})});
+           Timestamp::fromMicros(12'000'000)}));
 
   ParquetWriterOptions writerOptions;
   writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
@@ -2919,12 +2918,12 @@ TEST_F(ParquetReaderTest, timestampRowGroupPruning) {
            Timestamp::fromMicros(10'000'000),
            Timestamp::fromMicros(12'000'000),
            false)});
-  auto expected = makeRowVector(
-      {"ts"},
-      {makeFlatVector<Timestamp>(
+  auto expected = makeNamedRowVector(
+      "ts",
+      makeFlatVector<Timestamp>(
           {Timestamp::fromMicros(10'000'000),
            Timestamp::fromMicros(11'000'000),
-           Timestamp::fromMicros(12'000'000)})});
+           Timestamp::fromMicros(12'000'000)}));
   assertReadWithReaderAndFilters(
       *reader, rowType, std::move(filters), expected);
 }

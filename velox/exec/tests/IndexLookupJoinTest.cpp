@@ -2815,13 +2815,10 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithInnerJoin) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
+            GetParam().numPrefetches)
         .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(testData.maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            core::QueryConfig::kPreferredOutputBatchRows, testData.maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.splitOutput ? "true" : "false")
@@ -2838,7 +2835,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithInnerJoin) {
     const auto task = queryBuilder.assertResults(
         "SELECT t.c4, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(joinNodeId_).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), joinNodeId_).outputVectors,
         testData.numExpectedOutputBatch);
   }
 }
@@ -2899,6 +2896,64 @@ TEST_P(IndexLookupJoinTest, innerJoinNoLookupOutputColumns) {
       GetParam().needsIndexSplit,
       "SELECT t.c3 FROM t, u "
       "WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+}
+
+TEST_P(IndexLookupJoinTest, leftJoinNoProbeOutputColumns) {
+  IndexTableData tableData;
+  generateIndexTableData({128, 1, 1}, tableData, pool_);
+
+  const auto probeVectors = generateProbeInput(
+      /*numBatches=*/4,
+      /*batchSize=*/32,
+      /*numDuplicateProbeRows=*/1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      GetParam().hasNullKeys,
+      {},
+      {},
+      /*equalMatchPct=*/50);
+  const auto probeFiles = createProbeFiles(probeVectors);
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableVectors});
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2", "u3"}),
+      makeIndexColumnHandles({"u0", "u1", "u2", "u3"}));
+
+  // Join output picks only a lookup value column: no probe-side columns.
+  auto plan = makeLookupPlan(
+      planNodeIdGenerator,
+      indexScanNode,
+      {"t0", "t1", "t2"},
+      {"u0", "u1", "u2"},
+      /*joinConditions=*/{},
+      /*filter=*/"",
+      /*hasMarker=*/false,
+      core::JoinType::kLeft,
+      /*outputColumns=*/{"u3"});
+
+  runLookupQuery(
+      plan,
+      probeFiles,
+      GetParam().serialExecution,
+      GetParam().serialExecution,
+      /*maxBatchRows=*/32,
+      GetParam().numPrefetches,
+      GetParam().needsIndexSplit,
+      "SELECT u.c3 FROM t LEFT JOIN u "
+      "ON t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
 }
 
 TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
@@ -2988,13 +3043,10 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
+            GetParam().numPrefetches)
         .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(testData.maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            core::QueryConfig::kPreferredOutputBatchRows, testData.maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.splitOutput ? "true" : "false")
@@ -3011,7 +3063,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
     const auto task = queryBuilder.assertResults(
         "SELECT t.c4, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(joinNodeId_).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), joinNodeId_).outputVectors,
         testData.numExpectedOutputBatch);
     const auto probeScanId = probeScanNodeId_;
     auto planWithMatchColumn = makeLookupPlan(
@@ -3132,13 +3184,9 @@ TEST_P(IndexLookupJoinTest, splitOutputNodeOverride) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            GetParam().numPrefetches)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.configSplitOutput ? "true" : "false")
@@ -3155,7 +3203,7 @@ TEST_P(IndexLookupJoinTest, splitOutputNodeOverride) {
     const auto task = queryBuilder.assertResults(
         "SELECT t.c4, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(joinNodeId).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), joinNodeId).outputVectors,
         expectedNumOutputVectors);
   }
 }

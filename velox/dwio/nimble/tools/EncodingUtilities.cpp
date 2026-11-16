@@ -65,6 +65,7 @@ void extractCompressionType(
     case EncodingType::Delta:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::Constant:
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
@@ -142,6 +143,7 @@ void traverseEncodings(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::SimdForBitpack:
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.
@@ -275,15 +277,14 @@ void traverseEncodings(
     }
     case EncodingType::PartitionedEliasFano: {
       // Layout after the common prefix: numPartitions and numGroups
-      // [varints], then the partition offsets, the partition bases and the
-      // partition group offsets, each a nested stream preceded by a varint
-      // size. The per-group Elias-Fano streams follow.
+      // [varints], then the partition offsets and the partition bases, each a
+      // nested stream preceded by a varint size. The per-group Elias-Fano
+      // streams follow.
       auto body = stream.substr(dataOffset);
       encoding::readVarint32(body); // numPartitions
       encoding::readVarint32(body); // numGroups
       uint32_t childIndex{0};
-      for (const auto* name :
-           {"PartitionOffsets", "PartitionBases", "PartitionGroupOffsets"}) {
+      for (const auto* name : {"PartitionOffsets", "PartitionBases"}) {
         traverseEncodings(
             encoding::readLengthPrefixedBytes(body),
             level + 1,

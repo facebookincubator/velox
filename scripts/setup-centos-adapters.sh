@@ -186,8 +186,8 @@ function install_adapters {
     echo "All dependencies for the Velox Adapters installed!"
     if [[ ${USE_CLANG} != "false" ]]; then
       echo "To use clang for the Velox build set the CC and CXX environment variables in your session."
-      echo "  export CC=/usr/bin/clang-15"
-      echo "  export CXX=/usr/bin/clang++-15"
+      echo "  export CC=${CLANG_CC}"
+      echo "  export CXX=${CLANG_CXX}"
     fi
     dnf clean all
   fi

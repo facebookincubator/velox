@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
 #include <span>
 #include <utility>
 #include <vector>
@@ -27,6 +28,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -173,6 +175,22 @@ class DictionaryEncoding
           TrivialEncoding<physicalType>::estimateSize(uniqueCount),
           FixedBitWidthEncoding<physicalType>::estimateSize(
               uniqueCount, statistics.min(), statistics.max(), options));
+      if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
+        if (options.sortDictionaryAlphabet && uniqueCount > 1 &&
+            uniqueCount <= std::numeric_limits<uint32_t>::max() &&
+            hasEliasFanoCandidate(alphabetEncodingReadFactors)) {
+          const auto estimate =
+              EliasFanoEncoding<physicalType>::estimateNonDecreasingSize(
+                  static_cast<uint32_t>(uniqueCount),
+                  static_cast<uint64_t>(statistics.max()) -
+                      static_cast<uint64_t>(statistics.min()),
+                  options);
+          if (estimate.has_value()) {
+            alphabetEncodingSize =
+                std::min(alphabetEncodingSize, estimate.value());
+          }
+        }
+      }
       if constexpr (isFloatingPointType<T>()) {
         if (uniqueCount == 0) {
           return alphabetEncodingSize;
@@ -211,6 +229,14 @@ class DictionaryEncoding
       // values without rebuilding Statistics for every dictionary estimate.
       return alphabetEncodingSize;
     }
+  }
+
+  static bool hasEliasFanoCandidate(
+      std::span<const std::pair<EncodingType, float>> candidates) {
+    return std::any_of(
+        candidates.begin(), candidates.end(), [](const auto& candidate) {
+          return candidate.first == EncodingType::EliasFano;
+        });
   }
 
   static std::string_view encodeAlphabet(
@@ -383,11 +409,15 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
  public:
   /// Constructs a hook bound to the given dictionary visitor.
   /// 'filterCache' is the visitor's per-index verdict cache. It may be null
-  /// for reads without a filter.
+  /// for reads without a filter. 'dictionarySize' is the number of dictionary
+  /// entries.
   FusedDictionaryIndicesHook(
       DictionaryVisitor& visitor,
-      const uint8_t* filterCache)
-      : visitor_{visitor}, filterCache_{filterCache} {}
+      const uint8_t* filterCache,
+      uint64_t dictionarySize)
+      : visitor_{visitor},
+        filterCache_{filterCache},
+        dictionarySize_{dictionarySize} {}
 
   bool acceptsNulls() const final {
     return false;
@@ -396,12 +426,22 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
   /// Processes a single dictionary index. Handles leading nulls from the
   /// current row to the given row, then translates the index via the visitor.
   void addValue(vector_size_t row, int64_t index) final {
+    paths_.recordAddValue();
     processNulls(row);
     NIMBLE_DCHECK(
         !visitor_.atEnd(), "Dictionary visitor received an extra index");
+
+    // process() narrows the index to the visitor's index type. For SMALLINT
+    // that drops the high bits, so check the full index first.
+    if constexpr (
+        sizeof(typename DictionaryVisitor::DataType) < sizeof(int32_t)) {
+      NIMBLE_CHECK_FILE_LT(
+          static_cast<uint64_t>(index),
+          dictionarySize_,
+          "Dictionary index must be less than the dictionary size");
+    }
     bool atEnd{false};
     visitor_.process(index, atEnd);
-    syncFilterOnlyNumValues();
   }
 
   /// Processes a batch of non-null indices with their requested-row positions.
@@ -415,7 +455,9 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     if (size == 0) {
       return;
     }
+    paths_.recordAddValues();
     processNulls(rows[0]);
+    syncFilterOnlyNumValues();
     const auto startRowIndex = visitor_.rowIndex();
     const auto outputOffset = visitor_.reader().numValues();
     visitor_.processBulk(indices, size, rows);
@@ -429,7 +471,6 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
         setProjectionNulls(rows, size, startRowIndex, outputOffset);
       }
     }
-    syncFilterOnlyNumValues();
   }
 
   void addNull(vector_size_t /*row*/) final {
@@ -440,6 +481,12 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
   /// processed.
   void processTrailingNulls() {
     processNulls(visitor_.numRows());
+    syncFilterOnlyNumValues();
+  }
+
+  /// Returns the hook paths this read took, for fuzzer stats.
+  const fuzzer::DictionaryAwareReadPaths& paths() const {
+    return paths_;
   }
 
  private:
@@ -501,6 +548,8 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     auto outputPosition = numValues + numNulls - 1;
 
     if (numNulls * 4 >= size) {
+      paths_.recordMergeBulkNullsDense();
+
       // Dense nulls leave few passing rows between gaps, in counts a branch
       // cannot predict. Visit every non-null row instead, and take its verdict
       // from the filter cache, which processBulk() filled for every index in
@@ -537,6 +586,8 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
         }
       }
     } else {
+      paths_.recordMergeBulkNullsSparse();
+
       // Sparse nulls leave long runs between gaps, so jump from gap to gap and
       // move the passing values in between. The branches mispredict only
       // around the gaps, which are rare.
@@ -565,7 +616,10 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
         }
       }
     }
-    NIMBLE_DCHECK_EQ(outputPosition, passingPosition);
+    NIMBLE_CHECK_EQ(
+        outputPosition,
+        passingPosition,
+        "Merged nulls must fill the gaps in the filtered output exactly");
     visitor_.addNumValues(numNulls);
   }
 
@@ -593,9 +647,10 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     while (visitor_.rowIndex() < row) {
       visitor_.processNull(atEnd);
     }
-    syncFilterOnlyNumValues();
   }
 
+  // Filter-only process() and processNull() add output rows without advancing
+  // numValues(). Sync before anything that reads it, such as processBulk().
   void syncFilterOnlyNumValues() {
     if constexpr (DictionaryVisitor::kFilterOnly) {
       visitor_.reader().setNumValues(visitor_.reader().outputRows().size());
@@ -608,6 +663,13 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
 
   // Verdict per dictionary index, filled by the visitor's processBulk().
   const uint8_t* filterCache_;
+
+  // Number of dictionary entries. Each index from addValue() must be below it.
+  const uint64_t dictionarySize_;
+
+  // Hook paths this read took. Outside fuzzer builds it is an empty type whose
+  // record methods do nothing, so the hook pays nothing.
+  [[no_unique_address]] fuzzer::DictionaryAwareReadPaths paths_;
 };
 
 } // namespace detail
@@ -617,18 +679,23 @@ template <typename V>
 void DictionaryEncoding<T>::readWithVisitor(
     V& visitor,
     ReadWithVisitorParams& params) {
-  // Decode indices with an AlwaysTrue visitor and forward them directly into
-  // the shared logical-value dictionary visitor.
-  if (params.dictionaryAwareReads) {
-    if constexpr (
-        isNumericType<T>() && sizeof(T) >= sizeof(int16_t) && !V::kHasHook &&
-        V::FilterType::deterministic && V::kHasBulkPath) {
+  // Takes the fused read only when both groups of conditions hold:
+  //   1. The shared visitor's limits, which DWRF and Parquet follow too.
+  //   2. Nimble's own conditions (TODO: remove in the long term):
+  //      - No hook (aggregation pushdown): processBulk() does not support one.
+  //      - A bulk path: Nimble's float reader has none for REAL read as DOUBLE.
+  //      - dictionaryAwareReads, the rollout switch, is on.
+  if constexpr (
+      detail::dictionaryColumnVisitorSupported<T, V>() && !V::kHasHook &&
+      V::kHasBulkPath) {
+    if (params.dictionaryAwareReads) {
       using DictionaryVisitor = velox::dwio::common::DictionaryColumnVisitor<
           T,
           typename V::FilterType,
           typename V::Extract,
           V::dense>;
 
+      // Set up this chunk's dictionary and verdict cache.
       auto& scanState = visitor.reader().scanState();
 
       // Projection-only reads never consult the verdict cache.
@@ -649,6 +716,7 @@ void DictionaryEncoding<T>::readWithVisitor(
           static_cast<int32_t>(alphabet_.size());
       dictionaryState.filterCache = scanState.filterCache.data();
 
+      // Read the chunk through the dictionary visitor.
       const auto numRows = visitor.numRows() - visitor.rowIndex();
       const auto outputCapacity = visitor.reader().numValues() + numRows;
       const auto requiredBytes = std::max(
@@ -672,8 +740,10 @@ void DictionaryEncoding<T>::readWithVisitor(
         params.prepareResultNulls();
       }
 
+      // The filter applies to dictionary values, not indices, so decode indices
+      // unfiltered and let the dictionary visitor translate and filter them.
       detail::FusedDictionaryIndicesHook<DictionaryVisitor> dictionaryHook{
-          dictionaryVisitor, dictionaryState.filterCache};
+          dictionaryVisitor, dictionaryState.filterCache, alphabet_.size()};
       detail::ForwardingIndicesHook indicesHook{dictionaryHook};
       using IndicesExtract =
           velox::dwio::common::ExtractToHook<detail::ForwardingIndicesHook>;
@@ -692,17 +762,25 @@ void DictionaryEncoding<T>::readWithVisitor(
       callReadWithVisitor(*indicesEncoding_, indicesVisitor, params);
       dictionaryHook.processTrailingNulls();
       visitor.setRowIndex(dictionaryVisitor.rowIndex());
+
+      // Records fuzzer-only stats, which are no-ops in regular builds.
       if constexpr (std::is_same_v<T, int16_t>) {
-        fuzzer::updateSmallintDictionaryAwareReads();
+        fuzzer::updateSmallintDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       } else if constexpr (std::is_same_v<T, int32_t>) {
-        fuzzer::updateIntegerDictionaryAwareReads();
+        fuzzer::updateIntegerDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       } else if constexpr (std::is_same_v<T, int64_t>) {
-        fuzzer::updateBigintDictionaryAwareReads();
+        fuzzer::updateBigintDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       } else if constexpr (std::is_same_v<T, float>) {
-        fuzzer::updateRealDictionaryAwareReads();
+        fuzzer::updateRealDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       } else if constexpr (std::is_same_v<T, double>) {
-        fuzzer::updateDoubleDictionaryAwareReads();
+        fuzzer::updateDoubleDictionaryAwareReads(
+            visitor.filter(), dictionaryHook.paths());
       }
+
       return;
     }
   }
@@ -853,10 +931,13 @@ std::string_view DictionaryEncoding<T>::encode(
   // occasionally yield more compressible data, but they're not consistent and
   // can result in storage regression compared to the first two.
   //
-  // The second approach is used in this implementation because it's essentially
-  // free: we don't need to allocate O(m) memory for a sorting buffer and
-  // then do O(m log m) sorting. However, the first approach has a slightly
-  // better distribution curve for storage savings.
+  // The second approach is used by default because it's essentially free: we
+  // don't need to allocate O(m) memory for a sorting buffer and then do
+  // O(m log m) sorting. However, the first approach has a slightly better
+  // distribution curve for storage savings, and Options::sortDictionaryAlphabet
+  // applies it to integer alphabets in step three below. It wins most on wide
+  // values with few repeats, such as 64-bit ids: an unsorted alphabet pays the
+  // full width per value, while a sorted one can be stored by its gaps.
 
   // Step one: fill alphabet and indices until we get a full alphabet mapping.
   for (; alphabetIndex < alphabetCount; ++valuesIt, ++indiciesIndex) {
@@ -886,6 +967,30 @@ std::string_view DictionaryEncoding<T>::encode(
 
   NIMBLE_CHECK_EQ(indices.size(), valueCount, "Indices size mismatch.");
   NIMBLE_CHECK_EQ(alphabet.size(), alphabetCount, "Alphabet size mismatch.");
+
+  // Step three: with Options::sortDictionaryAlphabet, renumbers the alphabet
+  // in ascending physical order. Only integers are sorted: a floating-point
+  // alphabet would sort by bit pattern rather than by value.
+  if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
+    if (options.sortDictionaryAlphabet && alphabetCount > 1) {
+      ScopedVector<uint32_t> order{alphabetCount, pool, options.bufferPool};
+      std::iota(order.begin(), order.end(), 0);
+      std::sort(order.begin(), order.end(), [&](uint32_t lhs, uint32_t rhs) {
+        return alphabet[lhs] < alphabet[rhs];
+      });
+      ScopedVector<uint32_t> rank{alphabetCount, pool, options.bufferPool};
+      ScopedVector<physicalType> sorted{
+          alphabetCount, pool, options.bufferPool};
+      for (uint32_t i = 0; i < alphabetCount; ++i) {
+        rank[order[i]] = i;
+        sorted[i] = alphabet[order[i]];
+      }
+      std::copy(sorted.begin(), sorted.end(), alphabet.begin());
+      for (auto& index : indices) {
+        index = rank[index];
+      }
+    }
+  }
 
   ScopedEncodingBuffer scopedBuffer{
       &buffer.getMemoryPool(), options.encodingBufferPool};
@@ -926,11 +1031,10 @@ std::string_view DictionaryEncoding<T>::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const auto sourceRowCount =
-      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+      offset,
+      length);
 
   const char* pos = encoded.data() +
       EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);

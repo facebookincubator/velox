@@ -148,7 +148,8 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStats& runtimeStats,
-    const std::string& connectorId)
+    const std::string& connectorId,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps)
     : equalityColumnNames_(equalityColumnNames),
       equalityColumnTypes_(equalityColumnTypes),
       pool_(connectorQueryCtx->memoryPool()) {
@@ -214,14 +215,18 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   const FileHandleKey fileHandleKey{
       .filename = deleteFile.filePath,
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
-  auto deleteFileHandleCachePtr = fileHandleFactory->generate(fileHandleKey);
+  FileProperties fileProperties;
+  fileProperties.fileReadOps = fileReadOps;
+  auto deleteFileHandleCachePtr =
+      fileHandleFactory->generate(fileHandleKey, &fileProperties);
   auto deleteFileInput = connector::BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
       ioStatistics,
       ioStats,
-      executor);
+      executor,
+      fileReadOps);
 
   auto deleteReader =
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())

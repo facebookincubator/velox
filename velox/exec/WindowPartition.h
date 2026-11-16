@@ -109,23 +109,22 @@ class WindowPartition {
       vector_size_t resultOffset,
       const VectorPtr& result) const;
 
-  /// Extracts null positions at 'columnIndex' into 'nullsBuffer' for
-  /// 'numRows' starting at positions 'partitionOffset' in the partition
-  /// input data.
-  virtual void extractNulls(
+  /// Writes to 'nullsBuffer' a nulls buffer of the column at 'columnIndex'
+  /// for 'numRows' rows starting at 'partitionOffset' in the partition.
+  /// Returns the number of null rows.
+  virtual vector_size_t extractNulls(
       int32_t columnIndex,
       vector_size_t partitionOffset,
       vector_size_t numRows,
       const BufferPtr& nullsBuffer) const;
 
-  /// Extracts null positions at 'col' into 'nulls'. The null positions
-  /// are from the smallest 'frameStarts' value to the greatest 'frameEnds'
-  /// value for 'validRows'. Both 'frameStarts' and 'frameEnds' are buffers
-  /// of type vector_size_t.
-  /// The returned value is an optional pair of vector_size_t.
-  /// The pair is returned only if null values are found in the nulls
-  /// extracted. The first value of the pair is the smallest frameStart for
-  /// nulls. The second is the number of frames extracted.
+  /// Writes to 'nulls' a nulls buffer of column 'col' for the rows from the
+  /// smallest 'frameStarts' value to the greatest 'frameEnds' value of
+  /// 'validRows'. Both 'frameStarts' and 'frameEnds' are buffers of
+  /// vector_size_t.
+  ///
+  /// Returns the first row and the number of rows written if any of them is
+  /// null, and std::nullopt otherwise.
   std::optional<std::pair<vector_size_t, vector_size_t>> extractNulls(
       column_index_t col,
       const SelectivityVector& validRows,
@@ -243,13 +242,9 @@ class WindowPartition {
   // ORDER BY column info for this partition.
   const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
 
-  // Copy of the input RowColumn objects that are used for
-  // accessing the partition row columns. These RowColumn objects
-  // index into RowContainer data_ above and can retrieve the column values.
-  // The order of these columns is the same as that of the input row
-  // of the Window operator. The WindowFunctions know the
-  // corresponding indexes of their input arguments into this vector.
-  // They will request for column vector values at the respective index.
+  // The locations in the rows of 'data_' of the input columns of the Window
+  // operator, in input order, for checking values row by row without looking
+  // up the column each time.
   std::vector<exec::RowColumn> columns_;
 
   // The partition offset of the first row in 'rows_'. It is updated for

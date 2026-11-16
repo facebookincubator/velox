@@ -31,6 +31,7 @@ class ExpressionEvaluator;
 namespace facebook::velox::exec {
 
 class AggregateFunctionSignature;
+class RowColumn;
 
 /// Returns true if aggregation receives raw (unprocessed) input, e.g. partial
 /// and single aggregation.
@@ -96,6 +97,12 @@ class Aggregate {
     return false;
   }
 
+  /// Returns true if fillEmptyIntermediate() is supported, allowing merge
+  /// companions to bypass accumulator construction.
+  virtual bool supportsFillEmptyIntermediate() const {
+    return false;
+  }
+
   void setAllocator(HashStringAllocator* allocator) {
     setAllocatorInternal(allocator);
   }
@@ -127,33 +134,14 @@ class Aggregate {
       std::vector<core::LambdaTypedExprPtr> lambdaExpressions,
       std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator);
 
-  // Sets the offset and null indicator position of 'this'.
-  // @param offset Offset in bytes from the start of the row of the accumulator
-  // @param nullByte Offset in bytes from the start of the row of the null flag
-  // @param nullMask The specific bit in the nullByte that stores the null flag
-  // @param initializedByte Offset in bytes from the start of the row of the
-  // initialized flag
-  // @param initializedMask The specific bit in the initializedByte that stores
-  // the initialized flag
+  // Sets where the accumulator of 'this' is in a row.
+  // @param column The offset of the accumulator and its null and initialized
+  // flags.
   // @param rowSizeOffset The offset of a uint32_t row size from the start of
   // the row. Only applies to accumulators that store variable size data out of
   // line. Fixed length accumulators do not use this. 0 if the row does not have
   // a size field.
-  void setOffsets(
-      int32_t offset,
-      int32_t nullByte,
-      uint8_t nullMask,
-      int32_t initializedByte,
-      int8_t initializedMask,
-      int32_t rowSizeOffset) {
-    setOffsetsInternal(
-        offset,
-        nullByte,
-        nullMask,
-        initializedByte,
-        initializedMask,
-        rowSizeOffset);
-  }
+  void setOffsets(RowColumn column, int32_t rowSizeOffset);
 
   // Initializes null flags and accumulators for newly encountered groups.  This
   // function should be called only once for each group.
@@ -320,6 +308,15 @@ class Aggregate {
     VELOX_NYI("toIntermediate not supported");
   }
 
+  /// Writes an empty group's intermediate into selected rows of 'result',
+  /// leaving other rows unchanged, so merge pass-through can handle masked-out
+  /// and null inputs.
+  virtual void fillEmptyIntermediate(
+      const SelectivityVector& rows,
+      VectorPtr& result) const {
+    VELOX_NYI("fillEmptyIntermediate not supported");
+  }
+
   // Frees any out of line storage for the accumulator in
   // 'groups' and marks the aggregate as uninitialized.
   virtual void destroy(folly::Range<char**> groups) final {
@@ -387,13 +384,7 @@ class Aggregate {
  protected:
   virtual void setAllocatorInternal(HashStringAllocator* allocator);
 
-  virtual void setOffsetsInternal(
-      int32_t offset,
-      int32_t nullByte,
-      uint8_t nullMask,
-      int32_t initializedByte,
-      uint8_t initializedMask,
-      int32_t rowSizeOffset);
+  virtual void setOffsetsInternal(RowColumn column, int32_t rowSizeOffset);
 
   virtual void clearInternal();
 

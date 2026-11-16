@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions {
@@ -26,7 +26,7 @@ struct VectorIndexCardinalityFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   void call(int64_t& result, const arg_type<VectorIndex>& index) {
-    result = common::vectorindex::LocalVectorIndex::size(
+    result = common::vectorindex::FaissLocalVectorIndex::size(
         std::string_view(index.data(), index.size()));
   }
 };

@@ -18,6 +18,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/AggregateInfo.h"
+#include "velox/exec/Operator.h"
 #include "velox/exec/VectorHasher.h"
 
 namespace facebook::velox::exec {
@@ -128,7 +129,8 @@ void ColumnStatsCollector::createGroupingSet() {
   auto [groupingKeyInputChannels, groupingKeyOutputChannels] =
       setupGroupingKeyChannelProjections();
 
-  auto hashers = createVectorHashers(inputType_, groupingKeyInputChannels);
+  auto hashers =
+      VectorHasher::createForKeys(inputType_, groupingKeyInputChannels);
   const auto numHashers = hashers.size();
 
   // Setup aggregates based on the column stats specifications

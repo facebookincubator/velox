@@ -142,6 +142,16 @@ bool matchesPresenceKey(
   return true;
 }
 
+// Returns the field reader parameters that decode the fields of a stripe as
+// 'options' configure.
+FieldReaderParams toReaderParams(const StreamReader::Options& options) {
+  return FieldReaderParams{
+      .decodeExecutor = options.decodeExecutor,
+      .maxDecodeParallelism = options.maxDecodeParallelism,
+      .minStreamsPerDecodeTask = options.minStreamsPerDecodeTask,
+  };
+}
+
 } // namespace
 
 struct StreamReader::CachedReader {
@@ -169,11 +179,11 @@ struct StreamReader::CachedReader {
 StreamReader::StreamReader(
     std::shared_ptr<const Type> type,
     velox::memory::MemoryPool* pool,
-    Encoding::Options options)
+    Options options)
     : type_{std::move(type)},
       outputType_{convertToVeloxType(*velox::checkedNotNull(type_.get()))},
       pool_{velox::checkedNotNull(pool)},
-      options_{std::move(options)},
+      readerOptions_{options},
       cachedKey_{pool_} {
   NIMBLE_CHECK_NOT_NULL(outputType_);
 
@@ -184,10 +194,9 @@ void StreamReader::init() {
   const auto typeWithId =
       std::shared_ptr<const velox::dwio::common::TypeWithId>{
           velox::dwio::common::TypeWithId::create(outputType_)};
-  auto readerParams = FieldReaderParams{};
   std::vector<uint32_t> readerOffsets;
   readerFactory_ = FieldReaderFactory::create(
-      readerParams,
+      toReaderParams(readerOptions_),
       type_,
       typeWithId,
       readerOffsets,
@@ -203,11 +212,12 @@ folly::coro::Task<void> StreamReader::co_read(
     std::span<const std::string_view> streams,
     std::span<const RowRange> ranges,
     velox::vector_size_t outputOffset,
+    const Encoding::Options& options,
     velox::VectorPtr& output) {
   checkStreamCount(streams.size(), inputOffsets_.size());
   const auto outputRanges =
       makeOutputRanges(outputType_, ranges, outputOffset, output);
-  prepareRead(streams);
+  prepareRead(streams, options);
 
   // The streams are only valid during this call.
   SCOPE_EXIT {
@@ -225,9 +235,11 @@ folly::coro::Task<void> StreamReader::co_read(
   co_await co_decodeRows(ranges, outputRanges, output);
 }
 
-void StreamReader::setStreams(std::span<const std::string_view> streams) {
+void StreamReader::setStreams(
+    std::span<const std::string_view> streams,
+    const Encoding::Options& options) {
   checkStreamCount(streams.size(), inputOffsets_.size());
-  prepareRead(streams);
+  prepareRead(streams, options);
 }
 
 StreamReader::CachedReader& StreamReader::reader() const {
@@ -313,7 +325,7 @@ void StreamReader::rebuildReader(std::span<const std::string_view> streams) {
       auto* decoder = static_cast<EncodingViewDecoder*>(it->second.get());
       loadChunks(streams[i]);
       // @lint-ignore NULLSAFECLANG nullable-dereference
-      decoder->rebind(loadedChunks_);
+      decoder->rebind(loadedChunks_, options_.bufferPool);
       cachedReader.streamDecoders[i] = decoder;
       continue;
     }
@@ -329,8 +341,15 @@ void StreamReader::rebuildReader(std::span<const std::string_view> streams) {
       readerFactory_->createReader(cachedReader.decodersByStreamId);
 }
 
-void StreamReader::prepareRead(std::span<const std::string_view> streams) {
+void StreamReader::prepareRead(
+    std::span<const std::string_view> streams,
+    const Encoding::Options& options) {
   reset();
+  options_ = options;
+  if (readerOptions_.parallelDecodeEnabled()) {
+    // TODO: Make the encoding buffer pool safe for parallel decoding.
+    options_.bufferPool = nullptr;
+  }
   if (cachedReader_ != nullptr && cachedReader_->root != nullptr &&
       matchesPresenceKey(streams, cachedKey_)) {
     // The reader points to its decoders, so rebinding replaces their views and
@@ -338,7 +357,8 @@ void StreamReader::prepareRead(std::span<const std::string_view> streams) {
     for (size_t i{0}; i < streams.size(); ++i) {
       if (!streams[i].empty()) {
         loadChunks(streams[i]);
-        cachedReader_->streamDecoders[i]->rebind(loadedChunks_);
+        cachedReader_->streamDecoders[i]->rebind(
+            loadedChunks_, options_.bufferPool);
       }
     }
     cachedReader_->root->reset();

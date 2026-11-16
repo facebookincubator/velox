@@ -241,13 +241,10 @@ TEST_P(IndexLookupJoinTest, leftJoinTrailingMissesWithNoSplitOutput) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
+            GetParam().numPrefetches)
         .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(testData.maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            core::QueryConfig::kPreferredOutputBatchRows, testData.maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.splitOutput ? "true" : "false")
@@ -1056,6 +1053,17 @@ TEST_P(IndexLookupJoinTest, withFilter) {
        "u3 != u3",
        "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0 AND u.c3 != u.c3"},
 
+      // Inner join with filter on a lookup column not in the output
+      {{100, 1, 1},
+       5,
+       100,
+       80,
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u5"},
+       core::JoinType::kInner,
+       "u3 % 2 = 0",
+       "SELECT t.c1, u.c1, u.c2, u.c5 FROM t, u WHERE t.c0 = u.c0 AND u.c3 % 2 = 0"},
+
       // Inner join with filter on both side
       {{100, 1, 1},
        5,
@@ -1148,6 +1156,17 @@ TEST_P(IndexLookupJoinTest, withFilter) {
        core::JoinType::kLeft,
        "u3 != u3",
        "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND u.c3 != u.c3"},
+
+      // Left join with filter on a lookup column not in the output
+      {{100, 1, 1},
+       5,
+       100,
+       80,
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u5"},
+       core::JoinType::kLeft,
+       "u3 % 2 = 0",
+       "SELECT t.c1, u.c1, u.c2, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND u.c3 % 2 = 0"},
 
       // Left join with filter on both side
       {{100, 1, 1},
@@ -1340,9 +1359,9 @@ TEST_P(IndexLookupJoinTest, mixedFilterBatches) {
   queryBuilder.plan(plan)
       .config(
           core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-          std::to_string(GetParam().numPrefetches))
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "4")
-      .config(core::QueryConfig::kIndexLookupJoinSplitOutput, "true")
+          GetParam().numPrefetches)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 4)
+      .config(core::QueryConfig::kIndexLookupJoinSplitOutput, true)
       .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
       .serialExecution(GetParam().serialExecution)
       .barrierExecution(GetParam().serialExecution);

@@ -410,3 +410,16 @@ function(velox_configure_clang_atomic_linker_flags)
     message(STATUS "compiler-rt found, skipping libatomic linking")
   endif()
 endfunction()
+
+# Marks the intentional switch fall-through in the scanner that flex_target
+# `NAME` generates with `[[fallthrough]]`. Flex marks it with a comment, which
+# Clang's -Wimplicit-fallthrough ignores. Call it after flex_target(NAME ...).
+function(velox_flex_annotate_fallthrough NAME)
+  add_custom_command(
+    OUTPUT ${FLEX_${NAME}_OUTPUTS}
+    COMMAND
+      ${CMAKE_COMMAND} -DFLEX_OUTPUT=${FLEX_${NAME}_OUTPUTS} -P
+      ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/FlexAnnotateFallthrough.cmake
+    APPEND
+  )
+endfunction()

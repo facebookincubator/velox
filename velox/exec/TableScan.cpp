@@ -343,7 +343,7 @@ bool TableScan::getSplit() {
     return false;
   }
 
-  if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+  if (splitTracer_ != nullptr) [[unlikely]] {
     splitTracer_->write(split);
   }
 

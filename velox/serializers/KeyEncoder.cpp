@@ -1224,12 +1224,12 @@ KeyEncoder::IncrementedBoundsResult KeyEncoder::createIncrementedBounds(
     for (int col = numKeyColumns - 1; col >= 0; --col) {
       const bool descending = !sortOrders_[col].isAscending();
       const bool nullLast = !sortOrders_[col].isNullsFirst();
-      if (FOLLY_LIKELY(incrementColumnValue(
+      if (incrementColumnValue(
               incrementedChildren[col],
               row,
               descending,
               nullLast,
-              incrementedChildren[col]))) {
+              incrementedChildren[col])) [[likely]] {
         rawIndices[numSucceeded++] = row;
         break;
       }

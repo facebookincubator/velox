@@ -43,7 +43,7 @@ class EncodingViewDecoder final : public Decoder {
   /// `chunks` must be non-empty, and every chunk must store the same data type.
   /// `pool` and the views returned by `encodingViewFactory` must be non-null.
   /// The decoder keeps the factory to create the views of the chunks bound
-  /// later with rebind().
+  /// later with rebind(). `bufferPool` is as in rebind().
   EncodingViewDecoder(
       std::span<const std::string_view> chunks,
       velox::memory::MemoryPool* pool,
@@ -51,9 +51,13 @@ class EncodingViewDecoder final : public Decoder {
       const EncodingViewFactory& encodingViewFactory);
 
   /// Replaces the bound chunks with `chunks` and rewinds the sequential
-  /// cursor. `chunks` has the same requirements as in the constructor. A failed
-  /// call leaves the decoder released.
-  void rebind(std::span<const std::string_view> chunks);
+  /// cursor. `chunks` has the same requirements as in the constructor. The
+  /// reads of `chunks` take scratch buffers from `bufferPool` when it is not
+  /// null, until the next rebind() or release(). A failed call leaves the
+  /// decoder released.
+  void rebind(
+      std::span<const std::string_view> chunks,
+      velox::BufferPool* bufferPool);
 
   /// Drops the views of the current chunks so their bytes can be freed. The
   /// decoder must be rebound before it is used again.
@@ -149,11 +153,12 @@ class EncodingViewDecoder final : public Decoder {
   // Memory pool used to allocate retained string buffers.
   velox::memory::MemoryPool* const pool_;
 
-  // Returns temporary decode storage to the caller-owned cache.
-  velox::BufferPool* const bufferPool_;
-
   // Creates the view of each chunk bound to this decoder.
   const EncodingViewFactory encodingViewFactory_;
+
+  // Returns temporary decode storage to the caller-owned cache of the bound
+  // chunks, which each rebind() sets.
+  velox::BufferPool* bufferPool_{nullptr};
 
   // Bound chunks in stream order.
   std::vector<Chunk> chunks_;

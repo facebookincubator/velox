@@ -45,10 +45,10 @@ TEST_F(GetJsonObjectTest, basic) {
   // Returns input json if json path is "$".
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$"),
-      R"({"name": "Alice", "age": 5, "id": "001"})");
+      R"({"name":"Alice","age":5,"id":"001"})");
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$  "),
-      R"({"name": "Alice", "age": 5, "id": "001"})");
+      R"({"name":"Alice","age":5,"id":"001"})");
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$.age"),
       "5");
@@ -96,19 +96,19 @@ TEST_F(GetJsonObjectTest, basic) {
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
           "$.my.info"),
-      R"({"name": "Alice", "age": "5", "id": "001"})");
+      R"({"name":"Alice","age":"5","id":"001"})");
   EXPECT_EQ(
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
           "$['my']['info']"),
-      R"({"name": "Alice", "age": "5", "id": "001"})");
+      R"({"name":"Alice","age":"5","id":"001"})");
 
   // Array as result.
   EXPECT_EQ(
       getJsonObject(
           R"([{"my": {"info": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
           "$[1].other"),
-      R"(["v1", "v2"])");
+      R"(["v1","v2"])");
   // Array element as result.
   EXPECT_EQ(
       getJsonObject(
@@ -141,7 +141,7 @@ TEST_F(GetJsonObjectTest, supplementaryPlaneInObject) {
   // that must stay literal.
   EXPECT_EQ(
       getJsonObject(R"({"a": {"name": "🧧会员"}})", "$.a"),
-      R"({"name": "\uD83E\uDDE7会员"})");
+      R"({"name":"\uD83E\uDDE7会员"})");
 
   // Literal emoji U+1F947 inside an array.
   EXPECT_EQ(getJsonObject(R"({"a": ["🥇"]})", "$.a"), R"(["\uD83E\uDD47"])");
@@ -152,11 +152,60 @@ TEST_F(GetJsonObjectTest, supplementaryPlaneInObject) {
   // \ u D 8 3 E \ u D D E 7 g i f t.
   EXPECT_EQ(
       getJsonObject(R"({"a": {"name": "\uD83E\uDDE7gift"}})", "$.a"),
-      R"({"name": "\uD83E\uDDE7gift"})");
+      R"({"name":"\uD83E\uDDE7gift"})");
 
   // A supplementary-plane character extracted as a scalar string leaf is
   // decoded to its literal form, unaffected by this change.
   EXPECT_EQ(getJsonObject(R"({"a": "🥇"})", "$.a"), "🥇");
+}
+
+TEST_F(GetJsonObjectTest, compactResult) {
+  EXPECT_EQ(
+      getJsonObject(R"({"a": {"b" : [1, "x y"]}})", "$.a"),
+      R"({"b":[1,"x y"]})");
+  EXPECT_EQ(getJsonObject(R"( [ 1 , 2 ] )", "$"), "[1,2]");
+  EXPECT_EQ(getJsonObject(R"({"a":"unterminated})", "$"), std::nullopt);
+}
+
+TEST_F(GetJsonObjectTest, escapedResult) {
+  EXPECT_EQ(
+      getJsonObject(R"({"a":["x\/y","\u0041","\u00e9","\u2028"]})", "$.a"),
+      "[\"x/y\",\"A\",\"\u00e9\",\"\u2028\"]");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":["\b\f\n\r\t","q\"z","\\"]})", "$.a"),
+      R"(["\b\f\n\r\t","q\"z","\\"])");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":["\u0001","\u001f","\u000a","\u0022"]})", "$.a"),
+      R"(["\u0001","\u001F","\n","\""])");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":["\ud83d\ude00","\ud83d","\uD800\u0041"]})", "$.a"),
+      R"(["\uD83D\uDE00","\uD83D","\uD800A"])");
+  EXPECT_EQ(
+      getJsonObject(R"({"k\u00e9\/":{"\n":1}})", "$"),
+      "{\"k\u00e9/\":{\"\\n\":1}}");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[1.0e2, 1e-7, -0, 0.10]})", "$.a"),
+      "[1.0e2,1e-7,-0,0.10]");
+}
+
+TEST_F(GetJsonObjectTest, nonAsciiResultOfAsciiInput) {
+  const auto input = makeRowVector({
+      makeFlatVector<std::string>({
+          R"({"a":["\u00e9"]})",
+          R"({"a":"\u00e9"})",
+      }),
+      makeFlatVector<std::string>({"$.a", "$.a"}),
+  });
+  const SelectivityVector rows(input->size());
+  for (const auto& child : input->children()) {
+    auto* strings = child->asFlatVector<StringView>();
+    strings->computeAndSetIsAscii(rows);
+    ASSERT_TRUE(strings->isAscii(rows).value());
+  }
+
+  velox::test::assertEqualVectors(
+      makeFlatVector<int32_t>({5, 1}),
+      evaluate("length(get_json_object(c0, c1))", input));
 }
 
 TEST_F(GetJsonObjectTest, nullResult) {
@@ -196,19 +245,20 @@ TEST_F(GetJsonObjectTest, nullResult) {
 
 TEST_F(GetJsonObjectTest, incompleteJson) {
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5"},)", "$.hello"), "3.5");
-  EXPECT_EQ(getJsonObject(R"({"hello": "3.5",,,,})", "$.hello"), "3.5");
+  EXPECT_EQ(getJsonObject(R"({"hello": "3.5",,,,})", "$.hello"), std::nullopt);
   EXPECT_EQ(
-      getJsonObject(R"({"hello": "3.5",,,,"taskSort":"2"})", "$.hello"), "3.5");
+      getJsonObject(R"({"hello": "3.5",,,,"taskSort":"2"})", "$.hello"),
+      std::nullopt);
   EXPECT_EQ(
       getJsonObject(
           R"({"hello": "3.5","taskSort":"2",,,,,"taskSort",})", "$.hello"),
-      "3.5");
+      std::nullopt);
   EXPECT_EQ(
       getJsonObject(R"({"hello": "3.5","taskSort":"2",,,,,,})", "$.hello"),
-      "3.5");
+      std::nullopt);
   EXPECT_EQ(
       getJsonObject(R"({"hello": 3.5,"taskSort":"2",,,,,,})", "$.hello"),
-      "3.5");
+      std::nullopt);
   EXPECT_EQ(
       getJsonObject(R"({"hello": "boy","taskSort":"2"},,,,,)", "$.hello"),
       "boy");
@@ -223,7 +273,68 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}},)",
           "$['my']['info']"),
-      R"({"name": "Alice", "age": "5", "id": "001"})");
+      R"({"name":"Alice","age":"5","id":"001"})");
+}
+
+TEST_F(GetJsonObjectTest, malformedRootValue) {
+  EXPECT_EQ(getJsonObject(R"({"a":1,"b":[1,2)", "$.a"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":1,})", "$.a"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":[1,]})", "$.a[0]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":1,"b":01})", "$.a"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":"x","b":1 "c":2})", "$.a"), std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[{"b":1}, {"b":2} x]})", "$.a[0].b"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":1,"b":{"c":[tru]}})", "$.a"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":[1,]})", "$"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":1,"b":[1e400]})", "$.a"), "1");
+}
+
+TEST_F(GetJsonObjectTest, rootValueOnly) {
+  EXPECT_EQ(getJsonObject(R"({"a":"x"} trailing)", "$"), R"({"a":"x"})");
+  EXPECT_EQ(getJsonObject(R"({"a":1} {"a":2})", "$"), R"({"a":1})");
+  EXPECT_EQ(getJsonObject(R"({"a":"x"}})", "$.a"), "x");
+  EXPECT_EQ(getJsonObject("123 x", "$"), "123");
+  EXPECT_EQ(getJsonObject("true]", "$"), "true");
+  EXPECT_EQ(getJsonObject(R"("s"x)", "$"), "s");
+  EXPECT_EQ(getJsonObject(R"( "a\nb" )", "$"), "a\nb");
+  EXPECT_EQ(getJsonObject("null", "$"), "null");
+  EXPECT_EQ(getJsonObject("123x", "$"), std::nullopt);
+  EXPECT_EQ(getJsonObject("123,", "$"), std::nullopt);
+  EXPECT_EQ(getJsonObject("   ", "$"), std::nullopt);
+}
+
+TEST_F(GetJsonObjectTest, singleQuotes) {
+  EXPECT_EQ(getJsonObject(R"({"a":1,"b":'x'})", "$.a"), "1");
+  EXPECT_EQ(getJsonObject(R"({"a":1,'b':2})", "$.a"), "1");
+  EXPECT_EQ(getJsonObject(R"(['x',1])", "$[1]"), "1");
+  EXPECT_EQ(getJsonObject(R"({"a":'x"y'})", "$.a"), R"(x"y)");
+  EXPECT_EQ(getJsonObject(R"({"a":"\'"})", "$.a"), "'");
+  EXPECT_EQ(getJsonObject(R"({"a":{"b":'s'}})", "$.a"), R"({"b":"s"})");
+  EXPECT_EQ(getJsonObject(R"([ true, '', ''])", "$"), R"([true,"",""])");
+  EXPECT_EQ(getJsonObject(R"({"a":'x})", "$.a"), std::nullopt);
+}
+
+TEST_F(GetJsonObjectTest, controlCharacters) {
+  EXPECT_EQ(getJsonObject("{\"a\":1,\"b\":\"x\x01y\"}", "$.a"), "1");
+  EXPECT_EQ(getJsonObject("{\"a\":1,\"b\":\"x\x01y\"}", "$.b"), "x\x01y");
+  EXPECT_EQ(getJsonObject("{\"a\":\"x\x01\ty\"}", "$.a"), "x\x01\ty");
+  EXPECT_EQ(
+      getJsonObject("{\"a\":{\"b\":\"\x01\t\"}}", "$.a"),
+      R"({"b":"\u0001\t"})");
+  EXPECT_EQ(getJsonObject("\"\x01s\"", "$"), "\x01s");
+  EXPECT_EQ(getJsonObject("{\"a\":1,\"b\":'x\x01'}", "$.a"), "1");
+  EXPECT_EQ(getJsonObject("{\"a\":1,\"b\":'x\x01'}", "$.b"), "x\x01");
+  EXPECT_EQ(getJsonObject("{\"a\":'x\x01',\"b\":1}", "$.a"), "x\x01");
+  EXPECT_EQ(getJsonObject("{'a\x01':1,\"b\":2}", "$.a"), std::nullopt);
+  EXPECT_EQ(getJsonObject("{'a\x01':1,\"b\":2}", "$.b"), "2");
+}
+
+TEST_F(GetJsonObjectTest, mismatchedBrackets) {
+  EXPECT_EQ(getJsonObject(R"({"a":[1,"x","b":0},"b":2})", "$.b"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":1,"b":[1})", "$.a"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"([[1,"x","b":0}],1])", "$[0]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":"[}"})", "$.a"), "[}");
+  EXPECT_EQ(getJsonObject(R"({"a":1}])", "$.a"), "1");
 }
 
 TEST_F(GetJsonObjectTest, number) {
@@ -239,6 +350,19 @@ TEST_F(GetJsonObjectTest, number) {
   EXPECT_EQ(getJsonObject(R"({"f": -21.010})", "$.f"), "-21.01");
   EXPECT_EQ(getJsonObject(R"({"f": 21e3})", "$.f"), "21000.0");
   EXPECT_EQ(getJsonObject(R"({"f": -21E-3})", "$.f"), "-0.021");
+  EXPECT_EQ(getJsonObject(R"({"f": 1e400})", "$.f"), R"("Infinity")");
+  EXPECT_EQ(getJsonObject(R"({"f": [-1e400]})", "$.f[0]"), R"("-Infinity")");
+  EXPECT_EQ(getJsonObject(R"({"f":1.0e400})", "$.f"), R"("Infinity")");
+  EXPECT_EQ(getJsonObject(R"({"f":-1e400})", "$.f"), R"("-Infinity")");
+  EXPECT_EQ(getJsonObject(R"({"f":1e309})", "$.f"), R"("Infinity")");
+  EXPECT_EQ(getJsonObject(R"({"f":01e400})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f":-01e400})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f":1.e400})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f":.1e400})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f":1e})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject("01e400", "$"), std::nullopt);
+  EXPECT_EQ(getJsonObject("-01e400", "$"), std::nullopt);
+  EXPECT_EQ(getJsonObject("1.e400", "$"), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"i": +0})", "$.i"), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"i": -00})", "$.i"), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"i": 00})", "$.i"), std::nullopt);

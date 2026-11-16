@@ -822,6 +822,55 @@ TYPED_TEST(ALPRDEncodingTest, rejectsCorruptMetadataAndValues) {
   }
 }
 
+TYPED_TEST(ALPRDEncodingTest, rejectsCorruptValuesAnywhereInLongReads) {
+  using T = typename TestFixture::T;
+  using Physical = typename TestFixture::Physical;
+  // Spans several 256-value decode batches. Each corrupt value is the last.
+  constexpr uint32_t kNumRows = 600;
+  constexpr auto kRightWidth = sizeof(T) * 8 - 16;
+  const std::vector<uint16_t> dictionary{1, 2};
+  std::vector<uint16_t> codes(kNumRows);
+  std::vector<Physical> right(kNumRows);
+  std::vector<Physical> expected(kNumRows);
+  for (uint32_t i = 0; i < kNumRows; ++i) {
+    codes[i] = i % 2;
+    right[i] = i;
+    expected[i] = (Physical{dictionary[codes[i]]} << kRightWidth) | i;
+  }
+  const auto valid = this->fixture(dictionary, codes, right, {}, {});
+  this->check(valid, expected);
+  std::vector<Physical> output(kNumRows);
+  createEncodingView(valid, this->pool_.get(), this->options_)
+      ->read(0, kNumRows, output.data());
+  EXPECT_EQ(output, expected);
+
+  {
+    // The low three bits of code 9 select a valid dictionary entry.
+    auto corruptCodes = codes;
+    corruptCodes.back() = 9;
+    const auto corrupt = this->fixture(dictionary, corruptCodes, right, {}, {});
+    NIMBLE_ASSERT_THROW(
+        this->decoder(corrupt)->materialize(kNumRows, output.data()),
+        "Invalid ALPRD dictionary code.");
+    NIMBLE_ASSERT_THROW(
+        createEncodingView(corrupt, this->pool_.get(), this->options_)
+            ->read(0, kNumRows, output.data()),
+        "Invalid ALPRD dictionary code.");
+  }
+  {
+    auto corruptRight = right;
+    corruptRight.back() = Physical{1} << kRightWidth;
+    const auto corrupt = this->fixture(dictionary, codes, corruptRight, {}, {});
+    NIMBLE_ASSERT_THROW(
+        this->decoder(corrupt)->materialize(kNumRows, output.data()),
+        "Invalid ALPRD low part.");
+    NIMBLE_ASSERT_THROW(
+        createEncodingView(corrupt, this->pool_.get(), this->options_)
+            ->read(0, kNumRows, output.data()),
+        "Invalid ALPRD low part.");
+  }
+}
+
 TYPED_TEST(ALPRDEncodingTest, exceptionLoadingRespectsMemoryPool) {
   using Physical = typename TestFixture::Physical;
   constexpr uint32_t kNumRows = 1'048'576;

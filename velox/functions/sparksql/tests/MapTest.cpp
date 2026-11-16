@@ -82,6 +82,21 @@ TEST_F(MapTest, boolType) {
   testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector);
 }
 
+TEST_F(MapTest, constantKeysBuildFlatMap) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({10, 11}),
+  });
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kGenerateConstantMapsAsFlatMaps, "true"},
+  });
+  VELOX_ASSERT_THROW(
+      evaluate("map(1, c0)", data),
+      "Flat maps for constant map keys are not implemented in map()");
+  velox::test::assertEqualVectors(
+      makeMapVectorFromJson<int64_t, int64_t>({"{10:1}", "{11:1}"}),
+      evaluate("map(c0, 1)", data));
+}
+
 TEST_F(MapTest, duplicateMapKey) {
   // Input vectors with duplicate keys.
   auto inputVector1 = makeNullableFlatVector<int64_t>({1, 20, 3});

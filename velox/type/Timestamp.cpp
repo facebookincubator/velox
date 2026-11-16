@@ -92,7 +92,7 @@ bool Timestamp::epochToCalendarUtc(int64_t epoch, std::tm& tm) {
   // Fast path: Neri-Schneider 2022 covers ~3 million years centered on the
   // epoch — vastly wider than any practical Velox DATE / TIMESTAMP. Inputs
   // outside this range delegate to WideRangeDateConversion.
-  if (FOLLY_LIKELY(calendar::epochToCalendarUtc(epoch, tm))) {
+  if (calendar::epochToCalendarUtc(epoch, tm)) [[likely]] {
     return true;
   }
   return WideRangeDateConversion::epochToCalendarUtc(epoch, tm);

@@ -43,11 +43,14 @@
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
@@ -189,6 +192,17 @@ class EncodingSliceTest : public ::testing::Test {
         values.push_back(
             static_cast<DataType>(
                 std::uniform_int_distribution<uint32_t>{0, 4096}(rng) / 4.0));
+      }
+    } else if constexpr (std::is_same_v<
+                             EncodingType,
+                             nimble::SequenceEncoding<DataType>>) {
+      // A random start and step, wrapping like DataType.
+      auto value = nextIntegerValue();
+      const auto step =
+          static_cast<DataType>(std::uniform_int_distribution<uint32_t>{}(rng));
+      for (uint32_t i = 0; i < rowCount; ++i) {
+        values.push_back(value);
+        value = static_cast<DataType>(value + step);
       }
     } else if constexpr (std::is_same_v<
                              EncodingType,
@@ -373,6 +387,7 @@ using EncodingSliceTypes = ::testing::Types<
     EncodingSliceConfig<nimble::SimdForBitpackEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::HuffmanEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::ForEncoding<uint32_t>>,
+    EncodingSliceConfig<nimble::SequenceEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::ALPEncoding<double>>>;
 
 template <typename Config>
@@ -698,6 +713,96 @@ TEST_F(EncodingSliceTest, materializesNativeSliceForNullableEncoding) {
 
   const std::vector<uint32_t> expected{12, 13, 14};
   EXPECT_EQ(std::vector<uint32_t>(output.begin(), output.end()), expected);
+}
+
+TEST_F(EncodingSliceTest, slicesWithValueDelta) {
+  const auto sliceWithDelta =
+      [&](std::string_view encoded, uint32_t offset, uint32_t length) {
+        auto encoding = createEncoding(
+            nimble::EncodingFactory::slice(
+                encoded,
+                offset,
+                length,
+                /*valueDelta=*/-10,
+                *buffer_,
+                nimble::Encoding::Options{}));
+        std::vector<int32_t> output(length);
+        encoding->materialize(length, output.data());
+        return output;
+      };
+
+  // FixedBitWidth folds the delta into its baseline.
+  {
+    const auto values = makeVector<int32_t>({10, 11, 12, 13, 14, 15});
+    const auto encoded =
+        nimble::test::Encoder<nimble::FixedBitWidthEncoding<int32_t>>::encode(
+            *buffer_, values);
+    EXPECT_EQ(
+        sliceWithDelta(encoded, /*offset=*/2, /*length=*/3),
+        (std::vector<int32_t>{2, 3, 4}));
+  }
+
+  // Sequence folds the delta into its base. Rows 2 to 4 start at 16, so the
+  // slice stores base 6 and keeps step 3.
+  {
+    const auto values = makeVector<int32_t>({10, 13, 16, 19, 22, 25});
+    const auto encoded =
+        nimble::test::Encoder<nimble::SequenceEncoding<int32_t>>::encode(
+            *buffer_, values);
+    EXPECT_EQ(
+        sliceWithDelta(encoded, /*offset=*/2, /*length=*/3),
+        (std::vector<int32_t>{6, 9, 12}));
+
+    const nimble::SliceEncoding<int32_t> wrapper{
+        *pool_,
+        nimble::EncodingFactory::slice(
+            encoded,
+            /*offset=*/2,
+            /*length=*/3,
+            /*valueDelta=*/-10,
+            *buffer_,
+            nimble::Encoding::Options{})};
+    EXPECT_EQ(wrapper.valueDelta(), 0);
+    const auto inner = wrapper.innerEncoding();
+    ASSERT_EQ(
+        nimble::EncodingPrefix::encodingType(inner),
+        nimble::EncodingType::Sequence);
+    const auto dataOffset =
+        nimble::EncodingPrefix::prefixSize(inner, /*useVarint=*/false);
+    EXPECT_EQ(
+        nimble::SequenceEncoding<int32_t>::readBase(inner, dataOffset),
+        uint32_t{6});
+    EXPECT_EQ(
+        nimble::SequenceEncoding<int32_t>::readStep(inner, dataOffset),
+        uint32_t{3});
+  }
+
+  // RLE cannot absorb the delta, so the reader applies it.
+  {
+    const auto values = makeVector<int32_t>({10, 10, 11, 11, 12, 12});
+    const auto encoded =
+        nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+            *buffer_, values);
+    EXPECT_EQ(
+        sliceWithDelta(encoded, /*offset=*/1, /*length=*/4),
+        (std::vector<int32_t>{0, 1, 1, 2}));
+  }
+
+  {
+    const auto values = makeVector<double>({1.5, 2.5, 3.5});
+    const auto encoded =
+        nimble::test::Encoder<nimble::TrivialEncoding<double>>::encode(
+            *buffer_, values);
+    NIMBLE_ASSERT_THROW(
+        nimble::EncodingFactory::slice(
+            encoded,
+            /*offset=*/0,
+            /*length=*/2,
+            /*valueDelta=*/-1,
+            *buffer_,
+            nimble::Encoding::Options{}),
+        "A value delta requires an integer stream");
+  }
 }
 
 TEST_F(EncodingSliceTest, rejectsOutOfRangeSlice) {

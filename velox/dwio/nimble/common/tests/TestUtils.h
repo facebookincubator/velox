@@ -24,6 +24,7 @@
 
 #include "folly/Random.h"
 #include "folly/Synchronized.h"
+#include "folly/container/F14Map.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
@@ -543,6 +544,30 @@ class TrackingReadFile : public velox::ReadFile {
   std::atomic_uint64_t readDelayUs_{0};
   mutable std::mutex mu_;
   std::exception_ptr readError_;
+};
+
+// Records the file options passed to every pread.
+class FileOptsRecordingReadFile : public velox::InMemoryReadFile {
+ public:
+  using velox::InMemoryReadFile::InMemoryReadFile;
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const velox::FileIoContext& context = {}) const override {
+    fileOpts_.wlock()->push_back(context.fileOpts);
+    return velox::InMemoryReadFile::pread(offset, length, buf, context);
+  }
+
+  std::vector<folly::F14FastMap<std::string, std::string>> fileOpts() const {
+    return *fileOpts_.rlock();
+  }
+
+ private:
+  mutable folly::Synchronized<
+      std::vector<folly::F14FastMap<std::string, std::string>>>
+      fileOpts_;
 };
 
 } // namespace facebook::nimble::testing

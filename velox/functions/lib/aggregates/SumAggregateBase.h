@@ -49,6 +49,15 @@ class SumAggregateBase
     return true;
   }
 
+  bool supportsFillEmptyIntermediate() const override {
+    return true;
+  }
+
+  void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
+      const override {
+    result->addNulls(rows);
+  }
+
   void toIntermediate(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,

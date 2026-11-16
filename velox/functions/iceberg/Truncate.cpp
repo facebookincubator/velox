@@ -80,30 +80,32 @@ struct TruncateFunction {
 };
 } // namespace
 
-void registerTruncateFunctions(const std::string& prefix) {
+void registerTruncateFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<TruncateFunction, int8_t, int32_t, int8_t>(
-      {prefix + "truncate"});
+      {prefix + "truncate"}, {}, true, defaultOwner);
   registerFunction<TruncateFunction, int16_t, int32_t, int16_t>(
-      {prefix + "truncate"});
+      {prefix + "truncate"}, {}, true, defaultOwner);
   registerFunction<TruncateFunction, int32_t, int32_t, int32_t>(
-      {prefix + "truncate"});
+      {prefix + "truncate"}, {}, true, defaultOwner);
   registerFunction<TruncateFunction, int64_t, int32_t, int64_t>(
-      {prefix + "truncate"});
+      {prefix + "truncate"}, {}, true, defaultOwner);
   registerFunction<TruncateFunction, Varchar, int32_t, Varchar>(
-      {prefix + "truncate"});
+      {prefix + "truncate"}, {}, true, defaultOwner);
   registerFunction<TruncateFunction, Varbinary, int32_t, Varbinary>(
-      {prefix + "truncate"});
+      {prefix + "truncate"}, {}, true, defaultOwner);
   registerFunction<
       TruncateFunction,
       LongDecimal<P1, S1>,
       int32_t,
-      LongDecimal<P1, S1>>({prefix + "truncate"});
+      LongDecimal<P1, S1>>({prefix + "truncate"}, {}, true, defaultOwner);
 
   registerFunction<
       TruncateFunction,
       ShortDecimal<P1, S1>,
       int32_t,
-      ShortDecimal<P1, S1>>({prefix + "truncate"});
+      ShortDecimal<P1, S1>>({prefix + "truncate"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions::iceberg

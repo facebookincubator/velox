@@ -1421,8 +1421,8 @@ RowVectorPtr MergeJoin::handleSingleSideOutput() {
 }
 
 bool MergeJoin::canStreamLeftSide() const {
-  return streamLeftSideEnabled_ && filter_ == nullptr &&
-      (isInnerJoin(joinType_) || isLeftJoin(joinType_));
+  return streamLeftSideEnabled_ &&
+      (isInnerJoin(joinType_) || (filter_ == nullptr && isLeftJoin(joinType_)));
 }
 
 void MergeJoin::releaseConsumedLeftMatchInputs() {

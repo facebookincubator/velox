@@ -91,6 +91,16 @@ class FileConfig {
       "Speculative tail-read size in bytes for Nimble files.")
 
   VELOX_FILE_CONFIG_LEGACY(
+      kNimbleFsstDecodeRepeatedPayloadsSession,
+      kNimbleFsstDecodeRepeatedPayloads,
+      nimbleFsstDecodeRepeatedPayloads,
+      "nimble_fsst_decode_repeated_payloads",
+      "nimble.fsst-decode-repeated-payloads",
+      bool,
+      false,
+      "Reuse decoded bytes for repeated FSST payloads within a read.")
+
+  VELOX_FILE_CONFIG_LEGACY(
       kNimblePreserveDictionaryEncodingSession,
       kNimblePreserveDictionaryEncoding,
       nimblePreserveDictionaryEncoding,

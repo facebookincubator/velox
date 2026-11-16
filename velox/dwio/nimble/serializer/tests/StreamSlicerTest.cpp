@@ -1346,7 +1346,9 @@ TEST_F(StreamSlicerTest, hybridFlatMapRequiresWholeBatch) {
       {
           {.groupId = 0, .groupKeys = {"1"}},
           {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
-      }};
+      },
+      HybridFlatMap::KeyPresenceMode::kBitmap,
+  };
   Serializer serializer{
       SerializerOptions{
           .version = SerializationVersion::kSerialization,

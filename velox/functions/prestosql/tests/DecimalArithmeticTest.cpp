@@ -319,6 +319,17 @@ TEST_F(DecimalArithmeticTest, multiply) {
       "");
 }
 
+TEST_F(DecimalArithmeticTest, decimalDivLargeDivisor) {
+  const auto power = DecimalUtil::kPowersOfTen[38];
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeFlatVector<int128_t>({1, -1, -1, 1}, DECIMAL(38, 0)),
+      "divide(c0, c1)",
+      {makeFlatVector<int128_t>(
+           {power - 2, -power + 2, power - 2, -power + 2}, DECIMAL(38, 0)),
+       makeFlatVector<int128_t>(
+           {power - 1, power - 1, -power + 1, -power + 1}, DECIMAL(38, 0))});
+}
+
 TEST_F(DecimalArithmeticTest, decimalDivTest) {
   auto shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3));
   // Divide short and short, returning long.

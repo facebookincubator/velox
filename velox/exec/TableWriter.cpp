@@ -413,7 +413,7 @@ bool TableWriter::ConnectorReclaimer::reclaimableBytes(
     return false;
   }
   std::shared_ptr<Driver> driver = ensureDriver();
-  if (FOLLY_UNLIKELY(driver == nullptr)) {
+  if (driver == nullptr) [[unlikely]] {
     return false;
   }
   return memory::MemoryReclaimer::reclaimableBytes(pool, reclaimableBytes);
@@ -428,7 +428,7 @@ uint64_t TableWriter::ConnectorReclaimer::reclaim(
     return 0;
   }
   std::shared_ptr<Driver> driver = ensureDriver();
-  if (FOLLY_UNLIKELY(driver == nullptr)) {
+  if (driver == nullptr) [[unlikely]] {
     return 0;
   }
   VELOX_CHECK(

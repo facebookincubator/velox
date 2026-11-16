@@ -291,6 +291,10 @@ class TopNRowNumber : public Operator {
 
   const bool generateRowNumber_;
 
+  // Whether this is a partial step, which may pass its input through when it
+  // filters too few rows.
+  const bool partial_;
+
   const size_t numPartitionKeys_;
   const size_t numSortingKeys_;
 
@@ -357,7 +361,7 @@ class TopNRowNumber : public Operator {
   // Vector of pointers to individual rows in the RowContainer for the current
   // output block.
   std::vector<char*> outputRows_;
-  // Number of partitions to fetch from a HashTable in a single listAllRows
+  // Number of partitions to fetch from a HashTable in a single listRows
   // call.
   static const size_t kPartitionBatchSize = 100;
 

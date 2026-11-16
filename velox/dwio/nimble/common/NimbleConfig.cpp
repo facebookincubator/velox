@@ -483,6 +483,10 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.fixedbitwidth.use_exact_bits",
     false);
 
+/* static */ Config::Entry<bool> Config::SORT_DICTIONARY_ALPHABET(
+    "nimble.dictionary.sort_alphabet",
+    false);
+
 /* static */ Config::Entry<bool> Config::SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS(
     "nimble.flatmap.skip_constant_in_map_streams",
     false);

@@ -190,6 +190,7 @@ columnTypeNames() {
           {FileColumnHandle::ColumnType::kSynthesized, "Synthesized"},
           {FileColumnHandle::ColumnType::kRowIndex, "RowIndex"},
           {FileColumnHandle::ColumnType::kRowId, "RowId"},
+          {FileColumnHandle::ColumnType::kReadRange, "ReadRange"},
       };
   return kColumnTypeNames;
 }

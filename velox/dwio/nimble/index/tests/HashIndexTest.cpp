@@ -32,6 +32,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
@@ -590,6 +591,7 @@ TEST_F(HashIndexTest, indexDataReuseWithSameReader) {
       velox::memory::MemoryAllocator::Options{
           .capacity = 1UL << 30, .reservationByteLimit = 0});
   auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
 
   struct TestCase {
     bool cacheIndex;
@@ -641,7 +643,7 @@ TEST_F(HashIndexTest, indexDataReuseWithSameReader) {
       fileHandle->file = readFile;
       fileHandle->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle->groupId = velox::StringIdLease(ids, fileIdStr + "_group");
-      options.cache = cache.get();
+      options.blockCache = getBlockCache(cache.get());
       options.fileHandle = fileHandle.get();
     }
 
@@ -663,6 +665,7 @@ TEST_F(HashIndexTest, indexDataReuseWithSameReader) {
     EXPECT_EQ(tablet->denseIndex({"id"}), tablet->denseIndex({"id"}));
   }
 
+  testingResetBlockCache();
   cache->shutdown();
 }
 
@@ -680,6 +683,7 @@ TEST_F(HashIndexTest, indexDataReuseCrossReaders) {
       velox::memory::MemoryAllocator::Options{
           .capacity = 1UL << 30, .reservationByteLimit = 0});
   auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
 
   struct TestCase {
     bool cacheIndex;
@@ -738,7 +742,7 @@ TEST_F(HashIndexTest, indexDataReuseCrossReaders) {
         fileHandle->file = readFile;
         fileHandle->uuid = fileId;
         fileHandle->groupId = groupId;
-        options.cache = cache.get();
+        options.blockCache = getBlockCache(cache.get());
         options.fileHandle = fileHandle.get();
       }
 
@@ -773,6 +777,7 @@ TEST_F(HashIndexTest, indexDataReuseCrossReaders) {
     }
   }
 
+  testingResetBlockCache();
   cache->shutdown();
 }
 

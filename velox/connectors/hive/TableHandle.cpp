@@ -171,7 +171,8 @@ HiveTableHandle::HiveTableHandle(
     std::vector<HiveColumnHandlePtr> filterColumnHandles,
     double sampleRate,
     std::string dbName,
-    std::vector<int32_t> dataColumnFieldIds)
+    std::vector<int32_t> dataColumnFieldIds,
+    HiveBucketPropertyPtr bucketProperty)
     : connector::FileTableHandle(
           std::move(connectorId),
           tableName,
@@ -183,7 +184,8 @@ HiveTableHandle::HiveTableHandle(
           std::move(dbName)),
       dataColumnFieldIds_(std::move(dataColumnFieldIds)),
       indexColumns_(std::move(indexColumns)),
-      filterColumnHandles_(std::move(filterColumnHandles)) {
+      filterColumnHandles_(std::move(filterColumnHandles)),
+      bucketProperty_(std::move(bucketProperty)) {
   VELOX_CHECK_GT(sampleRate, 0.0, "Sample rate must be positive");
   VELOX_CHECK_LE(sampleRate, 1.0, "Sample rate must not exceed 1.0");
   VELOX_CHECK(
@@ -269,6 +271,9 @@ std::string HiveTableHandle::toString() const {
     }
     out << "]";
   }
+  if (bucketProperty_) {
+    out << ", bucket property: " << bucketProperty_->toString();
+  }
   return out.str();
 }
 
@@ -306,7 +311,11 @@ folly::dynamic HiveTableHandle::serializeHiveFields(
 }
 
 folly::dynamic HiveTableHandle::serialize() const {
-  return serializeHiveFields("HiveTableHandle");
+  auto obj = serializeHiveFields("HiveTableHandle");
+  if (bucketProperty_) {
+    obj["bucketProperty"] = bucketProperty_->serialize();
+  }
+  return obj;
 }
 
 // static
@@ -400,6 +409,11 @@ ConnectorTableHandlePtr HiveTableHandle::create(
       dbName,
       dataColumnFieldIds);
 
+  HiveBucketPropertyPtr bucketProperty;
+  if (auto it = obj.find("bucketProperty"); it != obj.items().end()) {
+    bucketProperty = HiveBucketProperty::deserialize(it->second, context);
+  }
+
   return std::make_shared<const HiveTableHandle>(
       std::move(connectorId),
       tableName,
@@ -411,7 +425,8 @@ ConnectorTableHandlePtr HiveTableHandle::create(
       std::move(filterColumnHandles),
       sampleRate,
       std::move(dbName),
-      std::move(dataColumnFieldIds));
+      std::move(dataColumnFieldIds),
+      std::move(bucketProperty));
 }
 
 void HiveTableHandle::registerSerDe() {

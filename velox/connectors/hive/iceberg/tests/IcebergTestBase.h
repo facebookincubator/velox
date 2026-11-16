@@ -117,6 +117,17 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::vector<RowVectorPtr>& data,
       const std::vector<int32_t>& icebergFieldIds);
 
+  /// Writes a spec-compliant Puffin deletion-vector-v1 file (PFA1 frame + magic
+  /// + portable roaring bitmap + standard CRC-32) for 'deletedPositions',
+  /// mirroring what Spark/Iceberg emits, and returns an IcebergDeleteFile
+  /// pointing at the DV blob inside it. The returned TempDirectoryPath keeps
+  /// the Puffin file alive for the duration of the scan. Requires the
+  /// LocalFileSink factory to be registered.
+  std::pair<std::shared_ptr<TempDirectoryPath>, IcebergDeleteFile>
+  writeDeletionVector(
+      const std::string& referencedDataFile,
+      const std::vector<int64_t>& deletedPositions);
+
 #ifdef VELOX_ENABLE_PARQUET
   /// Writes a Parquet file. 'icebergFieldIds[i]' is stamped as the Parquet
   /// field ID for column i so the reader resolves columns by field ID under

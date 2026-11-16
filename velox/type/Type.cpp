@@ -1797,7 +1797,7 @@ int64_t TimeMilliPrecisionType::valueToTime(
   int64_t parsedTimeMillis = valueToTime(timeStr);
 
   // Apply timezone conversion if provided
-  if (FOLLY_UNLIKELY(!timeZone)) {
+  if (!timeZone) [[unlikely]] {
     return parsedTimeMillis;
   }
 

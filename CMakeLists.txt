@@ -518,6 +518,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsized-deallocation")
 endif()
 
+# Folly's exception tracer records the stack of a throw inside a coroutine by
+# walking frame pointers, and crashes if a frame on the way omits them.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
+
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
 if("${MAX_HIGH_MEM_JOBS}")
@@ -923,7 +927,7 @@ if(
 )
   set(
     CMAKE_CXX_FLAGS
-    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
+    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
   )
   # Skip alignment errors and member access check for now.
   # https://github.com/facebookincubator/velox/issues/15811

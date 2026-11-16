@@ -254,6 +254,8 @@ velox_add_library(
   VectorSearchJoinBridge.h
   VectorSearchJoinBuild.h
   VectorSearchJoinProbe.h
+  VectorSearchJoinEmbeddings.h
+  VectorSearchJoinTable.h
   Window.h
   WindowFunction.h
   WindowPartition.h
@@ -283,7 +285,14 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_FAISS)
-  velox_sources(velox_exec PRIVATE VectorSearchJoinBuild.cpp VectorSearchJoinProbe.cpp)
+  velox_sources(
+    velox_exec
+    PRIVATE
+      VectorSearchJoinBuild.cpp
+      VectorSearchJoinProbe.cpp
+      VectorSearchJoinEmbeddings.cpp
+      VectorSearchJoinTable.cpp
+  )
   velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_FAISS)
   velox_link_libraries(velox_exec velox_vector_index)
 endif()

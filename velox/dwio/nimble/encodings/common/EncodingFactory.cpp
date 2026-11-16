@@ -37,6 +37,7 @@
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SliceEncoding.h"
@@ -166,6 +167,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     case EncodingType::PartitionedEliasFano: {
       RETURN_ENCODING_BY_INTEGER_TYPE(PartitionedEliasFanoEncoding, dataType);
     }
+    case EncodingType::Sequence: {
+      RETURN_ENCODING_BY_INTEGER_TYPE(SequenceEncoding, dataType);
+    }
     case EncodingType::ALP: {
       switch (dataType) {
         case DataType::Float:
@@ -245,6 +249,26 @@ std::string_view EncodingFactory::slice(
     Buffer& buffer,
     const Encoding::Options& options) {
   return EncodingSliceFactory::slice(encoded, offset, length, buffer, options);
+}
+
+std::string_view EncodingFactory::slice(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    int64_t valueDelta,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  ScopedEncodingBuffer scopedBuffer{
+      &buffer.getMemoryPool(), options.encodingBufferPool};
+  const auto sliced =
+      slice(encoded, offset, length, scopedBuffer.get(), options);
+  const auto dataType = EncodingPrefix::dataType(encoded);
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE_OR(
+      dataType,
+      T,
+      SliceEncoding<T>::wrap(
+          sliced, /*offset=*/0, length, buffer, valueDelta, options),
+      NIMBLE_FAIL("A value delta requires an integer stream: {}", dataType));
 }
 
 template <typename T>
@@ -463,6 +487,15 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "PartitionedEliasFano encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
+    case EncodingType::Sequence: {
+      if constexpr (isIntegralType<T>()) {
+        return SequenceEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Sequence encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     }
     case EncodingType::ALP: {

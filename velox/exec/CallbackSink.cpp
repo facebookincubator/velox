@@ -24,7 +24,7 @@ void CallbackSink::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CallbackSink::getOutput() {
-  if (FOLLY_LIKELY(!isDraining())) {
+  if (!isDraining()) [[likely]] {
     return nullptr;
   }
   const auto blockingReason = consumeCb_(nullptr, /*drained=*/true, &future_);

@@ -226,8 +226,14 @@ void FileSplitReader::createReader(
       .filename = fileSplit_->readPath(),
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
 
+  // The split's own fileReadOps only add keys; the reader's keys win. Like the
+  // reader's, they take effect only when the file is opened: the file handle
+  // cache key ignores them, so a cached handle keeps the ops it was opened
+  // with.
   auto fileProperties = fileSplit_->properties.value_or(FileProperties{});
-  fileProperties.fileReadOps = fileReadOps;
+  for (const auto& [key, value] : fileReadOps) {
+    fileProperties.fileReadOps.insert_or_assign(key, value);
+  }
   if (!tableHandle_->dbName().empty()) {
     fileProperties.fileReadOps[kDbNameKey] = tableHandle_->dbName();
   }

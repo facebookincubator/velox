@@ -337,17 +337,30 @@ TEST_P(ReaderBaseTest, locateStreams) {
       {{}},
   };
 
+  const auto& tablet = reader->tablet();
+  const auto stripe = tablet.stripeIdentifier(0);
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.debugString());
     auto locations = streams.locateStreams(testCase.streamIds);
     ASSERT_EQ(locations.size(), testCase.streamIds.size());
 
     for (size_t i = 0; i < locations.size(); ++i) {
-      SCOPED_TRACE(fmt::format("streamId={}", testCase.streamIds[i]));
-      if (locations[i].has_value()) {
-        EXPECT_EQ(locations[i]->streamId, testCase.streamIds[i]);
-        EXPECT_GT(locations[i]->region.length, 0);
+      const auto streamId = testCase.streamIds[i];
+      SCOPED_TRACE(fmt::format("streamId={}", streamId));
+      if (streamId >= tablet.streamCount(stripe) ||
+          tablet.streamSize(stripe, streamId) == 0) {
+        EXPECT_FALSE(locations[i].has_value());
+        EXPECT_FALSE(streams.hasStream(streamId));
+        continue;
       }
+      ASSERT_TRUE(locations[i].has_value());
+      EXPECT_EQ(locations[i]->streamId, streamId);
+      EXPECT_EQ(
+          locations[i]->region.offset,
+          tablet.stripeOffset(0) + tablet.streamOffset(stripe, streamId));
+      EXPECT_EQ(
+          locations[i]->region.length, tablet.streamSize(stripe, streamId));
+      EXPECT_TRUE(streams.hasStream(streamId));
     }
   }
 }
@@ -429,8 +442,22 @@ INSTANTIATE_TEST_CASE_P(
       return info.param == CreationMode::kDirect ? "direct" : "cached";
     });
 
+// A StripeGroup metadata format: a layout, and for kStreamMajor whether it uses
+// the sparse layout.
+struct StripeGroupFormat {
+  StripeGroup::EncodingLayout layout;
+  bool sparseLayout{false};
+
+  std::string debugString() const {
+    if (layout == StripeGroup::EncodingLayout::kRaw) {
+      return "raw";
+    }
+    return sparseLayout ? "streamMajorSparse" : "streamMajor";
+  }
+};
+
 class StripeStreamsMultiStripeTest
-    : public ::testing::TestWithParam<StripeGroup::EncodingLayout> {
+    : public ::testing::TestWithParam<StripeGroupFormat> {
  protected:
   static void SetUpTestSuite() {
     velox::memory::MemoryManager::testingSetInstance({});
@@ -446,7 +473,8 @@ class StripeStreamsMultiStripeTest
     velox::test::VectorMaker vectorMaker(pool_.get());
 
     WriterOptions writerOptions;
-    writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+    writerOptions.experimentalStripeGroupEncodingLayout = GetParam().layout;
+    writerOptions.experimentalStripeGroupSparseLayout = GetParam().sparseLayout;
     writerOptions.flushPolicyFactory = []() {
       return std::make_unique<LambdaFlushPolicy>(
           [](const StripeProgress&) { return true; });
@@ -576,9 +604,11 @@ INSTANTIATE_TEST_CASE_P(
     MetadataFormats,
     StripeStreamsMultiStripeTest,
     ::testing::Values(
-        StripeGroup::EncodingLayout::kRaw,
-        StripeGroup::EncodingLayout::kStreamMajor),
-    [](const ::testing::TestParamInfo<StripeGroup::EncodingLayout>& info) {
-      return info.param == StripeGroup::EncodingLayout::kRaw ? "raw"
-                                                             : "streamMajor";
+        StripeGroupFormat{StripeGroup::EncodingLayout::kRaw},
+        StripeGroupFormat{StripeGroup::EncodingLayout::kStreamMajor},
+        StripeGroupFormat{
+            StripeGroup::EncodingLayout::kStreamMajor,
+            /*sparseLayout=*/true}),
+    [](const ::testing::TestParamInfo<StripeGroupFormat>& info) {
+      return info.param.debugString();
     });

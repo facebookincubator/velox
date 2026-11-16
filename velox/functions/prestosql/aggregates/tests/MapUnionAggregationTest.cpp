@@ -77,8 +77,16 @@ TEST_F(MapUnionTest, groupByWithoutDuplicates) {
       }),
   });
 
-  testAggregations({data}, {"c0"}, {"map_union(c1)"}, {expectedResult});
-  testAggregations(split(data), {"c0"}, {"map_union(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"map_union(c1)"})
+      .assertResults(expectedResult);
+  AggregationTester(*this)
+      .inputs(split(data))
+      .groupBy({"c0"})
+      .aggregates({"map_union(c1)"})
+      .assertResults(expectedResult);
 
   expectedResult = makeRowVector({
       makeFlatVector<int32_t>({0, 1}),
@@ -90,14 +98,17 @@ TEST_F(MapUnionTest, groupByWithoutDuplicates) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"map_union(c1) filter (where c2)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"map_union(c1) filter (where c2)"})
+      .assertResults(expectedResult);
 
-  testAggregations(
-      split(data),
-      {"c0"},
-      {"map_union(c1) filter (where c2)"},
-      {expectedResult});
+  AggregationTester(*this)
+      .inputs(split(data))
+      .groupBy({"c0"})
+      .aggregates({"map_union(c1) filter (where c2)"})
+      .assertResults(expectedResult);
 }
 
 /**
@@ -133,14 +144,17 @@ TEST_F(MapUnionTest, groupByWithDuplicates) {
            [&](vector_size_t /*row*/) { return 1; },
            [&](vector_size_t /*row*/) { return 1.05; })})};
 
-  testAggregations(
-      {data, data, data}, {"c0"}, {"map_union(c1)"}, expectedResult);
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"map_union(c1)"})
+      .assertResults(expectedResult);
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"map_union(c1) filter (where c2)"},
-      expectedResult);
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"map_union(c1) filter (where c2)"})
+      .assertResults(expectedResult);
 }
 
 /**
@@ -152,7 +166,11 @@ TEST_F(MapUnionTest, groupByNoData) {
       {makeFlatVector<int32_t>({}), makeMapVector<int32_t, double>({})})};
   auto expectedResult = inputVectors;
 
-  testAggregations(inputVectors, {"c0"}, {"map_union(c1)"}, expectedResult);
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .groupBy({"c0"})
+      .aggregates({"map_union(c1)"})
+      .assertResults(expectedResult);
 }
 
 /**
@@ -184,7 +202,10 @@ TEST_F(MapUnionTest, globalWithoutDuplicates) {
       nullptr,
       nullEvery(7))})};
 
-  testAggregations(inputVectors, {}, {"map_union(c0)"}, expectedResult);
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"map_union(c0)"})
+      .assertResults(expectedResult);
 }
 
 /**
@@ -211,7 +232,10 @@ TEST_F(MapUnionTest, globalWithDuplicates) {
       [&](vector_size_t /*row*/) { return 1; },
       [&](vector_size_t /*row*/) { return 1.05; })})};
 
-  testAggregations(inputVectors, {}, {"map_union(c0)"}, expectedResult);
+  AggregationTester(*this)
+      .inputs(inputVectors)
+      .aggregates({"map_union(c0)"})
+      .assertResults(expectedResult);
 }
 
 /**
@@ -221,7 +245,10 @@ TEST_F(MapUnionTest, globalWithDuplicates) {
 TEST_F(MapUnionTest, globalNoData) {
   auto data = makeRowVector(ROW({"c0"}, {MAP(BIGINT(), VARCHAR())}), 0);
 
-  testAggregations({data}, {}, {"map_union(c0)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union(c0)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(MapUnionTest, nulls) {
@@ -248,7 +275,10 @@ TEST_F(MapUnionTest, nulls) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_union(m)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union(m)"})
+      .assertResults(expected);
 
   // Group-by aggregation.
   expected = makeRowVector({
@@ -260,7 +290,11 @@ TEST_F(MapUnionTest, nulls) {
       }),
   });
 
-  testAggregations({data}, {"k"}, {"map_union(m)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"k"})
+      .aggregates({"map_union(m)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionTest, unknownKeysAndValues) {
@@ -280,8 +314,15 @@ TEST_F(MapUnionTest, unknownKeysAndValues) {
       makeMapVector<UnknownValue, UnknownValue>({{}, {}}),
   });
 
-  testAggregations({data}, {}, {"map_union(c1)"}, {expectedGlobalResult});
-  testAggregations({data}, {"c0"}, {"map_union(c1)"}, {expectedGroupByResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union(c1)"})
+      .assertResults(expectedGlobalResult);
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"map_union(c1)"})
+      .assertResults(expectedGroupByResult);
 
   // map_union over non-empty map(T, unknown) where T is not unknown is allowed.
   data = makeRowVector({
@@ -319,8 +360,15 @@ TEST_F(MapUnionTest, unknownKeysAndValues) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_union(c1)"}, {expectedGlobalResult});
-  testAggregations({data}, {"c0"}, {"map_union(c1)"}, {expectedGroupByResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union(c1)"})
+      .assertResults(expectedGlobalResult);
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"map_union(c1)"})
+      .assertResults(expectedGroupByResult);
 
   // map_union over non-emtpy map(unknown, T) is not allowed.
   data = makeRowVector({
@@ -365,7 +413,10 @@ TEST_F(MapUnionTest, nans) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union(c0)"})
+      .assertResults(expectedResult);
 
   // Group by Aggregation, Primitive type
   expectedResult = makeRowVector(
@@ -373,8 +424,12 @@ TEST_F(MapUnionTest, nans) {
            {"{ 1: 1, 2: 2, NaN: 4}", "{ 3: 3, NaN: 5}"}),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"map_union(c0)"})
+      .project({"a0", "c1"})
+      .assertResults(expectedResult);
 
   // Global Aggregation, Complex type(Row)
   // The complex input values are:
@@ -399,7 +454,10 @@ TEST_F(MapUnionTest, nans) {
            makeFlatVector<int32_t>({1, 4, 5, 2})}),
       makeFlatVector<int32_t>({1, 3, 4, 2}))});
 
-  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union(c0)"})
+      .assertResults(expectedResult);
 
   // Group by Aggregation, Complex type(Row)
   // The expected result is
@@ -415,8 +473,12 @@ TEST_F(MapUnionTest, nans) {
            makeFlatVector<int32_t>({1, 3, 2, 4, 5})),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"map_union(c0)"})
+      .project({"a0", "c1"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapUnionTest, timestampWithTimeZone) {
@@ -440,7 +502,10 @@ TEST_F(MapUnionTest, timestampWithTimeZone) {
       {{{pack(0, 0), 1}, {pack(1, 0), 2}, {pack(2, 0), 3}, {pack(3, 3), 8}}},
       MAP(TIMESTAMP_WITH_TIME_ZONE(), INTEGER()))});
 
-  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union(c0)"})
+      .assertResults(expectedResult);
 
   // Group by Aggregation, Primitive type
   expectedResult = makeRowVector(
@@ -450,8 +515,12 @@ TEST_F(MapUnionTest, timestampWithTimeZone) {
            MAP(TIMESTAMP_WITH_TIME_ZONE(), INTEGER())),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"map_union(c0)"})
+      .project({"a0", "c1"})
+      .assertResults(expectedResult);
 
   // Global Aggregation, Complex type(Row)
   data = makeRowVector(
@@ -479,7 +548,10 @@ TEST_F(MapUnionTest, timestampWithTimeZone) {
           TIMESTAMP_WITH_TIME_ZONE())}),
       makeFlatVector<int32_t>({1, 2, 3, 8}))});
 
-  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union(c0)"})
+      .assertResults(expectedResult);
 
   expectedResult = makeRowVector(
       {makeMapVector(
@@ -495,8 +567,12 @@ TEST_F(MapUnionTest, timestampWithTimeZone) {
            makeFlatVector<int32_t>({1, 2, 3, 6, 7, 8})),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"map_union(c0)"})
+      .project({"a0", "c1"})
+      .assertResults(expectedResult);
 }
 
 } // namespace

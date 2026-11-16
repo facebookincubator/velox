@@ -632,7 +632,8 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
             ioStats_,
             runtimeStats,
             /*splitOffset=*/0,
-            icebergSplit_->connectorId));
+            icebergSplit_->connectorId,
+            /*fileReadOps=*/folly::F14FastMap<std::string, std::string>{}));
   }
 
   for (const auto& [deleteFile, keyNames, keyTypes] : equalityDeleteFiles_) {

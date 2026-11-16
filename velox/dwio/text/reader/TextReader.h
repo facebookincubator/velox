@@ -212,7 +212,6 @@ class TextRowReader : public dwio::common::RowReader {
 
   const std::shared_ptr<FileContents> contents_;
   const std::shared_ptr<const TypeWithId> schemaWithId_;
-  const std::shared_ptr<velox::common::ScanSpec>& scanSpec_;
 
   mutable std::shared_ptr<const TypeWithId> selectedSchema_;
 

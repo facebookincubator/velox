@@ -401,8 +401,8 @@ class MergeJoin : public Operator {
   // right group, so a left row is dead once emitted. Every other supported
   // type revisits the left group: right and full joins drive from the right,
   // and the semi/anti variants decide a left row from the whole group. The
-  // filter path is excluded because joinTracker_ resolves a left row's
-  // no-match output only after the group has been walked.
+  // filtered left join path is excluded because joinTracker_ resolves a left
+  // row's no-match output only after the group has been walked.
   bool canStreamLeftSide() const;
 
   // Drops the left batch whose rows have all been emitted, keeping the last one

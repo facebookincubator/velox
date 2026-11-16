@@ -175,7 +175,7 @@ SpatialIndex SpatialJoinBuild::buildSpatialIndex(
       double radius = radiusCol.valueAt<double>(i);
       const StringView geometryBytes = geometryCol.valueAt<StringView>(i);
       Envelope envelope = SpatialJoinBuild::readEnvelope(geometryBytes, radius);
-      if (FOLLY_UNLIKELY(envelope.isEmpty())) {
+      if (envelope.isEmpty()) [[unlikely]] {
         continue;
       }
       envelope.rowIndex = offset + geometryCol.index(i);

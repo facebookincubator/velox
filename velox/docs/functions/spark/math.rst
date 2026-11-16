@@ -75,10 +75,14 @@ Mathematical Functions
 
     Returns the cube root of ``x``.
 
-.. spark:function:: ceil(x) -> [same as x]
+.. spark:function:: ceil(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded up to the nearest integer.
     Supported types are: BIGINT, DOUBLE and DECIMAL.
+    For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+    BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+    is enabled (``spark.ansi_enabled``).
+    The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.
 
 .. spark:function:: checked_add(x, y) -> [same as x]
    :noindex:
@@ -139,7 +143,18 @@ Mathematical Functions
     When ``scale`` is negative, rounds up to a power of 10 (e.g., scale = -2
     rounds up to the nearest hundred). When ``scale`` >= the input
     scale, returns the value unchanged. Values that overflow the result
-    precision return NULL.
+    precision raise a user error regardless of ANSI mode; ``try`` catches
+    errors per row.
+
+    Shares scale handling and result typing with :spark:func:`decimal_round`.
+    All constant INTEGER scales are accepted.
+    For example, rounding DECIMAL(38,38) 0.1 to scale -1 returns 10, not zero.
+    When a negative scale requests a quantum larger than the result precision,
+    positive nonzero inputs raise an error; negative inputs and zero return
+    zero.
+
+    A typed NULL scale returns NULL without evaluating the runtime decimal
+    child; its result type uses scale zero.
 
     **Result type rules:**
 
@@ -154,7 +169,7 @@ Mathematical Functions
       The result scale is always 0. ``|n| + 1`` digits are needed because rounding
       to the nearest 10^|n| can produce a value one digit wider.
 
-    See `Spark's RoundBase.dataType <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+    See https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala.
 
     Examples (type annotations for clarity, not executable SQL)::
 
@@ -173,7 +188,7 @@ Mathematical Functions
         SELECT decimal_ceil(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
 
         -- negative scale: round up to power of 10
-        SELECT decimal_ceil(DECIMAL(3,1) 99.0, -1); -- 100 (DECIMAL(4,0))
+        SELECT decimal_ceil(DECIMAL(3,1) 99.0, -1); -- 100 (DECIMAL(3,0))
 
 .. spark:function:: decimal_floor(x, scale) -> decimal
 
@@ -184,8 +199,10 @@ Mathematical Functions
 
     When ``scale`` is negative, rounds down to a power of 10 (e.g., scale = -2
     rounds down to the nearest hundred). When ``scale`` >= the input
-    scale, returns the value unchanged. Values that overflow the result
-    precision return NULL.
+    scale, returns the value unchanged. Shares the scale validation, NULL-scale
+    handling and row-local overflow errors of :spark:func:`decimal_ceil`.
+    When the quantum is outside the result precision, negative nonzero inputs
+    raise an error; positive inputs and zero return zero.
 
     **Result type rules:**
 
@@ -208,7 +225,7 @@ Mathematical Functions
         SELECT decimal_floor(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
 
         -- negative scale: round down to power of 10
-        SELECT decimal_floor(DECIMAL(3,1) 99.0, -1); -- 90 (DECIMAL(4,0))
+        SELECT decimal_floor(DECIMAL(3,1) 99.0, -1); -- 90 (DECIMAL(3,0))
 
 .. spark:function:: degrees(x) -> double
 
@@ -271,10 +288,14 @@ Mathematical Functions
         SELECT factorial(21); -- NULL
         SELECT factorial(-1); -- NULL
 
-.. spark:function:: floor(x) -> [same as x]
+.. spark:function:: floor(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded down to the nearest integer.
-    Supported types are: BIGINT,  DOUBLE and DECIMAL.
+    Supported types are: BIGINT, DOUBLE and DECIMAL.
+    For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+    BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+    is enabled (``spark.ansi_enabled``).
+    The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.
 
 .. spark:function:: hex(x) -> varchar
 

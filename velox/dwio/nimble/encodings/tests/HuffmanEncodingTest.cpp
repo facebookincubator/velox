@@ -232,6 +232,38 @@ TEST_F(HuffmanEncodingTest, skipAndPartialReadsCrossCheckpoints) {
   EXPECT_TRUE(std::equal(second.begin(), second.end(), values.begin() + 510));
 }
 
+TEST_F(HuffmanEncodingTest, interleavedSkipsAndReads) {
+  Vector<uint64_t> values{pool_.get()};
+  for (uint32_t i = 0; i < 900; ++i) {
+    values.push_back((i * 7) % 23);
+  }
+
+  // Each step skips, then reads. Decoding continues from the previous read
+  // within a 256-row checkpoint interval and restarts at a checkpoint once a
+  // skip leaves the interval.
+  struct Step {
+    uint32_t skip;
+    uint32_t read;
+
+    std::string debugString() const {
+      return fmt::format("skip {}, read {}", skip, read);
+    }
+  };
+  const std::vector<Step> steps{
+      {0, 10}, {5, 3}, {250, 20}, {0, 300}, {300, 12}};
+  auto encoding = encode(values);
+  uint32_t row{0};
+  for (const auto& step : steps) {
+    SCOPED_TRACE(step.debugString());
+    encoding->skip(step.skip);
+    row += step.skip;
+    Vector<uint64_t> result{pool_.get(), step.read};
+    encoding->materialize(step.read, result.data());
+    EXPECT_TRUE(std::equal(result.begin(), result.end(), values.begin() + row));
+    row += step.read;
+  }
+}
+
 TEST_F(HuffmanEncodingTest, skipRejectsPastEnd) {
   Vector<uint32_t> values{pool_.get()};
   values.push_back(1);

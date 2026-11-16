@@ -179,7 +179,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameReorderDropAdd) {
 // file column to a non-colliding sentinel so the connector's by-name null-fill
 // correctly null-fills the re-added column instead of binding to stale data.
 TEST_F(IcebergNimbleInsertTest, fieldIdDropReaddSameName) {
-  auto writeVector = makeRowVector({"c"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto writeVector =
+      makeNamedRowVector("c", makeFlatVector<int32_t>({1, 2, 3}));
 
   const auto dir = TempDirectoryPath::create();
   const auto path = dir->getPath();
@@ -201,7 +202,7 @@ TEST_F(IcebergNimbleInsertTest, fieldIdDropReaddSameName) {
                   .planNode();
 
   auto expected =
-      makeRowVector({"c"}, {makeNullConstant(TypeKind::INTEGER, 3)});
+      makeNamedRowVector("c", makeNullConstant(TypeKind::INTEGER, 3));
   exec::test::AssertQueryBuilder(plan)
       .connectorSessionProperty(
           test::kIcebergConnectorId, kSelectiveNimbleReaderEnabled, "false")
@@ -216,13 +217,13 @@ TEST_F(IcebergNimbleInsertTest, fieldIdDropReaddSameName) {
 // projectStructToSpec in NimbleReader.cpp), so the struct comes back as the
 // requested ROW<z,x> rather than the file-order ROW<x,y,z>.
 TEST_F(IcebergNimbleInsertTest, fieldIdNestedStructReorderDrop) {
-  auto writeVector = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto writeVector = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"x", "y", "z"},
           {makeFlatVector<int32_t>({1, 2, 3}),
            makeFlatVector<int32_t>({4, 5, 6}),
-           makeFlatVector<int32_t>({7, 8, 9})})});
+           makeFlatVector<int32_t>({7, 8, 9})}));
 
   const auto dir = TempDirectoryPath::create();
   const auto path = dir->getPath();
@@ -248,12 +249,12 @@ TEST_F(IcebergNimbleInsertTest, fieldIdNestedStructReorderDrop) {
                   .endTableScan()
                   .planNode();
 
-  auto expected = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto expected = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"z", "x"},
           {makeFlatVector<int32_t>({7, 8, 9}),
-           makeFlatVector<int32_t>({1, 2, 3})})});
+           makeFlatVector<int32_t>({1, 2, 3})}));
   exec::test::AssertQueryBuilder(plan)
       .connectorSessionProperty(
           test::kIcebergConnectorId, kSelectiveNimbleReaderEnabled, "false")
@@ -289,7 +290,7 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameInsideArrayStruct) {
       {makeFlatVector<std::string>({"a", "b", "c"}),
        makeFlatVector<int32_t>({1, 2, 3})});
   auto items = makeArrayVector({0, 2}, elements);
-  auto writeVector = makeRowVector({"items"}, {items});
+  auto writeVector = makeNamedRowVector("items", items);
 
   const auto dir = TempDirectoryPath::create();
   const auto path = dir->getPath();
@@ -322,7 +323,7 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameInsideArrayStruct) {
       {makeFlatVector<std::string>({"a", "b", "c"}),
        makeFlatVector<int32_t>({1, 2, 3})});
   auto expected =
-      makeRowVector({"items"}, {makeArrayVector({0, 2}, expectedElements)});
+      makeNamedRowVector("items", makeArrayVector({0, 2}, expectedElements));
   exec::test::AssertQueryBuilder(plan)
       .connectorSessionProperty(
           test::kIcebergConnectorId, kSelectiveNimbleReaderEnabled, "false")

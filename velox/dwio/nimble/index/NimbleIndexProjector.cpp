@@ -105,6 +105,17 @@ void NimbleIndexProjector::setTimingEnabled(bool enabled) {
   timingEnabled_ = enabled;
 }
 
+void NimbleIndexProjector::setVerifyStreamChecksums(
+    bool verifyStreamChecksums) {
+  if (verifyStreamChecksums == (streamChecksum_ != nullptr)) {
+    return;
+  }
+  streamChecksum_.reset();
+  streamTrailerSize_ = 0;
+  streamTrailerChecksumOffset_ = 0;
+  initStreamChecksum(verifyStreamChecksums);
+}
+
 NimbleIndexProjector::Stats NimbleIndexProjector::stats() const {
   velox::tsan_lock_guard<std::mutex> lock(statsLock_);
   return stats_;
@@ -180,11 +191,11 @@ std::unique_ptr<DataInput> createDataInput(
     BlockCache* blockCache) {
   if (blockCache != nullptr) {
     return std::make_unique<CachedDataInput>(
-        fileHandle.file.get(),
+        fileHandle.file,
         CachedDataInput::Options{
             .pool = &options.memoryPool(),
             .cache = blockCache,
-            .fileId = fileHandle.uuid.id(),
+            .fileId = fileHandle.uuid,
             .ioStats = options.dataIoStats(),
         });
   }
@@ -194,8 +205,7 @@ std::unique_ptr<DataInput> createDataInput(
   dataInputOptions.ioStats = options.dataIoStats();
   dataInputOptions.maxCoalesceDistance = options.maxCoalesceDistance();
   dataInputOptions.maxCoalesceBytes = options.maxCoalesceBytes();
-  return std::make_unique<DirectDataInput>(
-      fileHandle.file.get(), dataInputOptions);
+  return std::make_unique<DirectDataInput>(fileHandle.file, dataInputOptions);
 }
 
 void freeDataHandle(void* /*buf*/, void* userData) {
@@ -265,15 +275,6 @@ NimbleIndexProjector::NimbleIndexProjector(
       numStripes_{tablet_->stripeCount()},
       projection_{std::move(projection)},
       hasProjectedHybridFlatMaps_{hasProjectedHybridFlatMaps(*projection_)},
-      streamSlicer_{std::make_unique<serde::StreamSlicer>(
-          projection_->nimbleType,
-          pool_,
-          serde::StreamSlicer::Options{
-              .streamVersion = SerializationVersion::kTablet,
-              .streamHasChunkHeader = true,
-              .streamsUseVarintRowCount =
-                  tablet_->properties().compactRowCountEncoding(),
-          })},
       dataInput_{std::move(dataInput)} {
   NIMBLE_CHECK_NOT_NULL(
       clusterIndex_, "NimbleIndexProjector requires a tablet with an index");
@@ -300,8 +301,8 @@ NimbleIndexProjector::NimbleIndexProjector(
 
   NIMBLE_CHECK_EQ(
       projection_->streamOffsets.size(),
-      projection_->rowOrFlatMapNullStreams.size(),
-      "Projected stream offsets and Row/FlatMap null stream mask must align");
+      projection_->barrierStreams.size(),
+      "Projected stream offsets and barrier stream mask must align");
 }
 
 NimbleIndexProjector::~NimbleIndexProjector() = default;
@@ -344,7 +345,7 @@ folly::coro::Task<NimbleIndexProjector::RowProjectionResult>
 NimbleIndexProjector::co_projectRows(
     const Request& request,
     const Options& options) {
-  ensureStreamReader(options.cacheEncodingView);
+  ensureStreamReader();
   SCOPE_EXIT {
     clearRequest();
   };
@@ -381,6 +382,7 @@ NimbleIndexProjector::co_projectRows(
   ScopedVector<velox::vector_size_t> stripeOutputRows{
       ctx_.numRequests, pool_, &encodingBufferPool_};
   std::fill(stripeOutputRows.begin(), stripeOutputRows.end(), 0);
+  const auto decodingOptions = encodingOptions(options.cacheEncodingView);
   for (size_t stripeOffset{0}; stripeOffset < ctx_.plan.stripeIndices.size();
        ++stripeOffset) {
     updateStats([numRows = ctx_.plan.numRows[stripeOffset]](Stats& stats) {
@@ -394,7 +396,7 @@ NimbleIndexProjector::co_projectRows(
                               stripeOffset,
                               /*resolveCanonicalStreams=*/false)
                               .streams;
-    streamReader_->setStreams(streams);
+    streamReader_->setStreams(streams, decodingOptions);
     // Release the views before the stripe's streams go away.
     SCOPE_EXIT {
       streamReader_->reset();
@@ -436,24 +438,32 @@ NimbleIndexProjector::co_projectRows(
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     const velox::serializer::EncodedKeyBounds& bounds) {
+  std::unique_ptr<index::KeyCursor> keyCursor;
+  return lookup(bounds, keyCursor);
+}
+
+std::vector<StripeSelection> NimbleIndexProjector::lookup(
+    const velox::serializer::EncodedKeyBounds& bounds,
+    std::unique_ptr<index::KeyCursor>& keyCursor) {
   NIMBLE_CHECK_NULL(ctx_.request, "Cannot look up rows during a projection");
   OptionalCpuWallTimer timer{
       timingEnabled_, [this](const velox::CpuWallTiming& timing) {
         recordStatsTiming(&Stats::lookupTiming, timing);
       }};
-  const auto result = clusterIndex().lookup(
-      index::IndexLookup::LookupRequest::rangeScan({bounds}));
-  NIMBLE_CHECK_EQ(result.size(), 1);
-  const auto& ranges = result[0];
-  NIMBLE_CHECK_LE(
-      ranges.size(),
-      1,
-      "Cluster index returned multiple ranges for one stream scan");
-  return lookup(ranges.empty() ? RowRange{} : ranges.front());
+  auto result = clusterIndex().seek(bounds);
+  keyCursor = std::move(result.keyCursor);
+  return lookup(result.rows);
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     std::string encodedKey) {
+  std::unique_ptr<index::KeyCursor> keyCursor;
+  return lookup(std::move(encodedKey), keyCursor);
+}
+
+std::vector<StripeSelection> NimbleIndexProjector::lookup(
+    std::string encodedKey,
+    std::unique_ptr<index::KeyCursor>& keyCursor) {
   // The successor of a key is the key followed by a zero byte.
   auto successor = encodedKey;
   successor.push_back('\0');
@@ -461,7 +471,8 @@ std::vector<StripeSelection> NimbleIndexProjector::lookup(
       velox::serializer::EncodedKeyBounds{
           .lowerKey = std::move(encodedKey),
           .upperKey = std::move(successor),
-      });
+      },
+      keyCursor);
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
@@ -568,14 +579,12 @@ Encoding::Options NimbleIndexProjector::encodingOptions(
   return options;
 }
 
-void NimbleIndexProjector::ensureStreamReader(bool cacheEncodingView) {
-  if (streamReader_ != nullptr && cacheEncodingView_ == cacheEncodingView) {
+void NimbleIndexProjector::ensureStreamReader() {
+  if (streamReader_ != nullptr) {
     return;
   }
-  // The reader fixes its encoding options when it is created.
   streamReader_ = std::make_unique<StreamReader>(
-      projection_->nimbleType, pool_, encodingOptions(cacheEncodingView));
-  cacheEncodingView_ = cacheEncodingView;
+      projection_->nimbleType, pool_, StreamReader::Options{});
 }
 
 void NimbleIndexProjector::setResumeKey(
@@ -1073,7 +1082,7 @@ void NimbleIndexProjector::verifyStreamChecksum(
   const auto expected = encoding::readUint32(checksumPos);
   data = data.substr(0, streamSize);
   const auto computed = streamChecksum_->computeChecksum32(data);
-  if (FOLLY_LIKELY(computed == expected)) {
+  if (computed == expected) [[likely]] {
     return;
   }
 
@@ -1202,6 +1211,21 @@ NimbleIndexProjector::processStripeStreams() {
   return result;
 }
 
+serde::StreamSlicer& NimbleIndexProjector::streamSlicer() {
+  if (streamSlicer_ == nullptr) {
+    streamSlicer_ = std::make_unique<serde::StreamSlicer>(
+        projection_->nimbleType,
+        pool_,
+        serde::StreamSlicer::Options{
+            .streamVersion = SerializationVersion::kTablet,
+            .streamHasChunkHeader = true,
+            .streamsUseVarintRowCount =
+                tablet_->properties().compactRowCountEncoding(),
+        });
+  }
+  return *streamSlicer_;
+}
+
 void NimbleIndexProjector::validateProjection() const {
   NIMBLE_CHECK_EQ(
       projection_->nimbleType->kind(),
@@ -1290,7 +1314,7 @@ NimbleIndexProjector::StripeStreams NimbleIndexProjector::locateStripeStreams(
     }
     ++streams.numStreams;
     streams.projectedBytes += stream.size;
-    if (projection_->rowOrFlatMapNullStreams[i]) {
+    if (projection_->barrierStreams[i]) {
       // A present barrier-sensitive stream also requires isolated decoding.
       streams.requiredBarrier = true;
     }
@@ -1599,7 +1623,7 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
       packRange.numRows(), 0, "Partial stripe range must not be empty");
   const auto& loadedStreams =
       collectStripeStreamViews(stripeOffset, /*resolveCanonicalStreams=*/false);
-  auto sliced = streamSlicer_->slice(
+  auto sliced = streamSlicer().slice(
       loadedStreams.streams,
       packRange.startRow,
       packRange.numRows(),

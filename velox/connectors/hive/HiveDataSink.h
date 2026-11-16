@@ -18,6 +18,7 @@
 #include "velox/common/compression/Compression.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileDataSink.h"
+#include "velox/connectors/hive/HiveBucketProperty.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionName.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
@@ -91,104 +92,6 @@ class LocationHandle : public ISerializable {
   const TableType tableType_;
 };
 
-class HiveSortingColumn : public ISerializable {
- public:
-  HiveSortingColumn(
-      const std::string& sortColumn,
-      const core::SortOrder& sortOrder);
-
-  const std::string& sortColumn() const {
-    return sortColumn_;
-  }
-
-  core::SortOrder sortOrder() const {
-    return sortOrder_;
-  }
-
-  folly::dynamic serialize() const override;
-
-  static std::shared_ptr<HiveSortingColumn> deserialize(
-      const folly::dynamic& obj,
-      void* context);
-
-  std::string toString() const;
-
-  static void registerSerDe();
-
- private:
-  const std::string sortColumn_;
-  const core::SortOrder sortOrder_;
-};
-
-class HiveBucketProperty : public ISerializable {
- public:
-  enum class Kind { kHiveCompatible, kPrestoNative };
-
-  HiveBucketProperty(
-      Kind kind,
-      int32_t bucketCount,
-      const std::vector<std::string>& bucketedBy,
-      const std::vector<TypePtr>& bucketedTypes,
-      const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortedBy);
-
-  Kind kind() const {
-    return kind_;
-  }
-
-  static std::string kindString(Kind kind);
-
-  /// Returns the number of bucket count.
-  int32_t bucketCount() const {
-    return bucketCount_;
-  }
-
-  /// Returns the bucketed by column names.
-  const std::vector<std::string>& bucketedBy() const {
-    return bucketedBy_;
-  }
-
-  /// Returns the bucketed by column types.
-  const std::vector<TypePtr>& bucketedTypes() const {
-    return bucketTypes_;
-  }
-
-  /// Returns the hive sorting columns if not empty.
-  const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortedBy()
-      const {
-    return sortedBy_;
-  }
-
-  folly::dynamic serialize() const override;
-
-  static std::shared_ptr<HiveBucketProperty> deserialize(
-      const folly::dynamic& obj,
-      void* context);
-
-  bool operator==(const HiveBucketProperty& other) const {
-    return true;
-  }
-
-  static void registerSerDe();
-
-  std::string toString() const;
-
- private:
-  void validate() const;
-
-  const Kind kind_;
-  const int32_t bucketCount_;
-  const std::vector<std::string> bucketedBy_;
-  const std::vector<TypePtr> bucketTypes_;
-  const std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy_;
-};
-
-FOLLY_ALWAYS_INLINE std::ostream& operator<<(
-    std::ostream& os,
-    HiveBucketProperty::Kind kind) {
-  os << HiveBucketProperty::kindString(kind);
-  return os;
-}
-
 class HiveInsertTableHandle;
 using HiveInsertTableHandlePtr = std::shared_ptr<HiveInsertTableHandle>;
 
@@ -243,7 +146,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
       std::shared_ptr<const LocationHandle> locationHandle,
       dwio::common::FileFormat storageFormat = dwio::common::FileFormat::DWRF,
-      std::shared_ptr<const HiveBucketProperty> bucketProperty = nullptr,
+      HiveBucketPropertyPtr bucketProperty = nullptr,
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
@@ -337,7 +240,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
  private:
   const dwio::common::FileFormat storageFormat_;
-  const std::shared_ptr<const HiveBucketProperty> bucketProperty_;
+  const HiveBucketPropertyPtr bucketProperty_;
   const std::optional<common::CompressionKind> compressionKind_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;

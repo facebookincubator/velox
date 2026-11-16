@@ -16,9 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/file/FileSystems.h"
-#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/exec/RowContainer.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
@@ -26,24 +24,10 @@
 
 namespace facebook::velox::exec::test {
 
-using TempDirectoryPath = common::testutil::TempDirectoryPath;
-
 class RowContainerTestBase : public testing::Test,
                              public velox::test::VectorTestBase {
  protected:
   void SetUp() override {
-    if (!isRegisteredVectorSerde()) {
-      facebook::velox::serializer::presto::PrestoVectorSerde::
-          registerVectorSerde();
-    }
-    if (!isRegisteredVectorSerde()) {
-      facebook::velox::serializer::presto::PrestoVectorSerde::
-          registerVectorSerde();
-    }
-    if (!isRegisteredVectorSerde()) {
-      facebook::velox::serializer::presto::PrestoVectorSerde::
-          registerVectorSerde();
-    }
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();
@@ -73,27 +57,6 @@ class RowContainerTestBase : public testing::Test,
       customizeData(batch);
     }
     return batch;
-  }
-
-  std::unique_ptr<RowContainer> makeRowContainer(
-      const std::vector<TypePtr>& keyTypes,
-      const std::vector<TypePtr>& dependentTypes,
-      bool isJoinBuild = true,
-      bool useListRowIndex = false) {
-    auto container = std::make_unique<RowContainer>(
-        keyTypes,
-        !isJoinBuild,
-        std::vector<Accumulator>{},
-        dependentTypes,
-        isJoinBuild,
-        isJoinBuild,
-        true,
-        false, // hasCountFlag
-        true,
-        useListRowIndex,
-        pool_.get());
-    VELOX_CHECK(container->testingMutable());
-    return container;
   }
 };
 } // namespace facebook::velox::exec::test

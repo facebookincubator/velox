@@ -18,89 +18,45 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include <folly/Function.h>
-
+#include "velox/common/ScopedRegistry.h"
 #include "velox/common/vectorindex/Embeddings.h"
-#include "velox/common/vectorindex/LocalVectorIndexOptions.h"
-#include "velox/common/vectorindex/VectorIndexKind.h"
 #include "velox/common/vectorindex/VectorIndexMetric.h"
-
-namespace faiss {
-struct Index;
-} // namespace faiss
 
 namespace facebook::velox::common::vectorindex {
 
-/// A local index: a FAISS index over a group of embeddings, with each
-/// embedding's id as its FAISS id. A vector index keeps one local index per
-/// group of nearby embeddings; a search looks only in the groups nearest to
-/// the query. VectorIndexKind names the kind of FAISS
-/// index. The local index is the plain FAISS serialization, as
-/// faiss::write_index writes it, so faiss::read_index rebuilds it with no
-/// container around it.
+/// A local index: an index over a group of embeddings, each with an id, that
+/// finds the embeddings nearest to a query. A vector index keeps one local
+/// index per group of nearby embeddings; a search looks only in the groups
+/// nearest to the query.
 ///
-/// Ids are not required to be distinct. An id may not be kPaddingId: building
-/// or reading a local index with that id throws a user error.
+/// A format decides how a local index is encoded (see LocalVectorIndexFormat):
+///
+///   auto reader = format->makeReader(VectorIndexMetric::kCosine, {});
+///   auto index = reader->open(bytes);
+///   index->search(queries, k, ids, scores);
 class LocalVectorIndex {
  public:
-  /// The id search() writes in the entries it has no result for, as FAISS
-  /// does. No embedding may have it.
+  /// The id search() writes in the entries it has no result for. No embedding
+  /// may have it.
   static constexpr int64_t kPaddingId{-1};
 
-  /// Builds a local index of 'kind' over 'embeddings', with 'ids' giving each
-  /// embedding's id, on the calling thread. Throws a user error for an id of
-  /// kPaddingId. The same input gives the same bytes. The embeddings must be
-  /// normalized for 'metric' (see
-  /// EmbeddingNormalizer). Passes the index's bytes to 'write' in order, a
-  /// chunk at a time, so the caller can place them without an intermediate
-  /// copy.
-  ///
-  /// 'ivf.nlist' defaults to 4 * sqrt(number of embeddings), between 8 and
-  /// 16384. The build reduces it, even when set, to give each list at least 39
-  /// embeddings, the fewest FAISS recommends for training a list; a group of
-  /// fewer than 39 embeddings gets one list. 'ivf.nprobe' defaults to a tenth
-  /// of the lists, rounded up, and is capped at the number of lists. 'hnsw.M',
-  /// 'hnsw.efConstruction' and 'hnsw.efSearch' default to 32, 200 and 64.
-  static void build(
-      VectorIndexKind kind,
-      VectorIndexMetric metric,
-      const LocalVectorIndexOptions& options,
-      const Embeddings& embeddings,
-      std::span<const int64_t> ids,
-      folly::FunctionRef<void(std::string_view)> write);
+  /// Search settings, as key-value pairs, that override the ones recorded in a
+  /// local index. Their keys and values are the format's.
+  using SearchOptions = std::vector<std::pair<std::string, std::string>>;
 
-  /// Reads a local index that build() wrote for 'metric'. The index refers to
-  /// its embeddings, codes and graph in 'bytes' rather than copying them, so
-  /// 'bytes' must outlive it. 'searchOptions', search settings only (see
-  /// LocalVectorIndexOptions::parseSearch), override the ones recorded in the
-  /// index: 'ivf.nprobe' for IVF types, capped at the number of lists, and
-  /// 'hnsw.efSearch' for kHnswSq. Throws a user error if 'bytes' is not such
-  /// a local index, if an embedding has kPaddingId, or for a setting that does
-  /// not apply to its kind. A local index has at least one embedding.
-  LocalVectorIndex(
-      std::string_view bytes,
-      VectorIndexMetric metric,
-      const LocalVectorIndexOptions& searchOptions);
+  virtual ~LocalVectorIndex() = default;
 
-  ~LocalVectorIndex();
+  /// The length of the embeddings.
+  virtual int32_t dimension() const = 0;
 
-  /// Returns the number of embeddings in the local index 'bytes', which
-  /// build() wrote, from its header, without reading the rest. Throws a user
-  /// error if 'bytes' does not start as a local index does.
-  static int64_t size(std::string_view bytes);
-
-  VectorIndexKind kind() const;
-
-  int32_t dimension() const;
-
-  /// The number of embeddings.
-  int64_t size() const;
+  /// The number of embeddings. At least 1.
+  virtual int64_t size() const = 0;
 
   /// Finds the 'k' embeddings nearest to each of 'queries', which must be
   /// normalized for the metric (see EmbeddingNormalizer). Writes each query's
@@ -108,16 +64,61 @@ class LocalVectorIndex {
   /// 'scores', 'k' entries per query, in query order. For kCosine, the score is
   /// the cosine similarity, where larger is nearer. A query with fewer than
   /// 'k' results, from a small index or an approximate search, gets
-  /// kPaddingId in the remaining entries. 'k' must be at least 1.
-  void search(
+  /// kPaddingId in the remaining entries. Ids are not required to be
+  /// distinct. 'k' must be at least 1.
+  virtual void search(
       const Embeddings& queries,
       int64_t k,
       std::span<int64_t> ids,
-      std::span<float> scores) const;
+      std::span<float> scores) const = 0;
+};
 
- private:
-  std::unique_ptr<faiss::Index> index_;
-  VectorIndexKind kind_;
+/// Reads local indexes of one format, built for one metric, with one set of
+/// search settings.
+class LocalVectorIndexReader {
+ public:
+  virtual ~LocalVectorIndexReader() = default;
+
+  /// Reads 'bytes', a local index. The caller keeps 'bytes' alive while the
+  /// index lives, so the index may refer to them rather than copy them. Throws
+  /// a user error if 'bytes' are not a local index of the reader's format and
+  /// metric.
+  virtual std::unique_ptr<LocalVectorIndex> open(
+      std::string_view bytes) const = 0;
+};
+
+/// A format of local indexes: how their bytes are read. An application
+/// registers the formats a query may read in a LocalVectorIndexFormats
+/// registry, set on the query's QueryCtx under kRegistryKey; a vector search
+/// join reads its indexes with the format it names.
+class LocalVectorIndexFormat {
+ public:
+  /// The key of the query's LocalVectorIndexFormats registry on its QueryCtx.
+  static constexpr std::string_view kRegistryKey{"localVectorIndexFormats"};
+
+  virtual ~LocalVectorIndexFormat() = default;
+
+  /// Returns a reader of local indexes built for 'metric' that searches them
+  /// with 'searchOptions'. Throws a user error for a search setting this
+  /// format does not support.
+  virtual std::unique_ptr<LocalVectorIndexReader> makeReader(
+      VectorIndexMetric metric,
+      const LocalVectorIndex::SearchOptions& searchOptions) const = 0;
+};
+
+/// The local vector index formats of a query, by name.
+class LocalVectorIndexFormats
+    : public ScopedRegistry<std::string, LocalVectorIndexFormat> {
+ public:
+  using ScopedRegistry::ScopedRegistry;
+
+  /// Returns a reader of local indexes in the format named 'format'. Throws a
+  /// user error if no such format is registered. See
+  /// LocalVectorIndexFormat::makeReader for 'metric' and 'searchOptions'.
+  std::unique_ptr<LocalVectorIndexReader> makeReader(
+      const std::string& format,
+      VectorIndexMetric metric,
+      const LocalVectorIndex::SearchOptions& searchOptions) const;
 };
 
 } // namespace facebook::velox::common::vectorindex
