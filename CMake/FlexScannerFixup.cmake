@@ -12,10 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Rewrites the fall-through comment in a flex-generated C++ scanner as the
-# C++17 attribute. Clang's -Wimplicit-fallthrough does not accept comments.
+# Normalizes flex-generated C++ scanners for compiler and generator compatibility.
 #
-# Usage: cmake -DFLEX_OUTPUT=<generated scanner> -P FlexAnnotateFallthrough.cmake
+# Usage: cmake -DFLEX_OUTPUT=<generated scanner> -P FlexScannerFixup.cmake
 file(READ "${FLEX_OUTPUT}" content)
+# Clang's -Wimplicit-fallthrough does not accept comments.
 string(REPLACE "/*FALLTHROUGH*/" "[[fallthrough]];" content "${content}")
+# Use the C++ fatal-error hook for default-rule actions that call the C-only helper.
+string(
+  REGEX REPLACE
+  "yypanic[ \t]*\\(([ \t]*\"flex scanner jammed\"[ \t]*)\\)"
+  "YY_FATAL_ERROR(\\1)"
+  content
+  "${content}"
+)
 file(WRITE "${FLEX_OUTPUT}" "${content}")

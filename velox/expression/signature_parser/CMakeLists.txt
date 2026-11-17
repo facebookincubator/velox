@@ -31,7 +31,7 @@ flex_target(
   COMPILE_FLAGS "-Cf --prefix=veloxsp"
 )
 
-velox_flex_annotate_fallthrough(SignatureParserScanner)
+velox_flex_fixup(SignatureParserScanner)
 
 add_flex_bison_dependency(SignatureParserScanner SignatureParser)
 

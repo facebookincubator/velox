@@ -27,7 +27,7 @@ flex_target(
   COMPILE_FLAGS "-Cf --prefix=veloxtc"
 )
 
-velox_flex_annotate_fallthrough(TypeCalculationScanner)
+velox_flex_fixup(TypeCalculationScanner)
 
 add_flex_bison_dependency(TypeCalculationScanner TypeCalculationParser)
 
