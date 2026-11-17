@@ -146,9 +146,9 @@ is disabled; throws an error when ANSI mode is enabled.
 
 .. note::
 
-    When ANSI mode is enabled, Spark converts a decimal with precision greater than 18
-    to DOUBLE before casting it to TINYINT, SMALLINT or INTEGER, while Velox truncates
-    the exact decimal value. Results can differ when the DOUBLE conversion rounds the
+    When ANSI mode is enabled, Spark converts a long decimal (precision greater than
+    18) to DOUBLE before casting it to TINYINT, SMALLINT or INTEGER, while Velox
+    truncates the exact decimal value. Short decimals are cast exactly in both. Results can differ when the DOUBLE conversion rounds the
     value up to the next integer. For example,
     ``cast(cast(127.999999999999999999 as DECIMAL(21, 18)) as tinyint)`` throws an
     error in Spark but returns 127 in Velox. Casting to BIGINT is exact in both.
