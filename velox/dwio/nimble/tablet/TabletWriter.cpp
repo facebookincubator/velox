@@ -497,19 +497,14 @@ namespace {
 // must list only encodings with O(1) stateless point access (the EncodingView
 // requirement); the selector picks the smallest predicted size among them,
 // biased by each candidate's read weight. When `readFactors` is empty the
-// writer falls back to `kDefaultReadFactors` below.
+// writer uses metadata defaults.
 template <typename T>
 std::unique_ptr<EncodingSelectionPolicy<T>> makeMetadataEncodingPolicy(
     const std::vector<std::pair<EncodingType, float>>& readFactors) {
-  static const std::vector<std::pair<EncodingType, float>> kDefaultReadFactors{
-      {EncodingType::Constant, 1.0},
-      {EncodingType::Trivial, 1.0},
-      {EncodingType::FixedBitWidth, 1.0},
-      {EncodingType::Dictionary, 1.0},
-  };
-  ManualEncodingSelectionPolicyFactory factory{
-      readFactors.empty() ? kDefaultReadFactors : readFactors,
-      /*compressionOptions=*/std::nullopt};
+  const auto factory = readFactors.empty()
+      ? ManualEncodingSelectionPolicyFactory::createForMetadata()
+      : ManualEncodingSelectionPolicyFactory{
+            readFactors, /*compressionOptions=*/std::nullopt};
   auto base = factory.createPolicy(TypeTraits<T>::dataType);
   return std::unique_ptr<EncodingSelectionPolicy<T>>(
       static_cast<EncodingSelectionPolicy<T>*>(base.release()));
@@ -618,7 +613,7 @@ class MetadataArrayEncoder {
   // Receives the encoded entries.
   flatbuffers::FlatBufferBuilder& builder_;
 
-  // Selects the encoding of each array. Empty selects kDefaultReadFactors.
+  // Selects the encoding of each array. Empty uses metadata defaults.
   const std::vector<std::pair<EncodingType, float>>& encodingReadFactors_;
 
   // Encodes each distinct array once when true.
