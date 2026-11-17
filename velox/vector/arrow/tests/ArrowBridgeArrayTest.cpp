@@ -1732,7 +1732,7 @@ TEST_F(ArrowBridgeArrayExportTest, elementsPastStructEnd) {
   auto arrays = makeArrayVector({0, 2, 3}, elements);
   auto vector = std::make_shared<RowVector>(
       pool(),
-      ROW({"c0"}, {arrays->type()}),
+      ROW("c0", arrays->type()),
       nullptr,
       2,
       std::vector<VectorPtr>{arrays});
