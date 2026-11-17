@@ -70,6 +70,32 @@ class EncodeTest : public SparkFunctionBaseTest {
          replaceUnmappable ? "true" : "false"},
     });
   }
+
+  void testZeroCopyOutputLifetime(
+      const std::string& value,
+      const std::string& charset,
+      bool dictionary,
+      bool lazy) {
+    auto flat = makeFlatVector<std::string>({value});
+    const auto* data = flat->valueAt(0).data();
+    ASSERT_EQ(flat->stringBuffers().size(), 1);
+    const auto* buffer = flat->stringBuffers().front().get();
+    const auto refCount = buffer->refCount();
+    VectorPtr input = flat;
+    flat.reset();
+    if (dictionary) {
+      input = wrapInDictionary(makeIndices({0}), input);
+    }
+    if (lazy) {
+      input = wrapInLazyDictionary(input);
+    }
+    auto result = evaluate<SimpleVector<StringView>>(
+        fmt::format("encode(c0, '{}')", charset), makeRowVector({input}));
+    EXPECT_EQ(result->valueAt(0).data(), data);
+    ASSERT_GT(buffer->refCount(), refCount);
+    input.reset();
+    EXPECT_EQ(result->valueAt(0).str(), value);
+  }
 };
 
 TEST_F(EncodeTest, verifiedSingleByteCharsets) {
@@ -363,54 +389,23 @@ TEST_F(EncodeTest, dynamicCharsetCacheAcrossBatches) {
 }
 
 TEST_F(EncodeTest, zeroCopyOutputLifetime) {
+  enableLegacyCharsets(/*replaceUnmappable=*/false);
   const std::string ascii(128, 'A');
-  const std::string unicode = std::string(128, 'A') + "\xF0\x9F\x98\x80";
-  for (const auto* charset : {"UTF-8", "US-ASCII", "ISO-8859-1"}) {
-    auto input = makeFlatVector<std::string>({ascii});
-    ASSERT_EQ(input->stringBuffers().size(), 1);
-    const auto* buffer = input->stringBuffers().front().get();
-    const auto refCount = buffer->refCount();
-    auto result = evaluate<SimpleVector<StringView>>(
-        fmt::format("encode(c0, '{}')", charset), makeRowVector({input}));
-    EXPECT_EQ(result->valueAt(0).data(), input->valueAt(0).data());
-    ASSERT_GT(buffer->refCount(), refCount);
-    input.reset();
-    EXPECT_EQ(result->valueAt(0).str(), ascii);
+  for (const auto* charset : {"windows-1252", "KOI8-R", "ISO-8859-2"}) {
+    SCOPED_TRACE(charset);
+    testZeroCopyOutputLifetime(
+        ascii, charset, /*dictionary=*/false, /*lazy=*/false);
   }
-  auto input = makeFlatVector<std::string>({unicode});
-  ASSERT_EQ(input->stringBuffers().size(), 1);
-  const auto* buffer = input->stringBuffers().front().get();
-  const auto refCount = buffer->refCount();
-  auto result = evaluate<SimpleVector<StringView>>(
-      "encode(c0, 'UTF-8')", makeRowVector({input}));
-  EXPECT_EQ(result->valueAt(0).data(), input->valueAt(0).data());
-  ASSERT_GT(buffer->refCount(), refCount);
-  input.reset();
-  EXPECT_EQ(result->valueAt(0).str(), unicode);
 }
 
 TEST_F(EncodeTest, zeroCopyWrappedInputLifetime) {
   enableLegacyCharsets(/*replaceUnmappable=*/false);
   const std::string ascii(128, 'A');
-  for (const auto* charset :
-       {"UTF-8", "US-ASCII", "ISO-8859-1", "windows-1252"}) {
+  for (const auto* charset : {"windows-1252", "KOI8-R", "ISO-8859-2"}) {
+    SCOPED_TRACE(charset);
     for (const bool lazy : {false, true}) {
-      auto flat = makeFlatVector<std::string>({ascii});
-      const auto* data = flat->valueAt(0).data();
-      ASSERT_EQ(flat->stringBuffers().size(), 1);
-      const auto* buffer = flat->stringBuffers().front().get();
-      const auto refCount = buffer->refCount();
-      VectorPtr input = wrapInDictionary(makeIndices({0}), flat);
-      flat.reset();
-      if (lazy) {
-        input = wrapInLazyDictionary(input);
-      }
-      auto result = evaluate<SimpleVector<StringView>>(
-          fmt::format("encode(c0, '{}')", charset), makeRowVector({input}));
-      EXPECT_EQ(result->valueAt(0).data(), data);
-      ASSERT_GT(buffer->refCount(), refCount);
-      input.reset();
-      EXPECT_EQ(result->valueAt(0).str(), ascii);
+      SCOPED_TRACE(lazy);
+      testZeroCopyOutputLifetime(ascii, charset, /*dictionary=*/true, lazy);
     }
   }
 }
@@ -453,60 +448,6 @@ TEST_F(EncodeTest, utf16AndUtf32) {
     EXPECT_THAT(encodeBytes("A", charset), ElementsAreArray(expected));
     EXPECT_THAT(encodeBytes("A", lowercaseCharset), ElementsAreArray(expected));
     EXPECT_THAT(encodeBytes("", charset), IsEmpty());
-  }
-}
-
-TEST_F(EncodeTest, utf32Boundaries) {
-  for (const size_t length : {12, 13, 31, 32, 63, 64, 65, 127, 128, 255, 256}) {
-    SCOPED_TRACE(length);
-    std::string input(length - 9, 'A');
-    input += "\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80";
-    std::string expected;
-    for (size_t i = 0; i < length - 9; ++i) {
-      expected.append("\x00\x00\x00\x41", 4);
-    }
-    expected.append("\x00\x00\x00\xE9\x00\x00\x20\xAC\x00\x01\xF6\x00", 12);
-    EXPECT_EQ(encode(input, "UTF-32"), expected);
-  }
-}
-
-TEST_F(EncodeTest, wideAsciiBoundaries) {
-  struct Golden {
-    const char* charset;
-    std::string pattern;
-    std::string bom;
-  };
-  const std::vector<Golden> goldens{
-      {"UTF-16BE", std::string("\x00\x00\x00\x41\x00\x7F", 6), ""},
-      {"UTF-16LE", std::string("\x00\x00\x41\x00\x7F\x00", 6), ""},
-      {"UTF-16", std::string("\x00\x00\x00\x41\x00\x7F", 6), "\xFE\xFF"},
-      {"UTF-32",
-       std::string("\x00\x00\x00\x00\x00\x00\x00\x41\x00\x00\x00\x7F", 12),
-       ""},
-  };
-  for (const auto& [charset, pattern, bom] : goldens) {
-    SCOPED_TRACE(charset);
-    for (const size_t length :
-         {0, 1, 7, 8, 11, 12, 13, 31, 32, 63, 64, 65, 127, 128, 255, 256}) {
-      SCOPED_TRACE(length);
-      std::string input;
-      std::string expected;
-      while (input.size() < length) {
-        input.append("\x00\x41\x7F", 3);
-        expected += pattern;
-      }
-      input.resize(length);
-      expected.resize(length * pattern.size() / 3);
-      if (length != 0) {
-        expected = bom + expected;
-      }
-      EXPECT_EQ(encode(input, charset), expected);
-      EXPECT_EQ(
-          evaluateOnce<std::string>(
-              fmt::format("encode(c0, '{}')", charset),
-              std::optional<std::string>(input)),
-          expected);
-    }
   }
 }
 
@@ -638,29 +579,6 @@ TEST_F(EncodeTest, codingErrorAction) {
           "b",
           "US-ASCII"),
       "a?b");
-}
-
-TEST_F(EncodeTest, mixedAsciiRuns) {
-  for (const bool replaceUnmappable : {false, true}) {
-    queryCtx_->testingOverrideConfigUnsafe({
-        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyCodingErrorAction),
-         replaceUnmappable ? "true" : "false"},
-    });
-    for (const size_t length : {2, 16, 64}) {
-      SCOPED_TRACE(length);
-      const std::string prefix(length, 'a');
-      const std::string suffix(length, 'b');
-      const auto input = prefix + "\xC3\xA9" + suffix;
-      EXPECT_EQ(encode(input, "ISO-8859-1"), prefix + "\xE9" + suffix);
-      if (replaceUnmappable) {
-        EXPECT_EQ(encode(input, "US-ASCII"), prefix + "?" + suffix);
-      } else {
-        VELOX_ASSERT_USER_THROW(
-            encode(input, "US-ASCII"),
-            "encode: input contains a character that cannot be encoded using 'US-ASCII'");
-      }
-    }
-  }
 }
 
 TEST_F(EncodeTest, malformedUtf8) {

@@ -41,19 +41,7 @@ class EncodeBenchmark : public ExpressionBenchmarkBuilder {
     auto& maker = vectorMaker();
     constexpr vector_size_t kNumRows = 1'024;
     const std::vector<const char*> charsets = legacyCharsets
-        ? std::vector<const char*>{"IBM037",        "IBM437",
-                                   "ISO-8859-2",    "ISO-8859-3",
-                                   "ISO-8859-4",    "ISO-8859-5",
-                                   "ISO-8859-6",    "ISO-8859-7",
-                                   "ISO-8859-8",    "ISO-8859-9",
-                                   "x-iso-8859-11", "ISO-8859-13",
-                                   "ISO-8859-15",   "ISO-8859-16",
-                                   "KOI8-R",        "KOI8-U",
-                                   "windows-1250",  "windows-1251",
-                                   "windows-1252",  "windows-1253",
-                                   "windows-1254",  "windows-1255",
-                                   "windows-1256",  "windows-1257",
-                                   "windows-1258"}
+        ? std::vector<const char*>{"windows-1252", "KOI8-R", "IBM037"}
         : std::vector<const char*>{
               "UTF-8",
               "US-ASCII",
@@ -85,22 +73,25 @@ class EncodeBenchmark : public ExpressionBenchmarkBuilder {
                }
                return name;
              })});
-        addBenchmarkSet(
+        auto& benchmarkSet = addBenchmarkSet(
             fmt::format(
                 "{}{}_{}_{}",
                 legacyCharsets ? "legacy_" : "",
                 replaceUnmappable ? "replacement" : "strict",
                 charset,
                 name),
-            input)
+            input);
+        benchmarkSet
             .addExpression(
                 "constant_charset", fmt::format("encode(input, '{}')", charset))
             .addExpression("per_row_charset", "encode(input, charset)")
-            .addExpression(
-                "changing_charset", "encode(input, changing_charset)")
             .withIterations(100);
+        if (legacyCharsets) {
+          benchmarkSet.addExpression(
+              "changing_charset", "encode(input, changing_charset)");
+        }
       };
-      for (const size_t length : {1, 8, 12, 13, 31, 32, 63, 64, 256}) {
+      for (const size_t length : {1, 8, 32, 256}) {
         addWorkload(
             fmt::format("ascii_{}bytes", length),
             {std::string(length, 'A'), std::string(length, 'B')});
@@ -110,20 +101,8 @@ class EncodeBenchmark : public ExpressionBenchmarkBuilder {
           charsetName == "ISO-8859-1";
       if (legacyCharsets) {
         std::string sample = "\xC3\xA9";
-        if (charsetName == "ISO-8859-5" || charsetName == "windows-1251" ||
-            charsetName.starts_with("KOI8")) {
+        if (charsetName == "KOI8-R") {
           sample = "\xD1\x8F";
-        } else if (
-            charsetName == "ISO-8859-6" || charsetName == "windows-1256") {
-          sample = "\xD8\xA7";
-        } else if (
-            charsetName == "ISO-8859-7" || charsetName == "windows-1253") {
-          sample = "\xCE\xB1";
-        } else if (
-            charsetName == "ISO-8859-8" || charsetName == "windows-1255") {
-          sample = "\xD7\x90";
-        } else if (charsetName == "x-iso-8859-11") {
-          sample = "\xE0\xB8\x81";
         }
         std::string longSample;
         for (size_t i = 0; i < 128; ++i) {
@@ -136,28 +115,8 @@ class EncodeBenchmark : public ExpressionBenchmarkBuilder {
       } else if (!singleByte) {
         addWorkload("non_ascii", {"\xE2\x82\xAC", "A\xF0\x9F\x98\x80"});
       }
-      if (!legacyCharsets && charsetName != "US-ASCII") {
-        const std::string sample =
-            charsetName == "ISO-8859-1" ? "\xC3\xA9" : "\xF0\x9F\x98\x80";
-        for (const size_t length :
-             {4, 8, 12, 13, 31, 32, 63, 64, 65, 127, 128, 256}) {
-          std::string value;
-          while (value.size() + sample.size() <= length) {
-            value += sample;
-          }
-          value.append(length - value.size(), 'A');
-          addWorkload(fmt::format("non_ascii_{}bytes", length), {value});
-        }
-      }
       if (replaceUnmappable || !singleByte) {
         addWorkload("malformed_utf8", {"A\xFF", "\xC3"});
-        if (!legacyCharsets) {
-          for (const size_t length : {4, 12, 13, 63, 64, 65}) {
-            std::string value(length - 1, 'A');
-            value += '\xFF';
-            addWorkload(fmt::format("malformed_utf8_{}bytes", length), {value});
-          }
-        }
       }
       if (replaceUnmappable && singleByte) {
         addWorkload("unmappable", {"A\xF0\x9F\x98\x80", "\xE2\x80\x8D"});

@@ -26,7 +26,7 @@
 //     header=velox/functions/sparksql/EncodeCharsets.h
 //     tmp=$(mktemp "${header}.XXXXXX")
 //     trap 'rm -f "$tmp"' EXIT
-//     java scripts/GenerateEncodeCharsets.java > "$tmp"
+//     java velox/functions/sparksql/GenerateEncodeCharsets.java > "$tmp"
 //     clang-format -i "$tmp"
 //     chmod 644 "$tmp"
 //     mv "$tmp" "$header"

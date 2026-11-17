@@ -32,6 +32,10 @@ public final class GenerateEncodeCharsets {
   private static final String[] STANDARD = {
     "UTF-8", "US-ASCII", "ISO-8859-1", "UTF-16", "UTF-16BE", "UTF-16LE", "UTF-32"
   };
+  // Keep the initial subset explicit: ISO-8859 and Windows-125x families,
+  // KOI8-R/U, IBM437 for DOS, and IBM037 for EBCDIC. Passing inspect() is
+  // necessary but does not add a charset to this list; other eligible
+  // encoders such as IBM850, IBM852, IBM866, and x-IBM737 remain out of scope.
   private static final String[] LEGACY = {
     "IBM037", "IBM437",
     "ISO-8859-2", "ISO-8859-3", "ISO-8859-4", "ISO-8859-5", "ISO-8859-6",
@@ -170,7 +174,7 @@ public final class GenerateEncodeCharsets {
         //     header=velox/functions/sparksql/EncodeCharsets.h
         //     tmp=$(mktemp "${header}.XXXXXX")
         //     trap 'rm -f "$tmp"' EXIT
-        //     java scripts/GenerateEncodeCharsets.java > "$tmp"
+        //     java velox/functions/sparksql/GenerateEncodeCharsets.java > "$tmp"
         //     clang-format -i "$tmp"
         //     chmod 644 "$tmp"
         //     mv "$tmp" "$header"

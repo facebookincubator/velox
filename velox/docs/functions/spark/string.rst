@@ -149,11 +149,18 @@ String Functions
     ``IBM037``, ``IBM437``, ``ISO-8859-2`` through ``ISO-8859-9``,
     ``x-iso-8859-11``, ``ISO-8859-13``, ``ISO-8859-15``, ``ISO-8859-16``,
     ``KOI8-R``, ``KOI8-U``, and ``windows-1250`` through ``windows-1258``.
+    This setting corresponds to Spark's ``spark.sql.legacy.javaCharsets``.
+    Spark accepts any JDK charset when enabled; Velox raises an error for names
+    outside the subset above.
     Names follow Spark's locale-independent lowercasing: ASCII case and the
     Kelvin sign (U+212A) match, but names must otherwise match exactly. The
     allowlist and encoder mappings are generated from JDK 17, including
-    encoder-only mappings. This is a bounded subset, not arbitrary Java charset
-    support.
+    encoder-only mappings. The initial subset covers the ISO-8859 and
+    Windows-125x families above, KOI8-R/U, IBM437 for DOS, and IBM037 for EBCDIC.
+    This is an explicit coverage choice, not every encoder that passes the
+    generator's single-byte checks. Other eligible encoders, including
+    ``IBM850``, ``IBM852``, ``IBM866``, and ``x-IBM737``, remain outside this
+    initial subset.
     Unlisted multibyte and stateful encodings, such as ``Shift_JIS``, ``Big5``,
     ``GBK``, ``EUC-JP``, ``EUC-KR``, and ``ISO-2022-JP``, and decode-only
     charsets remain unsupported.

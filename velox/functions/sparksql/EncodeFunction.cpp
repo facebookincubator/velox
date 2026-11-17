@@ -24,8 +24,6 @@
 #include <string_view>
 #include <utility>
 
-#include <simdjson.h>
-
 #include <folly/Range.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -35,6 +33,8 @@
 
 namespace facebook::velox::functions::sparksql::detail {
 namespace {
+
+constexpr char32_t kReplacementCodePoint = 0xFFFD;
 
 constexpr std::array<std::pair<std::string_view, CharsetType>, 7>
     kStandardCharsets{{
@@ -126,81 +126,6 @@ size_t decodeCodePoint(
   return bytesConsumed;
 }
 
-size_t decodeCodePointWithAsciiFastPath(
-    const char* input,
-    size_t inputSize,
-    size_t position,
-    char32_t& codePoint) {
-  const auto firstByte = static_cast<uint8_t>(input[position]);
-  if (firstByte < 0x80) {
-    codePoint = firstByte;
-    return 1;
-  }
-  return decodeCodePoint(input, inputSize, position, codePoint);
-}
-
-// Keep SIMD stack alignment out of the scalar conversion paths.
-FOLLY_NOINLINE bool isAsciiRange(const char* input, size_t size) {
-  return stringCore::isAscii(input, size);
-}
-
-bool isAscii(const StringView& input) {
-  if (input.empty()) {
-    return true;
-  }
-  if (static_cast<uint8_t>(input.data()[0]) >= 0x80) {
-    return false;
-  }
-  if (input.isInline()) {
-    for (size_t i = 1; i < input.size(); ++i) {
-      if (static_cast<uint8_t>(input.data()[i]) >= 0x80) {
-        return false;
-      }
-    }
-    return true;
-  }
-  return isAsciiRange(input.data(), input.size());
-}
-
-bool isValidUtf8(const StringView& input) {
-  if (!input.isInline()) {
-    return simdjson::validate_utf8(input.data(), input.size());
-  }
-  size_t position{0};
-  while (position < input.size()) {
-    if (static_cast<uint8_t>(input.data()[position]) < 0x80) {
-      ++position;
-      continue;
-    }
-    int32_t codePoint;
-    const auto size = tryGetUtf8CharLength(
-        input.data() + position, input.size() - position, codePoint);
-    if (size < 0) {
-      return false;
-    }
-    position += size;
-  }
-  return true;
-}
-
-template <bool asciiFastPath>
-size_t countCodePoints(const StringView& input) {
-  size_t count{0};
-  size_t position{0};
-  while (position < input.size()) {
-    char32_t codePoint;
-    if constexpr (asciiFastPath) {
-      position += decodeCodePointWithAsciiFastPath(
-          input.data(), input.size(), position, codePoint);
-    } else {
-      position +=
-          decodeCodePoint(input.data(), input.size(), position, codePoint);
-    }
-    ++count;
-  }
-  return count;
-}
-
 size_t utf8Length(char32_t codePoint) {
   if (codePoint <= 0x7F) {
     return 1;
@@ -272,36 +197,45 @@ Status unmappableCharacter(const StringView& charset) {
 }
 
 Status encodeUtf8(exec::StringWriter& result, const StringView& input) {
-  if (isValidUtf8(input)) {
-    result.setNoCopy(input);
-    return Status::OK();
-  }
-
   size_t outputSize{0};
   size_t position{0};
+  bool isValid{true};
   while (position < input.size()) {
     char32_t codePoint;
-    const auto bytesConsumed = decodeCodePointWithAsciiFastPath(
-        input.data(), input.size(), position, codePoint);
+    const auto bytesConsumed =
+        decodeCodePoint(input.data(), input.size(), position, codePoint);
+    if (codePoint == kReplacementCodePoint &&
+        !(bytesConsumed == 3 &&
+          static_cast<unsigned char>(input.data()[position]) == 0xEF &&
+          static_cast<unsigned char>(input.data()[position + 1]) == 0xBF &&
+          static_cast<unsigned char>(input.data()[position + 2]) == 0xBD)) {
+      isValid = false;
+    }
     outputSize += utf8Length(codePoint);
     position += bytesConsumed;
   }
 
   result.resize(outputSize);
+  if (isValid) {
+    if (!input.empty()) {
+      std::memcpy(result.data(), input.data(), input.size());
+    }
+    return Status::OK();
+  }
+
   position = 0;
   size_t outputPosition{0};
   while (position < input.size()) {
     char32_t codePoint;
-    const auto bytesConsumed = decodeCodePointWithAsciiFastPath(
-        input.data(), input.size(), position, codePoint);
+    const auto bytesConsumed =
+        decodeCodePoint(input.data(), input.size(), position, codePoint);
     outputPosition += writeUtf8(codePoint, result.data() + outputPosition);
     position += bytesConsumed;
   }
   return Status::OK();
 }
 
-template <bool copyAsciiRuns>
-FOLLY_ALWAYS_INLINE Status encodeSingleByteNonAscii(
+Status encodeSingleByte(
     exec::StringWriter& result,
     const StringView& input,
     const StringView& charset,
@@ -311,19 +245,6 @@ FOLLY_ALWAYS_INLINE Status encodeSingleByteNonAscii(
   size_t inputPosition{0};
   size_t outputPosition{0};
   while (inputPosition < input.size()) {
-    if constexpr (copyAsciiRuns) {
-      if (static_cast<uint8_t>(input.data()[inputPosition]) < 0x80) {
-        const auto begin = inputPosition++;
-        while (inputPosition < input.size() &&
-               static_cast<uint8_t>(input.data()[inputPosition]) < 0x80) {
-          ++inputPosition;
-        }
-        const auto size = inputPosition - begin;
-        std::memcpy(result.data() + outputPosition, input.data() + begin, size);
-        outputPosition += size;
-        continue;
-      }
-    }
     char32_t codePoint;
     inputPosition +=
         decodeCodePoint(input.data(), input.size(), inputPosition, codePoint);
@@ -339,24 +260,6 @@ FOLLY_ALWAYS_INLINE Status encodeSingleByteNonAscii(
   return Status::OK();
 }
 
-Status encodeSingleByte(
-    exec::StringWriter& result,
-    const StringView& input,
-    const StringView& charset,
-    char32_t limit,
-    bool replaceUnmappable) {
-  if (isAscii(input)) {
-    result.setNoCopy(input);
-    return Status::OK();
-  }
-  if (static_cast<uint8_t>(input.data()[0]) >= 0x80) {
-    return encodeSingleByteNonAscii<false>(
-        result, input, charset, limit, replaceUnmappable);
-  }
-  return encodeSingleByteNonAscii<true>(
-      result, input, charset, limit, replaceUnmappable);
-}
-
 Status encodeLegacySingleByte(
     exec::StringWriter& result,
     const StringView& input,
@@ -364,7 +267,8 @@ Status encodeLegacySingleByte(
     uint8_t charsetIndex,
     bool replaceUnmappable) {
   const auto& encoding = single_byte::kCharsets[charsetIndex];
-  if (encoding.asciiCompatible && isAscii(input)) {
+  if (encoding.asciiCompatible &&
+      stringCore::isAscii(input.data(), input.size())) {
     result.setNoCopy(input);
     return Status::OK();
   }
@@ -373,8 +277,8 @@ Status encodeLegacySingleByte(
   size_t outputPosition{0};
   while (inputPosition < input.size()) {
     char32_t codePoint;
-    inputPosition += decodeCodePointWithAsciiFastPath(
-        input.data(), input.size(), inputPosition, codePoint);
+    inputPosition +=
+        decodeCodePoint(input.data(), input.size(), inputPosition, codePoint);
     uint16_t encodedByte{single_byte::kUnmappable};
     if (codePoint < 256) {
       encodedByte = single_byte::kLowMappings[charsetIndex][codePoint];
@@ -402,24 +306,22 @@ Status encodeLegacySingleByte(
   return Status::OK();
 }
 
-template <bool bigEndian, bool includeBom>
-Status encodeUtf16(exec::StringWriter& result, const StringView& input) {
+Status encodeUtf16(
+    exec::StringWriter& result,
+    const StringView& input,
+    bool bigEndian,
+    bool includeBom) {
   if (input.empty()) {
     result.resize(0);
     return Status::OK();
   }
-  const bool ascii = isAscii(input);
   size_t outputSize{includeBom ? 2u : 0u};
-  if (ascii) {
-    outputSize += input.size() * 2;
-  } else {
-    size_t position{0};
-    while (position < input.size()) {
-      char32_t codePoint;
-      position += decodeCodePointWithAsciiFastPath(
-          input.data(), input.size(), position, codePoint);
-      outputSize += codePoint <= 0xFFFF ? 2 : 4;
-    }
+  size_t position{0};
+  while (position < input.size()) {
+    char32_t codePoint;
+    position +=
+        decodeCodePoint(input.data(), input.size(), position, codePoint);
+    outputSize += codePoint <= 0xFFFF ? 2 : 4;
   }
   result.resize(outputSize);
   size_t outputPosition{0};
@@ -429,21 +331,11 @@ Status encodeUtf16(exec::StringWriter& result, const StringView& input) {
     result.data()[outputPosition++] =
         static_cast<char>(bigEndian ? 0xFF : 0xFE);
   }
-  if (ascii) {
-    for (size_t i = 0; i < input.size(); ++i) {
-      writeUtf16(
-          static_cast<uint8_t>(input.data()[i]),
-          result.data() + outputPosition,
-          bigEndian);
-      outputPosition += 2;
-    }
-    return Status::OK();
-  }
   size_t inputPosition{0};
   while (inputPosition < input.size()) {
     char32_t codePoint;
-    inputPosition += decodeCodePointWithAsciiFastPath(
-        input.data(), input.size(), inputPosition, codePoint);
+    inputPosition +=
+        decodeCodePoint(input.data(), input.size(), inputPosition, codePoint);
     outputPosition +=
         writeUtf16(codePoint, result.data() + outputPosition, bigEndian);
   }
@@ -454,29 +346,16 @@ Status encodeUtf32(
     exec::StringWriter& result,
     const StringView& input,
     bool bigEndian) {
-  if (isAscii(input)) {
-    result.resize(input.size() * 4);
-    for (size_t i = 0; i < input.size(); ++i) {
-      writeUtf32(
-          static_cast<uint8_t>(input.data()[i]),
-          result.data() + i * 4,
-          bigEndian);
-    }
-    return Status::OK();
-  }
   size_t numCodePoints{0};
-  // Amortize validation before using the vectorizable UTF-8 byte counter.
-  constexpr size_t kMinByteCountSize{64};
-  if (input.size() >= kMinByteCountSize &&
-      simdjson::validate_utf8(input.data(), input.size())) {
-    numCodePoints = stringCore::lengthUnicode(input.data(), input.size());
-  } else if (static_cast<uint8_t>(input.data()[0]) < 0x80) {
-    numCodePoints = countCodePoints<true>(input);
-  } else {
-    numCodePoints = countCodePoints<false>(input);
+  size_t inputPosition{0};
+  while (inputPosition < input.size()) {
+    char32_t codePoint;
+    inputPosition +=
+        decodeCodePoint(input.data(), input.size(), inputPosition, codePoint);
+    ++numCodePoints;
   }
   result.resize(numCodePoints * 4);
-  size_t inputPosition{0};
+  inputPosition = 0;
   size_t outputPosition{0};
   while (inputPosition < input.size()) {
     char32_t codePoint;
@@ -552,11 +431,11 @@ Status encode(
       return encodeSingleByte(
           result, input, charset, 0x100, legacyCodingErrorAction);
     case CharsetType::kUtf16:
-      return encodeUtf16<true, true>(result, input);
+      return encodeUtf16(result, input, true, true);
     case CharsetType::kUtf16BE:
-      return encodeUtf16<true, false>(result, input);
+      return encodeUtf16(result, input, true, false);
     case CharsetType::kUtf16LE:
-      return encodeUtf16<false, false>(result, input);
+      return encodeUtf16(result, input, false, false);
     case CharsetType::kUtf32:
       return encodeUtf32(result, input, true);
     case CharsetType::kLegacySingleByte:

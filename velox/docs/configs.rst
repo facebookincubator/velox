@@ -1556,7 +1556,9 @@ Spark-specific Configuration
    * - spark.legacy_java_charsets
      - bool
      - false
-     - If true, the Spark :spark:func:`encode` function accepts JDK 17-verified aliases for its standard charsets and its documented single-byte charset subset. Does not enable arbitrary Java or ICU charset names.
+     - If true, the Spark :spark:func:`encode` function accepts JDK 17-verified aliases for its standard charsets and its documented single-byte charset subset.
+       Corresponds to Spark's ``spark.sql.legacy.javaCharsets`` setting.
+       Spark accepts any JDK charset with that setting enabled; Velox raises an error for names outside its documented subset.
    * - spark.legacy_date_formatter
      - bool
      - false
