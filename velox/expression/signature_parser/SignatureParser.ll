@@ -6,6 +6,10 @@
 #include "velox/expression/signature_parser/SignatureParser.yy.h"  // @manual
 #include "velox/expression/signature_parser/Scanner.h"
 #define YY_DECL int facebook::velox::exec::Scanner::lex(facebook::velox::exec::Parser::semantic_type *yylval)
+// Flex 2.6.5 - 2.6.16 generate a call to yypanic() for a C++ scanner built with
+// %option nodefault, but only define it for C scanners. Route it to
+// LexerError() as flex 2.6.4 did.
+#define yypanic(msg) LexerError(msg)
 
 std::string unescape_doublequote(const char* yytext) {
     size_t len = strlen(yytext);

@@ -2,6 +2,10 @@
 #include "velox/expression/type_calculation/TypeCalculation.yy.h"  // @manual
 #include "velox/expression/type_calculation/Scanner.h"
 #define YY_DECL int facebook::velox::expression::calculate::Scanner::lex(facebook::velox::expression::calculate::Parser::semantic_type *yylval)
+// Flex 2.6.5 - 2.6.16 generate a call to yypanic() for a C++ scanner built with
+// %option nodefault, but only define it for C scanners. Route it to
+// LexerError() as flex 2.6.4 did.
+#define yypanic(msg) LexerError(msg)
 %}
 
 %option c++ noyywrap noyylineno nodefault
