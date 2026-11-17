@@ -40,6 +40,8 @@ inline void ensureCapacity(
             newData->template asMutable<uint8_t>(),
             data->as<uint8_t>(),
             oldSize);
+      } else {
+        oldSize = 0;
       }
       data = newData;
     }
