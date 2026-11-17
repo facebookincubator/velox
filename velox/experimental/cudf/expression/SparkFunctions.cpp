@@ -153,6 +153,8 @@ void registerSparkFunctions(const std::string& prefix) {
       });
 
   registerSparkArrayAccessFunctions(prefix);
+  registerConstantMapElementAtFunction(prefix + "element_at");
+  registerConstantArrayContainsFunction(prefix + "array_contains");
 }
 
 } // namespace facebook::velox::cudf_velox
