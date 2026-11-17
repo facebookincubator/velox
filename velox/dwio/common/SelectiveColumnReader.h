@@ -194,6 +194,12 @@ class SelectiveColumnReader {
   /// last 'read().
   virtual void getValues(const RowSet& rows, VectorPtr* result) = 0;
 
+  /// Called before read() with the vector getValues() will receive, which
+  /// still holds the previous batch. A reader whose result shares its buffers
+  /// drops the result's references to them when nothing else holds the
+  /// result, so that read() can write them in place. Does nothing by default.
+  virtual void releaseReusableResult(VectorPtr& /*result*/) {}
+
   // Returns the rows that were selected/visited by the last
   // read(). If 'this' has no filter, returns 'rows' passed to last
   // read().
@@ -334,6 +340,10 @@ class SelectiveColumnReader {
 
   void setAllNull() {
     allNull_ = true;
+  }
+
+  bool allNull() const {
+    return allNull_;
   }
 
   void incrementNumValues(vector_size_t size) {
@@ -548,8 +558,13 @@ class SelectiveColumnReader {
       if (!nullsInReadRange_) {
         nullsInReadRange_ = std::move(flatMapValueNullsInReadRange_);
       }
-    } else if (nullsInReadRange_ && !nullsInReadRange_->unique()) {
-      nullsInReadRange_.reset();
+    } else {
+      if (!nullsInReadRange_) {
+        nullsInReadRange_ = std::move(reusableNullsInReadRange_);
+      }
+      if (nullsInReadRange_ && !nullsInReadRange_->unique()) {
+        nullsInReadRange_.reset();
+      }
     }
     formatData_->readNulls(
         numRows, incomingNulls, nullsInReadRange_, readsNullsOnly);
@@ -767,6 +782,10 @@ class SelectiveColumnReader {
   BufferPtr flatMapValueNullsInReadRange_;
   VectorPtr flatMapValueFlatValues_;
   VectorPtr flatMapValueConstantNullValues_;
+
+  // The nulls buffer of a read without nulls, kept for the next read that has
+  // nulls.
+  BufferPtr reusableNullsInReadRange_;
 };
 
 template <>
