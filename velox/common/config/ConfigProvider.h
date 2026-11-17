@@ -21,10 +21,9 @@ namespace facebook::velox::config {
 
 /// Declares and normalizes configuration properties for a component.
 /// Each provider knows its own property names (e.g., "session_timezone"),
-/// types, code defaults, and validation rules. Providers may be initialized
-/// with config-file values at construction to override code defaults,
-/// enabling a three-layer cascade: code default → config file → session
-/// override.
+/// types, defaults, validation rules, and whether a session may override each
+/// property. Providers may replace code defaults with deployment values. A
+/// session layer may then override only properties whose metadata permits it.
 class ConfigProvider {
  public:
   virtual ~ConfigProvider() = default;

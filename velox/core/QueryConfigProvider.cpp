@@ -16,13 +16,21 @@
 #include "velox/core/QueryConfigProvider.h"
 
 #include <glog/logging.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/core/QueryConfig.h"
 
 namespace facebook::velox::core {
 
+QueryConfigProvider QueryConfigProvider::withFixedValues(
+    std::unordered_map<std::string, std::string> configOverrides,
+    std::unordered_map<std::string, std::string> fixedValues) {
+  return QueryConfigProvider(
+      std::move(configOverrides), std::move(fixedValues), FixedValuesTag{});
+}
+
 std::vector<config::ConfigProperty> QueryConfigProvider::properties() const {
   auto props = QueryConfig::registeredProperties();
-  if (configOverrides_.empty()) {
+  if (configOverrides_.empty() && fixedValues_.empty()) {
     return props;
   }
 
@@ -41,6 +49,28 @@ std::vector<config::ConfigProperty> QueryConfigProvider::properties() const {
       LOG(WARNING) << "Unregistered session property in execution config: "
                    << key;
     }
+  }
+
+  for (const auto& [key, value] : fixedValues_) {
+    const auto property = propIndex.find(key);
+    VELOX_USER_CHECK(
+        property != propIndex.end(),
+        "Unknown fixed query config property: {}",
+        key);
+
+    const auto normalizedValue = normalize(key, value);
+    if (const auto overrideValue = configOverrides_.find(key);
+        overrideValue != configOverrides_.end()) {
+      VELOX_USER_CHECK_EQ(
+          normalizedValue,
+          normalize(key, overrideValue->second),
+          "Fixed query config value must match config override: {}",
+          key);
+    }
+
+    auto& configProperty = props.at(property->second);
+    configProperty.defaultValue = normalizedValue;
+    configProperty.sessionOverridable = false;
   }
 
   return props;
