@@ -789,9 +789,11 @@ velox_set_source(folly)
 velox_resolve_dependency(folly)
 
 if(${VELOX_BUILD_TESTING})
-  # Spark query runner depends on absl, gRPC.
+  # Spark query runner depends on absl, gRPC. The versions match
+  # scripts/setup-versions.sh so that, in AUTO mode, older system installs are
+  # rejected and the bundled versions are built.
   velox_set_source(absl)
-  velox_resolve_dependency(absl)
+  velox_resolve_dependency(absl 20250512 CONFIG)
 
   # 'gRPC_CARES_PROVIDER' is set as 'package', which means c-ares library needs
   # to be installed on the system, instead of being built by gRPC.
@@ -799,7 +801,7 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(c-ares)
 
   velox_set_source(gRPC)
-  velox_resolve_dependency(gRPC)
+  velox_resolve_dependency(gRPC 1.83.0 CONFIG)
 endif()
 
 # FBThrift is required by remote functions and LocalRunnerService.
