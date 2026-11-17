@@ -4148,6 +4148,13 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       makeRowVector({makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
   AssertQueryBuilder(plan).assertResults(expected);
 
+  // Compare equality results so approximate vector comparison cannot hide a
+  // one-ULP difference at a fine positive scale.
+  data = makeRowVector(
+      {makeFlatVector<double>({0.21472736303011786, -0.21472736303011786})});
+  assertExpressionMatchesCpu(
+      "round(c0, cast(17 as integer)) = c0", data, data->rowType());
+
   // round(double, -1) — round to nearest 10
   data =
       makeRowVector({makeFlatVector<double>({123.456, -987.654, 55.0, 5.0})});
