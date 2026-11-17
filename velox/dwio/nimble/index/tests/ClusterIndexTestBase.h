@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/Synchronized.h>
 #include <gtest/gtest.h>
 #include <optional>
 #include <string>
@@ -136,13 +137,37 @@ class ClusterIndexTestBase : public ::testing::Test {
   /// @param preloadIndex Decodes every key chunk at construction. Requires
   ///        pinIndex.
   /// @param withKeyStreamLocator Gives the index a key stream locator
-  ///        that returns indexBuffers.stripeKeyStreams.
+  ///        that returns indexBuffers.stripeKeyStreams, and records the file
+  ///        options of the context of each call, which
+  ///        keyStreamLocatorFileOpts() returns.
+  /// @param metadataFile ReadFile holding indexBuffers.indexPartitions, or
+  ///        nullptr to read them from a new in-memory file.
+  /// @param inputFileIoContext Context the metadata and key stream inputs
+  ///        read with when a call passes none.
   std::unique_ptr<ClusterIndex> createClusterIndex(
       const IndexBuffers& indexBuffers,
       std::shared_ptr<velox::ReadFile> keyStreamFile = nullptr,
       bool pinIndex = false,
       bool preloadIndex = false,
-      bool withKeyStreamLocator = true);
+      bool withKeyStreamLocator = true,
+      std::shared_ptr<velox::ReadFile> metadataFile = nullptr,
+      const velox::FileIoContext& inputFileIoContext = {});
+
+  using LocatorFileOpts =
+      std::optional<folly::F14FastMap<std::string, std::string>>;
+
+  /// Returns the file options of the context of each key stream locator call
+  /// since the last clearKeyStreamLocatorFileOpts(), in call order, or nullopt
+  /// for a call without a context. Partitions load concurrently, so calls can
+  /// come from several threads.
+  std::vector<LocatorFileOpts> keyStreamLocatorFileOpts() const {
+    return *keyStreamLocatorFileOpts_.rlock();
+  }
+
+  /// Forgets the key stream locator calls recorded so far.
+  void clearKeyStreamLocatorFileOpts() {
+    keyStreamLocatorFileOpts_.wlock()->clear();
+  }
 
   /// Creates a ChunkStatsGroup from the serialized IndexBuffers.
   std::shared_ptr<ChunkStatsGroup> createChunkStats(
@@ -158,6 +183,8 @@ class ClusterIndexTestBase : public ::testing::Test {
   // Receives the key stream reads of the index createClusterIndex() returned
   // last.
   std::shared_ptr<velox::io::IoStatistics> keyStreamIoStats_;
+  // Guards locator recordings made by concurrent partition loads.
+  folly::Synchronized<std::vector<LocatorFileOpts>> keyStreamLocatorFileOpts_;
 };
 
 } // namespace facebook::nimble::index::test

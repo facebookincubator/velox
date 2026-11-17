@@ -955,6 +955,10 @@ TEST_F(DataInputTest, readsPassFileIoContext) {
   const folly::F14FastMap<std::string, std::string> fileOpts{{"key", "value"}};
   velox::FileIoContext fileIoContext;
   fileIoContext.fileOpts = fileOpts;
+  velox::FileIoContext requestContext;
+  requestContext.fileOpts = {{"key", "request"}};
+  const std::vector<folly::F14FastMap<std::string, std::string>>
+      expectedOptions{fileOpts, fileOpts, requestContext.fileOpts, fileOpts};
 
   {
     SCOPED_TRACE("DirectDataInput");
@@ -970,9 +974,13 @@ TEST_F(DataInputTest, readsPassFileIoContext) {
     EXPECT_EQ(refData(input.bufferRef(index)), data.substr(2'100, 100));
     const auto [bytes, readHandle] = input.read(DataInput::Region{100, 1'000});
     EXPECT_EQ(bytes, data.substr(100, 1'000));
-    EXPECT_THAT(
-        file->fileOpts(),
-        ::testing::AllOf(::testing::SizeIs(2), ::testing::Each(fileOpts)));
+    EXPECT_EQ(
+        input.read(DataInput::Region{3'000, 100}, &requestContext).first,
+        data.substr(3'000, 100));
+    EXPECT_EQ(
+        input.read(DataInput::Region{3'500, 100}).first,
+        data.substr(3'500, 100));
+    EXPECT_EQ(file->fileOpts(), expectedOptions);
   }
   {
     SCOPED_TRACE("CachedDataInput");
@@ -1000,10 +1008,14 @@ TEST_F(DataInputTest, readsPassFileIoContext) {
       const auto [bytes, readHandle] =
           input.read(DataInput::Region{100, 1'000});
       EXPECT_EQ(bytes, data.substr(100, 1'000));
+      EXPECT_EQ(
+          input.read(DataInput::Region{3'000, 100}, &requestContext).first,
+          data.substr(3'000, 100));
+      EXPECT_EQ(
+          input.read(DataInput::Region{3'500, 100}).first,
+          data.substr(3'500, 100));
     }
-    EXPECT_THAT(
-        file->fileOpts(),
-        ::testing::AllOf(::testing::SizeIs(2), ::testing::Each(fileOpts)));
+    EXPECT_EQ(file->fileOpts(), expectedOptions);
     cache->shutdown();
   }
 }

@@ -202,25 +202,28 @@ std::vector<MetadataInput::IoGroup> MetadataInput::computeIoGroups(
   return ioGroups;
 }
 
-void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) const {
+void MetadataInput::executeIoGroups(
+    std::vector<IoGroup>& ioGroups,
+    const velox::FileIoContext& fileIoContext) const {
   // Shared with the executor tasks below, which can outlive this call.
   std::vector<std::shared_ptr<velox::AsyncSource<folly::Unit>>> asyncIos;
   asyncIos.reserve(ioGroups.size());
   for (const auto& group : ioGroups) {
     asyncIos.emplace_back(
-        std::make_shared<velox::AsyncSource<folly::Unit>>([this, &group]() {
-          // Measure at nanosecond resolution so that fast reads still register
-          // a non-zero scan time; truncating to microseconds would lose
-          // sub-microsecond reads entirely.
-          uint64_t storageReadNs{0};
-          {
-            velox::NanosecondTimer ioTimer(&storageReadNs);
-            file_->preadv(group.offset, group.ranges, fileIoContext_);
-          }
-          ioStats_->storageReadLatencyUs().increment(storageReadNs / 1'000);
-          ioStats_->incTotalScanTimeNs(storageReadNs);
-          return std::make_unique<folly::Unit>();
-        }));
+        std::make_shared<velox::AsyncSource<folly::Unit>>(
+            [this, &group, fileIoContext]() {
+              // Measure at nanosecond resolution so that fast reads still
+              // register a non-zero scan time; truncating to microseconds would
+              // lose sub-microsecond reads entirely.
+              uint64_t storageReadNs{0};
+              {
+                velox::NanosecondTimer ioTimer(&storageReadNs);
+                file_->preadv(group.offset, group.ranges, fileIoContext);
+              }
+              ioStats_->storageReadLatencyUs().increment(storageReadNs / 1'000);
+              ioStats_->incTotalScanTimeNs(storageReadNs);
+              return std::make_unique<folly::Unit>();
+            }));
   }
 
   QueryIoLatencyGuard queryIoGuard{ioStats_.get()};
@@ -252,7 +255,8 @@ void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) const {
 void MetadataInput::loadFromFile(
     const std::vector<LoadedSection>& sections,
     const std::vector<uint32_t>& loadIndices,
-    const std::vector<folly::Range<char*>>& readRanges) {
+    const std::vector<folly::Range<char*>>& readRanges,
+    const velox::FileIoContext& fileIoContext) {
   if (loadIndices.empty()) {
     return;
   }
@@ -275,15 +279,16 @@ void MetadataInput::loadFromFile(
   }
 
   auto ioGroups = computeIoGroups(sections, sortedIndices, sortedRanges);
-  executeIoGroups(ioGroups);
+  executeIoGroups(ioGroups, fileIoContext);
 }
 
 void MetadataInput::loadFromFile(
     const std::vector<LoadedSection>& sections,
-    const std::vector<folly::Range<char*>>& readRanges) {
+    const std::vector<folly::Range<char*>>& readRanges,
+    const velox::FileIoContext& fileIoContext) {
   std::vector<uint32_t> loadIndices(sections.size());
   std::iota(loadIndices.begin(), loadIndices.end(), 0);
-  loadFromFile(sections, loadIndices, readRanges);
+  loadFromFile(sections, loadIndices, readRanges, fileIoContext);
 }
 
 void MetadataInput::recordCoalescedIoStats(
@@ -315,14 +320,18 @@ void DirectMetadataInput::prepareBuffers(
 }
 
 std::vector<std::shared_ptr<MetadataBuffer>> DirectMetadataInput::load(
-    std::span<const MetadataSection> sections) {
+    std::span<const MetadataSection> sections,
+    const velox::FileIoContext* fileIoContext) {
   NIMBLE_CHECK(!sections.empty(), "No sections to load");
 
   std::vector<LoadedSection> loadSections(sections.begin(), sections.end());
   ReadBuffers readBuffers;
   prepareBuffers(loadSections, readBuffers);
 
-  loadFromFile(loadSections, readBuffers.readRanges);
+  loadFromFile(
+      loadSections,
+      readBuffers.readRanges,
+      fileIoContext != nullptr ? *fileIoContext : fileIoContext_);
 
   for (size_t i = 0; i < loadSections.size(); ++i) {
     loadSections[i].buffer = decompressAndStore(
@@ -488,7 +497,8 @@ std::vector<CachedMetadataInput::ReadGroup> CachedMetadataInput::coalesce(
 void CachedMetadataInput::readGroups(
     std::span<const ReadGroup> groups,
     char* buffer,
-    uint64_t payloadBytes) const {
+    uint64_t payloadBytes,
+    const velox::FileIoContext& fileIoContext) const {
   std::vector<velox::common::Region> regions;
   std::vector<folly::Range<char*>> buffers;
   regions.reserve(groups.size());
@@ -511,7 +521,7 @@ void CachedMetadataInput::readGroups(
             regions.data(), regions.size()),
         folly::Range<const folly::Range<char*>*>(
             buffers.data(), buffers.size()),
-        fileIoContext_);
+        fileIoContext);
   }
 
   // A read past the end of the file returns only the bytes before the end.
@@ -547,7 +557,8 @@ void CachedMetadataInput::loadDirectIo(
     std::span<const MetadataSection> sections,
     std::span<const uint32_t> missIndices,
     std::span<BlockCache::Entry> newEntries,
-    std::span<std::shared_ptr<MetadataBuffer>> buffers) {
+    std::span<std::shared_ptr<MetadataBuffer>> buffers,
+    const velox::FileIoContext& fileIoContext) {
   std::vector<uint32_t> readIndices;
   readIndices.reserve(missIndices.size());
   uint64_t payloadBytes{0};
@@ -581,7 +592,7 @@ void CachedMetadataInput::loadDirectIo(
     pool_->freeAligned(
         buffer, static_cast<int64_t>(bufferSize), allocationAlignment);
   };
-  readGroups(groups, buffer, payloadBytes);
+  readGroups(groups, buffer, payloadBytes, fileIoContext);
 
   for (const auto& group : groups) {
     for (auto i = group.begin; i < group.end; ++i) {
@@ -602,7 +613,8 @@ void CachedMetadataInput::loadBufferedIo(
     std::span<const MetadataSection> sections,
     std::span<const uint32_t> missIndices,
     std::span<BlockCache::Entry> newEntries,
-    std::span<std::shared_ptr<MetadataBuffer>> buffers) {
+    std::span<std::shared_ptr<MetadataBuffer>> buffers,
+    const velox::FileIoContext& fileIoContext) {
   // Without direct I/O, each section is read into a buffer of its own size. An
   // uncompressed section with a new entry is read straight into the entry.
   std::vector<velox::BufferPtr> readBuffers(sections.size());
@@ -621,7 +633,7 @@ void CachedMetadataInput::loadBufferedIo(
     destinations[index] = {
         readBuffers[index]->asMutable<char>(), section.size()};
   }
-  readSections(sections, missIndices, destinations);
+  readSections(sections, missIndices, destinations, fileIoContext);
 
   for (const auto index : missIndices) {
     const auto& section = sections[index];
@@ -643,7 +655,8 @@ void CachedMetadataInput::loadBufferedIo(
 void CachedMetadataInput::readSections(
     std::span<const MetadataSection> sections,
     std::span<const uint32_t> sortedIndices,
-    std::span<const folly::Range<char*>> destinations) const {
+    std::span<const folly::Range<char*>> destinations,
+    const velox::FileIoContext& fileIoContext) const {
   NIMBLE_CHECK(!directIo(), "readSections() must not read a direct-I/O file");
   NIMBLE_CHECK_EQ(destinations.size(), sections.size());
   std::vector<uint32_t> readIndices;
@@ -689,7 +702,7 @@ void CachedMetadataInput::readSections(
       readEnd = section.offset() + section.size();
     }
   }
-  executeIoGroups(reads);
+  executeIoGroups(reads, fileIoContext);
   recordReadBytes(readBytes, payloadBytes);
 }
 
@@ -708,7 +721,8 @@ std::shared_ptr<MetadataBuffer> CachedMetadataInput::decompress(
 }
 
 std::vector<std::shared_ptr<MetadataBuffer>> CachedMetadataInput::load(
-    std::span<const MetadataSection> sections) {
+    std::span<const MetadataSection> sections,
+    const velox::FileIoContext* fileIoContext) {
   NIMBLE_CHECK(!sections.empty(), "No sections to load");
   std::vector<std::shared_ptr<MetadataBuffer>> buffers(sections.size());
   // Entries created before the read, for the read to fill.
@@ -735,10 +749,12 @@ std::vector<std::shared_ptr<MetadataBuffer>> CachedMetadataInput::load(
     return buffers;
   }
 
+  const auto& readContext =
+      fileIoContext != nullptr ? *fileIoContext : fileIoContext_;
   if (directIo()) {
-    loadDirectIo(sections, missIndices, newEntries, buffers);
+    loadDirectIo(sections, missIndices, newEntries, buffers, readContext);
   } else {
-    loadBufferedIo(sections, missIndices, newEntries, buffers);
+    loadBufferedIo(sections, missIndices, newEntries, buffers, readContext);
   }
   return buffers;
 }

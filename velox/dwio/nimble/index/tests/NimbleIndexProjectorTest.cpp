@@ -351,6 +351,58 @@ TEST_P(NimbleIndexProjectorTest, projectorLooksUpAKeyCursor) {
   EXPECT_EQ(projector->stats().numReadStripes, 0);
 }
 
+TEST_P(NimbleIndexProjectorTest, keyCursorRetainsExplicitIOContext) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto file =
+      std::make_shared<nimble::testing::FileOptsRecordingReadFile>(sinkData_);
+  const auto fileHandle =
+      makeFileHandle(file, "keyCursorRetainsExplicitIOContext");
+  velox::dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  configureReaderOptions(
+      readerOptions,
+      /*setDataIoStats=*/true,
+      /*setMetadataIoStats=*/true,
+      /*setIndexIoStats=*/true,
+      /*cacheData=*/false,
+      /*verifyStreamChecksums=*/false);
+  const auto tablet = TabletReader::create(
+      file, leafPool_.get(), TabletReader::configureOptions(readerOptions));
+  const auto schemaSection =
+      tablet->loadOptionalSection(std::string(kSchemaSection));
+  ASSERT_TRUE(schemaSection.has_value());
+  const auto schema =
+      SchemaDeserializer::deserialize(schemaSection->content().data());
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projection = std::make_shared<NimbleTypeProjection>(
+      buildProjectedNimbleType(schema.get(), subfields));
+  const folly::F14FastMap<std::string, std::string> expected{
+      {"source", "request"}};
+  velox::FileIoContext context;
+  context.fileOpts = expected;
+  const auto projector = NimbleIndexProjector::create(
+      tablet,
+      fileHandle,
+      projection,
+      /*blockCache=*/nullptr,
+      readerOptions,
+      &context);
+  context.fileOpts.clear();
+  const auto firstRead = file->fileOpts().size();
+  auto cursor = projector->keyCursor(RowRange{0, 12});
+  uint32_t numKeys{};
+  while (cursor->hasNext()) {
+    cursor->next();
+    ++numKeys;
+  }
+  EXPECT_EQ(numKeys, 12);
+  const auto reads = file->fileOpts();
+  ASSERT_GT(reads.size(), firstRead);
+  const std::vector<folly::F14FastMap<std::string, std::string>> requestReads(
+      reads.begin() + firstRead, reads.end());
+  EXPECT_THAT(requestReads, ::testing::Each(expected));
+}
+
 TEST_P(NimbleIndexProjectorTest, collectsNoTimingsWhenDisabled) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});

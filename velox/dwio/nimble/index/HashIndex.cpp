@@ -149,12 +149,18 @@ HashIndex::HashIndex(
       metadataInput_{std::move(metadataInput)},
       partitionCache_{
           [this](uint32_t partitionIndex) -> std::shared_ptr<Partition> {
-            const auto& descriptor = partitions_[partitionIndex];
-            auto results = metadataInput_->load({&descriptor.section, 1});
-            NIMBLE_CHECK_EQ(results.size(), 1);
-            return Partition::create(
-                std::make_unique<MetadataBuffer>(std::move(*results.front())));
+            return loadPartition(partitionIndex, /*fileIoContext=*/nullptr);
           }} {}
+
+std::shared_ptr<HashIndex::Partition> HashIndex::loadPartition(
+    uint32_t partitionIndex,
+    const velox::FileIoContext* fileIoContext) const {
+  const auto& descriptor = partitions_[partitionIndex];
+  auto results = metadataInput_->load({&descriptor.section, 1}, fileIoContext);
+  NIMBLE_CHECK_EQ(results.size(), 1);
+  return Partition::create(
+      std::make_unique<MetadataBuffer>(std::move(*results.front())));
+}
 
 // static
 std::vector<HashIndex::PartitionDescriptor>
@@ -212,7 +218,8 @@ std::string_view HashIndex::maxKey() const {
 }
 
 IndexLookup::LookupResult HashIndex::lookup(
-    const LookupRequest& request) const {
+    const LookupRequest& request,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_EQ(
       request.mode(),
       LookupRequest::Mode::PointLookup,
@@ -247,7 +254,10 @@ IndexLookup::LookupResult HashIndex::lookup(
 
     // Load the partition containing this bucket.
     const uint32_t partitionIdx = findPartitionIndex(bucket);
-    const auto& partition = partitionCache_.getOrCreate(partitionIdx);
+    const auto& partition = partitionCache_.getOrCreate(
+        partitionIdx, [this, fileIoContext](uint32_t index) {
+          return loadPartition(index, fileIoContext);
+        });
     const uint32_t bucketOffset =
         bucket - partitions_[partitionIdx].startBucket;
 

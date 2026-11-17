@@ -61,17 +61,40 @@ class ClusterIndexTestHelper;
 ///
 /// Thread-safety: `lookup()` and `keyAtRow()` are safe for concurrent use
 /// from multiple threads. Partition metadata and key-stream chunks are
-/// lazily loaded under internal locks (SharedMutex for partitions, per-
-/// partition mutex for chunks).
+/// loaded lazily, and both are read outside the locks that guard their
+/// caches, so a slow read of one partition or chunk does not hold up callers
+/// that need others. Concurrent misses of the same partition or chunk may each
+/// read and build it. The first to install it wins and the others drop
+/// theirs.
+///
+/// Per-request IO context: lookup(), seek(), lookupStripes(), keyAtRow() and
+/// keyCursor() take a nullable 'fileIoContext'. They read the partition
+/// metadata, stripe-group metadata and key chunks that the call loads with
+/// that context, and with the context the index was created with when the
+/// pointer is null. The index never stores a caller's context in shared
+/// state: metadata and chunks it caches serve every later caller, whichever
+/// context loaded them. The guarantee covers only these key and partition
+/// reads. These read with the context the index was created with instead:
+///   - the preload of the constructor, when preloadIndex is set, and
+///     layout(), which take no context;
+///   - a subclass's buildLookupResult() narrowing, and partitionChunkRows()
+///     that it calls;
+///   - a subclass input of its own, such as the weights of a weighted index,
+///     which reads with that input's context.
 ///
 /// Example usage:
-///   auto index = ClusterIndex::create(std::move(rootSection), ...);
-///   auto locations = index->lookup(encodedKey);
-///   // locations[0].range is a file-level [startRow, endRow) range
+///   auto index = ClusterIndex::create(std::move(rootSection), pool, options);
+///   auto result = index->lookup(IndexLookup::LookupRequest::rangeScan(
+///       {{.lowerKey = lowerKey, .upperKey = upperKey}}));
+///   // result[0] holds the file-level [startRow, endRow) ranges of the keys.
 ///
-///   // With row range constraint (e.g., within a stripe):
-///   auto locations = index->lookup(encodedKey,
-///       {.rowRange = RowRange(stripeStart, stripeEnd)});
+///   // A point lookup within the rows of one stripe, read with the context
+///   // of the request:
+///   auto request = IndexLookup::LookupRequest::pointLookup(
+///       {encodedKey},
+///       std::make_shared<IndexLookup::LookupOptions>(
+///           RowRange(stripeStartRow, stripeEndRow)));
+///   auto result = index->lookup(request, &fileIoContext);
 ///
 class ClusterIndexBase : public IndexLookup {
  public:
@@ -81,7 +104,12 @@ class ClusterIndexBase : public IndexLookup {
     return indexColumns_;
   }
 
-  LookupResult lookup(const LookupRequest& request) const override;
+  /// Resolves key bounds using the request context when supplied, otherwise
+  /// using the inputs' default context. Derived lookup narrowing retains its
+  /// own read behavior; see the class contract.
+  LookupResult lookup(
+      const LookupRequest& request,
+      const velox::FileIoContext* fileIoContext = nullptr) const override;
 
   /// The rows of one key range and a cursor over their keys.
   struct SeekResult {
@@ -99,8 +127,13 @@ class ClusterIndexBase : public IndexLookup {
   /// chunk per partition for all of its readers, and a reader of another chunk
   /// of the partition can replace it between the lookup and the read of the
   /// keys. The cursor keeps the chunk of the first row, so it does not decode
-  /// that chunk again.
-  SeekResult seek(const velox::serializer::EncodedKeyBounds& bounds) const;
+  /// that chunk again. Reads what the lookup loads with 'fileIoContext', or
+  /// with the context the index was created with when it is null. The cursor
+  /// keeps a copy of the context and reads each later chunk with it, so the
+  /// stats and pool inside the context must outlive the cursor.
+  SeekResult seek(
+      const velox::serializer::EncodedKeyBounds& bounds,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   /// Returns the stripes whose rows a lookup of each entry of 'request' may
   /// select in a Stripe layout index, in request order: from the stripe of its
@@ -113,8 +146,12 @@ class ClusterIndexBase : public IndexLookup {
   /// lookup(request, keyChunks). Reads index metadata, and the metadata of the
   /// stripe groups of the stripes of the bounds and, for an entry that reaches
   /// the last stripe of the file without a bound in it, of the last stripe
-  /// group, loading them on first use, but no key chunk.
-  std::vector<StripeRange> lookupStripes(const LookupRequest& request) const;
+  /// group, loading them on first use, but no key chunk. Reads that metadata
+  /// with 'fileIoContext', which is valid only during the call, or with the
+  /// context the index was created with when it is null.
+  std::vector<StripeRange> lookupStripes(
+      const LookupRequest& request,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   /// The key chunk of a stripe in the Stripe layout, which a caller has read
   /// itself.
@@ -133,10 +170,13 @@ class ClusterIndexBase : public IndexLookup {
   /// last stripe that lookupStripes(request) returns for each entry are
   /// enough. 'keyChunks' must not be empty: lookup(request) reads no key chunk
   /// for a request without a bound in a stripe. Decodes the chunks in place,
-  /// without a copy, so it does not keep them past the call.
+  /// without a copy, so it does not keep them past the call. Reads the index
+  /// metadata it loads with 'fileIoContext', which is valid only during the
+  /// call, or with the context the index was created with when it is null.
   LookupResult lookup(
       const LookupRequest& request,
-      std::span<const KeyChunk> keyChunks) const;
+      std::span<const KeyChunk> keyChunks,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   /// Returns the minimum key across all partitions.
   std::string_view minKey() const override {
@@ -150,8 +190,12 @@ class ClusterIndexBase : public IndexLookup {
 
   /// Returns the encoded key at the given file-level row position.
   /// Requires loadData to have been provided at construction.
-  /// Used to compute resume keys when lookup results are truncated.
-  std::string keyAtRow(uint32_t row) const override;
+  /// Used to compute resume keys when lookup results are truncated. Reads what
+  /// it loads with 'fileIoContext', which is valid only during the call, or
+  /// with the context the index was created with when it is null.
+  std::string keyAtRow(
+      uint32_t row,
+      const velox::FileIoContext* fileIoContext = nullptr) const override;
 
   /// Returns the number of partitions in the index.
   uint32_t numPartitions() const {
@@ -184,7 +228,14 @@ class ClusterIndexBase : public IndexLookup {
   /// per thread. Cursors share no state with one another, so concurrent
   /// scans need no coordination beyond that. The index must outlive
   /// them.
-  std::unique_ptr<KeyCursor> keyCursor(RowRange rows) const override;
+  ///
+  /// The cursor keeps a copy of 'fileIoContext', and reads every partition and
+  /// chunk it loads with it, or with the context the index was created with
+  /// when it is null. The stats and pool inside the context must outlive the
+  /// cursor.
+  std::unique_ptr<KeyCursor> keyCursor(
+      RowRange rows,
+      const velox::FileIoContext* fileIoContext = nullptr) const override;
 
   /// File-level index layout for diagnostic output (nimble_dump, FileLayout).
   struct Layout {
@@ -220,8 +271,9 @@ class ClusterIndexBase : public IndexLookup {
   MetadataSection partitionSection(uint32_t partitionId) const;
 
   /// Returns the index layout for diagnostic consumers.
-  /// @param detail When true, loads per-partition metadata (requires I/O).
-  ///        When false, returns only root-level metadata (no I/O).
+  /// @param detail When true, loads per-partition metadata (requires I/O),
+  ///        with the context the index was created with. When false, returns
+  ///        only root-level metadata (no I/O).
   Layout layout(bool detail = true) const;
 
  protected:
@@ -250,7 +302,8 @@ class ClusterIndexBase : public IndexLookup {
   // per partition. After this returns, subsequent lookups against any
   // partition/chunk hit pure-memory state (assuming pinIndex_=true, which is
   // enforced). Runs only in the constructor, before any lookup, because it
-  // uses the batch API of dataInput_, which is not thread-safe.
+  // uses the batch API of dataInput_, which is not thread-safe. Reads with the
+  // inputs' own context, since no request exists yet.
   void preloadIndex();
 
   // Builds the flat LookupResult from partitionRowRanges. Subclasses override
@@ -263,9 +316,10 @@ class ClusterIndexBase : public IndexLookup {
 
   // Accumulated row counts of a partition's key chunks (prefix sum), so that
   // a subclass can align per-chunk structures of its own to the key chunks.
-  // Loads the partition metadata on first access; the returned range stays
-  // valid for the lifetime of this index because partitions are never
-  // evicted.
+  // Loads the partition metadata on first access, with the index's own
+  // context rather than the context of the call that a subclass narrows. The
+  // returned range stays valid for the lifetime of this index because
+  // partitions are never evicted.
   folly::Range<const uint32_t*> partitionChunkRows(uint32_t partitionId) const;
 
   // Start row of each partition. Size is numPartitions() + 1; the last entry
@@ -414,18 +468,23 @@ class ClusterIndexBase : public IndexLookup {
   // Looks up 'request' as lookup(request, keyChunks) does when 'keyChunks' is
   // set, and as lookup(request) does otherwise. Sets 'lowerBoundChunk' to the
   // decoded key chunk of the lower bound, which the upper bound reads when it
-  // is in the same chunk. 'lowerBoundChunk' can be null.
+  // is in the same chunk. 'lowerBoundChunk' can be null. Reads what it loads
+  // with 'fileIoContext', or with the inputs' own context when it is null.
   LookupResult lookup(
       const LookupRequest& request,
       std::optional<std::span<const KeyChunk>> keyChunks,
-      LowerBoundChunk* lowerBoundChunk) const;
+      LowerBoundChunk* lowerBoundChunk,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Finds the partition index for a key via binary search on partition keys.
   // Returns nullopt if the key is beyond all partitions.
   std::optional<uint32_t> lookupPartition(std::string_view key) const;
 
-  // Finds the partition containing the given file-level row.
-  const IndexPartitionBase* lookupPartition(uint32_t row) const;
+  // Finds the partition containing the given file-level row, loading it with
+  // 'fileIoContext' as loadPartition() does.
+  const IndexPartitionBase* lookupPartition(
+      uint32_t row,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Converts a file-level row to a partition-relative row number.
   uint32_t partitionRow(uint32_t partitionId, uint32_t row) const;
@@ -501,19 +560,24 @@ class ClusterIndexBase : public IndexLookup {
   //        them.
   // @param lowerBoundChunk Is set for a lower bound, and read otherwise, as
   //        seekInChunk() does. Can be null.
+  // @param fileIoContext Reads the chunk it decodes, as getDecodedChunk()
+  //        does.
   uint32_t resolvePartitionRow(
       const IndexPartitionBase* partition,
       const PartitionLookup& bound,
       std::optional<std::span<const KeyChunk>> keyChunks,
-      LowerBoundChunk* lowerBoundChunk) const;
+      LowerBoundChunk* lowerBoundChunk,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Resolves all partition lookups grouped by partition, decoding key chunks
   // from 'keyChunks' as getDecodedChunk() does. Sets 'lowerBoundChunk' when
-  // not null, as seekInChunk() does.
+  // not null, as seekInChunk() does. Loads partitions and chunks with
+  // 'fileIoContext'.
   void resolvePartitionBounds(
       std::optional<std::span<const KeyChunk>> keyChunks,
       std::vector<PartitionLookup>& partitionLookups,
-      LowerBoundChunk* lowerBoundChunk) const;
+      LowerBoundChunk* lowerBoundChunk,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Binary searches chunk keys in the partition. The returned ChunkLocation
   // carries the chunkIndex for indexing into per-chunk arrays.
@@ -537,31 +601,45 @@ class ClusterIndexBase : public IndexLookup {
   // underlying buffer via shared_ptr / BufferPtr so it is safe to use past
   // the call. A chunk to decode is read from the file, or when 'keyChunks' is
   // set, decoded in place from the entry that holds it, which it must have,
-  // and then not cached, since it reads the caller's bytes.
+  // and then not cached, since it reads the caller's bytes. Reads the chunk
+  // from the file with 'fileIoContext', or with the data input's own context
+  // when it is null.
   DecodedChunk getDecodedChunk(
       const IndexPartitionBase* partition,
       const ChunkLocation& chunkLocation,
-      std::optional<std::span<const KeyChunk>> keyChunks) const;
+      std::optional<std::span<const KeyChunk>> keyChunks,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Seeks the key of 'bound' within a chunk's decoded encoding.
   // @param keyChunks The key chunks to decode from, as getDecodedChunk() takes
   //        them.
   // @param lowerBoundChunk Supplies the decoded chunk when it is that chunk,
   //        and is set to the chunk of a lower bound. Can be null.
+  // @param fileIoContext Reads the chunk it decodes, as getDecodedChunk()
+  //        does.
   // Returns the partition-level row offset.
   uint32_t seekInChunk(
       const IndexPartitionBase* partition,
       const ChunkLocation& chunkLocation,
       const PartitionLookup& bound,
       std::optional<std::span<const KeyChunk>> keyChunks,
-      LowerBoundChunk* lowerBoundChunk) const;
+      LowerBoundChunk* lowerBoundChunk,
+      const velox::FileIoContext* fileIoContext) const;
 
-  // Returns the partition, loading on demand if needed. Never evicted.
-  const IndexPartitionBase* loadPartition(uint32_t partitionId) const;
+  // Returns the partition, loading on demand if needed. Never evicted. Reads
+  // the partition metadata, and in the Stripe layout the metadata of its
+  // stripe group, with 'fileIoContext', or with the inputs' own context when
+  // it is null. Reads and builds the partition without holding mutex_, then
+  // installs it under the exclusive lock unless a concurrent load installed
+  // it first, whose partition it then returns.
+  const IndexPartitionBase* loadPartition(
+      uint32_t partitionId,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Batch-loads the metadata for the given partitionIds via a single
   // coalesced IO. Caller guarantees each id is < numPartitions_ and not
-  // already loaded. Used by preloadIndex().
+  // already loaded. Used by preloadIndex(), which runs in the constructor
+  // before the index is shared.
   void loadPartitions(std::span<const uint32_t> partitionIds) const;
 
   // Loads and decodes all key-stream chunks for a single partition via one
@@ -569,11 +647,16 @@ class ClusterIndexBase : public IndexLookup {
   // partition from preloadIndex().
   void loadPartitionKeyStream(IndexPartitionBase* partition) const;
 
-  // Constructs the IndexPartition or, in the Stripe layout, the IndexGroup for
+  // Builds the IndexPartition or, in the Stripe layout, the IndexGroup for
   // partitionId from the given metadata buffer and (when pinIndex_=true)
   // pre-sizes its decodedChunks_ vector. Shared by loadPartition() (single IO)
-  // and loadPartitions() (batched IO).
-  void initializePartition(uint32_t partitionId, MetadataBuffer&& buffer) const;
+  // and loadPartitions() (batched IO). Locates the key streams of a Stripe
+  // layout group with 'fileIoContext'. Touches no shared state, so it runs
+  // without mutex_.
+  std::unique_ptr<IndexPartitionBase> buildPartition(
+      uint32_t partitionId,
+      MetadataBuffer&& buffer,
+      const velox::FileIoContext* fileIoContext) const;
 
   const Section rootSection_;
   const serialization::ClusterIndex* const indexRoot_;
@@ -624,7 +707,8 @@ class ClusterIndexBase : public IndexLookup {
 
   // --- Mutable state ---
 
-  // Protects partitions_ against concurrent lazy loading.
+  // Protects the slots of partitions_. Held only to check or install a
+  // slot, never across the read or the build of a partition.
   mutable folly::SharedMutex mutex_;
 
   // Partitions loaded on demand and never evicted. Accessed by raw pointer.

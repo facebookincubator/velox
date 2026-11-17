@@ -58,7 +58,10 @@ class SortedIndex : public IndexLookup {
     return columns_;
   }
 
-  LookupResult lookup(const LookupRequest& request) const override;
+  /// Looks up keys using IndexLookup's request/default context contract.
+  LookupResult lookup(
+      const LookupRequest& request,
+      const velox::FileIoContext* fileIoContext = nullptr) const override;
 
   std::string_view minKey() const override;
 
@@ -97,7 +100,9 @@ class SortedIndex : public IndexLookup {
   uint32_t rowOffset(uint32_t chunkIdx) const;
 
   // Loads a chunk and creates its reader without materializing entries.
-  std::shared_ptr<DecodedKeyChunk> loadChunk(uint32_t chunkIdx) const;
+  std::shared_ptr<DecodedKeyChunk> loadChunk(
+      uint32_t chunkIdx,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Extracts the key prefix (without row ID suffix) from a composite entry.
   std::string_view extractKey(std::string_view compositeEntry) const;
@@ -117,13 +122,15 @@ class SortedIndex : public IndexLookup {
   void pointLookup(
       std::string_view key,
       const std::optional<RowRange>& filterRange,
-      std::vector<RowRange>& rowRanges) const;
+      std::vector<RowRange>& rowRanges,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Performs a range scan and appends matching row ranges.
   void rangeScan(
       const velox::serializer::EncodedKeyBounds& bounds,
       const std::optional<RowRange>& filterRange,
-      std::vector<RowRange>& rowRanges) const;
+      std::vector<RowRange>& rowRanges,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Scans entries across chunks and appends matching row ranges.
   // boundKey controls chunk iteration: for point lookup this is the lookup key,
@@ -135,7 +142,8 @@ class SortedIndex : public IndexLookup {
       std::string_view boundKey,
       bool isPointLookup,
       const std::optional<RowRange>& filterRange,
-      std::vector<RowRange>& rowRanges) const;
+      std::vector<RowRange>& rowRanges,
+      const velox::FileIoContext* fileIoContext) const;
 
   const std::vector<std::string> columns_;
   const std::unique_ptr<MetadataBuffer> indexMetadata_;

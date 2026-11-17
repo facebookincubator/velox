@@ -532,7 +532,7 @@ IndexScanCursor::co_nextStripe(uint32_t row) {
 index::KeyCursor* IndexScanCursor::ensureKeyCursor(
     const StripeSelection& selection) {
   if (keyCursor_ == nullptr) {
-    keyCursor_ = projector_->clusterIndex().keyCursor(
+    keyCursor_ = projector_->keyCursor(
         RowRange{selection.selectedRowRange().startRow, range_->endRow});
   }
   return keyCursor_.get();

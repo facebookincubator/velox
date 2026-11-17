@@ -441,19 +441,26 @@ std::unique_ptr<ClusterIndex> ClusterIndexTestBase::createClusterIndex(
     std::shared_ptr<velox::ReadFile> keyStreamFile,
     bool pinIndex,
     bool preloadIndex,
-    bool withKeyStreamLocator) {
+    bool withKeyStreamLocator,
+    std::shared_ptr<velox::ReadFile> metadataFile,
+    const velox::FileIoContext& inputFileIoContext) {
   Section indexSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
           toBufferPtr(indexBuffers.rootIndex, pool_.get()),
           CompressionType::Uncompressed,
           pool_.get())))};
 
-  metadataFile_ =
-      std::make_shared<velox::InMemoryReadFile>(indexBuffers.indexPartitions);
+  metadataFile_ = metadataFile != nullptr
+      ? std::move(metadataFile)
+      : std::make_shared<velox::InMemoryReadFile>(indexBuffers.indexPartitions);
   ioStats_ = std::make_shared<velox::io::IoStatistics>();
   auto metadataInput = MetadataInput::create(
       metadataFile_.get(),
-      MetadataInput::Options{.pool = pool_.get(), .ioStats = ioStats_});
+      MetadataInput::Options{
+          .pool = pool_.get(),
+          .ioStats = ioStats_,
+          .fileIoContext = inputFileIoContext,
+      });
 
   keyStreamIoStats_ = std::make_shared<velox::io::IoStatistics>();
   auto dataInput = std::make_shared<DirectDataInput>(
@@ -461,17 +468,22 @@ std::unique_ptr<ClusterIndex> ClusterIndexTestBase::createClusterIndex(
       DirectDataInput::Options{
           .pool = pool_.get(),
           .ioStats = keyStreamIoStats_,
+          .fileIoContext = inputFileIoContext,
       });
 
   // Stands in for the stripe group metadata, which locates the key stream of
   // each stripe in the Stripe layout.
   IndexLookup::KeyStreamLocator keyStreamLocator;
   if (withKeyStreamLocator) {
-    keyStreamLocator = [stripeKeyStreams = indexBuffers.stripeKeyStreams](
+    keyStreamLocator = [this, stripeKeyStreams = indexBuffers.stripeKeyStreams](
                            uint32_t stripeGroup,
-                           std::span<const uint32_t> streamIds) {
+                           std::span<const uint32_t> streamIds,
+                           const velox::FileIoContext* fileIoContext) {
       NIMBLE_CHECK_EQ(streamIds.size(), 1);
       NIMBLE_CHECK_EQ(streamIds[0], kKeyStreamId);
+      keyStreamLocatorFileOpts_.wlock()->push_back(
+          fileIoContext != nullptr ? std::optional{fileIoContext->fileOpts}
+                                   : std::nullopt);
       return stripeKeyStreams.at(stripeGroup);
     };
   }
