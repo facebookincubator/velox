@@ -778,6 +778,42 @@ TEST(DuckParserTest, windowWithIntegerConstant) {
   EXPECT_EQ(*constant->type(), *INTEGER());
 }
 
+TEST(DuckParserTest, windowTypedLiterals) {
+  for (const bool parseIntegerAsBigint : {false, true}) {
+    ParseOptions options;
+    options.parseIntegerAsBigint = parseIntegerAsBigint;
+    for (const auto* literal : {"INTEGER '4'", "CAST('4' AS INTEGER)"}) {
+      SCOPED_TRACE(literal);
+      const auto call = parseWindowExpr(
+          fmt::format("histogram_numeric(c0, {}) over ()", literal), options);
+      const auto* constant = call->inputs()[1]->as<core::ConstantExpr>();
+      ASSERT_NE(constant, nullptr);
+      EXPECT_TRUE(constant->type()->isInteger());
+      EXPECT_EQ(constant->value().value<TypeKind::INTEGER>(), 4);
+    }
+  }
+}
+
+TEST(DuckParserTest, windowCastsRemainExpressions) {
+  const ParseOptions options;
+  for (const auto* argument : {
+           "CAST('+2' AS INTEGER)",
+           "CAST('002' AS INTEGER)",
+           "CAST('-0' AS INTEGER)",
+           "CAST('1.2' AS INTEGER)",
+           "CAST('invalid' AS INTEGER)",
+           "CAST('2147483648' AS INTEGER)",
+           "CAST('2' AS DECIMAL(5, 2))",
+           "CAST(c1 AS INTEGER)",
+           "TRY_CAST('2' AS INTEGER)",
+       }) {
+    SCOPED_TRACE(argument);
+    const auto call = parseWindowExpr(
+        fmt::format("histogram_numeric(c0, {}) over ()", argument), options);
+    EXPECT_NE(call->inputs()[1]->as<core::CastExpr>(), nullptr);
+  }
+}
+
 TEST(DuckParserTest, parseScalarOrWindowExpr) {
   ParseOptions options;
 
