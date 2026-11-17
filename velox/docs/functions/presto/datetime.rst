@@ -163,6 +163,13 @@ including wall clocks skipped by daylight-saving transitions.
 
     For ``TIME WITH TIME ZONE``, ``zone`` must be a ``+HH:mm`` offset.
 
+    With ``ignoreTimeZoneLabel`` set to true, ``at_timezone`` follows the SQL
+    ``AT TIME ZONE`` type rules:
+
+    * ``DATE`` is rejected.
+    * ``TIME`` is accepted only through a coercion to ``TIME WITH TIME ZONE``.
+    * ``zone`` must be ``VARCHAR``.
+
 .. function:: current_date() -> date
 
     Returns the current date.
