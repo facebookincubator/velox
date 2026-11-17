@@ -906,9 +906,8 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
 
   // Write test data to a local temp file.
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto vector = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vector);
+  auto vector = makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3}));
+  auto filePath = writeToFile(vector);
 
   // Create a table handle with dbName and tableName set.
   auto tableHandle = std::make_shared<HiveTableHandle>(
@@ -976,7 +975,7 @@ TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
         auto filePath = TempFilePath::create();
         writeToFile(
             filePath->getPath(),
-            makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+            makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})));
         auto connectorQueryCtx = ConnectorQueryCtx::Builder()
                                      .operatorPool(pool_.get())
                                      .connectorPool(pool_.get())
@@ -1026,7 +1025,7 @@ TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
   const auto filePath = TempFilePath::create();
   writeToFile(
       filePath->getPath(),
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})));
   const auto tableHandle = makeTableHandle(
       SubfieldFilters{},
       /*remainingFilter=*/nullptr,

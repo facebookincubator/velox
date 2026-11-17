@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include <ATen/core/dispatch/Dispatcher.h>
 #include <c10/core/Device.h>
 #include <torch/nativert/graph/Graph.h>
 
@@ -211,6 +212,43 @@ int32_t insertCpuOnlyCopies(nativert::Graph& graph) {
   LOG(INFO) << "insertCpuOnlyCopies: inserted " << sites.size()
             << " _to_copy(device=cpu) node(s)";
   return static_cast<int32_t>(sites.size());
+}
+
+int32_t rewriteMergeAndDedupToTw(nativert::Graph& graph) {
+  // (base node target, fused _tw node target, _tw dispatcher op name). The _tw
+  // ops are the fused TorchWave CUDA kernels registered by
+  // registerTorchWaveMergeAndDedup; only retarget a node when its _tw op is
+  // actually in the dispatcher, so this is a no-op for the base engine (where
+  // the sparsenn op runs as a standalone) and only fuses in a build that linked
+  // and registered the kernels.
+  struct Entry {
+    const char* from;
+    const char* to;
+    const char* op;
+  };
+  static const Entry kEntries[] = {
+      {"torch.ops.fb.fused_datafm_merge_and_dedup_by_reference.default",
+       "torch.ops.fb.fused_datafm_merge_and_dedup_by_reference_tw.default",
+       "fb::fused_datafm_merge_and_dedup_by_reference_tw"},
+      {"torch.ops.fb.fused_datafm_merge_and_dedup_by_reference_optimized.default",
+       "torch.ops.fb.fused_datafm_merge_and_dedup_by_reference_optimized_tw.default",
+       "fb::fused_datafm_merge_and_dedup_by_reference_optimized_tw"},
+  };
+  int32_t rewritten = 0;
+  for (auto& node : graph.nodes()) {
+    for (const auto& e : kEntries) {
+      if (node.target() == e.from &&
+          c10::Dispatcher::singleton()
+              .findOp(c10::OperatorName(e.op, ""))
+              .has_value()) {
+        node.setTarget(e.to);
+        ++rewritten;
+      }
+    }
+  }
+  LOG(INFO) << "rewriteMergeAndDedupToTw: rewrote " << rewritten
+            << " merge-and-dedup node(s) to fused _tw ops";
+  return rewritten;
 }
 
 } // namespace torch::wave

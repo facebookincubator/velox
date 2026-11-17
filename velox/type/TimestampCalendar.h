@@ -88,8 +88,8 @@ VELOX_GPU_COMPATIBLE inline bool epochToCalendarUtc(
     remainder += kSecondsPerDay;
     --days;
   }
-  if (FOLLY_UNLIKELY(
-          days < fast_date::kRataDieMin || days > fast_date::kRataDieMax)) {
+  if (days < fast_date::kRataDieMin || days > fast_date::kRataDieMax)
+      [[unlikely]] {
     return false;
   }
   tm.tm_hour = remainder / kSecondsPerHour;
@@ -121,10 +121,10 @@ VELOX_GPU_COMPATIBLE inline int64_t calendarUtcToEpoch(const std::tm& tm) {
   // would wrap before the result reached the int64_t.
   int64_t year = tm.tm_year + static_cast<int64_t>(kTmYearBase);
   int64_t month = tm.tm_mon;
-  if (FOLLY_UNLIKELY(month > 11)) {
+  if (month > 11) [[unlikely]] {
     year += month / 12;
     month %= 12;
-  } else if (FOLLY_UNLIKELY(month < 0)) {
+  } else if (month < 0) [[unlikely]] {
     const auto yearsDiff = (-month + 11) / 12;
     year -= yearsDiff;
     month += 12 * yearsDiff;

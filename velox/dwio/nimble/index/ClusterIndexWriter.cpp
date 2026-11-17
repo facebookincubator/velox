@@ -42,7 +42,8 @@ std::vector<SortOrder> getSortOrders(const ClusterIndexConfig& config) {
 std::unique_ptr<ClusterIndexWriter> ClusterIndexWriter::create(
     const IndexConfig& config,
     const velox::TypePtr& inputType,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    const ClusterIndexFactory::Options& options) {
   NIMBLE_USER_CHECK_EQ(config.family, IndexFamily::Cluster);
   NIMBLE_CHECK_NOT_NULL(pool, "memory pool must not be null");
   const auto& clusterConfig = checkedIndexConfig<ClusterIndexConfig>(config);
@@ -51,14 +52,16 @@ std::unique_ptr<ClusterIndexWriter> ClusterIndexWriter::create(
       clusterConfig,
       velox::asRowType(inputType),
       getSortOrders(clusterConfig),
-      pool));
+      pool,
+      options));
 }
 
 ClusterIndexWriter::ClusterIndexWriter(
     const ClusterIndexConfig& config,
     const velox::RowTypePtr& inputType,
     const std::vector<SortOrder>& sortOrders,
-    velox::memory::MemoryPool* pool)
+    velox::memory::MemoryPool* pool,
+    const ClusterIndexFactory::Options& options)
     : ClusterIndexWriterBase{
           inputType,
           Options{
@@ -67,6 +70,8 @@ ClusterIndexWriter::ClusterIndexWriter(
               .sortOrders = sortOrders,
               .maxRowsPerKeyChunk = config.maxRowsPerKeyChunk,
               .keyChunkCompressionType = config.keyChunkCompressionType,
+              .keyStreamLayout = options.keyStreamLayout,
+              .keyStreamId = options.keyStreamId,
           },
           createFlatKeyChunkBuilder(
               clusterIndexFactory(config.name)

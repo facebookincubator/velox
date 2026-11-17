@@ -1230,6 +1230,160 @@ TEST_P(EncodedVectorCopyTest, trailingNullRowsOverShortChildren) {
   }
 }
 
+TEST_P(EncodedVectorCopyTest, appendToRowWithShortDictionaryChild) {
+  // Row 1 is null, so the dictionary child only has row 0. Its indices buffer
+  // has room for more rows, which hold garbage as recycled memory does.
+  constexpr vector_size_t kIndicesCapacity = 16;
+  auto indices = allocateIndices(kIndicesCapacity, pool());
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  std::fill(rawIndices, rawIndices + kIndicesCapacity, 1'000'000'000);
+  rawIndices[0] = 0;
+  indices->setSize(sizeof(vector_size_t));
+  auto nulls = allocateNulls(2, pool());
+  bits::setNull(nulls->asMutable<uint64_t>(), 1);
+  VectorPtr target = std::make_shared<RowVector>(
+      pool(),
+      ROW("a", BIGINT()),
+      std::move(nulls),
+      2,
+      std::vector<VectorPtr>{BaseVector::wrapInDictionary(
+          nullptr, std::move(indices), 1, makeFlatVector<int64_t>({7}))});
+  target->validate({});
+
+  // Each copy appends past the end of the child. The second one also reads
+  // back the child rows the first one wrote.
+  auto source = makeRowVector({
+      wrapInDictionary(makeIndices({1, 0}), makeFlatVector<int64_t>({8, 9})),
+  });
+  for (const vector_size_t targetIndex : {2, 4}) {
+    SCOPED_TRACE(fmt::format("targetIndex={}", targetIndex));
+    BaseVector::CopyRange range = {0, targetIndex, 2};
+    copy(source, folly::Range(&range, 1), target);
+    target->validate({});
+  }
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>({7, 0, 9, 8, 9, 8})},
+      [](auto row) { return row == 1; });
+  test::assertEqualVectors(expected, target);
+}
+
+TEST_P(EncodedVectorCopyTest, appendToRowWithEmptyChild) {
+  auto testEmptyChild = [&](const std::function<VectorPtr()>& makeEmpty) {
+    // Both rows are null, so the child is empty.
+    VectorPtr target = std::make_shared<RowVector>(
+        pool(),
+        ROW("a", makeEmpty()->type()),
+        allocateNulls(2, pool(), bits::kNull),
+        2,
+        std::vector<VectorPtr>{makeEmpty()});
+    target->validate({});
+    SCOPED_TRACE(target->toString());
+
+    // Every row of the source child is null, so its base is empty too.
+    auto source = makeRowVector({BaseVector::wrapInDictionary(
+        allocateNulls(2, pool(), bits::kNull),
+        makeIndices({0, 0}),
+        2,
+        makeEmpty())});
+    BaseVector::CopyRange range = {0, 2, 2};
+    copy(source, folly::Range(&range, 1), target);
+    target->validate({});
+
+    auto expected = makeRowVector(
+        {BaseVector::createNullConstant(makeEmpty()->type(), 4, pool())},
+        [](auto row) { return row < 2; });
+    test::assertEqualVectors(expected, target);
+  };
+
+  testEmptyChild([&] {
+    return makeArrayVector<int64_t>(std::vector<std::vector<int64_t>>{});
+  });
+  testEmptyChild([&] {
+    return std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(BIGINT(), BIGINT()),
+        nullptr,
+        0,
+        makeFlatVector<int64_t>({}),
+        std::vector<VectorPtr>{},
+        std::vector<BufferPtr>{});
+  });
+}
+
+TEST_P(EncodedVectorCopyTest, appendToRowWithShortStructChild) {
+  // Row 1 is null, so the struct child 'n' only has row 0.
+  const auto innerType = ROW("g", BIGINT());
+  VectorPtr target = makeRowVector(
+      {"n"},
+      {makeRowVector({"g"}, {makeFlatVector<int64_t>({7})})},
+      [](auto row) { return row == 1; });
+  target->validate({});
+
+  // Every row of the source's 'n' is null, so its child 'g' is empty.
+  auto source = makeRowVector(
+      {"n"},
+      {std::make_shared<RowVector>(
+          pool(),
+          innerType,
+          allocateNulls(2, pool(), bits::kNull),
+          2,
+          std::vector<VectorPtr>{makeFlatVector<int64_t>({})})});
+  source->validate({});
+
+  BaseVector::CopyRange range = {0, 2, 2};
+  copy(source, folly::Range(&range, 1), target);
+  target->validate({});
+
+  auto expected = makeRowVector(
+      {"n"},
+      {makeRowVector(
+          {"g"},
+          {makeFlatVector<int64_t>({7, 0, 0, 0})},
+          [](auto row) { return row > 0; })},
+      [](auto row) { return row == 1; });
+  test::assertEqualVectors(expected, target);
+}
+
+TEST_P(EncodedVectorCopyTest, appendToRowWithLongStructChild) {
+  // The struct child 'n' is longer than the target. Its rows past row 0 are
+  // null, so its dictionary child 'g' only has row 0, which is null and points
+  // into an empty base.
+  const auto innerType = ROW("g", BIGINT());
+  auto innerNulls = allocateNulls(4, pool(), bits::kNull);
+  bits::clearNull(innerNulls->asMutable<uint64_t>(), 0);
+  VectorPtr target = std::make_shared<RowVector>(
+      pool(),
+      ROW("n", innerType),
+      nullptr,
+      2,
+      std::vector<VectorPtr>{std::make_shared<RowVector>(
+          pool(),
+          innerType,
+          std::move(innerNulls),
+          4,
+          std::vector<VectorPtr>{BaseVector::wrapInDictionary(
+              allocateNulls(1, pool(), bits::kNull),
+              allocateIndices(1, pool()),
+              1,
+              makeFlatVector<int64_t>({}))})});
+  target->validate({});
+
+  auto source = makeRowVector(
+      {"n"}, {makeRowVector({"g"}, {makeFlatVector<int64_t>({8, 9})})});
+  BaseVector::CopyRange range = {0, 2, 2};
+  copy(source, folly::Range(&range, 1), target);
+  target->validate({});
+
+  auto expected = makeRowVector(
+      {"n"},
+      {makeRowVector(
+          {"g"},
+          {makeNullableFlatVector<int64_t>({std::nullopt, 0, 8, 9})},
+          [](auto row) { return row == 1; })});
+  test::assertEqualVectors(expected, target);
+}
+
 TEST_P(EncodedVectorCopyTest, rowWithUnprojectedChild) {
   // A null child is a column the reader did not project.
   const auto rowType = ROW({{"a", BIGINT()}, {"b", BIGINT()}});
@@ -1588,6 +1742,171 @@ TEST_P(EncodedVectorCopyTest, fuzzerFlatMapEncoded) {
       test::assertEqualVectors(
           source->slice(mutableRange.sourceIndex, mutableRange.count),
           target->slice(mutableRange.targetIndex, mutableRange.count));
+    }
+  }
+}
+
+bool coinFlip(fuzzer::FuzzerGenerator& rng, double probability) {
+  return folly::Random::randDouble01(rng) < probability;
+}
+
+VectorPtr addReaderShapes(
+    const VectorPtr& vector,
+    memory::MemoryPool* pool,
+    fuzzer::FuzzerGenerator& rng);
+
+// Returns 'row' with every row null over empty children, or with each child
+// cut, at random, to end anywhere after the last non-null row.
+VectorPtr addReaderShapesToRow(
+    const RowVector& row,
+    memory::MemoryPool* pool,
+    fuzzer::FuzzerGenerator& rng) {
+  const auto size = row.size();
+  if (size > 0 && coinFlip(rng, 0.05)) {
+    std::vector<VectorPtr> emptyChildren;
+    for (const auto& child : row.children()) {
+      emptyChildren.push_back(
+          child ? BaseVector::create(child->type(), 0, pool) : nullptr);
+    }
+    return std::make_shared<RowVector>(
+        pool,
+        row.type(),
+        allocateNulls(size, pool, bits::kNull),
+        size,
+        std::move(emptyChildren));
+  }
+  const auto* rawNulls = row.rawNulls();
+  const vector_size_t minChildSize =
+      rawNulls ? bits::findLastBit(rawNulls, 0, size) + 1 : size;
+  std::vector<VectorPtr> children;
+  children.reserve(row.childrenSize());
+  for (const auto& child : row.children()) {
+    if (!child) {
+      children.push_back(nullptr);
+      continue;
+    }
+    auto shaped = addReaderShapes(child, pool, rng);
+    if (!shaped->isLazy() && minChildSize < shaped->size() &&
+        coinFlip(rng, 0.5)) {
+      const auto childSize = folly::Random::rand32(
+          minChildSize, std::min(shaped->size(), size) + 1, rng);
+      shaped = shaped->slice(0, childSize);
+    }
+    children.push_back(std::move(shaped));
+  }
+  return std::make_shared<RowVector>(
+      pool, row.type(), row.nulls(), size, std::move(children));
+}
+
+// Returns 'vector' with shapes that readers produce and VectorFuzzer does not:
+// structs whose children end before the struct does, and all-null
+// dictionaries over empty bases.
+VectorPtr addReaderShapes(
+    const VectorPtr& vector,
+    memory::MemoryPool* pool,
+    fuzzer::FuzzerGenerator& rng) {
+  const auto size = vector->size();
+  if (size > 0 && coinFlip(rng, 0.05)) {
+    return BaseVector::wrapInDictionary(
+        allocateNulls(size, pool, bits::kNull),
+        allocateIndices(size, pool),
+        size,
+        BaseVector::create(vector->type(), 0, pool));
+  }
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::DICTIONARY: {
+      // Only one top-level vector may wrap an unloaded lazy vector.
+      const auto& base = vector->valueVector();
+      if (isLazyNotLoaded(*base) ||
+          (base->encoding() == VectorEncoding::Simple::ROW &&
+           base->asUnchecked<RowVector>()->containsLazyNotLoaded())) {
+        return vector;
+      }
+      return BaseVector::wrapInDictionary(
+          vector->nulls(),
+          vector->wrapInfo(),
+          size,
+          addReaderShapes(base, pool, rng));
+    }
+    case VectorEncoding::Simple::ROW:
+      return addReaderShapesToRow(*vector->asUnchecked<RowVector>(), pool, rng);
+    default:
+      return vector;
+  }
+}
+
+// Copies batches one after another into one target, the way a rebatcher merges
+// them, and checks the target after every copy. Each copy starts from the
+// result of the previous ones, and the batches have the shapes readers produce.
+TEST_P(EncodedVectorCopyTest, fuzzerAppend) {
+  VectorFuzzer::Options fuzzerOptions;
+  fuzzerOptions.allowLazyVector = reuseSource();
+  // TODO: Fuzz flat maps too. Growing a flat map resizes its values vectors,
+  // which fails when one is shared with the source, and makes invalid rows in
+  // a dictionary over an empty base.
+  fuzzerOptions.allowFlatMapVector = false;
+  fuzzerOptions.containerLength = 3;
+  fuzzerOptions.nullRatio = 0.2;
+  auto seed = common::testutil::getRandomSeed(42);
+  VectorFuzzer fuzzer(fuzzerOptions, pool(), seed);
+  fuzzer::FuzzerGenerator rng(seed);
+#ifndef NDEBUG
+  constexpr int kNumIterations = 20;
+#else
+  constexpr int kNumIterations = 1000;
+#endif
+  constexpr int kNumBatches = 5;
+  for (int i = 0; i < kNumIterations; ++i) {
+    const auto rowType = fuzzer.randRowType(3);
+    SCOPED_TRACE(fmt::format("i={} type={}", i, rowType->toString()));
+    VectorPtr target;
+    // A batch kept alive shares the vectors a copy reuses from it.
+    VectorPtr previousBatch;
+    auto expected = BaseVector::create(rowType, 0, pool());
+    for (int batchIndex = 0; batchIndex < kNumBatches; ++batchIndex) {
+      fuzzer.getMutableOptions().vectorSize = folly::Random::rand32(1, 40, rng);
+      auto batch = fuzzer.fuzzInputRow(rowType);
+      std::vector<VectorPtr> columns;
+      for (const auto& column : batch->children()) {
+        columns.push_back(addReaderShapes(column, pool(), rng));
+      }
+      batch = std::make_shared<RowVector>(
+          pool(), rowType, nullptr, batch->size(), std::move(columns));
+      batch->validate({});
+
+      vector_size_t targetIndex = target ? target->size() : 0;
+      // A shared target takes the immutable path. A target only this copy
+      // holds is resized first, which may drop its tail, as Koski does.
+      VectorPtr sharedTarget;
+      if (target && coinFlip(rng, 0.3)) {
+        sharedTarget = target;
+      } else if (target) {
+        if (coinFlip(rng, 0.2)) {
+          targetIndex = folly::Random::rand32(targetIndex + 1, rng);
+        }
+        target->resize(targetIndex);
+      }
+      // Copy a whole batch, or the rest of it from a random row.
+      const vector_size_t sourceIndex =
+          coinFlip(rng, 0.3) ? folly::Random::rand32(batch->size(), rng) : 0;
+      BaseVector::CopyRange range = {
+          sourceIndex, targetIndex, batch->size() - sourceIndex};
+      SCOPED_TRACE(
+          fmt::format(
+              "batchIndex={} sourceIndex={} targetIndex={} count={} shared={}",
+              batchIndex,
+              range.sourceIndex,
+              range.targetIndex,
+              range.count,
+              sharedTarget != nullptr));
+      copy(batch, folly::Range(&range, 1), target);
+      target->validate({});
+
+      expected->resize(targetIndex);
+      expected->resize(targetIndex + range.count);
+      expected->copyRanges(batch.get(), folly::Range(&range, 1));
+      test::assertEqualVectors(expected, target);
+      previousBatch = coinFlip(rng, 0.3) ? batch : nullptr;
     }
   }
 }

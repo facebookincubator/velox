@@ -250,10 +250,10 @@ struct ScalarList {
 
 /// Struct for returning errors to host. Each block has one. These may be
 /// checked at a delay, so return status that requires action on host side must
-/// be sent in returnStatus, not here.
+/// be sent in returnStatus, not here. The host reads them only when the
+/// execution's error count says a block recorded an error. A block's timing is
+/// in TorchWaveParams::clocks and barrierClocks.
 struct DebugInfo {
-  int64_t clocks{0};
-  int64_t barrierClocks{0};
   int32_t op{0};
   int32_t line{0};
   /// Site-defined values printed after the line number, most sites using only
@@ -293,6 +293,14 @@ struct TorchWaveParams {
   /// If nullptr the BlockInfos are in inlineInfo.
   BlockInfo* info;
   DebugInfo* debugInfo;
+  /// Per block of the launch, at blockIdx.x: the clocks from ENTRY to LEAVE,
+  /// and of those the clocks spent waiting in op barriers. Slices of the
+  /// execution's clock buffer. Null to not time the launch.
+  int64_t* clocks;
+  int64_t* barrierClocks;
+  /// Word 0 of the execution's clock buffer: the number of blocks that
+  /// recorded an error in their DebugInfo. Null to not count.
+  unsigned long long* errorCount;
   /// If the grid fits in kMaxInlineBlocks BlockInfos, they are inlined here
   /// to avoid a separate device allocation for the block info array.
   static constexpr int32_t kMaxInlineBlocks = 100;

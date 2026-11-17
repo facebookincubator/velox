@@ -152,6 +152,43 @@ struct WaveConfig {
   // actual thread block clock distribution.
   bool autoAdjustCost{true};
 
+  // With autoAdjustCost, measures an op by its blocks' whole run times,
+  // including time spent waiting at its grid barriers. When false, the waits
+  // are left out, so an op given more blocks than it can use does not look
+  // more expensive for the blocks that only wait.
+  bool costCountsBarrierWait{true};
+
+  // A concat result that the allocation plan put in a lifetime group takes its
+  // slot there: the concat sizes it into the step's collector and writes its
+  // operands' bands once the group is carved. When false, every such result is
+  // allocated on its own, as the plan's group then holds no slot for it.
+  bool concatResultSlots{true};
+
+  // Groups the values that are never released, and are not graph outputs, with
+  // the others produced at the same point. They all live until the frame is
+  // cleared, so sharing a buffer holds nothing longer than before.
+  bool groupUnreleasedValues{true};
+
+  // Lets a value join a group when its own node only takes a table-derived
+  // view of it. The view is derived for its shape while the step is sized and
+  // again, with storage, once the group is carved.
+  bool groupViewedValues{true};
+
+  // Carves lifetime groups out of one persistent buffer, laid out from the
+  // previous execution's lifetimes, instead of one allocator call per group.
+  bool groupArena{true};
+
+  // Groups of at least this many bytes are allocated on their own rather than
+  // given an arena slot. A few such allocations cost little, and leaving them
+  // to the allocator lets other buffers use their space while they are dead,
+  // which a slot of the arena never does.
+  int64_t groupArenaMaxBytes{16 << 20};
+
+  // Runs the steps that would wait for an integer the device returns on a
+  // capacity for it, with the device fixing up the real dims. See
+  // DeviceSymbols. Needs the export's symbolic shapes.
+  bool deviceSymbols{true};
+
   // Ablation knobs.  Each switches one optimization off so its contribution
   // can be measured by comparing runtimes; none is meant for production use.
 
@@ -201,6 +238,29 @@ struct WaveConfig {
   // it selects. Disjoint writes into one tensor can then run side by side. On
   // by default.
   bool disjointWriteOrdering{true};
+
+  // Reads an elementwise leaf whose shape and the expression's are both fixed
+  // by the graph at an index with literal divisors, instead of decomposing
+  // 'idx' through the leaf's descriptor at run time.
+  bool staticLeafIndex{true};
+
+  // Computes once, at bind, each sizing call whose operands all have shapes
+  // fixed by the graph, and skips the call at run time.
+  bool constantSizes{true};
+
+  // With constantSizes, still runs those sizing calls and fails when a result
+  // differs from the one computed at bind. For validation runs.
+  bool verifyStaticSizes{false};
+
+  // Computes the elementwise producer of a reshaping view inline in the view's
+  // elementwise consumer, at the consumer's index, instead of writing the
+  // producer's result to memory (see CompileCtx::fusesThroughView).
+  bool fuseThroughViews{true};
+
+  // Evaluates the elementwise input of a row reduction such as tw.any_rows in
+  // the reduction's row loop instead of writing it to memory (see
+  // CompileCtx::fusesRowReduction).
+  bool fuseRowReductions{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a
@@ -332,6 +392,23 @@ struct WaveConfig {
   // wave. The _tw operator must be registered before the graph compiles.
   bool twMad{false};
 
+  // Rewrite each packed input (PackedInput.h) before the graph compiles: an
+  // input whose values the graph splits into one view per feature then
+  // arrives encoded, each feature at its narrowest width, and the graph
+  // decodes it per feature. The caller encodes such inputs with the recipes
+  // that the compiled model keeps.
+  bool packInputs{false};
+
+  // With packInputs, let the registered pack rewrites move row trimming into
+  // the recipes: the host trims the rows of a slot before encoding it, and the
+  // op that trimmed them (a length guard, a truncation) leaves the graph.
+  bool packWindows{true};
+
+  // With packInputs, let a gather that reads a packed slot read it in place
+  // rather than through a tw.unpack_slot copy. Saves the copy at the price of
+  // the decode's registers in the gather.
+  bool packAbsorbGetter{false};
+
   // Split merge-and-dedup into the fused TorchWave head and final ops instead
   // of running a standalone operator (sparsenn's or, with twMad, TorchWave's).
   bool twFusedMad{false};
@@ -404,14 +481,6 @@ struct WaveConfig {
   // cg grid because each names its predecessor through inputFromPreviousKernel,
   // which breaks that producer into its own kernel whatever the grid mode.
   bool mkSelect{false};
-
-  // If true, a fused cat / stack of more than two operands stops emitting one
-  // copy per operand into its own kernel and instead pushes every operand into
-  // a kernel op of its own in the previous step. Each of those is sized by the
-  // operand it writes and gets its own share of the grid, so the operands fill
-  // the result side by side instead of walking a chain of __concatCopy calls in
-  // one block. The concat then becomes a kernel break that copies nothing.
-  bool parallelConcatFill{false};
 
   // If true, alongside each composite kernel also compile one single-op kernel
   // per op it contains, named <composite>_op_<opCode>. Diagnostic only: the

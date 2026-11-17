@@ -1230,7 +1230,7 @@ const VectorPtr& BaseVector::wrappedVectorShared(const VectorPtr& vector) {
   }
 }
 
-bool isLazyNotLoaded(const BaseVector& vector) {
+bool detail::isLazyNotLoadedImpl(const BaseVector& vector) {
   switch (vector.encoding()) {
     case VectorEncoding::Simple::LAZY:
       if (!vector.asUnchecked<LazyVector>()->isLoaded()) {

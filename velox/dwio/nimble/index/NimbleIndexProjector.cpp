@@ -191,11 +191,11 @@ std::unique_ptr<DataInput> createDataInput(
     BlockCache* blockCache) {
   if (blockCache != nullptr) {
     return std::make_unique<CachedDataInput>(
-        fileHandle.file.get(),
+        fileHandle.file,
         CachedDataInput::Options{
             .pool = &options.memoryPool(),
             .cache = blockCache,
-            .fileId = fileHandle.uuid.id(),
+            .fileId = fileHandle.uuid,
             .ioStats = options.dataIoStats(),
         });
   }
@@ -205,8 +205,7 @@ std::unique_ptr<DataInput> createDataInput(
   dataInputOptions.ioStats = options.dataIoStats();
   dataInputOptions.maxCoalesceDistance = options.maxCoalesceDistance();
   dataInputOptions.maxCoalesceBytes = options.maxCoalesceBytes();
-  return std::make_unique<DirectDataInput>(
-      fileHandle.file.get(), dataInputOptions);
+  return std::make_unique<DirectDataInput>(fileHandle.file, dataInputOptions);
 }
 
 void freeDataHandle(void* /*buf*/, void* userData) {
@@ -439,24 +438,32 @@ NimbleIndexProjector::co_projectRows(
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     const velox::serializer::EncodedKeyBounds& bounds) {
+  std::unique_ptr<index::KeyCursor> keyCursor;
+  return lookup(bounds, keyCursor);
+}
+
+std::vector<StripeSelection> NimbleIndexProjector::lookup(
+    const velox::serializer::EncodedKeyBounds& bounds,
+    std::unique_ptr<index::KeyCursor>& keyCursor) {
   NIMBLE_CHECK_NULL(ctx_.request, "Cannot look up rows during a projection");
   OptionalCpuWallTimer timer{
       timingEnabled_, [this](const velox::CpuWallTiming& timing) {
         recordStatsTiming(&Stats::lookupTiming, timing);
       }};
-  const auto result = clusterIndex().lookup(
-      index::IndexLookup::LookupRequest::rangeScan({bounds}));
-  NIMBLE_CHECK_EQ(result.size(), 1);
-  const auto& ranges = result[0];
-  NIMBLE_CHECK_LE(
-      ranges.size(),
-      1,
-      "Cluster index returned multiple ranges for one stream scan");
-  return lookup(ranges.empty() ? RowRange{} : ranges.front());
+  auto result = clusterIndex().seek(bounds);
+  keyCursor = std::move(result.keyCursor);
+  return lookup(result.rows);
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     std::string encodedKey) {
+  std::unique_ptr<index::KeyCursor> keyCursor;
+  return lookup(std::move(encodedKey), keyCursor);
+}
+
+std::vector<StripeSelection> NimbleIndexProjector::lookup(
+    std::string encodedKey,
+    std::unique_ptr<index::KeyCursor>& keyCursor) {
   // The successor of a key is the key followed by a zero byte.
   auto successor = encodedKey;
   successor.push_back('\0');
@@ -464,7 +471,8 @@ std::vector<StripeSelection> NimbleIndexProjector::lookup(
       velox::serializer::EncodedKeyBounds{
           .lowerKey = std::move(encodedKey),
           .upperKey = std::move(successor),
-      });
+      },
+      keyCursor);
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
@@ -575,8 +583,8 @@ void NimbleIndexProjector::ensureStreamReader() {
   if (streamReader_ != nullptr) {
     return;
   }
-  streamReader_ =
-      std::make_unique<StreamReader>(projection_->nimbleType, pool_);
+  streamReader_ = std::make_unique<StreamReader>(
+      projection_->nimbleType, pool_, StreamReader::Options{});
 }
 
 void NimbleIndexProjector::setResumeKey(
@@ -1074,7 +1082,7 @@ void NimbleIndexProjector::verifyStreamChecksum(
   const auto expected = encoding::readUint32(checksumPos);
   data = data.substr(0, streamSize);
   const auto computed = streamChecksum_->computeChecksum32(data);
-  if (FOLLY_LIKELY(computed == expected)) {
+  if (computed == expected) [[likely]] {
     return;
   }
 

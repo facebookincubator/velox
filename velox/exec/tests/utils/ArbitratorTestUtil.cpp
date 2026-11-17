@@ -102,7 +102,7 @@ QueryTestResult runHashJoinTask(
                       .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, true)
                       .config(core::QueryConfig::kJoinSpillEnabled, true)
-                      .config(core::QueryConfig::kSpillStartPartitionBit, "29")
+                      .config(core::QueryConfig::kSpillStartPartitionBit, 29)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -142,15 +142,14 @@ QueryTestResult runAggregateTask(
   const auto plan = aggregationPlan(vectors, result.planNodeId);
   if (enableSpilling) {
     const auto spillDirectory = TempDirectoryPath::create();
-    result.data =
-        AssertQueryBuilder(plan)
-            .serialExecution(serialExecution)
-            .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kAggregationSpillEnabled, "true")
-            .queryCtx(queryCtx)
-            .maxDrivers(numDrivers)
-            .copyResults(pool, result.task);
+    result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
+                      .spillDirectory(spillDirectory->getPath())
+                      .config(core::QueryConfig::kSpillEnabled, true)
+                      .config(core::QueryConfig::kAggregationSpillEnabled, true)
+                      .queryCtx(queryCtx)
+                      .maxDrivers(numDrivers)
+                      .copyResults(pool, result.task);
   } else {
     result.data = AssertQueryBuilder(plan)
                       .serialExecution(serialExecution)
@@ -191,8 +190,8 @@ QueryTestResult runOrderByTask(
     result.data = AssertQueryBuilder(plan)
                       .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
-                      .config(core::QueryConfig::kSpillEnabled, "true")
-                      .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+                      .config(core::QueryConfig::kSpillEnabled, true)
+                      .config(core::QueryConfig::kOrderBySpillEnabled, true)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -236,8 +235,8 @@ QueryTestResult runRowNumberTask(
     result.data = AssertQueryBuilder(plan)
                       .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
-                      .config(core::QueryConfig::kSpillEnabled, "true")
-                      .config(core::QueryConfig::kRowNumberSpillEnabled, "true")
+                      .config(core::QueryConfig::kSpillEnabled, true)
+                      .config(core::QueryConfig::kRowNumberSpillEnabled, true)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -282,8 +281,8 @@ QueryTestResult runTopNTask(
         AssertQueryBuilder(plan)
             .serialExecution(serialExecution)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
             .queryCtx(queryCtx)
             .maxDrivers(numDrivers)
             .copyResults(pool, result.task);
@@ -332,12 +331,12 @@ QueryTestResult runWriteTask(
         AssertQueryBuilder(plan)
             .serialExecution(serialExecution)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kAggregationSpillEnabled, "false")
-            .config(core::QueryConfig::kWriterSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kAggregationSpillEnabled, false)
+            .config(core::QueryConfig::kWriterSpillEnabled, true)
             // Set 0 file writer flush threshold to always trigger flush in
             // test.
-            .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
+            .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
             // Set stripe size to extreme large to avoid writer internal
             // triggered flush.
             .connectorSessionProperty(

@@ -404,7 +404,7 @@ void RowNumber::reclaim(
     return;
   }
 
-  if (FOLLY_UNLIKELY(exceededMaxSpillLevelLimit_)) {
+  if (exceededMaxSpillLevelLimit_) [[unlikely]] {
     LOG(WARNING) << "Exceeded row spill level limit: "
                  << spillConfig_->maxSpillLevel
                  << ", and abandon spilling for memory pool: " << pool()->name()

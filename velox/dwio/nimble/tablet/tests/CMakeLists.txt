@@ -20,6 +20,7 @@ add_executable(
   IoAlignmentTest.cpp
   MetadataBufferTest.cpp
   SharedDictionaryReaderTest.cpp
+  StripeGroupFlushPolicyTest.cpp
   TabletTest.cpp
   TabletTestUtils.h
 )

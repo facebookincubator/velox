@@ -260,7 +260,7 @@ RowVectorPtr NestedLoopJoinProbe::getOutput() {
     // driver threads to get stuck in long-running processing loops that exceed
     // their allocated CPU time slice limits, preventing other tasks from being
     // scheduled and degrading overall system responsiveness.
-    if (FOLLY_UNLIKELY(shouldYield())) {
+    if (shouldYield()) [[unlikely]] {
       break;
     }
   }

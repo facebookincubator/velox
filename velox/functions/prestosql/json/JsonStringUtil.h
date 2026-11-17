@@ -53,6 +53,13 @@ void normalizeForJsonCast(const char* input, size_t length, char* output);
 /// @return The size of the string after escaping.
 size_t normalizedSizeForJsonCast(const char* input, size_t length);
 
+/// Writes an ASCII character as Jackson writes it inside a JSON string: quote,
+/// backslash and the control characters that have a short escape as that
+/// escape, the other control characters as an uppercase hexadecimal unicode
+/// escape, and anything else unchanged. Moves the output forward by 1, 2 or 6
+/// chars.
+void encodeAscii(int8_t value, char*& out);
+
 /// Unescape the unicode characters of `input` to make it canonical for JSON
 /// The behavior is compatible with Presto Java's json_parse.
 /// Presto java json_parse will unescape the following characters:

@@ -32,6 +32,19 @@ FlatMapVector* tryReuseResult(
 
   if (result->encoding() == VectorEncoding::Simple::FLAT_MAP) {
     auto* flatMap = static_cast<FlatMapVector*>(result.get());
+    if (size > flatMap->size()) {
+      for (column_index_t i = 0; i < flatMap->numDistinctKeys(); ++i) {
+        const auto& values = flatMap->mapValuesAt(i);
+        if (values != nullptr && values.use_count() != 1) {
+          return nullptr;
+        }
+      }
+      for (const auto& inMap : flatMap->inMaps()) {
+        if (inMap != nullptr && !inMap->unique()) {
+          return nullptr;
+        }
+      }
+    }
     if (flatMap->distinctKeys() != distinctKeys) {
       flatMap->setDistinctKeys(distinctKeys);
     }

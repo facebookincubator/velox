@@ -51,12 +51,14 @@ TEST_P(
       nimble::EncodingType::ALPRD,
       nimble::EncodingType::FixedBitWidth,
       nimble::EncodingType::Dictionary,
+      nimble::EncodingType::SharedDictionary,
       nimble::EncodingType::SparseBool,
       nimble::EncodingType::RLE,
       nimble::EncodingType::FOR,
       nimble::EncodingType::DeltaBlock,
       nimble::EncodingType::EliasFano,
       nimble::EncodingType::PartitionedEliasFano,
+      nimble::EncodingType::Sequence,
       nimble::EncodingType::Huffman,
       nimble::EncodingType::PFOR,
       nimble::EncodingType::SimdForBitpack,
@@ -74,7 +76,6 @@ TEST_P(
       nimble::EncodingType::Delta,
       nimble::EncodingType::Prefix,
       nimble::EncodingType::FrequencyPartition,
-      nimble::EncodingType::SharedDictionary,
       nimble::kRemovedBitRangeSplitEncodingType};
   for (const auto encodingType : unsupportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));

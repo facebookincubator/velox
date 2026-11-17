@@ -129,7 +129,8 @@ HybridFlatMap makeHybridFlatMapConfig(
   }
   groups.push_back(
       {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
-  return HybridFlatMap{keyKind, std::move(groups)};
+  return HybridFlatMap{
+      keyKind, std::move(groups), HybridFlatMap::KeyPresenceMode::kBitmap};
 }
 
 NimbleIndexProjector::RowProjectionResult projectRows(

@@ -76,7 +76,7 @@ std::string TableWriterTestBase::TestParam::toString() const {
       dwio::common::FileFormatName::toName((fileFormat())),
       testModeString(testMode()),
       CommitStrategyName::toName(commitStrategy()),
-      HiveBucketProperty::kindString(bucketKind()),
+      HiveBucketProperty::toName(bucketKind()),
       bucketSort(),
       multiDrivers(),
       compressionKindToString(compressionKind()),
@@ -180,7 +180,7 @@ TableWriterTestBase::TableWriterTestBase(uint64_t testValue)
       testMode_ == TestMode::kOnlyBucketed) {
     std::vector<std::string> bucketedBy = {"c3", "c5"};
     std::vector<TypePtr> bucketedTypes = {REAL(), VARCHAR()};
-    std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
+    std::vector<HiveSortingColumnPtr> sortedBy;
     if (testParam_.bucketSort()) {
       // The sortedBy key shouldn't contain partitionBy key.
       sortedBy = {std::make_shared<const HiveSortingColumn>(
@@ -216,15 +216,13 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .maxDrivers(
             2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-        .config(
-            QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+        .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
         .config(
             QueryConfig::kTaskPartitionedWriterCount,
-            std::to_string(numPartitionedTableWriterCount_))
+            numPartitionedTableWriterCount_)
         // Scale writer settings to trigger partition rebalancing.
         .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-        .config(
-            QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+        .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
         .config(
             QueryConfig::
                 kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
@@ -238,19 +236,18 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
       .spillDirectory(spillDirectory->getPath())
       .maxDrivers(
           2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-      .config(
-          QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+      .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
-          std::to_string(numPartitionedTableWriterCount_))
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(QueryConfig::kWriterSpillEnabled, "true")
+          numPartitionedTableWriterCount_)
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kWriterSpillEnabled, true)
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
       .config(
           QueryConfig::kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
-          "0")
+          0)
       .splits(splits)
       .assertResults(duckDbSql);
 }
@@ -264,17 +261,15 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .maxDrivers(
             2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-        .config(
-            QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+        .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
         .config(
             QueryConfig::kTaskPartitionedWriterCount,
-            std::to_string(numPartitionedTableWriterCount_))
-        .config(core::QueryConfig::kSpillEnabled, "true")
-        .config(QueryConfig::kWriterSpillEnabled, "true")
+            numPartitionedTableWriterCount_)
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(QueryConfig::kWriterSpillEnabled, true)
         // Scale writer settings to trigger partition rebalancing.
         .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-        .config(
-            QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+        .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
         .config(
             QueryConfig::
                 kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
@@ -287,19 +282,18 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
       .spillDirectory(spillDirectory->getPath())
       .maxDrivers(
           2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-      .config(
-          QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+      .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
-          std::to_string(numPartitionedTableWriterCount_))
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(QueryConfig::kWriterSpillEnabled, "true")
+          numPartitionedTableWriterCount_)
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kWriterSpillEnabled, true)
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
       .config(
           QueryConfig::kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
-          "0")
+          0)
       .assertResults(duckDbSql);
 }
 
@@ -310,15 +304,13 @@ RowVectorPtr TableWriterTestBase::runQueryWithWriterConfigs(
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .maxDrivers(
             2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-        .config(
-            QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+        .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
         .config(
             QueryConfig::kTaskPartitionedWriterCount,
-            std::to_string(numPartitionedTableWriterCount_))
+            numPartitionedTableWriterCount_)
         // Scale writer settings to trigger partition rebalancing.
         .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-        .config(
-            QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+        .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
         .config(
             QueryConfig::
                 kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
@@ -331,19 +323,18 @@ RowVectorPtr TableWriterTestBase::runQueryWithWriterConfigs(
       .spillDirectory(spillDirectory->getPath())
       .maxDrivers(
           2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
-      .config(
-          QueryConfig::kTaskWriterCount, std::to_string(numTableWriterCount_))
+      .config(QueryConfig::kTaskWriterCount, numTableWriterCount_)
       .config(
           QueryConfig::kTaskPartitionedWriterCount,
-          std::to_string(numPartitionedTableWriterCount_))
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(QueryConfig::kWriterSpillEnabled, "true")
+          numPartitionedTableWriterCount_)
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kWriterSpillEnabled, true)
       // Scale writer settings to trigger partition rebalancing.
       .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
-      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+      .config(QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, 0)
       .config(
           QueryConfig::kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
-          "0")
+          0)
       .copyResults(pool());
 }
 
@@ -369,7 +360,7 @@ void TableWriterTestBase::setBucketProperty(
     uint32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
     const std::vector<TypePtr>& bucketedTypes,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortedBy) {
+    const std::vector<HiveSortingColumnPtr>& sortedBy) {
   bucketProperty_ = std::make_shared<HiveBucketProperty>(
       kind, bucketCount, bucketedBy, bucketedTypes, sortedBy);
 }

@@ -124,14 +124,15 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
 // UnaryFunction: negation of a boolean column. Base column-only path.
 TEST_F(CudfLogicalFunctionsTest, notColumn) {
   auto data =
-      makeRowVector({"a"}, {makeFlatVector<bool>({true, false, true, false})});
+      makeNamedRowVector("a", makeFlatVector<bool>({true, false, true, false}));
   runProject({data}, "NOT a", "NOT a AS r", "SELECT NOT a AS r FROM tmp");
 }
 
 // Negation of a comparison. Velox rewrites NOT(equalto(...)) to neq(...),
 // so this also exercises the comparison FunctionExpression path.
 TEST_F(CudfLogicalFunctionsTest, notComparison) {
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
   runProject(
       {data},
       "NOT (c0 = 3)",
@@ -142,18 +143,18 @@ TEST_F(CudfLogicalFunctionsTest, notComparison) {
 // UnaryFunction: null row. `cudf::unary_operation` with `NOT` should propagate
 // null through untouched.
 TEST_F(CudfLogicalFunctionsTest, notWithNullRows) {
-  auto data = makeRowVector(
-      {"a"},
-      {makeNullableFlatVector<bool>(
-          {true, false, std::nullopt, true, std::nullopt})});
+  auto data = makeNamedRowVector(
+      "a",
+      makeNullableFlatVector<bool>(
+          {true, false, std::nullopt, true, std::nullopt}));
   runProject({data}, "NOT a", "NOT a AS r", "SELECT NOT a AS r FROM tmp");
 }
 
 // IsNullFunction: nullable INTEGER column with a mix of nulls and non-nulls.
 TEST_F(CudfLogicalFunctionsTest, isNullInteger) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5}));
   runProject(
       {data},
       "c0 IS NULL",
@@ -163,10 +164,10 @@ TEST_F(CudfLogicalFunctionsTest, isNullInteger) {
 
 // IsNullFunction: nullable VARCHAR column. Exercises string-typed input.
 TEST_F(CudfLogicalFunctionsTest, isNullVarchar) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<std::string>(
-          {"x", std::nullopt, "y", std::nullopt, ""})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<std::string>(
+          {"x", std::nullopt, "y", std::nullopt, ""}));
   runProject(
       {data},
       "c0 IS NULL",
@@ -176,7 +177,8 @@ TEST_F(CudfLogicalFunctionsTest, isNullVarchar) {
 
 // IsNullFunction: column with no nulls. Result is all false.
 TEST_F(CudfLogicalFunctionsTest, isNullNoNulls) {
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3, 4, 5}));
   runProject(
       {data},
       "c0 IS NULL",
@@ -186,9 +188,9 @@ TEST_F(CudfLogicalFunctionsTest, isNullNoNulls) {
 
 // IsNotNullFunction: nullable INTEGER column. Inverse of IS NULL.
 TEST_F(CudfLogicalFunctionsTest, isNotNullInteger) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5}));
   runProject(
       {data},
       "c0 IS NOT NULL",
@@ -198,10 +200,10 @@ TEST_F(CudfLogicalFunctionsTest, isNotNullInteger) {
 
 // IsNotNullFunction: nullable VARCHAR column.
 TEST_F(CudfLogicalFunctionsTest, isNotNullVarchar) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<std::string>(
-          {"x", std::nullopt, "y", std::nullopt, ""})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<std::string>(
+          {"x", std::nullopt, "y", std::nullopt, ""}));
   runProject(
       {data},
       "c0 IS NOT NULL",
@@ -212,9 +214,9 @@ TEST_F(CudfLogicalFunctionsTest, isNotNullVarchar) {
 // Composition: NOT wrapping IS NULL. Exercises UnaryFunction operating on the
 // column produced by IsNullFunction.
 TEST_F(CudfLogicalFunctionsTest, notOfIsNull) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5}));
   runProject(
       {data},
       "NOT (c0 IS NULL)",

@@ -752,9 +752,9 @@ TEST_F(TableScanTest, filterPrunesAllRowGroups) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   // One row group per vector, all holding values well below the filter bound.
   std::vector<RowVectorPtr> vectors = {
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}),
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})}),
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({7, 8, 9})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({4, 5, 6})),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({7, 8, 9})),
   };
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
@@ -2166,7 +2166,7 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
 
 TEST_F(TableScanTest, remainingFilterEligibility) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto data = makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4}));
   const auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
           rowType);
@@ -2203,20 +2203,20 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
   // A supported, non-extractable remaining filter keeps the scan on GPU.
   testFilter(
       "c0 % 2 = 0",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({2, 4})),
       true);
 
   // An unsupported nested function falls back to the CPU Hive data source.
   testFilter(
       "to_big_endian_64(c0) = to_big_endian_64(CAST(1 AS BIGINT))",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1})),
       false);
 
   // The data source extracts this filter into a subfield filter the cuDF AST
   // cannot express, so the scan falls back to the CPU Hive data source.
   testFilter(
       "c0 not in (1, 3)",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({2, 4})),
       false);
 
   // The data source extracts this filter into a sample rate. The cuDF data
@@ -2265,7 +2265,7 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
             .copyResults(pool(), task);
 
     assertEqualResults(
-        {makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4, 2, 4, 2, 4})})},
+        {makeNamedRowVector("c0", makeFlatVector<int64_t>({2, 4, 2, 4, 2, 4}))},
         {actual});
     EXPECT_EQ(wasCudfScanUsed(task, scanPlan->id()), expectCudfScan);
     const auto planStats = toPlanStats(task->taskStats());
@@ -2279,7 +2279,7 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
 
 TEST_F(TableScanTest, subfieldFilterEligibility) {
   auto rowType = ROW("c0", BIGINT());
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto data = makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4}));
   const auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
           rowType);
@@ -2315,14 +2315,14 @@ TEST_F(TableScanTest, subfieldFilterEligibility) {
 
   testFilter(
       "c0 in (1, 3)",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 3})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 3})),
       true);
 
   // The cuDF AST has no negated list of values, so the scan falls back to the
   // CPU Hive data source.
   testFilter(
       "c0 not in (1, 3)",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({2, 4})),
       false);
 
   // The cuDF data source reads top-level columns only, so a filter on a nested
@@ -2335,7 +2335,7 @@ TEST_F(TableScanTest, subfieldFilterEligibility) {
         nestedFilePath->getPath(),
         makeRowVector(
             {"s", "c1"},
-            {makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2})}),
+            {makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2})),
              makeFlatVector<int64_t>({10, 20})}));
     auto scanPlan = PlanBuilder(pool_.get())
                         .startTableScan()
@@ -2351,21 +2351,21 @@ TEST_F(TableScanTest, subfieldFilterEligibility) {
                       .splits(makeCudfHiveConnectorSplits({nestedFilePath}))
                       .copyResults(pool(), task);
     assertEqualResults(
-        {makeRowVector({"c1"}, {makeFlatVector<int64_t>({10})})}, {actual});
+        {makeNamedRowVector("c1", makeFlatVector<int64_t>({10}))}, {actual});
     EXPECT_FALSE(wasCudfScanUsed(task, scanPlan->id()));
   }
 }
 
 TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
   auto rowType = ROW({"event_ts"}, {TIMESTAMP()});
-  auto data = makeRowVector(
-      {"event_ts"},
-      {makeFlatVector<Timestamp>(
+  auto data = makeNamedRowVector(
+      "event_ts",
+      makeFlatVector<Timestamp>(
           {
               Timestamp(1767297600, 0), // 2026-01-01 20:00:00 UTC.
               Timestamp(1767258000, 0), // 2026-01-01 09:00:00 UTC.
           },
-          TIMESTAMP())});
+          TIMESTAMP()));
   const auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
           rowType);
@@ -2404,11 +2404,11 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
     EXPECT_EQ(wasCudfScanUsed(task, scanPlan->id()), expectCudfScan);
   };
 
-  auto firstRow = makeRowVector(
-      {"event_ts"},
-      {makeFlatVector<Timestamp>(
+  auto firstRow = makeNamedRowVector(
+      "event_ts",
+      makeFlatVector<Timestamp>(
           {Timestamp(1767297600, 0)},
-          TIMESTAMP())}); // 2026-01-01 20:00:00 UTC.
+          TIMESTAMP())); // 2026-01-01 20:00:00 UTC.
   auto noRows = makeRowVector(rowType, 0);
 
   // Without session-timezone adjustment, day truncation is safe on GPU.
@@ -3041,7 +3041,7 @@ TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
         expectedIds.insert(expectedIds.end(), {2, 8});
       }
       auto expected =
-          makeRowVector({"c1"}, {makeFlatVector<int64_t>(expectedIds)});
+          makeNamedRowVector("c1", makeFlatVector<int64_t>(expectedIds));
       AssertQueryBuilder(plan)
           .maxDrivers(1)
           .splits(makeCudfHiveConnectorSplits(
@@ -3099,13 +3099,13 @@ TEST_F(TableScanTest, remainingFilterCastDateToVarchar) {
   const auto day = DATE()->toDays("2026-01-02");
   const auto filePath = TempFilePath::create();
   auto plan = makeRemainingFilterPlan(
-      makeRowVector({"c0"}, {makeFlatVector<int32_t>({day, 0}, DATE())}),
+      makeNamedRowVector("c0", makeFlatVector<int32_t>({day, 0}, DATE())),
       "cast(c0 as varchar) like '2026-%'",
       filePath);
   AssertQueryBuilder(plan)
       .splits(makeCudfHiveConnectorSplits({filePath}))
       .assertResults(
-          makeRowVector({"c0"}, {makeFlatVector<int32_t>({day}, DATE())}));
+          makeNamedRowVector("c0", makeFlatVector<int32_t>({day}, DATE())));
 }
 
 TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
@@ -3130,7 +3130,7 @@ TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
                     .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
                     .split(makeCudfHiveConnectorSplit(filePath->getPath()))
                     .copyResults(pool(), task);
-  auto expected = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2})});
+  auto expected = makeNamedRowVector("k", makeFlatVector<int64_t>({1, 2}));
   facebook::velox::test::assertEqualVectors(expected, result);
 
   const auto operatorStats = toOperatorStats(task->taskStats());
@@ -3170,31 +3170,31 @@ TEST_F(TableScanTest, unsupportedScanOutputFallsBack) {
 // must be cast from DECIMAL32 to DECIMAL64.
 TEST_F(TableScanTest, lowPrecisionDecimalScan) {
   auto rowType = ROW({"d"}, {DECIMAL(7, 2)});
-  auto vector = makeRowVector(
-      {"d"},
-      {makeNullableFlatVector<int64_t>(
-          {12345, std::nullopt, -2500, 300}, DECIMAL(7, 2))});
+  auto vector = makeNamedRowVector(
+      "d",
+      makeNullableFlatVector<int64_t>(
+          {12345, std::nullopt, -2500, 300}, DECIMAL(7, 2)));
   assertDecimalScanRoundTrip(vector, rowType);
 }
 
 TEST_F(TableScanTest, lowPrecisionDecimalScanNoCast) {
   auto rowType = ROW({"d"}, {DECIMAL(12, 4)});
-  auto vector = makeRowVector(
-      {"d"},
-      {makeNullableFlatVector<int64_t>(
-          {123456789, std::nullopt, -999999}, DECIMAL(12, 4))});
+  auto vector = makeNamedRowVector(
+      "d",
+      makeNullableFlatVector<int64_t>(
+          {123456789, std::nullopt, -999999}, DECIMAL(12, 4)));
   assertDecimalScanRoundTrip(vector, rowType);
 }
 
 TEST_F(TableScanTest, nestedDecimalScan) {
   auto rowType = ROW({"s"}, {ROW({"x", "d"}, {INTEGER(), DECIMAL(7, 2)})});
-  auto vector = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto vector = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"x", "d"},
           {makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
            makeNullableFlatVector<int64_t>(
-               {100, std::nullopt, -200}, DECIMAL(7, 2))})});
+               {100, std::nullopt, -200}, DECIMAL(7, 2))}));
   assertDecimalScanRoundTrip(vector, rowType);
 }
 
@@ -3202,7 +3202,7 @@ TEST_F(TableScanTest, arrayDecimalScan) {
   auto rowType = ROW({"a"}, {ARRAY(DECIMAL(7, 2))});
   auto elements = makeNullableFlatVector<int64_t>(
       {100, 200, std::nullopt, 300}, DECIMAL(7, 2));
-  auto vector = makeRowVector({"a"}, {makeArrayVector({0, 2}, elements)});
+  auto vector = makeNamedRowVector("a", makeArrayVector({0, 2}, elements));
   assertDecimalScanRoundTrip(vector, rowType);
 }
 
@@ -3219,9 +3219,9 @@ TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
                ROW({"y", "a"}, {INTEGER(), ARRAY(DECIMAL(7, 2))})})});
   auto listElements = makeNullableFlatVector<int64_t>(
       {100, 200, std::nullopt, 300, 400}, DECIMAL(7, 2));
-  auto vector = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto vector = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"x", "d", "nested"},
           {makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
            makeNullableFlatVector<int64_t>(
@@ -3229,6 +3229,6 @@ TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
            makeRowVector(
                {"y", "a"},
                {makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
-                makeArrayVector({0, 2, 4}, listElements)})})});
+                makeArrayVector({0, 2, 4}, listElements)})}));
   assertDecimalScanRoundTrip(vector, rowType);
 }

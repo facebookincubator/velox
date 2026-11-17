@@ -205,8 +205,7 @@ class IcebergReadTest : public test::IcebergTestBase {
       const std::vector<RowVectorPtr>& expected,
       const std::unordered_map<std::string, std::string>& sessionProperties =
           {}) {
-    auto dataFilePath = TempFilePath::create();
-    writeToFile(dataFilePath->getPath(), data);
+    auto dataFilePath = writeToFile(data);
     test::IcebergPlanBuilder planBuilder;
     auto plan = planBuilder.startTableScan()
                     .outputType(outputType)
@@ -327,8 +326,7 @@ class IcebergReadTest : public test::IcebergTestBase {
           })};
     }
 
-    auto dataFilePath = TempFilePath::create();
-    writeToFile(dataFilePath->getPath(), inputVectors);
+    auto dataFilePath = writeToFile(inputVectors);
 
     std::vector<IcebergDeleteFile> deleteFiles;
     std::shared_ptr<TempFilePath> deleteFilePath;
@@ -443,10 +441,8 @@ class IcebergReadTest : public test::IcebergTestBase {
     queryBuilder.maxDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(kMultiBatchRowsPerBatch))
-        .config(
-            core::QueryConfig::kMaxOutputBatchRows,
-            std::to_string(kMultiBatchRowsPerBatch))
+            kMultiBatchRowsPerBatch)
+        .config(core::QueryConfig::kMaxOutputBatchRows, kMultiBatchRowsPerBatch)
         .splits({makeIcebergSplitWithInfoColumns(
             dataFilePath->getPath(), infoColumns)});
     auto task = numSelected == 0
@@ -481,18 +477,14 @@ class IcebergReadTest : public test::IcebergTestBase {
       const common::FilterPtr& rowIdFilter,
       std::optional<int64_t> secondFirstRowId,
       const RowVectorPtr& expected) {
-    auto firstFile = TempFilePath::create();
-    writeToFile(
-        firstFile->getPath(),
-        {makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
+    auto firstFile =
+        writeToFile(makeRowVector({makeFlatVector<int64_t>({10, 20, 30})}));
     const std::unordered_map<std::string, std::string> firstInfoColumns{
         {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
         {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
 
-    auto secondFile = TempFilePath::create();
-    writeToFile(
-        secondFile->getPath(),
-        {makeRowVector({makeFlatVector<int64_t>({40, 50, 60})})});
+    auto secondFile =
+        writeToFile(makeRowVector({makeFlatVector<int64_t>({40, 50, 60})}));
     std::unordered_map<std::string, std::string> secondInfoColumns{
         {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "9"}};
     if (secondFirstRowId.has_value()) {
@@ -547,10 +539,8 @@ class IcebergReadTest : public test::IcebergTestBase {
             fmt::join(deletePositions, ", ")));
     VELOX_CHECK_EQ(expectedValues.size(), expectedPositions.size());
 
-    auto dataFilePath = TempFilePath::create();
-    writeToFile(
-        dataFilePath->getPath(),
-        {makeRowVector({"c0"}, {makeFlatVector<int64_t>(values)})});
+    auto dataFilePath =
+        writeToFile(makeRowVector({"c0"}, {makeFlatVector<int64_t>(values)}));
 
     std::vector<IcebergDeleteFile> deleteFiles;
     std::shared_ptr<TempFilePath> deleteFilePath;
@@ -632,8 +622,7 @@ TEST_F(IcebergReadTest, schemaEvolutionRemoveColumn) {
           makeFlatVector<int32_t>({10, 20, 30, 40, 50}),
           makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
       })};
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   std::vector<RowVectorPtr> expectedVectors = {makeRowVector(
       newRowType->names(),
@@ -653,8 +642,7 @@ TEST_F(IcebergReadTest, schemaEvolutionAddColumns) {
 
   std::vector<RowVectorPtr> dataVectors = {
       makeRowVector({makeFlatVector<int64_t>({100, 200, 300})})};
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   std::vector<RowVectorPtr> expectedVectors = {makeRowVector(
       {dataVectors[0]->childAt(0),
@@ -803,7 +791,7 @@ TEST_F(IcebergReadTest, identityPartitionFilterOnlyConstantDoesNotLeak) {
   // Without preloading, both splits share the driver's scan spec.
   exec::test::AssertQueryBuilder(plan)
       .maxDrivers(1)
-      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
       .splits(splits)
       .assertResults(
           makeRowVector({"value"}, {makeFlatVector<std::string>({"c", "d"})}));
@@ -932,7 +920,7 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterReenabledForNextSplit) {
           .endTableScan()
           .planNode())
       .maxDrivers(1)
-      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 0)
       .splits(splits)
       .assertResults(
           makeRowVector({"value"}, {makeFlatVector<std::string>({"a", "b"})}));
@@ -1089,20 +1077,21 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterOnlyColumnIsNotRead) {
                         .endTableScan()
                         .planNode();
 
-  const auto readBytes = [&](const std::unordered_set<int32_t>&
-                                 enforcedFieldIds) {
-    auto splits = makeIcebergSplits(dataFile->getPath());
-    for (auto& split : splits) {
-      std::dynamic_pointer_cast<HiveIcebergSplit>(split)
-          ->partitionEnforcedFieldIds = enforcedFieldIds;
-    }
-    std::shared_ptr<exec::Task> task;
-    const auto result =
-        exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(
-            pool(), task);
-    EXPECT_EQ(result->size(), kNumRows);
-    return exec::toPlanStats(task->taskStats()).at(plan->id()).rawInputBytes;
-  };
+  const auto readBytes =
+      [&](const std::unordered_set<int32_t>& enforcedFieldIds) {
+        auto splits = makeIcebergSplits(dataFile->getPath());
+        for (auto& split : splits) {
+          std::dynamic_pointer_cast<HiveIcebergSplit>(split)
+              ->partitionEnforcedFieldIds = enforcedFieldIds;
+        }
+        std::shared_ptr<exec::Task> task;
+        const auto result =
+            exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(
+                pool(), task);
+        EXPECT_EQ(result->size(), kNumRows);
+        return exec::PlanNodeStats::extract(task->taskStats(), plan->id())
+            .rawInputBytes;
+      };
 
   const auto enforcedBytes = readBytes({1});
   const auto filteredBytes = readBytes({});
@@ -1793,8 +1782,7 @@ TEST_F(IcebergReadTest, addColumnWithInvalidDefault) {
 
   std::vector<RowVectorPtr> dataVectors = {
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   ColumnHandleMap assignments;
   assignments["c0"] = makeIcebergHandle("c0", BIGINT(), 1);
@@ -1829,9 +1817,8 @@ TEST_F(IcebergReadTest, defaultValueWithDeletesAndFilters) {
   auto newRowType = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})})};
-  auto dataFilePath = TempFilePath::create();
   // Write data file with old schema (only c0) containing rows 1-10.
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   auto deleteFilePath = TempFilePath::create();
   // Create delete file that deletes positions 1, 3, 5 (rows 2, 4, 6).
@@ -1939,8 +1926,7 @@ TEST_F(IcebergReadTest, filterPushdownWithInitialDefault) {
   std::vector<RowVectorPtr> dataVectors;
   dataVectors.push_back(
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   ColumnHandleMap assignments;
   assignments["c0"] = makeIcebergHandle("c0", BIGINT(), 1);
@@ -2010,8 +1996,7 @@ TEST_F(IcebergReadTest, filterPushdownWithNumericInitialDefaults) {
   std::vector<RowVectorPtr> dataVectors;
   dataVectors.push_back(
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   ColumnHandleMap assignments;
   assignments["c0"] = makeIcebergHandle("c0", BIGINT(), 1);
@@ -2074,9 +2059,8 @@ TEST_F(IcebergReadTest, partitionColumnsFromHive) {
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {makeFlatVector<int64_t>({1, 2, 3}),
        makeFlatVector<int32_t>({10, 20, 30})})};
-  auto dataFilePath = TempFilePath::create();
   // Write data file with only non-partition columns (c0, c1).
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   // Set partition keys for region and year.
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys = {
@@ -2410,10 +2394,8 @@ TEST_F(IcebergReadTest, rowLineageWithFilter) {
 // An unselected lineage column has no reader output slot to synthesize into
 // until the split reader appends one.
 TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumn) {
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
+  auto dataFilePath =
+      writeToFile(makeRowVector({makeFlatVector<int64_t>({10, 20, 30})}));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
@@ -2463,13 +2445,11 @@ TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumn) {
 // 'readerProducedType_', which has to grow with the appended filter-only
 // column too.
 TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumnWithExtraction) {
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector({makeMapVector<StringView, int64_t>(
+  auto dataFilePath =
+      writeToFile(makeRowVector({makeMapVector<StringView, int64_t>(
           {{{"a", 1}},
            {{"b", 2}, {"c", 3}},
-           {{"d", 4}, {"e", 5}, {"f", 6}}})})});
+           {{"d", 4}, {"e", 5}, {"f", 6}}})}));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
@@ -2521,17 +2501,13 @@ TEST_F(IcebergReadTest, rowLineageFilterOnUnprojectedColumnWithExtraction) {
 TEST_F(IcebergReadTest, rowLineageFilterFromRemainingFilter) {
   // Stored {null, 555, null} synthesizes {100, 555, 102}; filtered before
   // synthesis only 555 survives.
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector(
-          kRowLineageOutputNames,
-          {
-              makeFlatVector<int64_t>({10, 20, 30}),
-              makeNullableFlatVector<int64_t>(
-                  {std::nullopt, 555, std::nullopt}),
-              makeNullableFlatVector<int64_t>({std::nullopt, 3, std::nullopt}),
-          })});
+  auto dataFilePath = writeToFile(makeRowVector(
+      kRowLineageOutputNames,
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 555, std::nullopt}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 3, std::nullopt}),
+      }));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
@@ -2559,18 +2535,15 @@ TEST_F(IcebergReadTest, rowLineageFilterFromRemainingFilter) {
 TEST_F(IcebergReadTest, rowLineageFilterPushdownParity) {
   // _row_id synthesizes to {100, 555, 102, 103}, _last_updated_sequence_number
   // to {7, 3, 7, 7}.
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector(
-          kRowLineageOutputNames,
-          {
-              makeFlatVector<int64_t>({10, 20, 30, 40}),
-              makeNullableFlatVector<int64_t>(
-                  {std::nullopt, 555, std::nullopt, std::nullopt}),
-              makeNullableFlatVector<int64_t>(
-                  {std::nullopt, 3, std::nullopt, std::nullopt}),
-          })});
+  auto dataFilePath = writeToFile(makeRowVector(
+      kRowLineageOutputNames,
+      {
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 555, std::nullopt, std::nullopt}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 3, std::nullopt, std::nullopt}),
+      }));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
@@ -2660,17 +2633,13 @@ TEST_F(IcebergReadTest, rowLineageFilterPushdownParity) {
 // which say nothing about the synthesized values.
 TEST_F(IcebergReadTest, rowLineageMetadataFilterPruning) {
   // Synthesizes {101, 10001, 10002} against statistics of min = max = 101.
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector(
-          kRowLineageOutputNames,
-          {
-              makeFlatVector<int64_t>({10, 20, 30}),
-              makeNullableFlatVector<int64_t>(
-                  {101, std::nullopt, std::nullopt}),
-              makeNullableFlatVector<int64_t>({3, std::nullopt, std::nullopt}),
-          })});
+  auto dataFilePath = writeToFile(makeRowVector(
+      kRowLineageOutputNames,
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeNullableFlatVector<int64_t>({101, std::nullopt, std::nullopt}),
+          makeNullableFlatVector<int64_t>({3, std::nullopt, std::nullopt}),
+      }));
   const std::unordered_map<std::string, std::string> infoColumns{
       {IcebergMetadataColumn::kFirstRowIdInfoColumn, "10000"},
       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
@@ -2727,17 +2696,16 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
                     {"c0", "_row_id"})
                 .planNode();
 
-        auto task =
-            exec::test::AssertQueryBuilder(plan)
-                .maxDrivers(1)
-                .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "2")
-                .splits(scanId, splits)
-                .assertResults(makeRowVector(
-                    {"c0", "_row_id"},
-                    {
-                        makeFlatVector<int64_t>(expectedValues),
-                        makeFlatVector<int64_t>(expectedRowIds),
-                    }));
+        auto task = exec::test::AssertQueryBuilder(plan)
+                        .maxDrivers(1)
+                        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 2)
+                        .splits(scanId, splits)
+                        .assertResults(makeRowVector(
+                            {"c0", "_row_id"},
+                            {
+                                makeFlatVector<int64_t>(expectedValues),
+                                makeFlatVector<int64_t>(expectedRowIds),
+                            }));
 
         const auto planStats = exec::toPlanStats(task->taskStats());
         const auto& scanStats = planStats.at(scanId);
@@ -2747,17 +2715,13 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
       };
 
   // Synthesizes {100, 555, 102}; key 102 has a null stored value.
-  auto storedFile = TempFilePath::create();
-  writeToFile(
-      storedFile->getPath(),
-      {makeRowVector(
-          {"c0", "_row_id", "_last_updated_sequence_number"},
-          {
-              makeFlatVector<int64_t>({10, 20, 30}),
-              makeNullableFlatVector<int64_t>(
-                  {std::nullopt, 555, std::nullopt}),
-              makeNullableFlatVector<int64_t>({std::nullopt, 3, std::nullopt}),
-          })});
+  auto storedFile = writeToFile(makeRowVector(
+      {"c0", "_row_id", "_last_updated_sequence_number"},
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 555, std::nullopt}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 3, std::nullopt}),
+      }));
   auto splitAt = [&](const std::string& path, const std::string& firstRowId) {
     return makeIcebergSplitWithInfoColumns(
         path,
@@ -2769,14 +2733,10 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
 
   // '_row_id' is a null constant here, which the reader never filters. Both
   // splits are preloaded, synthesizing {100, 101, 102} and {200, 201, 202}.
-  auto firstFile = TempFilePath::create();
-  writeToFile(
-      firstFile->getPath(),
-      {makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
-  auto secondFile = TempFilePath::create();
-  writeToFile(
-      secondFile->getPath(),
-      {makeRowVector({makeFlatVector<int64_t>({40, 50, 60})})});
+  auto firstFile =
+      writeToFile(makeRowVector({makeFlatVector<int64_t>({10, 20, 30})}));
+  auto secondFile =
+      writeToFile(makeRowVector({makeFlatVector<int64_t>({40, 50, 60})}));
   auto task = assertJoinOnRowId(
       {splitAt(firstFile->getPath(), "100"),
        splitAt(secondFile->getPath(), "200")},
@@ -2940,10 +2900,8 @@ TEST_F(IcebergReadTest, targetTableRowIdSynthesis) {
 
 // The composite is as long as the batch, not as the rows the reader read.
 TEST_F(IcebergReadTest, targetTableRowIdWithDroppedRows) {
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30, 40, 50})})});
+  auto dataFilePath = writeToFile(
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30, 40, 50})}));
   auto [deleteFilePath, deleteFile] =
       makePositionalDeleteFile(dataFilePath->getPath(), {3});
 
@@ -2999,8 +2957,7 @@ class IcebergInfoColumnValidationTest : public IcebergReadTest {
       const std::string& expectedMessage) {
     std::vector<RowVectorPtr> inputVectors = {
         makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30})})};
-    auto dataFilePath = TempFilePath::create();
-    writeToFile(dataFilePath->getPath(), inputVectors);
+    auto dataFilePath = writeToFile(inputVectors);
 
     auto plan = makeIcebergTableScanPlan(
         /*outputType=*/outputType,
@@ -3073,17 +3030,13 @@ TEST_F(IcebergReadTest, flatMapAsStruct) {
   auto mapType = MAP(BIGINT(), DOUBLE());
   auto dataSchema = ROW({"id", "features"}, {BIGINT(), mapType});
 
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(
-      dataFilePath->getPath(),
-      {makeRowVector(
-          {"id", "features"},
-          {makeFlatVector<int64_t>({1, 2}),
-           makeMapVector(
-               {0, 3},
-               makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
-               makeFlatVector<double>(
-                   {10.0, 20.0, 30.0, 100.0, 200.0, 300.0}))})});
+  auto dataFilePath = writeToFile(makeRowVector(
+      {"id", "features"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeMapVector(
+           {0, 3},
+           makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
+           makeFlatVector<double>({10.0, 20.0, 30.0, 100.0, 200.0, 300.0}))}));
 
   // Build struct-encoded column handle for "features": keys {1, 2} as
   // struct fields {"1", "2"}.
@@ -3134,8 +3087,7 @@ TEST_F(IcebergReadTest, filterPushdownWithInitialDefaultInFilterColumnHandles) {
   // Old data file: only the 'id' column present.
   std::vector<RowVectorPtr> dataVectors = {
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto dataFilePath = writeToFile(dataVectors);
 
   auto outputType = ROW({"id"}, {BIGINT()});
 
@@ -3208,8 +3160,7 @@ TEST_F(IcebergReadTest, filterPushdownWithInitialDefaultInFilterColumnHandles) {
       {"id", "country"},
       {makeFlatVector<int64_t>({4, 5}),
        makeFlatVector<std::string>({"US", "US"})})};
-  auto newFilePath = TempFilePath::create();
-  writeToFile(newFilePath->getPath(), newData);
+  auto newFilePath = writeToFile(newData);
 
   auto makeTwoSplits = [&]() {
     auto s1 = makeIcebergSplits(dataFilePath->getPath());

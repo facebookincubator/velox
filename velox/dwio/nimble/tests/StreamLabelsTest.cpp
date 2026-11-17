@@ -158,6 +158,9 @@ TEST(StreamLabelsTest, flatMap) {
       "/0/key2");
 }
 
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST(StreamLabelsTest, hybridFlatMap) {
   nimble::SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
@@ -166,11 +169,12 @@ TEST(StreamLabelsTest, hybridFlatMap) {
       nimble::HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
-  const auto groupStreams = hybridMap->addGroup(0, {"1"}, groupValue);
+  const std::vector<std::string> groupKeys{"1"};
+  const auto groupStreams = hybridMap->addGroup(0, groupKeys, groupValue);
   auto defaultValue =
       builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
   const auto defaultStreams = hybridMap->addGroup(
-      nimble::HybridFlatMap::kDefaultGroupId, {}, defaultValue);
+      nimble::HybridFlatMap::kDefaultGroupId, kNoGroupKeys, defaultValue);
   root->addChild("features", hybridMap);
 
   auto labels = buildLabels(builder);

@@ -199,7 +199,9 @@ class FieldWriterContext {
     flatMapNodes_.reserve(size);
   }
 
-  /// Registers the logical grouping for a Hybrid FlatMap node.
+  /// Registers the logical grouping for a Hybrid FlatMap node. The node's
+  /// schema views the Default keys its field writer records, so read
+  /// schemaBuilder() only while that writer lives.
   void addHybridFlatMapNode(uint32_t nodeId, const HybridFlatMap& hybridMap) {
     NIMBLE_CHECK(
         !hasFlatMapNodeId(nodeId),
@@ -210,8 +212,10 @@ class FieldWriterContext {
         uniqueNode, "Hybrid FlatMap grouping already set for node {}", nodeId);
   }
 
-  /// Returns the logical grouping registered for a Hybrid FlatMap node.
-  HybridFlatMap* hybridFlatMapNode(uint32_t nodeId) {
+  /// Returns the HybridFlatMap registered for a Hybrid FlatMap node: the
+  /// writer configuration, whose Default group holds no keys. With a bitmap,
+  /// the node's field writer records the Default keys, which its schema views.
+  const HybridFlatMap* hybridFlatMapNode(uint32_t nodeId) const {
     auto it = hybridFlatMaps_.find(nodeId);
     return it == hybridFlatMaps_.end() ? nullptr : &it->second;
   }
@@ -497,10 +501,14 @@ class FieldWriterContext {
  protected:
   MemoryPoolHolder bufferMemoryPool_;
   std::mutex flatMapSchemaMutex_;
+  // Declared before schemaBuilder_ so it is destroyed after it: the schema's
+  // Hybrid FlatMap type builders view grouped keys in these HybridFlatMaps'
+  // shared groups. They view each Default group's keys in its field writer,
+  // whichever mode records them.
+  folly::F14FastMap<uint32_t, HybridFlatMap> hybridFlatMaps_;
   SchemaBuilder schemaBuilder_;
 
   folly::F14FastMap<uint32_t, std::set<std::string>> flatMapNodes_;
-  folly::F14FastMap<uint32_t, HybridFlatMap> hybridFlatMaps_;
   folly::F14FastSet<uint32_t> dictionaryArrayNodeIds_;
   folly::F14FastSet<uint32_t> deduplicatedMapNodeIds_;
   bool ignoreTopLevelNulls_{false};
