@@ -15,6 +15,10 @@
  */
 
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+
+#include <iomanip>
+#include <sstream>
+
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include "velox/common/file/FileSystems.h"
@@ -242,12 +246,16 @@ std::string getExtractFunctionNameWithSuffix(
   VELOX_UNREACHABLE("Could not find a function bound to argTypes.");
 }
 
-// Given the `index`-th aggregation expression, e.g., "avg(c0)", return the
-// names of its partial companion aggregation expression, merge companion
-// aggregation expression, merge_extract companion expression and extract
-// companion expression, e.g., CompanionFunctions{"avg_partial(c0)",
-// "avg_merge(a0)", "avg_merge_extract_double(a0)", "avg_extract_double(a0)"}
-// when `index` is 0.
+// Companion suffixes can contain multi-word type names.
+std::string quoteFunctionName(const std::string& name) {
+  std::ostringstream out;
+  out << std::quoted(name, '"', '"');
+  return out.str();
+}
+
+// Returns SQL expressions for the partial, merge, merge-extract and extract
+// companions of the `index`-th aggregate. Quotes companion names and uses
+// a<index> as the intermediate-result column and extract-result alias.
 CompanionFunctions getCompanionAggregates(
     column_index_t index,
     const exec::CompanionFunctionSignatureMap& companionFunctions,
@@ -256,11 +264,15 @@ CompanionFunctions getCompanionAggregates(
     const std::vector<TypePtr>& argTypes) {
   VELOX_CHECK_EQ(companionFunctions.partial.size(), 1);
   auto partialAggregate = fmt::format(
-      "{}({})", companionFunctions.partial.front().functionName, aggregateArgs);
+      "{}({})",
+      quoteFunctionName(companionFunctions.partial.front().functionName),
+      aggregateArgs);
 
   VELOX_CHECK_EQ(companionFunctions.merge.size(), 1);
   auto mergeAggregate = fmt::format(
-      "{}(a{})", companionFunctions.merge.front().functionName, index);
+      "{}(a{})",
+      quoteFunctionName(companionFunctions.merge.front().functionName),
+      index);
 
   // Construct the merge_extract expression. Rename the result of the expression
   // to be the same as the original aggregation result, so that post-aggregation
@@ -269,14 +281,16 @@ CompanionFunctions getCompanionAggregates(
   if (companionFunctions.mergeExtract.size() == 1) {
     mergeExtractExpression = fmt::format(
         "{0}(a{1}) as a{1}",
-        companionFunctions.mergeExtract.front().functionName,
+        quoteFunctionName(companionFunctions.mergeExtract.front().functionName),
         index);
   } else {
     VELOX_CHECK_GT(companionFunctions.mergeExtract.size(), 1);
     auto mergeExtractFunctionName =
         getMergeExtractFunctionNameWithSuffix(functionName, argTypes);
-    mergeExtractExpression =
-        fmt::format("{0}(a{1}) as a{1}", mergeExtractFunctionName, index);
+    mergeExtractExpression = fmt::format(
+        "{0}(a{1}) as a{1}",
+        quoteFunctionName(mergeExtractFunctionName),
+        index);
   }
 
   // Construct the extract expression.
@@ -284,14 +298,14 @@ CompanionFunctions getCompanionAggregates(
   if (companionFunctions.extract.size() == 1) {
     extractExpression = fmt::format(
         "{0}(a{1}) as a{1}",
-        companionFunctions.extract.front().functionName,
+        quoteFunctionName(companionFunctions.extract.front().functionName),
         index);
   } else {
     VELOX_CHECK_GT(companionFunctions.extract.size(), 1);
     auto extractFunctionName =
         getExtractFunctionNameWithSuffix(functionName, argTypes);
-    extractExpression =
-        fmt::format("{0}(a{1}) as a{1}", extractFunctionName, index);
+    extractExpression = fmt::format(
+        "{0}(a{1}) as a{1}", quoteFunctionName(extractFunctionName), index);
   }
   return CompanionFunctions{
       partialAggregate,
