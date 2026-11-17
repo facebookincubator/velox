@@ -20,6 +20,7 @@ target_link_libraries(
   velox_rpc_types
   velox_memory
   velox_process
+  GTest::gmock
   GTest::gtest
   Folly::folly
 )
@@ -80,6 +81,7 @@ target_link_libraries(
   velox_rpc_rate_limiter_test
   velox_rpc_rate_limiter
   velox_test_util
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
   Folly::folly
@@ -108,6 +110,7 @@ target_link_libraries(
   velox_rpc_plan_node_translator
   velox_async_rpc_function_registry
   velox_exec_test_lib
+  GTest::gmock
   GTest::gtest
   Folly::folly
 )
