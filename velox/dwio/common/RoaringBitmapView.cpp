@@ -224,6 +224,14 @@ RoaringBitmapView::RoaringBitmapView(std::string_view data, Format format)
   if (!std::is_sorted(containers_.begin(), containers_.end(), byBase)) {
     std::sort(containers_.begin(), containers_.end(), byBase);
   }
+  // A key with two containers would leave positions() unsorted and could count
+  // a position twice.
+  for (size_t i = 1; i < containers_.size(); ++i) {
+    VELOX_CHECK_LT(
+        containers_[i - 1].base,
+        containers_[i].base,
+        "Roaring bitmap has two containers for the same key.");
+  }
 }
 
 void RoaringBitmapView::parse64Bit() {
@@ -290,7 +298,7 @@ size_t RoaringBitmapView::parse32Bit(size_t offset, int64_t highBitsOffset) {
 
   const size_t runBitmapOffset = offset;
   if (hasRunContainers) {
-    const size_t runBitmapBytes = (numContainers + 7) / 8;
+    const size_t runBitmapBytes = bits::nbytes(numContainers);
     VELOX_CHECK_GE(remaining(), runBitmapBytes, "Truncated run bitmap.");
     offset += runBitmapBytes;
   }
@@ -319,7 +327,7 @@ size_t RoaringBitmapView::parse32Bit(size_t offset, int64_t highBitsOffset) {
                                      data + keysOffset + 4 * i + 2)) +
         1;
     const bool isRun =
-        hasRunContainers && ((data[runBitmapOffset + i / 8] >> (i % 8)) & 1);
+        hasRunContainers && bits::isBitSet(data + runBitmapOffset, i);
     const int64_t base = highBitsOffset | (static_cast<int64_t>(key) << 16);
 
     if (isRun) {
@@ -348,8 +356,13 @@ size_t RoaringBitmapView::parse32Bit(size_t offset, int64_t highBitsOffset) {
             "Roaring runs are not sorted and disjoint.");
         previousLast = last;
       }
-      containers_.push_back(
-          {base, base + previousLast, offset, numRuns, ContainerKind::kRun});
+      containers_.push_back({
+          .kind = ContainerKind::kRun,
+          .count = numRuns,
+          .base = base,
+          .lastPosition = base + previousLast,
+          .dataOffset = offset,
+      });
       offset += static_cast<size_t>(numRuns) * 4;
     } else if (cardinality <= kMaxArrayContainerCardinality) {
       VELOX_CHECK_GE(
@@ -367,8 +380,13 @@ size_t RoaringBitmapView::parse32Bit(size_t offset, int64_t highBitsOffset) {
             "Roaring array container values are not strictly increasing.");
         previous = value;
       }
-      containers_.push_back(
-          {base, base + previous, offset, cardinality, ContainerKind::kArray});
+      containers_.push_back({
+          .kind = ContainerKind::kArray,
+          .count = cardinality,
+          .base = base,
+          .lastPosition = base + previous,
+          .dataOffset = offset,
+      });
       offset += static_cast<size_t>(cardinality) * 2;
     } else {
       VELOX_CHECK_GE(
@@ -381,8 +399,13 @@ size_t RoaringBitmapView::parse32Bit(size_t offset, int64_t highBitsOffset) {
           break;
         }
       }
-      containers_.push_back(
-          {base, base + lastValue, offset, 0, ContainerKind::kBitset});
+      containers_.push_back({
+          .kind = ContainerKind::kBitset,
+          .count = 0,
+          .base = base,
+          .lastPosition = base + lastValue,
+          .dataOffset = offset,
+      });
       offset += kBitsetContainerBytes;
     }
   }
@@ -467,10 +490,6 @@ std::vector<int64_t> RoaringBitmapView::positions() const {
         appendBitsetPositions(payload, container.base, positions);
         break;
     }
-  }
-  // Containers can share a key only in an out-of-spec bitmap.
-  if (!std::is_sorted(positions.begin(), positions.end())) {
-    std::sort(positions.begin(), positions.end());
   }
   return positions;
 }

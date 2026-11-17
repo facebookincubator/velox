@@ -253,6 +253,15 @@ TEST(RoaringBitmapViewTest, corruptBitmaps) {
   appendLittleEndian(groupKeyTooLarge, RoaringBitmapView::kMaxGroupKey + 1);
   groupKeyTooLarge += serialize32Bit({});
 
+  // Two groups with the same high bits, each with a container for key 0.
+  std::string repeatedGroup;
+  appendLittleEndian(repeatedGroup, uint64_t{2});
+  for (int i = 0; i < 2; ++i) {
+    appendLittleEndian(repeatedGroup, uint32_t{0});
+    repeatedGroup += serialize32Bit(
+        {{.key = 0, .kind = TestContainer::Kind::kArray, .values = {3}}});
+  }
+
   const std::vector<TestParam> testSettings{
       {"too many containers",
        tooManyContainers,
@@ -265,6 +274,13 @@ TEST(RoaringBitmapViewTest, corruptBitmaps) {
              .runs = {{65'535, 1}}}}),
        Format::k32Bit,
        "Roaring run extends past its container."},
+      {"repeated container key",
+       serialize32Bit({
+           {.key = 0, .kind = TestContainer::Kind::kArray, .values = {1, 5}},
+           {.key = 0, .kind = TestContainer::Kind::kArray, .values = {3}},
+       }),
+       Format::k32Bit,
+       "Roaring bitmap has two containers for the same key."},
       {"truncated metadata",
        truncatedMetadata,
        Format::k32Bit,
@@ -282,6 +298,10 @@ TEST(RoaringBitmapViewTest, corruptBitmaps) {
        Format::k64Bit,
        "Roaring64Bitmap group key exceeds the maximum the Iceberg "
        "deletion-vector format can represent: 2147483647"},
+      {"repeated group",
+       repeatedGroup,
+       Format::k64Bit,
+       "Roaring bitmap has two containers for the same key."},
   };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
