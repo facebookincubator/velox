@@ -1396,7 +1396,8 @@ TEST_F(CudfFilterProjectTest, failFastKernelGuardedByConjunct) {
        "amount",
        "whole_days",
        "interval_val",
-       "seconds"},
+       "seconds",
+       "idx"},
       {makeFlatVector<int64_t>({0, 1, 2, 3}),
        makeArrayVector<int64_t>({{1, 2, 3}, {1}, {4, 5, -6}, {}}),
        makeFlatVector<int32_t>(
@@ -1414,7 +1415,8 @@ TEST_F(CudfFilterProjectTest, failFastKernelGuardedByConjunct) {
        makeFlatVector<int64_t>(
            {kMillisInDay, kMillisInHour, -2 * kMillisInDay, kMillisInHour},
            INTERVAL_DAY_TIME()),
-       makeFlatVector<double>({0.0, 1e300, 5.0, -1e300})});
+       makeFlatVector<double>({0.0, 1e300, 5.0, -1e300}),
+       makeFlatVector<int64_t>({1, 0, -1, 5})});
   std::vector<RowVectorPtr> vectors{data};
 
   // A false guard decides AND, and a true one decides OR.
@@ -1423,6 +1425,8 @@ TEST_F(CudfFilterProjectTest, failFastKernelGuardedByConjunct) {
         "abs(seconds) >= 1e10 OR to_unixtime(from_unixtime(seconds)) >= 0.0",
         "cardinality(a) >= 3 AND a[3] > 0",
         "cardinality(a) < 3 OR a[3] > 0",
+        "idx <> 0 AND element_at(a, idx) > 0",
+        "idx = 0 OR element_at(a, idx) > 0",
         "amount BETWEEN -10 AND 10 AND "
         "date_add('day', amount, event_date) > event_date",
         "amount NOT BETWEEN -10 AND 10 OR "

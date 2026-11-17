@@ -237,6 +237,12 @@ getCudfFunctionRegistry() {
   return registry;
 }
 
+std::unordered_map<std::string, CudfSpecialFormSpec>&
+getCudfSpecialFormRegistry() {
+  static std::unordered_map<std::string, CudfSpecialFormSpec> registry;
+  return registry;
+}
+
 static bool matchCallAgainstSignatures(
     const core::TypedExprPtr& call,
     const std::vector<exec::FunctionSignaturePtr>& sigs) {
@@ -329,12 +335,17 @@ const CudfExpressionEvaluatorEntry* findBestEvaluator(
   return best;
 }
 
-// Returns true if the tree holds a CAST from VARCHAR, which fails on a string
-// that spells no value of the target type; a TRY_CAST gives NULL instead.
-bool containsFailingCastFromVarchar(const core::TypedExprPtr& expr) {
-  if (expr->isCastKind() &&
+// A CAST from VARCHAR fails on a string that spells no value of the target
+// type; a TRY_CAST gives NULL instead.
+bool isFailingCastFromVarchar(const core::TypedExprPtr& expr) {
+  return expr->isCastKind() &&
       !expr->asUnchecked<core::CastTypedExpr>()->isTryCast() &&
-      !expr->inputs().empty() && expr->inputs()[0]->type()->isVarchar()) {
+      !expr->inputs().empty() && expr->inputs()[0]->type()->isVarchar();
+}
+
+// Returns true if the tree holds a failing CAST from VARCHAR.
+bool containsFailingCastFromVarchar(const core::TypedExprPtr& expr) {
+  if (isFailingCastFromVarchar(expr)) {
     return true;
   }
   for (const auto& input : expr->inputs()) {
@@ -2840,13 +2851,18 @@ bool registerCudfFunction(
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite,
-    CudfCanEvaluate canEvaluate) {
+    CudfCanEvaluate canEvaluate,
+    CudfFailsOnInvalidRow failsOnInvalidRow) {
   auto& registry = getCudfFunctionRegistry();
   if (!overwrite && !registry[name].empty()) {
     return false;
   }
   registry[name].push_back(
-      CudfFunctionSpec{std::move(factory), signatures, std::move(canEvaluate)});
+      CudfFunctionSpec{
+          std::move(factory),
+          signatures,
+          std::move(canEvaluate),
+          std::move(failsOnInvalidRow)});
   return true;
 }
 
@@ -2855,9 +2871,11 @@ void registerCudfFunctions(
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite,
-    CudfCanEvaluate canEvaluate) {
+    CudfCanEvaluate canEvaluate,
+    CudfFailsOnInvalidRow failsOnInvalidRow) {
   for (const auto& name : aliases) {
-    registerCudfFunction(name, factory, signatures, overwrite, canEvaluate);
+    registerCudfFunction(
+        name, factory, signatures, overwrite, canEvaluate, failsOnInvalidRow);
   }
 }
 
@@ -2982,6 +3000,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("boolean")
            .variableArity("boolean")
            .build()});
+
+  registerCudfSpecialForm(
+      {"and", "or"}, {.create = ConjunctExpression::create});
 
   registerCudfFunction(
       "not",
@@ -3253,7 +3274,14 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("varchar")
            .argumentType("varchar")
            .constantArgumentType("varchar")
-           .build()});
+           .build()},
+      /*overwrite=*/true,
+      /*canEvaluate=*/nullptr,
+      // A pattern column row that misuses the escape character.
+      [](const core::TypedExprPtr& expr) {
+        return expr->inputs().size() == 3 &&
+            !expr->inputs()[1]->isConstantKind();
+      });
 
   registerCudfFunction(
       prefix + "startswith",
@@ -3348,6 +3376,11 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         return !expr->inputs()[0]->isConstantKind();
       });
 
+  registerCudfSpecialForm(
+      {"switch", "if"},
+      {.create = ConditionalExpression::create,
+       .canEvaluate = ConditionalExpression::canEvaluate});
+
   registerCudfFunctions(
       // No signatures required for cast and try_cast. They are special forms.
       {"try_cast", "cast"},
@@ -3359,7 +3392,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       },
       {
           // Cast needs special handling dynamically using cudf.
-      });
+      },
+      /*overwrite=*/true,
+      /*canEvaluate=*/nullptr,
+      isFailingCastFromVarchar);
 
   //
   // regular binary operators
@@ -3395,7 +3431,13 @@ bool registerBuiltinFunctions(const std::string& prefix) {
              .argumentType("double")
              .argumentType("double")
              .build(),
-         decimalBinarySignature()});
+         decimalBinarySignature()},
+        /*overwrite=*/true,
+        /*canEvaluate=*/nullptr,
+        // DECIMAL division by zero and overflow.
+        [](const core::TypedExprPtr& expr) {
+          return expr->type()->isDecimal();
+        });
   };
 
   registerBinaryOp(
@@ -3717,24 +3759,6 @@ std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
 
 namespace {
 
-/// True for the special forms registered as SwitchFunction.
-bool isConditionalFunction(const core::TypedExprPtr& expr) {
-  if (expr->kind() != core::ExprKind::kCall) {
-    return false;
-  }
-  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
-  return name == "switch" || name == "if";
-}
-
-/// True for the special forms registered as LogicalFunction.
-bool isConjunctFunction(const core::TypedExprPtr& expr) {
-  if (expr->kind() != core::ExprKind::kCall) {
-    return false;
-  }
-  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
-  return name == "and" || name == "or";
-}
-
 /// Rows where \p condition is anything but a valid \p value, nulls included.
 cuda::device_buffer<std::byte> makeRowMaskExcept(
     const cudf::column_view& condition,
@@ -3995,19 +4019,6 @@ void ConjunctExpression::close() {
   subexpressions_.clear();
 }
 
-bool ConjunctExpression::canEvaluate(
-    const core::TypedExprPtr& expr,
-    const core::QueryConfig& config) {
-  // Narrowing costs mask ops per operand, so only take conjuncts where a later
-  // operand could fail fast on rows an earlier one decides.
-  return isConjunctFunction(expr) && expr->inputs().size() > 1 &&
-      std::any_of(
-             expr->inputs().begin() + 1,
-             expr->inputs().end(),
-             hasFailFastSubexpr) &&
-      FunctionExpression::canEvaluate(expr, config);
-}
-
 std::shared_ptr<ConditionalExpression> ConditionalExpression::create(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
@@ -4088,11 +4099,39 @@ void ConditionalExpression::close() {
 
 bool ConditionalExpression::canEvaluate(
     const core::TypedExprPtr& expr,
+    const core::QueryConfig& /*config*/) {
+  return !expr->inputs().empty() && !expr->inputs()[0]->isConstantKind() &&
+      !expr->inputs()[0]->isInputKind();
+}
+
+void registerCudfSpecialForm(
+    const std::vector<std::string>& names,
+    CudfSpecialFormSpec spec) {
+  auto& registry = getCudfSpecialFormRegistry();
+  for (const auto& name : names) {
+    registry[name] = spec;
+  }
+}
+
+bool canEvaluateSpecialForm(
+    const core::TypedExprPtr& expr,
     const core::QueryConfig& config) {
-  return isConditionalFunction(expr) && !expr->inputs().empty() &&
-      !expr->inputs()[0]->isConstantKind() &&
-      !expr->inputs()[0]->isInputKind() &&
+  if (!needsOperandNarrowing(expr)) {
+    return false;
+  }
+  const auto& spec = getCudfSpecialFormRegistry().at(exprRegistryName(expr));
+  return (!spec.canEvaluate || spec.canEvaluate(expr, config)) &&
       FunctionExpression::canEvaluate(expr, config);
+}
+
+std::shared_ptr<CudfExpression> createSpecialFormExpression(
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
+  return getCudfSpecialFormRegistry()
+      .at(exprRegistryName(expr))
+      .create(expr, inputRowSchema, pool, config);
 }
 
 bool FunctionExpression::canEvaluate(
@@ -4355,35 +4394,32 @@ bool containsTimestampToVarcharCast(const core::TypedExprPtr& expr) {
 }
 
 bool hasFailFastSubexpr(const core::TypedExprPtr& expr) {
-  if (expr->type()->isDecimal()) {
-    // Division by zero and overflow.
-    return true;
-  }
-  if (expr->isCallKind()) {
-    std::string_view name = expr->asUnchecked<core::CallTypedExpr>()->name();
-    const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
-    if (name.starts_with(prefix)) {
-      name.remove_prefix(prefix.size());
-    }
-    // An index out of bounds, or element_at's index 0.
-    if (name == "subscript" || name == "element_at") {
-      return true;
-    }
-    // Presto's date_add(unit, value, date), with a value outside INTEGER.
-    if (name == "date_add" && expr->inputs().size() == 3) {
-      return true;
-    }
-    // A date plus an interval that is not a whole number of days.
-    if (name == "plus" && expr->type()->isDate()) {
-      return true;
-    }
-    // Seconds past the range of the cuDF timestamp unit.
-    if (name == "from_unixtime") {
-      return true;
+  if (expr->isCallKind() || expr->isCastKind()) {
+    const auto& registry = getCudfFunctionRegistry();
+    // Any registration whose signature the call matches may be the one picked,
+    // so count the call as failing if any of them can fail.
+    if (auto it = registry.find(exprRegistryName(expr)); it != registry.end()) {
+      for (const auto& spec : it->second) {
+        if (spec.failsOnInvalidRow &&
+            (spec.signatures.empty() ||
+             matchCallAgainstSignatures(expr, spec.signatures)) &&
+            spec.failsOnInvalidRow(expr)) {
+          return true;
+        }
+      }
     }
   }
   return std::any_of(
       expr->inputs().begin(), expr->inputs().end(), hasFailFastSubexpr);
+}
+
+bool needsOperandNarrowing(const core::TypedExprPtr& expr) {
+  if (!expr->isCallKind() || expr->inputs().size() < 2 ||
+      !getCudfSpecialFormRegistry().contains(exprRegistryName(expr))) {
+    return false;
+  }
+  return std::any_of(
+      expr->inputs().begin() + 1, expr->inputs().end(), hasFailFastSubexpr);
 }
 
 bool canExprRunOnGpu(
@@ -4424,6 +4460,7 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 void unregisterFunctions() {
   auto& registry = getCudfFunctionRegistry();
   registry.clear();
+  getCudfSpecialFormRegistry().clear();
   prestoCastEnabled = false;
 }
 
