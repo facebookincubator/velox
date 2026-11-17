@@ -382,7 +382,7 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
                {"c0", "u_c0"})
            .planNode();
 
-  assertQueryReturnsEmptyResult(op);
+  AssertQueryBuilder(op).assertEmptyResults();
 
   // Multi-threaded build side.
   planNodeIdGenerator->reset();

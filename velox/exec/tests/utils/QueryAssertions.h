@@ -271,14 +271,6 @@ std::shared_ptr<Task> assertQuery(
     DuckDbQueryRunner& duckDbQueryRunner,
     std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
 
-std::shared_ptr<Task> assertQueryReturnsEmptyResult(
-    const core::PlanNodePtr& plan);
-
-std::shared_ptr<Task> assertQueryReturnsEmptyResult(
-    const CursorParameters& params);
-
-void assertEmptyResults(const std::vector<RowVectorPtr>& results);
-
 void assertResults(
     const std::vector<RowVectorPtr>& results,
     const RowTypePtr& resultType,
