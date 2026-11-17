@@ -213,6 +213,25 @@ ReaderBase::ReaderBase(
         return fileStats->toColumnStatistics(fileSchema_, nimbleSchema_);
       }()} {}
 
+bool ReaderBase::hasFileColumnStatistics() const {
+  return !fileColumnStats_.empty();
+}
+
+const ColumnStatistics* FOLLY_NULLABLE
+ReaderBase::fileColumnStatistics(uint32_t nodeId) const {
+  return nodeId < fileColumnStats_.size() ? fileColumnStats_[nodeId].get()
+                                          : nullptr;
+}
+
+std::optional<uint64_t> ReaderBase::fileColumnLogicalSize(
+    uint32_t nodeId) const {
+  const auto* stats = fileColumnStatistics(nodeId);
+  if (stats == nullptr) {
+    return std::nullopt;
+  }
+  return stats->getLogicalSize();
+}
+
 void LazyInput::load() {
   if (!loaded_) {
     input_->load(velox::dwio::common::LogType::STREAM_BUNDLE);
