@@ -15,10 +15,17 @@
  */
 #include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 
+#include <array>
+#include <span>
+
+#include <folly/Synchronized.h>
+
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 namespace facebook::nimble {
 
@@ -868,6 +875,402 @@ VectorizedFileStats::toColumnStatistics(
   auto schemaInfo = getSchemaInfo(schema, nimbleType);
   traverseSchema(schema, schemaInfo, statStreams_, statTypeCounts, columnStats);
   return columnStats;
+}
+
+namespace detail {
+
+// 'typedIndex' indexes the min/max streams of 'statType'.
+struct StatNodeInfo {
+  StatType statType;
+  uint32_t typedIndex;
+};
+
+} // namespace detail
+
+namespace {
+
+constexpr size_t kNumStatTypes{static_cast<size_t>(StatType::DEDUPLICATED) + 1};
+
+// One slot per StatStreamType value.
+constexpr size_t kNumStatStreamTypes{
+    static_cast<size_t>(StatStreamType::DEDUPLICATED_LOGICAL_SIZE) + 1};
+
+// Must produce the node order and kinds of traverseSchema().
+void appendNodes(
+    const velox::Type& type,
+    std::array<uint32_t, kNumStatTypes>& numTypedNodes,
+    std::vector<detail::StatNodeInfo>& nodes) {
+  const auto appendTyped = [&](StatType statType) {
+    nodes.push_back({statType, numTypedNodes[static_cast<size_t>(statType)]++});
+  };
+  switch (type.kind()) {
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
+      appendTyped(StatType::INTEGRAL);
+      break;
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+      appendTyped(StatType::FLOATING_POINT);
+      break;
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
+      appendTyped(StatType::STRING);
+      break;
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::TIMESTAMP:
+      nodes.push_back({StatType::DEFAULT, 0});
+      break;
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::ARRAY:
+    case velox::TypeKind::MAP:
+      nodes.push_back({StatType::DEFAULT, 0});
+      for (uint32_t i = 0; i < type.size(); ++i) {
+        appendNodes(*type.childAt(i), numTypedNodes, nodes);
+      }
+      break;
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
+    default:
+      NIMBLE_UNSUPPORTED("Unsupported schema kind: {}.", type.kind());
+  }
+}
+
+} // namespace
+
+namespace detail {
+
+// Reads a stats section lazily: parses only its header, reads each stat stream
+// in place through an encoding view, created on first use, and builds a node's
+// statistics on first request. Thread-safe.
+class LazyFileStatsReader {
+ public:
+  // Parses only the header of 'payload'. 'payloadHolder' keeps 'payload'
+  // valid, or is null if the caller does.
+  LazyFileStatsReader(
+      std::string_view payload,
+      std::shared_ptr<const void> payloadHolder,
+      velox::TypePtr schema,
+      velox::memory::MemoryPool& pool);
+
+  // Builds the node's statistics on first call. Throws on a corrupt section.
+  const ColumnStatistics* FOLLY_NULLABLE
+  columnStatistics(uint32_t nodeId) const;
+
+  // Builds no ColumnStatistics.
+  std::optional<uint64_t> logicalSize(uint32_t nodeId) const;
+
+ private:
+  // What lookups build on first use.
+  struct State {
+    // Each created on first use, indexed by StatStreamType.
+    std::array<std::unique_ptr<EncodingView>, kNumStatStreamTypes> streamViews;
+    // Kind and typed index of each node, built on first use.
+    std::vector<StatNodeInfo> nodes;
+    // Each built on first request, indexed by node id.
+    std::vector<std::unique_ptr<ColumnStatistics>> columnStats;
+  };
+
+  // The methods below read and fill the locked 'state'.
+
+  // Built from 'schema_' on first call.
+  const std::vector<StatNodeInfo>& nodes(State& state) const;
+
+  // Creates on first call. Null if the section lacks the stream.
+  template <typename T>
+  const TypedEncodingView<T>* FOLLY_NULLABLE
+  view(State& state, StatStreamType type) const;
+
+  // Creates the stream's view on first use. Throws if 'index' is past the end.
+  template <typename T>
+  std::optional<T> valueAt(State& state, StatStreamType type, uint32_t index)
+      const;
+
+  // Like valueAt(), but throws if absent.
+  uint64_t defaultValueAt(State& state, StatStreamType type, uint32_t nodeId)
+      const;
+
+  // Reads the entries at 'nodeId' and the min/max at 'node.typedIndex'.
+  std::unique_ptr<ColumnStatistics> buildColumnStatistics(
+      State& state,
+      uint32_t nodeId,
+      const StatNodeInfo& node) const;
+
+  // Allocates the lookup structures of the views.
+  velox::memory::MemoryPool& pool_;
+  // Gives each node its statistics kind.
+  const velox::TypePtr schema_;
+  // Keeps the section bytes valid. Declared before the views into them, so it
+  // outlives them.
+  const std::shared_ptr<const void> payloadHolder_;
+  // Indexed by StatStreamType.
+  std::array<std::optional<std::string_view>, kNumStatStreamTypes>
+      streamPayloads_;
+  // Filled by lookups, which hold its lock while they read or fill it.
+  mutable folly::Synchronized<State> state_;
+};
+
+} // namespace detail
+
+detail::LazyFileStatsReader::LazyFileStatsReader(
+    std::string_view payload,
+    std::shared_ptr<const void> payloadHolder,
+    velox::TypePtr schema,
+    velox::memory::MemoryPool& pool)
+    : pool_{pool},
+      schema_{std::move(schema)},
+      payloadHolder_{std::move(payloadHolder)} {
+  // Same layout as VectorizedFileStats::deserialize() reads.
+  constexpr uint64_t kFixedHeaderSize{sizeof(uint16_t) + 2 * sizeof(uint8_t)};
+  NIMBLE_CHECK_FILE_GE(
+      payload.size(),
+      kFixedHeaderSize,
+      "Vectorized stats section is too small");
+
+  const auto* pos = payload.data();
+  const auto version = encoding::read<uint16_t>(pos);
+  NIMBLE_CHECK_FILE_EQ(
+      version, kVectorizedStatsVersion, "Unsupported vectorized stats version");
+  const auto streamCount = encoding::read<uint8_t>(pos);
+  const auto bitWidth = encoding::read<uint8_t>(pos);
+  const auto streamTypesSize = FixedBitArray::bufferSize(streamCount, bitWidth);
+  const uint64_t headerSize{
+      kFixedHeaderSize + streamTypesSize + sizeof(uint8_t) +
+      streamCount * sizeof(uint64_t)};
+  NIMBLE_CHECK_FILE_LE(
+      headerSize,
+      payload.size(),
+      "Vectorized stats header overflows the section");
+  FixedBitArray streamTypes(const_cast<char*>(pos), bitWidth);
+  pos += streamTypesSize;
+  const auto lengthsEncoded = encoding::read<uint8_t>(pos);
+  NIMBLE_CHECK_FILE_EQ(
+      lengthsEncoded, 0, "Encoded vectorized stats lengths are not supported");
+
+  uint64_t offset{headerSize};
+  for (uint8_t i = 0; i < streamCount; ++i) {
+    const auto length = encoding::readUint64(pos);
+    NIMBLE_CHECK_FILE_LE(
+        length,
+        payload.size() - offset,
+        "Vectorized stats stream overflows the section");
+    const auto type = streamTypes.get(i);
+
+    // Keeps the first stream of a type, as deserialize() does.
+    if (type < kNumStatStreamTypes && !streamPayloads_[type].has_value()) {
+      streamPayloads_[type] = payload.substr(offset, length);
+    }
+    offset += length;
+  }
+}
+
+const std::vector<detail::StatNodeInfo>& detail::LazyFileStatsReader::nodes(
+    State& state) const {
+  if (state.nodes.empty()) {
+    // Builds into a local, so a throw leaves 'state.nodes' empty for a retry.
+    std::vector<detail::StatNodeInfo> nodes;
+    std::array<uint32_t, kNumStatTypes> numTypedNodes{};
+    appendNodes(*schema_, numTypedNodes, nodes);
+    state.nodes = std::move(nodes);
+  }
+  return state.nodes;
+}
+
+template <typename T>
+const TypedEncodingView<T>* FOLLY_NULLABLE
+detail::LazyFileStatsReader::view(State& state, StatStreamType type) const {
+  const auto index = static_cast<size_t>(type);
+  auto& view = state.streamViews[index];
+  if (view == nullptr && streamPayloads_[index].has_value()) {
+    const auto payload = *streamPayloads_[index];
+    NIMBLE_CHECK_FILE_GE(
+        payload.size(),
+        EncodingPrefix::kFixedPrefixSize,
+        "Stat stream is too small");
+    NIMBLE_CHECK_FILE_EQ(
+        EncodingPrefix::dataType(payload),
+        TypeTraits<T>::dataType,
+        "Stat stream has an unexpected data type");
+
+    // Caches the lookup structures, since the row-size estimate reads an entry
+    // of the same stream for each projected column. A throw leaves 'view'
+    // empty for a retry.
+    view = detail::createTypedEncodingView<T>(
+        payload, &pool_, Encoding::Options{.cacheEncodingView = true});
+  }
+  if (view == nullptr) {
+    return nullptr;
+  }
+
+  // Debug only: a dynamic_cast per lookup is too costly.
+  NIMBLE_DCHECK_NOT_NULL(
+      dynamic_cast<const TypedEncodingView<T>*>(view.get()),
+      "Stat stream value type mismatch");
+  return static_cast<const TypedEncodingView<T>*>(view.get());
+}
+
+template <typename T>
+std::optional<T> detail::LazyFileStatsReader::valueAt(
+    State& state,
+    StatStreamType type,
+    uint32_t index) const {
+  const auto* view = this->view<T>(state, type);
+  if (view == nullptr) {
+    return std::nullopt;
+  }
+  NIMBLE_CHECK_FILE_LT(
+      index,
+      view->rowCount(),
+      "Stat stream has fewer entries than the schema has nodes");
+  typename TypeTraits<T>::physicalType value;
+  const auto numNonNulls = view->read(
+      std::span<const uint32_t>{&index, 1},
+      /*setNull=*/[](uint32_t /*outputIndex*/) {},
+      &value);
+  if (numNonNulls == 0) {
+    return std::nullopt;
+  }
+  return detail::castFromPhysicalType<T>(value);
+}
+
+uint64_t detail::LazyFileStatsReader::defaultValueAt(
+    State& state,
+    StatStreamType type,
+    uint32_t nodeId) const {
+  const auto value = valueAt<uint64_t>(state, type, nodeId);
+  NIMBLE_CHECK_FILE(
+      value.has_value(),
+      "Vectorized stats lack a default statistic: stream type {}, node {}",
+      static_cast<uint32_t>(type),
+      nodeId);
+  return *value;
+}
+
+std::unique_ptr<ColumnStatistics>
+detail::LazyFileStatsReader::buildColumnStatistics(
+    State& state,
+    uint32_t nodeId,
+    const detail::StatNodeInfo& node) const {
+  const auto valueCount =
+      defaultValueAt(state, StatStreamType::VALUE_COUNT, nodeId);
+  const auto nullCount =
+      defaultValueAt(state, StatStreamType::NULL_COUNT, nodeId);
+  const auto logicalSize =
+      defaultValueAt(state, StatStreamType::LOGICAL_SIZE, nodeId);
+  const auto physicalSize =
+      defaultValueAt(state, StatStreamType::PHYSICAL_SIZE, nodeId);
+  switch (node.statType) {
+    case StatType::INTEGRAL:
+      return std::make_unique<IntegralStatistics>(
+          valueCount,
+          nullCount,
+          logicalSize,
+          physicalSize,
+          valueAt<int64_t>(
+              state, StatStreamType::INTEGRAL_MIN, node.typedIndex),
+          valueAt<int64_t>(
+              state, StatStreamType::INTEGRAL_MAX, node.typedIndex));
+    case StatType::FLOATING_POINT:
+      return std::make_unique<FloatingPointStatistics>(
+          valueCount,
+          nullCount,
+          logicalSize,
+          physicalSize,
+          valueAt<double>(
+              state, StatStreamType::FLOATING_POINT_MIN, node.typedIndex),
+          valueAt<double>(
+              state, StatStreamType::FLOATING_POINT_MAX, node.typedIndex));
+    case StatType::STRING: {
+      const auto toOptionalString = [](std::optional<std::string_view> value)
+          -> std::optional<std::string> {
+        if (!value.has_value()) {
+          return std::nullopt;
+        }
+        return std::string(*value);
+      };
+      return std::make_unique<StringStatistics>(
+          valueCount,
+          nullCount,
+          logicalSize,
+          physicalSize,
+          toOptionalString(
+              valueAt<std::string_view>(
+                  state, StatStreamType::STRING_MIN, node.typedIndex)),
+          toOptionalString(
+              valueAt<std::string_view>(
+                  state, StatStreamType::STRING_MAX, node.typedIndex)));
+    }
+    case StatType::DEFAULT:
+      break;
+    case StatType::DEDUPLICATED:
+      NIMBLE_UNREACHABLE("appendNodes() emits no DEDUPLICATED nodes.");
+  }
+  return std::make_unique<ColumnStatistics>(
+      valueCount, nullCount, logicalSize, physicalSize);
+}
+
+const ColumnStatistics* FOLLY_NULLABLE
+detail::LazyFileStatsReader::columnStatistics(uint32_t nodeId) const {
+  auto state = state_.wlock();
+  const auto& nodes = this->nodes(*state);
+  if (nodeId >= nodes.size()) {
+    return nullptr;
+  }
+  if (state->columnStats.empty()) {
+    state->columnStats.resize(nodes.size());
+  }
+  auto& stats = state->columnStats.at(nodeId);
+  if (stats == nullptr) {
+    stats = buildColumnStatistics(*state, nodeId, nodes[nodeId]);
+  }
+  return stats.get();
+}
+
+std::optional<uint64_t> detail::LazyFileStatsReader::logicalSize(
+    uint32_t nodeId) const {
+  auto state = state_.wlock();
+  if (nodeId >= nodes(*state).size()) {
+    return std::nullopt;
+  }
+  return defaultValueAt(*state, StatStreamType::LOGICAL_SIZE, nodeId);
+}
+
+VectorizedFileStats::~VectorizedFileStats() = default;
+
+VectorizedFileStats::VectorizedFileStats(
+    std::unique_ptr<detail::LazyFileStatsReader> lazyReader)
+    : lazyReader_{std::move(lazyReader)} {}
+
+/* static */ std::unique_ptr<VectorizedFileStats>
+VectorizedFileStats::deserializeLazily(
+    std::string_view payload,
+    std::shared_ptr<const void> payloadHolder,
+    velox::TypePtr schema,
+    velox::memory::MemoryPool& pool) {
+  return std::unique_ptr<VectorizedFileStats>(new VectorizedFileStats(
+      std::make_unique<detail::LazyFileStatsReader>(
+          payload, std::move(payloadHolder), std::move(schema), pool)));
+}
+
+const detail::LazyFileStatsReader& VectorizedFileStats::lazyReader() const {
+  NIMBLE_CHECK_NOT_NULL(
+      lazyReader_,
+      "Per-node lookups must use a VectorizedFileStats from deserializeLazily()");
+  return *lazyReader_;
+}
+
+const ColumnStatistics* FOLLY_NULLABLE
+VectorizedFileStats::columnStatistics(uint32_t nodeId) const {
+  return lazyReader().columnStatistics(nodeId);
+}
+
+std::optional<uint64_t> VectorizedFileStats::logicalSize(
+    uint32_t nodeId) const {
+  return lazyReader().logicalSize(nodeId);
 }
 
 } // namespace facebook::nimble

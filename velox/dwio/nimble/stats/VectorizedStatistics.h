@@ -118,6 +118,10 @@ using FloatingPointVectorizedStatistics = TypedVectorizedStatistic<double>;
 using StringVectorizedStatistics = TypedVectorizedStatistic<std::string_view>;
 using DeduplicatedVectorizedStatistics = TypedVectorizedStatistic<uint64_t>;
 
+namespace detail {
+class LazyFileStatsReader;
+} // namespace detail
+
 class VectorizedFileStats {
  public:
   /// Options for building file and stripe vectorized statistics.
@@ -137,15 +141,38 @@ class VectorizedFileStats {
       velox::memory::MemoryPool* pool,
       Options options);
 
+  ~VectorizedFileStats();
+
   std::string_view serialize(nimble::Buffer& buffer);
 
+  // TODO: Delete once the lazy path is fully rolled out.
   static std::unique_ptr<VectorizedFileStats> deserialize(
       const std::string_view payload,
       velox::memory::MemoryPool& pool);
 
+  // TODO: Delete once the lazy path is fully rolled out.
   std::vector<std::unique_ptr<ColumnStatistics>> toColumnStatistics(
       const velox::TypePtr& schema,
       const std::shared_ptr<const nimble::Type>& nimbleType);
+
+  /// Parses only the header of 'payload'. Reads each stat stream in place
+  /// through an encoding view, created on first use, instead of decoding it.
+  /// 'payloadHolder' keeps 'payload' valid, or is null if the caller does.
+  /// The result answers only columnStatistics() and logicalSize(), which are
+  /// thread-safe.
+  static std::unique_ptr<VectorizedFileStats> deserializeLazily(
+      std::string_view payload,
+      std::shared_ptr<const void> payloadHolder,
+      velox::TypePtr schema,
+      velox::memory::MemoryPool& pool);
+
+  /// Builds the node's statistics on first call. Throws on a corrupt section.
+  /// Requires deserializeLazily().
+  const ColumnStatistics* FOLLY_NULLABLE
+  columnStatistics(uint32_t nodeId) const;
+
+  /// Builds no ColumnStatistics. Requires deserializeLazily().
+  std::optional<uint64_t> logicalSize(uint32_t nodeId) const;
 
  private:
   VectorizedFileStats(
@@ -153,6 +180,9 @@ class VectorizedFileStats {
       const std::vector<uint64_t>& streamLengths,
       std::string_view statStreams,
       velox::memory::MemoryPool& pool);
+
+  explicit VectorizedFileStats(
+      std::unique_ptr<detail::LazyFileStatsReader> lazyReader);
 
   std::vector<StatStreamType> getStatStreamTypes() const;
   std::vector<StatStreamType> collateStatStreamTypes(
@@ -167,6 +197,10 @@ class VectorizedFileStats {
       std::string_view payload,
       velox::memory::MemoryPool& pool);
 
+  // Returns 'lazyReader_'. Throws if this object did not come from
+  // deserializeLazily().
+  const detail::LazyFileStatsReader& lazyReader() const;
+
   // Options applied when constructing the vectorized statistics streams.
   Options options_;
   std::set<StatType> statTypes_;
@@ -176,6 +210,8 @@ class VectorizedFileStats {
           DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
     return encodingFactory.createPolicy(dataType);
   };
+  // Set only by deserializeLazily(), which leaves the members above empty.
+  std::unique_ptr<detail::LazyFileStatsReader> lazyReader_;
 };
 
 } // namespace facebook::nimble
