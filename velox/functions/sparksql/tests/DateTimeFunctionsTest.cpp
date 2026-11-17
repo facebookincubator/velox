@@ -2140,32 +2140,28 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
       parseTimestamp("1968-02-28 12:00:00"),
       timestampadd("year", -1, parseTimestamp("1969-02-28 12:00:00")));
 
-  // A result far outside the supported range must throw. In a time zone with
-  // DST rules these used to run without end.
+  // A result far outside the supported range throws, also in a time zone with
+  // DST rules. In debug builds the Timestamp constructor checks the range
+  // first.
   setQueryTimeZone("America/Los_Angeles");
-  // In debug mode, Timestamp constructor will throw exception if range check
-  // fails.
 #ifndef NDEBUG
-  VELOX_ASSERT_THROW(
-      timestampadd(
-          "year",
-          std::numeric_limits<int32_t>::max(),
-          parseTimestamp("1800-01-01 00:00:00")),
-      "Timestamp seconds out of range");
+  const std::string outOfRange = "Timestamp seconds out of range";
 #else
+  const std::string outOfRange =
+      "Timepoint is outside of supported timestamp seconds since epoch range";
+#endif
   VELOX_ASSERT_THROW(
       timestampadd(
           "year",
           std::numeric_limits<int32_t>::max(),
           parseTimestamp("1800-01-01 00:00:00")),
-      "Timepoint is outside of supported timestamp seconds since epoch range");
-#endif
+      outOfRange);
   VELOX_ASSERT_THROW(
       timestampadd(
           "year",
           std::numeric_limits<int32_t>::min(),
           parseTimestamp("1800-01-01 00:00:00")),
-      "Timepoint is outside of supported timestamp seconds since epoch range");
+      outOfRange);
 }
 
 TEST_F(DateTimeFunctionsTest, timestampAddTimestampUtc) {

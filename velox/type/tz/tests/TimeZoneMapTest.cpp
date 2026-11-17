@@ -273,8 +273,7 @@ TEST(TimeZoneMapTest, correctNonexistentTime) {
   EXPECT_EQ(
       gapStart + hours(4), tz->correct_nonexistent_time(gapStart + hours(4)));
 
-  // Out of range time points must throw. Evaluating the DST rules for them
-  // used to run without end.
+  // Time points just outside the supported range throw.
   VELOX_ASSERT_THROW(
       tz->correct_nonexistent_time(
           seconds{std::numeric_limits<int64_t>::max() / 1000 + 1}),
@@ -282,6 +281,16 @@ TEST(TimeZoneMapTest, correctNonexistentTime) {
   VELOX_ASSERT_THROW(
       tz->correct_nonexistent_time(
           seconds{std::numeric_limits<int64_t>::min() / 1000 - 1}),
+      "Timepoint is outside of supported timestamp seconds since epoch range:");
+
+  // Time points past year INT32_MAX, in both directions, throw too.
+  const seconds pastMaxYear{
+      int64_t{std::numeric_limits<int32_t>::max()} * 366 * 86400};
+  VELOX_ASSERT_THROW(
+      tz->correct_nonexistent_time(pastMaxYear),
+      "Timepoint is outside of supported timestamp seconds since epoch range:");
+  VELOX_ASSERT_THROW(
+      tz->correct_nonexistent_time(-pastMaxYear),
       "Timepoint is outside of supported timestamp seconds since epoch range:");
 }
 
