@@ -165,6 +165,38 @@ General Aggregate Functions
     Returns the first non-null value of ``x``. Supports the same types as
     :spark:func:`first`.
 
+.. spark:function:: histogram_numeric(x, numBins) -> array(row(x [same as x], y double))
+
+    Computes an approximate numeric histogram with at most ``numBins`` bins.
+    ``numBins`` must be a non-null constant INTEGER of at least 2. Null input
+    values are ignored. Empty and all-null input returns null.
+
+    Matches Spark's default
+    ``spark.sql.legacy.histogramNumericPropagateInputType=true``, except for
+    DECIMAL inputs.
+
+    Supported input and center types are TINYINT, SMALLINT, INTEGER, BIGINT,
+    REAL, DOUBLE, DATE, TIMESTAMP, TIMESTAMP_UTC, and INTERVAL_YEAR_MONTH.
+    DECIMAL centers are not supported because Spark's Decimal reconstruction
+    depends on the Java runtime version. Spark's DayTimeIntervalType inputs
+    are not supported.
+
+    Results can vary with input order and aggregation-tree shape. See Spark's
+    `histogram_numeric documentation
+    <https://spark.apache.org/docs/latest/api/sql/index.html#histogram_numeric>`_
+    for the function semantics.
+
+.. spark:function:: histogram_numeric_legacy(x, numBins) -> array(row(x double, y double))
+
+    Computes a histogram using the same input and bin-count rules as
+    ``histogram_numeric``, but returns DOUBLE centers. Also supports DECIMAL
+    inputs without reconstructing Decimal centers. Matches
+    ``spark.sql.legacy.histogramNumericPropagateInputType=false``.
+    DECIMAL input handling matches Spark 3.5.5+ and 4.0.0+
+    (`SPARK-50769 <https://issues.apache.org/jira/browse/SPARK-50769>`_).
+    Earlier Spark versions throw ``ClassCastException`` for DECIMAL inputs.
+    Spark's DayTimeIntervalType inputs are not supported.
+
 .. spark:function:: kurtosis(x) -> double
 
     Returns the Pearson's kurtosis of all input values. When the count of `x` is not empty,

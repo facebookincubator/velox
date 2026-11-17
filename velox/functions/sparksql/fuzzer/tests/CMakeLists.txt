@@ -24,12 +24,14 @@ target_link_libraries(
   velox_spark_query_runner_test
   PRIVATE
     velox_functions_spark_aggregates
+    velox_aggregation_fuzzer_base
     velox_spark_query_runner
     velox_functions_spark
     velox_exec_test_lib
     velox_dwio_parquet_writer
     velox_parse_utils
     velox_vector_test_lib
+    GTest::gmock
     GTest::gtest
     GTest::gtest_main
     Folly::folly
