@@ -102,6 +102,9 @@ void ColumnLoader::loadInternal(
        },
        structReader_});
   raw_vector<vector_size_t> selectedRows(fieldReader_->memoryPool());
+  if (!hook) {
+    fieldReader_->releaseReusableResult(*result);
+  }
   auto effectiveRows =
       read(structReader_, fieldReader_, version_, rows, selectedRows, hook);
   if (!hook) {
