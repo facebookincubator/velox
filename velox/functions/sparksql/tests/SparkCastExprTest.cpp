@@ -3591,9 +3591,15 @@ TEST_F(SparkCastExprTestAnsiOn, castDecimalToIntegralOverflow) {
 
   // Scaled values are truncated toward zero before the range check.
   testThrow<int64_t>(
-      DECIMAL(7, 2), SMALLINT(), {3'276'800}, "to SMALLINT. Out of bounds.");
+      DECIMAL(7, 2),
+      SMALLINT(),
+      {3'276'800},
+      "Cannot cast DECIMAL(7, 2) '32768.00' to SMALLINT. Out of bounds.");
   testThrow<int128_t>(
-      DECIMAL(20, 2), TINYINT(), {12'800}, "to TINYINT. Out of bounds.");
+      DECIMAL(20, 2),
+      TINYINT(),
+      {12'800},
+      "Cannot cast DECIMAL(20, 2) '128.00' to TINYINT. Out of bounds.");
   testCast(
       makeFlatVector<int64_t>({3'276'799, -3'276'899}, DECIMAL(7, 2)),
       makeFlatVector<int16_t>({32'767, -32'768}));

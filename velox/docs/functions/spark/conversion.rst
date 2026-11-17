@@ -144,6 +144,15 @@ The decimal part will be truncated for casting to an integer.
 It is allowed when the truncated result exceeds the range of result type when ANSI mode
 is disabled; throws an error when ANSI mode is enabled.
 
+.. note::
+
+    When ANSI mode is enabled, Spark converts a decimal with precision greater than 18
+    to DOUBLE before casting it to TINYINT, SMALLINT or INTEGER, while Velox truncates
+    the exact decimal value. Results can differ when the DOUBLE conversion rounds the
+    value up to the next integer. For example,
+    ``cast(cast(127.999999999999999999 as DECIMAL(21, 18)) as tinyint)`` throws an
+    error in Spark but returns 127 in Velox. Casting to BIGINT is exact in both.
+
 Valid examples
 
 ::
