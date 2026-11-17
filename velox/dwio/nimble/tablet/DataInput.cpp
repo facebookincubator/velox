@@ -411,7 +411,8 @@ void DirectDataInput::clear() {
 }
 
 std::pair<std::string_view, DataInput::Handle> DirectDataInput::read(
-    Region region) const {
+    Region region,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_GT(region.length, 0, "Read region length must be positive");
   const auto readRegion = alignedRegion(region, alignment_, file_->size());
   auto [buffer, handle] = allocateBuffer(readRegion.length);
@@ -425,7 +426,7 @@ std::pair<std::string_view, DataInput::Handle> DirectDataInput::read(
     bytesRead = file_->preadv(
         folly::Range<const Region*>(&readRegion, 1),
         folly::Range<const folly::Range<char*>*>(&destination, 1),
-        fileIoContext_);
+        fileIoContext != nullptr ? *fileIoContext : fileIoContext_);
   }
   NIMBLE_CHECK_GE(
       bytesRead,
@@ -582,6 +583,7 @@ void CachedDataInput::loadCacheMissGroups(
     std::span<const CacheMissGroup> cacheMissGroups,
     uint64_t stagingBufferSize,
     std::span<BlockCache::Entry> cacheEntries,
+    const velox::FileIoContext& fileIoContext,
     LoadCallback loadCallback) const {
   char* stagingBuffer{nullptr};
   Handle stagingHandle;
@@ -626,7 +628,7 @@ void CachedDataInput::loadCacheMissGroups(
         folly::Range<const Region*>(readRegions.data(), readRegions.size()),
         folly::Range<const folly::Range<char*>*>(
             readBuffers.data(), readBuffers.size()),
-        fileIoContext_);
+        fileIoContext);
   }
   NIMBLE_CHECK_GE(
       bytesRead,
@@ -739,7 +741,11 @@ DataInput::Handle CachedDataInput::load(LoadCallback loadCallback) {
 
   if (!cacheMissGroups.empty()) {
     loadCacheMissGroups(
-        cacheMissGroups, stagingBufferSize, *cacheEntries, loadCallback);
+        cacheMissGroups,
+        stagingBufferSize,
+        *cacheEntries,
+        fileIoContext_,
+        loadCallback);
   }
 
   regions_.clear();
@@ -765,7 +771,8 @@ void CachedDataInput::clear() {
 }
 
 std::pair<std::string_view, DataInput::Handle> CachedDataInput::read(
-    Region region) const {
+    Region region,
+    const velox::FileIoContext* fileIoContext) const {
   checkCacheGroupRegion(region);
 
   // Checked before the entry is created, so a region past the end of the file
@@ -785,7 +792,8 @@ std::pair<std::string_view, DataInput::Handle> CachedDataInput::read(
     loadCacheMissGroups(
         std::span<const CacheMissGroup>{&cacheMissGroup, 1},
         readRegion.length,
-        std::span<BlockCache::Entry>{entry.get(), 1});
+        std::span<BlockCache::Entry>{entry.get(), 1},
+        fileIoContext != nullptr ? *fileIoContext : fileIoContext_);
   }
   const std::string_view data{entry->data(), region.length};
   return {data, std::move(entry)};

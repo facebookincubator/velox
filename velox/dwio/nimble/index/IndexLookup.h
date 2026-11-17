@@ -89,10 +89,12 @@ class IndexLookup {
   /// Returns the metadata of each stripe of stripe group 'stripeGroup', in
   /// stripe order, with the location of each of 'keyStreamIds' in the
   /// stripe, in the order of 'keyStreamIds'. Reads the metadata of the stripe
-  /// group.
+  /// group with 'fileIoContext', or with the reader's own context when it is
+  /// null. 'fileIoContext' is valid only during the call.
   using KeyStreamLocator = std::function<std::vector<StripeMetadata>(
       uint32_t stripeGroup,
-      std::span<const uint32_t> keyStreamIds)>;
+      std::span<const uint32_t> keyStreamIds,
+      const velox::FileIoContext* fileIoContext)>;
 
   /// IO options for index lookup creation. With blockCache, the index caches
   /// its metadata and data there. Without it, the index reads them directly.
@@ -319,8 +321,13 @@ class IndexLookup {
   ///   RowRanges for exact single rows (may return multiple per key).
   ///
   /// Results are indexed by input key position: result[i] returns the
-  /// RowRanges for request.keyBounds()[i].
-  virtual LookupResult lookup(const LookupRequest& request) const = 0;
+  /// RowRanges for request.keyBounds()[i]. A request context replaces the
+  /// index inputs' default context for key and partition reads. A null context
+  /// uses their default context. Derived lookup extensions document any reads
+  /// that use separate inputs.
+  virtual LookupResult lookup(
+      const LookupRequest& request,
+      const velox::FileIoContext* fileIoContext = nullptr) const = 0;
 
   /// Returns the minimum key in this index.
   virtual std::string_view minKey() const = 0;
@@ -330,14 +337,21 @@ class IndexLookup {
 
   /// Returns the encoded key at the given file-level row position.
   /// Not all index types support this — the default throws.
-  virtual std::string keyAtRow(uint32_t /*row*/) const {
+  /// Uses the request context for reads when supplied; otherwise uses the
+  /// default context of the index's inputs.
+  virtual std::string keyAtRow(
+      uint32_t /*row*/,
+      const velox::FileIoContext* /*fileIoContext*/ = nullptr) const {
     NIMBLE_NOT_IMPLEMENTED("keyAtRow is not supported by this index type");
   }
 
   /// Returns a cursor over the encoded keys of the rows in 'rows', which
   /// must be within the index. Scanning callers should prefer this to a
-  /// keyAtRow() loop.
-  virtual std::unique_ptr<KeyCursor> keyCursor(RowRange /*rows*/) const {
+  /// keyAtRow() loop. The cursor copies a supplied request context for lazy
+  /// reads. Objects referenced by that context must outlive the cursor.
+  virtual std::unique_ptr<KeyCursor> keyCursor(
+      RowRange /*rows*/,
+      const velox::FileIoContext* /*fileIoContext*/ = nullptr) const {
     NIMBLE_NOT_IMPLEMENTED(
         "keyCursor is not supported by index type {}", toString(type_));
   }

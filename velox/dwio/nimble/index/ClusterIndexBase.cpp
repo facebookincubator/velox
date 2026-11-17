@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <optional>
 #include <shared_mutex>
 
 #include "folly/json/json.h"
@@ -355,21 +356,30 @@ void ClusterIndexBase::loadPartitionKeyStream(
 void ClusterIndexBase::loadPartitions(
     std::span<const uint32_t> partitionIds) const {
   NIMBLE_CHECK(!partitionIds.empty(), "partitionIds must not be empty");
-  std::unique_lock l(mutex_);
   std::vector<MetadataSection> sections;
   sections.reserve(partitionIds.size());
   for (uint32_t id : partitionIds) {
     NIMBLE_CHECK_LT(id, numPartitions_);
-    NIMBLE_CHECK_NULL(partitions_[id]);
     sections.push_back(partitionSection(id));
   }
   auto buffers = metadataInput_->load(
-      std::span<const MetadataSection>{sections.data(), sections.size()});
+      std::span<const MetadataSection>{sections.data(), sections.size()},
+      /*fileIoContext=*/nullptr);
   NIMBLE_CHECK_EQ(buffers.size(), partitionIds.size());
+  std::vector<std::unique_ptr<IndexPartitionBase>> partitions;
+  partitions.reserve(partitionIds.size());
   auto partitionId = partitionIds.begin();
   for (auto& buffer : buffers) {
-    initializePartition(*partitionId, std::move(*buffer));
+    partitions.push_back(buildPartition(
+        *partitionId, std::move(*buffer), /*fileIoContext=*/nullptr));
     ++partitionId;
+  }
+
+  std::unique_lock l(mutex_);
+  for (size_t i = 0; i < partitionIds.size(); ++i) {
+    auto& slot = partitions_[partitionIds[i]];
+    NIMBLE_CHECK_NULL(slot);
+    slot = std::move(partitions[i]);
   }
 }
 
@@ -390,7 +400,8 @@ std::optional<uint32_t> ClusterIndexBase::lookupPartition(
 }
 
 const ClusterIndexBase::IndexPartitionBase* ClusterIndexBase::lookupPartition(
-    uint32_t row) const {
+    uint32_t row,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_LT(
       row, numRows_, "Row {} is beyond file total rows {}", row, numRows_);
   const auto it =
@@ -398,7 +409,7 @@ const ClusterIndexBase::IndexPartitionBase* ClusterIndexBase::lookupPartition(
   NIMBLE_CHECK(it != partitionRows_.begin());
   const uint32_t partitionId =
       static_cast<uint32_t>(it - partitionRows_.begin()) - 1;
-  return loadPartition(partitionId);
+  return loadPartition(partitionId, fileIoContext);
 }
 
 uint32_t ClusterIndexBase::partitionRow(uint32_t partitionId, uint32_t row)
@@ -412,7 +423,8 @@ uint32_t ClusterIndexBase::partitionRow(uint32_t partitionId, uint32_t row)
 void ClusterIndexBase::resolvePartitionBounds(
     std::optional<std::span<const KeyChunk>> keyChunks,
     std::vector<PartitionLookup>& partitionLookups,
-    LowerBoundChunk* lowerBoundChunk) const {
+    LowerBoundChunk* lowerBoundChunk,
+    const velox::FileIoContext* fileIoContext) const {
   std::sort(
       partitionLookups.begin(),
       partitionLookups.end(),
@@ -421,14 +433,15 @@ void ClusterIndexBase::resolvePartitionBounds(
       });
 
   for (size_t i = 0; i < partitionLookups.size();) {
-    const auto* partition = loadPartition(partitionLookups.at(i).partitionId);
+    const auto* partition =
+        loadPartition(partitionLookups.at(i).partitionId, fileIoContext);
     const auto& loadedPartition = *velox::checkedNotNull(partition);
 
     while (i < partitionLookups.size() &&
            partitionLookups.at(i).partitionId == loadedPartition.id()) {
       const auto& entry = partitionLookups.at(i);
-      *velox::checkedNotNull(entry.targetRow) =
-          resolvePartitionRow(partition, entry, keyChunks, lowerBoundChunk);
+      *velox::checkedNotNull(entry.targetRow) = resolvePartitionRow(
+          partition, entry, keyChunks, lowerBoundChunk, fileIoContext);
       ++i;
     }
   }
@@ -556,46 +569,54 @@ void ClusterIndexBase::lookupPartitions(
 }
 
 IndexLookup::LookupResult ClusterIndexBase::lookup(
-    const LookupRequest& request) const {
+    const LookupRequest& request,
+    const velox::FileIoContext* fileIoContext) const {
   return lookup(
-      request, /*keyChunks=*/std::nullopt, /*lowerBoundChunk=*/nullptr);
+      request,
+      /*keyChunks=*/std::nullopt,
+      /*lowerBoundChunk=*/nullptr,
+      fileIoContext);
 }
 
 IndexLookup::LookupResult ClusterIndexBase::lookup(
     const LookupRequest& request,
-    std::span<const KeyChunk> keyChunks) const {
+    std::span<const KeyChunk> keyChunks,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_EQ(
       keyStreamLayout_,
       KeyStreamLayout::kStripe,
       "Only a Stripe layout index looks up keys in given key chunks");
   NIMBLE_CHECK(!keyChunks.empty(), "A lookup in given key chunks needs some");
-  return lookup(request, keyChunks, /*lowerBoundChunk=*/nullptr);
+  return lookup(request, keyChunks, /*lowerBoundChunk=*/nullptr, fileIoContext);
 }
 
 IndexLookup::LookupResult ClusterIndexBase::lookup(
     const LookupRequest& request,
     std::optional<std::span<const KeyChunk>> keyChunks,
-    LowerBoundChunk* lowerBoundChunk) const {
+    LowerBoundChunk* lowerBoundChunk,
+    const velox::FileIoContext* fileIoContext) const {
   std::vector<PartitionLookup> partitionLookups;
   std::vector<RowRange> partitionRowRanges;
   lookupPartitions(request, partitionLookups, partitionRowRanges);
   NIMBLE_CHECK_EQ(partitionRowRanges.size(), request.size());
   NIMBLE_CHECK_LE(partitionLookups.size(), 2 * request.size());
-  resolvePartitionBounds(keyChunks, partitionLookups, lowerBoundChunk);
+  resolvePartitionBounds(
+      keyChunks, partitionLookups, lowerBoundChunk, fileIoContext);
 
   return buildLookupResult(request.options(), partitionRowRanges);
 }
 
 std::vector<StripeRange> ClusterIndexBase::lookupStripes(
-    const LookupRequest& request) const {
+    const LookupRequest& request,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_EQ(
       keyStreamLayout_,
       KeyStreamLayout::kStripe,
       "Only a Stripe layout index looks up the stripes of a request");
   // Returns the stripe whose key chunk lookup() decodes to resolve 'bound'.
-  const auto boundStripe = [this](const PartitionBound& bound) {
+  const auto boundStripe = [this, fileIoContext](const PartitionBound& bound) {
     const auto& partition =
-        *velox::checkedNotNull(loadPartition(bound.partitionId));
+        *velox::checkedNotNull(loadPartition(bound.partitionId, fileIoContext));
     return partition.chunkStripe(
         lookupChunk(&partition, bound.encodedKey).chunkIndex);
   };
@@ -618,8 +639,8 @@ std::vector<StripeRange> ClusterIndexBase::lookupStripes(
       continue;
     }
     if (!numStripes.has_value()) {
-      const auto& lastPartition =
-          *velox::checkedNotNull(loadPartition(numPartitions_ - 1));
+      const auto& lastPartition = *velox::checkedNotNull(
+          loadPartition(numPartitions_ - 1, fileIoContext));
       numStripes = lastPartition.chunkStripe(lastPartition.numChunks() - 1) + 1;
     }
     stripes[i] = StripeRange(startStripe, numStripes.value());
@@ -639,17 +660,23 @@ uint32_t ClusterIndexBase::resolvePartitionRow(
     const IndexPartitionBase* partition,
     const PartitionLookup& bound,
     std::optional<std::span<const KeyChunk>> keyChunks,
-    LowerBoundChunk* lowerBoundChunk) const {
+    LowerBoundChunk* lowerBoundChunk,
+    const velox::FileIoContext* fileIoContext) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const auto chunkLocation = lookupChunk(partition, bound.encodedKey);
-  const auto partitionRow =
-      seekInChunk(partition, chunkLocation, bound, keyChunks, lowerBoundChunk);
+  const auto partitionRow = seekInChunk(
+      partition,
+      chunkLocation,
+      bound,
+      keyChunks,
+      lowerBoundChunk,
+      fileIoContext);
   return partitionRows_.at(loadedPartition.id()) + partitionRow;
 }
 
 folly::Range<const uint32_t*> ClusterIndexBase::partitionChunkRows(
     uint32_t partitionId) const {
-  const auto* partition = loadPartition(partitionId);
+  const auto* partition = loadPartition(partitionId, /*fileIoContext=*/nullptr);
   return velox::checkedNotNull(partition)->chunkRows();
 }
 
@@ -846,31 +873,32 @@ class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
 
 } // namespace detail
 
-void ClusterIndexBase::initializePartition(
+std::unique_ptr<ClusterIndexBase::IndexPartitionBase>
+ClusterIndexBase::buildPartition(
     uint32_t partitionId,
-    MetadataBuffer&& buffer) const {
-  NIMBLE_CHECK_NULL(partitions_[partitionId]);
+    MetadataBuffer&& buffer,
+    const velox::FileIoContext* fileIoContext) const {
   auto metadata = std::make_unique<MetadataBuffer>(std::move(buffer));
   if (keyStreamLayout_ == KeyStreamLayout::kPartition) {
-    partitions_[partitionId] = std::make_unique<detail::IndexPartition>(
+    return std::make_unique<detail::IndexPartition>(
         partitionId, std::move(metadata), pinIndex_);
-    return;
   }
 
   // A partition holds the stripes of the stripe group of the same index.
   const auto keyStreamMetadata = keyStreamLocator_(
-      partitionId, std::span<const uint32_t>{&keyStreamId_, 1});
+      partitionId, std::span<const uint32_t>{&keyStreamId_, 1}, fileIoContext);
   auto group = std::make_unique<detail::IndexGroup>(
       partitionId, std::move(metadata), keyStreamMetadata, pinIndex_);
   NIMBLE_CHECK_FILE_EQ(
       group->chunkRows().back(),
       partitionRows_.at(partitionId + 1) - partitionRows_.at(partitionId),
       "The stripes of a cluster index group must hold its rows");
-  partitions_[partitionId] = std::move(group);
+  return group;
 }
 
 const ClusterIndexBase::IndexPartitionBase* ClusterIndexBase::loadPartition(
-    uint32_t partitionId) const {
+    uint32_t partitionId,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_LT(partitionId, numPartitions_);
   {
     std::shared_lock l(mutex_);
@@ -878,17 +906,23 @@ const ClusterIndexBase::IndexPartitionBase* ClusterIndexBase::loadPartition(
       return partitions_[partitionId].get();
     }
   }
+
+  // Read and build outside the lock so low-priority IO cannot block readers
+  // of other partitions. Concurrent misses can each build the same metadata.
+  velox::common::testutil::TestValue::adjust(
+      "facebook::nimble::index::ClusterIndexBase::loadPartition", &partitionId);
+  const auto section = partitionSection(partitionId);
+  auto results = metadataInput_->load({&section, 1}, fileIoContext);
+  NIMBLE_CHECK_EQ(results.size(), 1);
+  auto partition =
+      buildPartition(partitionId, std::move(*results.at(0)), fileIoContext);
+
   std::unique_lock l(mutex_);
-  if (partitions_[partitionId] == nullptr) {
-    velox::common::testutil::TestValue::adjust(
-        "facebook::nimble::index::ClusterIndexBase::loadPartition",
-        &partitionId);
-    const auto section = partitionSection(partitionId);
-    auto results = metadataInput_->load({&section, 1});
-    NIMBLE_CHECK_EQ(results.size(), 1);
-    initializePartition(partitionId, std::move(*results.at(0)));
+  auto& slot = partitions_[partitionId];
+  if (slot == nullptr) {
+    slot = std::move(partition);
   }
-  return partitions_.at(partitionId).get();
+  return slot.get();
 }
 
 ChunkLocation ClusterIndexBase::lookupChunk(
@@ -923,7 +957,7 @@ ClusterIndexBase::Layout ClusterIndexBase::layout(bool detail) const {
   // Populate per-partition detail (requires loading partition metadata via
   // I/O).
   for (uint32_t i = 0; i < numPartitions_; ++i) {
-    const auto* partition = loadPartition(i);
+    const auto* partition = loadPartition(i, /*fileIoContext=*/nullptr);
     const auto& loadedPartition = *velox::checkedNotNull(partition);
     auto& partitionLayout = result.partitions.at(i);
     // Every chunk of a Partition layout partition is in its one key stream,
@@ -952,7 +986,8 @@ ClusterIndexBase::Layout ClusterIndexBase::layout(bool detail) const {
 ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
     const IndexPartitionBase* partition,
     const ChunkLocation& chunkLocation,
-    std::optional<std::span<const KeyChunk>> keyChunks) const {
+    std::optional<std::span<const KeyChunk>> keyChunks,
+    const velox::FileIoContext* fileIoContext) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const uint32_t slotIdx = pinIndex_ ? chunkLocation.chunkIndex : 0;
   // Fast path: shared lock for cache hit.
@@ -977,7 +1012,7 @@ ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
                 chunkLocation.chunkSize,
                 keyChunks.value()),
             DataInput::Handle{})
-      : dataInput_->read(region);
+      : dataInput_->read(region, fileIoContext);
   decodedChunk.data =
       decodeKeyChunk(chunk, std::move(handle), keyReaderFactory_, pool_);
 
@@ -1009,7 +1044,8 @@ uint32_t ClusterIndexBase::seekInChunk(
     const ChunkLocation& chunkLocation,
     const PartitionLookup& bound,
     std::optional<std::span<const KeyChunk>> keyChunks,
-    LowerBoundChunk* lowerBoundChunk) const {
+    LowerBoundChunk* lowerBoundChunk,
+    const velox::FileIoContext* fileIoContext) const {
   // The upper bound of a key is usually in the chunk of its lower bound.
   const bool inLowerBoundChunk = lowerBoundChunk != nullptr &&
       lowerBoundChunk->data != nullptr &&
@@ -1017,7 +1053,8 @@ uint32_t ClusterIndexBase::seekInChunk(
       lowerBoundChunk->chunkIndex == chunkLocation.chunkIndex;
   const auto chunk = inLowerBoundChunk
       ? lowerBoundChunk->data
-      : getDecodedChunk(partition, chunkLocation, keyChunks).data;
+      : getDecodedChunk(partition, chunkLocation, keyChunks, fileIoContext)
+            .data;
   if (bound.lowerBound && lowerBoundChunk != nullptr) {
     NIMBLE_CHECK_NULL(lowerBoundChunk->data, "A seek has one lower bound");
     *lowerBoundChunk = {
@@ -1058,8 +1095,10 @@ ChunkLocation ClusterIndexBase::lookupChunk(
       loadedPartition.rowOffset(idx)};
 }
 
-std::string ClusterIndexBase::keyAtRow(uint32_t row) const {
-  const auto* partition = lookupPartition(row);
+std::string ClusterIndexBase::keyAtRow(
+    uint32_t row,
+    const velox::FileIoContext* fileIoContext) const {
+  const auto* partition = lookupPartition(row, fileIoContext);
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const auto partitionRow = this->partitionRow(loadedPartition.id(), row);
 
@@ -1083,8 +1122,8 @@ std::string ClusterIndexBase::keyAtRow(uint32_t row) const {
       loadedPartition.chunkSize(chunkIdx),
       loadedPartition.rowOffset(chunkIdx)};
 
-  const auto decodedChunk =
-      getDecodedChunk(partition, chunkLocation, /*keyChunks=*/std::nullopt);
+  const auto decodedChunk = getDecodedChunk(
+      partition, chunkLocation, /*keyChunks=*/std::nullopt, fileIoContext);
   const uint32_t rowInChunk = partitionRow - chunkLocation.rowOffset;
   return decodedChunk.data->reader->get(rowInChunk);
 }
@@ -1095,10 +1134,13 @@ std::string ClusterIndexBase::keyAtRow(uint32_t row) const {
 
 class ClusterIndexBase::KeyIterator final : public KeyCursor {
  public:
+  // Reads each chunk it loads with a copy of 'fileIoContext', or with the
+  // index's own context when it is null.
   KeyIterator(
       const ClusterIndexBase& index,
       RowRange rows,
-      std::shared_ptr<DecodedKeyChunk> chunk);
+      std::shared_ptr<DecodedKeyChunk> chunk,
+      const velox::FileIoContext* fileIoContext);
 
   bool hasNext() const override {
     return nextRow_ < endRow_;
@@ -1127,8 +1169,17 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
   // chunk of 'row', and otherwise the chunk that the index caches.
   void openChunkAt(uint32_t row, std::shared_ptr<DecodedKeyChunk> chunk);
 
+  // The context that chunk loads read with, or null for the index's own.
+  const velox::FileIoContext* fileIoContext() const {
+    return fileIoContext_.has_value() ? &fileIoContext_.value() : nullptr;
+  }
+
   // Index being scanned.
   const ClusterIndexBase& index_;
+
+  // Copy of the caller's context, kept because the cursor loads chunks after
+  // the call that created it returns. Empty when the caller passed none.
+  const std::optional<velox::FileIoContext> fileIoContext_;
 
   // File-level row the iteration stops at, exclusive.
   const uint32_t endRow_;
@@ -1152,17 +1203,22 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
   std::unique_ptr<KeyCursor> cursor_;
 };
 
-std::unique_ptr<KeyCursor> ClusterIndexBase::keyCursor(RowRange rows) const {
-  return std::make_unique<KeyIterator>(*this, rows, /*chunk=*/nullptr);
+std::unique_ptr<KeyCursor> ClusterIndexBase::keyCursor(
+    RowRange rows,
+    const velox::FileIoContext* fileIoContext) const {
+  return std::make_unique<KeyIterator>(
+      *this, rows, /*chunk=*/nullptr, fileIoContext);
 }
 
 ClusterIndexBase::SeekResult ClusterIndexBase::seek(
-    const velox::serializer::EncodedKeyBounds& bounds) const {
+    const velox::serializer::EncodedKeyBounds& bounds,
+    const velox::FileIoContext* fileIoContext) const {
   LowerBoundChunk lowerBoundChunk;
   const auto result = lookup(
       LookupRequest::rangeScan({bounds}),
       /*keyChunks=*/std::nullopt,
-      &lowerBoundChunk);
+      &lowerBoundChunk,
+      fileIoContext);
   NIMBLE_CHECK_EQ(result.size(), 1);
   const auto& ranges = result[0];
   NIMBLE_CHECK_LE(
@@ -1177,14 +1233,21 @@ ClusterIndexBase::SeekResult ClusterIndexBase::seek(
   return {
       .rows = rows,
       .keyCursor = std::make_unique<KeyIterator>(
-          *this, rows, std::move(lowerBoundChunk.data))};
+          *this, rows, std::move(lowerBoundChunk.data), fileIoContext)};
 }
 
 ClusterIndexBase::KeyIterator::KeyIterator(
     const ClusterIndexBase& index,
     RowRange rows,
-    std::shared_ptr<DecodedKeyChunk> chunk)
-    : index_{index}, endRow_{rows.endRow}, nextRow_{rows.startRow} {
+    std::shared_ptr<DecodedKeyChunk> chunk,
+    const velox::FileIoContext* fileIoContext)
+    : index_{index},
+      fileIoContext_{
+          fileIoContext != nullptr
+              ? std::optional<velox::FileIoContext>{*fileIoContext}
+              : std::nullopt},
+      endRow_{rows.endRow},
+      nextRow_{rows.startRow} {
   NIMBLE_CHECK_LE(
       rows.startRow,
       rows.endRow,
@@ -1263,14 +1326,17 @@ void ClusterIndexBase::KeyIterator::skip(size_t numKeys) {
 void ClusterIndexBase::KeyIterator::openChunkAt(
     uint32_t row,
     std::shared_ptr<DecodedKeyChunk> chunk) {
-  const auto* partition = index_.lookupPartition(row);
+  const auto* partition = index_.lookupPartition(row, fileIoContext());
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const uint32_t partitionRow = index_.partitionRow(loadedPartition.id(), row);
   const auto chunkLocation = index_.lookupChunk(partition, partitionRow);
   if (chunk == nullptr) {
     chunk = index_
                 .getDecodedChunk(
-                    partition, chunkLocation, /*keyChunks=*/std::nullopt)
+                    partition,
+                    chunkLocation,
+                    /*keyChunks=*/std::nullopt,
+                    fileIoContext())
                 .data;
   }
 

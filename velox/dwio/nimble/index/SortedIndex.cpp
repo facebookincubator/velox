@@ -127,13 +127,14 @@ std::optional<uint32_t> SortedIndex::findChunkIndex(
 }
 
 std::shared_ptr<DecodedKeyChunk> SortedIndex::loadChunk(
-    uint32_t chunkIdx) const {
+    uint32_t chunkIdx,
+    const velox::FileIoContext* fileIoContext) const {
   const uint64_t streamOffset = sortedIndex_->key_stream_offset();
   const uint32_t chunkOffset = this->chunkOffset(chunkIdx);
   const uint32_t chunkSize = this->chunkSize(chunkIdx);
 
   auto [chunk, handle] = dataInput_->read(
-      DataInput::Region{streamOffset + chunkOffset, chunkSize});
+      DataInput::Region{streamOffset + chunkOffset, chunkSize}, fileIoContext);
   return decodeKeyChunk(
       chunk,
       std::move(handle),
@@ -185,7 +186,8 @@ void SortedIndex::scanEntries(
     std::string_view boundKey,
     bool isPointLookup,
     const std::optional<RowRange>& filterRange,
-    std::vector<RowRange>& rowRanges) const {
+    std::vector<RowRange>& rowRanges,
+    const velox::FileIoContext* fileIoContext) const {
   // Returns true if entries matching the scan range may continue past this
   // chunk boundary. For point lookup, this means the chunk's last key equals
   // the lookup key (duplicates span). For range scan, this means the chunk's
@@ -201,7 +203,7 @@ void SortedIndex::scanEntries(
       break;
     }
 
-    auto chunk = loadChunk(ci);
+    auto chunk = loadChunk(ci, fileIoContext);
     const uint32_t rowCount = chunk->reader->rowCount();
 
     // Seek only in the first chunk. For continuation chunks, the loop guard
@@ -245,7 +247,8 @@ void SortedIndex::scanEntries(
 void SortedIndex::pointLookup(
     std::string_view key,
     const std::optional<RowRange>& filterRange,
-    std::vector<RowRange>& rowRanges) const {
+    std::vector<RowRange>& rowRanges,
+    const velox::FileIoContext* fileIoContext) const {
   if (key < minKey() || key > maxKey()) {
     ++numMinMaxSkips_;
     return;
@@ -263,13 +266,15 @@ void SortedIndex::pointLookup(
       key,
       /*isPointLookup=*/true,
       filterRange,
-      rowRanges);
+      rowRanges,
+      fileIoContext);
 }
 
 void SortedIndex::rangeScan(
     const velox::serializer::EncodedKeyBounds& bounds,
     const std::optional<RowRange>& filterRange,
-    std::vector<RowRange>& rowRanges) const {
+    std::vector<RowRange>& rowRanges,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK(
       bounds.lowerKey.has_value() && bounds.upperKey.has_value(),
       "Range scan requires both lower and upper bounds");
@@ -292,7 +297,8 @@ void SortedIndex::rangeScan(
       upperKey,
       /*isPointLookup=*/false,
       filterRange,
-      rowRanges);
+      rowRanges,
+      fileIoContext);
 }
 
 std::string_view SortedIndex::minKey() const {
@@ -304,7 +310,8 @@ std::string_view SortedIndex::maxKey() const {
 }
 
 IndexLookup::LookupResult SortedIndex::lookup(
-    const LookupRequest& request) const {
+    const LookupRequest& request,
+    const velox::FileIoContext* fileIoContext) const {
   const auto& options = request.options();
 
   std::vector<RowRange> rowRanges;
@@ -315,10 +322,12 @@ IndexLookup::LookupResult SortedIndex::lookup(
   for (uint32_t i = 0; i < request.size(); ++i) {
     if (request.mode() == LookupRequest::Mode::PointLookup) {
       ++numPointLookups_;
-      pointLookup(request.pointKey(i), options.rowRange, rowRanges);
+      pointLookup(
+          request.pointKey(i), options.rowRange, rowRanges, fileIoContext);
     } else {
       ++numRangeScans_;
-      rangeScan(request.rangeBound(i), options.rowRange, rowRanges);
+      rangeScan(
+          request.rangeBound(i), options.rowRange, rowRanges, fileIoContext);
     }
 
     numMatchedRows_ += rowRanges.size() - resultOffsets.back();

@@ -70,7 +70,10 @@ class HashIndex : public IndexLookup {
     return columns_;
   }
 
-  LookupResult lookup(const LookupRequest& request) const override;
+  /// Looks up keys using IndexLookup's request/default context contract.
+  LookupResult lookup(
+      const LookupRequest& request,
+      const velox::FileIoContext* fileIoContext = nullptr) const override;
 
   std::string_view minKey() const override;
 
@@ -135,6 +138,11 @@ class HashIndex : public IndexLookup {
   static std::vector<PartitionDescriptor> buildPartitionDescriptors(
       const MetadataBuffer& metadata,
       uint32_t numBuckets);
+
+  // Loads partition metadata with the request context or the input's default.
+  std::shared_ptr<Partition> loadPartition(
+      uint32_t partitionIndex,
+      const velox::FileIoContext* fileIoContext) const;
 
   // Finds the partition index for a given global bucket number.
   uint32_t findPartitionIndex(uint32_t bucket) const;

@@ -105,8 +105,18 @@ class MetadataInput {
   /// Loads metadata sections with coalesced IO. Returns one MetadataBuffer
   /// per input section, in the same order. Thread-safe: all per-call state
   /// is local.
+  ///
+  /// A non-null 'fileIoContext' is the request context for this load. It
+  /// replaces the input's default context, including file options, tracing,
+  /// cacheability, and file-level stats and scratch-pool pointers. The input's
+  /// own IoStatistics counters and buffer pool remain in use. A null request
+  /// context uses the default context.
+  ///
+  /// Queued IO copies the request context. Any referenced pool or file-level
+  /// stats object must outlive that IO.
   virtual std::vector<std::shared_ptr<MetadataBuffer>> load(
-      std::span<const MetadataSection> sections) = 0;
+      std::span<const MetadataSection> sections,
+      const velox::FileIoContext* fileIoContext = nullptr) = 0;
 
   /// Tries to find cached metadata at the given offset. Returns a
   /// MetadataBuffer holding a cache pin if found, nullptr otherwise.
@@ -154,12 +164,14 @@ class MetadataInput {
   void loadFromFile(
       const std::vector<LoadedSection>& sections,
       const std::vector<uint32_t>& loadIndices,
-      const std::vector<folly::Range<char*>>& readRanges);
+      const std::vector<folly::Range<char*>>& readRanges,
+      const velox::FileIoContext& fileIoContext);
 
   /// Overload for loading all sections (sequential indices).
   void loadFromFile(
       const std::vector<LoadedSection>& sections,
-      const std::vector<folly::Range<char*>>& readRanges);
+      const std::vector<folly::Range<char*>>& readRanges,
+      const velox::FileIoContext& fileIoContext);
 
   /// Decompresses the buffer into a MetadataBuffer. For uncompressed data,
   /// passes the buffer directly (zero copy).
@@ -186,7 +198,9 @@ class MetadataInput {
 
   // Dispatches IO groups in parallel via AsyncSource when executor is
   // available, records IO stats, and propagates the first error.
-  void executeIoGroups(std::vector<IoGroup>& ioGroups) const;
+  void executeIoGroups(
+      std::vector<IoGroup>& ioGroups,
+      const velox::FileIoContext& fileIoContext) const;
 
   // Returns the uncompressed size, or nullopt if unknown (old files
   // without uncompressed_size — will be deprecated).
@@ -228,7 +242,8 @@ class MetadataInput {
 class DirectMetadataInput : public MetadataInput {
  public:
   std::vector<std::shared_ptr<MetadataBuffer>> load(
-      std::span<const MetadataSection> sections) override;
+      std::span<const MetadataSection> sections,
+      const velox::FileIoContext* fileIoContext = nullptr) override;
 
  private:
   void prepareBuffers(
@@ -265,7 +280,8 @@ class CachedMetadataInput final : public MetadataInput {
   }
 
   std::vector<std::shared_ptr<MetadataBuffer>> load(
-      std::span<const MetadataSection> sections) override;
+      std::span<const MetadataSection> sections,
+      const velox::FileIoContext* fileIoContext = nullptr) override;
 
   std::unique_ptr<MetadataBuffer> findCachedMetadata(uint64_t offset) override;
 
@@ -333,7 +349,8 @@ class CachedMetadataInput final : public MetadataInput {
       std::span<const MetadataSection> sections,
       std::span<const uint32_t> missIndices,
       std::span<BlockCache::Entry> newEntries,
-      std::span<std::shared_ptr<MetadataBuffer>> buffers);
+      std::span<std::shared_ptr<MetadataBuffer>> buffers,
+      const velox::FileIoContext& fileIoContext);
 
   // Requires !directIo(). Like loadDirectIo(), but reads each merged range in
   // one scatter read, which skips the gaps between its sections.
@@ -341,7 +358,8 @@ class CachedMetadataInput final : public MetadataInput {
       std::span<const MetadataSection> sections,
       std::span<const uint32_t> missIndices,
       std::span<BlockCache::Entry> newEntries,
-      std::span<std::shared_ptr<MetadataBuffer>> buffers);
+      std::span<std::shared_ptr<MetadataBuffer>> buffers,
+      const velox::FileIoContext& fileIoContext);
 
   // Returns 'data', compressed with 'compressionType', decompressed into a new
   // pool buffer.
@@ -369,7 +387,8 @@ class CachedMetadataInput final : public MetadataInput {
   void readSections(
       std::span<const MetadataSection> sections,
       std::span<const uint32_t> sortedIndices,
-      std::span<const folly::Range<char*>> destinations) const;
+      std::span<const folly::Range<char*>> destinations,
+      const velox::FileIoContext& fileIoContext) const;
 
   // Merges the reads of the sections at 'sortedIndices'. Reads that share an
   // aligned block always merge, so the returned reads never overlap.
@@ -382,7 +401,8 @@ class CachedMetadataInput final : public MetadataInput {
   void readGroups(
       std::span<const ReadGroup> groups,
       char* buffer,
-      uint64_t payloadBytes) const;
+      uint64_t payloadBytes,
+      const velox::FileIoContext& fileIoContext) const;
 
   // Records the reads of one load: 'readBytes' bytes read from the file in
   // 'storageReadNs', of which 'payloadBytes' are section bytes.

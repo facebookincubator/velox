@@ -1400,6 +1400,30 @@ TEST_F(CachedMetadataInputTest, readsPassFileIoContext) {
   EXPECT_EQ(file->fileOpts(), expected);
 }
 
+TEST_F(CachedMetadataInputTest, requestContextOverridesInputDefault) {
+  auto file = std::make_shared<nimble::testing::FileOptsRecordingReadFile>(
+      std::string(1'000, 'a'));
+  auto options = makeOptions(blockCache_);
+  options.fileIoContext.fileOpts = {{"source", "input"}};
+  auto input = MetadataInput::create(file.get(), options);
+  velox::FileIoContext requestContext;
+  requestContext.fileOpts = {{"source", "request"}};
+  const std::vector<MetadataSection> firstSections{
+      {100, 200, CompressionType::Uncompressed}};
+  EXPECT_EQ(
+      contents(input->load(firstSections, &requestContext)),
+      std::vector<std::string>{std::string(200, 'a')});
+  const std::vector<MetadataSection> nextSections{
+      {500, 200, CompressionType::Uncompressed}};
+  EXPECT_EQ(
+      contents(input->load(nextSections)),
+      std::vector<std::string>{std::string(200, 'a')});
+  EXPECT_EQ(
+      file->fileOpts(),
+      (std::vector<folly::F14FastMap<std::string, std::string>>{
+          requestContext.fileOpts, options.fileIoContext.fileOpts}));
+}
+
 TEST_F(CachedMetadataInputTest, duplicateSectionsThrow) {
   auto [file, sections] = makeFile({{0, "duplicate"}}, 100, 1);
   auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));

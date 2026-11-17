@@ -34,6 +34,7 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/dwio/nimble/common/tests/TestUtils.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
 #include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
@@ -256,12 +257,12 @@ class SortedIndexParamTest
 INSTANTIATE_TEST_SUITE_P(
     SingleAndCompositeKey,
     SortedIndexParamTest,
-    testing::Values(
+    ::testing::Values(
         SortedIndexTestParam{{"id"}, EncodingType::Prefix},
         SortedIndexTestParam{{"id"}, EncodingType::Trivial},
         SortedIndexTestParam{{"id", "value"}, EncodingType::Prefix},
         SortedIndexTestParam{{"id", "value"}, EncodingType::Trivial}),
-    [](const testing::TestParamInfo<SortedIndexTestParam>& info) {
+    [](const ::testing::TestParamInfo<SortedIndexTestParam>& info) {
       return fmt::format(
           "columns_{}_{}",
           fmt::join(info.param.columns, "_"),
@@ -291,6 +292,41 @@ TEST_P(SortedIndexParamTest, roundTrip) {
   // Min key should match the encoded key for id=0, max for id=99.
   EXPECT_EQ(minKey, encodeLookupKey(columns(), 0));
   EXPECT_EQ(maxKey, encodeLookupKey(columns(), 99));
+}
+
+TEST_P(SortedIndexParamTest, lookupUsesRequestContext) {
+  const auto filePath = tempFilePath("request_context");
+  writeFile(filePath, {makeBatch(0, 50)}, indexConfig());
+  auto fs = velox::filesystems::getFileSystem(filePath, {});
+  auto original = fs->openFileForRead(filePath);
+  std::string data(original->size(), '\0');
+  original->pread(0, data.size(), data.data(), {});
+  auto file =
+      std::make_shared<nimble::testing::FileOptsRecordingReadFile>(data);
+  auto tablet = TabletReader::create(
+      file,
+      leafPool_.get(),
+      ::facebook::nimble::test::makeTestTabletOptions(leafPool_.get()));
+  auto* index = tablet->denseIndex(columns());
+  ASSERT_NE(index, nullptr);
+  const auto firstRead = file->fileOpts().size();
+  velox::FileIoContext fileIoContext;
+  fileIoContext.fileOpts = {{"source", "request"}};
+  const auto result = index->lookup(
+      IndexLookup::LookupRequest::pointLookup({encodeLookupKey(columns(), 25)}),
+      &fileIoContext);
+  ASSERT_EQ(result.size(), 1);
+  EXPECT_EQ(
+      std::vector<RowRange>(result[0].begin(), result[0].end()),
+      std::vector<RowRange>{RowRange(25, 26)});
+  const auto reads = file->fileOpts();
+  ASSERT_GT(reads.size(), firstRead);
+  using FileOpts = folly::F14FastMap<std::string, std::string>;
+  const std::vector<FileOpts> requestReads(
+      reads.begin() + firstRead, reads.end());
+  EXPECT_EQ(
+      requestReads,
+      std::vector<FileOpts>(requestReads.size(), fileIoContext.fileOpts));
 }
 
 TEST_P(SortedIndexParamTest, pointLookup) {

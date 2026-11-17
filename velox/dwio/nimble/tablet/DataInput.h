@@ -125,7 +125,18 @@ class DataInput {
   /// Reads 'region' on its own, outside any group. Returns the region's bytes
   /// view and a handle that keeps them alive. Thread-safe: unlike the batch API
   /// above, read() keeps no state in this object.
-  virtual std::pair<std::string_view, Handle> read(Region region) const = 0;
+  ///
+  /// A non-null 'fileIoContext' is the request context for this read. It
+  /// replaces the default context stored in the input, including file options,
+  /// tracing, cacheability, and file-level stats and scratch-pool pointers.
+  /// The input's own IoStatistics counters and buffer pool remain in use.
+  /// A null request context uses the default context.
+  ///
+  /// Shared index reads supply a request context per call. The batch API uses
+  /// the default context because a projector owns its input for that request.
+  virtual std::pair<std::string_view, Handle> read(
+      Region region,
+      const velox::FileIoContext* fileIoContext = nullptr) const = 0;
 };
 
 /// Direct data loading with IO coalescing and alignment for direct I/O.
@@ -173,7 +184,9 @@ class DirectDataInput : public DataInput {
 
   void clear() override;
 
-  std::pair<std::string_view, Handle> read(Region region) const override;
+  std::pair<std::string_view, Handle> read(
+      Region region,
+      const velox::FileIoContext* fileIoContext = nullptr) const override;
 
   enum class State { kInit, kEnqueuing, kLoaded };
 
@@ -337,7 +350,9 @@ class CachedDataInput final : public DataInput {
   /// returned handle pins the entry. Like a group, 'region' must fit in one
   /// cache entry. Entries are keyed by offset alone, so a read shares its entry
   /// with any read or group at the same offset.
-  std::pair<std::string_view, Handle> read(Region region) const override;
+  std::pair<std::string_view, Handle> read(
+      Region region,
+      const velox::FileIoContext* fileIoContext = nullptr) const override;
 
  private:
   struct EnqueuedRegion {
@@ -390,6 +405,7 @@ class CachedDataInput final : public DataInput {
       std::span<const CacheMissGroup> cacheMissGroups,
       uint64_t stagingBufferSize,
       std::span<BlockCache::Entry> cacheEntries,
+      const velox::FileIoContext& fileIoContext,
       LoadCallback loadCallback = {}) const;
 
   // File to read from on a cache miss. Shared, so the file lives as long as

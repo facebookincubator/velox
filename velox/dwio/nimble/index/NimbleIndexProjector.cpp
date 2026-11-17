@@ -188,7 +188,8 @@ void writeTabletTrailer(
 std::unique_ptr<DataInput> createDataInput(
     const velox::FileHandle& fileHandle,
     const velox::dwio::common::ReaderOptions& options,
-    BlockCache* blockCache) {
+    BlockCache* blockCache,
+    const velox::FileIoContext* fileIoContext) {
   if (blockCache != nullptr) {
     return std::make_unique<CachedDataInput>(
         fileHandle.file,
@@ -197,6 +198,8 @@ std::unique_ptr<DataInput> createDataInput(
             .cache = blockCache,
             .fileId = fileHandle.uuid,
             .ioStats = options.dataIoStats(),
+            .fileIoContext = fileIoContext != nullptr ? *fileIoContext
+                                                      : velox::FileIoContext{},
         });
   }
 
@@ -205,6 +208,9 @@ std::unique_ptr<DataInput> createDataInput(
   dataInputOptions.ioStats = options.dataIoStats();
   dataInputOptions.maxCoalesceDistance = options.maxCoalesceDistance();
   dataInputOptions.maxCoalesceBytes = options.maxCoalesceBytes();
+  if (fileIoContext != nullptr) {
+    dataInputOptions.fileIoContext = *fileIoContext;
+  }
   return std::make_unique<DirectDataInput>(fileHandle.file, dataInputOptions);
 }
 
@@ -219,7 +225,8 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
     const velox::FileHandle& fileHandle,
     const std::vector<Subfield>& projectedSubfields,
     BlockCache* blockCache,
-    const velox::dwio::common::ReaderOptions& options) {
+    const velox::dwio::common::ReaderOptions& options,
+    const velox::FileIoContext* fileIoContext) {
   validateReaderOptions(options);
   auto cached = tabletReaderCache.get(
       fileHandle.file, TabletReader::configureOptions(options));
@@ -237,7 +244,8 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
       fileHandle,
       std::move(projection),
       blockCache,
-      options);
+      options,
+      fileIoContext);
 }
 
 std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
@@ -245,18 +253,20 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
     const velox::FileHandle& fileHandle,
     std::shared_ptr<const NimbleTypeProjection> projection,
     BlockCache* blockCache,
-    const velox::dwio::common::ReaderOptions& options) {
+    const velox::dwio::common::ReaderOptions& options,
+    const velox::FileIoContext* fileIoContext) {
   validateReaderOptions(options);
   NIMBLE_CHECK_NOT_NULL(tablet);
   NIMBLE_CHECK_NOT_NULL(projection);
   return std::unique_ptr<NimbleIndexProjector>(new NimbleIndexProjector(
       std::move(tablet),
       fileHandle.file,
-      createDataInput(fileHandle, options, blockCache),
+      createDataInput(fileHandle, options, blockCache, fileIoContext),
       std::move(projection),
       &options.memoryPool(),
       options.dataIoStats(),
-      options.verifyStreamChecksums()));
+      options.verifyStreamChecksums(),
+      fileIoContext));
 }
 
 NimbleIndexProjector::NimbleIndexProjector(
@@ -266,10 +276,14 @@ NimbleIndexProjector::NimbleIndexProjector(
     std::shared_ptr<const NimbleTypeProjection> projection,
     velox::memory::MemoryPool* pool,
     std::shared_ptr<velox::io::IoStatistics> ioStats,
-    bool verifyStreamChecksums)
+    bool verifyStreamChecksums,
+    const velox::FileIoContext* fileIoContext)
     : file_{std::move(file)},
       tablet_{std::move(tablet)},
       ioStats_{std::move(ioStats)},
+      fileIoContext_{
+          fileIoContext != nullptr ? std::optional{*fileIoContext}
+                                   : std::nullopt},
       pool_{pool},
       clusterIndex_{tablet_->clusterIndex()},
       numStripes_{tablet_->stripeCount()},
@@ -450,7 +464,7 @@ std::vector<StripeSelection> NimbleIndexProjector::lookup(
       timingEnabled_, [this](const velox::CpuWallTiming& timing) {
         recordStatsTiming(&Stats::lookupTiming, timing);
       }};
-  auto result = clusterIndex().seek(bounds);
+  auto result = clusterIndex().seek(bounds, fileIoContext());
   keyCursor = std::move(result.keyCursor);
   return lookup(result.rows);
 }
@@ -473,6 +487,11 @@ std::vector<StripeSelection> NimbleIndexProjector::lookup(
           .upperKey = std::move(successor),
       },
       keyCursor);
+}
+
+std::unique_ptr<index::KeyCursor> NimbleIndexProjector::keyCursor(
+    RowRange rows) const {
+  return clusterIndex_->keyCursor(rows, fileIoContext());
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
@@ -516,7 +535,8 @@ NimbleIndexProjector::loadStripeStreams(
         timingEnabled_, [this](const velox::CpuWallTiming& timing) {
           recordStatsTiming(&Stats::prepareTiming, timing);
         }};
-    stripes = tablet_->stripeIdentifiers(stripeOffset, numStripes);
+    stripes =
+        tablet_->stripeIdentifiers(stripeOffset, numStripes, fileIoContext());
     NIMBLE_CHECK_EQ(stripes.size(), numStripes);
     for (uint32_t i{0}; i < numStripes; ++i) {
       const auto stripeIndex = stripeOffset + i;
@@ -622,7 +642,7 @@ void NimbleIndexProjector::setResumeKey(
     const auto stripeStartRow =
         static_cast<uint32_t>(tablet_->stripeStartRow(stripeIndex));
     ctx_.resumeKeys[requestIndex] =
-        clusterIndex_->keyAtRow(stripeStartRow + readEndRow);
+        clusterIndex_->keyAtRow(stripeStartRow + readEndRow, fileIoContext());
   }
 }
 
@@ -655,8 +675,10 @@ class StripeGroupLoader {
   StripeGroupLoader(
       const TabletReader& tablet,
       std::span<const uint32_t> resolvedStripes,
-      uint64_t maxBytesPerLoad)
+      uint64_t maxBytesPerLoad,
+      const velox::FileIoContext* fileIoContext)
       : tablet_{tablet},
+        fileIoContext_{fileIoContext},
         resolvedStripes_{resolvedStripes},
         maxBytesPerLoad_{maxBytesPerLoad} {
     for (const auto& descriptor :
@@ -728,13 +750,17 @@ class StripeGroupLoader {
       firstStripes.push_back(resolvedStripes_[resolvedStripeIndex]);
       resolvedStripeIndex += numResolvedStripesPerGroup_.at(resolvedGroupIndex);
     }
-    loadedStripeGroups_ = tablet_.stripeIdentifiers(firstStripes);
+    loadedStripeGroups_ =
+        tablet_.stripeIdentifiers(firstStripes, fileIoContext_);
     loadedStartResolvedGroupIndex_ = resolvedGroupIndex_;
     loadedEndResolvedGroupIndex_ = resolvedGroupIndex;
   }
 
   // Reads and caches the stripe groups.
   const TabletReader& tablet_;
+
+  // Borrowed from the projector throughout synchronous stripe planning.
+  const velox::FileIoContext* const fileIoContext_;
 
   // Stripes the key lookups found, in ascending order. A position in it is a
   // resolved stripe index.
@@ -809,7 +835,8 @@ void NimbleIndexProjector::prepareStripes() {
   StripeGroupLoader stripeGroupLoader{
       *tablet_,
       ctx_.stripeRanges.resolvedStripes,
-      ctx_.options->maxStripeGroupMetadataBytesPerLoad};
+      ctx_.options->maxStripeGroupMetadataBytesPerLoad,
+      fileIoContext()};
   for (uint32_t resolvedStripeIndex = 0;
        resolvedStripeIndex < numResolvedStripes;
        ++resolvedStripeIndex) {
@@ -982,7 +1009,8 @@ void NimbleIndexProjector::lookupStripes() {
       }};
 
   const auto result = clusterIndex_->lookup(
-      index::IndexLookup::LookupRequest::rangeScan(ctx_.request->keyBounds));
+      index::IndexLookup::LookupRequest::rangeScan(ctx_.request->keyBounds),
+      fileIoContext());
 
   struct ResolvedRequest {
     uint32_t requestIndex;
@@ -1702,7 +1730,8 @@ void NimbleIndexProjector::prepareResumeKeys() {
   if (firstUnprocessed < resolvedStripes.size() &&
       resolvedStripes[firstUnprocessed] == stripeIndex + 1) {
     const auto nextStripeResumeKey = clusterIndex_->keyAtRow(
-        static_cast<uint32_t>(tablet_->stripeStartRow(stripeIndex + 1)));
+        static_cast<uint32_t>(tablet_->stripeStartRow(stripeIndex + 1)),
+        fileIoContext());
     const auto nextRanges = ctx_.stripeRanges.getRanges(firstUnprocessed);
     for (const auto& request : plannedStripeRanges(lastStripeOffset)) {
       auto& resumeKey = ctx_.resumeKeys[request.requestIndex];

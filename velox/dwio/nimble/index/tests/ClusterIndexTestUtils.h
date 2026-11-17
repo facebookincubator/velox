@@ -213,7 +213,8 @@ class ClusterIndexTestHelper {
       uint32_t partitionIndex,
       std::string_view encodedKey) const {
     return clusterIndex_->lookupChunk(
-        clusterIndex_->loadPartition(partitionIndex), encodedKey);
+        clusterIndex_->loadPartition(partitionIndex, /*fileIoContext=*/nullptr),
+        encodedKey);
   }
 
   MetadataSection partitionSection(uint32_t partitionIndex) const {
@@ -225,7 +226,9 @@ class ClusterIndexTestHelper {
     NIMBLE_CHECK_EQ(
         clusterIndex_->keyStreamLayout(), KeyStreamLayout::kPartition);
     // Every chunk of a Partition layout partition is in its one key stream.
-    return clusterIndex_->loadPartition(partitionIndex)->keyStreamRegion(0);
+    return clusterIndex_
+        ->loadPartition(partitionIndex, /*fileIoContext=*/nullptr)
+        ->keyStreamRegion(0);
   }
 
   /// Returns the file region of the chunk at 'chunkLocation' in a partition,
@@ -233,7 +236,8 @@ class ClusterIndexTestHelper {
   velox::common::Region chunkStreamRegion(
       uint32_t partitionIndex,
       const ChunkLocation& chunkLocation) const {
-    return clusterIndex_->loadPartition(partitionIndex)
+    return clusterIndex_
+        ->loadPartition(partitionIndex, /*fileIoContext=*/nullptr)
         ->chunkStreamRegion(chunkLocation);
   }
 
@@ -243,7 +247,8 @@ class ClusterIndexTestHelper {
   /// vector has a single shared scratch slot, so the count is at most 1.
   size_t decodedChunkCount(uint32_t partitionIndex) const {
     const auto& decodedChunks =
-        clusterIndex_->loadPartition(partitionIndex)->decodedChunks();
+        clusterIndex_->loadPartition(partitionIndex, /*fileIoContext=*/nullptr)
+            ->decodedChunks();
     return std::count_if(
         decodedChunks.begin(), decodedChunks.end(), [](const auto& c) {
           return c.data != nullptr;
@@ -256,7 +261,8 @@ class ClusterIndexTestHelper {
       uint32_t partitionIndex,
       uint32_t chunkIndex) const {
     const auto& decodedChunks =
-        clusterIndex_->loadPartition(partitionIndex)->decodedChunks();
+        clusterIndex_->loadPartition(partitionIndex, /*fileIoContext=*/nullptr)
+            ->decodedChunks();
     NIMBLE_CHECK_LT(chunkIndex, decodedChunks.size());
     return decodedChunks[chunkIndex].data.get();
   }

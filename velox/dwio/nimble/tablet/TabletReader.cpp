@@ -259,8 +259,10 @@ TabletReader::TabletReader(
             .fileIoContext = fileIoContext_,
             .keyStreamLocator = [this](
                                     uint32_t stripeGroupIndex,
-                                    std::span<const uint32_t> keyStreamIds) {
-              return stripeMetadata(stripeGroupIndex, keyStreamIds);
+                                    std::span<const uint32_t> keyStreamIds,
+                                    const velox::FileIoContext* fileIoContext) {
+              return stripeMetadata(
+                  stripeGroupIndex, keyStreamIds, fileIoContext);
             }};
         if (!options.cacheIndex) {
           return indexOptions;
@@ -970,15 +972,17 @@ uint32_t TabletReader::stripeGroupIndex(uint32_t stripeIndex) const {
 }
 
 std::unique_ptr<MetadataBuffer> TabletReader::readMetadata(
-    const MetadataSection& section) const {
+    const MetadataSection& section,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_GT(section.size(), 0, "Metadata section size must be non-zero");
-  auto results = metadataInput_->load({&section, 1});
+  auto results = metadataInput_->load({&section, 1}, fileIoContext);
   NIMBLE_CHECK_EQ(results.size(), 1);
   return std::make_unique<MetadataBuffer>(std::move(*results[0]));
 }
 
 std::shared_ptr<StripeGroup> TabletReader::loadStripeGroup(
-    uint32_t stripeGroupIndex) const {
+    uint32_t stripeGroupIndex,
+    const velox::FileIoContext* fileIoContext) const {
   const auto* footer = footerRoot(*footer_);
   auto stripeGroupInfo = footer->stripe_groups()->Get(stripeGroupIndex);
 
@@ -986,20 +990,25 @@ std::shared_ptr<StripeGroup> TabletReader::loadStripeGroup(
   return std::make_shared<StripeGroup>(
       stripeGroupIndex,
       *stripes_,
-      readMetadata(section),
+      readMetadata(section, fileIoContext),
       stripeGroupEncodingViewDeduplicationEnabled_,
       pool_);
 }
 
 std::shared_ptr<StripeGroup> TabletReader::stripeGroup(
-    uint32_t stripeGroupIndex) const {
-  return stripeGroupCache_.getOrCreate(stripeGroupIndex);
+    uint32_t stripeGroupIndex,
+    const velox::FileIoContext* fileIoContext) const {
+  return stripeGroupCache_.getOrCreate(
+      stripeGroupIndex, [this, fileIoContext](uint32_t index) {
+        return loadStripeGroup(index, fileIoContext);
+      });
 }
 
 std::vector<StripeMetadata> TabletReader::stripeMetadata(
     uint32_t stripeGroupIndex,
-    std::span<const uint32_t> streamIds) const {
-  const auto group = stripeGroup(stripeGroupIndex);
+    std::span<const uint32_t> streamIds,
+    const velox::FileIoContext* fileIoContext) const {
+  const auto group = stripeGroup(stripeGroupIndex, fileIoContext);
   std::vector<StripeMetadata> stripes;
   stripes.reserve(group->stripeCount());
   const uint32_t endStripe = group->firstStripe() + group->stripeCount();
@@ -1030,16 +1039,18 @@ std::shared_ptr<ChunkStatsGroup> TabletReader::createChunkStatsGroup(
 }
 
 TabletReader::StripeGroupMetadata TabletReader::loadStripeGroupMetadata(
-    uint32_t stripeGroupIndex) const {
-  auto groups =
-      loadStripeGroupMetadata(std::span<const uint32_t>{&stripeGroupIndex, 1});
+    uint32_t stripeGroupIndex,
+    const velox::FileIoContext* fileIoContext) const {
+  auto groups = loadStripeGroupMetadata(
+      std::span<const uint32_t>{&stripeGroupIndex, 1}, fileIoContext);
   NIMBLE_CHECK_EQ(groups.size(), 1);
   return std::move(groups.front());
 }
 
 std::vector<TabletReader::StripeGroupMetadata>
 TabletReader::loadStripeGroupMetadata(
-    std::span<const uint32_t> stripeGroupIndices) const {
+    std::span<const uint32_t> stripeGroupIndices,
+    const velox::FileIoContext* fileIoContext) const {
   const auto* footer = footerRoot(*footer_);
   std::vector<MetadataSection> sections;
   sections.reserve(2 * stripeGroupIndices.size());
@@ -1050,7 +1061,7 @@ TabletReader::loadStripeGroupMetadata(
       sections.push_back(chunkStats_->groupMetadata(stripeGroupIndex));
     }
   }
-  auto buffers = metadataInput_->load(sections);
+  auto buffers = metadataInput_->load(sections, fileIoContext);
   size_t bufferIndex{0};
   std::vector<StripeGroupMetadata> groups;
   groups.reserve(stripeGroupIndices.size());
@@ -1153,7 +1164,9 @@ std::vector<StripeGroupDescriptor> TabletReader::stripeGroupDescriptors(
   return descriptors;
 }
 
-StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
+StripeIdentifier TabletReader::stripeIdentifier(
+    uint32_t stripeIndex,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_LT(stripeIndex, stripeCount_, "Stripe is out of range.");
   const auto stripeGroupIndex = this->stripeGroupIndex(stripeIndex);
 
@@ -1171,12 +1184,13 @@ StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
   if (allCached) {
     return StripeIdentifier{
         stripeIndex,
-        stripeGroup(stripeGroupIndex),
-        hasChunkStats ? chunkStats(stripeGroupIndex) : nullptr};
+        stripeGroup(stripeGroupIndex, fileIoContext),
+        hasChunkStats ? chunkStats(stripeGroupIndex, fileIoContext) : nullptr};
   }
 
   auto metadata = cacheStripeGroupMetadata(
-      stripeGroupIndex, loadStripeGroupMetadata(stripeGroupIndex));
+      stripeGroupIndex,
+      loadStripeGroupMetadata(stripeGroupIndex, fileIoContext));
   return StripeIdentifier{
       stripeIndex,
       std::move(metadata.stripeGroup),
@@ -1185,7 +1199,8 @@ StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
 
 std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
     uint32_t stripeOffset,
-    uint32_t numStripes) const {
+    uint32_t numStripes,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_LE(stripeOffset, stripeCount_, "Stripe index out of bounds");
   NIMBLE_CHECK_LE(
       numStripes,
@@ -1194,11 +1209,12 @@ std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
   NIMBLE_CHECK_GT(numStripes, 0);
   std::vector<uint32_t> stripes(numStripes);
   std::iota(stripes.begin(), stripes.end(), stripeOffset);
-  return stripeIdentifiers(stripes);
+  return stripeIdentifiers(stripes, fileIoContext);
 }
 
 std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
-    std::span<const uint32_t> stripes) const {
+    std::span<const uint32_t> stripes,
+    const velox::FileIoContext* fileIoContext) const {
   // Ascending stripes map to non-decreasing groups, so comparing with the last
   // group seen is enough to list each group once.
   std::vector<uint32_t> groupIndices;
@@ -1225,9 +1241,9 @@ std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
     const bool needsChunkStats = hasChunkStats(groupIndex);
     if (stripeGroupCache_.hasCacheEntry(groupIndex) &&
         (!needsChunkStats || chunkStatsCache_.hasCacheEntry(groupIndex))) {
-      groups[i].stripeGroup = stripeGroup(groupIndex);
+      groups[i].stripeGroup = stripeGroup(groupIndex, fileIoContext);
       if (needsChunkStats) {
-        groups[i].chunkStats = chunkStats(groupIndex);
+        groups[i].chunkStats = chunkStats(groupIndex, fileIoContext);
       }
     } else {
       missingGroups.push_back(groupIndex);
@@ -1235,7 +1251,7 @@ std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
     }
   }
   if (!missingGroups.empty()) {
-    auto loaded = loadStripeGroupMetadata(missingGroups);
+    auto loaded = loadStripeGroupMetadata(missingGroups, fileIoContext);
     for (size_t i{0}; i < loaded.size(); ++i) {
       groups[missingSlots[i]] =
           cacheStripeGroupMetadata(missingGroups[i], std::move(loaded[i]));
@@ -1648,12 +1664,17 @@ uint32_t TabletReader::stripeCount(uint32_t stripeGroupIndex) const {
 }
 
 std::shared_ptr<ChunkStatsGroup> TabletReader::chunkStats(
-    uint32_t stripeGroupIndex) const {
-  return chunkStatsCache_.getOrCreate(stripeGroupIndex);
+    uint32_t stripeGroupIndex,
+    const velox::FileIoContext* fileIoContext) const {
+  return chunkStatsCache_.getOrCreate(
+      stripeGroupIndex, [this, fileIoContext](uint32_t index) {
+        return loadChunkStatsGroup(index, fileIoContext);
+      });
 }
 
 std::shared_ptr<ChunkStatsGroup> TabletReader::loadChunkStatsGroup(
-    uint32_t stripeGroupIndex) const {
+    uint32_t stripeGroupIndex,
+    const velox::FileIoContext* fileIoContext) const {
   NIMBLE_CHECK_NOT_NULL(chunkStats_, "Chunk stats not initialized.");
   NIMBLE_CHECK_LT(
       stripeGroupIndex,
@@ -1665,7 +1686,7 @@ std::shared_ptr<ChunkStatsGroup> TabletReader::loadChunkStatsGroup(
     return nullptr;
   }
 
-  auto metadata = readMetadata(section);
+  auto metadata = readMetadata(section, fileIoContext);
   return createChunkStatsGroup(
       this->firstStripe(stripeGroupIndex),
       this->stripeCount(stripeGroupIndex),

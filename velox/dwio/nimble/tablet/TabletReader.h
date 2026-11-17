@@ -267,7 +267,8 @@ class TabletReader {
     std::shared_ptr<const ExternalDictionaryResolver>
         externalDictionaryResolver;
 
-    /// The stats and pool inside this context must outlive this tablet.
+    /// The default context for tablet metadata reads. Referenced stats and
+    /// scratch pools must outlive this tablet.
     velox::FileIoContext fileIoContext;
   };
 
@@ -515,20 +516,28 @@ class TabletReader {
       std::span<const uint32_t> stripes) const;
 
   /// Loads the metadata identifying one stripe.
-  StripeIdentifier stripeIdentifier(uint32_t stripeIndex) const;
+  ///
+  /// Each stripeIdentifier(s) overload accepts a request context. Cache-miss
+  /// reads use it, or the metadata input's default context when it is null.
+  /// Cached metadata is shared by all callers and keeps no request context.
+  StripeIdentifier stripeIdentifier(
+      uint32_t stripeIndex,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   /// Loads metadata for consecutive stripes, coalescing uncached stripe-group
   /// and chunk-stat sections. Returns identifiers in stripe order.
   /// Requires a non-zero stripe count.
   std::vector<StripeIdentifier> stripeIdentifiers(
       uint32_t stripeOffset,
-      uint32_t numStripes) const;
+      uint32_t numStripes,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   /// Loads metadata for strictly ascending stripes, which need not be
   /// consecutive, coalescing uncached stripe-group and chunk-stat sections
   /// into one load. Returns identifiers in input order.
   std::vector<StripeIdentifier> stripeIdentifiers(
-      std::span<const uint32_t> stripes) const;
+      std::span<const uint32_t> stripes,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   /// Returns whether any value stream uses a file or external dictionary.
   bool hasFileOrExternalDictionaries() const;
@@ -634,7 +643,9 @@ class TabletReader {
   //
   uint32_t stripeGroupIndex(uint32_t stripeIndex) const;
 
-  std::shared_ptr<StripeGroup> stripeGroup(uint32_t stripeGroupIndex) const;
+  std::shared_ptr<StripeGroup> stripeGroup(
+      uint32_t stripeGroupIndex,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   // Returns the metadata of each stripe of stripe group 'stripeGroupIndex',
   // with the location of each of 'streamIds' in the stripe, in the order of
@@ -643,9 +654,12 @@ class TabletReader {
   // stores its key chunks in stripes locates their key streams with it.
   std::vector<StripeMetadata> stripeMetadata(
       uint32_t stripeGroupIndex,
-      std::span<const uint32_t> streamIds) const;
+      std::span<const uint32_t> streamIds,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
-  std::shared_ptr<StripeGroup> loadStripeGroup(uint32_t stripeGroupIndex) const;
+  std::shared_ptr<StripeGroup> loadStripeGroup(
+      uint32_t stripeGroupIndex,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   // Parses the shared index section and caches its runtime descriptors.
   void initIndexDescriptors();
@@ -666,11 +680,14 @@ class TabletReader {
 
   // Loads stripe group and chunk stats together using coalesced IO via
   // MetadataInput.
-  StripeGroupMetadata loadStripeGroupMetadata(uint32_t stripeGroupIndex) const;
+  StripeGroupMetadata loadStripeGroupMetadata(
+      uint32_t stripeGroupIndex,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   // Loads all missing groups in one metadata I/O plan, preserving input order.
   std::vector<StripeGroupMetadata> loadStripeGroupMetadata(
-      std::span<const uint32_t> stripeGroupIndices) const;
+      std::span<const uint32_t> stripeGroupIndices,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   // Keeps loaded group and chunk metadata in their respective caches.
   StripeGroupMetadata cacheStripeGroupMetadata(
@@ -692,7 +709,8 @@ class TabletReader {
 
   // Reads and decompresses a metadata section via MetadataInput.
   std::unique_ptr<MetadataBuffer> readMetadata(
-      const MetadataSection& section) const;
+      const MetadataSection& section,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   void initDenseIndexes();
 
@@ -710,11 +728,14 @@ class TabletReader {
       uint64_t footerOffset = 0);
 
   // Returns the cached ChunkStatsGroup for the given stripe group index.
-  std::shared_ptr<ChunkStatsGroup> chunkStats(uint32_t stripeGroupIndex) const;
+  std::shared_ptr<ChunkStatsGroup> chunkStats(
+      uint32_t stripeGroupIndex,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   // Loads the ChunkStatsGroup for the given stripe group index from file.
   std::shared_ptr<ChunkStatsGroup> loadChunkStatsGroup(
-      uint32_t stripeGroupIndex) const;
+      uint32_t stripeGroupIndex,
+      const velox::FileIoContext* fileIoContext = nullptr) const;
 
   // Creates the version-specific chunk stats group implementation.
   std::shared_ptr<ChunkStatsGroup> createChunkStatsGroup(

@@ -112,6 +112,14 @@ class NimbleIndexProjector {
   /// `CachedDataInput` against the caller-owned cache; otherwise reads use
   /// `DirectDataInput` with no caching. The cache must outlive the projector.
   ///
+  /// 'fileIoContext' supplies the request context. The projector keeps a copy
+  /// for payload, stripe metadata, and standard index reads after create().
+  /// It replaces the inputs' default context as described by DataInput::read.
+  /// The tablet cache opens or retrieves the tablet using its default context.
+  /// A null request context leaves each input's default context in use.
+  /// Any referenced pool or file-level stats object must outlive the projector
+  /// and its key cursors.
+  ///
   // TODO: projectedSubfields currently must match file schema column names.
   // Add table-to-file column name mapping for schema evolution support.
   static std::unique_ptr<NimbleIndexProjector> create(
@@ -119,19 +127,24 @@ class NimbleIndexProjector {
       const velox::FileHandle& fileHandle,
       const std::vector<Subfield>& projectedSubfields,
       BlockCache* blockCache,
-      const velox::dwio::common::ReaderOptions& options);
+      const velox::dwio::common::ReaderOptions& options,
+      const velox::FileIoContext* fileIoContext = nullptr);
 
   /// Creates a projector with projection metadata built by the caller.
   /// The projection must have been built from the schema of `tablet`.
   /// When `blockCache` is non-null, stripe data reads route through
   /// `CachedDataInput` against the caller-owned cache; otherwise reads use
   /// `DirectDataInput` with no caching. The cache must outlive the projector.
+  ///
+  /// Copies the request context with the same behavior and lifetime contract
+  /// as the TabletReaderCache overload above.
   static std::unique_ptr<NimbleIndexProjector> create(
       std::shared_ptr<TabletReader> tablet,
       const velox::FileHandle& fileHandle,
       std::shared_ptr<const NimbleTypeProjection> projection,
       BlockCache* blockCache,
-      const velox::dwio::common::ReaderOptions& options);
+      const velox::dwio::common::ReaderOptions& options,
+      const velox::FileIoContext* fileIoContext = nullptr);
 
   /// Options for controlling projection behavior.
   ///
@@ -306,7 +319,19 @@ class NimbleIndexProjector {
     return projection_->nimbleType;
   }
 
+  /// Creates a lazy key cursor using this projector's request context.
+  /// IndexScanCursor uses this when a row-range scan needs keys without a
+  /// preceding key-bound lookup. The index alone cannot recover the context
+  /// because multiple projectors share it.
+  ///
+  /// This projector or another holder of its tablet must outlive the cursor,
+  /// as must any pools or file-level stats referenced by the request context.
+  std::unique_ptr<index::KeyCursor> keyCursor(RowRange rows) const;
+
   /// Returns the cluster index used to resolve projected key ranges.
+  /// Calls on this shared index use its default context unless the caller
+  /// passes a request context. Callers extracting fragment keys pass it
+  /// explicitly; keyCursor() binds this projector's context automatically.
   const ClusterIndexBase& clusterIndex() const {
     return *velox::checkedNotNull(clusterIndex_);
   }
@@ -390,7 +415,13 @@ class NimbleIndexProjector {
       std::shared_ptr<const NimbleTypeProjection> projection,
       velox::memory::MemoryPool* pool,
       std::shared_ptr<velox::io::IoStatistics> ioStats,
-      bool verifyStreamChecksums);
+      bool verifyStreamChecksums,
+      const velox::FileIoContext* fileIoContext);
+
+  // Returns the owned request context, or null to retain input defaults.
+  const velox::FileIoContext* fileIoContext() const {
+    return fileIoContext_.has_value() ? &*fileIoContext_ : nullptr;
+  }
 
   // A request index paired with its stripe-relative row range.
   struct StripeRange {
@@ -650,6 +681,10 @@ class NimbleIndexProjector {
   const std::shared_ptr<velox::ReadFile> file_;
   const std::shared_ptr<TabletReader> tablet_;
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
+
+  // Owns the request context used for payload and shared metadata/index reads.
+  const std::optional<velox::FileIoContext> fileIoContext_;
+
   // Owned by the caller throughout reads and asynchronous cleanup.
   velox::memory::MemoryPool* const pool_;
   const ClusterIndexBase* const clusterIndex_;

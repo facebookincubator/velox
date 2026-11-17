@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <atomic>
 #include <numeric>
 #include <thread>
@@ -71,6 +72,49 @@ velox::serializer::EncodedKeyBounds makeKeyBounds(std::string_view key) {
 IndexLookup::LookupRequest makeKeyRequest(std::string_view key) {
   return IndexLookup::LookupRequest::rangeScan({makeKeyBounds(key)});
 }
+
+// Records the file options of every read, and holds each read whose context
+// has the file options 'blockedFileOpts' until release().
+class BlockingReadFile final
+    : public nimble::testing::FileOptsRecordingReadFile {
+ public:
+  BlockingReadFile(
+      std::string data,
+      folly::F14FastMap<std::string, std::string> blockedFileOpts)
+      : FileOptsRecordingReadFile(std::move(data)),
+        blockedFileOpts_{std::move(blockedFileOpts)} {}
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const velox::FileIoContext& context = {}) const override {
+    if (context.fileOpts == blockedFileOpts_) {
+      if (!readBlocked_.exchange(true)) {
+        blockedReadStarted_.post();
+      }
+      released_.wait();
+    }
+    return FileOptsRecordingReadFile::pread(offset, length, buf, context);
+  }
+
+  // Returns whether a read with the blocked file options started within
+  // 'timeout'.
+  bool waitForBlockedRead(std::chrono::milliseconds timeout) const {
+    return blockedReadStarted_.try_wait_for(timeout);
+  }
+
+  // Lets the blocked reads, and every later one, proceed. Called once.
+  void release() const {
+    released_.post();
+  }
+
+ private:
+  const folly::F14FastMap<std::string, std::string> blockedFileOpts_;
+  mutable std::atomic_bool readBlocked_{false};
+  mutable folly::Baton<> blockedReadStarted_;
+  mutable folly::Baton<> released_;
+};
 
 // Reads the keys of 'cursor' through batches of up to 'maxKeys' keys, and
 // checks that only the last batch holds fewer keys, that a short last batch
@@ -327,6 +371,73 @@ class ClusterIndexTest : public ClusterIndexTestBase {
       });
     }
     return result;
+  }
+
+  using FileOpts = folly::F14FastMap<std::string, std::string>;
+
+  // File options that the inputs of a recording index read with when a call
+  // passes no context.
+  static FileOpts indexFileOpts() {
+    return {{"source", "index"}};
+  }
+
+  // File options of the context that a test passes to a call.
+  static FileOpts requestFileOpts() {
+    return {{"source", "request"}};
+  }
+
+  // A context that carries requestFileOpts().
+  static velox::FileIoContext requestContext() {
+    velox::FileIoContext context;
+    context.fileOpts = requestFileOpts();
+    return context;
+  }
+
+  // An index whose metadata and key stream files record the file options of
+  // every read.
+  struct RecordingIndex {
+    std::shared_ptr<nimble::testing::FileOptsRecordingReadFile> metadataFile;
+    std::shared_ptr<nimble::testing::FileOptsRecordingReadFile> keyStreamFile;
+    std::unique_ptr<ClusterIndex> index;
+  };
+
+  // Creates an unpinned Stripe layout index of two stripes per partition over
+  // 'keyStreams', whose inputs read with indexFileOpts() when a call passes
+  // no context, and clears the key stream locator calls recorded so far.
+  RecordingIndex createRecordingIndex(const StripeKeyStreams& keyStreams) {
+    const auto indexBuffers = createTestClusterIndex(
+        {"col1"}, "k00", keyStreams.stripes, {2, 2}, KeyStreamLayout::kStripe);
+    RecordingIndex result{
+        .metadataFile =
+            std::make_shared<nimble::testing::FileOptsRecordingReadFile>(
+                indexBuffers.indexPartitions),
+        .keyStreamFile =
+            std::make_shared<nimble::testing::FileOptsRecordingReadFile>(
+                keyStreams.file),
+        .index = nullptr,
+    };
+    velox::FileIoContext indexContext;
+    indexContext.fileOpts = indexFileOpts();
+    result.index = createClusterIndex(
+        indexBuffers,
+        result.keyStreamFile,
+        /*pinIndex=*/false,
+        /*preloadIndex=*/false,
+        /*withKeyStreamLocator=*/true,
+        result.metadataFile,
+        indexContext);
+    clearKeyStreamLocatorFileOpts();
+    return result;
+  }
+
+  // Expects 'file' to have been read at least once, and every read to carry
+  // 'fileOpts'.
+  static void expectReads(
+      const nimble::testing::FileOptsRecordingReadFile& file,
+      const FileOpts& fileOpts) {
+    const auto reads = file.fileOpts();
+    ASSERT_FALSE(reads.empty());
+    EXPECT_EQ(reads, std::vector<FileOpts>(reads.size(), fileOpts));
   }
 };
 
@@ -1097,6 +1208,177 @@ TEST_F(ClusterIndexTest, stripeLayoutKeyCursor) {
   }
 }
 
+TEST_F(ClusterIndexTest, lookupReadsWithRequestFileIoContext) {
+  const auto keyStreams = writeStripeKeyStreams(fourStripeKeys());
+  const auto context = requestContext();
+
+  // A key of the second stripe loads the first partition, the metadata of its
+  // stripe group and the key chunk of the stripe, all with the context. The
+  // lookup goes through the IndexLookup interface, as generic callers make it.
+  {
+    const auto recording = createRecordingIndex(keyStreams);
+    const IndexLookup& index = *recording.index;
+    expectRows(index.lookup(makeKeyRequest("k06"), &context), RowRange(6, 7));
+    expectReads(*recording.metadataFile, requestFileOpts());
+    expectReads(*recording.keyStreamFile, requestFileOpts());
+    EXPECT_EQ(
+        keyStreamLocatorFileOpts(),
+        (std::vector<std::optional<FileOpts>>{requestFileOpts()}));
+  }
+
+  // Without a context, the inputs read with their own.
+  {
+    const auto recording = createRecordingIndex(keyStreams);
+    expectRows(
+        recording.index->lookup(
+            makeKeyRequest("k06"), /*fileIoContext=*/nullptr),
+        RowRange(6, 7));
+    expectReads(*recording.metadataFile, indexFileOpts());
+    expectReads(*recording.keyStreamFile, indexFileOpts());
+    EXPECT_EQ(
+        keyStreamLocatorFileOpts(),
+        (std::vector<std::optional<FileOpts>>{std::nullopt}));
+  }
+
+  // The stripes of a request and a lookup in key chunks that the caller read
+  // load the partition with the context, and read no key chunk.
+  {
+    const auto recording = createRecordingIndex(keyStreams);
+    const auto request = makeKeyRequest("k06");
+    const auto stripes = recording.index->lookupStripes(request, &context);
+    EXPECT_EQ(toStrings(stripes), std::vector<std::string>{"[1, 2)"});
+    expectRows(
+        recording.index->lookup(
+            request,
+            keyChunks(keyStreams, keyStreams.file, boundStripes(stripes)),
+            &context),
+        RowRange(6, 7));
+    expectReads(*recording.metadataFile, requestFileOpts());
+    EXPECT_TRUE(recording.keyStreamFile->fileOpts().empty());
+    EXPECT_EQ(
+        keyStreamLocatorFileOpts(),
+        (std::vector<std::optional<FileOpts>>{requestFileOpts()}));
+  }
+
+  // An open-ended range loads the final partition to determine the file's
+  // last stripe, even when the lower bound is in another partition.
+  {
+    const auto recording = createRecordingIndex(keyStreams);
+    const auto request = IndexLookup::LookupRequest::rangeScan(
+        {{.lowerKey = "k06", .upperKey = std::nullopt}});
+    const auto stripes = recording.index->lookupStripes(request, &context);
+    EXPECT_EQ(toStrings(stripes), std::vector<std::string>{"[1, 4)"});
+    EXPECT_EQ(
+        recording.metadataFile->fileOpts(),
+        std::vector<FileOpts>(2, requestFileOpts()));
+    EXPECT_TRUE(recording.keyStreamFile->fileOpts().empty());
+    EXPECT_EQ(
+        keyStreamLocatorFileOpts(),
+        std::vector<std::optional<FileOpts>>(2, requestFileOpts()));
+  }
+}
+
+TEST_F(ClusterIndexTest, concurrentLookupsReadWithTheirOwnFileIoContext) {
+  const auto keyStreams = writeStripeKeyStreams(fourStripeKeys());
+  const auto recording = createRecordingIndex(keyStreams);
+  const FileOpts firstOpts{{"source", "first"}};
+  const FileOpts secondOpts{{"source", "second"}};
+
+  // Each lookup loads the partition of its key and the key chunk of its
+  // stripe, one read of each file, while the other runs. The partitions load
+  // concurrently, and the fixture records the key stream locator calls under
+  // a lock of its own.
+  const auto lookUp = [&](std::string_view key,
+                          const FileOpts& fileOpts,
+                          RowRange rows) {
+    velox::FileIoContext context;
+    context.fileOpts = fileOpts;
+    expectRows(recording.index->lookup(makeKeyRequest(key), &context), rows);
+  };
+  std::thread first([&] { lookUp("k02", firstOpts, RowRange(2, 3)); });
+  std::thread second([&] { lookUp("k12", secondOpts, RowRange(12, 13)); });
+  first.join();
+  second.join();
+
+  const auto sorted = [](auto values) {
+    std::sort(
+        values.begin(), values.end(), [](const auto& lhs, const auto& rhs) {
+          return lhs.at("source") < rhs.at("source");
+        });
+    return values;
+  };
+  const std::vector<FileOpts> expected{firstOpts, secondOpts};
+  EXPECT_EQ(sorted(recording.metadataFile->fileOpts()), expected);
+  EXPECT_EQ(sorted(recording.keyStreamFile->fileOpts()), expected);
+  std::vector<FileOpts> locatorOpts;
+  for (const auto& fileOpts : keyStreamLocatorFileOpts()) {
+    ASSERT_TRUE(fileOpts.has_value());
+    locatorOpts.push_back(fileOpts.value());
+  }
+  EXPECT_EQ(sorted(locatorOpts), expected);
+}
+
+TEST_F(ClusterIndexTest, keyReadsWithRequestFileIoContext) {
+  const auto stripeKeys = fourStripeKeys();
+  const auto keyStreams = writeStripeKeyStreams(stripeKeys);
+  const auto keys = flattenKeys(stripeKeys);
+  const std::vector<std::optional<FileOpts>> bothPartitions{
+      requestFileOpts(), requestFileOpts()};
+
+  {
+    const auto recording = createRecordingIndex(keyStreams);
+    const auto context = requestContext();
+    const IndexLookup& index = *recording.index;
+    EXPECT_EQ(index.keyAtRow(2, &context), keys[2]);
+    expectReads(*recording.metadataFile, requestFileOpts());
+    expectReads(*recording.keyStreamFile, requestFileOpts());
+  }
+
+  // A cursor loads every partition and chunk after the caller's context is
+  // gone, with its copy.
+  {
+    const auto recording = createRecordingIndex(keyStreams);
+    std::unique_ptr<KeyCursor> cursor;
+    {
+      const auto context = requestContext();
+      const IndexLookup& index = *recording.index;
+      cursor = index.keyCursor(
+          RowRange(0, static_cast<uint32_t>(keys.size())), &context);
+    }
+    std::vector<std::string> scannedKeys;
+    while (cursor->hasNext()) {
+      scannedKeys.emplace_back(cursor->next());
+    }
+    EXPECT_EQ(scannedKeys, keys);
+    expectReads(*recording.metadataFile, requestFileOpts());
+    expectReads(*recording.keyStreamFile, requestFileOpts());
+    EXPECT_EQ(keyStreamLocatorFileOpts(), bothPartitions);
+  }
+
+  // The cursor of a seek reads the chunks after the first with its copy.
+  {
+    const auto recording = createRecordingIndex(keyStreams);
+    std::optional<ClusterIndexBase::SeekResult> seekResult;
+    {
+      const auto context = requestContext();
+      seekResult.emplace(recording.index->seek(
+          {.lowerKey = std::string("k03"), .upperKey = std::string("k10")},
+          &context));
+    }
+    EXPECT_EQ(seekResult->rows.toString(), RowRange(3, 10).toString());
+    std::vector<std::string> scannedKeys;
+    while (seekResult->keyCursor->hasNext()) {
+      scannedKeys.emplace_back(seekResult->keyCursor->next());
+    }
+    EXPECT_EQ(
+        scannedKeys,
+        std::vector<std::string>(keys.begin() + 3, keys.begin() + 10));
+    expectReads(*recording.metadataFile, requestFileOpts());
+    expectReads(*recording.keyStreamFile, requestFileOpts());
+    EXPECT_EQ(keyStreamLocatorFileOpts(), bothPartitions);
+  }
+}
+
 TEST_F(ClusterIndexTest, stripeLayoutPreloadIndex) {
   const auto stripeKeys = fourStripeKeys();
   auto clusterIndex = createStripeLayoutIndex(
@@ -1254,7 +1536,8 @@ TEST_F(ClusterIndexTest, keyChunkLookupsRequireStripeLayout) {
       clusterIndex->lookupStripes(makeKeyRequest("k00")),
       "Only a Stripe layout index looks up the stripes of a request");
   NIMBLE_ASSERT_THROW(
-      clusterIndex->lookup(makeKeyRequest("k00"), /*keyChunks=*/{}),
+      clusterIndex->lookup(
+          makeKeyRequest("k00"), std::span<const ClusterIndexBase::KeyChunk>{}),
       "Only a Stripe layout index looks up keys in given key chunks");
   // Also when given the bytes of its key stream, from which its lookups read
   // the key.
@@ -1713,7 +1996,9 @@ TEST_F(ClusterIndexTest, lookupWithKeyChunks) {
           makeKeyRequest(keys[0]), readKeyChunks(makeKeyRequest(keys.back()))),
       "No key chunk is given for stripe 0");
   NIMBLE_ASSERT_THROW(
-      clusterIndex->lookup(makeKeyRequest(keys[0]), /*keyChunks=*/{}),
+      clusterIndex->lookup(
+          makeKeyRequest(keys[0]),
+          std::span<const ClusterIndexBase::KeyChunk>{}),
       "A lookup in given key chunks needs some");
   // The bytes given for a stripe must be its key stream, neither short of it
   // nor with more, such as its stream trailer.
@@ -3636,7 +3921,9 @@ TEST_F(ClusterIndexTest, preloadIndexAutoPromotesPinIndex) {
   EXPECT_EQ(indexIoStats_->rawBytesRead(), bytesAfterPreload);
 }
 
-DEBUG_ONLY_TEST_F(ClusterIndexTest, loadPartitionOnce) {
+DEBUG_ONLY_TEST_F(
+    ClusterIndexTest,
+    concurrentPartitionLoadsKeepTheFirstInstall) {
   std::vector<std::string> indexColumns = {"key_col"};
   std::string minKey = "aaa";
 
@@ -3665,6 +3952,8 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, loadPartitionOnce) {
   auto clusterIndex =
       createClusterIndex(indexBuffers, createKeyStreamFile(combinedStream));
 
+  ClusterIndexTestHelper helper(clusterIndex.get());
+
   std::atomic_uint32_t loadCount{0};
   folly::Baton firstLoaderReady;
   folly::Baton firstLoaderProceed;
@@ -3680,21 +3969,85 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, loadPartitionOnce) {
         }
       }));
 
+  // The first loader stops before its read, holding no lock, so the second
+  // reads, builds and installs the partition first.
   std::thread t1([&]() { clusterIndex->lookup(makeRangeScanRequest("bbb")); });
+  const bool firstLoaderStarted =
+      firstLoaderReady.try_wait_for(std::chrono::seconds(10));
+  EXPECT_TRUE(firstLoaderStarted);
 
-  firstLoaderReady.wait();
-  EXPECT_EQ(loadCount.load(), 1);
+  folly::Baton secondLoaderDone;
+  std::thread t2([&]() {
+    clusterIndex->lookup(makeRangeScanRequest("aaa"));
+    secondLoaderDone.post();
+  });
+  const bool secondLoaderFinished =
+      secondLoaderDone.try_wait_for(std::chrono::seconds(10));
+  // Reading the installed chunk loads nothing once the second loader is done.
+  const auto* installedChunk = secondLoaderFinished
+      ? helper.decodedChunkData(/*partitionIndex=*/0, /*chunkIndex=*/0)
+      : nullptr;
 
-  std::thread t2([&]() { clusterIndex->lookup(makeRangeScanRequest("aaa")); });
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  EXPECT_EQ(loadCount.load(), 1);
-
+  // The first loader reads and builds the partition too, and drops it.
   firstLoaderProceed.post();
   t1.join();
   t2.join();
 
-  EXPECT_EQ(loadCount.load(), 1);
+  ASSERT_TRUE(secondLoaderFinished);
+  EXPECT_EQ(loadCount.load(), 2);
+  EXPECT_NE(installedChunk, nullptr);
+  EXPECT_EQ(
+      helper.decodedChunkData(/*partitionIndex=*/0, /*chunkIndex=*/0),
+      installedChunk);
+}
+
+TEST_F(ClusterIndexTest, partitionLoadDoesNotBlockOtherPartitions) {
+  const auto keyStreams = writeStripeKeyStreams(fourStripeKeys());
+  const auto indexBuffers = createTestClusterIndex(
+      {"col1"}, "k00", keyStreams.stripes, {2, 2}, KeyStreamLayout::kStripe);
+  const folly::F14FastMap<std::string, std::string> slowFileOpts{
+      {"source", "slow"}};
+
+  // While a read of partition 0 is held, a lookup in partition 1 finishes,
+  // whether partition 1 is loaded or cold. A cold partition 1 loads with no
+  // context, so its read is not held.
+  for (const bool otherPartitionLoaded : {true, false}) {
+    SCOPED_TRACE(fmt::format("otherPartitionLoaded={}", otherPartitionLoaded));
+    const auto metadataFile = std::make_shared<BlockingReadFile>(
+        indexBuffers.indexPartitions, slowFileOpts);
+    const auto clusterIndex = createClusterIndex(
+        indexBuffers,
+        createKeyStreamFile(keyStreams.file),
+        /*pinIndex=*/false,
+        /*preloadIndex=*/false,
+        /*withKeyStreamLocator=*/true,
+        metadataFile);
+    if (otherPartitionLoaded) {
+      expectRows(clusterIndex->lookup(makeKeyRequest("k12")), RowRange(12, 13));
+    }
+
+    std::thread coldLookup([&]() {
+      velox::FileIoContext slowContext;
+      slowContext.fileOpts = slowFileOpts;
+      expectRows(
+          clusterIndex->lookup(makeKeyRequest("k02"), &slowContext),
+          RowRange(2, 3));
+    });
+    EXPECT_TRUE(metadataFile->waitForBlockedRead(std::chrono::seconds(10)));
+
+    folly::Baton otherLookupDone;
+    std::thread otherLookup([&]() {
+      expectRows(clusterIndex->lookup(makeKeyRequest("k13")), RowRange(13, 14));
+      otherLookupDone.post();
+    });
+    EXPECT_TRUE(otherLookupDone.try_wait_for(std::chrono::seconds(10)));
+
+    // Released whatever happened above, so a failed expectation cannot hang
+    // the test.
+    metadataFile->release();
+    coldLookup.join();
+    otherLookup.join();
+  }
 }
 
 DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunkFirstWins) {

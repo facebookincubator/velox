@@ -121,7 +121,8 @@ PartitionStats ClusterIndexTestHelper::partitionStats(
 
   NIMBLE_CHECK_EQ(
       clusterIndex_->keyStreamLayout(), KeyStreamLayout::kPartition);
-  const auto* partition = clusterIndex_->loadPartition(partitionIndex);
+  const auto* partition =
+      clusterIndex_->loadPartition(partitionIndex, /*fileIoContext=*/nullptr);
   const auto* index =
       flatbuffers::GetRoot<serialization::ClusterIndexPartition>(
           partition->metadata().content().data());
