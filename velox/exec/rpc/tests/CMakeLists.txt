@@ -20,6 +20,7 @@ target_link_libraries(
   velox_rpc_types
   velox_memory
   velox_process
+  GTest::gmock
   GTest::gtest
   Folly::folly
 )
@@ -80,12 +81,46 @@ target_link_libraries(
   velox_rpc_rate_limiter_test
   velox_rpc_rate_limiter
   velox_test_util
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
   Folly::folly
 )
 
 add_test(NAME velox_rpc_rate_limiter_test COMMAND velox_rpc_rate_limiter_test)
+
+add_executable(velox_rpc_job_simulation_test RPCJobSimulationTest.cpp)
+
+target_link_libraries(
+  velox_rpc_job_simulation_test
+  velox_rpc_state
+  velox_rpc_rate_limiter
+  GTest::gtest
+  GTest::gtest_main
+  Folly::folly
+  fmt::fmt
+)
+
+add_test(NAME velox_rpc_job_simulation_test COMMAND velox_rpc_job_simulation_test)
+# The simulations take seconds optimized and minutes unoptimized.
+set_tests_properties(velox_rpc_job_simulation_test PROPERTIES TIMEOUT 3000)
+
+add_executable(velox_rpc_shared_capacity_simulation_test RPCSharedCapacitySimulationTest.cpp)
+
+target_link_libraries(
+  velox_rpc_shared_capacity_simulation_test
+  velox_rpc_rate_limiter
+  GTest::gtest
+  GTest::gtest_main
+  Folly::folly
+  fmt::fmt
+)
+
+add_test(
+  NAME velox_rpc_shared_capacity_simulation_test
+  COMMAND velox_rpc_shared_capacity_simulation_test
+)
+set_tests_properties(velox_rpc_shared_capacity_simulation_test PROPERTIES TIMEOUT 3000)
 
 add_executable(velox_rpc_error_classification_test RpcErrorClassificationTest.cpp)
 
@@ -108,6 +143,7 @@ target_link_libraries(
   velox_rpc_plan_node_translator
   velox_async_rpc_function_registry
   velox_exec_test_lib
+  GTest::gmock
   GTest::gtest
   Folly::folly
 )

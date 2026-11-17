@@ -46,6 +46,7 @@
 #include "velox/expression/rpc/AsyncRPCFunction.h"
 
 #include <folly/futures/Promise.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -55,6 +56,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <iterator>
 #include <set>
 #include <string>
 #include <thread>
@@ -1047,6 +1049,103 @@ TEST_F(RPCStateTest, completedRowReleasesAdmissionBeforeDriverOutput) {
   EXPECT_EQ(limiter->stats().pending, 0);
   EXPECT_FALSE(claimedRow->sharedOverloadHandled);
   EXPECT_TRUE(claimedRow->admissionEpoch.has_value());
+}
+
+TEST_F(RPCStateTest, rowRejectionTellsLimiterWhetherCapacityWasNamed) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  using velox::rpc::CapacityRetryCause;
+  int64_t rowId{0};
+  // Of 100 calls in flight, one rejected, CAPACITY_PROBING keeps 80% of the 99
+  // the backend held on a capacity rejection, and halves its window of 200 on
+  // a quota rejection.
+  for (const auto& [cause, expected] :
+       std::vector<std::pair<CapacityRetryCause, int64_t>>{
+           {CapacityRetryCause::kCapacity, 79},
+           {CapacityRetryCause::kQuota, 100},
+       }) {
+    auto limiter = std::make_shared<RPCRateLimiter>("test.row.cause");
+    limiter->configure(
+        {.adaptive = true,
+         .ceiling = 1'000,
+         .floor = 50,
+         .flowControlPolicy = RPCFlowControlPolicy::kCapacityProbing});
+    // The limiter admits a few calls at a time until its first response.
+    std::vector<RPCRateLimiter::Token> tokens;
+    while (tokens.size() < 100) {
+      auto chunk = limiter->tryAcquireUpTo(100 - tokens.size());
+      ASSERT_FALSE(chunk.empty());
+      std::move(chunk.begin(), chunk.end(), std::back_inserter(tokens));
+    }
+    auto lease = limiter->makeLease(std::move(tokens.back()));
+    tokens.pop_back();
+    auto response = RPCResponse::failed(
+        ++rowId, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+    response.setCapacityRetry(
+        {.cause = cause,
+         .retryAfter = std::chrono::milliseconds(0),
+         .budget = std::chrono::seconds(60)});
+    state_->addPendingRow(
+        state_,
+        rowId,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(std::move(response)),
+        std::move(lease));
+    waitFor([&]() { return state_->numInFlight() == 0; });
+    EXPECT_EQ(limiter->stats().capacity, expected);
+  }
+}
+
+TEST_F(RPCStateTest, rejectionsCountByCause) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  const auto reject = [&](int64_t rowId, velox::rpc::CapacityRetry hint) {
+    auto response = RPCResponse::failed(
+        rowId, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+    response.setCapacityRetry(hint);
+    state_->addPendingRow(
+        state_,
+        rowId,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(std::move(response)));
+    waitFor([&]() { return state_->numInFlight() == 0; });
+  };
+  using velox::rpc::CapacityRetryCause;
+  const auto retried = [](CapacityRetryCause cause) {
+    return velox::rpc::CapacityRetry{
+        .cause = cause,
+        .retryAfter = std::chrono::milliseconds(0),
+        .budget = std::chrono::seconds(60)};
+  };
+  reject(1, retried(CapacityRetryCause::kQuota));
+  reject(2, retried(CapacityRetryCause::kCapacity));
+  // The transport already spent the row's only retry in place.
+  reject(
+      3,
+      {.cause = CapacityRetryCause::kCapacity,
+       .retryAfter = std::chrono::milliseconds(0),
+       .maxRetries = 1,
+       .numInPlaceRetries = 1});
+  reject(4, retried(CapacityRetryCause::kUnknown));
+  {
+    state_->addPendingRow(
+        state_,
+        5,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(
+            RPCResponse::failed(
+                5, velox::rpc::RPCErrorKind::kRateLimited, "rejected")));
+    waitFor([&]() { return state_->numInFlight() == 0; });
+  }
+
+  EXPECT_EQ(state_->takeDueRetries(10).size(), 3);
+  std::vector<int64_t> outputRows;
+  while (const auto ready = state_->tryClaimReady()) {
+    outputRows.push_back(ready->rowId);
+  }
+  EXPECT_THAT(outputRows, testing::UnorderedElementsAre(3, 5));
+  const auto snapshot = state_->operatorSnapshot();
+  EXPECT_EQ(snapshot.numQuotaRejections, 1);
+  EXPECT_EQ(snapshot.numCapacityRejections, 2);
 }
 
 TEST_F(RPCStateTest, completedOverloadBacksOffBeforeReleasingAdmission) {
