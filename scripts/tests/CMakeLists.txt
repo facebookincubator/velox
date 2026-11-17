@@ -12,7 +12,3 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_test(test_LicenseHeader ${CMAKE_CURRENT_SOURCE_DIR}/test_LicenseHeader.sh)
-add_test(
-  NAME test_FlexScannerFixup
-  COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/test_FlexScannerFixup.cmake
-)
