@@ -1583,14 +1583,6 @@ variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {
   return materialize(result.second[0])[0][0];
 }
 
-void printResults(const RowVectorPtr& result, std::ostream& out) {
-  auto materializedRows = materialize(result);
-  const auto& type = result->type();
-  for (const auto& row : materializedRows) {
-    out << toString(row, type) << std::endl;
-  }
-}
-
 std::unordered_map<std::string, OperatorStats> toOperatorStats(
     const TaskStats& taskStats) {
   std::unordered_map<std::string, OperatorStats> opStatsMap;

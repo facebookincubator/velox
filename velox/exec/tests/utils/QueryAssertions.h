@@ -342,8 +342,6 @@ void assertEqualTypeAndNumRows(
     vector_size_t expectedNumRows,
     const std::vector<RowVectorPtr>& actual);
 
-void printResults(const RowVectorPtr& result, std::ostream& out);
-
 /// Aggregates operator stats by operator type. If a task has more than one plan
 /// nodes having the same operator types, then their operator stats are merged
 /// together.
