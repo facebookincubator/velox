@@ -342,6 +342,46 @@ TEST_F(FileConnectorUtilTest, configureReaderOptionsWithoutReaderFactory) {
   EXPECT_EQ(readerOptions.formatSpecificOptions(), nullptr);
 }
 
+TEST_F(FileConnectorUtilTest, configureReaderOptionsNimbleLazyFileStats) {
+  auto fileConfig = makeFileConfig();
+  auto split = makeSplit(dwio::common::FileFormat::NIMBLE);
+
+  // Set in the session.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{connector::FileConfig::kNimbleLazyFileStatsSession, "true"}});
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    connector::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+
+    EXPECT_TRUE(readerOptions.nimbleLazyFileStats());
+  }
+
+  // Absent: defaults to false.
+  {
+    auto holder = makeConnectorQueryCtx();
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    connector::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+
+    EXPECT_FALSE(readerOptions.nimbleLazyFileStats());
+  }
+}
+
 TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   auto holder = makeConnectorQueryCtx();
   auto fileConfig = makeFileConfig();
