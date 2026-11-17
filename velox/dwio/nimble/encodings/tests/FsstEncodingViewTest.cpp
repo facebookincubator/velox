@@ -484,6 +484,28 @@ TEST_P(FsstEncodingViewTest, readsLongStringsAlone) {
   }
 }
 
+TEST_P(FsstEncodingViewTest, readsStringsThatExpandBeyondTheChunkEstimate) {
+  // FSST encodes each run of eight repeated bytes as one code, so these
+  // strings decode to about eight times their compressed size, more than a
+  // cached view first allocates for a chunk.
+  std::vector<std::string> storage;
+  storage.reserve(2'048);
+  Vector<std::string_view> values{pool_.get()};
+  for (uint32_t row = 0; row < 2'048; ++row) {
+    storage.emplace_back(
+        std::string(256 + row % 64, 'a') + std::to_string(row % 10));
+    values.push_back(storage.back());
+  }
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+  std::vector<std::string_view> output(values.size());
+  view->read(0, view->rowCount(), output.data());
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    EXPECT_EQ(output[row], values[row]) << "row " << row;
+  }
+}
+
 TEST_P(FsstEncodingViewTest, rejectsOutOfRangeIndices) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 256);

@@ -25,6 +25,7 @@ add_library(
   FixedBitArray.cpp
   MetricsLogger.cpp
   NimbleException.cpp
+  StringPageArena.cpp
   Types.cpp
   Varint.cpp
   Zigzag.h
@@ -32,6 +33,7 @@ add_library(
   Vector.h
   Varint.h
   Types.h
+  StringPageArena.h
   StatsUtil.h
   NimbleException.h
   MetricsLogger.h

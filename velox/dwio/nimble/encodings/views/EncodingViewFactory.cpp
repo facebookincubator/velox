@@ -130,6 +130,15 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "Dictionary encoding cannot be used for boolean data.");
+    case EncodingType::SharedDictionary:
+      if constexpr (isSharedDictionaryType<T>()) {
+        return std::make_unique<SharedDictionaryEncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "SharedDictionary encoding only supports integral and string data, "
+          "got {}.",
+          TypeTraits<T>::dataType);
     case EncodingType::SparseBool:
       if constexpr (std::is_same_v<T, bool>) {
         return std::make_unique<SparseBoolEncodingView>(data, pool, options);
@@ -280,6 +289,7 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::ALPRD,
       EncodingType::FixedBitWidth,
       EncodingType::Dictionary,
+      EncodingType::SharedDictionary,
       EncodingType::SparseBool,
       EncodingType::RLE,
       EncodingType::FOR,
