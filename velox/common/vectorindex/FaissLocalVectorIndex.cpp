@@ -341,11 +341,13 @@ void FaissLocalVectorIndex::search(
       "Query embedding length must match the vector index's");
   VELOX_CHECK_EQ(ids.size(), queries.size() * k);
   VELOX_CHECK_EQ(scores.size(), queries.size() * k);
+  // Flat GPU search still translates ids on the CPU, through IndexIDMap.
+  // The guard has to cover that translation and the CPU fallback.
+  SingleThreadedFaiss singleThreaded;
   if (accelerated_ != nullptr &&
       accelerated_->search(queries, k, ids, scores)) {
     return;
   }
-  SingleThreadedFaiss singleThreaded;
   index_->search(queries.size(), queries.data(), k, scores.data(), ids.data());
 }
 

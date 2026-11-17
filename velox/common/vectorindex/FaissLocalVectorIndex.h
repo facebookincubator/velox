@@ -118,7 +118,8 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
 
   int64_t size() const override;
 
-  /// True if search() runs on an accelerator's device copy.
+  /// True when a device copy exists. A search can still run on the CPU, for
+  /// example when the requested neighbor count exceeds the GPU limit.
   bool accelerated() const {
     return accelerated_ != nullptr;
   }
