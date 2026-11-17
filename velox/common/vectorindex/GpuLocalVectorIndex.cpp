@@ -20,6 +20,7 @@
 #include <exception>
 #include <mutex>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include <cuda_runtime_api.h>
@@ -177,8 +178,10 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
       try {
         index_->search(
             queries.size(), queries.data(), gpuK, searchScores, searchIds);
-      } catch (const faiss::FaissException& e) {
-        VELOX_FAIL("FAISS GPU local vector index search failed: {}", e.what());
+      } catch (const std::exception& e) {
+        LOG(WARNING) << "Local vector index search stays on the CPU: "
+                     << e.what();
+        return false;
       }
     }
     if (gpuK < k) {
@@ -291,8 +294,10 @@ class MappedIndex : public LocalVectorIndexAccelerator::Index {
       try {
         index_->search(
             queries.size(), queries.data(), gpuK, searchScores, searchIds);
-      } catch (const faiss::FaissException& e) {
-        VELOX_FAIL("FAISS GPU local vector index search failed: {}", e.what());
+      } catch (const std::exception& e) {
+        LOG(WARNING) << "Local vector index search stays on the CPU: "
+                     << e.what();
+        return false;
       }
     }
     const auto queriesSize = static_cast<int64_t>(queries.size());
@@ -380,6 +385,31 @@ std::unique_ptr<LocalVectorIndexAccelerator::Index> loadSmallHnsw(
       faiss::gpu::getMaxKSelection(/*use_cuvs=*/false));
 }
 
+// An empty GPU IVF owned before copyFrom runs, so a failure while copying
+// destroys the incomplete device index.
+template <typename GpuIvf, typename CpuIvf>
+std::unique_ptr<GpuIvf> emptyGpuIvf(Device& device, const CpuIvf& cpu) {
+  if constexpr (std::is_same_v<GpuIvf, faiss::gpu::GpuIndexIVFFlat>) {
+    faiss::gpu::GpuIndexIVFFlatConfig config;
+    config.device = device.id;
+    config.use_cuvs = false;
+    return std::make_unique<GpuIvf>(
+        &device.resources, cpu.d, cpu.nlist, cpu.metric_type, config);
+  } else {
+    faiss::gpu::GpuIndexIVFScalarQuantizerConfig config;
+    config.device = device.id;
+    config.use_cuvs = false;
+    return std::make_unique<GpuIvf>(
+        &device.resources,
+        cpu.d,
+        cpu.nlist,
+        cpu.sq.qtype,
+        cpu.metric_type,
+        cpu.by_residual,
+        config);
+  }
+}
+
 // Trains 'cpu' on the device, adds the embeddings, and copies the trained
 // quantizer and filled lists back into 'cpu'. Uses the FAISS GPU IVF index
 // rather than cuVS's, so training runs the same k-means as the CPU build.
@@ -389,16 +419,12 @@ void buildIvf(
     CpuIvf& cpu,
     const Embeddings& embeddings,
     std::span<const int64_t> ids) {
-  faiss::gpu::GpuClonerOptions options;
-  options.use_cuvs = false;
-  std::unique_ptr<faiss::Index> index(
-      faiss::gpu::index_cpu_to_gpu(
-          &device.resources, device.id, &cpu, &options));
-  auto& gpu = dynamic_cast<GpuIvf&>(*index);
-  gpu.cp = cpu.cp;
-  gpu.train(embeddings.size(), embeddings.data());
-  gpu.add_with_ids(embeddings.size(), embeddings.data(), ids.data());
-  gpu.copyTo(&cpu);
+  auto gpu = emptyGpuIvf<GpuIvf>(device, cpu);
+  gpu->copyFrom(&cpu);
+  gpu->cp = cpu.cp;
+  gpu->train(embeddings.size(), embeddings.data());
+  gpu->add_with_ids(embeddings.size(), embeddings.data(), ids.data());
+  gpu->copyTo(&cpu);
 }
 
 class GpuAccelerator : public LocalVectorIndexAccelerator {
@@ -424,11 +450,25 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
             "HNSW SQ has no FAISS GPU index");
         return flat;
       }
-      faiss::gpu::GpuClonerOptions options;
-      options.use_cuvs = false;
-      std::unique_ptr<faiss::Index> copy(
-          faiss::gpu::index_cpu_to_gpu(
-              &device_->resources, device_->id, &index, &options));
+      std::unique_ptr<faiss::Index> copy;
+      if (const auto* flat = dynamic_cast<const faiss::IndexIVFFlat*>(&index)) {
+        auto gpu = emptyGpuIvf<faiss::gpu::GpuIndexIVFFlat>(*device_, *flat);
+        gpu->copyFrom(flat);
+        copy = std::move(gpu);
+      } else if (
+          const auto* scalarQuantizer =
+              dynamic_cast<const faiss::IndexIVFScalarQuantizer*>(&index)) {
+        auto gpu = emptyGpuIvf<faiss::gpu::GpuIndexIVFScalarQuantizer>(
+            *device_, *scalarQuantizer);
+        gpu->copyFrom(scalarQuantizer);
+        copy = std::move(gpu);
+      } else {
+        faiss::gpu::GpuClonerOptions options;
+        options.use_cuvs = false;
+        copy.reset(
+            faiss::gpu::index_cpu_to_gpu(
+                &device_->resources, device_->id, &index, &options));
+      }
       return std::make_unique<ClonedIndex>(
           device_,
           std::move(copy),

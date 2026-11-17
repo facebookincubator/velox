@@ -66,10 +66,12 @@ class LocalVectorIndexAccelerator {
       return false;
     }
 
-    /// Device array mapping the ids searchDevice() writes, from 0 to the size
-    /// of the index, to the local index's ids, or null if searchDevice()
-    /// writes the local index's ids. Any other id searchDevice() writes, such
-    /// as a negative id or the largest int64_t, is padding.
+    /// Device array of the local index's ids, or null when searchDevice()
+    /// already writes those ids. When this returns a table, each id
+    /// searchDevice() writes is a position in that table: use it only when it
+    /// is inside the table, then read the id stored there. That id may be
+    /// negative or very large. When this returns null, searchDevice() writes
+    /// the application's ids directly, and only -1 means there is no result.
     virtual const int64_t* deviceIdMap() const {
       return nullptr;
     }
