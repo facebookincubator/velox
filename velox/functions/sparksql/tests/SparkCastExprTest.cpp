@@ -3606,6 +3606,15 @@ TEST_F(SparkCastExprTestAnsiOn, castDecimalToIntegralOverflow) {
   testCast(
       makeFlatVector<int128_t>({12'799, -12'899}, DECIMAL(20, 2)),
       makeFlatVector<int8_t>({127, -128}));
+
+  // Precision > 18: Velox truncates the exact value, so 127.999999999999999999
+  // casts to 127. Spark converts it to DOUBLE first, which rounds to 128.0 and
+  // throws. See the note in conversion.rst.
+  const int128_t kScale18 = 1'000'000'000'000'000'000;
+  testCast(
+      makeFlatVector<int128_t>(
+          {128 * kScale18 - 1, -129 * kScale18 + 1}, DECIMAL(21, 18)),
+      makeFlatVector<int8_t>({127, -128}));
 }
 
 TEST_F(SparkCastExprTestAnsiOn, tryCastDecimalToIntegralOverflow) {
