@@ -713,12 +713,11 @@ TEST_F(CudfExpressionSelectionTest, castAndTryCast) {
 }
 
 // element_at and contains over a constant collection run on the GPU, except
-// where cuDF would compare the keys or elements differently from the CPU.
+// in the unsupported forms below.
 TEST_F(CudfExpressionSelectionTest, constantLookupFallbacks) {
   const auto rowType = ROW(
       {{"s", VARCHAR()}, {"d", DOUBLE()}, {"i", BIGINT()}, {"t", TIMESTAMP()}});
   const auto canRunOnGpu = [&](const std::string& sql) {
-    SCOPED_TRACE(sql);
     return canExprRunOnGpu(
         optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get()),
         queryCtx_.get(),
@@ -730,7 +729,7 @@ TEST_F(CudfExpressionSelectionTest, constantLookupFallbacks) {
 
   // subscript raises on a missing key.
   EXPECT_FALSE(canRunOnGpu("subscript(map(array['a', 'b'], array[1, 2]), s)"));
-  // Velox compares REAL and DOUBLE with NaN equal to NaN, cuDF does not.
+  // REAL and DOUBLE keys and elements stay on the CPU conservatively.
   EXPECT_FALSE(canRunOnGpu("element_at(map(array[1.5, 2.5], array[1, 2]), d)"));
   EXPECT_FALSE(canRunOnGpu("contains(array[1.5, 2.5], d)"));
   // contains gives NULL rather than false when a NULL element matches no row.

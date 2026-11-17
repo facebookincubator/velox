@@ -39,6 +39,7 @@
 #include <cudf/search.hpp>
 #include <cudf/strings/slice.hpp>
 #include <cudf/table/table.hpp>
+#include <cudf/unary.hpp>
 #include <cudf/utilities/span.hpp>
 
 #include <memory>
@@ -151,11 +152,11 @@ std::pair<const T*, vector_size_t> constantCollection(
   return {vector->wrappedVector()->as<T>(), vector->wrappedIndex(0)};
 }
 
-// Restrict lookup keys to supported primitive types without floating-point
-// or custom comparison semantics.
+// Returns true if `type` can be a constant lookup key: a cuDF-supported
+// primitive type other than REAL or DOUBLE.
 bool isSupportedConstantLookupKeyType(const TypePtr& type) {
   return type->isPrimitiveType() && !type->isReal() && !type->isDouble() &&
-      !type->providesCustomComparison() && isTypeSupportedByCudf(type);
+      isTypeSupportedByCudf(type);
 }
 
 // Copies 'columns' of a constant collection to the GPU. toCudfTable()
@@ -180,11 +181,21 @@ std::unique_ptr<cudf::table> copyConstantLookupColumnsToGpu(
   return with_arrow::toCudfTable(rows, pool, stream, get_temp_mr());
 }
 
+// Returns 'probe' as 'type'. Child expressions are not finalized, so a probe
+// can arrive narrower than the constant, e.g. INT32 from length() for BIGINT.
+ColumnOrView
+castProbe(ColumnOrView& probe, cudf::data_type type, cuda::stream_ref stream) {
+  const auto view = asView(probe);
+  if (view.type() == type) {
+    return view;
+  }
+  return cudf::cast(view, type, stream, get_temp_mr());
+}
+
 // element_at(<constant map>, key) looks the key up in a hash table of the
 // map's keys and gathers the matching values, so a missing or NULL key gives
-// NULL. Presto's RewriteCaseToMap rule produces this form from simple CASE
-// expressions. Spark's element_at raises on a missing key under ANSI mode, so
-// only the Presto registration has it.
+// NULL. Only Presto registers it, since Presto's RewriteCaseToMap rule
+// produces this form from simple CASE expressions.
 class ConstantMapElementAtFunction : public CudfFunction {
  public:
   static bool canEvaluate(const core::TypedExprPtr& expr) {
@@ -232,8 +243,10 @@ class ConstantMapElementAtFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     // One index per row into the keys, JoinNoMatch for a missing or NULL key,
     // which the gather turns into NULL.
+    auto probe =
+        castProbe(inputColumns[0], entries_->get_column(0).type(), stream);
     const auto indices = keyIndex_->left_join(
-        cudf::table_view{{asView(inputColumns[0])}}, stream, get_temp_mr());
+        cudf::table_view{{asView(probe)}}, stream, get_temp_mr());
     auto values = cudf::gather(
         entries_->view().select({1}),
         cudf::column_view{cudf::device_span<const cudf::size_type>{*indices}},
@@ -289,11 +302,14 @@ class ConstantArrayContainsFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     // The result takes the probe's null mask, so a NULL probe gives NULL.
+    auto probe =
+        castProbe(inputColumns[0], elements_->get_column(0).type(), stream);
     return cudf::contains(
-        elements_->get_column(0).view(), asView(inputColumns[0]), stream, mr);
+        elements_->get_column(0).view(), asView(probe), stream, mr);
   }
 
  private:
+  // Elements of the constant array, none of them NULL.
   std::unique_ptr<cudf::table> elements_;
 };
 
