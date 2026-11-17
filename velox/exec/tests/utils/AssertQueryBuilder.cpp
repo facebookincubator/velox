@@ -15,6 +15,9 @@
  */
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+
+#include <gtest/gtest.h>
+
 #include "velox/exec/Cursor.h"
 
 namespace facebook::velox::exec::test {
@@ -236,7 +239,12 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
 
 std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults() {
   auto [cursor, results] = readCursor();
-  test::assertEmptyResults(results);
+  size_t numRows{0};
+  for (const auto& vector : results) {
+    numRows += vector->size();
+  }
+  EXPECT_EQ(0, numRows) << "Expected empty result but received " << numRows
+                        << " rows";
   return cursor->task();
 }
 
