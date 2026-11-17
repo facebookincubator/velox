@@ -374,6 +374,31 @@ class FlatMapVector : public BaseVector {
   /// every bit set. A buffer that is a view or shared is copied first.
   uint64_t* ensureInMapAt(column_index_t channel);
 
+  /// Merges the values that two channels hold for the same key into one
+  /// channel. The earlier channel is given by the result values and in-map,
+  /// the later one by the values and in-map, both with values indexed by row.
+  /// A null in-map means the key is in every selected row. The merged channel
+  /// holds the key in the selected rows where either channel does, with the
+  /// later values in the rows where both do. Unselected rows are undefined.
+  ///
+  /// When the earlier channel is shared, its values and in-map are not written
+  /// into but copied first into new ones of the given size. Returns whether
+  /// the merged values and in-map are still shared. When duplicate keys throw
+  /// and any selected row holds the key in both channels, throws a user error
+  /// naming the key at the given index of the keys before merging anything.
+  static bool mergeChannels(
+      const SelectivityVector& rows,
+      const VectorPtr& values,
+      BufferPtr inMap,
+      bool isShared,
+      vector_size_t size,
+      memory::MemoryPool* pool,
+      bool throwOnDuplicateKeys,
+      const BaseVector& keys,
+      vector_size_t keyIndex,
+      VectorPtr& resultValues,
+      BufferPtr& resultInMap);
+
   /// Updates the in map buffer from the key defined by `targetChannel` based on
   /// values from `sourceInMaps`. Updates based on the ranges defined in
   /// `ranges`.
