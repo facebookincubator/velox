@@ -126,13 +126,15 @@ int32_t filterByCache(
   // alphabet is single-tier, so the per-index test resolves the dictionary
   // entry directly and applies the byte filter. The Nimble path always emits
   // both indices and rows, hence kFilterOnly=false.
+  // The callers pad the inputs by simd::kPadding bytes and write to padded
+  // outputs: the reader's values and output rows, or padded scratch.
   return velox::dwio::common::filterDictionaryRunSimd</*kFilterOnly=*/false>(
-      inputIndices,
+      velox::Padded<const int32_t>::assumePadded(inputIndices),
       numInput,
-      inputRows,
+      velox::Padded<const int32_t>::assumePadded(inputRows),
       filterCache,
-      outputRows,
-      outputIndices,
+      velox::Padded<int32_t>::assumePadded(outputRows),
+      velox::Padded<int32_t>::assumePadded(outputIndices),
       /*numValues=*/0,
       [&](int32_t dictIndex) {
         const auto& sv = alphabet[dictIndex];
@@ -182,7 +184,10 @@ void StringColumnReader::filterDictionaryIndices(
   // continuation in read()), so extractNonNullEntries/processNullAndPassingRows
   // only ever touch rawValues_/rows/nulls over [0, readCount).
   const auto readCount = numValues_;
-  constexpr int32_t kSimdPadding = xsimd::batch<int32_t>::size;
+  // At least a SIMD batch and simd::kPadding bytes, which filterByCache's
+  // callers promise.
+  constexpr int32_t kSimdPadding = std::max<int32_t>(
+      xsimd::batch<int32_t>::size, velox::simd::kPadding / sizeof(int32_t));
   std::vector<int32_t> nonNullIndices(readCount + kSimdPadding, 0);
   std::vector<int32_t> nonNullRows(readCount + kSimdPadding, 0);
   // A dense read is exactly rows == [0, rows.size()) — the same shape

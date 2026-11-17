@@ -135,7 +135,7 @@ vector_size_t computeSelectedIndices(
     const DictionaryVector<T>* dictionaryVector,
     const folly::Range<const IndexRange*>& ranges,
     Scratch& scratch,
-    vector_size_t* selectedIndices) {
+    Padded<vector_size_t> selectedIndices) {
   // Create a bit set to track which values in the Dictionary are used.
   ScratchPtr<uint64_t, 64> usedIndicesHolder(scratch);
   auto* usedIndices = usedIndicesHolder.get(

@@ -183,6 +183,13 @@ class TestColumnReader : public SelectiveColumnReader {
   }
 };
 
+// Wraps the test reader's values, which ensureValuesCapacity() pads, and
+// filter hits sized for a full batch past the input.
+template <typename T>
+Padded<T> padded(T* data) {
+  return Padded<T>::assumePadded(data);
+}
+
 class GetFlatValuesTest : public ::testing::Test {
  protected:
   static void SetUpTestCase() {
@@ -659,7 +666,7 @@ TEST_F(GetFlatValuesTest, dictionaryBulkIndexOutOfRangeThrows) {
   VELOX_ASSERT_THROW(
       ([&] {
         visitor.processRun<false, false, false>(
-            values, 3, nullptr, nullptr, values, numValues);
+            padded(values), 3, nullptr, nullptr, padded(values), numValues);
       })(),
       "Index to dictionary");
 }
@@ -685,7 +692,7 @@ TEST_F(GetFlatValuesTest, dictionaryBulkIndexInRangeSucceeds) {
   auto* values = reinterpret_cast<int32_t*>(reader->rawValues());
   int32_t numValues = 0;
   visitor.processRun<false, false, false>(
-      values, 3, nullptr, nullptr, values, numValues);
+      padded(values), 3, nullptr, nullptr, padded(values), numValues);
   EXPECT_EQ(numValues, 3);
   EXPECT_THAT(
       std::vector<int32_t>(values, values + numValues),
@@ -720,7 +727,12 @@ TEST_F(GetFlatValuesTest, dictionaryFilteredIndexOutOfRangeThrows) {
   VELOX_ASSERT_THROW(
       ([&] {
         visitor.processRun<true, false, false>(
-            values, 8, nullptr, filterHits.data(), values, numValues);
+            padded(values),
+            8,
+            nullptr,
+            padded(filterHits.data()),
+            padded(values),
+            numValues);
       })(),
       "Index to dictionary");
 }
@@ -756,7 +768,12 @@ TEST_F(GetFlatValuesTest, dictionaryFilteredWideIndexOutOfRangeThrows) {
   VELOX_ASSERT_THROW(
       ([&] {
         visitor.processRun<true, false, false>(
-            values, 4, nullptr, filterHits.data(), values, numValues);
+            padded(values),
+            4,
+            nullptr,
+            padded(filterHits.data()),
+            padded(values),
+            numValues);
       })(),
       "Index to dictionary is out of range: 0x100000001 >= 3");
 }
@@ -793,7 +810,7 @@ TEST_F(GetFlatValuesTest, dictionaryLiteralValuesAreNotValidated) {
             ExtractToReader(reader.get()));
     int32_t numValues = 0;
     visitor.processRun<false, false, false>(
-        values, 3, nullptr, nullptr, values, numValues);
+        padded(values), 3, nullptr, nullptr, padded(values), numValues);
     EXPECT_THAT(
         std::vector<int32_t>(values, values + numValues),
         testing::ElementsAre(30, 5'000'000, 10));
@@ -812,7 +829,12 @@ TEST_F(GetFlatValuesTest, dictionaryLiteralValuesAreNotValidated) {
     std::vector<int32_t> filterHits(16);
     int32_t numValues = 0;
     visitor.processRun<true, false, false>(
-        values, 3, nullptr, filterHits.data(), values, numValues);
+        padded(values),
+        3,
+        nullptr,
+        padded(filterHits.data()),
+        padded(values),
+        numValues);
     EXPECT_THAT(
         std::vector<int32_t>(values, values + numValues),
         testing::ElementsAre(30, 5'000'000, 10));
@@ -876,7 +898,7 @@ TEST_F(GetFlatValuesTest, dictionarySmallintIndexValidation) {
   VELOX_ASSERT_THROW(
       ([&] {
         visitor.processRun<false, false, false>(
-            values, 2, nullptr, nullptr, values, numValues);
+            padded(values), 2, nullptr, nullptr, padded(values), numValues);
       })(),
       "Index to dictionary");
 
@@ -895,7 +917,12 @@ TEST_F(GetFlatValuesTest, dictionarySmallintIndexValidation) {
   auto* passingValues = reinterpret_cast<int16_t*>(reader->rawValues());
   int32_t passingNumValues = 0;
   passingVisitor.processRun<false, false, false>(
-      passingValues, 2, nullptr, nullptr, passingValues, passingNumValues);
+      padded(passingValues),
+      2,
+      nullptr,
+      nullptr,
+      padded(passingValues),
+      passingNumValues);
   EXPECT_EQ(passingNumValues, 2);
   EXPECT_THAT(
       std::vector<int16_t>(passingValues, passingValues + passingNumValues),

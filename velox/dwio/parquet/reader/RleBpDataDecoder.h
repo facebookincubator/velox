@@ -133,10 +133,11 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
       } else {
         innerVector = &visitor.innerNonNullRows();
         int32_t tailSkip = -1;
+        // 'nulls' are the reader's nulls, an AlignedBuffer.
         auto anyNulls = dwio::common::nonNullRowsFromSparse < hasFilter,
              !hasFilter &&
             !hasHook >
-                (nulls,
+                (Padded<const uint64_t>::assumePadded(nulls),
                  rowsAsRange,
                  *innerVector,
                  *outerVector,
@@ -191,12 +192,15 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
         reinterpret_cast<TIndex*>(values) + numValues);
     super::bufferStart_ += numBits >> 3;
     bitOffset_ = numBits & 7;
+    // The visitor's values and output rows are the reader's padded buffers, and
+    // 'scatterRows' is a padded raw_vector of the reader.
     visitor.template processRun<hasFilter, hasHook, scatter>(
-        values + numValues,
+        Padded<const typename Visitor::DataType>::assumePadded(
+            values + numValues),
         numRows,
-        scatterRows,
-        filterHits,
-        values,
+        Padded<const int32_t>::assumePadded(scatterRows),
+        Padded<int32_t>::assumePadded(filterHits),
+        Padded<typename Visitor::DataType>::assumePadded(values),
         numValues);
   }
 
@@ -250,14 +254,16 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
           // We are not at end and the next row of interest is after this run.
           VELOX_CHECK(!numAdvanced, "Would advance past end of RLEv1 run");
         } else if (repeating_) {
+          // The visitor's values and output rows are the reader's padded
+          // buffers, and 'scatterRows' is a padded raw_vector of the reader.
           visitor.template processRle<hasFilter, hasHook, scatter>(
               value_,
               0,
               numInRun,
               currentRow,
-              scatterRows,
-              filterHits,
-              values,
+              Padded<const int32_t>::assumePadded(scatterRows),
+              Padded<int32_t>::assumePadded(filterHits),
+              Padded<typename Visitor::DataType>::assumePadded(values),
               numValues);
         } else {
           processRun<hasFilter, hasHook, scatter>(

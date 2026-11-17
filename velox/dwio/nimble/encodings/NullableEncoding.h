@@ -455,8 +455,13 @@ void NullableEncoding<T>::materializeNullsForVisitor(
     const auto numInner =
         velox::bits::countNonNulls(incomingNulls, 0, rowCount);
     nulls_->materializeBoolsAsBits(numInner, chunkNulls, 0);
+    // 'nullBuffer_' is an AlignedBuffer, and incoming nulls are the reader's.
     velox::bits::scatterBits(
-        numInner, rowCount, chunkNullBytes, incomingNulls, chunkNullBytes);
+        numInner,
+        rowCount,
+        velox::Padded<const char>::assumePadded(chunkNullBytes),
+        velox::Padded<const uint64_t>::assumePadded(incomingNulls),
+        velox::Padded<char>::assumePadded(chunkNullBytes));
     auto* nulls = params.makeReaderNulls();
     velox::bits::copyBits(chunkNulls, 0, nulls, params.numScanned, rowCount);
   } else {

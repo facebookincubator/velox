@@ -230,11 +230,12 @@ int32_t indicesOfSetBits(
     const uint64_t* bits,
     int32_t begin,
     int32_t end,
-    int32_t* result,
+    Padded<int32_t> paddedResult,
     const A&) {
   if (end <= begin) {
     return 0;
   }
+  int32_t* result = paddedResult.get();
   int32_t row = begin & ~63;
   auto originalResult = result;
   int32_t endWord = bits::roundUp(end, 64) / 64;
@@ -1058,9 +1059,11 @@ struct Permute<T, A, 4> {
 template <int kScale, typename A>
 xsimd::batch<int16_t, A> gather(
     const int16_t* base,
-    const int32_t* indices,
+    const int32_t* rawIndices,
     int numIndices,
     const A& arch) {
+  // Padded, as the comment on the declaration requires.
+  const auto indices = Padded<const int32_t>::assumePadded(rawIndices);
   auto first = maskGather<int32_t, int32_t, kScale>(
       xsimd::batch<int32_t, A>::broadcast(0),
       leadingMask<int32_t>(numIndices, arch),

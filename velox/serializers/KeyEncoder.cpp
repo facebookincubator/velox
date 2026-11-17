@@ -365,7 +365,8 @@ void estimateEncodedColumnSize(
     }
 
     auto* nonNulls = nonNullsHolder.get(numRows);
-    const auto numNonNull = simd::indicesOfSetBits(nulls, 0, numRows, nonNulls);
+    const auto numNonNull =
+        simd::indicesOfSetBits(nulls, 0, numRows, nonNullsHolder.paddedData());
     if (numNonNull == 0) {
       return;
     }

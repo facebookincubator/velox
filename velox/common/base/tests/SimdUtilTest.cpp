@@ -58,13 +58,14 @@ class SimdUtilTest : public testing::Test {
     constexpr int32_t kWords = 1000;
     std::vector<uint64_t> bits(kWords);
     std::vector<int32_t> reference(kWords * 64);
-    std::vector<int32_t> test(kWords * 64);
+    // indicesOfSetBits may store a batch past the last index.
+    std::vector<int32_t> test(kWords * 64 + simd::kPadding / sizeof(int32_t));
     randomBits(bits, onesPer1000);
     auto run = [&](int begin, int end) {
       auto numReference =
           simpleIndicesOfSetBits(bits.data(), begin, end, reference.data());
-      auto numTest =
-          simd::indicesOfSetBits(bits.data(), begin, end, test.data());
+      auto numTest = simd::indicesOfSetBits(
+          bits.data(), begin, end, Padded<int32_t>::assumePadded(test.data()));
       ASSERT_EQ(numReference, numTest);
       ASSERT_EQ(
           memcmp(
@@ -156,11 +157,12 @@ TEST_F(SimdUtilTest, gather32) {
   for (auto i = 0; i < kBatchSize; ++i) {
     EXPECT_EQ(result.get(i), data[indices[i]]);
   }
+  // 'indicesMask' holds a full batch, which is all maskGather reads.
   auto resultMask = simd::maskGather(
       xsimd::batch<int32_t>::broadcast(-1),
       simd::leadingMask<int32_t>(kBatchSize - 2),
       data,
-      indicesMask);
+      Padded<const int32_t>::assumePadded(indicesMask));
   for (auto i = 0; i < kBatchSize - 2; ++i) {
     EXPECT_EQ(resultMask.get(i), data[indices[i]]);
   }
@@ -181,11 +183,12 @@ TEST_F(SimdUtilTest, gather64) {
   for (auto i = 0; i < kBatchSize; ++i) {
     EXPECT_EQ(result.get(i), data[indices[i]]);
   }
+  // 'indicesMask' holds a full batch, which is all maskGather reads.
   auto resultMask = simd::maskGather(
       xsimd::batch<int64_t>::broadcast(-1),
       simd::leadingMask<int64_t>(kBatchSize - 1),
       data,
-      indicesMask);
+      Padded<const int32_t>::assumePadded(indicesMask));
   for (auto i = 0; i < kBatchSize - 1; ++i) {
     EXPECT_EQ(resultMask.get(i), data[indices[i]]);
   }
@@ -196,8 +199,9 @@ TEST_F(SimdUtilTest, gather64) {
 }
 
 TEST_F(SimdUtilTest, gather16) {
-  int16_t data[32];
-  int32_t indices[32];
+  // gather() reads each value as 4 bytes and loads indices a batch at a time.
+  int16_t data[32 + simd::kPadding / sizeof(int16_t)];
+  int32_t indices[32 + simd::kPadding / sizeof(int32_t)];
   for (auto i = 0; i < 32; ++i) {
     indices[i] = 31 - i;
     data[i] = 15 + i;

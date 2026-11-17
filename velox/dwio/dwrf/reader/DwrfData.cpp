@@ -67,8 +67,8 @@ uint64_t DwrfData::skipNulls(uint64_t numValues, bool /*nullsOnly*/) {
   constexpr uint64_t kBufferBytes = 1024;
   constexpr auto kBitCount = kBufferBytes * 8;
   const auto countNulls = [](ByteRleDecoder& decoder, size_t size) {
-    char buffer[kBufferBytes];
-    decoder.next(buffer, size, nullptr);
+    char buffer[kBufferBytes + simd::kPadding];
+    decoder.next(Padded<char>::assumePadded(buffer), size, nullptr);
     return bits::countNulls(reinterpret_cast<const uint64_t*>(buffer), 0, size);
   };
 
@@ -133,18 +133,24 @@ void DwrfData::readNulls(
   nulls->setSize(numBytes);
 
   auto* nullsPtr = nulls->asMutable<char>();
+  const auto paddedNulls = paddedMutableData<char>(*nulls);
+  // Parent readers pass their own nulls, AlignedBuffers.
+  const auto paddedIncomingNulls =
+      Padded<const uint64_t>::assumePadded(incomingNulls);
   if (flatMapContext_.inMapDecoder) {
     if (notNullDecoder_) {
       dwio::common::ensureCapacity<char>(inMap_, numBytes, &memoryPool_);
       flatMapContext_.inMapDecoder->next(
-          inMap_->asMutable<char>(), numValues, incomingNulls);
-      notNullDecoder_->next(nullsPtr, numValues, inMap_->as<uint64_t>());
+          paddedMutableData<char>(*inMap_), numValues, paddedIncomingNulls);
+      notNullDecoder_->next(
+          paddedNulls, numValues, paddedData<uint64_t>(*inMap_));
     } else {
-      flatMapContext_.inMapDecoder->next(nullsPtr, numValues, incomingNulls);
+      flatMapContext_.inMapDecoder->next(
+          paddedNulls, numValues, paddedIncomingNulls);
       inMap_ = nulls;
     }
   } else if (notNullDecoder_) {
-    notNullDecoder_->next(nullsPtr, numValues, incomingNulls);
+    notNullDecoder_->next(paddedNulls, numValues, paddedIncomingNulls);
   } else {
     ::memcpy(nullsPtr, incomingNulls, numBytes);
   }

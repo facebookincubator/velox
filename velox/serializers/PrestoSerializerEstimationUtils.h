@@ -169,7 +169,7 @@ void estimateDictionarySerializedSize(
         dictionaryVector,
         ranges.subpiece(rangeIndex, 1),
         scratch,
-        mutableSelectedIndices);
+        selectedIndicesHolder.paddedData());
     for (int i = 0; i < numUsed; i++) {
       childIndices.push_back(mutableSelectedIndices[i]);
       childSizes.push_back(sizes[rangeIndex]);

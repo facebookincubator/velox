@@ -273,12 +273,15 @@ class ALPEncoding final
         Visitor::kFilterOnly,
         kScatter,
         Visitor::dense>(
-        velox::RowSet(selectedRows, numSelected),
+        // The selected rows and the values and output rows of the reader are
+        // padded.
+        velox::Padded<const int32_t>::assumePadded(selectedRows),
+        numSelected,
         0,
         numSelected,
-        scatterRows,
-        values,
-        filterHits,
+        velox::Padded<const int32_t>::assumePadded(scatterRows),
+        velox::Padded<cppDataType>::assumePadded(values),
+        velox::Padded<int32_t>::assumePadded(filterHits),
         numValues,
         visitor.filter(),
         visitor.hook());

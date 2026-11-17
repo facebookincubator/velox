@@ -61,8 +61,9 @@ using BufferPtr = boost::intrusive_ptr<Buffer>;
 //   just bits::nbytes(n) bytes.
 // - Code may read past the last valid byte only up to that end. Such reads stay
 //   inside the buffer's memory and never cross a page.
-// - Padding is not a property of every buffer. A function that needs it says so
-//   next to its signature, and its callers pass an AlignedBuffer.
+// - Padding is not a property of every buffer. A function that needs it takes
+//   a Padded<T> (see Padded.h), so that its callers say where the padding comes
+//   from, such as an AlignedBuffer.
 //
 // NOTE: References to sizes represent number of bytes.
 class Buffer {
@@ -789,6 +790,23 @@ class NonPODAlignedBuffer : public Buffer {
   // Needs to use this class from static methods of AlignedBuffer
   friend class AlignedBuffer;
 };
+
+/// Returns the data of 'buffer' as Padded. 'buffer' must not be a BufferView:
+/// the other buffers, AlignedBuffer and NonPODAlignedBuffer, keep
+/// simd::kPadding bytes past capacity().
+template <typename T>
+Padded<const T> paddedData(const Buffer& buffer) {
+  VELOX_CHECK(!buffer.isView(), "Padded data must not come from a BufferView.");
+  return Padded<const T>::assumePadded(buffer.as<T>());
+}
+
+/// Same as paddedData() for writing. 'buffer' must be mutable. A function that
+/// stores new values past the data needs room inside capacity() (see Padded).
+template <typename T>
+Padded<T> paddedMutableData(Buffer& buffer) {
+  VELOX_CHECK(!buffer.isView(), "Padded data must not come from a BufferView.");
+  return Padded<T>::assumePadded(buffer.asMutable<T>());
+}
 
 // Immutable view over externally managed memory. When the last reference is
 // destroyed, release() is called on 'releaser'. Has no padding: the memory may

@@ -111,9 +111,12 @@ std::string toString(const void* bits, int offset, int size) {
 void scatterBits(
     int32_t numSource,
     int32_t numTarget,
-    const char* source,
-    const uint64_t* targetMask,
-    char* target) {
+    Padded<const char> paddedSource,
+    Padded<const uint64_t> paddedTargetMask,
+    Padded<char> paddedTarget) {
+  const char* source = paddedSource.get();
+  const uint64_t* targetMask = paddedTargetMask.get();
+  char* target = paddedTarget.get();
   if (!process::hasBmi2()) {
     scatterBitsSimple(numSource, numTarget, source, targetMask, target);
     return;

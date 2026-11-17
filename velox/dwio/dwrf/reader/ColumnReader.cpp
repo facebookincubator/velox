@@ -152,8 +152,12 @@ void ColumnReader::readNulls(
     return;
   }
   memset(nullsPtr, bits::kNotNullByte, numBytes);
+  // 'nulls' has simd::kPadding bytes of capacity past 'numBytes'. Parent
+  // readers pass their own nulls, which this function padded.
   notNullDecoder_->next(
-      reinterpret_cast<char*>(nullsPtr), numValues, incomingNulls);
+      Padded<char>::assumePadded(reinterpret_cast<char*>(nullsPtr)),
+      numValues,
+      Padded<const uint64_t>::assumePadded(incomingNulls));
 }
 
 ColumnReader::ColumnReader(
@@ -182,12 +186,13 @@ uint64_t ColumnReader::skip(uint64_t numValues) {
   if (notNullDecoder_) {
     // page through the values that we want to skip
     // and count how many are non-null
-    std::array<char, BUFFER_SIZE> buffer;
+    std::array<char, BUFFER_SIZE + simd::kPadding> buffer;
     constexpr auto bitCount = BUFFER_SIZE * 8;
     uint64_t remaining = numValues;
     while (remaining > 0) {
       uint64_t chunkSize = std::min(remaining, bitCount);
-      notNullDecoder_->next(buffer.data(), chunkSize, nullptr);
+      notNullDecoder_->next(
+          Padded<char>::assumePadded(buffer.data()), chunkSize, nullptr);
       remaining -= chunkSize;
       numValues -= bits::countNulls(
           reinterpret_cast<uint64_t*>(buffer.data()), 0, chunkSize);
@@ -327,7 +332,11 @@ void ByteRleColumnReader<FileType, RequestedType>::next(
   // Since the byte rle places the output in a char* instead of long*,
   // we cheat here and use the long* and then expand it in a second pass.
   auto valuesPtr = values->asMutable<RequestedType>();
-  rle->next(reinterpret_cast<char*>(valuesPtr), numValues, nullsPtr);
+  // readNulls() pads 'nulls'.
+  rle->next(
+      paddedMutableData<char>(*values),
+      numValues,
+      Padded<const uint64_t>::assumePadded(nullsPtr));
 
   // Handle upcast
   if constexpr (
@@ -769,8 +778,11 @@ void IntegerDictionaryColumnReader<ReqT>::next(
   const char* inDict = nullptr;
   if (inDictionaryReader) {
     detail::ensureCapacity<bool>(inDictionary, numValues, &memoryPool_);
+    // readNulls() pads 'nulls'.
     inDictionaryReader->next(
-        inDictionary->asMutable<char>(), numValues, nullsPtr);
+        paddedMutableData<char>(*inDictionary),
+        numValues,
+        Padded<const uint64_t>::assumePadded(nullsPtr));
     inDict = inDictionary->as<char>();
   }
 
@@ -1437,7 +1449,11 @@ void StringDictionaryColumnReader::readDictionaryVector(
   const char* inDictPtr = nullptr;
   if (inDictionaryReader_) {
     detail::ensureCapacity<bool>(inDict_, numValues, &memoryPool_);
-    inDictionaryReader_->next(inDict_->asMutable<char>(), numValues, nullsPtr);
+    // readNulls() pads 'nulls'.
+    inDictionaryReader_->next(
+        paddedMutableData<char>(*inDict_),
+        numValues,
+        Padded<const uint64_t>::assumePadded(nullsPtr));
     inDictPtr = inDict_->as<char>();
   }
 
@@ -1562,7 +1578,11 @@ void StringDictionaryColumnReader::readFlatVector(
   const char* inDictPtr = nullptr;
   if (inDictionaryReader_) {
     detail::ensureCapacity<bool>(inDict_, numValues, &memoryPool_);
-    inDictionaryReader_->next(inDict_->asMutable<char>(), numValues, nullsPtr);
+    // readNulls() pads 'nulls'.
+    inDictionaryReader_->next(
+        paddedMutableData<char>(*inDict_),
+        numValues,
+        Padded<const uint64_t>::assumePadded(nullsPtr));
     inDictPtr = inDict_->as<char>();
   }
   auto dataPtr = data->asMutable<StringView>();

@@ -78,6 +78,8 @@ struct RawScanState {
 
   // See comment in  ScanState below.
   RawDictionaryState dictionary2;
+  // Followed by simd::kPadding bytes: it is the data of the AlignedBuffer
+  // 'ScanState::inDictionary'.
   const uint64_t* __restrict inDictionary{nullptr};
   uint8_t* __restrict filterCache;
 };
@@ -174,6 +176,10 @@ class SelectiveColumnReader {
   // relative to start of stripe. 'rows' are relative to 'offset', so that row 0
   // is the 'offset'th row from start of stripe. 'rows' is expected to stay
   // constant between this and the next call to read.
+  //
+  // Padding: simd::kPadding bytes after 'rows'. The scan kernels load rows a
+  // SIMD batch at a time. The row sets that readers pass to each other are
+  // raw_vectors, which provide it.
   virtual void
   read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls) = 0;
 

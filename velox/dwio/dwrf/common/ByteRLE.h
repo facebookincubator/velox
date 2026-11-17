@@ -20,6 +20,7 @@
 #include <memory>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/SimdUtil.h"
 #include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/common/Range.h"
@@ -131,8 +132,16 @@ class ByteRleDecoder {
    * @param numValues the number of values to read
    * @param nulls If the pointer is null, all values are read. If the
    *    pointer is not null, positions that are true are skipped.
+   *
+   * Alignment: 'nulls' must be 8-byte aligned. 'data' need not be on x86:
+   * BooleanRleDecoder reads and rewrites it as uint64_t words at byte offsets,
+   * which other targets may require aligned.
+   * Padding: simd::kPadding bytes after 'data' and 'nulls'.
+   * BooleanRleDecoder scatters its values around the nulls, which reads 'nulls'
+   * and reads and rewrites 'data' 64 bits at a time past their ends.
    */
-  virtual void next(char* data, uint64_t numValues, const uint64_t* nulls);
+  virtual void
+  next(Padded<char> data, uint64_t numValues, Padded<const uint64_t> nulls);
 
   /**
    * Load the RowIndex values for the stream this is reading.
@@ -287,7 +296,8 @@ class BooleanRleDecoder : public ByteRleDecoder {
     pendingSkip_ += numValues;
   }
 
-  void next(char* data, uint64_t numValues, const uint64_t* nulls) override;
+  void next(Padded<char> data, uint64_t numValues, Padded<const uint64_t> nulls)
+      override;
 
   size_t loadIndices(size_t startIndex) override {
     return ByteRleDecoder::loadIndices(startIndex) + 1;
@@ -304,9 +314,14 @@ class BooleanRleDecoder : public ByteRleDecoder {
     if (hasNulls) {
       totalNulls = bits::countNulls(nulls, 0, end);
     }
-    bits_.resize(bits::nwords(end - totalNulls));
+    // next() needs padding after its output.
+    bits_.resize(
+        bits::nwords(end - totalNulls) + simd::kPadding / sizeof(uint64_t));
     if (end > totalNulls) {
-      next(reinterpret_cast<char*>(bits_.data()), end - totalNulls, nullptr);
+      next(
+          Padded<char>::assumePadded(reinterpret_cast<char*>(bits_.data())),
+          end - totalNulls,
+          nullptr);
     }
     int32_t dataPosition = 0;
     int32_t current = visitor.start();

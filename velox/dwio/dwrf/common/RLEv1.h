@@ -332,10 +332,11 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
       } else {
         innerVector = &visitor.innerNonNullRows();
         int32_t tailSkip = -1;
+        // 'nulls' are the reader's nulls, an AlignedBuffer.
         auto anyNulls = dwio::common::nonNullRowsFromSparse < hasFilter,
              !hasFilter &&
             !hasHook >
-                (nulls,
+                (Padded<const uint64_t>::assumePadded(nulls),
                  rowsAsRange,
                  *innerVector,
                  *outerVector,
@@ -377,12 +378,15 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
           values + numValues,
           currentRow);
     }
+    // The visitor's values and output rows are the reader's padded buffers, and
+    // 'scatterRows' is a padded raw_vector of the reader.
     visitor.template processRun<hasFilter, hasHook, scatter>(
-        values + numValues,
+        Padded<const typename Visitor::DataType>::assumePadded(
+            values + numValues),
         numRows,
-        scatterRows,
-        filterHits,
-        values,
+        Padded<const int32_t>::assumePadded(scatterRows),
+        Padded<int32_t>::assumePadded(filterHits),
+        Padded<typename Visitor::DataType>::assumePadded(values),
         numValues);
   }
 
@@ -439,14 +443,16 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
           // We are not at end and the next row of interest is after this run.
           VELOX_CHECK(!numAdvanced, "Would advance past end of RLEv1 run");
         } else if (repeating_) {
+          // The visitor's values and output rows are the reader's padded
+          // buffers, and 'scatterRows' is a padded raw_vector of the reader.
           visitor.template processRle<hasFilter, hasHook, scatter>(
               value_,
               delta_,
               numInRun,
               currentRow,
-              scatterRows,
-              filterHits,
-              values,
+              Padded<const int32_t>::assumePadded(scatterRows),
+              Padded<int32_t>::assumePadded(filterHits),
+              Padded<typename Visitor::DataType>::assumePadded(values),
               numValues);
           value_ += numAdvanced * delta_;
         } else {

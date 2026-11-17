@@ -89,11 +89,18 @@ class ChunkedDecoder {
       const ChunkBoundaryCallback& onChunkBoundary = kNoopAtChunkBoundary);
 
   /// Decode nulls or in-map buffer values.
+  ///
+  /// Padding: simd::kPadding bytes after 'data' and 'incomingNulls'. With
+  /// incoming nulls, the values are scattered around them, which reads and
+  /// rewrites 64-bit words past their ends.
   void nextBools(uint64_t* data, int64_t count, const uint64_t* incomingNulls);
 
   /// Decodes the nulls of the next 'count' rows of a scalar value stream into
   /// 'nulls' and skips their values without decoding them. Rows that
   /// 'incomingNulls' marks null are absent from the stream and come out null.
+  ///
+  /// Padding: simd::kPadding bytes after 'nulls' and 'incomingNulls', as for
+  /// nextBools().
   void nextNulls(
       uint64_t* nulls,
       velox::vector_size_t count,

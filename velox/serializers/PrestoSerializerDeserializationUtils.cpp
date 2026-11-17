@@ -341,12 +341,15 @@ vector_size_t readNulls(
   bits::negate(reinterpret_cast<uint64_t*>(rawNulls), numBytes * 8);
   // Add incoming nulls if any.
   if (incomingNulls) {
+    // 'nulls' is an AlignedBuffer: mutableNulls() replaces a view. Incoming
+    // nulls come from the deserializer's own AlignedBuffers and raw_vectors.
     bits::scatterBits(
         size,
         numIncomingNulls,
-        reinterpret_cast<const char*>(rawNulls),
-        incomingNulls,
-        reinterpret_cast<char*>(rawNulls));
+        Padded<const char>::assumePadded(
+            reinterpret_cast<const char*>(rawNulls)),
+        Padded<const uint64_t>::assumePadded(incomingNulls),
+        Padded<char>::assumePadded(reinterpret_cast<char*>(rawNulls)));
   }
 
   // Shift bits if needed.
@@ -1078,12 +1081,15 @@ void readRowVector(
     if (structNulls) {
       if (incomingNulls) {
         combinedNulls = AlignedBuffer::allocate<bool>(numIncomingNulls, pool);
+        // 'structNulls' is a raw_vector, and incoming nulls come from the
+        // deserializer's own AlignedBuffers and raw_vectors.
         bits::scatterBits(
             numStructNulls,
             numIncomingNulls,
-            reinterpret_cast<const char*>(structNulls),
-            incomingNulls,
-            combinedNulls->asMutable<char>());
+            Padded<const char>::assumePadded(
+                reinterpret_cast<const char*>(structNulls)),
+            Padded<const uint64_t>::assumePadded(incomingNulls),
+            paddedMutableData<char>(*combinedNulls));
         childNulls = combinedNulls->as<uint64_t>();
         numChildNulls = numIncomingNulls;
       } else {

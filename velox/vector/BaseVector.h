@@ -580,10 +580,15 @@ class BaseVector {
 
   /// Transposes two sets of dictionary indices into one level of indirection.
   /// Sets result[i] = base[indices[i]] for i = 0 ... i < size.
+  ///
+  /// Alignment: all pointers must be 4-byte aligned.
+  /// Padding: simd::kPadding bytes after 'indices', which are loaded a full
+  /// batch at a time, up to a batch minus one past the end. Not required after
+  /// 'result'.
   static void transposeIndices(
       const vector_size_t* base,
       vector_size_t size,
-      const vector_size_t* indices,
+      Padded<const vector_size_t> indices,
       vector_size_t* result);
 
   /// Transposes two levels of indices into a single level with nulls. sets
@@ -591,11 +596,17 @@ class BaseVector {
   /// indices[i] is not null in 'baseNulls'. If indices[i] is null in
   /// 'baseNulls' or i is null in 'wrapNulls', then 'resultNulls' is null at i.
   /// 'wrapNulls' may be nullptr, meaning that no new nulls are added.
+  ///
+  /// Alignment: the indices must be 4-byte aligned and the nulls 8-byte
+  /// aligned.
+  /// Padding: simd::kPadding bytes after 'wrapIndices', as for
+  /// transposeIndices(). Not required after 'resultIndices'. 'baseNulls' is
+  /// read with simd::gather8Bits().
   static void transposeIndicesWithNulls(
       const vector_size_t* baseIndices,
       const uint64_t* baseNulls,
       vector_size_t wrapSize,
-      const vector_size_t* wrapIndices,
+      Padded<const vector_size_t> wrapIndices,
       const uint64_t* wrapNulls,
       vector_size_t* resultIndices,
       uint64_t* resultNulls);

@@ -440,8 +440,9 @@ void SelectiveStringDirectColumnReader::readWithVisitor(
         extractSparse(rows.data(), outerNonNullRows_.size());
       } else {
         int32_t tailSkip = -1;
+        // 'nulls' are the reader's nulls, an AlignedBuffer.
         anyNulls_ = dwio::common::nonNullRowsFromSparse<false, true>(
-            nulls,
+            Padded<const uint64_t>::assumePadded(nulls),
             rows,
             innerNonNullRows_,
             outerNonNullRows_,

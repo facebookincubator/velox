@@ -24,17 +24,18 @@ namespace facebook::velox::dwio::common {
 namespace {
 
 int sumLengths(
-    const int32_t* lengths,
+    Padded<const int32_t> lengths,
     const uint64_t* nulls,
     int first,
     int last) {
   int sum = 0;
   if (!nulls) {
     for (auto i = first; i < last; ++i) {
-      sum += lengths[i];
+      sum += lengths.get()[i];
     }
   } else if (last - first < 64) {
-    bits::forEachSetBit(nulls, first, last, [&](int i) { sum += lengths[i]; });
+    bits::forEachSetBit(
+        nulls, first, last, [&](int i) { sum += lengths.get()[i]; });
   } else {
     xsimd::batch<int32_t> sums{};
     static_assert(sums.size <= 64);
@@ -44,7 +45,7 @@ int sumLengths(
       for (int j = 0; j < 64 && mask; j += sums.size) {
         if (auto m = (mask >> j) & submask) {
           auto selected = simd::fromBitMask<int32_t>(m);
-          sums += simd::maskLoad(&lengths[i * 64 + j], selected);
+          sums += simd::maskLoad(lengths + (i * 64 + j), selected);
         }
       }
     });
@@ -100,10 +101,13 @@ void SelectiveRepeatedColumnReader::makeNestedRowSet(
   // Reads the lengths, leaves an uninitialized gap for a null
   // map/list. Reading these checks the null mask.
   readLengths(allLengths_, maxRow + 1, nulls);
+  // 'allLengths_' is the data of 'allLengthsHolder_', an AlignedBuffer.
+  const auto allLengths =
+      Padded<const vector_size_t>::assumePadded(allLengths_);
 
   vector_size_t nestedLength;
   if (nestedRowsAllSelected_) {
-    nestedLength = sumLengths(allLengths_, nulls, 0, maxRow + 1);
+    nestedLength = sumLengths(allLengths, nulls, 0, maxRow + 1);
     childTargetReadOffset_ += nestedLength;
     nestedRows_ = RowSet(iota(nestedLength, nestedRowsHolder_), nestedLength);
     return;
@@ -124,7 +128,7 @@ void SelectiveRepeatedColumnReader::makeNestedRowSet(
     const auto row = rows[rowIndex];
     // Add up the lengths of non-null rows skipped since the last
     // non-null.
-    nestedOffset += sumLengths(allLengths_, nulls, currentRow, row);
+    nestedOffset += sumLengths(allLengths, nulls, currentRow, row);
     currentRow = row + 1;
     if (nulls && bits::isBitNull(nulls, row)) {
       continue;
@@ -137,7 +141,7 @@ void SelectiveRepeatedColumnReader::makeNestedRowSet(
     nestedRow += lengthAtRow;
     nestedOffset += allLengths_[row];
   }
-  nestedOffset += sumLengths(allLengths_, nulls, currentRow, maxRow + 1);
+  nestedOffset += sumLengths(allLengths, nulls, currentRow, maxRow + 1);
   childTargetReadOffset_ += nestedOffset;
   nestedRows_ = nestedRowsHolder_;
 }
@@ -149,6 +153,9 @@ void SelectiveRepeatedColumnReader::makeOffsetsAndSizes(
       result.mutableOffsets(rows.size())->asMutable<vector_size_t>();
   auto* rawSizes = result.mutableSizes(rows.size())->asMutable<vector_size_t>();
   auto* nulls = nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+  // 'allLengths_' is the data of 'allLengthsHolder_', an AlignedBuffer.
+  const auto allLengths =
+      Padded<const vector_size_t>::assumePadded(allLengths_);
   numValues_ = rows.size();
   vector_size_t currentOffset = 0;
   if (nestedRowsAllSelected_ && rows.size() == outputRows().size()) {
@@ -178,7 +185,7 @@ void SelectiveRepeatedColumnReader::makeOffsetsAndSizes(
   vector_size_t nestedRowIndex = 0;
   for (int i = 0; i < rows.size(); ++i) {
     const auto row = rows[i];
-    currentOffset += sumLengths(allLengths_, nulls, currentRow, row);
+    currentOffset += sumLengths(allLengths, nulls, currentRow, row);
     currentRow = row + 1;
     nestedRowIndex =
         advanceNestedRows(nestedRows_, nestedRowIndex, currentOffset);
@@ -673,6 +680,9 @@ void SelectiveMapAsStructColumnReader::getValues(
 template <typename T>
 void SelectiveMapAsStructColumnReader::makeCopyRanges(const RowSet& rows) {
   auto* nulls = nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+  // 'allLengths_' is the data of 'allLengthsHolder_', an AlignedBuffer.
+  const auto allLengths =
+      Padded<const vector_size_t>::assumePadded(allLengths_);
   for (vector_size_t i = 0,
                      currentOffset = 0,
                      currentRow = 0,
@@ -684,7 +694,7 @@ void SelectiveMapAsStructColumnReader::makeCopyRanges(const RowSet& rows) {
       anyNulls_ = true;
       continue;
     }
-    currentOffset += sumLengths(allLengths_, nulls, currentRow, row);
+    currentOffset += sumLengths(allLengths, nulls, currentRow, row);
     currentRow = row + 1;
     nestedRowIndex =
         advanceNestedRows(nestedRows_, nestedRowIndex, currentOffset);

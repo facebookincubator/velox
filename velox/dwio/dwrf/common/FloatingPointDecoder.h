@@ -123,10 +123,11 @@ class FloatingPointDecoder {
         }
       } else {
         innerVector = &visitor.innerNonNullRows();
+        // 'nulls' are the reader's nulls, an AlignedBuffer.
         auto anyNulls = dwio::common::nonNullRowsFromSparse < hasFilter,
              !hasFilter &&
             !hasHook >
-                (nulls,
+                (Padded<const uint64_t>::assumePadded(nulls),
                  folly::Range<const int32_t*>(rows, numRows),
                  *innerVector,
                  *outerVector,
@@ -141,12 +142,16 @@ class FloatingPointDecoder {
           return;
         }
       }
+      // The visitor's rows, values and output rows are the reader's padded
+      // row set and buffers.
       dwio::common::fixedWidthScan<TFile, filterOnly, true>(
-          innerVector ? folly::Range<const int32_t*>(*innerVector)
-                      : folly::Range<const int32_t*>(rows, outerVector->size()),
-          outerVector->data(),
-          visitor.rawValues(numRows),
-          hasFilter ? visitor.outputRows(numRows) : nullptr,
+          innerVector ? innerVector->paddedData()
+                      : Padded<const int32_t>::assumePadded(rows),
+          innerVector ? innerVector->size() : outerVector->size(),
+          outerVector->paddedData(),
+          Padded<void>::assumePadded(visitor.rawValues(numRows)),
+          Padded<int32_t>::assumePadded(
+              hasFilter ? visitor.outputRows(numRows) : nullptr),
           numValues,
           *input_,
           bufferStart_,
@@ -156,10 +161,14 @@ class FloatingPointDecoder {
       skip<false>(tailSkip, 0, nullptr);
     } else {
       dwio::common::fixedWidthScan<TFile, filterOnly, false>(
-          folly::Range<const int32_t*>(rows, numRows),
-          hasHook ? velox::iota(numRows, visitor.innerNonNullRows()) : nullptr,
-          visitor.rawValues(numRows),
-          hasFilter ? visitor.outputRows(numRows) : nullptr,
+          Padded<const int32_t>::assumePadded(rows),
+          numRows,
+          Padded<const int32_t>::assumePadded(
+              hasHook ? velox::iota(numRows, visitor.innerNonNullRows())
+                      : nullptr),
+          Padded<void>::assumePadded(visitor.rawValues(numRows)),
+          Padded<int32_t>::assumePadded(
+              hasFilter ? visitor.outputRows(numRows) : nullptr),
           numValues,
           *input_,
           bufferStart_,

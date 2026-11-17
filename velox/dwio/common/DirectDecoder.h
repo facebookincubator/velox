@@ -176,10 +176,11 @@ class DirectDecoder : public IntDecoder<isSigned> {
         }
       } else {
         innerVector = &visitor.innerNonNullRows();
+        // 'nulls' are the reader's nulls, an AlignedBuffer.
         auto anyNulls = dwio::common::nonNullRowsFromSparse < hasFilter,
              !hasFilter &&
             !hasHook >
-                (nulls,
+                (Padded<const uint64_t>::assumePadded(nulls),
                  rowsAsRange,
                  *innerVector,
                  *outerVector,
@@ -206,27 +207,32 @@ class DirectDecoder : public IntDecoder<isSigned> {
           super::bulkReadRows(*innerVector, data);
         }
         this->template skip<false>(tailSkip, 0, nullptr);
-        auto dataRows = innerVector
-            ? folly::Range<const int*>(innerVector->data(), innerVector->size())
-            : folly::Range<const int32_t*>(rows, outerVector->size());
+        // The visitor's rows, values and output rows are the reader's padded
+        // row set and buffers.
+        const int32_t numDataRows =
+            innerVector ? innerVector->size() : outerVector->size();
         dwio::common::processFixedWidthRun<T, filterOnly, true, Visitor::dense>(
-            dataRows,
+            innerVector ? innerVector->paddedData()
+                        : Padded<const int32_t>::assumePadded(rows),
+            numDataRows,
             0,
-            dataRows.size(),
-            outerVector->data(),
-            data,
-            hasFilter ? visitor.outputRows(numRows) : nullptr,
+            numDataRows,
+            outerVector->paddedData(),
+            Padded<T>::assumePadded(data),
+            Padded<int32_t>::assumePadded(
+                hasFilter ? visitor.outputRows(numRows) : nullptr),
             numValues,
             visitor.filter(),
             visitor.hook());
       } else {
         dwio::common::fixedWidthScan<T, filterOnly, true>(
-            innerVector
-                ? folly::Range<const int32_t*>(*innerVector)
-                : folly::Range<const int32_t*>(rows, outerVector->size()),
-            outerVector->data(),
-            visitor.rawValues(numRows),
-            hasFilter ? visitor.outputRows(numRows) : nullptr,
+            innerVector ? innerVector->paddedData()
+                        : Padded<const int32_t>::assumePadded(rows),
+            innerVector ? innerVector->size() : outerVector->size(),
+            outerVector->paddedData(),
+            Padded<void>::assumePadded(visitor.rawValues(numRows)),
+            Padded<int32_t>::assumePadded(
+                hasFilter ? visitor.outputRows(numRows) : nullptr),
             numValues,
             *super::inputStream_,
             super::bufferStart_,
@@ -246,29 +252,37 @@ class DirectDecoder : public IntDecoder<isSigned> {
         }
         dwio::common::
             processFixedWidthRun<T, filterOnly, false, Visitor::dense>(
-                rowsAsRange,
+                Padded<const int32_t>::assumePadded(rows),
+                numRows,
                 0,
-                rowsAsRange.size(),
-                hasHook ? velox::iota(
-                              numRows,
-                              visitor.innerNonNullRows(),
-                              visitor.numValuesBias())
-                        : nullptr,
-                visitor.rawValues(numRows),
-                hasFilter ? visitor.outputRows(numRows) : nullptr,
+                numRows,
+                Padded<const int32_t>::assumePadded(
+                    hasHook ? velox::iota(
+                                  numRows,
+                                  visitor.innerNonNullRows(),
+                                  visitor.numValuesBias())
+                            : nullptr),
+                Padded<T>::assumePadded(visitor.rawValues(numRows)),
+                Padded<int32_t>::assumePadded(
+                    hasFilter ? visitor.outputRows(numRows) : nullptr),
                 numValues,
                 visitor.filter(),
                 visitor.hook());
       } else {
+        // The visitor's rows, values and output rows are the reader's padded
+        // row set and buffers.
         dwio::common::fixedWidthScan<T, filterOnly, false>(
-            rowsAsRange,
-            hasHook ? velox::iota(
-                          numRows,
-                          visitor.innerNonNullRows(),
-                          visitor.numValuesBias())
-                    : nullptr,
-            visitor.rawValues(numRows),
-            hasFilter ? visitor.outputRows(numRows) : nullptr,
+            Padded<const int32_t>::assumePadded(rows),
+            numRows,
+            Padded<const int32_t>::assumePadded(
+                hasHook ? velox::iota(
+                              numRows,
+                              visitor.innerNonNullRows(),
+                              visitor.numValuesBias())
+                        : nullptr),
+            Padded<void>::assumePadded(visitor.rawValues(numRows)),
+            Padded<int32_t>::assumePadded(
+                hasFilter ? visitor.outputRows(numRows) : nullptr),
             numValues,
             *super::inputStream_,
             super::bufferStart_,

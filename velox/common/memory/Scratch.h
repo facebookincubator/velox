@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/Padded.h"
 #include "velox/common/memory/RawVector.h"
 
 /// A utility for reusable scoped temporary scratch areas.
@@ -148,6 +149,12 @@ class ScratchPtr {
     return ptr_;
   }
 
+  /// Returns get() as Padded: the last element is followed by simd::kPadding
+  /// bytes.
+  Padded<T> paddedData() const {
+    return Padded<T>::assumePadded(get());
+  }
+
   /// Returns the size of the previous get(int32_t).
   int32_t size() const {
     return size_;
@@ -160,7 +167,7 @@ class ScratchPtr {
   T* ptr_{nullptr};
   int32_t size_{0};
   T inline_[inlineSize];
-  char padding_[inlineSize == 0 ? 0 : simd::kPadding];
+  char padding_[simd::kPadding];
 };
 
 } // namespace facebook::velox

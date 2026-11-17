@@ -20,6 +20,7 @@
 #include <optional>
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/SimdUtil.h"
 DECLARE_bool(bmi2); // NOLINT
 
 namespace facebook {
@@ -115,6 +116,11 @@ void setupScatterBits(
   source.resize(1000, 0x1234567890abcdef);
   assert(!mask.empty()); // howtoeven does not recognize resize() above.
   numSource = __builtin_popcountll(mask[0]) * mask.size();
+  // scatterBits reads and writes past the last bit, into this padding.
+  constexpr int32_t kPaddingWords = simd::kPadding / sizeof(uint64_t);
+  mask.resize(mask.size() + kPaddingWords);
+  target.resize(target.size() + kPaddingWords);
+  source.resize(source.size() + kPaddingWords);
 }
 
 void runScatterBits(int32_t n, bool isSimple) {
@@ -126,11 +132,15 @@ void runScatterBits(int32_t n, bool isSimple) {
     FLAGS_bmi2 = !isSimple; // NOLINT
     setupScatterBits(source, numSource, mask, target);
   }
-  auto sourceBits = reinterpret_cast<const char*>(source.data());
-  auto targetBits = reinterpret_cast<char*>(target.data());
+  const auto sourceBits = Padded<const char>::assumePadded(
+      reinterpret_cast<const char*>(source.data()));
+  const auto maskBits = Padded<const uint64_t>::assumePadded(mask.data());
+  const auto targetBits =
+      Padded<char>::assumePadded(reinterpret_cast<char*>(target.data()));
+  const int32_t numTarget =
+      (target.size() - simd::kPadding / sizeof(uint64_t)) * 64;
   for (auto i = 0; i < n; ++i) {
-    bits::scatterBits(
-        numSource, target.size() * 64, sourceBits, mask.data(), targetBits);
+    bits::scatterBits(numSource, numTarget, sourceBits, maskBits, targetBits);
   }
   FLAGS_bmi2 = true; // NOLINT
 }

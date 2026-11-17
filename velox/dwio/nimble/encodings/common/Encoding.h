@@ -572,7 +572,10 @@ void readDenseMaterializedIndices(
   outerNonNullRows.resize(numNonNulls);
   auto* rawOuterNonNullRows = outerNonNullRows.data();
   velox::simd::indicesOfSetBits(
-      rawNulls, readOffset, readOffset + numReadRows, rawOuterNonNullRows);
+      rawNulls,
+      readOffset,
+      readOffset + numReadRows,
+      outerNonNullRows.paddedData());
   for (auto& row : outerNonNullRows) {
     row = row - readOffset + valueOutputOffset;
   }
@@ -770,7 +773,7 @@ void readWithVisitorFast(
     }
     outerRows.resize(numRows);
     auto numNonNulls = velox::simd::indicesOfSetBits(
-        nulls, visitor.rowIndex(), visitor.numRows(), outerRows.data());
+        nulls, visitor.rowIndex(), visitor.numRows(), outerRows.paddedData());
     outerRows.resize(numNonNulls);
     if (outerRows.empty()) {
       if constexpr (kOutputNulls) {
@@ -797,9 +800,10 @@ void readWithVisitorFast(
     chunkResultNulls = reinterpret_cast<uint8_t*>(resultNulls) +
         velox::bits::nbytes(visitor.rowIndex());
   }
+  // 'nulls' are the reader's nulls, an AlignedBuffer.
   bool anyNulls =
       velox::dwio::common::nonNullRowsFromSparse<V::kHasFilter, kOutputNulls>(
-          nulls,
+          velox::Padded<const uint64_t>::assumePadded(nulls),
           velox::RowSet(visitor.rows() + visitor.rowIndex(), numRows),
           innerRows,
           outerRows,
@@ -886,12 +890,15 @@ void applyFixedWidthRun(
   }
   velox::dwio::common::
       processFixedWidthRun<T, V::kFilterOnly, kScatter, V::dense>(
-          velox::RowSet(selectedRows, numSelected),
+          // The selected rows and the values and output rows of the reader are
+          // padded.
+          velox::Padded<const int32_t>::assumePadded(selectedRows),
+          numSelected,
           0,
           numSelected,
-          scatterRows,
-          values,
-          filterHits,
+          velox::Padded<const int32_t>::assumePadded(scatterRows),
+          velox::Padded<T>::assumePadded(values),
+          velox::Padded<int32_t>::assumePadded(filterHits),
           numValues,
           visitor.filter(),
           visitor.hook());

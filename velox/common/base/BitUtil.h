@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Padded.h"
 
 #include <folly/CPortability.h>
 
@@ -52,6 +53,8 @@ namespace bits {
 
 inline constexpr uint64_t kNullHash = 1;
 
+/// Alignment: 'bits' must be aligned to alignof(T).
+/// Padding: not required.
 template <typename T>
 inline bool isBitSet(const T* bits, uint64_t idx) {
   return bits[idx / (sizeof(bits[0]) * 8)] &
@@ -59,8 +62,13 @@ inline bool isBitSet(const T* bits, uint64_t idx) {
 }
 
 /// Return the binary representation of bits in the range specified.
+///
+/// Alignment: not required.
+/// Padding: not required.
 std::string toString(const void* bits, int offset, int size);
 
+/// Alignment: not required.
+/// Padding: not required.
 void toString(const void* bits, int offset, int size, char* out);
 
 // The reason we do this is that it's slightly faster for
@@ -79,18 +87,24 @@ static constexpr uint8_t kZeroBitmasks[] = {
     static_cast<uint8_t>(~(1 << 7)),
 };
 
+/// Alignment: not required.
+/// Padding: not required.
 template <typename T>
 inline void setBit(T* bits, uint64_t idx) {
   auto bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
   bitsAs8Bit[idx / 8] |= (1 << (idx % 8));
 }
 
+/// Alignment: not required.
+/// Padding: not required.
 template <typename T>
 inline void clearBit(T* bits, uint64_t idx) {
   auto bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
   bitsAs8Bit[idx / 8] &= kZeroBitmasks[idx % 8];
 }
 
+/// Alignment: not required.
+/// Padding: not required.
 template <typename T>
 inline void setBit(T* bits, uint64_t idx, bool value) {
   value ? setBit(bits, idx) : clearBit(bits, idx);
@@ -98,17 +112,24 @@ inline void setBit(T* bits, uint64_t idx, bool value) {
 
 /// Branchless: sets the bit at idx if value is true, no-op if false.
 /// Assumes target memory is pre-zeroed for unset bits.
+///
+/// Alignment: not required.
+/// Padding: not required.
 template <typename T>
 inline void maybeSetBit(T* bits, uint64_t idx, bool value) {
   auto* bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
   bitsAs8Bit[idx / 8] |= (static_cast<uint8_t>(value) << (idx % 8));
 }
 
+/// Alignment: not required.
+/// Padding: not required.
 inline void negateBit(void* bits, uint64_t idx) {
   auto* bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
   bitsAs8Bit[idx / 8] ^= (1 << (idx % 8));
 }
 
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 inline void negate(uint64_t* bits, int32_t size) {
   int32_t i = 0;
   for (; i + 64 <= size; i += 64) {
@@ -274,6 +295,9 @@ forEachWord(int32_t begin, int32_t end, PartialWordFunc partialWordFunc) {
 // outside of begin ... end by up to kWidth - 1 bits but using the
 // mask for example for load with mask will scope the operation to
 // valid values only.
+//
+// Alignment: 'bits' must be 8-byte aligned.
+// Padding: not required.
 template <int8_t kWidth, typename Callable>
 void forBatches(
     const uint64_t* bits,
@@ -342,6 +366,8 @@ inline bool testWordsReverse(
   return true;
 }
 
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 inline void fillBits(uint64_t* bits, int32_t begin, int32_t end, bool value) {
   forEachWord(
       begin,
@@ -356,6 +382,8 @@ inline void fillBits(uint64_t* bits, int32_t begin, int32_t end, bool value) {
       [bits, value](int32_t idx) { bits[idx] = value ? -1 : 0; });
 }
 
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 inline int32_t countBits(const uint64_t* bits, int32_t begin, int32_t end) {
   int32_t count = 0;
   forEachWord(
@@ -374,6 +402,9 @@ inline int32_t countBits(const uint64_t* bits, int32_t begin, int32_t end) {
  * for the first value is the high bit.
  * @param bytes The byte array to be reversed
  * @param numBytes The number of bytes of the byte array
+ *
+ * Alignment: not required.
+ * Padding: not required.
  */
 inline void reverseBits(uint8_t* bytes, int numBytes) {
   for (int i = 0; i < numBytes; ++i) {
@@ -384,6 +415,8 @@ inline void reverseBits(uint8_t* bytes, int numBytes) {
   }
 }
 
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 inline bool
 isAllSet(const uint64_t* bits, int32_t begin, int32_t end, bool value = true) {
   if (begin >= end) {
@@ -399,6 +432,8 @@ isAllSet(const uint64_t* bits, int32_t begin, int32_t end, bool value = true) {
       [bits, word](int32_t idx) { return word == bits[idx]; });
 }
 
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 inline int32_t findFirstBit(const uint64_t* bits, int32_t begin, int32_t end) {
   int32_t found = -1;
   testWords(
@@ -431,6 +466,9 @@ inline int32_t findFirstBit(const uint64_t* bits, int32_t begin, int32_t end) {
  * @param isSet determines whether the function is called for each
  *        set or unset bit
  * @param func function to call; takes the index of the bit
+ *
+ * Alignment: 'bits' must be 8-byte aligned.
+ * Padding: not required.
  */
 template <typename Callable>
 void forEachBit(
@@ -471,6 +509,9 @@ void forEachBit(
 }
 
 /// Invokes a function for each set bit.
+///
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 template <typename Callable>
 inline void
 forEachSetBit(const uint64_t* bits, int32_t begin, int32_t end, Callable func) {
@@ -478,6 +519,9 @@ forEachSetBit(const uint64_t* bits, int32_t begin, int32_t end, Callable func) {
 }
 
 /// Invokes a function for each unset bit.
+///
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 template <typename Callable>
 inline void forEachUnsetBit(
     const uint64_t* bits,
@@ -497,6 +541,9 @@ inline void forEachUnsetBit(
  * @param func function to call; takes the index of the bit and
  *        returns a boolean which terminates the loop if false
  * @return true if completed full loop, false if terminated early
+ *
+ * Alignment: 'bits' must be 8-byte aligned.
+ * Padding: not required.
  */
 template <typename Callable>
 bool testBits(
@@ -537,6 +584,9 @@ bool testBits(
 }
 
 /// Invokes a function for each set bit.
+///
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 template <typename Callable>
 inline bool
 testSetBits(const uint64_t* bits, int32_t begin, int32_t end, Callable func) {
@@ -544,12 +594,17 @@ testSetBits(const uint64_t* bits, int32_t begin, int32_t end, Callable func) {
 }
 
 /// Invokes a function for each unset bit.
+///
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 template <typename Callable>
 inline bool
 testUnsetBits(const uint64_t* bits, int32_t begin, int32_t end, Callable func) {
   return testBits(bits, begin, end, false, func);
 }
 
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 inline int32_t findLastBit(
     const uint64_t* bits,
     int32_t begin,
@@ -578,11 +633,15 @@ inline int32_t findLastBit(
   return found;
 }
 
+/// Alignment: 'bits' must be 8-byte aligned.
+/// Padding: not required.
 inline int32_t
 findLastUnsetBit(const uint64_t* bits, int32_t begin, int32_t end) {
   return findLastBit(bits, begin, end, false);
 }
 
+/// Alignment: 'target', 'left' and 'right' must be 8-byte aligned.
+/// Padding: not required.
 template <bool negate>
 inline void andRange(
     uint64_t* target,
@@ -602,6 +661,8 @@ inline void andRange(
       });
 }
 
+/// Alignment: 'target', 'left' and 'right' must be 8-byte aligned.
+/// Padding: not required.
 template <bool negate>
 inline void orRange(
     uint64_t* target,
@@ -622,6 +683,9 @@ inline void orRange(
 }
 
 // Bit-wise AND: target = left AND right
+//
+// Alignment: 'target', 'left' and 'right' must be 8-byte aligned.
+// Padding: not required.
 inline void andBits(
     uint64_t* target,
     const uint64_t* left,
@@ -632,12 +696,18 @@ inline void andBits(
 }
 
 // Bit-wise in-place AND: target = target AND right
+//
+// Alignment: 'target' and 'right' must be 8-byte aligned.
+// Padding: not required.
 inline void
 andBits(uint64_t* target, const uint64_t* right, int32_t begin, int32_t end) {
   andRange<false>(target, target, right, begin, end);
 }
 
 // Bit-wise AND NOT: target = left AND !right
+//
+// Alignment: 'target', 'left' and 'right' must be 8-byte aligned.
+// Padding: not required.
 inline void andWithNegatedBits(
     uint64_t* target,
     const uint64_t* left,
@@ -648,6 +718,9 @@ inline void andWithNegatedBits(
 }
 
 // Bit-wise in-place AND NOT: target = target AND !right
+//
+// Alignment: 'target' and 'right' must be 8-byte aligned.
+// Padding: not required.
 inline void andWithNegatedBits(
     uint64_t* target,
     const uint64_t* right,
@@ -657,6 +730,9 @@ inline void andWithNegatedBits(
 }
 
 // Bit-wise OR: target = left OR right
+//
+// Alignment: 'target', 'left' and 'right' must be 8-byte aligned.
+// Padding: not required.
 inline void orBits(
     uint64_t* target,
     const uint64_t* left,
@@ -667,12 +743,18 @@ inline void orBits(
 }
 
 // Bit-wise in-place OR: target = target OR right
+//
+// Alignment: 'target' and 'right' must be 8-byte aligned.
+// Padding: not required.
 inline void
 orBits(uint64_t* target, const uint64_t* right, int32_t begin, int32_t end) {
   orRange<false>(target, target, right, begin, end);
 }
 
 // Bit-wise OR NOT: target = left OR !right
+//
+// Alignment: 'target', 'left' and 'right' must be 8-byte aligned.
+// Padding: not required.
 inline void orWithNegatedBits(
     uint64_t* target,
     const uint64_t* left,
@@ -683,6 +765,9 @@ inline void orWithNegatedBits(
 }
 
 // Bit-wise in-place OR NOT: target = target OR !right
+//
+// Alignment: 'target' and 'right' must be 8-byte aligned.
+// Padding: not required.
 inline void orWithNegatedBits(
     uint64_t* target,
     const uint64_t* right,
@@ -691,6 +776,8 @@ inline void orWithNegatedBits(
   orRange<true>(target, target, right, begin, end);
 }
 
+/// Alignment: 'sub' and 'super' must be 8-byte aligned.
+/// Padding: not required.
 inline bool isSubset(
     const uint64_t* sub,
     const uint64_t* super,
@@ -709,6 +796,8 @@ inline bool isSubset(
       });
 }
 
+/// Alignment: 'left' and 'right' must be 8-byte aligned.
+/// Padding: not required.
 bool inline hasIntersection(
     const uint64_t* left,
     const uint64_t* right,
@@ -781,6 +870,8 @@ inline uint64_t commutativeHashMix(
   return 3860031 + (upper + lower) * 2779 + (upper * lower * 2);
 }
 
+/// Alignment: not required.
+/// Padding: not required.
 inline uint64_t loadPartialWord(const uint8_t* data, int32_t size) {
   uint64_t result = 0;
   // memcpy handles potentially unaligned source and is opaque to the
@@ -789,6 +880,10 @@ inline uint64_t loadPartialWord(const uint8_t* data, int32_t size) {
   return result;
 }
 
+/// Alignment: not required on x86. 'data' is read as uint64_t words through
+/// typed pointers, which other targets may require 8-byte aligned and which
+/// UBSan's alignment check flags at unaligned addresses.
+/// Padding: not required.
 uint64_t hashBytes(uint64_t seed, const char* data, size_t size);
 
 namespace detail {
@@ -796,6 +891,10 @@ namespace detail {
 // from 'source'. T must be at least 'numBits' wide. If 'numBits' bits
 // from 'bitIffset' do not in T, loads the next byte to get the extra
 // bits.
+//
+// Alignment: not required.
+// Padding: not required if 'numBits' is 8 * sizeof(T). Otherwise reads up to
+// sizeof(T) - 1 bytes past the last needed byte.
 template <typename T>
 inline T loadBits(const uint64_t* source, uint64_t bitOffset, uint8_t numBits) {
   constexpr int32_t kBitSize = 8 * sizeof(T);
@@ -819,6 +918,10 @@ inline T loadBits(const uint64_t* source, uint64_t bitOffset, uint8_t numBits) {
 // wide. If the bit field that is stored overflows a word of T, writes
 // the trailing bits in the low bits of the next byte. Preserves all
 // bits below and above the written bits.
+//
+// Alignment: not required.
+// Padding: not required if 'numBits' is 8 * sizeof(T). Otherwise reads and
+// rewrites up to sizeof(T) - 1 bytes past the last written byte.
 template <typename T>
 inline void
 storeBits(uint64_t* target, uint64_t offset, uint64_t word, uint8_t numBits) {
@@ -843,6 +946,9 @@ storeBits(uint64_t* target, uint64_t offset, uint64_t word, uint8_t numBits) {
 
 // Copies a string of bits between locations in memory given by an
 // address and a bit offset for source and destination.
+//
+// Alignment: not required.
+// Padding: not required.
 inline void copyBits(
     const uint64_t* source,
     uint64_t sourceOffset,
@@ -876,6 +982,9 @@ inline void copyBits(
 // range starting at data + targetOffset, where sourceOffset < targetOffset, and
 // the ranges can overlap.  The bits are copied in reverse order (the last bit
 // is copied first), but their relative order is preserved.
+//
+// Alignment: not required.
+// Padding: not required.
 void copyBitsBackward(
     uint64_t* bits,
     uint64_t sourceOffset,
@@ -887,18 +996,20 @@ void copyBitsBackward(
 /// contiguous bits of source are scattered in place. The positions of 'target'
 /// where 'targetMask' is 0 are 0. A sample use case is reading a column of
 /// boolean with nulls. The booleans from the column get inserted into the
-/// places given by ones in the present bitmap. All source, target and mask bit
-/// arrays are accessed at 64 bit width and must have a minimum of 64 bits plus
-/// one addressable byte after the last bit. Using std::vector as a
-/// bit array without explicit padding, for example, can crash with
-/// access to unmapped address if the vector happens to border on
-/// unmapped memory.
+/// places given by ones in the present bitmap.
+///
+/// Alignment: 'targetMask' must be 8-byte aligned. 'source' and 'target' need
+/// not be on x86: they are read and written as uint64_t words at byte offsets,
+/// which other targets may require aligned.
+/// Padding: simd::kPadding bytes after each argument. 'source' and
+/// 'targetMask' are read, and 'target' is read and rewritten, 8 bytes at a
+/// time, up to 7 bytes past their last byte.
 void scatterBits(
     int32_t numSource,
     int32_t numTarget,
-    const char* source,
-    const uint64_t* targetMask,
-    char* target);
+    Padded<const char> source,
+    Padded<const uint64_t> targetMask,
+    Padded<char> target);
 
 /// Extract bits from integer 'a' at the corresponding bit locations specified
 /// by 'mask' to contiguous low bits in return value; the remaining upper bits
@@ -956,6 +1067,9 @@ inline uint64_t rotateLeft64(uint64_t a, uint32_t shift) {
 /// [pointer + 5 ... pointer + 15 inclusive. Does not write past
 /// 'pointer' + 'size' in any case. Used to initialize memory that may
 /// be partly filled for use with valgring/asan.
+///
+/// Alignment: not required.
+/// Padding: not required.
 inline void padToAlignment(
     void* pointer,
     int32_t size,
@@ -989,6 +1103,9 @@ inline __int128_t builtin_bswap128(__int128_t value) {
 /// index).  If `kSize' is 8, we store the whole byte directly; otherwise it
 /// must be 4 and we store either the whole byte or the upper 4 bits only,
 /// depending on the `index'.
+///
+/// Alignment: not required.
+/// Padding: not required.
 template <int kSize>
 void storeBitsToByte(uint8_t bits, uint8_t* bytes, unsigned index) {
   VELOX_DCHECK_EQ(index % kSize, 0);
@@ -1014,10 +1131,18 @@ inline int bitsRequired(uint64_t value) noexcept {
 /// Packs bools into bitmap. bitmap must point to a region large enough.
 /// Does not clear bitmap first — bit i is set if bools[i] is true OR
 /// bit i was already set.
+///
+/// Alignment: 'bitmap' must be 8-byte aligned.
+/// Padding: not required. 'bitmap' is read and written a 64-bit word at a time,
+/// so it must span whole words, as vector bitmaps do (see Buffer).
 void packBitmap(std::span<const bool> bools, char* bitmap);
 
 /// Finds the index of the n'th set bit in [begin, end) in bitmap.
 /// Returns end if not found. Returns begin if begin >= end or n == 0.
+///
+/// Alignment: 'bitmap' must be 8-byte aligned.
+/// Padding: not required. 'bitmap' is read a 64-bit word at a time, so it must
+/// span whole words, as vector bitmaps do (see Buffer).
 uint32_t
 findSetBit(const char* bitmap, uint32_t begin, uint32_t end, uint32_t n);
 

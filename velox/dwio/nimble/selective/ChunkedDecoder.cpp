@@ -198,12 +198,14 @@ void ChunkedDecoder::nextBools(
       i += numValues;
     }
     if (incomingNulls != nullptr) {
+      // 'data' and 'incomingNulls' are the reader's AlignedBuffers.
+      auto* bytes = reinterpret_cast<char*>(data);
       velox::bits::scatterBits(
           totalNumValues,
           count,
-          reinterpret_cast<char*>(data),
-          incomingNulls,
-          reinterpret_cast<char*>(data));
+          velox::Padded<const char>::assumePadded(bytes),
+          velox::Padded<const uint64_t>::assumePadded(incomingNulls),
+          velox::Padded<char>::assumePadded(bytes));
     }
   } else {
     // This is a temporary solution for array and map types, which only needs to
@@ -237,12 +239,14 @@ void ChunkedDecoder::nextNulls(
     offset += chunkValues;
   }
   if (incomingNulls != nullptr) {
+    // 'nulls' and 'incomingNulls' are the reader's AlignedBuffers.
+    auto* bytes = reinterpret_cast<char*>(nulls);
     velox::bits::scatterBits(
         numValues,
         count,
-        reinterpret_cast<char*>(nulls),
-        incomingNulls,
-        reinterpret_cast<char*>(nulls));
+        velox::Padded<const char>::assumePadded(bytes),
+        velox::Padded<const uint64_t>::assumePadded(incomingNulls),
+        velox::Padded<char>::assumePadded(bytes));
   }
 }
 

@@ -210,15 +210,16 @@ class DeltaBpDecoder {
       const int32_t n = std::min<int32_t>(kBatch, total - consumed);
       DataType* dst = output + numValues;
       decodeLongs(dst, n);
+      // The visitor's values and output rows are the reader's padded buffers.
       visitor.template processRun<
           kHasFilter,
           /*hasHook=*/false,
           /*scatter=*/false>(
-          dst,
+          Padded<const DataType>::assumePadded(dst),
           n,
           /*scatterRows=*/nullptr,
-          filterHits,
-          output,
+          Padded<int32_t>::assumePadded(filterHits),
+          Padded<DataType>::assumePadded(output),
           numValues);
       consumed += n;
     }

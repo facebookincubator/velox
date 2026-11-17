@@ -93,7 +93,7 @@ void VectorLoader::load(
   }
   raw_vector<vector_size_t> positions(rows.countSelected(), pool);
   simd::indicesOfSetBits(
-      rows.allBits(), rows.begin(), rows.end(), positions.data());
+      rows.allBits(), rows.begin(), rows.end(), positions.paddedData());
   load(positions, hook, resultSize, result);
 }
 
@@ -205,7 +205,7 @@ void LazyVector::ensureLoadedRowsImpl(
         rowNumbers.resize(rows.end());
         rowNumbers.resize(
             simd::indicesOfSetBits(
-                rows.asRange().bits(), 0, rows.end(), rowNumbers.data()));
+                rows.asRange().bits(), 0, rows.end(), rowNumbers.paddedData()));
         rowSet = RowSet(rowNumbers);
       }
     } else {
@@ -213,7 +213,10 @@ void LazyVector::ensureLoadedRowsImpl(
       rowNumbers.resize(baseRows.end());
       rowNumbers.resize(
           simd::indicesOfSetBits(
-              baseRows.asRange().bits(), 0, baseRows.end(), rowNumbers.data()));
+              baseRows.asRange().bits(),
+              0,
+              baseRows.end(),
+              rowNumbers.paddedData()));
 
       rowSet = RowSet(rowNumbers);
     }
