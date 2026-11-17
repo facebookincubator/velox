@@ -525,6 +525,32 @@ TEST_F(HistogramNumericAggregateTest, validatesNumBinsWithoutNonNullValues) {
       "numBins must be at least 2");
 }
 
+TEST_F(HistogramNumericAggregateTest, windowTypedNumBins) {
+  const auto input = makeRowVector({makeFlatVector<double>({0, 1, 2, 3})});
+  const auto expected = makeRowVector({makeArrayVector(
+      {0, 1, 3, 5},
+      makeRowVector(
+          {"x", "y"},
+          {makeFlatVector<double>({0, 0, 1, 0, 1.5, 1, 3}),
+           makeFlatVector<double>({1, 1, 1, 1, 2, 3, 1})}))});
+  for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
+    SCOPED_TRACE(name);
+    for (const auto* literal : {"INTEGER '2'", "CAST('2' AS INTEGER)"}) {
+      SCOPED_TRACE(literal);
+      const auto plan =
+          PlanBuilder()
+              .values({input})
+              .window({fmt::format(
+                  "{}(c0, {}) over (order by c0 rows between unbounded preceding and current row)",
+                  name,
+                  literal)})
+              .project({"w0"})
+              .planNode();
+      AssertQueryBuilder(plan).assertResults(expected);
+    }
+  }
+}
+
 TEST_F(HistogramNumericAggregateTest, windowEmptyFramesValidateNumBins) {
   auto input = makeRowVector({makeFlatVector<double>({1})});
   auto expected = makeRowVector({BaseVector::createNullConstant(

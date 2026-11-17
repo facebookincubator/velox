@@ -846,6 +846,23 @@ std::optional<Variant> tryParseCanonicalLiteral(
   }
 }
 
+void foldCanonicalLiterals(std::vector<core::ExprPtr>& inputs) {
+  for (auto& input : inputs) {
+    const auto* cast = input->as<core::CastExpr>();
+    if (cast == nullptr || cast->isTryCast()) {
+      continue;
+    }
+    const auto* constant = cast->inputs()[0]->as<core::ConstantExpr>();
+    if (constant != nullptr && constant->type()->isVarchar()) {
+      if (auto value = tryParseCanonicalLiteral(
+              cast->type(), constant->value().value<TypeKind::VARCHAR>())) {
+        input = std::make_shared<const core::ConstantExpr>(
+            cast->type(), std::move(*value), input->alias());
+      }
+    }
+  }
+}
+
 // Parse an CAST expression.
 core::ExprPtr parseCastExpr(
     ParsedExpression& expr,
@@ -1140,23 +1157,7 @@ core::AggregateCallExprPtr parseAggregateExpr(
 
   auto* call = callExpr->as<core::CallExpr>();
   auto inputs = call->inputs();
-  for (auto i = 0; i < inputs.size(); ++i) {
-    if (inputs[i]->is(core::IExpr::Kind::kConstant)) {
-      continue;
-    }
-    const auto* cast = inputs[i]->as<core::CastExpr>();
-    if (cast == nullptr || cast->isTryCast()) {
-      continue;
-    }
-    const auto* constant = cast->inputs()[0]->as<core::ConstantExpr>();
-    if (constant != nullptr && constant->type()->isVarchar()) {
-      if (auto value = tryParseCanonicalLiteral(
-              cast->type(), constant->value().value<TypeKind::VARCHAR>())) {
-        inputs[i] = std::make_shared<const core::ConstantExpr>(
-            cast->type(), std::move(*value), inputs[i]->alias());
-      }
-    }
-  }
+  foldCanonicalLiterals(inputs);
   return std::make_shared<core::AggregateCallExpr>(
       call->name(),
       std::move(inputs),
@@ -1227,6 +1228,7 @@ core::WindowCallExprPtr buildWindowCallExpr(
   for (const auto& c : windowExpr.children) {
     params.emplace_back(parseExpr(*c, options));
   }
+  foldCanonicalLiterals(params);
 
   // Lead and Lag functions have extra offset and default_value arguments.
   if (windowExpr.offset_expr) {
