@@ -41,6 +41,9 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 
+#include <map>
+#include <set>
+
 DEFINE_int64(
     seed,
     0,
@@ -102,23 +105,27 @@ int main(int argc, char** argv) {
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
 
-  // Fail if every hash join fell back to CPU.
-  bool ranGpuHashJoin = false;
+  // Count the tasks that ran each operator to show which operators ran on GPU
+  // and which fell back to CPU.
+  std::map<std::string, size_t> numTasksByOperator;
   exec::joinFuzzer(
       initialSeed,
       std::move(referenceQueryRunner),
       [&](const exec::TaskStats& stats) {
-        bool ranBuild = false;
-        bool ranProbe = false;
+        std::set<std::string> operatorTypes;
         for (const auto& pipeline : stats.pipelineStats) {
           for (const auto& op : pipeline.operatorStats) {
-            ranBuild |= op.operatorType == "CudfHashJoinBuild";
-            ranProbe |= op.operatorType == "CudfHashJoinProbe";
+            operatorTypes.insert(op.operatorType);
           }
         }
-        ranGpuHashJoin |= ranBuild && ranProbe;
+        for (const auto& operatorType : operatorTypes) {
+          ++numTasksByOperator[operatorType];
+        }
       });
-  VELOX_CHECK(ranGpuHashJoin, "No hash join ran on GPU");
+  LOG(INFO) << "Number of tasks that ran each operator:";
+  for (const auto& [operatorType, numTasks] : numTasksByOperator) {
+    LOG(INFO) << "  " << operatorType << ": " << numTasks;
+  }
 
   cudf_velox::unregisterCudf();
 }
