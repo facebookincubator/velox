@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Set.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -231,6 +232,15 @@ struct TableParameter {
 struct RowNumberColumnInfo {
   column_index_t insertPosition;
   std::string name;
+};
+
+/// Rows of a split to read: 'numRows' rows starting at row 'firstRow', counted
+/// from the first row in the split's byte range.
+struct SplitRowRange {
+  uint64_t firstRow{0};
+  uint64_t numRows{std::numeric_limits<uint64_t>::max()};
+
+  bool operator==(const SplitRowRange& other) const = default;
 };
 
 /// Carries format-owned reader and writer options through the common reader
@@ -503,6 +513,16 @@ class RowReaderOptions {
     return skipRows_;
   }
 
+  /// Restricts reading to a range of the split's rows. Only the selective
+  /// Nimble reader supports it.
+  void setSplitRowRange(std::optional<SplitRowRange> splitRowRange) {
+    splitRowRange_ = splitRowRange;
+  }
+
+  const std::optional<SplitRowRange>& splitRowRange() const {
+    return splitRowRange_;
+  }
+
   bool preserveFlatMapsInMemory() const {
     return preserveFlatMapsInMemory_;
   }
@@ -689,6 +709,7 @@ class RowReaderOptions {
   std::function<void(uint16_t)> stripeCountCallback_;
   bool eagerFirstStripeLoad_{true};
   uint64_t skipRows_{0};
+  std::optional<SplitRowRange> splitRowRange_;
 
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory_;
 
