@@ -14,7 +14,7 @@
 include_guard(GLOBAL)
 
 velox_set_source(absl)
-velox_resolve_dependency(absl CONFIG REQUIRED)
+velox_resolve_dependency(absl 20250512 CONFIG REQUIRED)
 
 set(VELOX_GRPC_BUILD_VERSION 1.83.0)
 set(

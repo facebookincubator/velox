@@ -27,7 +27,10 @@ if(${VELOX_PROTOBUF_BUILD_VERSION} LESS 22.0)
   )
 else()
   velox_set_source(absl)
-  velox_resolve_dependency(absl CONFIG REQUIRED)
+  # Protobuf 35 needs the Abseil release pinned in scripts/setup-versions.sh.
+  # Abseil's package config only accepts an exact version match, so an older
+  # system Abseil is rejected and AUTO builds the bundled one.
+  velox_resolve_dependency(absl 20250512 CONFIG REQUIRED)
   string(
     CONCAT
     VELOX_PROTOBUF_SOURCE_URL
