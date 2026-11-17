@@ -31,7 +31,7 @@ flex_target(
   COMPILE_FLAGS "-Cf --prefix=veloxprestotp"
 )
 
-velox_flex_annotate_fallthrough(TypeParserScanner)
+velox_flex_fixup(TypeParserScanner)
 
 add_flex_bison_dependency(TypeParserScanner TypeParser)
 
