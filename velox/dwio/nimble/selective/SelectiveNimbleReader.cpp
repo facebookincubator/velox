@@ -19,6 +19,7 @@
 #include <folly/container/F14Set.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
@@ -1150,7 +1151,31 @@ SelectiveNimbleReader::columnStatistics(uint32_t index) const {
   if (index >= stats.size() || !stats[index]) {
     return nullptr;
   }
-  return stats[index]->toCommonStatistics();
+  auto commonStats = stats[index]->toCommonStatistics();
+
+  // Writers can leave a NaN out of a floating-point maximum, and a filter with
+  // no upper bound, such as x > 5, passes NaN. A maximum of +inf never prunes
+  // those filters. A minimum without NaN stays: NaN never passes a filter with
+  // an upper bound, so it is still exact for them.
+  const auto* doubleStats =
+      dynamic_cast<const dwio::common::DoubleColumnStatistics*>(
+          commonStats.get());
+  if (doubleStats == nullptr || !doubleStats->getMaximum().has_value()) {
+    return commonStats;
+  }
+
+  // A writer that saw a NaN first stores it as the minimum, which hides the
+  // smallest value. Velox orders NaN above +inf, so such a minimum would prune
+  // x < 5 if read as an order, and is reported as unknown instead.
+  auto minimum = doubleStats->getMinimum();
+  if (minimum.has_value() && std::isnan(*minimum)) {
+    minimum.reset();
+  }
+  return std::make_unique<dwio::common::DoubleColumnStatistics>(
+      static_cast<const dwio::common::ColumnStatistics&>(*doubleStats),
+      minimum,
+      std::numeric_limits<double>::infinity(),
+      doubleStats->getSum());
 }
 
 const RowTypePtr& SelectiveNimbleReader::rowType() const {

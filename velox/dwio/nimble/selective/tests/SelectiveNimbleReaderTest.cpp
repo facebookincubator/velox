@@ -37,6 +37,7 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -4073,6 +4074,9 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsInteger) {
 }
 
 // Verifies columnStatistics returns DoubleColumnStatistics for DOUBLE columns.
+// The maximum is +inf so that statistics never prune a filter that passes a
+// NaN the writer left out, and the minimum still prunes filters with an upper
+// bound.
 TEST_P(SelectiveNimbleReaderTest, columnStatisticsDouble) {
   constexpr int kSize = 50;
   auto input = makeRowVector({
@@ -4095,7 +4099,73 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsDouble) {
   ASSERT_TRUE(fpStats->getMinimum().has_value());
   EXPECT_DOUBLE_EQ(fpStats->getMinimum().value(), 0.0);
   ASSERT_TRUE(fpStats->getMaximum().has_value());
-  EXPECT_DOUBLE_EQ(fpStats->getMaximum().value(), 73.5);
+  EXPECT_EQ(
+      fpStats->getMaximum().value(), std::numeric_limits<double>::infinity());
+
+  const common::DoubleRange lessThanMinusOne(
+      /*lower=*/0.0,
+      /*lowerUnbounded=*/true,
+      /*lowerExclusive=*/false,
+      /*upper=*/-1.0,
+      /*upperUnbounded=*/false,
+      /*upperExclusive=*/true,
+      /*nullAllowed=*/false);
+  EXPECT_FALSE(
+      common::testFilter(&lessThanMinusOne, stats.get(), kSize, DOUBLE()));
+}
+
+// A writer can leave a NaN out of a floating-point maximum. A filter with no
+// upper bound, such as x > 10, passes NaN, so file statistics must not prune
+// the file for it.
+TEST_P(SelectiveNimbleReaderTest, columnStatisticsDoubleKeepsNaNForFilters) {
+  auto input = makeRowVector({
+      makeFlatVector<double>(
+          {1.0, std::numeric_limits<double>::quiet_NaN(), 2.0}),
+  });
+  WriterOptions writerOptions;
+  writerOptions.enableVectorizedStats = true;
+  auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  auto readers = makeReaders(input, fileContent, scanSpec);
+
+  auto stats = readers.reader->columnStatistics(1);
+  ASSERT_NE(stats, nullptr);
+  const common::DoubleRange greaterThanTen(
+      /*lower=*/10.0,
+      /*lowerUnbounded=*/false,
+      /*lowerExclusive=*/true,
+      /*upper=*/0.0,
+      /*upperUnbounded=*/true,
+      /*upperExclusive=*/false,
+      /*nullAllowed=*/false);
+  EXPECT_TRUE(
+      common::testFilter(
+          &greaterThanTen, stats.get(), input->size(), DOUBLE()));
+}
+
+// A writer that sees a NaN first stores it as the minimum, which hides the
+// smallest value, so the reader reports the minimum as unknown.
+TEST_P(SelectiveNimbleReaderTest, columnStatisticsDoubleLeadingNaN) {
+  auto input = makeRowVector({
+      makeFlatVector<double>(
+          {std::numeric_limits<double>::quiet_NaN(), 1.0, 2.0}),
+  });
+  WriterOptions writerOptions;
+  writerOptions.enableVectorizedStats = true;
+  auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  auto readers = makeReaders(input, fileContent, scanSpec);
+
+  auto stats = readers.reader->columnStatistics(1);
+  auto* fpStats =
+      dynamic_cast<dwio::common::DoubleColumnStatistics*>(stats.get());
+  ASSERT_NE(fpStats, nullptr);
+  EXPECT_FALSE(fpStats->getMinimum().has_value());
+  ASSERT_TRUE(fpStats->getMaximum().has_value());
+  EXPECT_EQ(
+      fpStats->getMaximum().value(), std::numeric_limits<double>::infinity());
 }
 
 // Verifies columnStatistics returns StringColumnStatistics for VARCHAR columns.
