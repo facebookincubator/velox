@@ -1205,7 +1205,7 @@ TEST_F(AggregationTest, largeValueRangeArray) {
                 .capturePlanNodeId(finalAggId)
                 .project({"c0", "cardinality(a0) as l"})
                 .planNode();
-  auto task = test::assertQuery(op, expected);
+  auto task = AssertQueryBuilder(op).assertResults(expected);
   auto stats = toPlanStats(task->taskStats());
   auto runtimeStats = stats.at(partialAggId).customStats;
 

@@ -23,6 +23,7 @@
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
+#include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"

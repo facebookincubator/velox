@@ -1954,9 +1954,10 @@ TEST_F(TableScanTest, waitForSplit) {
   const auto scanNodeId = plan->id();
   std::atomic_int32_t fileIndex = 0;
   std::thread queryThread([&]() {
-    ::assertQuery(
-        plan,
-        [&](TaskCursor* taskCursor) {
+    CursorParameters params;
+    params.planNode = plan;
+    auto [queryCursor, results] =
+        readCursor(params, [&](TaskCursor* taskCursor) {
           if (taskCursor->noMoreSplits()) {
             return;
           }
@@ -1970,9 +1971,10 @@ TEST_F(TableScanTest, waitForSplit) {
           cursor = taskCursor;
           addSplitWaitFlag = false;
           addSplitWait.notifyAll();
-        },
-        "SELECT * FROM tmp",
-        duckDbQueryRunner_);
+        });
+    assertResults(
+        results, plan->outputType(), "SELECT * FROM tmp", duckDbQueryRunner_);
+    EXPECT_TRUE(waitForTaskCompletion(queryCursor->task().get()));
   });
 
   addSplitWait.await([&] { return !addSplitWaitFlag.load(); });

@@ -187,7 +187,8 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<uint32_t>& sortingKeys) {
     {
       SCOPED_TRACE("run without spilling");
-      assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+      AssertQueryBuilder(planNode, duckDbQueryRunner_)
+          .assertResults(duckDbSql, sortingKeys);
     }
     {
       SCOPED_TRACE("run with spilling");
@@ -198,11 +199,10 @@ class OrderByTest : public OperatorTestBase {
           {core::QueryConfig::kSpillEnabled, "true"},
           {core::QueryConfig::kOrderBySpillEnabled, "true"},
       });
-      CursorParameters params;
-      params.planNode = planNode;
-      params.queryCtx = queryCtx;
-      params.spillDirectory = spillDirectory->getPath();
-      auto task = assertQueryOrdered(params, duckDbSql, sortingKeys);
+      auto task = AssertQueryBuilder(planNode, duckDbQueryRunner_)
+                      .queryCtx(queryCtx)
+                      .spillDirectory(spillDirectory->getPath())
+                      .assertResults(duckDbSql, sortingKeys);
       auto inputRows =
           PlanNodeStats::extract(task->taskStats(), orderById).inputRows;
       const uint64_t peakSpillMemoryUsage =
@@ -467,11 +467,11 @@ TEST_F(OrderByTest, outputBatchRows) {
           std::to_string(testData.preferredOutBatchBytes)},
          {core::QueryConfig::kMaxOutputBatchRows,
           std::to_string(testData.maxOutBatchRows)}});
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = queryCtx;
-    auto task = assertQueryOrdered(
-        params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .queryCtx(queryCtx)
+                    .assertResults(
+                        "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST",
+                        std::vector<uint32_t>{0});
     EXPECT_EQ(
         testData.expectedOutputVectors,
         PlanNodeStats::extract(task->taskStats(), orderById).outputVectors);
