@@ -1466,6 +1466,11 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                     /*isDaysSinceEpoch=*/false));
           } else {
             // Fall back to NULL if no default value.
+            // Feature projection can request a MAP column as a ROW.
+            if (auto outputTypeIndex =
+                    readerOutputType_->getChildIdxIfExists(fieldName)) {
+              columnType = readerOutputType_->childAt(outputTypeIndex.value());
+            }
             VELOX_CHECK_NOT_NULL(
                 columnType, "Column '{}' not found in table schema", fieldName);
             childSpec->setConstantValue(
