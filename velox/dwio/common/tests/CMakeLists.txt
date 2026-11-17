@@ -51,6 +51,7 @@ add_executable(
   ReadFileInputStreamTests.cpp
   ReaderTest.cpp
   RetryTests.cpp
+  RoaringBitmapViewTest.cpp
   ScanSpecTest.cpp
   SelectiveColumnReaderTest.cpp
   StreamUtilTest.cpp
