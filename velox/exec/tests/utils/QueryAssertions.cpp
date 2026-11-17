@@ -975,32 +975,6 @@ std::shared_ptr<Task> assertQuery(
       sortingKeys);
 }
 
-std::shared_ptr<Task> assertQueryReturnsEmptyResult(
-    const core::PlanNodePtr& plan) {
-  CursorParameters params;
-  params.planNode = plan;
-  auto [cursor, results] = readCursor(params);
-  assertEmptyResults(results);
-  return cursor->task();
-}
-
-std::shared_ptr<Task> assertQueryReturnsEmptyResult(
-    const CursorParameters& params) {
-  VELOX_DCHECK_NOT_NULL(params.planNode);
-  auto [cursor, results] = readCursor(params);
-  assertEmptyResults(results);
-  return cursor->task();
-}
-
-void assertEmptyResults(const std::vector<RowVectorPtr>& results) {
-  size_t totalCount = 0;
-  for (const auto& vector : results) {
-    totalCount += vector->size();
-  }
-  EXPECT_EQ(0, totalCount) << "Expected empty result but received "
-                           << totalCount << " rows";
-}
-
 // Compare left and right without epsilon and returns true if they are equal.
 static bool compareMaterializedRows(
     const MaterializedRowMultiset& left,

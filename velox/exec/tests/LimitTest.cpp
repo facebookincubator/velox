@@ -76,7 +76,7 @@ TEST_F(LimitTest, basic) {
   assertQuery(
       makePlan(1'234, 2'000), "SELECT * FROM tmp OFFSET 1234 LIMIT 2000");
 
-  assertQueryReturnsEmptyResult(makePlan(12'345, 10));
+  AssertQueryBuilder(makePlan(12'345, 10)).assertEmptyResults();
 }
 
 TEST_F(LimitTest, limitOverLocalExchange) {
