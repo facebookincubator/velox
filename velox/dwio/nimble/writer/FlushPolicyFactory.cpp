@@ -72,12 +72,9 @@ TestFlushPolicy::Options parseTestRandomConfig(const ConfigEntries& entries) {
       // case-insensitive KB/MB/GB suffix (e.g. "128MB").
       try {
         options.maxStripePhysicalSize = velox::config::toCapacity(
-            std::string(value), velox::config::CapacityUnit::BYTE);
-      } catch (const velox::VeloxUserError&) {
-        NIMBLE_USER_FAIL(
-            "Invalid byte size '{}' for flush policy config key '{}'.",
-            value,
-            key);
+            std::string(value), velox::config::CapacityUnit::BYTE, key);
+      } catch (const velox::VeloxUserError& error) {
+        NIMBLE_USER_FAIL("{}", error.message());
       }
     } else if (key == "estimated_compression_factor") {
       options.estimatedCompressionFactor = parseValue<double>(key, value);

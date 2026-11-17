@@ -434,7 +434,9 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
           incorrectDictionaryPageSizeSessionProperties,
           true),
       fmt::format(
-          "Invalid capacity string '{}'", invalidDictionaryPageSizeValue));
+          "Invalid value for config {}: {} - Invalid capacity string",
+          parquet::ParquetConfig::kWriterDictionaryPageSizeLimit,
+          invalidDictionaryPageSizeValue));
 }
 
 TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
@@ -703,7 +705,9 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
           incorrectPageSizeConfigFromFile,
           incorrectPageSizeSessionPropertiesFromFile),
       fmt::format(
-          "Invalid capacity string '{}'", invalidPageSizeAndBatchSizeValue))
+          "Invalid value for config {}: {} - Invalid capacity string",
+          parquet::ParquetConfig::kWriterPageSize,
+          invalidPageSizeAndBatchSizeValue))
 
   // Test incorrect batch size config
 

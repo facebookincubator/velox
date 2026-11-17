@@ -176,7 +176,8 @@ class Config : public config::ConfigBase {
                 connectorConfig,
                 kOrcMaxCoalesceDistance)
             .value_or(kOrcMaxCoalesceDistanceSessionProperty::defaultValue),
-        config::CapacityUnit::BYTE);
+        config::CapacityUnit::BYTE,
+        kOrcMaxCoalesceDistance);
     VELOX_USER_CHECK_LE(
         distance,
         std::numeric_limits<int32_t>::max(),

@@ -1711,7 +1711,8 @@ class QueryConfig {
   uint64_t queryMaxMemoryPerNode() const {
     return config::toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"),
-        config::CapacityUnit::BYTE);
+        config::CapacityUnit::BYTE,
+        kQueryMaxMemoryPerNode);
   }
 
   vector_size_t preferredOutputBatchRows() const {
@@ -1760,7 +1761,8 @@ class QueryConfig {
   uint64_t debugMemoryPoolWarnThresholdBytes() const {
     return config::toCapacity(
         get<std::string>(kDebugMemoryPoolWarnThresholdBytes, "0B"),
-        config::CapacityUnit::BYTE);
+        config::CapacityUnit::BYTE,
+        kDebugMemoryPoolWarnThresholdBytes);
   }
 
   enum class RowSizeTrackingMode {

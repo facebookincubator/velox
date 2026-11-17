@@ -136,11 +136,17 @@ std::string HiveConfig::writeFileCreateConfig() const {
 
 uint64_t HiveConfig::sortWriterMaxOutputBytes(
     const config::ConfigBase* session) const {
-  return config::toCapacity(
-      session->get<std::string>(
-          kSortWriterMaxOutputBytesSession,
-          config_->get<std::string>(kSortWriterMaxOutputBytes, "10MB")),
-      config::CapacityUnit::BYTE);
+  const auto value =
+      session->get<std::string>(kSortWriterMaxOutputBytesSession);
+  return value.has_value()
+      ? config::toCapacity(
+            *value,
+            config::CapacityUnit::BYTE,
+            kSortWriterMaxOutputBytesSession)
+      : config::toCapacity(
+            config_->get<std::string>(kSortWriterMaxOutputBytes, "10MB"),
+            config::CapacityUnit::BYTE,
+            kSortWriterMaxOutputBytes);
 }
 
 uint64_t HiveConfig::maxTargetFileSizeBytes(
@@ -170,12 +176,13 @@ uint64_t HiveConfig::maxTargetFileSizeBytes(
       return 0;
   }
 
-  auto maxTargetFileSize = session->get<std::string>(sessionKey);
-  if (!maxTargetFileSize.has_value()) {
-    maxTargetFileSize = config_->get<std::string>(configKey);
+  if (const auto value = session->get<std::string>(sessionKey)) {
+    return config::toCapacity(*value, config::CapacityUnit::BYTE, sessionKey);
   }
   return config::toCapacity(
-      maxTargetFileSize.value_or(defaultValue), config::CapacityUnit::BYTE);
+      config_->get<std::string>(configKey, defaultValue),
+      config::CapacityUnit::BYTE,
+      configKey);
 }
 
 } // namespace facebook::velox::connector::hive

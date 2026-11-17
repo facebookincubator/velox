@@ -14,14 +14,29 @@
  * limitations under the License.
  */
 
+#include <folly/String.h>
 #include <re2/re2.h>
 #include <algorithm>
 
+#include "velox/common/EnumDefine.h"
 #include "velox/common/config/Config.h"
 
 namespace facebook::velox::config {
+namespace {
 
-double toBytesPerCapacityUnit(CapacityUnit unit) {
+const auto& capacityUnitNames() {
+  static const folly::F14FastMap<CapacityUnit, std::string_view> kNames = {
+      {CapacityUnit::BYTE, "b"},
+      {CapacityUnit::KILOBYTE, "kb"},
+      {CapacityUnit::MEGABYTE, "mb"},
+      {CapacityUnit::GIGABYTE, "gb"},
+      {CapacityUnit::TERABYTE, "tb"},
+      {CapacityUnit::PETABYTE, "pb"},
+  };
+  return kNames;
+}
+
+double bytesPerCapacityUnit(CapacityUnit unit) {
   switch (unit) {
     case CapacityUnit::BYTE:
       return 1;
@@ -35,49 +50,47 @@ double toBytesPerCapacityUnit(CapacityUnit unit) {
       return exp2(40);
     case CapacityUnit::PETABYTE:
       return exp2(50);
-    default:
-      VELOX_USER_FAIL("Invalid capacity unit '{}'", static_cast<int>(unit));
   }
+  VELOX_UNREACHABLE("Invalid capacity unit: {}", static_cast<int>(unit));
 }
 
-CapacityUnit valueOfCapacityUnit(const std::string& unitStr) {
-  std::stringstream ss;
-  for (const char c : unitStr) {
-    ss << static_cast<char>(std::tolower(c));
-  }
-  const auto lowerUnitStr = ss.str();
-  if (lowerUnitStr == "b") {
-    return CapacityUnit::BYTE;
-  }
-  if (lowerUnitStr == "kb") {
-    return CapacityUnit::KILOBYTE;
-  }
-  if (lowerUnitStr == "mb") {
-    return CapacityUnit::MEGABYTE;
-  }
-  if (lowerUnitStr == "gb") {
-    return CapacityUnit::GIGABYTE;
-  }
-  if (lowerUnitStr == "tb") {
-    return CapacityUnit::TERABYTE;
-  }
-  if (lowerUnitStr == "pb") {
-    return CapacityUnit::PETABYTE;
-  }
-  VELOX_USER_FAIL("Invalid capacity unit '{}'", unitStr);
-}
+} // namespace
 
-uint64_t toCapacity(const std::string& from, CapacityUnit to) {
+VELOX_DEFINE_ENUM_NAME(CapacityUnit, capacityUnitNames);
+
+uint64_t
+toCapacity(const std::string& from, CapacityUnit to, std::string_view key) {
   static const RE2 kPattern(R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)");
   double value;
   std::string unit;
   if (!RE2::FullMatch(from, kPattern, &value, &unit)) {
+    if (!key.empty()) {
+      detail::failInvalidConfigValue(key, from, "Invalid capacity string");
+    }
     VELOX_USER_FAIL("Invalid capacity string '{}'", from);
   }
 
-  return value *
-      (toBytesPerCapacityUnit(valueOfCapacityUnit(unit)) /
-       toBytesPerCapacityUnit(to));
+  auto lowerUnit = unit;
+  folly::toLowerAscii(lowerUnit);
+  const auto fromUnit = CapacityUnitName::tryToCapacityUnit(lowerUnit);
+  if (!fromUnit) {
+    if (!key.empty()) {
+      detail::failInvalidConfigValue(
+          key, from, fmt::format("Invalid capacity unit '{}'", unit));
+    }
+    VELOX_USER_FAIL("Invalid capacity unit '{}' in '{}'", unit, from);
+  }
+  const double capacity =
+      value * (bytesPerCapacityUnit(*fromUnit) / bytesPerCapacityUnit(to));
+  // 2^64 is the first value outside the uint64_t range.
+  constexpr double kCapacityLimit = 0x1p64;
+  if (capacity >= kCapacityLimit) {
+    if (!key.empty()) {
+      detail::failInvalidConfigValue(key, from, "Capacity out of range");
+    }
+    VELOX_USER_FAIL("Capacity out of range: {}", from);
+  }
+  return static_cast<uint64_t>(capacity);
 }
 
 std::chrono::duration<double> toDuration(const std::string& str) {

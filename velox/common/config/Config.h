@@ -20,9 +20,11 @@
 #include <map>
 #include <mutex>
 #include <shared_mutex>
+#include <string_view>
 #include <unordered_map>
 
 #include "folly/Conv.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/IConfig.h"
 
@@ -37,13 +39,12 @@ enum class CapacityUnit {
   PETABYTE
 };
 
-double toBytesPerCapacityUnit(CapacityUnit unit);
+VELOX_DECLARE_ENUM_NAME(CapacityUnit);
 
-CapacityUnit valueOfCapacityUnit(const std::string& unitStr);
-
-/// Convert capacity string with unit to the capacity number in the specified
-/// units
-uint64_t toCapacity(const std::string& from, CapacityUnit to);
+/// Converts a capacity string to the specified unit. Errors include the
+/// config key when supplied.
+uint64_t
+toCapacity(const std::string& from, CapacityUnit to, std::string_view key = {});
 
 std::chrono::duration<double> toDuration(const std::string& str);
 

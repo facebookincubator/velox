@@ -791,13 +791,19 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
 
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::reservedCapacity(configs),
-      "Invalid capacity string 'invalid'");
+      fmt::format(
+          "Invalid value for config {}: invalid - Invalid capacity string",
+          SharedArbitrator::ExtraConfig::kReservedCapacity));
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::memoryPoolInitialCapacity(configs),
-      "Invalid capacity string 'invalid'");
+      fmt::format(
+          "Invalid value for config {}: invalid - Invalid capacity string",
+          SharedArbitrator::ExtraConfig::kMemoryPoolInitialCapacity));
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::memoryPoolReservedCapacity(configs),
-      "Invalid capacity string 'invalid'");
+      fmt::format(
+          "Invalid value for config {}: invalid - Invalid capacity string",
+          SharedArbitrator::ExtraConfig::kMemoryPoolReservedCapacity));
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(configs),
       "Invalid duration 'invalid'");
@@ -809,13 +815,17 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
       "Failed while parsing SharedArbitrator configs");
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::memoryPoolMinReclaimBytes(configs),
-      "Invalid capacity string 'invalid'");
+      fmt::format(
+          "Invalid value for config {}: invalid - Invalid capacity string",
+          SharedArbitrator::ExtraConfig::kMemoryPoolMinReclaimBytes));
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::memoryPoolMinReclaimPct(configs),
       "Failed while parsing SharedArbitrator configs");
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::memoryPoolAbortCapacityLimit(configs),
-      "Invalid capacity string 'invalid'");
+      fmt::format(
+          "Invalid value for config {}: invalid - Invalid capacity string",
+          SharedArbitrator::ExtraConfig::kMemoryPoolAbortCapacityLimit));
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::globalArbitrationMemoryReclaimPct(configs),
       "Failed while parsing SharedArbitrator configs");

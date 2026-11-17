@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <string_view>
 
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
@@ -395,20 +396,23 @@ std::optional<arrow::SizeStatisticsLevel> toSizeStatisticsLevel(
       "Unsupported parquet writer size statistics level {}", *level);
 }
 
-std::optional<int64_t> toParquetPageSize(std::optional<std::string> pageSize) {
+std::optional<int64_t> toParquetPageSize(
+    std::optional<std::string> pageSize,
+    std::string_view key) {
   if (!pageSize) {
     return std::nullopt;
   }
-  return config::toCapacity(*pageSize, config::CapacityUnit::BYTE);
+  return config::toCapacity(*pageSize, config::CapacityUnit::BYTE, key);
 }
 
 std::optional<uint64_t> toParquetRowGroupSize(
-    std::optional<std::string> rowGroupSize) {
+    std::optional<std::string> rowGroupSize,
+    std::string_view key) {
   if (!rowGroupSize) {
     return std::nullopt;
   }
   const auto sizeInBytes =
-      config::toCapacity(*rowGroupSize, config::CapacityUnit::BYTE);
+      config::toCapacity(*rowGroupSize, config::CapacityUnit::BYTE, key);
   VELOX_USER_CHECK_GT(
       sizeInBytes,
       0,
@@ -875,7 +879,8 @@ ParquetWriterFactory::createFormatOptions(
           connectorConfig, session),
       "enable store decimal as integer");
   parquetOptions->dictionaryPageSizeLimit = toParquetPageSize(
-      ParquetConfig::writerDictionaryPageSizeLimit(connectorConfig, session));
+      ParquetConfig::writerDictionaryPageSizeLimit(connectorConfig, session),
+      ParquetConfig::kWriterDictionaryPageSizeLimit);
   parquetOptions->useParquetDataPageV2 = isParquetV2(
       ParquetConfig::writerDataPageVersion(connectorConfig, session));
   parquetOptions->enableWritePageIndex = toBoolConfigValue(
@@ -884,9 +889,11 @@ ParquetWriterFactory::createFormatOptions(
   parquetOptions->sizeStatisticsLevel = toSizeStatisticsLevel(
       ParquetConfig::writerSizeStatisticsLevel(connectorConfig, session));
   parquetOptions->dataPageSize = toParquetPageSize(
-      ParquetConfig::writerPageSize(connectorConfig, session));
+      ParquetConfig::writerPageSize(connectorConfig, session),
+      ParquetConfig::kWriterPageSize);
   parquetOptions->rowGroupSizeBytes = toParquetRowGroupSize(
-      ParquetConfig::writerRowGroupSize(connectorConfig, session));
+      ParquetConfig::writerRowGroupSize(connectorConfig, session),
+      ParquetConfig::kWriterRowGroupSize);
   parquetOptions->batchSize = toParquetBatchSize(
       ParquetConfig::writerBatchSize(connectorConfig, session));
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);

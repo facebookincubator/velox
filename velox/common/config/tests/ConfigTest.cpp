@@ -186,6 +186,17 @@ TEST_F(ConfigTest, immutableConfig) {
   ASSERT_EQ(expectedRawConfigs, config->rawConfigsCopy());
 }
 
+TEST_F(ConfigTest, invalidValue) {
+  const ConfigBase config(
+      std::unordered_map<std::string, std::string>{{"int32_entry", "12abc"}});
+  constexpr auto kMessage =
+      "Invalid value for config int32_entry: 12abc - "
+      "Non-whitespace character found after end of conversion: \"abc\"";
+
+  VELOX_ASSERT_USER_THROW(config.get<int32_t>("int32_entry"), kMessage);
+  VELOX_ASSERT_USER_THROW(config.get<int32_t>("int32_entry", 0), kMessage);
+}
+
 TEST_F(ConfigTest, mutableConfig) {
   // Create a mutable configuration with some initial values
   std::unordered_map<std::string, std::string> initialConfigs{
@@ -260,6 +271,31 @@ TEST_F(ConfigTest, capacityConversion) {
             (uint64_t)(testNumber * (units[i].second / units[j].second)));
       }
     }
+  }
+}
+
+TEST_F(ConfigTest, toCapacity) {
+  EXPECT_EQ(toCapacity(" 1.5 kB ", CapacityUnit::BYTE), 1536);
+  EXPECT_EQ(toCapacity("0GB", CapacityUnit::BYTE), 0);
+  EXPECT_EQ(toCapacity("0.5B", CapacityUnit::BYTE), 0);
+  EXPECT_EQ(toCapacity("1.5KB", CapacityUnit::KILOBYTE), 1);
+  EXPECT_EQ(toCapacity("1.5MB", CapacityUnit::KILOBYTE, "capacity"), 1536);
+
+  // The largest double below 2^64 is still in range.
+  EXPECT_EQ(
+      toCapacity("18446744073709549568B", CapacityUnit::BYTE),
+      18446744073709549568ULL);
+}
+
+TEST_F(ConfigTest, invalidCapacity) {
+  for (const auto& [value, reason] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"1", "Invalid capacity string '1'"},
+           {"1 XB", "Invalid capacity unit 'XB' in '1 XB'"},
+           {"16384PB", "Capacity out of range: 16384PB"},
+           {"18446744073709551616B",
+            "Capacity out of range: 18446744073709551616B"}}) {
+    VELOX_ASSERT_USER_THROW(toCapacity(value, CapacityUnit::BYTE), reason);
   }
 }
 

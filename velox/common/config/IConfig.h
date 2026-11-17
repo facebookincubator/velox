@@ -17,11 +17,26 @@
 #pragma once
 
 #include <folly/Conv.h>
+#include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
+#include "velox/common/base/Exceptions.h"
+
 namespace facebook::velox::config {
+
+namespace detail {
+
+[[noreturn]] inline void failInvalidConfigValue(
+    std::string_view key,
+    std::string_view value,
+    std::string_view reason) {
+  VELOX_USER_FAIL("Invalid value for config {}: {} - {}", key, value, reason);
+}
+
+} // namespace detail
 
 /// IConfig - Read-only config interface
 /// for accessing key-value parameters.
@@ -29,15 +44,15 @@ namespace facebook::velox::config {
 /// duplication of the raw configuration data.
 /// Can be used by velox::QueryConfig to access
 /// externally managed system configuration.
+/// The default converter reports the key, value, and conversion reason for
+/// invalid values.
 class IConfig {
  public:
   template <typename T>
   std::optional<T> get(
       const std::string& key,
       const std::function<T(std::string, std::string)>& toT =
-          [](auto /* unused */, auto value) {
-            return folly::to<T>(value);
-          }) const {
+          DefaultConverter<T>{}) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }
@@ -49,9 +64,7 @@ class IConfig {
       const std::string& key,
       const T& defaultValue,
       const std::function<T(std::string, std::string)>& toT =
-          [](auto /* unused */, auto value) {
-            return folly::to<T>(value);
-          }) const {
+          DefaultConverter<T>{}) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }
@@ -64,6 +77,17 @@ class IConfig {
   virtual ~IConfig() = default;
 
  private:
+  template <typename T>
+  struct DefaultConverter {
+    T operator()(const std::string& key, const std::string& value) const {
+      try {
+        return folly::to<T>(value);
+      } catch (const folly::ConversionErrorBase& error) {
+        detail::failInvalidConfigValue(key, value, error.what());
+      }
+    }
+  };
+
   virtual std::optional<std::string> access(const std::string& key) const = 0;
 };
 
