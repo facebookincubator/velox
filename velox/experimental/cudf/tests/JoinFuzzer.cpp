@@ -64,9 +64,14 @@ DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
 
 DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");
 
+DECLARE_bool(enable_spill);
+
 using namespace facebook::velox;
 
 int main(int argc, char** argv) {
+  // cuDF hash join does not spill, so spilling runs repeat the non-spilling
+  // GPU runs. Disable them unless requested on the command line.
+  FLAGS_enable_spill = false;
   folly::Init init(&argc, &argv);
   exec::test::setupMemory(FLAGS_allocator_capacity, FLAGS_arbitrator_capacity);
 
