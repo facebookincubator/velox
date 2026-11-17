@@ -18,6 +18,7 @@
 #include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Cat.h"
 #include "velox/experimental/torchwave/Compile.h"
+#include "velox/experimental/torchwave/DeviceSymbols.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GroupAlloc.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
@@ -107,11 +108,11 @@ void traceStaticDims(std::string_view label, const ElementExpr& ee) {
             << " leaves" << leaves;
 }
 
-// Synchronizes the CUDA default stream (stream 0), where eager ATen standalone
-// ops are dispatched. Used to order them against wave-stream work before a
-// composite invocation returns.
+// Synchronizes the torch stream, where eager ATen standalone ops are
+// dispatched. Used to order them against wave-stream work before a composite
+// invocation returns.
 void syncTorchDefaultStream() {
-  cudaStreamSynchronize(nullptr);
+  syncTorchStream();
 }
 
 // Bytes currently held in live tensors by the torch CUDA caching allocator on
@@ -939,7 +940,10 @@ void recordD2hProducers(ExecutionState& state, const StepVectors& sv) {
   };
   for (const auto& data : sv.kernels) {
     for (auto id : data.returnValues) {
-      record(id);
+      // Device symbols runs it on its capacity: nothing waits for it.
+      if (state.symbolUnreturned.count(id) == 0) {
+        record(id);
+      }
     }
   }
   for (const auto& copy : sv.hostCopies) {
@@ -3012,6 +3016,13 @@ void readScalarFromDevice(
     bool trace) {
   auto val = *reinterpret_cast<const T*>(pinnedBase + absOffset);
   if constexpr (std::is_same_v<T, int64_t>) {
+    if (auto* state = currentExecutionState(); state != nullptr &&
+        state->waveGraph != nullptr && WaveConfig::get().deviceSymbols) {
+      auto* symbols = state->waveGraph->deviceSymbols();
+      if (symbols != nullptr && symbols->observeReturn(*state, id, val)) {
+        return;
+      }
+    }
     if (readScalarIntoTable(id, val)) {
       return;
     }
@@ -3079,6 +3090,11 @@ void processReturnData(
     }
   }
   bool trace = WaveConfig::get().trace & WaveConfig::kTensors;
+  auto* symbolState = currentExecutionState();
+  if (symbolState != nullptr &&
+      (!symbolState->deviceSymbolsMode || symbolState->waveGraph == nullptr)) {
+    symbolState = nullptr;
+  }
   for (size_t i = 0; i < sv.kernels.size(); ++i) {
     auto& data = sv.kernels[i];
     if (data.returnValues.empty()) {
@@ -3089,6 +3105,14 @@ void processReturnData(
       auto absOffset = sv.paramOffsets.at(i) + data.returnOffsets.at(j);
       auto typeKind = data.returnTypes[j];
       if (typeKind == nativert::Type::Kind::Tensor) {
+        if (symbolState != nullptr &&
+            symbolState->waveGraph->deviceSymbols()->observeReturnDims(
+                *symbolState,
+                actualId,
+                reinterpret_cast<const Tensor*>(pinnedBase + absOffset)
+                    ->dims[0])) {
+          continue;
+        }
         resizeTensorFromDevice(frame, actualId, pinnedBase, absOffset, trace);
       } else if (typeKind == nativert::Type::Kind::TensorList) {
         for (const auto& tlp : data.tensorLists) {
@@ -3397,7 +3421,8 @@ void CompositeInvocation::materializeStepGroups(
         continue;
       }
       buffer = state.tableOnlyActive
-          ? materializeAllocGroupTable(requests, frame, state)
+          ? materializeAllocGroupTable(
+                requests, frame, state, collector.group(g))
           : materializeAllocGroup(requests, frame);
       numCarved = static_cast<int32_t>(requests.size());
     }
@@ -4083,6 +4108,15 @@ void CompositeInvocation::launch(
     }
   } else {
     stream->hostToDeviceAsync(deviceBase, pinnedBase, h2dBytes);
+    if (sv.program != nullptr && sv.program->symbolFixups != nullptr) {
+      auto* state = currentExecutionState();
+      TORCH_CHECK(
+          state != nullptr && state->waveGraph != nullptr &&
+              state->waveGraph->deviceSymbols() != nullptr,
+          "A step with symbol fixups runs outside a device-symbols execution");
+      state->waveGraph->deviceSymbols()->runFixups(
+          *state, *sv.program->symbolFixups, deviceBase, stream);
+    }
     for (const auto& segment : segments) {
       if (!WaveConfig::get().launchPerOp) {
         launchSegment(segment);
