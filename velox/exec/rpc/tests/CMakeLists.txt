@@ -89,6 +89,39 @@ target_link_libraries(
 
 add_test(NAME velox_rpc_rate_limiter_test COMMAND velox_rpc_rate_limiter_test)
 
+add_executable(velox_rpc_job_simulation_test RPCJobSimulationTest.cpp)
+
+target_link_libraries(
+  velox_rpc_job_simulation_test
+  velox_rpc_state
+  velox_rpc_rate_limiter
+  GTest::gtest
+  GTest::gtest_main
+  Folly::folly
+  fmt::fmt
+)
+
+add_test(NAME velox_rpc_job_simulation_test COMMAND velox_rpc_job_simulation_test)
+# The simulations take seconds optimized and minutes unoptimized.
+set_tests_properties(velox_rpc_job_simulation_test PROPERTIES TIMEOUT 3000)
+
+add_executable(velox_rpc_shared_capacity_simulation_test RPCSharedCapacitySimulationTest.cpp)
+
+target_link_libraries(
+  velox_rpc_shared_capacity_simulation_test
+  velox_rpc_rate_limiter
+  GTest::gtest
+  GTest::gtest_main
+  Folly::folly
+  fmt::fmt
+)
+
+add_test(
+  NAME velox_rpc_shared_capacity_simulation_test
+  COMMAND velox_rpc_shared_capacity_simulation_test
+)
+set_tests_properties(velox_rpc_shared_capacity_simulation_test PROPERTIES TIMEOUT 3000)
+
 add_executable(velox_rpc_error_classification_test RpcErrorClassificationTest.cpp)
 
 target_link_libraries(
