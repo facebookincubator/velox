@@ -1440,10 +1440,29 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
   const bool hasV2ChunkStats =
       tablet->hasOptionalSection(std::string{kChunkStatsV2Section});
 
-  if (chunkStatsEnabled) {
+  // The writer records no chunk stats for a stripe group whose stripes wrote
+  // no streams, e.g. because every column is a scalar that is null in every
+  // row of those stripes. When every group of the file is such a group, it
+  // writes no chunk stats section.
+  bool hasStreams{false};
+  for (uint32_t stripe = 0; stripe < tablet->stripeCount(); ++stripe) {
+    if (tablet->streamCount(tablet->stripeIdentifier(stripe)) > 0) {
+      hasStreams = true;
+      break;
+    }
+  }
+
+  if (chunkStatsEnabled && hasStreams) {
     NIMBLE_CHECK(!hasV1ChunkStats);
     NIMBLE_CHECK(hasV2ChunkStats);
     ++chunkStatsCoverage_.numV2IndexedFiles;
+  } else if (chunkStatsEnabled) {
+    NIMBLE_CHECK(!hasV1ChunkStats);
+    NIMBLE_CHECK(
+        !hasV2ChunkStats,
+        "Chunk stats section present in a file with no streams (seed {}).",
+        options_.seed);
+    ++chunkStatsCoverage_.numUnindexedFiles;
   } else {
     NIMBLE_CHECK(!hasV1ChunkStats);
     NIMBLE_CHECK(!hasV2ChunkStats);
@@ -1462,6 +1481,12 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
       NIMBLE_CHECK_NULL(
           chunkStats,
           "Chunk stats present in stripe {} but chunk stats are disabled (seed {}).",
+          stripe,
+          options_.seed);
+    } else if (tablet->streamCount(stripeIdentifier) == 0) {
+      NIMBLE_CHECK_NULL(
+          chunkStats,
+          "Chunk stats present in stripe {} of a group with no streams (seed {}).",
           stripe,
           options_.seed);
     } else {

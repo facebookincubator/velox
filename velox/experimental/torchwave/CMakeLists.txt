@@ -42,6 +42,7 @@ add_library(
   LaunchPartition.cpp
   Model.cpp
   NodePrinter.cpp
+  PackedInput.cpp
   ParallelExpr.cpp
   Project.cpp
   Pt2Load.cpp

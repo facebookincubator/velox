@@ -35,6 +35,7 @@
 namespace torch::wave {
 
 class AllocGroupCollector;
+struct SymbolFixups;
 struct OutputDesc;
 struct ValueTypes;
 
@@ -148,6 +149,10 @@ struct BoundLaunch {
   /// is.
   int32_t countSize{-1};
   bool countFromReserve{false};
+  /// The count reads a value one of the launch's outputs writes (an op sized
+  /// from its own output, e.g. index_select), so it is taken again after the
+  /// outputs are written.
+  bool recount{false};
   /// Outputs when the launch is sized by its largest input and one exists,
   /// and the outputs otherwise.
   int32_t largestShapeSize{-1};
@@ -232,6 +237,7 @@ struct LaunchOp {
   int32_t countSize{-1};
   int32_t largestShapeSize{-1};
   bool countFromReserve{false};
+  bool recount{false};
   /// Into StepCode::outputs.
   Span outputs;
   Span largestOutputs;
@@ -306,7 +312,8 @@ struct StepCode {
         .constants = {consts + op.constants.begin, op.constants.size},
         .intList = {consts + op.intList.begin, op.intList.size},
         .outputs = {ids + op.outputs.begin, op.outputs.size},
-        .elements = {ids + op.elements.begin, op.elements.size}};
+        .elements = {ids + op.elements.begin, op.elements.size},
+        .wholeExtent = op.wholeExtent};
   }
 };
 
@@ -342,6 +349,9 @@ struct StepProgram {
   /// Collects the step's allocation groups. Built at bind, installed for each
   /// execution of the step.
   std::shared_ptr<AllocGroupCollector> collector;
+  /// Rewrites of the step's parameters from symbol values the device holds;
+  /// null when the step reads none.
+  std::shared_ptr<SymbolFixups> symbolFixups;
   /// The sizes, launches and fills above, packed. 'sizes' and 'launches' are
   /// kept for messages and the bind passes that follow; the run reads 'code'.
   StepCode code;
