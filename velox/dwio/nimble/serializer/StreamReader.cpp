@@ -217,7 +217,7 @@ folly::coro::Task<void> StreamReader::co_read(
   checkStreamCount(streams.size(), inputOffsets_.size());
   const auto outputRanges =
       makeOutputRanges(outputType_, ranges, outputOffset, output);
-  prepareRead(streams, options);
+  prepareRead(streams, /*alphabets=*/{}, options);
 
   // The streams are only valid during this call.
   SCOPE_EXIT {
@@ -238,8 +238,20 @@ folly::coro::Task<void> StreamReader::co_read(
 void StreamReader::setStreams(
     std::span<const std::string_view> streams,
     const Encoding::Options& options) {
+  setStreams(streams, /*alphabets=*/{}, options);
+}
+
+void StreamReader::setStreams(
+    std::span<const std::string_view> streams,
+    const SharedDictionaryAlphabets& alphabets,
+    const Encoding::Options& options) {
   checkStreamCount(streams.size(), inputOffsets_.size());
-  prepareRead(streams, options);
+  if (!alphabets.empty()) {
+    NIMBLE_USER_CHECK_NULL(
+        options.sharedDictionaryAlphabet,
+        "Shared dictionary alphabets must come from the map or the options, not both");
+  }
+  prepareRead(streams, alphabets, options);
 }
 
 StreamReader::CachedReader& StreamReader::reader() const {
@@ -307,7 +319,32 @@ void StreamReader::loadChunks(std::string_view stream) {
   }
 }
 
-void StreamReader::rebuildReader(std::span<const std::string_view> streams) {
+void StreamReader::bindStream(
+    std::string_view stream,
+    size_t streamIndex,
+    const SharedDictionaryAlphabets& alphabets,
+    const std::function<void()>& bindDecoder) {
+  loadChunks(stream);
+  const auto it = alphabets.find(static_cast<uint32_t>(streamIndex));
+  if (it == alphabets.end()) {
+    bindDecoder();
+    return;
+  }
+
+  // setStreams() takes alphabets from the map or the options, not both. The
+  // decoder creates the views of the chunks before it returns, so options_
+  // carries the stream's alphabet only meanwhile.
+  NIMBLE_CHECK_NULL(options_.sharedDictionaryAlphabet);
+  options_.sharedDictionaryAlphabet = it->second;
+  SCOPE_EXIT {
+    options_.sharedDictionaryAlphabet.reset();
+  };
+  bindDecoder();
+}
+
+void StreamReader::rebuildReader(
+    std::span<const std::string_view> streams,
+    const SharedDictionaryAlphabets& alphabets) {
   const EncodingViewDecoder::EncodingViewFactory encodingViewFactory =
       [this](std::string_view encoding) { return makeEncodingView(encoding); };
   auto& cachedReader = *cachedReader_;
@@ -323,17 +360,20 @@ void StreamReader::rebuildReader(std::span<const std::string_view> streams) {
     const auto it = cachedReader.decodersByStreamId.find(streamId);
     if (it != cachedReader.decodersByStreamId.end()) {
       auto* decoder = static_cast<EncodingViewDecoder*>(it->second.get());
-      loadChunks(streams[i]);
-      // @lint-ignore NULLSAFECLANG nullable-dereference
-      decoder->rebind(loadedChunks_, options_.bufferPool);
+      bindStream(streams[i], i, alphabets, [&] {
+        // @lint-ignore NULLSAFECLANG nullable-dereference
+        decoder->rebind(loadedChunks_, options_.bufferPool);
+      });
       cachedReader.streamDecoders[i] = decoder;
       continue;
     }
 
     // TODO: Support encodings without an EncodingView.
-    loadChunks(streams[i]);
-    auto decoder = std::make_unique<EncodingViewDecoder>(
-        loadedChunks_, pool_, options_.bufferPool, encodingViewFactory);
+    std::unique_ptr<EncodingViewDecoder> decoder;
+    bindStream(streams[i], i, alphabets, [&] {
+      decoder = std::make_unique<EncodingViewDecoder>(
+          loadedChunks_, pool_, options_.bufferPool, encodingViewFactory);
+    });
     cachedReader.streamDecoders[i] = decoder.get();
     cachedReader.decodersByStreamId.emplace(streamId, std::move(decoder));
   }
@@ -343,6 +383,7 @@ void StreamReader::rebuildReader(std::span<const std::string_view> streams) {
 
 void StreamReader::prepareRead(
     std::span<const std::string_view> streams,
+    const SharedDictionaryAlphabets& alphabets,
     const Encoding::Options& options) {
   reset();
   options_ = options;
@@ -356,9 +397,10 @@ void StreamReader::prepareRead(
     // keeps the reader.
     for (size_t i{0}; i < streams.size(); ++i) {
       if (!streams[i].empty()) {
-        loadChunks(streams[i]);
-        cachedReader_->streamDecoders[i]->rebind(
-            loadedChunks_, options_.bufferPool);
+        bindStream(streams[i], i, alphabets, [&] {
+          cachedReader_->streamDecoders[i]->rebind(
+              loadedChunks_, options_.bufferPool);
+        });
       }
     }
     cachedReader_->root->reset();
@@ -370,7 +412,7 @@ void StreamReader::prepareRead(
     // paired with another pattern's key.
     cachedReader_->root.reset();
     makePresenceKey(streams, cachedKey_);
-    rebuildReader(streams);
+    rebuildReader(streams, alphabets);
   }
   streamsBound_ = true;
 }

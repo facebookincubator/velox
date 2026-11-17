@@ -147,6 +147,26 @@ TEST(StatisticsTest, sequenceStep) {
   EXPECT_EQ(sequenceStep(std::vector<uint64_t>{0, 1, 3, 4}), std::nullopt);
 }
 
+// sequenceStep() caches std::nullopt as well as a step, so a second call does
+// not scan the stream again. The statistics view the values, so changing them
+// after the first call shows whether the second call scanned them.
+TEST(StatisticsTest, sequenceStepIsCached) {
+  {
+    std::vector<uint32_t> values{0, 1, 3};
+    const auto statistics = nimble::Statistics<uint32_t>::create(values);
+    EXPECT_EQ(statistics.sequenceStep(), std::nullopt);
+    values[2] = 2;
+    EXPECT_EQ(statistics.sequenceStep(), std::nullopt);
+  }
+  {
+    std::vector<uint32_t> values{0, 1, 2};
+    const auto statistics = nimble::Statistics<uint32_t>::create(values);
+    EXPECT_EQ(statistics.sequenceStep(), 1);
+    values[2] = 3;
+    EXPECT_EQ(statistics.sequenceStep(), 1);
+  }
+}
+
 TEST(StatisticsTest, runValues) {
   const std::vector<int32_t> data = {1, 1, 2, 2, 1, 3, 3};
   const std::vector<int32_t> expected = {1, 2, 1, 3};

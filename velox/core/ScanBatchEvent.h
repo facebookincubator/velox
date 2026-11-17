@@ -21,7 +21,8 @@
 
 namespace facebook::velox::core {
 
-/// Per-batch scan statistics event fired by TableScan after each batch.
+/// Per-batch scan statistics event fired by TableScan after each read that
+/// scanned rows, including a read that produced no output rows.
 struct ScanBatchEvent {
   virtual ~ScanBatchEvent() = default;
 

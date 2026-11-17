@@ -28,7 +28,9 @@
 #include "velox/exec/fuzzer/WindowFuzzer.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/serializers/UnsafeRowSerializer.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec::test {
@@ -77,6 +79,10 @@ class WindowFuzzerRunner {
     facebook::velox::parse::registerTypeResolver();
     facebook::velox::serializer::presto::PrestoVectorSerde::
         registerVectorSerde();
+    // Spilling serializes through a named serde.
+    serializer::presto::PrestoVectorSerde::tryRegisterNamedVectorSerde();
+    serializer::CompactRowVectorSerde::tryRegisterNamedVectorSerde();
+    serializer::spark::UnsafeRowVectorSerde::tryRegisterNamedVectorSerde();
     facebook::velox::filesystems::registerLocalFileSystem();
 
     auto& aggregationFunctionDataSpecs =

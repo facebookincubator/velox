@@ -457,94 +457,100 @@ IndexLookup::LookupResult ClusterIndexBase::buildLookupResult(
   return LookupResult{std::move(locations), std::move(offsets)};
 }
 
+std::optional<ClusterIndexBase::PartitionBounds>
+ClusterIndexBase::lookupPartitionBounds(
+    const LookupRequest& request,
+    uint32_t index) const {
+  if (request.mode() == LookupRequest::Mode::PointLookup) {
+    const auto encodedKey = request.pointKey(index);
+    const auto partitionId = lookupPartition(encodedKey);
+    if (!partitionId.has_value()) {
+      return std::nullopt;
+    }
+    // Lower bound: first row >= key (inclusive). Upper bound: first row > key
+    // (exclusive).
+    return PartitionBounds{
+        .lower =
+            PartitionBound{
+                .partitionId = partitionId.value(),
+                .encodedKey = encodedKey,
+                .inclusive = true},
+        .upper = PartitionBound{
+            .partitionId = partitionId.value(),
+            .encodedKey = encodedKey,
+            .inclusive = false}};
+  }
+
+  const auto& keyBound = request.rangeBound(index);
+  NIMBLE_CHECK(
+      keyBound.lowerKey.has_value() || keyBound.upperKey.has_value(),
+      "At least one of lowerKey or upperKey must be set");
+
+  // Skip empty ranges where upper bound <= lower bound.
+  if (keyBound.lowerKey.has_value() && keyBound.upperKey.has_value() &&
+      compareKeys(
+          keyBound.upperKey.value(),
+          keyBound.lowerKey.value(),
+          keyComparator_) <= 0) {
+    return std::nullopt;
+  }
+
+  PartitionBounds bounds;
+  if (keyBound.lowerKey.has_value()) {
+    const auto partitionId = lookupPartition(keyBound.lowerKey.value());
+    if (!partitionId.has_value()) {
+      return std::nullopt;
+    }
+    bounds.lower = PartitionBound{
+        .partitionId = partitionId.value(),
+        .encodedKey = keyBound.lowerKey.value(),
+        .inclusive = true};
+  }
+  if (keyBound.upperKey.has_value()) {
+    const auto partitionId = lookupPartition(keyBound.upperKey.value());
+    if (partitionId.has_value()) {
+      // Upper bound is exclusive: seekAtOrAfter gives the correct cutoff.
+      bounds.upper = PartitionBound{
+          .partitionId = partitionId.value(),
+          .encodedKey = keyBound.upperKey.value(),
+          .inclusive = true};
+    }
+  }
+  return bounds;
+}
+
 void ClusterIndexBase::lookupPartitions(
     const LookupRequest& request,
     std::vector<PartitionLookup>& partitionLookups,
     std::vector<RowRange>& partitionRowRanges) const {
   partitionLookups.reserve(2 * request.size());
   partitionRowRanges.assign(request.size(), RowRange{});
-
-  if (request.mode() == LookupRequest::Mode::PointLookup) {
-    partitionPointLookups(request, partitionLookups, partitionRowRanges);
-  } else {
-    partitionRangeLookups(request, partitionLookups, partitionRowRanges);
-  }
-}
-
-void ClusterIndexBase::partitionPointLookups(
-    const LookupRequest& request,
-    std::vector<PartitionLookup>& partitionLookups,
-    std::vector<RowRange>& partitionRowRanges) const {
   for (uint32_t i = 0; i < request.size(); ++i) {
-    const auto encodedKey = request.pointKey(i);
-    const auto partitionId = lookupPartition(encodedKey);
-    if (!partitionId.has_value()) {
+    const auto bounds = lookupPartitionBounds(request, i);
+    if (!bounds.has_value()) {
       continue;
     }
-    // Lower bound: first row >= key (inclusive).
-    partitionLookups.emplace_back(
-        partitionId.value(),
-        encodedKey,
-        /*inclusive=*/true,
-        /*lowerBound=*/true,
-        &partitionRowRanges.at(i).startRow);
-    // Upper bound: first row > key (exclusive).
-    partitionLookups.emplace_back(
-        partitionId.value(),
-        encodedKey,
-        /*inclusive=*/false,
-        /*lowerBound=*/false,
-        &partitionRowRanges.at(i).endRow);
-  }
-}
-
-void ClusterIndexBase::partitionRangeLookups(
-    const LookupRequest& request,
-    std::vector<PartitionLookup>& partitionLookups,
-    std::vector<RowRange>& partitionRowRanges) const {
-  for (uint32_t i = 0; i < request.size(); ++i) {
-    const auto& keyBound = request.rangeBound(i);
-    NIMBLE_CHECK(
-        keyBound.lowerKey.has_value() || keyBound.upperKey.has_value(),
-        "At least one of lowerKey or upperKey must be set");
-
-    // Skip empty ranges where upper bound <= lower bound.
-    if (keyBound.lowerKey.has_value() && keyBound.upperKey.has_value() &&
-        compareKeys(
-            keyBound.upperKey.value(),
-            keyBound.lowerKey.value(),
-            keyComparator_) <= 0) {
-      continue;
-    }
-
-    if (keyBound.lowerKey.has_value()) {
-      const auto partitionId = lookupPartition(keyBound.lowerKey.value());
-      if (!partitionId.has_value()) {
-        continue;
-      }
+    // A range without a lower bound starts at row 0, as 'rows' does.
+    auto& rows = partitionRowRanges.at(i);
+    if (bounds->lower.has_value()) {
+      const auto& lower = bounds->lower.value();
       partitionLookups.emplace_back(
-          partitionId.value(),
-          keyBound.lowerKey.value(),
-          /*inclusive=*/true,
+          lower.partitionId,
+          lower.encodedKey,
+          lower.inclusive,
           /*lowerBound=*/true,
-          &partitionRowRanges.at(i).startRow);
+          &rows.startRow);
     }
-
-    if (keyBound.upperKey.has_value()) {
-      const auto partitionId = lookupPartition(keyBound.upperKey.value());
-      if (partitionId.has_value()) {
-        // Upper bound is exclusive: seekAtOrAfter gives the correct cutoff.
-        partitionLookups.emplace_back(
-            partitionId.value(),
-            keyBound.upperKey.value(),
-            /*inclusive=*/true,
-            /*lowerBound=*/false,
-            &partitionRowRanges.at(i).endRow);
-      } else {
-        partitionRowRanges.at(i).endRow = numRows_;
-      }
+    if (bounds->upper.has_value()) {
+      const auto& upper = bounds->upper.value();
+      partitionLookups.emplace_back(
+          upper.partitionId,
+          upper.encodedKey,
+          upper.inclusive,
+          /*lowerBound=*/false,
+          &rows.endRow);
     } else {
-      partitionRowRanges.at(i).endRow = numRows_;
+      rows.endRow = numRows_;
     }
   }
 }
@@ -580,26 +586,44 @@ IndexLookup::LookupResult ClusterIndexBase::lookup(
   return buildLookupResult(request.options(), partitionRowRanges);
 }
 
-std::vector<uint32_t> ClusterIndexBase::lookupStripes(
+std::vector<StripeRange> ClusterIndexBase::lookupStripes(
     const LookupRequest& request) const {
   NIMBLE_CHECK_EQ(
       keyStreamLayout_,
       KeyStreamLayout::kStripe,
       "Only a Stripe layout index looks up the stripes of a request");
-  std::vector<PartitionLookup> partitionLookups;
-  std::vector<RowRange> partitionRowRanges;
-  lookupPartitions(request, partitionLookups, partitionRowRanges);
-  std::vector<uint32_t> stripes;
-  stripes.reserve(partitionLookups.size());
-  for (const auto& bound : partitionLookups) {
+  // Returns the stripe whose key chunk lookup() decodes to resolve 'bound'.
+  const auto boundStripe = [this](const PartitionBound& bound) {
     const auto& partition =
         *velox::checkedNotNull(loadPartition(bound.partitionId));
-    // The chunk that lookup() decodes to resolve the bound.
-    const auto chunkLocation = lookupChunk(&partition, bound.encodedKey);
-    stripes.emplace_back(partition.chunkStripe(chunkLocation.chunkIndex));
+    return partition.chunkStripe(
+        lookupChunk(&partition, bound.encodedKey).chunkIndex);
+  };
+  // The number of stripes of the file, from the last partition, which only a
+  // range that reaches the last stripe without a bound in it loads.
+  std::optional<uint32_t> numStripes;
+  std::vector<StripeRange> stripes(request.size());
+  for (uint32_t i = 0; i < request.size(); ++i) {
+    const auto bounds = lookupPartitionBounds(request, i);
+    // A range that selects no row keeps empty stripes.
+    if (!bounds.has_value()) {
+      continue;
+    }
+    // A range without a lower bound starts at the first stripe.
+    const uint32_t startStripe =
+        bounds->lower.has_value() ? boundStripe(bounds->lower.value()) : 0;
+    if (bounds->upper.has_value()) {
+      stripes[i] =
+          StripeRange(startStripe, boundStripe(bounds->upper.value()) + 1);
+      continue;
+    }
+    if (!numStripes.has_value()) {
+      const auto& lastPartition =
+          *velox::checkedNotNull(loadPartition(numPartitions_ - 1));
+      numStripes = lastPartition.chunkStripe(lastPartition.numChunks() - 1) + 1;
+    }
+    stripes[i] = StripeRange(startStripe, numStripes.value());
   }
-  std::sort(stripes.begin(), stripes.end());
-  stripes.erase(std::unique(stripes.begin(), stripes.end()), stripes.end());
   return stripes;
 }
 

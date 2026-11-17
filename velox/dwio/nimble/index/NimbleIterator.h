@@ -82,10 +82,17 @@ class NimbleIterator {
     folly::Executor::KeepAlive<> prefetchExecutor{};
 
     /// Maximum stripe slots reserved by queued or running I/O prefetch batches.
-    /// Batches target half this limit, rounded down, with a minimum of one
-    /// stripe. Reservations are held until the batch's last stripe is dequeued.
-    /// Zero disables prefetch.
+    /// Batches target this limit divided by numPrefetchBatches, rounded down,
+    /// with a minimum of one stripe. Reservations are held until the batch's
+    /// last stripe is dequeued. Zero disables prefetch.
     uint32_t maxPrefetchStripes{1};
+
+    /// Number of batches that the stripe limit is split into, each loaded in
+    /// one read. With two, the next batch loads while the consumer reads the
+    /// current one. With one, each read loads the whole limit, for the fewest
+    /// reads, and the next batch loads after the consumer takes the last
+    /// stripe of the current one. Must be positive.
+    uint32_t numPrefetchBatches{2};
 
     /// Reads the CPU and wall clocks around index lookups, plan building,
     /// stripe loads and the decoding and conversion of stripes to fill the

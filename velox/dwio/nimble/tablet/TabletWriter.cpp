@@ -367,7 +367,8 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
         stripeStreamOffsets[index] = stripeStreamOffsets[originalIndex];
         // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
         stripeStreamSizes[index] = stripeStreamSizes[originalIndex];
-        addStreamChunkStats(index, it->first->chunks);
+        // Equal bytes can still differ in chunk boundaries and null counts.
+        addStreamChunkStats(index, stream.chunks);
         continue;
       }
     }

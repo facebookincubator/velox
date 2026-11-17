@@ -399,6 +399,12 @@ Expression Evaluation Configuration
      - integer
      - 100
      - Controls maximum number of compiled regular expression patterns per batch.
+   * - expression.min_rows_for_peeling
+     - integer
+     - 0
+     - Minimum number of selected rows for expression evaluation to peel dictionary encodings off its inputs. Below it,
+       a function whose only non-constant input is a dictionary gets that input flattened instead, unless its rows are
+       large enough that copying them costs more than peeling.
    * - debug_disable_expression_with_peeling
      - bool
      - false

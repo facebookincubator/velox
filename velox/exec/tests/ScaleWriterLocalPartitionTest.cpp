@@ -235,7 +235,7 @@ class FakeSourceOperator : public SourceOperator {
   }
 
   void waitForOutput() {
-    if (FOLLY_UNLIKELY(memoryManager_ == nullptr)) {
+    if (memoryManager_ == nullptr) [[unlikely]] {
       memoryManager_ =
           operatorCtx_->driver()->task()->getLocalExchangeMemoryManager(
               operatorCtx_->driverCtx()->splitGroupId,
@@ -374,7 +374,7 @@ class FakeWriteOperator : public Operator {
   }
 
   void waitForConsume() {
-    if (FOLLY_UNLIKELY(memoryManager_ == nullptr)) {
+    if (memoryManager_ == nullptr) [[unlikely]] {
       memoryManager_ =
           operatorCtx_->driver()->task()->getLocalExchangeMemoryManager(
               operatorCtx_->driverCtx()->splitGroupId,

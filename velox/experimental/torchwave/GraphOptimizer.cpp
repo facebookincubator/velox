@@ -365,6 +365,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
     auto replacements = metadata->maybeReplace(producer, types_, waveGraph_);
     bool replacedGraphOutput = false;
     for (auto& [oldValue, newValue] : replacements) {
+      waveGraph_.recordReplacement(oldValue->name(), newValue->name());
       graph_->replaceAllUses(
           const_cast<nativert::Value*>(oldValue),
           const_cast<nativert::Value*>(newValue));

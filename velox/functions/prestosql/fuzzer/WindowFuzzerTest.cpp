@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/WindowFuzzerRunner.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/fuzzer/ApproxDistinctInputGenerator.h"
@@ -44,6 +45,10 @@ DEFINE_int64(
     0,
     "Initial seed for random number generator used to reproduce previous "
     "results (0 means start with random seed).");
+
+DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
+
+DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");
 
 DEFINE_string(
     only,
@@ -99,8 +104,6 @@ int main(int argc, char** argv) {
   facebook::velox::aggregate::prestosql::registerInternalAggregateFunctions("");
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
-  facebook::velox::memory::MemoryManager::initialize(
-      facebook::velox::memory::MemoryManager::Options{});
 
   ::testing::InitGoogleTest(&argc, argv);
 
@@ -108,6 +111,13 @@ int main(int argc, char** argv) {
   // singletons, installing proper signal handlers for better debugging
   // experience, and initialize glog and gflags.
   folly::Init init(&argc, &argv);
+
+  // Install a real arbitrator so the window operator can spill under memory
+  // pressure. Injection-driven spilling works without one -- SortWindowBuild
+  // calls spill() directly on testingTriggerSpill -- but Window::reclaim() is
+  // only ever driven by the arbitrator.
+  facebook::velox::exec::test::setupMemory(
+      FLAGS_allocator_capacity, FLAGS_arbitrator_capacity);
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
