@@ -81,8 +81,6 @@ int main(int argc, char** argv) {
   // Register cuDF with CPU fallback enabled.  Unsupported operators
   // fall back to CPU transparently.
   cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
-  // Log which operators are replaced with GPU equivalents per pipeline.
-  cudf_velox::CudfConfig::getInstance().debugEnabled = true;
   cudf_velox::registerCudf();
 
   std::shared_ptr<memory::MemoryPool> rootPool{
