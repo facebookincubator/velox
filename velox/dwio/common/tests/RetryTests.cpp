@@ -174,6 +174,23 @@ TEST(RetryModuleTests, testJitter) {
   ASSERT_GT(wait.count(), nextWait);
 }
 
+TEST(RetryModuleTests, jitterStaysWithinHalfTheWait) {
+  // Each wait adds at most half of its base wait, which doubles from the start
+  // wait up to the max wait.
+  for (int policyIndex = 0; policyIndex < 100; ++policyIndex) {
+    ExponentialBackoff policy(8ms, 64ms, 4, RetryDuration::zero(), false);
+    float baseWait = 8;
+    for (int retry = 0; retry < 4; ++retry) {
+      const auto wait = policy.nextWaitTime();
+      ASSERT_TRUE(wait.has_value());
+      EXPECT_GE(wait->count(), baseWait);
+      EXPECT_LE(wait->count(), baseWait * 1.5);
+      baseWait = std::min(baseWait * 2, 64.0f);
+    }
+    EXPECT_FALSE(policy.nextWaitTime().has_value());
+  }
+}
+
 TEST(RetryModuleTests, exponentialBackOffCountExecutionTime) {
   Raise raise(1);
   auto retriable = [&raise]() {
