@@ -889,16 +889,6 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
 endif()
 find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
-
-# Flex 2.6.5+ declares a virtual yyFlexLexer::yyread() that
-# YyFlexLexerShim.cpp has to define, older versions do not have it.
-find_file(VELOX_FLEX_LEXER_HEADER FlexLexer.h HINTS ${FLEX_INCLUDE_DIRS} ${FLEX_INCLUDE_DIR})
-if(VELOX_FLEX_LEXER_HEADER)
-  file(STRINGS "${VELOX_FLEX_LEXER_HEADER}" _velox_flex_yyread REGEX "yyread")
-  if(_velox_flex_yyread)
-    add_compile_definitions(VELOX_FLEX_LEXER_HAS_YYREAD)
-  endif()
-endif()
 find_package(double-conversion 3.1.5 REQUIRED)
 
 include_directories(SYSTEM velox)

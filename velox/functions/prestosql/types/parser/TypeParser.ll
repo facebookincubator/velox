@@ -6,10 +6,6 @@
 #include "velox/functions/prestosql/types/parser/TypeParser.yy.h"  // @manual
 #include "velox/functions/prestosql/types/parser/Scanner.h"
 #define YY_DECL int facebook::velox::functions::prestosql::Scanner::lex(facebook::velox::functions::prestosql::Parser::semantic_type *yylval)
-// Flex 2.6.5 - 2.6.16 generate a call to yypanic() for a C++ scanner built with
-// %option nodefault, but only define it for C scanners. Route it to
-// LexerError() as flex 2.6.4 did.
-#define yypanic(msg) LexerError(msg)
 %}
 
 %option c++ noyywrap noyylineno nodefault caseless ecs
